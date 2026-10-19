@@ -23,6 +23,8 @@ export class ProductionApiError extends Error {
 
 const enc = encodeURIComponent;
 const base = (die: string, config: string) => `/api/production/${enc(die)}/${enc(config)}`;
+/** ?list=tooling selects the tooling / fixtures order list (bom_tooling.json / costs_tooling.json); absent = the motor BOM. */
+const lq = (list?: 'tooling') => (list ? `?list=${list}` : '');
 const adminBase = (die: string, config: string) => `/api/admin/production/${enc(die)}/${enc(config)}`;
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -112,24 +114,24 @@ export const productionApi = {
   get: (die: string, config: string) => call<Production>('GET', base(die, config)),
 
   parts: async (die: string, config: string) => unwrapList<Part>(await call('GET', `${base(die, config)}/parts`), 'parts'),
-  createPart: (die: string, config: string, part: Partial<Part>) => call<Part>('POST', `${base(die, config)}/parts`, part),
+  createPart: (die: string, config: string, part: Partial<Part>, list?: 'tooling') => call<Part>('POST', `${base(die, config)}/parts${lq(list)}`, part),
   updatePart: (die: string, config: string, id: string, patch: Partial<Part>) =>
     call<Part>('PATCH', `${base(die, config)}/parts/${enc(id)}`, patch),
   deletePart: (die: string, config: string, id: string) => call<unknown>('DELETE', `${base(die, config)}/parts/${enc(id)}`),
 
-  bom: async (die: string, config: string) => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom`), 'rows'),
-  saveBom: (die: string, config: string, rows: BomRow[]) => call<unknown>('PUT', `${base(die, config)}/bom`, { rows }),
+  bom: async (die: string, config: string, list?: 'tooling') => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom${lq(list)}`), 'rows'),
+  saveBom: (die: string, config: string, rows: BomRow[], list?: 'tooling') => call<unknown>('PUT', `${base(die, config)}/bom${lq(list)}`, { rows }),
 
   assembly: (die: string, config: string) =>
     call<{ tree: AssemblyTree; parts: Part[]; costs: Record<string, number> }>('GET', `${base(die, config)}/assembly`),
   applyDefaultAssembly: (die: string, config: string) =>
     call<{ tree: AssemblyTree; parts: Part[] }>('POST', `${base(die, config)}/assembly/default`, {}),
 
-  costs: (die: string, config: string) => call<CostsData>('GET', `${base(die, config)}/costs`),
-  saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }) =>
-    call<CostsData>('PUT', `${base(die, config)}/costs`, data),
+  costs: (die: string, config: string, list?: 'tooling') => call<CostsData>('GET', `${base(die, config)}/costs${lq(list)}`),
+  saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }, list?: 'tooling') =>
+    call<CostsData>('PUT', `${base(die, config)}/costs${lq(list)}`, data),
 
-  procurement: (die: string, config: string) => call<ProcurementData>('GET', `${base(die, config)}/procurement`),
+  procurement: (die: string, config: string, list?: 'tooling') => call<ProcurementData>('GET', `${base(die, config)}/procurement${lq(list)}`),
   saveProcurementLine: (die: string, config: string, partId: string, line: Partial<ProcurementLine>) =>
     call<{ row: ProcurementLine }>('PUT', `${base(die, config)}/procurement/${enc(partId)}`, line),
 

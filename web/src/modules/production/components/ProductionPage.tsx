@@ -19,7 +19,7 @@ import type {
 } from '../types';
 
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
-const TABS = ['bom', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -34,10 +34,10 @@ function writeStore(key: string, v: unknown): void {
 }
 
 interface Data {
-  parts: Part[]; bom: BomRow[]; process: ProcessSection[]; documents: DocumentRec[];
+  parts: Part[]; bom: BomRow[]; toolingBom: BomRow[]; process: ProcessSection[]; documents: DocumentRec[];
   threads: Thread[]; proposals: Proposal[]; revisions: Revision[];
 }
-const EMPTY: Data = { parts: [], bom: [], process: [], documents: [], threads: [], proposals: [], revisions: [] };
+const EMPTY: Data = { parts: [], bom: [], toolingBom: [], process: [], documents: [], threads: [], proposals: [], revisions: [] };
 
 const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void }> = ({ die, config, onBack }) => {
   const { t } = useTranslation('production');
@@ -59,14 +59,15 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const reload = useCallback(async () => {
     try {
       const p = await productionApi.get(die, config);
-      const [parts, bom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
-        productionApi.parts(die, config), productionApi.bom(die, config), productionApi.process(die, config),
+      const [parts, bom, toolingBom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
+        productionApi.parts(die, config), productionApi.bom(die, config), productionApi.bom(die, config, 'tooling').catch(() => [] as BomRow[]),
+        productionApi.process(die, config),
         productionApi.documents(die, config), productionApi.threads(die, config), productionApi.proposals(die, config),
         productionApi.revisions(die, config),
         productionApi.procurement(die, config).catch(() => null),
       ]);
       setProd(p);
-      setData({ parts, bom, process, documents, threads, proposals, revisions });
+      setData({ parts, bom, toolingBom, process, documents, threads, proposals, revisions });
       if (proc?.summary) setReadiness(proc.summary);
       setErr(null);
       setNda(false);
@@ -82,6 +83,9 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     die, config, role, email, uiLang: ui, canEdit: canEditRole(role), productType: prod?.product_type ?? 'motor',
     reload: () => { void reload(); },
   }), [die, config, role, email, ui, reload, prod?.product_type]);
+  // the separate tooling / fixtures order list (owner 2026-10-19): same table, ?list=tooling
+  const toolingCtx = useMemo(() => ({ ...ctx, list: 'tooling' as const }), [ctx]);
+  const visibleTabs = TABS.filter((id) => id !== 'tooling' || data.toolingBom.length > 0 || ctx.canEdit);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
 
   return (
@@ -105,7 +109,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
         <Box sx={{ position: 'sticky', top: 0, zIndex: 20, bgcolor: 'var(--app-bg)', mb: 1.5 }}>
           <Tabs value={tab} onChange={(_, v) => setTab(v as TabId)} variant="scrollable" scrollButtons="auto"
             sx={{ minHeight: 32, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontSize: 12.5, py: 0.5 } }}>
-            {TABS.map((id) => (
+            {visibleTabs.map((id) => (
               <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : t(`tabs.${id}`)} />
             ))}
           </Tabs>
@@ -187,6 +191,25 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
                 parts={data.parts}
                 orderQuantity={prod.order_quantity}
                 ctx={ctx}
+                shareCostsWithOem={prod.share_costs_with_oem}
+                documents={data.documents}
+                threads={data.threads}
+                proposals={data.proposals}
+                onPartChanged={reload}
+              />
+            </>
+          )}
+          {tab === 'tooling' && (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tabs.tooling')}</Typography>
+                <HelpTip title={t('bom.toolingTip')} />
+              </Box>
+              <BomTable
+                rows={data.toolingBom}
+                parts={data.parts}
+                orderQuantity={1}
+                ctx={toolingCtx}
                 shareCostsWithOem={prod.share_costs_with_oem}
                 documents={data.documents}
                 threads={data.threads}

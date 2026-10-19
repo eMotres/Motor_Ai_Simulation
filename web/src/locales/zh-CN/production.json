@@ -47,7 +47,8 @@
     "discussion": "讨论",
     "proposals": "建议",
     "changes": "变更",
-    "assembly": "装配流程"
+    "assembly": "装配流程",
+    "tooling": "工装"
   },
   "bilingual": {
     "machine": "机器翻译，未经核实",
@@ -111,7 +112,11 @@
     "currency": "币种",
     "note": "备注",
     "tip": "订单合计由每台数量和生产订单数量得出。",
-    "unknownPart": "未知零件"
+    "unknownPart": "未知零件",
+    "unitPriceTooling": "单价",
+    "unitPriceToolingTip": "单件价格；单项合计 = 单价 × 数量。",
+    "lineTotalTooling": "单项合计（数量 × 单价）",
+    "toolingTip": "工装/夹具订购清单：数量为总数，价格不乘以电机台数；价格的查看权限与电机物料清单相同。"
   },
   "costs": {
     "title": "成本明细与定价",

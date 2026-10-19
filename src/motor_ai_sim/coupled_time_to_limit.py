@@ -185,18 +185,39 @@ def _offset(thermal_result: Mapping[str, Any], node: str) -> Tuple[float, str]:
 # The limits — read off the machine's own cards, by the report's own rules
 # ---------------------------------------------------------------------------
 
-def rated_winding_limit() -> Tuple[float, str]:
-    """The RATED winding temperature — the coils' mean at the rated point
-    (owner 2026-10-19: 180 °C) — from the ONE place the project states it
-    (``report.PROJECT_RATED_WINDING_C``).  Configure's rated speed cap, the S1
-    rating, ``solve_to: continuous`` and the duty class read it here."""
+def _rated_tables() -> Tuple[float, Dict[str, float], Dict[str, float]]:
     try:
-        from motor_ai_sim.report import PROJECT_RATED_WINDING_C as lim
+        from motor_ai_sim import report as _r
+        return (float(_r.PROJECT_RATED_WINDING_C),
+                dict(_r.RATED_WINDING_C_BY_APPLICATION),
+                dict(_r.RATED_AMBIENT_C_BY_APPLICATION))
     except Exception:                                        # noqa: BLE001
-        lim = tdc.PROJECT_RATED_WINDING_C
-    return float(lim), ("the project's RATED winding temperature (%g °C, the "
-                        "coils' mean at the rated point; the insulation class "
-                        "stays the overheat limit)" % float(lim))
+        return (float(tdc.PROJECT_RATED_WINDING_C),
+                dict(tdc.RATED_WINDING_C_BY_APPLICATION),
+                dict(tdc.RATED_AMBIENT_C_BY_APPLICATION))
+
+
+def rated_winding_limit(application: Optional[str] = None) -> Tuple[float, str]:
+    """The RATED winding temperature — the coils' mean at the rated point —
+    for a configuration's ``application`` (owner 2026-10-19: 180 °C for
+    aviation / propeller, 70 °C for robots), from the ONE place the project
+    states it (``report.RATED_WINDING_C_BY_APPLICATION``).  Configure's rated
+    cap, the S1 rating, ``solve_to: continuous`` and the duty class read it
+    here.  No / an unlisted application: ``report.PROJECT_RATED_WINDING_C``."""
+    default, by_app, _amb = _rated_tables()
+    app = str(application or "").strip().lower()
+    lim = float(by_app.get(app, default))
+    return lim, ("the project's RATED winding temperature for %s (%g °C, the "
+                 "coils' mean at the rated point; the insulation class stays "
+                 "the overheat limit)" % (app or "an unset application", lim))
+
+
+def rated_ambient(application: Optional[str] = None) -> Optional[float]:
+    """The ambient the rated point is stated at for ``application`` (owner
+    2026-10-19: robots 30 °C), or ``None`` = the duty's own ambient."""
+    _d, _w, by_app = _rated_tables()
+    v = by_app.get(str(application or "").strip().lower())
+    return None if v is None else float(v)
 
 
 #: Parts that are REPORTED and warned about but never limit a point (owner
@@ -294,7 +315,10 @@ def part_limits(*, thermal_result: Mapping[str, Any],
     """
     out: List[PartLimit] = []
 
-    w_lim, w_src = ((float(winding_limit_c), "given by the caller")
+    w_lim, w_src = ((float(winding_limit_c),
+                     ("the configuration's RATED winding temperature (%g °C)"
+                      % float(winding_limit_c)) if rated_winding
+                     else "given by the caller")
                     if winding_limit_c is not None
                     else rated_winding_limit() if rated_winding
                     else winding_limit())

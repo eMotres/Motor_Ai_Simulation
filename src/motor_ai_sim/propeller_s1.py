@@ -1291,9 +1291,10 @@ def configure_thermal_model(m: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _rated_winding_c() -> float:
-    """The project's rated winding temperature, from its one place."""
+    """The rated winding temperature of a PROPELLER machine (this model only
+    exists for one), from its one place (``configure_limits.rated_winding``)."""
     from motor_ai_sim.configure_limits import rated_winding
-    return rated_winding()[0]
+    return rated_winding("propeller")[0]
 
 
 # ---------------------------------------------------------------------------

@@ -7419,6 +7419,25 @@ def _setpoint_only_limited_line(i_duty: Optional[float],
                else "its limit"))
 
 
+def _active_application() -> Optional[str]:
+    """The default application of the catalogued configuration this run is
+    on (``applications``: propeller / robot / aviation / marine), or ``None``
+    when the run is not on a catalogued machine or the configuration names
+    none.  Never raises."""
+    try:
+        from motor_ai_sim.applications import (config_applications,
+                                               default_application)
+        from motor_ai_sim.duty_results import active_context
+        from motor_ai_sim.routes import family as _fam
+        ctx = active_context()
+        if not ctx:
+            return None
+        doc = _fam.config_doc(str(ctx[0]), str(ctx[1]))
+        return default_application(config_applications(doc)[0])
+    except Exception:  # noqa: BLE001 — no application is the ordinary case
+        return None
+
+
 def _s1_time_to_limit(body: Dict[str, Any], cooling: Dict[str, Any],
                       em: Mapping[str, Any], field: Mapping[str, Any], *,
                       i_s1: float, bearing_temp_c: Optional[float]
@@ -8123,12 +8142,14 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
             geometry=geom, cooling=cooling, side_areas=side0,
             d_housing_m=d_housing_m, duty=duty, mode=mode,
             resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"),
-            # THE RATED POINT (owner 2026-10-19): the coils AT the project's
-            # rated winding temperature (`coupled_time_to_limit.
-            # rated_winding_limit`, 180 °C), judged on the winding MEAN — the
-            # coil temperature the EM solve runs at.  The bearing seat is NOT
+            # THE RATED POINT (owner 2026-10-19): the coils AT the rated
+            # winding temperature of THIS configuration's application
+            # (`coupled_time_to_limit.rated_winding_limit`: 180 °C aviation /
+            # propeller, 70 °C robots), judged on the winding MEAN — the coil
+            # temperature the EM solve runs at.  The bearing seat is NOT
             # judged: it is reported, never a limit on rated.
             rated_winding=True,
+            winding_limit_c=_ttl.rated_winding_limit(_active_application())[0],
             speed_search=_cr_speed_search_opts(cooling, summary, float(rpm),
                                                pwm=pwm),
             eddy_noload_fraction=_cr_eddy_f0(summary, float(rpm))[0])

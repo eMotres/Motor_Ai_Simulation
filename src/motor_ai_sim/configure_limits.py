@@ -249,13 +249,25 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         w_c, w_basis = winding_limit()
     except Exception:                                   # noqa: BLE001
         w_c, w_basis = WINDING_LIMIT_C, "project insulation class N (200 °C)"
-    r_c, r_basis = rated_winding()
-    return {"winding_C": float(w_c), "winding_basis": w_basis,
-            # THE RATED POINT (owner 2026-10-19): the coils' mean at the rated
-            # winding temperature — Configure's rated cap aims here; the red
-            # line stays on ``winding_C`` (the insulation class).
-            "rated_winding_C": r_c, "rated_winding_basis": r_basis,
-            "magnet_C": mag, "magnet_card": str(name) if name else None}
+    try:
+        from motor_ai_sim.applications import (config_applications,
+                                               default_application)
+        app = default_application(config_applications(fam)[0])
+    except Exception:                                   # noqa: BLE001
+        app = None
+    r_c, r_basis = rated_winding(app)
+    out = {"winding_C": float(w_c), "winding_basis": w_basis,
+           # THE RATED POINT (owner 2026-10-19): the coils' mean at the rated
+           # winding temperature of this configuration's application (180 °C
+           # aviation / propeller, 70 °C robots) — Configure's rated cap aims
+           # here; the red line stays on ``winding_C`` (the insulation class).
+           "rated_winding_C": r_c, "rated_winding_basis": r_basis,
+           "magnet_C": mag, "magnet_card": str(name) if name else None}
+    r_amb = rated_ambient(app)
+    if r_amb is not None:
+        # …and the air the rated point is stated at (robots: 30 °C)
+        out["rated_ambient_C"] = r_amb
+    return out
 
 
 #: Rated winding fallback when the single source cannot be imported — mirrors
@@ -263,16 +275,26 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 RATED_WINDING_C = 180.0
 
 
-def rated_winding() -> tuple:
-    """``(rated winding °C, basis)`` from ``coupled_time_to_limit.
-    rated_winding_limit`` — the ONE place the S1 rating, ``solve_to:
-    continuous``, the duty class and Configure all read."""
+def rated_winding(application: Optional[str] = None) -> tuple:
+    """``(rated winding °C, basis)`` for ``application`` from
+    ``coupled_time_to_limit.rated_winding_limit`` — the ONE place the S1
+    rating, ``solve_to: continuous``, the duty class and Configure all read."""
     try:
         from motor_ai_sim.coupled_time_to_limit import rated_winding_limit
-        c, basis = rated_winding_limit()
+        c, basis = rated_winding_limit(application)
         return float(c), basis
     except Exception:                                   # noqa: BLE001
         return RATED_WINDING_C, "project rated winding temperature (180 °C)"
+
+
+def rated_ambient(application: Optional[str] = None) -> Optional[float]:
+    """The ambient the rated point is stated at for ``application`` (robots:
+    30 °C), ``None`` = the duty's own (``coupled_time_to_limit.rated_ambient``)."""
+    try:
+        from motor_ai_sim.coupled_time_to_limit import rated_ambient as _ra
+        return _ra(application)
+    except Exception:                                   # noqa: BLE001
+        return None
 
 
 

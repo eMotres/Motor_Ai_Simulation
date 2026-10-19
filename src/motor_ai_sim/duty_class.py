@@ -128,7 +128,14 @@ def classify(entry: Optional[Mapping[str, Any]],
         coil = _num(c.get("coil_temp_c"))
         if coil is not None:
             from motor_ai_sim.coupled_time_to_limit import rated_winding_limit
-            rated_c = rated_winding_limit()[0]
+            cr = c.get("continuous_rating")
+            cr = cr if isinstance(cr, Mapping) else {}
+            # the record's OWN rated temperature (it depends on the
+            # configuration's application) when its rating states one
+            rated_c = (_num((cr.get("limits_c") or {}).get("winding"))
+                       if cr.get("winding_basis") == "mean" else None)
+            if rated_c is None:
+                rated_c = rated_winding_limit()[0]
             out.update({"winding_c": round(coil, 1),
                         "rated_winding_c": rated_c,
                         "at_rated_winding": -1.0 - 0.05 <= coil - rated_c <= 0.05})

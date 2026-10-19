@@ -214,7 +214,8 @@ def test_the_loops_rating_asks_for_the_rated_winding(monkeypatch):
         {"geo": None}, cooling={"cooling_mode": "air", "air_speed_mps": 40.0},
         rpm=10000.0, coil_temp_c=200.0, magnet_temp_c=48.2, duty="rated",
         mode="motor", time_to_limit=None)
-    assert RATE_CALLS == [{"rated_winding": True}]
+    # no catalogued configuration in this test: the default (aviation) 180 °C
+    assert RATE_CALLS == [{"rated_winding": True, "winding_limit_c": 180.0}]
 
 
 def test_a_continuous_class_says_where_the_coils_sit():
@@ -384,6 +385,39 @@ def test_the_rated_point_judges_coils_and_magnets_only():
     assert "housing" not in rated and "winding" in rated
     plain = [p.part for p in ttl.part_limits(thermal_result=field)]
     assert "housing" in plain
+
+
+def test_the_rated_point_depends_on_the_application():
+    """Owner 2026-10-19: 180 °C for aviation / propeller machines; robots 70 °C
+    at 30 °C air.  One table, read through one function."""
+    from motor_ai_sim import configure_limits as cl
+    from motor_ai_sim import coupled_time_to_limit as ttl
+
+    assert ttl.rated_winding_limit("propeller")[0] == 180.0
+    assert ttl.rated_winding_limit("aviation")[0] == 180.0
+    assert ttl.rated_winding_limit("robot")[0] == 70.0
+    assert ttl.rated_winding_limit(None)[0] == 180.0
+    assert ttl.rated_ambient("robot") == 30.0
+    assert ttl.rated_ambient("propeller") is None
+    robot = cl.thermal_limits({"applications": ["robot"]})
+    assert robot["rated_winding_C"] == 70.0 and robot["rated_ambient_C"] == 30.0
+    assert robot["winding_C"] == 200.0                 # the overheat line stays
+    prop = cl.thermal_limits({"applications": ["propeller"]})
+    assert prop["rated_winding_C"] == 180.0 and "rated_ambient_C" not in prop
+    w = {p.part: p for p in ttl.part_limits(
+        thermal_result={"components": {"winding": {"avg": 60.0, "max": 63.0}}},
+        rated_winding=True, winding_limit_c=70.0)}["winding"]
+    assert w.limit_c == 70.0 and w.offset_k == 0.0 and w.at_point_c == 60.0
+
+
+def test_the_class_reads_the_records_own_rated_temperature():
+    from motor_ai_sim import duty_class
+
+    c = {"coil_temp_c": 70.0, "time_to_limit": {"within_limits": True},
+         "continuous_rating": {"winding_basis": "mean",
+                               "limits_c": {"winding": 70.0}}}
+    cls = duty_class.classify(None, c)
+    assert cls["rated_winding_c"] == 70.0 and cls["at_rated_winding"] is True
 
 
 def test_configure_reads_the_same_rated_winding():

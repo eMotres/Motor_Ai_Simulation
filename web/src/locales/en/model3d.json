@@ -108,5 +108,10 @@
     "backRight": "Back right edge"
   },
   "orthographic": "Ortho",
-  "perspective": "Persp"
+  "perspective": "Persp",
+  "fusion": {
+    "ok": "Fusion v{version}",
+    "okTip": "Built from the Fusion export {document} v{version} ({at}); AeroStator and Fusion agree.",
+    "warnMore": "{first} (+{n} more)"
+  }
 }

@@ -108,5 +108,10 @@
     "backRight": "åŽå³æ–¹"
   },
   "orthographic": "æ­£äº¤",
-  "perspective": "é€è§†"
+  "perspective": "é€è§†",
+  "fusion": {
+    "ok": "Fusion v{version}",
+    "okTip": "由 Fusion 导出 {document} v{version}（{at}）生成；AeroStator 与 Fusion 一致。",
+    "warnMore": "{first}（另有 {n} 条）"
+  }
 }

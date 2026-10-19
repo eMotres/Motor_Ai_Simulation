@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
+import FusionSyncBadge from './FusionSyncBadge';
 import VerificationStatus from './VerificationStatus';
 import { lockedKind, parseAccess, type AccessInfo } from '../../lib/verification';
 
@@ -191,6 +192,7 @@ const Model3DPanel: React.FC = () => {
             </Button>
           )}
           {models && !models.length && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('none')}</Typography>}
+          <FusionSyncBadge die={model?.die} config={model?.config} compact />
           <Box sx={{ flex: 1 }} />
           {has('info') && (
             <>

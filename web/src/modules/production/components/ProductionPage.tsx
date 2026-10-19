@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Paper, Tab, Tabs, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
+import FusionSyncBadge from '../../../components/model3d/FusionSyncBadge';
 import { useAuth } from '../../../contexts/AuthContext';
 import AssemblyProcess from './AssemblyProcess';
 import BilingualText, { useContentLang } from './BilingualText';
@@ -155,6 +156,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               />
             )}
           </Box>
+          {/* docs/FUSION_SYNC.md: the drawings and parts come from this Fusion export (admins only) */}
+          <FusionSyncBadge die={die} config={config} compact />
           {readiness.assembly_warnings && readiness.assembly_warnings.length > 0 && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Typography sx={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>

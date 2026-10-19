@@ -156,7 +156,10 @@ def model_info(entry: dict) -> dict:
                 simplified_available=bool(s_step), simplified_step_bytes=s_step and s_step["bytes"],
                 simplified_glb_bytes=s_glb and s_glb["bytes"], simplified_glb_sha256=s_glb and s_glb["sha256"],
                 version=dict(template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
-                             param_hash=(m.get("param_hash") or "")[:12]))
+                             param_hash=(m.get("param_hash") or "")[:12],
+                             # docs/FUSION_SYNC.md 4.2: the Fusion export the model was built from (None for template-built models)
+                             fusion=({k: (m.get("fusion") or {}).get(k) for k in ("document", "version", "exported_at")}
+                                     if m.get("fusion") else None)))
 
 
 # ── STEP stamp ──────────────────────────────────────────────────────────────

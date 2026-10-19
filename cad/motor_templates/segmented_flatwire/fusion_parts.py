@@ -20,6 +20,12 @@ Owner rule 2026-10-19: everything in production comes ONLY from Fusion.  `profil
                                                              the build would see as a volume change)
         "replaced_rows":    ["shaft_seat_r", ...]            optional, Params rows that only the replaced template geometry reads: dead by design,
                                                              build_model.py lists them in roles_check.replaced_by_fusion instead of refusing the build
+        "source":           "bundle"                         A.8 (docs/FUSION_SYNC.md): the files are a Fusion export bundle of the add-in
+                                                             (found through $FC_FUSION_PARTS = <bundle>/parts); the active parts Core, Coil,
+                                                             RotorCore, Magnet may be listed too (build.py), and Ring (mechanics.py)
+        "multi":            {"Coil": "fuse"}                 optional, a part made of several Fusion bodies: all solids of the STEP fused into one
+                                                             (the Fusion bodies overlap, so the volume gate is skipped for it)
+        "bundle":           {document, urn, version, ...}    A.8: the Fusion export the files come from (stamped on every derived file)
     }
 
 Without `shift` the occupancy variant (CIANO28 150) keeps its own rule (front parts +d/2, rear parts -d/2).
@@ -152,7 +158,14 @@ def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stre
         raise RuntimeError("Fusion STEP %s of %s not found; looked in: %s.  The mechanical parts of this profile are the real Fusion bodies (no "
                            "template geometry as fall-back): put the file there or set $FC_FUSION_PARTS" % (file_name, bn, " | ".join(cands)))
     shape = Part.read(path)
-    sol = max(shape.Solids, key=lambda x: x.Volume)             # a component STEP also carries the screws of the holder: the part is the biggest solid
+    fuse = (cfg.get("multi") or {}).get(bn) == "fuse"
+    if fuse:                                                    # several Fusion bodies make the part (the coil turns): one solid
+        fused = shape.Solids[0].fuse(shape.Solids[1:]).removeSplitter() if len(shape.Solids) > 1 else shape.Solids[0]
+        if len(fused.Solids) != 1:
+            raise RuntimeError("Fusion STEP %s: the %d bodies of %s do not fuse into one solid (%d)" % (file_name, len(shape.Solids), bn, len(fused.Solids)))
+        sol = fused.Solids[0]
+    else:
+        sol = max(shape.Solids, key=lambda x: x.Volume)         # a component STEP also carries the screws of the holder: the part is the biggest solid
     if cfg.get("canonical"):
         sol = _canonical(sol)
     src_valid, check = sol.isValid(), ""
@@ -163,7 +176,7 @@ def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stre
             check = str(e)[:200]
     if not sol.Shells or not all(x.isClosed() for x in sol.Shells):
         raise RuntimeError("Fusion STEP %s: the part is not a closed solid" % file_name)
-    expected = float((cfg.get("volumes_mm3") or {}).get(bn, 0.0))
+    expected = 0.0 if fuse else float((cfg.get("volumes_mm3") or {}).get(bn, 0.0))
     filler = 0.0
     if stretch and abs(stretch.get("dz", 0.0)) > 1e-12:
         sol, filler = stretch_solid(sol, float(stretch["z"]), float(stretch["dz"]))

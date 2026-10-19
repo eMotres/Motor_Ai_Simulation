@@ -941,10 +941,14 @@ def build_mechanics(doc, sh, polar_array, fusion_parts=None):
     if fusion and carrier:
         raise RuntimeError("profile.fusion_parts is not supported for the ring-carrier mechanics (CIANO28 85)")
     from . import fusion_parts as FP
+    bundle = bool(fusion_parts) and fusion_parts.get("source") == "bundle"
+    if bundle:                                                   # A.8: the active parts are build.py's; the GFRP ring may be Fusion's too
+        fusion = {k: v for k, v in fusion.items() if k not in ("Core", "Coil", "RotorCore", "Magnet")}
     if fusion:
-        bad = sorted(set(fusion) - {"Shaft", "Stator_holder", "Stator_holder_back", "Prop_fix"})
+        allowed = {"Shaft", "Stator_holder", "Stator_holder_back", "Prop_fix"} | ({"Ring"} if bundle else set())
+        bad = sorted(set(fusion) - allowed)
         if bad:
-            raise RuntimeError("profile.fusion_parts lists %s: only Shaft, Stator_holder, Stator_holder_back, Prop_fix can be Fusion bodies here" % ", ".join(bad))
+            raise RuntimeError("profile.fusion_parts lists %s: only %s can be Fusion bodies here" % (", ".join(bad), ", ".join(sorted(allowed))))
 
     def fusion_body(name):
         """The part `name` as the Fusion STEP body (BaseFeature of its PartDesign body), None when the profile does not list it."""
@@ -988,7 +992,8 @@ def build_mechanics(doc, sh, polar_array, fusion_parts=None):
         b = body("Stator_holder"); mech.addObject(b); rep["Stator_holder"] = build_holder_front(doc, sh, b)
     if fusion_body("Stator_holder_back") is None:
         b = body("Stator_holder_back"); mech.addObject(b); rep["Stator_holder_back"] = build_holder_back(doc, sh, b)
-    b = body("Ring"); mech.addObject(b); rep["Ring"] = build_ring(doc, sh, b)
+    if fusion_body("Ring") is None:
+        b = body("Ring"); mech.addObject(b); rep["Ring"] = build_ring(doc, sh, b)
     if not carrier and fusion_body("Prop_fix") is None:
         b = body("Prop_fix"); mech.addObject(b); rep["Prop_fix"] = build_prop_fix(doc, sh, b)
     sc = body("Screw"); mech.addObject(sc); rep["Screw"] = build_screw(doc, sh, sc)

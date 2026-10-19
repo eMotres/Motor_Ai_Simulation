@@ -112,6 +112,7 @@ from motor_ai_sim.routes.catalog_cards import router as catalog_cards_router
 from motor_ai_sim.routes.saved_sims import router as saved_sims_router
 from motor_ai_sim.routes.freecad import router as freecad_router
 from motor_ai_sim.routes.fusion import router as fusion_router
+from motor_ai_sim.routes.fusion_sync import router as fusion_sync_router
 from motor_ai_sim.routes.family import router as family_router
 # The PDF report export — same /api/family prefix and the same die gate as the
 # datasheet route it sits beside, in its own module because it reads four other
@@ -310,6 +311,7 @@ _api_errors.install(app)
 
 app.include_router(geometry_router)
 app.include_router(fusion_router)
+app.include_router(fusion_sync_router)
 app.include_router(pipeline_router)
 app.include_router(simulation_router)
 app.include_router(static3d_router)

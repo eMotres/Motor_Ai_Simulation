@@ -45,6 +45,7 @@ htmlcov/
 
 # Distribution
 *.manifest
+!fusion/**/*.manifest
 *.spec
 
 # Logs

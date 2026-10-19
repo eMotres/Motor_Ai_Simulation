@@ -694,8 +694,10 @@ def _csv_value(l, k):
     return "" if v is None else v
 
 
-def write_csv(bom, path, extra_columns=None):
-    """extra_columns: {'col title': {line key: value}} appended after the standard columns (a caller may add its own columns)."""
+def write_csv(bom, path, extra_columns=None, source=None):
+    """extra_columns: {'col title': {line key: value}} appended after the standard columns (a caller may add its own columns).
+    source: one closing row (item "S") naming where the geometry comes from, e.g. "Fusion 'CIANO14 50' v3" (docs/FUSION_SYNC.md);
+    readers skip it like every non-numbered row."""
     extra_columns = extra_columns or {}
     keys = [k for k, _ in CSV_COLUMNS]
 
@@ -716,6 +718,8 @@ def write_csv(bom, path, extra_columns=None):
         w.writerow(row(dict(item="C", part="parts the simulation mass does not contain", type="comparison", unit="g", total_mass_g=c["extra_parts_g"])))
         for ex in c.get("explain", []):
             w.writerow(row(dict(item="E", part=ex, type="difference explained")))
+        if source:
+            w.writerow(row(dict(item="S", part="Source: " + source, type="source")))
 
 
 def write_xlsx(bom, path, banner="", extra_sheets=None, sheet_name=None):

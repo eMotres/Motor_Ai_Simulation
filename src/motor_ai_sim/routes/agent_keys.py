@@ -27,6 +27,11 @@ def _owner(authorization: Optional[str]) -> str:
     return ident
 
 
+def _is_admin(authorization: Optional[str]) -> bool:
+    from motor_ai_sim.auth import _is_admin_caller
+    return bool(_is_admin_caller(authorization)[0])
+
+
 class KeyCreate(BaseModel):
     name: str = ""
     scopes: Optional[List[str]] = None
@@ -37,9 +42,10 @@ def list_my_keys(authorization: Optional[str] = Header(default=None)):
     owner = _owner(authorization)
     from motor_ai_sim import agent_designs as _ad
     sim_day = _ad.daily_limit(_keys.Principal(email=owner, credential_id=""))
-    return {"keys": _keys.list_keys(owner), "scopes": list(_keys.SCOPES),
+    extra = list(_keys.ADMIN_KEY_SCOPES) if _is_admin(authorization) else []
+    return {"keys": _keys.list_keys(owner), "scopes": list(_keys.SCOPES) + extra,
             "default_scopes": list(_keys.DEFAULT_SCOPES),
-            "scope_descriptions": dict(_keys.SCOPE_DESCRIPTIONS),
+            "scope_descriptions": {k: v for k, v in _keys.SCOPE_DESCRIPTIONS.items() if k in _keys.SCOPES or k in extra},
             "limits": {"per_minute": _keys.per_minute_limit(),
                        "per_day": _keys.per_day_limit(),
                        "simulations_per_day": sim_day}}
@@ -48,6 +54,8 @@ def list_my_keys(authorization: Optional[str] = Header(default=None)):
 @router.post("")
 def create_my_key(req: KeyCreate, authorization: Optional[str] = Header(default=None)):
     owner = _owner(authorization)
+    if set(req.scopes or ()) & set(_keys.ADMIN_KEY_SCOPES) and not _is_admin(authorization):
+        raise HTTPException(403, detail="the scope(s) %s are for admin accounts only" % ", ".join(_keys.ADMIN_KEY_SCOPES))
     try:
         token, rec = _keys.create_key(owner, req.name, req.scopes)
     except ValueError as e:

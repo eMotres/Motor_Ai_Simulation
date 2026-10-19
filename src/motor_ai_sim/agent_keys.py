@@ -51,6 +51,12 @@ SCOPE_DESCRIPTIONS: Dict[str, str] = {
     "simulate": "Queue simulations of those drafts in your job queue "
                 "(daily fair-use limit)",
 }
+#: Scopes a KEY may carry but OAuth never offers (they are not in SCOPES, which is OAuth's supported and default list):
+#: ``fusion:sync`` lets the Fusion add-in (fusion/AeroStatorSync) use /api/fusion/sync; only an admin may mint it and the
+#: route also checks that the key's owner is an admin (docs/FUSION_SYNC.md, owner 2026-10-19).
+ADMIN_KEY_SCOPES: Tuple[str, ...] = ("fusion:sync",)
+SCOPE_DESCRIPTIONS["fusion:sync"] = ("Fusion add-in: export the Fusion model to AeroStator and read the EM parameters back "
+                                     "(admin only; the synced dies only)")
 TOKEN_PREFIX = "emk_"
 MAX_KEYS_PER_USER = 10
 
@@ -124,9 +130,9 @@ def create_key(owner: str, name: str = "",
     if not owner:
         raise ValueError("an owner is required")
     sc = list(dict.fromkeys(scopes or DEFAULT_SCOPES))
-    bad = [s for s in sc if s not in SCOPES]
+    bad = [s for s in sc if s not in SCOPES and s not in ADMIN_KEY_SCOPES]
     if bad:
-        raise ValueError(f"unknown scope(s): {bad}; allowed: {list(SCOPES)}")
+        raise ValueError(f"unknown scope(s): {bad}; allowed: {list(SCOPES) + list(ADMIN_KEY_SCOPES)}")
     if not sc:
         raise ValueError("at least one scope is required")
     kid = secrets.token_hex(4)

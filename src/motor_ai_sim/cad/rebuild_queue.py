@@ -61,16 +61,18 @@ def read(root, die, config):
         return None
 
 
-def request(root, die, config, *, requested_by="", overrides_hash="none", layer="shared"):
-    """Queue (or re-queue) a rebuild.  A request that is already ``pending`` / ``building`` for the same overrides is kept as it is
-    (one build per state, however many clicks)."""
+def request(root, die, config, *, requested_by="", overrides_hash="none", layer="shared", fusion_version=None):
+    """Queue (or re-queue) a rebuild.  A request that is already ``pending`` / ``building`` for the same overrides (and the same
+    Fusion export version, docs/FUSION_SYNC.md) is kept as it is (one build per state, however many clicks)."""
     cur = read(root, die, config)
-    if cur and cur.get("state") in ("pending", "building") and cur.get("overrides_hash") == overrides_hash:
+    if cur and cur.get("state") in ("pending", "building") and cur.get("overrides_hash") == overrides_hash             and cur.get("fusion_version") == fusion_version:
         return cur
     now = time.time()
     rec = dict(die=die, config=config, layer=layer, state="pending", overrides_hash=overrides_hash,
                requested_by=str(requested_by or "")[:200], requested_at=round(now, 3),
                requested_iso=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), message="", finished_at=None)
+    if fusion_version is not None:
+        rec["fusion_version"] = int(fusion_version)
     return _write(root, rec)
 
 

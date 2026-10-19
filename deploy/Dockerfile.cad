@@ -39,6 +39,9 @@ RUN test -f cad/reference/CIANO14_40_12.json \
  && test -f cad/reference/fusion_mechanics/Shaft.step \
  || { echo "the 'private' build context has no cad/reference (see the header of deploy/Dockerfile.cad)" >&2; exit 1; }
 COPY src/motor_ai_sim/cad/ src/motor_ai_sim/cad/
+# Fusion sync (docs/FUSION_SYNC.md): the read side of the bundle store + the stamps, stdlib only.  The rebuild worker mounts
+# the bundle store read-only and sets MOTRES_FUSION_SYNC_ROOT (see docs/FUSION_SYNC.md section 9).
+COPY src/motor_ai_sim/fusion_sync/ src/motor_ai_sim/fusion_sync/
 COPY src/motor_ai_sim/routes/_validation.py src/motor_ai_sim/routes/fusion.py src/motor_ai_sim/routes/
 COPY config/fusion_param_map.yaml config/motor_config.yaml config/bearings_library.yaml config/
 ARG GIT_SHA=unknown
@@ -50,6 +53,7 @@ ENV QT_QPA_PLATFORM=offscreen \
     MOTRES_DIES_DIR=/store/dies \
     MOTRES_MATERIALS_LIBRARY=/store/materials_library.yaml \
     MOTRES_BEARINGS_LIBRARY=/store/bearings_library.yaml \
+    MOTRES_FUSION_SYNC_ROOT=/store/fusion \
     HOME=/tmp
 
 # The micromamba entrypoint activates the environment; the default command is the builder.

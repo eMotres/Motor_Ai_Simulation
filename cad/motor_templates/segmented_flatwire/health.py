@@ -337,15 +337,19 @@ def gate(doc, sheet_name="Params"):
                     errors.append("sketch %s: %s %s" % (o.Label, k, list(getattr(o, k))))
     vols = {}
     shapes = {}
+    warnings = []
+    fusion_active = {bn for bn in ("Core", "Coil", "RotorCore", "Magnet") if doc.getObject(bn + "_Fusion") is not None}
     for bn in ("Core", "Coil", "RotorCore", "Magnet"):
         b = doc.getObject(bn)
         if b is None:
             errors.append("body %s missing" % bn)
             continue
         s = b.Shape
-        if s.isNull() or not s.isValid() or len(s.Solids) != 1 or s.Volume <= 0:
+        if s.isNull() or not _fusion_valid(doc, bn, s) or len(s.Solids) != 1 or s.Volume <= 0:
             errors.append("body %s: null/invalid/%d solids/volume<=0" % (bn, 0 if s.isNull() else len(s.Solids)))
             continue
+        if bn in fusion_active:
+            errors += _fusion_volume_errors(doc, bn)
         vols[bn] = s.Volume
         shapes[bn] = s
     exp = expected_counts(g)
@@ -375,10 +379,14 @@ def gate(doc, sheet_name="Params"):
             inv += [("Core z length = motor_length", b.ZLength, L), ("Core outer radius = stator_up_r", b.YMax, g("stator_up_r"))]
             sk = doc.getObject("CoreSectorSketch")
             try:
+                if "Core" in fusion_active:                     # A.8: the Fusion core has no template sketch; z length and radius judge it
+                    raise _Skip()
                 import Part
                 area = Part.Face(Part.Wire(Part.__sortEdges__([e for e in sk.Shape.Edges]))).Area
                 inv.append(("Core volume = sector area x motor_length x num_seg*3", shapes["Core"].Volume,
                             area * L * exp["core_sectors"]))
+            except _Skip:
+                pass
             except Exception as e:
                 errors.append("Core sector sketch area not computable: %s" % e)
         if "RotorCore" in shapes:
@@ -392,13 +400,13 @@ def gate(doc, sheet_name="Params"):
             h_in = App.Vector((Rhub + 0.01) * math.cos(ab), (Rhub + 0.01) * math.sin(ab), 0)
             h_out = App.Vector((Rhub - 0.01) * math.cos(ab), (Rhub - 0.01) * math.sin(ab), 0)
             if not (s.isInside(p_in, 1e-6, True) and not s.isInside(p_out, 1e-6, True)):
-                errors.append("stale/incorrect Rotor: outer radius is not rotor_up_r = %.4f" % Rup)
+                (warnings if "RotorCore" in fusion_active else errors).append("stale/incorrect Rotor: outer radius is not rotor_up_r = %.4f" % Rup)
             if not (s.isInside(h_in, 1e-6, True) and not s.isInside(h_out, 1e-6, True)):
-                errors.append("stale/incorrect Rotor: bore radius is not rotor_down_r - rotor_house_height = %.4f" % Rhub)
+                (warnings if "RotorCore" in fusion_active else errors).append("stale/incorrect Rotor: bore radius is not rotor_down_r - rotor_house_height = %.4f" % Rhub)
             if _opt(g, "rotor_key_count", 0) > 0:                    # keys: tip at bore radius - rotor_key_h + rotor_key_offset
                 yt = Rhub - g("rotor_key_h") + g("rotor_key_offset")
                 if not (s.isInside(App.Vector(0, yt + 0.01, 0), 1e-6, True) and not s.isInside(App.Vector(0, yt - 0.01, 0), 1e-6, True)):
-                    errors.append("stale/incorrect Rotor key: tip is not at bore radius - rotor_key_h + rotor_key_offset = %.4f" % yt)
+                    (warnings if "RotorCore" in fusion_active else errors).append("stale/incorrect Rotor key: tip is not at bore radius - rotor_key_h + rotor_key_offset = %.4f" % yt)
         if "Magnet" in shapes:
             b = _bb(shapes["Magnet"])
             inv += [("Magnet z length = mag_step", b.ZLength, g("mag_step")),
@@ -420,11 +428,20 @@ def gate(doc, sheet_name="Params"):
             if name.startswith("Coil") and (" y" in name or " x" in name):
                 tol = 1e-3   # the -z transition loft (B-spline through 7 sections) overshoots its layer by < 1 um
             if abs(got - want) > tol:
-                errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
+                msg = "stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want)
+                part = "RotorCore" if name.startswith("Rotor") else name.split(" ")[0]
+                if part in fusion_active:                       # A.8 (owner 2026-10-19): a Fusion body that disagrees with the
+                    warnings.append("Fusion body vs parameters: %s: Fusion %.6f, AeroStator %.6f" % (name, got, want))   # parameters warns
+                else:
+                    errors.append(msg)
     except Exception as e:
         errors.append("geometry invariants not evaluable: %s" % e)
     return dict(ok=not errors, errors=errors, counts=dict(counts, core_sectors=exp["core_sectors"]), volumes=vols,
-                precheck_violations=pre)
+                precheck_violations=pre, fusion_active=sorted(fusion_active), fusion_warnings=warnings)
+
+
+class _Skip(Exception):
+    pass
 
 
 MECH_BODIES = ("Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring",

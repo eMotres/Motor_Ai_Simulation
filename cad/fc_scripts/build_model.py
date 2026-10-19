@@ -51,6 +51,7 @@ def main():
         pb = electronics.fit(doc, electronics.motor_groups(doc))       # clearances + lead ends vs the board (reported, not refused)
         report["phase_board"] = dict(pb, import_=report.get("phase_board_import"))
     report["gate"] = {k: v for k, v in gt.items() if k != "volumes"}
+    report["fusion_warnings"] = gt.get("fusion_warnings") or []         # A.8: Fusion bodies vs the parameters (warned, not refused)
     report["volumes"] = {k: round(v, 4) for k, v in gt["volumes"].items()}
     direct, live = ps.live_parameters(doc)
     roles = {p["name"]: p.get("role") for _, p in ps.all_params(pj)}
@@ -61,8 +62,9 @@ def main():
         report["roles_check"]["omitted_with_housing"] = report["roles_check"].pop("declared_but_dead")
         report["roles_check"]["declared_but_dead"] = []
     fusion = (pj.get("profile") or {}).get("fusion_parts") or {}
-    if fusion.get("replaced_rows") and not kit:     # rows that only the replaced template geometry read are dead by design (the part is the Fusion body, not parametric)
-        gone = set(fusion["replaced_rows"])
+    if (fusion.get("replaced_rows") or fusion.get("source") == "bundle") and not kit:   # rows that only the replaced template geometry read are dead by
+        # design (the part is the Fusion body, not parametric); A.8 (a whole Fusion export bundle): every such row
+        gone = set(report["roles_check"]["declared_but_dead"]) if fusion.get("source") == "bundle" else set(fusion["replaced_rows"])
         dead = report["roles_check"]["declared_but_dead"]
         report["roles_check"]["replaced_by_fusion"] = [n for n in dead if n in gone]
         report["roles_check"]["declared_but_dead"] = [n for n in dead if n not in gone]

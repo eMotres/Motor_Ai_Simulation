@@ -74,14 +74,21 @@ def build_bodies(doc, sh, pj):
         return p
 
     stator, winding, rotor, magnets = part("Stator"), part("Winding"), part("Rotor"), part("Magnets")
-    core = doc.addObject("PartDesign::Body", "Core"); stator.addObject(core)
-    r_core = build_core(doc, sh, core)
-    coil = doc.addObject("PartDesign::Body", "Coil"); winding.addObject(coil)
-    r_coil = build_coil(doc, sh, coil)
-    rot = doc.addObject("PartDesign::Body", "RotorCore"); rot.Label = "RotorCore"; rotor.addObject(rot)
-    r_rot = build_rotor(doc, sh, rot)
-    mag = doc.addObject("PartDesign::Body", "Magnet"); magnets.addObject(mag)
-    r_mag = build_magnet(doc, sh, mag)
+    fp = prof.get("fusion_parts") or {}
+    fus = dict(fp.get("files") or {}) if fp.get("source") == "bundle" else {}       # A.8: active parts = the Fusion bodies
+    from . import fusion_parts as FP
+
+    def active(name, parent, builder):
+        b = doc.addObject("PartDesign::Body", name); b.Label = name; parent.addObject(b)
+        if name in fus:
+            report.setdefault("fusion_active", {})[name] = FP.import_fusion_part(doc, b, name, fus[name], fp, 0.0, parent)
+            return b, dict(sketch=None, sketches=[])
+        return b, builder(doc, sh, b)
+
+    core, r_core = active("Core", stator, build_core)
+    coil, r_coil = active("Coil", winding, build_coil)
+    rot, r_rot = active("RotorCore", rotor, build_rotor)
+    mag, r_mag = active("Magnet", magnets, build_magnet)
     doc.recompute()
     coils = _polar_array(doc, coil, "Params.coil_count", "Coils"); winding.addObject(coils)
     if ps.has_param(sh, "magnet_slices") and round(pval_(sh, "magnet_slices")) > 1:      # axially sliced magnets (CIANO28 150: 7 x 5 mm)
@@ -97,7 +104,8 @@ def build_bodies(doc, sh, pj):
     doc.recompute()
     for r in (r_core, r_rot, r_mag):
         for sk in [r["sketch"]] + list(r.get("extra_sketches", [])):
-            report["sketches"][sk.Name] = check_sketch(sk)[1]
+            if sk is not None:
+                report["sketches"][sk.Name] = check_sketch(sk)[1]
     for sk in r_coil["sketches"]:
         report["sketches"][sk.Name] = check_sketch(sk)[1]
     if pj.get("named_parameters_mechanics") and not kit:

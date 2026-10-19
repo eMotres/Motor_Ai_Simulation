@@ -50,15 +50,15 @@ def assemble(eff, profile, materials_library=None, bearings_library=None, wire_s
                 provenance=dict(store_files={k: v["sha256"][:12] for k, v in (eff.get("files") or {}).items()}))
 
 
-def write(dump_path, eff, profile, out_prefix, **kw):
+def write(dump_path, eff, profile, out_prefix, source=None, **kw):
     """Build the BOM from a bom_dump.py JSON and write <out_prefix>_BOM.csv (+ .xlsx when openpyxl is installed).
     Returns {files, lines, mass_g, sim_mass_g, to_be_specified, warnings}."""
     dump = json.load(open(dump_path, encoding="utf-8"))
     b = bom.build_bom(dump, assemble(eff, profile, **kw))
     files = [out_prefix + "_BOM.csv"]
-    bom.write_csv(b, files[0])
+    bom.write_csv(b, files[0], source=source)
     try:
-        bom.write_xlsx(b, out_prefix + "_BOM.xlsx")
+        bom.write_xlsx(b, out_prefix + "_BOM.xlsx", **({"banner": "Source: " + source} if source else {}))
         files.append(out_prefix + "_BOM.xlsx")
     except ImportError:
         pass

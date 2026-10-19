@@ -338,6 +338,12 @@ def part_limits(*, thermal_result: Mapping[str, Any],
     # Absent on every other map, which is every map before that date.
     hp = ((thermal_result or {}).get("cooling") or {}).get("heat_path")
     hp = hp if isinstance(hp, Mapping) else {}
+    if rated_winding:
+        # THE RATED POINT judges the coils and the magnets only (owner
+        # 2026-10-19: rated = the coils at the rated temperature; only the
+        # magnet may stop it).  A touch body is reported by `time_to_limit`,
+        # never a limit on where rated sits.
+        hp = {}
     body = str(hp.get("body") or "")
     if body in ("housing", "structure") and hp.get("t_body_c") is not None:
         node = PART_NODE[body]

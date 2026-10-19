@@ -369,3 +369,18 @@ def test_still_on_limit_reads_the_previous_s_on_the_new_network(monkeypatch):
     assert ccr._still_on_limit(loss, 100.0, 1.0, net, caps, lim, "rated", 0.5)
     assert not ccr._still_on_limit(loss, 100.0, 1.05, net, caps, lim,
                                    "rated", 0.5)
+
+
+def test_the_rated_point_judges_coils_and_magnets_only():
+    from motor_ai_sim import coupled_time_to_limit as ttl
+
+    field = {"components": {"winding": {"avg": 170.0, "max": 174.0},
+                            "magnet": {"avg": 100.0, "max": 101.0},
+                            "stator": {"avg": 150.0, "max": 151.0}},
+             "cooling": {"heat_path": {"body": "housing", "t_body_c": 95.0}}}
+    rated = [p.part for p in ttl.part_limits(thermal_result=field,
+                                             rated_winding=True,
+                                             bearing_temp_c=None)]
+    assert "housing" not in rated and "winding" in rated
+    plain = [p.part for p in ttl.part_limits(thermal_result=field)]
+    assert "housing" in plain

@@ -104,7 +104,11 @@ Fusion API behaviour the code works around:
 - The DXF sketch export needs a writable script context even though it changes nothing.
 - `importToTarget` (STEP import) always goes into the **active** document, whatever target component is passed.
 - An occurrence (component) pattern whose count is an expression shows a "not an exact integer" warning while its
-  document is not active; the copies are still placed correctly.
+  document is not active; the copies are still placed correctly, and the warning goes when the document is active.
+- Switching the active document (also the temporary design of a hidden part) leaves the source document flagged as
+  modified although nothing changed; the next Export then asks for a save first (a version without changes).
+- The Import never creates `wire_split` (approved mapping 2026-09-25) and offers every *new* parameter unticked: a user
+  parameter the model does not use is only noise in Fusion's list (found in the first live round trip).
 
 ## 4. Server: rebuild from Fusion bodies
 
@@ -257,3 +261,30 @@ options (owner decision, §8 Q3):
 
 Purchased parts are not redrawn from Fusion: bearings and screws stay catalogue/template parts (their Fusion bodies are
 checked against them by volume), and the phase board stays the KiCad STEP of the Controller repository.
+
+## 9. Deploy notes (when the PR is merged)
+
+- **API** (`/etc/motres/api.env`): `MOTRES_FUSION_SYNC_ROOT=/srv/motres/shared/fusion` (the path as the API container
+  sees it); optionally `FUSION_SYNC_DIES` (default `CIANO14 50 edited`). `ADMIN_EMAILS` must be set (it is): with it unset
+  every caller is admin, as for every admin route on a workstation.
+- **CAD image** (`deploy/Dockerfile.cad`): copies `src/motor_ai_sim/fusion_sync/` and sets
+  `MOTRES_FUSION_SYNC_ROOT=/store/fusion`; rebuild the image (`motres-cad:1.1.3-a78`) and update `/etc/motres/cad-image`.
+- **Rebuild worker** (`/usr/local/bin/motres-cad-rebuild-worker.py`, not in the repository): add the read-only mount
+  `-v /srv/motres/shared/fusion:/store/fusion:ro` to its `docker run`. Without it a synced die's build is refused
+  ("bundle store not there"), never built from template geometry.
+- **Add-in**: Fusion → Utilities → Add-Ins → "+" → `fusion/AeroStatorSync`; Settings: server `https://aerostator.com`,
+  the key from "Access for agents" (scope `fusion:sync`, admin accounts only), mirror folder = the private-repo checkout
+  `cad/reference/fusion_bundles/` (owner decision 3A).
+
+## 10. Stage 1 result (2026-10-19)
+
+Round trip on CIANO14 50, add-in code driven through the Fusion MCP, API of this branch on a workstation port with a
+copy of the die, CAD build in the server sandbox (CAD image + this branch):
+
+| Step | Result |
+|---|---|
+| Export v5 → upload | stored; parameter diff empty; 7/7 body checks pass; rebuild queued |
+| CAD build from the v5 bodies (sandbox) | see the private doc (gate, volumes, stamps) |
+| AeroStator changes `air_gap` 0.25 → 0.3 | guard: 1 parameter differs, "Import into Fusion pending" |
+| Import (add-in) → Fusion | one-row diff; `air_gap` updated, rotor volume 3685.302 → 3668.751 mm³; saved v6; export v6 → guard clean |
+| Revert 0.3 → 0.25 (Import) | rotor back to 3685.302 mm³; saved v7 = AeroStator L15; export v7 → guard clean |

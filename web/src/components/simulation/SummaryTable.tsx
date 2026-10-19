@@ -21,6 +21,7 @@ import { couplingLine, couplingTooltip, coupledStateLine,
          continuousRatingTip, s1ResultsAtLine } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
+import SaveContinuousPointButton from './SaveContinuousPointButton';
 import EmResultTiles from './EmResultTiles';
 import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
@@ -1147,6 +1148,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                     && s.coupling.continuous_rating.trustworthy !== false
                     ? 'green' : 'amber'}
             tooltip={continuousRatingTip(s.coupling)}/>
+          {/* No rating at the duty's speed → save the speed that holds
+              as a duty of its own (owner 2026-10-19), behind a dialog. */}
+          <SaveContinuousPointButton coupling={s.coupling}/>
           {/* The manual "Use N A as the operating point" button (owner
               2026-09-21, third round) is GONE (owner, fourth round, looking at
               it: *«can't you just record this current yourself and run the

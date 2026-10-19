@@ -1377,6 +1377,16 @@ def compact_pwm(record: Dict[str, Any],
     return out
 
 
+def _duty_class_fields(coupling: Any) -> Dict[str, Any]:
+    """``duty_class.coupled_fields`` — never fails a compaction."""
+    try:
+        from motor_ai_sim.duty_class import coupled_fields
+        return coupled_fields(coupling if isinstance(coupling, dict) else {})
+    except Exception:                                       # noqa: BLE001
+        log.debug("duty class could not be read", exc_info=True)
+        return {}
+
+
 def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
     """The coupled loop's verdict: how many electromagnetic runs it took, where
     the temperatures settled, what the bearings cost and what came out of the
@@ -1393,6 +1403,11 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         # the inverter — the bridge that reached them.  A record with no
         # `drive` predates the PWM loop and is a sinusoid (see `_entry_drive`).
         "drive": c.get("drive") or "sine",
+        # SHORT-TIME OR CONTINUOUS (owner 2026-10-19): read off the blocks
+        # below by `duty_class.coupled_fields`, stored flat so the catalog,
+        # the datasheet and the duty selector read one key.  Absent when the
+        # record says neither.
+        **_duty_class_fields(c),
         **({"inverter": dict(c["inverter"])}
            if isinstance(c.get("inverter"), dict) else {}),
         # The last electromagnetic run's own numbers — torque, the four loss

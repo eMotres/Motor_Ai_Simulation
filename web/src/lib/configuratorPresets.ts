@@ -27,6 +27,9 @@ export interface PresetDutyPoint {
   name: string; current_A: number | null; rpm: number | null;
   /** current angle and motor/generator role of the saved mode (absent on older servers) */
   gamma_deg?: number | null; mode?: string | null;
+  /** SHORT-TIME OR CONTINUOUS (owner 2026-10-19); absent when nothing says */
+  duty_class?: string | null;
+  duty_label?: string | null;
 }
 
 export interface Preset {

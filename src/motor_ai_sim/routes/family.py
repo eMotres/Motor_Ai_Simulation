@@ -1027,6 +1027,39 @@ def _config_role(c: dict) -> tuple:
     return ("mixed", "duties")
 
 
+def config_classes(c: dict, dr_cfg: Optional[dict] = None
+                   ) -> Dict[str, Optional[Dict[str, Any]]]:
+    """``{duty name: duty_class.classify(...)}`` for one configuration —
+    its yaml entries and its stored coupled records (``dr_cfg`` is
+    ``duty_results.index(die)[cfg]``; read here when not given)."""
+    from motor_ai_sim import duty_class as _dcl
+    if dr_cfg is None:
+        try:
+            from motor_ai_sim import duty_results as _dr
+            dr_cfg = _dr.get(str(c.get("die") or ""), str(c.get("name") or ""))
+        except Exception:                                   # noqa: BLE001
+            dr_cfg = {}
+    out: Dict[str, Optional[Dict[str, Any]]] = {}
+    for d in (c.get("duties") or []):
+        if not isinstance(d, dict) or not d.get("name"):
+            continue
+        n = str(d["name"])
+        out[n] = _dcl.classify(d, ((dr_cfg or {}).get(n) or {}).get("coupled"))
+    return out
+
+
+def config_rated_duty(c: dict, classes: Optional[Dict[str, Any]] = None
+                      ) -> Optional[str]:
+    """The duty a catalog card and a datasheet's rated column show (owner
+    2026-10-19): :func:`config_default_duty`, unless that one is SHORT-TIME
+    and the configuration has a CONTINUOUS duty — a short-time duty is never
+    shown as the rating."""
+    from motor_ai_sim import duty_class as _dcl
+    names = [str(d.get("name")) for d in (c.get("duties") or [])
+             if isinstance(d, dict) and d.get("name")]
+    return _dcl.prefer_continuous(config_default_duty(c), classes or {}, names)
+
+
 def config_default_duty(c: dict) -> Optional[str]:
     """The mode the catalog shows (and loads) for a configuration — owner
     2026-10-13: one row per motor outside, only the DEFAULT mode in it.
@@ -1652,6 +1685,22 @@ def _continuous_rating_kv(coupled: Any) -> Dict[str, Any]:
     return {"continuous_rating": row} if row else {}
 
 
+def _duty_class_kv(name: str, cls: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``{"duty_class": …, "duty_label": …, "short_time": {...}}`` or ``{}``."""
+    if not cls:
+        return {}
+    from motor_ai_sim import duty_class as _dcl
+    out: Dict[str, Any] = {"duty_class": cls.get("duty_class"),
+                           "duty_label": _dcl.label(name, cls)}
+    if cls.get("duty_class") == _dcl.SHORT_TIME:
+        out["short_time"] = {
+            "time_to_limit_s": cls.get("time_to_limit_s"),
+            "time_from_rated_s": cls.get("time_from_rated_s"),
+            "part": cls.get("part"), "limit_c": cls.get("limit_c"),
+            "words": _dcl.short_time_words(cls)}
+    return out
+
+
 def _duty_run_files(entry: dict) -> list[str]:
     return [str(r["payload_file"])
             for r in (entry.get("runs") or {}).values()
@@ -2267,8 +2316,12 @@ def tree(response: Response, authorization: str = Header(default=None)):
                 # The mode the Motors row shows and loads (owner 2026-10-13);
                 # `default_duty_stored` is what the yaml says, kept visible
                 # when it names a duty that no longer exists.
-                "default_duty": config_default_duty(c),
+                "default_duty": config_rated_duty(
+                    c, _cls := config_classes(c, _dr_cfg)),
                 "default_duty_stored": c.get("default_duty"),
+                # The duty the yaml names, when the row shows a CONTINUOUS one
+                # in its place because it is short-time (owner 2026-10-19).
+                "default_duty_configured": config_default_duty(c),
                 "battery": c.get("battery"),
                 # The bearings, exactly the way the battery rides here: a
                 # property of the MACHINE, so the catalog row, the Mechanical
@@ -2314,7 +2367,11 @@ def tree(response: Response, authorization: str = Header(default=None)):
                      # `_continuous_rating_row` says why "no key" is an answer.
                      **_continuous_rating_kv(
                          (_dr_cfg.get(str(d.get("name") or "")) or {})
-                         .get("coupled"))}
+                         .get("coupled")),
+                     # SHORT-TIME OR CONTINUOUS (owner 2026-10-19), with the
+                     # label every page prints.  Absent when nothing says.
+                     **_duty_class_kv(str(d.get("name") or ""),
+                                      _cls.get(str(d.get("name") or "")))}
                     for d in (c.get("duties") or [])
                 ],
             })
@@ -3460,6 +3517,116 @@ def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
             "runs_copied": sorted((entry.get("runs") or {}).keys())}
 
 
+class ContinuousPointSave(BaseModel):
+    #: the new duty's name; default ``rated`` when the source is short-time
+    name: Optional[str] = None
+    #: what the SOURCE duty is renamed to when the new one takes its name;
+    #: default ``<source>_short_time``
+    rename_source_to: Optional[str] = None
+
+
+@router.post("/duty/{die}/{cfg}/{duty}/save_continuous_point")
+def save_continuous_point(die: str, cfg: str, duty: str,
+                          req: Optional[ContinuousPointSave] = None,
+                          _w: dict = Depends(require_catalog_write)):
+    """Save the CONTINUOUS POINT a coupled run found for ``duty`` (owner
+    2026-10-19) as a duty of its own: the point's speed and current, the
+    source duty's load angle, mode, connection, materials and mesh — the
+    machine and the cooling it was found under are the source's.
+
+    The web asks the user first (a dialog names both the new duty and, when
+    the new one takes the source's name, what the source becomes) — nothing
+    here changes silently: the source is renamed, never overwritten, and its
+    stored results move with it.  Refused when the source has no continuous
+    point, when that point was a network estimate the real pass did NOT
+    confirm, or when a name is taken.
+    """
+    from motor_ai_sim import duty_class as _dcl
+    from motor_ai_sim import duty_results as _dr
+    die = _check_name(die, "die")
+    cfg = _check_name(cfg, "configuration")
+    duty = _check_name(duty, "duty")
+    _require_die_write(die, _w, cfg)
+    req = req or ContinuousPointSave()
+    p = _cfg_file(die, cfg)
+    c = _load_yaml(p, "configuration")
+    src = next((x for x in (c.get("duties") or [])
+                if isinstance(x, dict) and x.get("name") == duty), None)
+    if src is None:
+        raise HTTPException(404, detail=f"duty '{duty}' not found")
+    rec = (_dr.get(die, cfg).get(duty) or {}).get("coupled") or {}
+    cr = rec.get("continuous_rating") if isinstance(rec, dict) else None
+    cp = (cr or {}).get("continuous_point") if isinstance(cr, dict) else None
+    if not isinstance(cp, dict) or not cp.get("feasible") \
+            or not _ttl_num(cp.get("rpm")) or not _ttl_num(cp.get("I_cont_A_rms")):
+        raise HTTPException(409, detail=(
+            f"duty '{duty}' has no continuous point — run it coupled with "
+            "'continuous' first"))
+    if cp.get("verified") is False:
+        raise HTTPException(409, detail=(
+            "the continuous point was NOT confirmed by its real pass ("
+            + str(cp.get("note") or "see the S1 line") + ") — it is not saved "
+            "as a duty"))
+    cls = _dcl.classify(src, rec)
+    src_short = bool(cls and cls.get("duty_class") == _dcl.SHORT_TIME)
+    new_name = _check_name((req.name or "").strip()
+                           or (duty if src_short else duty + "_continuous"),
+                           "duty")
+    names = {str(x.get("name")) for x in (c.get("duties") or [])
+             if isinstance(x, dict)}
+    renamed_to = None
+    if new_name == duty:
+        renamed_to = _check_name((req.rename_source_to or "").strip()
+                                 or duty + _dcl.SHORT_TIME_SUFFIX, "duty")
+        if renamed_to in names:
+            raise HTTPException(409, detail=(
+                f"'{renamed_to}' already exists — pick another name for the "
+                f"short-time duty"))
+        rename_duty(die, cfg, duty, DutyDuplicate(name=renamed_to), _w)
+        c = _load_yaml(p, "configuration")
+        names = {str(x.get("name")) for x in (c.get("duties") or [])
+                 if isinstance(x, dict)}
+        src = next(x for x in c["duties"] if x.get("name") == renamed_to)
+    elif new_name in names:
+        raise HTTPException(409, detail=f"duty '{new_name}' already exists")
+    power = cp.get("power") if isinstance(cp.get("power"), dict) else {}
+    p_shaft = _ttl_num(power.get("P_shaft_W")) or _ttl_num(power.get("P_mech_W"))
+    t_em = _ttl_num(power.get("T_em_Nm"))
+    entry = {
+        "name": new_name, "mode": src.get("mode", "motor"),
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "current_arms": round(float(cp["I_cont_A_rms"]), 3),
+        "rpm": round(float(cp["rpm"]), 1),
+        "gamma_deg": round(float(src.get("gamma_deg") or 0.0), 3),
+        "duty_class": _dcl.CONTINUOUS,
+        "note": ("continuous point of '%s' (%s): %s"
+                 % (duty, "FEM-verified" if cp.get("verified") is True
+                    else "network estimate",
+                    str(cr.get("cooling_label") or "its saved cooling"))),
+        "continuous_source": {
+            "duty": renamed_to or duty, "verified": cp.get("verified"),
+            "limiting_part": cp.get("limiting_part"),
+            "basis": cp.get("basis"), "cooling": cr.get("cooling"),
+            "computed_at": rec.get("computed_at")},
+    }
+    if t_em is not None:
+        entry["torque_nm"] = round(abs(t_em), 2)
+    if p_shaft is not None:
+        entry["power_kw"] = round(abs(p_shaft) / 1000.0, 2)
+    for k in ("star_delta", "materials", "mesh"):
+        if src.get(k):
+            entry[k] = src[k]
+    c["duties"] = list(c.get("duties") or []) + [entry]
+    _save_yaml(p, c)
+    log.info("family: continuous point of '%s/%s/%s' saved as duty '%s' "
+             "(%.1f A rms @ %.0f rpm)%s", die, cfg, duty, new_name,
+             entry["current_arms"], entry["rpm"],
+             (" — the source is now '%s'" % renamed_to) if renamed_to else "")
+    return {"ok": True, "duty": new_name, "renamed_source_to": renamed_to,
+            "entry": {k: entry[k] for k in ("name", "current_arms", "rpm",
+                                            "gamma_deg", "duty_class")}}
+
+
 @router.patch("/duty/{die}/{cfg}/{duty}")
 def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
                 _w: dict = Depends(require_catalog_write)):
@@ -4600,6 +4767,9 @@ def context(response: Response, authorization: str = Header(default=None)):
             "current_arms": point.get("current_arms"), "rpm": point.get("rpm"),
             "gamma_deg": point.get("gamma_deg"), "mode": point.get("mode", "motor"),
         }),
+        # SHORT-TIME OR CONTINUOUS, per duty of this configuration (owner
+        # 2026-10-19) — the strip labels the loaded duty and its dropdown.
+        "duty_classes": _active_duty_classes(die, cfg, c),
         # The SAVED build — the strip compares the live geometry against it
         # and shows the effective name (M1-L220, amber) while unsaved.
         "build": {
@@ -4608,6 +4778,18 @@ def context(response: Response, authorization: str = Header(default=None)):
             "turns": (c.get("geometry_overrides") or {}).get("num_wires_per_slot"),
         },
     }
+
+
+def _active_duty_classes(die: str, cfg: str, c: dict) -> Dict[str, Any]:
+    """``{name: {duty_class, duty_label, short_time?}}`` — never fails the
+    context read."""
+    try:
+        from motor_ai_sim import duty_results as _dr
+        classes = config_classes(c, _dr.get(die, cfg))
+        return {n: _duty_class_kv(n, k) for n, k in classes.items() if k}
+    except Exception:                                       # noqa: BLE001
+        log.debug("duty classes could not be read", exc_info=True)
+        return {}
 
 
 class LockPatch(BaseModel):

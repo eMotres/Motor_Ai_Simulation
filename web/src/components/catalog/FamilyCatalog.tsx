@@ -50,6 +50,7 @@ import { cleanApplications, diesOfDiameter, filterDiesByApplication, type Applic
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
+import { dutyLabel, fmtDuration, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -126,6 +127,10 @@ interface Duty {
   /** THE CONTINUOUS (S1) RATING at this duty's own saved cooling (2026-09-21).
    *  Absent on a duty that never asked `solve_to: continuous`. */
   continuous_rating?: DutyContinuousRating | null;
+  /** SHORT-TIME OR CONTINUOUS (owner 2026-10-19) — absent when nothing says. */
+  duty_class?: DutyClassInfo['duty_class'];
+  duty_label?: string | null;
+  short_time?: DutyClassInfo['short_time'];
 }
 interface Battery {
   chemistry?: string | null; cells?: number | null;
@@ -890,6 +895,14 @@ const FamilyCatalog: React.FC<{
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
                                                           fontVariantNumeric: 'tabular-nums' }}>
                           {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg{cur.mass_partial ? ` (${tx('massPartialShort')})` : ''}
+                          {/* SHORT-TIME (owner 2026-10-19): no continuous mode to show
+                              in its place, so the card says it is not a rating. */}
+                          {cur.short_time && (
+                            <span style={{ color: '#f59e0b', marginLeft: 6 }}>
+                              {cur.short_time_s != null
+                                ? `short-time ${fmtDuration(cur.short_time_s)}` : 'short-time'}
+                            </span>
+                          )}
                         </Typography>
                       </Tooltip>
                       {/* no load arrow here (owner 2026-10-15): the configuration buttons load the motor */}
@@ -1253,6 +1266,15 @@ const FamilyCatalog: React.FC<{
                               <span style={{ color: roleColor(d.mode), fontWeight: 600,
                                              cursor: 'help' }}>
                                 {staleRes ? '⚠ ' : ''}{d.name}{(c.default_duty ?? null) === d.name ? ' ★' : ''}
+                                {/* SHORT-TIME (owner 2026-10-19): never read as a rating. */}
+                                {shortTimeChip(d) && (
+                                  <Tooltip title={dutyLabel(d.name, d)}>
+                                    <span style={{ color: '#f59e0b', fontWeight: 400,
+                                                   fontSize: 10, marginLeft: 6 }}>
+                                      {shortTimeChip(d)}
+                                    </span>
+                                  </Tooltip>
+                                )}
                                 {d.saved_at && (
                                   <span style={{ color: 'var(--text-4)', fontWeight: 400,
                                                  fontSize: 10, marginLeft: 6 }}>

@@ -54,7 +54,10 @@ export function buildModePresets(presets: readonly Preset[]): ModePreset[] {
         duty: m.name,
         knobs: { ...pr.knobs, I_A: m.current_A, rpm: m.rpm },
         key: modeKey(pr.config, m.name),
-        label: modeLabel(pr.config, m.name),
+        // SHORT-TIME (owner 2026-10-19): a mode the machine cannot hold for
+        // ever is never offered as if it were a rating.
+        label: modeLabel(pr.config, m.name)
+          + (m.duty_class === 'short_time' ? ' (short-time)' : ''),
         gamma_deg: finite(m.gamma_deg) ? m.gamma_deg : null,
       });
     }

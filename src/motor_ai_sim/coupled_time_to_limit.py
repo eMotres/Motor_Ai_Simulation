@@ -223,9 +223,10 @@ def rated_ambient(application: Optional[str] = None) -> Optional[float]:
 #: Parts that are REPORTED and warned about but never limit a point (owner
 #: 2026-10-19: «the bearing never limits rated»).  An advisory part over its
 #: limit does not make a point short-time and is not a crossing the loop stops
-#: at; it rides the block as ``advisories``.  The bearing seat of the 2-D map is
-#: the shaft inside the active stack — no holder, no axial path — so its number
-#: is an upper bound, not a seat temperature (see `mech_losses`).
+#: at; it rides the block as ``advisories``.  Since 2026-10-19 the bearing's
+#: number is the solved bearing / holder network's hottest node when the map
+#: carries one; on an older map it is the shaft inside the active stack — no
+#: holder, no axial path — an upper bound (see `mech_losses`).
 ADVISORY_PARTS: Tuple[str, ...] = ("bearing",)
 
 
@@ -752,10 +753,13 @@ def solve(*, thermal_result: Mapping[str, Any],
                  "limit_c": round(float(p.limit_c), 2),
                  "over_by_K": round(p.over_by_k, 2),
                  "note": ("%s over its %g °C limit — REPORTED, never a limit on "
-                          "this point; the 2-D seat is the shaft inside the "
-                          "active stack (no holder, no axial path), so this "
-                          "is an upper bound" % (PART_QUANTITY.get(p.part, p.part),
-                                                 float(p.limit_c)))}
+                          "this point.  The temperature is the hottest node of "
+                          "the solved shaft / bearing / holder network when the "
+                          "map carries one (cooling.bearing_node, 2026-10-19); "
+                          "on a map without it, the 2-D shaft inside the active "
+                          "stack (no holder, no axial path) — an upper bound"
+                          % (PART_QUANTITY.get(p.part, p.part),
+                             float(p.limit_c)))}
         for p in judged if p.over and p.part in ADVISORY_PARTS}
     if not over:
         return {

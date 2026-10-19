@@ -52,6 +52,8 @@ kept as a network-only pass.
 """
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from tests.test_coupled import COOLING as PANEL_COOLING, EM_BODY
@@ -109,7 +111,7 @@ def _fake_rating(monkeypatch, *, block=None):
     calls = []
 
     def _rate(body, *, cooling, rpm, coil_temp_c, magnet_temp_c, duty, mode,
-              time_to_limit=None):
+              time_to_limit=None, pwm=False):
         calls.append({"cooling": dict(cooling or {}), "duty": duty,
                       "mode": mode, "rpm": rpm, "coil_temp_c": coil_temp_c,
                       "magnet_temp_c": magnet_temp_c,
@@ -687,7 +689,7 @@ def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
 
     def _rate(*, thermal_result, em_summary, caps, geometry, cooling,
              side_areas, d_housing_m, duty, mode, resolve, refit,
-             magnet_grade, speed_search=None):
+             magnet_grade, speed_search=None, eddy_noload_fraction=None):
         return dict(rate_return)
 
     monkeypatch.setattr(cp._ccr, "rate", _rate, raising=True)
@@ -949,7 +951,7 @@ def test_the_continuous_point_is_verified_but_never_becomes_the_record(
                 "I_cont_A_rms": 52.3, "actual_c": 150.8,
                 "em": {"summary": {"T_em_avg_Nm": 20.0, "P_mech_W": 6500.0,
                                    "P_loss_total_W": 310.0}},
-                "field": {}}
+                "field": {"components": {"magnet": {"max": 150.8}}}}
 
     monkeypatch.setattr(cp, "_s1_verify", fake_verify)
     block = {"ok": True, "feasible": False, "limits_c": {"magnet": 150.0}}
@@ -968,7 +970,8 @@ def test_the_continuous_point_is_verified_but_never_becomes_the_record(
     # A pass that misses its limit leaves the estimate standing, as evidence.
     def fake_miss(body, **kw):
         return {"verified": False, "passes": 2, "miss_K": 9.0,
-                "I_cont_A_rms": 50.0, "actual_c": 159.0, "em": {}, "field": {},
+                "I_cont_A_rms": 50.0, "actual_c": 159.0, "em": {},
+                "field": {"components": {"magnet": {"max": 159.0}}},
                 "note": "still 9.0 K over its limit after 2 verification passes"}
 
     monkeypatch.setattr(cp, "_s1_verify", fake_miss)
@@ -976,7 +979,7 @@ def test_the_continuous_point_is_verified_but_never_becomes_the_record(
             "limiting_part": "magnet", "temperatures_c": {"magnet": 149.6}}
     cp._cp_verify_continuous_point({}, block, miss, cooling={}, inverter=None,
                                    controller=None, t_coil=200.0, t_mag=None)
-    assert miss["verified"] is False and miss["I_cont_A_rms"] == 54.0
+    assert miss["verified"] is False and miss["I_cont_A_rms"] < 50.0
     assert miss["verification_trial"]["actual_c"] == 159.0
 
     # A PWM drive is never re-run at another speed: the estimate stands.
@@ -985,3 +988,85 @@ def test_the_continuous_point_is_verified_but_never_becomes_the_record(
                                    inverter={"target_I_phase_rms_A": 80.0},
                                    controller=None, t_coil=200.0, t_mag=None)
     assert pwm["verified"] is None and pwm["verification_status"] == "not_tried"
+
+
+def test_a_load_line_point_is_reported_on_the_load_line(monkeypatch):
+    """Review of PR #311, item 1: the first real pass at the propeller's own
+    current reads the magnet HOT, so the network's S1 line is corrected by
+    that reading, the crossing is re-found on the stored curve and a second
+    pass checks the lower speed — and the reported (rpm, current) is that
+    second point, on the curve."""
+    from motor_ai_sim.routes import coupled as cp
+
+    calls = []
+
+    def fake(body, **kw):
+        calls.append((kw["rpm"], kw["i_estimate"], kw.get("max_passes")))
+        hot = len(calls) == 1
+        return {"verified": False, "passes": 1, "I_cont_A_rms": kw["i_estimate"],
+                "em": {"summary": {}},
+                "field": {"components": {
+                    "magnet": {"max": 165.0 if hot else 146.0},
+                    "winding": {"max": 120.0}}}}
+
+    monkeypatch.setattr(cp, "_s1_verify", fake)
+    block = {"ok": True, "feasible": False,
+             "limits_c": {"magnet": 150.0, "winding": 200.0}}
+    point = {"feasible": True, "basis": "load_line", "rpm": 3000.0, "s": 0.45,
+             "I_cont_A_rms": 0.45 * 80.0, "I_limit_A_rms": 0.45 * 80.0,
+             "I_load_A_rms": 0.45 * 80.0, "limiting_part": "magnet",
+             "temperatures_c": {"magnet": 150.0, "winding": 110.0},
+             "power": {"P_shaft_W": 5000.0, "T_em_Nm": 16.0},
+             "curve": [[1000.0, 0.9, 0.05], [2000.0, 0.7, 0.2],
+                       [3000.0, 0.45, 0.45], [4000.0, None, 0.8]]}
+    cp._cp_verify_continuous_point({"I_phase_rms": 80.0}, block, point,
+                                   cooling={"ambient_temp": 40.0},
+                                   inverter=None, controller=None,
+                                   t_coil=200.0, t_mag=110.0)
+    assert len(calls) == 2 and calls[0][2] == 1 and calls[1][2] == 1
+    rpm2, i2 = calls[1][0], calls[1][1]
+    assert 2000.0 < rpm2 < 3000.0
+    # (rpm2, i2) sits on the stored load line
+    expect = (0.2 + (rpm2 - 2000.0) / 1000.0 * (0.45 - 0.2)) * 80.0
+    assert i2 == pytest.approx(expect, rel=1e-6)
+    assert point["verified"] is True and point["rpm"] == round(rpm2, 1)
+    assert point["I_cont_A_rms"] == pytest.approx(i2, abs=1e-3)
+    assert point["miss_K"] == pytest.approx(-4.0)
+    assert point["power"]["P_shaft_W"] < 5000.0
+
+
+def test_a_hot_real_pass_off_the_load_line_never_reports_the_estimate(
+        monkeypatch):
+    """Item 3: two real passes still 9 K over → the current is corrected
+    once from the reading (and says it was not re-checked), never the
+    network's estimate."""
+    from motor_ai_sim.routes import coupled as cp
+
+    monkeypatch.setattr(cp, "_s1_verify", lambda body, **kw: {
+        "verified": False, "passes": 2, "I_cont_A_rms": 50.0, "em": {},
+        "field": {"components": {"magnet": {"max": 159.0}}}})
+    block = {"ok": True, "feasible": False, "limits_c": {"magnet": 150.0}}
+    point = {"feasible": True, "basis": "max_power", "rpm": 3000.0, "s": 0.6,
+             "I_cont_A_rms": 54.0, "limiting_part": "magnet",
+             "temperatures_c": {"magnet": 149.6}}
+    cp._cp_verify_continuous_point({}, block, point,
+                                   cooling={"ambient_temp": 40.0},
+                                   inverter=None, controller=None,
+                                   t_coil=200.0, t_mag=None)
+    assert point["verified"] is False and point["miss_K"] == pytest.approx(9.0)
+    assert point["I_cont_A_rms"] == pytest.approx(
+        50.0 * math.sqrt((150.0 - 40.0) / (159.0 - 40.0)), abs=1e-3)
+    assert "NOT re-checked" in point["note"]
+    assert point["verification_trial"]["actual_c"] == 159.0
+
+
+def test_a_propeller_that_cannot_be_read_says_so(monkeypatch, caplog):
+    from motor_ai_sim.routes import coupled as cp
+
+    opts = cp._cr_speed_search_opts(
+        {"cooling_mode": "air", "air_speed_source": "propeller",
+         "propeller_id": "no_such_prop", "ambient_temp": 40.0},
+        {"T_em_avg_Nm": 31.0}, 4000.0)
+    assert "load_s_at" not in opts
+    assert "could not be read" in opts["note"]
+    assert cp._cr_speed_search_opts({}, {}, 4000.0, pwm=True)["hold_iron"]

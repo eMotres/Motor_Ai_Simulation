@@ -393,3 +393,17 @@ test('an infeasible S1 names the continuous point instead of a dead end', () => 
   delete coupling.continuous_rating.continuous_point;
   assert.match(continuousRatingLine(coupling), /^S1: this cooling cannot hold/);
 });
+
+
+test('a missed continuous point says by how much, and nothing at all says so too', () => {
+  const coupling = { continuous_rating: {
+    ok: true, feasible: false, limiting_part: 'magnet', reference: { rpm: 4000 },
+    continuous_point: { feasible: true, rpm: 2600, I_cont_A_rms: 24, verified: false,
+                        miss_K: 6.2 },
+  } };
+  assert.match(continuousRatingLine(coupling), /\(estimate, real pass \+6\.2 K\)$/);
+  coupling.continuous_rating.continuous_point = { feasible: false, rpm_min: 400 };
+  assert.equal(continuousRatingLine(coupling),
+    'S1 at 4000 rpm: none (magnet); no speed down to 400 rpm holds under this '
+    + 'cooling — it needs more cooling');
+});

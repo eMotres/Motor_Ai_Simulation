@@ -439,7 +439,12 @@ export interface ContinuousRating {
   continuous_point?: {
     feasible?: boolean;
     rpm?: number | null;
+    /** the lowest speed the search tried, when nothing held */
+    rpm_min?: number | null;
     I_cont_A_rms?: number | null;
+    /** on a load line: the most current the cooling holds at `rpm` */
+    I_limit_A_rms?: number | null;
+    capped?: boolean;
     limiting_part?: string | null;
     temperatures_c?: Record<string, number>;
     power?: { T_em_Nm?: number | null; P_shaft_W?: number | null;
@@ -1004,16 +1009,26 @@ export function continuousRatingLine(c: CouplingBlock | null | undefined):
   // ever end with a positive result»): no current holds at the duty's own speed,
   // so the line names the highest speed that DOES hold under the same cooling.
   const cp = r.continuous_point;
-  if (r.ok && r.feasible === false && cp?.feasible && cp.rpm != null
-      && cp.I_cont_A_rms != null) {
+  if (r.ok && r.feasible === false && cp) {
     const rpmRef = r.reference?.rpm;
-    const p = cp.power?.P_shaft_W ?? cp.power?.P_mech_W;
-    const tag = cp.verified === true ? 'FEM-verified'
-      : cp.verified === false ? 'estimate, not verified' : 'network estimate';
-    return `S1 at ${rpmRef != null ? `${Math.round(rpmRef)} rpm` : 'this speed'}`
-      + `: none (${r.limiting_part ?? 'a part'}); continuous: `
-      + `${Math.round(cp.rpm)} rpm, ${cp.I_cont_A_rms.toFixed(1)} A rms`
-      + `${p != null ? `, ${(p / 1000).toFixed(1)} kW` : ''} (${tag})`;
+    const lead = `S1 at ${rpmRef != null ? `${Math.round(rpmRef)} rpm` : 'this speed'}`
+      + `: none (${r.limiting_part ?? 'a part'}); `;
+    if (cp.feasible && cp.rpm != null && cp.I_cont_A_rms != null) {
+      const p = cp.power?.P_shaft_W ?? cp.power?.P_mech_W;
+      // A point the real pass did not confirm says by how much it missed.
+      const tag = cp.verified === true ? 'FEM-verified'
+        : cp.verified === false
+          ? (cp.miss_K != null
+            ? `estimate, real pass ${cp.miss_K >= 0 ? '+' : ''}${cp.miss_K.toFixed(1)} K`
+            : 'estimate, not verified')
+          : 'network estimate';
+      return lead + `continuous: ${Math.round(cp.rpm)} rpm, `
+        + `${cp.I_cont_A_rms.toFixed(1)} A rms`
+        + `${p != null ? `, ${(p / 1000).toFixed(1)} kW` : ''} (${tag})`;
+    }
+    return lead + `no speed down to ${cp.rpm_min != null
+      ? `${Math.round(cp.rpm_min)} rpm` : 'the search floor'} holds under `
+      + 'this cooling — it needs more cooling';
   }
   if (!r.ok || r.feasible === false || r.I_cont_A_rms == null) {
     return `S1: ${r.refusal?.error ?? r.note ?? 'no continuous rating under '

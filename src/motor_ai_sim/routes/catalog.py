@@ -7,9 +7,9 @@ the presets service.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 
 import logging
 import threading
@@ -1073,6 +1073,75 @@ def get_configure_context(motor_id: str,
             **_cl.context(motor, fam),
             # one preset per configuration of the die, read from the machines themselves
             "presets": presets}
+
+
+@router.get("/{motor_id}/configure_load")
+def get_configure_load(motor_id: str,
+                       config: str = Query(..., min_length=1, max_length=100),
+                       duty: Optional[str] = Query(default=None, max_length=100,
+                                                   description="the duty to open on; default rated"),
+                       ambient_c: float = Query(default=25.0, ge=-60.0, le=80.0),
+                       propeller: Optional[str] = Query(default=None, max_length=200,
+                                                        description="the viewer's propeller; default the configuration's"),
+                       housing_d_mm: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                       drive: Optional[str] = Query(default=None, max_length=100,
+                                                    description="S1 drive; default the preset's own (its first PWM variant, else sine)"),
+                       pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                       pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                       series_rpm_max: float = Query(default=40000.0, gt=0.0, le=60000.0),
+                       series_n: int = Query(default=321, ge=3, le=400),
+                       authorization: Optional[str] = Header(default=None)):
+    """ONE Configure load (``motor_ai_sim.configure_load``): the context, the target
+    configuration + duty, and - when the machine is propeller-cooled - the propeller it opens
+    on, its rpm series with the housing film h and its motor S1 limit for the preset's drive
+    and pack, in one answer, so the page renders the loaded point once.  The parts are the
+    existing routes' own answers; a part that cannot be computed is ``null`` with its reason."""
+    from motor_ai_sim import configure_load as _ld
+    from motor_ai_sim import propeller as _pp
+    from motor_ai_sim.routes import propellers as _prop_routes
+    ctx = get_configure_context(motor_id, authorization=authorization)
+    preset = next((p for p in ctx.get("presets") or [] if p.get("config") == config), None)
+    if preset is None:
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' has no configuration '{config}'")
+    mode = _ld.pick_mode(preset, duty)
+    out: Dict[str, Any] = {"motor_id": motor_id, "context": ctx, "config": config,
+                           "duty": (mode or {}).get("name") or preset.get("duty"),
+                           "propeller": None}
+    cooling = ctx.get("cooling") if isinstance(ctx.get("cooling"), dict) else {}
+    try:
+        catalog = _pp.load_catalog()
+    except Exception:                                           # noqa: BLE001
+        catalog = {}
+    pid = _ld.pick_propeller(cooling, config, propeller, catalog)
+    if not pid:
+        return out
+    housing = housing_d_mm          # the page's housing diameter (its film h uses the same)
+    s1_drive = drive or preset.get("drive_variant") or "sine"
+    pack = ({"min": pack_v_min, "max": pack_v_max} if pack_v_min and pack_v_max
+            else _ld.preset_pack(preset))
+    prop_out: Dict[str, Any] = {"id": pid, "ambient_c": ambient_c, "housing_d_mm": housing,
+                                "series_rpm_max": series_rpm_max, "series_n": series_n,
+                                "die": cooling.get("die"), "config": config,
+                                "drive": s1_drive, "pack": pack,
+                                "series": None, "series_error": None, "s1": None, "s1_error": None}
+    try:
+        prop_out["series"] = _prop_routes.get_series(
+            pid, rpm_max=series_rpm_max, n=series_n, temp_c=ambient_c, altitude_m=0.0,
+            pressure_pa=None, position=None, factor=None, housing_d_mm=housing)
+    except HTTPException as exc:
+        prop_out["series_error"] = str(exc.detail)
+    if cooling.get("die"):
+        try:
+            prop_out["s1"] = _prop_routes.get_s1(
+                pid, die=str(cooling["die"]), config=config, ambient_c=ambient_c, altitude_m=0.0,
+                position=None, factor=None, n=41, drive=s1_drive, esc_i_bus_max_A=None,
+                esc_i_phase_max_A=None,
+                pack_v_min=pack["min"] if pack else None, pack_v_max=pack["max"] if pack else None,
+                pack_i_max_A=None, authorization=authorization)
+        except HTTPException as exc:
+            prop_out["s1_error"] = str(exc.detail)
+    out["propeller"] = prop_out
+    return out
 
 
 def _mark_duty_classes(pr: dict, docs: list) -> None:

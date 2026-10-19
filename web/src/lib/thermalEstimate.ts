@@ -48,6 +48,27 @@ export function configureMotorHeat(
       P_extra_W: extra, P_extra_stator_W: extra } };
 }
 
+/** ONE operating point's temperatures and verdict, exactly as the Configure tiles and the red
+ *  "overheats" line judge it: the motor heat of the drive in use (`configureMotorHeat`: PWM extra
+ *  loss in the stator, controller loss NOT motor heat) through `estimateThermal`, judged on the
+ *  winding and the magnet.  `heat` / `thermal` are null when the point or its cooling is unknown
+ *  (then nothing is shown and nothing overheats).  The rated-speed cap evaluates this same function
+ *  at other speeds, so the two can never disagree. */
+export function configurePointThermal(
+  mode: 'sine' | 'pwm', pointAccepted: boolean,
+  base: { P_cu_W: number; P_fe_W: number; P_mag_W: number; stator_W: number; rotor_W: number } | null,
+  extraMotorLoss_W: number | null,
+  cooling: ThermalCooling | null, geom: ThermalGeom,
+  limits: { winding_C: number; magnet_C: number },
+): { heat: ReturnType<typeof configureMotorHeat>; thermal: ThermalEstimate | null; over: boolean;
+     windingOver: boolean; magnetOver: boolean } {
+  const heat = configureMotorHeat(mode, pointAccepted, base, extraMotorLoss_W);
+  const thermal = heat && cooling ? estimateThermal(geom, heat.thermalLosses, cooling) : null;
+  const windingOver = !!thermal && thermal.T_winding_C > limits.winding_C;
+  const magnetOver = !!thermal && thermal.T_magnet_C > limits.magnet_C;
+  return { heat, thermal, over: windingOver || magnetOver, windingOver, magnetOver };
+}
+
 export interface ThermalEstimate {
   P_total_W: number;
   A_surface_m2: number;

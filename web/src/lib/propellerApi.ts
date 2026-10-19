@@ -80,7 +80,7 @@ const _series = new Map<string, Promise<PropSeries | null>>();
 
 /** One propeller's answer on the rpm grid, with the housing film coefficient of every sample. */
 export function fetchSeries(id: string, ambientC: number, housingMm: number): Promise<PropSeries | null> {
-  const key = `${id}|${ambientC.toFixed(1)}|${housingMm.toFixed(1)}`;
+  const key = seriesCacheKey(id, ambientC, housingMm);
   const hit = _series.get(key);
   if (hit) return hit;
   const q = new URLSearchParams({
@@ -93,4 +93,49 @@ export function fetchSeries(id: string, ambientC: number, housingMm: number): Pr
     .then((v) => { if (v == null) _series.delete(key); return v; });
   _series.set(key, p);
   return p;
+}
+
+/** The cache key of one `/series` request (propeller, ambient, housing diameter). */
+export const seriesCacheKey = (id: string, ambientC: number, housingMm: number): string =>
+  `${id}|${ambientC.toFixed(1)}|${housingMm.toFixed(1)}`;
+
+/** Put answers the server already gave (the one-call load below) into the request caches, so the
+ *  page's own request for the same thing is answered without a second trip. */
+export function primeSeries(id: string, ambientC: number, housingMm: number, s: PropSeries): void {
+  _series.set(seriesCacheKey(id, ambientC, housingMm), Promise.resolve(s));
+}
+export function primeS1(id: string, die: string, config: string, ambientC: number, drive: string,
+                        pack: { min: number; max: number } | null, r: S1Result): void {
+  _s1.set(s1CacheKey(id, die, config, ambientC, drive, pack, null), Promise.resolve(r));
+}
+
+/** ONE Configure load as the server resolves it (GET /api/catalog/{id}/configure_load,
+ *  motor_ai_sim.configure_load): the context, the configuration + duty the load lands on and, for a
+ *  propeller-cooled machine, the propeller it opens on with its series and its S1 limit for the
+ *  preset's drive and pack - one answer, so the page renders the loaded point once. */
+export interface ConfigureLoadAnswer {
+  motor_id: string;
+  context: import('./configureContextApi').ConfigureContext;
+  config: string;
+  duty: string | null;
+  propeller: null | {
+    id: string; ambient_c: number; housing_d_mm: number | null;
+    die: string | null; config: string; drive: string; pack: { min: number; max: number } | null;
+    series: PropSeries | null; series_error: string | null;
+    s1: S1Result | null; s1_error: string | null;
+  };
+}
+
+export async function fetchConfigureLoad(motorId: string, q: {
+  config: string; duty: string | null; ambientC: number; housingMm: number | null;
+}): Promise<ConfigureLoadAnswer | null> {
+  const p = new URLSearchParams({ config: q.config, ambient_c: String(q.ambientC),
+    series_rpm_max: String(SERIES_RPM_MAX), series_n: String(SERIES_N) });
+  if (q.duty) p.set('duty', q.duty);
+  if (q.housingMm != null && q.housingMm > 0) p.set('housing_d_mm', String(q.housingMm));
+  try {
+    const r = await fetch(`${API}/api/catalog/${encodeURIComponent(motorId)}/configure_load?${p}`,
+      { cache: 'no-store' });
+    return r.ok ? ((await r.json()) as ConfigureLoadAnswer) : null;
+  } catch { return null; }
 }

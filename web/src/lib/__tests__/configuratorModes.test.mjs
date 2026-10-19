@@ -65,3 +65,17 @@ t('a loaded machine on a mode point is recognised as that mode', () => {
   assert.equal(M.modeOfPoint(bs, 'L12', 1, 1), null);
   assert.equal(M.modeOfPoint(bs, 'L20', 48.8, 14400), null);
 });
+
+t('rated is never short-time and a rated variant is never a button (owner 2026-10-19)', () => {
+  const d85 = mk('L15', 15, 18, 0.3, [
+    { ...pt('rated_short_time', 25.88, 1000, 2), duty_class: 'short_time' },
+    { ...pt('peak', 45.962, 1000, 2), duty_class: 'short_time' },
+    { ...pt('rated', 6.3, 1000, 0), duty_class: 'short_time' },   // even if a stored record says so
+  ]);
+  const b = M.buildModePresets([d85]);
+  assert.deepEqual(b.map((x) => x.label), ['L15 · rated', 'L15 · peak (short-time)']);
+  assert.equal(b[0].knobs.I_A, 6.3);                               // the default load lands on rated
+  assert.equal(M.isPresetMode('Rated short time'), false);
+  assert.equal(M.isPresetMode('rated'), true);
+  assert.equal(M.isPresetMode('peak'), true);
+});

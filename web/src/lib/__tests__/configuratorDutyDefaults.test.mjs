@@ -39,6 +39,7 @@ t('Manual retains its live RPM while Propeller initializes from its catalog poin
 });
 
 t('applying a preset seeds its RPM and seed identity from the same normalized catalog duty', () => {
-  assert.match(panel, /const nk = \{ \.\.\.nk0, rpm: initialRpmForLoadMode\(propLoad \? 'prop' : 'manual',/);
+  // a MODE button (L12 · peak) carries its own point; a configuration-level preset takes the catalog duty's speed
+  assert.match(panel, /const nk = \{ \.\.\.nk0, rpm: isMode \? nk0\.rpm : initialRpmForLoadMode\(propLoad \? 'prop' : 'manual',/);
   assert.match(panel, /propRpmSeedRef\.current = `\$\{catId \?\? refId\}\|\$\{catalogPoint\?\.key/);
 });

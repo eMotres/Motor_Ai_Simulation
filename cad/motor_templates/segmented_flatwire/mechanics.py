@@ -922,12 +922,12 @@ def g_B(sh):
     return pval(sh, "bearing_B")
 
 
-def build_mechanics(doc, sh, polar_array):
+def build_mechanics(doc, sh, polar_array, fusion_parts=None):
     """Adds the Mechanics part with every mechanical body.  polar_array(doc, base, count_expr, name) -> Draft link array.
-    Returns the per-body reports (sketches, chamfer / fillet edge counts)."""
-    if has_param(sh, "occupancy_variant"):                     # CIANO28 150: aluminium parts from occupancy rings
+    Returns the per-body reports (sketches, chamfer / fillet edge counts).  fusion_parts = profile.fusion_parts (occupancy variant only)."""
+    if has_param(sh, "occupancy_variant"):                     # CIANO28 150: aluminium parts = the Fusion bodies (A.7.6) or occupancy rings
         from .mechanics_occupancy import build_mechanics_occupancy
-        return build_mechanics_occupancy(doc, sh, polar_array)
+        return build_mechanics_occupancy(doc, sh, polar_array, fusion_parts)
     mech = doc.addObject("App::Part", "Mechanics"); mech.Label = "Mechanics"
     rep = {}
 

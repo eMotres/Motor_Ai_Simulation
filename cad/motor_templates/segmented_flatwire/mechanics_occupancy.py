@@ -13,8 +13,18 @@ z rows are relative to the stack (motor_length / 2 + offset), so the part follow
 
 Rings are built full rings first, then sectors, each touching what is built (a PartDesign body keeps one solid); all sectors go into
 one PolarPattern.
+
+FUSION SHAPES (template A.7.6, 2026-10-19).  The volume-equivalent rings are NOT the owner's parts: a ring with fill < 1 is a set of sectors
+with gaps between them (the "12 windows" of the holders, hairline slits of the rotor holders, notches in the rim), none of which exist in the
+Fusion design.  When the profile has `profile.fusion_parts` the four aluminium parts are the REAL Fusion bodies instead: the read-only
+Fusion STEP of each part (lightening pockets, ribs, screw holes as designed) is imported once, its largest solid is the part, and it is
+the BaseFeature of the same PartDesign::Body (same names, same solids, same fit / BOM / STEP / GLB code).  Only the axial position follows
+motor_length (a shift of +-(motor_length - ref_motor_length) / 2 at build time); the shape itself is not parametric.  A missing STEP refuses
+the build - there is no silent fall-back to the gapped rings.
 """
+import hashlib
 import math
+import os
 import Part
 import Sketcher
 from .sketchkit import Chain, SK, V_AXIS
@@ -112,6 +122,74 @@ def ring_sketch(body, name, prefix, k, r0, r1):
     return sk
 
 
+FUSION_SUFFIX = "_Fusion"
+
+
+def find_fusion_part(file_name, subdir):
+    """Fusion STEP of a part: $FC_FUSION_PARTS/<file>, cad/reference/fusion_parts/<subdir>/<file> or (owner repo)
+    fusion_source/<subdir>/mechanics/<file>, relative to the template's grand-parent directory (cad/)."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cands = []
+    if os.environ.get("FC_FUSION_PARTS"):
+        cands.append(os.path.join(os.environ["FC_FUSION_PARTS"], file_name))
+    cands += [os.path.join(root, "reference", "fusion_parts", subdir, file_name),
+              os.path.join(root, "fusion_source", subdir, "mechanics", file_name)]
+    for c in cands:
+        if os.path.isfile(c):
+            return c, cands
+    return None, cands
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for blk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None):
+    """The Fusion body of part `bn` as the BaseFeature of `body` (see the module docstring).  Returns the report."""
+    path, cands = find_fusion_part(file_name, cfg.get("dir", ""))
+    if path is None:
+        raise RuntimeError("Fusion STEP %s of %s not found; looked in: %s.  The CIANO28 150 holders are the real Fusion bodies (no gapped "
+                           "volume-equivalent rings): put the file there or set $FC_FUSION_PARTS" % (file_name, bn, " | ".join(cands)))
+    shape = Part.read(path)
+    sol = max(shape.Solids, key=lambda x: x.Volume)             # the Stator_holder STEP also carries its 12 screws: the holder is the biggest solid
+    valid, check = sol.isValid(), ""
+    if not valid:                                               # Fusion's own B-rep: 12 pocket faces + 2 big faces of each stator holder trip BRepCheck
+        try:                                                    # (tolerance-level 'self-intersecting / intersecting wires'); volume, booleans and meshing are fine
+            sol.check(True)
+        except Exception as e:
+            check = str(e)[:200]
+    if not sol.Shells or not all(x.isClosed() for x in sol.Shells):
+        raise RuntimeError("Fusion STEP %s: the part is not a closed solid" % file_name)
+    if abs(shift_z) > 1e-12:                                    # translated(): a moved location, the geometry (and its validity) is not copied
+        import FreeCAD as App
+        sol = sol.translated(App.Vector(0, 0, shift_z))
+    f = doc.addObject("Part::Feature", bn + FUSION_SUFFIX)
+    f.Label = bn + FUSION_SUFFIX
+    f.Shape = sol
+    for prop, typ, val, tip in (
+            ("SourceFile", "App::PropertyString", file_name, "Fusion STEP the shape was read from (imported once, not parametric)"),
+            ("SourceSHA256", "App::PropertyString", _sha256(path), "SHA-256 of that STEP"),
+            ("SourceVolume", "App::PropertyFloat", sol.Volume, "volume (mm3) of the imported solid"),
+            ("FusionBodyVolume", "App::PropertyFloat", float((cfg.get("volumes_mm3") or {}).get(bn, 0.0)),
+             "volume (mm3) of the Fusion body read from the design (0 = not recorded); the gate compares it with the solid"),
+            ("SourceValid", "App::PropertyBool", valid, "BRepCheck verdict of the imported solid; False = Fusion's B-rep carries tolerance-level wire errors (see SourceCheck), the gate accepts exactly that"),
+            ("SourceCheck", "App::PropertyString", check, "message of Shape.check() when the imported solid is not valid"),
+            ("SourceSolids", "App::PropertyInteger", len(shape.Solids), "solids in the STEP (the part is the biggest)"),
+            ("AxialShift", "App::PropertyFloat", float(shift_z), "z shift (mm) applied for motor_length != ref_motor_length")):
+        f.addProperty(typ, prop, "Motor", tip)
+        setattr(f, prop, val)
+    if parent is not None:                                       # the BaseFeature must live in the same App::Part as the body
+        parent.addObject(f)
+    body.BaseFeature = f
+    doc.recompute()
+    return dict(step=file_name, sha256=f.SourceSHA256, volume=round(sol.Volume, 3), solids_in_step=len(shape.Solids), faces=len(sol.Faces),
+                valid=valid, check=check, shift_z=shift_z)
+
+
 def build_occupancy_part(doc, sh, body, prefix):
     g = lambda n: pval(sh, n)
     rings = ring_table(sh, prefix)
@@ -152,8 +230,9 @@ PART_BODIES = (("Shaft", "rotor_holder1"), ("Shaft_rear", "rotor_holder2"), ("St
                ("Stator_holder_back", "stator_holder_back"))
 
 
-def build_mechanics_occupancy(doc, sh, polar_array):
-    """Mechanics of the CIANO28 150: four occupancy parts + the 61811-2RZ bearing (+ screws, see build_screws_occupancy)."""
+def build_mechanics_occupancy(doc, sh, polar_array, fusion_parts=None):
+    """Mechanics of the CIANO28 150: four aluminium parts + the 61811-2RZ bearing (+ screws, see build_screws_occupancy).  The four parts
+    are the Fusion STEP bodies when `fusion_parts` (profile.fusion_parts) is given, else volume-equivalent occupancy rings."""
     import FreeCAD as App
     from . import mechanics as M
     mech = doc.addObject("App::Part", "Mechanics"); mech.Label = "Mechanics"
@@ -165,7 +244,12 @@ def build_mechanics_occupancy(doc, sh, polar_array):
 
     for bn, prefix in PART_BODIES:
         b = body(bn); mech.addObject(b)
-        rep[bn] = build_occupancy_part(doc, sh, b, prefix)
+        if fusion_parts:
+            front = bn in ("Shaft", "Stator_holder")                     # z > 0 side: moves with +motor_length / 2
+            shift = (pval(sh, "motor_length") - float(fusion_parts["ref_motor_length"])) / 2.0 * (1 if front else -1)
+            rep[bn] = dict(sketches=[], features=[], fusion=import_fusion_part(doc, b, bn, fusion_parts["files"][bn], fusion_parts, shift, mech))
+        else:
+            rep[bn] = build_occupancy_part(doc, sh, b, prefix)
     brg = doc.addObject("App::Part", "Bearing_618_8"); brg.Label = "Bearing_618_8"; mech.addObject(brg)       # label kept: bom_dump / BOM find the back copy by it
     o, i, ba = body("Bearing_outer_ring"), body("Bearing_inner_ring"), body("Bearing_ball")
     for x in (o, i, ba):

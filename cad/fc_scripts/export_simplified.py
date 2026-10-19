@@ -138,7 +138,9 @@ def main():
     board, brep = S.board_plate(braw["body"], braw["thickness_solids"]) if braw else (None, None)
     bad = S.check(monolith, rep, coil_blocks, board, brep, coil_ref)
     for name, s in keep.items():
-        if not s.isValid() or len(s.Solids) != 1:
+        fus = src.getObject(name + "_Fusion")                    # a Fusion body (CIANO28 150 holders, A.7.6) may be exactly as invalid as its STEP
+        tol_invalid = fus is not None and not fus.SourceValid and all(x.isClosed() for x in s.Shells)
+        if not (s.isValid() or tol_invalid) or len(s.Solids) != 1:
             bad.append("%s is not one valid solid" % name)
     if bad:
         for b in bad:

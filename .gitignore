@@ -190,3 +190,5 @@ cad/reference/*
 !cad/reference/*.py
 
 # the tool scripts above are public code; the data beside them is private
+# owner design data of the CIANO28 150: Fusion STEP bodies of the four aluminium parts (template A.7.6); never committed to the public repo
+cad/reference/fusion_parts/

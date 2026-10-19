@@ -27,9 +27,9 @@ def ref():
     return pj, rows, vals
 
 
-def test_template_version_is_a75():                      # A.7.5 (CIANO14 50, even-mm holder screw) keeps the 150 port
+def test_template_version_is_a76():                      # A.7.6: the 150 holders are the real Fusion bodies (no gapped rings)
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.5"' in src
+    assert 'TEMPLATE_VERSION = "A.7.6"' in src
 
 
 def test_reference_is_found_for_the_die():
@@ -86,6 +86,27 @@ def test_shaft_and_walls_are_aluminium(ref):
 def test_every_row_has_a_source(ref):
     pj, rows, _ = ref
     assert all(r.get("source") or r["role"] == "derived" for r in rows.values())     # a derived row is its own formula
+
+
+def test_the_holders_are_the_fusion_bodies_not_gapped_rings(ref):
+    """Owner 2026-10-19: no gaps anywhere, Fusion is the truth.  The four aluminium parts come from the Fusion STEP bodies; the measured
+    occupancy rows stay only as the record (role info: not live, so the role check does not call them dead)."""
+    pj, rows, _ = ref
+    fp = pj["profile"]["fusion_parts"]
+    assert set(fp["files"]) == {"Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back"} == set(fp["volumes_mm3"])
+    assert fp["ref_motor_length"] == 35 and fp["dir"] == "CIANO28_150_35"
+    for n, r in rows.items():
+        if n.split("_r0_")[0] in ("rotor_holder1", "rotor_holder2", "stator_holder", "stator_holder_back") and "_r0_" in n:
+            assert r["role"] == "info", n
+    for pre in ("rotor_holder1", "rotor_holder2", "stator_holder", "stator_holder_back"):
+        for suf in ("pattern_n", "rot", "r0_1", "r1_1", "z0_1", "z1_1"):
+            if pre + "_" + suf in rows:
+                assert rows[pre + "_" + suf]["role"] == "info"
+
+
+def test_the_fusion_part_import_has_no_silent_fallback():
+    src = open(os.path.join(TPL, "mechanics_occupancy.py"), encoding="utf-8").read()
+    assert "not found" in src and "raise RuntimeError" in src and "fusion_parts" in src
 
 
 def test_the_occupancy_rows_are_declared_info_only_where_python_reads_them(ref):

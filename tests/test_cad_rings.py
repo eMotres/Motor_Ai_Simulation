@@ -155,7 +155,7 @@ def test_the_150_port_has_no_ring():
 
 
 @pytest.mark.parametrize("profile,length,face_z,flange_z,screw", [
-    ("CIANO14_40_12.json", 12, 7.9, 9.1, 18.0), ("CIANO14_40_12.json", 20, 11.9, 13.1, 25.0),
+    ("CIANO14_40_12.json", 12, 7.9, 9.1, 18.0), ("CIANO14_40_12.json", 20, 11.9, 13.1, 26.0),
     ("CIANO28_85_20SW1200.json", 13, 8.6, 9.6, 20.0), ("CIANO28_85_20SW1200.json", 15, 9.6, 10.6, 22.0)])
 def test_holders_bearings_shaft_and_screws_keep_their_axial_positions(profile, length, face_z, flange_z, screw):
     v = _values(profile, length)

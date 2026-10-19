@@ -19,6 +19,10 @@ GLB / BOM branches. Existing profiles (CIANO14 40, CIANO28 85) build the same ge
 A.7.4 (2026-10-16): the GFRP Ring (body Ring, link Ring_back) is back in the FULL model of every profile that has ring rows (CIANO14 40,
 CIANO28 85; it fixes the coils) and is omitted only from the SIMPLIFIED model; CIANO28 150_35 has no ring. Holders / bearings / shaft keep
 their axial positions (same ring_h + ring_holder_gap chain).
+A.7.5 (2026-10-19): CIANO14 50 (a reference profile with no Fusion model: cad/reference/CIANO14_50_edited.json): the phase board STEP is named by
+profile.phase_board (step, pins, copper_volume; a board STEP without pins), the Tip of the array bases Screw / Bearing_ball is visible so the
+link arrays Screws / Balls show. Owner 2026-10-19: holder_screw_l = holder_screw_req rounded UP to an even mm (CIANO14 40 L20: M2x26, was 25;
+L12 18, 85 L13 20 unchanged).
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.4"
+TEMPLATE_VERSION = "A.7.5"

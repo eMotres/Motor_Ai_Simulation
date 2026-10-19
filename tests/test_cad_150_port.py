@@ -25,9 +25,9 @@ def ref():
     return pj, rows, vals
 
 
-def test_template_version_is_a74():                      # A.7.4 (GFRP rings back in the full model) keeps the 150 port
+def test_template_version_is_a75():                      # A.7.5 (CIANO14 50, even-mm holder screw) keeps the 150 port
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.4"' in src
+    assert 'TEMPLATE_VERSION = "A.7.5"' in src
 
 
 def test_reference_is_found_for_the_die():

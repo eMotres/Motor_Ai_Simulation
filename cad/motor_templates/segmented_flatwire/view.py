@@ -45,7 +45,7 @@ def _is_origin_feature(o):
 
 def set_visibility(doc):
     tips = set()
-    for n in BODIES:
+    for n in _ALL_BODIES:                               # array bases too: their Tip is what the link arrays (Screws, Balls) show
         b = doc.getObject(n)
         if b is not None and getattr(b, "Tip", None) is not None:
             tips.add(b.Tip.Name)
@@ -64,7 +64,7 @@ def set_visibility(doc):
 
 def check_visibility(doc):
     bad = []
-    tips = {doc.getObject(n).Tip.Name for n in BODIES
+    tips = {doc.getObject(n).Tip.Name for n in _ALL_BODIES
             if doc.getObject(n) is not None and getattr(doc.getObject(n), "Tip", None) is not None}
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
@@ -148,7 +148,7 @@ def colour_phase_board(doc, gdoc):
     import ImportGui
     from . import electronics
     f, vo = doc.getObject("PhaseBoard"), gdoc.getObject("PhaseBoard")
-    path = electronics.find_step()
+    path = electronics.find_step(getattr(f, "SourceFile", None))
     tmp = App.newDocument("_board_colours")
     table = {}
     try:

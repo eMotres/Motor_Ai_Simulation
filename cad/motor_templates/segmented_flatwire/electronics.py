@@ -32,12 +32,14 @@ COPPER_PLANE_VOLUME = (90.0, 110.0)      # the four full-board copper layers (10
 LEAD_PROBE_LEN = 40.0
 
 
-def find_step():
+def find_step(name=None):
     """STEP of the board: $FC_PHASE_BOARD_STEP, cad/reference/phase_board/ (motor_ai_sim) or fusion_source/phase_board/
-    (owner repo), relative to the template's grand-parent directory."""
+    (owner repo), relative to the template's grand-parent directory.  `name` = the STEP file name of the profile
+    (`profile.phase_board.step`; default: the CIANO14 40 board)."""
+    name = name or STEP_NAME
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cands = [os.environ.get("FC_PHASE_BOARD_STEP"), os.path.join(root, "reference", "phase_board", STEP_NAME),
-             os.path.join(root, "fusion_source", "phase_board", STEP_NAME)]
+    cands = [os.environ.get("FC_PHASE_BOARD_STEP"), os.path.join(root, "reference", "phase_board", name),
+             os.path.join(root, "fusion_source", "phase_board", name)]
     for c in cands:
         if c and os.path.isfile(c):
             return c
@@ -56,15 +58,20 @@ def has_board(doc):
     return doc.getObject(PART) is not None and doc.getObject(BODY) is not None
 
 
-def build_electronics(doc, sh):
-    """Adds the Electronics part with the PhaseBoard body.  Returns a small report."""
+def build_electronics(doc, sh, cfg=None):
+    """Adds the Electronics part with the PhaseBoard body.  Returns a small report.
+    cfg = profile["phase_board"] (optional; the CIANO14 40 board needs none): step (STEP file name), pins (bool: the board STEP carries
+    phase pins - the J13 position gate and the pin clearances), copper_volume ([lo, hi] mm3 of one full-board copper layer solid,
+    for the N-side copper search)."""
     import Part
     from .params_sheet import has_param
     if has_param(sh, "board_outer_r"):
         return build_board_plate(doc, sh)
-    path = find_step()
+    cfg = cfg or {}
+    step_name = cfg.get("step", STEP_NAME)
+    path = find_step(step_name)
     if path is None:
-        raise RuntimeError("phase board STEP %s not found (cad/reference/phase_board/ or $FC_PHASE_BOARD_STEP)" % STEP_NAME)
+        raise RuntimeError("phase board STEP %s not found (cad/reference/phase_board/ or $FC_PHASE_BOARD_STEP)" % step_name)
     shape = Part.read(path)
     part = doc.addObject("App::Part", PART)
     part.Label = PART
@@ -73,7 +80,10 @@ def build_electronics(doc, sh):
     f.Shape = shape
     part.addObject(f)
     for prop, typ, val, tip in (
-            ("SourceFile", "App::PropertyString", STEP_NAME, "STEP the shape was read from (imported once, not parametric)"),
+            ("SourceFile", "App::PropertyString", step_name, "STEP the shape was read from (imported once, not parametric)"),
+            ("HasPins", "App::PropertyBool", bool(cfg.get("pins", True)), "the board carries phase pins (J13 position gate, pin clearances)"),
+            ("CopperVolume", "App::PropertyString", "%g,%g" % tuple(cfg.get("copper_volume", COPPER_PLANE_VOLUME)),
+             "volume range (mm3) of a full-board copper layer solid"),
             ("SourceSHA256", "App::PropertyString", sha256_file(path), "SHA-256 of that STEP"),
             ("SolidCount", "App::PropertyInteger", len(shape.Solids), "solids of the imported board (gate)")):
         f.addProperty(typ, prop, "Motor", tip)
@@ -81,7 +91,7 @@ def build_electronics(doc, sh):
     for axis in "xyz":
         part.setExpression(".Placement.Base.%s" % axis, "%sphase_board_%s" % (P, axis))
     doc.recompute()
-    return dict(step=STEP_NAME, sha256=f.SourceSHA256, solids=len(shape.Solids), faces=len(shape.Faces))
+    return dict(step=step_name, sha256=f.SourceSHA256, solids=len(shape.Solids), faces=len(shape.Faces))
 
 
 # ---------------------------------------------------------------------------------------------------- plate board (CIANO28 85)
@@ -254,7 +264,21 @@ def board_shape(doc):
     return s
 
 
-def pins(shape):
+def board_cfg(doc):
+    """(has_pins, copper volume range) of the board object (defaults = the CIANO14 40 board; a plate board has no such properties)."""
+    f = doc.getObject(BODY)
+    has_pins = bool(getattr(f, "HasPins", True)) if f is not None else True
+    try:
+        vol = tuple(float(x) for x in f.CopperVolume.split(","))
+    except Exception:
+        vol = COPPER_PLANE_VOLUME
+    return has_pins, vol
+
+
+def pins(shape, has_pins=True):
+    """The phase pins / lead sleeves of the board shape.  `has_pins=False` (board STEP without pins, profile.phase_board.pins): none."""
+    if not has_pins:
+        return []
     tall = [s for s in shape.Solids if s.BoundBox.ZLength > PIN_MIN_Z_LENGTH]
     vmax = max([s.Volume for s in shape.Solids] or [0.0])
     if tall and not any(abs(s.Volume - vmax) < 1e-9 for s in tall):        # a thick plate (CIANO28 150, 6.1 mm) is not a pin
@@ -262,19 +286,19 @@ def pins(shape):
     return [s for s in shape.Solids if s.Volume < 0.05 * vmax] if len(shape.Solids) > 1 else []
 
 
-def n_copper_z(shape):
+def n_copper_z(shape, vol=COPPER_PLANE_VOLUME):
     """Z of the N-side copper surface: the lowest of the four full-board copper layers (volume ~100 mm3, < 0.25 mm thick)."""
     layers = [s for s in shape.Solids if s.BoundBox.XLength > 30 and s.BoundBox.ZLength < 0.25
-              and COPPER_PLANE_VOLUME[0] < s.Volume < COPPER_PLANE_VOLUME[1]]
+              and vol[0] < s.Volume < vol[1]]
     return min(s.BoundBox.ZMin for s in layers) if layers else None
 
 
-def pin_positions(shape):
-    return [(p.BoundBox.Center.x, p.BoundBox.Center.y) for p in pins(shape)]
+def pin_positions(shape, has_pins=True):
+    return [(p.BoundBox.Center.x, p.BoundBox.Center.y) for p in pins(shape, has_pins)]
 
 
-def j13_error(shape):
-    ps = pin_positions(shape)
+def j13_error(shape, has_pins=True):
+    ps = pin_positions(shape, has_pins)
     return min(math.hypot(x - J13[0], y - J13[1]) for x, y in ps) if ps else None
 
 
@@ -301,15 +325,16 @@ def gate(doc, g):
     if abs(g("phase_board_z") - chain) > 1e-6:
         errors.append("phase_board_z %.6f is not coil lead end + N offset (%.6f)" % (g("phase_board_z"), chain))
     bs = board_shape(doc)
-    zn = n_copper_z(bs)
+    has_pins, vol = board_cfg(doc)
+    zn = n_copper_z(bs, vol)
     lead_end = -(g("coil_leg_length") / 2 + g("coil_lead_total"))
     if zn is None:
         errors.append("PhaseBoard: N-side copper layer not found in the imported shape")
     elif abs(zn - (lead_end + g("phase_board_n_offset"))) > 1e-3:
         errors.append("stale/incorrect geometry: PhaseBoard N copper z %.4f, coil lead end %.4f + N offset %.4f require %.4f" % (
             zn, lead_end, g("phase_board_n_offset"), lead_end + g("phase_board_n_offset")))
-    e = j13_error(bs)
-    if e is None or e > J13_TOL:
+    e = j13_error(bs) if has_pins else 0.0
+    if has_pins and (e is None or e > J13_TOL):
         errors.append("stale/incorrect geometry: pin J13 is %s mm from (%.3f, %.3f), allowed %.2f" % (
             "?" if e is None else "%.4f" % e, J13[0], J13[1], J13_TOL))
     return errors
@@ -419,8 +444,9 @@ def fit(doc, motor_groups):
     if is_plate(doc):
         return plate_fit(doc, motor_groups)
     bs = board_shape(doc)
+    has_pins, vol = board_cfg(doc)
     sol = list(bs.Solids)
-    pn = pins(bs)
+    pn = pins(bs, has_pins)
     body = [s for s in sol if s.BoundBox.ZLength <= PIN_MIN_Z_LENGTH]
     rows, errors = [], []
     for name, grp in motor_groups.items():
@@ -444,11 +470,11 @@ def fit(doc, motor_groups):
         c = face.CenterOfMass
         leads.append(dict(coil=ci, lead=name, centre=[round(c.x, 3), round(c.y, 3), round(c.z, 3)],
                           r=round(math.hypot(c.x, c.y), 3), section_x=[round(bb.XMin, 3), round(bb.XMax, 3)],
-                          section_y=[round(bb.YMin, 3), round(bb.YMax, 3)], stands_out_of_n_copper_mm=round(n_copper_z(bs) - z0, 4),
+                          section_y=[round(bb.YMin, 3), round(bb.YMax, 3)], stands_out_of_n_copper_mm=round(n_copper_z(bs, vol) - z0, 4),
                           overlap_mm3=round(ov, 6), clearance_to_board_mm=_r(d_b),
                           clearance_to_fr4_mm=_r(d_f)))
-    return dict(groups=rows, leads=leads, pins=[[round(x, 4), round(y, 4)] for x, y in pin_positions(bs)],
-                j13_error_mm=round(j13_error(bs), 5), board_bbox=[round(v, 4) for v in (
+    return dict(groups=rows, leads=leads, pins=[[round(x, 4), round(y, 4)] for x, y in pin_positions(bs, has_pins)],
+                j13_error_mm=(round(j13_error(bs), 5) if has_pins else None), board_bbox=[round(v, 4) for v in (
                     bs.BoundBox.XMin, bs.BoundBox.YMin, bs.BoundBox.ZMin, bs.BoundBox.XMax, bs.BoundBox.YMax, bs.BoundBox.ZMax)],
                 errors=errors)
 
@@ -466,13 +492,14 @@ def datums(doc, g):
                     note="board_top_z = end of the straight legs + coil_lead_ext + board_gap; the sleeves sit on the coil lead stubs")
     bs = board_shape(doc)
     pl = placement(doc)
+    has_pins, vol = board_cfg(doc)
     return dict(
         what="phase (coil-connection) board rev C, imported reference body (not in the active-part STEP)",
-        step=STEP_NAME, sha256=doc.getObject(BODY).SourceSHA256, solids=len(bs.Solids),
+        step=doc.getObject(BODY).SourceFile, sha256=doc.getObject(BODY).SourceSHA256, solids=len(bs.Solids),
         translation=[round(pl.Base.x, 6), round(pl.Base.y, 6), round(pl.Base.z, 6)], rotation="none",
-        n_copper_z=round(n_copper_z(bs), 6), a_side_top_z=round(bs.BoundBox.ZMax, 6),
+        n_copper_z=round(n_copper_z(bs, vol), 6), a_side_top_z=round(bs.BoundBox.ZMax, 6),
         coil_lead_end_z=round(-(g("coil_leg_length") / 2 + g("coil_lead_total")), 6), n_offset=g("phase_board_n_offset"),
-        pins_xy=[[round(x, 4), round(y, 4)] for x, y in pin_positions(bs)], pin_j13_target=list(J13),
+        pins_xy=[[round(x, 4), round(y, 4)] for x, y in pin_positions(bs, has_pins)], pin_j13_target=list(J13) if has_pins else None,
         note="STEP frame is KiCad absolute (centre 100, -100); +Z = layer A facing the motor; N-side copper at the lead end + "
              "n_offset; the board grows toward the motor when its thickness grows")
 

@@ -131,13 +131,11 @@ Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm 
 
 Not dimensioned in Fusion (Sketch2 is not fully constrained), read as 14.843191 / 1.460021 and rounded by the owner
 2026-10-13 (Fusion not dimensioned): `holder_bolt_r` 14.85, `holder_window_r` 1.46.  Fusion's Chamfer7 at the journal end chamfers one of the two arcs left by the flats (edge picked after
-Extrude15); the template chamfers both.  Screw length: `holder_screw_req = 2 holder_face_z + holder_flange_t` (L20 25, L12 17), `holder_screw_l` = the LONGEST stock length (even mm up to 20, then 22, 25, 30, ...; M2 and M2.5 alike) that keeps the tip `screw_tip_margin`
+Extrude15); the template chamfers both.  Screw length: `holder_screw_req = 2 holder_face_z + holder_flange_t` (L20 25, L12 17), `holder_screw_l` = `holder_screw_req` rounded UP to an even mm, `2 * ceil(holder_screw_req / 2 mm - 1e-6) * 1 mm` (M2 and M2.5 alike; **owner 2026-10-19**; template A.7.5).  The tip must stay `screw_tip_margin`
 (0.2 mm, as the L12 M2x18 has) inside the back flange outer face: `holder_screw_max = 2 holder_flange_z [+ holder_rib_h on the 85] - screw_tip_margin`
-(template A.6.1, 2026-10-15; before, the length was the next stock length above `holder_screw_req`, which broke through the flange on the 85 L15:
-25 instead of 22).  L12 M2x18, L20 M2x25, 85 L13 M2.5x20 are unchanged (profile values identical), 85 L15 (15 mm stack) gets M2.5x22, L12 with a 16 mm
-stack M2x22.  When no stock length lies between `holder_screw_req` and the tip limit the pre-check refuses in words (e.g. 40 mm die, 22 mm stack: needs 27, the
-longest that fits is 25).  The thread engagement stays REPORTED against 1.5 x bolt_d (L20's 2.9 mm is below it as built).  The BOM row names the chosen
-length and checks it against the stock list (22 is a catalogue size).  `fit()` writes
+(template A.6.1, 2026-10-15 introduced the tip limit; until A.7.4 the length was the LONGEST stock length, even mm up to 20, then 22, 25, 30, that fits under it).  L12 M2x18, 85 L13 M2.5x20, 85 L15 M2.5x22 and CIANO14 50 L15 M2x20 (clamp 19.9) are unchanged; **CIANO14 40 L20 is now M2x26** (clamp 25, was M2x25), L12 with a 16 mm
+stack M2x22.  When the rounded length exceeds the tip limit the pre-check refuses in words (e.g. a 40 mm die with `screw_tip_margin` 0.5 mm and a 22 mm stack: needs 27 -> 28, the tip limit is 27.7).  The thread engagement stays REPORTED against 1.5 x bolt_d (L20's 2.9 mm is below it as built).  The BOM row names the chosen
+length and checks it against the stock list (22 and 26 are catalogue sizes).  `fit()` writes
 `screw_check` to `build_report.json` (tip z, margin to the back flange outer face - the tip must stay inside the flange, else
 the build is refused - and the thread engagement in the back holder, reported against 1.5 x bolt_d).
 Coil straight length (owner 2026-10-13): `coil_straight_len = motor_length + 1 mm` (L12 13, L20 21; each stack length has its
@@ -171,6 +169,21 @@ there copies `cad/motor_templates/segmented_flatwire/`, `cad/reference/` and the
 (path argument, default `../motor_ai_sim`), records the source commit in `motor_templates/SOURCE.json`, and never touches
 the owner's models or `params/`; the models in `models/` are refreshed from the server build (`Swap_in_new_models.cmd` if
 FreeCAD has them open).
+
+## CIANO14 50 (die "CIANO14 50 edited", config L15; template A.7.5, owner 2026-10-19)
+
+The 50 mm motor has no Fusion model; its reference profile `cad/reference/CIANO14_50_edited.json` (found by `store.reference_for(die)`) is the CIANO14 40
+reference + the rows of `cad/reference/designs/CIANO14_50_edited_design.json` (bearing 61901-2Z 12x24x6, shaft tip M6, holder flange 1.8, spokes 6, back holder
+window of the board, M2x20 screws, ...: every row has its reason), made by `python cad/reference/make_die_reference.py designs/CIANO14_50_edited_design.json CIANO14_50_edited.json`
+(rerun after any change of the 40 reference).  The simulation values are laid on top by `make_profile`; `deviations` (rotor_fill_r 0.2 mm, not built by the template) are applied after them and
+shown as "DEVIATION, not modelled" in `pull_report.json`.  The bearing comes from the card named in `L15.yaml` (`bearings_library.yaml` 61901-2Z).
+
+**Phase board (replaceable file).**  `profile.phase_board` = `{step, pins, copper_volume}`: the board STEP is read from `cad/reference/phase_board/<step>` (in the CAD image
+`/app/cad/reference/phase_board/CIANO14_50_phase_board_revC_colour.step`; `$FC_PHASE_BOARD_STEP` overrides).  A revised board is a drop-in file of the same name followed by an image rebuild; the gate
+checks the N-side copper layer against the coil lead end (`phase_board_z` chain), `pins: false` = no pin / J13 checks (CIANO50 board: phase holes, the 12 AWG leads are soldered in), `copper_volume` = the wide
+volume range [80, 260] mm3 in which a full-board copper layer is searched.  Only a board STEP goes to the server: no vendor 3-D models.
+
+The GUI finish shows the Tip of the array bases `Screw` / `Bearing_ball`, so the link arrays Screws / Balls are visible (all models).
 
 ## How the owner edits
 

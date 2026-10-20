@@ -126,6 +126,7 @@ from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.account_data import router as account_data_router
 from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.admin_analytics import router as admin_analytics_router
+from motor_ai_sim.routes.admin_analytics_accounts import router as admin_analytics_accounts_router
 from motor_ai_sim.routes.activity import router as activity_router, admin_router as activity_admin_router
 from motor_ai_sim.routes.model3d import router as model3d_router
 from motor_ai_sim.routes.construction import router as construction_router
@@ -373,6 +374,7 @@ app.include_router(account_router)
 app.include_router(account_data_router)
 app.include_router(admin_router)
 app.include_router(admin_analytics_router)
+app.include_router(admin_analytics_accounts_router)
 app.include_router(activity_router)
 app.include_router(activity_admin_router)
 app.include_router(model3d_router)

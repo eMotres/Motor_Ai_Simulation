@@ -15,7 +15,9 @@ It looks at the TRACKED files (``git ls-files``) and checks
   3. ``config/dies/`` holds only the OPEN dies listed below (a new die is a deliberate owner decision: add its name here
      in the same pull request, after checking that it is public in the server catalogue);
   4. ``config/motor_catalog.json`` and ``config/motor_presets.json`` carry only open entries;
-  5. (re-audit R4, 2026-10-20) no Python LITERAL of closed-motor data in ``src/`` (``tests/`` for the digest list): a 64-hex
+  5. (re-audit R4, continued) no tracked text file (docs/*.md, coordination/, web/src, scripts, configs ...) names a
+     token on the PRIVATE_LITERAL_DIGESTS list (closed card id, candidate pin, source-record hash, also truncated to 16 hex);
+  6. (re-audit R4, 2026-10-20) no Python LITERAL of closed-motor data in ``src/`` (``tests/`` for the digest list): a 64-hex
      (sha256) string, a closed card id (``candidate_<die>_...``), a basis-shaped dict (``sourceSha256`` + ``sourceRecord``, or
      ``windingC`` + ``magnetC`` + ``stackLengthMm``), or any literal on the PRIVATE_LITERAL_DIGESTS list.  A legitimate public
      literal is allowed with ``# private-data-ok: <reason>`` on its line or an entry in ALLOWED_LITERALS.
@@ -98,6 +100,8 @@ PRIVATE_LITERAL_DIGESTS = frozenset({
     "4d79db9394d5c6d51b6ba800d0523a2936cc9477b662a15bde9f4d8bc38d6acd",   # closed reference card id
     "be7d7e9afada0c082b2ae453786b94688b0e8f51b5642d3707af6b0ae0e49ab8",   # its candidate pin
     "494a5e9ec197081a1fe83bb687a583e812e7ae5e05f6ec24a283a419d3110ad5",   # its source-record hash
+    "7ed32ad2136389ff8cce7cc9ddafbbf472c23752223d1f6b24311bdd74cc003d",   # first 16 hex characters of the pin
+    "b7a7db0e459b724ed9e35c9dc4462082763acec5979ebab66f3009cf3faa1ee0",   # first 16 hex characters of the record hash
 })
 
 #: Python literals that are allowed although they look like closed data: ``(posix path, literal)``.
@@ -112,6 +116,52 @@ _HEX64 = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])")
 _CARD_ID = re.compile(r"^candidate_[a-z]+\d+_[a-z0-9_]+$")
 #: Key sets of a dict literal that is an audited-basis record.
 _BASIS_KEYS = (frozenset({"sourceSha256", "sourceRecord"}), frozenset({"windingC", "magnetC", "stackLengthMm"}))
+
+
+#: Text files scanned token by token against the digest list (docs, notes, web sources, scripts, configs).
+TEXT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".mjs", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
+                           ".py", ".html", ".csv", ".toml", ".sh", ".ps1"})
+MAX_TEXT_BYTES = 8 * 1024 * 1024
+_TOKEN = re.compile(r"[a-z0-9_]+")
+
+
+def check_text_tokens(path: str, text: str) -> List[str]:
+    """Closed-motor identifiers in a text file: every token (and the first 16 characters of a long hex token) is
+    hashed and looked up in PRIVATE_LITERAL_DIGESTS.  The digests live in this guard; the values never do."""
+    if PurePosixPath(path).suffix.lower() not in TEXT_SUFFIXES:
+        return []
+    found: List[str] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if ALLOW_MARK in line or (path, line.strip()) in ALLOWED_LITERALS:
+            continue
+        for tok in _TOKEN.findall(line.lower()):
+            if len(tok) < 12:
+                continue
+            hit = hashlib.sha256(tok.encode("utf-8")).hexdigest() in PRIVATE_LITERAL_DIGESTS
+            if not hit and len(tok) >= 16 and re.fullmatch(r"[0-9a-f]+", tok):
+                hit = hashlib.sha256(tok[:16].encode("utf-8")).hexdigest() in PRIVATE_LITERAL_DIGESTS
+            if hit:
+                found.append(f"{path}:{lineno}: names a closed reference card / pin / record hash (PRIVATE_LITERAL_DIGESTS); "
+                             f"such notes live in the private repository (docs/d85_reference_basis_moved/ style)")
+                break
+    return found
+
+
+def check_texts(root: str, paths: Iterable[str]) -> List[str]:
+    problems: List[str] = []
+    for p in paths:
+        if PurePosixPath(p).suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        full = os.path.join(root, p)
+        try:
+            if os.path.getsize(full) > MAX_TEXT_BYTES:
+                continue
+            with open(full, encoding="utf-8", errors="ignore") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        problems += check_text_tokens(p, text)
+    return problems
 
 
 def check_python_literals(path: str, text: str) -> List[str]:
@@ -223,7 +273,7 @@ def check_catalog_files(root: str) -> List[str]:
 
 def check(root: str) -> List[str]:
     files = tracked_files(root)
-    return check_paths(files) + check_catalog_files(root) + check_literals(root, files)
+    return check_paths(files) + check_catalog_files(root) + check_literals(root, files) + check_texts(root, files)
 
 
 def main(argv=None) -> int:

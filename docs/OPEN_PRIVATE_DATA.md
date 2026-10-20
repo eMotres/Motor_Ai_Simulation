@@ -60,7 +60,8 @@ Without the private checkout the application runs on the public data alone and t
 `tests/test_no_private_data_in_public.py`) fails when a tracked file is a 3-D / CAD / board file, sits under one of the
 closed-data paths above, is a die other than the open ones, or when `config/motor_catalog.json` / `config/motor_presets.json`
 carry a non-open entry, or when a Python file under `src/` holds a closed-motor literal (sha256 string, closed card id,
-basis-shaped dict; `tests/` is checked against the digest list only). A public literal can be allowed with
+basis-shaped dict; `tests/` is checked against the digest list only). Every tracked text file (docs, notes, web sources, scripts) is also scanned token by token against the same digest list
+(closed card id, candidate pin, record hash). A public literal can be allowed with
 `# private-data-ok: <reason>`. Publishing a new open motor means adding its name to the lists in that script in the same pull
 request.
 

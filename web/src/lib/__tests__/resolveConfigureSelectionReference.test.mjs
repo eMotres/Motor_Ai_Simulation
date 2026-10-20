@@ -8,7 +8,7 @@ const t = M ? test : test.skip;
 
 const current = { ref_id: null, die: 'CIANO28 85 20SW1200', config: 'L13', duty: 'peak' };
 const candidate = {
-  id: 'cat:candidate_d85_ciano28_85_20sw1200_l13',
+  id: 'cat:candidate_x9_synthetic_card',
   card: { die: 'CIANO28 85 20SW1200', config: 'L13', date: '2026-10-08' },
   geo: { numSlots: 24, numPoles: 28, statorOR_mm: 42.5, magnetHeight_mm: 7.0 },
 };
@@ -42,7 +42,7 @@ t('null-id exact family card is refused when live geometry is stale or unavailab
 });
 
 t('explicit reference id retains exact id plus same-die behavior', () => {
-  const selection = { ...current, ref_id: 'candidate_d85_ciano28_85_20sw1200_l13' };
+  const selection = { ...current, ref_id: 'candidate_x9_synthetic_card' };
   assert.equal(M.resolveConfigureSelectionReference(selection, [candidate], staleD40), candidate);
   assert.equal(M.resolveConfigureSelectionReference(selection, [{
     ...candidate, id: 'cat:other',

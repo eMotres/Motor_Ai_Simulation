@@ -114,3 +114,36 @@ def test_non_python_and_other_folders_are_skipped():
 def test_the_real_reference_basis_module_is_a_loader_only():
     problems = G.check_literals(str(ROOT), ["src/motor_ai_sim/reference_basis.py", "tests/test_reference_basis.py"])
     assert not problems, problems
+
+
+# --- notes, docs and web sources: the digest list applies to every tracked text file (re-audit R4, continued) ---------
+
+def _with_digests(monkeypatch, *values):
+    import hashlib
+    monkeypatch.setattr(G, "PRIVATE_LITERAL_DIGESTS", frozenset(hashlib.sha256(v.encode()).hexdigest() for v in values))
+
+
+def test_a_doc_naming_a_listed_card_id_is_refused(monkeypatch):
+    _with_digests(monkeypatch, "synthetic_card_id_x9")
+    doc = "# Notes\n\nThe API returned `cat:Synthetic_Card_ID_X9` for the account.\n"
+    for path in ("docs/some-note.md", "coordination/journal.md", "web/src/lib/__tests__/x.test.mjs", "scripts/a.py"):
+        problems = G.check_text_tokens(path, doc)
+        assert problems and path in problems[0] and ":3:" in problems[0], path
+    assert not G.check_text_tokens("docs/some-note.md", "# Notes\n\nNothing private here, card_id_x8.\n")
+
+
+def test_a_truncated_hash_in_a_doc_is_refused(monkeypatch):
+    _with_digests(monkeypatch, "0123456789abcdef")
+    assert G.check_text_tokens("docs/a.md", "| pin | `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef` |")
+    assert G.check_text_tokens("docs/a.md", "pin 0123456789abcdef..")
+    assert not G.check_text_tokens("docs/a.md", "pin 0123456789abcde..")
+
+
+def test_text_scan_skips_other_suffixes_and_allows_a_marked_line(monkeypatch):
+    _with_digests(monkeypatch, "synthetic_card_id_x9")
+    assert not G.check_text_tokens("docs/a.bin", "synthetic_card_id_x9")
+    assert not G.check_text_tokens("docs/a.md", "synthetic_card_id_x9  <!-- private-data-ok: public example -->")
+
+
+def test_the_real_tree_has_no_listed_token():
+    assert not G.check_texts(str(ROOT), G.tracked_files(str(ROOT)))

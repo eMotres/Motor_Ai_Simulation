@@ -26,19 +26,30 @@ import Part  # noqa: E402
 import glb_writer as G  # noqa: E402
 from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view, palette, frameless  # noqa: E402
 from motor_templates.segmented_flatwire import simplified as S  # noqa: E402
+from motor_templates.segmented_flatwire import fusion_extras  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 VOL_TOL = 0.03
 ANG = 0.3
 EXPLODE = {"Monolith": 0.0, "Coils": -0.35, "Shaft": 2.2, "Holder_back": -1.15, "Bearings_back": -1.55,
-           "PhaseBoard": -2.2, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
+           "PhaseBoard": -2.2, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2,
+           "Rotor_holder_front": 2.2, "Rotor_holder_rear": -1.95, "Holder_bearing": 1.55, "Housing": 1.0, "Fittings": -1.3}      # G2 (A.7.9)
 BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask")}
 ORDER = ["Monolith", "Coils", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
-         "Screws", "Prop_fix", "PhaseBoard_FR4"]
+         "Screws", "Prop_fix", "PhaseBoard_FR4", "Rotor_holder_front", "Rotor_holder_rear", "Holder_bearing", "Housing", "Fittings"]
 
 
 def r6(v):
     return round(float(v), 6)
+
+
+def face_tessellate(f, tol):
+    """Face.tessellate with a fall-back for a full 360 degree cone face (a countersink of a Fusion screw hole): its tessellation comes back EMPTY and the
+    part then loses that wall in the mesh (G2 Stator_holder_down: -3.4 % of the volume); the same face as a NURBS surface meshes fine."""
+    verts, tris = f.tessellate(tol)
+    if not tris and f.Surface.__class__.__name__ == "Cone":
+        verts, tris = f.toNurbs().tessellate(tol)
+    return verts, tris
 
 
 def tessellate(shape, tol):
@@ -49,7 +60,7 @@ def tessellate(shape, tol):
         MeshPart.meshFromShape(Shape=sol, LinearDeflection=tol, AngularDeflection=ANG)
         sv, sp = 0.0, []
         for f in sol.Faces:
-            verts, tris = f.tessellate(tol)
+            verts, tris = face_tessellate(f, tol)
             if not tris:
                 continue
             v = [(p.x, p.y, p.z) for p in verts]
@@ -78,6 +89,42 @@ def board_parts(doc):
     pins = electronics.pins(bs, electronics.board_cfg(doc)[0])
     rest = [s for s in bs.Solids if all(not s.isSame(p) for p in pins)]
     return dict(body=max(rest, key=lambda s: s.Volume), pins=list(pins), thickness_solids=rest)
+
+
+def extras_board_parts(doc):
+    """A.7.9 (G2): the phase board of a model whose passive parts are Fusion extras = the GFRP plates (SimplifiedRule 'board'); the simplified board is ONE plain
+    piece: the outline of the first plate extruded over the z extent of the whole stack of plates and copper layers."""
+    plates = [x for o in fusion_extras.objects(doc) if getattr(o, "SimplifiedRule", "") == "board" for x in o.Shape.Solids]
+    if not plates:
+        return None
+    every = [x for o in fusion_extras.objects(doc) if o.ViewGroup.startswith("PhaseBoard") for x in o.Shape.Solids]
+    return dict(body=max(plates, key=lambda x: x.Volume).copy(), pins=[], thickness_solids=[x.copy() for x in every])
+
+
+def extras_keep(doc, d):
+    """{name: solid} of the Fusion extras the simplified model keeps: 'keep' = as built (the holders, the housing, the fittings, the screws),
+    'ring' = one solid ring d x D x B per occurrence (the bearings: no balls, cage or shields).  'board' and 'omit' parts are not kept."""
+    import Part
+    out = {}
+    for o in fusion_extras.objects(doc):
+        rule = getattr(o, "SimplifiedRule", "")
+        sols = [x.copy() for x in o.Shape.Solids]
+        if rule == "keep":
+            for i, x in enumerate(sols):
+                out["%s_%02d" % (o.Label, i + 1)] = (x, o.ViewGroup, o.ColourRole)
+        elif rule == "ring":
+            k = max(1, int(o.FusionOccurrences))
+            per = len(sols) // k
+            for j in range(k):
+                chunk = sols[j * per:(j + 1) * per]
+                comp = Part.makeCompound(chunk)
+                cyl = [f for x in chunk for f in x.Faces if f.Surface.__class__.__name__ == "Cylinder" and abs(f.Surface.Axis.z) > 0.999]
+                bore, outer = min(f.Surface.Radius for f in cyl), max(f.Surface.Radius for f in cyl)
+                ends = [f.BoundBox.ZMin for x in chunk for f in x.Faces if f.Surface.__class__.__name__ == "Plane" and abs(f.Surface.Axis.z) > 0.999]
+                ring = S.ring_solid(outer, 2.0 * bore, min(ends), max(ends))                       # the bearing's width B between its two end planes
+                side = "front" if comp.BoundBox.Center.z > 0 else "back"
+                out["Bearing_%s" % side] = (ring, "Bearings_" + side, o.ColourRole)
+    return out
 
 
 def template_plate_parts(doc):
@@ -128,7 +175,8 @@ def main():
     coil_base = src.getObject("Coil").Shape.copy()
     ncoil = int(round(g("coil_count"))) if ps.has_param(sh, "coil_count") else len([o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids)
     mech = mechanics.solids(src)
-    braw = board_parts(src)
+    braw = board_parts(src) or extras_board_parts(src)
+    xkeep = extras_keep(src, g)                                  # A.7.9 (G2): the passive parts are Fusion extras
 
     monolith, rep = S.build_monolith(core, rotor, mags, g("stator_up_r"), g("rotor_up_r"))
     ytop = g("stator_up_r") - g("core_thickness") - g("insulation_thickness") - g("wire_spacing_y") / 2
@@ -154,6 +202,8 @@ def main():
         outer = mech.get("Bearing_618_8_%s_outer_ring" % side)
         if outer is not None:
             keep["Bearing_%s" % side] = S.bearing_ring(outer, g("bearing_d"))
+    for name, (x, _grp, _role) in xkeep.items():
+        keep[name] = x
     board, brep = S.board_plate(braw["body"], braw["thickness_solids"]) if braw else (None, None)
     bad = S.check(monolith, rep, coil_blocks, board, brep, coil_ref)
     for name, s in keep.items():
@@ -186,6 +236,10 @@ def main():
         for k in ("Shaft", "Shaft_rear"):
             if k in keep:
                 mounting["shaft"][k + "_z"] = [r6(keep[k].BoundBox.ZMin), r6(keep[k].BoundBox.ZMax)]
+    if xkeep:
+        mounting["fusion_parts"] = {n: dict(z=[r6(x.BoundBox.ZMin), r6(x.BoundBox.ZMax)], outer_diameter=r6(2 * max(abs(x.BoundBox.XMax), abs(x.BoundBox.XMin), abs(x.BoundBox.YMax), abs(x.BoundBox.YMin))))
+                                    for n, (x, _g, _r) in xkeep.items() if not n.startswith("Screws_")}
+        mounting["note_fusion_parts"] = "G2: holders, housing, fittings and screws as built (the Fusion bodies), bearings as plain rings; the axial z of each part is given"
     boardinfo = None
     if braw:
         bb_ = board.BoundBox
@@ -232,12 +286,16 @@ def main():
     if keep:
         mp = part(root, "Mechanics")
         subs = {}
-        for name, grp in mechanics.groups(list(keep)).items():
+        for name, grp in mechanics.groups([n for n in keep if n not in xkeep]).items():
             parent = mp
             if grp:
                 subs.setdefault(grp, part(mp, grp))
                 parent = subs[grp]
             solid(parent, name, keep[name])
+        if xkeep:                                             # A.7.9: one sub-assembly per Fusion group
+            for name, (x, grp, _role) in xkeep.items():
+                subs.setdefault(grp, part(mp, grp))
+                solid(subs[grp], name, x)
     ex.recompute()
     step = os.path.join(out_dir, mid + "_simplified.step")
     tmp = os.path.splitext(step)[0] + ".partial.step"
@@ -286,11 +344,14 @@ def main():
             add(name, name, s, view.COLORS["Prop_fix"])
         elif name.startswith("Screw_"):
             add("Screws", name, s, view.COLORS["Screw"])
+        elif name in xkeep:                                   # A.7.9 (G2): the Fusion parts keep their GLB group and colour role
+            _x, grp, role = xkeep[name]
+            add(grp, name, s, palette.rgb(role), family=grp)
     if board is not None:
         add("PhaseBoard_FR4", "PhaseBoard", board, BOARD_COLOURS["PhaseBoard_FR4"], family="PhaseBoard")
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), cad_variant=info["cad_variant"],
                  kind="SIMPLIFIED - envelope only", tessellation_mm=round(tol, 4))
-    glb, st = G.build_glb([groups[n] for n in ORDER if n in groups], asset)
+    glb, st = G.build_glb([groups[n] for n in ORDER if n in groups] + [gr for n, gr in groups.items() if n not in ORDER], asset)
     worst = max([c[1] for c in checks] or [0.0])
     App.closeDocument(src.Name)
     ok = step_ok and worst < VOL_TOL

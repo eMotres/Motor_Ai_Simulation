@@ -33,7 +33,7 @@ def manifest():
 
 def test_template_version_is_a77_or_later():
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.8"' in src and "A.7.7 (2026-10-19)" in src      # A.7.8 (CIANO28 150_35 from Fusion) keeps the 40 mm parts
+    assert 'TEMPLATE_VERSION = "A.7.9"' in src and "A.7.7 (2026-10-19)" in src      # A.7.8 (CIANO28 150_35 from Fusion) keeps the 40 mm parts
 
 
 def test_the_profile_names_the_four_fusion_parts(prof, manifest):

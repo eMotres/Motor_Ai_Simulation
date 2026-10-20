@@ -29,7 +29,7 @@ def placed_solids(cfg, item):
         raise RuntimeError("Fusion STEP %s of %s not found; looked in: %s.  The part is the Fusion body (no fall-back): put the file there "
                            "or set $FC_FUSION_PARTS" % (item["file"], item.get("name") or item.get("component"), " | ".join(cands)))
     shape = FP.read_step(path)
-    sols = list(shape.Solids)
+    sols = FP.select_solids(shape, item["select"], item["file"]) if item.get("select") else list(shape.Solids)       # select: the part's own solid (a component STEP also carries its child screws)
     if FP.is_canonical(cfg, item.get("name") or item.get("component")):       # STEP round trip once (the build's STEP re-import check)
         sols = [FP._canonical(s) for s in sols]
     out = []
@@ -54,7 +54,12 @@ def _props(f, item, path, n_solids):
             ("BomType", "App::PropertyString", (item.get("bom") or {}).get("type", "manufactured"), "bill-of-materials row type"),
             ("ViewGroup", "App::PropertyString", item.get("group", item.get("name", "")), "GLB group of the 3-D viewer"),
             ("ColourRole", "App::PropertyString", item.get("role", ""), "palette role (palette.py)"),
-            ("SplitSides", "App::PropertyBool", bool(item.get("split_sides", False)), "GLB: one group per side (<group>_front / _back by the solid's z)")):
+            ("SplitSides", "App::PropertyBool", bool(item.get("split_sides", False)), "GLB: one group per side (<group>_front / _back by the solid's z)"),
+            ("DensityKgM3", "App::PropertyFloat", float(item.get("density_kg_m3", 0.0)), "density (kg/m3) the bill of materials weighs the part with (0 = the BOM looks the material up)"),
+            ("DensitySource", "App::PropertyString", item.get("density_src", ""), "where that density comes from"),
+            ("FusionMaterials", "App::PropertyString", json.dumps(item.get("fusion_materials", [])), "material names the Fusion bodies carry (JSON list; the Fusion label is not always right)"),
+            ("CountSolids", "App::PropertyBool", bool(item.get("count_solids", False)), "BOM: the quantity is the number of solids (a bag of small pieces), not of occurrences"),
+            ("SimplifiedRule", "App::PropertyString", item.get("simplified", ""), "SIMPLIFIED model: keep (as built) | ring (bearing ring) | board (plain plate) | omit")):
         f.addProperty(typ, prop, "Motor", tip)
         setattr(f, prop, val)
 
@@ -112,8 +117,62 @@ def gate(doc):
 def bom_props(o):
     """The properties bom_dump copies into the dump (BOM rows of the extras and the Fusion board)."""
     out = {}
-    for k in ("MaterialName", "BomKey", "BomTitle", "BomType", "FusionComponent", "FusionOccurrences", "FusionVolume", "SolidMaterials"):
+    for k in ("MaterialName", "BomKey", "BomTitle", "BomType", "FusionComponent", "FusionOccurrences", "FusionVolume", "SolidMaterials",
+              "DensityKgM3", "DensitySource", "FusionMaterials", "SimplifiedRule", "CountSolids"):
         if hasattr(o, k):
             v = getattr(o, k)
-            out[k] = json.loads(v) if k == "SolidMaterials" and v else v
+            out[k] = json.loads(v) if k in ("SolidMaterials", "FusionMaterials") and v else v
     return out
+
+
+FIT_CLEAR_MM3 = 1e-3            # a pair that Fusion keeps apart must not overlap more than this
+FIT_DESIGN_TOL = 0.01           # relative: the overlap of a pair the Fusion design itself has (press fit, thread, lead through the board) vs its Fusion value
+FIT_DESIGN_ABS = 0.5            # mm3
+
+
+def fit(doc, cfg):
+    """Interference table of an assembly whose passive parts are all Fusion extras (template A.7.9, G2).  Every pair of groups whose bounding boxes
+    meet is measured (overlap volume, solid by solid); the active parts are not tested against each other (the instance check proves every copy sits on
+    its Fusion occurrence).  A pair listed in ``fusion_parts.fit_design`` {"A|B": mm3} is an overlap of the Fusion design itself (bearing press fits,
+    screws in tapped holes, coil leads through the phase board, coils in the back holder): reported, and it must stay at its Fusion value; every other
+    pair must be clear.  Returns dict(pairs, errors)."""
+    import time
+    from . import health
+    groups = {"Core": doc.getObject("Core").Shape, "RotorCore": doc.getObject("RotorCore").Shape}
+    for lbl in ("Coils", "MagnetArray"):
+        groups[lbl] = [o for o in doc.Objects if o.Label == lbl][0].Shape
+    for o in objects(doc):
+        groups[o.Label] = o.Shape
+    design = dict(cfg.get("fit_design") or {})
+    active = ("Core", "RotorCore", "Coils", "MagnetArray")
+    names = list(groups)
+    rows, errors, seen = [], [], set()
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            if a in active and b in active:
+                continue
+            if not groups[a].BoundBox.intersect(groups[b].BoundBox):
+                continue
+            t0 = time.time()
+            ov = health._common_volume(groups[a], groups[b])
+            key = a + "|" + b if a + "|" + b in design else b + "|" + a
+            kind = "design" if key in design else "clear"
+            seen.add(key)
+            row = dict(a=a, b=b, kind=kind, overlap_mm3=round(ov, 6), seconds=round(time.time() - t0, 1))
+            if kind == "design":
+                want = float(design[key])
+                row["fusion_overlap_mm3"] = want
+                row["ok"] = abs(ov - want) <= FIT_DESIGN_TOL * want + FIT_DESIGN_ABS
+                row["note"] = "overlap of the Fusion design itself, reported: the model reproduces Fusion"
+                if not row["ok"]:
+                    errors.append("fit: %s / %s overlap %.3f mm3, the Fusion design has %.3f mm3 (a part is not where Fusion puts it)" % (a, b, ov, want))
+            else:
+                row["ok"] = ov < FIT_CLEAR_MM3
+                if not row["ok"]:
+                    errors.append("fit: %s runs into %s (overlap %.3f mm3; Fusion keeps them apart)" % (a, b, ov))
+            rows.append(row)
+    for key, want in design.items():
+        if key not in seen and float(want) > FIT_DESIGN_ABS:
+            errors.append("fit: the Fusion design overlap %s (%.3f mm3) is gone - the parts no longer meet" % (key, float(want)))
+    return dict(pairs=rows, errors=errors, screw=None)
+

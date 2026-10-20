@@ -164,6 +164,9 @@ def _extra(model, pattern):
 
 # ------------------------------------------------------------------------------------------------------ the BOM
 def build_bom(dump, inputs):
+    if (dump.get("meta") or {}).get("motor_bom_mode") == "fusion_assembly":    # A.7.9 (G2): the passive parts are Fusion bodies (profile.fusion_parts.extras)
+        from .bom_fusion import build_bom_fusion
+        return build_bom_fusion(dump, inputs)
     m = Model(dump)
     kit = is_frameless(dump, inputs)
     cfg = inputs["config"]

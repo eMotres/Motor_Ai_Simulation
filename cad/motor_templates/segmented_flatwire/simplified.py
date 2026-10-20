@@ -185,6 +185,15 @@ def check_coil(block, coil, ytop, wire_h, pitch, n_layers):
     return bad
 
 
+def ring_solid(R, d, z0, z1):
+    """One solid ring: outer radius R, bore diameter d, from z0 to z1 (the radii of an imported bearing are read from its cylinder faces - a bounding box
+    of a revolved Fusion body is not tight)."""
+    import Part
+    big = Part.makeCylinder(R, z1 - z0, _V(0, 0, z0))
+    small = Part.makeCylinder(d / 2.0, z1 - z0, _V(0, 0, z0))
+    return big.cut(small).removeSplitter().Solids[0]
+
+
 def bearing_ring(outer_ring, d, z_range=None):
     """One solid ring d x D x B from an outer ring solid (its radius and axial extent) and the bore diameter d."""
     import Part

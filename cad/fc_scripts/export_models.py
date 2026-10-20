@@ -38,7 +38,8 @@ from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2.2,
            "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
            "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2,
-           "Fan_front": 1.55, "Fan_back": -1.35, "Insulation_ceramic": -0.2}           # Fusion-only parts of the CIANO28 150 (A.7.8)
+           "Fan_front": 1.55, "Fan_back": -1.35, "Insulation_ceramic": -0.2,           # Fusion-only parts of the CIANO28 150 (A.7.8)
+           "Rotor_holder_front": 2.2, "Rotor_holder_rear": -1.95, "Holder_bearing": 1.55, "Housing": 1.0, "Fittings": -1.3, "Fan": -1.35}    # G2 (A.7.9)
 # board groups use THE palette (palette.py): the board body is the solder-mask green, copper layers + pads gold, pins brass, the
 # remaining solids (notch walls) the FR4 edge colour
 BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper": palette.rgb("pcb_gold"),
@@ -48,7 +49,8 @@ ANG = 0.3                       # angular deflection (rad) of the viewer meshes
 ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
          "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
          "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins",
-         "Fan_front", "Fan_back", "Insulation_ceramic"]
+         "Fan_front", "Fan_back", "Insulation_ceramic",
+         "Rotor_holder_front", "Rotor_holder_rear", "Holder_bearing", "Housing", "Fittings", "Fan"]
 
 
 def _mesh(sol, tol):
@@ -93,6 +95,15 @@ def fine_of(node):
     return 0.25 if any(k in node for k in FINE_NODES) else 1.0
 
 
+def face_tessellate(f, tol):
+    """Face.tessellate with a fall-back for a full 360 degree cone face (a countersink of a Fusion screw hole): its tessellation comes back EMPTY and the
+    part then loses that wall in the mesh (G2 Stator_holder_down: -3.4 % of the volume); the same face as a NURBS surface meshes fine."""
+    verts, tris = f.tessellate(tol)
+    if not tris and f.Surface.__class__.__name__ == "Cone":
+        verts, tris = f.toNurbs().tessellate(tol)
+    return verts, tris
+
+
 def tessellate(shape, tol, thread_of=None):
     """-> ([G.Mesh per face, ...], mesh volume, [(G.Mesh, thread extras), ...]).  One patch per face: hard edges between faces.
     `thread_of(face)` returns the `extras` dict of a threaded cylinder face (or None): such faces are returned separately in the
@@ -103,7 +114,7 @@ def tessellate(shape, tol, thread_of=None):
         sv = 0.0
         sp = []
         for f in sol.Faces:
-            verts, tris = f.tessellate(tol)
+            verts, tris = face_tessellate(f, tol)
             if not tris:
                 continue
             v = [(p.x, p.y, p.z) for p in verts]
@@ -143,6 +154,8 @@ def thread_rules(src):
       ring carrier   internal M3 hub holes."""
     sh = src.getObject("Params")
     g = lambda n: ps.pval(sh, n)
+    if not mechanics.has_mechanics(src):                    # A.7.9: a model whose passive parts are all Fusion extras (G2) has no template threads
+        return {}
     if ps.has_param(sh, "occupancy_variant"):               # CIANO28 150: no threads are modelled in the volume-equivalent holders / screws
         return {}
     carrier = not ps.has_param(sh, "shaft_thread_r")
@@ -228,7 +241,7 @@ class Collector:
             self.checks.append((node, round(shape.Volume, 4), round(vol, 4), abs(vol - shape.Volume) / shape.Volume))
 
     def ordered(self):
-        return [self.groups[n] for n in ORDER if n in self.groups]
+        return [self.groups[n] for n in ORDER if n in self.groups] + [g for n, g in self.groups.items() if n not in ORDER]
 
     def geometry_sha256(self):
         return G.geometry_hash(self.ordered())
@@ -304,7 +317,7 @@ def add_motor(col, parts):
     for label, (sols, group, role, split) in (parts.get("extras") or {}).items():       # A.7.8: Fusion-only parts (fan plates, alumina pieces)
         for i, s in enumerate(sols):
             g = (group + ("_front" if s.CenterOfMass.z > 0 else "_back")) if split else group
-            col.add(g, "%s_%02d" % (label, i + 1), s, palette.rgb(role), family=g, check=i < 2)
+            col.add(g, "%s_%02d" % (label, i + 1), s, palette.rgb(role), family="PhaseBoard" if g.startswith("PhaseBoard") else g, check=i < 2)
     return info
 
 

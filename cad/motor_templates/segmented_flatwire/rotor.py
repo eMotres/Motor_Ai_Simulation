@@ -42,6 +42,14 @@ def build_rotor(doc, sh, body):
     xl = n["Rup"] * math.sin(math.radians(n["h"]))
     Lb = (xl, cfil[1] + math.sqrt(rf * rf - (xl - cfil[0]) ** 2))
     Lt = (xl, math.sqrt(n["Rup"] ** 2 - xl * xl))
+    rt = g("rotor_tip_fill_r") if has_param(sh, "rotor_tip_fill_r") else 0.0     # pole-tip rounding (Fusion Fillet8 = rotor_r; sim rotor_fill_r)
+    if rt > 1e-12:
+        Ct = (xl + rt, math.sqrt((n["Rup"] - rt) ** 2 - (xl + rt) ** 2))        # centre: tangent to the lip line (x = xl) inside the Rup circle
+        T1 = (xl, Ct[1])                                                        # tangent point on the lip line
+        kk = n["Rup"] / (n["Rup"] - rt)
+        T2 = (Ct[0] * kk, Ct[1] * kk)                                           # tangent point on the outer arc
+    else:
+        T1 = T2 = Lt
     Pp = (n["Rup"] * n["sa"], n["Rup"] * n["ca"])
     Ph = (n["Rhub"] * n["sa"], n["Rhub"] * n["ca"])
     a_deg = n["a"]
@@ -53,13 +61,17 @@ def build_rotor(doc, sh, body):
     R["plo"] = c.line(Bp, Kp, joint="C")
     R["pup"] = c.line(Kp, Fu, joint="T")
     R["fil"] = c.arc(cfil, rf, Fu, Lb, ccw=True, joint="C")
-    R["lip"] = c.line(Lb, Lt, joint="C")
-    R["outer"] = c.arc((0, 0), n["Rup"], Lt, Pp, ccw=False, joint="C")
+    R["lip"] = c.line(Lb, T1, joint="T" if rt > 1e-12 else "C")
+    if rt > 1e-12:
+        R["tip"] = c.arc(Ct, rt, T1, T2, ccw=False, joint="T")
+    R["outer"] = c.arc((0, 0), n["Rup"], T2, Pp, ccw=False, joint="C")
     R["pole"] = c.line(Pp, Ph, joint="C", rev=True)          # drawn hub -> outer so its angle to the pole axis is +half_pole_angle
     hub = c.arc((0, 0), n["Rhub"], Ph, M(Ph), ccw=True, joint="C")
     L["pole"] = c.line(M(Ph), M(Pp), joint="C")
-    L["outer"] = c.arc((0, 0), n["Rup"], M(Pp), M(Lt), ccw=False, joint="C")
-    L["lip"] = c.line(M(Lt), M(Lb), joint="C")
+    L["outer"] = c.arc((0, 0), n["Rup"], M(Pp), M(T2), ccw=False, joint="C")
+    if rt > 1e-12:
+        L["tip"] = c.arc(M(Ct), rt, M(T2), M(T1), ccw=False, joint="C")
+    L["lip"] = c.line(M(T1), M(Lb), joint="C")
     L["fil"] = c.arc(M(cfil), rf, M(Lb), M(Fu), ccw=True, joint="C")
     L["pup"] = c.line(M(Fu), M(Kp), joint="C")
     L["plo"] = c.line(M(Kp), M(Bp), joint="C")
@@ -98,6 +110,8 @@ def build_rotor(doc, sh, body):
     s.con("Radius", R["fil"], rf, name="pocket_fillet_r", expr=P + "magnet_fill_radius + " + P + "offset_rotor")
     s.con("Distance", -1, 1, R["fil"], 3, n["Rtop"] - n["mfr"], name="fillet_centre_r",
           expr=P + "rotor_up_r - " + P + "magnet_up_gap - " + P + "magnet_fill_radius")
+    if rt > 1e-12:
+        s.con("Radius", R["tip"], rt, name="rotor_tip_fill_r", expr=P + "rotor_tip_fill_r")
     s.con("Vertical", R["lip"])
     s.con("DistanceX", -1, 1, R["lip"], 1, xl, name="lip_x", expr=lip_expr)
     s.con("Coincident", R["outer"], 3, -1, 1)
@@ -130,7 +144,8 @@ def build_rotor(doc, sh, body):
 def build_keys(doc, sh, body, g):
     """Rotor keys: see the module docstring.  Right half is dimensioned, the left half is its mirror (Symmetric / Equal)."""
     Rb = g("rotor_down_r") - g("rotor_house_height")                  # bore radius (= hub inner radius)
-    koff, kw, kh, fr = g("rotor_key_offset"), g("rotor_key_w"), g("rotor_key_h"), g("rotor_fill_r")
+    kfn = "rotor_key_fill_r" if has_param(sh, "rotor_key_fill_r") else "rotor_fill_r"      # G2: the key fillet is its own row (rotor_fill_r = pole tips)
+    koff, kw, kh, fr = g("rotor_key_offset"), g("rotor_key_w"), g("rotor_key_h"), g(kfn)
     w2, yt = kw / 2 - koff, Rb - kh + koff                              # side x, tip y after the offset
     A = (w2 - fr, yt)                                                   # tip line end / tip fillet start
     C1 = (w2 - fr, yt + fr)
@@ -166,7 +181,7 @@ def build_keys(doc, sh, body, g):
           expr=P + "rotor_down_r - " + P + "rotor_house_height - " + P + "rotor_key_h + " + P + "rotor_key_offset")
     s.con("Vertical", R["side"])
     s.con("DistanceX", -1, 1, R["side"], 1, w2, name="key_side_x", expr=P + "rotor_key_w / 2 - " + P + "rotor_key_offset")
-    s.con("Radius", R["f1"], fr, name="rotor_fill_r", expr=P + "rotor_fill_r")           # one fillet dimension
+    s.con("Radius", R["f1"], fr, name="rotor_fill_r", expr=P + kfn)           # one fillet dimension
     s.con("Equal", R["f1"], R["f2"])
     doc.recompute()
     pad = body.newObject("PartDesign::Pad", "RotorKeyPad")

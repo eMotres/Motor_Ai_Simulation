@@ -205,8 +205,8 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
 # rotating mass below is a mass, not an inertia.
 
 #: parts of the full list that turn with the rotor (rotor iron, magnets, shaft or rotor carrier, sleeve, glass-fibre rings,
-#: the propeller fixing plate).  Bearings are not listed: half of each turns, and the app has no split.
-ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "carrier_rear", "rings", "prop_fix")
+#: the propeller fixing plate, the G2 fan).  Bearings are not listed: half of each turns, and the app has no split.
+ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "carrier_rear", "rings", "prop_fix", "fan")
 
 #: the one wording of an incomplete full mass (owner 2026-10-19: "Mass" = the FULL mass, "Active mass" = the active parts; a motor
 #: whose full mass cannot be completed shows its active mass under this label, never as "Mass")

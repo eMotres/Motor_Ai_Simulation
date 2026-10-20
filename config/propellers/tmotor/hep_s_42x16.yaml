@@ -1,0 +1,70 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-20: T-Motor heavy-lift props of 42-47 in with a published torque column, for motors that
+# need more propeller torque at 3500-4500 rpm than the G40x13.1 absorbs.
+schema: propeller-1
+id: tmotor_hep_s_42x16
+vendor: T-MOTOR
+model: HEP-S 42*16
+series: HEP-S series (heavy-lift carbon fiber, one-piece straight)
+status: current
+product_url: https://store.tmotor.com/product/hep-s-42-12-carbon-fiber-uav-propeller.html
+source_urls:
+- https://store.tmotor.com/product/hep-s-42-12-carbon-fiber-uav-propeller.html
+- https://uav-en.tmotor.com/2026/hep-s-series-carbon-fiber-prop_0727/1432.html
+- https://uav-en.tmotor.com/Multirotor/Propellers/hep-s-series-carbon-fiber-prop/
+accessed: '2026-10-20'
+geometry:
+  diameter_in: 42.0
+  diameter_mm: 1066.8
+  disc_diameter_mm: 1072.4   # spec table: "Diameter 42 (1072.4mm)"
+  pitch_in: 16.0             # spec table: "Pitch 16 (406.4mm)"; T-Motor's catalogue lists the part as HEP-S 42*16
+  pitch_mm: 406.4
+  blades: null               # "One-Piece Straight Propeller"; the blade count is not stated
+material: resin-based carbon fiber composite + PMI foam core, glossy
+mass_single_blade_g: 225   # "Average Single Blade Weight (g) 225"
+hub: {bore_mm: 12.0, bolt_circle_mm: 30.0, mount: "flange, 4 x 5 mm holes"}
+published_limits:
+  common_rpm: [1750, 2500]
+  common_thrust_kg: [9.7, 21.2]
+  recommended_max_rpm: 3640
+  recommended_max_thrust_kg: 52
+  limit_rpm: 4050
+  limit_thrust_kg: 65
+  recommended_solution: "MN1123 KV53 + M200A 24S / U15 II KV100"
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.1924
+  density_basis: "T-Motor states 'Ambient Temperature 22 C, Altitude 25 m' for the table; density = ISA pressure at 25 m and 22 C (dry air)"
+  tables:
+    - id: hep_s_42x16_lab
+      source_url: https://store.tmotor.com/product/hep-s-42-12-carbon-fiber-uav-propeller.html
+      accessed: '2026-10-20'
+      test_motor: "T-MOTOR laboratory propeller test (motor not named)"
+      prop_label_in_source: "HEP-S 42*12 (store page) / HEP-S 42*16 (T-Motor catalogue)"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["rpm", "torque_Nm", "thrust_gf", "output_power_W", "efficiency_gf_per_W"]
+      note: "propeller-level table: torque, thrust and OUTPUT (shaft) power; output power = 2 pi n tau within 0.3 % on every row"
+      rows:
+      - {rpm: 1670, thrust_g: 10463, torque_Nm: 5.14, Pshaft_W: 898.60}
+      - {rpm: 1840, thrust_g: 12796, torque_Nm: 6.23, Pshaft_W: 1200.49}
+      - {rpm: 2010, thrust_g: 15370, torque_Nm: 7.45, Pshaft_W: 1567.97}
+      - {rpm: 2180, thrust_g: 18184, torque_Nm: 8.80, Pshaft_W: 2007.81}
+      - {rpm: 2350, thrust_g: 21239, torque_Nm: 10.27, Pshaft_W: 2526.79}
+      - {rpm: 2520, thrust_g: 24535, torque_Nm: 11.87, Pshaft_W: 3131.69}
+      - {rpm: 2690, thrust_g: 28072, torque_Nm: 13.59, Pshaft_W: 3829.27}
+      - {rpm: 2860, thrust_g: 31850, torque_Nm: 15.45, Pshaft_W: 4626.32}
+      - {rpm: 3030, thrust_g: 35868, torque_Nm: 17.43, Pshaft_W: 5529.61}
+      - {rpm: 3200, thrust_g: 40128, torque_Nm: 19.53, Pshaft_W: 6545.92}
+      - {rpm: 3370, thrust_g: 44628, torque_Nm: 21.77, Pshaft_W: 7682.02}
+      - {rpm: 3540, thrust_g: 49368, torque_Nm: 24.13, Pshaft_W: 8944.69}
+      - {rpm: 3710, thrust_g: 54350, torque_Nm: 26.62, Pshaft_W: 10340.70}
+      - {rpm: 3880, thrust_g: 59572, torque_Nm: 29.23, Pshaft_W: 11876.84}
+      - {rpm: 4050, thrust_g: 65036, torque_Nm: 31.97, Pshaft_W: 13559.86}
+notes:
+- Model name: the store page headline and video caption say 'HEP-S 42*12' and its URL says 42-12, but its own spec table gives pitch 16 in (406.4 mm) and T-Motor's catalogue (uav-en.tmotor.com) lists the part as 'HEP-S 42*16'; this card follows the spec table.
+- The published 'Output Power (W)' is shaft power (equal to torque x omega); there is no electrical column in this table.
+- Rows above the recommended max rpm 3640 up to the limit rpm 4050 are published by T-Motor and are kept in the fit.

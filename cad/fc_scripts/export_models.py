@@ -8,7 +8,8 @@ Writes into FC_OUT_DIR (under a temporary name first, moved only after its check
   <motor_id>_full.glb          the model for the web viewer, ONE model for everybody (owner 2026-10-13): every part of the active
                                STEP plus the phase board with its copper, one coloured node per part (Core, Coils/Coil_nn, Rotor,
                                Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back, Ring_front/back, Screws/Screw_n,
-                               Prop_fix, PhaseBoard*); node extras carry the exploded-view axial factor.  Viewing is open to every
+                               Prop_fix, PhaseBoard*, the Fusion-only parts Fan_front / Fan_back / Insulation_ceramic of A.7.8); node extras
+                               carry the exploded-view axial factor.  Viewing is open to every
                                signed-in user who may see the motor; the STEP download is for NDA accounts and the owner only.
   <motor_id>_models3d.json     evidence: triangle counts and the mesh-vs-solid volume check (the manifest holds the hashes)
 
@@ -30,12 +31,14 @@ import MeshPart  # noqa: E402
 import glb_writer as G  # noqa: E402
 import threads as TH  # noqa: E402
 from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view, palette, frameless  # noqa: E402
+from motor_templates.segmented_flatwire import fusion_extras  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 # axial factor of the viewer's exploded view (units of the motor length; + = propeller side): physical order along the axis
 EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2.2,
            "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
-           "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
+           "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2,
+           "Fan_front": 1.55, "Fan_back": -1.35, "Insulation_ceramic": -0.2}           # Fusion-only parts of the CIANO28 150 (A.7.8)
 # board groups use THE palette (palette.py): the board body is the solder-mask green, copper layers + pads gold, pins brass, the
 # remaining solids (notch walls) the FR4 edge colour
 BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper": palette.rgb("pcb_gold"),
@@ -44,7 +47,8 @@ VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny pa
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
 ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
          "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
-         "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
+         "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins",
+         "Fan_front", "Fan_back", "Insulation_ceramic"]
 
 
 def _mesh(sol, tol):
@@ -78,6 +82,15 @@ def budget_of(node):
         if key in node:
             return b
     return None
+
+
+FINE_NODES = []          # node-name keys meshed finer, set by main(): "_seal_" when the bearing shield is the Fusion body (A.7.8)
+
+
+def fine_of(node):
+    """Factor on the tessellation tolerance of thin curved parts: the Fusion 61811-2RZ shield (0.8 mm sheet with a toroidal lip, A.7.8) loses
+    3.6 % of its volume at the global tolerance; a quarter of it keeps the mesh within the 3 % check.  Template seals keep the global one."""
+    return 0.25 if any(k in node for k in FINE_NODES) else 1.0
 
 
 def tessellate(shape, tol, thread_of=None):
@@ -198,7 +211,7 @@ class Collector:
             g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)),
                                              metallic=metallic, roughness=roughness)
         b = budget_of(node)
-        patches, vol, tpatches = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol,
+        patches, vol, tpatches = tessellate(shape, (budgeted_tol(shape, self.tol, b) if b else self.tol) * fine_of(node),
                                             thread_finder(self.rules, node, shape))
         bands = []
         for m, ex in tpatches:             # a thread node is exactly its axial band: the rest of the face stays smooth in the solid's node
@@ -224,10 +237,16 @@ class Collector:
         return G.build_glb(self.ordered(), dict(asset_extras, geometry_sha256=self.geometry_sha256()))
 
 
-def classify_board(shape, keep_pins=True, has_pins=True):
+def classify_board(shape, keep_pins=True, has_pins=True, materials=None):
     """PhaseBoard solids -> {group name: [solids]} (FR4, copper layers + pads, pins, other: notch walls / mask).
     `keep_pins=False` (an imported PCB, owner 2026-10-18): the phase leads are soldered straight into the holes, so the
-    3 phase pins of the board's STEP are not part of the motor and are left out (a plate board keeps its lead sleeves)."""
+    3 phase pins of the board's STEP are not part of the motor and are left out (a plate board keeps its lead sleeves).
+    `materials` (the Fusion board, A.7.8): the material of every solid; copper -> copper group, insulation layers -> FR4 group."""
+    if materials:
+        out = {"PhaseBoard_FR4": [], "PhaseBoard_copper": [], "PhaseBoard_pins": [], "PhaseBoard_other": []}
+        for sol, m in zip(shape.Solids, materials):
+            out["PhaseBoard_copper" if str(m).lower().startswith("copper") else "PhaseBoard_FR4"].append(sol)
+        return out
     pins = electronics.pins(shape, has_pins)                       # has_pins=False: the board STEP carries no pins (CIANO14 50)
     out = {"PhaseBoard_FR4": [], "PhaseBoard_copper": [], "PhaseBoard_pins": list(pins) if keep_pins else [], "PhaseBoard_other": []}
     rest = [s for s in shape.Solids if all(not s.isSame(p) for p in pins)]
@@ -277,10 +296,15 @@ def add_motor(col, parts):
     info = None
     if board is not None:
         info = {}
-        for gname, sols in classify_board(board, keep_pins=bool(parts.get("board_plate")), has_pins=parts.get("board_has_pins", True)).items():
+        for gname, sols in classify_board(board, keep_pins=bool(parts.get("board_plate")), has_pins=parts.get("board_has_pins", True),
+                                          materials=parts.get("board_materials")).items():
             info[gname] = len(sols)
             for i, s in enumerate(sols):
                 col.add(gname, "%s_%03d" % (gname, i + 1), s, BOARD_COLOURS[gname], family="PhaseBoard", check=False)
+    for label, (sols, group, role, split) in (parts.get("extras") or {}).items():       # A.7.8: Fusion-only parts (fan plates, alumina pieces)
+        for i, s in enumerate(sols):
+            g = (group + ("_front" if s.CenterOfMass.z > 0 else "_back")) if split else group
+            col.add(g, "%s_%02d" % (label, i + 1), s, palette.rgb(role), family=g, check=i < 2)
     return info
 
 
@@ -310,13 +334,18 @@ def main():
         mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None,
         board_plate=electronics.has_board(src) and electronics.is_plate(src),
         board_has_pins=electronics.board_cfg(src)[0],
+        board_materials=electronics.solid_materials(src) if electronics.has_board(src) and electronics.is_fusion_board(src) else None,
+        extras={o.Label: ([x.copy() for x in o.Shape.Solids], o.ViewGroup, o.ColourRole, bool(getattr(o, "SplitSides", False)))
+                for o in fusion_extras.objects(src)},
         mag_slices=int(round(ps.pval(sh, "magnet_slices"))) if ps.has_param(sh, "magnet_slices") else 1)
     allbb = [parts["core"].BoundBox, parts["rotor"].BoundBox] + [s.BoundBox for s in parts["mech"].values()] \
-        + ([parts["board"].BoundBox] if parts["board"] else [])
+        + ([parts["board"].BoundBox] if parts["board"] else []) + [s.BoundBox for v in parts["extras"].values() for s in v[0]]
     diag = math.sqrt(sum((max(getattr(b, a + "Max") for b in allbb) - min(getattr(b, a + "Min") for b in allbb)) ** 2 for a in "XYZ"))
     tol = min(0.2, max(0.01, 0.0006 * diag))
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
                  cad_variant="frameless" if frameless.is_frameless(src) else "full", tessellation_mm=round(tol, 4))
+    if src.getObject("Bearing_seal_Fusion") is not None:
+        FINE_NODES.append("_seal_")
     col = Collector(tol, thread_rules(src) if os.environ.get("FC_THREADS", "1") != "0" else None)
     board_info = add_motor(col, parts)
     glb, st = col.glb(asset)

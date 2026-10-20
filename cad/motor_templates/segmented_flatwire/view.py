@@ -20,7 +20,7 @@ import math
 
 BODIES = ("Core", "Coil", "RotorCore", "Magnet",
           "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal", "PhaseBoard")
-PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
+PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics", "Fusion_extras")
 SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
 ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws", "Screws_M3x30", "Screws_M3x6", "BoardPinsA", "BoardPinsB")   # labels of the Draft link arrays
 LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
@@ -43,7 +43,14 @@ def _is_origin_feature(o):
     return o.TypeId in ("App::Origin", "App::Line", "App::Plane")
 
 
+def _extras(doc):
+    """Names of the Fusion-only parts (fusion_extras.py, template A.7.8): visible Part::Features like the imported board."""
+    part = doc.getObject("Fusion_extras")
+    return {o.Name for o in part.Group} if part is not None else set()
+
+
 def set_visibility(doc):
+    extras = _extras(doc)
     tips = set()
     for n in _ALL_BODIES:                               # array bases too: their Tip is what the link arrays (Screws, Balls) show
         b = doc.getObject(n)
@@ -52,7 +59,7 @@ def set_visibility(doc):
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
-        if o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS or o.Name in SHAPES:
+        if o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS or o.Name in SHAPES or o.Name in extras:
             o.Visibility = True
         else:
             o.Visibility = False                       # sketches, intermediate features, origins, axes, planes, Params
@@ -64,13 +71,14 @@ def set_visibility(doc):
 
 def check_visibility(doc):
     bad = []
+    extras = _extras(doc)
     tips = {doc.getObject(n).Tip.Name for n in _ALL_BODIES
             if doc.getObject(n) is not None and getattr(doc.getObject(n), "Tip", None) is not None}
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
         want = (o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS
-                or o.Name in SHAPES)
+                or o.Name in SHAPES or o.Name in extras)
         if bool(o.Visibility) != want:
             bad.append("%s (%s) Visibility=%s, expected %s" % (o.Name, o.TypeId, o.Visibility, want))
     return bad
@@ -117,6 +125,7 @@ def model_bbox(doc):
             boxes.append(electronics.board_shape(doc).BoundBox)
     except Exception:
         pass
+    boxes += [doc.getObject(n).Shape.BoundBox for n in _extras(doc)]
     return (min(b.XMin for b in boxes), min(b.YMin for b in boxes), min(b.ZMin for b in boxes),
             max(b.XMax for b in boxes), max(b.YMax for b in boxes), max(b.ZMax for b in boxes))
 
@@ -334,6 +343,38 @@ def style_gui(doc, gdoc):
     rep["magnet_colours"] = colour_magnet_array(doc, gdoc)
     rep["appearance"] = apply_appearance(doc, gdoc)
     pbo = doc.getObject("PhaseBoard")
-    if pbo is not None and pbo.TypeId == "Part::Feature":        # the imported board (CIANO14 40); the CIANO28 85 plate uses the palette bodies
+    if pbo is not None and pbo.TypeId == "Part::Feature" and getattr(pbo, "FusionBoard", False):
+        rep["phase_board"] = colour_fusion_board(doc, gdoc)       # A.7.8: the Fusion board, coloured per solid by its material
+    elif pbo is not None and pbo.TypeId == "Part::Feature":      # the imported board (CIANO14 40); the CIANO28 85 plate uses the palette bodies
         rep["phase_board"] = colour_phase_board(doc, gdoc)
+    rep["fusion_extras"] = colour_extras(doc, gdoc)
     return rep
+
+
+def board_solid_role(material):
+    """Palette role of a Fusion board solid: copper layers gold, insulation layers the board green."""
+    return "pcb_gold" if str(material).lower().startswith("copper") else "pcb_mask"
+
+
+def colour_fusion_board(doc, gdoc):
+    import json
+    f, vo = doc.getObject("PhaseBoard"), gdoc.getObject("PhaseBoard")
+    mats = json.loads(f.SolidMaterials or "[]")
+    alpha = opaque_alpha(vo)
+    cols = []
+    for sol, m in zip(f.Shape.Solids, mats):
+        cols += [palette.rgb(board_solid_role(m)) + (alpha,)] * len(sol.Faces)
+    vo.DiffuseColor = cols
+    return dict(faces=len(cols), solids=len(mats), copper=sum(1 for m in mats if board_solid_role(m) == "pcb_gold"))
+
+
+def colour_extras(doc, gdoc):
+    out = {}
+    for n in sorted(_extras(doc)):
+        o, vo = doc.getObject(n), gdoc.getObject(n)
+        if vo is None or not hasattr(vo, "ShapeColor"):
+            continue
+        vo.Visibility = True
+        vo.ShapeColor = palette.rgb(getattr(o, "ColourRole", "") or "")
+        out[n] = getattr(o, "ColourRole", "")
+    return out

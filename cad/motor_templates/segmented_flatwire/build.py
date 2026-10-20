@@ -25,6 +25,8 @@ from .sketchkit import check_sketch
 from .params_sheet import pval as pval_
 from . import mechanics, electronics, frameless
 
+ACTIVE_BODIES = ("Core", "Coil", "RotorCore", "Magnet")       # profile.fusion_parts.files may name them (A.7.8)
+
 
 def _z_array(doc, base, count_expr, pitch_expr, name):
     """Draft link ortho array along z (magnet slices): count and pitch from Params."""
@@ -74,14 +76,25 @@ def build_bodies(doc, sh, pj):
         return p
 
     stator, winding, rotor, magnets = part("Stator"), part("Winding"), part("Rotor"), part("Magnets")
-    core = doc.addObject("PartDesign::Body", "Core"); stator.addObject(core)
-    r_core = build_core(doc, sh, core)
-    coil = doc.addObject("PartDesign::Body", "Coil"); winding.addObject(coil)
-    r_coil = build_coil(doc, sh, coil)
-    rot = doc.addObject("PartDesign::Body", "RotorCore"); rot.Label = "RotorCore"; rotor.addObject(rot)
-    r_rot = build_rotor(doc, sh, rot)
-    mag = doc.addObject("PartDesign::Body", "Magnet"); magnets.addObject(mag)
-    r_mag = build_magnet(doc, sh, mag)
+    fp = prof.get("fusion_parts") or {}
+    fus = {k: v for k, v in (fp.get("files") or {}).items() if k in ACTIVE_BODIES}     # A.7.8: active parts = the Fusion bodies
+    if fus and abs(pval_(sh, "motor_length") - float(fp["ref_motor_length"])) > 1e-9:
+        raise RuntimeError("profile.fusion_parts makes %s the Fusion bodies drawn at motor_length %g; this build has motor_length %g. The active "
+                           "parts cannot be moved or stretched: export the Fusion design at this length" % (
+                               ", ".join(sorted(fus)), float(fp["ref_motor_length"]), pval_(sh, "motor_length")))
+
+    def active(name, parent, builder):
+        b = doc.addObject("PartDesign::Body", name); b.Label = name; parent.addObject(b)
+        if name in fus:
+            from . import fusion_parts as FP
+            report.setdefault("fusion_active", {})[name] = FP.import_fusion_part(doc, b, name, fus[name], fp, 0.0, parent)
+            return b, dict(sketch=None, sketches=[])
+        return b, builder(doc, sh, b)
+
+    core, r_core = active("Core", stator, build_core)
+    coil, r_coil = active("Coil", winding, build_coil)
+    rot, r_rot = active("RotorCore", rotor, build_rotor)
+    mag, r_mag = active("Magnet", magnets, build_magnet)
     doc.recompute()
     coils = _polar_array(doc, coil, "Params.coil_count", "Coils"); winding.addObject(coils)
     if ps.has_param(sh, "magnet_slices") and round(pval_(sh, "magnet_slices")) > 1:      # axially sliced magnets (CIANO28 150: 7 x 5 mm)
@@ -97,7 +110,8 @@ def build_bodies(doc, sh, pj):
     doc.recompute()
     for r in (r_core, r_rot, r_mag):
         for sk in [r["sketch"]] + list(r.get("extra_sketches", [])):
-            report["sketches"][sk.Name] = check_sketch(sk)[1]
+            if sk is not None:
+                report["sketches"][sk.Name] = check_sketch(sk)[1]
     for sk in r_coil["sketches"]:
         report["sketches"][sk.Name] = check_sketch(sk)[1]
     if pj.get("named_parameters_mechanics") and not kit:
@@ -112,8 +126,11 @@ def build_bodies(doc, sh, pj):
             for sk in part["sketches"]:
                 report["sketches"][sk.Name] = check_sketch(sk)[1]
     if any(p["name"] in ("phase_board_z", "board_outer_r") for _, p in ps.all_params(pj)):
-        report["phase_board_import"] = electronics.build_electronics(doc, sh, prof.get("phase_board"))
+        report["phase_board_import"] = electronics.build_electronics(doc, sh, prof.get("phase_board"), fusion=None if kit else prof.get("fusion_parts"))
         doc.recompute()
+    if (prof.get("fusion_parts") or {}).get("extras") and not kit:       # A.7.8: Fusion parts the template has no geometry for (fan plates, ...)
+        from . import fusion_extras
+        report["fusion_extras"] = fusion_extras.build_extras(doc, prof["fusion_parts"])
     if kit:
         report["mounting_datums"] = frameless.build_mounting_datums(doc, sh)
     return report

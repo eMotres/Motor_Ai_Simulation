@@ -69,6 +69,8 @@ def board_parts(doc):
     are its "pins"), or an imported board (the FR4 body, the pins; mask / copper / walls only count for the thickness) - or None."""
     if not electronics.has_board(doc):
         return None
+    if electronics.is_fusion_board(doc):          # A.7.8: the full model carries the Fusion board; the simplified board stays the template plate
+        return template_plate_parts(doc)
     bs = electronics.board_shape(doc)
     if electronics.is_plate(doc):
         plate, sleeves = bs.Solids[0], list(bs.Solids[1:])
@@ -76,6 +78,23 @@ def board_parts(doc):
     pins = electronics.pins(bs, electronics.board_cfg(doc)[0])
     rest = [s for s in bs.Solids if all(not s.isSame(p) for p in pins)]
     return dict(body=max(rest, key=lambda s: s.Volume), pins=list(pins), thickness_solids=rest)
+
+
+def template_plate_parts(doc):
+    """The template plate board (ring plate + lead slots + lead sleeves, built from the Params rows board_* exactly as the full model built it
+    before template A.7.8) in a scratch document: the SIMPLIFIED model of a motor whose full model has the Fusion phase board keeps the plate
+    envelope (owner 2026-10-20: the simplified model stays as it is)."""
+    tmp = App.newDocument("_simplified_plate")
+    try:
+        sh = tmp.copyObject(doc.getObject("Params"), False)
+        tmp.recompute()
+        electronics.build_board_plate(tmp, sh)
+        tmp.recompute()
+        bs = electronics.board_shape(tmp)
+        plate, sleeves = bs.Solids[0].copy(), [x.copy() for x in bs.Solids[1:]]
+    finally:
+        App.closeDocument(tmp.Name)
+    return dict(body=plate, pins=sleeves, thickness_solids=[plate])
 
 
 def pick(g, sh, names):

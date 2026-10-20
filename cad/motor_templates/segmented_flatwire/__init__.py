@@ -32,6 +32,14 @@ A.7.7 (2026-10-19): CIANO14 40: Shaft, Prop_fix, Stator_holder and Stator_holder
 Fusion"). The same mechanism as A.7.6 now serves the standard mechanics (fusion_parts.py): rigid parts shift with motor_length, the Shaft is stretched by
 a cut-and-shift in its constant dia 9.9 rotor-seat section (L20 = L12 + 8 mm). The template shaft differed from Fusion (bore bottom, flange dia 15.9 instead
 of 13.9, thread section dia 4.95 instead of 4.901) and so did the Prop_fix hole (4.99 vs 4.901). Other dies and the other mechanics are unchanged.
+A.7.8 (2026-10-20): CIANO28 150_35: EVERY part of the full model is the Fusion body (owner 2026-10-20: the 3-D model of the 150_35 comes from
+Fusion; Fusion sync decision Q5 of 2026-10-19: core, rotor, magnets and coils too, the EM solver keeps its own 2-D geometry). Core, RotorCore,
+Magnet (one slice), Coil (the 29 conductor bodies fused), the bearing rings and shield and the three screw families are the Fusion solids at the
+Fusion occurrence the template body stands for (profile.fusion_parts select / placement); the template arrays and links place the copies and the
+build proves that each one lands on a Fusion occurrence (fusion_parts.instance_check, occurrences). The phase board is the Fusion board
+(electronics.build_board_fusion; the SIMPLIFIED model keeps the template plate), the fan plates and the alumina insulation pieces are Fusion-only
+parts (fusion_extras.py). A Fusion body that disagrees with a Params row is WARNED (build_report fusion_warnings), not refused. Profiles without
+these keys build exactly as A.7.7.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.7"
+TEMPLATE_VERSION = "A.7.8"

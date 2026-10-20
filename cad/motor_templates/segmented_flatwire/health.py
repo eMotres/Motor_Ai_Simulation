@@ -337,15 +337,21 @@ def gate(doc, sheet_name="Params"):
                     errors.append("sketch %s: %s %s" % (o.Label, k, list(getattr(o, k))))
     vols = {}
     shapes = {}
+    warnings = []
+    # A.7.8: an active part that is the Fusion body (profile.fusion_parts) is judged by its Fusion volume; where it disagrees with the Params
+    # rows the gate WARNS (Fusion is the design truth, the rows feed the EM solver) instead of refusing
+    fusion_active = {bn for bn in ("Core", "Coil", "RotorCore", "Magnet") if doc.getObject(bn + "_Fusion") is not None}
     for bn in ("Core", "Coil", "RotorCore", "Magnet"):
         b = doc.getObject(bn)
         if b is None:
             errors.append("body %s missing" % bn)
             continue
         s = b.Shape
-        if s.isNull() or not s.isValid() or len(s.Solids) != 1 or s.Volume <= 0:
+        if s.isNull() or not _fusion_valid(doc, bn, s) or len(s.Solids) != 1 or s.Volume <= 0:
             errors.append("body %s: null/invalid/%d solids/volume<=0" % (bn, 0 if s.isNull() else len(s.Solids)))
             continue
+        if bn in fusion_active:
+            errors += _fusion_volume_errors(doc, bn)
         vols[bn] = s.Volume
         shapes[bn] = s
     exp = expected_counts(g)
@@ -361,10 +367,12 @@ def gate(doc, sheet_name="Params"):
     if kit:
         errors += frameless.gate(doc, g)
     elif doc.getObject("Mechanics") is not None:
-        errors += _gate_mechanics(doc, g, exp, counts, vols)
+        errors += _gate_mechanics(doc, g, exp, counts, vols, warnings)
     if doc.getObject("Electronics") is not None:
         from . import electronics
         errors += electronics.gate(doc, g)
+    from . import fusion_extras
+    errors += fusion_extras.gate(doc)
     # stale-geometry invariants (a failed feature keeps its previous shape) - always evaluated
     try:
         L = g("motor_length")
@@ -375,10 +383,14 @@ def gate(doc, sheet_name="Params"):
             inv += [("Core z length = motor_length", b.ZLength, L), ("Core outer radius = stator_up_r", b.YMax, g("stator_up_r"))]
             sk = doc.getObject("CoreSectorSketch")
             try:
+                if "Core" in fusion_active:                     # the Fusion core has no template sketch: z length and radius judge it
+                    raise _Skip()
                 import Part
                 area = Part.Face(Part.Wire(Part.__sortEdges__([e for e in sk.Shape.Edges]))).Area
                 inv.append(("Core volume = sector area x motor_length x num_seg*3", shapes["Core"].Volume,
                             area * L * exp["core_sectors"]))
+            except _Skip:
+                pass
             except Exception as e:
                 errors.append("Core sector sketch area not computable: %s" % e)
         if "RotorCore" in shapes:
@@ -391,14 +403,15 @@ def gate(doc, sheet_name="Params"):
             ab = math.radians(90 - g("angle_mag") / 2)          # at the pole boundary: a key (pole axis) is not in the way
             h_in = App.Vector((Rhub + 0.01) * math.cos(ab), (Rhub + 0.01) * math.sin(ab), 0)
             h_out = App.Vector((Rhub - 0.01) * math.cos(ab), (Rhub - 0.01) * math.sin(ab), 0)
+            rot_err = warnings if "RotorCore" in fusion_active else errors
             if not (s.isInside(p_in, 1e-6, True) and not s.isInside(p_out, 1e-6, True)):
-                errors.append("stale/incorrect Rotor: outer radius is not rotor_up_r = %.4f" % Rup)
+                rot_err.append("stale/incorrect Rotor: outer radius is not rotor_up_r = %.4f" % Rup)
             if not (s.isInside(h_in, 1e-6, True) and not s.isInside(h_out, 1e-6, True)):
-                errors.append("stale/incorrect Rotor: bore radius is not rotor_down_r - rotor_house_height = %.4f" % Rhub)
+                rot_err.append("stale/incorrect Rotor: bore radius is not rotor_down_r - rotor_house_height = %.4f" % Rhub)
             if _opt(g, "rotor_key_count", 0) > 0:                    # keys: tip at bore radius - rotor_key_h + rotor_key_offset
                 yt = Rhub - g("rotor_key_h") + g("rotor_key_offset")
                 if not (s.isInside(App.Vector(0, yt + 0.01, 0), 1e-6, True) and not s.isInside(App.Vector(0, yt - 0.01, 0), 1e-6, True)):
-                    errors.append("stale/incorrect Rotor key: tip is not at bore radius - rotor_key_h + rotor_key_offset = %.4f" % yt)
+                    rot_err.append("stale/incorrect Rotor key: tip is not at bore radius - rotor_key_h + rotor_key_offset = %.4f" % yt)
         if "Magnet" in shapes:
             b = _bb(shapes["Magnet"])
             inv += [("Magnet z length = mag_step", b.ZLength, g("mag_step")),
@@ -420,11 +433,19 @@ def gate(doc, sheet_name="Params"):
             if name.startswith("Coil") and (" y" in name or " x" in name):
                 tol = 1e-3   # the -z transition loft (B-spline through 7 sections) overshoots its layer by < 1 um
             if abs(got - want) > tol:
-                errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
+                part = "RotorCore" if name.startswith("Rotor") else name.split(" ")[0]
+                if part in fusion_active:                       # A.7.8: the Fusion body disagrees with the Params rows: warned, not refused
+                    warnings.append("Fusion body vs Params: %s: Fusion %.6f, Params %.6f" % (name, got, want))
+                else:
+                    errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
     except Exception as e:
         errors.append("geometry invariants not evaluable: %s" % e)
     return dict(ok=not errors, errors=errors, counts=dict(counts, core_sectors=exp["core_sectors"]), volumes=vols,
-                precheck_violations=pre)
+                precheck_violations=pre, fusion_active=sorted(fusion_active), fusion_warnings=warnings)
+
+
+class _Skip(Exception):
+    pass
 
 
 MECH_BODIES = ("Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring",
@@ -452,14 +473,14 @@ def _fusion_volume_errors(doc, bn):
         bn, fus.SourceVolume, fus.FusionBodyVolume)]
 
 
-def _gate_mechanics(doc, g, exp, counts, vols):
+def _gate_mechanics(doc, g, exp, counts, vols, warnings=None):
     """Mechanical parts: valid single solids, array counts, links, and stale-geometry invariants (extents that the
     current Params demand)."""
     from . import mechanics
     errors = []
     carrier = doc.getObject("Shaft_rear") is not None
     if _opt(g, "occupancy_variant", None) is not None:
-        return _gate_occupancy(doc, g, exp, counts, vols)
+        return _gate_occupancy(doc, g, exp, counts, vols, warnings)
     for bn in (MECH_BODIES_CARRIER if carrier else MECH_BODIES):
         b = doc.getObject(bn)
         if b is None:
@@ -543,7 +564,7 @@ SCREW_BODY = {"screwA": ("Screw", "Screws", "Screw_1"), "screwB": ("Screw_M3x30"
               "screwC": ("Screw_M3x6", "Screws_M3x6", "Screw_M3x6_1")}
 
 
-def _gate_occupancy(doc, g, exp, counts, vols):
+def _gate_occupancy(doc, g, exp, counts, vols, warnings=None):
     """Mechanics of the occupancy variant (CIANO28 150): single valid solids, array counts, links, stale-geometry invariants.
     Each aluminium part has the volume of its ring table (sum of fill * pi * (r1^2 - r0^2) * dz) and its z extent."""
     from . import mechanics
@@ -559,6 +580,8 @@ def _gate_occupancy(doc, g, exp, counts, vols):
         if s.isNull() or not _fusion_valid(doc, bn, s) or len(s.Solids) != 1 or s.Volume <= 0:
             errors.append("body %s: null/invalid/%d solids/volume<=0" % (bn, 0 if s.isNull() else len(s.Solids)))
             continue
+        if doc.getObject(bn + "_Fusion") is not None and bn not in OCC_BODY.values():    # A.7.8: bearings and screws from Fusion
+            errors += _fusion_volume_errors(doc, bn)
         vols[bn] = s.Volume
     want_arr = [("Balls", "balls", int(round(g("bearing_ball_count"))))]
     for pre, (_, lbl, _k) in SCREW_BODY.items():
@@ -605,10 +628,15 @@ def _gate_occupancy(doc, g, exp, counts, vols):
         if g(pre + "_flip") > 0.5:
             top, tip = -tip, -top                                     # head down: local +z = global -z
         inv += [("%s head top z" % bn, _bb(so[key]).ZMax, top), ("%s tip z" % bn, _bb(so[key]).ZMin, tip)]
+    fus_body = {"bearing": "Bearing_outer_ring"}
     for name, got, want in inv:
         tol = 1e-6 * abs(want) if "volume" in name else max(TOL, 1e-7 * abs(want))
         if abs(got - want) > tol:
-            errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
+            owner = fus_body["bearing"] if "bearing" in name else name.split(" ")[0]
+            if warnings is not None and doc.getObject(owner + "_Fusion") is not None and owner not in OCC_BODY.values():
+                warnings.append("Fusion body vs Params: %s: Fusion %.6f, Params %.6f" % (name, got, want))     # A.7.8: warned, not refused
+            else:
+                errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
     return errors
 
 
@@ -662,6 +690,25 @@ FIT_PAIRS_CARRIER = [(a, b, k) for a, b, k in FIT_PAIRS if "Prop_fix" not in (a,
     ("Shaft", "Stator_holder", "clear"), ("Shaft_rear", "Stator_holder_back", "clear"),
     ("Shaft", "Stator_holder_back", "clear"), ("Shaft_rear", "Stator_holder", "clear"),
     ("Shaft", "Ring_front", "clear"), ("Shaft_rear", "Ring_back", "clear"), ("Screws", "Shaft", "clear"), ("Screws", "Shaft_rear", "clear")]
+FIT_PAIRS_FUSION_ASSEMBLY = [   # A.7.8 (CIANO28 150_35): EVERY part is the Fusion body, so the pairs are judged exactly.  Kind "design": an
+    # overlap that the Fusion design itself has (bearing press fits in the holder seats, the holder bolts in their holes / tapped holes, the
+    # fan plates on the rotor holders), reported, never refused: the model reproduces Fusion and Fusion is the design truth
+    ("Shaft", "RotorCore", "clear"), ("Shaft_rear", "RotorCore", "clear"),
+    ("Shaft", "Bearing_618_8_front_inner_ring", "clear"), ("Shaft_rear", "Bearing_618_8_back_inner_ring", "clear"),
+    ("Bearing_618_8_front_outer_ring", "Stator_holder", "design"), ("Bearing_618_8_back_outer_ring", "Stator_holder_back", "design"),
+    ("Stator_holder", "Core", "clear"), ("Stator_holder_back", "Core", "clear"),
+    ("Stator_holder", "Coils", "clear"), ("Stator_holder_back", "Coils", "clear"),
+    ("RotorCore", "Stator_holder", "clear"), ("RotorCore", "Stator_holder_back", "clear"),
+    ("MagnetArray", "Stator_holder", "clear"), ("MagnetArray", "Stator_holder_back", "clear"),
+    ("Shaft", "Stator_holder", "clear"), ("Shaft_rear", "Stator_holder_back", "clear"),
+    ("Shaft", "Stator_holder_back", "clear"), ("Shaft_rear", "Stator_holder", "clear"),
+    ("Screws", "Core", "clear"), ("Screws", "Coils", "clear"), ("Screws", "RotorCore", "clear"), ("Screws", "MagnetArray", "clear"),
+    ("Screws", "Stator_holder", "design"), ("Screws", "Stator_holder_back", "design"),
+    ("Fan_plates", "Shaft", "design"), ("Fan_plates", "Shaft_rear", "design"), ("Fan_plates", "Stator_holder", "clear"),
+    ("Fan_plates", "Stator_holder_back", "clear"), ("Fan_plates", "Coils", "clear"), ("Fan_plates", "RotorCore", "clear"),
+    ("Fan_plates", "MagnetArray", "clear"), ("Insulation_ceramic", "Stator_holder", "clear"), ("Insulation_ceramic", "Stator_holder_back", "clear")]
+# (the active parts against each other - magnets in their pockets, coils and alumina pieces in the slots - are Fusion's own assembly: the
+# instance check proves every copy sits on its Fusion occurrence; their booleans over hundreds of coincident faces would take tens of minutes)
 SCREW_ENGAGE_MIN_D = 1.5     # thread engagement in the back boss: at least 1.5 x screw diameter (owner 2026-10-13, reported)
 APPROX_FRACTION = 0.025     # occupancy variant: overlap allowed between a volume-equivalent ring part and its neighbour (share of the smaller part)
 FIT_REFUSE_MM3 = 0.5        # an overlap above this (outside "thread") refuses the build: a part runs into another one
@@ -676,23 +723,31 @@ def fit(doc):
     for lbl in ("Coils", "MagnetArray"):
         act[lbl] = [o for o in doc.Objects if o.Label == lbl][0].Shape
     act["Screws"] = Part.makeCompound([v for k, v in so.items() if k.startswith("Screw_")])
+    from . import fusion_extras
+    for o in fusion_extras.objects(doc):                       # A.7.8: Fusion parts the template has no geometry for
+        act[o.Label] = o.Shape
     rows, errors = [], []
     pairs = FIT_PAIRS_CARRIER if doc.getObject("Shaft_rear") is not None else FIT_PAIRS
     from .params_sheet import has_param
     if doc.getObject("Params") is not None and has_param(doc.getObject("Params"), "occupancy_variant"):
         pairs = FIT_PAIRS_OCCUPANCY
+        if all(doc.getObject(n + "_Fusion") is not None for n in ("Core", "RotorCore", "Shaft", "Stator_holder")):
+            pairs = FIT_PAIRS_FUSION_ASSEMBLY
+    import time
     for a, b, kind in pairs:
         sa, sb = so.get(a, act.get(a)), so.get(b, act.get(b))
         if sa is None or sb is None:
             continue
-        common = sa.common(sb)
-        ov = common.Volume if not common.isNull() else 0.0
-        imported = doc.getObject(a + "_Fusion") is not None or doc.getObject(b + "_Fusion") is not None
+        t0 = time.time()
+        ov = _common_volume(sa, sb)
+        imported = (doc.getObject(a + "_Fusion") is not None or doc.getObject(b + "_Fusion") is not None
+                    or pairs is FIT_PAIRS_FUSION_ASSEMBLY)     # A.7.8: every part is a Fusion body (fan plates vs the 196 magnets: 300 s of distance)
         if ov < 1e-9 and (kind == "contact" or not imported):
             dist = sa.distToShape(sb)[0]
         else:                              # a Fusion body (700 faces) against the coil lofts: the exact distance takes > 10 min and no rule uses it
             dist = None if ov < 1e-9 else 0.0
-        row = dict(a=a, b=b, kind=kind, overlap_mm3=round(ov, 6), min_distance_mm=None if dist is None else round(dist, 6))
+        row = dict(a=a, b=b, kind=kind, overlap_mm3=round(ov, 6), min_distance_mm=None if dist is None else round(dist, 6),
+                   seconds=round(time.time() - t0, 1))
         if kind == "contact":
             row["ok"] = ov < 1e-3 and dist < 1e-6
         elif kind == "clear":
@@ -705,13 +760,31 @@ def fit(doc):
                 100 * APPROX_FRACTION)
             if not row["ok"]:
                 errors.append("fit: %s runs into %s (overlap %.3f mm3, limit %.3f)" % (a, b, ov, lim))
+        elif kind == "design":
+            row["ok"] = True
+            row["note"] = "overlap of the Fusion design itself (press fit / bolt in its hole), reported: the model reproduces Fusion"
         else:
             row["ok"] = True
             row["note"] = "screw thread in the tapped hole (overlap = engaged thread)"
         rows.append(row)
-        if kind not in ("thread", "approx") and ov > FIT_REFUSE_MM3:
+        if kind not in ("thread", "approx", "design") and ov > FIT_REFUSE_MM3:
             errors.append("fit: %s runs into %s (overlap %.3f mm3)" % (a, b, ov))
     return dict(pairs=rows, errors=errors, screw=_screw_check(doc, so, errors))
+
+
+def _common_volume(sa, sb):
+    """Overlap volume of two shapes, solid by solid with a bounding-box pre-filter: the same number as sa.common(sb) (the solids of one
+    group do not overlap each other) without the boolean of a whole compound against a whole compound (fan plates against the 196 magnets
+    took 350 s, A.7.8)."""
+    ov = 0.0
+    for x in sa.Solids:
+        bx = x.BoundBox
+        for y in sb.Solids:
+            if not bx.intersect(y.BoundBox):
+                continue
+            c = x.common(y)
+            ov += c.Volume if not c.isNull() else 0.0
+    return ov
 
 
 def _screw_check(doc, so, errors):

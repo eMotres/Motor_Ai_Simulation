@@ -248,8 +248,9 @@ def build_shaft(doc, sh, body):
 # --------------------------------------------------------------------------------------------- bearing 618/8
 
 
-def build_bearing(doc, sh, outer, inner, ball):
-    """Bodies in bearing-local coordinates: axis Z, faces z = 0 and z = bearing_B (the Part / Link places them)."""
+def build_bearing(doc, sh, outer, inner, ball, skip=()):
+    """Bodies in bearing-local coordinates: axis Z, faces z = 0 and z = bearing_B (the Part / Link places them).
+    skip = ("outer", "inner"): those rings are not built here (template A.7.8: they are the Fusion bodies)."""
     g = _g(sh)
     d2, D2, B = g("bearing_d") / 2, g("bearing_D") / 2, g("bearing_B")
     lo, li = g("bearing_outer_land_d") / 2, g("bearing_inner_land_d") / 2
@@ -271,60 +272,62 @@ def build_bearing(doc, sh, outer, inner, ball):
         s.con("Radius", arc, rb, name=name_r, expr=P + "bearing_ball_d / 2")
         return arc, (1, 2) if ccw else (2, 1)
 
-    # outer ring: land (lo) with the groove, OD corners rounded (bearing_edge_r)
-    sk = plane_sketch(outer, "OuterRingSketch", "XZ_Plane")
-    s = SK(sk)
-    pts = [(lo, 0), (D2, 0), (D2, B), (lo, B), (lo, B / 2 + dz), (lo, B / 2 - dz)]
-    gl = [sk.addGeometry(Part.LineSegment(V(*pts[i], 0), V(*pts[i + 1], 0)), False) for i in range(4)]
-    lb = sk.addGeometry(Part.LineSegment(V(*pts[5], 0), V(*pts[0], 0)), False)
-    for i in range(3):
-        sk.addConstraint(Sketcher.Constraint("Coincident", gl[i], 2, gl[i + 1], 1))
-    arc, (ps, pe) = groove(sk, s, pts[4], pts[5], ccw=False, name_r="ball_groove_r")
-    sk.addConstraint(Sketcher.Constraint("Coincident", gl[3], 2, arc, ps))
-    sk.addConstraint(Sketcher.Constraint("Coincident", arc, pe, lb, 1))
-    sk.addConstraint(Sketcher.Constraint("Coincident", lb, 2, gl[0], 1))
-    s.con("Horizontal", gl[0]); s.con("PointOnObject", gl[0], 1, H_AXIS)
-    s.con("Vertical", gl[1]); s.con("DistanceX", ORIGIN, 1, gl[1], 1, D2, name="bearing_D_r", expr=P + "bearing_D / 2")
-    s.con("Horizontal", gl[2]); s.con("DistanceY", ORIGIN, 1, gl[2], 1, B, name="bearing_B", expr=P + "bearing_B")
-    s.con("Vertical", gl[3]); s.con("DistanceX", ORIGIN, 1, gl[3], 1, lo, name="outer_land_r", expr=P + "bearing_outer_land_d / 2")
-    s.con("Vertical", lb); s.con("PointOnObject", lb, 1, gl[3])
-    f1 = rounded_corner(sk, s, gl[0], gl[1], e, name="bearing_edge_r", expr=P + "bearing_edge_r")
-    rounded_corner(sk, s, gl[1], gl[2], e, equal_to=f1)
-    doc.recompute()
-    out["outer"] = (sk, revolve(outer, sk, "OuterRingRevolve"))
-    outer.Tip = out["outer"][1]
     seal_sketches, seal_feats = [], []
-    if has_param(sh, "bearing_seal_notch_r"):                    # 2RS1: seal notch + lip groove + cone at both ends
-        for top in (False, True):
-            gk, gf = _seal_groove(doc, sh, outer, top)
-            seal_sketches.append(gk); seal_feats.append(gf)
+    # outer ring: land (lo) with the groove, OD corners rounded (bearing_edge_r)
+    if "outer" not in skip:
+        sk = plane_sketch(outer, "OuterRingSketch", "XZ_Plane")
+        s = SK(sk)
+        pts = [(lo, 0), (D2, 0), (D2, B), (lo, B), (lo, B / 2 + dz), (lo, B / 2 - dz)]
+        gl = [sk.addGeometry(Part.LineSegment(V(*pts[i], 0), V(*pts[i + 1], 0)), False) for i in range(4)]
+        lb = sk.addGeometry(Part.LineSegment(V(*pts[5], 0), V(*pts[0], 0)), False)
+        for i in range(3):
+            sk.addConstraint(Sketcher.Constraint("Coincident", gl[i], 2, gl[i + 1], 1))
+        arc, (ps, pe) = groove(sk, s, pts[4], pts[5], ccw=False, name_r="ball_groove_r")
+        sk.addConstraint(Sketcher.Constraint("Coincident", gl[3], 2, arc, ps))
+        sk.addConstraint(Sketcher.Constraint("Coincident", arc, pe, lb, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", lb, 2, gl[0], 1))
+        s.con("Horizontal", gl[0]); s.con("PointOnObject", gl[0], 1, H_AXIS)
+        s.con("Vertical", gl[1]); s.con("DistanceX", ORIGIN, 1, gl[1], 1, D2, name="bearing_D_r", expr=P + "bearing_D / 2")
+        s.con("Horizontal", gl[2]); s.con("DistanceY", ORIGIN, 1, gl[2], 1, B, name="bearing_B", expr=P + "bearing_B")
+        s.con("Vertical", gl[3]); s.con("DistanceX", ORIGIN, 1, gl[3], 1, lo, name="outer_land_r", expr=P + "bearing_outer_land_d / 2")
+        s.con("Vertical", lb); s.con("PointOnObject", lb, 1, gl[3])
+        f1 = rounded_corner(sk, s, gl[0], gl[1], e, name="bearing_edge_r", expr=P + "bearing_edge_r")
+        rounded_corner(sk, s, gl[1], gl[2], e, equal_to=f1)
+        doc.recompute()
+        out["outer"] = (sk, revolve(outer, sk, "OuterRingRevolve"))
+        outer.Tip = out["outer"][1]
+        if has_param(sh, "bearing_seal_notch_r"):                    # 2RS1: seal notch + lip groove + cone at both ends
+            for top in (False, True):
+                gk, gf = _seal_groove(doc, sh, outer, top)
+                seal_sketches.append(gk); seal_feats.append(gf)
 
     # inner ring: bore (d/2) with rounded corners, land (li) with the groove
-    sk = plane_sketch(inner, "InnerRingSketch", "XZ_Plane")
-    s = SK(sk)
-    pts = [(d2, 0), (li, 0), (li, B / 2 - dzi), (li, B / 2 + dzi), (li, B), (d2, B)]
-    l0 = sk.addGeometry(Part.LineSegment(V(*pts[0], 0), V(*pts[1], 0)), False)
-    l1 = sk.addGeometry(Part.LineSegment(V(*pts[1], 0), V(*pts[2], 0)), False)
-    l2 = sk.addGeometry(Part.LineSegment(V(*pts[3], 0), V(*pts[4], 0)), False)
-    l3 = sk.addGeometry(Part.LineSegment(V(*pts[4], 0), V(*pts[5], 0)), False)
-    l4 = sk.addGeometry(Part.LineSegment(V(*pts[5], 0), V(*pts[0], 0)), False)
-    arc, (ps, pe) = groove(sk, s, pts[2], pts[3], ccw=False, name_r="ball_groove_r")
-    sk.addConstraint(Sketcher.Constraint("Coincident", l0, 2, l1, 1))
-    sk.addConstraint(Sketcher.Constraint("Coincident", l1, 2, arc, ps))
-    sk.addConstraint(Sketcher.Constraint("Coincident", arc, pe, l2, 1))
-    sk.addConstraint(Sketcher.Constraint("Coincident", l2, 2, l3, 1))
-    sk.addConstraint(Sketcher.Constraint("Coincident", l3, 2, l4, 1))
-    sk.addConstraint(Sketcher.Constraint("Coincident", l4, 2, l0, 1))
-    s.con("Horizontal", l0); s.con("PointOnObject", l0, 1, H_AXIS)
-    s.con("Vertical", l1); s.con("DistanceX", ORIGIN, 1, l1, 1, li, name="inner_land_r", expr=P + "bearing_inner_land_d / 2")
-    s.con("Vertical", l2); s.con("PointOnObject", l2, 1, l1)
-    s.con("Horizontal", l3); s.con("DistanceY", ORIGIN, 1, l3, 1, B, name="bearing_B", expr=P + "bearing_B")
-    s.con("Vertical", l4); s.con("DistanceX", ORIGIN, 1, l4, 1, d2, name="bearing_d_r", expr=P + "bearing_d / 2")
-    f1 = rounded_corner(sk, s, l3, l4, e, name="bearing_edge_r", expr=P + "bearing_edge_r")
-    rounded_corner(sk, s, l4, l0, e, equal_to=f1)
-    doc.recompute()
-    out["inner"] = (sk, revolve(inner, sk, "InnerRingRevolve"))
-    inner.Tip = out["inner"][1]
+    if "inner" not in skip:
+        sk = plane_sketch(inner, "InnerRingSketch", "XZ_Plane")
+        s = SK(sk)
+        pts = [(d2, 0), (li, 0), (li, B / 2 - dzi), (li, B / 2 + dzi), (li, B), (d2, B)]
+        l0 = sk.addGeometry(Part.LineSegment(V(*pts[0], 0), V(*pts[1], 0)), False)
+        l1 = sk.addGeometry(Part.LineSegment(V(*pts[1], 0), V(*pts[2], 0)), False)
+        l2 = sk.addGeometry(Part.LineSegment(V(*pts[3], 0), V(*pts[4], 0)), False)
+        l3 = sk.addGeometry(Part.LineSegment(V(*pts[4], 0), V(*pts[5], 0)), False)
+        l4 = sk.addGeometry(Part.LineSegment(V(*pts[5], 0), V(*pts[0], 0)), False)
+        arc, (ps, pe) = groove(sk, s, pts[2], pts[3], ccw=False, name_r="ball_groove_r")
+        sk.addConstraint(Sketcher.Constraint("Coincident", l0, 2, l1, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", l1, 2, arc, ps))
+        sk.addConstraint(Sketcher.Constraint("Coincident", arc, pe, l2, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", l2, 2, l3, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", l3, 2, l4, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", l4, 2, l0, 1))
+        s.con("Horizontal", l0); s.con("PointOnObject", l0, 1, H_AXIS)
+        s.con("Vertical", l1); s.con("DistanceX", ORIGIN, 1, l1, 1, li, name="inner_land_r", expr=P + "bearing_inner_land_d / 2")
+        s.con("Vertical", l2); s.con("PointOnObject", l2, 1, l1)
+        s.con("Horizontal", l3); s.con("DistanceY", ORIGIN, 1, l3, 1, B, name="bearing_B", expr=P + "bearing_B")
+        s.con("Vertical", l4); s.con("DistanceX", ORIGIN, 1, l4, 1, d2, name="bearing_d_r", expr=P + "bearing_d / 2")
+        f1 = rounded_corner(sk, s, l3, l4, e, name="bearing_edge_r", expr=P + "bearing_edge_r")
+        rounded_corner(sk, s, l4, l0, e, equal_to=f1)
+        doc.recompute()
+        out["inner"] = (sk, revolve(inner, sk, "InnerRingRevolve"))
+        inner.Tip = out["inner"][1]
 
     # one ball on +Y (as the Fusion import: balls at +-Y), the Balls array makes bearing_ball_count of them
     sk = plane_sketch(ball, "BallSketch", "YZ_Plane")
@@ -342,8 +345,9 @@ def build_bearing(doc, sh, outer, inner, ball):
     rv = revolve(ball, sk, "BallRevolve", axis="Edge2")
     ball.Tip = rv
     out["ball"] = (sk, rv)
-    return dict(sketches=[out["outer"][0], out["inner"][0], sk] + seal_sketches,
-                features=[out["outer"][1], out["inner"][1], rv] + seal_feats)
+    rings = [out[k] for k in ("outer", "inner") if k in out]
+    return dict(sketches=[r[0] for r in rings] + [sk] + seal_sketches,
+                features=[r[1] for r in rings] + [rv] + seal_feats)
 
 
 def _seal_groove(doc, sh, outer, top):

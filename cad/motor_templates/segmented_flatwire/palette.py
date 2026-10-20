@@ -30,6 +30,7 @@ PALETTE = {
     "pcb_gold": "#D4AF37",         # copper pads / plated copper
     "pcb_fr4": "#C9B27C",          # FR4 edge
     "pcb_pins": "#B5A642",         # brass pins
+    "ceramic": "#E6E1D3",          # alumina insulation pieces (CIANO28 150, Fusion component Insulation_ceramic): ivory
 }
 DEFAULT = "#9AA3AB"
 
@@ -50,7 +51,8 @@ GROUP_ROLE = {"Core": "core", "Coils": "coil", "Rotor": "rotor_core", "Magnets":
               "Shaft": "shaft", "Shaft_rear": "aluminium", "Bearings_front": "bearing_ring", "Bearings_back": "bearing_ring",
               "Bearings_front_balls": "bearing_ball", "Bearings_back_balls": "bearing_ball", "Holder_front": "aluminium",
               "Holder_back": "aluminium", "Bearings_front_seals": "bearing_seal", "Bearings_back_seals": "bearing_seal", "Ring_front": "ring", "Ring_back": "ring", "Screws": "screw", "Prop_fix": "aluminium",
-              "PhaseBoard_FR4": "pcb_mask", "PhaseBoard_copper": "pcb_gold", "PhaseBoard_pins": "pcb_pins", "PhaseBoard_other": "pcb_fr4"}
+              "PhaseBoard_FR4": "pcb_mask", "PhaseBoard_copper": "pcb_gold", "PhaseBoard_pins": "pcb_pins", "PhaseBoard_other": "pcb_fr4",
+              "Fan_front": "aluminium", "Fan_back": "aluminium", "Insulation_ceramic": "ceramic"}     # Fusion-only parts of the CIANO28 150 (template A.7.8)
 THREAD_DARKEN = 0.72               # cosmetic thread faces: the host colour, a little darker
 
 

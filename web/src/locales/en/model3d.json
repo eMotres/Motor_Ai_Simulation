@@ -17,7 +17,10 @@
     "Ring_back": "Ring (back)",
     "Screws": "Screws",
     "Prop_fix": "Propeller adapter",
-    "PhaseBoard": "Phase board"
+    "PhaseBoard": "Phase board",
+    "Fan_front": "Fan plate (front)",
+    "Fan_back": "Fan plate (back)",
+    "Insulation_ceramic": "Ceramic insulation"
   },
   "explode": "Exploded view",
   "section": "Section plane",

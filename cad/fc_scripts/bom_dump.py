@@ -50,7 +50,9 @@ def entry(o):
     com = [sum(s.Volume * s.CenterOfMass[i] for s in sols) / vol for i in range(3)]
     linked = getattr(o, "LinkedObject", None)
     base = getattr(o, "Base", None)
-    return dict(name=o.Name, label=o.Label, type=o.TypeId, parent=parent_part(o),
+    from motor_templates.segmented_flatwire import fusion_extras
+    motor = fusion_extras.bom_props(o)                    # A.7.8: material / BOM row of a Fusion-only part, materials of the Fusion board solids
+    return dict(name=o.Name, label=o.Label, type=o.TypeId, parent=parent_part(o), motor=motor,
                 linked=linked.Label if linked is not None else None,
                 base=base.Label if base is not None and hasattr(base, "Label") else None,
                 state=[s for s in o.State if s in ("Invalid", "Error")], n_solids=len(sols), volume=vol, area=sh.Area,
@@ -80,8 +82,10 @@ def main():
                 entries.append(e)
     sheet = doc.getObject("Params")
     params = {k: v["value"] for k, v in ps.read_sheet(sheet).items()} if sheet is not None else {}
+    fusion_bodies = sorted(o.Name for o in doc.Objects if o.TypeId == "PartDesign::Body" and getattr(o, "BaseFeature", None) is not None
+                           and o.BaseFeature.Name.endswith("_Fusion"))       # bodies that are Fusion STEP solids (A.7.6 - A.7.8)
     res = dict(model=os.path.basename(model), freecad_version=".".join(str(x) for x in App.Version()[:3]),
-               meta=dict(doc.Meta or {}), params=params, entries=entries)
+               meta=dict(doc.Meta or {}), params=params, entries=entries, fusion_bodies=fusion_bodies)
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(res, fh, indent=1)
     finish(True, "%d BOM entries, %d Params rows (FreeCAD %s)" % (len(entries), len(params), res["freecad_version"]))

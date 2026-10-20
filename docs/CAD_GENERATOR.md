@@ -479,7 +479,7 @@ volumes to 1e-6, bounding boxes and solid counts identical):
 * Gate / fit / STEP datums / GLB / BOM have an occupancy branch. Fit kind `approx`: the rings stand in for pocketed parts, so rotor keys, the bearing seat and the coil
   end turns overlap them a little; the overlap is reported and refused above 2.5 % of the smaller part. The screws are not tested against the holders (their holes are not modelled).
 
-Not modelled (disclosed in the BOM / report): fan plates (Fan_200_24s), the 72 alumina insulation bodies (Insulation_ceramic), (until A.7.6: pockets / ribs / holes of the four
+Not modelled until A.7.8 (since A.7.8 every part is the Fusion body, see below) (disclosed in the BOM / report): fan plates (Fan_200_24s), the 72 alumina insulation bodies (Insulation_ceramic), (until A.7.6: pockets / ribs / holes of the four
 holders - since A.7.6 they are the Fusion bodies), the bearing shield detail, slot-edge fillets, screw threads and head knurling, the PCB layers. The Fusion component "M3 x 0.5 x 30" has a 34 mm shank (the
 BOM flags the length for confirmation).
 
@@ -562,6 +562,58 @@ PartDesign bodies, so names, solids, gate, fit, BOM, STEP tree and GLB code are 
   Shaft wall: bore to drive flat 1.025 mm (the old bore broke into the flats); smallest wall of the bore 0.8 mm (the C0.2 chamfer at the rear end face, as in
   Fusion). Every visible object opaque (the 28 transparent view objects are hidden sketches). CIANO14 50 L15: 15 volumes, 33 fit rows, screw check and gate
   identical to the server build report; CIANO28 150_35 L35: volumes, 20 fit rows and parameter hash identical to the A.7.6 build.
+
+## CIANO28 150_35: every part of the full model is the Fusion body (template A.7.8, 2026-10-20)
+
+Owner 2026-10-20: the 3-D model of the 150_35 comes from Fusion (the simplified model stays as it is). Fusion sync decision Q5 (2026-10-19): core,
+rotor, magnets and coils of the 3-D model come from the Fusion bodies too; the EM solver keeps its own parametric 2-D geometry.
+
+**Source**: the open Fusion document "CIANO28 150", version 37, read on 2026-10-20 through the local Fusion MCP with a readOnly script that addresses the
+document BY NAME (not activated; the export manager writes component STEP files, nothing in the document changes). The private repository holds the
+STEP files, `fusion_export_manifest.json` (version, URN, user parameters, every body with material / volume / bbox / centre of mass, every occurrence
+with its component -> root matrix) and the two scripts (`scripts/fusion_150/`: the Fusion export, the generator of the profile block).
+
+**Mechanism** (`profile.fusion_parts` of `cad/reference/CIANO28_150_35_new.json`, `fusion_parts.py`, `fusion_extras.py`):
+
+| template body / object | Fusion | how |
+|---|---|---|
+| `Core`, `RotorCore` | Core, Rotor | the Fusion body as the BaseFeature of the same PartDesign body (no template sketch) |
+| `Magnet` (+ `MagnetStack` x 7, `MagnetArray` x 28) | Magnet: 7 slices of 5 mm, 28 occurrences | the lowest slice is the body (`select.seed`); the arrays place the other 195 |
+| `Coil` (+ `Coils` x 12) | Coil: 29 copper bodies, 12 occurrences | the 29 bodies fused into one solid (`select.match = fuse`) |
+| `Shaft`, `Shaft_rear`, `Stator_holder`, `Stator_holder_back` | Rotor_holder1 / 2, Stator_holder, Stator_holder_back | as A.7.6 (the 2026-10-16 files; the v37 export is byte-identical apart from its time stamp) |
+| `Bearing_outer_ring`, `Bearing_inner_ring`, `Bearing_seal` (+ `Bearing_618_8_back`, `Bearing_seal_2`) | 61811-2rz, 2 occurrences | by volume (`select.match.volume`), in the frame of the bearing Part |
+| `Bearing_ball` (+ `Balls` x 22) | - | stays the template sphere: Fusion draws the 22 balls as ONE body (spheres joined by a torus); checked against its sphere centres |
+| `Screw`, `Screw_M3x30`, `Screw_M3x6` (+ their polar arrays) | 91290A137 (12), DIN 912 M3 x 30 / x 6 (6 each, hidden in Fusion) | the Fusion screw at the occurrence the array starts from |
+| `PhaseBoard` (in `Electronics`) | PCB 150 2 parallel 0.6x14: Insulation (GFRP) x 8, PhaseA1 ... C2, Null (copper) | `electronics.build_board_fusion`: one compound of every body at its Fusion placement, `SolidMaterials` per solid |
+| `Fusion_extras` / `Fan_plates`, `Insulation_ceramic` | Fan 200 24s (2), Insulation_ceramic (72 bodies) | Fusion-only parts: one compound each at the Fusion placements |
+
+* `select`: which solids of the component STEP make the part (`largest`, `all`, `fuse`, `{"volume": v}`) and which ONE is the template body
+  (`seed.near`, component coordinates). `placement`: the occurrence matrix (component -> motor frame) the template body stands for.
+* **Instance check** (`fusion_parts.instance_check`, build report `fusion_instances`, refuses the build): `occurrences` lists EVERY Fusion occurrence
+  of every part; each Fusion solid at each occurrence must have exactly one model solid with the same volume (1e-4), centre of mass and bounding box
+  (2 um). So the template arrays and links are proved to land on the Fusion assembly: on CIANO28 150_35 L35 every one of the 14 parts matched (Magnet 196 / 196, Coil 12 / 12, bearings 2 + 2 + 4, screws 12 + 6 + 6, max centre deviation 0.13 um).
+  `instance_bbox_tol_mm` 0.15 for the two DIN 912 families: Fusion translates those copies without turning them, the polar array turns them about
+  the motor axis, so the hex socket sits differently (0.10 mm in the bounding box; centre and volume equal).
+* **Gate**: each Fusion body is one closed solid of its Fusion volume (0.1 %, FusionBodyVolume); the Params invariants of the active parts and of the
+  bearing / screw z positions WARN when a Fusion body disagrees with a row (build report `fusion_warnings`), they do not refuse: Fusion is the
+  design truth, the rows feed the EM solver. The core sector-area invariant is skipped (the Fusion core has no template sketch).
+* **Length**: the active parts cannot move or stretch, so a build at another `motor_length` than `ref_motor_length` (35) is refused with that reason.
+* **Rows**: `fusion_parts.replaced_rows` (115 Params rows that only the replaced template geometry read: slot, rotor, magnet, coil, screw, seal,
+  plate-board rows) are listed in `roles_check.replaced_by_fusion` instead of failing the role check.
+* **Fit** (`FIT_PAIRS_FUSION_ASSEMBLY`): the pairs are judged exactly now (no "approx" ring stand-ins). Kind `design` = an overlap the Fusion design
+  itself has, reported, never refused: bearing outer rings in the holder seats (press fit, 77.05 mm3 each), the 12 holder bolts in the front holder
+  (75.50 mm3) and in the back holder taps (118.18 mm3), the fan plates on the rotor holders (0.075 mm3 each). The active parts against each other
+  (magnets in the pockets, coils and alumina pieces in the slots) are Fusion's own assembly, proved by the instance check; a whole-assembly check of
+  the Fusion export found no other overlap. The overlap is now summed solid by solid with a bounding-box filter (`_common_volume`, same number as the
+  compound boolean; the fan plates against the 196 magnets took 350 s as one boolean).
+* **Simplified model**: unchanged by design. The board stays the template plate envelope (`export_simplified.template_plate_parts` builds it from the
+  `board_*` rows in a scratch document); the Fusion-only parts are not in it. Checked: same 44 solids and hygiene gate; the coil blocks follow the Fusion coil outline (-7.1 mm3 each, -0.12 %), the screws are the Fusion screws (+-0.1 mm3), the monolith bore follows the Fusion rotor (-2.7 mm3), board plate, bearing rings and holders identical.
+* **BOM**: the rotor holders are named "Rotor carrier, front / rear (Fusion Rotor_holder1 / 2, the Fusion body)", so `motor_mass` counts them as the
+  rotor carriers and no longer adds the simulation's shaft stand-in tube on top (it was counted twice before); the holders read "the Fusion body";
+  the board row takes its insulation / copper volumes from the model's Fusion board; new rows "Fan plate" (2 x, Aluminium_6061) and
+  "Ceramic insulation pieces" (1 set of 72, library card Al2O3, 3800 kg/m3) with the part rules `fan_plates` / `insulation_ceramic` and the part-tree
+  entries (GLB groups `Fan_front`, `Fan_back`, `Insulation_ceramic`). Full mass (`mass_summary`) of L35: 3.927 kg -> 3.891 kg (-70.2 g shaft tube no longer counted twice, +19.2 g fan plates, +14.4 g alumina pieces; the server shows the new value after the rebuild); rotating mass 1.259 -> 1.396 kg (the carriers are rotating parts); BOM T1 3838.1 g -> 3870.4 g.
+* **Checked** (local build through `cad/run_build.py`, FreeCAD 1.1.3, private checkout, server die copy of 2026-10-20): gate ok, no Fusion warning (every Fusion body agrees with the Params rows), instance check 14 / 14, fit table 33 / 33 ok, roles 115 rows replaced by Fusion, GUI finish + `check_gui` ok (Fusion board coloured per solid, extras in their palette colours, everything opaque), STEP re-import 364 solids, full GLB 14.4 MB (the Fusion 61811-2RZ shield is meshed at a quarter of the global tolerance: 0.8 mm sheet, 3.6 % mesh error otherwise), simplified 44 solids, BOM. 435 s (A.7.7: 511 s). Volumes = Fusion: core, rotor, 196 magnets, board, fan plates, alumina 0.000 %; holders <= 0.0005 %; screws <= 0.002 %; bearings -0.0003 %; coils +0.026 % (the 29 bodies fused after the STEP round trip; one Fusion coil body reads 0.1 % large from its STEP). The model's interferences are exactly the Fusion design's own (bearing seats 77.05 mm3, holder bolts 75.50 / 118.14 mm3, the hidden DIN 912 screws in Rotor_holder2 57.74 / 49.55 mm3, fan plates 0.075 mm3), the same numbers as a check of the Fusion export alone. CIANO14 40 new L12 rebuilt with A.7.8: parameter hash, all 17 volumes, the 33 fit rows, the screw check, the gate counts and the simplified model identical to the server's A.7.7 build; the BOM differs only in the coil copper (+0.02 g, the same local-vs-server difference the A.7.7 baseline build of the 150 shows).
 
 ## The GFRP rings: full model only (template A.7.4, 2026-10-16)
 

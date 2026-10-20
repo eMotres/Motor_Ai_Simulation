@@ -38,10 +38,13 @@ def main():
         return finish(False, "pre-check failed, nothing built: " + " | ".join(viol), precheck=viol, overrides=overrides)
 
     report = build_bodies(doc, sh, pj)
+    print("stage build %.1f s" % (time.time() - t0)); sys.stdout.flush()
     gt = health.gate(doc)
+    print("stage gate %.1f s" % (time.time() - t0)); sys.stdout.flush()
     if gt["ok"] and doc.getObject("Mechanics") is not None and not kit:
         ft = health.fit(doc)                       # stage 3: interference / contact table of the assembled motor
         report["fit"] = ft["pairs"]
+        print("stage fit %.1f s" % (time.time() - t0)); sys.stdout.flush()
         report["screw_check"] = ft.get("screw")
         if ft["errors"]:
             gt["errors"] += ft["errors"]
@@ -50,6 +53,17 @@ def main():
         from motor_templates.segmented_flatwire import electronics
         pb = electronics.fit(doc, electronics.motor_groups(doc))       # clearances + lead ends vs the board (reported, not refused)
         report["phase_board"] = dict(pb, import_=report.get("phase_board_import"))
+        print("stage board fit %.1f s" % (time.time() - t0)); sys.stdout.flush()
+    fp = (pj.get("profile") or {}).get("fusion_parts") or {}
+    if gt["ok"] and fp.get("occurrences") and not kit:      # A.7.8: the template arrays / links land on every Fusion occurrence
+        from motor_templates.segmented_flatwire import fusion_parts as FP
+        rows, errs = FP.instance_check(doc, fp)
+        report["fusion_instances"] = rows
+        print("stage Fusion instances %.1f s" % (time.time() - t0)); sys.stdout.flush()
+        if errs:
+            gt["errors"] += errs
+            gt["ok"] = False
+    report["fusion_warnings"] = gt.get("fusion_warnings") or []       # Fusion bodies vs the Params rows (warned, not refused)
     report["gate"] = {k: v for k, v in gt.items() if k != "volumes"}
     report["volumes"] = {k: round(v, 4) for k, v in gt["volumes"].items()}
     direct, live = ps.live_parameters(doc)

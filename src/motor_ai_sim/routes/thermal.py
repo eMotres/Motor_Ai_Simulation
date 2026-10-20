@@ -3382,7 +3382,7 @@ def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
 #: The rotor's axial paths (2026-10-19) — the bearing / holder network and the
 #: rotor's own channels.  Rides in the thermal cache key: bump it when either
 #: model changes, so no map solved with the old one is served.
-AXIAL_PATHS_VERSION = "2026-10-19.1"
+AXIAL_PATHS_VERSION = "2026-10-20.1"
 
 
 def _rotor_air_channels(verts, tris, tags, mask, sym,
@@ -5038,6 +5038,7 @@ def solve_thermal_field(
     _bn_ends: List[Dict[str, Any]] = []
     _bn_cad: Dict[str, Any] = {}
     _bn_holder_to = "stator"
+    _bn_coolant_on = False
     _bn_air_mode = "still"
     _bn_air_v = 0.0
     _bn_assign = dict(_mech.get("assignment") or {})
@@ -5079,6 +5080,16 @@ def solve_thermal_field(
             _bn_air_v = float(_open_v if frame == "open" else air_speed_mps)
             _bn_air_mode = "wash" if _bn_air_v > 0.0 else "still"
         _bn_holder_to = "heat_path" if _hp_housing else "stator"
+        # The coolant jacket on the holders' rims (2026-10-20, the G2-L40's
+        # water-cooled side walls): only a jacket mode (liquid, or manual —
+        # the engineer's own jacket h at the coolant temperature) and only an
+        # end whose CAD holder gives ``coolant_area_mm2``.
+        _bn_coolant_on = bool(cooling_mode in ("liquid", "manual")
+                              and not _hp_housing
+                              and any(float(((_bn_cad.get(_e) or {})
+                                             .get("holder") or {})
+                                            .get("coolant_area_mm2") or 0.0) > 0.0
+                                      for _e in ("A", "B")))
         for _end in ("A", "B"):
             _cname = str((_mres.get(_end) or {}).get("card") or "")
             if not _cname:
@@ -5113,6 +5124,12 @@ def solve_thermal_field(
                     else "still air + radiation",
                     "the stator core" if _bn_holder_to == "stator"
                     else "the housing body"))
+            if _bn_coolant_on:
+                _bn_notes.append(
+                    "the holders' rims are WETTED by the %s jacket (CAD "
+                    "coolant_area_mm2): the arms end in a rim node that the "
+                    "pads and the jacket's own film (the OD's h and sink) "
+                    "share" % cooling_mode)
             if not _bn_cad:
                 _bn_notes.append(
                     "this configuration carries no CAD thermal_path for its "
@@ -5797,7 +5814,12 @@ def solve_thermal_field(
                     for _e in _bn_ends},
                 emissivity=float(emissivity), symmetry_mult=sym,
                 shaft_tags=[DOM_SHAFT], stator_tags=[DOM_STATOR],
-                holder_to=_bn_holder_to)
+                holder_to=_bn_holder_to,
+                # the jacket's film on a holder rim the CAD says it wets
+                # (2026-10-20): the OD's own coefficient and sink this pass
+                coolant=({"h_W_per_m2K": float(h_eff), "t_sink_c": float(t_sink),
+                          "source": "%s jacket on the OD" % cooling_mode}
+                         if _bn_coolant_on else None))
             _nodes_pass = list(_nodes_pass) + list(_bn_net["nodes"])
             _bn_links = list(_bn_net["links"])
             _bn_sinks = list(_bn_net["sinks"])
@@ -5965,6 +5987,12 @@ def solve_thermal_field(
 
         _by_name = {s["name"]: s for s in (th.get("surfaces") or [])}
         p_outer_new = float(_by_name.get("outer", {}).get("heat_removed_W", 0.0)) * sym
+        if _bn_coolant_on:
+            # the holders' rims warm the same coolant (its outlet)
+            p_outer_new += sum(
+                float(n.get("heat_removed_W") or 0.0) * sym
+                for n in (th.get("nodes") or [])
+                if str(n.get("name") or "").endswith("_rim"))
         p_bore_new = float(_by_name.get("bore", {}).get("heat_removed_W", 0.0)) * sym
         if not _iterating:
             break
@@ -6141,6 +6169,7 @@ def solve_thermal_field(
         bearing_node_blk = {
             "mode": "solved", **_bn_sum,
             "holder_to": _bn_holder_to, "air_mode": _bn_air_mode,
+            "coolant_rim": _bn_coolant_on,
             "air_speed_mps": round(float(_bn_air_v), 3),
             "cad": bool(_bn_cad), "notes": _bn_notes,
             "advisory": ("the bearing temperature is REPORTED and flagged "

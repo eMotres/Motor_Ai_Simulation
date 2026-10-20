@@ -23,6 +23,14 @@ Per bearing end (A, B), in series from the 2-D shaft to the room::
          ─R_fit,o─  holder ─┬─ film (wash / still air) ─ ambient
                             └─ arms + pad contact ─ stator core (2-D, mean)
 
+and on a LIQUID-COOLED machine whose holder rim is wetted by the jacket
+(``holder.coolant_area_mm2``, 2026-10-20, owner on the G2-L40: the side
+walls that carry the bearings are water-cooled from above) the arms end in a
+RIM node shared by the pads and the jacket film::
+
+    holder ─arms─ rim ─┬─ pad contact ─ stator core (2-D, mean)
+                       └─ jacket film h·A_wet ─ coolant (the OD's own sink)
+
 plus the ring-to-ring path through the air in the bearing (``R_annulus``).
 
 EVERY RESISTANCE CARRIES ITS SOURCE (``network(...)["resistances"]``), and
@@ -71,6 +79,10 @@ nothing here is tuned to a measurement:
     (``cooling_models.flat_plate_forced_nu`` on the holder's envelope, the
     conservative length) or the still-air + radiation pair
     (``cooling_models.end_face_still``) in the still / robotics modes.
+  * holder rim in the jacket (liquid / manual cooling only, and only where
+    the CAD gives ``coolant_area_mm2``) — the SAME film coefficient and sink
+    the route applies to the stator OD (``routes.thermal._cooling_bc``), on
+    the holder's wetted area.  Nothing new is fitted.
 
 THE BEARING IS ADVISORY.  Its temperature is reported, it drives the grease
 viscosity in the friction model, and ``time_to_limit.advisories`` flags it over
@@ -432,6 +444,7 @@ def end_geometry(*, end: str, card: Mapping[str, Any],
                 for L, A in (h.get("arm_segments_mm") or [])]
         film_a = float(h.get("film_area_mm2") or 0.0) * 1e-6
         lc = float(h.get("char_len_mm") or od * 1e3) * 1e-3
+        cool_a = max(float(h.get("coolant_area_mm2") or 0.0), 0.0) * 1e-6
         src["holder"] = "CAD: " + str(h.get("source") or "measured on the assembly")
     else:
         # DEFAULT holder: a solid aluminium end plate, thickness B, from the
@@ -448,6 +461,7 @@ def end_geometry(*, end: str, card: Mapping[str, Any],
         arms = [(max(r_yoke - r_seat, 1e-3), 2.0 * math.pi * r_mid * max(B, 1e-3))]
         film_a = 2.0 * math.pi * max(r_od ** 2 - r_seat ** 2, 0.0)
         lc = od
+        cool_a = 0.0
         src["holder"] = ("DEFAULT (no CAD holder on this configuration): solid "
                          "aluminium end plate B thick from the bearing seat to "
                          "the stator OD, both faces wetted, pads on 10 % of the "
@@ -464,6 +478,8 @@ def end_geometry(*, end: str, card: Mapping[str, Any],
         "holder_k": k_h,
         "holder_film_area_m2": film_a,
         "holder_char_len_m": lc,
+        # the holder's rim wetted by the coolant jacket [m²] (0: dry holder)
+        "holder_coolant_area_m2": cool_a,
         "sources": src,
     }
 
@@ -559,7 +575,8 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
             holder_wall_c: Mapping[str, float], emissivity: float,
             symmetry_mult: int, shaft_tags: Sequence[int],
             stator_tags: Sequence[int],
-            holder_to: str = "stator") -> Dict[str, Any]:
+            holder_to: str = "stator",
+            coolant: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """The lumped nodes, links and volume sinks for ``solve_steady_thermal``.
 
     ``ends`` — one dict per bearing end: ``{"end", "card" (dict), "geom"
@@ -568,6 +585,13 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
     properties)}``.  ``holder_to`` is ``"stator"`` (the holder screwed to the
     core: a sink on the stator elements attached to the holder node) or the
     name of a lumped node (a robotics housing body) the holder links into.
+
+    ``coolant`` — ``{"h_W_per_m2K", "t_sink_c", "source"}``, the coolant
+    jacket's film on the stator OD this pass (liquid / manual cooling).  An
+    end whose geometry has ``holder_coolant_area_m2 > 0`` then gets a RIM
+    node: holder ─arms─ rim, rim ─pads─ stator (or the body), rim ─h·A─
+    coolant.  Without it (or with no wetted area) the network is the one it
+    always was.
 
     Returns ``{"nodes", "links", "sinks", "ends": per-end report}``.  The
     friction of each bearing is injected 50 % into its balls node and 25 % into
@@ -592,6 +616,12 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
         r_arms = series_conduction(g["holder_arm_segments_m"], g["holder_k"])
         g_pad = fit_conductance(g["holder_contact_m2"])
         r_hold_stator = r_arms + (1.0 / g_pad if g_pad > 0 else float("inf"))
+        # the jacket on the holder's rim (2026-10-20)
+        a_cool = float(g.get("holder_coolant_area_m2") or 0.0)
+        cool = dict(coolant or {})
+        h_cool = max(float(cool.get("h_W_per_m2K") or 0.0), 0.0)
+        g_cool = h_cool * a_cool if a_cool > 0.0 else 0.0
+        t_cool = float(cool.get("t_sink_c", t_ambient_c))
         film = holder_film(mode=air_mode, air_speed_mps=air_speed_mps,
                            t_wall_c=float(holder_wall_c.get(nm, t_ambient_c)),
                            t_ambient_c=t_ambient_c,
@@ -600,6 +630,7 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
                            emissivity=emissivity)
         n_in, n_ba, n_out, n_h = ("brg%s_inner" % nm, "brg%s_balls" % nm,
                                   "brg%s_outer" % nm, "brg%s_holder" % nm)
+        n_rim = "brg%s_rim" % nm
         nodes += [
             {"name": n_in, "G_W_per_K": 0.0, "t_sink_c": t_ambient_c,
              "q_W": 0.25 * p_w, "symmetry_mult": sym},
@@ -627,7 +658,32 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
             links.append({"name": "brg%s_annulus" % nm, "a": n_in, "b": n_out,
                           "G_W_per_K": brg["G_annulus_W_per_K"]})
         g_hs = (1.0 / r_hold_stator) if math.isfinite(r_hold_stator) else 0.0
-        if g_hs > 0.0:
+        # THE RIM (2026-10-20): the arms end where the pads AND the jacket
+        # are; the holder node keeps its own air film.  Arms with no
+        # sections (a holder that IS its rim) are a stiff link.
+        g_arm = (1.0 / r_arms) if r_arms > 0.0 else 1.0e6
+        g_hc = 0.0  # holder ↔ coolant, rim reduced
+        g_cs = 0.0  # stator ↔ coolant THROUGH the rim, rim reduced
+        if g_cool > 0.0:
+            nodes.append({"name": n_rim, "G_W_per_K": g_cool,
+                          "t_sink_c": t_cool, "symmetry_mult": sym})
+            links.append({"name": "brg%s_arms" % nm, "a": n_h, "b": n_rim,
+                          "G_W_per_K": g_arm})
+            if g_pad > 0.0:
+                if holder_to == "stator":
+                    sinks.append({"name": "bearing_%s_holder_stator" % nm,
+                                  "tags": list(stator_tags), "G_W_per_K": g_pad,
+                                  "t_sink_c": t_ambient_c, "node": n_rim,
+                                  "symmetry_mult": sym})
+                else:
+                    links.append({"name": "brg%s_holder_body" % nm, "a": n_rim,
+                                  "b": str(holder_to), "G_W_per_K": g_pad})
+            # Kron-reduce the rim (no source in it) for the delta below
+            _sr = g_arm + g_pad + g_cool
+            g_hs = g_arm * g_pad / _sr
+            g_hc = g_arm * g_cool / _sr
+            g_cs = g_pad * g_cool / _sr
+        elif g_hs > 0.0:
             if holder_to == "stator":
                 sinks.append({"name": "bearing_%s_holder_stator" % nm,
                               "tags": list(stator_tags), "G_W_per_K": g_hs,
@@ -674,6 +730,15 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
                           (1.0 / g_pad if g_pad > 0 else float("inf")),
                           g["sources"]["holder"])},
         ]
+        if g_cool > 0.0:
+            res.append(
+                {"path": "holder rim → coolant jacket", "R_K_per_W": 1.0 / g_cool,
+                 "source": "the jacket's own film on the stator OD, h %.0f W/m²K "
+                           "at %.1f °C (%s), on the rim's wetted %.0f mm² (CAD "
+                           "coolant_area_mm2); the arms run from the holder "
+                           "node to the rim, the pads leave the rim"
+                           % (h_cool, t_cool, str(cool.get("source") or "jacket"),
+                              a_cool * 1e6)})
         # THE SAME NETWORK SEEN FROM THE 2-D NODES: the holder is a star
         # between the rotor side (shaft → … → outer ring), the stator and the
         # air; its delta (exact for the linear network, friction aside) is what
@@ -682,11 +747,16 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
                        + 1.0 / brg["G_balls_outer_W_per_K"])
                 + brg["G_annulus_W_per_K"])
         g_r = 1.0 / (1.0 / g_shaft_in + 1.0 / g_rr + 1.0 / g_fit_o)
-        g_a = float(film["G_W_per_K"])
+        # With a wetted rim the coolant joins the AIR side of the delta (both
+        # are sinks outside the machine; the coolant's is the ambient the
+        # route was handed in manual mode or the jacket's mean film in liquid
+        # mode, reported as ``coolant_sink_c``) and the rim adds its own
+        # stator ↔ coolant leg.
+        g_a = float(film["G_W_per_K"]) + g_hc
         g_sig = max(g_r + g_hs + g_a, 1e-12)
         delta = {"G_rotor_air_W_per_K": g_r * g_a / g_sig,
                  "G_rotor_stator_W_per_K": g_r * g_hs / g_sig,
-                 "G_stator_air_W_per_K": g_hs * g_a / g_sig,
+                 "G_stator_air_W_per_K": g_hs * g_a / g_sig + g_cs,
                  "G_rotor_holder_W_per_K": g_r,
                  # ...and the friction's EQUIVALENT SOURCES (re-audit R2,
                  # 2026-10-20): the delta alone carries the conductances, and a
@@ -702,12 +772,16 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
                                 g_annulus=brg["G_annulus_W_per_K"],
                                 g_fit_outer=g_fit_o, g_holder_stator=g_hs,
                                 g_holder_air=g_a)}
+        if g_cool > 0.0:
+            delta["coolant_sink_c"] = t_cool
         reports.append({"end": nm, "card": card.get("name"), "P_friction_W": p_w,
                         "delta": delta,
+                        "G_holder_to_coolant_W_per_K": g_cool,
                         "bearing": brg, "film": film,
                         "G_shaft_to_inner_W_per_K": g_shaft_in,
                         "G_holder_to_stator_W_per_K": g_hs,
-                        "nodes": [n_in, n_ba, n_out, n_h],
+                        "nodes": ([n_in, n_ba, n_out, n_h]
+                                  + ([n_rim] if g_cool > 0.0 else [])),
                         "resistances": res})
     return {"nodes": nodes, "links": links, "sinks": sinks, "ends": reports}
 
@@ -726,7 +800,8 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
     t_max = None
     for rep in net.get("ends") or []:
         nm = rep["end"]
-        n_in, n_ba, n_out, n_h = rep["nodes"]
+        n_in, n_ba, n_out, n_h = rep["nodes"][:4]
+        n_rim = rep["nodes"][4] if len(rep["nodes"]) > 4 else None
 
         def _t(n):
             v = nodes.get(n, {}).get("t_c")
@@ -735,8 +810,12 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
         s_sh = sinks.get("bearing_%s_shaft" % nm) or {}
         s_hs = sinks.get("bearing_%s_holder_stator" % nm) or {}
         film_w = float(nodes.get(n_h, {}).get("heat_removed_W") or 0.0) * sym
+        cool_w = (float(nodes.get(n_rim, {}).get("heat_removed_W") or 0.0) * sym
+                  if n_rim else 0.0)
         temps = {"inner_ring_c": _t(n_in), "balls_c": _t(n_ba),
                  "outer_ring_c": _t(n_out), "holder_c": _t(n_h)}
+        if n_rim:
+            temps["holder_rim_c"] = _t(n_rim)
         # the BEARING's temperature: its rings and balls (where the grease
         # is), not the holder it sits in
         for k_t in ("inner_ring_c", "balls_c", "outer_ring_c"):
@@ -752,6 +831,8 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
             # (negative when a holder feeds the stator)
             "stator_to_holder_W": round(float(s_hs.get("heat_removed_W") or 0.0) * sym, 4),
             "holder_to_air_W": round(film_w, 4),
+            # the rim's jacket film (0 on a dry holder)
+            "holder_to_coolant_W": round(cool_w, 4),
             "friction_W": round(float(rep.get("P_friction_W") or 0.0), 4),
             "links_W": {k: round(float(v["heat_W"]) * sym, 4)
                         for k, v in lks.items() if k.startswith("brg%s_" % nm)},
@@ -772,5 +853,7 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
             "shaft_to_bearings_W": round(sum(e["shaft_to_bearing_W"] for e in out_ends), 4),
             "stator_to_holders_W": round(sum(e["stator_to_holder_W"] for e in out_ends), 4),
             "holders_to_air_W": round(sum(e["holder_to_air_W"] for e in out_ends), 4),
+            "holders_to_coolant_W": round(sum(e["holder_to_coolant_W"]
+                                              for e in out_ends), 4),
             "friction_W": round(sum(e["friction_W"] for e in out_ends), 4),
             "t_ambient_c": float(t_ambient_c)}

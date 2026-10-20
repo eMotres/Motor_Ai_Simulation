@@ -6910,6 +6910,11 @@ def solve_thermal_field(
             # and the rotor's own ventilated windows.
             "bearing_node": bearing_node_blk,
             "rotor_channels": rotor_channels_blk,
+            # Where the rotor face's open fraction came from (the CAD or the
+            # fully-open default) — the end-face films ride on it even with
+            # the channels off, and an answer to a caller without the NDA gate
+            # withholds the measured one (``construction_privacy``, R1).
+            "holder_open_fraction_source": _phi_src,
             # The MECHANICAL heat (2026-09-08): what the bearings and the air
             # cost this machine at this speed, at which bearing temperature and
             # from where, and what this cross-section did with each watt.

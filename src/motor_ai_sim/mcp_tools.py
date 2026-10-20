@@ -46,6 +46,10 @@ GEOMETRY_DENYLIST = frozenset({
     "slot_width", "shaft_diameter", "slot_pitch", "pole_pitch", "angle_slot",
     "angle_pole", "daxis_deg", "bh_curve", "core_loss_curves", "payload",
     "payload_file", "gamma_deg", "file", "dir",
+    # the CAD-measured bearing basis (re-audit R1, 2026-10-20): never on the MCP
+    "thermal_path", "shaft_segments_mm", "segments_mm", "arm_segments_mm",
+    "contact_core_mm2", "film_area_mm2", "char_len_mm",
+    "rotor_face_open_fraction", "holder_open_fraction",
 })
 
 
@@ -242,11 +246,16 @@ def _visible_tree() -> List[dict]:
     die left with none: uncomputed machines are not shown to clients (the rule of
     ``web/src/components/catalog/MotorsCatalog.tsx``)."""
     from fastapi import Response
+    from motor_ai_sim.construction_privacy import public_bearings
     from motor_ai_sim.routes import family as _fam
     dies = list((_fam.tree(Response(), authorization=None) or {}).get("dies") or [])
     out = []
     for d in dies:
-        cfgs = [c for c in d.get("configs") or [] if c.get("card_date")]
+        # the MCP is public-facing for every caller (PUBLIC-CATALOG RULE): the
+        # bearings' CAD basis never rides along, whoever the agent acts for
+        cfgs = [({**c, "bearings": public_bearings(c["bearings"])}
+                 if isinstance(c.get("bearings"), dict) else c)
+                for c in d.get("configs") or [] if c.get("card_date")]
         if cfgs:
             out.append({**d, "configs": cfgs, "config_count": len(cfgs)})
     return out

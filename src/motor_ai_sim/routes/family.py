@@ -2110,7 +2110,8 @@ def _overlay_mass(die: str, cfg: dict) -> dict:
     return {**cfg, "mass": summ, "duties": duties}
 
 
-def _stamp_cards(dies: list, with_mass: bool = True) -> list:
+def _stamp_cards(dies: list, with_mass: bool = True,
+                 full_construction: bool = False) -> list:
     """Copy of the tree's dies with the FULL-passport-card flag on every
     configuration (``card_date``: the card's date or None) and the die-level
     summary (``cards`` / ``config_count``).  Stamped AFTER the tree cache, on
@@ -2119,7 +2120,14 @@ def _stamp_cards(dies: list, with_mass: bool = True) -> list:
 
     ``with_mass=False`` skips the full-mass overlay: that one builds the machine's 2-D geometry
     for every configuration on EVERY call (the tree memo sits before it), which a caller that only
-    needs the catalog rows (the support assistant) must not pay."""
+    needs the catalog rows (the support assistant) must not pay.
+
+    ``full_construction`` (re-audit R1, 2026-10-20): the memo holds every
+    configuration's bearings block whole, CAD ``thermal_path`` included; each
+    answer gets it only when THIS caller passes the full-construction gate
+    (``construction_privacy``), so no cache order can hand one caller's view to
+    another."""
+    from motor_ai_sim.construction_privacy import bearings_for as _bearings_for
     try:
         from motor_ai_sim import passport_store as _ps
         idx = _ps.card_index()
@@ -2129,7 +2137,10 @@ def _stamp_cards(dies: list, with_mass: bool = True) -> list:
     for d in dies:
         have = idx.get(str(d.get("name")), {})
         cfgs = [(_overlay_mass if with_mass else (lambda _n, cc: cc))(
-                    str(d.get("name")), {**c, "card_date": have.get(str(c.get("name")))})
+                    str(d.get("name")), {**c, "card_date": have.get(str(c.get("name"))),
+                                         **({"bearings": _bearings_for(c.get("bearings"),
+                                                                       full_construction)}
+                                            if "bearings" in c else {})})
                 for c in (d.get("configs") or [])]
         out.append({**d, "configs": cfgs,
                     "cards": sum(1 for c in cfgs if c["card_date"]),
@@ -2139,16 +2150,22 @@ def _stamp_cards(dies: list, with_mass: bool = True) -> list:
 
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
-    return tree_for_access(response, catalog_access(authorization))
+    from motor_ai_sim.construction_privacy import may_see_full_construction
+    return tree_for_access(response, catalog_access(authorization),
+                           full_construction=may_see_full_construction(authorization))
 
 
-def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True):
+def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
+                    full_construction: bool = False):
     """The catalog tree for an ALREADY RESOLVED ``motor_access`` answer.
 
     ``tree`` is this with the caller's own access; the support assistant calls it
     directly to list "the motors a fresh sign-up may open" for a visitor, which no
     header can express.  Same rules, same memo.  ``with_mass=False`` leaves the per-configuration
     ``mass`` block and the full-mass overlay of the duties out (see :func:`_stamp_cards`).
+    ``full_construction`` — the caller passes the NDA + verification gate, so the
+    bearings keep their CAD ``thermal_path``; the default (every in-process
+    caller: the support assistant) withholds it (re-audit R1).
     """
     # Who may CHANGE the catalog: the vendor alone on a single-layer install,
     # and — since Stage 5 — any registered account once layering is on, because
@@ -2240,7 +2257,8 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True):
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
     if _sig and _hit is not None and _hit[0] == _sig:
-        res = {"dies": _stamp_cards(_hit[1], with_mass), "can_write": _can_write}
+        res = {"dies": _stamp_cards(_hit[1], with_mass, full_construction),
+               "can_write": _can_write}
         if not _hit[1] and _acc["mode"] == MODE_GRANTED:
             res["note"] = "no motors granted yet — ask the vendor"
         return res
@@ -2409,7 +2427,8 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True):
         })
     if _sig:
         _TREE_CACHE[_key] = (_sig, out)
-    res = {"dies": _stamp_cards(out, with_mass), "can_write": _can_write}
+    res = {"dies": _stamp_cards(out, with_mass, full_construction),
+           "can_write": _can_write}
     if not out and _acc["mode"] == MODE_GRANTED:
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.
@@ -4788,8 +4807,9 @@ def context(response: Response, authorization: str = Header(default=None)):
         # The bearings this machine is built with — the input to the SKF
         # frictional-moment model behind the "Bearings" and "Windage" cells on
         # the Electromagnetic summary and the mechanical rows in the datasheet.
-        # Absent = not decided yet, which is NOT the same as zero loss.
-        "bearings": c.get("bearings"),
+        # Absent = not decided yet, which is NOT the same as zero loss.  The
+        # CAD thermal_path only behind the full-construction gate (R1).
+        "bearings": _bearings_for_caller(c.get("bearings"), authorization),
         "duty_point": (None if point is None else {
             "current_arms": point.get("current_arms"), "rpm": point.get("rpm"),
             "gamma_deg": point.get("gamma_deg"), "mode": point.get("mode", "motor"),
@@ -5300,6 +5320,26 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
     return {"ok": True, "controller": c["controller"]}
 
 
+def _bearings_for_caller(block: Any, authorization: Optional[str]) -> Any:
+    """A configuration's bearings block as THIS caller may see it: the CAD
+    ``thermal_path`` (and any other non-public key) only behind the
+    full-construction gate (re-audit R1, ``construction_privacy``)."""
+    from motor_ai_sim.construction_privacy import (bearings_for,
+                                                   may_see_full_construction)
+    if not isinstance(block, dict):
+        return block
+    return bearings_for(block, may_see_full_construction(authorization))
+
+
+def _effective_cards(block: Any) -> Dict[str, str]:
+    """``{"A": card, "B": card}`` the way the loss model reads a block (a
+    missing end takes the other's card) — what the CAD thermal_path was
+    measured against."""
+    from motor_ai_sim import bearings as _brg
+    r = _brg.resolve_assignment(block if isinstance(block, dict) else None)
+    return {e: str((r.get(e) or {}).get("card") or "") for e in ("A", "B")}
+
+
 class BearingEnd(BaseModel):
     """One end of the shaft line."""
     card: Optional[str] = None       # a name in config/bearings_library.yaml
@@ -5337,6 +5377,14 @@ def set_bearings(die: str, cfg: str, req: BearingsPatch,
 
     A PATCH replaces the whole block — a bearing pair is one decision, and a
     half-updated pair (a new A against a stale B) is a shaft line nobody drew.
+
+    ONE key survives it (re-audit R3, 2026-10-20): the CAD ``thermal_path`` —
+    the shaft segments, holder sections and areas measured on the assembly,
+    which this request has no field for.  It is KEPT while both ends keep
+    their cards (the measured shaft line is still the one built), and
+    INVALIDATED — removed, and the answer says so — when either card changes
+    or the pair is cleared, because then the measured basis describes a
+    bearing seat that no longer exists.
     """
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     _require_die_write(die, _w, cfg)
@@ -5390,10 +5438,16 @@ def set_bearings(die: str, cfg: str, req: BearingsPatch,
         # yet), and it must leave NO block rather than an empty one that reads
         # as "assigned, zero loss".
         c = _load_yaml(_cfg_file(die, cfg), "configuration")
-        c.pop("bearings", None)
+        _old = c.pop("bearings", None)
         _save_yaml(_cfg_file(die, cfg), c)
         log.info("family: bearings CLEARED on '%s/%s'", die, cfg)
-        return {"ok": True, "bearings": None}
+        out: Dict[str, Any] = {"ok": True, "bearings": None}
+        if isinstance(_old, dict) and _old.get("thermal_path"):
+            out["thermal_path_status"] = {
+                "status": "invalidated",
+                "reason": ("the bearings were cleared: the CAD thermal_path "
+                           "measured for the old pair was removed with them")}
+        return out
 
     block: Dict[str, Any] = dict(ends)
     block["lubrication"] = lub
@@ -5403,10 +5457,48 @@ def set_bearings(die: str, cfg: str, req: BearingsPatch,
         block["temp_c"] = round(float(req.temp_c), 1)
 
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    _old = c.get("bearings") if isinstance(c.get("bearings"), dict) else {}
+    _tp_status: Optional[Dict[str, Any]] = None
+    if _old.get("thermal_path"):
+        _before, _after = _effective_cards(_old), _effective_cards(block)
+        from motor_ai_sim.construction_privacy import may_see_full_construction
+        if _before == _after and not may_see_full_construction(_w.get("authorization")):
+            # A caller without the full-construction gate saving its OWN
+            # copy (layering: copy-on-write into its workspace; the shared
+            # original keeps its basis): the measured basis is not copied to
+            # it.  (Flat installs only let the admin write at all.)
+            _tp_status = {"status": "withheld",
+                          "reason": "the CAD thermal_path is full-construction "
+                                    "data and was not copied into this save"}
+        elif _before == _after:
+            # the same pair on the same seats: the measured basis still holds
+            block["thermal_path"] = _old["thermal_path"]
+            _tp_status = {"status": "kept",
+                          "reason": "the bearing cards are unchanged (%s / %s)"
+                                    % (_after["A"], _after["B"])}
+        else:
+            _chg = ", ".join("%s %s -> %s" % (e, _before[e] or "none",
+                                              _after[e] or "none")
+                             for e in ("A", "B") if _before[e] != _after[e])
+            _tp_status = {
+                "status": "invalidated",
+                "reason": ("the bearing changed (%s): the CAD thermal_path was "
+                           "measured on the old bearing seats, so it was "
+                           "removed; the thermal model uses its stated "
+                           "defaults until the assembly is measured again"
+                           % _chg)}
+            log.warning("family: bearings on '%s/%s' changed (%s) - CAD "
+                        "thermal_path INVALIDATED", die, cfg, _chg)
     c["bearings"] = block
     _save_yaml(_cfg_file(die, cfg), c)
-    log.info("family: bearings on '%s/%s': %s", die, cfg, block)
-    return {"ok": True, "bearings": block}
+    log.info("family: bearings on '%s/%s': cards %s, thermal_path %s", die, cfg,
+             _effective_cards(block),
+             (_tp_status or {}).get("status", "none"))
+    out = {"ok": True,
+           "bearings": _bearings_for_caller(block, _w.get("authorization"))}
+    if _tp_status is not None:
+        out["thermal_path_status"] = _tp_status
+    return out
 
 
 def _num_eq(a, b) -> bool:

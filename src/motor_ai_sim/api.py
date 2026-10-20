@@ -245,6 +245,14 @@ _ALLOWED_ORIGINS = [
 # handler — cost nothing.  With ``WORKSPACES_ROOT`` unset (this workstation) the
 # middleware does not even read the headers and every call resolves to the
 # process config, exactly as before.
+# THE FULL-CONSTRUCTION BOUNDARY on every JSON answer (re-audit R1,
+# 2026-10-20): installed BEFORE the resolver so it is innermost — it runs inside
+# the request's workspace and caller — and strips the CAD-measured bearing basis
+# (``bearings.thermal_path`` and what the thermal model echoes of it) from any
+# answer to a caller without the NDA + verification gate.
+from motor_ai_sim import construction_privacy as _construction_privacy
+_construction_privacy.install(app)
+
 from motor_ai_sim.workspace import install_workspace_resolver
 install_workspace_resolver(app)
 

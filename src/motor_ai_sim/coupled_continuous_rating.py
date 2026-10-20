@@ -592,6 +592,9 @@ def losses_at_speed(loss: Mapping[str, Any], r: float, *,
     out["split"] = split
     out["rpm"] = float(loss.get("rpm") or 0.0) * r
     out["total_W"] = round(sum(float(out.get(n) or 0.0) for n in NODES), 4)
+    # the holders' direct share of the friction is mechanical: held (R2)
+    out["input_total_W"] = round(out["total_W"] + float(
+        loss.get("bearings_to_ambient_W") or 0.0), 4)
     return out
 
 

@@ -162,7 +162,7 @@ def test_bisection_lands_on_the_binding_limit(tmp_path):
     assert r["monotone"] and L is not None
     assert L["binding"] in ("winding", "magnet")
     key = "T_winding_C" if L["binding"] == "winding" else "T_magnet_C"
-    lim = 200.0 if L["binding"] == "winding" else 150.0
+    lim = s1._rated_winding_c() if L["binding"] == "winding" else 150.0
     assert L[key] <= lim and L[key] > lim - 1.0               # bisected to 1 rpm: within a kelvin
     rho = r["rho_kg_m3"]
     above = s1.solve_point(m, prop, L["rpm"] + 2.0, ambient_c=25.0, rho=rho, lims=r["limits"])
@@ -175,7 +175,8 @@ def test_bisection_lands_on_the_binding_limit(tmp_path):
 def test_binding_constraint_follows_the_tightest_limit(tmp_path):
     m, prop = _model(), _prop(tmp_path)
     w = _run(m, prop, magnet_limit_c=400.0)["limit"]
-    assert w["binding"] == "winding" and w["T_winding_C"] == pytest.approx(200.0, abs=1.0)
+    # the continuous line is the RATED winding (180 °C), not the 200 °C class (2026-10-20)
+    assert w["binding"] == "winding" and w["T_winding_C"] == pytest.approx(s1._rated_winding_c(), abs=1.0)
     g = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=90.0)["limit"]
     assert g["binding"] == "magnet" and g["T_magnet_C"] == pytest.approx(90.0, abs=1.0)
     assert g["rpm"] < w["rpm"]
@@ -1069,3 +1070,16 @@ def test_effective_board_cooling_rule(tmp_path):
     assert new["drive"]["board_cooling"] == "slipstream"
     assert new["rows"][0]["rpm"] == 5000.0
     assert new["rows"][0]["controller_limit_A"] == pytest.approx(old["controller_limit_A"], rel=1e-12)
+
+
+def test_the_continuous_line_sits_at_the_rated_winding_and_a_caller_limit_still_wins(tmp_path):
+    """Owner 2026-10-20: on the first load the rated point and the S1 line are one point —
+    the S1 continuous limit is the rated winding temperature (180 °C), the 200 °C class
+    stays the overheat line; an explicit caller limit still overrides it."""
+    m, prop = _model(), _prop(tmp_path)
+    r = _run(m, prop, magnet_limit_c=400.0)
+    assert r["limits"]["winding_C"] == pytest.approx(s1._rated_winding_c())
+    assert "rated winding" in r["limits"]["winding_basis"]
+    hi = _run(m, prop, winding_limit_c=200.0, magnet_limit_c=400.0)
+    assert hi["limits"]["winding_C"] == pytest.approx(200.0)
+    assert hi["limit"]["rpm"] > r["limit"]["rpm"]

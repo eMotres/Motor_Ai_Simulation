@@ -21,12 +21,19 @@ router = APIRouter(prefix="/api/erp-export", tags=["erp-export"])
 
 
 def _authorise(authorization: Optional[str]) -> None:
-    token = (os.environ.get("ERP_SYNC_TOKEN") or "").strip()
-    if token and isinstance(authorization, str):
-        parts = authorization.split(" ", 1)
-        if len(parts) == 2 and parts[0].lower() == "bearer" and hmac.compare_digest(parts[1].strip(), token):
-            return
+    if valid_service_credential(authorization):
+        return
     require_admin(authorization)          # 401 anonymous, 403 not an admin
+
+
+def valid_service_credential(authorization: Optional[str]) -> bool:
+    """Whether this bearer is the configured ERP-only service credential."""
+    token = (os.environ.get("ERP_SYNC_TOKEN") or "").strip()
+    if not token or not isinstance(authorization, str):
+        return False
+    parts = authorization.split(" ", 1)
+    return (len(parts) == 2 and parts[0].lower() == "bearer"
+            and hmac.compare_digest(parts[1].strip(), token))
 
 
 def _server_data(fn):

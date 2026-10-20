@@ -107,12 +107,22 @@ def is_user_activity(method: str, path: str) -> bool:
 class RequestInfo:
     """The request in flight as far as session activity is concerned (mutable: verification writes
     ``reason`` into it so the middleware can put it on the response)."""
-    __slots__ = ("method", "path", "reason")
+    __slots__ = ("method", "path", "reason", "auth_rejects", "ip", "user_agent")
 
-    def __init__(self, method: str, path: str) -> None:
+    def __init__(self, method: str, path: str, ip: str = "", user_agent: str = "") -> None:
         self.method = method
         self.path = path
         self.reason = ""
+        self.auth_rejects = set()
+        self.ip = ip
+        self.user_agent = user_agent
+
+    def mark_auth_reject(self, key: tuple) -> bool:
+        """Return true only for the first matching reject during this request."""
+        if key in self.auth_rejects:
+            return False
+        self.auth_rejects.add(key)
+        return True
 
     @property
     def is_activity(self) -> bool:
@@ -148,7 +158,10 @@ class SessionContextMiddleware:
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
-        info = RequestInfo(str(scope.get("method") or ""), str(scope.get("path") or ""))
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        client = scope.get("client") or ("", 0)
+        info = RequestInfo(str(scope.get("method") or ""), str(scope.get("path") or ""),
+                           str(client[0] or ""), headers.get(b"user-agent", b"").decode("latin-1"))
         tok = _REQ.set(info)
 
         async def _send(message):

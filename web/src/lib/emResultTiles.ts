@@ -185,7 +185,7 @@ export interface EmTileSpec {
 
 /** The width of a part-mass tile: two ordinary tiles and the gap between them (TILE_W of
  *  components/common/ResultTiles.tsx = 132, gap 6), so the row keeps the grid of the rows above. */
-export const EM_WIDE_TILE_W = 2 * 132 + 6;
+export const EM_WIDE_TILE_W = 2 * 110 + 6;
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const _n = (v: number) => String(Number(v.toFixed(0)));

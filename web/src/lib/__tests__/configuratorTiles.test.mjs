@@ -145,7 +145,7 @@ t('no results tile in the panel is conditional on the drive (no `drv &&` around 
 t('a refusal is a fixed slot, never a block that shifts the grid', () => {
   const panel = read('components/compare/ConfiguratorPanel.tsx');
   assert.doesNotMatch(panel, /driveRefusals\.map\(\(r\) => \(\s*<Typography/);   // the old inserted lines
-  assert.match(panel, /height: 34, overflow: 'hidden'/);
+  assert.match(panel, /height: 16, overflow: 'hidden'/);                       // the drive refusal slot (one line, owner 2026-10-20)
   assert.match(panel, /height: 16, whiteSpace: 'nowrap'/);                       // the propeller line
 });
 
@@ -213,7 +213,7 @@ for (const [l, max] of [['en', 11], ['zh-CN', 12]]) {
     }
     assert.match(d.motorEffTip, /controller|控制器/i);                    // says the controller is not in it (the Efficiency tile is the system)
     assert.match(d.motorLossTip, /PWM/);
-    // the coefficient titles too: one short line at the 132 px tile, full name in the tooltip
+    // the coefficient titles too: one short line at the tile width, full name in the tooltip
     const c = loc(l).configure;
     const kMax = l === 'en' ? 11 : 12;
     for (const k of ['demagKoef', 'saturationKoef', 'totalKoef']) {

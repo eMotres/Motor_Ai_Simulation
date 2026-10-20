@@ -66,6 +66,25 @@ _FACE_NOTE = re.compile(
 _FACE_NOTE_SUB = ("the air reaches the rotor face through the holder's "
                   "measured windows (open fraction %s)" % WITHHELD)
 
+#: The open rotor-face film's note (``cooling_models.rotor_end_faces_open``):
+#: it prints the face air speed — the wash × the MEASURED open fraction — and
+#: its Reynolds number (re-audit #2 R6).  Replaced WHOLE, with no numbers.
+_END_FACE_NOTE = re.compile(
+    r"\d+ × [-+0-9.eE]+ cm² of (?P<name>.+?) in the wash: rotating disc at "
+    r".*?flat plate at [-+0-9.eE]+ m/s.*?(?:photographs\.|$)", re.S)
+#: …and the rotor axial channels' note (``rotor_axial_channels``), same speed.
+_CHANNEL_NOTE = re.compile(
+    r"\d+ of \d+ rotor air region\(s\) are open axial channels; the air "
+    r"reaches the rotor face at [-+0-9.eE]+ m/s;.*?(?:CALIBRATION\.|$)", re.S)
+_END_FACE_NEUTRAL = ("{name} in the wash through the holder's measured windows: "
+                     "a forced film from the solved model (the air speed and its "
+                     "Reynolds number are " + WITHHELD + ")")
+_CHANNEL_NEUTRAL = ("the rotor's open axial channels are ventilated through the "
+                    "holder's measured windows (the air speed is " + WITHHELD + ")")
+#: The phrases that say THIS cooling block's rotor face ran on the CAD fraction.
+_FACE_CAD_TEXT = ("CAD (bearings.thermal_path.rotor_face_open_fraction)",
+                  "holder's measured windows")
+
 
 # ── the bearings block ──────────────────────────────────────────────────────
 
@@ -173,6 +192,8 @@ def _redact_bearing_node(bn: Dict[str, Any]) -> Dict[str, Any]:
 
 def _redact_rotor_channels(rc: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(rc)
+    if "note" in out:
+        out["note"] = _CHANNEL_NEUTRAL
     out["holder_open_fraction"] = None
     out["holder_open_fraction_source"] = "CAD (%s)" % WITHHELD
     for k in ("face_speed_mps",):
@@ -198,8 +219,13 @@ def _redact_end_faces(ef: Any) -> Any:
             return blk
         if str(blk.get("film_kind") or "") != "forced":
             return blk
-        return {k: (None if k in ("air_speed_mps", "re", "re_plate") else v)
-                for k, v in blk.items()}
+        out = {k: (None if k in ("air_speed_mps", "re", "re_plate", "h_plate",
+                                 "nu") else v)
+               for k, v in blk.items()}
+        if "note" in out:
+            out["note"] = _END_FACE_NEUTRAL.format(
+                name=str(blk.get("name") or "rotor end face"))
+        return out
     if isinstance(ef, Mapping):
         return {k: _one(v) for k, v in ef.items()}
     if isinstance(ef, list):
@@ -214,8 +240,14 @@ def _redact_cooling(c: Dict[str, Any]) -> Dict[str, Any]:
         out["bearing_node"] = _redact_bearing_node(dict(bn))
     rc = out.get("rotor_channels")
     face_cad = str(out.get("holder_open_fraction_source") or "").startswith("CAD")
-    if isinstance(rc, Mapping) and str(
-            rc.get("holder_open_fraction_source") or "").startswith("CAD"):
+    if isinstance(rc, Mapping):
+        # a payload stored before the cooling-level source key existed still
+        # says it in the channels' own notes (re-audit #2: stored payloads)
+        _txt = json.dumps(rc.get("notes") or [], ensure_ascii=False)
+        if any(t in _txt for t in _FACE_CAD_TEXT):
+            face_cad = True
+    if isinstance(rc, Mapping) and (face_cad or str(
+            rc.get("holder_open_fraction_source") or "").startswith("CAD")):
         out["rotor_channels"] = _redact_rotor_channels(dict(rc))
         face_cad = True
     if face_cad:
@@ -246,7 +278,12 @@ def redact(obj: Any) -> Any:
         return tuple(redact(v) for v in obj)
     if isinstance(obj, str):
         if "holder open fraction" in obj:
-            return _FACE_NOTE.sub(_FACE_NOTE_SUB, obj)
+            obj = _FACE_NOTE.sub(_FACE_NOTE_SUB, obj)
+        if "flat plate at" in obj and "in the wash: rotating disc" in obj:
+            obj = _END_FACE_NOTE.sub(lambda m: _END_FACE_NEUTRAL.format(
+                name=m.group("name")), obj)
+        if "open axial channels; the air reaches the rotor face at" in obj:
+            obj = _CHANNEL_NOTE.sub(_CHANNEL_NEUTRAL, obj)
         return obj
     return obj
 
@@ -344,3 +381,195 @@ class ConstructionRedactionMiddleware:
 
 def install(app) -> None:
     app.add_middleware(ConstructionRedactionMiddleware)
+
+
+# -- documents at rest: copies, exports, the one-off cleanup (re-audit #2 R5) --
+#
+# The JSON middleware guards ANSWERS.  A workspace copy (layered copy-on-write)
+# and the account ZIP export are not answers: they are files, and a file that
+# holds the CAD basis is the basis.  So the same redaction runs on the
+# documents themselves: when they are written into a workspace for a caller
+# without the gate, when they are packed into such an owner's export, and
+# (once, by hand) over every copy written before this rule existed.
+
+#: The document kinds that can carry the basis (a configuration yaml, a stored
+#: thermal / coupled payload, a JSON-lines log).  ``.gz`` wraps any of them.
+DOC_SUFFIXES = (".yaml", ".yml", ".json", ".jsonl")
+
+
+def subject_may_see_full_construction(email: Optional[str]) -> bool:
+    """The gate for the OWNER of some data (an export's subject, a workspace's
+    owner) rather than for the current request's caller.  Fails closed."""
+    try:
+        ident = str(email or "").strip().lower()
+        if not ident:
+            return False
+        from motor_ai_sim import auth as _auth
+        from motor_ai_sim import users as _U
+        rec = _U.get_user(ident) or {}
+        admins = getattr(_auth, "_ADMIN_EMAILS", None) or set()
+        is_admin = (ident in {str(a).strip().lower() for a in admins}
+                    or str(rec.get("role") or "") == "admin")
+        return may_see_full_construction(identity={"id": ident,
+                                                   "is_admin": is_admin})
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def caller_may_keep_construction() -> bool:
+    """For a WRITE seam with no header in hand (``_save_yaml``,
+    copy-on-write): the identity the middleware resolved for this request."""
+    return may_see_full_construction(None)
+
+
+def scrub_bytes(name: str, data: bytes) -> Optional[bytes]:
+    """``data`` (the file ``name``) with the CAD basis removed, or ``None``
+    when there is nothing to remove.  Raises ``ValueError`` when the file
+    carries a marker but cannot be parsed: the caller then withholds it rather
+    than ship it unread."""
+    import gzip
+    low = name.lower()
+    if low.endswith(".gz"):
+        try:
+            inner = gzip.decompress(data)
+        except OSError as exc:
+            raise ValueError("unreadable gzip: %s" % exc)
+        out = scrub_bytes(name[:-3], inner)
+        return None if out is None else gzip.compress(out)
+    if not low.endswith(DOC_SUFFIXES) or not needs_redaction(data):
+        return None
+    try:
+        text = data.decode("utf-8")
+        if low.endswith((".yaml", ".yml")):
+            import yaml
+            doc = yaml.safe_load(text)
+            return yaml.safe_dump(redact(doc), sort_keys=False,
+                                  allow_unicode=True).encode("utf-8")
+        if low.endswith(".jsonl"):
+            lines = [json.dumps(redact(json.loads(ln)), ensure_ascii=False)
+                     if ln.strip() else ln for ln in text.splitlines()]
+            return ("\n".join(lines)
+                    + ("\n" if text.endswith("\n") else "")).encode("utf-8")
+        return json.dumps(redact(json.loads(text)), ensure_ascii=False,
+                          indent=1).encode("utf-8")
+    except Exception as exc:  # noqa: BLE001 -- yaml / json / unicode errors
+        raise ValueError("%s: unparseable (%s)" % (name, exc))
+
+
+def scrub_file(path, *, dry_run: bool = False) -> str:
+    """Scrub one file in place (atomic replace): ``"clean"``, ``"scrubbed"``
+    (``"would-scrub"`` on a dry run) or ``"error: ..."``."""
+    import os
+    from pathlib import Path
+    p = Path(path)
+    try:
+        data = p.read_bytes()
+        new = scrub_bytes(p.name, data)
+    except (OSError, ValueError) as exc:
+        return "error: %s" % exc
+    if new is None or new == data:
+        return "clean"
+    if dry_run:
+        return "would-scrub"
+    tmp = p.with_name(p.name + ".scrub.tmp")
+    tmp.write_bytes(new)
+    os.replace(str(tmp), str(p))
+    return "scrubbed"
+
+
+def _is_doc(fn: str) -> bool:
+    low = fn.lower()
+    return low.endswith(DOC_SUFFIXES) or (
+        low.endswith(".gz") and low[:-3].endswith(DOC_SUFFIXES))
+
+
+def scrub_tree(root, *, dry_run: bool = False) -> Dict[str, Any]:
+    """Every document under ``root`` (symlinks not followed)."""
+    import os
+    from pathlib import Path
+    out: Dict[str, Any] = {"root": str(root), "files": 0, "scrubbed": [],
+                           "errors": []}
+    r = Path(root)
+    if not r.is_dir():
+        return out
+    for dirpath, dirnames, filenames in os.walk(r, followlinks=False):
+        dirnames[:] = [d for d in dirnames
+                       if not os.path.islink(os.path.join(dirpath, d))]
+        for fn in filenames:
+            fp = Path(dirpath) / fn
+            if fp.is_symlink() or not _is_doc(fn):
+                continue
+            out["files"] += 1
+            st = scrub_file(fp, dry_run=dry_run)
+            if st in ("scrubbed", "would-scrub"):
+                out["scrubbed"].append(str(fp))
+            elif st.startswith("error"):
+                out["errors"].append({"file": str(fp), "error": st})
+    return out
+
+
+def scrub_workspaces(*, dry_run: bool = True) -> Dict[str, Any]:
+    """THE ONE-OFF CLEANUP (re-audit #2 R5c): scrub the CAD basis out of every
+    per-account workspace and published namespace whose OWNER does not pass the
+    full-construction gate.  An owner who passes it keeps their copies; a
+    workspace whose owner cannot be identified is scrubbed (fails closed).
+    Shared originals are never touched.  ``dry_run`` (the default) only lists."""
+    from motor_ai_sim import users as _U
+    from motor_ai_sim import workspace as _W
+    report: Dict[str, Any] = {"dry_run": bool(dry_run), "workspaces": [],
+                              "published": [], "kept_for_gated_owner": []}
+    root = _W.workspaces_root()
+    if root is None:
+        report.update(note="WORKSPACES_ROOT is not set: a single-user install "
+                           "has no per-account copies", files_scrubbed=0, errors=0)
+        return report
+    owners: Dict[str, str] = {}
+    for u in _U.list_users():
+        email = str((u or {}).get("email") or "").strip().lower()
+        if email:
+            owners[_W.workspace_id(email)] = email
+    for d in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()):
+        email = owners.get(d.name, "")
+        if email and subject_may_see_full_construction(email):
+            report["kept_for_gated_owner"].append(d.name)
+            continue
+        report["workspaces"].append(dict(scrub_tree(d, dry_run=dry_run),
+                                         workspace=d.name, owner_known=bool(email)))
+    try:
+        pub = _W.published_root()
+    except Exception:  # noqa: BLE001
+        pub = None
+    if pub is not None and pub.is_dir():
+        for ns in sorted(p for p in pub.iterdir() if p.is_dir() and not p.is_symlink()):
+            email = (_W._owner_email(ns) or owners.get(ns.name, "")).strip().lower()
+            if email and subject_may_see_full_construction(email):
+                report["kept_for_gated_owner"].append("published/" + ns.name)
+                continue
+            report["published"].append(dict(scrub_tree(ns, dry_run=dry_run),
+                                             namespace=ns.name,
+                                             owner_known=bool(email)))
+    rows = report["workspaces"] + report["published"]
+    report["files_scrubbed"] = sum(len(r["scrubbed"]) for r in rows)
+    report["errors"] = sum(len(r["errors"]) for r in rows)
+    return report
+
+
+def _main(argv=None) -> int:
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(prog="python -m motor_ai_sim.construction_privacy")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sw = sub.add_parser("scrub-workspaces",
+                        help="remove the CAD bearing basis from the workspace / "
+                             "published copies of owners without the NDA gate")
+    sw.add_argument("--apply", action="store_true",
+                    help="write the changes (default: a dry run that only lists)")
+    a = ap.parse_args(argv)
+    rep = scrub_workspaces(dry_run=not a.apply)
+    json.dump(rep, sys.stdout, indent=1, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 1 if rep.get("errors") else 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(_main())

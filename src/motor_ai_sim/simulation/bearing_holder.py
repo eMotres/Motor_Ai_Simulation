@@ -530,6 +530,26 @@ def source_split(p_w: float, *, g_shaft_in: float, g_inner_balls: float,
     return {"P_to_rotor_W": j_r, "P_to_stator_W": j_s, "P_to_air_W": j_a}
 
 
+def node_sources(delta: Optional[Mapping[str, Any]],
+                 friction_w: float) -> Dict[str, float]:
+    """The friction ``friction_w`` made in the solved bearing nodes, split the
+    way the network's own reduction splits it (``delta.P_to_*_W``, summed over
+    the ends): ``{to_rotor_W, to_stator_W, to_air_W}``, which add up to
+    ``friction_w`` (re-audit #2 R8, the route's whole-system budget).  A delta
+    without the split (a map solved before 2026-10-20) puts all of it on the
+    rotor, as ``thermal_duty_cycle.losses_by_node`` does."""
+    d = dict(delta or {})
+    p = max(float(friction_w or 0.0), 0.0)
+    js = [max(float(d.get(k) or 0.0), 0.0)
+          for k in ("P_to_rotor_W", "P_to_stator_W", "P_to_air_W")]
+    tot = sum(js)
+    if tot <= 1e-12:
+        js, tot = [1.0, 0.0, 0.0], 1.0
+    f = p / tot
+    return {"to_rotor_W": round(js[0] * f, 4), "to_stator_W": round(js[1] * f, 4),
+            "to_air_W": round(js[2] * f, 4)}
+
+
 # ---------------------------------------------------------------------------
 # THE network
 # ---------------------------------------------------------------------------

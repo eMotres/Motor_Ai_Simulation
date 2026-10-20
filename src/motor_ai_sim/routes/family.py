@@ -420,6 +420,13 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
     dst.mkdir(parents=True, exist_ok=True)
     copied = 0
     _acc = catalog_access(None)
+    # THE FULL-CONSTRUCTION BOUNDARY on the copy itself (re-audit #2 R5): a
+    # caller without the NDA + verification gate gets every copied document —
+    # die.yaml and EVERY sibling configuration — without the CAD basis
+    # (``bearings.thermal_path``).  The JSON middleware guards answers; this is
+    # a FILE, which the account export and any later read hand out as it is.
+    from motor_ai_sim import construction_privacy as _cp
+    _keep_cad = _cp.caller_may_keep_construction()
     for p in sorted(src_dir.glob("*.yaml")):
         q = dst / p.name
         if q.exists():
@@ -430,7 +437,18 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
                 _acc, addressed, p.stem, p, layer=_src_layer):
             continue
         import shutil as _sh
-        _sh.copy2(p, q)
+        _scrubbed = None
+        if not _keep_cad:
+            try:
+                _scrubbed = _cp.scrub_bytes(p.name, p.read_bytes())
+            except ValueError:
+                log.warning("family: %s carries construction data and could not "
+                            "be read for scrubbing - not copied", p)
+                continue
+        if _scrubbed is not None:
+            q.write_bytes(_scrubbed)
+        else:
+            _sh.copy2(p, q)
         copied += 1
     if copied:
         # Rename the die inside its own document when the label became the name.
@@ -837,6 +855,22 @@ def _save_yaml(p: Path, d: dict) -> None:
     # redirected the other way.  With layering off this is a no-op.
     p = _write_target(p)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # A save into a WORKSPACE by a caller without the full-construction gate
+    # never writes the CAD basis there (re-audit #2 R5): the document was read
+    # whole (often from the shared original, ``thermal_path`` included) and a
+    # controller / battery / duty save writes all of it back.  Shared writes
+    # (the admin's ``?layer=shared``) and flat installs are untouched.
+    _scrub_old = False
+    if isinstance(d, dict) and _ws_layering():
+        try:
+            _in_ws = _classify_die_dir(p.parent)[0] == _WS.LAYER_WORKSPACE
+        except Exception:                         # noqa: BLE001 — fail closed
+            _in_ws = True
+        if _in_ws:
+            from motor_ai_sim import construction_privacy as _cp
+            if not _cp.caller_may_keep_construction():
+                d = _cp.redact(d)
+                _scrub_old = True
     # An unknown `applications` value is refused loudly, never written (owner 2026-10-13).
     if isinstance(d, dict) and "applications" in d:
         from motor_ai_sim.applications import ApplicationsError, validate_applications
@@ -876,7 +910,14 @@ def _save_yaml(p: Path, d: dict) -> None:
     try:
         if p.exists():
             old = p.read_bytes()
-            if old != tmp.read_bytes():
+            if _scrub_old:
+                # nor in the history snapshot of the version it replaces
+                from motor_ai_sim import construction_privacy as _cp
+                try:
+                    old = _cp.scrub_bytes(p.name, old) or old
+                except ValueError:
+                    old = b""
+            if old and old != tmp.read_bytes():
                 from datetime import datetime as _dt
                 hdir = p.parent.parent / ".history" / p.parent.name
                 hdir.mkdir(parents=True, exist_ok=True)
@@ -6266,6 +6307,10 @@ def _pub_put(p: Path, doc: dict) -> None:
     of the other layers, and this is the one call that is allowed in.
     """
     import yaml as _y
+    from motor_ai_sim import construction_privacy as _cp
+    if not _cp.caller_may_keep_construction():
+        # a publisher without the gate never publishes the CAD basis (R5)
+        doc = _cp.redact(doc)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(_y.safe_dump(doc, sort_keys=False, allow_unicode=True),

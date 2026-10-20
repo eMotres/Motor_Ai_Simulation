@@ -31,6 +31,22 @@ def test_oem_uploads_and_download_is_traced(prod_env, tmp_path, monkeypatch):
     rows = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x.strip()]
     assert rows and rows[-1]["kind"] == "production_file" and rows[-1]["file"] == "test_report_汇总.pdf"
     assert rows[-1]["sha256"] and rows[-1]["die"] == DIE and rows[-1]["config"] == CONFIG
+    # the account is named (owner 2026-10-20: the 3-D downloads list showed "(unknown)" for every production file)
+    assert rows[-1]["user"] == ENGINEER.lower() and rows[-1]["email"] == ENGINEER.lower(), rows[-1]
+
+
+def test_old_rows_without_the_account_name_it_from_their_nda_record(tmp_path, monkeypatch):
+    from motor_ai_sim import model3d as M, nda as N
+    log = tmp_path / "downloads.jsonl"
+    monkeypatch.setattr(M, "download_log_path", lambda: log)
+    monkeypatch.setattr(N, "get_record", lambda rid: {"id": rid, "email": "buyer@example.com"} if rid == "n1" else None)
+    old = {"download_id": "d1", "kind": "production_file", "user": None, "email": "", "name": "unknown",
+           "nda_basis": {"type": "online", "record_id": "n1"}}
+    log.write_text(json.dumps(old) + chr(10), encoding="utf-8")
+    row = M.read_log()[0]
+    assert row["email"] == "buyer@example.com" and row["account_from"] == "nda_record"
+    assert M.read_log(user="buyer@")[0]["download_id"] == "d1"
+    assert json.loads(log.read_text(encoding="utf-8"))["email"] == ""      # the log itself is not rewritten
 
 
 def test_oem_still_cannot_edit_design_data(prod_env):

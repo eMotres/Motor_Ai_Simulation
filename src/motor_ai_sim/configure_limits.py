@@ -294,8 +294,11 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
         # the configuration's own application list (a die can mix applications)
         "applications": config_applications(doc)[0],
         "application": default_application(config_applications(doc)[0]),
-        # the drive a preset opens on: its first computed variant, else Sine
-        "drive_variant": vs[0]["id"] if vs else None,
+        # the drive a preset opens on: ALWAYS Sine (owner 2026-10-20: the rated point is a sine rating, so on the
+        # first load the speed marker, the rated duty and the S1 line are one point).  The PWM button then
+        # picks the first computed variant (the default build, two devices per switch), named here.
+        "drive_variant": None,
+        "drive_variant_suggested": vs[0]["id"] if vs else None,
     }
 
 

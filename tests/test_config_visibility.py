@@ -339,6 +339,7 @@ WRITE_ROUTES = {         # layered-only (a registered account writes into its ow
     ("PATCH", "/api/family/config/{die}/{cfg}/controller"): {"devices_parallel": 1},
     ("PATCH", "/api/family/config/{die}/{cfg}/bearings"): {"A": {"card": "618/8-2Z"}, "B": {"card": "618/8-2Z"}},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/duplicate"): {"name": "copy"},
+    ("POST", "/api/family/duty/{die}/{cfg}/{duty}/save_continuous_point"): {"name": "continuous"},
     ("PATCH", "/api/family/duty/{die}/{cfg}/{duty}"): {"name": "renamed"},
     ("DELETE", "/api/family/duty/{die}/{cfg}/{duty}"): None,
     ("POST", "/api/family/publish/{die}/{cfg}"): None,
@@ -670,6 +671,139 @@ def test_configure_context_presets_list_only_visible_configurations(env):
     assert PRIV not in names
     g = client.get("/api/catalog/cat_pub/configure_context", headers=env["granted"]).json()
     assert PRIV in sorted(p.get("config") for p in g.get("presets") or [])
+
+
+# ── Configure's STORED answers (F1, pre-launch review 2026-10-20) ─────────────
+# The context / load are stored answers (answer_store) shared by every caller.  They are stored UNFILTERED and filtered for
+# the caller on every request: whoever built the stored answer first must never decide what the next caller sees.
+
+_CTX = "/api/catalog/cat_pub/configure_context"
+_LOAD = "/api/catalog/cat_pub/configure_load"
+_SEES_PRIV = {"admin": True, "granted": True, "eng": False, "plain": False}
+
+
+@pytest.fixture
+def answers(env, monkeypatch):
+    """A fresh answer store ON DISK (both shapes) and an empty memory; the CAD mass is not part of this question."""
+    from motor_ai_sim import answer_store as st
+    from motor_ai_sim.routes import catalog as cat
+    monkeypatch.setattr(cat, "_preset_mass", lambda *a: None)
+    root = env["tmp"] / "answers"
+    monkeypatch.setenv(st.ENV_ROOT, str(root))
+    st.clear_memory()
+    yield {"st": st, "root": root}
+    st.clear_memory()
+
+
+def _ctx_names(who, env):
+    r = client.get(_CTX, headers=env[who])
+    assert r.status_code == 200, (who, r.text)
+    assert "_config_access" not in r.text, who                      # the stored bookkeeping never leaves the server
+    return sorted(p["config"] for p in r.json().get("presets") or [])
+
+
+def _check_every_role(env):
+    for who, sees in _SEES_PRIV.items():
+        names = _ctx_names(who, env)
+        assert names == ([PUB, PRIV] if sees else [PUB]), (who, names)
+
+
+@pytest.mark.parametrize("first", ["admin", "granted", "plain", "eng"])
+def test_stored_configure_context_is_filtered_for_every_caller_whoever_built_it(env, answers, first):
+    _ctx_names(first, env)                                          # builds and stores the answer
+    _check_every_role(env)
+    _check_every_role(env)                                          # and again, all from the store
+
+
+def test_stored_configure_context_admin_then_ordinary(env, answers):
+    assert _ctx_names("admin", env) == [PUB, PRIV]
+    assert _ctx_names("plain", env) == [PUB]                        # was [L40, L41] from the admin's stored answer
+    assert _ctx_names("eng", env) == [PUB]
+
+
+def test_stored_configure_context_ordinary_then_authorized(env, answers):
+    assert _ctx_names("plain", env) == [PUB]
+    assert _ctx_names("granted", env) == [PUB, PRIV]                # was [L40]: the authorized user lost the private preset
+    assert _ctx_names("admin", env) == [PUB, PRIV]
+
+
+def test_stored_configure_context_after_a_memory_clear_reads_the_disk_and_still_filters(env, answers):
+    assert _ctx_names("admin", env) == [PUB, PRIV]
+    stored = list(answers["root"].rglob("*.json"))
+    if env["layered"]:
+        assert stored, "the shared machine's answer is stored on disk"
+    answers["st"].clear_memory()
+    assert _ctx_names("plain", env) == [PUB]                        # was the admin's [L40, L41], read back from disk
+    answers["st"].clear_memory()
+    assert _ctx_names("granted", env) == [PUB, PRIV]
+
+
+def test_a_stored_context_without_access_records_is_still_filtered(env, answers):
+    """Defence in depth: even a stored answer that lists the private preset and carries no file record (an answer
+    built some other way) is judged by name for every caller."""
+    from motor_ai_sim.routes import catalog as cat
+    motor, src = cat._configure_motor("cat_pub", env["admin"]["Authorization"])
+    full = cat._stored_context("cat_pub", motor, src)
+    assert sorted(p["config"] for p in full["presets"]) == [PUB, PRIV]          # stored WHOLE
+    poisoned = {k: v for k, v in full.items() if k != "_config_access"}
+    answers["st"].put("configure_context", {"motor": "cat_pub", "src": str(src)}, cat._configure_stamp(src), poisoned,
+                      persist=False)
+    _check_every_role(env)
+
+
+def test_answers_stored_before_the_fix_are_ignored(env, answers):
+    """The store version is part of every stamp: an answer stored under the old one is stale and recomputed."""
+    from motor_ai_sim.routes import catalog as cat
+    from motor_ai_sim import fscache
+    assert cat.CONFIGURE_STORE_VERSION != "configure-1"
+    motor, src = cat._configure_motor("cat_pub", env["admin"]["Authorization"])
+    real = cat._configure_stamp(src)
+    old = real
+    try:
+        orig = fscache.stamp_of
+        fscache.stamp_of = lambda paths, dirs=(), *, salt="": orig(paths, dirs, salt="configure-1")
+        old = cat._configure_stamp(src)
+    finally:
+        fscache.stamp_of = orig
+    assert old != real
+    answers["st"].put("configure_context", {"motor": "cat_pub", "src": str(src)}, old,
+                      {"motor_id": "cat_pub", "presets": [{"die": DIE, "config": PRIV, "stale": True}]})
+    answers["st"].clear_memory()
+    r = client.get(_CTX, headers=env["admin"]).json()
+    assert sorted(p["config"] for p in r["presets"]) == [PUB, PRIV]
+    assert not any(p.get("stale") for p in r["presets"])            # recomputed, not the old answer
+
+
+@pytest.mark.parametrize("first", ["admin", "plain"])
+def test_configure_load_of_a_hidden_configuration_answers_like_a_missing_one(env, answers, first):
+    """An ordinary user selecting the private L41 got HTTP 200 and its whole load (configure_load).  Now it is refused
+    BEFORE anything is read, with the very answer a configuration the machine does not have gets - also when the
+    admin's load of L41 is already stored."""
+    if first == "admin":
+        r = client.get(_LOAD, params={"config": PRIV}, headers=env["admin"])
+        assert r.status_code == 200, r.text
+        assert r.json()["config"] == PRIV
+    for who in ("plain", "eng", "anon"):
+        hidden = client.get(_LOAD, params={"config": PRIV}, headers=env[who])
+        missing = client.get(_LOAD, params={"config": NOSUCH}, headers=env[who])
+        _same_as_missing(hidden, missing, PRIV)
+        assert hidden.status_code in (401, 404), (who, hidden.status_code)
+        assert "N42SH" not in hidden.text
+        if who != "anon":
+            ok = client.get(_LOAD, params={"config": PUB}, headers=env[who])
+            assert ok.status_code == 200, (who, ok.text)
+            body = ok.json()
+            assert sorted(p["config"] for p in body["context"]["presets"]) == [PUB], who   # embedded context filtered
+            assert PRIV not in json.dumps(body["context"]) and "_config_access" not in ok.text, who
+    for who in ("admin", "granted"):
+        r = client.get(_LOAD, params={"config": PRIV}, headers=env[who])
+        assert r.status_code == 200, (who, r.text)
+        assert r.json()["config"] == PRIV
+        assert sorted(p["config"] for p in r.json()["context"]["presets"]) == [PUB, PRIV], who
+    if env["layered"]:                                               # and after a memory clear (disk only)
+        answers["st"].clear_memory()
+        hidden = client.get(_LOAD, params={"config": PRIV}, headers=env["plain"])
+        assert hidden.status_code == 404, hidden.text
 
 
 def test_presets_of_a_hidden_configuration_do_not_exist_for_others(env):

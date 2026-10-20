@@ -148,6 +148,36 @@ def test_resend_keeps_the_return_path(env):
     assert (PATH + "?since=2026-10-19") in _plain(page.text)
 
 
+#: F2 (pre-launch review 2026-10-20): a SHORT allowed path (< MAX_LEN) whose query has more than parse_qsl's 20 fields
+#: raised ValueError out of safe_app_path, and POST /api/auth/register answered 500.
+_MANY_FIELDS = "/production/a/b/documents?" + "&".join("x=1" for _ in range(21))
+
+
+def test_a_short_query_with_too_many_fields_is_refused_not_raised():
+    assert len(_MANY_FIELDS) < RP.MAX_LEN
+    assert RP.safe_app_path(_MANY_FIELDS) is None
+    assert RP.safe_app_path(PATH + "?" + "&".join("x=%d" % i for i in range(25)) + "&since=2026-10-19") is None
+    # exactly 20 fields is still parsed (the limit itself is unchanged)
+    assert RP.safe_app_path(PATH + "?since=2026-10-19&" + "&".join("x=1" for _ in range(19))) == PATH + "?since=2026-10-19"
+
+
+def test_too_many_query_fields_never_break_the_signup_or_the_resend(env):
+    _smtp_on(env)
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/api/auth/register", json={"email": NEW, "password": PW, "name": "New Person", "next": _MANY_FIELDS},
+        headers={"X-Forwarded-For": "203.0.113.5"})
+    assert r.status_code == 202, r.text                                     # was 500
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/api/auth/register/resend", json={"email": NEW, "next": _MANY_FIELDS},
+        headers={"X-Forwarded-For": "203.0.113.5"})
+    assert r.status_code == 202, r.text
+    sid = _token_from(env["outbox"][-1], "verify")
+    page = client.get(f"{LINK}/v/{sid}")
+    assert page.status_code == 200 and "E-mail confirmed" in page.text
+    assert "Open the page you came for" not in page.text and f'href="{APP}/"' in page.text   # signed up, no return path
+    assert env["U"].is_verified(env["U"].get_user(NEW))
+
+
 def test_without_a_return_path_nothing_changes(env):
     _smtp_on(env)
     _register()

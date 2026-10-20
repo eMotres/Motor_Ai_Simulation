@@ -113,6 +113,19 @@ def report(die: str, cfg: str, duty: Optional[str] = Query(default=None),
     _require_die_access(die, authorization, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    # Re-audit #3 B2: the report prints the per-path cooling budget (rotor end
+    # faces, bearings, the heat split) of the stored maps.  For a machine whose
+    # cooling ran on CAD-measured inputs those lines invert to the construction,
+    # so without the NDA + verification gate the report is not built at all —
+    # a PDF / Word file is not an answer the JSON redaction can reach.
+    from motor_ai_sim import construction_privacy as _cp
+    if (not _cp.may_see_full_construction(authorization)
+            and _cp.config_cooling_is_cad(die, cfg, c)):
+        raise HTTPException(403, detail=dict(
+            code="nda_required",
+            message=("The report of this machine includes cooling paths measured "
+                     "on the CAD assembly; it needs the signed NDA and a verified "
+                     "account.")))
     if duty:
         duty = _check_name(duty, "duty")
         if not any(str(x.get("name") or "") == duty

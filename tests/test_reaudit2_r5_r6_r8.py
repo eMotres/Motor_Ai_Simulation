@@ -238,13 +238,13 @@ def test_the_face_speed_is_not_in_any_note_without_the_gate(thermal_last, monkey
     assert r.status_code == 200, r.text[:300]
     cooling = r.json()["field"]["result"]["cooling"]
     face = cooling["end_faces"]["rotor"]
-    assert face["air_speed_mps"] is None and face["re"] is None and face["h_plate"] is None
+    assert face.get("air_speed_mps") is None and face.get("re") is None and face.get("h_plate") is None
     assert "m/s" not in face["note"] and "Re_D" not in face["note"]
-    assert "measured windows" in face["note"]
+    assert face["note"] == "detailed cooling paths with NDA"         # re-audit #3 B2
     assert "m/s" not in cooling["rotor_channels"]["note"]
     for needle in ("5.2 m/s", "5.19 m/s", "Re_D", "0.43,", "0.4321"):
         assert needle not in r.text, (who, stored, needle)
-    assert face["G_W_per_K"] > 0.0                                       # the RESULT stays
+    assert face.get("G_W_per_K") is None          # B2: no per-path G of a CAD-derived paths
 
 
 def test_the_admin_still_reads_the_note_as_it_was(thermal_last, monkeypatch):

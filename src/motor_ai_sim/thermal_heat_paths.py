@@ -42,6 +42,8 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Mapping, Optional
 
+from motor_ai_sim import construction_privacy as _cp
+
 #: Bumped when the shape below changes in a way a client has to notice.  The
 #: web view reads it and refuses to draw a model it does not understand rather
 #: than silently mis-placing a surface.
@@ -540,4 +542,7 @@ def heat_path_model(result: Optional[Mapping[str, Any]],
         },
         "sinks": sinks,
         "geometry": env,
+        # re-audit #3 B2: the rotor faces ran on the CAD basis
+        **({"construction_basis": _cp.CONSTRUCTION_BASIS}
+           if _cp.cooling_is_cad_sensitive(cooling) else {}),
     }

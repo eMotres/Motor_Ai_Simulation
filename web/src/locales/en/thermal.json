@@ -90,5 +90,6 @@
   "coolingSourceLastUsed": "Cooling of {motor}: your last-used settings",
   "coolingSourceTip": "The cooling fields are remembered per motor. Your saved settings are what you last set for this motor; configuration defaults come from the configuration's thermal_defaults block; the application default is the rule for its application (the frame and the bore are reset, not inherited from the previous motor). Edit any cooling field to save your own.",
   "coolingMismatch": "solved with {solved}, fields now {now} - re-Solve",
-  "coolingMismatchTip": "This result was solved with a different outer cooling mode or frame than the fields hold now. Press Solve to recompute it with the cooling shown here."
+  "coolingMismatchTip": "This result was solved with a different outer cooling mode or frame than the fields hold now. Press Solve to recompute it with the cooling shown here.",
+  "coolingDetailNda": "Detailed cooling paths with NDA"
 }

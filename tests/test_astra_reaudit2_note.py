@@ -59,7 +59,7 @@ def test_thermal_last_note_no_longer_discloses_the_face_speed(
     cooling = response.json()["field"]["result"]["cooling"]
     # The numeric field is redacted, but the scalar-model note still contains
     # the same CAD-derived face velocity and Reynolds number.
-    assert cooling["end_faces"]["rotor"]["air_speed_mps"] is None
+    assert cooling["end_faces"]["rotor"].get("air_speed_mps") is None
     note = cooling["end_faces"]["rotor"]["note"]
     # R6, flipped: the note reads neutrally, without the speed or its Reynolds number
     assert f"flat plate at {face_speed_mps:.1f} m/s" not in note

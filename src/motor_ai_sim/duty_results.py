@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from motor_ai_sim.file_lock import store_lock
+from motor_ai_sim import construction_privacy as _cp
 
 log = logging.getLogger(__name__)
 
@@ -837,6 +838,12 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
             **({"from_state": str(cooling["from_state"]),
                 "state_note": str(cooling.get("state_note") or "")}
                if cooling.get("from_state") else {}),
+            # WHETHER the rotor-side axial paths ran on the CAD basis
+            # (re-audit #3 B2): a caller without the NDA gate then gets no
+            # per-path detail of them out of this stored copy either.
+            "holder_open_fraction_source": cooling.get("holder_open_fraction_source"),
+            **({"construction_basis": _cp.CONSTRUCTION_BASIS}
+               if _cp.cooling_is_cad_sensitive(cooling) else {}),
             "outer": _pick(cooling.get("outer"), _COOLING_KEYS),
             "inner": _pick(cooling.get("inner"), _COOLING_KEYS),
             "shaft_ends": _pick(cooling.get("shaft_ends"),

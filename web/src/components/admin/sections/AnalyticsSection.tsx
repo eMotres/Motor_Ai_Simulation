@@ -34,6 +34,23 @@ const Tile: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   </Paper>
 );
 
+interface AccountAnalyticsPayload {
+  range: AnalyticsRange;
+  accounts: { total: number; new: number };
+  nda: { total: number; new: number; online_total: number; admin_flag_total: number };
+  series: Array<{ t: string; accounts: number; nda: number }>;
+}
+
+const AccountTile: React.FC<{ label: string; value: number; totalLabel: string }> = ({ label, value, totalLabel }) => (
+  <Paper elevation={0} sx={{ ...PANEL, minWidth: 150, flex: '1 1 150px' }}>
+    <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{label}</Typography>
+    <Typography sx={{ fontSize: 22, fontWeight: 800, color: 'var(--text-0)' }}>{value}</Typography>
+    <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>
+      {totalLabel}
+    </Typography>
+  </Paper>
+);
+
 const TopList: React.FC<{ title: string; rows: AnalyticsRow[]; empty: string; map?: (n: string) => string }> =
   ({ title, rows, empty, map }) => (
   <Paper elevation={0} sx={{ ...PANEL, flex: '1 1 280px', minWidth: 260 }}>
@@ -66,17 +83,50 @@ const AnalyticsSection: React.FC = () => {
   const [range, setRange] = useState<AnalyticsRange>(savedRange);
   const [data, setData] = useState<AnalyticsPayload | null>(null);
   const [state, setState] = useState<'loading' | 'ok' | 'unavailable' | 'forbidden' | 'error'>('loading');
+  const [accountData, setAccountData] = useState<AccountAnalyticsPayload | null>(null);
+  const [accountState, setAccountState] = useState<'loading' | 'ok' | 'forbidden' | 'error'>('loading');
 
-  const load = useCallback(async (r: AnalyticsRange) => {
+  const load = useCallback(async (r: AnalyticsRange, signal: AbortSignal) => {
+    setData(null);
     setState('loading');
     try {
-      const res = await fetch(`${API}/api/admin/analytics?range=${r}`);
+      const res = await fetch(`${API}/api/admin/analytics?range=${r}`, { signal });
+      if (signal.aborted) return;
       if (!res.ok) { setData(null); setState(analyticsErrorKind(res.status)); return; }
-      setData(await res.json() as AnalyticsPayload);
+      const payload = await res.json() as AnalyticsPayload;
+      if (signal.aborted) return;
+      setData(payload);
       setState('ok');
-    } catch { setData(null); setState('error'); }
+    } catch { if (!signal.aborted) { setData(null); setState('error'); } }
   }, []);
-  useEffect(() => { void load(range); }, [range, load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(range, controller.signal);
+    return () => controller.abort();
+  }, [range, load]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setAccountData(null);
+    setAccountState('loading');
+    void fetch(`${API}/api/admin/analytics/accounts?range=${range}`, { signal: controller.signal })
+      .then(async (res) => {
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          setAccountData(null);
+          setAccountState(res.status === 401 || res.status === 403 ? 'forbidden' : 'error');
+          return;
+        }
+        const payload = await res.json() as AccountAnalyticsPayload;
+        if (controller.signal.aborted) return;
+        setAccountData(payload);
+        setAccountState('ok');
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) { setAccountData(null); setAccountState('error'); }
+      });
+    return () => controller.abort();
+  }, [range]);
 
   const pick = (_e: unknown, v: AnalyticsRange | null) => {
     if (!v) return;
@@ -103,7 +153,7 @@ const AnalyticsSection: React.FC = () => {
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-        {state === 'loading' && <CircularProgress size={16} />}
+        {(state === 'loading' || accountState === 'loading') && <CircularProgress size={16} />}
       </Box>
 
       {state === 'unavailable' && (
@@ -111,18 +161,28 @@ const AnalyticsSection: React.FC = () => {
       )}
       {state === 'forbidden' && <Alert severity="error" sx={{ mb: 1.5 }}>{t('analytics.forbidden')}</Alert>}
       {state === 'error' && <Alert severity="error" sx={{ mb: 1.5 }}>{t('analytics.error')}</Alert>}
+      {accountState === 'forbidden' && <Alert severity="error" sx={{ mb: 1.5 }}>{t('analytics.forbidden')}</Alert>}
+      {accountState === 'error' && <Alert severity="error" sx={{ mb: 1.5 }}>{t('analytics.accountsError')}</Alert>}
 
-      {data && tt && (
+      {(data || accountData) && (
         <>
           <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap', mb: 1.5 }}>
-            <Tile label={t('analytics.visitors')} value={String(tt.visitors)} />
-            <Tile label={t('analytics.visits')} value={String(tt.visits)} />
-            <Tile label={t('analytics.pageviews')} value={String(tt.pageviews)} />
-            <Tile label={t('analytics.bounce')} value={formatPercent(tt.bounce_rate)} />
-            <Tile label={t('analytics.avgVisit')} value={formatDuration(tt.avg_visit_s)} />
+            {tt && <>
+              <Tile label={t('analytics.visitors')} value={String(tt.visitors)} />
+              <Tile label={t('analytics.visits')} value={String(tt.visits)} />
+              <Tile label={t('analytics.pageviews')} value={String(tt.pageviews)} />
+              <Tile label={t('analytics.bounce')} value={formatPercent(tt.bounce_rate)} />
+              <Tile label={t('analytics.avgVisit')} value={formatDuration(tt.avg_visit_s)} />
+            </>}
+            {accountData && <>
+              <AccountTile label={t('analytics.registered')} value={accountData.accounts.new}
+                totalLabel={t('analytics.totalLine', { count: accountData.accounts.total })} />
+              <AccountTile label={t('analytics.ndaSigned')} value={accountData.nda.new}
+                totalLabel={t('analytics.totalLine', { count: accountData.nda.total })} />
+            </>}
           </Box>
 
-          <Paper elevation={0} sx={{ ...PANEL, mb: 1.5 }}>
+          {data && tt && <Paper elevation={0} sx={{ ...PANEL, mb: 1.5 }}>
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)', mb: 0.5 }}>
               {data.unit === 'hour' ? t('analytics.chartHourly') : t('analytics.chartDaily')}
             </Typography>
@@ -142,9 +202,9 @@ const AnalyticsSection: React.FC = () => {
                 </ComposedChart>
               </ResponsiveContainer>
             </Box>
-          </Paper>
+          </Paper>}
 
-          <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
+          {data && <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
             <TopList title={t('analytics.topPages')} rows={data.pages} empty={t('analytics.noData')} />
             <TopList title={t('analytics.countries')} rows={data.countries} empty={t('analytics.noData')}
               map={(n) => countryName(n, i18n.language)} />
@@ -152,7 +212,7 @@ const AnalyticsSection: React.FC = () => {
             <TopList title={t('analytics.browsers')} rows={data.browsers} empty={t('analytics.noData')} />
             <TopList title={t('analytics.os')} rows={data.os} empty={t('analytics.noData')} />
             <TopList title={t('analytics.devices')} rows={data.devices} empty={t('analytics.noData')} />
-          </Box>
+          </Box>}
         </>
       )}
     </Box>

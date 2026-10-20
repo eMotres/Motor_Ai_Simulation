@@ -204,6 +204,28 @@ def test_the_report_cover_and_table_use_the_full_mass(catalog):
     assert any(r[0].startswith("Partial mass") for r in R.mass_rows(em2, {}))
 
 
+def test_the_report_per_mass_figures_are_over_the_full_mass(monkeypatch):
+    """Owner 2026-10-20: Km / torque / power / loss per mass in the report's hot tables are over the mass the cover prints."""
+    from types import SimpleNamespace as NS
+    from motor_ai_sim import report as R
+    part = NS(counted=True, mass_kg=0.2, name="Stator core", material_id="x", role="stator", basis="b")
+    fm = NS(partial=False, scope="full motor", partial_reason="", parts=[part], total_kg=0.25, rotating_kg=0.1)
+    monkeypatch.setattr(MM, "full_mass", lambda die, cfg, **k: fm)
+    em = {"mass_total_kg": 0.0917, "T_em_avg_Nm": 0.4, "rpm": 3000.0, "P_loss_total_W": 20.0, "Km_Nm_sqrtW": 0.05,
+          "Km_per_mass_Nm_sqrtW_kg": 0.05 / 0.0917, "torque_per_mass_Nm_kg": 0.4 / 0.0917}
+    R._inject_full_mass(em, "D", "C")
+    assert em["mass_partial"] is False and em["mass_full_kg"] == pytest.approx(0.25)
+    assert em["Km_per_mass_Nm_sqrtW_kg"] == pytest.approx(0.05 / 0.25)
+    assert em["torque_per_mass_Nm_kg"] == pytest.approx(0.4 / 0.25)
+    assert em["loss_density_W_kg"] == pytest.approx(20.0 / 0.25)
+    # no CAD model: the figures stay over the active mass (nothing replaced)
+    fm2 = NS(partial=True, scope="full motor", partial_reason="no BOM", parts=[], total_kg=0.1414, rotating_kg=0.0)
+    monkeypatch.setattr(MM, "full_mass", lambda die, cfg, **k: fm2)
+    em2 = {"mass_total_kg": 0.1414, "T_em_avg_Nm": 0.4, "rpm": 3000.0, "torque_per_mass_Nm_kg": 0.4 / 0.1414}
+    R._inject_full_mass(em2, "D", "C")
+    assert em2["mass_partial"] is True and em2["torque_per_mass_Nm_kg"] == pytest.approx(0.4 / 0.1414)
+
+
 def test_the_configure_passport_gets_the_fixed_parts_only_with_a_cad_model(catalog):
     from motor_ai_sim.routes.catalog import _with_full_mass
     fm = MM.full_mass(DIE, CFG)

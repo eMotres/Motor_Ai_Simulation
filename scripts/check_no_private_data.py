@@ -14,7 +14,11 @@ It looks at the TRACKED files (``git ls-files``) and checks
      profiles, BOM fixtures, passport data dumps, study inputs of closed dies);
   3. ``config/dies/`` holds only the OPEN dies listed below (a new die is a deliberate owner decision: add its name here
      in the same pull request, after checking that it is public in the server catalogue);
-  4. ``config/motor_catalog.json`` and ``config/motor_presets.json`` carry only open entries.
+  4. ``config/motor_catalog.json`` and ``config/motor_presets.json`` carry only open entries;
+  5. (re-audit R4, 2026-10-20) no Python LITERAL of closed-motor data in ``src/`` (``tests/`` for the digest list): a 64-hex
+     (sha256) string, a closed card id (``candidate_<die>_...``), a basis-shaped dict (``sourceSha256`` + ``sourceRecord``, or
+     ``windingC`` + ``magnetC`` + ``stackLengthMm``), or any literal on the PRIVATE_LITERAL_DIGESTS list.  A legitimate public
+     literal is allowed with ``# private-data-ok: <reason>`` on its line or an entry in ALLOWED_LITERALS.
 
 Usage:  python scripts/check_no_private_data.py [--root DIR]     exit 0 = clean, 1 = violations (listed).
 Where the data went and how the app finds it: docs/OPEN_PRIVATE_DATA.md ("3-D models and closed-motor data").
@@ -22,8 +26,11 @@ Where the data went and how the app finds it: docs/OPEN_PRIVATE_DATA.md ("3-D mo
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import PurePosixPath
@@ -85,6 +92,80 @@ OPEN_CATALOG_IDS = frozenset({"cat_motor_100mm", "cat_ciano14_30_10", "cat_ciano
 OPEN_PRESET_IDS = frozenset({"motor_100mm", "ciano14_30_10", "ciano20_150_35_new"})
 
 
+#: SHA-256 digests of lower-cased string literals that must never appear in public Python (src/ or tests/).  Digests,
+#: not the values: the guard itself is public.  Add the digest of a closed card id / record hash here when one is found.
+PRIVATE_LITERAL_DIGESTS = frozenset({
+    "4d79db9394d5c6d51b6ba800d0523a2936cc9477b662a15bde9f4d8bc38d6acd",   # closed reference card id
+    "be7d7e9afada0c082b2ae453786b94688b0e8f51b5642d3707af6b0ae0e49ab8",   # its candidate pin
+    "494a5e9ec197081a1fe83bb687a583e812e7ae5e05f6ec24a283a419d3110ad5",   # its source-record hash
+})
+
+#: Python literals that are allowed although they look like closed data: ``(posix path, literal)``.
+ALLOWED_LITERALS: frozenset = frozenset()
+
+#: Where Python literals are scanned: all rules under src/, only the digest list under tests/.
+SRC_PREFIX = "src/"
+TEST_PREFIX = "tests/"
+ALLOW_MARK = "private-data-ok"
+
+_HEX64 = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])")
+_CARD_ID = re.compile(r"^candidate_[a-z]+\d+_[a-z0-9_]+$")
+#: Key sets of a dict literal that is an audited-basis record.
+_BASIS_KEYS = (frozenset({"sourceSha256", "sourceRecord"}), frozenset({"windingC", "magnetC", "stackLengthMm"}))
+
+
+def check_python_literals(path: str, text: str) -> List[str]:
+    """Closed-motor literals in one Python file (``path`` is the repo-relative POSIX path)."""
+    in_src = path.startswith(SRC_PREFIX)
+    if not (in_src or path.startswith(TEST_PREFIX)) or not path.endswith(".py"):
+        return []
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    lines = text.splitlines()
+
+    def allowed(lineno: int, literal: str = "") -> bool:
+        line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
+        return ALLOW_MARK in line or (path, literal) in ALLOWED_LITERALS
+
+    problems: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            val = node.value
+            why = None
+            if hashlib.sha256(val.strip().lower().encode("utf-8")).hexdigest() in PRIVATE_LITERAL_DIGESTS:
+                why = "is a closed-motor card id / hash (PRIVATE_LITERAL_DIGESTS)"
+            elif in_src and _HEX64.search(val):
+                why = "holds a 64-hex (sha256) literal"
+            elif in_src and _CARD_ID.match(val):
+                why = "looks like a closed reference card id (candidate_<die>_...)"
+            if why and not allowed(node.lineno, val):
+                shown = val if len(val) <= 14 else val[:12] + ".."
+                problems.append(f"{path}:{node.lineno}: string literal {shown!r} {why}; closed-motor data lives in the private "
+                                f"repository / shared data store (mark a public one with '# {ALLOW_MARK}: <reason>')")
+        elif in_src and isinstance(node, ast.Dict):
+            keys = {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            if any(ks <= keys for ks in _BASIS_KEYS) and not allowed(node.lineno):
+                problems.append(f"{path}:{node.lineno}: dict literal shaped like an audited reference basis; it belongs in "
+                                f"<shared>/references/basis (private repo config/references/basis), not in public source")
+    return problems
+
+
+def check_literals(root: str, paths: Iterable[str]) -> List[str]:
+    problems: List[str] = []
+    for p in paths:
+        if not p.endswith(".py") or not (p.startswith(SRC_PREFIX) or p.startswith(TEST_PREFIX)):
+            continue
+        try:
+            with open(os.path.join(root, p), encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        problems += check_python_literals(p, text)
+    return problems
+
+
 def tracked_files(root: str) -> List[str]:
     """Tracked files of the git checkout at ``root`` (POSIX paths); the file tree itself when it is not a checkout."""
     try:
@@ -141,7 +222,8 @@ def check_catalog_files(root: str) -> List[str]:
 
 
 def check(root: str) -> List[str]:
-    return check_paths(tracked_files(root)) + check_catalog_files(root)
+    files = tracked_files(root)
+    return check_paths(files) + check_catalog_files(root) + check_literals(root, files)
 
 
 def main(argv=None) -> int:
@@ -161,7 +243,7 @@ def main(argv=None) -> int:
         print(f"\n{len(problems)} violation(s). Move the file(s) to eMotres/motor-ai-sim-private (same relative path); "
               "see docs/OPEN_PRIVATE_DATA.md.")
         return 1
-    print("ok: no 3-D model and no closed-motor data is tracked")
+    print("ok: no 3-D model, no closed-motor data file and no closed-motor Python literal is tracked")
     return 0
 
 

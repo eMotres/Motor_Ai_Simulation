@@ -49,6 +49,7 @@ points at):
 | `config/motor_catalog_closed_entries.json`, `config/motor_presets_closed.json` | catalogue entries and presets removed from the public JSON files | the tests that need the 40 mm / 150 mm fixtures |
 | `tests/fixtures/server_bom/`, `tests/fixtures/cad_bom_dump_*.json` | BOMs with materials of the closed machines | the CAD / mass tests (they skip without it) |
 | `docs/data/passport_*`, `docs/data/propeller_s1_*`, `docs/data/shaft_ss420_fem_*` | passport and S1 data dumps | documentation only |
+| `config/references/basis/*.json` | audited input basis (stack, rpm, current, temperatures, source-record hash) and card id / candidate pin of a reviewed reference card; on a server `<shared>/references/basis/` wins | `motor_ai_sim.reference_basis` (the public module is a loader only; no folder = pinned cards fail closed) |
 
 Without the private checkout the application runs on the public data alone and the tests that need the private files
 **skip** (they never fail for a missing private file). A CAD build needs the reference files: set `MOTOR_AI_SIM_PRIVATE_DATA`
@@ -58,7 +59,9 @@ Without the private checkout the application runs on the public data alone and t
 **Guard.** `scripts/check_no_private_data.py` (CI workflow `no-private-data.yml`, test
 `tests/test_no_private_data_in_public.py`) fails when a tracked file is a 3-D / CAD / board file, sits under one of the
 closed-data paths above, is a die other than the open ones, or when `config/motor_catalog.json` / `config/motor_presets.json`
-carry a non-open entry. Publishing a new open motor means adding its name to the lists in that script in the same pull
+carry a non-open entry, or when a Python file under `src/` holds a closed-motor literal (sha256 string, closed card id,
+basis-shaped dict; `tests/` is checked against the digest list only). A public literal can be allowed with
+`# private-data-ok: <reason>`. Publishing a new open motor means adding its name to the lists in that script in the same pull
 request.
 
 The data set is **not** the same thing as *visibility* (Admin → Motors access:

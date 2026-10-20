@@ -58,3 +58,59 @@ def test_catalogue_and_preset_entries_must_be_open(tmp_path):
     (tmp_path / "config" / "motor_presets.json").write_text('{"ciano14_30_10": {}, "my_closed": {}}')
     problems = G.check_catalog_files(str(tmp_path))
     assert len(problems) == 2 and "cat_x_closed" in problems[0] and "my_closed" in problems[1]
+
+
+# --- Python literals of closed-motor data (re-audit R4, 2026-10-20) --------------------------------------------------
+# All values below are SYNTHETIC; the shapes are the ones the real leak had (a card id, a pin, a source-record hash and
+# a basis dict in a public module).
+
+_SYN_HASH = "ab" * 32
+_LEAK = f'''
+_BASIS = {{
+    "{_SYN_HASH}": {{"windingC": 1, "magnetC": 2, "stackLengthMm": 3, "rpm": 4, "currentA": 5,
+                     "sourceRecord": "rec", "sourceSha256": "{'cd' * 32}"}},
+}}
+_REQUIRED = frozenset({{"candidate_x9_synthetic_card"}})
+'''
+
+
+def test_basis_literals_in_public_source_are_refused():
+    problems = G.check_python_literals("src/motor_ai_sim/some_module.py", _LEAK)
+    text = "\n".join(problems)
+    assert "64-hex" in text and "audited reference basis" in text and "candidate_<die>" in text
+
+
+def test_the_same_literals_in_a_test_are_not_a_source_leak():
+    assert not G.check_python_literals("tests/test_x.py", _LEAK)       # tests may build synthetic basis dicts
+
+
+def test_digest_list_covers_tests_too(monkeypatch):
+    import hashlib
+    monkeypatch.setattr(G, "PRIVATE_LITERAL_DIGESTS",
+                        frozenset({hashlib.sha256(b"some_private_record").hexdigest()}))
+    for path in ("src/motor_ai_sim/a.py", "tests/test_a.py"):
+        assert G.check_python_literals(path, 'X = "Some_Private_Record"\n'), path
+    assert not G.check_python_literals("src/motor_ai_sim/a.py", 'X = "something_else"\n')
+
+
+def test_a_public_literal_can_be_allowed():
+    ok = f'H = "{_SYN_HASH}"  # private-data-ok: published test vector\n'
+    assert not G.check_python_literals("src/motor_ai_sim/a.py", ok)
+    assert G.check_python_literals("src/motor_ai_sim/a.py", f'H = "{_SYN_HASH}"\n')
+    path = "src/motor_ai_sim/a.py"
+    G.ALLOWED_LITERALS = frozenset({(path, _SYN_HASH)})
+    try:
+        assert not G.check_python_literals(path, f'H = "{_SYN_HASH}"\n')
+    finally:
+        G.ALLOWED_LITERALS = frozenset()
+
+
+def test_non_python_and_other_folders_are_skipped():
+    assert not G.check_python_literals("scripts/x.py", _LEAK)
+    assert not G.check_python_literals("src/motor_ai_sim/data.json", _LEAK)
+    assert not G.check_python_literals("src/motor_ai_sim/broken.py", "def (:\n")
+
+
+def test_the_real_reference_basis_module_is_a_loader_only():
+    problems = G.check_literals(str(ROOT), ["src/motor_ai_sim/reference_basis.py", "tests/test_reference_basis.py"])
+    assert not problems, problems

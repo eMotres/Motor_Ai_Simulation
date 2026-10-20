@@ -20,7 +20,13 @@
     "PhaseBoard": "相线板",
     "Fan_front": "风扇板（前）",
     "Fan_back": "风扇板（后）",
-    "Insulation_ceramic": "陶瓷绝缘件"
+    "Insulation_ceramic": "陶瓷绝缘件",
+    "Rotor_holder_front": "转子支架（前）",
+    "Rotor_holder_rear": "转子支架（后）",
+    "Holder_bearing": "支架（轴承座）",
+    "Housing": "外壳套筒",
+    "Fittings": "冷却接口",
+    "Fan": "风扇"
   },
   "explode": "爆炸视图",
   "section": "剖切面",

@@ -29,7 +29,7 @@ def ref():
 
 def test_template_version_has_the_150_fusion_bodies():  # A.7.6 (150 holders are the real Fusion bodies, no gapped rings); A.7.7 added the CIANO14 40 parts
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.8"' in src and "A.7.6 (2026-10-19)" in src and "A.7.8 (2026-10-20)" in src
+    assert 'TEMPLATE_VERSION = "A.7.9"' in src and "A.7.6 (2026-10-19)" in src and "A.7.8 (2026-10-20)" in src
 
 
 def test_reference_is_found_for_the_die():

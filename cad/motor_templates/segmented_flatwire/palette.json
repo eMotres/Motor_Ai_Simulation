@@ -83,7 +83,13 @@
   "PhaseBoard_other": "pcb_fr4",
   "Fan_front": "aluminium",
   "Fan_back": "aluminium",
-  "Insulation_ceramic": "ceramic"
+  "Insulation_ceramic": "ceramic",
+  "Rotor_holder_front": "aluminium",
+  "Rotor_holder_rear": "aluminium",
+  "Holder_bearing": "aluminium",
+  "Housing": "aluminium",
+  "Fittings": "aluminium",
+  "Fan": "aluminium"
  },
  "magnet_alternate": [
   "magnet_n",

@@ -20,7 +20,13 @@
     "PhaseBoard": "Phase board",
     "Fan_front": "Fan plate (front)",
     "Fan_back": "Fan plate (back)",
-    "Insulation_ceramic": "Ceramic insulation"
+    "Insulation_ceramic": "Ceramic insulation",
+    "Rotor_holder_front": "Rotor holder (front)",
+    "Rotor_holder_rear": "Rotor holder (rear)",
+    "Holder_bearing": "Holder (bearing seat)",
+    "Housing": "Housing sleeve",
+    "Fittings": "Coolant fittings",
+    "Fan": "Fan"
   },
   "explode": "Exploded view",
   "section": "Section plane",

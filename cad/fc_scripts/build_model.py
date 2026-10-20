@@ -49,6 +49,15 @@ def main():
         if ft["errors"]:
             gt["errors"] += ft["errors"]
             gt["ok"] = False
+    fp0 = (pj.get("profile") or {}).get("fusion_parts") or {}
+    if gt["ok"] and doc.getObject("Mechanics") is None and fp0.get("extras") and fp0.get("fit_design") is not None and not kit:
+        from motor_templates.segmented_flatwire import fusion_extras      # A.7.9 (G2): no template mechanics, every passive part is a Fusion extra
+        ft = fusion_extras.fit(doc, fp0)
+        report["fit"] = ft["pairs"]
+        print("stage fit %.1f s" % (time.time() - t0)); sys.stdout.flush()
+        if ft["errors"]:
+            gt["errors"] += ft["errors"]
+            gt["ok"] = False
     if gt["ok"] and doc.getObject("Electronics") is not None:
         from motor_templates.segmented_flatwire import electronics
         pb = electronics.fit(doc, electronics.motor_groups(doc))       # clearances + lead ends vs the board (reported, not refused)

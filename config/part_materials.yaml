@@ -207,6 +207,12 @@ mechanical_parts:
   bearings:      {name: "Bearings", match: "^ball bearing|^bearing", role: structural, material: Bearing_steel_100Cr6, status: computed,
                   note: "rings and balls only (shields, seals and cage are not modelled)"}
   screws:        {name: "Screws", match: "^screw", role: fastener, material: Stainless_A2_70, status: computed}
+  # G2 (CILN28 / G2-L40, template A.7.9): the phase board is copper sheet layers separated by GFRP plates, both Fusion bodies; the two rows come BEFORE the
+  # generic "Phase board" rule (the first matching rule wins), so the copper is never weighed as FR-4
+  board_copper:  {name: "Phase board copper layers", match: "^phase board copper", role: conductor, material: copper, status: computed,
+                  note: "G2: the seven copper layers of the Fusion phase board (PhaseA1, A2, B1, B2, C1, C2 and Null), library card copper"}
+  board_insulation: {name: "Phase board insulation plates", match: "^phase board insulation", role: electronic, material: FR4_glass_epoxy, status: assumed,
+                  note: "G2: the eight GFRP plates between the copper layers (Fusion material GFRP); FR-4 is the flame-retardant grade of the same laminate"}
   board:         {name: "Phase board", match: "^phase board", role: electronic, material: FR4_glass_epoxy, status: assumed,
                   note: "the copper layers are inside this mass; FR-4 is used for the whole board (small part)"}
   pins:          {name: "Phase pins", match: "^phase pin", role: conductor, material: copper, status: assumed,
@@ -215,3 +221,9 @@ mechanical_parts:
                   note: "CIANO28 150: the two fan plates of the Fusion design (component 'Fan 200 24s'), aluminium 6061 as in Fusion"}
   insulation_ceramic: {name: "Ceramic insulation", match: "^ceramic insulation", role: insulation, material: Al2O3, status: computed,
                   note: "CIANO28 150: the 72 alumina pieces of the Fusion design (component 'Insulation_ceramic'); library card Al2O3 (density 3800 kg/m3, estimate)"}
+  housing:       {name: "Housing sleeve", match: "^housing", role: structural, material: Aluminium_6061, status: computed,
+                  note: "G2: the sleeve round the stator that forms the coolant jacket (Fusion Housing, aluminium 6061)"}
+  fittings:      {name: "Coolant fittings", match: "^coolant fitting", role: structural, material: Aluminium_6061, status: computed,
+                  note: "G2: the two coolant ports (Fusion component Fitting), aluminium 6061"}
+  fan:           {name: "Fan", match: '^fan(?! plate)', role: structural, material: Aluminium_6061, status: computed,
+                  note: "G2: the rotor fan, a 1 mm aluminium sheet (Fusion component 'Fan 200 24s'); it turns with the rotor"}

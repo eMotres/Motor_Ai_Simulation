@@ -40,6 +40,15 @@ build proves that each one lands on a Fusion occurrence (fusion_parts.instance_c
 (electronics.build_board_fusion; the SIMPLIFIED model keeps the template plate), the fan plates and the alumina insulation pieces are Fusion-only
 parts (fusion_extras.py). A Fusion body that disagrees with a Params row is WARNED (build_report fusion_warnings), not refused. Profiles without
 these keys build exactly as A.7.7.
+A.7.9 (2026-10-20): G2 = die CILN28 (config G2-L40, the generator CILN28 200, Fusion document "CILN28 200"). The profile has NO template mechanics and no template phase
+board: EVERY part is a Fusion body. The four active parts (Core, RotorCore, Magnet, Coil) are the Fusion solids exactly as in A.7.8 (the template's own parametric
+geometry is the check: Core, rotor and magnets equal the Fusion bodies to 1e-9, the coil is 0.175 % bigger than the Fusion body sum); every other part is an
+`extras` item of profile.fusion_parts (fusion_extras.py: holders, rotor holders, housing, fittings, fan, bearings, four screw families, the 72 alumina pieces, the
+seven copper layers and the eight GFRP plates of the phase board). New in this version: `extras[].select` (the part's own solid of a component STEP that also carries
+its child screws), `density_kg_m3` / `density_src` / `simplified` / `count_solids` per item, `fusion_parts.bom_mode = "fusion_assembly"` (bill of materials of
+src/motor_ai_sim/cad/bom_fusion.py), `fusion_parts.fit_design` and the interference table of fusion_extras.fit(), the SIMPLIFIED model keeps the extras that are
+marked keep / ring / board, rotor tip / key fillet rows (rotor_tip_fill_r, rotor_key_fill_r: the template's own G2 rotor, used for the sync check), a full 360 degree
+cone face is tessellated through its NURBS form (the viewer mesh lost 3.4 % of a Fusion holder). Profiles without these keys build exactly as A.7.8.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.8"
+TEMPLATE_VERSION = "A.7.9"

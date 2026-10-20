@@ -41,7 +41,7 @@ def manifest():
 
 def test_template_version_is_a78():
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.8"' in src and "A.7.8 (2026-10-20)" in src
+    assert 'TEMPLATE_VERSION = "A.7.9"' in src and "A.7.8 (2026-10-20)" in src
 
 
 def test_every_part_of_the_full_model_is_a_fusion_body(fp, manifest):

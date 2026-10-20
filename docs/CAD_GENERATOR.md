@@ -644,6 +644,49 @@ with its component -> root matrix) and the two scripts (`scripts/fusion_150/`: t
   entries (GLB groups `Fan_front`, `Fan_back`, `Insulation_ceramic`). Full mass (`mass_summary`) of L35: 3.927 kg -> 3.891 kg (-70.2 g shaft tube no longer counted twice, +19.2 g fan plates, +14.4 g alumina pieces; the server shows the new value after the rebuild); rotating mass 1.259 -> 1.396 kg (the carriers are rotating parts); BOM T1 3838.1 g -> 3870.4 g.
 * **Checked** (local build through `cad/run_build.py`, FreeCAD 1.1.3, private checkout, server die copy of 2026-10-20): gate ok, no Fusion warning (every Fusion body agrees with the Params rows), instance check 14 / 14, fit table 33 / 33 ok, roles 115 rows replaced by Fusion, GUI finish + `check_gui` ok (Fusion board coloured per solid, extras in their palette colours, everything opaque), STEP re-import 364 solids, full GLB 14.4 MB (the Fusion 61811-2RZ shield is meshed at a quarter of the global tolerance: 0.8 mm sheet, 3.6 % mesh error otherwise), simplified 44 solids, BOM. 435 s (A.7.7: 511 s). Volumes = Fusion: core, rotor, 196 magnets, board, fan plates, alumina 0.000 %; holders <= 0.0005 %; screws <= 0.002 %; bearings -0.0003 %; coils +0.026 % (the 29 bodies fused after the STEP round trip; one Fusion coil body reads 0.1 % large from its STEP). The model's interferences are exactly the Fusion design's own (bearing seats 77.05 mm3, holder bolts 75.50 / 118.14 mm3, the hidden DIN 912 screws in Rotor_holder2 57.74 / 49.55 mm3, fan plates 0.075 mm3), the same numbers as a check of the Fusion export alone. CIANO14 40 new L12 rebuilt with A.7.8: parameter hash, all 17 volumes, the 33 fit rows, the screw check, the gate counts and the simplified model identical to the server's A.7.7 build; the BOM differs only in the coil copper (+0.02 g, the same local-vs-server difference the A.7.7 baseline build of the 150 shows).
 
+
+## G2 (CILN28 / G2-L40): every part from Fusion, the BOM and the full mass (template A.7.9, 2026-10-20)
+
+Owner 2026-10-20: the G2 parts were ordered and made from the Fusion design, so Fusion v35 ("CILN28 200") is the as-built reference for EVERY part,
+the active ones included; where the template's own parametric geometry differs, our side is the defect. The G2 profile (private `cad/reference/CILN28.json`)
+therefore has no template mechanics and no template phase board.
+
+* **Active parts** (`Core`, `RotorCore`, `Magnet`, `Coil`): the Fusion solids as in A.7.8 (`fusion_parts.files`, `select`, `placement`, `occurrences`,
+  `instance_check`). Magnets: 8 axial slices of 5 mm on 28 poles = 224 pieces (`magnet_lamination` 5 mm, the G2-L40 decision); coils: the 65 conductor bodies
+  of a Fusion coil are fused into ONE solid (the union is 0.41 % smaller than the sum of the bodies, whose overlaps at the bends Fusion counts twice).
+  The template's own geometry (rotor tip / key fillet rows `rotor_tip_fill_r`, `rotor_key_fill_r` added for this) is the check: core, rotor and magnet equal the
+  Fusion bodies to 1e-9, the coil is 0.175 % above Fusion's body sum (0.59 % above the union; the whole difference is in the rear end-turn transition
+  z -47.9 .. -21 mm, the straight part has the same section 161.700 mm2). The numbers, and the FEM polygons against the Fusion sections, are in the private
+  `cad/reference/fusion_parts/CILN28_G2_L40/sync_active_parts.json`.
+* **Passive parts** are `fusion_parts.extras` (`fusion_extras.py`): rotor holders (front, rear), stator holders (front, bearing seat, back), housing sleeve,
+  2 coolant fittings, the fan, 2 bearings (61814, split front / back), the four screw families (32 pieces), the 72 alumina slot pieces, the 7 copper layers and
+  the 8 GFRP plates of the phase board. Per item: `select` (the part's own solid - a component STEP also carries the screws that are its children),
+  `density_kg_m3` + `density_src` (the Fusion material labels are not used: the Fusion core says 20SW1200, the magnets "Steel"), `simplified`
+  (keep | ring | board | omit), `count_solids`, `bom.key / title / type`. The Fusion document has two components called "Insulation" (alumina pieces; the GFRP
+  plate inside the referenced "PCB 200 24s serial"): the first export took the alumina for both, which is why the 9.13 kg of `components_v35.json`
+  counts nine alumina masses of 33.6 g; the plate has its own export (by component id).
+* **Gate / fit**: every extra carries the Fusion volume x occurrences (1e-4). `fusion_extras.fit` measures every pair of groups whose bounding boxes meet
+  (131 pairs, ~3 min): the 9 overlaps the Fusion design itself has (`fusion_parts.fit_design`: the coils in the back holder 220.0 mm3, the coil leads through
+  the first copper layer 34.1 and the GFRP plates 493.2, the bearing press fits 155.2 / 155.0, the screw threads 223.5 / 210.5 / 610.5 / 165.5) must stay at
+  their Fusion value (1 % + 0.5 mm3); every other pair must be clear (< 0.001 mm3). Active parts are not compared with each other (instance check).
+* **BOM** (`bom_fusion.py`, selected by `fusion_parts.bom_mode = "fusion_assembly"` -> Meta `motor_bom_mode`): the active rows weigh the Fusion solid like the generic
+  BOM (laminations x k_f 0.92 x 7600 kg/m3 of B15AHV950M, magnets 7500 kg/m3 of N52UH, bare copper), every extra by its density; items with one `bom.key` are one
+  row (screws 32 pcs, board copper 7 layers). Row titles start with the words the part rules classify by (`config/part_materials.yaml`: new keys
+  `housing`, `fittings`, `fan`, `board_copper`, `board_insulation`, the last two before the generic `board`); the part tree knows them
+  (`part_tree.py`, viewer families), the fan is a rotating part (`ROTATING_KEYS`). **Configure reads**
+  `<cad>/<die>/<config>/*_BOM.csv` (server `/srv/motres/shared/cad/CILN28/G2-L40/CILN28_G2-L40_BOM.csv`) through `modules.motor_mass.mass_summary`
+  (`full_kg` = the app's active parts + the BOM's non-active rows; the two rotor carriers replace the simulation shaft tube); `routes/catalog._preset_mass`
+  and `_with_full_mass` hand it to Configure as `mass` / `mass_fixed_kg`, the datasheet and the report read the same function.
+* **Simplified model**: monolith + 12 coil blocks + the holders, rotor holders, housing, fittings and screws as built, the two bearings as plain rings
+  d x D x B (read from the cylinder and end faces), the phase board as ONE plain plate (outline of a GFRP plate over the stack thickness, 29 through holes);
+  the fan, the alumina pieces and the copper layers are omitted. The viewer groups `Rotor_holder_front/rear`, `Holder_bearing`, `Housing`, `Fittings`, `Fan`
+  are in `palette.py` / `palette.json`, the exploded-view factors in `export_models.py`, the names in the web locales.
+* **Viewer mesh**: a full 360 degree cone face (the countersinks of the DIN 7991 holes) comes back EMPTY from `Face.tessellate`; it is meshed through its NURBS
+  form (`face_tessellate`), else the bearing-seat holder lost 3.4 % of its volume in the GLB.
+* **Checked** (local build through `cad/run_build.py`, FreeCAD 1.1.3, private checkout, server die copy of 2026-10-20): gate ok, no Fusion warning, instance check
+  4 / 4 (Coil 12 / 12 max 0.5 um, Magnet 224 / 224), fit 131 pairs ok (9 design overlaps equal to Fusion's), GUI finish + `check_gui`, STEP re-import 382 solids,
+  full GLB 19.9 MB (591 k triangles), simplified 56 solids, BOM 21 lines, T1 = 8506.7 g. Full mass for Configure 8.465 kg (app active parts 5.773 kg + 2.693 kg of BOM rows).
+
 ## The GFRP rings: full model only (template A.7.4, 2026-10-16)
 
 Template A.7.1 (#216, 2026-10-15) removed the glass-fibre `Ring` (body) and its `Ring_back` (link) from every construction. The owner only wanted

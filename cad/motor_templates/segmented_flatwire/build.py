@@ -59,6 +59,10 @@ def prepare_document(pj, doc_name=None):
         meta = dict(doc.Meta)
         meta.update({"motor_" + k: str(prof.get(k, "")) for k in ("motor_id", "variant", "revision")})
         meta["motor_cad_variant"] = frameless.variant_of_profile(pj)
+        fp = prof.get("fusion_parts") or {}
+        if fp.get("bom_mode"):                                                   # A.7.9: the passive parts are Fusion extras; the BOM reads them (bom_fusion.py)
+            meta["motor_bom_mode"] = str(fp["bom_mode"])
+            meta["motor_fusion_document"] = "%s v%s" % ((fp.get("document") or {}).get("name", "Fusion"), (fp.get("document") or {}).get("version", "?"))
         doc.Meta = meta
     except Exception:
         pass

@@ -10,6 +10,8 @@ gate(doc)        - run AFTER every recompute and BEFORE any save-as-result / STE
 """
 import math
 
+from .common import rotor_numbers, fillet_center_circle_line
+
 TOL = 1e-4   # mm
 
 
@@ -23,6 +25,14 @@ def _opt(g, name, default):
         return float(g(name))
     except Exception:
         return default
+
+
+def _has(g, name):
+    try:
+        g(name)
+        return True
+    except Exception:
+        return False
 
 
 def precheck(g, frameless=False):
@@ -50,20 +60,40 @@ def precheck(g, frameless=False):
                                                   "motor_length long, slices of mag_step)" % sl)
     nkey = _opt(g, "rotor_key_count", 0)
     need(abs(nkey - round(nkey)) < 1e-9 and nkey >= 0, "rotor_key_count = %g must be an integer >= 0" % nkey)
+    # G2 (CILN28 200): the key fillet may have its own row rotor_key_fill_r; then rotor_fill_r is the pole-tip rounding (rotor_tip_fill_r)
+    own_key = _has(g, "rotor_key_fill_r")
+    key_row = "rotor_key_fill_r" if own_key else "rotor_fill_r"
     if round(nkey) == 0:
-        need(abs(_num(g, "rotor_fill_r")) < 1e-12, "rotor_fill_r = %g needs rotor keys (rotor_key_count > 0): it rounds the key "
-                                                   "edges and has no other use (must be 0 without keys)" % _num(g, "rotor_fill_r"))
+        if not (own_key or _has(g, "rotor_tip_fill_r")):
+            need(abs(_num(g, "rotor_fill_r")) < 1e-12, "rotor_fill_r = %g needs rotor keys (rotor_key_count > 0): it rounds the key "
+                                                       "edges and has no other use (must be 0 without keys)" % _num(g, "rotor_fill_r"))
     else:
-        kw, kh, ko, kf = _num(g, "rotor_key_w"), _num(g, "rotor_key_h"), _num(g, "rotor_key_offset"), _num(g, "rotor_fill_r")
+        kw, kh, ko, kf = _num(g, "rotor_key_w"), _num(g, "rotor_key_h"), _num(g, "rotor_key_offset"), _num(g, key_row)
         Rb_ = _num(g, "rotor_down_r") - _num(g, "rotor_house_height")
         w2_ = kw / 2 - ko
         need(ko >= 0 and kf > 0 and w2_ > 2 * kf and kh - ko > 2 * kf,
-             "rotor key: width/2 - offset (%.3f) and depth - offset (%.3f) must both exceed 2 x rotor_fill_r (%.3f), "
-             "rotor_key_offset >= 0" % (w2_, kh - ko, kf))
+             "rotor key: width/2 - offset (%.3f) and depth - offset (%.3f) must both exceed 2 x %s (%.3f), "
+             "rotor_key_offset >= 0" % (w2_, kh - ko, key_row, kf))
         need(Rb_ - kh > 0 and (Rb_ - kf) ** 2 > (w2_ + kf) ** 2, "rotor key deeper than the bore radius or too wide for the bore")
         need(round(nkey) * 2 * math.asin(min(1.0, (w2_ + kf) / Rb_)) < 2 * math.pi,
              "rotor keys overlap each other: reduce rotor_key_count or rotor_key_w")
         need(_num(g, "rotor_down_r") > Rb_ + 0.05, "rotor hub ring thinner than 0.05 mm: the key cannot be fused")
+    rt = _opt(g, "rotor_tip_fill_r", 0.0)
+    if rt > 1e-12:
+        # pole-tip rounding: fillet between the pocket lip (vertical line at x = rotor_up_r * sin(lip angle)) and the outer arc must fit
+        # above the pocket top fillet and before the half-pole boundary
+        n_ = rotor_numbers(lambda k: _num(g, k))
+        xl_ = n_["Rup"] * math.sin(math.radians(n_["h"]))
+        ok_geo = (n_["Rup"] - rt) ** 2 > (xl_ + rt) ** 2
+        need(ok_geo, "rotor_tip_fill_r = %g does not fit between the magnet pocket lip and the outer arc" % rt)
+        if ok_geo:
+            cy_ = math.sqrt((n_["Rup"] - rt) ** 2 - (xl_ + rt) ** 2)
+            phi_ = math.degrees(math.atan2(xl_ + rt, cy_))
+            rfp = n_["mfr"] + n_["off"]
+            cf_ = fillet_center_circle_line(n_["Rtop"] - n_["mfr"], n_["K"], n_["U"], n_["mfr"])
+            lby_ = cf_[1] + math.sqrt(max(rfp * rfp - (xl_ - cf_[0]) ** 2, 0.0))
+            need(phi_ < n_["a"] - 0.05, "rotor_tip_fill_r = %g reaches the half-pole boundary (%.2f deg of %.2f deg)" % (rt, phi_, n_["a"]))
+            need(cy_ > lby_ + 0.05, "rotor_tip_fill_r = %g overlaps the magnet pocket top fillet (lip line only %.3f mm long)" % (rt, cy_ - lby_))
 
     # stator core sector
     R_in, R_out = _num(g, "stator_down_r"), _num(g, "stator_up_r")

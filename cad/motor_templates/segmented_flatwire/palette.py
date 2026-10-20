@@ -52,7 +52,9 @@ GROUP_ROLE = {"Core": "core", "Coils": "coil", "Rotor": "rotor_core", "Magnets":
               "Bearings_front_balls": "bearing_ball", "Bearings_back_balls": "bearing_ball", "Holder_front": "aluminium",
               "Holder_back": "aluminium", "Bearings_front_seals": "bearing_seal", "Bearings_back_seals": "bearing_seal", "Ring_front": "ring", "Ring_back": "ring", "Screws": "screw", "Prop_fix": "aluminium",
               "PhaseBoard_FR4": "pcb_mask", "PhaseBoard_copper": "pcb_gold", "PhaseBoard_pins": "pcb_pins", "PhaseBoard_other": "pcb_fr4",
-              "Fan_front": "aluminium", "Fan_back": "aluminium", "Insulation_ceramic": "ceramic"}     # Fusion-only parts of the CIANO28 150 (template A.7.8)
+              "Fan_front": "aluminium", "Fan_back": "aluminium", "Insulation_ceramic": "ceramic",     # Fusion-only parts of the CIANO28 150 (template A.7.8)
+              "Rotor_holder_front": "aluminium", "Rotor_holder_rear": "aluminium", "Holder_bearing": "aluminium", "Housing": "aluminium",
+              "Fittings": "aluminium", "Fan": "aluminium"}                                     # Fusion parts of the G2 (CILN28 200, template A.7.9)
 THREAD_DARKEN = 0.72               # cosmetic thread faces: the host colour, a little darker
 
 

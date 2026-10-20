@@ -4273,6 +4273,36 @@ def _fem_transient_sliding_band_once(
     else:
         p = params_from_config()
     dom = MotorDomains2D(p)
+    # ── NEVER SOLVE AN IMPOSSIBLE WINDING (owner 2026-10-20) ─────────────────
+    # The field only reads n_parallel (I_coil = I_phase / n_parallel), so a
+    # label that does not factor THIS machine's coils per phase used to solve
+    # anyway: a die grown from 24 to 48 / 60 slots kept its `2S`, and a panel
+    # holding the previous machine's option list sent `10P` to a 48-slot one
+    # (8 coils/phase) — a tenth of the coil MMF, solved without a word.  The
+    # label is checked against the slot count actually meshed, and so is the
+    # path count the solve will divide by — whenever the winding is THIS
+    # machine's: named by the request, or read from the config that describes
+    # the machine being meshed.  Under a geometry override with no winding of
+    # its own (a candidate, a catalog machine, the no-load d-axis probe) the
+    # config's winding belongs to whatever machine the user has loaded; those
+    # callers name their own connection when it matters, and that is checked.
+    from motor_ai_sim.winding import (connection_error as _conn_error,
+                                      n_parallel_error as _npar_error)
+    if connection is not None or not geo_override:
+        _wlabel = wind.get("connection")
+        if _wlabel:
+            _werr = _conn_error(str(_wlabel), int(p.num_slots))
+            if _werr:
+                raise ValueError("impossible winding: " + _werr + (
+                    "" if connection is not None else
+                    " (the configuration's stored winding — pick a valid "
+                    "connection on the Simulation tab)"))
+    if connection is not None or n_parallel is not None or not geo_override:
+        # (the same default the path count below is read with)
+        _werr = _npar_error(max(1, int(wind.get("n_parallel", 2) or 1)),
+                            int(p.num_slots))
+        if _werr:
+            raise ValueError("impossible winding: " + _werr)
     # ── Feature-relative mesh refinement (real element sizing, not a fudge) ──
     # mesh_size_mm is an ABSOLUTE target.  On a small motor the UI default
     # (4 mm) leaves ~1 element across a 2.8 mm slot → the field, torque and

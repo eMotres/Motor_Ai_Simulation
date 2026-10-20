@@ -552,6 +552,21 @@ def update_sim_config(patch: SimConfigPatch):
             _n_par, _n_ser = _parse_conn(_conn_req)
         except ValueError as _e:
             raise HTTPException(status_code=422, detail=str(_e))
+        # ...and it has to be a connection THIS machine has.  The panel's
+        # label can be stale (its option list was loaded for the previous
+        # geometry): a `10P` written onto a 48-slot machine (8 coils/phase) was
+        # accepted here and solved with a tenth of the coil MMF.
+        try:
+            from motor_ai_sim.winding import slot_pole_counts as _live_slot_pole_counts
+            from motor_ai_sim.winding import connection_error as _conn_err
+            from motor_ai_sim.config import get_config as _gc_conn
+            _slots = _live_slot_pole_counts(
+                dict((_gc_conn() or {}).get("geometry") or {}))[0]
+            _cerr = _conn_err(_conn_req.strip(), _slots)
+        except Exception:   # noqa: BLE001 — the solve validates again
+            _cerr = None
+        if _cerr:
+            raise HTTPException(status_code=422, detail=_cerr)
         wind_updates.update({"connection": _conn_req.strip(),
                              "n_parallel": _n_par, "n_series": _n_ser})
 

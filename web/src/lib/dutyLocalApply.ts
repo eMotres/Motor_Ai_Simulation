@@ -84,6 +84,9 @@ export interface DutyPayload {
   winding?: any;
   materials?: any;
   /* eslint-enable @typescript-eslint/no-explicit-any */
+  /** Set when the server re-picked the configuration's connection for this
+   *  lamination's slot count (GET /api/family/payload). */
+  winding_note?: string | null;
 }
 
 /** What the panel held BEFORE this apply — the answer to "did the machine

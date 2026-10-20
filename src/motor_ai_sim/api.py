@@ -1067,16 +1067,10 @@ def _winding_connections(num_slots: int):
     winding: coils per phase C = num_slots / 6, and every factor pair
     (n_series x n_parallel = C) is an option (n_parallel = parallel paths).
     e.g. 12 slots -> C=2 -> 2S, 2P ; 24 -> C=4 -> 4S, 2S-2P, 4P ;
-    36 -> 6S, 3S-2P, 2S-3P, 6P ; 48 -> 8S, 4S-2P, 2S-4P, 8P."""
-    C = max(1, round((num_slots or 0) / 6))
-    out = []
-    for n_parallel in range(1, C + 1):
-        if C % n_parallel:
-            continue
-        n_series = C // n_parallel
-        out.append({"label": _conn_label(n_series, n_parallel),
-                    "n_parallel": n_parallel, "n_series": n_series})
-    return out
+    36 -> 6S, 3S-2P, 2S-3P, 6P ; 48 -> 8S, 4S-2P, 2S-4P, 8P.
+    One definition: motor_ai_sim.winding.connection_options."""
+    from motor_ai_sim.winding import connection_options
+    return connection_options(num_slots)
 
 
 class WindingConfigPatch(BaseModel):
@@ -1092,12 +1086,19 @@ class WindingConfigPatch(BaseModel):
     set_neutrals:      Optional[str] = None  # "isolated" (default) | "common"
 
 
+def _live_slot_pole_counts(geo: dict) -> tuple:
+    """(num_slots, num_poles) of the LIVE geometry block — the segment form
+    first (see ``winding.slot_pole_counts``)."""
+    from motor_ai_sim.winding import slot_pole_counts
+    return slot_pole_counts(geo)
+
+
 def _current_winding_layout():
-    """Return (num_slots, [(phase, dir), …]) for the live config winding."""
+    """Return (num_slots, [(phase, dir), ...]) for the live config winding."""
     cfg = get_config()
     geo = cfg.get("geometry", {})
-    num_slots = int(geo.get("num_slots", 24))
-    num_pp    = int(geo.get("num_poles", 28)) // 2
+    num_slots, num_poles = _live_slot_pole_counts(geo)
+    num_pp    = num_poles // 2
     w = cfg.get("winding", {})
     try:
         from motor_ai_sim.simulation.geometry_2d import build_winding_layout
@@ -1110,9 +1111,56 @@ def _current_winding_layout():
     return num_slots, lay
 
 
+#: The last connection re-pick per config file, shown ONCE by the next
+#: GET /api/winding/config (the PUT /api/geometry that re-picked it may have
+#: come from another tab).
+_WINDING_NOTES: dict = {}
+
+
+def reconcile_live_winding() -> Optional[str]:
+    """Make the LIVE winding connection valid for the live slot count.
+
+    A geometry change (segments, slots per segment) changes the coils per
+    phase; a stored connection that no longer factors them (``2S`` on 48
+    slots, a stale ``10P``) is re-picked by ``winding.repick_connection`` and
+    written back, and the one-line note it returns is logged and kept for the
+    panel.  Returns that note, or None when the stored connection was valid.
+    Never raises: a config the writer cannot touch leaves the solve's own
+    validation to refuse it loudly."""
+    try:
+        from motor_ai_sim.winding import repick_connection
+        cfg = get_config()
+        w = dict(cfg.get("winding") or {})
+        if not w:
+            return None
+        num_slots, _ = _live_slot_pole_counts(cfg.get("geometry", {}) or {})
+        fixed, note = repick_connection(w, num_slots)
+        if note is None:
+            return None
+        _write_winding_updates({
+            "connection": f'"{fixed["connection"]}"',
+            "n_parallel": str(int(fixed["n_parallel"])),
+            "n_series": str(int(fixed["n_series"])),
+            "n_coils_per_phase": str(int(fixed["n_coils_per_phase"])),
+        })
+        logging.getLogger("motor_ai_sim.winding").warning("winding: %s", note)
+        _WINDING_NOTES[str(_config_path())] = note
+        return note
+    except Exception as e:   # noqa: BLE001
+        logging.getLogger("motor_ai_sim.winding").warning("winding: connection re-pick skipped (%s)", e)
+        return None
+
+
 @app.get("/api/winding/config")
 def get_winding_config():
-    """Return current winding connection + per-slot layout (phase, direction)."""
+    """Return current winding connection + per-slot layout (phase, direction).
+
+    The options, the coils per phase and the stored connection all follow the
+    LIVE slot count: an invalid stored connection is re-picked here
+    (``reconcile_live_winding``) and ``connection_note`` says so."""
+    _note = reconcile_live_winding()
+    # shown ONCE: this answer carries it, so the kept copy goes either way
+    _note = _WINDING_NOTES.pop(str(_config_path()), None) or _note
     cfg = get_config()
     w = cfg.get("winding", {})
     n_parallel = w.get("n_parallel", 1)
@@ -1143,7 +1191,13 @@ def get_winding_config():
     return {
         "connection":         _conn_label(n_series, n_parallel),
         "connections":        _winding_connections(num_slots),
-        "n_coils_per_phase":  n_coils,
+        # DERIVED from the live slot count (the stored value is a copy that
+        # did not follow segment changes); the stored one rides beside it.
+        "n_coils_per_phase":  _coils_per_phase(num_slots),
+        "n_coils_per_phase_stored": n_coils,
+        "connection_valid":   _conn_error(_conn_label(n_series, n_parallel),
+                                          num_slots) is None,
+        "connection_note":    _note,
         "n_parallel":         n_parallel,
         "n_series":           n_series,
         "I_phase_Arms":       I_phase,
@@ -1185,6 +1239,92 @@ def _six_phase_view(w: dict) -> dict:
 
 
 from motor_ai_sim.winding import parse_connection as _parse_connection  # noqa: E402
+from motor_ai_sim.winding import (coils_per_phase as _coils_per_phase,  # noqa: E402
+                                  connection_error as _conn_error)
+
+
+def _write_winding_updates(updates: dict) -> None:
+    """Write ``updates`` ({key: yaml scalar text}) into the winding block of
+    motor_config.yaml (and the simulation.connection mirror), then flush
+    the config and simulation caches.  Shared by PATCH /api/winding/config
+    and the connection re-pick (``reconcile_live_winding``)."""
+    content = _config_path().read_text(encoding="utf-8")
+    lines   = content.splitlines(keepends=True)
+    in_winding = False
+    in_sim     = False
+    result     = []
+    replaced   = set()
+
+    for line in lines:
+        if re.match(r'^winding\s*:', line):
+            in_winding = True
+            in_sim = False
+        elif re.match(r'^simulation\s*:', line):
+            in_sim = True
+            in_winding = False
+        elif (in_winding or in_sim) and re.match(r'^\S', line):
+            in_winding = in_sim = False
+
+        # simulation.connection is a MIRROR of the winding block's — nothing in
+        # the physics reads it (the solver reads cfg["winding"]), but the
+        # optimizer's plan and the Stage-D script did, and a mirror that is only
+        # written by the other path goes stale: 4S selected here, a 12-hour
+        # optimization planned at the 2S-2P the mirror still held.  Keep them
+        # equal at the only place the connection changes.
+        if in_sim and "connection" in updates:
+            m = re.match(r'^(\s+connection\s*:\s*)(.*)$', line)
+            if m:
+                line = m.group(1) + updates["connection"] + '\n'
+
+        if in_winding:
+            for key, val in updates.items():
+                m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
+                if m:
+                    line = m.group(1) + val + '\n'
+                    replaced.add(key)
+                    break
+
+        result.append(line)
+
+    # The six-phase keys are new, and an older block may lack the connection
+    # counts: a block that has never carried them gains them at its end
+    # instead of refusing the change.
+    _six_new = [k for k in ("phases", "set1_paths", "set_neutrals", "connection",
+                            "n_parallel", "n_series", "n_coils_per_phase")
+                if k in updates and k not in replaced]
+    if _six_new:
+        _out, _inw = [], False
+        for _ln in result:
+            if re.match(r'^winding\s*:', _ln):
+                _inw = True
+            elif _inw and re.match(r'^\S', _ln):
+                _out.extend(f"  {k}: {updates[k]}\n" for k in _six_new)
+                _inw = False
+            _out.append(_ln)
+        if _inw:
+            if _out and not _out[-1].endswith("\n"):
+                _out[-1] += "\n"
+            _out.extend(f"  {k}: {updates[k]}\n" for k in _six_new)
+        result = _out
+        replaced.update(_six_new)
+    missing = set(updates) - replaced
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Keys not found in winding: block: {missing}"
+        )
+
+    _config_path().write_text(''.join(result), encoding="utf-8")
+    clear_config_cache()
+    # A winding change (connection / layers / layout) alters the field & torque,
+    # so flush the simulation caches (mesh / field / transient) like a geometry edit.
+    if {"connection", "layers", "layout", "phases", "set1_paths",
+            "set_neutrals"} & set(updates):
+        try:
+            from motor_ai_sim.routes.simulation import clear_simulation_caches
+            clear_simulation_caches(reason="winding changed")
+        except Exception:
+            pass
 
 
 @app.patch("/api/winding/config")
@@ -1259,81 +1399,7 @@ def update_winding_config(patch: WindingConfigPatch):
         if _e6:
             raise HTTPException(status_code=422, detail=_e6)
 
-    content = _config_path().read_text(encoding="utf-8")
-    lines   = content.splitlines(keepends=True)
-    in_winding = False
-    in_sim     = False
-    result     = []
-    replaced   = set()
-
-    for line in lines:
-        if re.match(r'^winding\s*:', line):
-            in_winding = True
-            in_sim = False
-        elif re.match(r'^simulation\s*:', line):
-            in_sim = True
-            in_winding = False
-        elif (in_winding or in_sim) and re.match(r'^\S', line):
-            in_winding = in_sim = False
-
-        # simulation.connection is a MIRROR of the winding block's — nothing in
-        # the physics reads it (the solver reads cfg["winding"]), but the
-        # optimizer's plan and the Stage-D script did, and a mirror that is only
-        # written by the other path goes stale: 4S selected here, a 12-hour
-        # optimization planned at the 2S-2P the mirror still held.  Keep them
-        # equal at the only place the connection changes.
-        if in_sim and "connection" in updates:
-            m = re.match(r'^(\s+connection\s*:\s*)(.*)$', line)
-            if m:
-                line = m.group(1) + updates["connection"] + '\n'
-
-        if in_winding:
-            for key, val in updates.items():
-                m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
-                if m:
-                    line = m.group(1) + val + '\n'
-                    replaced.add(key)
-                    break
-
-        result.append(line)
-
-    # The six-phase keys are new: a block that has never carried them gains
-    # them at its end instead of refusing the change.
-    _six_new = [k for k in ("phases", "set1_paths", "set_neutrals")
-                if k in updates and k not in replaced]
-    if _six_new:
-        _out, _inw = [], False
-        for _ln in result:
-            if re.match(r'^winding\s*:', _ln):
-                _inw = True
-            elif _inw and re.match(r'^\S', _ln):
-                _out.extend(f"  {k}: {updates[k]}\n" for k in _six_new)
-                _inw = False
-            _out.append(_ln)
-        if _inw:
-            if _out and not _out[-1].endswith("\n"):
-                _out[-1] += "\n"
-            _out.extend(f"  {k}: {updates[k]}\n" for k in _six_new)
-        result = _out
-        replaced.update(_six_new)
-    missing = set(updates) - replaced
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Keys not found in winding: block: {missing}"
-        )
-
-    _config_path().write_text(''.join(result), encoding="utf-8")
-    clear_config_cache()
-    # A winding change (connection / layers / layout) alters the field & torque,
-    # so flush the simulation caches (mesh / field / transient) like a geometry edit.
-    if {"connection", "layers", "layout", "phases", "set1_paths",
-            "set_neutrals"} & set(updates):
-        try:
-            from motor_ai_sim.routes.simulation import clear_simulation_caches
-            clear_simulation_caches(reason="winding changed")
-        except Exception:
-            pass
+    _write_winding_updates(updates)
     return {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
 
 

@@ -413,6 +413,57 @@ def test_malformed_rejects_are_origin_keyed_and_recorded_rarely(env):
     assert all(e.get("path") == "/api/x" and e.get("ip") for e in rej)
 
 
+def test_erp_service_token_is_quiet_and_wrong_token_is_logged_once_with_request_context(env, monkeypatch):
+    from motor_ai_sim import session_activity as SA
+    from motor_ai_sim import auth as A
+    monkeypatch.setenv("ERP_SYNC_TOKEN", "erp-test-secret")
+    info = SA.RequestInfo("GET", "/api/erp-export/directory", "198.51.100.30", "erp-sync-test")
+    token = SA._REQ.set(info)
+    try:
+        assert A.resolve_user_detail("Bearer erp-test-secret")["reason"] == "service_token"
+        assert not [e for e in _events(env) if e.get("event") == "reject"]
+        A.resolve_user_detail("Bearer wrong-service-token")
+        A.resolve_user_detail("Bearer wrong-service-token")
+    finally:
+        SA._REQ.reset(token)
+    rejects = [e for e in _events(env) if e.get("event") == "reject"]
+    assert len(rejects) == 1
+    assert rejects[0]["reason"] == "service_token_invalid"
+    assert rejects[0]["path"] == "/api/erp-export/directory"
+    assert rejects[0]["ip"]
+
+
+def test_erp_service_paths_accept_only_the_service_token_without_reject_events(env, monkeypatch):
+    monkeypatch.setenv("ERP_SYNC_TOKEN", "erp-test-secret")
+    monkeypatch.setenv("WORKSPACES_ROOT", str(env["tmp"] / "workspaces"))
+    monkeypatch.setattr(env["A"], "AUTH_ENFORCE", True)
+    for path in ("/api/erp-export/directory", "/api/erp-export/motor-prices"):
+        before = len([e for e in _events(env) if e.get("event") == "reject"])
+        assert client.get(path, headers=_bearer("erp-test-secret")).status_code == 200
+        assert len([e for e in _events(env) if e.get("event") == "reject"]) == before
+        bad = client.get(path, headers=_bearer("wrong-service-token"))
+        assert bad.status_code == 401
+        rejects = [e for e in _events(env) if e.get("event") == "reject"]
+        assert len(rejects) == before + 1
+        assert rejects[-1]["reason"] == "service_token_invalid"
+        assert rejects[-1]["path"] == path
+        # A repeated resolve inside one request (middleware -> route/workspace)
+        # must not append another copy of the same audit event.
+        env["A"]._reject_seen.clear()
+
+    # The service credential has no authority outside the two export routes.
+    assert client.get("/api/admin/users", headers=_bearer("erp-test-secret")).status_code == 401
+
+
+def test_erp_exports_reject_signed_in_non_admin(env, monkeypatch):
+    monkeypatch.setenv("ERP_SYNC_TOKEN", "erp-test-secret")
+    monkeypatch.setenv("WORKSPACES_ROOT", str(env["tmp"] / "workspaces"))
+    monkeypatch.setattr(env["A"], "AUTH_ENFORCE", True)
+    user_token = _login(CLIENT, "password-client")["token"]
+    for path in ("/api/erp-export/directory", "/api/erp-export/motor-prices"):
+        assert client.get(path, headers=_bearer(user_token)).status_code == 403
+
+
 def test_node_ingest_bearer_skips_account_resolution():
     from motor_ai_sim import workspace as W
     ok = "Bearer mnode_abc123"

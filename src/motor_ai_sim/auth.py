@@ -620,6 +620,27 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
     from motor_ai_sim import sessions as _sessions
     from motor_ai_sim import users as _users
 
+    # Route helpers that resolve the same request again often omit path. Recover
+    # it from the outer ASGI context so diagnostics retain the real endpoint.
+    if not path:
+        try:
+            from motor_ai_sim import session_activity as _sa
+            _request = _sa.current_request()
+            if _request is not None:
+                path = _request.path
+                ip = ip or _request.ip
+                user_agent = user_agent or _request.user_agent
+        except Exception:
+            pass
+
+    # ERP's dedicated credential is valid only on its anonymous-OK export
+    # routes. The route uses this same validator before serving data.
+    if path.startswith("/api/erp-export/") and anonymous_allowed(path):
+        from motor_ai_sim.routes.erp_export import valid_service_credential
+        if valid_service_credential(authorization):
+            return {"user": None, "reason": "service_token", "sid": "",
+                    "email": "", "presented": True, "renewedToken": None}
+
     def _out(user, reason, sid="", email="", renewed=None, presented=True):
         return {"user": user, "reason": reason, "sid": sid, "email": email,
                 "presented": presented, "renewedToken": renewed}
@@ -695,14 +716,23 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         return _out({"uid": claims.get("sub"), "email": email, "role": role},
                     "ok", email=email)
 
-    _report_reject(res.reason, res.email, res.sid, ip, user_agent, path)
-    return _out(None, res.reason, sid=res.sid, email=res.email)
+    reason = ("service_token_invalid" if path.startswith("/api/erp-export/") and anonymous_allowed(path)
+              and res.reason == "malformed" else res.reason)
+    _report_reject(reason, res.email, res.sid, ip, user_agent, path)
+    return _out(None, reason, sid=res.sid, email=res.email)
 
 
 def _report_reject(reason: str, email: str, sid: str, ip: str,
                    user_agent: str, path: str) -> None:
     from motor_ai_sim import sessions as _sessions
-    if reason == "malformed" and not (sid or email):
+    try:
+        from motor_ai_sim import session_activity as _sa
+        _request = _sa.current_request()
+        if _request is not None and not _request.mark_auth_reject((reason, sid, email)):
+            return
+    except Exception:
+        pass
+    if reason in ("malformed", "service_token_invalid") and not (sid or email):
         # keyed by origin (ip + path), not by the empty identity, so two
         # different sources are both visible; each is recorded once per 15 min
         if not _should_report((reason, ip, path), _REJECT_QUIET_ANON_S):

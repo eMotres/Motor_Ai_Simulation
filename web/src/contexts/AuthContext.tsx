@@ -5,7 +5,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
-import { AUTH_IDLE_EVENT, installFetchAuth, setTokenGetter } from '../lib/apiAuth';
+import { AUTH_IDLE_EVENT, installFetchAuth, isIdleClosedToken, setTokenGetter } from '../lib/apiAuth';
 import {
   clearSession, getStoredToken, getStoredUser, isGisLoaded, loadGis, storeSession,
   setSessionRole, serverLogout, updateToken, GOOGLE_CLIENT_ID, type SessionUser,
@@ -156,12 +156,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loadRoleRef = React.useRef<(() => Promise<void>) | null>(null);
   const meFailuresRef = React.useRef(0);
   const loadRole = useCallback(async () => {
+    const requestedToken = getStoredToken();
     try {
       // A hung request is a failure too (a cross-border link can stall for minutes).
       const j = await fetch(`${API}/api/me`, { signal: typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(15_000) : undefined }).then((r) => {
         if (!meResponseUsable(r.status)) throw new Error(`/api/me ${r.status}`);
         return r.json();
       });
+      // A response for a session cleared by idle handling, or replaced by a
+      // fresh sign-in, must not restore its role or renewed token.
+      if (getStoredToken() !== requestedToken) return;
       meFailuresRef.current = 0;
       // The backend could not READ users.json / .sessions.json / .auth_secret
       // (a Windows file lock during the atomic replace, an antivirus hold).
@@ -237,13 +241,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // way a normal sign-out does (token + user forgotten, nothing else wiped) and shows one line with a Sign in button.
   useEffect(() => {
     const onIdle = () => {
-      if (!getStoredToken()) return;
+      const token = getStoredToken();
+      if (!isIdleClosedToken(token)) return;
       clearSession('idle_timeout');
       setUser(null);
+      setRole('anon');
+      setIsAdmin(false);
+      setDefaultMotor(null);
       setIdleClosed(true);
       void loadRoleRef.current?.();
     };
     window.addEventListener(AUTH_IDLE_EVENT, onIdle);
+    // The interceptor installs at module load and can receive an answer before
+    // this effect mounts. Consume that pending close when the provider appears.
+    onIdle();
     return () => window.removeEventListener(AUTH_IDLE_EVENT, onIdle);
   }, []);
 

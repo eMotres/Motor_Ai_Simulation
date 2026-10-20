@@ -8,8 +8,24 @@ import { refusalReasonKey } from './accessUi';
 import { sharedGet } from './sharedGet';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
+const DOCUMENT_URL = new URL(window.location.href);
+const API_URL = new URL(API || '/', DOCUMENT_URL);
+
+function isApiUrl(raw: string): boolean {
+  try {
+    // A relative fetch is relative to the page, even when the API is hosted on
+    // another origin. Resolving it against API_URL would leak that API bearer.
+    const candidate = new URL(raw, DOCUMENT_URL);
+    const basePath = API_URL.pathname.replace(/\/$/, '');
+    return candidate.origin === API_URL.origin
+      && (!basePath || candidate.pathname === basePath || candidate.pathname.startsWith(`${basePath}/`));
+  } catch {
+    return false;
+  }
+}
 
 let tokenGetter: (() => Promise<string | null>) | null = null;
+const idleClosedTokens = new Set<string>();
 
 /** Fired on `window` when the server answers that the CURRENT session was closed for idling. */
 export const AUTH_IDLE_EVENT = 'auth-idle-timeout';
@@ -17,6 +33,11 @@ export const AUTH_IDLE_EVENT = 'auth-idle-timeout';
 /** AuthProvider keeps this pointed at the current user's getIdToken(). */
 export function setTokenGetter(fn: (() => Promise<string | null>) | null): void {
   tokenGetter = fn;
+}
+
+/** True when this exact token has already received the server's idle close. */
+export function isIdleClosedToken(token: string | null | undefined): boolean {
+  return !!token && idleClosedTokens.has(token);
 }
 
 // ── Per-request active geometry (multi-user isolation, P2) ──────────────────
@@ -79,27 +100,40 @@ export function installFetchAuth(): void {
 
   const orig = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    let url = '';
     try {
-      const url =
+      url =
         typeof input === 'string' ? input
         : input instanceof URL ? input.href
         : input instanceof Request ? input.url
         : String(input);
-      if (tokenGetter && url.startsWith(API)) {
+      if (tokenGetter && isApiUrl(url)) {
         const token = await tokenGetter();
-        if (token) {
-          const headers = new Headers(
-            init?.headers ?? (input instanceof Request ? input.headers : undefined),
-          );
-          if (!headers.has('Authorization')) {
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : undefined),
+        );
+        const existing = headers.get('Authorization');
+        if (existing && /^Bearer\s+/i.test(existing) && idleClosedTokens.has(existing.replace(/^Bearer\s+/i, '').trim())) {
+          headers.delete('Authorization');
+          init = { ...init, headers };
+        } else if (token && !idleClosedTokens.has(token) && !existing) {
             headers.set('Authorization', `Bearer ${token}`);
             init = { ...init, headers };
-          }
+        }
+      }
+      // Also strip a stale explicit Request/header after sign-out, when there is
+      // no token getter result to enter the branch above.
+      if (isApiUrl(url)) {
+        const currentHeaders = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        const currentAuth = currentHeaders.get('Authorization');
+        if (currentAuth && /^Bearer\s+/i.test(currentAuth) && idleClosedTokens.has(currentAuth.replace(/^Bearer\s+/i, '').trim())) {
+          currentHeaders.delete('Authorization');
+          init = { ...init, headers: currentHeaders };
         }
       }
       // P2: attach the active geometry to COMPUTE requests so the backend builds
       // THIS client's design (stateless) instead of the shared global config.
-      if (geoGetter && url.startsWith(API) && COMPUTE_RE.test(url) && !/[?&]geo=/.test(url)) {
+      if (geoGetter && isApiUrl(url) && COMPUTE_RE.test(url) && !/[?&]geo=/.test(url)) {
         const geo = geoGetter();
         if (geo) {
           const newUrl = url + (url.includes('?') ? '&' : '?') + 'geo=' + encodeURIComponent(geo);
@@ -114,7 +148,7 @@ export function installFetchAuth(): void {
           : input instanceof URL ? input.href
           : input instanceof Request ? input.url
           : String(input);
-        if (cur.startsWith(API) && /\/api\/simulation\/physics/.test(cur) && !/[?&]mat=/.test(cur)) {
+        if (isApiUrl(cur) && /\/api\/simulation\/physics/.test(cur) && !/[?&]mat=/.test(cur)) {
           const mat = matGetter();
           if (mat) {
             const newUrl = cur + (cur.includes('?') ? '&' : '?') + 'mat=' + encodeURIComponent(mat);
@@ -136,9 +170,20 @@ export function installFetchAuth(): void {
     // The server closed this session for idling (30 min without use, sessions.py): it says so on EVERY answer to
     // that token (X-Auth-Reason), so the app learns from any request, not only from a 401.
     try {
-      if (usedToken && res.headers.get('x-auth-reason') === 'idle_timeout' && String(res.url || '').startsWith(API)) {
+      if (!isApiUrl(url)) return res;
+      let idleReason = res.headers.get('x-auth-reason') === 'idle_timeout';
+      if (!idleReason && res.status === 401) {
+        const body = await res.clone().json().catch(() => null);
+        idleReason = body?.reason === 'idle_timeout';
+      }
+      if (usedToken && idleReason && isApiUrl(String(res.url || url))) {
         const cur = tokenGetter ? await tokenGetter() : null;
-        if (cur === usedToken) window.dispatchEvent(new CustomEvent(AUTH_IDLE_EVENT));
+        // Do not let a late answer for a prior session close a newly signed-in user.
+        const firstClose = !idleClosedTokens.has(usedToken);
+        idleClosedTokens.add(usedToken);
+        if (cur === usedToken && firstClose) {
+          window.dispatchEvent(new CustomEvent(AUTH_IDLE_EVENT));
+        }
       }
     } catch { /* a notice must never break a request */ }
     // A call the server's role gate REFUSED must never fail silently: say why,
@@ -146,7 +191,7 @@ export function installFetchAuth(): void {
     // ({detail, required_role, your_role}) counts - any other 401/403 is the
     // caller's to explain.
     try {
-      if ((res.status === 401 || res.status === 403) && String(res.url || '').startsWith(API)) {
+      if ((res.status === 401 || res.status === 403) && isApiUrl(String(res.url || url))) {
         void res.clone().json().then((b) => {
           const key = refusalReasonKey(res.status, b);
           if (key) window.dispatchEvent(new CustomEvent('api-refused', { detail: { key } }));

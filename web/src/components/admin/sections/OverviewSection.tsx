@@ -6,6 +6,7 @@ import { Box, Typography, CircularProgress } from '@mui/material';
 import HelpTip from '../../common/HelpTip';
 import LiveLoadPanel from '../LiveLoadPanel';
 import type { AdminSectionId } from '../AdminNav';
+import { countAuthRejects24h } from '../../../lib/authEventCounts';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -35,7 +36,6 @@ const Tile: React.FC<{ k: Kpi; onGoto: (s: AdminSectionId) => void }> = ({ k, on
 
 interface RegistryUser { email: string; role: string; created?: string | null }
 interface AdminSession { email: string; lastSeen: number; revoked: boolean }
-interface AuthEvent { ts: string; event: string }
 interface Cluster { cores: number; cpu_used_cores: number; mem_used: number; mem_total: number }
 interface AppView { jobs: { running: number; queued: number }; mcp: { calls_per_min: number; throttled_429: number } }
 
@@ -66,8 +66,7 @@ const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ on
         setUsers(u.users ?? []);
         setPending((p.pending ?? []).length);
         setActiveSessions(s.sessions ?? []);
-        const cutoff = Date.now() / 1000 - 86400;
-        setRejects24h((ev.events ?? []).filter((e: AuthEvent) => e.event === 'reject' && Date.parse(e.ts) / 1000 >= cutoff).length);
+        setRejects24h(countAuthRejects24h(ev.events ?? []));
         setCluster(n.cluster ?? null);
         setApp(a);
       } catch (e) {
@@ -102,7 +101,7 @@ const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ on
     { label: 'Pending sign-ups', value: pending, color: pending ? '#fbbf24' : undefined, goto: 'signups' },
     { label: 'MCP calls', value: app?.mcp.calls_per_min ?? 0, sub: `per min · ${app?.mcp.throttled_429 ?? 0} throttled (429)`, goto: 'agents' },
     { label: 'Auth errors', value: rejects24h, sub: 'rejected tokens, 24 h', color: rejects24h ? '#f87171' : undefined, goto: 'logs',
-      help: 'Rejected auth tokens in the last 24 h (expired, revoked, bad signature, disabled, …). Not a general error count — see Logs / Events for reasons.' },
+      help: 'Rejected auth tokens in the last 24 h (expired, revoked, bad signature, disabled, and similar). Idle session closes are excluded. See Logs / Events for reasons.' },
   ];
 
   return (

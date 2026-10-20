@@ -887,6 +887,8 @@ def _raise_for_unverified(authorization: str, *, ip: str = "",
     except Exception as exc:                                # noqa: BLE001
         log.error("workspace: token re-check crashed (%s: %s)", type(exc).__name__, exc)
         raise WorkspaceResolutionError(503, "store_unavailable") from exc
+    if reason == "service_token":
+        return
     if reason == "store_unavailable":
         log.error("workspace: identity store unavailable — request refused (503)")
         raise WorkspaceResolutionError(503, "store_unavailable")

@@ -190,6 +190,27 @@ def _redact_bearing_node(bn: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+#: What of a CAD-derived FILM may leave without the gate (follow-up to re-audit
+#: #2 R6): the conductance and the watts it carries, the temperatures it sits
+#: between, and the plain facts of the face — a WHITELIST.  Every other field
+#: (h_conv / h_total / h_disc / h_plate, Re / Nu, the regime, the air speed,
+#: the mass flow, the areas and lengths the coefficient is per) is returned as
+#: ``None``, because from any one of them and the public correlation the face
+#: or channel air speed — the wash × the MEASURED open fraction — inverts.
+FILM_PUBLIC_KEYS = frozenset({
+    "mode", "film_kind", "name", "orientation", "n_faces", "emissivity",
+    "G_W_per_K", "heat_removed_W", "convection_W", "radiation_W", "h_rad",
+    "t_wall_c", "t_film_c", "t_sink_c", "t_mean_c", "rpm", "calibration", "note",
+})
+CHANNEL_PUBLIC_KEYS = frozenset({"open", "why", "G_W_per_K", "count",
+                                 "magnet_wall_share", "heat_removed_W"})
+
+
+def _whitelist(blk: Mapping[str, Any], keep: frozenset) -> Dict[str, Any]:
+    """Same keys (the shape the web reads), ``None`` outside ``keep``."""
+    return {k: (v if k in keep else None) for k, v in blk.items()}
+
+
 def _redact_rotor_channels(rc: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(rc)
     if "note" in out:
@@ -202,8 +223,7 @@ def _redact_rotor_channels(rc: Dict[str, Any]) -> Dict[str, Any]:
     chans = []
     for c in rc.get("channels") or []:
         if isinstance(c, Mapping):
-            c = {k: (None if k in ("v_mps", "re", "m_dot_g_s") else v)
-                 for k, v in c.items()}
+            c = _whitelist(c, CHANNEL_PUBLIC_KEYS)
         chans.append(c)
     if "channels" in rc:
         out["channels"] = chans
@@ -219,9 +239,7 @@ def _redact_end_faces(ef: Any) -> Any:
             return blk
         if str(blk.get("film_kind") or "") != "forced":
             return blk
-        out = {k: (None if k in ("air_speed_mps", "re", "re_plate", "h_plate",
-                                 "nu") else v)
-               for k, v in blk.items()}
+        out = _whitelist(blk, FILM_PUBLIC_KEYS)
         if "note" in out:
             out["note"] = _END_FACE_NEUTRAL.format(
                 name=str(blk.get("name") or "rotor end face"))

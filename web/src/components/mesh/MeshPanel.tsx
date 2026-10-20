@@ -762,7 +762,9 @@ const MeshPanel: React.FC = () => {
   const symSlots = geo?.num_slots ?? 24;
   const symPoles = geo?.num_poles ?? 28;
   const symGcd = Math.max(1, _gcd(Math.round(symSlots), Math.round(symPoles)));
-  const validSectors = [1, 2, 3, 4, 6, 8, 12].filter(s => symGcd % s === 0);
+  // EVERY divisor of the GCD (owner 2026-10-20: a 60s/70p machine of 10 segments needs 1/5 and 1/10;
+  // the old fixed list [1, 2, 3, 4, 6, 8, 12] offered only Full and 1/2 for GCD 10)
+  const validSectors = Array.from({ length: symGcd }, (_, i) => i + 1).filter(s => symGcd % s === 0);
   // If the loaded nSectors is invalid for this motor, snap to Full (always valid).
   // NOT marked dirty — a machine-driven correction, so it changes the preview but
   // never writes to config (2026-09-07: automatic writes are what lost the 1/2).

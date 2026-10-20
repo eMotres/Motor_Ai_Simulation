@@ -138,6 +138,14 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
     });
     return rows;
   }, [users, search, roleFilter, sortKey, sortDir, sessionsByEmail]);
+  // the client number: the order of registration, the oldest account = 1 (owner 2026-10-20) - fixed per
+  // account, whatever the sort or the filter
+  const clientNo = useMemo(() => {
+    const m = new Map<string, number>();
+    [...users].sort((a, b) => (a.created ?? '').localeCompare(b.created ?? '') || a.email.localeCompare(b.email))
+      .forEach((u, i) => m.set(u.email, i + 1));
+    return m;
+  }, [users]);
 
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -192,6 +200,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
           }}>
             <TableHead>
               <TableRow>
+                <TableCell align="right" title="Client number: order of registration, the first account = 1">#</TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'email'} direction={sortDir} onClick={() => toggleSort('email')}>User</TableSortLabel></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'role'} direction={sortDir} onClick={() => toggleSort('role')}>Role</TableSortLabel></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'created'} direction={sortDir} onClick={() => toggleSort('created')}>Created</TableSortLabel></TableCell>
@@ -212,6 +221,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                 return (
                   <TableRow key={u.email} hover onClick={() => setSelected(u.email)}
                     sx={{ opacity: u.disabled ? 0.55 : 1, cursor: 'pointer' }}>
+                    <TableCell align="right" sx={{ color: 'var(--text-3)', fontFamily: 'monospace', width: 40 }}>{clientNo.get(u.email) ?? ''}</TableCell>
                     <TableCell>
                       <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{u.email}</Typography>
                     </TableCell>
@@ -241,7 +251,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
               })}
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
+                  <TableCell colSpan={9} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
                     {users.length === 0
                       ? 'No accounts yet — Google sign-ins appear here automatically; password accounts via "Add account".'
                       : 'No accounts match this search/filter.'}

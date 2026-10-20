@@ -84,14 +84,11 @@ t('the temperatures are ONE fixed row of four tiles, present with or without dat
   const row = Object.fromEntries(T.tempRowTiles(TEMPS, LIM).map((x) => [x.id, x]));
   assert.equal(row.tWinding.value, 120); assert.equal(row.tWinding.level, 'ok');
   assert.equal(row.airSpeed.value, 9.5); assert.equal(row.filmH, undefined);
-  // h, the air speed and the surface ride in the HOUSING tile's tooltip (one clause each), in every state
+  // the housing tile still carries air / h / surface in its spec (the tooltip itself is bare since 2026-10-20)
   assert.deepEqual([row.tHousing.air, row.tHousing.h, row.tHousing.surface], [9.5, 61, 120]);
   const none = T.tempRowTiles(null, LIM).find((x) => x.id === 'tHousing');
   assert.deepEqual([none.air, none.h, none.surface], [null, null, null]);
   for (const l of ['en', 'zh-CN']) {
-    const tip = loc(l).configurePropeller.tHousingTip;
-    assert.match(tip, /\{air\}/); assert.match(tip, /\{h\}/); assert.match(tip, /\{limit\}/); assert.match(tip, /\{surface\}/);
-    assert.equal(tip.split('\n').length, 4, `${l}: the limit line, the air line, the h line and the surface line`);
     assert.equal(loc(l).configurePropeller.filmH, undefined); assert.equal(loc(l).configurePropeller.filmHTip, undefined);
   }
   assert.match(read('components/compare/ConfiguratorPanel.tsx'), /air: t\.air != null \? fmt\(t\.air, 1\)/);
@@ -214,7 +211,7 @@ for (const [l, max] of [['en', 11], ['zh-CN', 12]]) {
       assert.ok([...d[k]].length <= max, `${l} configureDrive.${k} = "${d[k]}" (${[...d[k]].length} > ${max})`);
       assert.ok(d[`${k}Tip`] && d[`${k}Tip`].length > d[k].length, `${k}Tip carries the details`);
     }
-    assert.match(d.motorEffTip, /system|系统/i);                          // says what the Efficiency tile is
+    assert.match(d.motorEffTip, /controller|控制器/i);                    // says the controller is not in it (the Efficiency tile is the system)
     assert.match(d.motorLossTip, /PWM/);
     // the coefficient titles too: one short line at the 132 px tile, full name in the tooltip
     const c = loc(l).configure;
@@ -317,7 +314,6 @@ t('the panel: EFFICIENCY is the system, the saved column and the ranking follow 
   assert.match(panel, /<MetricTile label=\{tx\('configure\.efficiency'\)\} value=\{sysEff\.value\}/);
   assert.match(panel, /systemEfficiency\(driveMode, drv, result\.P_mech_W, motorLoss_W\)/);
   assert.match(panel, /motorEfficiency\(driveMode, drv, result\.P_mech_W, motorLoss_W\)/);
-  assert.match(panel, /board_copper_W \?\? 0, 1\)/);                               // the split in the tooltip names the board copper
   assert.match(panel, /get: \(c\) => \(c\.drive\?\.mode === 'pwm' \? \(c\.drive\.eta_drive_pct \?\? NaN\) : c\.result\.efficiency \* 100\)/);
   assert.doesNotMatch(panel, /columnDriveEff/);
   assert.match(panel, /base=\{baseSysEff \?\? 0\}/);
@@ -355,4 +351,172 @@ t('the compact bar carries torque, power, efficiency, winding and magnet, and fo
   // no thermal data yet: every temperature is blank, never invented
   const c = T.compactResultTiles({ T_Nm: 1, P_kW: 1, eff_pct: 90, temps: [] });
   assert.equal(c[3].value, null);
+});
+
+// ── the tooltips are bare (owner 2026-10-20: «пиши только столько, чтобы можно было понять, что эта переменная означает»)
+const BARE_TIPS = [
+  'configureDrive.sineTip',
+  'configureDrive.pwmTip',
+  'configureDrive.notComputedTip',
+  'configureDrive.variantTip',
+  'configureDrive.buildScaledTip',
+  'configureDrive.noVariantTip',
+  'configureDrive.buildTunedTip',
+  'configureDrive.refuseEnvelopeTip',
+  'configureDrive.refuseMissingPointTip',
+  'configureDrive.refuseLimitTip',
+  'configureDrive.refuseBusTip',
+  'configureDrive.motorLossTip',
+  'configureDrive.invLossTip',
+  'configureDrive.readNearTip',
+  'configureDrive.blankSine',
+  'configureDrive.blankRefused',
+  'configureDrive.blankMissing',
+  'configureDrive.tjTip',
+  'configureDrive.tjTipDevice',
+  'configureDrive.tjBlankMissing',
+  'configureDrive.pContMaxTip',
+  'configureDrive.motorEffTip',
+  'configureDrive.transistorTip',
+  'configureDrive.frequencyTip',
+  'configure.torqueTip',
+  'configure.powerTip',
+  'configure.massFullTip',
+  'configure.massPartialTip',
+  'configure.massActiveTip',
+  'configure.massCopperUnscaledTip',
+  'configure.efficiencyTip',
+  'configure.tRippleTip',
+  'configure.tPerMassTip',
+  'configure.pPerMassTip',
+  'configure.totalLossTip',
+  'configure.ironLossTip',
+  'configure.magnetLossTip',
+  'configure.copperLossTip',
+  'configure.copperLossTipPlain',
+  'configure.lossDensityTip',
+  'configure.dcBusMinTip',
+  'configure.vLinePeakTip',
+  'configure.vPhasePeakTip',
+  'configure.vLineRmsTip',
+  'configure.vPhaseRmsTip',
+  'configure.currDensityTip',
+  'configure.phaseSectionTip',
+  'configure.fillFactorTip',
+  'configure.leadCableTip',
+  'configure.rPhaseTip',
+  'configure.rLineLineTip',
+  'configure.ldTip',
+  'configure.lqTip',
+  'configure.psiPmTip',
+  'configure.lqLdTip',
+  'configure.kvTip',
+  'configure.ktTip',
+  'configure.kmTip',
+  'configure.kmPerMassTip',
+  'configure.demagKoefTip',
+  'configure.saturationKoefTip',
+  'configure.totalKoefTip',
+  'configure.stackCoefficientsTip',
+  'configure.lossNotComputedTip',
+  'configure.invalidPackTip',
+  'configure.refuseSpeedPackTip',
+  'configure.resetPackTip',
+  'configure.motorVTip',
+  'configure.compactBarTip',
+  'configure.presetTip',
+  'configure.presetShortTimeTip',
+  'configure.resetToDefaultTip',
+  'configure.restoreFallbackTip',
+  'configure.applyTip',
+  'configure.generatorNeedsPackTip',
+  'configure.cellsSeriesTip',
+  'configure.cellVTip',
+  'configureLimits.stackLengthTip',
+  'configureLimits.turnsPerSlotTip',
+  'configureLimits.wireThicknessTip',
+  'configureLimits.phaseCurrentTip',
+  'configureLimits.speedTip',
+  'configureLimits.connectionTip',
+  'configureLimits.lHandTip',
+  'configureLimits.lDefaultTip',
+  'configureLimits.nFitTip',
+  'configureLimits.wireFitTip',
+  'configureLimits.iMotorPeakTip',
+  'configureLimits.iDemagTip',
+  'configureLimits.iGridTip',
+  'configureLimits.iDutyTip',
+  'configureLimits.iBoardMarkTip',
+  'configureLimits.iNoLimitTip',
+  'configureLimits.rpmEnvelopeTip',
+  'configureLimits.rpmKvTip',
+  'configureLimits.rpmNoBatteryTip',
+  'configureLimits.connWarnTip',
+  'configureLimits.overFitTip',
+  'configureLimits.badTurnsTip',
+  'configureLimits.atLimitTip',
+  'configureLimits.stockTip',
+  'configureLimits.rangeMinTip',
+  'configureLimits.rangeMaxTip',
+  'configureLimits.clearHandTip',
+  'configureLimits.resetToReferenceTip',
+  'configurePropeller.roboticsTip',
+  'configurePropeller.stillAirTip',
+  'configurePropeller.propellerAirTip',
+  'configurePropeller.coolingPickerTip',
+  'configurePropeller.coolingAmbientTip',
+  'configurePropeller.pickerTip',
+  'configurePropeller.estimatedTip',
+  'configurePropeller.ambientTip',
+  'configurePropeller.loadTip',
+  'configurePropeller.loadPropTip',
+  'configurePropeller.loadManualTip',
+  'configurePropeller.currentFromPropTip',
+  'configurePropeller.zoneTip',
+  'configurePropeller.beyondTestedTip',
+  'configurePropeller.refuseTorqueTip',
+  'configurePropeller.noPropellerTip',
+  'configurePropeller.tWindingTip',
+  'configurePropeller.tMagnetTip',
+  'configurePropeller.tHousingTip',
+  'configurePropeller.airSpeedTip',
+  'configurePropeller.s1CtrlTip',
+  'configurePropeller.curvesTip',
+  'configureApplication.tip',
+];
+for (const l of ['en', 'zh-CN']) {
+  t(`every tile / knob / field tooltip is one short phrase (<= 120 characters) (${l})`, () => {
+    const d = loc(l);
+    for (const k of BARE_TIPS) {
+      const v = k.split('.').reduce((a, x) => a?.[x], d);
+      assert.equal(typeof v, 'string', `${l} ${k}`);
+      assert.ok([...v].length <= 120, `${l} ${k} is ${[...v].length} characters: ${v}`);
+      assert.equal(v.split(String.fromCharCode(10)).length, 1, `${l} ${k} is a single line`);
+    }
+  });
+}
+
+t('T_j: what it is, which device and the limit, and why it is empty', () => {
+  for (const l of ['en', 'zh-CN']) {
+    const d = loc(l).configureDrive;
+    assert.match(d.tjTipDevice, /\{device\}/); assert.match(d.tjTipDevice, /\{n\}/); assert.match(d.tjTipDevice, /\{limit\}/);
+    assert.ok(d.tjTip && d.tjBlankMissing && d.blankSine && d.blankRefused);
+  }
+  const panel = read('components/compare/ConfiguratorPanel.tsx');
+  assert.match(panel, /configureDrive\.tjTipDevice/);
+  assert.match(panel, /t\.id === 'tj' \? 'configureDrive\.tjBlankMissing'/);
+  // the T_j tile is blank for exactly these reasons
+  const blanks = (mode, drv) => T.driveRowTiles(mode, drv, 150).find((r) => r.id === 'tj').blank;
+  assert.equal(blanks('sine', null), 'sine');
+  assert.equal(blanks('pwm', null), 'refused');
+  assert.equal(blanks('pwm', { ...FULL, tj_C: null }), 'missing');
+  assert.equal(blanks('pwm', FULL), null);
+});
+
+t('the hover text wraps at about 300 px so it never covers the tiles around it', () => {
+  const src = read('components/common/ResultTiles.tsx');
+  const w = Number(/TIP_MAX_W = (\d+)/.exec(src)?.[1]);
+  assert.ok(w >= 280 && w <= 320, `TIP_MAX_W = ${w}`);
+  assert.match(src, /<Tip title=/);                                   // the tile uses it, not a native title
+  assert.match(src, /whiteSpace: 'pre-line'/);
 });

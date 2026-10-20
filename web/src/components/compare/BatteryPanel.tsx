@@ -11,6 +11,7 @@ import React, { useMemo } from 'react';
 import { Box, Typography, ToggleButton, ToggleButtonGroup, Button } from '@mui/material';
 import BatteryChargingFullIcon from '@mui/icons-material/BatteryChargingFull';
 import { nsT } from '../../i18n/nsT';
+import { Tip } from '../common/ResultTiles';
 import { batteryFieldText, editBatteryField, validBatteryNumbers, batteryInputIssues, sameBattery } from '../../lib/configuratorBattery';
 
 const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
@@ -30,9 +31,9 @@ const fmt = (v: number, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 
 /** A labelled number field: the label is a normal title (the panel's LABEL style, never
  *  truncated), the value a plain input — no floating small print. */
-const numField = (label: string, value: string, onChange: (e: any) => void, step = 0.05, width = 66, error?: string) => (
+const numField = (label: string, value: string, onChange: (e: any) => void, step = 0.05, width = 66, error?: string, tip?: string) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-    <Typography sx={{ ...LABEL, color: error ? '#f87171' : LABEL.color }}>{label}</Typography>
+    <Tip title={tip}><Typography sx={{ ...LABEL, color: error ? '#f87171' : LABEL.color }}>{label}</Typography></Tip>
     <input type="number" aria-label={label} aria-invalid={!!error} value={value} step={step} onChange={onChange}
       style={{ width, background: 'transparent', border: `1px solid ${error ? '#f87171' : 'var(--line)'}`, borderRadius: 4, color: 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
     {error && <Typography role="alert" sx={{ color: '#f87171', fontSize: 10, lineHeight: 1.15, maxWidth: width + 18 }}>{error}</Typography>}
@@ -102,14 +103,14 @@ const BatteryPanel: React.FC<{
           ))}
         </ToggleButtonGroup>
         {numField(tx('configure.cellsSeries'), batteryFieldText(bat, 'cells'), setF('cells'), 1, 66,
-          issues.has('cells') ? tx('configure.invalidCellCount') : undefined)}
+          issues.has('cells') ? tx('configure.invalidCellCount') : undefined, tx('configure.cellsSeriesTip'))}
         <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
           {numField(`${tx('configure.cellV')} · ${tx('configure.cellMin')}`, batteryFieldText(bat, 'min'), setF('min'), 0.05, 66,
-            issues.has('min') ? tx('configure.invalidCellMin') : undefined)}
+            issues.has('min') ? tx('configure.invalidCellMin') : undefined, tx('configure.cellVTip'))}
           {numField(tx('configure.cellNom'), batteryFieldText(bat, 'nom'), setF('nom'), 0.05, 66,
-            issues.has('nom') ? tx('configure.invalidCellNom') : undefined)}
+            issues.has('nom') ? tx('configure.invalidCellNom') : undefined, tx('configure.cellVTip'))}
           {numField(tx('configure.cellMax'), batteryFieldText(bat, 'max'), setF('max'), 0.05, 66,
-            issues.has('max') ? tx('configure.invalidCellMax') : undefined)}
+            issues.has('max') ? tx('configure.invalidCellMax') : undefined, tx('configure.cellVTip'))}
         </Box>
         {machinePack && onReset && !sameBattery(bat, machinePack) && (
           <Button size="small" onClick={onReset} title={tx('configure.resetPackTip')}

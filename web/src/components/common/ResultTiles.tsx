@@ -4,7 +4,7 @@
 // from the same props; the row builders stay pure in lib/configuratorTiles.ts (Configure) and
 // lib/emResultTiles.ts (the FEM run summary).
 import React from 'react';
-import { Box, Typography } from '@mui/material';
+import { Box, Typography, Tooltip } from '@mui/material';
 import GreekLabel from '../compare/GreekLabel';
 import { nsT } from '../../i18n/nsT';
 import { pickCable } from '../../lib/cableTable';
@@ -20,6 +20,17 @@ export const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, te
 
 /** the one width of every result tile */
 export const TILE_W = 132;
+
+/** The hover text of Configure: wraps at 300 px so it never covers the tiles around it (a native `title` has no width cap). */
+export const TIP_MAX_W = 300;
+export const Tip: React.FC<{ title: string | undefined | null; children: React.ReactElement }> = ({ title, children }) => (
+  title ? (
+    <Tooltip title={title} placement="top" enterDelay={250}
+      slotProps={{ tooltip: { sx: { maxWidth: TIP_MAX_W, fontSize: 12, lineHeight: 1.35, fontWeight: 400, whiteSpace: 'pre-line' } } }}>
+      {children}
+    </Tooltip>
+  ) : children
+);
 
 // ── one result tile: value + unit + Δ vs reference ──
 export const MetricTile: React.FC<{
@@ -65,11 +76,11 @@ export const MetricTile: React.FC<{
   return (
     // ONE fixed width and a fixed value line: a number changing (or becoming "—") never moves
     // another tile (owner 2026-10-05: the block must not jump when the drive is toggled)
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: width ?? TILE_W, boxSizing: 'border-box' }}
-      title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
+    <Tip title={[tip, blank ? blankTip : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
-        : tx('configure.sameAsRef'))}>
-      <Typography title={label} sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
+        : tx('configure.sameAsRef')].filter(Boolean).join('\n')}>
+    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: width ?? TILE_W, boxSizing: 'border-box' }}>
+      <Typography sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
         color: labelColor ?? LABEL.color, overflow: 'hidden', whiteSpace: 'nowrap',
         textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
@@ -81,6 +92,7 @@ export const MetricTile: React.FC<{
           color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>}
       </Typography>
     </Box>
+    </Tip>
   );
 };
 
@@ -94,10 +106,9 @@ export const TileRow: React.FC<{ children: React.ReactNode }> = ({ children }) =
 export const LeadCableTile: React.FC<{ section_mm2: number }> = ({ section_mm2 }) => {
   const c = pickCable(section_mm2);
   return c ? (
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
-      title={tx('configure.leadCableTip', { strands: c.strands, area: c.area_mm2, section: section_mm2.toFixed(2),
-          d: c.d_mm, od: c.od_mm, thk: c.thk_mm, r: c.r_ohm_km, irated: c.i_rated_A, imax: c.i_max_A, roll: c.roll_m })
+    <Tip title={tx('configure.leadCableTip', { irated: c.i_rated_A })
         + (c.suspect ? tx('configure.cableSuspectLine', { text: tx(c.awg === '10awg' ? 'configure.cableSuspect10' : 'configure.cableSuspect75') }) : '')}>
+    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}>
       <Typography sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
         overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{tx('configure.leadCable')}</Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)',
@@ -108,5 +119,6 @@ export const LeadCableTile: React.FC<{ section_mm2: number }> = ({ section_mm2 }
         </Box>
       </Typography>
     </Box>
+    </Tip>
   ) : null;
 };

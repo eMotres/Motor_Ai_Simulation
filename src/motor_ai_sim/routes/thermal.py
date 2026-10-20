@@ -3379,6 +3379,92 @@ def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
     return 1.0, "unknown"
 
 
+#: The rotor's axial paths (2026-10-19) — the bearing / holder network and the
+#: rotor's own channels.  Rides in the thermal cache key: bump it when either
+#: model changes, so no map solved with the old one is served.
+AXIAL_PATHS_VERSION = "2026-10-19.1"
+
+
+def _rotor_air_channels(verts, tris, tags, mask, sym,
+                        mag_tags=(4, 44)) -> List[Dict[str, Any]]:
+    """The connected regions of ``mask`` (the rotor's air), each as a channel.
+
+    Per region: its area, its wetted perimeter against the MAGNETS and against
+    the rotor IRON / shaft (edges facing another solid count as iron), whether
+    it opens onto another air domain (the gap — then it is the gap stream's
+    recess, not a channel of its own) and its centroid radius.  Areas and
+    perimeters are THIS mesh's; ``count_machine`` is ``sym`` (each wedge
+    region stands for ``sym`` of them).  Edges on the mesh boundary (the wedge
+    cuts) are not walls.
+    """
+    import numpy as _np
+
+    tris = _np.asarray(tris, int)
+    verts = _np.asarray(verts, float)
+    tags = _np.asarray(tags, int)
+    mask = _np.asarray(mask, bool)
+    m = int(tris.shape[0])
+    if m == 0 or not mask.any():
+        return []
+    ends = _np.vstack([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+    owner = _np.tile(_np.arange(m), 3)
+    key = _np.sort(ends, axis=1)
+    _, inv = _np.unique(key, axis=0, return_inverse=True)
+    inv = _np.asarray(inv).ravel()
+    n_edges = int(inv.max()) + 1
+    cnt = _np.bincount(inv, minlength=n_edges)
+    sum_own = _np.bincount(inv, weights=owner.astype(float), minlength=n_edges)
+    other = (sum_own[inv] - owner).astype(int)
+    # union-find over the masked elements joined by an interior edge
+    parent = _np.arange(m)
+
+    def _f(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    inner = mask[owner] & (cnt[inv] == 2) & mask[other]
+    for a_, b_ in zip(owner[inner], other[inner]):
+        ra, rb = _f(int(a_)), _f(int(b_))
+        if ra != rb:
+            parent[ra] = rb
+    idx = _np.where(mask)[0]
+    roots = _np.array([_f(int(i)) for i in idx])
+    v = verts[tris]
+    area = 0.5 * _np.abs((v[:, 1, 0] - v[:, 0, 0]) * (v[:, 2, 1] - v[:, 0, 1])
+                         - (v[:, 2, 0] - v[:, 0, 0]) * (v[:, 1, 1] - v[:, 0, 1]))
+    cr = _np.hypot(v[:, :, 0].mean(axis=1), v[:, :, 1].mean(axis=1))
+    elen = _np.hypot(verts[ends[:, 1], 0] - verts[ends[:, 0], 0],
+                     verts[ends[:, 1], 1] - verts[ends[:, 0], 1])
+    out: List[Dict[str, Any]] = []
+    mag_tags = _np.asarray(list(mag_tags), int)
+    air_tags = _np.asarray(_AIR_TAGS, int)
+    for r_ in _np.unique(roots):
+        els = idx[roots == r_]
+        sel = _np.zeros(m, bool)
+        sel[els] = True
+        bnd = sel[owner] & (cnt[inv] == 2) & ~sel[other]
+        nb = tags[other[bnd]]
+        is_air = _np.isin(nb, air_tags) & (nb != DOM_POCKET_AIR)
+        is_mag_nb = _np.isin(nb, mag_tags)
+        p_mag = float(elen[bnd][is_mag_nb].sum())
+        p_iron = float(elen[bnd][~is_mag_nb & ~is_air & ~_np.isin(nb, air_tags)].sum())
+        a_r = float(area[els].sum())
+        out.append({
+            "area_m2": a_r, "perimeter_m": p_mag + p_iron,
+            "perimeter_magnet_m": p_mag, "perimeter_iron_m": p_iron,
+            "r_m": float((area[els] * cr[els]).sum() / max(a_r, 1e-30)),
+            "opens_to_gap": bool(is_air.any()),
+            "count_machine": int(sym),
+            "d_h_mm": round(4.0 * a_r / max(p_mag + p_iron, 1e-12) * 1e3, 3)})
+    # Each region is ONE channel of this section and stands for ``sym`` of
+    # them in the machine (``count``): the channel model takes its D_h from the
+    # region and multiplies its conductance by the count.
+    for c in out:
+        c["count"] = int(sym)
+    return out
+
+
 def _domain_wetted_perimeter(verts, tris, tags, mask) -> "tuple[float, float]":
     """``(wetted perimeter [m], cross-section area [m²])`` of a masked domain.
 
@@ -3731,6 +3817,12 @@ def _resolve_mech_losses(geo_ov: Optional[dict], *, rpm: float,
         if mech:
             out["mech"] = mech
             out["has_bearings"] = True
+            # The raw bearing block (cards, preload and — since 2026-10-19 —
+            # the CAD ``thermal_path``), for the bearing / holder network.
+            try:
+                out["assignment"] = dict(ml.machine_bearings()[0] or {})
+            except Exception:  # noqa: BLE001 — the network falls back to defaults
+                out["assignment"] = None
             out["bearing_temp_c"] = mech.get("bearing_temp_c")
             out["bearing_temp_source"] = mech.get("bearing_temp_source")
             out["P_bearings_W"] = float(mech.get("P_bearings_W") or 0.0)
@@ -3816,6 +3908,15 @@ def solve_thermal_field(
     end_face_sides:     int   = 2,
     magnet_temp_c:      Optional[float] = None,
     bearing_temp_c:     Optional[float] = None,
+    # THE ROTOR'S AXIAL PATHS (2026-10-19) — 'auto' (default) | 'off'.
+    # ``bearing_node``: shaft stub → bearing → holder → air / stator as solved
+    # lumped nodes (``simulation.bearing_holder``), on every machine that names
+    # its bearings and has no exposed-shaft or robotics shaft path of its own.
+    # ``rotor_channels``: the rotor's open axial windows as ventilated channels
+    # on an OPEN frame (``cooling_models.rotor_axial_channels``).  'off' is the
+    # map as it was before, bit for bit.
+    bearing_node:       str = "auto",
+    rotor_channels:     str = "auto",
     # "motor" | "generator" | None (= the shared config's simulation.mode):
     # selects the angle the Electromagnetic run is looked up under — see
     # _solved_gamma_deg.  Never changes the thermal physics itself.
@@ -4212,6 +4313,26 @@ def solve_thermal_field(
     if _mech.get("has_any"):
         key = key + ("mech", round(float(_mech["P_bearings_W"]), 3),
                      round(float(_mech["P_windage_gap_W"]), 4))
+    # THE AXIAL PATHS (2026-10-19): on by default, so EVERY map solved before
+    # them is another answer — the version rides in the key, and so does the
+    # configuration's bearing block (cards, preload, the CAD thermal_path).
+    bearing_node = str(bearing_node or "auto").strip().lower()
+    rotor_channels = str(rotor_channels or "auto").strip().lower()
+    if bearing_node not in ("auto", "off"):
+        raise _bad("bearing_node", bearing_node, "bad_value",
+                   "bearing_node is 'auto' (the shaft / bearing / holder path "
+                   "is solved whenever the machine names its bearings) or "
+                   "'off'.", error="unknown bearing_node %r" % (bearing_node,))
+    if rotor_channels not in ("auto", "off"):
+        raise _bad("rotor_channels", rotor_channels, "bad_value",
+                   "rotor_channels is 'auto' (the rotor's open axial windows "
+                   "are ventilated on an open frame) or 'off'.",
+                   error="unknown rotor_channels %r" % (rotor_channels,))
+    if bearing_node != "off" or rotor_channels != "off":
+        key = key + ("axial_paths", AXIAL_PATHS_VERSION, bearing_node,
+                     rotor_channels,
+                     json.dumps(_mech.get("assignment") or {}, sort_keys=True,
+                                default=str))
     # An INJECTED map is not cacheable under this key — see the docstring — and
     # a caller that asked to CAPTURE the map must not be handed a cached answer
     # instead: `solve_coupled` needs the loss field itself, not just the
@@ -4899,6 +5020,126 @@ def solve_thermal_field(
                            "t_sink_c": float(ambient_temp),
                            "node": "heat_path", "symmetry_mult": sym})
 
+    # ── THE BEARINGS AND THEIR HOLDERS (2026-10-19) ──────────────────────────
+    # Owner: «подшипники не греются так же как обмотка».  Until today the
+    # bearing WAS the rotor (the shaft's 2-D mean, 0 K drop) and the rotor had
+    # no axial door on a machine without exposed stubs.  Now, per bearing end:
+    # shaft stub → inner ring → balls → outer ring → holder → air, and holder →
+    # stator core, as SOLVED lumped nodes — see ``simulation.bearing_holder``
+    # for every resistance and its source.  The friction of each bearing is
+    # injected AT the bearing (50 % balls, 25 % each ring).  Off when the
+    # machine names no bearings (its friction is unknown, its holders too),
+    # when the shaft stubs are already a path (``shaft_ext_length_mm``) or the
+    # robotics heat path already carries the shaft (``heat_path`` 'shaft' /
+    # 'both') — one model per path, never two.
+    from motor_ai_sim.simulation import bearing_holder as _bh
+    _bn_on = False
+    _bn_notes: List[str] = []
+    _bn_ends: List[Dict[str, Any]] = []
+    _bn_cad: Dict[str, Any] = {}
+    _bn_holder_to = "stator"
+    _bn_air_mode = "still"
+    _bn_air_v = 0.0
+    _bn_assign = dict(_mech.get("assignment") or {})
+    _bn_cad = dict(_bn_assign.get("thermal_path") or {})
+    if bearing_node == "off":
+        _bn_notes.append("bearing_node = 'off': no bearing / holder path")
+    elif not _mech.get("has_bearings"):
+        _bn_notes.append("this machine names no bearings: their friction and "
+                         "their holders are unknown, so there is no bearing "
+                         "path (the rotor keeps the doors it had)")
+    elif not _shaft_mask.any():
+        _bn_notes.append("this cross-section carries no shaft elements for the "
+                         "bearings to sit on")
+    elif _shaft_len_m > 0.0:
+        _bn_notes.append("the exposed shaft stubs are already the axial path "
+                         "(shaft_ext_length_mm > 0); the bearing node is not "
+                         "added on top of them")
+    elif _hp_shaft:
+        _bn_notes.append("the robotics heat path already carries the shaft into "
+                         "the structure (heat_path %r)" % heat_path)
+    elif not (tags == DOM_STATOR).any():
+        _bn_notes.append("no stator elements for the holders to sit on")
+    else:
+        _bn_on = True
+        from motor_ai_sim import bearings as _brgmod
+        _mres = _brgmod.resolve_assignment(_bn_assign)
+        _mm = dict(_mech.get("mech") or {})
+        _per_end = {str(b.get("end")): b for b in (_mm.get("bearings") or [])}
+        _rir = float(g.get("rotor_inner_radius") or 0.0) * 1e-3
+        if _rir <= 0.0:
+            _sn0 = _np.unique(tris[_shaft_mask])
+            _rir = float(_np.hypot(verts[_sn0, 0], verts[_sn0, 1]).max())
+        _a_shaft_stack = math.pi * max(_rir ** 2 - max(r_bore_m, 0.0) ** 2,
+                                       1e-10)
+        # The air on the holders: the wash (the propeller's slipstream or the
+        # typed air speed) on an air-cooled machine — the open frame's own
+        # stream when it has one — else still air + radiation.
+        if cooling_mode == "air":
+            _bn_air_v = float(_open_v if frame == "open" else air_speed_mps)
+            _bn_air_mode = "wash" if _bn_air_v > 0.0 else "still"
+        _bn_holder_to = "heat_path" if _hp_housing else "stator"
+        for _end in ("A", "B"):
+            _cname = str((_mres.get(_end) or {}).get("card") or "")
+            if not _cname:
+                continue
+            try:
+                _card = _brgmod.get_bearing(_cname).to_dict()
+            except Exception as _exc:  # noqa: BLE001
+                _bn_notes.append("bearing %s: card %r unreadable (%s) — this "
+                                 "end has no node" % (_end, _cname, _exc))
+                continue
+            _geom = _bh.end_geometry(
+                end=_end, card=_card, cad=_bn_cad.get(_end), stack_m=L,
+                shaft_area_stack_m2=_a_shaft_stack,
+                shaft_bore_d_m=2.0 * max(r_bore_m, 0.0),
+                stator_od_m=2.0 * R_house, stator_bore_m=2.0 * stator_inner_m)
+            _bn_ends.append({
+                "end": _end, "card": _card, "geom": _geom,
+                "f_r_n": float((_per_end.get(_end) or {}).get("F_r_N") or 0.0),
+                "f_a_n": float(_mres.get("preload_n") or 0.0),
+                "p_w": float((_mech.get("per_end_W") or {}).get(_end) or 0.0),
+                "t_c": float(bearing_temp_c if bearing_temp_c is not None
+                             else 80.0)})
+        if not _bn_ends:
+            _bn_on = False
+            _bn_notes.append("no bearing end could be built")
+        else:
+            _bn_notes.append(
+                "the bearings are SOLVED nodes: shaft stub → inner ring → balls "
+                "→ outer ring → holder → %s, holder → %s; friction injected at "
+                "the bearing (Hoffmann et al. 2020)" % (
+                    ("the wash at %.1f m/s" % _bn_air_v) if _bn_air_mode == "wash"
+                    else "still air + radiation",
+                    "the stator core" if _bn_holder_to == "stator"
+                    else "the housing body"))
+            if not _bn_cad:
+                _bn_notes.append(
+                    "this configuration carries no CAD thermal_path for its "
+                    "bearings, so the shaft stand-off and the holder are the "
+                    "stated DEFAULTS of simulation.bearing_holder")
+
+    # THE HOLDER'S OPEN FRACTION in front of the rotor face (2026-10-19): the
+    # share of the rotor disc the holder does NOT cover in axial projection,
+    # measured on the assembly (``bearings.thermal_path.rotor_face_open_fraction``).
+    # The air that reaches the rotor's end faces and its axial channels is the
+    # wash times that fraction (continuity through the windows).  No CAD → 1.0,
+    # the rotor face fully in the wash (what the open frame assumed until now).
+    # It rides with ``rotor_channels``: 'off' is the map as it was, faces in
+    # the full wash.
+    try:
+        if rotor_channels == "off":
+            raise ValueError("rotor_channels off")
+        _phi_face = float(_bn_cad.get("rotor_face_open_fraction"))
+        _phi_src = "CAD (bearings.thermal_path.rotor_face_open_fraction)"
+    except (TypeError, ValueError):
+        _phi_face, _phi_src = 1.0, ("rotor_channels = 'off': the face fully in "
+                                    "the wash, as before" if rotor_channels == "off"
+                                    else "no CAD holder: the face is taken "
+                                         "fully open")
+    _phi_face = min(max(_phi_face, 0.0), 1.0)
+    _face_v = float(_open_v) * _phi_face
+
     # ── THE HOUSED FRAME's END CAPS in the propeller slipstream (2026-10-11) ──
     # A housed drone motor cooled by its own propeller has its two end caps in
     # the same stream as the housing side, and until now only the side was a
@@ -5161,6 +5402,44 @@ def solve_thermal_field(
                    "speed are both 0)" if _open_v <= 0.0 else
                    "this mesh resolves no gap-air elements"))
 
+    # ── THE ROTOR'S OWN AXIAL CHANNELS (2026-10-19) ──────────────────────────
+    # Owner, on the 150_35: the rotor is open, with large axial windows between
+    # the magnet pockets, and the wash goes through it.  DETECTED, not typed:
+    # every connected region of rotor air (``DOM_POCKET_AIR``) in this section
+    # runs through the stack, so it is a candidate channel; a region that opens
+    # onto the gap is already the gap stream's open recess and is left to it;
+    # a clearance thinner than ``CHANNEL_MIN_DH_M`` is adhesive, not a duct.
+    # The flow is driven by the wash that reaches the rotor face (the holder's
+    # open fraction × the wash), and the film is applied to the walls that line
+    # each channel — see ``cooling_models.rotor_axial_channels``.
+    _rch_on = False
+    _rch_list: List[Dict[str, Any]] = []
+    _rch_notes: List[str] = []
+    if rotor_channels == "off":
+        _rch_notes.append("rotor_channels = 'off'")
+    elif frame != "open":
+        _rch_notes.append("a housed frame: the rotor's windows are inside the "
+                          "housing, nothing is blown through them")
+    elif not is_pocket.any():
+        _rch_notes.append("this rotor section has no air region: no axial "
+                          "channels")
+    else:
+        _rch_list = _rotor_air_channels(verts, tris, tags, is_pocket, sym,
+                                        mag_tags=(DOM_MAG_N, DOM_MAG_S))
+        _rch_used = [c for c in _rch_list if not c["opens_to_gap"]]
+        for c in _rch_list:
+            if c["opens_to_gap"]:
+                c["why"] = ("opens onto the air gap: part of the gap stream "
+                            "(the open magnet recess), not a separate channel")
+        _rch_on = bool(_rch_used) and _face_v > 0.0
+        _rch_notes.append(
+            "%d rotor air region(s) found on this section (machine: %d); %d open "
+            "onto the gap; the air reaches the rotor face at %.2f m/s (wash "
+            "%.2f m/s × holder open fraction %.2f, %s)"
+            % (len(_rch_list), int(sum(c["count_machine"] for c in _rch_list)),
+               sum(1 for c in _rch_list if c["opens_to_gap"]), _face_v,
+               float(_open_v), _phi_face, _phi_src))
+
     # ── THE MECHANICAL HEAT (2026-09-08) ─────────────────────────────────────
     # User: *"all losses should be passed into the electromagnetic calculation"* — and
     # into this one.  The two analytic terms enter where they are MADE:
@@ -5195,13 +5474,16 @@ def solve_thermal_field(
     _p_brg_in = float(_mech.get("P_bearings_W") or 0.0)
     _brg_modelled = bool(_shaft_len_m > 0.0 and _shaft_mask.any()
                          and _p_brg_in > 0.0)
+    # …or, since 2026-10-19, AT THE BEARINGS: the bearing nodes carry it (as a
+    # node source, not a map source), so nothing lands on the shaft elements.
+    _brg_at_nodes = bool(_bn_on and _p_brg_in > 0.0)
     if _brg_modelled:
         # ALL of it on the shaft: an UPPER BOUND, and stated as one.  A real
         # bearing sends part of its heat out through the outer ring into the end
         # cap — a path this cross-section does not carry either, so splitting it
         # would mean inventing a fraction to hide watts behind.
         q_elem[_shaft_mask] += _q_density(_shaft_mask, _p_brg_in)
-    _p_brg_dropped = 0.0 if _brg_modelled else _p_brg_in
+    _p_brg_dropped = 0.0 if (_brg_modelled or _brg_at_nodes) else _p_brg_in
     _p_wind_gap = float(_mech.get("P_windage_gap_W") or 0.0)
     _wind_modelled = bool(is_gap_air.any() and _p_wind_gap > 0.0)
     if _wind_modelled:
@@ -5217,7 +5499,13 @@ def solve_thermal_field(
     # with a number beside it is a statement an engineer can act on, and a
     # silently dropped watt is not.
     _mech_notes: List[str] = []
-    if _p_brg_in > 0.0 and not _brg_modelled:
+    if _brg_at_nodes:
+        _mech_notes.append(
+            "bearing friction %.3f W enters AT the bearings — 50 %% into the "
+            "balls, 25 %% into each ring (Hoffmann et al. 2020) — and leaves "
+            "through the shaft, the holder and its film as the bearing network "
+            "decides (cooling.bearing_node)" % _p_brg_in)
+    elif _p_brg_in > 0.0 and not _brg_modelled:
         _mech_notes.append(
             "bearing friction %.1f W is NOT modelled in this cross-section: the "
             "bearings sit on the shaft stubs outside the housing and the "
@@ -5253,7 +5541,9 @@ def solve_thermal_field(
         "P_bearings_W": round(_p_brg_in, 3),
         "P_bearings_into_shaft_W": round(_p_brg_in if _brg_modelled else 0.0, 3),
         "P_bearings_not_modelled_W": round(_p_brg_dropped, 3),
-        "bearings_modelled": bool(_brg_modelled),
+        "bearings_modelled": bool(_brg_modelled or _brg_at_nodes),
+        "P_bearings_at_bearing_nodes_W": round(
+            _p_brg_in if _brg_at_nodes else 0.0, 3),
         "per_end_W": {k: round(float(v), 3)
                       for k, v in (_mech.get("per_end_W") or {}).items()},
         "P_windage_gap_W": round(_p_wind_gap, 4),
@@ -5300,6 +5590,13 @@ def solve_thermal_field(
     # film is gone (the housing covers it) and "outer" is a fixed contact.
     if _hp_body is not None:
         _wall_iterating = _wall_iterating + ["heat_path"]
+    # The bearing network's still-air holders and the rotor channels' wall
+    # (2026-10-19) iterate the same way; a network in the wash is linear and
+    # needs no extra pass of its own.
+    if _bn_on and _bn_air_mode == "still":
+        _wall_iterating = _wall_iterating + ["bearing_node"]
+    if _rch_on:
+        _wall_iterating = _wall_iterating + ["rotor_channels"]
     _iterating = _outlet_iterating + _wall_iterating
     if (_ef_specs or _gf_on) and not _wall_iterating:
         # The open frame (2026-09-21) reaches this too: its rotor-face film is
@@ -5417,7 +5714,7 @@ def solve_thermal_field(
                 # downstream — the sink, the payload block, the heat budget — is
                 # written once and does not know which film it asked for.
                 _rep = _cm3.rotor_end_faces_open(
-                    air_speed_mps=_open_v, rpm=rpm,
+                    air_speed_mps=_face_v, rpm=rpm,
                     t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
                     area_m2=_s["area_face_m2"],
                     radius_m=float(_s.get("radius_m") or rotor_outer_m),
@@ -5477,7 +5774,48 @@ def solve_thermal_field(
                         "G_W_per_K": float(_g),
                         "t_sink_c": float(ambient_temp),
                         "symmetry_mult": sym})
-        _sinks_pass = list(_sinks) + _ef_sinks + _gf_sinks
+        # THE BEARING NETWORK (2026-10-19), rebuilt every pass: the holder's
+        # still-air film moves with its wall, and the bearing's air properties
+        # with the bearing.  In the wash it is the same network every pass.
+        _bn_sinks: List[Dict[str, Any]] = []
+        _bn_links: List[Dict[str, Any]] = []
+        if _bn_on:
+            for _e in _bn_ends:
+                _e["t_c"] = float(_t_wall.get("brg%s_balls" % _e["end"],
+                                              _e["t_c"]))
+            _bn_net = _bh.network(
+                ends=_bn_ends, k_shaft=float(k_shaft), rpm=float(rpm),
+                t_ambient_c=float(ambient_temp), air_mode=_bn_air_mode,
+                air_speed_mps=float(_bn_air_v),
+                holder_wall_c={_e["end"]: float(_t_wall.get(
+                    "brg%s_holder" % _e["end"], _t_wall_seed))
+                    for _e in _bn_ends},
+                emissivity=float(emissivity), symmetry_mult=sym,
+                shaft_tags=[DOM_SHAFT], stator_tags=[DOM_STATOR],
+                holder_to=_bn_holder_to)
+            _nodes_pass = list(_nodes_pass) + list(_bn_net["nodes"])
+            _bn_links = list(_bn_net["links"])
+            _bn_sinks = list(_bn_net["sinks"])
+        # THE ROTOR CHANNELS (2026-10-19), at this pass's rotor temperature.
+        _rch_sinks: List[Dict[str, Any]] = []
+        if _rch_on:
+            _rch_rep = _cm3.rotor_axial_channels(
+                channels=[c for c in _rch_list if not c["opens_to_gap"]],
+                length_m=L, face_speed_mps=_face_v, rpm=rpm,
+                t_air_c=float(ambient_temp),
+                t_wall_c=float(_t_wall.get("rotor_channels", _t_wall_seed)))
+            for _nm_c, _tg_c, _g_c in (
+                    ("rotor_channels_magnet", [DOM_MAG_N, DOM_MAG_S],
+                     float(_rch_rep["G_magnet_W_per_K"])),
+                    ("rotor_channels_iron", [DOM_ROTOR],
+                     float(_rch_rep["G_iron_W_per_K"]))):
+                if _g_c > 0.0:
+                    _rch_sinks.append({"name": _nm_c, "tags": list(_tg_c),
+                                       "G_W_per_K": _g_c,
+                                       "t_sink_c": float(ambient_temp),
+                                       "symmetry_mult": sym})
+        _sinks_pass = (list(_sinks) + _ef_sinks + _gf_sinks + _bn_sinks
+                       + _rch_sinks)
 
         if gap is None:
             # The air gap, once.  Properties at a STATED gap temperature: the
@@ -5604,7 +5942,8 @@ def solve_thermal_field(
                 # lumped conductances on the elements they act on, not facet
                 # films (every one of those surfaces is out along the axis, so
                 # this cross-section has no facets for them).
-                volume_sinks=_sinks_pass, lumped_nodes=_nodes_pass)
+                volume_sinks=_sinks_pass, lumped_nodes=_nodes_pass,
+                node_links=(_bn_links or None))
         except ValueError as exc:
             # A cross-section the conduction solve cannot stand up (no solid
             # elements left, a disconnected island with no housing) is NAMED,
@@ -5672,6 +6011,22 @@ def solve_thermal_field(
                 _d = max(_d, _wall_move(
                     _s["name"],
                     (_sk_by_name.get(_s["name"]) or {}).get("t_mean_c")))
+            if _bn_on:
+                _nd_by = {n.get("name"): n for n in (th.get("nodes") or [])}
+                for _e in _bn_ends:
+                    for _suf in ("balls", "holder"):
+                        _k = "brg%s_%s" % (_e["end"], _suf)
+                        _mv = _wall_move(_k, (_nd_by.get(_k) or {}).get("t_c"))
+                        # only a still-air holder film moves with its wall
+                        if _suf == "holder" and _bn_air_mode == "still":
+                            _d = max(_d, _mv)
+            if _rch_on:
+                _tr = [(_sk_by_name.get(_n) or {}).get("t_mean_c")
+                       for _n in ("rotor_channels_magnet", "rotor_channels_iron")]
+                _tr = [t for t in _tr if t is not None]
+                if _tr:
+                    _d = max(_d, _wall_move("rotor_channels",
+                                            sum(_tr) / len(_tr)))
             if _gf_on:
                 # The gap streams iterate on the AIR's own mean temperature —
                 # the elements the sink sits on — for the same half a kelvin.
@@ -5731,7 +6086,7 @@ def solve_thermal_field(
         for _s in _ef_specs:
             _ef_reports[_s["name"]] = (
                 _cm3.rotor_end_faces_open(
-                    air_speed_mps=_open_v, rpm=rpm,
+                    air_speed_mps=_face_v, rpm=rpm,
                     t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
                     area_m2=_s["area_face_m2"],
                     radius_m=float(_s.get("radius_m") or rotor_outer_m),
@@ -5769,6 +6124,37 @@ def solve_thermal_field(
     _sink_by_name0 = {s.get("name"): s for s in (th.get("sinks") or [])}
     _brg_w = float((_sink_by_name0.get("bearings") or {})
                    .get("heat_removed_W") or 0.0) * sym
+    # THE BEARING NETWORK (2026-10-19): what the shaft hands the bearings is a
+    # ROTOR outflow beside the robotics bearing path; what the stator hands the
+    # holders is a STATOR outflow.  Both machine watts, both the solver's own.
+    bearing_node_blk: Dict[str, Any] = {"mode": "off", "notes": _bn_notes}
+    _bn_stator_w = 0.0
+    if _bn_on:
+        _bn_sum = _bh.summarize(th, _bn_net, t_ambient_c=float(ambient_temp))
+        _brg_w += float(_bn_sum["shaft_to_bearings_W"])
+        _bn_stator_w = float(_bn_sum["stator_to_holders_W"])
+        bearing_node_blk = {
+            "mode": "solved", **_bn_sum,
+            "holder_to": _bn_holder_to, "air_mode": _bn_air_mode,
+            "air_speed_mps": round(float(_bn_air_v), 3),
+            "cad": bool(_bn_cad), "notes": _bn_notes,
+            "advisory": ("the bearing temperature is REPORTED and flagged "
+                         "against its lubricant; it never limits the rating"),
+        }
+    rotor_channels_blk: Dict[str, Any] = {"mode": "off", "notes": _rch_notes,
+                                          "regions": _rch_list}
+    _rch_w_mag = float((_sink_by_name0.get("rotor_channels_magnet") or {})
+                       .get("heat_removed_W") or 0.0) * sym
+    _rch_w_iron = float((_sink_by_name0.get("rotor_channels_iron") or {})
+                        .get("heat_removed_W") or 0.0) * sym
+    if _rch_on:
+        rotor_channels_blk = {
+            "mode": "through-flow", **_rch_rep,
+            "heat_removed_W": round(_rch_w_mag + _rch_w_iron, 3),
+            "magnet_W": round(_rch_w_mag, 3), "iron_W": round(_rch_w_iron, 3),
+            "holder_open_fraction": round(_phi_face, 4),
+            "holder_open_fraction_source": _phi_src,
+            "notes": _rch_notes, "regions": _rch_list}
     if _hp_body is not None:
         _hp_node = next((n for n in (th.get("nodes") or [])
                          if n.get("name") == "heat_path"), {})
@@ -6178,7 +6564,10 @@ def solve_thermal_field(
             gap_flow["notes"] = list(_gf_notes)
 
     _resid = (_gen_w - _outer_w - _bore_w - _shaft_w - _ew_w - _ch_w
-              - _mount_w - _ef_w_total - _gf_w - _brg_w - _hfe_w)
+              - _mount_w - _ef_w_total - _gf_w - _brg_w - _hfe_w
+              # the bearing holders off the stator and the rotor's own
+              # channels (2026-10-19) leave the mesh like every path above
+              - _bn_stator_w - _rch_w_mag - _rch_w_iron)
 
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
@@ -6231,6 +6620,10 @@ def solve_thermal_field(
         # shaft → bearings → the housing / structure.  0 otherwise.
         "axial_bearings_W": round(_brg_w, 3),
         "axial_bearings_pct": _share(_brg_w),
+        # …and the rotor's own AXIAL CHANNELS (2026-10-19): the wash through
+        # the windows, off the magnets and the iron that line them.
+        "rotor_channels_W": round(_rch_w_mag + _rch_w_iron, 3),
+        "rotor_channels_pct": _share(_rch_w_mag + _rch_w_iron),
         # …and the rotor's OTHER out-of-plane path (2026-09-14): the rotor core's
         # and the magnets' own end faces, when the machine's ends are exposed.
         # 0 on every housed machine, and 0 there is a statement.
@@ -6248,7 +6641,8 @@ def solve_thermal_field(
         # axial term would not close on a machine that has one.
         "closure_W": round(_rotor_w - _gap_w - _bore_w - _shaft_w - _brg_w
                            - _ef_w_by_node.get("rotor", 0.0)
-                           - _ef_w_by_node.get("magnet", 0.0) - _gf_w_rot, 3),
+                           - _ef_w_by_node.get("magnet", 0.0) - _gf_w_rot
+                           - _rch_w_mag - _rch_w_iron, 3),
         "note": ("what the rotor makes and where it goes, on the 2-D "
                  "cross-section: across the AIR GAP into the stator (the outer "
                  "diameter) and off the BORE surface into whatever turns in it "
@@ -6307,8 +6701,13 @@ def solve_thermal_field(
         # reaches the back iron.
         "gap_flow_W": round(_gf_w_sta, 3),
         "gap_flow_pct": _share_s(_gf_w_sta),
+        # …and the BEARING HOLDERS screwed to the core (2026-10-19): what the
+        # stator hands them (negative when a holder feeds the stator).
+        "bearing_holders_W": round(_bn_stator_w, 3),
+        "bearing_holders_pct": _share_s(_bn_stator_w),
         "closure_W": round(_stator_in_w - _outer_w - _mount_w - _hfe_w
-                           - _ef_stator_side_w - _ew_w - _ch_w - _gf_w_sta, 3),
+                           - _ef_stator_side_w - _ew_w - _ch_w - _gf_w_sta
+                           - _bn_stator_w, 3),
         "note": ("what the stator side makes and where it goes: ∫q dV outside "
                  "the slip radius plus what crosses the AIR GAP from the rotor, "
                  "against the housing film, the bolted MOUNT (a lumped "
@@ -6354,6 +6753,11 @@ def solve_thermal_field(
         # THE BEARINGS (2026-09-26): heat_path 'shaft' / 'both' — the rotor's
         # conduction path out through the shaft and the bearings.  0 otherwise.
         "bearings_W": round(_brg_w, 3),
+        # THE BEARING HOLDERS (2026-10-19): stator → holders, and the rotor's
+        # axial channels.  0 when the network / the channels are off.
+        "bearing_holders_from_stator_W": round(_bn_stator_w, 3),
+        "rotor_channels_W": round(_rch_w_mag + _rch_w_iron, 3),
+        "rotor_channels_magnet_W": round(_rch_w_mag, 3),
         # ── THE OPEN FRAME's two paths (2026-09-09) ─────────────────────────
         # Both are 0 on a housed machine, and 0 there is a STATEMENT: the end
         # turns and the slot air are inside the housing.  On an open one they
@@ -6501,6 +6905,11 @@ def solve_thermal_field(
             # coils.  `mode: off` on a housed machine and on an open one with no
             # wash — both are answers, not missing keys.
             "gap_flow": gap_flow,
+            # THE ROTOR'S AXIAL PATHS (2026-10-19): the bearing / holder
+            # network as solved (every node, every resistance with its source)
+            # and the rotor's own ventilated windows.
+            "bearing_node": bearing_node_blk,
+            "rotor_channels": rotor_channels_blk,
             # The MECHANICAL heat (2026-09-08): what the bearings and the air
             # cost this machine at this speed, at which bearing temperature and
             # from where, and what this cross-section did with each watt.

@@ -679,7 +679,8 @@ _BETA_LIQUID = {"water": 3.0e-4, "water_glycol_50": 4.5e-4,
 
 
 def centrifugal_convection(*, props: FluidProps, beta_per_k: float, rpm: float,
-                           r_bore_m: float, wall_dt_k: float) -> Dict[str, float]:
+                           r_bore_m: float, wall_dt_k: float,
+                           length_m: Optional[float] = None) -> Dict[str, float]:
     """Natural convection in the CENTRIFUGAL field of a spinning bore.
 
     The bore wall turns at ω; the fluid in it spins up with the wall, and in
@@ -698,7 +699,10 @@ def centrifugal_convection(*, props: FluidProps, beta_per_k: float, rpm: float,
     conduction pass (h ∝ ΔT^(1/3), so a rough number costs little).
     """
     r = max(float(r_bore_m), 1e-5)
-    d = 2.0 * r
+    # ``length_m`` (2026-10-19): the length Ra and Nu are built on.  The bore is
+    # its own diameter (the default); a rotor channel at radius r is its
+    # hydraulic diameter, in the SAME field omega^2 r.
+    d = 2.0 * r if length_m is None else max(float(length_m), 1e-6)
     omega = abs(float(rpm)) * 2.0 * math.pi / 60.0
     g_eff = omega * omega * r
     dt = max(float(wall_dt_k), 1.0)
@@ -2061,3 +2065,178 @@ def taylor_couette_gap(*, rpm: float, r_rotor_m: float, r_bore_m: float,
                  "(stator bore − rotor OD including any retaining sleeve), air "
                  f"properties at {t_gap_c:.0f} °C"),
     }
+
+
+# ---------------------------------------------------------------------------
+# The ROTOR's own axial channels (2026-10-19)
+# ---------------------------------------------------------------------------
+# Owner, 2026-10-19, on the CIANO28 150_35 (front view in Fusion): «почему через
+# зазор? он весь открытый со всех сторон, обдувается» — the rotor has LARGE axial
+# windows between its V-shaped magnet pockets, the holders have windows too, and
+# the wash goes straight through the rotor.  Until today a rotor pocket was
+# enclosed still air (conduction only), so a rotor whose magnets sit in those
+# windows could only lose its heat across the gap.
+#
+# The model is the slot channels' and the ventilated gap's, put together:
+#
+#   * the channel's THROUGH-VELOCITY is solved from the same pressure balance
+#     ``gap_axial_flow`` uses (entrance K 0.5 + exit K 1.0 + friction over the
+#     stack, on the channel's own hydraulic diameter), driven by the dynamic
+#     head of the air that reaches the rotor face — the wash times the holder's
+#     open fraction in front of the rotor (``face_speed_mps``, the caller's);
+#   * the film is the internal-flow Nusselt for a SHORT duct, simultaneously
+#     developing, constant wall temperature — VDI Heat Atlas (2010) G1, the
+#     laminar mean Nu (Gnielinski / Stephan superposition)::
+#
+#         Nu_m = [3.66^3 + 0.7^3 + (1.615 (Re Pr D/L)^(1/3) - 0.7)^3
+#                 + ((2/(1+22 Pr))^(1/6) (Re Pr D/L)^(1/2))^3]^(1/3)
+#
+#     and, turbulent, the fully developed ladder (``pipe_nusselt``) times the
+#     Gnielinski entrance factor [1 + (D/L)^(2/3)] (VDI G1);
+#   * ROTATION enters twice.  (1) The centrifugal buoyancy of the spinning
+#     channel — ``centrifugal_convection`` on the channel's D_h in the field
+#     omega^2 r, the SAME model the bore's self-pumped air uses (2026-09-07),
+#     blended with the forced value by Churchill's cube rule
+#     (``_mixed_nusselt``).  (2) Air entering a channel that turns at omega r
+#     arrives with a relative tangential velocity omega r that the channel's
+#     side walls take out of it within about one hydraulic diameter: over that
+#     inlet length the forced film is evaluated on sqrt(v^2 + (omega r)^2)
+#     (``CHANNEL_INLET_SWIRL_LENGTH_DH``, a STATED ESTIMATE, not a published
+#     coefficient — AWAITING CALIBRATION).  A purely axial channel does NOT
+#     pump: rotation adds no axial pressure rise between two ends at the same
+#     radius, so the mass flow is the wash's alone;
+#   * what the stream can carry is the constant-wall-temperature EFFECTIVENESS,
+#     G = m_dot cp (1 - exp(-h P L/(m_dot cp))) (Incropera eq. 8.42b) — a
+#     channel whose walls could hand it more than its air can carry leaves hot,
+#     and the conductance says so.  It is applied to the WALLS' own mean
+#     temperature (the magnets and the rotor iron that line the channel, split
+#     by wetted perimeter), so the meshed pocket air is not asked to conduct the
+#     heat to a sink it does not have.  No through-flow (no wash, a covered
+#     face) -> no removal: the stirred air cannot leave.
+
+#: Inlet length, in hydraulic diameters, over which entering air still carries
+#: the relative swirl omega r before the channel walls turn it.  A STATED
+#: ESTIMATE.
+CHANNEL_INLET_SWIRL_LENGTH_DH = 1.0
+#: The smallest pocket clearance counted as an open axial channel [m].  Below it
+#: the clearance is where the magnet adhesive goes (the 40 mm BOM: glue
+#: 0.10 mm) and the laminar flow it could carry is negligible anyway.
+CHANNEL_MIN_DH_M = 0.5e-3
+
+
+def short_duct_nusselt(re: float, pr: float, d_over_l: float) -> Tuple[float, str]:
+    """(mean Nu, regime) for a SHORT duct, simultaneously developing flow,
+    constant wall temperature — VDI Heat Atlas G1 (see the block above)."""
+    re = max(float(re), 0.0)
+    pr = max(float(pr), 1e-6)
+    dl = max(float(d_over_l), 0.0)
+    gz = re * pr * dl
+    nu_lam = (3.66 ** 3 + 0.7 ** 3
+              + (1.615 * gz ** (1.0 / 3.0) - 0.7) ** 3
+              + ((2.0 / (1.0 + 22.0 * pr)) ** (1.0 / 6.0) * gz ** 0.5) ** 3
+              ) ** (1.0 / 3.0)
+    if re < 2300.0:
+        return nu_lam, "laminar, developing"
+    nu_t, reg = pipe_nusselt(re, pr)
+    return (max(nu_t * (1.0 + dl ** (2.0 / 3.0)), nu_lam),
+            reg + ", entrance-corrected")
+
+
+def rotor_axial_channels(*, channels, length_m: float, face_speed_mps: float,
+                         rpm: float, t_air_c: float, t_wall_c: float,
+                         props: Optional[FluidProps] = None) -> Dict[str, Any]:
+    """The rotor's axial windows as ventilated channels — see the block above.
+
+    ``channels``: one entry per channel SHAPE: ``{area_m2, perimeter_m,
+    perimeter_magnet_m, perimeter_iron_m, r_m, count}`` — the area and the
+    wetted perimeters of ONE channel (its D_h) and how many of them the machine
+    has (``count``, default 1); each row's ``G_W_per_K`` is one channel's.
+    Returns the per-channel results and the totals ``G_magnet_W_per_K`` /
+    ``G_iron_W_per_K`` for the two wall families.
+    """
+    L = max(float(length_m), 1e-6)
+    v_face = max(float(face_speed_mps), 0.0)
+    p = props or air_properties(0.5 * (float(t_air_c) + float(t_wall_c)))
+    omega = abs(float(rpm)) * 2.0 * math.pi / 60.0
+    beta = 1.0 / max(float(t_air_c) + _T0_K, 1.0)
+    rows = []
+    g_mag = g_iron = 0.0
+    for ch in channels:
+        a = max(float(ch.get("area_m2") or 0.0), 0.0)
+        per = max(float(ch.get("perimeter_m") or 0.0), 0.0)
+        if a <= 0.0 or per <= 0.0:
+            continue
+        d_h = 4.0 * a / per
+        r = max(float(ch.get("r_m") or 0.0), 0.0)
+        row: Dict[str, Any] = {"area_mm2": a * 1e6, "perimeter_mm": per * 1e3,
+                               "d_h_mm": d_h * 1e3, "r_mm": r * 1e3}
+        if d_h < CHANNEL_MIN_DH_M:
+            row.update({"open": False, "G_W_per_K": 0.0,
+                        "why": "D_h %.2f mm < %.1f mm: an adhesive clearance, "
+                               "not a channel" % (d_h * 1e3,
+                                                  CHANNEL_MIN_DH_M * 1e3)})
+            rows.append(row)
+            continue
+        v, re, f_d = 0.0, 0.0, 0.0
+        if v_face > 0.0:
+            v = v_face
+            for _ in range(80):
+                re = max(v * d_h / p.nu, 1e-6)
+                f_d = 64.0 / re if re < 2300.0 else 0.316 * re ** -0.25
+                sigma = GAP_ENTRANCE_K + GAP_EXIT_K + f_d * L / d_h
+                v_new = v_face / math.sqrt(max(sigma, 1e-9))
+                if abs(v_new - v) <= 1e-4 * max(v_new, 1e-9):
+                    v = v_new
+                    break
+                v = 0.5 * (v + v_new)
+            re = v * d_h / p.nu
+        m_dot = p.rho * a * v
+        if v > 0.0:
+            nu_f, reg_f = short_duct_nusselt(re, p.pr, d_h / L)
+        else:
+            nu_f, reg_f = 0.0, "no through-flow"
+        nu_sw = nu_f
+        l_in = min(CHANNEL_INLET_SWIRL_LENGTH_DH * d_h, L)
+        if v > 0.0 and omega > 0.0 and r > 0.0:
+            v_rel = math.hypot(v, omega * r)
+            nu_in, _ = short_duct_nusselt(v_rel * d_h / p.nu, p.pr,
+                                          d_h / max(l_in, 1e-9))
+            nu_sw = (l_in * nu_in + (L - l_in) * nu_f) / L
+        cen = centrifugal_convection(
+            props=p, beta_per_k=beta, rpm=rpm, r_bore_m=max(r, 1e-5),
+            wall_dt_k=max(float(t_wall_c) - float(t_air_c), 1.0), length_m=d_h)
+        nu = _mixed_nusselt(max(nu_f, nu_sw), float(cen["nu"]))
+        h = nu * p.k / d_h
+        ua = h * per * L
+        c = m_dot * p.cp
+        g = c * (1.0 - math.exp(-ua / c)) if c > 1e-12 else 0.0
+        pm = max(float(ch.get("perimeter_magnet_m") or 0.0), 0.0)
+        pi_ = max(float(ch.get("perimeter_iron_m") or 0.0), 0.0)
+        tot_w = max(pm + pi_, 1e-12)
+        n_ch = max(int(ch.get("count") or 1), 1)
+        g_mag += n_ch * g * pm / tot_w
+        g_iron += n_ch * g * pi_ / tot_w
+        row.update({"open": True, "v_mps": v, "re": re, "friction_factor": f_d,
+                    "nu_forced": nu_f, "nu_inlet_swirl_avg": nu_sw,
+                    "nu_rotation": float(cen["nu"]), "nu": nu, "h": h,
+                    "regime": reg_f, "m_dot_g_s": m_dot * 1e3,
+                    "UA_W_per_K": ua, "C_W_per_K": c,
+                    "NTU": (ua / c if c > 0 else None),
+                    "G_W_per_K": g, "count": n_ch,
+                    "magnet_wall_share": pm / tot_w})
+        rows.append(row)
+    n_open = sum(1 for r_ in rows if r_.get("open"))
+    return {"channels": rows, "n_channels": len(rows), "n_open": n_open,
+            "G_magnet_W_per_K": g_mag, "G_iron_W_per_K": g_iron,
+            "G_W_per_K": g_mag + g_iron, "face_speed_mps": v_face,
+            "length_m": L, "rpm": float(rpm),
+            "note": ("%d of %d rotor air region(s) are open axial channels; the "
+                     "air reaches the rotor face at %.1f m/s; through-velocity "
+                     "from the entrance/exit/friction balance, short-duct VDI "
+                     "G1 Nusselt, inlet swirl over %.1f D_h (estimate), "
+                     "centrifugal buoyancy on D_h (the bore model), "
+                     "effectiveness m_dot cp (1 - e^-NTU) -> %.3f W/K (magnets "
+                     "%.3f, iron %.3f).  Films AWAIT CALIBRATION."
+                     % (n_open, len(rows), v_face,
+                        CHANNEL_INLET_SWIRL_LENGTH_DH, g_mag + g_iron, g_mag,
+                        g_iron))}

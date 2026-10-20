@@ -88,6 +88,7 @@ def solve_steady_thermal(
     coil_mask: Optional[np.ndarray] = None,   # (n_elem,) bool — the winding
     volume_sinks: Optional[Sequence[Dict[str, Any]]] = None,
     lumped_nodes: Optional[Sequence[Dict[str, Any]]] = None,
+    node_links: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Return the solved sub-mesh, its temperature field and its heat budget.
 
@@ -178,6 +179,19 @@ def solve_steady_thermal(
     ``heat_removed_W`` (wedge watts, the same ``× symmetry_mult`` as every
     other flow); the surfaces and sinks attached to a node report its solved
     temperature as their ``t_sink_c``.
+
+    A SMALL NETWORK of nodes (2026-10-19, the bearing / holder path): a node
+    may carry ``"q_W"`` — whole-machine watts generated IN it (a bearing's
+    friction) — and ``node_links`` joins nodes to each other, each
+    ``{"a": name, "b": name, "G_W_per_K": float, "name": str}`` a
+    whole-machine conductance.  A node's own film may then be 0 as long as it
+    reaches a film or the mesh through its links (an inner ring has no film of
+    its own: it sits between the shaft and the balls); a group of nodes with
+    neither is refused, because it has no steady temperature.  The links are
+    rows of the same bordered system — still symmetric, still one solve.  Each
+    node reports ``q_W``, and ``node_links`` the heat each link carries a → b,
+    in the same wedge watts as everything else.  No links and no ``q_W`` is
+    the 2026-09-26 behaviour bit for bit.
 
     ``surfaces[i]["t_mean_c"]`` (2026-09-14) is the AREA-MEAN WALL TEMPERATURE of
     that surface, ∫T dA / A over the facets the film acts on — the surface-side
@@ -383,19 +397,44 @@ def solve_steady_thermal(
     n_dof = int(mesh.p.shape[1])
     node_spec: List[Dict[str, Any]] = []
     node_idx: Dict[str, int] = {}
+    _linked = set()
+    for _lk in list(node_links or ()):
+        _linked.add(str(_lk.get("a")))
+        _linked.add(str(_lk.get("b")))
     for _nd in list(lumped_nodes or ()):
         _nm = str(_nd.get("name", "node"))
         _g = float(_nd.get("G_W_per_K", 0.0) or 0.0)
-        if not (np.isfinite(_g) and _g > 0.0):
+        if (not np.isfinite(_g)) or _g < 0.0 or (_g == 0.0 and _nm not in _linked):
             raise ValueError(
                 "lumped node %r has no film to its sink (G = %r W/K): a body "
                 "that cannot lose heat has no steady temperature" % (_nm, _g))
+        _q = float(_nd.get("q_W", 0.0) or 0.0)
+        if not np.isfinite(_q):
+            raise ValueError("lumped node %r has a non-finite source q_W = %r"
+                             % (_nm, _q))
         node_idx[_nm] = len(node_spec)
-        node_spec.append({"name": _nm, "G_W_per_K": _g,
+        node_spec.append({"name": _nm, "G_W_per_K": _g, "q_W": _q,
                           "t_sink": float(_nd.get("t_sink_c", t_ambient)),
                           "symmetry_mult": max(int(_nd.get("symmetry_mult", 1)
                                                    or 1), 1),
                           "col": np.zeros(n_dof), "diag": 0.0, "fed_by": []})
+    link_spec: List[Dict[str, Any]] = []
+    for _lk in list(node_links or ()):
+        _a, _b = str(_lk.get("a")), str(_lk.get("b"))
+        _gl = float(_lk.get("G_W_per_K", 0.0) or 0.0)
+        if _a not in node_idx or _b not in node_idx or _a == _b:
+            raise ValueError("node link %r joins %r and %r, which are not two "
+                             "distinct lumped nodes" % (_lk.get("name"), _a, _b))
+        if not (np.isfinite(_gl) and _gl > 0.0):
+            raise ValueError("node link %r has no conductance (G = %r W/K)"
+                             % (_lk.get("name"), _gl))
+        _sa = node_spec[node_idx[_a]]["symmetry_mult"]
+        if _sa != node_spec[node_idx[_b]]["symmetry_mult"]:
+            raise ValueError("node link %r joins nodes with different "
+                             "symmetry_mult" % (_lk.get("name"),))
+        link_spec.append({"name": str(_lk.get("name") or "%s-%s" % (_a, _b)),
+                          "a": node_idx[_a], "b": node_idx[_b], "G": _gl,
+                          "symmetry_mult": _sa})
 
     def _node_of(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         nm = entry.get("node")
@@ -633,15 +672,44 @@ def solve_steady_thermal(
     t_node = np.zeros(len(node_spec))
     if node_spec:
         from scipy.sparse import bmat as _bmat, csr_matrix as _csr
+        # Every group of linked nodes must reach a film or the mesh.
+        _grp = list(range(len(node_spec)))
+
+        def _root(i: int) -> int:
+            while _grp[i] != i:
+                _grp[i] = _grp[_grp[i]]
+                i = _grp[i]
+            return i
+        for _lk in link_spec:
+            _grp[_root(_lk["a"])] = _root(_lk["b"])
+        _anchored = {_root(i) for i, nd in enumerate(node_spec)
+                     if nd["G_W_per_K"] > 0.0 or nd["fed_by"]}
+        _float = [nd["name"] for i, nd in enumerate(node_spec)
+                  if _root(i) not in _anchored]
+        if _float:
+            raise ValueError(
+                "lumped node(s) %s reach neither a film nor the mesh: they "
+                "have no steady temperature" % ", ".join(map(repr, _float)))
         _cols = np.column_stack([nd["col"] for nd in node_spec])
         _gpl = np.array([nd["G_W_per_K"] / (nd["symmetry_mult"] * L)
                          for nd in node_spec])
-        _D = _csr(np.diag([nd["diag"] for nd in node_spec]) + np.diag(_gpl))
+        _Dd = np.diag([nd["diag"] for nd in node_spec]) + np.diag(_gpl)
+        for _lk in link_spec:
+            _gpl_l = _lk["G"] / (_lk["symmetry_mult"] * L)
+            _ia, _ib = _lk["a"], _lk["b"]
+            _Dd[_ia, _ia] += _gpl_l
+            _Dd[_ib, _ib] += _gpl_l
+            _Dd[_ia, _ib] -= _gpl_l
+            _Dd[_ib, _ia] -= _gpl_l
+        _D = _csr(_Dd)
         _C = _csr(-_cols)
         K_aug = _bmat([[K.tocsr(), _C], [_C.T, _D]], format="csr")
+        _qpl = np.array([nd["q_W"] / (nd["symmetry_mult"] * L)
+                         for nd in node_spec])
         f_aug = np.concatenate([np.asarray(f, float),
                                 _gpl * np.array([nd["t_sink"]
-                                                 for nd in node_spec])])
+                                                 for nd in node_spec])
+                                + _qpl])
         T_full = np.asarray(spsolve(K_aug, f_aug), float)
         T = T_full[:n_dof]
         t_node = T_full[n_dof:]
@@ -816,15 +884,25 @@ def solve_steady_thermal(
         "surfaces": surf_out,
         "sinks": sink_out,
         # The lumped nodes (2026-09-26): what each one hands its OWN sink, in
-        # the same wedge watts as the films and sinks that feed it (the node
-        # has no source, so this equals the sum of what reaches it).
+        # the same wedge watts as the films and sinks that feed it.  With a
+        # source (``q_W``) or links (2026-10-19) that is what reaches it plus
+        # what it makes, less what its links carry on to other nodes.
         "nodes": [{"name": nd["name"], "t_c": float(t_node[_j]),
                    "G_W_per_K": nd["G_W_per_K"], "t_sink_c": nd["t_sink"],
                    "heat_removed_W": (nd["G_W_per_K"] / nd["symmetry_mult"]
                                       * (float(t_node[_j]) - nd["t_sink"])),
+                   "q_W": nd["q_W"] / nd["symmetry_mult"],
                    "fed_by": list(nd["fed_by"]),
                    "symmetry_mult": nd["symmetry_mult"]}
                   for _j, nd in enumerate(node_spec)],
+        "node_links": [{"name": lk["name"],
+                        "a": node_spec[lk["a"]]["name"],
+                        "b": node_spec[lk["b"]]["name"],
+                        "G_W_per_K": lk["G"],
+                        "heat_W": lk["G"] / lk["symmetry_mult"] * float(
+                            t_node[lk["a"]] - t_node[lk["b"]]),
+                        "symmetry_mult": lk["symmetry_mult"]}
+                       for lk in link_spec],
         "gap_heat_W": gap_w,
         "q_generated_W": q_gen,
         "q_rotor_W": q_rotor,

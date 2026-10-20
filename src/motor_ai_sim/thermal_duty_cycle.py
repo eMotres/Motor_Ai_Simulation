@@ -1282,9 +1282,26 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
                 if surface_fit else 0.0)
     gf_sta_w = (max(float(_gapf.get("stator_side_W") or 0.0), 0.0)
                 if surface_fit else 0.0)
+    # THE ROTOR'S AXIAL PATHS (2026-10-19): the bearing / holder network and
+    # the rotor's own ventilated channels.  The network is carried as the
+    # DELTA of its holder star (rotor↔air, rotor↔stator, stator↔air —
+    # ``cooling.bearing_node.delta``, physical conductances off the solved
+    # network, not fitted); the channels as fitted conductances to the room,
+    # the magnets' share off the magnet node.  0 on every map before them.
+    _bn = dict(cooling.get("bearing_node") or {})
+    _bn_delta = dict(_bn.get("delta") or {}) if _bn.get("mode") == "solved" else {}
+    rch_mag_w = (max(float(budget.get("rotor_channels_magnet_W") or 0.0), 0.0)
+                 if surface_fit else 0.0)
+    rch_iron_w = (max(float(budget.get("rotor_channels_W") or 0.0)
+                      - float(budget.get("rotor_channels_magnet_W") or 0.0), 0.0)
+                  if surface_fit else 0.0)
+    if _bn_delta:
+        # the network's share of `bearings_W` is carried by the delta below
+        bearings_w = max(bearings_w - float(_bn.get("shaft_to_bearings_W") or 0.0),
+                         0.0)
     drive = {"w_s": max(P_cu - open_w - _efw["winding"], 0.0),
              "r_s": gap_w,
-             "m_r": max(P_mag - _efw["magnet"], 0.0)}
+             "m_r": max(P_mag - _efw["magnet"] - rch_mag_w, 0.0)}
     if open_w > 0.0 or _efw["winding"] > 0.0:
         notes.append(
             "%.2f W leave the winding DIRECTLY to the room (%.2f W from the end "
@@ -1429,6 +1446,24 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     G["r_bore"] = bore_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
     G["r_shaft"] = shaft_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
     G["r_bearings"] = bearings_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
+    if _bn_delta:
+        G["r_bearings"] += float(_bn_delta.get("G_rotor_air_W_per_K") or 0.0)
+        G["s_holders"] = float(_bn_delta.get("G_stator_air_W_per_K") or 0.0)
+        G["r_s_holders"] = float(_bn_delta.get("G_rotor_stator_W_per_K") or 0.0)
+        links["bearing_node"] = {
+            "kind": "physical", "nodes": ["rotor", "stator", "ambient"],
+            "G_W_per_K": round(G["r_bearings"] + G["s_holders"]
+                               + G["r_s_holders"], 6),
+            "basis": ("the shaft / bearing / holder network of the map, as "
+                      "the delta of its holder star: rotor→air %.4f, "
+                      "rotor→stator %.4f, stator→air %.4f W/K"
+                      % (float(_bn_delta.get("G_rotor_air_W_per_K") or 0.0),
+                         G["r_s_holders"], G["s_holders"]))}
+    _dt_mag = means["magnet"] - t_amb
+    G["r_channels"] = (rch_iron_w / dt_rotor
+                       if (rch_iron_w > 0.0 and abs(dt_rotor) > 1e-6) else 0.0)
+    G["m_channels"] = (rch_mag_w / _dt_mag
+                       if (rch_mag_w > 0.0 and abs(_dt_mag) > 1e-6) else 0.0)
     _hp = dict(cooling.get("heat_path") or {})
     if _hp.get("body"):
         # The housing / structure is a NODE of the 2-D solve but not of this
@@ -1754,6 +1789,15 @@ def _flows(T: Mapping[str, float], network: Network) -> Dict[str, float]:
         # wall the way natural convection does.
         "rotor_gap_flow": float(network.G.get("r_gap_flow") or 0.0) * (tr - amb),
         "stator_gap_flow": float(network.G.get("s_gap_flow") or 0.0) * (ts - amb),
+        # THE ROTOR'S AXIAL PATHS (2026-10-19) — see ``network_from_steady``.
+        "stator_holders": float(network.G.get("s_holders") or 0.0) * (ts - amb),
+        "rotor_channels": float(network.G.get("r_channels") or 0.0) * (tr - amb),
+        "magnet_channels": float(network.G.get("m_channels") or 0.0) * (
+            float(T[network.rep("magnet")]) - amb),
+        # internal: rotor → stator through the shaft, the bearings and the
+        # holders screwed to the core (positive from rotor to stator)
+        "r_s_holders": float(network.G.get("r_s_holders") or 0.0) * (
+            0.0 if network.rep("rotor") == network.rep("stator") else (tr - ts)),
     }
     for node, key in _SIDE_KEY.items():
         tn = float(T[network.rep(node)])
@@ -1772,14 +1816,16 @@ _FLOW_NODE: Dict[str, str] = {
     "stator_ends": "stator", "rotor_ends": "rotor", "magnet_ends": "magnet",
     "winding_open": "winding",
     "rotor_gap_flow": "rotor", "stator_gap_flow": "stator",
+    "stator_holders": "stator", "rotor_channels": "rotor",
+    "magnet_channels": "magnet",
 }
 EXTERNAL_FLOWS: Tuple[str, ...] = tuple(_FLOW_NODE)
 #: Which side of the machine each external path belongs to (for the split).
 STATOR_SIDE_FLOWS = ("housing", "mount", "winding_ends", "stator_ends",
-                     "winding_open", "stator_gap_flow")
+                     "winding_open", "stator_gap_flow", "stator_holders")
 ROTOR_SIDE_FLOWS = ("bore", "shaft_ends", "bearings", "rotor_ends",
                     "magnet_ends",
-                    "rotor_gap_flow")
+                    "rotor_gap_flow", "rotor_channels", "magnet_channels")
 
 
 def _derivatives(seg: Segment, T: Mapping[str, float], network: Network,
@@ -1799,6 +1845,10 @@ def _derivatives(seg: Segment, T: Mapping[str, float], network: Network,
         if ra != rb:
             net_w[ra] -= F[key]
             net_w[rb] += F[key]
+    _rr, _rs = network.rep("rotor"), network.rep("stator")
+    if _rr != _rs and F.get("r_s_holders"):
+        net_w[_rr] -= F["r_s_holders"]
+        net_w[_rs] += F["r_s_holders"]
     return ({r: net_w[r] / max(float(caps[r]), 1e-9)
              for r in network.active_nodes}, P, F)
 
@@ -2370,6 +2420,9 @@ def _time_constant(network: Network, C: Mapping[str, float]) -> float:
          + float(network.G.get("r_bore") or 0.0)
          + float(network.G.get("r_shaft") or 0.0)
          + float(network.G.get("r_bearings") or 0.0)
+         + float(network.G.get("s_holders") or 0.0)
+         + float(network.G.get("r_channels") or 0.0)
+         + float(network.G.get("m_channels") or 0.0)
          + still_air_G(network.t_ambient_c + 60.0, network, "housing")
          + sum(still_air_G(network.t_ambient_c + 60.0, network, k)
                for k in _SIDE_KEY.values()))

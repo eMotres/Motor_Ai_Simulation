@@ -52,7 +52,6 @@ def _real_films():
 
 @pytest.mark.parametrize("who", ["plain", "factory"])
 def test_no_film_field_lets_the_speed_be_inverted(thermal_last, monkeypatch, who):
-    from motor_ai_sim import construction_privacy as CPV
     from motor_ai_sim.routes import thermal
     res, face, ch = _real_films()
     monkeypatch.setattr(thermal, "_LAST", {"field": {"result": res, "params": {},
@@ -61,24 +60,19 @@ def test_no_film_field_lets_the_speed_be_inverted(thermal_last, monkeypatch, who
     assert r.status_code == 200, r.text[:300]
     cooling = r.json()["field"]["result"]["cooling"]
     blk = cooling["end_faces"]["rotor"]
-    row = cooling["rotor_channels"]["channels"][0]
-    # every field that carries a value is on the whitelist...
-    assert {k for k, v in blk.items() if v is not None} <= CPV.FILM_PUBLIC_KEYS
-    assert {k for k, v in row.items() if v is not None} <= CPV.CHANNEL_PUBLIC_KEYS
-    # ...none of the speed-bearing ones is set, h_conv included
-    for k in SPEED_BEARING:
+    # re-audit #3 B2 superseded the per-field whitelist: a CAD-derived film
+    # comes back with no number at all — not G, not watts, not a temperature
+    assert not [k for k, v in blk.items() if isinstance(v, (int, float))
+                and not isinstance(v, bool)], blk
+    for k in SPEED_BEARING + ("G_W_per_K", "heat_removed_W", "t_wall_c", "t_mean_c"):
         assert blk.get(k) is None, ("end face", k)
-        assert row.get(k) is None, ("channel", k)
-    assert cooling["rotor_channels"]["face_speed_mps"] is None
-    # the RESULTS stay: conductance and watts
-    assert blk["G_W_per_K"] == pytest.approx(face["G_W_per_K"])
-    assert blk["heat_removed_W"] == pytest.approx(face["heat_removed_W"])
-    assert row["G_W_per_K"] == pytest.approx(ch["channels"][0]["G_W_per_K"])
+    assert "channels" not in cooling["rotor_channels"]
+    assert cooling["rotor_channels"].get("face_speed_mps") is None
     # and no speed-derived number of either film survives anywhere in the answer
-    for k in ("h_conv", "h_plate", "re", "nu", "air_speed_mps"):
+    for k in ("h_conv", "h_plate", "re", "nu", "air_speed_mps", "G_W_per_K"):
         if isinstance(face.get(k), float) and face[k] > 0:
             assert json.dumps(round(face[k], 6)) not in r.text, k
-    for k in ("h", "re", "v_mps", "m_dot_g_s"):
+    for k in ("h", "re", "v_mps", "m_dot_g_s", "G_W_per_K"):
         v = ch["channels"][0].get(k)
         if isinstance(v, float) and v > 0:
             assert json.dumps(round(v, 6)) not in r.text, k

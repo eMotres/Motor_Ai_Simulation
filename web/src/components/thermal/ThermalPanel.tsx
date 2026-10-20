@@ -926,6 +926,10 @@ const ThermalPanel: React.FC = () => {
      the shaft bore or across the gap — the split the cooling design of a
      sleeved rotor turns on. */
   const budget = res?.cooling?.heat_budget;
+  /* Re-audit #3 B2: without the NDA the per-path cooling detail of a machine
+     whose rotor-side paths ran on CAD-measured inputs is not sent — only the
+     motor-level totals.  One line says so where the detail used to be. */
+  const coolingWithheld = Boolean((res?.cooling as Record<string, unknown> | undefined)?.cooling_detail);
   /* The ROBOTICS paths (2026-09-14): the bolted mount and the four axial end
      faces.  `mode: 'off'` is an answer about the machine, not a missing block,
      so the line below appears only when one of them is really there — the same
@@ -956,7 +960,7 @@ const ThermalPanel: React.FC = () => {
      The sum of the two outflows is the same number only while the solve closes,
      which is exactly the case where a panel must not paper over the difference;
      it stays as the fallback for a result cached before that field existed. */
-  const rotorW = budget
+  const rotorW = budget && !coolingWithheld
     ? (budget.rotor_W ?? ((budget.bore_W ?? 0) + (budget.gap_W ?? 0)
                           + (budget.shaft_ends_W ?? 0)))
     : null;
@@ -1728,7 +1732,10 @@ const ThermalPanel: React.FC = () => {
                 and the BOLTS take the rest, which is what the flange has to be
                 designed for.  The second half is the stator/rotor share — the
                 answer to "which side of this machine do I have to cool". */}
-            {showRobot && budget && (
+            {coolingWithheld && (
+              <Typography sx={{ ...lbl, mt: 0.75 }}>{tx('coolingDetailNda')}</Typography>
+            )}
+            {showRobot && budget && !coolingWithheld && (
               <Tooltip {...TIP_PROPS} title={`Every watt that left the model, on its own path, integrated on the solved mesh. HOUSING ${fmt(budget.housing_W, 1)} W = ${fmt(budget.housing_convection_W, 1)} W of natural convection (Churchill–Chu on the cylinder, h ${fmt(outer.h_conv, 1)} W/m²K) + ${fmt(budget.housing_radiation_W, 1)} W of radiation at ε ${fmt(outer.emissivity as number, 2)} — the split is exact, not apportioned: both films act on the same area and the same ΔT, so it is the ratio of the two coefficients. MOUNT ${fmt(budget.mount_W, 1)} W = ${fmt(mount?.G_W_per_K, 3)} W/K × (${fmt(mount?.t_housing_mean_c, 1)} − ${fmt(mount?.t_sink_c, 0)} °C), the bolted flange (${String(mount?.t_sink_source ?? '')}) — an ASSUMED conductance until this joint is measured. END FACES ${fmt(budget.end_faces_W, 1)} W over ${endFaceBlk?.sides ?? 0} exposed end(s): end turns ${fmt(endFaceBlk?.winding?.heat_removed_W, 1)} W, stator core ${fmt(endFaceBlk?.stator?.heat_removed_W, 1)} W, rotor core ${fmt(endFaceBlk?.rotor?.heat_removed_W, 1)} W, magnets ${fmt(endFaceBlk?.magnet?.heat_removed_W, 2)} W. BORE ${fmt(budget.bore_W, 1)} W off the open inner diameter.${sSplit ? ` The STATOR side makes ${fmt(sSplit.stator_W, 1)} W and takes ${fmt(sSplit.gap_in_W, 1)} W more across the gap; of that ${fmt(sSplit.housing_pct, 0)} % leaves through the housing, ${fmt(sSplit.mount_pct, 0)} % through the mount and ${fmt(sSplit.end_faces_pct, 0)} % off its end faces (closure ${fmt(sSplit.closure_W, 2)} W).` : ''} The whole budget closes to ${fmt(budget.residual_pct, 2)} % of ${fmt(budget.losses_W, 1)} W.`}>
                 <Typography sx={{ ...lbl, mt: 0.75, display: 'inline-block', cursor: 'help',
                   borderBottom: '1px dotted var(--text-4)', fontFamily: 'monospace' }}>

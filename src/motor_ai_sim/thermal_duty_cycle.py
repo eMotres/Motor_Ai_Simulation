@@ -87,6 +87,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from motor_ai_sim.thermal_capacities import NODES
 
+
+def _construction_basis_of(cooling) -> Optional[str]:
+    """``construction_privacy.CONSTRUCTION_BASIS`` when this map's rotor-side
+    axial paths ran on the CAD basis, else ``None`` (re-audit #3 B2)."""
+    from motor_ai_sim import construction_privacy as _cp
+    return _cp.CONSTRUCTION_BASIS if _cp.cooling_is_cad_sensitive(cooling) else None
+
 #: Short node names, as the stored record spells the conductances (B.3).
 SHORT: Dict[str, str] = {"winding": "w", "stator": "s", "rotor": "r",
                          "magnet": "m"}
@@ -1691,6 +1698,9 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
             "surface_film_kind": dict(film),
             "surface_t_fit_c": {k: round(float(v), 2)
                                 for k, v in t_fit.items()},
+            # re-audit #3 B2: the network carries CAD-derived paths
+            # (``construction_privacy`` withholds them without the NDA gate)
+            "construction_basis": _construction_basis_of(cooling),
         })
     # Record which film each still-air path will actually use.
     net.h_sources["housing"] = housing_h_total(

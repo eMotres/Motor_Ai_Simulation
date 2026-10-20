@@ -11,7 +11,14 @@ export interface ConfigureContext {
   current: {
     set: boolean; reason?: string; device?: string; devices_parallel?: number;
     i_d_rating_A?: number; t_case_c?: number; t_j_max_c?: number; basis?: string;
+    /** the transistor's DATASHEET figure as a phase current - information only, never a slider limit */
     i_phase_rms_max_A?: number;
+    /** the REAL limits this machine's records state (owner 2026-10-20), at its saved build */
+    caps?: {
+      demag: { A: number; ref_magnet_C?: number | null; source?: string } | null;
+      board: { A: number; device?: string | null; n_parallel?: number; variant?: string | null;
+               cooling?: string; source?: string } | null;
+    };
   };
   modulation: { m: number; source: 'controller' | 'default' };
   battery: {

@@ -26,7 +26,7 @@ import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile } from '../common/ResultTiles';
 import {
-  scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult, type PwmVariant,
+  scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
 import {
   EMPTY_REFERENCE, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
@@ -78,6 +78,7 @@ import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationS
 import {
   physicalRanges, narrowRange, speedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
+  sliderCurrentCap, boardMarker, type CurrentCap,
   type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis,
 } from '../../lib/configuratorLimits';
 import {
@@ -188,7 +189,10 @@ const KnobSlider: React.FC<{
   disabled?: boolean;
   /** Keep the numeric request editable while withholding an unavailable derived range. */
   hideRange?: boolean;
-}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand, zone, disabled, hideRange }) => {
+  /** a CONTINUOUS limit inside the range (the controller board's current): a tick on the rail and, when the
+   *  value is above it, one amber line under the slider - a warning, never a cap and never a block */
+  marker?: { at: number; text: string; tip: string; over: boolean };
+}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand, zone, disabled, hideRange, marker }) => {
   const delta = pctDelta(value, base);
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
@@ -239,10 +243,18 @@ const KnobSlider: React.FC<{
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} name={tx('configureLimits.rangeMin', { label })} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
         <Slider value={value} min={min} max={max} step={step} aria-label={label}
           onChange={(_, v) => onChange(v as number)} size="small" disabled={disabled}
+          marks={marker && marker.at > min && marker.at < max ? [{ value: marker.at }] : undefined}
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 },
+                ...(marker ? { '& .MuiSlider-mark': { width: 3, height: 12, borderRadius: 1, bgcolor: '#f59e0b', opacity: 1, transform: 'translate(-50%, -50%)' } } : {}),
                 ...(zone ? { '& .MuiSlider-rail': { background: zone, opacity: 0.9, height: 4 } } : {}) }} />
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} name={tx('configureLimits.rangeMax', { label })} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>}
+      {marker && (
+        <Typography component="div" title={marker.tip}
+          sx={{ fontSize: 11, color: marker.over ? '#f59e0b' : 'var(--text-3)', fontWeight: marker.over ? 700 : 400, textAlign: 'right', mt: -0.25 }}>
+          {marker.text}
+        </Typography>
+      )}
     </Box>
   );
 };
@@ -930,18 +942,47 @@ const ConfiguratorPanel: React.FC = () => {
       batteryValid,
     });
   }, [p, knobs, ref.poles, packMaxV, modM, batteryValid]);
+  // PHASE-CURRENT MAXIMUM = THE LOWEST MOTOR LIMIT (owner 2026-10-20: 238 A on 85 L15 had nothing to do with the
+  // motor or a real board).  Never the transistor's bare drain-current rating, and NOT the controller board's
+  // continuous current either (the board is a marker on the slider, `boardMark` below): the lowest of the saved
+  // peak duty, the passport's demagnetisation limit and the top of its measured current grid - ampere-turn limits,
+  // moved with the live winding - and never under a duty the loaded configuration saved, so a loaded rated / peak
+  // mode always sits inside the slider.  lib/configuratorLimits.ts names it for the label.
+  const sAtKnobs = (k: Knobs) => turnsFactor(p, k) * (p.nP0 && k.nP ? p.nP0 / k.nP : 1);
+  const currentCap: CurrentCap | null = useMemo(() => {
+    const ownPreset = presets.find((x) => x.config === originalConfig) ?? basePreset;
+    const sOf = (pre: Preset | null | undefined) => sAtKnobs(pre ? presetKnobs(baseKnobs(p), pre) : baseKnobs(p));
+    const cc = p.current;
+    return sliderCurrentCap({
+      duties: basePreset?.duty_points,
+      sDuty: sOf(basePreset),
+      demag: { A: currentContext?.current?.caps?.demag?.A ?? null, s: sOf(ownPreset) },
+      gridTopA: cc && cc.I_A.length >= 2 ? cc.I_A[cc.I_A.length - 1] : null,
+      sLive: sAtKnobs(knobs),
+    });
+  }, [p, knobs, currentContext, presets, originalConfig, basePreset]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** the controller board's CONTINUOUS current: the selected PWM variant's, else the machine's own controller.
+   *  A marker and a note on the slider, never a cap and never a block (owner 2026-10-20). */
+  const boardMark = useMemo(() => {
+    const caps = currentContext?.current?.caps;
+    const vLim = variant?.i_board_limit_A?.favourable;
+    const board = variant
+      ? (typeof vLim === 'number' && vLim > 0 ? { A: vLim, device: variant.device, n: variant.n_parallel ?? 1 } : null)
+      : (caps?.board && caps.board.A > 0 ? { A: caps.board.A, device: caps.board.device ?? null, n: caps.board.n_parallel ?? 1 } : null);
+    return boardMarker(board, knobs.I_A);
+  }, [currentContext, variant, knobs.I_A]);
   const phys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
-    iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
+    iCap: currentCap,
     speed: speedLim,
-  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedLim]);
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedLim, currentCap]);
   const displayPhys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
-    iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
+    iCap: currentCap,
     speed: speedDisplayLim,
-  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedDisplayLim]);
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedDisplayLim, currentCap]);
   const ranges: Record<KnobKey, KRange> = useMemo(() => ({
     L_mm: narrowRange(phys.L_mm, overrides.L_mm), N: narrowRange(phys.N, overrides.N),
     wireH_mm: narrowRange(phys.wireH_mm, overrides.wireH_mm),
@@ -974,7 +1015,6 @@ const ConfiguratorPanel: React.FC = () => {
   const limitNote = (k: KnobKey): { text: string; tip: string; hand?: boolean } => {
     const b: LimitBasis = (phys as Record<KnobKey, PhysRange>)[k].basis;
     const mx = fmt(ranges[k].max, k === 'wireH_mm' ? 1 : 0);
-    const cur = currentContext?.current;
     if (k === 'L_mm') {
       return b === 'hand'
         ? { text: tx('configureLimits.lHand', { max: mx }), tip: tx('configureLimits.lHandTip'), hand: true }
@@ -989,10 +1029,13 @@ const ConfiguratorPanel: React.FC = () => {
                tip: tx('configureLimits.wireFitTip') };
     }
     if (k === 'I_A') {
-      return b === 'inverter'
-        ? { text: tx('configureLimits.iInverter', { max: mx, device: cur?.device ?? '', n: cur?.devices_parallel ?? 1 }),
-            tip: tx('configureLimits.iInverterTip', { rating: fmt(cur?.i_d_rating_A ?? NaN, 0), tcase: fmt(cur?.t_case_c ?? NaN, 0) }) }
-        : { text: '', tip: tx('configureLimits.iNoControllerTip') };
+      switch (b) {
+        case 'motor_peak': return { text: tx('configureLimits.iMotorPeak', { max: mx }), tip: tx('configureLimits.iMotorPeakTip') };
+        case 'demag': return { text: tx('configureLimits.iDemag', { max: mx }), tip: tx('configureLimits.iDemagTip') };
+        case 'duty': return { text: tx('configureLimits.iDuty', { max: mx }), tip: tx('configureLimits.iDutyTip') };
+        case 'grid': return { text: tx('configureLimits.iGrid', { max: mx }), tip: tx('configureLimits.iGridTip') };
+        default: return { text: '', tip: tx('configureLimits.iNoLimitTip') };
+      }
     }
     if (k === 'rpm' && !batteryValid) return { text: tx('configure.invalidPack'), tip: tx('configure.invalidPackTip') };
     return speedLimitNote(tx, { basis: b, max: mx, packV: fmt(packMaxV ?? NaN, 1), m: fmt(modM, 2) });
@@ -2441,6 +2484,12 @@ ${s1Text.tip}` : '';
             sub={tx('configureLimits.peakOf', { value: fmt(knobs.I_A * Math.SQRT2, 0) })}
             onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
             disabled={propLoad} zone={propLoad ? null : zones.I}
+            marker={boardMark ? {
+              at: boardMark.A, over: boardMark.over,
+              text: boardMark.over
+                ? tx('configureLimits.iBoardOver', { max: fmt(boardMark.A, 0), device: boardMark.device, n: boardMark.n })
+                : tx('configureLimits.iBoardMark', { max: fmt(boardMark.A, 0), device: boardMark.device, n: boardMark.n }),
+              tip: tx('configureLimits.iBoardMarkTip', { max: fmt(boardMark.A, 0), device: boardMark.device, n: boardMark.n }) } : undefined}
             limitNote={propLoad
               ? propellerCurrentNote(tx, { max: fmt(ranges.I_A.max, 0), basisTip: limitNote('I_A').tip })
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />

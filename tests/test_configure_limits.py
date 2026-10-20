@@ -2,9 +2,10 @@
 
 * the hand-set stack-length maximum is admin-only, validated, stored on the
   catalogue card, clearable, and visible to every reader through the context;
-* the phase-current ceiling is the machine's own inverter device x devices in
-  parallel, read with the Controller's own card method — and "no controller
-  set" is an explicit answer, never a made-up number;
+* the transistor's datasheet figure (``current_limit``) is information only; the
+  phase-current limits the server states (``current_caps``) come from the board
+  model and the passport's demagnetisation limit (owner 2026-10-20) — and "no
+  controller set" is an explicit answer, never a made-up number;
 * the slot-fit identity the web relies on (rows x (wire + spacing) + 2 x
   insulation <= slot height) is the SAME bound the solver's constraint uses.
 
@@ -310,3 +311,62 @@ def test_context_names_the_cooling_and_the_temperature_limits():
     assert free["thermal_limits"]["magnet_C"] is None and free["thermal_limits"]["magnet_card"] is None
     # no family document at all: still a complete answer
     assert cl.context(None, None)["cooling"]["restricted"] is False
+
+
+# ---------------------------------------------------------------------------
+# The phase-current limits: the BOARD and the demagnetisation limit (owner 2026-10-20),
+# never the bare drain-current rating of the transistor
+# ---------------------------------------------------------------------------
+
+def _variant(vid, device, n_par, favourable=None):
+    return {"id": vid, "device": device, "n_parallel": n_par, "carrier_hz": 48000.0,
+            "i_board_limit_A": ({"favourable": favourable, "weak": 10.0} if favourable else {})}
+
+
+def test_the_board_limit_is_the_boards_not_the_transistors_rating():
+    ctrl = {"device": SI, "devices_parallel": 1}
+    vs = [_variant("a", SI, 2, 61.0), _variant("b", SI, 1, 40.0), _variant("c", "OTHER", 1, 5.0)]
+    cap = cl.board_cap({"die": "D", "name": "L15"}, ctrl, vs)
+    assert cap["A"] == 40.0 and cap["device"] == SI and cap["n_parallel"] == 1
+    assert cap["cooling"] == "favourable" and cap["variant"] == "b"
+    # the number is nowhere near the datasheet-derived figure
+    assert cap["A"] < cl.current_limit(ctrl)["i_phase_rms_max_A"] / 2
+    # x2 build -> the x2 variant's own board limit
+    assert cl.board_cap({"die": "D", "name": "L15"}, {"device": SI, "devices_parallel": 2}, vs)["A"] == 61.0
+
+
+def test_a_board_without_a_model_limit_states_none_rather_than_the_datasheet_figure():
+    ctrl = {"device": SI, "devices_parallel": 2}
+    assert cl.board_cap({"die": "D", "name": "L15"}, ctrl, []) is None
+    assert cl.board_cap({"die": "D", "name": "L15"}, ctrl, [_variant("a", SI, 2)]) is None   # no limits dict
+    assert cl.board_cap({"die": "D", "name": "L15"}, {}, [_variant("a", SI, 2, 61.0)]) is None
+    assert cl.board_cap({"die": "D", "name": "L15"}, ctrl, [_variant("a", SI, 1, 61.0)]) is None  # other build
+
+
+def test_the_demag_limit_comes_from_the_passport_model(monkeypatch):
+    from motor_ai_sim import propeller_s1 as s1
+    monkeypatch.setattr(s1, "load_model", lambda die, cfg: {
+        "demag": {"I_limit_A": 52.4, "ref_magnet_C": 69.2}})
+    d = cl.demag_cap({"die": "CIANO28 85 20SW1200", "name": "L15"})
+    assert d["A"] == 52.4 and d["ref_magnet_C"] == 69.2
+
+    def none(die, cfg):
+        raise s1.S1ModelNotFound("no model")
+    monkeypatch.setattr(s1, "load_model", none)
+    assert cl.demag_cap({"die": "D", "name": "L15"}) is None
+
+
+def test_context_carries_the_caps_next_to_the_datasheet_figure(monkeypatch):
+    from motor_ai_sim import passport_store as ps
+    from motor_ai_sim import propeller_s1 as s1
+    monkeypatch.setattr(ps, "variants_for", lambda name, length=None: [_variant("v", SI, 2, 61.0)])
+    monkeypatch.setattr(s1, "load_model", lambda die, cfg: {"demag": {"I_limit_A": 52.4, "ref_magnet_C": 69.2}})
+    fam = {"die": "D", "name": "L15", "controller": {"device": SI, "devices_parallel": 2}}
+    cur = cl.context({"id": "x"}, fam)["current"]
+    assert cur["set"] and cur["i_phase_rms_max_A"] > 100          # information only
+    assert cur["caps"]["board"]["A"] == 61.0 and cur["caps"]["demag"]["A"] == 52.4
+    # no controller and no model: the caps are explicit nulls
+    monkeypatch.setattr(ps, "variants_for", lambda name, length=None: None)
+    monkeypatch.setattr(s1, "load_model", lambda die, cfg: (_ for _ in ()).throw(s1.S1ModelNotFound("x")))
+    cur = cl.context({"id": "x"}, {"die": "D", "name": "L15"})["current"]
+    assert cur["caps"] == {"demag": None, "board": None}

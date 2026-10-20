@@ -238,8 +238,15 @@ def _safe_eval(expr, ns):
     return v
 
 
+#: Longest chain of cells referring to cells that :func:`evaluate` follows (security review 2026-10-20, F5).  The real Params
+#: sheets go 5-9 deep (CIANO14 40 L12/L20 7, CIANO28 85 9, CIANO28 150 / CILN28 G2 5); a deeper chain in an upload is refused
+#: with a ValueError instead of running into Python's recursion limit.
+MAX_DEPENDENCY_DEPTH = 64
+
+
 def evaluate(exprs):
-    """{name: FreeCAD/Fusion expression} -> {name: value} (lengths mm, angles deg).  Raises on unknown names/loops."""
+    """{name: FreeCAD/Fusion expression} -> {name: value} (lengths mm, angles deg).  Raises on unknown names/loops and on a
+    dependency chain deeper than :data:`MAX_DEPENDENCY_DEPTH`."""
     vals, busy = {}, set()
 
     def ev(n):
@@ -247,6 +254,8 @@ def evaluate(exprs):
             return vals[n]
         if n in busy:
             raise ValueError("circular expression at %s" % n)
+        if len(busy) >= MAX_DEPENDENCY_DEPTH:
+            raise ValueError("expression dependency chain deeper than %d cells at %s" % (MAX_DEPENDENCY_DEPTH, n))
         busy.add(n)
         e = str(exprs[n]).strip().lstrip("=")
         e = _NUM_UNIT.sub(lambda m: "(%s*%r)" % (m.group(1), _UNIT[m.group(2)]), e)
@@ -673,19 +682,114 @@ def bearing_profile_rows(eff, params, report):
 
 
 # ----------------------------------------------------------------------------------------------- back (owner edits)
-def read_fcstd_params(path, sheet="Params"):
-    """{alias: expression} of the Params spreadsheet of an FCStd (zip / Document.xml), no FreeCAD needed."""
-    import xml.etree.ElementTree as ET
+#: Limits of an FCStd read (security review 2026-10-20, F5: the archive size alone does not bound the expanded XML).  Sized
+#: from the real models (2026-10-20): Document.xml 0.52-3.62 MB (CILN28 G2 L40 the largest), 4 908-33 436 XML elements,
+#: 111-414 Params cells.  Each limit is about 4x / 6x / 12x the largest real file.
+MAX_DOCUMENT_XML_BYTES = 16_000_000
+MAX_XML_ELEMENTS = 200_000
+MAX_SHEET_CELLS = 5_000
+_XML_CHUNK = 64 * 1024
+
+
+class FcstdLimitError(ValueError):
+    """An FCStd beyond the read limits.  ``status`` = the HTTP answer: 413 (Document.xml too large), 422 (too complex)."""
+
+    def __init__(self, message, status=422):
+        super().__init__(message)
+        self.status = status
+
+
+def _document_xml_chunks(source, max_bytes):
+    """Document.xml of an FCStd zip in chunks, never more than ``max_bytes`` decompressed: the declared size is checked first,
+    then the stream itself is counted (a header that under-states the size cannot make the read run past the limit)."""
     import zipfile
-    with zipfile.ZipFile(path) as z:
-        root = ET.fromstring(z.read("Document.xml"))
-    for obj in root.iter("Object"):
-        if obj.get("name") != sheet:
-            continue
-        for prop in obj.iter("Property"):
-            if prop.get("name") == "cells":
-                return {c.get("alias"): (c.get("content") or "").lstrip("=") for c in prop.iter("Cell") if c.get("alias")}
-    raise KeyError("no %s sheet in %s" % (sheet, path))
+    with zipfile.ZipFile(source) as z:
+        info = z.getinfo("Document.xml")                                   # KeyError: not a FreeCAD file
+        if info.file_size > max_bytes:
+            raise FcstdLimitError("Document.xml expands to %d bytes; the limit is %d" % (info.file_size, max_bytes), 413)
+        total = 0
+        with z.open(info) as fh:
+            while True:
+                chunk = fh.read(min(_XML_CHUNK, max_bytes + 1 - total))
+                if not chunk:
+                    return
+                total += len(chunk)
+                if total > max_bytes:
+                    raise FcstdLimitError("Document.xml expands to more than %d bytes" % max_bytes, 413)
+                yield chunk
+
+
+class _CellsDone(Exception):
+    """Internal: the wanted sheet's cells have been read; stop parsing."""
+
+
+def read_fcstd_cells(source, sheet=None):
+    """[(alias, content)] of the aliased spreadsheet cells of an FCStd, streamed and bounded (no tree is built).
+
+    ``sheet`` = the name of one spreadsheet object: only the first ``cells`` property of that object is read (what
+    :func:`read_fcstd_params` always did); ``None`` = every aliased cell of every sheet, in document order.  Refused with
+    :class:`FcstdLimitError`: Document.xml over :data:`MAX_DOCUMENT_XML_BYTES` (413), more than :data:`MAX_XML_ELEMENTS` elements
+    or :data:`MAX_SHEET_CELLS` aliased cells (422).  A DOCTYPE / entity declaration (FreeCAD writes none) or malformed XML is a
+    ValueError.  Raises KeyError when the sheet is absent."""
+    from xml.parsers import expat
+    max_bytes, max_elems, max_cells = MAX_DOCUMENT_XML_BYTES, MAX_XML_ELEMENTS, MAX_SHEET_CELLS
+    st = {"n": 0, "sheet_obj": 0, "cells_prop": 0, "found": False}
+    stack = []
+    out = []
+
+    def start(tag, attrs):
+        st["n"] += 1
+        if st["n"] > max_elems:
+            raise FcstdLimitError("Document.xml has more than %d XML elements" % max_elems, 422)
+        flag = None
+        if tag == "Object" and (sheet is None or attrs.get("name") == sheet):
+            st["sheet_obj"] += 1
+            flag = "obj"
+        elif tag == "Property" and attrs.get("name") == "cells" and (sheet is None or st["sheet_obj"]):
+            st["cells_prop"] += 1
+            flag = "cells"
+        elif tag == "Cell" and (sheet is None or st["cells_prop"]) and attrs.get("alias"):
+            out.append((attrs["alias"], attrs.get("content") or ""))
+            if len(out) > max_cells:
+                raise FcstdLimitError("the spreadsheet has more than %d aliased cells" % max_cells, 422)
+        stack.append(flag)
+
+    def end(_tag):
+        flag = stack.pop()
+        if flag == "obj":
+            st["sheet_obj"] -= 1
+        elif flag == "cells":
+            st["cells_prop"] -= 1
+            if sheet is not None:
+                st["found"] = True
+                raise _CellsDone()
+
+    def refuse(*_a):
+        raise ValueError("Document.xml carries a DOCTYPE / entity declaration; a FreeCAD file has none")
+
+    p = expat.ParserCreate()
+    p.StartElementHandler, p.EndElementHandler = start, end
+    p.StartDoctypeDeclHandler = p.EntityDeclHandler = refuse
+    chunks = _document_xml_chunks(source, max_bytes)
+    try:
+        for chunk in chunks:
+            p.Parse(chunk, False)
+        p.Parse(b"", True)
+    except _CellsDone:
+        pass
+    except expat.ExpatError as exc:
+        raise ValueError("Document.xml is not well-formed XML: %s" % exc) from exc
+    finally:
+        chunks.close()                                                     # closes the zip at once, also on an early stop
+    if sheet is not None and not st["found"]:
+        raise KeyError("no %s sheet in the FreeCAD file" % sheet)
+    return out
+
+
+def read_fcstd_params(path, sheet="Params"):
+    """{alias: expression} of the Params spreadsheet of an FCStd (zip / Document.xml), no FreeCAD needed.  Bounded: see
+    :func:`read_fcstd_cells`."""
+    return {a: c.lstrip("=") for a, c in read_fcstd_cells(path, sheet)}
 
 
 def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):

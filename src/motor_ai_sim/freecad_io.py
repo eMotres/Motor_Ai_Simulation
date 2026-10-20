@@ -37,7 +37,6 @@ import io
 import logging
 import re
 import zipfile
-import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
@@ -621,18 +620,18 @@ def read_fcstd_params(data: bytes) -> Dict[str, float]:
     Reads what FreeCAD SAVED — aliases survive edits, added rows, renames of
     the sheet itself.  Non-numeric cells (notes the user typed) are skipped;
     a numeric cell whose alias matches nothing on our side is reported by the
-    caller, not silently dropped."""
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
-        xmls = [n for n in z.namelist() if n == "Document.xml"]
-        if not xmls:
-            raise ValueError("not a FreeCAD document: Document.xml is missing")
-        root = ET.fromstring(z.read("Document.xml"))
+    caller, not silently dropped.
+
+    Read through the bounded streaming reader of ``motor_ai_sim.cad.store`` (security review 2026-10-20, F5): the expanded
+    Document.xml, its element count and its aliased cells are capped, so a small archive cannot expand into memory."""
+    from motor_ai_sim.cad import store as _cs
+    try:
+        cells = _cs.read_fcstd_cells(io.BytesIO(data))
+    except KeyError:
+        raise ValueError("not a FreeCAD document: Document.xml is missing")
     out: Dict[str, float] = {}
-    for cell in root.iter("Cell"):
-        alias = cell.get("alias")
-        if not alias:
-            continue
-        raw = (cell.get("content") or "").strip()
+    for alias, content in cells:
+        raw = (content or "").strip()
         # FreeCAD may store '=<expr>' for computed cells; a plain number is the
         # common case.  Units typed into the cell ("7.1 mm") are tolerated.
         m = re.match(r"^=?\s*(-?\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s*(?:mm|deg)?\s*$",

@@ -8,7 +8,14 @@
     POST /api/family/config/{die}/{cfg}/cad_params/import   the same edits from a Fusion Parameter I/O CSV or a FreeCAD .FCStd
     POST /api/family/config/{die}/{cfg}/cad_rebuild         request a server rebuild of the CAD model (also made by every save)
 
-Permission = the rule of every other die/configuration edit (``family.require_catalog_write`` + ``_require_die_write``: an admin on
+Full-construction gate (security review 2026-10-20, F8): every route here - the part tree, the construction table (GET),
+its save (PUT), the file import and the rebuild - answers 403 ``nda_required`` unless the caller passes
+``model3d.can_download`` (the owner / admin; an account flagged "NDA signed" by an administrator; an online NDA signer only
+once the applicant verification is VERIFIED).  The 404 of a hidden / missing motor or configuration comes first, so the
+gate never tells a stranger that a motor exists.  These dimensions (shaft, holders, bearings ...) are the full
+construction, not public-datasheet data.
+
+Permission to WRITE = the rule of every other die/configuration edit (``family.require_catalog_write`` + ``_require_die_write``: an admin on
 a workstation, any registered account in its own workspace copy under the multi-user layering).  A save is audited
 (``cad.params``).  The electromagnetic simulation never reads ``cad_overrides``: a Full edit cannot change the geometry, its
 ``_geoSig`` or any run input (tests/test_construction_params.py pins it).
@@ -51,6 +58,24 @@ def _resolve_cfg(die: str, config: Optional[str], who: dict) -> str:
     return names[0]
 
 
+FULL_CONSTRUCTION_DENIED = "The full construction needs the signed NDA and a verified account."
+
+
+def require_full_construction(authorization, message: str = FULL_CONSTRUCTION_DENIED) -> None:
+    """403 ``nda_required`` unless the caller may see the FULL construction: the same gate as the full model / STEP
+    (``model3d.can_download``: NDA signed AND applicant verification; the owner / admin always).  Called AFTER the hidden /
+    missing 404s and BEFORE anything of the construction is read or written."""
+    from motor_ai_sim import model3d as _m3
+    from motor_ai_sim.auth import caller_identity as _ci
+    who = _ci(authorization)
+    rec: Dict[str, Any] = {}
+    if not who.get("is_admin") and who.get("id"):
+        from motor_ai_sim import users as _U
+        rec = _U.get_user(who["id"]) or {}
+    if not _m3.can_download(who, rec):
+        raise HTTPException(status_code=403, detail=dict(code="nda_required", message=message))
+
+
 # ---------------------------------------------------------------------------
 # the part tree
 # ---------------------------------------------------------------------------
@@ -64,15 +89,7 @@ def get_part_tree(die: str, config: Optional[str] = None, authorization: str = H
     who = fam._require_die_access(die, authorization)
     cfg = _resolve_cfg(die, config, who)
     # the part tree IS the full construction (owner 2026-10-15): the same gate as the full model / STEP; the 404 for a hidden configuration came first
-    from motor_ai_sim import model3d as _m3
-    from motor_ai_sim.auth import caller_identity as _ci
-    _who = _ci(authorization)
-    _rec = {}
-    if not _who.get("is_admin") and _who.get("id"):
-        from motor_ai_sim import users as _U
-        _rec = _U.get_user(_who["id"]) or {}
-    if not _m3.can_download(_who, _rec):
-        raise HTTPException(status_code=403, detail=dict(code="nda_required", message="The part tree of the full construction needs the signed NDA and a verified account."))
+    require_full_construction(authorization, "The part tree of the full construction needs the signed NDA and a verified account.")
     out: Dict[str, Any] = {"die": die, "config": cfg, "can_write": fam._can_write_catalog(who)}
     try:
         out.update(PT.part_tree(die, cfg, dies_dir=fam._die_dir(die).parent))
@@ -164,6 +181,7 @@ def get_cad_params(die: str, cfg: str, authorization: str = Header(default=None)
     who = fam._require_die_access(die, authorization, cfg)
     if not (fam._die_dir(die) / f"{cfg}.yaml").is_file():          # same text as the config-path gate gives a hidden one
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    require_full_construction(authorization)                        # F8: the dimensions are the full construction
     return _table(die, cfg, who)
 
 
@@ -241,6 +259,8 @@ def put_cad_params(die: str, cfg: str, req: CadParamsPut, _w: dict = Depends(fam
     die = fam._check_name(die, "die")
     cfg = fam._check_name(cfg, "configuration")
     fam._require_die_write(die, _w, cfg)
+    fam._load_yaml(fam._cfg_file(die, cfg), "configuration")       # 404 for a missing one first, like a hidden one
+    require_full_construction(_w.get("authorization"))              # F8: a save answers with the whole table
     return _change(die, cfg, _w, req.values, bearing_set="bearing_card" in req.model_fields_set,
                    bearing_card=req.bearing_card, dry_run=req.dry_run, source="form")
 
@@ -278,8 +298,10 @@ def values_from_csv(data: bytes) -> Dict[str, float]:
 def values_from_fcstd(data: bytes) -> Dict[str, float]:
     """CAD parameters of the ``Params`` spreadsheet of a FreeCAD file (evaluated; formulas of other cells are followed)."""
     try:
-        cells = CS.read_fcstd_params(io.BytesIO(data))
-        vals = CS.evaluate(cells)
+        cells = CS.read_fcstd_params(io.BytesIO(data))            # bounded (F5): Document.xml size, elements, cells
+        vals = CS.evaluate(cells)                                   # bounded dependency depth
+    except CS.FcstdLimitError as exc:
+        raise HTTPException(exc.status, detail=f"FreeCAD file refused: {exc}")
     except (zipfile.BadZipFile, KeyError, ValueError, SyntaxError, NameError, ZeroDivisionError) as exc:
         raise HTTPException(422, detail=f"not a FreeCAD file with a Params sheet: {exc}")
     return {n: float(vals[n]) for n in CP.CATALOGUE if n in vals}
@@ -294,6 +316,7 @@ async def import_cad_params(die: str, cfg: str, dry_run: int = Query(1), file: U
     cfg = fam._check_name(cfg, "configuration")
     fam._require_die_write(die, _w, cfg)
     saved = CP.clean_overrides(fam._load_yaml(fam._cfg_file(die, cfg), "configuration").get(CP.OVERRIDES_KEY))   # 404 first, like a missing one
+    require_full_construction(_w.get("authorization"))              # F8: before the upload is even read
     data = await file.read()
     if len(data) > 20_000_000:
         raise HTTPException(413, detail="file too large")
@@ -319,6 +342,7 @@ def request_cad_rebuild(die: str, cfg: str, _w: dict = Depends(fam.require_catal
     fam._require_die_write(die, _w, cfg)
     cfile = fam._cfg_file(die, cfg)
     ov = CP.clean_overrides(fam._load_yaml(cfile, "configuration").get(CP.OVERRIDES_KEY))
+    require_full_construction(_w.get("authorization"))              # F8: the full model is built for NDA accounts only
     if CP.read_manifest(die, cfg) is None:
         raise HTTPException(409, detail="no CAD model has been built for this motor yet")
     actor = _AA.actor_of(_w.get("user"))

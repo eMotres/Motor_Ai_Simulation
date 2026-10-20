@@ -1744,7 +1744,17 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
     drv = resolve_drive(m, drive, bc, esc_i_bus_A, esc_i_phase_A)
     drv["board_cooling_basis"] = bc_basis
     pk = resolve_pack(m, pack_v_min, pack_v_max, pack_i_max_A)
-    lims = limits_of(m, winding_limit_c, magnet_limit_c)
+    # THE CONTINUOUS LIMIT IS THE RATED WINDING (owner 2026-10-20: «при первой
+    # загрузке текущая точка и rated должны совпадать»): the S1 line is where a
+    # propeller machine's rated point sits — the coils at the application's rated
+    # temperature (180 °C, configure_limits.rated_winding) — not the insulation
+    # class, which stays the overheat line.  A caller's own limit still wins.
+    if winding_limit_c is None:
+        lims = limits_of(m, _rated_winding_c(), magnet_limit_c)
+        lims["winding_basis"] = ("rated winding temperature of a propeller machine "
+                                 "(%g °C, configure_limits.rated_winding)" % lims["winding_C"])
+    else:
+        lims = limits_of(m, winding_limit_c, magnet_limit_c)
     rho = pp.air_density(temp_c=ambient_c, altitude_m=altitude_m)
     prop_end = 1.5 * prop.rpm_range[1]
     hi = float(rpm_max) if rpm_max else min(lims["rpm_max"], prop_end)

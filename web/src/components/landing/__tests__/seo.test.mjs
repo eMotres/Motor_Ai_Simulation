@@ -217,7 +217,7 @@ for (const { name, dist } of targets) {
       assert.equal(figs.length, 3, `${file}: three figures`);
       for (const a of figs) {
         assert.match(a, /src="\/landing\/[a-z-]+\.webp"/);
-        assert.match(a, /width="884" height="76[67]"/);
+        assert.match(a, /width="884" height="(771|772|749)"/);
         assert.match(a, /loading="lazy"/);
         assert.match(a, /fetchpriority="low"/);
       }

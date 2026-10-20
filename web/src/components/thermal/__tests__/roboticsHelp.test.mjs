@@ -16,7 +16,7 @@
  * beside it copy their source because they pin FUNCTIONS out of a .tsx-adjacent
  * module that pulls in React.
  *
- * The numbers are the Ø85 L13 robot joint's last heat-path record
+ * The numbers are the Ø85 robot joint's last heat-path record
  * (`GET /api/thermal/heat_paths/last`, robotics, 40 °C room): 195.8 W removed,
  * mount 163.2 W = 83 %, end-winding faces 18.4 W = 9.4 %, housing 5.0 W = 2.5 %
  * (radiation 2.91 W against convection 2.05 W), bore 2.0 W = 1 %.
@@ -26,7 +26,7 @@ import assert from 'node:assert/strict';
 
 import {
   BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
-  FRAME_LABEL, HEAT_PATH_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE, L13_SHARES,
+  FRAME_LABEL, HEAT_PATH_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE, ROBOT_JOINT_SHARES,
   PARAM_BY_SINK,
   ROBOTICS_HELP, ROBOTICS_SUBTITLE, SHAFT_SIDES_LABEL, setByLine,
 } from '../roboticsHelp.ts';
@@ -76,8 +76,8 @@ test('the emissivity tip says it is THE radiation parameter, with the law and th
   assert.match(t, /0\.9/);            // the store's default
   assert.match(t, /anodised/);        // what 0.9 IS
   assert.match(t, /polished/);        // the other end of the range
-  assert.match(t, new RegExp(String(L13_SHARES.housing_radiation_W)));
-  assert.match(t, new RegExp(String(L13_SHARES.housing_convection_W)));
+  assert.match(t, new RegExp(String(ROBOT_JOINT_SHARES.housing_radiation_W)));
+  assert.match(t, new RegExp(String(ROBOT_JOINT_SHARES.housing_convection_W)));
 });
 
 test('the heat-path tip states every default it stands on and the touch limit', () => {
@@ -113,18 +113,18 @@ test('end faces, bore and shaft tips say what the options DO', () => {
 test('every quoted share is the record\'s, not an invented one', () => {
   const quoted = Object.values(ROBOTICS_HELP).map((c) => c.tip).join(' ')
     + HOW_IT_WORKS.map((h) => h.text).join(' ');
-  // (The L13 mount share is no longer quoted: the mount W/K it came from was
+  // (The robot-joint mount share is no longer quoted: the mount W/K it came from was
   // replaced by the heat path on 2026-09-26.)
-  for (const pct of [L13_SHARES.end_faces_total_pct, L13_SHARES.bore_pct]) {
+  for (const pct of [ROBOT_JOINT_SHARES.end_faces_total_pct, ROBOT_JOINT_SHARES.bore_pct]) {
     assert.match(quoted, new RegExp(`${pct} %`), `share ${pct} % is never quoted`);
   }
   // …and the shares must still add up to the record's own outflow
-  const parts = L13_SHARES.mount_W + L13_SHARES.housing_W
-    + L13_SHARES.end_faces_total_W + L13_SHARES.bore_W;
-  assert.ok(Math.abs(parts - L13_SHARES.removed_W) < 1.0,
-            `the quoted watts (${parts}) do not make the removed ${L13_SHARES.removed_W} W`);
-  assert.ok(Math.abs(L13_SHARES.housing_convection_W + L13_SHARES.housing_radiation_W
-                     - L13_SHARES.housing_W) < 0.1);
+  const parts = ROBOT_JOINT_SHARES.mount_W + ROBOT_JOINT_SHARES.housing_W
+    + ROBOT_JOINT_SHARES.end_faces_total_W + ROBOT_JOINT_SHARES.bore_W;
+  assert.ok(Math.abs(parts - ROBOT_JOINT_SHARES.removed_W) < 1.0,
+            `the quoted watts (${parts}) do not make the removed ${ROBOT_JOINT_SHARES.removed_W} W`);
+  assert.ok(Math.abs(ROBOT_JOINT_SHARES.housing_convection_W + ROBOT_JOINT_SHARES.housing_radiation_W
+                     - ROBOT_JOINT_SHARES.housing_W) < 0.1);
 });
 
 test('the option texts say what the option does, not what it is called', () => {

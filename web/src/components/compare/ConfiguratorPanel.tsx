@@ -29,7 +29,7 @@ import {
   scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
 import {
-  REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
+  EMPTY_REFERENCE, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
 import GreekLabel from './GreekLabel';
@@ -263,8 +263,8 @@ const ConfiguratorPanel: React.FC = () => {
   const identity = user?.email?.trim().toLowerCase() ?? null;
   const lastMotor = useLastMotorState();
   const isOrdinaryAccount = !!(enforced && identity && !isAdmin);
-  // FEM-characterised catalog motors (fetched) come first; the built-in
-  // REFERENCE_PASSPORTS stay as a seed/fallback.
+  // FEM-characterised catalog motors (fetched from the server); the client bundle carries no
+  // built-in machine (public-bundle rule), only the inert EMPTY_REFERENCE stand-in.
   const [catalogRefs, setCatalogRefs] = useState<ReferenceMotor[]>([]);
   // Has the references fetch been ANSWERED (an empty list included)?  Until it has, and
   // until the loaded machine has been matched against the answer, the panel says it is
@@ -273,7 +273,7 @@ const ConfiguratorPanel: React.FC = () => {
   const [matchChecked, setMatchChecked] = useState(false);
   // Retry until the catalog answers, and refetch on catalog changes — a
   // single failed fetch (server restart window) left the panel with ONLY the
-  // built-in 200 mm reference forever, so no loaded motor could ever match
+  // built-in reference forever, so no loaded motor could ever match
   // (user 2026-08-25: "200 mm again").  Same illness as the Motors-tab
   // canWrite freeze, same cure.
   useEffect(() => {
@@ -308,8 +308,8 @@ const ConfiguratorPanel: React.FC = () => {
   /** The knobs the panel opened with for THIS machine — the "ref" every
    *  percentage is measured against, and what Reset returns to. */
   const [refKnobs, setRefKnobs] = useState<Knobs | null>(null);
-  const allRefs = useMemo(() => [...catalogRefs, ...REFERENCE_PASSPORTS], [catalogRefs]);
-  const seedRefId = REFERENCE_PASSPORTS[0]?.id ?? '';
+  const allRefs = catalogRefs;
+  const seedRefId = EMPTY_REFERENCE.id;
   const [refChoice, setRefChoice] = useState(() => ({
     email: identity, id: readConfigureRefId(identity) ?? seedRefId,
   }));
@@ -483,9 +483,9 @@ const ConfiguratorPanel: React.FC = () => {
           && Number.isFinite(live.L_mm) && Number.isFinite(live.N)) {
         // Only adopt the live build onto a passport that GENUINELY matches its
         // cross-section (m).  Grafting these raw slider values onto some other
-        // ref's passport (the previous pick, or the built-in fallback) produced
-        // numbers for a machine that does not exist — e.g. a 200 mm 20p/24s
-        // passport computed with a loaded 40 mm 12s/14p build's turns/current
+        // ref's passport (the previous pick, or the empty stand-in) produced
+        // numbers for a machine that does not exist — e.g. one machine's passport
+        // computed with another loaded build's turns/current
         // (owner 2026-09-29: "three different motors on one page").  With no
         // match, leave the knobs/ranges alone; the render layer shows the
         // "no configurator model" empty state instead of a wrong-machine result.
@@ -527,19 +527,19 @@ const ConfiguratorPanel: React.FC = () => {
     return () => clearTimeout(t);
   }, [refsAnswered, liveGeo, matchChecked]);
   const ref: ReferenceMotor = useMemo(
-    () => allRefs.find((r) => r.id === refId) ?? allRefs[0],
+    () => allRefs.find((r) => r.id === refId) ?? allRefs[0] ?? EMPTY_REFERENCE,
     [refId, allRefs],
   );
-  const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(
-    ref.referenceProvenance?.candidate_sha256,
-  );
+  const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(ref.referenceBasis);
   const resistanceReferenceC = configuratorResistanceReferenceTemperature(
-    ref.referenceProvenance?.candidate_sha256, ref.passport.extraction_rev, ref.passport.R0_temp_C,
+    ref.referenceBasis, ref.passport.extraction_rev, ref.passport.R0_temp_C,
   );
+  // The server flags the audited cards (reference_basis.required); no card id lives in the bundle.
+  const referenceBasisRequired = ref.referenceBasis?.required === true;
   // Exact D85 reference cards fail closed when their audited cold provenance is
   // absent or malformed; otherwise scaleMotor would expose hot passport values
   // as if they were 20 °C constants. Legacy cards retain their prior behavior.
-  const coldConstantsUnavailable = coldConstantsUnavailableForCard(catId, referenceTemperatureBasis);
+  const coldConstantsUnavailable = coldConstantsUnavailableForCard(referenceBasisRequired, referenceTemperatureBasis);
   const coldBasisLabel = resistanceReferenceC != null
     ? tx('configure.rPhaseAtReferenceTemp', { temp: resistanceReferenceC })
     : tx('configure.rPhaseReferenceUnknown');
@@ -555,7 +555,7 @@ const ConfiguratorPanel: React.FC = () => {
     return baseKnobs(p);
   });
   const stackCoefficientsUnavailable = stackCoefficientReferenceOnly(
-    catId, knobs.L_mm, referenceTemperatureBasis,
+    referenceBasisRequired, knobs.L_mm, referenceTemperatureBasis,
   );
   // remember the user's tuning across reloads
   useEffect(() => { try { localStorage.setItem(KNOBS_LS, stampKnobs(knobs, refId)); } catch { /* ignore */ } }, [knobs]); // eslint-disable-line react-hooks/exhaustive-deps

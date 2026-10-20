@@ -63,9 +63,9 @@ export interface Feature {
 
 /** The three simulation pictures, in order.  Exported so the test can check them without a DOM. */
 export const FEATURES: Feature[] = [
-  { key: 'em', src: '/landing/em-field.webp', w: 884, h: 766 },
-  { key: 'thermal', src: '/landing/thermal-map.webp', w: 884, h: 767 },
-  { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 767 },
+  { key: 'em', src: '/landing/em-field.webp', w: 884, h: 771 },
+  { key: 'thermal', src: '/landing/thermal-map.webp', w: 884, h: 772 },
+  { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 749 },
 ];
 
 /** The button's words.  Only a deployment that HAS a Google client id may

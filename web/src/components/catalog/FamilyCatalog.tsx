@@ -588,7 +588,12 @@ const FamilyCatalog: React.FC<{
               return;
             }
             if (data?.code === 'die.retire_required') {
-              setMsg(`✗ ${tx('retireRequired', { die: name })}`);
+              // A shared catalog die cannot be unlinked (the shared store is read-only to the API):
+              // the same Delete click offers to retire it for everyone right here, instead of a
+              // one-line message that was easy to miss (owner 2026-10-20: «нажимаю на delete, но они
+              // не убираются»).  Retiring is reversible (Restore retired).
+              setBusy(null);
+              retireDie(name);
               return;
             }
             if (r.status !== 409) {

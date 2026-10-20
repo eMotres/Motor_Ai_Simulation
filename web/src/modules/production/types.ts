@@ -251,17 +251,24 @@ export interface ExtraCost {
   note?: string | null;
 }
 
-export interface CostSummary {
+/** Totals of one currency; amounts in different currencies are never added together. */
+export interface CurrencyTotals {
+  currency: string;
   parts_subtotal: number;
   extra_subtotal: number;
   cost_per_motor: number;
-  margin_pct: number;
   price_per_motor: number;
-  order_quantity: number;
   order_parts_total: number;
   order_extra_total: number;
   order_cost_total: number;
   order_price_total: number;
+}
+
+export interface CostSummary {
+  margin_pct: number;
+  order_quantity: number;
+  /** one entry per currency in use (the default currency when nothing is priced), in display order */
+  by_currency: CurrencyTotals[];
   missing_prices_count: number;
   warnings: string[];
 }

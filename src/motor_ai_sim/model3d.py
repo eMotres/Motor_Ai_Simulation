@@ -5,6 +5,7 @@ The generator (``motor_ai_sim.cad``) writes, per die/config, into ``<shared>/cad
     <motor_id>_full.glb           the model for the viewer             -> every signed-in user who may see the motor
     <motor_id>_active.step        the full STEP                         -> download: NDA accounts and the owner / admin only
     <motor_id>_simplified.step    the SIMPLIFIED envelope-only model (+ .glb, .json)  -> every signed-in user, NO NDA (owner 2026-10-15)
+    <motor_id>_*.meshopt.glb      the compressed VIEWER copies of the two GLBs (cad/viewer_pack.py); what the viewer routes serve
     manifest.json                 SHA-256 of every file
 
 ONE model (owner 2026-10-13): everybody who may see a motor can view, rotate and section it; downloading it is the NDA
@@ -42,7 +43,12 @@ _LOCK = threading.RLock()
 #: file name suffix per kind; the GLB is written by cad/fc_scripts/export_models.py, the STEP by export_step.py
 _SUFFIX = {"glb": "_full.glb", "step": "_active.step",
            # the SIMPLIFIED model (owner 2026-10-15): envelope only, no NDA, written by cad/fc_scripts/export_simplified.py
-           "simplified_step": "_simplified.step", "simplified_glb": "_simplified.glb", "simplified_json": "_simplified.json"}
+           "simplified_step": "_simplified.step", "simplified_glb": "_simplified.glb", "simplified_json": "_simplified.json",
+           # the compressed viewer copies (owner 2026-10-20, load time): same node tree, meshopt-compressed (cad/viewer_pack.py)
+           "glb_view": "_full.meshopt.glb", "simplified_glb_view": "_simplified.meshopt.glb"}
+
+#: the viewer copy of a canonical GLB kind
+_VIEW_OF = {"glb": "glb_view", "simplified_glb": "simplified_glb_view"}
 
 SIMPLIFIED_NOTICE = "SIMPLIFIED - envelope only"
 
@@ -141,6 +147,12 @@ def file_row(entry: dict, kind: str) -> Optional[dict]:
     if not row or not p.is_file():
         return None
     return dict(path=p, name=name, sha256=row.get("sha256"), bytes=p.stat().st_size)
+
+
+def view_row(entry: dict, kind: str) -> Optional[dict]:
+    """The file the VIEWER gets for ``glb`` / ``simplified_glb``: the compressed copy when the build wrote one, else the canonical GLB.
+    Same model, same access rule - only the bytes on the wire differ."""
+    return file_row(entry, _VIEW_OF[kind]) or file_row(entry, kind)
 
 
 def model_info(entry: dict) -> dict:

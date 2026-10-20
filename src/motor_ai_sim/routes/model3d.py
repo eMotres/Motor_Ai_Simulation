@@ -97,31 +97,63 @@ def list_models(authorization: Optional[str] = Header(default=None)):
     return {"can_download": full, "access": V.public_access(who, rec), "models": out}
 
 
+#: The two VIEWER routes (owner 2026-10-20, load time): the compressed copy of the GLB (``M.view_row``), a strong ETag = its sha256, and
+#: "revalidate every time".  NOT a long max-age: the browser cache is keyed by the URL, not by the account, so a max-age would hand the
+#: full model to the next account signed in to the same browser without the server's check.  A repeat view costs one request that
+#: answers 304 (no body) - and the 304 is sent only AFTER the same access checks as the 200.  Inside one tab the viewer keeps the
+#: bytes in memory anyway (ModelCanvas), so switching tabs never refetches.
+VIEW_CACHE_CONTROL = "private, no-cache"
+
+
+def etag_matches(if_none_match: Optional[str], sha: Optional[str]) -> bool:
+    """RFC 9110 weak comparison of an If-None-Match list with the file's sha256 (nginx's gzip turns the ETag into W/"...")."""
+    if not if_none_match or not sha:
+        return False
+    for tag in if_none_match.split(","):
+        tag = tag.strip()
+        if tag == "*":
+            return True
+        if tag.startswith("W/"):
+            tag = tag[2:]
+        if tag.strip('"') == sha:
+            return True
+    return False
+
+
+def _serve_view(request: Request, row: dict):
+    """200 with the file, or 304 when the caller's copy is current.  The caller has passed every access check before this."""
+    headers = {"Cache-Control": VIEW_CACHE_CONTROL}
+    if row.get("sha256"):
+        headers["ETag"] = '"%s"' % row["sha256"]
+    if etag_matches(request.headers.get("if-none-match"), row.get("sha256")):
+        return Response(status_code=304, headers=headers)
+    return FileResponse(row["path"], media_type="model/gltf-binary", headers=headers)
+
+
 @router.get("/{die}/{config}/model.glb")
-def get_glb(die: str, config: str, authorization: Optional[str] = Header(default=None)):
+def get_glb(die: str, config: str, request: Request, authorization: Optional[str] = Header(default=None)):
     """The FULL viewer model.  Only a caller who passes the full-model gate (NDA + verification, owner / admin); everybody else sees the
-    simplified model (``simplified_view.glb``).  The hidden / ungranted 404 comes first."""
+    simplified model (``simplified_view.glb``).  The hidden / ungranted 404 comes first.  Served compressed when the build wrote the
+    viewer copy (``<motor_id>_full.meshopt.glb``), else the canonical GLB."""
     _caller(authorization)
     e = _entry_for(authorization, die, config)
     require_full_view(authorization)
-    row = M.file_row(e, "glb")
+    row = M.view_row(e, "glb")
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
-    return FileResponse(row["path"], media_type="model/gltf-binary",
-                        headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=0, must-revalidate"})
+    return _serve_view(request, row)
 
 
 @router.get("/{die}/{config}/simplified_view.glb")
-def get_simplified_view(die: str, config: str, authorization: Optional[str] = Header(default=None)):
+def get_simplified_view(die: str, config: str, request: Request, authorization: Optional[str] = Header(default=None)):
     """The SIMPLIFIED model for the viewer: every signed-in caller who may see the motor.  Viewing is not downloading: not stamped, not
-    logged (``simplified.glb`` / ``simplified.step`` are the logged downloads); a short private cache."""
+    logged (``simplified.glb`` / ``simplified.step`` are the logged downloads, and they stay the canonical, uncompressed files)."""
     _caller(authorization)
     e = _entry_for(authorization, die, config)
-    row = M.file_row(e, "simplified_glb")
+    row = M.view_row(e, "simplified_glb")
     if row is None:
         raise HTTPException(status_code=404, detail="The simplified model of this motor has not been built yet.")
-    return FileResponse(row["path"], media_type="model/gltf-binary",
-                        headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=60"})
+    return _serve_view(request, row)
 
 
 @router.get("/{die}/{config}/model.step")

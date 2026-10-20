@@ -433,6 +433,35 @@ Deploying: the CAD image must be rebuilt from this commit (`export_models.py`, `
 (`docker run ... motres-cad:<tag> build --die ... --config ...`, same command as above; a rebuild replaces the whole output directory, so old
 `<motor_id>_envelope.*` files disappear); the API only reads `<shared>/cad`.
 
+### Compressed viewer copies (owner 2026-10-20: "the models load slowly")
+
+The 15.7 s (150_35, 14.4 MB) and 7.6 s (50 mm, 5.1 MB) the owner saw were all transfer time: from the server to itself the same GLBs
+answer in 30-70 ms.  So the bytes are cut, not the serving path.  After the exporters, `build.py` runs `cad/viewer_pack.py`, which writes
+next to each canonical GLB a viewer copy packed by gltfpack (meshoptimizer 1.3, MIT; built from the pinned source in `deploy/Dockerfile.cad`):
+
+| File | Served by |
+|---|---|
+| `<motor_id>_full.meshopt.glb` | `model.glb` (the full-model gate) |
+| `<motor_id>_simplified.meshopt.glb` | `simplified_view.glb` (every signed-in user who may see the motor) |
+
+Options `-cc -vpf -vn 10 -kn -km -ke`: EXT_meshopt_compression + KHR_mesh_quantization, positions stay FLOAT (the exponential filter: no
+dequantisation transform on any node, so the node tree, the names, the extras and the CAD-frame coordinates the viewer reads are the
+canonical file's), 10-bit normals, no simplification.  `viewer_pack.check` refuses a copy whose node tree, child order, extras, triangle
+counts, materials or bounding boxes (0.05 mm) differ, that adds a node transform or an extension three.js does not load, or that is not
+smaller; a refused copy is not written and the route serves the canonical GLB.  Measured on the public motors: 4.5-5.1 MB -> 0.86-0.99 MB,
+14.4 -> 2.65 MB, 6.3 -> 1.08 MB (simplified 150_35); worst position error 0.006 mm, normals 0.23 degrees; rendered before/after in three.js,
+<0.2 % of the model's pixels differ by more than 24/255.  The web nginx gzips `model/gltf-binary` on top (the meshopt streams are made for
+it): 150_35 full 1.07 MB on the wire.  The viewer decodes with three's `MeshoptDecoder` (`web/src/modules/viewer3d/internal/gltfLoader.ts`,
+bundled, no CDN).  The logged, stamped `simplified.glb` download stays the canonical file.
+
+Caching: strong ETag = sha256 of the served file, `Cache-Control: private, no-cache`; the 304 comes after the same access checks as the 200.
+No long max-age: the browser cache is keyed by the URL, not by the account, so it would hand the full model to the next account in the same
+browser without the server's check.  Inside a tab the viewer keeps the bytes in memory (ModelCanvas), so a repeat view there costs nothing.
+
+Re-pack models that are already built (no FreeCAD, seconds; the manifest gets the new rows and a `viewer_pack` block):
+`docker run --rm --user 10001:10001 -v /srv/motres/shared/cad:/out motres-cad:<tag> pack --out-root /out [--die D --config C]`.
+The image build runs `run_build.py pack-selftest` and fails if gltfpack does not pack a synthetic model correctly.
+
 ## Ring-carrier variant and the CIANO28 85 (template A.5.0, 2026-10-14)
 
 The CIANO28 85 20SW1200 / L13 is built by the same template as the CIANO14 40; what differs is selected by profile rows (a profile

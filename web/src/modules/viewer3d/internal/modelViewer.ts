@@ -10,7 +10,7 @@ import {
   MeshStandardMaterial, Object3D, PerspectiveCamera, OrthographicCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
   UnsignedByteType, Vector2, Vector3, WebGLRenderer,
 } from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { makeGltfLoader } from './gltfLoader';
 import {
   distance, explodeShift, sectionPlane, sectionRange, type Axis, type Box, type PartGroup, type Vec3, type StandardView, standardViewDirection,
 } from './model3d';
@@ -112,7 +112,7 @@ export class ModelViewer {
   async load(buffer: ArrayBuffer): Promise<{ groups: PartGroup[]; box: Box }> {
     const token = ++this.loadToken;
     this.clear();
-    const gltf = await new GLTFLoader().parseAsync(buffer, '');
+    const gltf = await makeGltfLoader().parseAsync(buffer, '');
     if (token !== this.loadToken || this.disposed) {
       gltf.scene.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.geometry.dispose(); for (const mt of Array.isArray(m.material) ? m.material : [m.material]) mt.dispose(); } });
       return { groups: [], box: this.box };

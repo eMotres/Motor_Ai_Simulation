@@ -184,16 +184,37 @@ def test_polls_alone_never_keep_a_session_alive(env):
     assert _rec(env, sid)["revoked_reason"] == "idle_timeout"
 
 
-def test_a_non_get_request_counts_as_activity_but_the_working_time_beat_does_not(env):
+def test_a_non_get_request_and_the_working_time_beat_count_as_activity_but_a_get_poll_does_not(env):
     j = _login()
     sid = _sid(env, j["token"])
     _age(env, sid, activity_ago=10 * 60)
     before = _rec(env, sid)["last_activity"]
     r = client.post("/api/activity/heartbeat", json={"sid": "abcdefgh1234", "tab": "motors"}, headers=_bearer(j["token"]))
     assert r.status_code == 200
-    assert _rec(env, sid)["last_activity"] == before    # the 5-minute working-time beat is passive
-    client.post("/api/auth/sessions/nonexistent/revoke", headers=_bearer(j["token"]))   # a user action (404 is fine)
+    # the input-driven working-time beat of the bundle already in browsers counts as activity ...
     assert _rec(env, sid)["last_activity"] > before + 9 * 60
+
+    # ... a GET poll still does not
+    _age(env, sid, activity_ago=10 * 60)
+    before = _rec(env, sid)["last_activity"]
+    assert client.get("/api/me", headers=_bearer(j["token"])).status_code == 200
+    assert _rec(env, sid)["last_activity"] == before
+
+    # and any other non-GET is a user action (404 is fine)
+    client.post("/api/auth/sessions/nonexistent/revoke", headers=_bearer(j["token"]))
+    assert _rec(env, sid)["last_activity"] > before + 9 * 60
+
+
+def test_an_old_tab_that_only_sends_the_working_time_beat_stays_signed_in(env):
+    """The bundle sent before the idle rule has no session heartbeat, only the input-driven beat."""
+    j = _login()
+    sid = _sid(env, j["token"])
+    _age(env, sid, activity_ago=29 * 60)                 # one minute from the limit
+    r = client.post("/api/activity/heartbeat", json={"sid": "abcdefgh1234", "tab": "motors"}, headers=_bearer(j["token"]))
+    assert r.status_code == 200
+    assert _rec(env, sid)["last_activity"] > time.time() - 5     # the beat refreshed the clock
+    assert client.get("/api/me", headers=_bearer(j["token"])).json()["email"] == CLIENT
+    assert not _rec(env, sid)["revoked"]
 
 
 def test_what_counts_as_activity():
@@ -207,7 +228,7 @@ def test_what_counts_as_activity():
               "/api/admin/analytics/live", "/api/version"):
         assert not SA.is_user_activity("GET", p), p
     assert not SA.is_user_activity("OPTIONS", "/api/kernel/run")
-    assert not SA.is_user_activity("POST", "/api/activity/heartbeat")
+    assert SA.is_user_activity("POST", "/api/activity/heartbeat")      # the input-driven working-time beat
     assert not SA.is_user_activity("POST", "/api/nodes/heartbeat")
 
 

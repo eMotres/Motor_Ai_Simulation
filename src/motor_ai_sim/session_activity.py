@@ -17,9 +17,13 @@ This module owns the two inputs of that rule.
 User activity (``is_user_activity``)
 ------------------------------------
 * any request that is not GET / HEAD / OPTIONS (a click that changes something), except the
-  automatic ones in ``PASSIVE_NON_GET`` (the working-time beat, worker / node traffic);
+  automatic ones in ``PASSIVE_NON_GET`` (worker / node traffic);
 * ``POST /api/auth/heartbeat`` - the app sends it at most once a minute, only when the tab is
-  visible and there was real input (pointer, key, wheel, touch) since the previous one.
+  visible and there was real input (pointer, key, wheel, touch) since the previous one;
+* ``POST /api/activity/heartbeat`` - the working-time beat of the bundle already in users' browsers.
+  It is input-driven too (it keeps sending only for up to 5 minutes after the last real input), so
+  it counts: tabs open from before this rule stay alive while people use them, and the idle limit
+  stretches by at most those 5 minutes (owner/coordinator 2026-10-20).
 
 Everything else is background traffic and never extends a session: ``GET`` polls (job status,
 live load, version checks, ``/api/me``...).
@@ -66,9 +70,9 @@ ACTIVE_WINDOW_S = 300.0
 #: A `running` / `queued` job record older than this is a crashed leftover, not work in flight.
 JOB_STALE_S = 48 * 3600.0
 
-#: Non-GET requests that are NOT a user acting: the working-time beat is sent for up to 5 minutes after
-#: the last input; node / worker traffic carries its own tokens.
-PASSIVE_NON_GET = ("/api/activity/heartbeat", "/api/nodes/", "/api/worker/")
+#: Non-GET requests that are NOT a user acting: node / worker traffic carries its own tokens.  (The
+#: working-time beat POST /api/activity/heartbeat is NOT here: it is input-driven, see the docstring.)
+PASSIVE_NON_GET = ("/api/nodes/", "/api/worker/")
 HEARTBEAT_PATH = "/api/auth/heartbeat"
 
 

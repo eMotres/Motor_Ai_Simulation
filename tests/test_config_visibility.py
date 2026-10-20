@@ -458,7 +458,9 @@ def test_read_routes_serve_admin_and_a_granted_account(env, route):
         pub = client.get(*( (template.format(die=DIE), ) if READ_ROUTES[route] == "query-config" else (_read_url(template, PUB),) ),
                          params=({"config": PUB} if READ_ROUTES[route] == "query-config" else None), headers=env[who])
         assert r.status_code == pub.status_code or r.status_code in (200, 400, 422), (who, r.status_code, pub.status_code)
-        assert miss.status_code in (404, 400, 422, 200)
+        # (403 nda_required: a full-construction route answers every configuration alike without the NDA gate - existing,
+        # hidden or missing - so it is no oracle; security review 2026-10-20)
+        assert miss.status_code in (404, 400, 422, 200) or _nda_required(miss), (who, miss.status_code, miss.text[:200])
 
 
 def test_payload_content_is_the_hidden_machine_for_the_granted_account(env):
@@ -470,8 +472,23 @@ def test_payload_content_is_the_hidden_machine_for_the_granted_account(env):
     assert client.get(f"/api/family/payload/{DIE}/{PRIV}", headers=env["eng"]).status_code == 404
 
 
-def test_part_materials_without_config_never_picks_the_hidden_one(env):
-    # no `config=` -> the first VISIBLE configuration (L40), not L41 (alphabetically after, but the rule is "visible")
+def _nda_required(r) -> bool:
+    try:
+        d = r.json().get("detail")
+    except ValueError:
+        return False
+    return r.status_code == 403 and isinstance(d, dict) and d.get("code") == "nda_required"
+
+
+def test_part_materials_without_config_never_picks_the_hidden_one(env, monkeypatch):
+    # the per-part breakdown is the full construction: without the NDA gate a 403 that names nothing (security review 2026-10-20)
+    r = client.get(f"/api/family/die/{DIE}/part_materials", headers=env["eng"])
+    assert r.status_code in (200, 403, 404, 500), r.text
+    assert PRIV not in r.text
+    # with the gate passed: no `config=` -> the first VISIBLE configuration (L40), not L41 (alphabetically after, but the rule
+    # is "visible")
+    from motor_ai_sim.routes import construction
+    monkeypatch.setattr(construction, "require_full_construction", lambda *a, **k: None)
     r = client.get(f"/api/family/die/{DIE}/part_materials", headers=env["eng"])
     assert r.status_code in (200, 404, 500), r.text
     assert PRIV not in r.text

@@ -73,3 +73,47 @@ def test_resource_and_value_guards(expr):
 def test_callable_in_namespace_is_not_a_value():
     with pytest.raises(ValueError):
         _safe_eval("f", {"f": print})
+
+
+# -- FreeCAD's argument separator ``;`` (min(a; b)): converted on tokens, inside calls only ----------------------------------
+
+def test_semicolon_argument_separator_inside_calls_evaluates():
+    from motor_ai_sim.cad.store import evaluate, freecad_call_separators
+    assert freecad_call_separators("min(a; b)") == "min(a, b)"
+    assert freecad_call_separators("2 * ceil(min(x; (20*1.0)) / (2*1.0) - 1e-06)") == "2 * ceil(min(x, (20*1.0)) / (2*1.0) - 1e-06)"
+    assert freecad_call_separators("max(min(a; b); 3)") == "max(min(a, b), 3)"
+    assert freecad_call_separators("a + b") == "a + b"                        # nothing to do: untouched
+    # the real Params-sheet form (CIANO14 40 L12 / L20, CIANO28 85: holder screw length rounded to stock)
+    v = evaluate({"req": "23.2 mm",
+                  "screw": "2 * ceil(min(req; 20 mm) / 2 mm - 1e-06) * 1 mm + 5 * ceil(max(req; 20 mm) / 5 mm - 1e-06) * 1 mm - 20 mm"})
+    assert v["screw"] == pytest.approx(2 * 10 + 5 * 5 - 20)
+    assert evaluate({"a": "2", "b": "3", "c": "max(a; b; 1) - min(a; b)"})["c"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("expr", [
+    "a; b",                      # a statement separator at the top level
+    "1; __import__('os')",
+    "(a; b)",                    # inside a plain group, not a call
+    "min((a; b))",               # a group nested in a call: still not an argument separator
+    "a;",
+    ";",
+    "min(a; b)\n; 1",            # multi-line
+])
+def test_semicolon_outside_a_call_is_rejected(expr):
+    from motor_ai_sim.cad.store import evaluate, freecad_call_separators
+    with pytest.raises(ValueError):
+        freecad_call_separators(expr)
+    with pytest.raises(ValueError):
+        evaluate({"a": "2", "b": "3", "x": expr})
+
+
+@pytest.mark.parametrize("expr", [
+    "getattr(a; 'real')",        # converted to a call the whitelist still refuses
+    "min(a; b).__class__",
+    "eval('1'; 2)",
+    "min(a; lambda: 1)",
+])
+def test_the_whitelist_still_decides_after_the_conversion(expr):
+    from motor_ai_sim.cad.store import _safe_eval, freecad_call_separators
+    with pytest.raises(ValueError):
+        _safe_eval(freecad_call_separators(expr), {**NS, "min": min})

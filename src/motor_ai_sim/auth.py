@@ -263,6 +263,13 @@ _GATED: dict[tuple[str, str], str] = {
     # existing stores - the Simulation menus' audience, like the System graph.  The per-card
     # route /api/components/{id} is in _GATED_PREFIX below.
     ("GET",  "/api/components"): "engineer",
+    # The CAD exports of the caller's own workspace machine (security review 2026-10-20): the electromagnetic geometry
+    # as a FreeCAD bundle / Fusion Parameter I/O rows.  A signed-in account of any role, no NDA (they carry no construction
+    # dimensions); an anonymous exhibit visitor gets 401.  The in-Fusion scripts call the workstation, where AUTH_ENFORCE
+    # is off and this table is not applied.
+    ("GET",  "/api/freecad/export"): "user",
+    ("GET",  "/api/fusion/params.csv"): "user",
+    ("GET",  "/api/fusion/params.json"): "user",
     # NOT listed since 2026-09-17: POST /api/support/chat.  It was "free" —
     # "calls the paid provider API, so require a signed-in account so an
     # anonymous visitor can't run up the bill" — which is the right worry and

@@ -257,7 +257,7 @@ def test_admin_list_reports_both_levels(env):
 
 # ── (2) the leak test: an inherit sibling of a die visible only via ANOTHER configuration ──
 
-def test_inherit_sibling_of_a_die_opened_by_another_configuration_stays_hidden(env):
+def test_inherit_sibling_of_a_die_opened_by_another_configuration_stays_hidden(env, monkeypatch):
     from motor_ai_sim import mcp_tools as T
     from motor_ai_sim import motor_access as MA
     from motor_ai_sim.agent_keys import Principal
@@ -277,9 +277,14 @@ def test_inherit_sibling_of_a_die_opened_by_another_configuration_stays_hidden(e
     for path in (f"/api/family/datasheet/{DIE}/{SIBLING}", f"/api/family/duty_results/{DIE}/{SIBLING}"):
         assert client.get(path, headers=env["user"]).status_code == 404, path
     # a die-level route that picks "the first configuration" never picks the hidden one
-    r = client.get(f"/api/family/die/{DIE}/part_materials", headers=env["user"])
+    # (the per-part breakdown is behind the NDA gate since 2026-10-20: pass it here, the subject is the configuration pick)
+    from motor_ai_sim.routes import construction as _construction
+    with monkeypatch.context() as m:
+        m.setattr(_construction, "require_full_construction", lambda *a, **k: None)
+        r = client.get(f"/api/family/die/{DIE}/part_materials", headers=env["user"])
     if r.status_code == 200:
         assert r.json()["config"] == OPEN
+    assert SIBLING not in r.text
     # the low-level reader every solve / report route uses
     from motor_ai_sim import users as U
     tok = MA._REQ_AUTH.set(f"Bearer {U.issue_token(USER)}")

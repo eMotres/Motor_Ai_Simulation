@@ -187,6 +187,7 @@
   "materialsFullTotalKitTip": "机器人用无框套件：带线圈和相线板的定子 + 带磁钢的转子。不含壳体、定子支架、转子支架、轴承、轴、螺钉和环。所有单位质量指标均以此计算。",
   "materialsFullNoMotor": "请先加载电机以查看其部件。",
   "materialsFullUnavailable": "此处没有该电机的部件清单。",
+  "materialsFullNda": "签署保密协议并完成账户验证后可查看完整部件清单；有效部件的材料请在“有效部件”模式中查看。",
   "materialsFullNoCad": "整机质量不完整（尚无 CAD 模型）：仅列出有效部件及配置中提到的部件。",
   "materialsFullLoading": "正在加载部件",
   "materialsFullSaved": "已随电机型号保存",

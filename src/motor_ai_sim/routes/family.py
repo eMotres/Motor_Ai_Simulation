@@ -4858,9 +4858,15 @@ def get_part_materials(die: str, config: Optional[str] = None, authorization: st
     assignment of the configuration, shown read-only here) plus every non-active part the motor's CAD bill of materials
     lists (holders, rings, carrier, bearings, screws, phase board), each with its material, mass and role.  A motor with
     no built BOM lists only what its configuration names; no part is invented.  ``choices`` = the materials a part may
-    be given.  Nothing is written."""
+    be given.  Nothing is written.
+
+    The per-part breakdown (materials + masses of every part) is the full construction, like the part tree and the BOM:
+    the same NDA + verification gate (``routes.construction.require_full_construction``, security review 2026-10-20),
+    after the die / configuration 404s - a hidden and a missing configuration still answer alike.  The motor's MASS
+    figure (``mass_summary`` of the catalog / Configure) stays public; only this breakdown is gated."""
     from motor_ai_sim import part_materials as _pm
     from motor_ai_sim.modules import motor_mass as _mm
+    from motor_ai_sim.routes.construction import require_full_construction
     die = _check_name(die, "die")
     who = _require_die_access(die, authorization)
     ddir = _die_dir(die)
@@ -4871,6 +4877,7 @@ def get_part_materials(die: str, config: Optional[str] = None, authorization: st
         if not names:
             raise HTTPException(404, detail=f"die '{die}' has no configuration")
         cfg = names[0]
+    require_full_construction(authorization, "The full parts list needs the signed NDA and a verified account.")
     out: dict = {"die": die, "config": cfg, "can_write": _can_write_catalog(who)}
     try:
         if config and not config_allowed(who, die, cfg):
@@ -4900,8 +4907,11 @@ def put_part_material(die: str, req: PartMaterialPut, _w: dict = Depends(require
     permission rule as every catalog write.  The electromagnetic simulation never reads this block: it keeps the
     configuration's active assignment, the geometry and its signature untouched."""
     from motor_ai_sim import part_materials as _pm
+    from motor_ai_sim.routes.construction import require_full_construction
     die = _check_name(die, "die")
     _require_die_write(die, _w)
+    _load_yaml(_die_file(die), "die")                                   # 404 for a missing die first
+    require_full_construction(_w.get("authorization"), "The full parts list needs the signed NDA and a verified account.")
     part = str(req.part or "").strip()
     if part not in _pm.mechanical_parts():
         raise HTTPException(400, detail=f"'{part}' is not a non-active part (valid: {sorted(_pm.mechanical_parts())}); "

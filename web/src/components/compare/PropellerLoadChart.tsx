@@ -5,13 +5,14 @@
  * motor may drive.  Each point is a steady continuous operating point from the backend's propeller S1 rows; the
  * part above the continuous limit is dashed.
  */
-import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Chip, Paper, Tooltip, Typography } from '@mui/material';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Chip, CircularProgress, Paper, Tooltip, Typography } from '@mui/material';
 import { CartesianGrid, Legend, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
 import type { PropSummary } from '../../lib/configuratorPropeller';
 import { modelLabel, vendorLabel } from '../../lib/configuratorPropeller';
 import { fetchPropellerS1 } from '../../lib/propellerApi';
-import { LOAD_COLORS, LOAD_METRICS, METRIC_UNIT, loadLine, valueAt, withPointAt, type LoadMetric, type S1ChartRow } from '../../lib/propellerLoadChart';
+import { s1CacheKey } from '../../lib/configuratorPropellerS1';
+import { LOAD_COLORS, LOAD_METRICS, METRIC_UNIT, chartState, loadLine, rpmAtChartX, speedMarker, valueAt, withPointAt, type LoadMetric, type S1ChartRow } from '../../lib/propellerLoadChart';
 import { nsT } from '../../i18n/nsT';
 
 const tx = nsT('controller');
@@ -33,15 +34,24 @@ interface Props {
   /** the controller / ESC / pack current limit (orange dashed); absent with a sine drive */
   supplyRpm?: number | null;
   supplyReason?: string | null;
+  /** a side that holds to the top of its scan (a BOUND): the whole label of its line, e.g. "S1: holds up to 9 090 rpm
+   *  (end of propeller data)" - the line is still drawn (owner 2026-10-19) */
+  s1Label?: string | null;
+  supplyLabel?: string | null;
+  /** the speed Configure is set to NOW (knobs.rpm): a solid marker line with a dot on every curve - where the user clicked,
+   *  dragged, typed or slid, or where a preset load put it (owner 2026-10-19) */
+  speedRpm?: number | null;
   onRpmChange?: (rpm: number) => void;
 }
 
 const propName = (p: PropSummary | undefined, id: string) =>
   p ? `${vendorLabel(p.vendor)} ${modelLabel(p.model)}` : id;
 
-const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, supplyRpm, supplyReason, onRpmChange }) => {
+const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, supplyRpm, supplyReason, s1Label, supplyLabel, speedRpm, onRpmChange }) => {
   const [metric, setMetric] = useState<LoadMetric>('thrust');
   const [extra, setExtra] = useState<string[]>([]);
+  // the answers kept WITH the request they answer (propeller, drive, pack, air): a line never shows another request's rows,
+  // and a request still in flight is "loading", never "no data" (owner 2026-10-19)
   const [rows, setRows] = useState<Record<string, S1ChartRow[] | null>>({});
   const ids = useMemo(() => {
     const out: string[] = [];
@@ -50,30 +60,50 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
   }, [selectedId, extra, allowed]);
   const packMin = pack?.min ?? null;
   const packMax = pack?.max ?? null;
+  const reqKey = (id: string) => s1CacheKey(id, die, config, ambient, drive,
+    packMin != null && packMax != null ? { min: packMin, max: packMax } : null, escBusA);
 
   useEffect(() => {
     let dead = false;
     const pk = packMin != null && packMax != null ? { min: packMin, max: packMax } : null;
     for (const id of ids) {
+      const k = reqKey(id);
       void fetchPropellerS1(id, die, config, ambient, drive, pk, escBusA).then((r) => {
         if (dead) return;
         const rr = (r as unknown as { rows?: S1ChartRow[] } | null)?.rows ?? null;
-        setRows((cur) => ({ ...cur, [id]: rr }));
+        setRows((cur) => ({ ...cur, [k]: rr }));
       });
     }
     return () => { dead = true; };
-  }, [ids, die, config, ambient, drive, packMin, packMax, escBusA]);
+  }, [ids, die, config, ambient, drive, packMin, packMax, escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
+  const answers = Object.fromEntries(ids.map((id) => [id, rows[reqKey(id)]]));
 
   // the selected propeller's line carries points AT the two limit speeds, so the tooltip stops exactly there
   const lines = ids.map((id, i) => {
-    let ln = loadLine(rows[id], metric);
-    if (id === selectedId) ln = withPointAt(withPointAt(ln, s1Rpm), supplyRpm);
+    let ln = loadLine(answers[id], metric);
+    if (id === selectedId) ln = withPointAt(withPointAt(withPointAt(ln, s1Rpm), supplyRpm), speedRpm);
     return { id, color: LOAD_COLORS[i], name: propName(allowed.find((p) => p.id === id), id), ...ln };
   });
   const sel = lines.find((l) => l.id === selectedId);
   const s1Y = sel && s1Rpm != null ? valueAt(sel, s1Rpm) : null;
   const supplyY = sel && supplyRpm != null ? valueAt(sel, supplyRpm) : null;
   const anyData = lines.some((l) => l.ok.length || l.over.length);
+  // the speed marker: always the CURRENT speed, so a click elsewhere (a new speed) moves it
+  const marker = speedMarker(lines, speedRpm);
+  const state = anyData ? 'data' : chartState(ids, answers);
+  // A click on the chart sets the motor's speed there, dragging moves it (owner 2026-10-19: "it used to recompute the
+  // motor") - the current then follows the propeller, no loading gate: an interactive move recomputes at once.
+  const box = useRef<HTMLDivElement | null>(null);
+  const dragging = useRef(false);
+  const xs = lines.flatMap((l) => [...l.ok, ...l.over].map((q) => q.x));
+  const xMin = xs.length ? Math.min(...xs) : 0;
+  const xMax = xs.length ? Math.max(...xs) : 0;
+  const setFrom = (ev: { clientX?: number } | undefined) => {
+    const rect = box.current?.getBoundingClientRect();
+    if (!rect || ev?.clientX == null || !onRpmChange) return;
+    const r = rpmAtChartX(ev.clientX - rect.left, rect.width, xMin, xMax);
+    if (r != null) onRpmChange(r);
+  };
   const unit = METRIC_UNIT[metric];
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
   const toggle = (id: string) => setExtra((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -100,10 +130,13 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
             sx={{ fontSize: 11, height: 22, borderColor: '#16a34a', color: '#16a34a' }} />
         </Box>
       )}
-      <Box sx={{ height: 390 }}>
+      <Box ref={box} sx={{ height: 390, cursor: onRpmChange && anyData ? 'crosshair' : undefined, userSelect: 'none' }}
+        onMouseUp={() => { dragging.current = false; }} onMouseLeave={() => { dragging.current = false; }}>
         {anyData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 4 }}>
+            <LineChart margin={{ top: 18, right: 12, bottom: 18, left: 4 }}
+              onMouseDown={(_s: unknown, ev: { clientX?: number }) => { dragging.current = true; setFrom(ev); }}
+              onMouseMove={(_s: unknown, ev: { clientX?: number }) => { if (dragging.current) setFrom(ev); }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.25)" />
               <XAxis type="number" dataKey="x" domain={['dataMin', 'dataMax']} tick={{ fontSize: 11 }} tickFormatter={(v: number) => v.toFixed(0)}
                 label={{ value: tx('propLoad.x'), position: 'insideBottom', offset: -10, fontSize: 11 }} />
@@ -114,14 +147,22 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
                 contentStyle={{ fontSize: 11 }} />
               <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
               {s1Rpm != null && <ReferenceLine x={s1Rpm} stroke="#16a34a" strokeDasharray="4 3"
-                label={{ value: tx('propLoad.motorLabel', { rpm: Math.round(s1Rpm) }) + (s1Reason ? ` - ${s1Reason}` : ''), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
+                label={{ value: s1Label ?? (tx('propLoad.motorLabel', { rpm: Math.round(s1Rpm) }) + (s1Reason ? ` - ${s1Reason}` : '')), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
               {supplyRpm != null && <ReferenceLine x={supplyRpm} stroke="#ea580c" strokeDasharray="6 3"
-                label={{ value: tx('propLoad.supplyLabel', { rpm: Math.round(supplyRpm) }) + (supplyReason ? ` - ${supplyReason}` : ''),
+                label={{ value: supplyLabel ?? (tx('propLoad.supplyLabel', { rpm: Math.round(supplyRpm) }) + (supplyReason ? ` - ${supplyReason}` : '')),
                   fill: '#ea580c', fontSize: 10.5, position: 'insideBottomLeft' }} />}
               {s1Rpm != null && s1Y != null && <ReferenceDot x={s1Rpm} y={s1Y} r={5} fill="#16a34a" stroke="#fff"
                 label={{ value: `${fmt(s1Y)} ${unit}`, position: 'top', offset: 12, fill: '#16a34a', fontSize: 11, fontWeight: 700 }} />}
               {supplyRpm != null && supplyY != null && <ReferenceDot x={supplyRpm} y={supplyY} r={5} fill="#ea580c" stroke="#fff"
                 label={{ value: `${fmt(supplyY)} ${unit}`, position: 'bottom', offset: 12, fill: '#ea580c', fontSize: 11, fontWeight: 700 }} />}
+              {marker && <ReferenceLine x={marker.x} stroke="var(--text-1)" strokeWidth={1.25}
+                label={{ value: tx('propLoad.speedLabel', { rpm: Math.round(marker.x) }), position: 'top', fill: 'var(--text-1)',
+                  fontSize: 11, fontWeight: 700 }} />}
+              {marker?.dots.map((d) => (
+                <ReferenceDot key={`speed-${d.id}`} x={marker.x} y={d.y} r={4} fill={d.color} stroke="var(--text-1)" strokeWidth={1.25}
+                  label={d.id === selectedId ? { value: `${fmt(d.y)} ${unit}`, position: 'right', offset: 8,
+                    fill: 'var(--text-1)', fontSize: 11, fontWeight: 700 } : undefined} />
+              ))}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"
@@ -129,6 +170,11 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
               ])}
             </LineChart>
           </ResponsiveContainer>
+        ) : state === 'loading' ? (
+          <Box role="status" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, pt: 4 }}>
+            <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
+            <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tx('propLoad.loading')}</Typography>
+          </Box>
         ) : (
           <Typography sx={{ fontSize: 12, color: 'var(--text-3)', pt: 4, textAlign: 'center' }}>{tx('propLoad.noData')}</Typography>
         )}

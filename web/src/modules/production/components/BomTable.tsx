@@ -73,7 +73,7 @@ const PRESET_EXTRAS: Array<{ en: string; zh: string; defaultAmount: number }> = 
   { en: 'VAT', zh: '增值税', defaultAmount: 25 },
 ];
 
-export const AddPart: React.FC<{ die: string; config: string; onDone: () => void }> = ({ die, config, onDone }) => {
+export const AddPart: React.FC<{ die: string; config: string; onDone: () => void; list?: 'tooling' }> = ({ die, config, onDone, list }) => {
   const { t } = useTranslation('production');
   const [open, setOpen] = useState(false);
   const [nameEn, setNameEn] = useState('');
@@ -107,7 +107,7 @@ export const AddPart: React.FC<{ die: string; config: string; onDone: () => void
               spec: '',
               material_i18n: { zh: '', en: '' },
               spec_i18n: { zh: '', en: '' },
-            });
+            }, list);
             setOpen(false); setNameEn(''); setNameZh(''); onDone();
           } catch (e) { setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) })); }
         }}>{t('add')}</Button>
@@ -150,6 +150,8 @@ const BomTable: React.FC<BomTableProps> = ({
   const ui = useContentLang();
   const byId = useMemo(() => new Map(parts.map((p) => [p.id, p])), [parts]);
 
+  // the tooling / fixtures list (owner 2026-10-19): same table, quantities are totals, the price is per piece and the line costs price x quantity
+  const tooling = ctx.list === 'tooling';
   const hasCostAccess = canViewCosts(ctx.role, shareCostsWithOem) || rows.some((r) => r.unit_price !== undefined);
   const canEdit = ctx.canEdit && canEditCosts(ctx.role);
 
@@ -239,7 +241,7 @@ const BomTable: React.FC<BomTableProps> = ({
   useEffect(() => {
     if (!hasCostAccess) return;
     let live = true;
-    productionApi.costs(ctx.die, ctx.config)
+    productionApi.costs(ctx.die, ctx.config, ctx.list)
       .then((data) => {
         if (!live) return;
         setInitialCosts(data);
@@ -258,19 +260,19 @@ const BomTable: React.FC<BomTableProps> = ({
         setCostRows(initialCostRows);
       });
     return () => { live = false; };
-  }, [ctx.die, ctx.config, hasCostAccess, rows]);
+  }, [ctx.die, ctx.config, ctx.list, hasCostAccess, rows]);
 
   const [procData, setProcData] = useState<ProcurementData | null>(null);
 
   const loadProcurement = useCallback(() => {
     let live = true;
-    productionApi.procurement(ctx.die, ctx.config)
+    productionApi.procurement(ctx.die, ctx.config, ctx.list)
       .then((data) => {
         if (live) setProcData(data);
       })
       .catch(() => {});
     return () => { live = false; };
-  }, [ctx.die, ctx.config]);
+  }, [ctx.die, ctx.config, ctx.list]);
 
   useEffect(() => {
     return loadProcurement();
@@ -289,10 +291,17 @@ const BomTable: React.FC<BomTableProps> = ({
   // Merge cost info by part_id for fast lookup
   const costMap = useMemo(() => new Map(costRows.map((r) => [r.part_id, r])), [costRows]);
 
+  // Tooling list: the line costs price x quantity (the summary adds up lines, the order quantity is 1)
+  const priceRows = useMemo(() => {
+    if (!tooling) return costRows;
+    const qty = new Map(draftRows.map((r) => [r.part_id, r.qty_per_motor]));
+    return costRows.map((c) => (c.unit_price !== null && c.unit_price !== undefined ? { ...c, unit_price: c.unit_price * (qty.get(c.part_id) ?? 1) } : c));
+  }, [tooling, costRows, draftRows]);
+
   // Recalculate summary in real-time
   const summary = useMemo(() => {
-    return calcCostSummary(draftRows, costRows, extras, marginPct, orderQuantity);
-  }, [draftRows, costRows, extras, marginPct, orderQuantity]);
+    return calcCostSummary(draftRows, priceRows, extras, marginPct, orderQuantity);
+  }, [draftRows, priceRows, extras, marginPct, orderQuantity]);
 
   // Check if anything has changed
   const dirty = useMemo(() => {
@@ -388,8 +397,8 @@ const BomTable: React.FC<BomTableProps> = ({
 
   // Build assembly tree
   const assemblyTree = useMemo(() => {
-    return buildAssemblyTree(parts, costRows, orderQuantity);
-  }, [parts, costRows, orderQuantity]);
+    return buildAssemblyTree(parts, priceRows, orderQuantity);
+  }, [parts, priceRows, orderQuantity]);
 
   const handleAddPresetExtra = (p: { en: string; zh: string; defaultAmount: number }) => {
     const newExtra: ExtraCost = {
@@ -439,15 +448,15 @@ const BomTable: React.FC<BomTableProps> = ({
     try {
       const bomChanged = draftRows.some((r, i) => !rows[i] || rows[i].qty_per_motor !== r.qty_per_motor);
       if (bomChanged) {
-        await productionApi.saveBom(ctx.die, ctx.config, draftRows);
+        await productionApi.saveBom(ctx.die, ctx.config, draftRows, ctx.list);
       }
       if (hasCostAccess) {
         await productionApi.saveCosts(ctx.die, ctx.config, {
           rows: costRows,
           extras,
           margin_pct: marginPct,
-        });
-        const updatedCosts = await productionApi.costs(ctx.die, ctx.config);
+        }, ctx.list);
+        const updatedCosts = await productionApi.costs(ctx.die, ctx.config, ctx.list);
         setInitialCosts(updatedCosts);
         setCostRows(updatedCosts.rows || []);
         setExtras(updatedCosts.extras || []);
@@ -497,7 +506,7 @@ const BomTable: React.FC<BomTableProps> = ({
       {view === 'table' && (
         <>
       {/* Add Part bar for editors */}
-      {canEdit && <AddPart die={ctx.die} config={ctx.config} onDone={() => { onPartChanged?.(); ctx.reload(); }} />}
+      {canEdit && <AddPart die={ctx.die} config={ctx.config} list={ctx.list} onDone={() => { onPartChanged?.(); ctx.reload(); }} />}
 
       {/* Main BOM Table */}
       {/* overflow 'clip' (not 'hidden'): keeps the rounded corners without becoming a scroll box, so the header can stick */}
@@ -520,11 +529,11 @@ const BomTable: React.FC<BomTableProps> = ({
                 <>
                   <TableCell align="right">
                     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                      {t('bom.unitPrice')}
-                      <HelpTip title={t('costs.unitPriceTip')} />
+                      {tooling ? t('bom.unitPriceTooling') : t('bom.unitPrice')}
+                      <HelpTip title={tooling ? t('bom.unitPriceToolingTip') : t('costs.unitPriceTip')} />
                     </Box>
                   </TableCell>
-                  <TableCell align="right">{t('bom.lineTotal', { count: orderQuantity })}</TableCell>
+                  <TableCell align="right">{tooling ? t('bom.lineTotalTooling') : t('bom.lineTotal', { count: orderQuantity })}</TableCell>
                   <TableCell>{t('bom.currency')}</TableCell>
                   <TableCell>{t('bom.note')}</TableCell>
                 </>
@@ -549,7 +558,7 @@ const BomTable: React.FC<BomTableProps> = ({
               const unitPrice = crow?.unit_price !== undefined ? crow.unit_price : (r.unit_price ?? null);
               const currency = crow?.currency || r.currency || 'CNY';
               const note = crow?.note !== undefined ? crow.note : (r.note || '');
-              const lineTotal = unitPrice !== null && !isNaN(unitPrice) ? unitPrice * orderQuantity : null;
+              const lineTotal = unitPrice !== null && !isNaN(unitPrice) ? unitPrice * (tooling ? r.qty_per_motor : orderQuantity) : null;
               const isSelected = selectedPartId === r.part_id;
 
               const mat = p?.material_i18n ? (p.material_i18n[ui] || p.material_i18n.zh || p.material) : p?.material;

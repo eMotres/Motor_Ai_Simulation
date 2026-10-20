@@ -127,7 +127,9 @@ export interface S1Result {
   no_continuous_point: boolean;
   first_failure: S1Binding | null;
   monotone: boolean;
-  limits: { winding_C: number; magnet_C: number; winding_basis: string; magnet_basis: string };
+  limits: { winding_C: number; magnet_C: number; winding_basis: string; magnet_basis: string; rpm_max?: number | null };
+  /** the propeller's tested speed range: the scan stops at 1.5 x its top */
+  rpm_range_tested?: number[] | null;
   /** the drive the limit was computed for (Configure's selected one) */
   drive?: { id: string; kind: 'sine' | 'pwm' | 'external';
             /** the ONE board cooling class the machine decides (null: an external ESC) and why */
@@ -184,6 +186,22 @@ export function s1BindingKey(b: S1Binding | null | undefined): string {
     case 'nonconverged': return 'configurePropeller.s1BindNonconverged';
     default: return 'configurePropeller.s1BindUnknown';
   }
+}
+
+/**
+ * A side limit that is a BOUND (`lower_bound`: the scan ended still passing - the motor holds continuously all the way
+ * to the top of the speeds it was scanned over): why the scan ended there, from the answer itself.  The top is the lower
+ * of the passport's speed range (`limits.rpm_max`) and 1.5 x the propeller's highest tested speed (beyond that the
+ * propeller data is not extrapolated) - motor_ai_sim.propeller_s1.s1_rating.  The load chart then still draws the line,
+ * labelled as a bound (owner 2026-10-19: «для этого пропеллера нет ограничения S1 на графике»).
+ */
+export function s1BoundEnd(rpm: number, r: Pick<S1Result, 'limit'> & { rpm_range_tested?: number[] | null;
+                           limits?: { rpm_max?: number | null } | null }): S1RangeEnd {
+  const near = (a: number | null | undefined) => a != null && Number.isFinite(a) && Math.abs(a - rpm) <= Math.max(1, 1e-3 * rpm);
+  const tested = r.rpm_range_tested?.[1];
+  if (tested != null && near(1.5 * tested)) return 'propeller_data';
+  if (near(r.limits?.rpm_max ?? null)) return 'motor_speed_grid';
+  return r.limit?.range_end ?? 'motor_speed_grid';
 }
 
 /** The locale key of why a still-passing scan stopped. */

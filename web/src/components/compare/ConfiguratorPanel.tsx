@@ -52,7 +52,7 @@ import {
 } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchSeries, fetchPropellerS1, fetchConfigureLoad, primeSeries, primeS1, seriesCacheKey, s1KnownDrives, noteS1Drives } from '../../lib/propellerApi';
 import {
-  s1Line, s1BindingKey, s1DriveRequest, s1CacheKey, s1BoardBuilds, s1BoardBuildKey, s1BoardBuildOfId, s1BoardCoolingKey,
+  s1Line, s1BindingKey, s1BoundEnd, s1RangeEndKey, s1DriveRequest, s1CacheKey, s1BoardBuilds, s1BoardBuildKey, s1BoardBuildOfId, s1BoardCoolingKey,
   type S1Binding, type S1BoardBuild, type S1Controller, type S1Result,
 } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
@@ -71,8 +71,8 @@ import {
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
-import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
-import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/configuratorModes';
+import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, presetMassAnchor, type Preset } from '../../lib/configuratorPresets';
+import { buildModePresets, baseModeLabel, presetButtons, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
@@ -94,7 +94,7 @@ import { nsT } from '../../i18n/nsT';
 import { slotMouthLimit } from '../../lib/slotMouthFit';
 import i18n from '../../i18n';
 import {
-  usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems,
+  usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems, pwmBuildScale, transferPwmReading,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits, type VariantReading,
@@ -744,6 +744,11 @@ const ConfiguratorPanel: React.FC = () => {
   }, [loadCtx]);
   const presets: Preset[] = currentContext?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
+  // THE MASSES OF THE LOADED BUILD ARE THE SERVER'S (owner 2026-10-19): the loaded configuration's full / active mass anchor
+  // the mass model, so the tiles show exactly those at that build and scale from them only when the build moves
+  const massPreset = basePreset ?? presetOfBuild(presets, refKnobs ?? baseKnobs(p));
+  const massAnchor = useMemo(() => presetMassAnchor(baseKnobs(p), massPreset), [p, massPreset]);
+  const pMass = useMemo(() => (massAnchor ? { ...p, mass_anchor: massAnchor } : p), [p, massAnchor]);
   // One button per configuration x mode that has data (lib/configuratorModes); the build is the
   // configuration's, the current and speed are the mode's.
   const modePresets: ModePreset[] = useMemo(() => buildModePresets(presets), [presets]);
@@ -812,7 +817,7 @@ const ConfiguratorPanel: React.FC = () => {
   // scaleMotor() is the SINE model and never sees the drive; `scaleKnobs` stays as
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
-  const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
+  const result  = useMemo(() => scaleMotor(pMass, scaleKnobs, ref.poles), [pMass, scaleKnobs, ref.poles]);
   const motorLoss_W = motorLossesComputed ? result.P_loss_W : null;
   const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
   const copperResistanceTempC = p.R_temp_C ?? referenceTemperatureBasis?.windingC ?? null;
@@ -1025,8 +1030,8 @@ const ConfiguratorPanel: React.FC = () => {
   // showed −92.7 % with nothing touched — it was being compared to another
   // configuration's base build).  refKnobs is set when a machine is adopted;
   // it falls back to the passport base when nothing is loaded.
-  const baseRes = useMemo(() => scaleMotor(p, refKnobs ?? baseKnobs(p), ref.poles),
-                          [p, ref.poles, refKnobs]);
+  const baseRes = useMemo(() => scaleMotor(pMass, refKnobs ?? baseKnobs(p), ref.poles),
+                          [pMass, p, ref.poles, refKnobs]);
   const iMax    = useMemo(() => maxCurrent(p, knobs), [p, knobs]);
 
   // ── DRIVE, continued: the choice, its reading, the device limits ──────────
@@ -1058,11 +1063,17 @@ const ConfiguratorPanel: React.FC = () => {
     }).catch(() => { if (!dead) setDevLimitsDone(true); /* limits unknown: only the envelope checks apply */ });
     return () => { dead = true; };
   }, [driveOn]);
-  /** the variants were computed for the loaded build: only I and rpm move */
+  /** the variants were computed for the loaded build; a moved build keeps PWM, carried from it (never a blank page) */
   const driveBuildMoved = driveOn && buildTuned(knobs, refKnobs ?? baseKnobs(p));
-  const driveRead = useMemo(
-    () => (variant && !driveBuildMoved ? readVariantNear(variant, knobs.rpm, knobs.I_A) : null),
-    [variant, driveBuildMoved, knobs.rpm, knobs.I_A]);
+  /** PWM asked for on a machine with no computed drive variant at all: Sine is shown, with one note */
+  const pwmWithoutVariant = knobs.drive === 'pwm' && variants.length === 0;
+  /** the PWM extra loss's factor from the loaded build to the knobs' build (`pwmBuildScale`; 1 = the loaded build) */
+  const pwmScale = driveBuildMoved ? pwmBuildScale(refKnobs ?? baseKnobs(p), knobs) : 1;
+  const driveRead = useMemo(() => {
+    if (!variant) return null;
+    const r = readVariantNear(variant, knobs.rpm, knobs.I_A);
+    return r.ok && driveBuildMoved ? { ...r, values: transferPwmReading(r.values, pwmScale), exact: false } : r;
+  }, [variant, driveBuildMoved, pwmScale, knobs.rpm, knobs.I_A]);
   const driveProblems = useMemo(
     () => (variant && driveRead && driveRead.ok
       ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, packWindow)
@@ -1083,9 +1094,6 @@ const ConfiguratorPanel: React.FC = () => {
     }
     if (!driveOn) return motorLossesComputed ? []
       : [{ text: tx('configure.lossNotComputed'), tip: tx('configure.lossNotComputedTip') }];
-    if (driveBuildMoved) {
-      return [{ text: tx('configureDrive.buildTuned'), tip: tx('configureDrive.buildTunedTip') }];
-    }
     if (!variant || !driveRead) {
       return [{ text: tx('configureDrive.refuseMissingPoint'), tip: tx('configureDrive.refuseMissingPointTip') }];
     }
@@ -1347,13 +1355,21 @@ const ConfiguratorPanel: React.FC = () => {
   // (controller / ESC / pack current) - the controller does not cut the motor's line; a sine drive has one line.
   const s1Motor = s1Info && s1?.limit_motor && s1.limit_motor.rpm != null ? s1.limit_motor : null;
   const s1Supply = s1Info && s1Drive !== 'sine' && s1?.limit_supply && s1.limit_supply.rpm != null ? s1.limit_supply : null;
-  const s1MotorRpm = s1Motor && !s1Motor.lower_bound ? s1Motor.rpm : (s1Info?.kind === 'limit' && !s1?.limit_motor ? s1Info.rpm : null);
-  const s1MotorReason = s1Motor && !s1Motor.lower_bound ? tx(s1BindingKey(s1Motor.binding as S1Binding)) : null;
-  const s1SupplyReason = s1Supply
+  // A side that holds all the way to the top of its scan is a BOUND, not "no limit": the chart still draws its line,
+  // labelled as such (owner 2026-10-19: «для этого пропеллера нет ограничения S1 на графике»)
+  const boundLabel = (key: string, rpm: number | null) => s1 && rpm != null ? tx(key, { rpm: fmt(Math.round(rpm / 10) * 10, 0),
+    why: tx(s1RangeEndKey(s1BoundEnd(rpm, s1))) }) : null;
+  const s1MotorBound = !!s1Motor && !!s1Motor.lower_bound;
+  const s1MotorRpm = s1Motor ? s1Motor.rpm : (s1Info?.kind === 'limit' && !s1?.limit_motor ? s1Info.rpm : null);
+  const s1MotorReason = s1Motor && !s1MotorBound ? tx(s1BindingKey(s1Motor.binding as S1Binding)) : null;
+  const s1MotorLabel = s1Motor && s1MotorBound ? boundLabel('propLoad.motorBoundLabel', s1Motor.rpm) : null;
+  const s1SupplyBound = !!s1Supply && !!s1Supply.lower_bound;
+  const s1SupplyReason = s1Supply && !s1SupplyBound
     ? tx(s1BindingKey(s1Supply.binding as S1Binding)) + (s1Supply.binding === 'controller'
       ? (s1Supply.controller_limit_A ? ` ${Number(s1Supply.controller_limit_A).toFixed(1)} A rms`
         : s1Supply.controller_bus_limit_A ? ` ${Number(s1Supply.controller_bus_limit_A).toFixed(1)} A` : '') : '')
     : null;
+  const s1SupplyLabel = s1Supply && s1SupplyBound ? boundLabel('propLoad.supplyBoundLabel', s1Supply.rpm) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
     if (!s1Info) return null;
     const prop = propSummary ? modelLabel(propSummary.model) : (propId ?? '');
@@ -1632,10 +1648,10 @@ ${s1Text.tip}` : '';
     const speedOk = batteryValid && speedRequestAccepted(rpm, lim.rpm);
     let dr: VariantReading | null = null;
     if (driveOn) {
-      if (!variant || driveBuildMoved) return true;
+      if (!variant) return true;
       const read = readVariantNear(variant, rpm, ld.I_A);
       if (!read.ok || limitProblems(variant, read.values, ld.I_A, devLimits[variant.device] ?? null, packWindow).length) return true;
-      dr = read.values;
+      dr = driveBuildMoved ? transferPwmReading(read.values, pwmScale) : read.values;
     }
     const gate = pointDisplayGate({ batteryValid, speedAccepted: speedOk, driveMode,
       driveAccepted: driveMode === 'sine' || dr != null, motorLossesComputed });
@@ -1658,7 +1674,7 @@ ${s1Text.tip}` : '';
     if (!propLoad || !series || ratedCapStart == null) return null;
     return ratedSpeedCap(ratedCapStart, pointBadAt, { floor: Math.max(ranges.rpm.min, 0.05 * ratedCapStart) })
       ?? s1CapRpm;
-  }, [propLoad, series, ratedCapStart, s1CapRpm, p, ref.poles, thermalGeom, tLimits, ambient, driveOn, variant, driveBuildMoved, // eslint-disable-line react-hooks/exhaustive-deps
+  }, [propLoad, series, ratedCapStart, s1CapRpm, p, ref.poles, thermalGeom, tLimits, ambient, driveOn, variant, driveBuildMoved, pwmScale, // eslint-disable-line react-hooks/exhaustive-deps
       devLimits, packWindow?.min, packWindow?.max, packMaxV, modM, batteryValid, motorLossesComputed, ranges.I_A.max, ranges.rpm.min,
       knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, calUsable, calModel, calDriveId, ratedWindingC]);
   useEffect(() => {
@@ -1781,8 +1797,17 @@ ${s1Text.tip}` : '';
       clearBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, pr.config, originalConfig)); } catch { /* ignore */ }
     batterySeeded.current = '';
     if (pk) setBattery(pk);
-    // the propeller goes back to the one this configuration opens on (the user's pick is dropped)
-    if (cooled) updateCool({ propId: null });
+    // the propeller goes back to the one this configuration opens on (the user's pick is dropped) - for the TARGET
+    // configuration too: a signed-in account keeps its pick per configuration (coolChoiceKey), and the page reads the
+    // target's key once baseConfig moves, so an older pick there made a fresh load read "changed from L20 · rated"
+    // (owner 2026-10-19, 40 L20 + 50 L15)
+    if (cooled) {
+      updateCool({ propId: null });
+      const targetKey = coolChoiceKey(identity, refId, pr.config);
+      if (targetKey !== coolKey) {
+        try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), targetKey, { propId: null })); } catch { /* ignore */ }
+      }
+    }
   };
   // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
   // (with a propeller as the load the current is the propeller's, not a setting)
@@ -2233,12 +2258,13 @@ ${s1Text.tip}` : '';
                 </Button>
               )}
               <ToggleButtonGroup exclusive size="small" value={matchedKey} sx={{ ml: 'auto', flexWrap: 'wrap' }}>
-                {modePresets.map((pr) => (
+                {/* only the LOADED configuration's modes, named by the mode alone (owner 2026-10-19) */}
+                {presetButtons(modePresets, baseConfig).map(({ preset: pr, text }) => (
                   <ToggleButton key={pr.key} value={pr.key} onClick={() => startLoad(pr.config, pr.duty || null)}
-                    title={tx('configure.presetTip')}
+                    title={pr.short_time ? `${tx('configure.presetTip')} ${tx('configure.presetShortTimeTip')}` : tx('configure.presetTip')}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                       '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-                    {pr.label}
+                    {text}
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>
@@ -2481,13 +2507,20 @@ ${s1Text.tip}` : '';
           {/* ONE reserved two-line slot: a refusal fills it, it never pushes the blocks below
               (the tiles on the right turn to "—" at the same time) */}
           <Box sx={{ height: 34, overflow: 'hidden', mb: 0.5 }}
-            title={driveRefusals.map((r) => `${r.text}. ${r.tip}`).join('\n')}>
-            {driveRefusals.length > 0 && (
+            title={driveRefusals.length ? driveRefusals.map((r) => `${r.text}. ${r.tip}`).join('\n')
+              : driveBuildMoved ? tx('configureDrive.buildScaledTip', { k: fmt(pwmScale, 2) })
+                : pwmWithoutVariant ? tx('configureDrive.noVariantTip') : undefined}>
+            {driveRefusals.length > 0 ? (
               <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', lineHeight: 1.3,
                 display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                 ⚠ {driveRefusals[0].text}{driveRefusals.length > 1 ? ` (+${driveRefusals.length - 1})` : ''}
               </Typography>
-            )}
+            ) : (driveBuildMoved || pwmWithoutVariant) ? (
+              // a moved build keeps its PWM numbers, carried from the loaded build (owner 2026-10-19: never blank)
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.3 }}>
+                {tx(driveBuildMoved ? 'configureDrive.buildScaled' : 'configureDrive.noVariant')}
+              </Typography>
+            ) : null}
           </Box>
 
 
@@ -2539,7 +2572,7 @@ ${s1Text.tip}` : '';
               absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} blankTip={pointBlankTip} />
             <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={3}
               base={baseRes.mass_kg} goodHi={false}
-              tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
+              tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_partial && massAnchor?.partial_reason ? ` (${massAnchor.partial_reason})` : ''}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
             {!result.mass_partial && (
               <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={3}
                 base={baseRes.mass_active_kg} goodHi={false} tip={tx('configure.massActiveTip')} />
@@ -2756,8 +2789,8 @@ ${s1Text.tip}` : '';
             : <PropellerLoadChart die={s1Die} config={s1Config} ambient={ambient} drive={s1Drive}
                 pack={s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null}
                 escBusA={s1Req.escBusA} allowed={allowedProps} selectedId={propId}
-                s1Reason={s1MotorReason} s1Rpm={s1MotorRpm}
-                supplyRpm={s1Supply?.rpm ?? null} supplyReason={s1SupplyReason} onRpmChange={setRpm} />}
+                s1Reason={s1MotorReason} s1Rpm={s1MotorRpm} s1Label={s1MotorLabel}
+                supplyRpm={s1Supply?.rpm ?? null} supplyReason={s1SupplyReason} supplyLabel={s1SupplyLabel} speedRpm={knobs.rpm} onRpmChange={setRpm} />}
           {!s1Moved && s1DriveFellBack && (
             <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 0.5 }}>
               {tx('configurePropeller.s1DriveFallback', { drive: s1Req.drive })}

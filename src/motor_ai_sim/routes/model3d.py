@@ -188,7 +188,7 @@ def _mass_text(die: str, config: str, info: Optional[dict] = None) -> tuple[str,
     if s:
         g = round(s["full_kg"] * 1000.0, 1)
         scope = s.get("scope") or "full motor"
-        return ("%s g (%s%s)" % (g, scope, ", partial: no CAD bill of materials yet" if s.get("partial") else ""),
+        return ("%s g (%s%s)" % (g, scope, ", full mass incomplete: active parts only" if s.get("partial") else ""),
                 dict(total_g=g, scope=scope, partial=bool(s.get("partial"))))
     m = (info or {}).get("mass") or {}
     if m.get("total_g") is not None:
@@ -373,7 +373,7 @@ def _bom_rows(tree: dict) -> list:
 
 def _bom_total(tree: dict) -> list:
     return ["", "", "", "total (counted)", "", "", "", round((tree.get("total_kg") or 0) * 1000.0, 3), "", "",
-            "partial mass (no CAD model yet)" if tree.get("partial") else (tree.get("scope") if tree.get("kit") else "")]
+            "full mass incomplete (active parts only)" if tree.get("partial") else (tree.get("scope") if tree.get("kit") else "")]
 
 
 @router.get("/{die}/{config}/bom.csv")

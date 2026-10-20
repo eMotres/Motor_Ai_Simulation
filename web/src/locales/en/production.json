@@ -47,7 +47,8 @@
     "discussion": "Discussion",
     "proposals": "Proposals",
     "changes": "Changes",
-    "assembly": "Assembly process"
+    "assembly": "Assembly process",
+    "tooling": "Tooling"
   },
   "bilingual": {
     "machine": "Machine translation, not verified",
@@ -111,7 +112,11 @@
     "currency": "Currency",
     "note": "Note",
     "tip": "Order total follows the per-motor quantity and the production order quantity.",
-    "unknownPart": "Unknown part"
+    "unknownPart": "Unknown part",
+    "unitPriceTooling": "Unit price",
+    "unitPriceToolingTip": "Price of one piece; the line costs price x quantity.",
+    "lineTotalTooling": "Line total (qty x price)",
+    "toolingTip": "Tooling / fixtures order list: quantities are totals, no price is multiplied by the number of motors; prices follow the same access rule as the motor BOM."
   },
   "costs": {
     "title": "Cost breakdown & pricing",
@@ -182,6 +187,15 @@
     "editSections": "Edit process sections",
     "hideSections": "Hide sections"
   },
+  "access": {
+    "none": "You are not on this production.",
+    "request": "Request access",
+    "requested": "Access requested. The team will get back to you.",
+    "tip": "A link to a page does not give access. Ask the team to add your account to this production.",
+    "error": "Could not check access.",
+    "retry": "Retry",
+    "home": "Home"
+  },
   "docs": {
     "none": "No documents.",
     "upload": "Upload",
@@ -194,7 +208,18 @@
     "uploadTip": "Owner and engineer upload; every download is traced.",
     "internal": "Internal",
     "shared": "Factory sees",
-    "internalTip": "Internal documents are hidden from the factory (OEM members). Click to switch."
+    "internalTip": "Internal documents are hidden from the factory (OEM members). Click to switch.",
+    "copyLink": "Copy link",
+    "copied": "Link copied",
+    "sinceLabel": "New since",
+    "copyNew": "Copy link to new",
+    "copyTip": "The link opens this page for engineers right after they sign in or register. It does not give access: only members of this production see the documents.",
+    "copyManual": "Copy this link",
+    "newBadge": "New",
+    "newSince": "New since {date}: {n}",
+    "selected": "Shared selection: {n}",
+    "showAll": "Show all",
+    "clear": "Clear"
   },
   "discussion": {
     "general": "General",

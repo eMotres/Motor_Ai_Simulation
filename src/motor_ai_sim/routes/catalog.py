@@ -390,6 +390,18 @@ def _passport_copper_mass(card: Optional[dict], passport: dict) -> Optional[floa
         return None
 
 
+def _same_build(passport: dict, build: Optional[Dict[str, float]]) -> bool:
+    """The passport's base build (L0, N0, wireH0) equals ``build`` (``motor_mass.config_build``)."""
+    if not build:
+        return False
+    try:
+        pairs = ((passport.get("L0_mm"), build["L_mm"]), (passport.get("N0"), build["N"]),
+                 (passport.get("wireH0_mm"), build["wireH_mm"]))
+        return all(a is not None and abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b))) for a, b in pairs)
+    except (TypeError, ValueError, KeyError):
+        return False
+
+
 def _with_full_mass(outer: dict, card: Optional[dict]) -> dict:
     """THE MOTOR MASS IS THE FULL ASSEMBLED MASS (owner 2026-10-14).  The passport's ``mass0_kg`` is the ACTIVE mass of its
     base solve (it scales with the stack length); Configure adds ``mass_fixed_kg`` - the parts that do not scale with the
@@ -408,10 +420,19 @@ def _with_full_mass(outer: dict, card: Optional[dict]) -> dict:
             summ = None
     if summ is None or summ["partial"]:
         extra = {"mass_partial": True}
+        if summ is not None:
+            extra["mass_partial_reason"] = summ.get("partial_reason") or ""
     else:
         extra = {"mass_partial": False, "mass_fixed_kg": round(summ["full_kg"] - summ["active_kg"], 5),
                  "mass_active_base_kg": round(summ["active_kg"], 5), "mass_rotating_kg": round(summ["rotating_kg"], 5),
                  "mass_scope": summ.get("scope", "full motor")}      # "frameless kit": the fixed part may be negative (no shaft tube)
+    # The passport's ``mass0_kg`` is a STORED number of its base solve; some cards carry the full mass there (40 L12 0.1229 /
+    # L20 0.1807 kg against the active 0.0945 / 0.1506 - Configure then added the non-active parts twice, owner 2026-10-19).
+    # When the passport's base build IS the configuration's build, the base active mass is the server's own active mass.
+    if summ is not None and card and _same_build(inner, _mm.config_build(str(card["die"]), str(card["config"]))):
+        if inner.get("mass0_kg") is not None:
+            extra["mass0_stored_kg"] = inner.get("mass0_kg")
+        extra["mass0_kg"] = round(float(summ["active_kg"]), 5)
     cu = _passport_copper_mass(card, inner)
     if cu is not None:
         extra["mass_cu0_kg"] = round(cu, 7)
@@ -1089,7 +1110,7 @@ def _shared_source(src: Any) -> bool:
 #: the code a stored Configure answer is computed by: a deploy that changes it invalidates every stored answer
 _CONFIGURE_CODE = ("routes/catalog.py", "configure_limits.py", "configure_load.py", "configure_anchor.py",
                    "propeller_s1.py", "propeller.py", "cooling_options.py", "passport_store.py", "duty_class.py",
-                   "duty_results.py", "applications.py", "routes/propellers.py")
+                   "duty_results.py", "applications.py", "routes/propellers.py", "modules/motor_mass.py")
 
 
 def _configure_stamp(src: Any = None) -> str:
@@ -1118,6 +1139,13 @@ def _configure_stamp(src: Any = None) -> str:
         dirs += [_ps.store_dir(), *_pp.catalog_dirs(), *_s1.model_dirs()]
     except Exception:                                           # noqa: BLE001
         log.debug("configure stamp: stores unavailable", exc_info=True)
+    try:                                                        # the CAD bills of materials: every preset's full mass
+        from motor_ai_sim.modules import motor_mass as _mm
+        for root in _mm._cad_dirs():
+            if root.is_dir():
+                paths += sorted(root.glob("*/*/*_BOM.csv"))
+    except Exception:                                           # noqa: BLE001
+        log.debug("configure stamp: CAD BOMs unavailable", exc_info=True)
     src = Path(__file__).resolve().parents[1]
     paths += [src / f for f in _CONFIGURE_CODE]
     return _fsc.stamp_of(sorted({str(x) for x in paths}), dirs, salt="configure-1")
@@ -1148,7 +1176,27 @@ def _configure_context_of(motor_id: str, motor: dict) -> Dict[str, Any]:
         pr["card_date"] = _ps.card_date(str(pr.get("die") or ""), str(pr.get("config") or ""))
         _mark_duty_classes(pr, docs)
         _drive_the_s1_model_carries(pr, s1_die)
+        pr["mass"] = _preset_mass(str(pr.get("die") or ""), str(pr.get("config") or ""))
     return ctx
+
+
+def _preset_mass(die: str, config: str) -> Optional[Dict[str, Any]]:
+    """THE masses of one configuration as the server computes them (``modules.motor_mass.mass_summary``): Configure shows
+    exactly these for the loaded build - "Mass" = ``full_kg``, "Active mass" = ``active_kg`` - and scales from them only when
+    the user moves the build (owner 2026-10-19: 40 L20 showed 0.211 / 0.181 kg against the server's 0.181 / 0.151, because
+    the page scaled from a passport ``mass0_kg`` that held the full mass).  ``None`` = the die cannot be weighed here."""
+    if not die or not config:
+        return None
+    try:
+        from motor_ai_sim.modules import motor_mass as _mm
+        s = _mm.mass_summary(die, config)
+    except Exception:                                           # noqa: BLE001 - a mass hiccup never breaks the context
+        return None
+    if not s:
+        return None
+    return {"full_kg": round(float(s["full_kg"]), 5), "active_kg": round(float(s["active_kg"]), 5),
+            "partial": bool(s["partial"]), "partial_reason": s.get("partial_reason") or "",
+            "scope": s.get("scope") or "full motor"}
 
 
 def _drive_the_s1_model_carries(pr: dict, s1_die: str) -> None:

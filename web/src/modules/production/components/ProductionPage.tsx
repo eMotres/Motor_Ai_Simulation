@@ -14,12 +14,13 @@ import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import { ProductionApiError, productionApi } from '../api';
 import { callerRole, canEditRole, unackedRevisions } from '../helpers';
+import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
 import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
 
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
-const TABS = ['bom', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -34,12 +35,17 @@ function writeStore(key: string, v: unknown): void {
 }
 
 interface Data {
-  parts: Part[]; bom: BomRow[]; process: ProcessSection[]; documents: DocumentRec[];
+  parts: Part[]; bom: BomRow[]; toolingBom: BomRow[]; process: ProcessSection[]; documents: DocumentRec[];
   threads: Thread[]; proposals: Proposal[]; revisions: Revision[];
 }
-const EMPTY: Data = { parts: [], bom: [], process: [], documents: [], threads: [], proposals: [], revisions: [] };
+const EMPTY: Data = { parts: [], bom: [], toolingBom: [], process: [], documents: [], threads: [], proposals: [], revisions: [] };
 
-const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void }> = ({ die, config, onBack }) => {
+/** The shared documents link this page load was opened with, if the address bar holds a valid one (read once, at mount). */
+function linkFromAddressBar(): ProductionLink | null {
+  try { return parseProductionLink(window.location.pathname, window.location.search); } catch { return null; }
+}
+
+const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; link?: ProductionLink | null }> = ({ die, config, onBack, link: linkProp = null }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const { user, isAdmin } = useAuth();
@@ -47,11 +53,26 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
   const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
+  // a shared link (since= / ids=) opens the Documents sub-tab; "Clear" / "Show all" drops its filter for this visit
+  const [link, setLink] = useState<ProductionLink | null>(linkProp);
   const [tab, setTabState] = useState<TabId>(() => {
+    if (linkProp) return 'documents';
     const saved = readStore<string>(TAB_KEY(die, config));
     return saved && (TABS as readonly string[]).includes(saved) ? (saved as TabId) : 'bom';
   });
   const setTab = (v: TabId) => { setTabState(v); writeStore(TAB_KEY(die, config), v); };
+  // While the page was entered by a link its address stays that link (reload / copy from the bar both work); leaving the
+  // Documents view or the link's filter returns the bar to the app root.
+  useEffect(() => {
+    try {
+      if (linkProp && tab === 'documents') {
+        const p = productionLinkPath({ die, config, since: link?.since, ids: link?.ids });
+        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(null, '', p);
+      } else if (isProductionLinkPath(window.location.pathname)) {
+        window.history.replaceState(null, '', '/');
+      }
+    } catch { /* no history API */ }
+  }, [linkProp, tab, link, die, config]);
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -59,14 +80,15 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const reload = useCallback(async () => {
     try {
       const p = await productionApi.get(die, config);
-      const [parts, bom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
-        productionApi.parts(die, config), productionApi.bom(die, config), productionApi.process(die, config),
+      const [parts, bom, toolingBom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
+        productionApi.parts(die, config), productionApi.bom(die, config), productionApi.bom(die, config, 'tooling').catch(() => [] as BomRow[]),
+        productionApi.process(die, config),
         productionApi.documents(die, config), productionApi.threads(die, config), productionApi.proposals(die, config),
         productionApi.revisions(die, config),
         productionApi.procurement(die, config).catch(() => null),
       ]);
       setProd(p);
-      setData({ parts, bom, process, documents, threads, proposals, revisions });
+      setData({ parts, bom, toolingBom, process, documents, threads, proposals, revisions });
       if (proc?.summary) setReadiness(proc.summary);
       setErr(null);
       setNda(false);
@@ -82,6 +104,9 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     die, config, role, email, uiLang: ui, canEdit: canEditRole(role), productType: prod?.product_type ?? 'motor',
     reload: () => { void reload(); },
   }), [die, config, role, email, ui, reload, prod?.product_type]);
+  // the separate tooling / fixtures order list (owner 2026-10-19): same table, ?list=tooling
+  const toolingCtx = useMemo(() => ({ ...ctx, list: 'tooling' as const }), [ctx]);
+  const visibleTabs = TABS.filter((id) => id !== 'tooling' || data.toolingBom.length > 0 || ctx.canEdit);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
 
   return (
@@ -105,7 +130,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
         <Box sx={{ position: 'sticky', top: 0, zIndex: 20, bgcolor: 'var(--app-bg)', mb: 1.5 }}>
           <Tabs value={tab} onChange={(_, v) => setTab(v as TabId)} variant="scrollable" scrollButtons="auto"
             sx={{ minHeight: 32, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontSize: 12.5, py: 0.5 } }}>
-            {TABS.map((id) => (
+            {visibleTabs.map((id) => (
               <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : t(`tabs.${id}`)} />
             ))}
           </Tabs>
@@ -195,9 +220,28 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               />
             </>
           )}
+          {tab === 'tooling' && (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tabs.tooling')}</Typography>
+                <HelpTip title={t('bom.toolingTip')} />
+              </Box>
+              <BomTable
+                rows={data.toolingBom}
+                parts={data.parts}
+                orderQuantity={1}
+                ctx={toolingCtx}
+                shareCostsWithOem={prod.share_costs_with_oem}
+                documents={data.documents}
+                threads={data.threads}
+                proposals={data.proposals}
+                onPartChanged={reload}
+              />
+            </>
+          )}
           {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
-          {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} />}
+          {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}
@@ -209,7 +253,10 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 
 /** The top-level Production tab: the list, and one production once opened. */
 export const ProductionTab: React.FC = () => {
+  // opened by a shared documents link: that production (and its filter) wins over the remembered one
+  const [entry, setEntry] = useState<ProductionLink | null>(linkFromAddressBar);
   const [sel, setSelState] = useState<{ die: string; config: string } | null>(() => {
+    if (entry) return { die: entry.die, config: entry.config };
     const v = readStore<{ die?: unknown; config?: unknown }>(LAST_KEY);
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
@@ -220,8 +267,9 @@ export const ProductionTab: React.FC = () => {
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ px: 3, pt: 3, pb: 3 }}>
         {sel
-          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => setSel(null)} />
-          : <ProductionListPage onOpen={(p) => setSel({ die: p.die, config: p.config })} />}
+          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => { setEntry(null); setSel(null); }}
+              link={entry && entry.die === sel.die && entry.config === sel.config ? entry : null} />
+          : <ProductionListPage onOpen={(p) => { setEntry(null); setSel({ die: p.die, config: p.config }); }} />}
       </Box>
     </Box>
   );

@@ -360,6 +360,8 @@ export interface ProdCtx {
   canEdit: boolean;
   /** 'electronics' productions have no motor CAD model: no per-part 3-D view */
   productType?: 'motor' | 'electronics';
+  /** 'tooling' = the separate tooling / fixtures order list next to the motor BOM (owner 2026-10-19); absent = the motor BOM */
+  list?: 'tooling';
   reload: () => void;
 }
 
@@ -380,3 +382,8 @@ export interface AssemblyStep {
   parts_resolved?: Array<{ id: string; name: Bilingual }>;
 }
 export interface AssemblyProcessView { default: boolean; steps: AssemblyStep[] }
+
+/** GET /api/production/{die}/{config}/access - the answer behind a shared documents link. */
+export type ProductionAccess =
+  | { access: 'member'; role: MemberRole | 'admin'; can_share: boolean; factory: boolean }
+  | { access: 'none'; requested: boolean };

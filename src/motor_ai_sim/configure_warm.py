@@ -95,6 +95,67 @@ def warm_all(*, limit_s: float = 900.0) -> Dict[str, Any]:
     return out
 
 
+def warm_propellers(*, limit_s: float = 1800.0) -> Dict[str, Any]:
+    """The S1 answer of EVERY propeller a public configuration may drive (owner 2026-10-19: «почему так долго
+    грузятся пропеллеры?» - the first pick of another propeller in the selector / the load chart's compare chips ran a
+    5 s S1 search in the request), for the drives the page asks with (Sine, and the preset's own PWM variant when its
+    S1 model carries it), at the default air and the preset's pack - exactly the request the page sends.  An answer
+    whose inputs did not change is a stamp check.  S1 answers do not depend on the caller's workspace: one pass."""
+    from fastapi import HTTPException
+    from motor_ai_sim import configure_load as ld
+    from motor_ai_sim import propeller as pp
+    from motor_ai_sim import propeller_s1 as s1
+    from motor_ai_sim.cooling_options import cooling_options
+    from motor_ai_sim.routes import catalog as cat
+    from motor_ai_sim.routes import propellers as R
+    t0 = time.monotonic()
+    done = failed = 0
+    seen = set()
+    try:
+        catalog = pp.load_catalog()
+    except Exception:                                           # noqa: BLE001
+        catalog = {}
+    for card in _shared_cards():
+        try:
+            ctx = cat.configure_context_answer(str(card["id"]), None)
+        except Exception:                                       # noqa: BLE001
+            continue
+        die = str(((ctx.get("cooling") or {}) if isinstance(ctx.get("cooling"), dict) else {}).get("die") or "")
+        if not die:
+            continue
+        for pr in ctx.get("presets") or []:
+            cfg = str(pr.get("config") or "")
+            try:
+                model = s1.load_model(die, cfg)
+            except Exception:                                   # noqa: BLE001 - no S1 model: no load chart
+                continue
+            drives = ["sine"] + [d for d in (pr.get("drive_variant"), pr.get("drive_variant_unmodelled"))
+                                 if d and d in (model.get("drives") or {})]
+            pack = ld.preset_pack(pr)
+            props = [p for p in (cooling_options(die, cfg).get("propellers") or [])
+                     if p in catalog and getattr(catalog[p], "selectable", False)]
+            for pid in props:
+                for d in dict.fromkeys(drives):
+                    key = (pid, die, cfg, d, None if pack is None else (round(pack["min"], 6), round(pack["max"], 6)))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if time.monotonic() - t0 > limit_s:
+                        break
+                    try:
+                        R.s1_answer(pid, die, cfg, ambient_c=DEFAULT_AMBIENT_C, drive=d,
+                                    pack_v_min=pack["min"] if pack else None, pack_v_max=pack["max"] if pack else None)
+                        done += 1
+                    except HTTPException:
+                        continue
+                    except Exception:                           # noqa: BLE001
+                        log.warning("warm: S1 %s %s %s %s failed", pid, die, cfg, d, exc_info=True)
+                        failed += 1
+    out = {"s1_answers": done, "failed": failed, "seconds": round(time.monotonic() - t0, 1)}
+    log.info("propeller S1 warm-up: %s", out)
+    return out
+
+
 def _warm_memory() -> None:
     """In the API process: the references and the family tree of the process workspace (seconds once)."""
     time.sleep(5.0)
@@ -147,3 +208,5 @@ if __name__ == "__main__":                                      # pragma: no cov
         print(warm_all())
     with use_workspace(process_workspace()):                    # the admin's view
         print(warm_all())
+    with use_workspace(public_workspace()):                     # every propeller of every public configuration
+        print(warm_propellers())

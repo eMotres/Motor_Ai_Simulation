@@ -21,10 +21,13 @@ import LandingShell from './components/landing/LandingShell';
 import { showsLandingShell } from './lib/rootGate';
 import { watchChunkImport } from './lib/chunkReload';
 import { resolveSchemasRoute } from './lib/schemasRoute';
+import { parseProductionLink } from './lib/productionLink';
 
 const App = lazy(watchChunkImport(() => import('./App')));
 const OAuthConsent = lazy(watchChunkImport(() => import('./components/auth/OAuthConsent')));
 const CommPrefsPage = lazy(watchChunkImport(() => import('./components/auth/CommPrefsPage')));
+// the door behind a shared production-documents link: asks the server whether the caller is a member before the workspace opens
+const ShareLinkEntry = lazy(watchChunkImport(() => import('./modules/production/components/ShareLinkEntry')));
 
 const Loading: React.FC = () => (
   <div role="status" aria-live="polite" style={{
@@ -38,6 +41,8 @@ const Loading: React.FC = () => (
 const Root: React.FC = () => {
   const { user, resolved, enforced } = useAuth();
   const path = window.location.pathname;
+  // read ONCE: the Production page rewrites the address bar later, and the tree must not change shape (that would remount App)
+  const [entryLink] = React.useState(() => parseProductionLink(window.location.pathname, window.location.search));
   useEffect(() => {
     const route = resolveSchemasRoute(window.location.href);
     if (route.redirected) window.history.replaceState(null, '', route.href);
@@ -47,6 +52,16 @@ const Root: React.FC = () => {
   if (path === '/agent-consent') return <Suspense fallback={<Loading />}><OAuthConsent /></Suspense>;
   if (isPreferencesPath(path)) return <Suspense fallback={<Loading />}><CommPrefsPage /></Suspense>;
   if (showsLandingShell(!!user, resolved, enforced)) return <LandingShell />;
+  // A shared link to a production's documents (owner 2026-10-19): the link grants nothing, the server decides (a stranger gets a
+  // one-line "request access" page with no names).  A signed-out visitor got the landing above, with the sign-in dialog open.
+  const shareLink = user ? entryLink : null;
+  if (shareLink) {
+    return (
+      <Suspense fallback={<Loading />}>
+        <ShareLinkEntry link={shareLink}><Suspense fallback={<Loading />}><App /></Suspense></ShareLinkEntry>
+      </Suspense>
+    );
+  }
   return <Suspense fallback={<Loading />}><App /></Suspense>;
 };
 

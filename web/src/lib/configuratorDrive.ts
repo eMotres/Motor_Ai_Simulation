@@ -316,6 +316,30 @@ export function readVariantNear(v: PwmVariant, rpm: number, I: number):
   return { ok: true, values, exact: false, near: at };
 }
 
+/**
+ * The PWM extra motor loss of the LOADED build carried to another build (owner 2026-10-19: "Configure never blanks
+ * the results because of a knob move").  The drive variants are solved for one winding; the extra loss they carry is
+ * the carrier ripple's loss, and the ripple is set by the volt-seconds the bridge applies per carrier period - fixed
+ * by the bus and the carrier, not by the winding.  Per turn that is a ripple FLUX density B_r ∝ 1 / (series turns per
+ * phase x stack length), and the loss it drives in the iron and the magnets goes with B_r² x the active volume
+ * (∝ stack length):
+ *
+ *     P_pwm(new) = P_pwm(loaded) x (N_s,loaded / N_s,new)² x (L_loaded / L_new),   N_s = turns per slot / parallel paths
+ *
+ * Wire thickness does not enter (the ripple flux does not depend on it).  The bridge's own losses stay the variant's at
+ * the operating point (they follow the current, which the knobs set).  A first-order transfer, named on the page.
+ */
+export function pwmBuildScale(loaded: Pick<Knobs, 'N' | 'L_mm' | 'nP'>, now: Pick<Knobs, 'N' | 'L_mm' | 'nP'>): number {
+  const ns0 = loaded.N / Math.max(1, loaded.nP || 1), ns = now.N / Math.max(1, now.nP || 1);
+  if (!(ns0 > 0) || !(ns > 0) || !(loaded.L_mm > 0) || !(now.L_mm > 0)) return 1;
+  return (ns0 / ns) ** 2 * (loaded.L_mm / now.L_mm);
+}
+
+/** A reading with the motor's PWM extra loss carried to another build (`pwmBuildScale`). */
+export function transferPwmReading(r: VariantReading, scale: number): VariantReading {
+  return { ...r, motor_pwm_loss_W: r.motor_pwm_loss_W == null ? null : r.motor_pwm_loss_W * scale };
+}
+
 /** True when a build knob moved off the machine as loaded.  The variants were
  *  computed for the loaded build; only current and speed are free. */
 export function buildTuned(k: Knobs, r: Knobs | null): boolean {

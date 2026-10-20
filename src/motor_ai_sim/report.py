@@ -9674,7 +9674,7 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
         # never a hardcoded list — see `mass_composition_words`.
         ["Mass" + (" (frameless kit)" if _g(em, "mass_scope") == "frameless kit" else "")
          + (" (partial)" if _g(em, "mass_partial") else ""), _fmt(m_tot, 3, "kg"),
-         (("partial mass (no CAD model yet): the active parts only - " if _g(em, "mass_partial") else
+         (("full mass incomplete: the active parts only - " if _g(em, "mass_partial") else
            ("frameless kit (stator, coils, phase board, rotor, magnets; no housing, bearings, shaft) - "
             if _g(em, "mass_scope") == "frameless kit" else "full assembled motor - ")) + mass_composition_words(em))],
     ]
@@ -10419,7 +10419,7 @@ def mass_rows(em: Dict[str, Any],
         # where it differs from the TOTAL above — most configurations carry
         # one mass and this row does not print.
         if _g(em, "mass_partial"):
-            rows.append(["Partial mass (no CAD model yet)", "", "", "", ""])
+            rows.append(["Full mass incomplete: active parts only", "", "", "", ""])
         _act = _numf(_g(em, "mass_active_total_kg")) or _numf(_g(em, "mass_active_kg"))
         if (_act is not None and _mtt is not None
                 and abs(_act - _mtt) > MASS_SUM_TOL_KG):

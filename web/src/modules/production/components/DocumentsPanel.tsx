@@ -5,11 +5,37 @@ import { useTranslation } from 'react-i18next';
 import { PartName } from './PartName';
 import HelpTip from '../../../components/common/HelpTip';
 import ProcessView from './ProcessView';
+import { useAuth } from '../../../contexts/AuthContext';
 import { downloadFile, openFileInNewWindow, processDocument, productionApi } from '../api';
+import {
+  canShareLink, documentsForLink, latestUploadDay, productionLinkUrl, validDay, type ProductionLink,
+} from '../../../lib/productionLink';
 import type { DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 
-const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: ProdCtx; sections?: ProcessSection[] }> = ({ documents, parts, ctx, sections = [] }) => {
+const NEW_BG = 'rgba(37, 99, 235, 0.10)';
+
+/** Copy text; browsers without the clipboard API (or a refused permission) get the text in a prompt to copy by hand. */
+async function copyText(text: string, manualLabel: string): Promise<void> {
+  try { await navigator.clipboard.writeText(text); } catch { window.prompt(manualLabel, text); }
+}
+
+const DocumentsPanel: React.FC<{
+  documents: DocumentRec[]; parts: Part[]; ctx: ProdCtx; sections?: ProcessSection[];
+  /** the shared link this page was opened with (`since` marks new documents, `ids` narrows the list); null = plain view */
+  link?: ProductionLink | null;
+  onLinkChange?: (l: ProductionLink | null) => void;
+}> = ({ documents, parts, ctx, sections = [], link = null, onLinkChange }) => {
   const { t } = useTranslation('production');
+  const { isAdmin } = useAuth();
+  const canShare = canShareLink(ctx.role, isAdmin);
+  const [sinceDay, setSinceDay] = useState<string>(() => link?.since || latestUploadDay(documents) || new Date().toISOString().slice(0, 10));
+  const [copied, setCopied] = useState<'all' | 'new' | null>(null);
+  const view = documentsForLink(documents, link);
+  const copyLink = (kind: 'all' | 'new') => {
+    const url = productionLinkUrl(window.location.origin, { die: ctx.die, config: ctx.config, ...(kind === 'new' ? { since: sinceDay } : {}) });
+    if (!url) return;
+    void copyText(url, t('docs.copyManual')).then(() => { setCopied(kind); window.setTimeout(() => setCopied(null), 2000); });
+  };
   const fileRef = useRef<HTMLInputElement>(null);
   const [partId, setPartId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,6 +86,27 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
           {err && <Typography sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
         </Box>
       )}
+      {canShare && (
+        // admins and the production's owners hand the page to engineers: the link opens sign-in first and grants nothing by itself
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+          <Button size="small" variant="outlined" sx={{ textTransform: 'none' }} onClick={() => copyLink('all')}>
+            {copied === 'all' ? t('docs.copied') : t('docs.copyLink')}</Button>
+          <TextField size="small" type="date" label={t('docs.sinceLabel')} value={sinceDay}
+            onChange={(e) => setSinceDay(e.target.value)} InputLabelProps={{ shrink: true }} sx={{ width: 160 }} />
+          <Button size="small" variant="outlined" disabled={!validDay(sinceDay)} sx={{ textTransform: 'none' }} onClick={() => copyLink('new')}>
+            {copied === 'new' ? t('docs.copied') : t('docs.copyNew')}</Button>
+          <HelpTip title={t('docs.copyTip')} />
+        </Box>
+      )}
+      {link && (link.since || link.ids?.length) && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25, flexWrap: 'wrap' }}>
+          <Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>
+            {view.narrowed ? t('docs.selected', { n: view.shown.length }) : t('docs.newSince', { date: link.since, n: view.newIds.size })}
+          </Typography>
+          <Button size="small" sx={{ textTransform: 'none', fontSize: 11 }} onClick={() => onLinkChange?.(null)}>
+            {view.narrowed ? t('docs.showAll') : t('docs.clear')}</Button>
+        </Box>
+      )}
       {documents.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('docs.none')}</Typography> : (
         <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
           <Table size="small" sx={{
@@ -73,10 +120,11 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
               </TableRow>
             </TableHead>
             <TableBody>
-              {documents.map((d) => {
+              {view.shown.map((d) => {
                 const p = d.part_id ? byId.get(d.part_id) : undefined;
+                const isNew = view.newIds.has(d.id);
                 return (
-                  <TableRow key={d.id} hover>
+                  <TableRow key={d.id} hover sx={isNew ? { bgcolor: NEW_BG } : undefined} data-new={isNew ? '1' : undefined}>
                     <TableCell>
                       {/* a click opens the document in a new window (pdf / pictures); other types download (owner 2026-10-17) */}
                       <Box component="span" title={t('parts.openFull', 'Open full screen')}
@@ -90,6 +138,7 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
                         sx={{ cursor: 'pointer', color: '#2563eb', '&:hover': { textDecoration: 'underline' } }}>
                         {d.name}
                       </Box>
+                      {isNew && <Chip size="small" label={t('docs.newBadge')} color="primary" sx={{ ml: 1, height: 18, fontSize: 10 }} />}
                     </TableCell>
                     <TableCell>{p ? <PartName name={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}</TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>

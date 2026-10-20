@@ -49,6 +49,24 @@ export interface Preset {
   /** what this configuration is for (`applications` in its yaml, first = default); [] = not set */
   applications?: string[];
   application?: string | null;
+  /** THE masses of this configuration as the server computes them (owner 2026-10-19): "Mass" = full_kg, "Active mass" =
+   *  active_kg for this exact build; absent on older servers / when the die cannot be weighed */
+  mass?: PresetMass | null;
+}
+
+export interface PresetMass {
+  full_kg: number; active_kg: number; partial: boolean; partial_reason?: string; scope?: string;
+}
+
+/** The mass anchor of a preset: its build and the server's masses for it (`null` when the preset carries none). */
+export function presetMassAnchor<K extends KnobsLike>(base: K, pr: Preset | null | undefined):
+    { N: number; L_mm: number; wireH_mm: number; active_kg: number; full_kg: number; partial: boolean;
+      partial_reason?: string } | null {
+  const m = pr?.mass;
+  if (!pr || !m || !(Number(m.active_kg) > 0) || !Number.isFinite(Number(m.full_kg))) return null;
+  const k = presetKnobs(base, pr);
+  return { N: k.N, L_mm: k.L_mm, wireH_mm: k.wireH_mm, active_kg: Number(m.active_kg), full_kg: Number(m.full_kg),
+           partial: !!m.partial, partial_reason: m.partial_reason || undefined };
 }
 
 /** The slice of the tuner's knobs the presets speak about. */

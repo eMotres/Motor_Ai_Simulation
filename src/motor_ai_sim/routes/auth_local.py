@@ -161,8 +161,8 @@ def _stored_lang(email: str) -> str:
     return str(rec.get("lang") or "")
 
 
-def _send_verification(email: str, return_path: str = "", return_host: str = "", lang: str = "") -> None:
-    sid = U.issue_short_link(email, "verify", return_path=return_path)
+def _send_verification(email: str, return_path: str = "", return_host: str = "", lang: str = "", next_path: str = "") -> None:
+    sid = U.issue_short_link(email, "verify", return_path=return_path, next_path=next_path)
     url = E.short_link("verify", sid)
     subj, body = E.verify_mail(email, url, return_path, return_host, zh=E.wants_zh(lang or _stored_lang(email), email))
     if not E.send(email, subj, body, kind="verify"):
@@ -195,6 +195,16 @@ class RegisterReq(BaseModel):
     #: then gets a single-use continuation bound to {request, this address};
     #: the confirmation link carries it (docs/MCP_DISCOVERY.md "Sign-up").
     return_to: Optional[str] = None
+    #: A shared link to an app page the visitor opened before registering (``/production/<die>/<config>/documents?since=...``).
+    #: Validated by ``return_path.safe_app_path``; anything else is ignored (the account is still created).  The path only says
+    #: where the confirmed visitor lands - it grants nothing.
+    next: Optional[str] = None
+
+
+def _next_path(raw) -> str:
+    """The validated same-origin app path of a sign-up/resend request, or '' (never an error: a bad value just means "home")."""
+    from motor_ai_sim import return_path as RP
+    return RP.safe_app_path(raw) or ""
 
 
 def _oauth_rid(return_to: Optional[str]) -> Optional[str]:
@@ -272,6 +282,7 @@ def register(req: RegisterReq, request: Request):
     if E.SIGNUP_IP.blocked(ip):
         raise HTTPException(429, detail="too many sign-ups from this network — try again later")
     rid = _oauth_rid(req.return_to)
+    nxt = _next_path(req.next)
     topics = _comm_prefs_ticked(req.comm_prefs)
     E.SIGNUP_IP.hit(ip)
     may_mail = _mail_allowed(email, ip)
@@ -293,9 +304,9 @@ def register(req: RegisterReq, request: Request):
         if outcome == "created":
             # Only a row THIS request created gets the continuation: an older
             # pending row was not necessarily registered by this browser.
-            _send_verification(email, *_continuation_path(rid, email), lang=req.lang)
+            _send_verification(email, *_continuation_path(rid, email), lang=req.lang, next_path=nxt)
         elif outcome == "exists_unverified":
-            _send_verification(email)
+            _send_verification(email, next_path=nxt)
         else:
             subj, body = E.exists_mail(email)
             E.send(email, subj, body)
@@ -307,6 +318,7 @@ def register(req: RegisterReq, request: Request):
 
 class ResendReq(BaseModel):
     email: str
+    next: Optional[str] = None      # the shared page the visitor came for (see RegisterReq.next)
 
 
 @router.post("/register/resend", status_code=202)
@@ -320,7 +332,7 @@ def register_resend(req: ResendReq, request: Request):
     may_mail = _mail_allowed(email, ip)
     rec = U.get_user(email)
     if may_mail and rec is not None and not U.is_verified(rec) and not rec.get("disabled"):
-        _send_verification(email)
+        _send_verification(email, next_path=_next_path(req.next))
     return _ACCEPTED
 
 
@@ -526,13 +538,20 @@ def _continue_url(return_path: str, secret: str, email: str) -> str:
         return ""
 
 
-def _confirmed_page(request: Request, email: str, *, already: bool, return_path: str = "", secret: str = "") -> HTMLResponse:
+def _confirmed_page(request: Request, email: str, *, already: bool, return_path: str = "", secret: str = "",
+                    next_path: str = "") -> HTMLResponse:
     from motor_ai_sim import link_pages as LP
     lang = _link_lang(request, email)
     home, signin = _urls(lang)
     cont = "" if already else _continue_url(return_path, secret, email)
+    # a shared page the visitor registered for: both buttons lead there (re-validated: the stored value is data, not trust);
+    # a signed-out visitor meets the sign-in dialog on that very URL, a signed-in one lands on the page
+    nxt = "" if cont else _next_path(next_path)
+    if nxt:
+        home = E.app_url() + nxt
+        signin = home + ("&" if "?" in home else "?") + "signin=1"
     return _html(LP.verified(lang, email, already=already, open_url=home, signin_url=signin, continue_url=cont,
-                             switch_url=_switch(request, lang)))
+                             switch_url=_switch(request, lang), open_label="open_next" if nxt else ""))
 
 
 def _invalid_page(request: Request, kind: str, email: str = "") -> HTMLResponse:
@@ -542,10 +561,10 @@ def _invalid_page(request: Request, kind: str, email: str = "") -> HTMLResponse:
     return _html(LP.invalid(lang, kind=kind, email=email, action="/api/auth/link/resend", switch_url=_switch(request, lang)))
 
 
-def _do_verify(request: Request, email: str, sid: str = "") -> None:
+def _do_verify(request: Request, email: str, sid: str = "", next_path: str = "") -> None:
     U.mark_verified(email, by="link")
     if sid:
-        U.spend_short_links(email, "verify", sid)
+        U.spend_short_links(email, "verify", sid, next_path=next_path)
     S.record_event("verified", email=email, reason="link", ip=_ip(request), path="/api/auth/link")
 
 
@@ -560,10 +579,11 @@ def link_verify(sid: str, request: Request):
     if rec is None:
         return _invalid_page(request, "verify")
     if info["state"] == "valid" and not U.is_verified(rec):
-        _do_verify(request, email, sid)
-        return _confirmed_page(request, email, already=False, return_path=info.get("return_path", ""))
+        _do_verify(request, email, sid, next_path=info.get("next_path", ""))
+        return _confirmed_page(request, email, already=False, return_path=info.get("return_path", ""),
+                               next_path=info.get("next_path", ""))
     if U.is_verified(rec):
-        return _confirmed_page(request, email, already=True)
+        return _confirmed_page(request, email, already=True, next_path=info.get("next_path", ""))
     return _invalid_page(request, "verify", email)
 
 

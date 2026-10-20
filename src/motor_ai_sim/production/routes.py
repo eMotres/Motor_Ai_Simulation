@@ -25,6 +25,53 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/production", tags=["production"])
 
 
+#: BOM lists of one production (owner 2026-10-19): the motor BOM (default, bom.json / costs.json) and a separate TOOLING / FIXTURES order list
+#: (bom_tooling.json / costs_tooling.json) with the same rows, columns, prices and statuses.  ``?list=tooling`` selects it.  The tooling list is
+#: ordered as a whole: its quantities are totals (the "per motor" column is the quantity, the order quantity is 1), so no price is multiplied
+#: by the number of motors.  Prices stay behind the same cost-access rule as the motor BOM.
+LISTS = {"": ("bom.json", "costs.json"), "tooling": ("bom_tooling.json", "costs_tooling.json")}
+
+
+def _list_name(request: Request) -> str:
+    v = str(request.query_params.get("list") or "").strip().lower()
+    if v in ("", "motor"):
+        return ""
+    if v in LISTS:
+        return v
+    raise HTTPException(status_code=422, detail="list must be 'motor' or 'tooling'")
+
+
+def _bom_file(list_name: str) -> str:
+    return LISTS[list_name][0]
+
+
+def _costs_file(list_name: str) -> str:
+    return LISTS[list_name][1]
+
+
+def _list_order_qty(production: dict, list_name: str) -> int:
+    """Quantity the per-motor numbers are multiplied by: the production's order quantity, or 1 for the tooling list."""
+    return 1 if list_name else max(0, int(production.get("order_quantity") or 0))
+
+
+def _price_rows(list_name: str, bom_rows: list, cost_rows: list) -> list:
+    """Cost rows as the summary should add them up.  Motor list: ``unit_price`` is the cost of the line PER MOTOR (the summary multiplies by the
+    order quantity).  Tooling list: ``unit_price`` is the price of ONE piece, the line costs price x quantity, and the order quantity is 1."""
+    if not list_name:
+        return cost_rows
+    qty = {str(b.get("part_id")): max(0, int(b.get("qty_per_motor") or 1)) for b in bom_rows if isinstance(b, dict)}
+    out = []
+    for r in cost_rows:
+        r2 = dict(r) if isinstance(r, dict) else r
+        if isinstance(r2, dict) and r2.get("unit_price") is not None and r2.get("part_id") in qty:
+            try:
+                r2["unit_price"] = float(r2["unit_price"]) * qty[r2["part_id"]]
+            except (ValueError, TypeError):
+                pass
+        out.append(r2)
+    return out
+
+
 def _email(user: dict) -> str:
     return str(user.get("email") or "").strip().lower()
 
@@ -77,8 +124,9 @@ def list_productions(request: Request):
 
 # ── procurement & project schedule helpers ───────────────────────────────────
 
-def _get_procurement_data(die: str, config: str, production: dict, today: Optional[str] = None) -> tuple[list[dict], dict]:
-    bom = store.load_file(die, config, "bom.json")
+def _get_procurement_data(die: str, config: str, production: dict, today: Optional[str] = None,
+                          list_name: str = "") -> tuple[list[dict], dict]:
+    bom = store.load_file(die, config, _bom_file(list_name))
     bom_rows = bom.get("rows", [])
     parts_data = store.load_file(die, config, "parts.json")
     parts = parts_data.get("parts", [])
@@ -93,11 +141,11 @@ def _get_procurement_data(die: str, config: str, production: dict, today: Option
     assembly_phase = next((p for p in phases if p.get("key") == "assembly" or p.get("id") == "assembly"), None)
     assembly_planned_start = assembly_phase.get("planned_start") if assembly_phase else None
 
-    order_qty = max(0, int(production.get("order_quantity") or 0))
+    order_qty = _list_order_qty(production, list_name)
 
-    # We want a row for every part in BOM (or parts list if BOM is empty)
+    # We want a row for every part in BOM (or parts list if BOM is empty; never for the tooling list: it names its parts)
     target_part_ids = []
-    if bom_rows:
+    if bom_rows or list_name:
         for br in bom_rows:
             pid = str(br.get("part_id") or "")
             if pid and pid not in target_part_ids:
@@ -215,6 +263,61 @@ def get_production(request: Request, die: str, config: str):
     return production
 
 
+# ── shared links: who may open a production's page, and how a stranger asks ─────
+
+def _access_request_title(die: str, config: str) -> str:
+    import re
+    clean = lambda v: re.sub(r"[^\w .\-]", "_", str(v))[:48]                    # noqa: E731 - names come from the URL
+    return "Production access: %s / %s" % (clean(die), clean(config))
+
+
+def _has_open_access_request(email: str, title: str) -> bool:
+    from motor_ai_sim import ticket_store as T
+    return any(r.get("title") == title and (r.get("status") or "open") in ("open", "in_progress")
+               for r in T.list_for(email))
+
+
+@router.get("/{die}/{config}/access")
+def my_access(request: Request, die: str, config: str):
+    """What the caller may do with a shared link to this production - and NOTHING else about it.
+
+    The answer for a stranger is the same whether the production exists or not and carries no name, title or count
+    (the page behind the link must not confirm what is there).  Opening a link grants nothing: ``member`` only when the
+    account is on the production's member list (or an admin), exactly the rule every other route applies."""
+    user = access.require_signed_in(request)
+    production = access.load_production(die, config)
+    admin = access.is_admin(user)
+    role = models.is_member(_email(user), production) if production else None
+    if production is not None and (admin or role is not None):
+        return {"access": "member", "role": role or "admin",
+                "can_share": bool(admin or role == "owner"), "factory": role == "oem" and not admin}
+    title = _access_request_title(die, config)
+    return {"access": "none", "requested": _has_open_access_request(_email(user), title)}
+
+
+@router.post("/{die}/{config}/request_access")
+def request_access(request: Request, die: str, config: str):
+    """A signed-in stranger asks the team for access: one 'account' ticket in the admin inbox (the existing support path).
+    Nothing is granted and nothing is sent; asking twice files one ticket; the answer never says whether the production
+    exists."""
+    from motor_ai_sim import ticket_store as T
+    user = access.require_signed_in(request)
+    email = _email(user)
+    production = access.load_production(die, config)
+    if production is not None and (access.is_admin(user) or models.is_member(email, production) is not None):
+        return {"ok": True, "already_member": True}
+    title = _access_request_title(die, config)
+    if not _has_open_access_request(email, title):
+        try:
+            T.create(email, "account", title,
+                     "Asked for access through a shared link to the documents of this production. "
+                     "Grant a role under Admin > Production access, or decline.",
+                     context={"source": "production_share_link"})
+        except T.TicketError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+    return {"ok": True, "already_member": False}
+
+
 # ── parts ────────────────────────────────────────────────────────────────────
 
 @router.get("/{die}/{config}/parts")
@@ -226,6 +329,7 @@ def list_parts(request: Request, die: str, config: str):
 @router.post("/{die}/{config}/parts")
 async def create_part(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
+    list_name = _list_name(request)
     body = await _json_or_form(request)
     part = models.normalize_part(body)
     # Do not machine-translate part names: canonical English is kept or pending
@@ -237,14 +341,14 @@ async def create_part(request: Request, die: str, config: str):
     store.mutate_file(die, config, "parts.json", lambda d: d.setdefault("parts", []).append(part))
     if part.get("kind") != "assembly":
         # a new part is a BOM line at once (owner 2026-10-18: "Add part" created a part the BOM table never showed)
-        oq = int((_production or {}).get("order_quantity") or 0)
+        oq = _list_order_qty(_production or {}, list_name)
         qty = float(part.get("qty_per_motor") or 1)
 
         def _add_row(d):
             rows = d.setdefault("rows", [])
             if not any(r.get("part_id") == part["id"] for r in rows):
                 rows.append({"part_id": part["id"], "qty_per_motor": qty, "order_total": qty * oq})
-        store.mutate_file(die, config, "bom.json", _add_row)
+        store.mutate_file(die, config, _bom_file(list_name), _add_row)
     _touch(die, config)
     _audit(_email(user), die, config, "create", "part", part["id"], {"part": part})
     return part
@@ -352,7 +456,8 @@ def apply_default_assembly(request: Request, die: str, config: str):
 @router.get("/{die}/{config}/bom")
 def get_bom(request: Request, die: str, config: str):
     user, production = require_member_with_full_view(request, die, config)
-    bom_data = store.load_file(die, config, "bom.json")
+    list_name = _list_name(request)
+    bom_data = store.load_file(die, config, _bom_file(list_name))
     rows = list(bom_data.get("rows", []))
     from motor_ai_sim.production import access
     if not access.can_view_costs(user, production):
@@ -367,9 +472,9 @@ def get_bom(request: Request, die: str, config: str):
         ]
         return {"rows": cleaned}
 
-    costs = store.load_file(die, config, "costs.json")
+    costs = store.load_file(die, config, _costs_file(list_name))
     cost_map = {r["part_id"]: r for r in costs.get("rows", []) if isinstance(r, dict) and r.get("part_id")}
-    order_qty = max(0, int(production.get("order_quantity") or 0))
+    order_qty = _list_order_qty(production, list_name)
 
     enriched_rows = []
     for r in rows:
@@ -386,7 +491,7 @@ def get_bom(request: Request, die: str, config: str):
             try:
                 up = float(crow["unit_price"])
                 row_dict["unit_price"] = up
-                row_dict["line_total"] = round(up * order_qty, 2)
+                row_dict["line_total"] = round(up * (row_dict["qty_per_motor"] if list_name else order_qty), 2)
             except (ValueError, TypeError):
                 row_dict["unit_price"] = None
                 row_dict["line_total"] = None
@@ -399,7 +504,7 @@ def get_bom(request: Request, die: str, config: str):
 
     summary = models.compute_cost_summary(
         enriched_rows,
-        costs.get("rows", []),
+        _price_rows(list_name, rows, costs.get("rows", [])),
         costs.get("extras", []),
         costs.get("margin_pct", 0.0),
         order_qty,
@@ -414,14 +519,15 @@ def get_bom(request: Request, die: str, config: str):
 @router.put("/{die}/{config}/bom")
 async def save_bom(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
+    list_name = _list_name(request)
     body = await _json_or_form(request)
     rows = body.get("rows") if isinstance(body, dict) else []
     parts = store.load_file(die, config, "parts.json").get("parts", [])
     part_ids = {p.get("id") for p in parts if isinstance(p, dict)}
     cleaned = models.normalize_bom_rows(rows, part_ids)
-    store.save_file(die, config, "bom.json", {"rows": cleaned})
+    store.save_file(die, config, _bom_file(list_name), {"rows": cleaned})
     _touch(die, config)
-    _audit(_email(user), die, config, "update", "bom", "bom", {"rows": cleaned})
+    _audit(_email(user), die, config, "update", "bom", "bom" + (":" + list_name if list_name else ""), {"rows": cleaned})
     return {}
 
 
@@ -434,10 +540,11 @@ def get_costs(request: Request, die: str, config: str):
     if not access.can_view_costs(user, production):
         raise HTTPException(status_code=403, detail="Cost access restricted")
 
-    costs = store.load_file(die, config, "costs.json")
-    bom = store.load_file(die, config, "bom.json")
+    list_name = _list_name(request)
+    costs = store.load_file(die, config, _costs_file(list_name))
+    bom = store.load_file(die, config, _bom_file(list_name))
     bom_rows = bom.get("rows", [])
-    order_qty = max(0, int(production.get("order_quantity") or 0))
+    order_qty = _list_order_qty(production, list_name)
 
     cost_map = {r["part_id"]: r for r in costs.get("rows", []) if isinstance(r, dict) and r.get("part_id")}
     rows_out = []
@@ -455,7 +562,7 @@ def get_costs(request: Request, die: str, config: str):
 
     summary = models.compute_cost_summary(
         bom_rows,
-        rows_out,
+        _price_rows(list_name, bom_rows, rows_out),
         costs.get("extras", []),
         costs.get("margin_pct", 0.0),
         order_qty,
@@ -475,21 +582,22 @@ async def save_costs(request: Request, die: str, config: str):
     if not access.can_edit_costs(user, production):
         raise HTTPException(status_code=403, detail="Editor access required")
 
+    list_name = _list_name(request)
     body = await _json_or_form(request)
     costs = models.normalize_costs(body)
     for extra in costs["extras"]:
         extra["name"] = models.ensure_translated(extra["name"])
 
-    store.save_file(die, config, "costs.json", costs)
+    store.save_file(die, config, _costs_file(list_name), costs)
     _touch(die, config)
-    _audit(_email(user), die, config, "update", "costs", "costs", {"costs": costs})
+    _audit(_email(user), die, config, "update", "costs", "costs" + (":" + list_name if list_name else ""), {"costs": costs})
 
-    bom = store.load_file(die, config, "bom.json")
+    bom = store.load_file(die, config, _bom_file(list_name))
     bom_rows = bom.get("rows", [])
-    order_qty = max(0, int(production.get("order_quantity") or 0))
+    order_qty = _list_order_qty(production, list_name)
     summary = models.compute_cost_summary(
         bom_rows,
-        costs["rows"],
+        _price_rows(list_name, bom_rows, costs["rows"]),
         costs["extras"],
         costs["margin_pct"],
         order_qty,
@@ -505,7 +613,7 @@ async def save_costs(request: Request, die: str, config: str):
 @router.get("/{die}/{config}/procurement")
 def get_procurement(request: Request, die: str, config: str, today: Optional[str] = None):
     user, production = require_member_with_full_view(request, die, config)
-    rows, summary = _get_procurement_data(die, config, production, today=today)
+    rows, summary = _get_procurement_data(die, config, production, today=today, list_name=_list_name(request))
     return {"rows": rows, "summary": summary}
 
 

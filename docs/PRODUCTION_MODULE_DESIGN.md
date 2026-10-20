@@ -227,6 +227,16 @@ All routes require a signed-in caller. Reads fail NDA gate with 403 `nda_require
 | POST | `/api/production/{die}/{config}/translate/retry` | members / admin | Retry pending translation |
 | POST | `/api/production/{die}/{config}/translate/confirm` | members / admin | Confirm/edit translation |
 
+### Tooling / fixtures order list (owner 2026-10-19)
+
+A production has a second, separate order list next to the motor BOM: the TOOLING / FIXTURES the factory or our own shop needs to make the
+motor (e.g. the coil press).  Same rows, columns, prices, currencies and procurement statuses as the motor BOM, same cost-access rule (prices
+never reach the factory roles).  `?list=tooling` on `GET/PUT .../bom`, `GET/PUT .../costs`, `GET .../procurement` and `POST .../parts`
+selects it; no parameter = the motor BOM.  Files: `bom_tooling.json` (same shape as `bom.json`) and `costs_tooling.json` (same shape as
+`costs.json`); procurement lines stay in `procurement.json` (keyed by part id).  Quantities are TOTALS (the "per motor" column is the quantity,
+the order quantity is 1); `unit_price` is the price of one piece and a line costs price x quantity, so nothing is multiplied by the number of
+motors.  The motor BOM, its costs and its readiness summary never see the tooling parts.
+
 ### Admin routes
 
 | Method | Path | Who | Description |

@@ -106,3 +106,48 @@ export function withPointAt(line: { ok: LoadPoint[]; over: LoadPoint[] }, x: num
   const ok = line.ok.length && x > okEnd && nextFail && x <= nextFail.x ? [...line.ok, p] : add(line.ok);
   return { ok, over: add(line.over) };
 }
+
+/** The chart's plot margins (PropellerLoadChart: LineChart margin left 4 + YAxis width 46, right 12). */
+export const PLOT_LEFT_PX = 4 + 46;
+export const PLOT_RIGHT_PX = 12;
+
+/**
+ * The speed under the pointer: a click on the load chart sets the motor's speed there (owner 2026-10-19 «раньше на
+ * графике пропеллера нажимаешь на точку и мотор пересчитывался»), dragging moves it.  `chartX` is the pointer's x in the
+ * chart's own pixels, `width` the chart's width, [xMin, xMax] the speed axis.  Rounded to 10 rpm; null outside the
+ * plot area or with no axis.
+ */
+export function rpmAtChartX(chartX: number, width: number, xMin: number, xMax: number,
+                            left = PLOT_LEFT_PX, right = PLOT_RIGHT_PX): number | null {
+  if (!(width > 0) || !Number.isFinite(chartX) || !(xMax > xMin)) return null;
+  const f = (chartX - left) / Math.max(1, width - left - right);
+  if (f < 0 || f > 1) return null;
+  return Math.round((xMin + f * (xMax - xMin)) / 10) * 10;
+}
+
+/**
+ * The SPEED MARKER (owner 2026-10-19 «при нажатии на графике, чтобы оставалась полоска в точке нажатия ... при нажатии на
+ * другое место она должна смещаться»): a vertical line at the speed Configure is set to - where the user clicked or
+ * dragged on the chart, typed the rpm, moved the slider, or where a preset load put it - with a dot on every line that
+ * reaches that speed.  `rpm` is ALWAYS the current knob value; the marker has no state of its own, so a second click
+ * (a new knob value) moves it.  null when the speed is not on the chart's speed axis [xMin, xMax].
+ */
+export function speedMarker(lines: readonly { id: string; color: string; ok: readonly LoadPoint[]; over: readonly LoadPoint[] }[],
+                            rpm: number | null | undefined): { x: number; dots: { id: string; color: string; y: number }[] } | null {
+  if (rpm == null || !Number.isFinite(rpm)) return null;
+  const xs = lines.flatMap((l) => [...l.ok, ...l.over].map((q) => q.x));
+  if (!xs.length || rpm < Math.min(...xs) || rpm > Math.max(...xs)) return null;
+  const dots = lines.flatMap((l) => {
+    const y = valueAt(l, rpm);
+    return y == null ? [] : [{ id: l.id, color: l.color, y }];
+  });
+  return { x: rpm, dots };
+}
+
+/** What the chart says while it has no line: still LOADING (a request in flight) or truly NO DATA (every answer came
+ *  back empty).  `answers` maps each requested propeller to its rows: undefined = in flight, null / [] = no data. */
+export function chartState(ids: readonly string[], answers: Readonly<Record<string, readonly unknown[] | null | undefined>>):
+  'loading' | 'nodata' | 'data' {
+  if (ids.some((id) => (answers[id]?.length ?? 0) > 0)) return 'data';
+  return ids.some((id) => answers[id] === undefined) ? 'loading' : 'nodata';
+}

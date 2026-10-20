@@ -496,8 +496,11 @@ def _sid_digest(sid: str) -> str:
     return hashlib.sha256(("short-link|" + str(sid)).encode("utf-8")).hexdigest()
 
 
-def issue_short_link(email: str, purpose: str, ttl_s: int = LINK_TTL_S, return_path: str = "") -> str:
-    """Mint a short single-use link id for `email` / `purpose`; KeyError for an unknown account."""
+def issue_short_link(email: str, purpose: str, ttl_s: int = LINK_TTL_S, return_path: str = "", next_path: str = "") -> str:
+    """Mint a short single-use link id for `email` / `purpose`; KeyError for an unknown account.
+
+    ``next_path``: an app page the "confirmed" page leads on to (already validated by ``return_path.safe_app_path``; it
+    confers no access, it is only where the visitor lands once signed in)."""
     if purpose not in LINK_PURPOSES:
         raise ValueError(purpose)
     email = _norm(email)
@@ -513,6 +516,8 @@ def issue_short_link(email: str, purpose: str, ttl_s: int = LINK_TTL_S, return_p
         row = {"p": purpose, "d": _sid_digest(sid), "exp": now + int(ttl_s)}
         if return_path:
             row["rp"] = str(return_path)[:300]
+        if next_path:
+            row["nx"] = str(next_path)[:300]
         live.append(row)
         users[email]["short_links"] = live
         _save(users)
@@ -531,14 +536,18 @@ def find_short_link(sid: str, purpose: str) -> Optional[dict]:
             continue
         for r in rec.get("short_links") or []:
             if isinstance(r, dict) and r.get("p") == purpose and hmac.compare_digest(str(r.get("d") or ""), d):
-                return {"email": email, "state": "valid" if r.get("exp", 0) > now else "expired", "return_path": r.get("rp", "")}
+                return {"email": email, "state": "valid" if r.get("exp", 0) > now else "expired", "return_path": r.get("rp", ""),
+                        "next_path": r.get("nx", "")}
         if (rec.get("short_used") or {}).get(d) == purpose:
-            return {"email": email, "state": "used", "return_path": ""}
+            # a mail scanner may open the link first: the person's own click still finds the page it leads to
+            return {"email": email, "state": "used", "return_path": "", "next_path": (rec.get("short_next") or {}).get(d, "")}
     return None
 
 
-def spend_short_links(email: str, purpose: str, sid: str = "") -> None:
-    """After the link was used: forget every live id of this purpose and remember the spent one(s)."""
+def spend_short_links(email: str, purpose: str, sid: str = "", next_path: str = "") -> None:
+    """After the link was used: forget every live id of this purpose and remember the spent one(s).
+
+    ``next_path`` stays attached to the spent id so a second click (or the person after a mail scanner) still finds the page."""
     email = _norm(email)
     with _LOCK:
         users = _load()
@@ -546,18 +555,28 @@ def spend_short_links(email: str, purpose: str, sid: str = "") -> None:
         if rec is None:
             return
         used = dict(rec.get("short_used") or {})
+        nexts = dict(rec.get("short_next") or {})
         keep = []
         for r in rec.get("short_links") or []:
             if isinstance(r, dict) and r.get("p") == purpose:
                 used[str(r.get("d"))] = purpose
+                if r.get("nx"):
+                    nexts[str(r.get("d"))] = str(r.get("nx"))
             else:
                 keep.append(r)
         if sid:
             used[_sid_digest(sid)] = purpose
+            if next_path:
+                nexts[_sid_digest(sid)] = str(next_path)[:300]
         for k in list(used)[:-_SHORT_USED_KEEP]:
             used.pop(k, None)
+        nexts = {k: v for k, v in nexts.items() if k in used}
         rec["short_links"] = keep
         rec["short_used"] = used
+        if nexts:
+            rec["short_next"] = nexts
+        else:
+            rec.pop("short_next", None)
         _save(users)
 
 

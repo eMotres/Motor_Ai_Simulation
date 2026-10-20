@@ -16,6 +16,7 @@ import {
   GOOGLE_CLIENT_ID, TERMS_URL, PRIVACY_URL, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
 import { isChineseVisitor } from '../../i18n/detectInitialLanguage';
+import { shareReturnPath } from '../../lib/productionLink';
 import HelpTip from '../common/HelpTip';
 import CommPrefsBoxes from '../common/CommPrefsBoxes';
 import { emptyTopics, tickedTopics, type Topics } from '../../lib/commPrefsLogic';
@@ -213,7 +214,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         setEmail(''); setPassword('');
         onSignedIn(token, user);
       } else if (mode === 'register') {
-        await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo);
+        await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo,
+          shareReturnPath(window.location.pathname, window.location.search));
         setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics());
         setMode('signin');
         setSent({ email: email.trim(), ok: null }); setChanging(false); setNewEmail(''); setCooldown(60);
@@ -241,7 +243,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
     if (!sent || busy || cooldown > 0) return;
     setBusy(true); setErr(null);
     try {
-      await resendVerification(sent.email);
+      await resendVerification(sent.email, shareReturnPath(window.location.pathname, window.location.search));
       setSent({ ...sent, ok: t('auth.sent.resent') }); setCooldown(60);
     } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
   };

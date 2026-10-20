@@ -3,7 +3,7 @@
 import { errorInfo, safeFileName, unwrapList } from './helpers';
 import type {
   AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
-  Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
+  ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -23,6 +23,8 @@ export class ProductionApiError extends Error {
 
 const enc = encodeURIComponent;
 const base = (die: string, config: string) => `/api/production/${enc(die)}/${enc(config)}`;
+/** ?list=tooling selects the tooling / fixtures order list (bom_tooling.json / costs_tooling.json); absent = the motor BOM. */
+const lq = (list?: 'tooling') => (list ? `?list=${list}` : '');
 const adminBase = (die: string, config: string) => `/api/admin/production/${enc(die)}/${enc(config)}`;
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -110,26 +112,31 @@ export const productionApi = {
   // -- caller routes ---------------------------------------------------------------------------------------------------
   list: async (): Promise<Production[]> => unwrapList<Production>(await call('GET', '/api/production'), 'productions'),
   get: (die: string, config: string) => call<Production>('GET', base(die, config)),
+  /** What the caller may do behind a shared link: `member` (with the role), or `none` - a nameless answer, same for a missing production. */
+  access: (die: string, config: string) => call<ProductionAccess>('GET', `${base(die, config)}/access`),
+  /** A stranger asks the team for access (one ticket in the admin inbox; nothing is granted). */
+  requestAccess: (die: string, config: string) =>
+    call<{ ok: boolean; already_member: boolean }>('POST', `${base(die, config)}/request_access`, {}),
 
   parts: async (die: string, config: string) => unwrapList<Part>(await call('GET', `${base(die, config)}/parts`), 'parts'),
-  createPart: (die: string, config: string, part: Partial<Part>) => call<Part>('POST', `${base(die, config)}/parts`, part),
+  createPart: (die: string, config: string, part: Partial<Part>, list?: 'tooling') => call<Part>('POST', `${base(die, config)}/parts${lq(list)}`, part),
   updatePart: (die: string, config: string, id: string, patch: Partial<Part>) =>
     call<Part>('PATCH', `${base(die, config)}/parts/${enc(id)}`, patch),
   deletePart: (die: string, config: string, id: string) => call<unknown>('DELETE', `${base(die, config)}/parts/${enc(id)}`),
 
-  bom: async (die: string, config: string) => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom`), 'rows'),
-  saveBom: (die: string, config: string, rows: BomRow[]) => call<unknown>('PUT', `${base(die, config)}/bom`, { rows }),
+  bom: async (die: string, config: string, list?: 'tooling') => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom${lq(list)}`), 'rows'),
+  saveBom: (die: string, config: string, rows: BomRow[], list?: 'tooling') => call<unknown>('PUT', `${base(die, config)}/bom${lq(list)}`, { rows }),
 
   assembly: (die: string, config: string) =>
     call<{ tree: AssemblyTree; parts: Part[]; costs: Record<string, number> }>('GET', `${base(die, config)}/assembly`),
   applyDefaultAssembly: (die: string, config: string) =>
     call<{ tree: AssemblyTree; parts: Part[] }>('POST', `${base(die, config)}/assembly/default`, {}),
 
-  costs: (die: string, config: string) => call<CostsData>('GET', `${base(die, config)}/costs`),
-  saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }) =>
-    call<CostsData>('PUT', `${base(die, config)}/costs`, data),
+  costs: (die: string, config: string, list?: 'tooling') => call<CostsData>('GET', `${base(die, config)}/costs${lq(list)}`),
+  saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }, list?: 'tooling') =>
+    call<CostsData>('PUT', `${base(die, config)}/costs${lq(list)}`, data),
 
-  procurement: (die: string, config: string) => call<ProcurementData>('GET', `${base(die, config)}/procurement`),
+  procurement: (die: string, config: string, list?: 'tooling') => call<ProcurementData>('GET', `${base(die, config)}/procurement${lq(list)}`),
   saveProcurementLine: (die: string, config: string, partId: string, line: Partial<ProcurementLine>) =>
     call<{ row: ProcurementLine }>('PUT', `${base(die, config)}/procurement/${enc(partId)}`, line),
 

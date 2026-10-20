@@ -108,7 +108,7 @@ def _read(f: Path) -> Optional[Dict[str, Any]]:
 def _load() -> Tuple[Dict[str, Optional[Dict[str, Any]]], frozenset, bool]:
     """``(basis by candidate pin, required card ids, store usable)``.
 
-    *Usable* = the folder exists and every ``*.json`` in it is a valid record; otherwise no card can be
+    *Usable* = the folder exists, holds at least one record and every ``*.json`` in it is valid; otherwise no card can be
     matched with confidence and `attach` fails the pinned cards closed.
     """
     root = store_dir()
@@ -126,7 +126,7 @@ def _load() -> Tuple[Dict[str, Optional[Dict[str, Any]]], frozenset, bool]:
             by_cand[rec["candidate"]] = rec["basis"]
         if rec["card_id"]:
             ids.append(rec["card_id"])
-    return by_cand, frozenset(ids), healthy
+    return by_cand, frozenset(ids), healthy and bool(by_cand or ids)     # an empty folder matches nothing: not usable
 
 
 def _candidate_of(entry: Dict[str, Any]) -> Optional[str]:

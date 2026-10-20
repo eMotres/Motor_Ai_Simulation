@@ -68,6 +68,15 @@ def test_missing_store_fails_pinned_cards_closed(tmp_path, monkeypatch):
     assert "reference_basis" not in plain
 
 
+def test_empty_store_fails_pinned_cards_closed(tmp_path, monkeypatch):
+    d = tmp_path / "empty"
+    d.mkdir()
+    monkeypatch.setattr(rb, "_DIR", d)
+    e = {"id": "p", "reference_provenance": {"candidate_sha256": CAND}}
+    rb.attach([e])
+    assert e["reference_basis"] == {"required": True, "basis": None}
+
+
 def test_unreadable_record_fails_pinned_cards_closed(store):
     (store / "broken.json").write_text("{not json", encoding="utf-8")
     e = {"id": "p", "reference_provenance": {"candidate_sha256": OTHER}}

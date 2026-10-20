@@ -402,7 +402,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     if (drive === 'voltage') setDrive('current');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [targetValue, setTargetValue] = usePersisted<number>('targetValue', 850);
+  const [targetValue, setTargetValue] = usePersisted<number>('targetValue', 1);
   const [fitBusy, setFitBusy] = useState(false);
   const [fitMsg,  setFitMsg]  = useState<string | null>(null);
   // Why the last Run did not produce a solve, shown UNDER THE RUN BUTTON.

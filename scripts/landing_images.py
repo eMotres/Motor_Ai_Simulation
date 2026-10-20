@@ -4,9 +4,12 @@
 generator lives in somebody's scratchpad is a picture nobody can check and
 nobody can reproduce.  This is that generator.
 
-WHAT IT DRAWS.  One machine at one operating point — CIANO10 200 opt /
-"L155 motor" / rated 1x9 mm — so the three cards are the same machine three
-ways and not three unrelated pretty pictures.  Each picture comes out of
+WHAT IT DRAWS.  One machine at one operating point — by default the PUBLIC
+CIANO14 40 new / L12 / "rated" — so the three cards are the same machine three
+ways and not three unrelated pretty pictures.  The machine is a command-line
+choice (``--die`` / ``--cfg`` / ``--duty``, see below), never hard-coded: the
+landing page is public, so it may only ever show a machine that is public
+(review F4, 2026-10-20: the first set was drawn from a closed 200 mm machine).  Each picture comes out of
 `report.py`'s OWN map builder, off the arrays that duty's solves filed in
 `motor_ai_sim.duty_fields`, so what the landing shows is what the report
 prints:
@@ -44,6 +47,13 @@ maximum is 3.626 T at a tooth-tip singularity) and the temperature bar still
 runs 68.93 to 135.2 degC.  That agreement is the check that the replication is
 faithful — if a rotation were wrong, the scale would move.  **Nothing in
 report.py changes**: the report still prints the half it solved.
+
+THE MACHINE.  ``--die NAME --cfg NAME --duty NAME`` choose the stored duty;
+``--config-root DIR`` points at a folder holding ``dies/<die>/runs/<cfg>/<duty-stem>/fields/``
+(read-only: a copy of the server's shared tree is enough, no server is started).
+Without ``--config-root`` the process's own workspace is used.  The section
+count is read off each mesh, so a machine meshed as a half, a third or a whole
+ring all work.
 
 THE MESH, AT CARD SIZE (user 2026-09-16: "add the mesh to these pictures").
 `report._map_png` already draws it — `mesh=True` is its default, and every
@@ -86,6 +96,7 @@ package in-process and reads the npz stores directly; it starts no server and
 calls none::
 
     python scripts/landing_images.py            # rewrite web/public/landing/*.webp
+    python scripts/landing_images.py --config-root DIR --die "CIANO14 40 new" --cfg L12 --duty rated
     python scripts/landing_images.py --check     # --verify, then redraw elsewhere and compare
     python scripts/landing_images.py --verify    # offline: format, size and pixel width of the shipped files
     python scripts/landing_images.py --from-png [DIR]   # offline: convert the old PNGs (no solver store needed)
@@ -162,7 +173,8 @@ MESH_COLOR = "#5a5a5a"
 #: stay a line.  One tone for all three, because the alternative is a tone per
 #: picture and no rule.
 
-DIE, CFG, DUTY = "CIANO10 200 opt", "L155 motor", "rated 1x9 mm"
+#: The default machine: a PUBLIC one (CIANO14 40 L12).  Override with --die/--cfg/--duty.
+DIE, CFG, DUTY = "CIANO14 40 new", "L12", "rated"
 #: The width the figures are PLACED at, in cm.  `report.map_font_pt` sizes the
 #: colour-bar type from it, so one value here is one tick-label size on all
 #: three cards.
@@ -337,13 +349,14 @@ def from_png(src: Path) -> Dict[str, bytes]:
 
 # ── the three pictures ──────────────────────────────────────────────────────
 
-def build(mesh: bool = True) -> Dict[str, bytes]:
+def build(mesh: bool = True, die: str = DIE, cfg: str = CFG,
+          duty: str = DUTY) -> Dict[str, bytes]:
     """``{filename: png bytes}`` for the whole set."""
     out: Dict[str, bytes] = {}
 
-    em = df.load(DIE, CFG, DUTY, "em")
+    em = df.load(die, cfg, duty, "em")
     if em is None or em.get("b_mag_per_tri") is None:
-        raise SystemExit("no em field for %s / %s / %s" % (DIE, CFG, DUTY))
+        raise SystemExit("no em field for %s / %s / %s" % (die, cfg, duty))
     print("em           %d sector(s)" % sectors_of(em["vertices"]))
     P, T, _n, tri = to_full(em["vertices"], em["triangles"], {},
                             {"b": em["b_mag_per_tri"], "tags": em["tags"]})
@@ -356,7 +369,7 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
           % (maps.get("b_max_T") or 0.0, maps.get("b_cap_T") or 0.0))
     out["em-field.webp"] = encode(maps["b"])
 
-    th = df.load(DIE, CFG, DUTY, "thermal")
+    th = df.load(die, cfg, duty, "thermal")
     if th is None or th.get("temperature_per_node") is None:
         raise SystemExit("no thermal field for this duty")
     print("thermal      %d sector(s)" % sectors_of(th["vertices"]))
@@ -372,7 +385,7 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
         raise SystemExit("the temperature map did not render")
     out["thermal-map.webp"] = encode(png)
 
-    src = report._duty_map_sources(DIE, CFG, DUTY)
+    src = report._duty_map_sources(die, cfg, duty)
     rs: Optional[Dict[str, Any]] = src.get("rotor_stress")
     if rs is None:
         raise SystemExit("no rotor_stress field for this duty")
@@ -387,6 +400,16 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
     return out
 
 
+def _use_config_root(root: Path) -> None:
+    """Read the duty fields from ``root/dies/...`` instead of the process workspace."""
+    if not (root / "dies").is_dir():
+        raise SystemExit("%s has no dies/ folder" % root)
+    from motor_ai_sim import workspace as _ws
+    _ws.root = lambda: root                                  # type: ignore[assignment]
+    # duty_fields resolves its folder through workspace.root() on every call.
+    print("fields read from %s (read-only)" % root)
+
+
 def main(argv: List[str]) -> int:
     args = list(argv[1:])
     check = "--check" in args
@@ -398,6 +421,16 @@ def main(argv: List[str]) -> int:
             raise SystemExit("--preview needs a directory")
         preview = Path(args[i + 1])
         del args[i:i + 2]
+    opts: Dict[str, str] = {}
+    for flag in ("--die", "--cfg", "--duty", "--config-root"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                raise SystemExit("%s needs a value" % flag)
+            opts[flag] = args[i + 1]
+            del args[i:i + 2]
+    if "--config-root" in opts:
+        _use_config_root(Path(opts["--config-root"]))
     if "--verify" in args:
         return 0 if verify() else 1
     convert: Optional[Path] = None
@@ -415,7 +448,9 @@ def main(argv: List[str]) -> int:
 
     if check and not verify():
         return 1
-    pics = from_png(convert) if convert is not None else build(mesh=mesh)
+    pics = from_png(convert) if convert is not None else build(
+        mesh=mesh, die=opts.get("--die", DIE), cfg=opts.get("--cfg", CFG),
+        duty=opts.get("--duty", DUTY))
     # A bare-field run is a comparison, not the shipped set: it never writes
     # into the repo, whether or not --check was asked for.
     dest = (Path(tempfile.mkdtemp(prefix="landing-check-"))

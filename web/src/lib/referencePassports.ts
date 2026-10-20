@@ -12,6 +12,7 @@
 import type { Passport } from './motorScaling';
 import { isReferenceOnlyCard } from './referenceOnlyPassport';
 import { referenceCandidateProvenanceFromCatalogEntry } from './referenceCardProvenance';
+import { parseReferenceBasisAnswer, type ReferenceBasisAnswer } from './configuratorReferenceTemperature';
 
 export interface ReferenceMotor {
   id: string;
@@ -29,6 +30,8 @@ export interface ReferenceMotor {
   card?: { die: string; config: string; date: string } | null;
   /** The server's pinned provenance identity; used only to select matching source metadata. */
   referenceProvenance?: { candidate_sha256?: string | null } | null;
+  /** The server's audited-basis block for this card (`reference_basis` of the references answer); absent = not an audited card. */
+  referenceBasis?: ReferenceBasisAnswer | null;
   // slot/wire context — mirrors the backend slot-fit constraint
   // (geometry_constraints._wire_height_max, which mirrors the radial wire stack
   // in cadquery_geometry): N rows of (wire_height + wireSpacingY) must fit between
@@ -157,6 +160,7 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
         // nested `passport` within `m.passport`, not on the motor row itself.
         // Accept the old top-level shape too, and fail closed on conflicts.
         referenceProvenance: referenceCandidateProvenanceFromCatalogEntry(m),
+        referenceBasis: parseReferenceBasisAnswer(m.reference_basis),
         fit: sp.fit,
         geo: sp.geo,
       });

@@ -474,6 +474,8 @@ def get_references(authorization: Optional[str] = Header(default=None)):
     for o in out:
         o["passport"] = _with_full_mass(o["passport"], o.get("card"))
     _ps.attach(out)
+    from motor_ai_sim import reference_basis as _rb
+    _rb.attach(out)                     # audited input basis of reviewed cards (kept out of the web bundle)
     return {"motors": out}
 
 

@@ -59,9 +59,9 @@ function apiReady(resolved, hasUser, enforced) {
 /** The card list, kept in step with Landing.tsx's `FEATURES` (key + src; the
  *  label, alt and hint prose live in locales/<lng>/landing.json). */
 const FEATURES = [
-  { key: 'em', src: '/landing/em-field.webp', w: 884, h: 766 },
-  { key: 'thermal', src: '/landing/thermal-map.webp', w: 884, h: 767 },
-  { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 767 },
+  { key: 'em', src: '/landing/em-field.webp', w: 884, h: 771 },
+  { key: 'thermal', src: '/landing/thermal-map.webp', w: 884, h: 772 },
+  { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 749 },
 ];
 
 /* ── who gets the landing ────────────────────────────────────────────────── */

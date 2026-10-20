@@ -22,16 +22,14 @@ const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 const PRIVATE_NAMES = [
   /\b200\s?mm\b/i, /Ø\s?200\b/, /\bCIANO\s?10\b/i, /150[_-]35/, /\bL155\b/, /\bL180\b/,
   /\bNUAA\b/i, /\bCILN28\b/i, /\bG2[-_ ]L40\b/i, /\bM1[-_ ]?850/i,
-  /85\s?L13\b/i, /\bØ?85[_ ]?L13\b/i, /_l13\b/i,
+  // 85 L13 (hidden): its name in any spelling, its card id, its audited-record hashes
+  /\bL13\b/i, /_l13\b/i, /\bD85\b/i, /d85_ciano28/i,
+  /7d333cee34b8783a/i, /03f600ce90b9462d/i,
 ];
 
-// Reviewed exceptions (file relative to web/ -> why).  Keep this list short and honest.
-const KNOWN_EXCEPTIONS = {
-  // Fail-closed provenance guards keyed on the exact card id of a closed machine.  They are
-  // behaviour, not copy; replacing the id needs a server-supplied flag (follow-up).
-  'src/lib/coldConstantsGuard.mjs': 'candidate card id (provenance guard)',
-  'src/lib/stackCoefficientBasis.mjs': 'candidate card id (provenance guard)',
-};
+// Reviewed exceptions (file relative to web/ -> why).  Empty on purpose: a private name in the
+// shipped bundle is fixed at the source (the server supplies the data), not allow-listed.
+const KNOWN_EXCEPTIONS = {};
 
 const TEST_FILE = /(^|[\/])(__tests__|__mocks__)[\/]|\.(test|spec)\.[cm]?[jt]sx?$/;
 
@@ -80,6 +78,7 @@ function shippedFiles() {
     if (/\.(json)$/.test(rel) && rel.startsWith('src/locales/')) files.push({ rel, f, code: false });
     else if (/\.(tsx?|mjs|js|jsx)$/.test(rel)) files.push({ rel, f, code: true });
   }
+  if (fs.existsSync(path.join(WEB, 'index.html'))) files.push({ rel: 'index.html', f: path.join(WEB, 'index.html'), code: false });
   const pub = path.join(WEB, 'public');
   if (fs.existsSync(pub)) {
     for (const f of walk(pub)) {
@@ -108,7 +107,7 @@ test('stripComments drops comments but keeps strings', () => {
 
 test('the detector flags every private name', () => {
   for (const s of ['a 200 mm machine', 'Ø200 rotor', 'CIANO10 200 opt', 'CIANO28 150_35', 'L155 motor', 'L180 gen',
-    'NUAA 1 MW', 'CILN28 / x', 'G2-L40', 'M1 850Nm', 'the Ø85 L13', 'candidate_d85_ciano28_85_20sw1200_l13']) {
+    'NUAA 1 MW', 'CILN28 / x', 'G2-L40', 'M1 850Nm', 'the Ø85 L13', 'candidate_d85_ciano28_85_20sw1200_l13', 'D85 card', '7d333cee34b8783a4b58']) {
     assert.ok(findHits(s).length > 0, s);
   }
   for (const s of ['CIANO14 40 L12', 'CIANO14 50 L15', 'CIANO28 85 L15', 'a 40 mm motor', '2000 mm cable']) {
@@ -118,7 +117,9 @@ test('the detector flags every private name', () => {
 
 test('shipped locales, code and public text name no private machine', () => {
   const bad = [];
-  for (const { rel, f, code } of shippedFiles()) {
+  const files = shippedFiles();
+  assert.ok(files.length > 50, 'the scan found suspiciously few files');
+  for (const { rel, f, code } of files) {
     if (rel in KNOWN_EXCEPTIONS) continue;
     let text = fs.readFileSync(f, 'utf8');
     if (code) text = stripComments(text);
@@ -127,11 +128,6 @@ test('shipped locales, code and public text name no private machine', () => {
   assert.deepEqual(bad, [], `private machine names in the public bundle:\n${bad.join('\n')}`);
 });
 
-test('the reviewed exceptions still exist and still need to be exceptions', () => {
-  for (const rel of Object.keys(KNOWN_EXCEPTIONS)) {
-    const p = path.join(WEB, rel);
-    assert.ok(fs.existsSync(p), `${rel} is gone: drop it from KNOWN_EXCEPTIONS`);
-    assert.ok(findHits(stripComments(fs.readFileSync(p, 'utf8'))).length > 0,
-      `${rel} no longer names a private machine: drop it from KNOWN_EXCEPTIONS`);
-  }
+test('no reviewed exception is left', () => {
+  assert.deepEqual(Object.keys(KNOWN_EXCEPTIONS), []);
 });

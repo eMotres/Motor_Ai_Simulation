@@ -49,14 +49,14 @@
     "title": "Simulation",
     "sub": "One machine, three physics, one operating point.",
     "em": "Electromagnetic FEM",
-    "emAlt": "Flux-density map of a permanent-magnet machine: the whole cross-section, twelve slots around ten magnets, coloured by |B| from 0 to 2.4 tesla, the finite-element mesh drawn over it, and the colour bar beside it.",
+    "emAlt": "Flux-density map of a permanent-magnet machine: the whole cross-section, twelve slots around fourteen magnets, coloured by |B| from 0 to 2.6 tesla, the finite-element mesh drawn over it, and the colour bar beside it.",
     "emHint": "Flux density |B| of a permanent-magnet machine cross-section solved by 2-D FEM, with the FE mesh it was solved on. The solved half is repeated to the full ring, which is the periodicity the solve itself assumed.",
     "thermal": "Thermal and duty cycle",
-    "thermalAlt": "Temperature map of the same whole cross-section, from 69 °C at the outer housing to 135 °C in the rotor, the finite-element mesh drawn over it, and the colour bar beside it.",
+    "thermalAlt": "Temperature map of the same whole cross-section, from 112 °C in the rotor to 182 °C in the windings, the finite-element mesh drawn over it, and the colour bar beside it.",
     "thermalHint": "Temperature of the same machine with the FE mesh over it, coupled to the losses of the same run. The solved half is repeated to the full ring, as above.",
     "mech": "Mechanical simulation",
-    "mechAlt": "Deformation map of the same rotor under its retaining sleeve: the whole ring, sleeve, magnets and rotor iron, coloured by how far each point moves at speed, 7 to 146 micrometres, the finite-element mesh drawn over it, the colour bar beside it and the shape exaggerated so the bending is visible.",
-    "mechHint": "The rotor and its sleeve at speed with the FE mesh over them, coloured by displacement |u|. The shape is exaggerated 22 times so the bending can be seen."
+    "mechAlt": "Deformation map of the same rotor under its retaining sleeve: the whole ring, sleeve, magnets and rotor iron, coloured by how far each point moves at speed, 0.05 to 0.64 micrometres, the finite-element mesh drawn over it, the colour bar beside it and the shape exaggerated so the bending is visible.",
+    "mechHint": "The rotor and its sleeve at speed with the FE mesh over them, coloured by displacement |u|. The shape is exaggerated about 920 times so the bending can be seen."
   },
   "open": {
     "title": "Open and free",

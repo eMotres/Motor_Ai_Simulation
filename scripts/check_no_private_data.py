@@ -54,6 +54,13 @@ FORBIDDEN_PREFIXES = (
     "scripts/gap_layers_study/inputs/l13/",
     "scripts/gap_layers_study/inputs/l155/",
     "web/public/motor-thumbs/cat_my_motor_40mm.svg",   # outline of a closed 40 mm build
+    # review F4 (2026-10-20): only the thumbnail of an OPEN catalogue card may sit in the public web folder;
+    # the server serves every other card's thumb_svg through the API (visibility-checked).
+    "web/public/motor-thumbs/cat_150_baseline.svg",
+    "web/public/motor-thumbs/cat_150_opt.svg",
+    "web/public/motor-thumbs/cat_my_baseline.svg",
+    "web/public/motor-thumbs/cat_motor_40mm.svg",
+    "web/public/last_loadline.json",                   # load-line sweep of an old closed build
     "config/motor_config.yaml.bak",                    # geometry of the retired 40 mm build
     "config/.last_descent.myverify.bak",
     "data/closed/",

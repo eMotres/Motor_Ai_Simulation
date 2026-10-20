@@ -530,16 +530,16 @@ const ConfiguratorPanel: React.FC = () => {
     () => allRefs.find((r) => r.id === refId) ?? allRefs[0] ?? EMPTY_REFERENCE,
     [refId, allRefs],
   );
-  const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(
-    ref.referenceProvenance?.candidate_sha256,
-  );
+  const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(ref.referenceBasis);
   const resistanceReferenceC = configuratorResistanceReferenceTemperature(
-    ref.referenceProvenance?.candidate_sha256, ref.passport.extraction_rev, ref.passport.R0_temp_C,
+    ref.referenceBasis, ref.passport.extraction_rev, ref.passport.R0_temp_C,
   );
+  // The server flags the audited cards (reference_basis.required); no card id lives in the bundle.
+  const referenceBasisRequired = ref.referenceBasis?.required === true;
   // Exact D85 reference cards fail closed when their audited cold provenance is
   // absent or malformed; otherwise scaleMotor would expose hot passport values
   // as if they were 20 °C constants. Legacy cards retain their prior behavior.
-  const coldConstantsUnavailable = coldConstantsUnavailableForCard(catId, referenceTemperatureBasis);
+  const coldConstantsUnavailable = coldConstantsUnavailableForCard(referenceBasisRequired, referenceTemperatureBasis);
   const coldBasisLabel = resistanceReferenceC != null
     ? tx('configure.rPhaseAtReferenceTemp', { temp: resistanceReferenceC })
     : tx('configure.rPhaseReferenceUnknown');
@@ -555,7 +555,7 @@ const ConfiguratorPanel: React.FC = () => {
     return baseKnobs(p);
   });
   const stackCoefficientsUnavailable = stackCoefficientReferenceOnly(
-    catId, knobs.L_mm, referenceTemperatureBasis,
+    referenceBasisRequired, knobs.L_mm, referenceTemperatureBasis,
   );
   // remember the user's tuning across reloads
   useEffect(() => { try { localStorage.setItem(KNOBS_LS, stampKnobs(knobs, refId)); } catch { /* ignore */ } }, [knobs]); // eslint-disable-line react-hooks/exhaustive-deps

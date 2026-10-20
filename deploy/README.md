@@ -470,6 +470,9 @@ docker build -f deploy/Dockerfile.cad --build-context private=/srv/motres/privat
 * Reviewed reference cards read their audited basis from `/srv/motres/shared/references/basis/*.json` (private repo path
   `config/references/basis/`; the shared folder wins, else `$MOTOR_AI_SIM_PRIVATE_DATA/config/references/basis`). Without it the
   pinned cards fail closed in Configure.
+  After every copy run the completeness check (empty output list = complete; the required cards are named inside the
+  loader by digest, so a missing record shows up here and fails closed in Configure):
+  `cd /opt/motres/app && python -c "from motor_ai_sim import reference_basis as r; print(r.store_problems())"`.
 * What the two build contexts would carry, without Docker: `python scripts/cad_context_listing.py --private /srv/motres/private_assets`.
 
 ## Testing the image

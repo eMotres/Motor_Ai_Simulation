@@ -49,7 +49,7 @@ points at):
 | `config/motor_catalog_closed_entries.json`, `config/motor_presets_closed.json` | catalogue entries and presets removed from the public JSON files | the tests that need the 40 mm / 150 mm fixtures |
 | `tests/fixtures/server_bom/`, `tests/fixtures/cad_bom_dump_*.json` | BOMs with materials of the closed machines | the CAD / mass tests (they skip without it) |
 | `docs/data/passport_*`, `docs/data/propeller_s1_*`, `docs/data/shaft_ss420_fem_*` | passport and S1 data dumps | documentation only |
-| `config/references/basis/*.json` | audited input basis (stack, rpm, current, temperatures, source-record hash) and card id / candidate pin of a reviewed reference card; on a server `<shared>/references/basis/` wins | `motor_ai_sim.reference_basis` (the public module is a loader only; no folder = pinned cards fail closed) |
+| `config/references/basis/*.json` | audited input basis (stack, rpm, current, temperatures, source-record hash) and card id / candidate pin of a reviewed reference card; on a server `<shared>/references/basis/` wins | `motor_ai_sim.reference_basis` (the public module is a loader only; no folder = pinned cards fail closed; the cards that REQUIRE a basis are listed by digest in the loader, so a missing record fails closed too; `store_problems()` checks completeness) |
 
 Without the private checkout the application runs on the public data alone and the tests that need the private files
 **skip** (they never fail for a missing private file). A CAD build needs the reference files: set `MOTOR_AI_SIM_PRIVATE_DATA`

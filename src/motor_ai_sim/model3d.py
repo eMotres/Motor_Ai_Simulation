@@ -351,6 +351,26 @@ def _all_rows() -> list[dict]:
     return rows
 
 
+def _with_account(rows: list[dict]) -> list[dict]:
+    """Rows logged without the account (production files before 2026-10-20) name it from their NDA record, marked
+    ``account_from: "nda_record"``.  Copies only: the log itself is never rewritten."""
+    out, cache = [], {}
+    for r in rows:
+        rid = (r.get("nda_basis") or {}).get("record_id")
+        if not (r.get("user") or r.get("email")) and rid:
+            if rid not in cache:
+                try:
+                    from motor_ai_sim import nda as N
+                    nrec = N.get_record(str(rid)) or {}
+                except Exception:                           # noqa: BLE001 - the row stays as logged
+                    nrec = {}
+                cache[rid] = str(nrec.get("email") or nrec.get("user") or "")
+            if cache[rid]:
+                r = {**r, "email": cache[rid], "account_from": "nda_record"}
+        out.append(r)
+    return out
+
+
 def _has(row_val, needle: str) -> bool:
     return needle.casefold() in str(row_val or "").casefold()
 
@@ -359,9 +379,9 @@ def read_log(limit: int = 200, *, user: str = "", company: str = "", motor: str 
              kind: str = "") -> list[dict]:
     """Newest first.  The filters are case-insensitive substrings (user: id / e-mail / name; company; motor: die, config or
     motor id; nda_version: the NDA version or admin-flag / internal); ``kind`` is exact (``step``)."""
-    rows = _all_rows()
+    rows = _with_account(_all_rows())
     if user:
-        rows = [r for r in rows if _has(r.get("user"), user) or _has(r.get("name"), user)]
+        rows = [r for r in rows if _has(r.get("user"), user) or _has(r.get("email"), user) or _has(r.get("name"), user)]
     if company:
         rows = [r for r in rows if _has(r.get("company"), company)]
     if motor:

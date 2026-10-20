@@ -937,9 +937,11 @@ def download_file(request: Request, die: str, config: str, file_id: str):
         raise HTTPException(status_code=404, detail="File not found")
     data = path.read_bytes()
     name = _original_name(die, config, file_id) or file_id
-    rec = users.get_user(_email(user)) or {}
-    basis = M.nda_basis(user, rec)
-    who_for = M.recipient_of(user, rec, basis)
+    # the download log names the account by its e-mail: the production identity carries it as `email`, model3d reads `id`
+    ident = {**user, "id": _email(user) or str(user.get("id") or "")}
+    rec = users.get_user(ident["id"]) or {}
+    basis = M.nda_basis(ident, rec)
+    who_for = M.recipient_of(ident, rec, basis)
     now = datetime.datetime.now(datetime.timezone.utc)
     try:
         from motor_ai_sim.client_ip import from_request
@@ -947,8 +949,8 @@ def download_file(request: Request, die: str, config: str, file_id: str):
     except Exception:                                       # noqa: BLE001
         ip = "?"
     try:
-        M.log_download(dict(download_id=M.new_download_id(now), user=user.get("id"), email=who_for["email"],
-                            name=M.customer_name(user, rec), role=user.get("role"), company=who_for["company"],
+        M.log_download(dict(download_id=M.new_download_id(now), user=ident["id"], email=who_for["email"],
+                            name=M.customer_name(ident, rec), role=user.get("role"), company=who_for["company"],
                             nda=basis["type"] != "internal", nda_basis=basis, die=die, config=config,
                             motor_id="%s/%s" % (die, config), kind="production_file", file=name, source_file=file_id,
                             sha256=M.sha256_bytes(data), bytes=len(data), ip=ip,

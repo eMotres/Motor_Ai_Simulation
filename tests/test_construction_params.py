@@ -326,9 +326,13 @@ def test_permission_follows_the_catalog_write_rule(env):
     assert client.post(f"/api/family/config/{DIE}/{CFG}/cad_rebuild", headers=env["user"]).status_code == 403
     assert _cfg_doc(env).get("cad_overrides") is None
     assert client.put(CP, json=body, headers=env["admin"]).status_code == 200
-    # an engineer with a grant READS the table (can_write false); an ungranted account gets nothing
-    t = client.get(CP, headers=env["eng"]).json()
+    # an engineer with a grant AND the NDA reads the table (can_write false); without the NDA the dimensions are the full
+    # construction: 403 nda_required (security review 2026-10-20, F8); an ungranted / missing die stays a 404 first
+    t = client.get(CP, headers=env["engnda"]).json()
     assert t["available"] and t["can_write"] is False and t["rows"]
+    for who in ("eng", "user"):
+        r = client.get(CP, headers=env[who])
+        assert r.status_code == 403 and r.json()["detail"]["code"] == "nda_required", (who, r.text)
     assert client.get(CP.replace(DIE, "No such die"), headers=env["eng"]).status_code == 404
 
 
@@ -494,7 +498,11 @@ def test_under_the_layering_a_registered_account_saves_into_its_own_workspace(en
     monkeypatch.delitem(fam.__dict__, "_DIES_DIR", raising=False)
     monkeypatch.delenv("MOTRES_DIES_DIR", raising=False)
     fam._TREE_CACHE.clear()
+    # without the NDA a registered account may not edit the full construction either (F8): refused before anything is copied
     r = client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["eng"])
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "nda_required", r.text
+    assert not list(works.rglob(f"{CFG}.yaml"))
+    r = client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["engnda"])
     assert r.status_code == 200, r.text
     assert "cad_overrides" not in yaml.safe_load((shared / "dies" / DIE / f"{CFG}.yaml").read_text("utf-8"))     # shared untouched
     mine = list(works.rglob(f"{CFG}.yaml"))
@@ -502,7 +510,7 @@ def test_under_the_layering_a_registered_account_saves_into_its_own_workspace(en
     from motor_ai_sim.cad import rebuild_queue as RQ
     assert RQ.read(env["cad"], DIE, CFG)["layer"] != "shared"          # the worker builds shared dies only
     assert RQ.pending(env["cad"]) == [] and len(RQ.pending(env["cad"], layer=None)) == 1
-    assert client.get(CP, headers=env["eng"]).json()["rows"]
+    assert client.get(CP, headers=env["engnda"]).json()["rows"]
     fam._TREE_CACHE.clear()
 
 

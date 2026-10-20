@@ -231,8 +231,11 @@ async def import_freecad(file: UploadFile = File(...),
     data = await file.read()
     if not data:
         raise HTTPException(422, detail="empty upload")
+    from motor_ai_sim.cad.store import FcstdLimitError
     try:
         vals = F.read_fcstd_params(data)
+    except FcstdLimitError as e:        # bounded read (F5): 413 too large, 422 too complex
+        raise HTTPException(e.status, detail=f"could not read the FreeCAD file: {e}")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(422, detail=f"could not read the FreeCAD file: {e}")
     if not vals:

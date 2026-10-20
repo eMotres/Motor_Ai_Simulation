@@ -8,15 +8,16 @@
  *     enforces auth and only while nobody is signed in.  Get it wrong the one
  *     way and the local dev server boots into a poster instead of the app; get
  *     it wrong the other way and production shows the empty shell again.
- *   • `signInLabel` — a deployment with no Google client id must not print
- *     "Sign in with Google" over a dialog that can only offer a password.
+ *   • the way in — the primary buttons say "Create free account ...", one line
+ *     says it is free and instant, "Request access" is gone (it only ever opened
+ *     the create-account form), and both locales carry the same keys.
  *
  * The third check is the assets: every card names a PNG, and a card whose
  * picture 404s is worse than no card.  So the three files are opened here, at
  * the path the component asks the server for, and weighed against the 300 KB
  * ceiling the page was designed to.
  *
- * The two helpers are re-implemented verbatim below rather than imported: the
+ * The helpers are re-implemented verbatim below rather than imported: the
  * module is TypeScript and pulls in `import.meta.env` through `lib/localAuth`,
  * which `node --test` cannot load (same reason as common/progressStrip.test).
  * Changing `Landing.tsx` therefore has to change this file too — and that is
@@ -33,10 +34,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, '..', '..', '..', '..');
 
 /* ── verbatim copies of the shipped helpers ──────────────────────────────── */
-
-function signInLabel(clientId, labels = { google: 'Sign in with Google', plain: 'Sign in' }) {
-  return clientId ? labels.google : labels.plain;
-}
 
 function shouldShowLanding(enforced, hasUser) {
   return enforced && !hasUser;
@@ -119,17 +116,38 @@ test('a restored session calls immediately, and the dev server always does', () 
   assert.equal(apiReady(true, false, false), true);
 });
 
-/* ── what the button promises ────────────────────────────────────────────── */
+/* ── what the buttons promise ────────────────────────────────────────────── */
 
-test('with a Google client id the button says so', () => {
-  assert.equal(signInLabel('1234-abc.apps.googleusercontent.com'),
-    'Sign in with Google');
+const heroOf = (lng) => JSON.parse(fs.readFileSync(
+  path.join(WEB, 'src', 'locales', lng, 'landing.json'), 'utf8')).hero;
+
+test('the primary buttons are free-account buttons, with one line saying it is free', () => {
+  const h = heroOf('en');
+  assert.equal(h.createGoogle, 'Create free account with Google');
+  assert.equal(h.createEmail, 'Create free account with e-mail');
+  assert.equal(h.free, 'Free · instant · no approval needed');
+  assert.equal(h.haveAccount, 'Already have an account?');
+  assert.equal(h.signInLink, 'Sign in');
 });
 
-test('without one it promises nothing it cannot do', () => {
-  assert.equal(signInLabel(''), 'Sign in');
-  assert.equal(signInLabel(undefined), 'Sign in');
-  assert.equal(signInLabel(null), 'Sign in');
+test('"Request access" and the old sign-in buttons are gone from both locales', () => {
+  for (const lng of ['en', 'zh-CN']) {
+    const h = heroOf(lng);
+    for (const k of ['request', 'signIn', 'signInGoogle', 'signInEmail']) {
+      assert.equal(k in h, false, `${lng}: hero.${k} should be removed`);
+    }
+  }
+});
+
+test('the zh-CN hero mirrors the English keys exactly', () => {
+  assert.deepEqual(Object.keys(heroOf('zh-CN')).sort(), Object.keys(heroOf('en')).sort());
+});
+
+test('the landing never prints "Request access" or a mailto for signing up', () => {
+  const src = fs.readFileSync(path.join(WEB, 'src', 'components', 'landing', 'Landing.tsx'), 'utf8');
+  assert.doesNotMatch(src, /hero\.request/);
+  assert.match(src, /hero\.createEmail/);
+  assert.match(src, /hero\.free/);
 });
 
 /* ── the pictures are really shipped ─────────────────────────────────────── */
@@ -145,11 +163,6 @@ test('three cards, each with a short label in both locales', () => {
       assert.ok(sim[f.key + 'Alt'] && sim[f.key + 'Hint'], `${lng}: ${f.key} lacks alt/hint`);
     }
   }
-});
-
-test('the label is translated when the caller passes translations', () => {
-  assert.equal(signInLabel('id', { google: '使用 Google 登录', plain: '登录' }), '使用 Google 登录');
-  assert.equal(signInLabel('', { google: '使用 Google 登录', plain: '登录' }), '登录');
 });
 
 test('every card picture exists under public/, is a WebP under 150 KB and matches its declared size', async () => {

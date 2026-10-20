@@ -8,10 +8,21 @@
     "agents": "接入您的 AI 智能体，一起共建",
     "agentsHow": "了解方式",
     "sub": "基于 AeroStator Core 电机，完成驱动部件的设计、仿真与生产准备。",
-    "signInGoogle": "使用 Google 登录",
-    "signIn": "登录",
-    "signInEmail": "邮箱登录",
-    "request": "申请访问"
+    "createGoogle": "使用 Google 免费创建账号",
+    "createEmail": "使用邮箱免费创建账号",
+    "free": "免费 · 即时开通 · 无需审批",
+    "haveAccount": "已有账号？",
+    "signInLink": "登录"
+  },
+  "motors": {
+    "title": "公开电机",
+    "sub": "各电机的额定点。创建免费账号，即可在 Configure 中打开。",
+    "open": "在 Configure 中打开——免费账号",
+    "openHint": "先创建您的免费账号，随后在 Configure 中打开此电机。",
+    "ratedHint": "额定点，来自已保存的二维有限元仿真结果；质量为整机质量。",
+    "massPartialHint": "整机质量暂不可用，此处为有效部件的质量。",
+    "label": { "power": "功率", "torque": "转矩", "speed": "转速", "mass": "质量", "efficiency": "效率" },
+    "app": { "propeller": "螺旋桨", "robot": "机器人", "aviation": "航空", "marine": "船舶" }
   },
   "chain": {
     "label": "从构想到产品",

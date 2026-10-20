@@ -123,6 +123,9 @@ def public_exhibit() -> bool:
 #: contents and customer designs, and the route hands the model no app state.
 _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version", "/api/notice",
                             "/api/support/chat",
+                            # the landing page's motor preview: allow-listed datasheet numbers of the public
+                            # motors, cached 5 min and rate-limited per IP (routes/public_motors.py)
+                            "/api/public/motors",
                             # node agents: own per-node bearer, checked in the route
                             "/api/admin/nodes/metrics"})
 #: …plus the sign-in endpoints themselves: the password login, the Google GIS

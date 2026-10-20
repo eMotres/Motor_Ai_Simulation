@@ -8,10 +8,21 @@
     "agents": "Connect your AI agents and build together",
     "agentsHow": "How",
     "sub": "Design, simulate and prepare production of drive components built on AeroStator Core motors.",
-    "signInGoogle": "Sign in with Google",
-    "signIn": "Sign in",
-    "signInEmail": "Sign in with e-mail",
-    "request": "Request access"
+    "createGoogle": "Create free account with Google",
+    "createEmail": "Create free account with e-mail",
+    "free": "Free · instant · no approval needed",
+    "haveAccount": "Already have an account?",
+    "signInLink": "Sign in"
+  },
+  "motors": {
+    "title": "Public motors",
+    "sub": "Rated point of each motor. Open one in Configure with a free account.",
+    "open": "Open in Configure — free account",
+    "openHint": "Creates your free account, then opens this motor in Configure.",
+    "ratedHint": "Rated point from saved 2-D FEM results. Mass is the full motor.",
+    "massPartialHint": "Full mass is not available yet: this is the mass of the active parts.",
+    "label": { "power": "Power", "torque": "Torque", "speed": "Speed", "mass": "Mass", "efficiency": "Efficiency" },
+    "app": { "propeller": "Propeller", "robot": "Robot", "aviation": "Aviation", "marine": "Marine" }
   },
   "chain": {
     "label": "From idea to product",

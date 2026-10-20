@@ -15,6 +15,7 @@ import IdleSignedOutNotice from '../components/auth/IdleSignedOutNotice';
 import { pendingEmailLink, requestedAuthMode } from '../lib/localAuth';
 import { meFailureAction, meResponseUsable, meRetryDelayMs } from '../lib/authFallback';
 import { isProductionLinkPath } from '../lib/productionLink';
+import { applyLandingMotor } from '../lib/landingMotorApply';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -248,6 +249,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const onSignedIn = useCallback((token: string, u: SessionUser) => {
     storeSession(token, u);
+    // "Open in Configure" on a landing motor card: pass the choice on before the workspace boots
+    applyLandingMotor(u.email);
     setUser(toAuthUser(u));
     setLoginOpen(false);
     setIdleClosed(false);

@@ -10,9 +10,11 @@ therefore comes from here, through ``GET /api/catalog/{motor_id}/configure_conte
   bare drain-current rating of the MOSFET (``current_limit`` below is only the
   device's datasheet figure and is kept as information).  The server states the
   limits it knows - the demagnetisation limit of the passport and the
-  controller BOARD's continuous current (:func:`current_caps`) - and the web adds
-  the motor's own peak duty and the passport's current-grid top, then takes the
-  lowest and names it (``web/src/lib/configuratorLimits.ts``);
+  controller BOARD's CONTINUOUS current (:func:`current_caps`).  The web caps the
+  slider at the lowest MOTOR limit (peak duty, demag, passport grid top; never
+  under a duty the loaded configuration saved) and only MARKS the board's
+  continuous current on the slider - it is a warning, never a cap
+  (``web/src/lib/configuratorLimits.ts``);
 * the pack and the modulation index the speed limit is read against.
 
 Nothing here solves a field and nothing is written except the one hand-set
@@ -180,8 +182,7 @@ def demag_cap(fam: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 def current_caps(fam: Optional[Dict[str, Any]], ctrl: Optional[Dict[str, Any]],
                  variants: Optional[list] = None) -> Dict[str, Any]:
-    """The REAL current limits this machine's own records state (the web adds the peak
-    duty and the passport grid top, and takes the lowest): ``{demag, board}``, each
+    """The current limits this machine's own records state: ``{demag, board}``, each
     ``None`` when unknown.  Both are values AT THE SAVED BUILD; the web scales the
     demag one with ampere-turns when the user changes turns or connection."""
     return {"demag": demag_cap(fam), "board": board_cap(fam, ctrl, variants)}

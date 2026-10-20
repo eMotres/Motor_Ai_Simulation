@@ -77,7 +77,9 @@ from typing import Any, Mapping, Optional, Tuple
 __all__ = ["parse_connection", "n_parallel_from_connection", "connection_label",
            "wire_parallel_from_geo", "wire_split_from_geo", "turns_per_coil",
            "n_parallel_effective", "conductors_per_slot", "strip_width_mm",
-           "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR"]
+           "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR",
+           "coils_per_phase", "connection_options", "connection_error",
+           "n_parallel_error", "repick_connection", "slot_pole_counts"]
 
 #: How many ``wire_spacing_x`` layers sit between two strips of the SAME row.
 #: TWO, not one (user 2026-09-08: *"I'd make the gap between wires 2·Wire
@@ -301,3 +303,118 @@ def connection_label(n_series: int, n_parallel: int) -> str:
     if n_series <= 1:
         return f"{int(n_parallel)}P"
     return f"{int(n_series)}S-{int(n_parallel)}P"
+
+
+# ── Connection options follow the SLOT COUNT (owner 2026-10-20) ─────────────
+#
+# A 3-phase single-layer winding of S slots has C = S / 6 coil groups per
+# phase, and every factor pair n_series x n_parallel = C is a connection.  The
+# list used to live in api.py only, and nothing else checked a stored label
+# against it: a die grown from 24 slots to 48 or 60 kept the `2S` (or a
+# panel's stale `10P`) it was born with, and the solver read n_parallel off
+# whatever label it was handed.  A `10P` on a 48-slot machine (C = 8) is not a
+# machine at all; the solve still ran, with a tenth of the coil MMF.
+
+def coils_per_phase(num_slots: int) -> int:
+    """C = coil groups per phase of the 3-phase single-layer winding (>= 1)."""
+    return max(1, int(round(int(num_slots or 0) / 6)))
+
+
+def connection_options(num_slots: int) -> list:
+    """Every valid connection for ``num_slots``, all-series first:
+    ``[{"label", "n_parallel", "n_series"}, ...]``."""
+    c = coils_per_phase(num_slots)
+    out = []
+    for n_par in range(1, c + 1):
+        if c % n_par:
+            continue
+        n_ser = c // n_par
+        out.append({"label": connection_label(n_ser, n_par),
+                    "n_parallel": n_par, "n_series": n_ser})
+    return out
+
+
+def connection_error(conn: Optional[str], num_slots: int) -> Optional[str]:
+    """``None`` when ``conn`` is a valid connection for ``num_slots``; else the
+    reason, naming the valid labels.  An unreadable label is an error too."""
+    opts = connection_options(num_slots)
+    valid = [o["label"] for o in opts]
+    try:
+        n_par, n_ser = parse_connection(conn or "")
+    except ValueError as e:
+        return f"{e}. Valid for {int(num_slots)} slots: {', '.join(valid)}"
+    if (n_par, n_ser) in {(o["n_parallel"], o["n_series"]) for o in opts}:
+        return None
+    return (f"connection {conn!r} ({n_ser} series x {n_par} parallel) is not "
+            f"possible on {int(num_slots)} slots: {coils_per_phase(num_slots)} "
+            f"coils per phase, so n_series x n_parallel must be "
+            f"{coils_per_phase(num_slots)}. Valid: {', '.join(valid)}")
+
+
+def n_parallel_error(n_parallel: int, num_slots: int) -> Optional[str]:
+    """``None`` when ``n_parallel`` paths divide the coils per phase."""
+    c = coils_per_phase(num_slots)
+    n = int(n_parallel or 0)
+    if n >= 1 and c % n == 0:
+        return None
+    return (f"{n} parallel paths are not possible on {int(num_slots)} slots "
+            f"({c} coils per phase). Valid: "
+            f"{', '.join(o['label'] for o in connection_options(num_slots))}")
+
+
+def repick_connection(winding: Optional[Mapping[str, Any]],
+                      num_slots: int) -> Tuple[dict, Optional[str]]:
+    """``(winding, note)``: a COPY of the winding block whose connection is
+    valid for ``num_slots``, and a one-line note when it had to be re-picked
+    (``None`` when the stored one was valid — the block is then unchanged).
+
+    The re-pick keeps the stored PARALLEL-PATH count when it still divides the
+    new coils per phase — that is the only part of the label the field solve
+    reads (I_coil = I_phase / n_parallel), so the ampere-turns the user had stay
+    the ampere-turns he gets.  Otherwise it takes the all-series option.
+    n_series and n_coils_per_phase are rewritten to match.
+    """
+    w = dict(winding or {})
+    conn = w.get("connection")
+    if conn and connection_error(str(conn), num_slots) is None:
+        return w, None
+    c = coils_per_phase(num_slots)
+    keep = None
+    try:
+        keep = parse_connection(str(conn or ""))[0]
+    except ValueError:
+        keep = None
+    if keep is None:
+        try:
+            keep = int(w.get("n_parallel") or 0) or None
+        except (TypeError, ValueError):
+            keep = None
+    n_par = keep if (keep and c % keep == 0) else 1
+    n_ser = c // n_par
+    new = connection_label(n_ser, n_par)
+    w.update({"connection": new, "n_parallel": n_par, "n_series": n_ser,
+              "n_coils_per_phase": c})
+    old = f"'{conn}'" if conn else "none"
+    note = (f"winding connection {old} is not valid for {int(num_slots)} slots "
+            f"({c} coils/phase) - set to {new}"
+            + (" (same parallel paths)" if keep == n_par and n_par > 1 else
+               " (all series)" if n_par == 1 else ""))
+    return w, note
+
+
+def slot_pole_counts(geo: Optional[Mapping[str, Any]]) -> Tuple[int, int]:
+    """``(num_slots, num_poles)`` of a geometry block.  The segment form
+    (``num_seg`` x per-segment counts) is the primary input; the stored
+    ``num_slots`` / ``num_poles`` are derived copies that can lag behind it,
+    and the connection options must follow what the CAD will actually cut."""
+    g = dict(geo or {})
+
+    def _i(k):
+        try:
+            return int(float(g.get(k)))
+        except (TypeError, ValueError):
+            return 0
+    seg, sps, pps = _i("num_seg"), _i("num_slots_per_segment"), _i("num_poles_per_segment")
+    slots = seg * sps if seg > 0 and sps > 0 else (_i("num_slots") or 24)
+    poles = seg * pps if seg > 0 and pps > 0 else (_i("num_poles") or 28)
+    return slots, poles

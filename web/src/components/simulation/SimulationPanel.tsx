@@ -277,6 +277,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
   const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
   const [windErr, setWindErr]       = useState<string | null>(null);  // refused winding change
+  // The backend RE-PICKED a connection that the live slot count no longer
+  // allows (a geometry change, a die/config copy) — one line saying so.
+  const [windNote, setWindNote]     = useState<string | null>(null);
   // connection options + the selected connection's parallel-path count come from
   // the backend (slot-derived). I_coil = I_phase / n_parallel.
   // Prefer the backend's slot-derived options; fall back to deriving them locally
@@ -295,6 +298,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         // config.yaml is the persistent, cross-browser source for the connection;
         // adopt it on load so a fresh browser / other tab reflects the real value.
         if (d.connection) setConnection(d.connection);
+        if (d.connection_note) setWindNote(String(d.connection_note));
+        // The geometry counts ride on the same answer: they used to be read
+        // ONCE on mount, so the period / cogging labels kept the previous
+        // machine's slot count after a die switch.
+        if (Number(d.num_slots) > 0) setNumSlots(Number(d.num_slots));
+        if (Number(d.n_coils_per_phase) > 0) setNCoilsPerPhase(Number(d.n_coils_per_phase));
       })
       .catch(() => {});
   }, []);
@@ -785,6 +794,42 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // once on mount, which used to leave a stale (or bare 0) factor behind in every
   // consumer that reads `sim.endWinding` (TransientCharts, motorStore, sweep).
   const geomSig = useMotorStore(s => JSON.stringify(s.geometry ?? {}));
+
+  // ── the winding options FOLLOW THE GEOMETRY ───────────────────────────────
+  // /api/winding/config used to be read once, on mount.  Switching to another
+  // die (24 -> 60 -> 48 slots) left the PREVIOUS machine's option list on the
+  // buttons and its label in `connection`, which the next Run sent: a `10P`
+  // on a 48-slot machine (8 coils/phase), solved with a tenth of the coil MMF
+  // (owner 2026-10-20).  Re-read it on every geometry change and every load
+  // of another machine; the backend re-picks a connection the new slot count
+  // does not allow and says so (`connection_note`).
+  useEffect(() => {
+    loadWinding();
+    try {
+      const g = JSON.parse(geomSig) as Record<string, unknown>;
+      const seg = Number(g.num_seg), sps = Number(g.num_slots_per_segment),
+        pps = Number(g.num_poles_per_segment);
+      if (seg > 0 && pps > 0) setNumPoles(seg * pps);
+      else if (Number(g.num_poles) > 0) setNumPoles(Number(g.num_poles));
+      if (seg > 0 && sps > 0) setNumSlots(seg * sps);
+      if (Number(g.num_wires_per_slot) > 0) setNWiresPerSlot(Number(g.num_wires_per_slot));
+    } catch { /* store not hydrated yet */ }
+  }, [geomSig, loadWinding]);
+  useEffect(() => {
+    const on = () => loadWinding();
+    const onNote = (e: Event) => {
+      const m = (e as CustomEvent<{ message?: string | null }>).detail?.message;
+      if (m) setWindNote(String(m));
+    };
+    window.addEventListener('family-changed', on);
+    window.addEventListener('sim-design-applied', on);
+    window.addEventListener('winding-note', onNote);
+    return () => {
+      window.removeEventListener('family-changed', on);
+      window.removeEventListener('sim-design-applied', on);
+      window.removeEventListener('winding-note', onNote);
+    };
+  }, [loadWinding]);
 
   // ── Run-Simulation gating ──────────────────────────────────────────────
   // The FEM transient + field animation only (re)compute when runNonce
@@ -1756,7 +1801,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button
                   size="small"
                   variant={connection === c.label ? 'contained' : 'outlined'}
-                  onClick={() => { setConnection(c.label); applyWinding({ connection: c.label }); }}
+                  onClick={() => { setWindNote(null); setConnection(c.label); applyWinding({ connection: c.label }); }}
                   disabled={isRunning}
                   sx={{ flex: 1, minWidth: 52, fontSize: 11, fontWeight: 700, py: 0.5,
                     textTransform: 'none',
@@ -1862,6 +1907,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           {sixPhaseLine(windCfg) && (
             <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mb: 1 }}>
               {sixPhaseLine(windCfg)}
+            </Typography>
+          )}
+
+          {/* The connection was re-picked for this slot count — one line. */}
+          {windNote && !windErr && (
+            <Typography sx={{ fontSize: 10.5, color: '#fbbf24', mt: -0.75, mb: 1 }}>
+              {windNote}
             </Typography>
           )}
 

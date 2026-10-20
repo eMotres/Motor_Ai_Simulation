@@ -2827,6 +2827,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "end_winding_factor": sim.get("end_winding_factor"),
         "duties": [],
     }
+    _repick_config_winding(doc, geo, f"new configuration '{die}/{name}'")
     return name, doc
 
 
@@ -2950,6 +2951,7 @@ def duplicate_die(die: str, req: DieDuplicate,
         _sh.copytree(_runs, dst_dir / "runs", dirs_exist_ok=True,
                      ignore=lambda d, names: [n for n in names
                                               if Path(d) == _runs and n in _skip])
+    _repick_die_windings(new)
     log.info("family: die '%s' duplicated as '%s' (%d configuration(s))",
              die, new, len(cfgs))
     return {"ok": True, "die": new, "configs": cfgs}
@@ -2985,6 +2987,12 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     # A duplicate is a FULL copy, no empty cells (the house rule) — the stored
     # PWM/BLDC runs and their sidecars are copied like the duties they belong to.
     _refile_config_runs(die, c, cfg, new, copy=True)
+    try:
+        _repick_config_winding(
+            c, dict(_load_yaml(_die_file(die), "die").get("geometry") or {}),
+            f"'{die}/{new}'")
+    except Exception:   # noqa: BLE001
+        pass
     _save_yaml(dst, c)
     log.info("family: configuration '%s/%s' duplicated as '%s' (%d duty(ies))",
              die, cfg, new, len(c.get("duties") or []))
@@ -4062,6 +4070,52 @@ def _matching_die(live_geo: dict, exclude: str) -> Optional[str]:
     return None
 
 
+def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional[str]:
+    """Make configuration ``c``'s winding connection valid for ``geo``'s slot
+    count, IN PLACE.  Returns the one-line note when it was re-picked (logged),
+    None when it was already valid or there is no winding block.
+
+    A die grown from 24 slots to 48 or 60 (or copied, or derived) used to carry
+    the source machine's ``2S`` along: a connection that factors neither 8 nor
+    10 coils per phase.  ``winding.repick_connection`` keeps the parallel-path
+    count when it still divides the new coils per phase (the ampere-turns the
+    duties were run with), else takes the all-series option."""
+    w = c.get("winding")
+    if not isinstance(w, dict) or not w:
+        return None
+    from motor_ai_sim.winding import repick_connection, slot_pole_counts
+    fixed, note = repick_connection(w, slot_pole_counts(geo or {})[0])
+    if note:
+        c["winding"] = fixed
+        log.warning("family: %s: %s", where, note)
+    return note
+
+
+def _repick_die_windings(die: str, *, skip_locked: bool = False) -> list:
+    """``_repick_config_winding`` over every configuration of ``die`` against
+    the die's own geometry; the notes it wrote."""
+    notes = []
+    try:
+        d = _load_yaml(_die_file(die), "die")
+    except Exception:   # noqa: BLE001
+        return notes
+    geo = dict(d.get("geometry") or {})
+    for pth in sorted(_die_dir(die).glob("*.yaml")):
+        if pth.name == "die.yaml":
+            continue
+        try:
+            c = _load_yaml(pth, "configuration")
+        except Exception:   # noqa: BLE001
+            continue
+        if skip_locked and c.get("locked") is True:
+            continue
+        n = _repick_config_winding(c, geo, f"'{die}/{pth.stem}'")
+        if n:
+            _save_yaml(pth, c)
+            notes.append(f"{pth.stem}: {n}")
+    return notes
+
+
 def _copy_die_documents(src_die: str, dst_die: str) -> list:
     """Copy a WHOLE die's documents — die.yaml plus every configuration with
     its duties, materials, parts and notes — into a brand-new WORKSPACE
@@ -4101,6 +4155,12 @@ def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
     c = _load_yaml(_cfg_file(src_die, cfg), "configuration")
     dst_name = _unique_config_name(dst_die, cfg)
     c["die"] = dst_die
+    try:
+        _repick_config_winding(
+            c, dict(_load_yaml(_die_file(dst_die), "die").get("geometry") or {}),
+            f"'{dst_die}/{dst_name}' (copied from '{src_die}')")
+    except Exception:   # noqa: BLE001 — the solve still refuses an invalid one
+        pass
     if dst_name != cfg:
         c["name"] = dst_name
     _save_yaml(_cfg_file(dst_die, dst_name), c)
@@ -4166,6 +4226,9 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
             # the reused die has this configuration's NAME but not this duty —
             # bring the duty across rather than silently dropping the point.
             target_cfg = _copy_config_into(die, target, cfg)
+    # The configurations now sit on the NEW lamination: a connection that
+    # factored the old slot count may not factor this one (2S on 48 slots).
+    _repick_die_windings(target, skip_locked=not created)
     import json as _json
     at = datetime.now().isoformat(timespec="seconds")
     _ctx_file().write_text(_json.dumps({
@@ -5921,10 +5984,18 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
         if not mats.get(_k):
             mats[_k] = _v
     poles = int(geo.get("num_poles") or 0)
+    # The winding the frontend PATCHes must be one THIS lamination has: a
+    # configuration copied from a 24-slot die still saying `2S` on 48 slots was
+    # refused by PATCH /api/winding/config ("Connection '2S' invalid") and the
+    # previous machine's connection stayed live.  Re-pick it for the apply
+    # (the file itself is fixed by the copy / transition paths) and say so.
+    _wc = {"winding": dict(c.get("winding") or {})}
+    _wnote = _repick_config_winding(_wc, geo, f"apply '{die}/{cfg}'")
     out = {
         "die": die, "config": cfg,
         "geometry": geo,
-        "winding": c.get("winding") or {},
+        "winding": _wc["winding"],
+        **({"winding_note": _wnote} if _wnote else {}),
         "materials": mats,
         # Per-part accounting the configuration was built and characterised
         # under — applied the same way its materials are, so a frameless
@@ -5933,7 +6004,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
         "sim": {
             "end_winding_factor": c.get("end_winding_factor"),
             "daxis_deg": d.get("daxis_deg"),
-            "connection": (c.get("winding") or {}).get("connection"),
+            "connection": _wc["winding"].get("connection"),
             # The terminal connection: the configuration's winding block, else
             # the DUTY's own saved panel setting, and "star" only when neither
             # says.  A configuration written before `star_delta` existed

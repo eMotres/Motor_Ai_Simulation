@@ -185,6 +185,13 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
         });
         if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
       }
+      // The payload re-picked a connection this lamination does not allow
+      // (a die grown from 24 to 48 slots still saying 2S): one visible line.
+      if (p.winding_note) {
+        try {
+          window.dispatchEvent(new CustomEvent('winding-note', { detail: { message: p.winding_note } }));
+        } catch { /* SSR */ }
+      }
       // 2b) the build's materials — a configuration is a physical product;
       //     loading it must load what it is made of.  EVERY part the payload
       //     names (2026-09-09): it now spells out the liner and the enamel

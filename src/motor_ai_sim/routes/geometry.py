@@ -342,6 +342,19 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
         except Exception as _se:   # noqa: BLE001
             log.warning("geometry PUT: active-die snapshot sync failed: %s", _se)
 
+        # ── The winding connection follows the slot count ───────────────────
+        # A segment / slots-per-segment change moves the coils per phase; a
+        # stored connection that no longer factors them (2S on 48 slots) is
+        # re-picked HERE, at the change, and the one line saying so travels
+        # with the response (and is shown once by the Simulation panel).
+        try:
+            from motor_ai_sim.api import reconcile_live_winding
+            _wn = reconcile_live_winding()
+            if _wn:
+                result["winding_note"] = _wn
+        except Exception as _we:   # noqa: BLE001
+            log.warning("geometry PUT: winding connection re-pick failed: %s", _we)
+
         # ── Real geometry validation, AFTER the clamp ───────────────────────
         # The clamp fixes ONE knob at a time against an analytic bound; it can
         # not see where the finished regions land.  Build the same 2-D polygons

@@ -72,6 +72,12 @@ _FACTS = """## Facts
 - **Winding connection** trades voltage ↔ current at the same torque: all-series = the highest voltage and the lowest current, all-parallel = the opposite, and the mixed layouts sit between. **Y (star)** vs **Δ (delta)** does the same at the machine's terminals (Δ ≈ √3 more current at √3 less line voltage).
 - **Duty** = one operating point of a configuration (power, torque, speed, current, connection, temperatures, cooling). A configuration usually carries several — continuous, peak, generator …
 - **Rated is always a continuous point** (it holds for ever, at the duty's own cooling): aviation / propeller motors are rated with the coils at 180 °C at the duty's own air; robot motors with the coils at 70 °C in 30 °C air. **Peak** is short-time and always comes with its time to the limit. 200 °C (class N) is the overheat limit. The bearing never limits rated; its temperature is only reported.
+- **PWM drive variants** (Configure → Drive → PWM): only these are computed (FEM with the real PWM current, centred SVPWM); nothing else can be picked. The transistor sits in each of the six switches of the bridge; "×2" = two in parallel per switch (lower conduction loss and junction temperature T_j).
+  - **CIANO14 40 L12** (6S pack, 18–25.2 V): Si **IQE018N06NM6SC** (60 V) at 48 kHz; GaN **IGC019S06S1** (60 V) and **IGC016K10S2** (100 V) at 48 and 100 kHz.
+  - **CIANO14 40 L20** and **CIANO14 50 L15** (12S, 36–50.4 V): Si **IQE036N08NM6SC** (80 V) at 48 kHz; GaN **IGC016K10S2** (100 V) at 48 and 100 kHz.
+  - **CIANO28 85 L15** (12S, 36–50.4 V): Si **IQE036N08NM6SC** at 48 kHz, ×1 or ×2; GaN **IGC016K10S2** ×2 at 48 and 100 kHz.
+  - High-voltage motors on a 48S pack (144–202 V): SiC **IMDQ75R007M2H** (750 V) at 48 and 100 kHz, SiC **IMDQ75R004M2H** at 48 kHz.
+  - Higher frequency = smoother current and less motor loss, but more switching loss in the transistors. A motor or variant not listed has no PWM computed: say so and offer to request it.
 - **Mass** shown everywhere is the FULL motor mass (the CAD parts list plus the simulated parts); the active mass is shown separately.
 - The service is **free**: there are no plans, tiers or prices to quote. Ordering motors or a manufacturing licence is a conversation with support@aerostator.com."""
 

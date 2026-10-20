@@ -2,8 +2,7 @@
 
 This is an evidence inventory and bounded planning note. It does not claim a
 complete passport, voltage boundary, coupling qualification, or maximum-S1
-result. Sources: `docs/d85-configure-coupling-progress-2026-10-08.md`,
-`coordination/agent-run-journal-2026-10-07-d85.md`, and
+result. Sources: the D85 coupling-progress notes and the D85 run journal (moved to the private repository), and
 `motor_ai_sim_wt_passdoc2/docs/PASSPORT_ALGORITHM.md` at
 `bb3a74c4e63c8e96133328cb28a6deb1ba6c79426ceee03ecce5202caa2fa606`.
 

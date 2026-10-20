@@ -12,6 +12,7 @@
 //
 // Comments and test files are NOT shipped and are not scanned.
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,10 +23,28 @@ const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 const PRIVATE_NAMES = [
   /\b200\s?mm\b/i, /Ø\s?200\b/, /\bCIANO\s?10\b/i, /150[_-]35/, /\bL155\b/, /\bL180\b/,
   /\bNUAA\b/i, /\bCILN28\b/i, /\bG2[-_ ]L40\b/i, /\bM1[-_ ]?850/i,
-  // 85 L13 (hidden): its name in any spelling, its card id, its audited-record hashes
-  /\bL13\b/i, /_l13\b/i, /\bD85\b/i, /d85_ciano28/i,
-  /7d333cee34b8783a/i, /03f600ce90b9462d/i,
+  // 85 L13 (hidden): its name in any spelling.  Its card id and audited-record hashes are matched by DIGEST below
+  // (this test file is public, so it must not hold them).
+  /\bL13\b/i, /_l13\b/i, /\bD85\b/i,
 ];
+
+// SHA-256 digests of lower-cased tokens that must not appear in the shipped bundle: the hidden card id, and the
+// first 16 hex characters of its candidate pin and of its source-record hash.  Digests only: the guard is public.
+const PRIVATE_TOKEN_DIGESTS = new Set([
+  '4d79db9394d5c6d51b6ba800d0523a2936cc9477b662a15bde9f4d8bc38d6acd',
+  '7ed32ad2136389ff8cce7cc9ddafbbf472c23752223d1f6b24311bdd74cc003d',
+  'b7a7db0e459b724ed9e35c9dc4462082763acec5979ebab66f3009cf3faa1ee0',
+]);
+const sha = (x) => createHash('sha256').update(x).digest('hex');
+
+function hasPrivateToken(line) {
+  for (const m of line.toLowerCase().matchAll(/[a-z0-9_]+/g)) {
+    const tok = m[0];
+    if (PRIVATE_TOKEN_DIGESTS.has(sha(tok))) return true;
+    if (/^[0-9a-f]{16,}$/.test(tok) && PRIVATE_TOKEN_DIGESTS.has(sha(tok.slice(0, 16)))) return true;
+  }
+  return false;
+}
 
 // Reviewed exceptions (file relative to web/ -> why).  Empty on purpose: a private name in the
 // shipped bundle is fixed at the source (the server supplies the data), not allow-listed.
@@ -92,7 +111,7 @@ function shippedFiles() {
 export function findHits(text) {
   const hits = [];
   text.split(/\r?\n/).forEach((line, i) => {
-    for (const re of PRIVATE_NAMES) if (re.test(line)) { hits.push(`${i + 1}: ${line.trim().slice(0, 120)}`); break; }
+    if (PRIVATE_NAMES.some((re) => re.test(line)) || hasPrivateToken(line)) hits.push(`${i + 1}: ${line.trim().slice(0, 120)}`);
   });
   return hits;
 }
@@ -107,8 +126,21 @@ test('stripComments drops comments but keeps strings', () => {
 
 test('the detector flags every private name', () => {
   for (const s of ['a 200 mm machine', 'Ø200 rotor', 'CIANO10 200 opt', 'CIANO28 150_35', 'L155 motor', 'L180 gen',
-    'NUAA 1 MW', 'CILN28 / x', 'G2-L40', 'M1 850Nm', 'the Ø85 L13', 'candidate_d85_ciano28_85_20sw1200_l13', 'D85 card', '7d333cee34b8783a4b58']) {
+    'NUAA 1 MW', 'CILN28 / x', 'G2-L40', 'M1 850Nm', 'the Ø85 L13', 'D85 card']) {
     assert.ok(findHits(s).length > 0, s);
+  }
+  // the digest list: a synthetic token and a synthetic 16-hex prefix are caught once their digests are listed
+  const synthId = 'x9_synthetic_card_id';
+  const synthHash = 'deadbeefdeadbeef0123456789';
+  assert.equal(findHits(`id: ${synthId} h: ${synthHash}`).length, 0);
+  PRIVATE_TOKEN_DIGESTS.add(sha(synthId));
+  PRIVATE_TOKEN_DIGESTS.add(sha(synthHash.slice(0, 16)));
+  try {
+    assert.ok(findHits(`id: ${synthId}`).length > 0);
+    assert.ok(findHits(`h: ${synthHash}`).length > 0);
+  } finally {
+    PRIVATE_TOKEN_DIGESTS.delete(sha(synthId));
+    PRIVATE_TOKEN_DIGESTS.delete(sha(synthHash.slice(0, 16)));
   }
   for (const s of ['CIANO14 40 L12', 'CIANO14 50 L15', 'CIANO28 85 L15', 'a 40 mm motor', '2000 mm cable']) {
     assert.equal(findHits(s).length, 0, s);

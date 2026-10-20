@@ -467,6 +467,9 @@ docker build -f deploy/Dockerfile.cad --build-context private=/srv/motres/privat
 * The API needs none of it for CAD (builds run in the image). To read the passports / S1 models of the closed motors from the checkout
   instead of `/srv/motres/shared/{passports,propeller_s1}`, set `MOTOR_AI_SIM_PRIVATE_DATA=/srv/motres/private_assets` in
   `/etc/motres/api.env` (the shared folders win when present, so this is optional).
+* Reviewed reference cards read their audited basis from `/srv/motres/shared/references/basis/*.json` (private repo path
+  `config/references/basis/`; the shared folder wins, else `$MOTOR_AI_SIM_PRIVATE_DATA/config/references/basis`). Without it the
+  pinned cards fail closed in Configure.
 * What the two build contexts would carry, without Docker: `python scripts/cad_context_listing.py --private /srv/motres/private_assets`.
 
 ## Testing the image

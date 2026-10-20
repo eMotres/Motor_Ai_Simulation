@@ -38,6 +38,12 @@ try:
         if c != tuple(round(x, 2) for x in view.COLORS[n]):
             bad.append("%s colour %s != %s" % (n, c, view.COLORS[n]))
     out["body_colours"] = cols
+    for n in view._extras(doc):                          # A.7.8: Fusion-only parts in their palette colour
+        o, vo = doc.getObject(n), gdoc.getObject(n)
+        c = tuple(round(x, 2) for x in vo.ShapeColor[:3])
+        cols[n] = c
+        if c != tuple(round(x, 2) for x in view.palette.rgb(getattr(o, "ColourRole", "") or "")):
+            bad.append("%s colour %s != palette role %s" % (n, c, getattr(o, "ColourRole", "")))
     th = view.thread_face_indices(doc)
     out["thread_faces"] = {k: len(v) for k, v in th.items()}
     for bn, idx in th.items():                           # cosmetic threads (Fusion: modeled = False): coloured faces
@@ -47,7 +53,15 @@ try:
             bad.append("%s: %d of %d thread faces carry the thread colour (%d colours for %d faces)" % (
                 bn, got, len(idx), len(dc), len(doc.getObject(bn).Shape.Faces)))
     pb = gdoc.getObject("PhaseBoard")
-    if pb is not None and doc.getObject("PhaseBoard").TypeId == "Part::Feature":                                   # the STEP colours must have reached the view object
+    if pb is not None and getattr(doc.getObject("PhaseBoard"), "FusionBoard", False):        # A.7.8: the Fusion board, coloured per solid by material
+        mats = json.loads(doc.getObject("PhaseBoard").SolidMaterials or "[]")
+        want = [tuple(round(x, 2) for x in view.palette.rgb(view.board_solid_role(m))) for s, m in zip(doc.getObject("PhaseBoard").Shape.Solids, mats)
+                for _ in s.Faces]
+        dc = [tuple(round(x, 2) for x in c[:3]) for c in pb.DiffuseColor]
+        out["phase_board_colours"] = dict(faces=len(dc), distinct=len(set(dc)), fusion_board=True)
+        if dc != want:
+            bad.append("PhaseBoard (Fusion) colours: %d per-face colours, %d expected from the solid materials" % (len(dc), len(want)))
+    elif pb is not None and doc.getObject("PhaseBoard").TypeId == "Part::Feature":                                 # the STEP colours must have reached the view object
         dc = list(pb.DiffuseColor)
         distinct = sorted({tuple(round(x, 2) for x in c[:3]) for c in dc})
         out["phase_board_colours"] = dict(faces=len(dc), distinct=len(distinct))

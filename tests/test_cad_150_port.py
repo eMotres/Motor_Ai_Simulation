@@ -29,7 +29,7 @@ def ref():
 
 def test_template_version_has_the_150_fusion_bodies():  # A.7.6 (150 holders are the real Fusion bodies, no gapped rings); A.7.7 added the CIANO14 40 parts
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.7"' in src and "A.7.6 (2026-10-19)" in src
+    assert 'TEMPLATE_VERSION = "A.7.8"' in src and "A.7.6 (2026-10-19)" in src and "A.7.8 (2026-10-20)" in src
 
 
 def test_reference_is_found_for_the_die():
@@ -93,7 +93,7 @@ def test_the_holders_are_the_fusion_bodies_not_gapped_rings(ref):
     occupancy rows stay only as the record (role info: not live, so the role check does not call them dead)."""
     pj, rows, _ = ref
     fp = pj["profile"]["fusion_parts"]
-    assert set(fp["files"]) == {"Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back"} == set(fp["volumes_mm3"])
+    assert {"Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back"} <= set(fp["files"]) == set(fp["volumes_mm3"])   # A.7.8: every part
     assert fp["ref_motor_length"] == 35 and fp["dir"] == "CIANO28_150_35"
     for n, r in rows.items():
         if n.split("_r0_")[0] in ("rotor_holder1", "rotor_holder2", "stator_holder", "stator_holder_back") and "_r0_" in n:

@@ -23,10 +23,12 @@ def assemble(eff, profile, materials_library=None, bearings_library=None, wire_s
     """Plain-data inputs of bom.build_bom for one effective machine (store.load_effective) and its profile."""
     cards = dict(eff.get("material_cards") or {})
     lib_path = materials_library or store.default_materials_library()
+    extra = list(EXTRA_CARDS) + [e["material"] for e in ((profile["profile"].get("fusion_parts") or {}).get("extras") or [])
+                                 if e.get("material")]               # A.7.8: the Fusion-only parts name their library card (Al2O3)
     if os.path.exists(lib_path):
         for cat, d in _yaml(lib_path).items():
             if isinstance(d, dict):
-                for name in EXTRA_CARDS:
+                for name in extra:
                     if name in d and name not in cards:
                         cards[name] = dict(category=cat, **{k: v for k, v in d[name].items() if k not in SKIP_KEYS})
     bcard = None

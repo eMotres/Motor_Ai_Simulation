@@ -17,7 +17,10 @@
     "Ring_back": "环（后）",
     "Screws": "螺钉",
     "Prop_fix": "螺旋桨转接件",
-    "PhaseBoard": "相线板"
+    "PhaseBoard": "相线板",
+    "Fan_front": "风扇板（前）",
+    "Fan_back": "风扇板（后）",
+    "Insulation_ceramic": "陶瓷绝缘件"
   },
   "explode": "爆炸视图",
   "section": "剖切面",

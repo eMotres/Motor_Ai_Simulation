@@ -190,10 +190,24 @@ def build_mechanics_occupancy(doc, sh, polar_array, fusion_parts=None):
     o, i, ba = body("Bearing_outer_ring"), body("Bearing_inner_ring"), body("Bearing_ball")
     for x in (o, i, ba):
         brg.addObject(x)
-    rep["Bearing"] = M.build_bearing(doc, sh, o, i, ba)
+    files = (fusion_parts or {}).get("files") or {}
+    # A.7.8: the rings (and the shield) are the Fusion bodies of 61811-2rz, in the frame of the bearing Part (z = holder_face_z); the balls
+    # stay the template spheres (Fusion draws the 22 balls as ONE body: spheres joined by a torus)
+    frame = App.Placement(App.Vector(0, 0, pval(sh, "holder_face_z")), App.Rotation())
+    skip = tuple(k for k, n in (("outer", "Bearing_outer_ring"), ("inner", "Bearing_inner_ring")) if n in files)
+    rep["Bearing"] = M.build_bearing(doc, sh, o, i, ba, skip=skip)
+    for n, b in (("Bearing_outer_ring", o), ("Bearing_inner_ring", i), ("Bearing_ball", ba)):
+        if n in files:
+            if n == "Bearing_ball":
+                raise RuntimeError("profile.fusion_parts: the bearing balls cannot be a Fusion body (one template ball + the Balls array)")
+            rep["Bearing"].setdefault("fusion", {})[n] = import_fusion_part(doc, b, n, files[n], fusion_parts, 0.0, brg, frame=frame)
     if has_param(sh, "bearing_seal_ri"):
         sl = body("Bearing_seal"); brg.addObject(sl)
-        rep["Bearing_seal"] = M.build_bearing_seal(doc, sh, sl)
+        if "Bearing_seal" in files:
+            rep["Bearing_seal"] = dict(sketches=[], features=[], fusion=import_fusion_part(doc, sl, "Bearing_seal", files["Bearing_seal"],
+                                                                                          fusion_parts, 0.0, brg, frame=frame))
+        else:
+            rep["Bearing_seal"] = M.build_bearing_seal(doc, sh, sl)
         lk = doc.addObject("App::Link", "Bearing_seal_2"); lk.Label = "Bearing_seal_2"; lk.LinkedObject = sl
         lk.Placement = App.Placement(V(0, 0, M.g_B(sh)), App.Rotation(V(1, 0, 0), 180))
         lk.setExpression(".Placement.Base.z", P + "bearing_B")
@@ -203,7 +217,10 @@ def build_mechanics_occupancy(doc, sh, polar_array, fusion_parts=None):
     for fam, body_name, label in SCREW_FAMILIES:                  # three socket-head screw families (Fusion occurrences)
         if has_param(sh, fam + "_bolt_r"):
             sc = body(body_name); mech.addObject(sc)
-            rep[body_name] = M.build_screw(doc, sh, sc, pre=fam)
+            if body_name in files:                                 # A.7.8: the Fusion screw at the occurrence the array starts from
+                rep[body_name] = dict(sketches=[], features=[], fusion=import_fusion_part(doc, sc, body_name, files[body_name], fusion_parts, 0.0, mech))
+            else:
+                rep[body_name] = M.build_screw(doc, sh, sc, pre=fam)
             arrays.append((sc, fam, label))
     doc.recompute()
     balls = polar_array(doc, ba, P + "bearing_ball_count", "Balls"); brg.addObject(balls)

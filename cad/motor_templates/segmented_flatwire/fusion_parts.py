@@ -14,7 +14,7 @@ Owner rule 2026-10-19: everything in production comes ONLY from Fusion.  `profil
         "thread_radii":     {"Shaft": [2.4505]}              optional, radii of the cosmetic-thread cylinders (view.thread_face_indices, glTF thread nodes)
         "param_overrides":  {"holder_bolt_r": "14.8431907 mm"}   optional, Params rows of the template parts that must follow the Fusion body
                                                              (store.apply_fusion_param_overrides; the screws sit on the Fusion bolt circle)
-        "canonical":        true                             optional, write the imported solid to a STEP and read it back (see import_fusion_part): the shape then
+        "canonical":        true | [names]                   optional, write the imported solid to a STEP and read it back (see import_fusion_part): the shape then
                                                              has FreeCAD's own tolerance (1e-7) instead of the 2.5e-3 .. 4.2e-3 mm of Fusion's STEP and its
                                                              volume and area are Fusion's to 1e-9 (a plain read is off by 1e-5, which the STEP round-trip check of
                                                              the build would see as a volume change)
@@ -144,16 +144,26 @@ def _canonical(sol):
     return back[0]
 
 
-def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stretch=None):
+def is_canonical(cfg, name):
+    """profile.fusion_parts.canonical: true (every part) or a list of the parts whose solid is written to a STEP and read back (_canonical)."""
+    c = cfg.get("canonical")
+    return bool(c) if not isinstance(c, list) else name in c
+
+
+def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stretch=None, frame=None):
     """The Fusion body of part `bn` as the BaseFeature of `body` (see the module docstring).  stretch = dict(z=..., dz=...) or None.
-    Returns the report."""
+    frame = App.Placement of the body's App::Part in the motor frame (None = identity).  Returns the report."""
     path, cands = find_fusion_part(file_name, cfg.get("dir", ""))
     if path is None:
         raise RuntimeError("Fusion STEP %s of %s not found; looked in: %s.  The mechanical parts of this profile are the real Fusion bodies (no "
                            "template geometry as fall-back): put the file there or set $FC_FUSION_PARTS" % (file_name, bn, " | ".join(cands)))
-    shape = Part.read(path)
-    sol = max(shape.Solids, key=lambda x: x.Volume)             # a component STEP also carries the screws of the holder: the part is the biggest solid
-    if cfg.get("canonical"):
+    shape = read_step(path)
+    rule = (cfg.get("select") or {}).get(bn)
+    if rule:                                                    # A.7.8: which solid(s) of the component STEP make the part (select_solids)
+        sol = seed_solid(select_solids(shape, rule, file_name), rule, file_name)
+    else:
+        sol = max(shape.Solids, key=lambda x: x.Volume)         # a component STEP also carries the screws of the holder: the part is the biggest solid
+    if is_canonical(cfg, bn):
         sol = _canonical(sol)
     src_valid, check = sol.isValid(), ""
     if not src_valid:                                           # Fusion's own B-rep: tolerance-level wire errors; volume, booleans and meshing are fine
@@ -169,8 +179,13 @@ def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stre
         sol, filler = stretch_solid(sol, float(stretch["z"]), float(stretch["dz"]))
         if expected > 0:
             expected += float(stretch["dz"]) * _section_face(sol, float(stretch["z"])).Area
+    m12 = (cfg.get("placement") or {}).get(bn)
+    if m12:                                                     # A.7.8: component frame -> motor frame (the Fusion occurrence the template body stands for)
+        sol = transformed(sol, matrix(m12))
     if abs(shift_z) > 1e-12:
         sol = _moved(sol, shift_z)
+    if frame is not None and not frame.isIdentity():           # the body lives in a placed App::Part (bearing): its BaseFeature is in that frame
+        sol = transformed(sol, frame.inverse().toMatrix())
     f = doc.addObject("Part::Feature", bn + FUSION_SUFFIX)
     f.Label = bn + FUSION_SUFFIX
     f.Shape = sol
@@ -183,7 +198,8 @@ def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stre
              "volume (mm3) the Fusion body must have at this motor_length (Fusion volume + stretch slab; 0 = not recorded); the gate compares it with the solid"),
             ("SourceValid", "App::PropertyBool", bool(src_valid), "BRepCheck verdict of the Fusion STEP solid; False = Fusion's B-rep carries tolerance-level wire errors (see SourceCheck), the gate accepts exactly that"),
             ("SourceCheck", "App::PropertyString", check, "message of Shape.check() when the Fusion solid is not valid"),
-            ("SourceSolids", "App::PropertyInteger", len(shape.Solids), "solids in the STEP (the part is the biggest)"),
+            ("SourceSolids", "App::PropertyInteger", len(shape.Solids), "solids in the STEP (the part is the biggest unless profile.fusion_parts.select says otherwise)"),
+            ("SourcePlacement", "App::PropertyString", json.dumps(m12 or []), "Fusion occurrence matrix (component -> motor frame, 3 x 4, mm) applied to the solid; [] = identity"),
             ("AxialShift", "App::PropertyFloat", float(shift_z), "z shift (mm) applied for motor_length != ref_motor_length"),
             ("StretchDz", "App::PropertyFloat", float((stretch or {}).get("dz", 0.0)), "mm added (+) or removed (-) in the constant section of the part (cut-and-shift)"),
             ("ThreadRadii", "App::PropertyString", json.dumps(radii), "radii (mm) of the cylinders that carry a cosmetic thread (JSON list)")):
@@ -194,5 +210,174 @@ def import_fusion_part(doc, body, bn, file_name, cfg, shift_z, parent=None, stre
     body.BaseFeature = f
     doc.recompute()
     return dict(step=file_name, sha256=f.SourceSHA256, volume=round(sol.Volume, 3), solids_in_step=len(shape.Solids), faces=len(sol.Faces),
+                placement=bool(m12),
                 valid=bool(src_valid), check=check, shift_z=shift_z, stretch_dz=float((stretch or {}).get("dz", 0.0)),
                 stretch_filler_mm3=round(filler, 3), expected_volume=round(expected, 3))
+
+
+# ---------------------------------------------------------------------------------------------- A.7.8: every part from Fusion
+# CIANO28 150_35 (owner 2026-10-20: the 3-D model of the 150_35 comes from Fusion; Fusion sync decision Q5 2026-10-19: core, rotor, magnets
+# and coils of the 3-D model come from the Fusion bodies, the EM solver keeps its own 2-D geometry).  Three more profile keys:
+#
+#   "select":      {"Magnet": {"match": "all", "seed": {"near": [0, 48.7, -15]}}, "Coil": {"match": "fuse"},
+#                   "Bearing_seal": {"match": {"volume": 883.401302}, "seed": {"near": [...]}}, "Bearing_ball": {"match": {"volume": ...}, "split": "shells", ...}}
+#                  which solids of the component STEP make the part (match: "largest" (default), "all", "fuse" = all solids fused into one,
+#                  {"volume": v} = the solids of that volume, 1e-4 relative; split "shells" = every closed shell of them is its own solid)
+#                  and which ONE of them is the template body (seed: the solid whose centre of mass is nearest, component coordinates)
+#   "placement":   {"Magnet": [3 x 4 matrix, mm]}  the Fusion occurrence (component -> motor frame) the template body stands for; the
+#                  template's arrays / links place the other copies (instance_check proves they land on every Fusion occurrence)
+#   "occurrences": {"Magnet": [[3 x 4], ...]}  EVERY Fusion occurrence of the component, for instance_check
+#   "instance_bbox_tol_mm": {"Screw_M3x30": 0.15}  optional: the template's polar array turns each copy about the motor axis, a Fusion copy
+#                  may keep the seed's own orientation (a hex socket / head detail then sits a little differently in the bounding box)
+#
+# The template keeps its bodies, arrays and links (names, solid counts, BOM, STEP tree, GLB groups unchanged); only the shape of each seed
+# body is the Fusion solid.  A missing STEP or a selection that does not resolve refuses the build (no fall-back to template geometry).
+
+_STEP_CACHE = {}
+
+
+def read_step(path):
+    """Part.read with a per-process cache (one component STEP serves several bodies: the bearing rings, seal and balls)."""
+    key = (path, os.path.getmtime(path))
+    if key not in _STEP_CACHE:
+        _STEP_CACHE[key] = Part.read(path)
+    return _STEP_CACHE[key]
+
+
+def matrix(m12):
+    """App.Matrix of a 3 x 4 row-major matrix (Fusion transform2, translation in mm)."""
+    import FreeCAD as App
+    return App.Matrix(*([float(x) for x in m12] + [0.0, 0.0, 0.0, 1.0]))
+
+
+def transformed(sol, m):
+    """`sol` transformed by the App.Matrix m, baked into the geometry (see _moved)."""
+    out = sol.copy()
+    out.transformShape(m, True)
+    return out
+
+
+def _shell_solids(sol):
+    out = []
+    for sh in sol.Shells:
+        if not sh.isClosed():
+            raise RuntimeError("an open shell in a Fusion solid that is split into shells")
+        s = Part.Solid(sh)
+        if s.Volume < 0:
+            s.reverse()
+        out.append(s)
+    return out
+
+
+def select_solids(shape, rule, file_name="?"):
+    """The solids of the component STEP `shape` that make the part (rule["match"], see above)."""
+    m = (rule or {}).get("match", "largest")
+    sols = list(shape.Solids)
+    if not sols:
+        raise RuntimeError("Fusion STEP %s has no solid" % file_name)
+    if m == "largest":
+        out = [max(sols, key=lambda x: x.Volume)]
+    elif m == "all":
+        out = sols
+    elif m == "fuse":
+        fused = sols[0].fuse(sols[1:]).removeSplitter() if len(sols) > 1 else sols[0]
+        if len(fused.Solids) != 1:
+            raise RuntimeError("Fusion STEP %s: the %d bodies do not fuse into one solid (%d)" % (file_name, len(sols), len(fused.Solids)))
+        out = [fused.Solids[0]]
+    elif isinstance(m, dict) and "volume" in m:
+        v = float(m["volume"])
+        out = [s for s in sols if abs(s.Volume - v) <= 1e-4 * v]
+    else:
+        raise RuntimeError("profile.fusion_parts.select: unknown match %r" % (m,))
+    if (rule or {}).get("split") == "shells":
+        out = [x for s in out for x in _shell_solids(s)]
+    if not out:
+        raise RuntimeError("Fusion STEP %s: no solid matches %r (volumes %s)" % (file_name, m, sorted(round(s.Volume, 4) for s in sols)))
+    return out
+
+
+def seed_solid(sols, rule, file_name="?"):
+    """The ONE solid of `sols` that is the template body: the only one, or the one nearest to rule["seed"]["near"]."""
+    if len(sols) == 1:
+        return sols[0]
+    near = ((rule or {}).get("seed") or {}).get("near")
+    if near is None:
+        raise RuntimeError("Fusion STEP %s: %d solids match and the profile names no seed (select.seed.near)" % (file_name, len(sols)))
+    import FreeCAD as App
+    p = App.Vector(*near)
+    return min(sols, key=lambda s: (s.CenterOfMass - p).Length)
+
+
+def fusion_instances(cfg, bn):
+    """Every solid of part `bn` in the motor frame as Fusion places it: the matched solids x every occurrence (profile.fusion_parts)."""
+    path, cands = find_fusion_part(cfg["files"][bn], cfg.get("dir", ""))
+    if path is None:
+        raise RuntimeError("Fusion STEP %s of %s not found; looked in: %s" % (cfg["files"][bn], bn, " | ".join(cands)))
+    rule = (cfg.get("select") or {}).get(bn)
+    sols = select_solids(read_step(path), rule, cfg["files"][bn])
+    occ = (cfg.get("occurrences") or {}).get(bn) or [(cfg.get("placement") or {}).get(bn)]
+    out = []
+    for m12 in occ:
+        for s in sols:
+            out.append(transformed(s, matrix(m12)) if m12 else s.copy())
+    return out
+
+
+def model_instances(doc, bn):
+    """The solids of the built model (motor frame) that stand for part `bn`: the body itself or every copy of its arrays / links."""
+    from . import mechanics
+    arr = {"Magnet": "MagnetArray", "Coil": "Coils"}
+    if bn in arr:
+        return [s.copy() for o in doc.Objects if o.Label == arr[bn] for s in o.Shape.Solids]
+    if bn in ("Core", "RotorCore"):
+        return [x.copy() for x in doc.getObject(bn).Shape.Solids]
+    so = mechanics.solids(doc)
+    key = {"Bearing_outer_ring": "_outer_ring", "Bearing_inner_ring": "_inner_ring", "Bearing_seal": "_seal_", "Bearing_ball": "_ball_"}
+    if bn in key:
+        return [x for k, v in so.items() if k.startswith("Bearing_618_8_") and key[bn] in k for x in v.Solids]
+    if bn in ("Screw", "Screw_M3x30", "Screw_M3x6"):
+        pre = {"Screw": "Screw_", "Screw_M3x30": "Screw_M3x30_", "Screw_M3x6": "Screw_M3x6_"}[bn]
+        return [x for k, v in so.items() if k.startswith(pre) and k[len(pre):].isdigit() for x in v.Solids]
+    return [x for x in so[bn].Solids] if bn in so else []
+
+
+INSTANCE_TOL_MM = 2e-3          # centre of mass / bounding box of a model copy vs the Fusion occurrence
+INSTANCE_TOL_VOL = 1e-4         # relative volume
+
+
+def instance_check(doc, cfg):
+    """Every Fusion occurrence of every listed part has exactly one model solid on it (same volume, centre of mass and bounding box):
+    the template's arrays and links reproduce the Fusion assembly.  Returns (rows, errors)."""
+    rows, errors = [], []
+    for bn in sorted(cfg.get("occurrences") or {}):
+        fus = fusion_instances(cfg, bn)
+        mod = model_instances(doc, bn)
+        free = list(range(len(mod)))
+        worst_c = worst_b = worst_v = 0.0
+        missing = 0
+        for f in fus:
+            fc, fb = f.CenterOfMass, f.BoundBox
+            best = None
+            for j in free:
+                d = (mod[j].CenterOfMass - fc).Length
+                if best is None or d < best[0]:
+                    best = (d, j)
+            if best is None or best[0] > INSTANCE_TOL_MM:
+                missing += 1
+                continue
+            j = best[1]
+            free.remove(j)
+            mb = mod[j].BoundBox
+            db = max(abs(getattr(mb, a) - getattr(fb, a)) for a in ("XMin", "YMin", "ZMin", "XMax", "YMax", "ZMax"))
+            dv = abs(mod[j].Volume - f.Volume) / max(f.Volume, 1e-12)
+            worst_c, worst_b, worst_v = max(worst_c, best[0]), max(worst_b, db), max(worst_v, dv)
+        tol_b = max(INSTANCE_TOL_MM, float((cfg.get("instance_bbox_tol_mm") or {}).get(bn, 0.0)))   # a copy turned about its own axis
+        ok = missing == 0 and not free and worst_b <= tol_b and worst_v <= INSTANCE_TOL_VOL
+        rows.append(dict(part=bn, fusion=len(fus), model=len(mod), unmatched_fusion=missing, unmatched_model=len(free),
+                         max_centre_mm=round(worst_c, 6), max_bbox_mm=round(worst_b, 6), bbox_tol_mm=tol_b, max_rel_volume=float("%.3g" % worst_v),
+                         ok=ok))
+        if not ok:
+            errors.append("Fusion occurrences of %s: %d in Fusion, %d in the model, %d / %d unmatched, max centre %.4f mm, bbox %.4f mm, "
+                          "volume %.2g (the template copies do not land on the Fusion assembly)" % (
+                              bn, len(fus), len(mod), missing, len(free), worst_c, worst_b, worst_v))
+    return rows, errors

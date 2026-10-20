@@ -211,3 +211,7 @@ mechanical_parts:
                   note: "the copper layers are inside this mass; FR-4 is used for the whole board (small part)"}
   pins:          {name: "Phase pins", match: "^phase pin", role: conductor, material: copper, status: assumed,
                   note: "the BOM names a CuCrZr alloy; copper is used (small part)"}
+  fan_plates:    {name: "Fan plates", match: "^fan plate", role: structural, material: Aluminium_6061, status: computed,
+                  note: "CIANO28 150: the two fan plates of the Fusion design (component 'Fan 200 24s'), aluminium 6061 as in Fusion"}
+  insulation_ceramic: {name: "Ceramic insulation", match: "^ceramic insulation", role: insulation, material: Al2O3, status: computed,
+                  note: "CIANO28 150: the 72 alumina pieces of the Fusion design (component 'Insulation_ceramic'); library card Al2O3 (density 3800 kg/m3, estimate)"}

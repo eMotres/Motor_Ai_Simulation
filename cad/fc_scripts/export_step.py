@@ -11,7 +11,7 @@ only then it replaces the final name.
 STEP tree: <motor_id>_active / Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M ;
            Mechanics / Shaft, Bearing_618_8_front / (outer_ring, inner_ring, ball_01..), Bearing_618_8_back / (...),
                        Stator_holder, Stator_holder_back, Ring_front, Ring_back, Prop_fix, Screws / Screw_1..
-           (Mechanics only for profiles with the stage-3 rows)
+           (Mechanics only for profiles with the stage-3 rows); Fusion_extras / <part> / <part>_01.. for the Fusion-only parts (A.7.8)
 Frameless kit (cad_variant = frameless, template A.6.0): Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M ;
            Electronics / PhaseBoard_001.. (the phase board: plate + lead sleeves, or the imported board's solids); no Mechanics.
            The datums JSON gets a `frameless` block (kit contents, mounting datums).
@@ -212,6 +212,8 @@ def main():
     coils = [s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids]
     mags = [s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids]
     mech = mechanics.solids(src)
+    from motor_templates.segmented_flatwire import fusion_extras
+    extras = fusion_extras.solids(src)                     # A.7.8: Fusion-only parts (fan plates, alumina pieces), {label: [solids]}
     kit = frameless.is_frameless(src)
     board = [s.copy() for s in electronics_board(src).Solids] if kit and src.getObject("Electronics") is not None else []
     meta = dict(src.Meta or {})
@@ -286,6 +288,12 @@ def main():
                     sub_parts[grp] = part(mp, grp)
                 parent = sub_parts[grp]
             solid(parent, name, mech[name])
+    if extras:
+        xp = part(root, "Fusion_extras")
+        for label, sols in extras.items():
+            lp = part(xp, label)
+            for i, s in enumerate(sols):
+                solid(lp, "%s_%02d" % (label, i + 1), s)
     ex.recompute()
     tmp = os.path.splitext(out)[0] + ".partial.step"      # written under a temporary name, moved after the check
     Import.export([root], tmp)
@@ -297,7 +305,7 @@ def main():
             if o.TypeId == "Part::Feature" and not o.Shape.isNull() and o.Shape.Solids]
     parts = sorted({o.Label for o in chk.Objects if o.TypeId == "App::Part"})
     App.closeDocument(chk.Name)
-    expv = core.Volume + rotor.Volume + sum(s.Volume for s in coils) + sum(s.Volume for s in mags) + sum(s.Volume for s in mech.values()) + sum(s.Volume for s in board)
+    expv = core.Volume + rotor.Volume + sum(s.Volume for s in coils) + sum(s.Volume for s in mags) + sum(s.Volume for s in mech.values()) + sum(s.Volume for s in board)         + sum(s.Volume for v in extras.values() for s in v)
     res = dict(step=os.path.basename(out), datums=os.path.basename(dat), freecad_version=".".join(str(x) for x in App.Version()[:3]), size_bytes=os.path.getsize(tmp), parts=parts,
                n_solid_objects=len(rows), total_volume=round(sum(r["volume"] for r in rows), 3), expected_total_volume=round(expv, 3),
                leads=len(leads), objects=rows)
@@ -307,7 +315,7 @@ def main():
     print(json.dumps({k: v for k, v in res.items() if k != "objects"}, indent=1))
     # re-import volume: relative 1e-6 (the coil transition lofts are B-splines; the STEP round trip moves ~1e-3 mm3)
     ok = abs(res["total_volume"] - res["expected_total_volume"]) < 1e-6 * res["expected_total_volume"] + 1e-3 \
-        and len(rows) == 2 + ncoil + len(mags) + len(mech) + len(board) and len(leads) == 2 * ncoil
+        and len(rows) == 2 + ncoil + len(mags) + len(mech) + len(board) + sum(len(v) for v in extras.values()) and len(leads) == 2 * ncoil
     if ok:
         os.replace(tmp, out)
         with open(dat, "w", encoding="utf-8") as fh:

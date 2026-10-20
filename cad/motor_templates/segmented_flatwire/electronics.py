@@ -61,13 +61,16 @@ def has_board(doc):
     return doc.getObject(PART) is not None and doc.getObject(BODY) is not None
 
 
-def build_electronics(doc, sh, cfg=None):
+def build_electronics(doc, sh, cfg=None, fusion=None):
     """Adds the Electronics part with the PhaseBoard body.  Returns a small report.
+    fusion = profile.fusion_parts with a `board` list (template A.7.8, CIANO28 150_35): the board is the Fusion phase board (build_board_fusion).
     cfg = profile["phase_board"] (optional; the CIANO14 40 board needs none): step (STEP file name), pins (bool: the board STEP carries
     phase pins - the J13 position gate and the pin clearances), copper_volume ([lo, hi] mm3 of one full-board copper layer solid,
     for the N-side copper search)."""
     import Part
     from .params_sheet import has_param
+    if fusion and fusion.get("board"):
+        return build_board_fusion(doc, fusion)
     if has_param(sh, "board_outer_r"):
         return build_board_plate(doc, sh)
     cfg = cfg or {}
@@ -95,6 +98,105 @@ def build_electronics(doc, sh, cfg=None):
         part.setExpression(".Placement.Base.%s" % axis, "%sphase_board_%s" % (P, axis))
     doc.recompute()
     return dict(step=step_name, sha256=f.SourceSHA256, solids=len(shape.Solids), faces=len(shape.Faces))
+
+
+# ---------------------------------------------------------------------------------------------------- Fusion board (CIANO28 150_35, A.7.8)
+# profile.fusion_parts.board = [{"component": "Insulation", "file": "PCB_Insulation.step", "material": "GFRP", "occurrences": [[3 x 4], ...],
+#                                "volume_mm3": <one occurrence>}, {"component": "PhaseA1", ..., "material": "Copper"}, ...]
+# The board is the Fusion phase board as designed (insulation layers + copper layers), every solid placed by its Fusion occurrence matrix,
+# ONE compound Part::Feature `PhaseBoard` in the App::Part `Electronics` (identity placement).  SolidMaterials (JSON) names the material of
+# every solid in compound order (GLB colours, BOM).  The template plate envelope (board_* rows) is not built in the full model; the
+# SIMPLIFIED model keeps exactly that plate (export_simplified builds it from the Params rows in a scratch document).
+
+
+def is_fusion_board(doc):
+    f = doc.getObject(BODY)
+    return f is not None and bool(getattr(f, "FusionBoard", False))
+
+
+def build_board_fusion(doc, fusion):
+    import Part
+    import json
+    from . import fusion_extras as FX
+    part = doc.addObject("App::Part", PART)
+    part.Label = PART
+    sols, mats, comps, shas, want = [], [], [], {}, 0.0
+    for item in fusion["board"]:
+        placed, path = FX.placed_solids(fusion, item)
+        for _, s in placed:
+            sols.append(s)
+            mats.append(item.get("material", ""))
+            comps.append(item.get("component", ""))
+        shas[item["file"]] = sha256_file(path)
+        want += float(item.get("volume_mm3", 0.0)) * len(item["occurrences"])
+    f = doc.addObject("Part::Feature", BODY)
+    f.Label = BODY
+    f.Shape = Part.makeCompound(sols)
+    part.addObject(f)
+    for prop, typ, val, tip in (
+            ("FusionBoard", "App::PropertyBool", True, "the board is the Fusion phase board (profile.fusion_parts.board), not the plate envelope"),
+            ("SourceFile", "App::PropertyString", ", ".join(sorted(shas)), "Fusion STEP files of the board components"),
+            ("SourceSHA256", "App::PropertyString", json.dumps(shas, sort_keys=True), "SHA-256 of every board STEP"),
+            ("SolidMaterials", "App::PropertyString", json.dumps(mats), "material of every solid of the compound, in order"),
+            ("SolidComponents", "App::PropertyString", json.dumps(comps), "Fusion component of every solid of the compound, in order"),
+            ("FusionVolume", "App::PropertyFloat", want, "volume (mm3) of all board bodies in Fusion (gate)"),
+            ("HasPins", "App::PropertyBool", False, "no phase pins: the coil leads are soldered into the copper"),
+            ("CopperVolume", "App::PropertyString", "0,0", "not used by a Fusion board"),
+            ("SolidCount", "App::PropertyInteger", len(sols), "solids of the board (gate)")):
+        f.addProperty(typ, prop, "Motor", tip)
+        setattr(f, prop, val)
+    doc.recompute()
+    return dict(step=None, kind="fusion", files=shas, solids=len(sols), volume=round(f.Shape.Volume, 3), fusion_volume=round(want, 3))
+
+
+def fusion_board_gate(doc):
+    f = doc.getObject(BODY)
+    s = f.Shape
+    errors = []
+    if s.isNull() or len(s.Solids) != int(f.SolidCount):
+        return ["PhaseBoard (Fusion): %d solids, the import recorded %d" % (0 if s.isNull() else len(s.Solids), f.SolidCount)]
+    if not doc.getObject(PART).Placement.isIdentity():
+        errors.append("PhaseBoard (Fusion): the Electronics part must keep the identity placement (the solids carry the Fusion placement)")
+    if f.FusionVolume > 0 and abs(s.Volume - f.FusionVolume) > 1e-4 * f.FusionVolume:
+        errors.append("PhaseBoard (Fusion): volume %.3f mm3, the Fusion board bodies give %.3f mm3 (wrong or stale STEP)" % (s.Volume, f.FusionVolume))
+    return errors
+
+
+def solid_materials(doc):
+    import json
+    f = doc.getObject(BODY)
+    try:
+        return json.loads(f.SolidMaterials)
+    except Exception:
+        return []
+
+
+def fusion_board_fit(doc, motor_groups):
+    """Board vs every motor group (overlap, minimum clearance) and the coil lead stubs through the board: overlap with the insulation
+    layers and with the copper (the leads are soldered into the copper), reported, not refused."""
+    bs = board_shape(doc)
+    sol = list(bs.Solids)
+    mats = solid_materials(doc)
+    cu = [s for s, m in zip(sol, mats) if m.lower().startswith("copper")]
+    ins = [s for s, m in zip(sol, mats) if not m.lower().startswith("copper")]
+    rows = []
+    for name, grp in motor_groups.items():
+        d_all, ov = distance_overlap(sol, grp)
+        rows.append(dict(group=name, overlap_mm3=round(ov, 6), min_distance_mm=_r(d_all), status="CLASH" if ov > 1e-6 else "clear"))
+    leads = []
+    zb1 = bs.BoundBox.ZMax
+    for ci, name, face in lead_ends(motor_groups.get("Coils", [])):
+        z0 = face.CenterOfMass.z
+        prism = face.extrude(App.Vector(0, 0, zb1 + 1.0 - z0)).Solids[0]
+        d_i, ov_i = distance_overlap([prism], ins)
+        d_c, ov_c = distance_overlap([prism], cu)
+        c = face.CenterOfMass
+        leads.append(dict(coil=ci, lead=name, centre=[round(c.x, 3), round(c.y, 3), round(c.z, 3)], r=round(math.hypot(c.x, c.y), 3),
+                          overlap_mm3=round(ov_i + ov_c, 6), clearance_to_board_mm=_r(min([d for d in (d_i, d_c) if d is not None] or [None])),
+                          overlap_insulation_mm3=round(ov_i, 6), clearance_to_insulation_mm=_r(d_i),
+                          overlap_copper_mm3=round(ov_c, 6), clearance_to_copper_mm=_r(d_c)))
+    return dict(kind="fusion", groups=rows, leads=leads, pins=[], board_bbox=[round(v, 4) for v in (
+        bs.BoundBox.XMin, bs.BoundBox.YMin, bs.BoundBox.ZMin, bs.BoundBox.XMax, bs.BoundBox.YMax, bs.BoundBox.ZMax)], errors=[])
 
 
 # ---------------------------------------------------------------------------------------------------- plate board (CIANO28 85)
@@ -313,6 +415,8 @@ def gate(doc, g):
         return ["Electronics / PhaseBoard missing"]
     if is_plate(doc):
         return plate_gate(doc, g)
+    if is_fusion_board(doc):
+        return fusion_board_gate(doc)
     s = f.Shape
     if s.isNull() or not s.isValid() or s.Volume <= 0:
         return ["PhaseBoard: null / invalid / volume<=0"]
@@ -446,6 +550,8 @@ def fit(doc, motor_groups):
     import Part
     if is_plate(doc):
         return plate_fit(doc, motor_groups)
+    if is_fusion_board(doc):
+        return fusion_board_fit(doc, motor_groups)
     bs = board_shape(doc)
     has_pins, vol = board_cfg(doc)
     sol = list(bs.Solids)
@@ -493,6 +599,14 @@ def datums(doc, g):
                     coil_lead_end_z=round(-(g("coil_leg_length") / 2 + g("coil_lead_total")), 6),
                     pins_xy=[[round(x, 4), round(y, 4)] for x, y in pin_positions(bs)],
                     note="board_top_z = end of the straight legs + coil_lead_ext + board_gap; the sleeves sit on the coil lead stubs")
+    if is_fusion_board(doc):
+        bs = board_shape(doc)
+        f = doc.getObject(BODY)
+        mats = solid_materials(doc)
+        return dict(what="phase (coil-connection) board: the Fusion phase board (insulation + copper layers, Fusion placement)",
+                    files=f.SourceFile, solids=len(bs.Solids), copper_solids=sum(1 for m in mats if m.lower().startswith("copper")),
+                    board_top_z=round(bs.BoundBox.ZMax, 6), board_bottom_z=round(bs.BoundBox.ZMin, 6),
+                    pins_xy=[], note="every solid is the Fusion body at its Fusion occurrence; the coil leads are soldered into the copper")
     bs = board_shape(doc)
     pl = placement(doc)
     has_pins, vol = board_cfg(doc)

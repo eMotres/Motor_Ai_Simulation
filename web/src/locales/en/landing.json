@@ -50,7 +50,7 @@
     "sub": "One machine, three physics, one operating point.",
     "em": "Electromagnetic FEM",
     "emAlt": "Flux-density map of a permanent-magnet machine: the whole cross-section, twelve slots around ten magnets, coloured by |B| from 0 to 2.4 tesla, the finite-element mesh drawn over it, and the colour bar beside it.",
-    "emHint": "Flux density |B| of a 200 mm machine at its rated duty, with the FE mesh it was solved on. The solved half is repeated to the full ring, which is the periodicity the solve itself assumed.",
+    "emHint": "Flux density |B| of a permanent-magnet machine cross-section solved by 2-D FEM, with the FE mesh it was solved on. The solved half is repeated to the full ring, which is the periodicity the solve itself assumed.",
     "thermal": "Thermal and duty cycle",
     "thermalAlt": "Temperature map of the same whole cross-section, from 69 °C at the outer housing to 135 °C in the rotor, the finite-element mesh drawn over it, and the colour bar beside it.",
     "thermalHint": "Temperature of the same machine with the FE mesh over it, coupled to the losses of the same run. The solved half is repeated to the full ring, as above.",

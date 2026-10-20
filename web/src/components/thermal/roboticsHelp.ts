@@ -29,19 +29,19 @@
  *     (`cooling_models.outer_still`), the same pair down an unventilated bore
  *     (`bore_still`), four lumped end-face conductances G = h_total(ΔT)·A·n_faces
  *     (`end_face_still`), and the mount as a volume sink G·(T_stator − T_mount);
- *   • the SHARES are the real Ø85 L13 robot joint's last heat-path record
+ *   • the SHARES are the real Ø85 robot joint's last heat-path record
  *     (`GET /api/thermal/heat_paths/last`, robotics mode, 40 °C room, 195.8 W
  *     removed): mount 163.2 W = 83 %, end-winding faces 18.4 W = 9.4 %, housing
  *     5.0 W = 2.5 % of which radiation 2.91 W against convection 2.05 W, stator
  *     end annulus 3.9 W = 2.0 %, bore 2.0 W = 1.0 %, rotor and magnet end
- *     annuli 1.7 W = 0.9 % each.  `L13_SHARES` below keeps them in one place so
+ *     annuli 1.7 W = 0.9 % each.  `ROBOT_JOINT_SHARES` below keeps them in one place so
  *     a text and a test cannot drift apart, and so nobody invents a share.
  */
 
-/** The Ø85 L13 robot joint's measured split, quoted by the tips above.  Watts
+/** The Ø85 robot joint's measured split, quoted by the tips above.  Watts
  *  and percents exactly as the heat-path record reports them — these are an
  *  ORDER OF MAGNITUDE for the reader, not a specification of his machine. */
-export const L13_SHARES = {
+export const ROBOT_JOINT_SHARES = {
   removed_W: 195.8,
   ambient_c: 40,
   mount_W: 163.2, mount_pct: 83,
@@ -88,7 +88,7 @@ export const ROBOTICS_HELP: Record<RoboticsControlKey, RoboticsControl> = {
   emissivity: {
     label: 'ε (radiation)',
     short: 'ε (radiation)',
-    tip: 'THIS IS THE RADIATION PARAMETER: the total hemispherical emissivity of the housing surface, 0…1, default 0.9. Heat leaves as light at ε·σ·A·(T⁴ − T_room⁴), and on a small machine in still air that beats the air film — on the Ø85 L13 joint the housing loses 2.91 W by radiation against 2.05 W by convection. 0.9 is anodised, painted or oxidised metal and most real housings; 0.2 is bare machined aluminium and 0.05 polished. Lower it and the housing arrow in the 3-D view shrinks by exactly that much — ε = 0 removes the radiation half and nothing else.',
+    tip: 'THIS IS THE RADIATION PARAMETER: the total hemispherical emissivity of the housing surface, 0…1, default 0.9. Heat leaves as light at ε·σ·A·(T⁴ − T_room⁴), and on a small machine in still air that beats the air film — on the Ø85 robot joint the housing loses 2.91 W by radiation against 2.05 W by convection. 0.9 is anodised, painted or oxidised metal and most real housings; 0.2 is bare machined aluminium and 0.05 polished. Lower it and the housing arrow in the 3-D view shrinks by exactly that much — ε = 0 removes the radiation half and nothing else.',
   },
   heatPath: {
     label: 'Heat path',
@@ -98,17 +98,17 @@ export const ROBOTICS_HELP: Record<RoboticsControlKey, RoboticsControl> = {
   endFaces: {
     label: 'End faces',
     short: 'end faces',
-    tip: 'The two AXIAL faces of the machine: the end turns standing proud of the core, plus the stator, rotor and magnet end annuli. Open to air puts all four in the room at their own natural-convection + radiation film (G = h·A·n_faces per face) — on the Ø85 L13 they carry 25.7 W together, 13 % of everything, the end turns alone 9.4 %. Closed removes those four paths: it is a machine buried between a gearbox and the arm, and its heat then has to leave through the housing and the mount.',
+    tip: 'The two AXIAL faces of the machine: the end turns standing proud of the core, plus the stator, rotor and magnet end annuli. Open to air puts all four in the room at their own natural-convection + radiation film (G = h·A·n_faces per face) — on the Ø85 robot joint they carry 25.7 W together, 13 % of everything, the end turns alone 9.4 %. Closed removes those four paths: it is a machine buried between a gearbox and the arm, and its heat then has to leave through the housing and the mount.',
   },
   endFaceSides: {
     label: 'Ends open',
     short: 'ends open',
-    tip: 'How many of the two ends are actually in the room\'s air — every axial conductance scales with the count. Both ends is the default; 1 end is the usual joint, bolted flat against the arm on the flange side so only the far end sees the room. Halving the count roughly halves the end-face watts, about 13 W on the Ø85 L13.',
+    tip: 'How many of the two ends are actually in the room\'s air — every axial conductance scales with the count. Both ends is the default; 1 end is the usual joint, bolted flat against the arm on the flange side so only the far end sees the room. Halving the count roughly halves the end-face watts, about 13 W on the Ø85 robot joint.',
   },
   boreMode: {
     label: 'Rotor bore',
     short: 'bore',
-    tip: 'What is inside the hollow shaft — the only path that reaches the rotor and the magnets WITHOUT crossing the air gap, which is why it moves the magnet temperature more than a bigger fan on the housing does. Open bore, still air is a joint with a cable down it: natural convection in the hole plus radiation out of its two ends at the same ε (2.0 W, 1 % on the Ø85 L13). Forced air and Liquid are a blown or pumped bore with their own speed or flow; Closed is adiabatic, and everything the rotor and the magnets make then crosses the gap into the stator.',
+    tip: 'What is inside the hollow shaft — the only path that reaches the rotor and the magnets WITHOUT crossing the air gap, which is why it moves the magnet temperature more than a bigger fan on the housing does. Open bore, still air is a joint with a cable down it: natural convection in the hole plus radiation out of its two ends at the same ε (2.0 W, 1 % on the Ø85 robot joint). Forced air and Liquid are a blown or pumped bore with their own speed or flow; Closed is adiabatic, and everything the rotor and the magnets make then crosses the gap into the stator.',
   },
   shaftExtMm: {
     label: 'shaft out of housing, mm/side',
@@ -200,17 +200,17 @@ export const HOW_IT_WORKS: HowLine[] = [
   { path: 'housing → still air', param: 'room air °C',
     text: 'Churchill–Chu natural convection, roughly 6 W/m²K at ΔT 60 K. No fan is involved in this mode.' },
   { path: 'housing → radiation', param: 'ε (radiation)',
-    text: 'ε·σ·A·(T⁴ − T_room⁴). Bigger than the air film here: 2.91 W against 2.05 W on the Ø85 L13.' },
+    text: 'ε·σ·A·(T⁴ − T_room⁴). Bigger than the air film here: 2.91 W against 2.05 W on the Ø85 robot joint.' },
   { path: 'stator / shaft → housing or structure → room', param: 'Heat path',
     text: 'conduction into one body sized from the stator, which sheds it by still air + radiation; judged against a 70 °C touch limit.' },
   { path: 'end turns + core and magnet end annuli → still air', param: 'End faces',
-    text: 'four lumped conductances G = h·A·n_faces, scaled by Ends open. 13 % together on the Ø85 L13.' },
+    text: 'four lumped conductances G = h·A·n_faces, scaled by Ends open. 13 % together on the Ø85 robot joint.' },
   { path: 'end turns + slot ducts → wash', param: 'Frame',
     text: 'only on an open frame; a housed machine has no such path and gets nothing here.' },
   { path: 'rotor + magnets → air gap → stator', param: '',
     text: 'the rotor has no cooled surface of its own, so this is where its heat goes unless the bore or the shaft takes it.' },
   { path: 'rotor → bore', param: 'Rotor bore',
-    text: 'still air in the hole plus radiation at the same ε, or forced air, or liquid, or closed = adiabatic. 1 % on the Ø85 L13.' },
+    text: 'still air in the hole plus radiation at the same ε, or forced air, or liquid, or closed = adiabatic. 1 % on the Ø85 robot joint.' },
   { path: 'rotor → shaft stubs', param: 'shaft out of housing, mm/side',
     text: 'the exposed shaft as a fin in room air; 0 mm switches it off.' },
   { path: 'every film, every pass', param: '',

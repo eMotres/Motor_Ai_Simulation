@@ -49,31 +49,26 @@ export interface ReferenceMotor {
   };
 }
 
-export const REFERENCE_PASSPORTS: ReferenceMotor[] = [
-  {
-    id: 'ref-200-20p24s',
-    name: '200 mm · 20-pole / 24-slot',
-    subtitle: 'IPM · N52UH · ~80 N·m @ 4000 rpm (4S)',
-    poles: 20,
-    slots: 24,
-    passport: {
-      N0: 12, L0_mm: 45, wireH0_mm: 0.9,
-      I0_A: 110, rpm0: 4000, nP0: 1,
-      T0_Nm: 80.235, Vemf0_peak_V: 174.76, Vload0_peak_V: 210.7, R0_ohm: 0.02457,
-      endWindFrac: 0.33, Pfe0_W: 168.5, Pmag0_W: 6.2, mass0_kg: 10.141,
-      // FEM speed-sweep (sliding-band, I=110 A, γ=28°, L=45 mm): iron + magnet
-      // eddy loss vs rpm.  scaleMotor interpolates these instead of f^1.5 / f²
-      // (the FEM iron loss is ~f^1.1, not f^1.5 — the analytical law over-estimated it).
-      speed: {
-        rpm:    [1000, 2000, 3000, 4000, 5000, 6000],
-        Pfe_W:  [37.0, 78.2, 122.2, 168.5, 217.1, 267.6],
-        Pmag_W: [0.4, 1.6, 3.5, 6.2, 9.7, 14.0],
-      },
-    },
-    fit: { slotHeight_mm: 19.8, insulation_mm: 0.2, wireSpacingY_mm: 0.13, slotWidth_mm: 7.6, wireWidth_mm: 7.0 },
-    geo: { statorOR_mm: 100, statorIR_mm: 73, rotorOR_mm: 72.35, rotorIR_mm: 49.35, numSlots: 24, numPoles: 20, magnetHeight_mm: 21.4 },
+/** Inert, SYNTHETIC stand-in so the panel's hooks always hold a well-formed reference before the
+ *  server's configure_load / references answer arrives.  It is NOT a machine: it never enters
+ *  the picker or `allRefs`, the render layer is gated on a matched catalogue machine, and its
+ *  numbers describe no real or private design (public-bundle rule, review F4 2026-10-20: the
+ *  client bundle may carry no built-in machine data; the server owns every real passport). */
+export const EMPTY_REFERENCE: ReferenceMotor = {
+  id: '',
+  name: '—',
+  subtitle: '',
+  poles: 14,
+  slots: 12,
+  passport: {
+    N0: 10, L0_mm: 20, wireH0_mm: 1,
+    I0_A: 10, rpm0: 1000, nP0: 1,
+    T0_Nm: 1, Vemf0_peak_V: 10, Vload0_peak_V: 12, R0_ohm: 0.1,
+    endWindFrac: 0.3, Pfe0_W: 1, Pmag0_W: 0.1, mass0_kg: 1,
   },
-];
+  fit: { slotHeight_mm: 10, insulation_mm: 0.2, wireSpacingY_mm: 0.1, slotWidth_mm: 5, wireWidth_mm: 4 },
+  geo: { statorOR_mm: 20, statorIR_mm: 12, rotorOR_mm: 11, rotorIR_mm: 6, numSlots: 12, numPoles: 14, magnetHeight_mm: 2 },
+};
 
 // Winding connection options, derived from the SLOT COUNT.  For a 3-phase
 // single-layer winding the coils per phase C = numSlots/6, and every factor pair
@@ -104,8 +99,7 @@ export const connLabel = (nP: number, numSlots: number): string =>
 // ── Catalog-derived references ────────────────────────────────────────────────
 // Motors published into the MOTORS catalog with a FEM-generated passport (admin
 // "Generate passport" → POST /api/catalog/{id}/passport).  These are the real,
-// simulation-backed references; REFERENCE_PASSPORTS above is the built-in seed /
-// fallback used when the catalog has no characterised motor.
+// simulation-backed references; there is no built-in machine in the client bundle.
 const _API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
 /** What the references fetch says: `ok` = the server ANSWERED (an empty list is then a

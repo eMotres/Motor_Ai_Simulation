@@ -69,8 +69,8 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
     if (has(r => r.P)) c.push({ id: 'P', label: 'P (kW)', get: r => r.P, fmt: v => v.toFixed(1) });
     c.push({ id: 'eff', label: 'η %', get: r => r.eff, fmt: v => v.toFixed(2) });
     c.push({ id: 'ripple', label: 'ripple %', get: r => r.ripple, fmt: v => v.toFixed(2) });
-    c.push({ id: 'td', label: 'N·m/kg', get: r => r.td, fmt: v => v.toFixed(2) });
-    if (has(r => r.mass)) c.push({ id: 'mass', label: 'mass (kg)', get: r => r.mass, fmt: v => v.toFixed(3) });
+    c.push({ id: 'td', label: 'N·m/kg (active)', get: r => r.td, fmt: v => v.toFixed(2) });
+    if (has(r => r.mass)) c.push({ id: 'mass', label: 'active mass (kg)', get: r => r.mass, fmt: v => v.toFixed(3) });
     if (has(r => r.ploss)) c.push({ id: 'ploss', label: 'P_loss (W)', get: r => r.ploss, fmt: v => v.toFixed(0) });
     if (has(r => r.vpk)) c.push({ id: 'vpk', label: 'V_peak (V)', get: r => r.vpk, fmt: v => v.toFixed(0) });
     if (has(r => r.j)) c.push({ id: 'j', label: 'J (A/mm²)', get: r => r.j, fmt: v => v.toFixed(1) });

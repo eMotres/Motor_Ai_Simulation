@@ -29,6 +29,7 @@ import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import ViewColumnIcon    from '@mui/icons-material/ViewColumn';
 import HelpTip from '../common/HelpTip';
 import { partMaxLabel } from './resultRows';
+import { shownMass, perMass } from '../../lib/fullMass';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -156,7 +157,16 @@ interface ResultCol {
   text?: boolean;
   /** stored on every row but off until the user ticks it in the picker */
   off?: boolean;
+  /** the stored key whose presence says a row carries this column, when `key` itself is a derived name */
+  presentKey?: string;
+  /** true for a row whose value is on the ACTIVE-mass basis (no full mass for it): the cell is marked "*" with the reason
+   *  on hover, never mixed silently with the full-mass rows (owner 2026-10-20: «везде полная масса») */
+  activeBasis?: (r: Record<string, any>) => boolean;
 }
+
+/** The hover text of a "*" cell. */
+const ACTIVE_BASIS_TIP = 'Active mass (no CAD build): the full motor mass is not known for this row, so the value is on the '
+  + 'active mass (EM parts + shaft tube).';
 
 const RESULT_COLS: ResultCol[] = [
   // Column ORDER is the user's reading order for a design row:
@@ -172,14 +182,19 @@ const RESULT_COLS: ResultCol[] = [
     derive: r => Number(r.I_phase_rms_A) * Math.SQRT2 },
   { key: 'I_phase_rms_A',        label: 'I phase',     unit: 'A rms',  d: 1 },
   { key: 'J_coil_A_per_mm2',     label: 'J coil',      unit: 'A/mm²',  d: 1, better: 'lo' },
-  { key: 'torque_per_mass_Nm_kg',label: 'TD',          unit: 'N·m/kg', d: 2, better: 'hi' },
+  // THE MOTOR MASS IS THE FULL ASSEMBLED MASS everywhere a motor is shown (owner 2026-10-20).  The server stamps every run
+  // with the full mass of the configuration it was solved on (mass_full_kg = the run's active mass + the non-active parts,
+  // from mass_summary) and the per-mass figures over it.  TD / PD / Mass read those.  A row saved before the stamp existed, or
+  // one with no CAD build, has only its ACTIVE mass (EM parts + shaft tube): its cell carries a "*" and says "Active mass
+  // (no CAD build)" - never silently mixed with the full-mass rows.  The run's active mass stays in the next column.
+  { key: 'torque_per_mass_Nm_kg',label: 'TD',          unit: 'N·m/kg', d: 2, better: 'hi',
+    derive: r => perMass(r, 'torque').value ?? NaN, activeBasis: r => !perMass(r, 'torque').full },
   { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
-    derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg) },
-  // Mass (total = EM-active + shaft) is what TD/PD above divide by; EM-active
-  // drops the shaft and is the basis a commercial FEM active-mass expression quotes.
-  // THE motor mass is the FULL assembled mass everywhere a motor is shown (owner 2026-10-14); a saved-simulation row is
-  // a geometry VARIANT with no CAD model, so its mass is the ACTIVE mass (EM parts + shaft tube) - labelled as such, with
-  // TD / PD dividing by it ("partial mass (no CAD model yet)"), never silently mixed with a full mass.
+    derive: r => perMass(r, 'power').value
+      ?? Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg),
+    activeBasis: r => !perMass(r, 'power').full },
+  { key: 'mass_full',            label: 'Mass',        unit: 'kg',     d: 3, better: 'lo', presentKey: 'mass_total_kg',
+    derive: r => shownMass(r).kg ?? NaN, activeBasis: r => shownMass(r).kind !== 'full' },
   { key: 'mass_total_kg',        label: 'Active mass', unit: 'kg',     d: 3, better: 'lo' },
   { key: 'mass_active_kg',       label: 'EM-active',   unit: 'kg',     d: 3, better: 'lo' },
   { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
@@ -348,7 +363,7 @@ function resultText(r: ResultCol, s: SavedSim): string {
  *  it wants to see a sleeve stress. */
 const colPresent = (r: ResultCol, sims: SavedSim[]): boolean =>
   sims.some((s) => {
-    const v = resultSrc(r, s)?.[r.key];
+    const v = resultSrc(r, s)?.[r.presentKey ?? r.key];
     return v !== undefined && v !== null && v !== '';
   });
 const paramLabel = (k: string) => PARAM_META[k]?.label ?? k;
@@ -708,20 +723,30 @@ const ComparePanel: React.FC = () => {
     return a.localeCompare(b);
   });
 
+  // A column on a mass basis (Mass, TD, PD) is ranked among the rows on the FULL basis when there are any; a row on the active
+  // basis is then not coloured at all (it is not comparable) - and with no full row anywhere the active rows rank among
+  // themselves, as before.
+  const fullBasisRows = (r: ResultCol, rows: SavedSim[]) =>
+    (r.activeBasis ? rows.filter(s => !r.activeBasis!(resultSrc(r, s))) : rows);
+  const extentVals = (r: ResultCol, rows: SavedSim[]): number[] => {
+    const full = fullBasisRows(r, rows);
+    return (full.length ? full : rows).map(s => resultVal(r, s)).filter(Number.isFinite);
+  };
+
   // per-result best/worst across the selected rows (for highlight).  Keyed on
   // `colId`, not on `key`: the EM summary and the mechanical block both carry an
   // `rpm`, and one extent shared between them would colour the hottest against
   // the fastest.
   const resExtent: Record<string, { min: number; max: number }> = {};
   resultCols.forEach(r => {
-    const nums = selected.map(s => resultVal(r, s)).filter(Number.isFinite);
+    const nums = extentVals(r, selected);
     if (nums.length) resExtent[colId(r)] = { min: Math.min(...nums), max: Math.max(...nums) };
   });
   // Same, but across EVERY saved row — so the library table alone already shows
   // which variant leads on each metric, without having to tick rows first.
   const libExtent: Record<string, { min: number; max: number }> = {};
   resultCols.forEach(r => {
-    const nums = sims.map(s => resultVal(r, s)).filter(Number.isFinite);
+    const nums = extentVals(r, sims);
     if (nums.length) libExtent[colId(r)] = { min: Math.min(...nums), max: Math.max(...nums) };
   });
 
@@ -742,7 +767,7 @@ const ComparePanel: React.FC = () => {
   // name can't collide).
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
-    const ns = selected.map(s => resultVal(r, s)).filter(Number.isFinite);
+    const ns = extentVals(r, selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });
   const diffSet = new Set(diffKeys);
@@ -777,10 +802,13 @@ const ComparePanel: React.FC = () => {
       );
     }
     const raw = resultVal(r, s);
-    const col = metricColor(r, raw, ext);
+    const activeOnly = Number.isFinite(raw) && !!r.activeBasis?.(resultSrc(r, s));
+    const mixed = activeOnly && fullBasisRows(r, sims).length > 0;     // ranked among the full-basis rows only
+    const col = mixed ? 'var(--text-1)' : metricColor(r, raw, ext);
     return (
-      <Box component="td" sx={{ ...TD, color: col, fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>
-        {Number.isFinite(raw) ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—'}
+      <Box component="td" title={activeOnly ? ACTIVE_BASIS_TIP : undefined}
+        sx={{ ...TD, color: col, fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>
+        {Number.isFinite(raw) ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—'}{activeOnly ? '*' : ''}
       </Box>
     );
   };
@@ -1038,7 +1066,7 @@ const ComparePanel: React.FC = () => {
                     </Box>
                     {resultCols.map(r => (
                       // A verdict has no maximum to be a percentage of.
-                      <PctCell key={`p-${colId(r)}`} v={r.text ? NaN : resultVal(r, s)}
+                      <PctCell key={`p-${colId(r)}`} v={r.text || (r.activeBasis?.(resultSrc(r, s)) && fullBasisRows(r, selected).length > 0) ? NaN : resultVal(r, s)}
                         max={r.text ? undefined : colMax[`r:${colId(r)}`]} />
                     ))}
                     {displayCols.map(k => (

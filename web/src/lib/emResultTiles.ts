@@ -10,6 +10,7 @@
 import { tempTileSpec, type TempTileSpec } from './configuratorTiles';
 import { tempLimits, judgeTemps, type TempLimits } from './configuratorPropeller';
 import { shaftBalance } from './shaftBalance';
+import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
 
 /** The run summary, as far as these tiles read it: every field optional, nothing invented. */
@@ -42,8 +43,19 @@ export interface EmTileSummary {
   loss_density_W_kg?: number | null;
   mass_total_kg?: number | null;
   mass_active_kg?: number | null;
+  /** the FULL motor mass of the simulated geometry + the per-mass figures on it, all from the server (lib/fullMass.ts) */
+  mass_full_kg?: number | null;
+  mass_non_active_kg?: number | null;
+  mass_partial?: boolean | null;
+  mass_partial_reason?: string | null;
+  mass_basis?: string | null;
+  mass_scope?: string | null;
   torque_per_mass_Nm_kg?: number | null;
   power_per_mass_W_kg?: number | null;
+  torque_per_mass_full_Nm_kg?: number | null;
+  power_per_mass_full_W_kg?: number | null;
+  Km_per_mass_full_Nm_sqrtW_kg?: number | null;
+  loss_density_full_W_kg?: number | null;
   V_phase_peak_V?: number | null;
   V_phase_rms_V?: number | null;
   V_line_peak_V?: number | null;
@@ -246,6 +258,17 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   const partial = s.solid_loss_not_solved === true;       // magnet / shaft eddy not solved → optimistic
   const etaFlag = etaPct != null && (partial || !mechKnown);
   const ripple = num(s.T_ripple_pct);
+  // THE MASS IS THE FULL MOTOR MASS (owner 2026-10-20): the server's full mass of the loaded configuration; a geometry that
+  // belongs to no configuration with a CAD build shows its active mass, labelled so, never an unlabelled "Mass".
+  const ms = shownMass(s as MassSummary);
+  const pm = (k: 'torque' | 'power' | 'km' | 'loss') => perMass(s as MassSummary, k);
+  const massTile = tile({
+    id: 'mass',
+    labelKey: ms.kind === 'full' ? 'configure.mass' : ms.kind === 'active-no-cad' ? 'configure.massNoCad' : 'configure.massActive',
+    tipKey: ms.kind === 'full' ? 'emTiles.massFullTip' : ms.kind === 'active-no-cad' ? 'emTiles.massNoCadTip' : 'emTiles.massTip',
+    tipVars: { active: ms.activeKg != null ? _n2(ms.activeKg) : '—', basis: s.mass_basis ?? '—',
+      reason: s.mass_partial_reason ?? '—' },
+    unit: 'kg', d: 2, value: ms.kg });
   const r1 = row(
     tile({ id: 'torque', labelKey: 'configure.torque', tipKey: 'emTiles.torqueTip',
       tipExtraKeys: torqueMethod ? [...k3d, torqueMethod] : [...k3d], unit: 'N·m',
@@ -258,9 +281,7 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       tipKey: bal?.gen ? 'emTiles.elecPowerTipGen' : 'emTiles.elecPowerTipMotor',
       tipExtraKeys: mechKnown ? undefined : ['emTiles.elecPowerNoMech'], unit: 'kW', d: 2,
       value: bal?.pElec != null ? bal.pElec / 1000 : null }),
-    tile({ id: 'mass', labelKey: 'configure.massActive', tipKey: 'emTiles.massTip',
-      tipVars: { active: num(s.mass_active_kg) != null ? _n2(num(s.mass_active_kg) as number) : '—' }, unit: 'kg', d: 2,
-      value: num(s.mass_total_kg) ?? num(s.mass_active_kg) }),
+    massTile,
     tile({ id: 'efficiency', labelKey: 'configure.efficiency',
       tipKey: mechKnown ? 'emTiles.efficiencyTip' : 'emTiles.efficiencyTipNoMech',
       tipVars: { em: bal?.etaEm != null ? _n2(100 * bal.etaEm) : '—' },
@@ -270,10 +291,12 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     tile({ id: 'tRipple', labelKey: 'configure.tRipple', tipKey: 'emTiles.tRippleTip',
       tipExtraKeys: torqueMethod ? [torqueMethod] : undefined, unit: '%', d: 1, value: ripple,
       level: ripple == null ? undefined : ripple <= 5 ? 'ok' : ripple <= 15 ? 'warn' : 'bad' }),
-    tile({ id: 'tPerMass', labelKey: 'configure.tPerMass', tipKey: 'emTiles.tPerMassTip', unit: 'N·m/kg', d: 2,
-      value: num(s.torque_per_mass_Nm_kg) }),
-    tile({ id: 'pPerMass', labelKey: 'configure.pPerMass', tipKey: 'emTiles.pPerMassTip', unit: 'kW/kg', d: 2,
-      value: num(s.power_per_mass_W_kg) != null ? (num(s.power_per_mass_W_kg) as number) / 1000 : null }),
+    tile({ id: 'tPerMass', labelKey: pm('torque').full ? 'configure.tPerMass' : 'configure.tPerMassActive',
+      tipKey: pm('torque').full ? 'emTiles.tPerMassFullTip' : 'emTiles.tPerMassTip', unit: 'N·m/kg', d: 2,
+      value: pm('torque').value }),
+    tile({ id: 'pPerMass', labelKey: pm('power').full ? 'configure.pPerMass' : 'configure.pPerMassActive',
+      tipKey: pm('power').full ? 'emTiles.pPerMassFullTip' : 'emTiles.pPerMassTip', unit: 'kW/kg', d: 2,
+      value: pm('power').value != null ? (pm('power').value as number) / 1000 : null }),
   );
 
   // ── 2 total loss · iron · copper · magnet · shaft · sleeve · bearings · windage · heat · density · controller ──
@@ -337,8 +360,9 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     tile({ id: 'rotorHeat', labelKey: 'configure.rotorHeat', tipKey: 'emTiles.rotorHeatTip',
       tipExtraKeys: splitUnknown ? ['emTiles.splitUnknown'] : undefined, unit: 'W', d: 0, value: num(s.P_loss_rotor_W),
       level: splitUnknown ? 'warn' : undefined }),
-    tile({ id: 'lossDensity', labelKey: 'configure.lossDensity', tipKey: 'emTiles.lossDensityTip', unit: 'W/kg', d: 0,
-      value: num(s.loss_density_W_kg) }),
+    tile({ id: 'lossDensity', labelKey: pm('loss').full ? 'configure.lossDensity' : 'configure.lossDensityActive',
+      tipKey: pm('loss').full ? 'emTiles.lossDensityFullTip' : 'emTiles.lossDensityTip', unit: 'W/kg', d: 0,
+      value: pm('loss').value }),
     tile({ id: 'invLoss', labelKey: 'configureDrive.invLoss', tipKey: 'emTiles.ctrlLossTip', unit: 'W', d: 1,
       value: num(ctl?.losses?.total_W) }),
     tile({ id: 'tj', labelKey: 'configureDrive.tj', tipKey: 'emTiles.tjTip', unit: '°C', d: 0, value: tj,
@@ -452,8 +476,9 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       d: kt != null && Math.abs(kt) < 0.1 ? 4 : 3, value: kt, ...blue }),
     tile({ id: 'km', labelKey: 'configure.km', tipKey: 'emTiles.kmTip', tipExtraKeys: k3d, unit: 'N·m/√W', d: 3,
       value: num(s.Km_Nm_sqrtW), ...blue }),
-    tile({ id: 'kmPerMass', labelKey: 'configure.kmPerMass', tipKey: 'emTiles.kmPerMassTip', tipExtraKeys: k3d,
-      unit: 'N·m/(√W·kg)', d: 3, value: num(s.Km_per_mass_Nm_sqrtW_kg), ...blue }),
+    tile({ id: 'kmPerMass', labelKey: pm('km').full ? 'configure.kmPerMass' : 'configure.kmPerMassActive',
+      tipKey: pm('km').full ? 'emTiles.kmPerMassFullTip' : 'emTiles.kmPerMassTip', tipExtraKeys: k3d,
+      unit: 'N·m/(√W·kg)', d: 3, value: pm('km').value, ...blue }),
     tile({ id: 'rotorInertia', labelKey: 'configure.rotorInertia', tipKey: 'emTiles.rotorInertiaTip', unit: 'kg·cm²', d: 2,
       value: num(s.rotor_inertia?.J_kg_cm2) }),
   );

@@ -3463,6 +3463,20 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
             "primary": drive == _primary_drive(entry)}
 
 
+def _summary_with_full_mass(summary: Any, die: str, cfg: str) -> Any:
+    """A STORED run summary as the Simulation tab shows it, with the FULL motor mass of its own configuration stamped on a
+    COPY (owner 2026-10-20: "the full mass everywhere"): the run weighed only the EM parts + shaft tube; the holders, rings,
+    bearings, screws and board of ``die`` / ``cfg`` come from ``modules.motor_mass.mass_summary``.  Nothing is written to the
+    yaml; a mass hiccup returns the summary as it was."""
+    if not isinstance(summary, dict):
+        return summary
+    try:
+        from motor_ai_sim.modules import motor_mass as _mm
+        return _mm.stamp_run_summary(dict(summary), die, cfg, dies_dir=_die_dir(die).parent)
+    except Exception:                                      # noqa: BLE001 - a mass hiccup never breaks a load
+        return summary
+
+
 @router.get("/duty_runs/{die}/{cfg}/{duty}")
 def get_duty_runs(die: str, cfg: str, duty: str,
                   authorization: str = Header(default=None)):
@@ -3504,7 +3518,7 @@ def get_duty_runs(die: str, cfg: str, duty: str,
             "assignment_sig": r.get("assignment_sig"),
             "stale": bool(r.get("build_sig") and r.get("build_sig") != bsig),
             "settings": r.get("settings") or {},
-            "summary": r.get("summary"), "result": r.get("result"),
+            "summary": _summary_with_full_mass(r.get("summary"), die, cfg), "result": r.get("result"),
             "payload": payload,
         })
     return {"die": die, "config": cfg, "duty": duty,
@@ -3540,7 +3554,7 @@ def get_duty_run(die: str, cfg: str, duty: str, drive: str,
         "build_sig": r.get("build_sig"), "assignment_sig": r.get("assignment_sig"),
         "stale": bool(r.get("build_sig") and r.get("build_sig") != bsig),
         "settings": r.get("settings") or {},
-        "summary": r.get("summary"), "result": r.get("result"),
+        "summary": _summary_with_full_mass(r.get("summary"), die, cfg), "result": r.get("result"),
         # None = the description outlived its sidecar (deleted by hand): the
         # settings still restore, the charts stay empty and say why.
         "payload": payload,
@@ -5987,6 +6001,8 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
                     out["duty"]["summary"] = _s2
         except Exception:   # noqa: BLE001 — no passport is the normal state
             pass
+        if isinstance(out["duty"].get("summary"), dict):
+            out["duty"]["summary"] = _summary_with_full_mass(out["duty"]["summary"], die, cfg)
         out["sim"].update({
             "mode": found.get("mode", "motor"),
             "current_a": found.get("current_arms"),

@@ -231,6 +231,19 @@ export interface TransientSummary {
   // expression quotes, so it is the tile a user cross-checks against commercial FEM.
   mass_total_kg:       number;
   mass_active_kg?:     number;
+  // THE FULL MOTOR MASS of the simulated geometry (owner 2026-10-20), stamped by the server from the loaded configuration's
+  // mass_summary: mass_full_kg = mass_total_kg + mass_non_active_kg (holders, rings, bearings, screws, board).  Absent /
+  // mass_partial = no CAD build: the tiles then print the active mass labelled so.  See lib/fullMass.ts.
+  mass_full_kg?:       number;
+  mass_non_active_kg?: number;
+  mass_partial?:       boolean;
+  mass_partial_reason?: string;
+  mass_basis?:         string;
+  mass_scope?:         string;
+  torque_per_mass_full_Nm_kg?: number;
+  power_per_mass_full_W_kg?:   number;
+  loss_density_full_W_kg?:     number;
+  Km_per_mass_full_Nm_sqrtW_kg?: number | null;
   mass_area_source?:   string;
   rotor_inertia?: { J_kg_m2: number; J_kg_cm2: number; rotor_iron: number;
                     magnet: number; shaft: number; sleeve?: number;
@@ -671,6 +684,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       P_mech_W: Pm,
       torque_per_mass_Nm_kg: summary.torque_per_mass_Nm_kg * kq,
       power_per_mass_W_kg: summary.power_per_mass_W_kg * kq,
+      // the same torque factor on the per-mass figures over the FULL mass (the server's divisor, not ours)
+      torque_per_mass_full_Nm_kg: summary.torque_per_mass_full_Nm_kg != null
+        ? summary.torque_per_mass_full_Nm_kg * kq : summary.torque_per_mass_full_Nm_kg,
+      power_per_mass_full_W_kg: summary.power_per_mass_full_W_kg != null
+        ? summary.power_per_mass_full_W_kg * kq : summary.power_per_mass_full_W_kg,
       V_phase_peak_V: summary.V_phase_peak_V * k,
       V_phase_rms_V: summary.V_phase_rms_V * k,
       V_line_peak_V: summary.V_line_peak_V * k,
@@ -693,6 +711,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         ? summary.Km_Nm_sqrtW * kq : summary.Km_Nm_sqrtW,
       Km_per_mass_Nm_sqrtW_kg: summary.Km_per_mass_Nm_sqrtW_kg != null
         ? summary.Km_per_mass_Nm_sqrtW_kg * kq : summary.Km_per_mass_Nm_sqrtW_kg,
+      Km_per_mass_full_Nm_sqrtW_kg: summary.Km_per_mass_full_Nm_sqrtW_kg != null
+        ? summary.Km_per_mass_full_Nm_sqrtW_kg * kq : summary.Km_per_mass_full_Nm_sqrtW_kg,
       efficiency: (Pm > 0 && summary.P_loss_total_W > 0)
         ? Pm / (Pm + summary.P_loss_total_W) : summary.efficiency,
       // The charging card is an energy balance on the shaft power, so it moves

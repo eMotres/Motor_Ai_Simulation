@@ -285,7 +285,7 @@ def build_server():
         voltage_v: Annotated[Optional[float], Field(gt=0, description="available DC bus voltage, V")] = None,
         max_diameter_mm: Annotated[Optional[float], Field(gt=0, description="max outer (stator) diameter, mm")] = None,
         max_length_mm: Annotated[Optional[float], Field(gt=0, description="max active (stack) length, mm")] = None,
-        max_mass_kg: Annotated[Optional[float], Field(gt=0, description="max active mass, kg")] = None,
+        max_mass_kg: Annotated[Optional[float], Field(gt=0, description="max motor mass, kg (the full assembled mass; the active mass where the motor has no CAD build yet)")] = None,
         cooling: Annotated[Optional[str], Field(description="required cooling, e.g. air | robotics | liquid")] = None,
         limit: Annotated[int, Field(ge=1, le=50, description="max rows per list")] = 10,
     ) -> Dict[str, Any]:
@@ -314,7 +314,7 @@ class Requirements(BaseModel):
     dc_bus_v: Optional[float] = Field(None, gt=0, description="DC bus voltage of the inverter, V")
     max_outer_diameter_mm: Optional[float] = Field(None, gt=0, description="max stator outer diameter, mm")
     max_length_mm: Optional[float] = Field(None, gt=0, description="max active (stack) length, mm")
-    max_mass_kg: Optional[float] = Field(None, gt=0, description="max active mass, kg")
+    max_mass_kg: Optional[float] = Field(None, gt=0, description="max motor mass, kg (the full assembled mass; the active mass where the motor has no CAD build yet)")
     cooling: Optional[str] = Field(None, description="air | liquid | robotics")
     duty: Optional[str] = Field(None, description="S1 (continuous) | S2 | S3 | peak")
     ambient_c: Optional[float] = Field(None, description="ambient / coolant temperature, degC (default 40)")

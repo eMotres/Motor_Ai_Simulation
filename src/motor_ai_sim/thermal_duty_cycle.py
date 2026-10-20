@@ -393,7 +393,10 @@ def losses_by_node(summary: Mapping[str, Any],
       * rotor   — ``P_core_terms.rotor`` + the SOLID loss that is not in the
         magnets (shaft eddy), + bearing friction when the shaft-end path is
         open (it enters at the shaft seats, ``routes.thermal`` :3317) + half the
-        gap windage;
+        gap windage; with the SOLVED bearing nodes (closed shaft ends,
+        2026-10-19) the friction's equivalent sources instead — rotor and
+        stator shares on those nodes, the holder film's share reported as
+        ``bearings_to_ambient_W`` (re-audit R2, 2026-10-20);
       * magnet  — ``P_mag_eddy_W``; with no thermal payload the whole
         ``P_solid_W`` is put on the magnets and the note SAYS so, because that
         is the conservative half of the ambiguity (the magnets are the part with
@@ -454,14 +457,57 @@ def losses_by_node(summary: Mapping[str, Any],
 
     # Mechanical watts, exactly where the steady map puts them.
     mech = dict((th.get("cooling") or {}).get("mech_losses") or {})
+    p_brg_air = 0.0
     if mech:
         open_ends = (bool(mech.get("shaft_ends_open")) if shaft_ends_open is None
                      else bool(shaft_ends_open))
         p_brg = float(mech.get("P_bearings_W") or 0.0)
+        p_brg_nodes = float(mech.get("P_bearings_at_bearing_nodes_W") or 0.0)
         if p_brg > 0.0 and open_ends:
             p_r += p_brg
             notes.append("bearing friction %.2f W enters at the shaft (rotor "
                          "node) — the shaft-ends path is open" % p_brg)
+        elif p_brg_nodes > 0.0:
+            # THE BEARING NETWORK (2026-10-19) carries the friction in its own
+            # solved nodes, and the lumped network carries that network as the
+            # delta of its holder star (``network_from_steady``).  The delta's
+            # EQUIVALENT SOURCES go with it (re-audit R2, 2026-10-20): the
+            # watts the friction delivers to the rotor and to the stator, and
+            # the share the holder film takes straight to the room.  Before
+            # this the friction was simply missing from every transient.
+            _bn = dict((th.get("cooling") or {}).get("bearing_node") or {})
+            _d = dict(_bn.get("delta") or {})
+            _keys = ("P_to_rotor_W", "P_to_stator_W", "P_to_air_W")
+            if (_bn.get("mode") == "solved"
+                    and all(_d.get(k) is not None for k in _keys)):
+                j_r, j_s, j_a = (max(float(_d[k]), 0.0) for k in _keys)
+                j_sum = j_r + j_s + j_a
+                # the split is exact for the friction the network was built
+                # with; scale it onto the watts the map reports (rounding)
+                f = (p_brg_nodes / j_sum) if j_sum > 1e-12 else 0.0
+                j_r, j_s, j_a = j_r * f, j_s * f, j_a * f
+                if j_sum <= 1e-12:
+                    j_r = p_brg_nodes
+                p_r += j_r
+                p_s += j_s
+                p_brg_air = j_a
+                notes.append(
+                    "bearing friction %.3f W is made in the solved bearing "
+                    "nodes; its equivalent sources go with the bearing "
+                    "network's delta: %.3f W to the rotor, %.3f W to the "
+                    "stator, %.3f W straight to the room through the holder "
+                    "film" % (p_brg_nodes, j_r, j_s, j_a))
+            else:
+                # a map solved before the split existed: all of it on the
+                # rotor — the node the friction is made beside, and an upper
+                # bound for the rotor — and SAID
+                p_r += p_brg_nodes
+                notes.append(
+                    "bearing friction %.3f W is made in the solved bearing "
+                    "nodes, and this map carries no split of it "
+                    "(cooling.bearing_node.delta.P_to_*_W, 2026-10-20), so all "
+                    "of it is put on the rotor node — an upper bound for the "
+                    "rotor" % p_brg_nodes)
         elif p_brg > 0.0:
             notes.append("bearing friction %.2f W is NOT in this network: the "
                          "shaft-ends path is closed, so the steady map does not "
@@ -511,6 +557,12 @@ def losses_by_node(summary: Mapping[str, Any],
                                       else "summary (all of P_solid_W)")},
     }
     out["total_W"] = round(sum(float(out[n]) for n in NODES), 4)
+    # The friction share the bearing holders hand straight to the room: made
+    # by the machine, never a node's heat (re-audit R2).  `total_W` stays the
+    # watts the four nodes carry; `input_total_W` is everything made, so the
+    # balance `total_W + bearings_to_ambient_W == input_total_W` is checkable.
+    out["bearings_to_ambient_W"] = round(p_brg_air, 4)
+    out["input_total_W"] = round(out["total_W"] + p_brg_air, 4)
     return out
 
 

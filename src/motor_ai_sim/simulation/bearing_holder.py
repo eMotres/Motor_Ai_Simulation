@@ -469,6 +469,68 @@ def end_geometry(*, end: str, card: Mapping[str, Any],
 
 
 # ---------------------------------------------------------------------------
+# The friction's equivalent sources (re-audit R2, 2026-10-20)
+# ---------------------------------------------------------------------------
+
+#: The share of a bearing's friction injected into each internal node
+#: (Hoffmann et al. 2020): inner ring, balls, outer ring.
+FRICTION_SPLIT = (0.25, 0.50, 0.25)
+
+
+def source_split(p_w: float, *, g_shaft_in: float, g_inner_balls: float,
+                 g_balls_outer: float, g_annulus: float, g_fit_outer: float,
+                 g_holder_stator: float, g_holder_air: float) -> Dict[str, float]:
+    """Where ONE bearing's friction ends up when the rotor, the stator and the
+    air are all held at the same temperature [machine W].
+
+    The bearing network is a linear network between three outside nodes
+    (rotor, stator, air) with four inside nodes (inner ring, balls, outer
+    ring, holder) and the friction injected inside it.  Eliminating the inside
+    nodes (Kron reduction) gives the three delta conductances
+    (``delta.G_*``) AND three equivalent sources: the watts the friction
+    delivers to each outside node with every outside temperature equal.  A
+    lumped model that carries the delta must carry these too, or the friction
+    is simply lost (re-audit R2: 10 W copper + 2 W friction transient-summed to
+    10 W).  The three watts add up to ``p_w``; the ``air`` share leaves through
+    the holder's film without heating any machine node.
+
+    Inside the holder star: shaft → inner ring (``g_shaft_in``), inner ring →
+    balls → outer ring with the ring-to-ring annulus in parallel, outer ring →
+    holder (``g_fit_outer``), holder → stator and holder → air.
+    """
+    p = max(float(p_w or 0.0), 0.0)
+    if p <= 0.0:
+        return {"P_to_rotor_W": 0.0, "P_to_stator_W": 0.0, "P_to_air_W": 0.0}
+    g_si = max(float(g_shaft_in), 0.0)
+    g_ib = max(float(g_inner_balls), 0.0)
+    g_bo = max(float(g_balls_outer), 0.0)
+    g_an = max(float(g_annulus), 0.0)
+    g_fo = max(float(g_fit_outer), 0.0)
+    g_hs = max(float(g_holder_stator), 0.0)
+    g_ha = max(float(g_holder_air), 0.0)
+    g_h = g_hs + g_ha
+    # outer ring → holder → (stator ∥ air), all outside nodes at 0
+    g_oh = (g_fo * g_h / (g_fo + g_h)) if (g_fo > 0.0 and g_h > 0.0) else 0.0
+    # the three ring / ball nodes, sources 25 / 50 / 25 %
+    a = [[g_si + g_ib + g_an, -g_ib, -g_an],
+         [-g_ib, g_ib + g_bo, -g_bo],
+         [-g_an, -g_bo, g_bo + g_an + g_oh]]
+    q = [FRICTION_SPLIT[0] * p, FRICTION_SPLIT[1] * p, FRICTION_SPLIT[2] * p]
+    try:
+        import numpy as _np
+        t_in, _t_ba, t_out = (float(v) for v in _np.linalg.solve(
+            _np.array(a, dtype=float), _np.array(q, dtype=float)))
+    except Exception:  # noqa: BLE001 — a singular star (no path out at all)
+        # nothing leaves but through the shaft: everything to the rotor
+        return {"P_to_rotor_W": p, "P_to_stator_W": 0.0, "P_to_air_W": 0.0}
+    j_r = g_si * t_in
+    j_h = g_oh * t_out
+    j_s = j_h * g_hs / g_h if g_h > 0.0 else 0.0
+    j_a = j_h * g_ha / g_h if g_h > 0.0 else 0.0
+    return {"P_to_rotor_W": j_r, "P_to_stator_W": j_s, "P_to_air_W": j_a}
+
+
+# ---------------------------------------------------------------------------
 # THE network
 # ---------------------------------------------------------------------------
 
@@ -605,7 +667,21 @@ def network(*, ends: Sequence[Mapping[str, Any]], k_shaft: float, rpm: float,
         delta = {"G_rotor_air_W_per_K": g_r * g_a / g_sig,
                  "G_rotor_stator_W_per_K": g_r * g_hs / g_sig,
                  "G_stator_air_W_per_K": g_hs * g_a / g_sig,
-                 "G_rotor_holder_W_per_K": g_r}
+                 "G_rotor_holder_W_per_K": g_r,
+                 # ...and the friction's EQUIVALENT SOURCES (re-audit R2,
+                 # 2026-10-20): the delta alone carries the conductances, and a
+                 # lumped model that took only them lost the friction made
+                 # inside the star.  These are the Norton injections of the
+                 # same reduction — where the friction goes with the rotor,
+                 # the stator and the air all at one temperature — so the
+                 # delta + these three watts reproduce the solved network
+                 # exactly (linear network, films frozen at this pass).
+                 **source_split(p_w, g_shaft_in=g_shaft_in,
+                                g_inner_balls=brg["G_inner_balls_W_per_K"],
+                                g_balls_outer=brg["G_balls_outer_W_per_K"],
+                                g_annulus=brg["G_annulus_W_per_K"],
+                                g_fit_outer=g_fit_o, g_holder_stator=g_hs,
+                                g_holder_air=g_a)}
         reports.append({"end": nm, "card": card.get("name"), "P_friction_W": p_w,
                         "delta": delta,
                         "bearing": brg, "film": film,
@@ -671,7 +747,8 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
     return {"ends": out_ends, "t_bearing_max_c": t_max,
             "delta": {k: round(sum(float(d.get(k) or 0.0) for d in _dl), 6)
                       for k in ("G_rotor_air_W_per_K", "G_rotor_stator_W_per_K",
-                                "G_stator_air_W_per_K")},
+                                "G_stator_air_W_per_K", "P_to_rotor_W",
+                                "P_to_stator_W", "P_to_air_W")},
             "shaft_to_bearings_W": round(sum(e["shaft_to_bearing_W"] for e in out_ends), 4),
             "stator_to_holders_W": round(sum(e["stator_to_holder_W"] for e in out_ends), 4),
             "holders_to_air_W": round(sum(e["holder_to_air_W"] for e in out_ends), 4),

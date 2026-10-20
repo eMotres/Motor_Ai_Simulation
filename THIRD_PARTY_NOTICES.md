@@ -124,6 +124,13 @@ BSD-3-Clause 18, and one each of MIT AND ISC (victory-vendor), Zlib, 0BSD and
 MIT (webgl-constants, licence file only). No copyleft or non-commercial
 licence.
 
+The 3-D viewer decodes the compressed GLBs with three's bundled `MeshoptDecoder`
+(`three/examples/jsm/libs/meshopt_decoder.module.js`, part of meshoptimizer, MIT,
+copyright Arseny Kapoulkine). The CAD image (`deploy/Dockerfile.cad`) builds the
+`gltfpack` program of meshoptimizer 1.3 (MIT) from its release source and runs it
+as a separate program on the generated GLBs; its licence text ships in the image at
+`/usr/local/share/doc/gltfpack/LICENSE.md`.
+
 Development-only tools (pytest, black, ruff, mypy, Vite, TypeScript, ESLint)
 are not distributed with the software and are not listed.
 

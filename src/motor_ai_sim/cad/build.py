@@ -20,6 +20,8 @@ Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the 
   <motor_id>_simplified.json   mounting interface, board terminals and the mass.  Written for every config, full and frameless alike.
   <motor_id>_full.glb          the model for the web viewer (one coloured node per part): viewing is open to every signed-in user who
                                may see the motor; the STEP download (<motor_id>_active.step) is for NDA accounts and the owner
+  <motor_id>_full.meshopt.glb  the VIEWER copies the browser loads (gltfpack: meshopt-compressed, ~5x smaller, same node tree; see
+  <motor_id>_simplified.meshopt.glb  viewer_pack.py); written when gltfpack is there, else the canonical GLBs are served
   params.json                  the FreeCAD profile built from the store (what the template was fed)
   pull_report.json             simulation vs CAD parameter table
   build_report.json / step_check.json / gui_report.json / gui_check.json
@@ -36,7 +38,7 @@ import sys
 import time
 
 from . import manifest as mf
-from . import runner, store
+from . import runner, store, viewer_pack
 
 SCRIPTS = os.path.join(store.CAD_DIR, "fc_scripts")
 DEFAULT_OUT_ROOT = "/srv/motres/shared/cad"
@@ -196,6 +198,13 @@ def build(args):
             simp = _simplified(work, mid, fcstd, args)
             if simp.get("ok"):
                 _simplified_mass(work, mid, bom_info)
+        vpack = None
+        if not args.no_viewer_pack and (models3d or (simp and simp.get("ok"))):
+            vpack = viewer_pack.pack_dir(work, mid)              # never refuses the build: the routes fall back to the canonical GLBs
+            for n, r in vpack["skipped"].items():
+                print("viewer copy %s not written: %s" % (n, r["message"]))
+            if vpack.get("message"):
+                print(vpack["message"])
         build_report = _read(os.path.join(work, "build_report.json"))
         step_check = _read(os.path.join(work, "step_check.json"))
         gui_report = _read(os.path.join(work, "gui_report.json"))
@@ -208,6 +217,7 @@ def build(args):
             names += bom_info["files"] + [mid + "_bom_model_dump.json"]
         if simp and simp.get("ok"):
             names += [mid + "_simplified.step", mid + "_simplified.glb", mid + "_simplified.json", mid + "_simplified_report.json"]
+        names += viewer_pack.produced(vpack)
         m = mf.build_manifest(eff, pj, pull, build_report, step_check, mf.file_rows(work, names),
                               build_report.get("freecad_version") or step_check.get("freecad_version"),
                               round(time.time() - t0, 1), kind=kind)
@@ -217,6 +227,7 @@ def build(args):
         m["bom"] = bom_info
         m["models3d"] = models3d
         m["simplified"] = simp
+        m["viewer_pack"] = vpack
         _write(os.path.join(work, "manifest.json"), m)
         if os.path.exists(out_dir):
             old = out_dir + ".old-%d" % os.getpid()
@@ -244,9 +255,29 @@ def back(args):
     return 0
 
 
+def pack(args):
+    """Re-pack the viewer copies of models that are already built (no FreeCAD): after a new gltfpack or for models built without it."""
+    root = args.out_root or DEFAULT_OUT_ROOT
+    rows = viewer_pack.repack_root(root, die=args.die, config=args.config)
+    bad = 0
+    for d, c, info in rows:
+        sizes = ", ".join("%s %.2f -> %.2f MB" % (n.rsplit("_", 1)[-1], r["bytes_in"] / 1e6, r["bytes_out"] / 1e6) for n, r in info["files"].items())
+        print("%s/%s: %s%s" % (d, c, sizes or "nothing packed",
+                               "".join("; %s NOT written: %s" % (n, r["message"]) for n, r in info["skipped"].items())
+                               + ("; " + info["message"] if info.get("message") else "")))
+        bad += not info["ok"]
+    if not rows:
+        print("no built model under %s" % root)
+    return 3 if bad or not rows else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("build", "back", "-h", "--help"):
+    if argv[:1] == ["pack-selftest"]:                        # image build check (deploy/Dockerfile.cad)
+        ok, msg = viewer_pack.selftest()
+        print(msg)
+        return 0 if ok else 3
+    if not argv or argv[0] not in ("build", "back", "pack", "-h", "--help"):
         argv.insert(0, "build")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -270,6 +301,7 @@ def main(argv=None):
     b.add_argument("--no-bom", action="store_true", help="skip the bill of materials (<motor_id>_BOM.csv / .xlsx)")
     b.add_argument("--no-simplified", action="store_true", help="skip the simplified envelope-only model (<motor_id>_simplified.step / .glb / .json)")
     b.add_argument("--no-models", action="store_true", help="skip the 3D-viewer model (<motor_id>_full.glb)")
+    b.add_argument("--no-viewer-pack", action="store_true", help="do not write the compressed viewer copies (<motor_id>_*.meshopt.glb)")
     b.add_argument("--dry-run", action="store_true", help="only write params.json / pull_report.json")
     b.add_argument("--normal-priority", action="store_true", help="do not lower the FreeCAD process priority")
     b.add_argument("-v", "--verbose", action="store_true")
@@ -277,9 +309,15 @@ def main(argv=None):
     k.add_argument("--fcstd", required=True)
     k.add_argument("--propose", action="store_true")
     k.add_argument("--out-dir", help="where the review files go (default ./sync)")
+    q = sub.add_parser("pack", help="re-pack the compressed viewer GLBs of built models in place (no FreeCAD; manifest updated)")
+    q.add_argument("--out-root", help="default %s" % DEFAULT_OUT_ROOT)
+    q.add_argument("--die", help="only this die")
+    q.add_argument("--config", help="only this config")
     a = ap.parse_args(argv)
     if a.cmd == "back":
         return back(a)
+    if a.cmd == "pack":
+        return pack(a)
     return build(a)
 
 

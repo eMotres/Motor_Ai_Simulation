@@ -109,7 +109,7 @@ def _migrate_role(rec: dict) -> str:
 #: success; only `store_unavailable` is NOT the client's fault and must never
 #: cost the user their session.
 REASONS = ("ok", "expired", "bad_signature", "malformed", "unknown_user",
-           "disabled", "revoked", "store_unavailable")
+           "disabled", "revoked", "idle_timeout", "store_unavailable")
 
 
 @dataclasses.dataclass
@@ -1387,8 +1387,19 @@ def verify_token(token: str, *, renew: bool = False) -> TokenResult:
             return TokenResult("store_unavailable", email=email, sid=sid, exp=exp)
         # A token whose session the readable registry does not know is refused like a revoked one (security
         # audit 2026-10-18): revocations live in the registry, so an unknown sid cannot be shown to be live.
-        if not isinstance(rec, dict) or rec.get("revoked"):
+        if not isinstance(rec, dict):
             return TokenResult("revoked", email=email, sid=sid, exp=exp)
+        if rec.get("revoked"):
+            # A session closed for idling keeps saying so, so every later request with its token gets the
+            # distinct reason (the app shows "signed out after 30 minutes") and not a generic "revoked".
+            return TokenResult("idle_timeout" if rec.get("revoked_reason") == S.IDLE_REASON else "revoked",
+                               email=email, sid=sid, exp=exp)
+        # Idle expiry of a WEB session (sessions.py docstring): only when no user activity AND no computation of
+        # the account for the idle limit.  Agent tokens / API keys never reach this registry.
+        from motor_ai_sim import session_activity as _SA
+        if S.check_idle(sid, rec, activity=_SA.request_is_activity()):
+            return TokenResult("idle_timeout", email=email, sid=sid, exp=exp)
+        S.maybe_sweep_idle()
 
     renewed = None
     if renew and exp and (exp - time.time()) < RENEW_WINDOW_S:

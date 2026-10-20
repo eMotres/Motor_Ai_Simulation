@@ -86,6 +86,8 @@
     "live": {
       "title": "实时动态",
       "totalOnline": "{total} 人在线（{signedIn} 已登录，{anonymous} 匿名）",
+      "sessionsLine": "当前活跃（5 分钟）：{active} · 打开的会话：{open}",
+      "sessionsTip": "最近 5 分钟内有用户操作的已登录会话数，以及仍处于打开状态的网页会话数。会话在 {minutes} 分钟无操作且无计算运行后关闭。",
       "autoRefresh": "每 10 秒自动刷新",
       "loading": "正在加载实时数据…",
       "error": "无法加载实时统计数据。",

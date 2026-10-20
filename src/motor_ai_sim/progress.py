@@ -591,6 +591,29 @@ class ProgressRegistry:
                     if not e.is_default
                     and (is_admin or not owner or e.owner == owner)]
 
+    def owner_state(self, owner: str) -> "tuple[bool, float]":
+        """``(busy, last_end)`` for one account: is any of its runs in flight, and when did the newest
+        finished one end (0 = unknown)?  Touches nothing (session idle check, ``session_activity``)."""
+        want = str(owner or "").strip().lower()
+        busy, last_end = False, 0.0
+        if not want:
+            return busy, last_end
+        with self._lock:
+            entries = [e for e in self._e.values()
+                       if not e.is_default and str(e.owner or "").strip().lower() == want]
+        for e in entries:
+            if e.running:
+                busy = True
+                continue
+            try:
+                snap = e.snapshot()
+                t0 = float(snap.get("ts_start") or 0.0)
+                if t0 > 0:
+                    last_end = max(last_end, t0 + float(snap.get("elapsed_s") or 0.0))
+            except Exception:                               # noqa: BLE001 - an end time is a nicety
+                pass
+        return busy, last_end
+
     def clear(self) -> None:
         with self._lock:
             self._e.clear()

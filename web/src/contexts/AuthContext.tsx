@@ -5,12 +5,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
-import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
+import { AUTH_IDLE_EVENT, installFetchAuth, setTokenGetter } from '../lib/apiAuth';
 import {
   clearSession, getStoredToken, getStoredUser, isGisLoaded, loadGis, storeSession,
   setSessionRole, serverLogout, updateToken, GOOGLE_CLIENT_ID, type SessionUser,
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
+import IdleSignedOutNotice from '../components/auth/IdleSignedOutNotice';
 import { pendingEmailLink, requestedAuthMode } from '../lib/localAuth';
 import { meFailureAction, meResponseUsable, meRetryDelayMs } from '../lib/authFallback';
 import { isProductionLinkPath } from '../lib/productionLink';
@@ -145,6 +146,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // the session is kept and retried, so the user needs to know only that the
   // pause is ours and temporary.
   const [storeBusy, setStoreBusy] = useState(false);
+  // One short line when the server closed the session for idling (30 min without use, sessions.py).
+  const [idleClosed, setIdleClosed] = useState(false);
 
   // Ask the backend who we are (the fetch interceptor attaches the token).
   // Also our expiry check: a token the backend SAW and refused (expired / user
@@ -201,7 +204,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const stored = getStoredToken();
       const rejected = j.tokenRejected === true
         || (j.tokenRejected === undefined && j.tokenPresented === undefined && stored && !j.email);
-      if (stored && rejected) { clearSession(String(j.authError ?? 'rejected'), j); setUser(null); }
+      if (stored && rejected) {
+        clearSession(String(j.authError ?? 'rejected'), j); setUser(null);
+        if (j.authError === 'idle_timeout') setIdleClosed(true);
+      }
       else if (stored && !j.email) {
         // eslint-disable-next-line no-console
         console.warn('[auth] /api/me answered anonymous but our token was not '
@@ -226,10 +232,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     void loadRole();
   }, [loadRole]);
 
+  // Any answer carrying X-Auth-Reason: idle_timeout for the CURRENT token (lib/apiAuth.ts) ends the session the
+  // way a normal sign-out does (token + user forgotten, nothing else wiped) and shows one line with a Sign in button.
+  useEffect(() => {
+    const onIdle = () => {
+      if (!getStoredToken()) return;
+      clearSession('idle_timeout');
+      setUser(null);
+      setIdleClosed(true);
+      void loadRoleRef.current?.();
+    };
+    window.addEventListener(AUTH_IDLE_EVENT, onIdle);
+    return () => window.removeEventListener(AUTH_IDLE_EVENT, onIdle);
+  }, []);
+
   const onSignedIn = useCallback((token: string, u: SessionUser) => {
     storeSession(token, u);
     setUser(toAuthUser(u));
     setLoginOpen(false);
+    setIdleClosed(false);
     void loadRole();
   }, [loadRole]);
 
@@ -259,6 +280,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn}
         initialMode={loginOpts.mode} initialTab={loginOpts.tab} returnTo={loginOpts.returnTo} />
+      <IdleSignedOutNotice open={idleClosed && !user} onClose={() => setIdleClosed(false)}
+        onSignIn={() => { setIdleClosed(false); void signIn(); }} />
       <Snackbar open={storeBusy} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
         <Alert severity="warning" variant="outlined" sx={{ fontSize: 12, py: 0.25 }}>
           Auth store busy — retrying, your session is kept.

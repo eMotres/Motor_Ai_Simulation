@@ -151,6 +151,8 @@
     }
   },
   "auth": {
+    "idleClosed": "Signed out after {minutes} minutes without activity",
+    "idleClosedTip": "A session closes after {minutes} minutes with no activity and no computation running. Computations already started keep running.",
     "title": {
       "signin": "Sign in",
       "register": "Create account",

@@ -151,6 +151,8 @@
     }
   },
   "auth": {
+    "idleClosed": "已因 {minutes} 分钟无操作退出登录",
+    "idleClosedTip": "会话在 {minutes} 分钟内无任何操作且没有正在运行的计算时自动关闭。已启动的计算会继续运行。",
     "title": {
       "signin": "登录",
       "register": "创建账户",

@@ -140,6 +140,15 @@ export const LiveAnalyticsCard: React.FC = () => {
         </Box>
       </Box>
 
+      {/* Exact "active now": sessions with user input in the last 5 min, and open (not idle-closed) sessions */}
+      {data?.sessions && (
+        <Tooltip title={t('analytics.live.sessionsTip', { minutes: Math.round((data.sessions.idle_timeout_s || 0) / 60) })}>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-1)', mb: 1.25, display: 'inline-block' }}>
+            {t('analytics.live.sessionsLine', { active: data.sessions.active_sessions, open: data.sessions.open_sessions })}
+          </Typography>
+        </Tooltip>
+      )}
+
       {/* States */}
       {state === 'loading' && !data && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>

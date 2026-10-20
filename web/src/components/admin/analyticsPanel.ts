@@ -55,6 +55,8 @@ export interface LiveAnalyticsPayload {
   active_users: LiveUser[];
   anonymous: LiveAnonymous;
   events: LiveEvent[];
+  /** From the session registry (sessions.live_counts): sessions with user input in the last 5 minutes, open web sessions. */
+  sessions?: { active_sessions: number; active_accounts: number; open_sessions: number; window_s: number; idle_timeout_s: number };
   cached_at: number;
 }
 

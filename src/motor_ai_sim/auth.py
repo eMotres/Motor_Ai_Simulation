@@ -667,7 +667,10 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
 
     # A token that is definitively OURS and definitively bad — do not waste a
     # Google round trip on it, and say so.
-    if res.reason in ("expired", "revoked", "disabled", "unknown_user"):
+    if res.reason in ("expired", "revoked", "disabled", "unknown_user", "idle_timeout"):
+        if res.reason == "idle_timeout":
+            from motor_ai_sim import session_activity as _sa
+            _sa.note_auth_reason("idle_timeout")             # the response says so (X-Auth-Reason)
         _report_reject(res.reason, res.email, res.sid, ip, user_agent, path)
         return _out(None, res.reason, sid=res.sid, email=res.email)
 
@@ -745,6 +748,17 @@ def _deploy_loopback(request: Request) -> bool:
     return False
 
 
+def _idle_reason_field() -> dict:
+    """``{"reason": "idle_timeout"}`` when the token of THIS request was refused for idling, else ``{}``."""
+    from motor_ai_sim import session_activity as _sa
+    r = _sa.current_request()
+    return {"reason": "idle_timeout"} if r is not None and r.reason == "idle_timeout" else {}
+
+
+def _gate_401(detail: str, need: str) -> dict:
+    return {"detail": detail, "required_role": need, "your_role": "anon", **_idle_reason_field()}
+
+
 class RoleGateMiddleware(BaseHTTPMiddleware):
     """Two gates, one place, in this order:
 
@@ -777,11 +791,7 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
                 if closed and user is None and not _has_service_token(_authz):
                     return JSONResponse(
                         status_code=401,
-                        content={
-                            "detail": "Sign in to use this server.",
-                            "required_role": need or "user",
-                            "your_role": "anon",
-                        },
+                        content=_gate_401("Sign in to use this server.", need or "user"),
                     )
                 if need is not None:
                     role = user["role"] if user else "anon"
@@ -797,6 +807,7 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
                                 ),
                                 "required_role": need,
                                 "your_role": role,
+                                **_idle_reason_field(),
                             },
                         )
         return await call_next(request)

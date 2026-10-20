@@ -579,10 +579,21 @@ def fetch_live_analytics(now: Optional[float] = None) -> dict:
     page_events = anon.pop("page_view_events", [])
     events = fetch_live_events(limit=50, page_view_events=page_events)
 
+    # 4. Web sessions from the session registry (sessions.py): user activity in the last 5 min, and open
+    #    (not idle-closed) sessions.  Idle sessions nobody returns to are closed by the sweep first.
+    try:
+        from motor_ai_sim import sessions as _S
+        _S.maybe_sweep_idle(curr)
+        sessions_live = _S.live_counts(curr)
+    except Exception:                                          # noqa: BLE001 - the card must not break
+        sessions_live = {"active_sessions": 0, "active_accounts": 0, "open_sessions": 0,
+                         "window_s": 300.0, "idle_timeout_s": 0}
+
     payload = {
         "active_users": active_users,
         "anonymous": anon,
         "events": events,
+        "sessions": sessions_live,
         "cached_at": curr,
     }
 

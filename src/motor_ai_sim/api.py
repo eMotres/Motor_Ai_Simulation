@@ -432,6 +432,9 @@ from motor_ai_sim.roles import InstanceHeaderMiddleware as _InstanceHeaderMiddle
 app.add_middleware(_InstanceHeaderMiddleware)
 from motor_ai_sim.live_status import InflightMiddleware as _InflightMiddleware
 app.add_middleware(_InflightMiddleware)
+# Idle-session context (owner 2026-10-20): which request is user activity, and X-Auth-Reason on an idle-closed token.
+from motor_ai_sim.session_activity import SessionContextMiddleware as _SessionContextMiddleware
+app.add_middleware(_SessionContextMiddleware)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

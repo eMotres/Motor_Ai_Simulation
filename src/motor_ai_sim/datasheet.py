@@ -1234,6 +1234,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     _kit = bool(_mi.get("kit"))                       # frameless kit: the "full motor mass" is the kit mass (owner 2026-10-15)
     _full_what = ("frameless kit mass (stator + coils + phase board + rotor + magnets)" if _kit else "full assembled motor mass")
     mass = ([float(_mi["full_kg"]) if (m is not None and not _partial) else m for m in mass_active])
+    mass_full_for_km = float(_mi["full_kg"]) if (not _partial and _mi.get("full_kg")) else None
 
     row("Power (kW)", P_kw, "shaft power at this point", 2, bold=True)
     row("Torque (N·m)", T_nm,
@@ -1694,10 +1695,18 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "per line amp; " + _kb + "; " + _tail20, 4)
         one("Km at 20 °C (N·m/√W)", _ct20["km_Nm_sqrtW"],
             "torque per root watt of copper; " + _kb + "; " + _tail20, 3)
-        one("Km per mass at 20 °C (N·m/(√W·kg))",
-            _ct20["km_per_mass_Nm_sqrtW_kg"],
-            "the figure of merit that survives scaling; " + _kb + "; "
-            + _tail20, 4)
+        # THE PER-MASS FIGURES ARE OVER THE FULL MASS (owner 2026-10-20): the stored per-mass number is Km over the ACTIVE mass of
+        # the cold run, so the row divides Km by the full motor mass of ``mass_info`` (the same one "Power per mass" uses);
+        # a motor with no CAD bill of materials keeps the active-mass figure and the label says "per active mass".
+        _km20 = _ct20["km_Nm_sqrtW"]
+        if not _partial and _km20 is not None and mass_full_for_km:
+            one("Km per mass at 20 °C (N·m/(√W·kg))", float(_km20) / mass_full_for_km,
+                "the figure of merit that survives scaling; over the " + _full_what + "; " + _kb + "; " + _tail20, 4)
+        else:
+            one("Km per active mass at 20 °C (N·m/(√W·kg))",
+                _ct20["km_per_mass_Nm_sqrtW_kg"],
+                "over the active parts only (full mass incomplete); the figure of merit that survives scaling; "
+                + _kb + "; " + _tail20, 4)
         # …AND THE INDUCTANCES ON THE SAME BASIS (owner 2026-09-20: *"Ld/Lq
         # also need to be given at 20 degrees and at zero current, like KV"*).  KV
         # is a no-load constant at a stated temperature; a catalogue that

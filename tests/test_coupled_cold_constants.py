@@ -269,7 +269,7 @@ def test_the_report_prints_the_four_catalogue_constants():
     labels = [r[0] for r in rows]
     assert labels[0] == "Constant"
     for want in ("KV, no load [rpm/V]", "Torque constant Kt [N·m/A rms]",
-                 "Motor constant Km [N·m/√W]", "Km per mass [N·m/(√W·kg)]",
+                 "Motor constant Km [N·m/√W]", "Km per active mass [N·m/(√W·kg)]",
                  "Phase resistance R₂₀ [mΩ]"):
         assert want in labels, (want, labels)
     cells = {r[0]: r[1] for r in rows}
@@ -293,6 +293,22 @@ def test_the_report_prints_the_four_catalogue_constants():
     # …and the point they were taken at is part of the answer.
     assert any(r[0] == "…measured at" for r in rows)
     assert cold_constants_of({"constants_20c": dict(BLOCK)}) is not None
+
+
+def test_km_per_mass_at_20c_is_over_the_full_mass_when_the_report_has_one():
+    """Owner 2026-10-20: every per-mass figure is over the FULL mass.  The stored per-mass number is Km over the cold run's
+    ACTIVE mass; with the report's full mass the row divides Km by it, without one it says "per active mass"."""
+    from motor_ai_sim.report import cold_constant_rows
+    rec = {"constants_20c": dict(BLOCK)}
+    full = {r[0]: r for r in cold_constant_rows(rec, {"mass_full_kg": 0.5, "mass_partial": False})}
+    assert "Km per mass [N·m/(√W·kg)]" in full and "Km per active mass [N·m/(√W·kg)]" not in full
+    assert "0.74" in full["Km per mass [N·m/(√W·kg)]"][1]                       # 0.37 / 0.5
+    assert "full motor mass" in full["Km per mass [N·m/(√W·kg)]"][2]
+    for em in ({"mass_full_kg": 0.5, "mass_partial": True}, {}, None):
+        part = {r[0]: r for r in cold_constant_rows(rec, em)}
+        assert "Km per active mass [N·m/(√W·kg)]" in part and "Km per mass [N·m/(√W·kg)]" not in part, em
+        assert "active parts only" in part["Km per active mass [N·m/(√W·kg)]"][2]
+        assert "0.74" in part["Km per active mass [N·m/(√W·kg)]"][1]             # the stored active-mass figure
 
 
 def test_a_duty_with_no_cold_pass_says_so_and_invents_nothing():
@@ -340,8 +356,21 @@ def test_the_datasheet_carries_the_same_four_when_a_duty_has_them(tmp_path):
     # the block's 3-D factor (k_flux here), recomputed from two_d
     assert with_["Kt at 20 °C (N·m/A rms)"] == pytest.approx(0.185, abs=1e-9)
     assert with_["Km at 20 °C (N·m/√W)"] == pytest.approx(0.37, abs=1e-9)
-    assert with_["Km per mass at 20 °C (N·m/(√W·kg))"] == pytest.approx(
-        0.74, abs=1e-9)
+    # no mass_info: the full mass is unknown here, so the row is over the ACTIVE mass and says so
+    assert "Km per mass at 20 °C (N·m/(√W·kg))" not in with_
+    assert with_["Km per active mass at 20 °C (N·m/(√W·kg))"] == pytest.approx(0.74, abs=1e-9)
+    # with the server's full mass (mass_info, the one "Power per mass" uses) Km is divided by it
+    full = _labels(build_datasheet(
+        die="D", cfg="L13", die_doc=die_doc, cfg_doc=cfg_doc,
+        coupled={"peak": {"constants_20c": dict(BLOCK)}},
+        mass_info={"full_kg": 0.5, "active_kg": 0.367, "partial": False, "kit": False, "parts": []}))
+    assert full["Km per mass at 20 °C (N·m/(√W·kg))"] == pytest.approx(0.37 / 0.5, abs=1e-9)
+    assert "Km per active mass at 20 °C (N·m/(√W·kg))" not in full
+    partial = _labels(build_datasheet(
+        die="D", cfg="L13", die_doc=die_doc, cfg_doc=cfg_doc,
+        coupled={"peak": {"constants_20c": dict(BLOCK)}},
+        mass_info={"full_kg": 0.5, "active_kg": 0.367, "partial": True, "kit": False, "parts": []}))
+    assert partial["Km per active mass at 20 °C (N·m/(√W·kg))"] == pytest.approx(0.74, abs=1e-9)
 
     without = _labels(build_datasheet(die="D", cfg="L13", die_doc=die_doc,
                                       cfg_doc=cfg_doc, coupled=None))

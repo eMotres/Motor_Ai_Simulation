@@ -7547,6 +7547,12 @@ def _inject_full_mass(em: Dict[str, Any], die: str, cfg: str) -> None:
     em["mass_full_kg"] = fm.total_kg
     em["mass_components"] = rows
     em["rotating_mass_kg"] = fm.rotating_kg
+    # the per-mass figures were derived from the run's ACTIVE mass before this swap: re-derive them over the full mass, so
+    # "Km per mass" / "Torque per mass" in the hot tables are over the mass the cover prints
+    try:
+        _em_recompute_derived(em)
+    except Exception:                                                  # noqa: BLE001 - a derived figure never fails a report
+        log.exception("full-mass per-mass figures could not be re-derived")
 
 
 def duty_em_source(die: str, cfg: str, duty: Optional[str],
@@ -11265,7 +11271,7 @@ def cold_constants_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]
     return blk if isinstance(blk, dict) and blk else None
 
 
-def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
+def cold_constant_rows(rec: Optional[Dict[str, Any]], em: Optional[Dict[str, Any]] = None) -> List[List[Any]]:
     """The catalogue table — always a table, never a silence.
 
     A duty whose cold pass was never made gets ONE row saying so and naming the
@@ -11312,8 +11318,16 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
        else "per line amp, which in star is the winding's") + _tail_t)
     R("Motor constant Km [N·m/√W]", _ct["km_Nm_sqrtW"], 3, "",
       "torque per root watt of copper, at 20 °C copper" + _tail_t)
-    R("Km per mass [N·m/(√W·kg)]", _ct["km_per_mass_Nm_sqrtW_kg"], 4, "",
-      "the figure of merit that survives scaling" + _tail_t)
+    # THE PER-MASS FIGURES ARE OVER THE FULL MASS (owner 2026-10-20): the stored per-mass number is Km over the ACTIVE mass of
+    # the cold run; the report's full motor mass (``_inject_full_mass``) is the divisor when this document has one, otherwise
+    # the active-mass figure stays and the row says "per active mass".
+    _full = _numf((em or {}).get("mass_full_kg")) if (em and not em.get("mass_partial")) else None
+    if _full and _ct["km_Nm_sqrtW"] is not None:
+        R("Km per mass [N·m/(√W·kg)]", float(_ct["km_Nm_sqrtW"]) / _full, 4, "",
+          "the figure of merit that survives scaling; over the full motor mass" + _tail_t)
+    else:
+        R("Km per active mass [N·m/(√W·kg)]", _ct["km_per_mass_Nm_sqrtW_kg"], 4, "",
+          "over the active parts only (full mass incomplete); the figure of merit that survives scaling" + _tail_t)
     R("Phase resistance R₂₀ [mΩ]",
       (lambda v: None if v is None else v * 1000.0)(
           _numf(c.get("R_phase_20_ohm"))), 3, "",
@@ -12008,7 +12022,7 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
     # would read as a machine that has no catalogue constants.
     out.append(_para("Machine constants at 20 °C (catalogue values)", st["h2"]))
     out.append(_table([[r[0], r[1], _para(r[2], st["cell"])]
-                       for r in cold_constant_rows(coupled)],
+                       for r in cold_constant_rows(coupled, em)],
                       [175, 95, CONTENT_W - 270], header=True, size=8.8))
     out.append(_para(COLD_CONSTANTS_NOTE, st["note"]))
 

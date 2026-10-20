@@ -1034,7 +1034,7 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     # printed, like the PDF's: an absent subsection would read as a machine that
     # HAS no catalogue constants, which is a different statement.
     _h(doc, "Machine constants at 20 °C (catalogue values)", 2)
-    _table(doc, R.cold_constant_rows(_coupled(D)), size=10.5,
+    _table(doc, R.cold_constant_rows(_coupled(D), em), size=10.5,
            widths_cm=[6.4, 3.6, 12.0])
     _p(doc, R.COLD_CONSTANTS_NOTE, size=9.5, italic=True, color=NOTE)
 

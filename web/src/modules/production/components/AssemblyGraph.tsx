@@ -34,7 +34,7 @@ import type { Node, Edge, NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { useContentLang } from './BilingualText';
-import { displayText } from '../helpers';
+import { DEFAULT_CURRENCY, displayText, formatMoney } from '../helpers';
 import type { AssemblyTree } from '../types';
 
 const NODE_WIDTH = 190;
@@ -64,7 +64,7 @@ const AssemblyTreeNode: React.FC<NodeProps<Node<GraphNodeData>>> = ({ data }) =>
     kind,
     qty,
     cost,
-    currency = 'CNY',
+    currency = DEFAULT_CURRENCY,
     hasCostAccess,
     isSelected,
     isCollapsed,
@@ -191,7 +191,7 @@ const AssemblyTreeNode: React.FC<NodeProps<Node<GraphNodeData>>> = ({ data }) =>
               color: isMotor || isAssembly ? '#34d399' : 'var(--text-1)',
             }}
           >
-            {cost.toFixed(2)} {currency}
+            {formatMoney(cost, currency)}
           </Typography>
         )}
       </Box>
@@ -217,6 +217,8 @@ interface AssemblyGraphProps {
   selectedPartId: string | null;
   onSelectPart: (partId: string) => void;
   hasCostAccess?: boolean;
+  /** currency of every price shown (the graph never mixes currencies) */
+  currency?: string;
   die?: string;
   config?: string;
 }
@@ -226,6 +228,7 @@ const FlowInner: React.FC<AssemblyGraphProps> = ({
   selectedPartId,
   onSelectPart,
   hasCostAccess = false,
+  currency,
   die,
   config,
 }) => {
@@ -268,6 +271,7 @@ const FlowInner: React.FC<AssemblyGraphProps> = ({
         kind: 'motor',
         cost: motorCost > 0 ? motorCost : null,
         hasCostAccess,
+        currency,
         isSelected: selectedPartId === 'motor',
         onSelect: () => onSelectPart('motor'),
       },
@@ -290,6 +294,7 @@ const FlowInner: React.FC<AssemblyGraphProps> = ({
           qty: sub.node.qty_per_motor,
           cost: sub.node.unit_price,
           hasCostAccess,
+          currency,
           isSelected,
           isCollapsed,
           childrenCount: sub.children.length,
@@ -323,6 +328,7 @@ const FlowInner: React.FC<AssemblyGraphProps> = ({
               qty: child.qty_per_motor,
               cost: child.unit_price,
               hasCostAccess,
+              currency,
               isSelected: isChildSelected,
               onSelect: () => onSelectPart(childId),
             },
@@ -340,7 +346,7 @@ const FlowInner: React.FC<AssemblyGraphProps> = ({
     }
 
     return { rawNodes: nodesList, rawEdges: edgesList };
-  }, [tree, config, die, ui, hasCostAccess, selectedPartId, collapsedSubs, handleToggleCollapse, onSelectPart]);
+  }, [tree, config, die, ui, hasCostAccess, currency, selectedPartId, collapsedSubs, handleToggleCollapse, onSelectPart]);
 
   // Compute Dagre layout
   const { layoutedNodes, layoutedEdges } = useMemo(() => {

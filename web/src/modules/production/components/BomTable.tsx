@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  InputAdornment,
   MenuItem,
   Paper,
   Table,
@@ -41,7 +42,11 @@ import {
   calcCostSummary,
   canEditCosts,
   canViewCosts,
+  currencyOptions,
+  DEFAULT_CURRENCY,
   emptyBilingual,
+  formatCurrencyAmounts,
+  formatMoney,
   formatReceiptTime,
   formatShortDate,
   getStatusColor,
@@ -53,6 +58,7 @@ import type {
   BomRow,
   CostRow,
   CostsData,
+  CurrencyTotals,
   DocumentRec,
   ExtraCost,
   Part,
@@ -232,6 +238,7 @@ const BomTable: React.FC<BomTableProps> = ({
   const [customExtraEn, setCustomExtraEn] = useState('');
   const [customExtraZh, setCustomExtraZh] = useState('');
   const [extraAmount, setExtraAmount] = useState('15');
+  const [extraCurrency, setExtraCurrency] = useState(DEFAULT_CURRENCY);
 
   useEffect(() => {
     setDraftRows(rows);
@@ -254,7 +261,7 @@ const BomTable: React.FC<BomTableProps> = ({
         const initialCostRows: CostRow[] = rows.map((r) => ({
           part_id: r.part_id,
           unit_price: r.unit_price ?? null,
-          currency: r.currency || 'CNY',
+          currency: r.currency || DEFAULT_CURRENCY,
           note: r.note || null,
         }));
         setCostRows(initialCostRows);
@@ -303,6 +310,12 @@ const BomTable: React.FC<BomTableProps> = ({
     return calcCostSummary(draftRows, priceRows, extras, marginPct, orderQuantity);
   }, [draftRows, priceRows, extras, marginPct, orderQuantity]);
 
+  // Totals per currency: "325.00 CNY", or "CNY 1 234.00 · EUR 56.00" when currencies are mixed (never one summed number)
+  const totalsText = (pick: (c: CurrencyTotals) => number) =>
+    formatCurrencyAmounts(summary.by_currency.map((c) => ({ currency: c.currency, amount: pick(c) })));
+  const summaryCurrencies = summary.by_currency.map((c) => c.currency).join(', ');
+  const mixedCurrencies = summary.by_currency.length > 1;
+
   // Check if anything has changed
   const dirty = useMemo(() => {
     const bomChanged = draftRows.some((r, i) => {
@@ -332,7 +345,7 @@ const BomTable: React.FC<BomTableProps> = ({
         next[idx] = { ...next[idx], unit_price: num !== null && !isNaN(num) ? num : null };
         return next;
       }
-      return [...prev, { part_id: partId, unit_price: num !== null && !isNaN(num) ? num : null, currency: 'CNY', note: null }];
+      return [...prev, { part_id: partId, unit_price: num !== null && !isNaN(num) ? num : null, currency: DEFAULT_CURRENCY, note: null }];
     });
   };
 
@@ -356,7 +369,7 @@ const BomTable: React.FC<BomTableProps> = ({
         next[idx] = { ...next[idx], note: noteStr };
         return next;
       }
-      return [...prev, { part_id: partId, unit_price: null, currency: 'CNY', note: noteStr }];
+      return [...prev, { part_id: partId, unit_price: null, currency: DEFAULT_CURRENCY, note: noteStr }];
     });
   };
 
@@ -383,12 +396,14 @@ const BomTable: React.FC<BomTableProps> = ({
       id: `extra_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       name,
       amount,
+      currency: extraCurrency,
     };
     setExtras((prev) => [...prev, newExtra]);
     setAddExtraOpen(false);
     setCustomExtraEn('');
     setCustomExtraZh('');
     setExtraAmount('15');
+    setExtraCurrency(DEFAULT_CURRENCY);
   };
 
   const handleDeleteExtra = (id: string) => {
@@ -410,6 +425,7 @@ const BomTable: React.FC<BomTableProps> = ({
         status: { en: 'confirmed', zh: 'confirmed' },
       },
       amount: p.defaultAmount,
+      currency: DEFAULT_CURRENCY,
     };
     setExtras((prev) => [...prev, newExtra]);
   };
@@ -494,7 +510,9 @@ const BomTable: React.FC<BomTableProps> = ({
               tree={assemblyTree}
               selectedPartId={selectedPartId}
               onSelectPart={handleGraphSelect}
-              hasCostAccess={hasCostAccess}
+              // the graph rolls prices up into one number per node: hidden while the lines use different currencies
+              hasCostAccess={hasCostAccess && !mixedCurrencies}
+              currency={summary.by_currency[0]?.currency}
               die={ctx.die}
               config={ctx.config}
             />
@@ -556,7 +574,7 @@ const BomTable: React.FC<BomTableProps> = ({
                 : '—';
 
               const unitPrice = crow?.unit_price !== undefined ? crow.unit_price : (r.unit_price ?? null);
-              const currency = crow?.currency || r.currency || 'CNY';
+              const currency = crow?.currency || r.currency || DEFAULT_CURRENCY;
               const note = crow?.note !== undefined ? crow.note : (r.note || '');
               const lineTotal = unitPrice !== null && !isNaN(unitPrice) ? unitPrice * (tooling ? r.qty_per_motor : orderQuantity) : null;
               const isSelected = selectedPartId === r.part_id;
@@ -642,24 +660,32 @@ const BomTable: React.FC<BomTableProps> = ({
                             value={unitPrice !== null ? unitPrice : ''}
                             placeholder={t('costs.missing')}
                             onChange={(e) => handleUnitPriceChange(r.part_id, e.target.value)}
+                            InputProps={{
+                              endAdornment: (
+                                <InputAdornment position="end" sx={{ ml: 0.5 }}>
+                                  <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{currency}</span>
+                                </InputAdornment>
+                              ),
+                            }}
                             sx={{
-                              width: 85,
+                              width: 135,
                               '& .MuiInputBase-input': {
                                 fontSize: 12.5,
                                 py: 0.3,
                                 textAlign: 'right',
                                 color: unitPrice === null ? '#f87171' : undefined,
                               },
+                              '& .MuiInputBase-root': { pr: 0.75 },
                             }}
                           />
                         ) : unitPrice !== null ? (
-                          unitPrice.toFixed(2)
+                          <span style={{ whiteSpace: 'nowrap' }}>{formatMoney(unitPrice, currency)}</span>
                         ) : (
                           <span style={{ color: '#f87171' }}>{t('costs.missing')}</span>
                         )}
                       </TableCell>
-                      <TableCell align="right">
-                        {lineTotal !== null ? lineTotal.toFixed(2) : '—'}
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        {formatMoney(lineTotal, currency)}
                       </TableCell>
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         {canEdit ? (
@@ -670,9 +696,7 @@ const BomTable: React.FC<BomTableProps> = ({
                             onChange={(e) => handleCurrencyChange(r.part_id, e.target.value)}
                             sx={{ width: 85, '& .MuiInputBase-input': { fontSize: 12, py: 0.3 } }}
                           >
-                            <MenuItem value="CNY">CNY</MenuItem>
-                            <MenuItem value="USD">USD</MenuItem>
-                            <MenuItem value="EUR">EUR</MenuItem>
+                            {currencyOptions(currency).map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
                           </TextField>
                         ) : (
                           currency
@@ -705,6 +729,7 @@ const BomTable: React.FC<BomTableProps> = ({
               const isSelected = selectedExtraId === extra.id;
               const extraName = ui === 'zh' ? (extra.name.zh || extra.name.en) : (extra.name.en || extra.name.zh);
               const extraOrderTotal = (extra.amount || 0) * orderQuantity;
+              const extraCur = extra.currency || DEFAULT_CURRENCY;
 
               return (
                 <TableRow
@@ -755,30 +780,35 @@ const BomTable: React.FC<BomTableProps> = ({
                         type="number"
                         value={extra.amount}
                         onChange={(e) => handleExtraAmountChange(extra.id, e.target.value)}
-                        sx={{ width: 85, '& .MuiInputBase-input': { fontSize: 12.5, py: 0.3, textAlign: 'right' } }}
+                        InputProps={{
+                          endAdornment: (
+                            <InputAdornment position="end" sx={{ ml: 0.5 }}>
+                              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{extraCur}</span>
+                            </InputAdornment>
+                          ),
+                        }}
+                        sx={{ width: 135, '& .MuiInputBase-input': { fontSize: 12.5, py: 0.3, textAlign: 'right' }, '& .MuiInputBase-root': { pr: 0.75 } }}
                       />
                     ) : (
-                      extra.amount.toFixed(2)
+                      <span style={{ whiteSpace: 'nowrap' }}>{formatMoney(extra.amount, extraCur)}</span>
                     )}
                   </TableCell>
-                  <TableCell align="right">
-                    {extraOrderTotal.toFixed(2)}
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                    {formatMoney(extraOrderTotal, extraCur)}
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     {canEdit ? (
                       <TextField
                         select
                         size="small"
-                        value={extra.currency || 'CNY'}
+                        value={extraCur}
                         onChange={(e) => handleExtraFieldChange(extra.id, { currency: e.target.value })}
                         sx={{ width: 85, '& .MuiInputBase-input': { fontSize: 12, py: 0.3 } }}
                       >
-                        <MenuItem value="CNY">CNY</MenuItem>
-                        <MenuItem value="USD">USD</MenuItem>
-                        <MenuItem value="EUR">EUR</MenuItem>
+                        {currencyOptions(extraCur).map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
                       </TextField>
                     ) : (
-                      extra.currency || 'CNY'
+                      extraCur
                     )}
                   </TableCell>
                   <TableCell sx={{ color: 'var(--text-2)' }} onClick={(e) => e.stopPropagation()}>
@@ -838,7 +868,7 @@ const BomTable: React.FC<BomTableProps> = ({
                             color: 'var(--text-2)',
                           }}
                         >
-                          + {ui === 'zh' ? p.zh : p.en} ({p.defaultAmount} CNY)
+                          + {ui === 'zh' ? p.zh : p.en} ({formatMoney(p.defaultAmount, DEFAULT_CURRENCY)})
                         </Button>
                       );
                     })}
@@ -865,13 +895,13 @@ const BomTable: React.FC<BomTableProps> = ({
                   <TableCell colSpan={9} sx={{ fontWeight: 600, color: 'var(--text-1)', pl: 2 }}>
                     {t('costs.partsSubtotal')}
                   </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)' }}>
-                    {summary.parts_subtotal.toFixed(2)}
+                  <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                    {totalsText((c) => c.parts_subtotal)}
                   </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)' }}>
-                    {summary.order_parts_total.toFixed(2)}
+                  <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                    {totalsText((c) => c.order_parts_total)}
                   </TableCell>
-                  <TableCell sx={{ color: 'var(--text-2)' }}>CNY</TableCell>
+                  <TableCell sx={{ color: 'var(--text-2)' }}>{summaryCurrencies}</TableCell>
                   <TableCell colSpan={3} sx={{ color: 'var(--text-4)' }}>—</TableCell>
                 </TableRow>
 
@@ -881,13 +911,13 @@ const BomTable: React.FC<BomTableProps> = ({
                     <TableCell colSpan={9} sx={{ fontWeight: 600, color: 'var(--text-1)', pl: 2 }}>
                       {t('costs.extraSubtotal')}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)' }}>
-                      {summary.extra_subtotal.toFixed(2)}
+                    <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                      {totalsText((c) => c.extra_subtotal)}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)' }}>
-                      {summary.order_extra_total.toFixed(2)}
+                    <TableCell align="right" sx={{ fontWeight: 600, color: 'var(--text-0)', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                      {totalsText((c) => c.order_extra_total)}
                     </TableCell>
-                    <TableCell sx={{ color: 'var(--text-2)' }}>CNY</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)' }}>{summaryCurrencies}</TableCell>
                     <TableCell colSpan={3} sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   </TableRow>
                 )}
@@ -897,13 +927,13 @@ const BomTable: React.FC<BomTableProps> = ({
                   <TableCell colSpan={9} sx={{ fontWeight: 700, color: 'var(--text-0)', pl: 2 }}>
                     {t('costs.costPerMotor')}
                   </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, color: 'var(--text-0)' }}>
-                    {summary.cost_per_motor.toFixed(2)}
+                  <TableCell align="right" sx={{ fontWeight: 700, color: 'var(--text-0)', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                    {totalsText((c) => c.cost_per_motor)}
                   </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, color: 'var(--text-0)' }}>
-                    {summary.order_cost_total.toFixed(2)}
+                  <TableCell align="right" sx={{ fontWeight: 700, color: 'var(--text-0)', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                    {totalsText((c) => c.order_cost_total)}
                   </TableCell>
-                  <TableCell sx={{ color: 'var(--text-2)' }}>CNY</TableCell>
+                  <TableCell sx={{ color: 'var(--text-2)' }}>{summaryCurrencies}</TableCell>
                   <TableCell colSpan={3} sx={{ color: 'var(--text-4)' }}>—</TableCell>
                 </TableRow>
 
@@ -940,13 +970,13 @@ const BomTable: React.FC<BomTableProps> = ({
                   <TableCell colSpan={9} sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399', pl: 2 }}>
                     {t('costs.pricePerMotor')}
                   </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399' }}>
-                    {summary.price_per_motor.toFixed(2)}
+                  <TableCell align="right" sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                    {totalsText((c) => c.price_per_motor)}
                   </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399' }}>
-                    {summary.order_price_total.toFixed(2)}
+                  <TableCell align="right" sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399', whiteSpace: mixedCurrencies ? 'normal' : 'nowrap' }}>
+                    {totalsText((c) => c.order_price_total)}
                   </TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#34d399' }}>CNY</TableCell>
+                  <TableCell sx={{ fontWeight: 700, color: '#34d399' }}>{summaryCurrencies}</TableCell>
                   <TableCell colSpan={3} sx={{ color: 'var(--text-4)' }}>—</TableCell>
                 </TableRow>
               </>
@@ -1020,7 +1050,7 @@ const BomTable: React.FC<BomTableProps> = ({
         <Box sx={{ mt: 1.5 }}>
           <ExtraDetailPanel
             extra={selectedExtra}
-            currency="CNY"
+            currency={selectedExtra.currency || DEFAULT_CURRENCY}
             onClose={() => setSelectedExtraId(null)}
           />
         </Box>
@@ -1067,10 +1097,19 @@ const BomTable: React.FC<BomTableProps> = ({
           <TextField
             size="small"
             type="number"
-            label={`${t('costs.amount')} (CNY)`}
+            label={`${t('costs.amount')} (${extraCurrency})`}
             value={extraAmount}
             onChange={(e) => setExtraAmount(e.target.value)}
           />
+          <TextField
+            select
+            size="small"
+            label={t('bom.currency')}
+            value={extraCurrency}
+            onChange={(e) => setExtraCurrency(e.target.value)}
+          >
+            {currencyOptions(extraCurrency).map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+          </TextField>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button size="small" onClick={() => setAddExtraOpen(false)} sx={{ textTransform: 'none' }}>

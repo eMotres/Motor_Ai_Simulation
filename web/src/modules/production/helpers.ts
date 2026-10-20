@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, ExtraCost, Lang, Member, Part, Production, Revision, TranslationStatus,
+  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, Production, Revision, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -131,6 +131,57 @@ export const canViewCosts = (role: CallerRole, shareWithOem = false): boolean =>
 export const canEditCosts = (role: CallerRole): boolean =>
   role === 'owner' || role === 'engineer' || role === 'admin';
 
+// -- money ----------------------------------------------------------------------------------------------------------------
+
+/** Currency of a price line that names none. */
+export const DEFAULT_CURRENCY = 'CNY';
+/** Currencies offered in the editing dropdown (a currency already stored on a line is always offered too). */
+export const KNOWN_CURRENCIES: readonly string[] = ['CNY', 'USD', 'EUR'];
+/** U+2009 THIN SPACE: the thousands separator in every locale (EN and zh-CN read the same). */
+export const THIN_SPACE = ' ';
+
+/** "1234.5" -> "1 234.50" (2 decimals, thin-space thousands, locale independent). Non-finite -> "—". */
+export function formatAmount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  const fixed = Math.abs(value).toFixed(2);
+  const [int, frac] = fixed.split('.');
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, THIN_SPACE);
+  const negative = value < 0 && Number(fixed) !== 0;
+  return `${negative ? '-' : ''}${grouped}.${frac}`;
+}
+
+/** "325.00 CNY"; the amount alone ("—") when it is missing. */
+export function formatMoney(value: number | null | undefined, currency?: string | null): string {
+  const amount = formatAmount(value);
+  if (amount === '—') return amount;
+  return `${amount} ${currency || DEFAULT_CURRENCY}`;
+}
+
+/** Orders currency codes: the known ones first (CNY, USD, EUR), then the rest alphabetically. */
+export function compareCurrencies(a: string, b: string): number {
+  const ia = KNOWN_CURRENCIES.indexOf(a);
+  const ib = KNOWN_CURRENCIES.indexOf(b);
+  if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * One amount per currency: "325.00 CNY" when only one currency is in use,
+ * "CNY 1 234.00 · EUR 56.00" when they are mixed (never one summed number).
+ */
+export function formatCurrencyAmounts(items: ReadonlyArray<{ currency: string; amount: number }>): string {
+  if (items.length === 0) return '—';
+  if (items.length === 1) return formatMoney(items[0].amount, items[0].currency);
+  return items.map((i) => `${i.currency} ${formatAmount(i.amount)}`).join(' · ');
+}
+
+/** Options for a currency dropdown: the known ones plus the line's own currency when it is something else. */
+export function currencyOptions(current?: string | null): string[] {
+  const list = [...KNOWN_CURRENCIES];
+  if (current && !list.includes(current)) list.push(current);
+  return list;
+}
+
 export function calcCostSummary(
   bomRows: readonly BomRow[],
   costRows: readonly CostRow[],
@@ -142,41 +193,59 @@ export function calcCostSummary(
   const margin = Math.max(0, Math.min(99.99, Number.isFinite(marginPct) ? marginPct : 0));
   const costMap = new Map(costRows.map((r) => [r.part_id, r]));
 
-  let partsSubtotal = 0;
+  // Amounts are summed per currency only: CNY and EUR are never added into one number.
+  const parts = new Map<string, number>();
+  const extra = new Map<string, number>();
   let missingPricesCount = 0;
 
   for (const br of bomRows) {
     const cr = costMap.get(br.part_id);
     const p = cr ? cr.unit_price : br.unit_price;
     if (p !== null && p !== undefined && Number.isFinite(p)) {
-      partsSubtotal += p;
+      const cur = (cr?.currency || br.currency || DEFAULT_CURRENCY);
+      parts.set(cur, (parts.get(cur) ?? 0) + p);
     } else {
       missingPricesCount += 1;
     }
   }
 
-  const extraSubtotal = extras.reduce((sum, e) => sum + (Number.isFinite(e.amount) ? Math.max(0, e.amount) : 0), 0);
-  const costPerMotor = partsSubtotal + extraSubtotal;
-  const priceFactor = 1 - margin / 100;
-  const pricePerMotor = priceFactor > 0 ? costPerMotor / priceFactor : costPerMotor;
+  for (const e of extras) {
+    const cur = e.currency || DEFAULT_CURRENCY;
+    extra.set(cur, (extra.get(cur) ?? 0) + (Number.isFinite(e.amount) ? Math.max(0, e.amount) : 0));
+  }
 
+  const currencies = [...new Set([...parts.keys(), ...extra.keys()])].sort(compareCurrencies);
+  if (currencies.length === 0) currencies.push(DEFAULT_CURRENCY);
+
+  const priceFactor = 1 - margin / 100;
   const round2 = (v: number) => Math.round(v * 100) / 100;
+  const by_currency: CurrencyTotals[] = currencies.map((currency) => {
+    const partsSubtotal = parts.get(currency) ?? 0;
+    const extraSubtotal = extra.get(currency) ?? 0;
+    const costPerMotor = partsSubtotal + extraSubtotal;
+    const pricePerMotor = priceFactor > 0 ? costPerMotor / priceFactor : costPerMotor;
+    return {
+      currency,
+      parts_subtotal: round2(partsSubtotal),
+      extra_subtotal: round2(extraSubtotal),
+      cost_per_motor: round2(costPerMotor),
+      price_per_motor: round2(pricePerMotor),
+      order_parts_total: round2(partsSubtotal * qty),
+      order_extra_total: round2(extraSubtotal * qty),
+      order_cost_total: round2(costPerMotor * qty),
+      order_price_total: round2(pricePerMotor * qty),
+    };
+  });
+
   const warnings: string[] = [];
   if (missingPricesCount > 0) {
     warnings.push(`${missingPricesCount} BOM item(s) have missing prices; parts subtotal is incomplete.`);
   }
 
   return {
-    parts_subtotal: round2(partsSubtotal),
-    extra_subtotal: round2(extraSubtotal),
-    cost_per_motor: round2(costPerMotor),
     margin_pct: round2(margin),
-    price_per_motor: round2(pricePerMotor),
     order_quantity: qty,
-    order_parts_total: round2(partsSubtotal * qty),
-    order_extra_total: round2(extraSubtotal * qty),
-    order_cost_total: round2(costPerMotor * qty),
-    order_price_total: round2(pricePerMotor * qty),
+    by_currency,
     missing_prices_count: missingPricesCount,
     warnings,
   };

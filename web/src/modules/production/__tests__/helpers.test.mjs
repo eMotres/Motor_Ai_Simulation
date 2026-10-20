@@ -137,18 +137,92 @@ t('costs: permissions and summary calculation including margin and warnings', ()
     { id: 'e1', name: { en: 'Packaging', zh: '包装', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } }, amount: 20 },
   ];
   const summary = H.calcCostSummary(bom, [], extras, 20, 10);
+  assert.equal(summary.by_currency.length, 1);
+  const c = summary.by_currency[0];
+  assert.equal(c.currency, 'CNY');
   // parts subtotal = 100 + 50 = 150
-  assert.equal(summary.parts_subtotal, 150);
-  assert.equal(summary.extra_subtotal, 20);
-  assert.equal(summary.cost_per_motor, 170);
+  assert.equal(c.parts_subtotal, 150);
+  assert.equal(c.extra_subtotal, 20);
+  assert.equal(c.cost_per_motor, 170);
   // price = 170 / (1 - 0.20) = 170 / 0.8 = 212.5
-  assert.equal(summary.price_per_motor, 212.5);
-  assert.equal(summary.order_parts_total, 1500);
-  assert.equal(summary.order_extra_total, 200);
-  assert.equal(summary.order_cost_total, 1700);
-  assert.equal(summary.order_price_total, 2125);
+  assert.equal(c.price_per_motor, 212.5);
+  assert.equal(c.order_parts_total, 1500);
+  assert.equal(c.order_extra_total, 200);
+  assert.equal(c.order_cost_total, 1700);
+  assert.equal(c.order_price_total, 2125);
   assert.equal(summary.missing_prices_count, 1);
   assert.equal(summary.warnings.length, 1);
+});
+
+t('formatAmount: 2 decimals, thin-space thousands, the same in every locale', () => {
+  const T = ' ';
+  assert.equal(H.formatAmount(325), '325.00');
+  assert.equal(H.formatAmount(3.25), '3.25');
+  assert.equal(H.formatAmount(1234), `1${T}234.00`);
+  assert.equal(H.formatAmount(1234567.891), `1${T}234${T}567.89`);
+  assert.equal(H.formatAmount(999.999), `1${T}000.00`);
+  assert.equal(H.formatAmount(0), '0.00');
+  assert.equal(H.formatAmount(-1234.5), `-1${T}234.50`);
+  assert.equal(H.formatAmount(-0.001), '0.00');
+  assert.equal(H.formatAmount(null), '—');
+  assert.equal(H.formatAmount(undefined), '—');
+  assert.equal(H.formatAmount(NaN), '—');
+});
+
+t('formatMoney / formatCurrencyAmounts: the currency code travels with the amount', () => {
+  const T = ' ';
+  const N = ' ';
+  assert.equal(H.formatMoney(325, 'CNY'), `325.00${N}CNY`);
+  assert.equal(H.formatMoney(325), `325.00${N}CNY`); // default currency
+  assert.equal(H.formatMoney(12.5, 'EUR'), `12.50${N}EUR`);
+  assert.equal(H.formatMoney(null, 'EUR'), '—');
+  assert.equal(H.formatCurrencyAmounts([]), '—');
+  assert.equal(H.formatCurrencyAmounts([{ currency: 'USD', amount: 1234 }]), `1${T}234.00${N}USD`);
+  assert.equal(
+    H.formatCurrencyAmounts([{ currency: 'CNY', amount: 1234 }, { currency: 'EUR', amount: 56 }]),
+    `CNY${N}1${T}234.00 · EUR${N}56.00`,
+  );
+  assert.deepEqual(H.currencyOptions('USD'), ['CNY', 'USD', 'EUR']);
+  assert.deepEqual(H.currencyOptions('JPY'), ['CNY', 'USD', 'EUR', 'JPY']);
+  assert.deepEqual(H.currencyOptions(), ['CNY', 'USD', 'EUR']);
+});
+
+t('calcCostSummary: mixed currencies give one subtotal per currency, never one summed number', () => {
+  const bom = [
+    { part_id: 'a', qty_per_motor: 1, order_total: 100, unit_price: 3.25 },
+    { part_id: 'b', qty_per_motor: 1, order_total: 100, unit_price: 10 },
+    { part_id: 'c', qty_per_motor: 1, order_total: 100, unit_price: 5 },
+    { part_id: 'd', qty_per_motor: 1, order_total: 100, unit_price: null },
+  ];
+  const costs = [
+    { part_id: 'a', unit_price: 3.25, currency: 'CNY', note: null },
+    { part_id: 'b', unit_price: 10, currency: 'EUR', note: null },
+    { part_id: 'c', unit_price: 5, currency: 'CNY', note: null },
+  ];
+  const extras = [
+    { id: 'e1', name: { en: 'Pack', zh: '包装', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } }, amount: 4, currency: 'EUR' },
+    { id: 'e2', name: { en: 'Ship', zh: '运输', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } }, amount: 2 }, // default CNY
+    { id: 'e3', name: { en: 'Tax', zh: '税', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } }, amount: 7, currency: 'USD' },
+  ];
+  const s = H.calcCostSummary(bom, costs, extras, 50, 100);
+  assert.deepEqual(s.by_currency.map((x) => x.currency), ['CNY', 'USD', 'EUR']);
+  const by = Object.fromEntries(s.by_currency.map((x) => [x.currency, x]));
+  assert.equal(by.CNY.parts_subtotal, 8.25); // 3.25 + 5, not + 10
+  assert.equal(by.CNY.extra_subtotal, 2);
+  assert.equal(by.CNY.cost_per_motor, 10.25);
+  assert.equal(by.CNY.price_per_motor, 20.5); // 10.25 / (1 - 0.5)
+  assert.equal(by.CNY.order_price_total, 2050);
+  assert.equal(by.EUR.parts_subtotal, 10);
+  assert.equal(by.EUR.extra_subtotal, 4);
+  assert.equal(by.EUR.cost_per_motor, 14);
+  assert.equal(by.USD.parts_subtotal, 0);
+  assert.equal(by.USD.extra_subtotal, 7);
+  assert.equal(s.missing_prices_count, 1);
+  const line = H.formatCurrencyAmounts(s.by_currency.map((x) => ({ currency: x.currency, amount: x.cost_per_motor })));
+  assert.equal(line, 'CNY 10.25 · USD 7.00 · EUR 14.00');
+  // nothing priced at all: still one (default) currency, zeros
+  const empty = H.calcCostSummary([], [], [], 0, 5);
+  assert.deepEqual(empty.by_currency.map((x) => [x.currency, x.cost_per_motor]), [['CNY', 0]]);
 });
 
 t('procurement permissions: OEM can edit procurement, only editors can edit schedule', () => {

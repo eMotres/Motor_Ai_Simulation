@@ -25,7 +25,7 @@ import PartName from './PartName';
 import { UnifiedViewer } from '../../viewer3d';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 import { downloadFile, downloadModelStep, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
-import { canEditProcurement, displayText, formatReceiptTime, getStatusColor, makeBilingual, partFamilies } from '../helpers';
+import { canEditProcurement, DEFAULT_CURRENCY, displayText, formatMoney, formatReceiptTime, getStatusColor, makeBilingual, partFamilies } from '../helpers';
 import type {
   CostRow,
   DocumentRec,
@@ -315,7 +315,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   const partProposals = proposals.filter((p) => p.part_id === part.id);
 
   const unitPrice = costRow?.unit_price ?? null;
-  const currency = costRow?.currency || 'CNY';
+  const currency = costRow?.currency || DEFAULT_CURRENCY;
   const note = costRow?.note || '';
   const orderTotalParts = part.qty_per_motor * orderQuantity;
 
@@ -457,7 +457,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
             />
             {unitPrice !== null && (
               <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
-                {t('bom.lineTotal', { count: orderQuantity })}: {(unitPrice * orderQuantity).toFixed(2)} {currency}
+                {t('bom.lineTotal', { count: orderQuantity })}: {formatMoney(unitPrice * orderQuantity, currency)}
               </Typography>
             )}
           </Box>
@@ -893,7 +893,7 @@ export interface ExtraDetailPanelProps {
 
 export const ExtraDetailPanel: React.FC<ExtraDetailPanelProps> = ({
   extra,
-  currency = 'CNY',
+  currency = DEFAULT_CURRENCY,
   onClose,
 }) => {
   const ui = useContentLang();
@@ -907,7 +907,7 @@ export const ExtraDetailPanel: React.FC<ExtraDetailPanelProps> = ({
             {name}
           </Typography>
           <Typography sx={{ fontSize: 14, fontWeight: 600, color: '#38bdf8' }}>
-            {extra.amount.toFixed(2)} {currency}
+            {formatMoney(extra.amount, currency)}
           </Typography>
         </Box>
         {onClose && (

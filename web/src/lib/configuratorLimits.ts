@@ -9,9 +9,11 @@
 //   wire          min = 0.2 mm (manufacturing limit), step 0.1 mm, max = the
 //                 thickest wire at which N rows still fit the slot
 //   turns / slot  max = the rows that fit the slot at the chosen wire
-//   phase current max = what the machine's inverter device allows (server,
-//                 from the Controller settings) — Sine mode too; none saved =
-//                 the passport rule, said as "no controller set"
+//   phase current max = the lowest REAL limit (owner 2026-10-20): the motor's own
+//                 peak duty / demagnetisation limit / passport current-grid top,
+//                 the controller BOARD's continuous current; named in the label.
+//                 Never the bare drain-current rating of the MOSFET.  Nothing
+//                 known = the passport rule
 //   speed         max = the speed at which the line voltage reaches the fully
 //                 charged pack (x the modulation index): from the passport's
 //                 voltage model when it has one, else Kv x V_max x m
@@ -29,14 +31,70 @@ export type LimitBasis =
   | 'hand'          // L: set by an admin for this motor
   | 'default'       // today's rule (a multiple of the passport base)
   | 'fit'           // wire / turns: the slot
-  | 'inverter'      // I: the machine's inverter device
-  | 'no_controller' // I: nothing saved -> the passport rule
+  | 'motor_peak'    // I: the motor's saved peak duty
+  | 'demag'         // I: the passport's demagnetisation limit
+  | 'grid'          // I: top of the passport's measured current grid
+  | 'board'         // I: the controller board's continuous current
+  | 'no_limit'      // I: no real limit known -> the passport rule
   | 'envelope'      // rpm: the passport's voltage model at the pack maximum
   | 'kv'            // rpm: Kv x V_max x m
   | 'no_battery'    // rpm: no pack known -> the passport rule
   | 'invalid_battery'; // rpm: raw pack input is invalid; the fallback range is not displayable
 
 export interface PhysRange extends KRange { basis: LimitBasis; }
+
+// ── phase current: the binding real limit ───────────────────────────────────
+
+export type CurrentKind = 'peak' | 'demag' | 'grid' | 'board';
+
+/** One real limit on the phase current [A rms], already at the LIVE winding. */
+export interface CurrentCap { kind: CurrentKind; A: number; device?: string | null; n?: number | null; }
+
+/** The saved peak duty of a configuration [A rms] (the highest duty named "peak…"), or null. */
+export function peakDutyA(duties: ReadonlyArray<{ name?: string | null; current_A?: number | null }> | null | undefined): number | null {
+  let best: number | null = null;
+  for (const d of duties ?? []) {
+    const a = d?.current_A;
+    if (!String(d?.name ?? '').trim().toLowerCase().startsWith('peak')) continue;
+    if (typeof a === 'number' && Number.isFinite(a) && a > 0 && (best == null || a > best)) best = a;
+  }
+  return best;
+}
+
+/** The real current limits at the live winding.  Motor limits are ampere-turn limits: a value
+ *  known AT a build (`s` = that build's ampere-turns per ampere) moves with the live winding as
+ *  `s / sLive`; the passport grid is read at the passport base (s = 1).  The board's current
+ *  belongs to the board, not to the winding.  Order = tie-break order (motor first). */
+export function buildCurrentCaps(a: {
+  peak: { A: number | null; s: number } | null;
+  demag: { A: number | null; s: number } | null;
+  gridTopA: number | null;
+  sLive: number;
+  board: { A: number; device?: string | null; n?: number | null } | null;
+}): CurrentCap[] {
+  const ok = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  const live = a.sLive > 0 ? a.sLive : 1;
+  const moved = (x: { A: number | null; s: number } | null) => (x && ok(x.A) ? x.A * (x.s > 0 ? x.s : 1) / live : null);
+  const out: CurrentCap[] = [];
+  const pk = moved(a.peak); if (pk != null) out.push({ kind: 'peak', A: pk });
+  const dm = moved(a.demag); if (dm != null) out.push({ kind: 'demag', A: dm });
+  // the top of the measured grid is a DATA bound: below a saved peak / demag value it only means the grid was not
+  // measured that far, so it is not a limit then
+  const grid = ok(a.gridTopA) ? a.gridTopA / live : null;
+  if (grid != null && !out.some((c) => c.A > grid + 1e-9)) out.push({ kind: 'grid', A: grid });
+  if (a.board && ok(a.board.A)) out.push({ kind: 'board', A: a.board.A, device: a.board.device ?? null, n: a.board.n ?? null });
+  return out;
+}
+
+/** The lowest limit (the first of equals), or null when none is known. */
+export function bindingCurrentCap(caps: readonly CurrentCap[]): CurrentCap | null {
+  let best: CurrentCap | null = null;
+  for (const c of caps) if (c.A > 0 && (best == null || c.A < best.A - 1e-9)) best = c;
+  return best;
+}
+
+const CURRENT_BASIS: Record<CurrentKind, LimitBasis> = {
+  peak: 'motor_peak', demag: 'demag', grid: 'grid', board: 'board' };
 
 /** Manufacturing limit of the flat wire [mm]. */
 export const WIRE_MIN_MM = 0.2;
@@ -145,8 +203,8 @@ export interface RangeInputs {
   N: number; wireH_mm: number;
   /** hand-set stack-length maximum of this motor [mm] (server) */
   lMaxMm: number | null;
-  /** the machine's inverter ceiling, phase current [A rms] (server); null = none saved */
-  iMaxA: number | null;
+  /** the binding real phase-current limit (`bindingCurrentCap`); null = none known */
+  iCap: CurrentCap | null;
   speed: SpeedLimit;
   /** TODO(erp-stock): stocked wire thicknesses [mm], ascending; null = unrestricted */
   allowedWireH?: number[] | null;
@@ -169,9 +227,9 @@ export function physicalRanges(a: RangeInputs): Record<KnobKey, PhysRange> {
       : { ...d.L_mm, basis: 'default' },
     N: { min: Math.min(d.N.min, nMax), max: nMax, basis: 'fit' },
     wireH_mm: { min: WIRE_MIN_MM, max: hMax, basis: 'fit' },
-    I_A: a.iMaxA != null && a.iMaxA > 0
-      ? { min: 0, max: a.iMaxA, basis: 'inverter' }
-      : { ...d.I_A, basis: 'no_controller' },
+    I_A: a.iCap != null && a.iCap.A > 0
+      ? { min: 0, max: a.iCap.A, basis: CURRENT_BASIS[a.iCap.kind] }
+      : { ...d.I_A, basis: 'no_limit' },
     rpm: a.speed.rpm != null && a.speed.rpm > 0
       ? { min: 0, max: a.speed.rpm, basis: a.speed.basis === 'kv' ? 'kv' : 'envelope' }
       : { ...d.rpm, basis: a.speed.basis === 'invalid_battery' ? 'invalid_battery' : 'no_battery' },

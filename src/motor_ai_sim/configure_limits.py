@@ -6,10 +6,13 @@ therefore comes from here, through ``GET /api/catalog/{motor_id}/configure_conte
 
 * the **stack-length maximum**, set BY HAND per motor by an admin and stored on
   the catalogue card (``configure_limits.L_max_mm``);
-* the **phase-current maximum**: what the machine's own inverter device allows,
-  from the Controller settings saved with its configuration — the device's
-  continuous drain-current rating at the junction limit times the devices in
-  parallel, converted to a phase current;
+* the **phase-current maximum** (owner 2026-10-20): the binding REAL limit, not the
+  bare drain-current rating of the MOSFET (``current_limit`` below is only the
+  device's datasheet figure and is kept as information).  The server states the
+  limits it knows - the demagnetisation limit of the passport and the
+  controller BOARD's continuous current (:func:`current_caps`) - and the web adds
+  the motor's own peak duty and the passport's current-grid top, then takes the
+  lowest and names it (``web/src/lib/configuratorLimits.ts``);
 * the pack and the modulation index the speed limit is read against.
 
 Nothing here solves a field and nothing is written except the one hand-set
@@ -47,7 +50,12 @@ def _pos(v: Any) -> Optional[float]:
 
 
 def current_limit(ctrl: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The inverter-side phase-current ceiling of a machine.
+    """The DATASHEET figure of the machine's inverter device, as a phase current.
+
+    INFORMATION ONLY (owner 2026-10-20): it is the transistor's own drain-current
+    rating, not what the controller BOARD can carry and not what the motor can take,
+    so Configure no longer sets its current slider from it - the slider reads
+    :func:`current_caps` and the motor's own limits instead.
 
     ``{set: False, reason}`` when the machine has no Controller device saved
     (Configure then keeps the passport's rule and says "no controller set").
@@ -87,6 +95,96 @@ def modulation(ctrl: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if m is not None:
         return {"m": m, "source": "controller"}
     return {"m": DEFAULT_MODULATION_INDEX, "source": "default"}
+
+
+#: The board cooling class the Configure current limit reads: the passport's rated
+#: airflow (the basis of its "Controller continuous" tile).
+BOARD_COOLING_CLASS = "favourable"
+
+
+def _board_entry(v: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The board's continuous phase current of one computed drive variant, or ``None``."""
+    lim = v.get("i_board_limit_A") if isinstance(v.get("i_board_limit_A"), dict) else {}
+    a = _pos(lim.get(BOARD_COOLING_CLASS))
+    if a is None:
+        return None
+    return {"A": round(a, 2), "device": str(v.get("device") or "") or None,
+            "n_parallel": int(_pos(v.get("n_parallel")) or 1), "variant": str(v.get("id") or "") or None,
+            "cooling": BOARD_COOLING_CLASS, "source": "passport drive variant"}
+
+
+def board_cap(fam: Optional[Dict[str, Any]], ctrl: Optional[Dict[str, Any]],
+              variants: Optional[list] = None) -> Optional[Dict[str, Any]]:
+    """The controller BOARD's continuous phase current for the machine's own Controller
+    device (``None`` = the board model states none).
+
+    Read from the board model the passport carries (stage 3: ``i_board_limit_A`` of the
+    computed drive variant that uses the machine's device and number of devices in
+    parallel; else the S1 model's sine controller block) - never from the bare
+    drain-current rating of the transistor.
+    """
+    fam = fam if isinstance(fam, dict) else {}
+    c = ctrl if isinstance(ctrl, dict) else {}
+    part = str(c.get("device") or "").strip().upper()
+    if not part:
+        return None
+    n_par = int(_pos(c.get("devices_parallel")) or 1)
+    vs = variants
+    if vs is None:
+        try:
+            from motor_ai_sim import passport_store as _ps
+            vs = _ps.variants_for(f"{fam.get('die') or ''} {fam.get('name') or ''}".strip(), None)
+        except Exception:                                   # noqa: BLE001
+            vs = None
+    cands = []
+    for v in vs or []:
+        if not isinstance(v, dict) or str(v.get("device") or "").strip().upper() != part:
+            continue
+        e = _board_entry(v)
+        if e is not None:
+            cands.append(e)
+    exact = [e for e in cands if e["n_parallel"] == n_par]
+    if exact:
+        # several carriers of one build: the board limit does not depend on the carrier
+        # in the model's calibration; the lowest is the safe one to state
+        return min(exact, key=lambda e: e["A"])
+    try:
+        from motor_ai_sim import propeller_s1 as _s1
+        m = _s1.load_model(str(fam.get("die") or ""), str(fam.get("name") or ""))
+        sc = m.get("sine_controller") or {}
+        a = _pos((sc.get("i_board_limit_A") or {}).get(BOARD_COOLING_CLASS))
+        if a is not None:
+            return {"A": round(a, 2), "device": part, "n_parallel": n_par, "variant": None,
+                    "cooling": BOARD_COOLING_CLASS, "source": "S1 model sine controller"}
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None
+
+
+def demag_cap(fam: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The passport's demagnetisation current limit (<= 1 % rated-torque drop, phase rms)
+    of this configuration, or ``None`` when its model carries none."""
+    fam = fam if isinstance(fam, dict) else {}
+    try:
+        from motor_ai_sim import propeller_s1 as _s1
+        m = _s1.load_model(str(fam.get("die") or ""), str(fam.get("name") or ""))
+    except Exception:                                       # noqa: BLE001
+        return None
+    dm = m.get("demag") if isinstance(m.get("demag"), dict) else {}
+    a = _pos(dm.get("I_limit_A"))
+    if a is None:
+        return None
+    return {"A": round(a, 2), "ref_magnet_C": _pos(dm.get("ref_magnet_C")),
+            "source": "passport demagnetisation probe"}
+
+
+def current_caps(fam: Optional[Dict[str, Any]], ctrl: Optional[Dict[str, Any]],
+                 variants: Optional[list] = None) -> Dict[str, Any]:
+    """The REAL current limits this machine's own records state (the web adds the peak
+    duty and the passport grid top, and takes the lowest): ``{demag, board}``, each
+    ``None`` when unknown.  Both are values AT THE SAVED BUILD; the web scales the
+    demag one with ampere-turns when the user changes turns or connection."""
+    return {"demag": demag_cap(fam), "board": board_cap(fam, ctrl, variants)}
 
 
 def pack(batt: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -322,7 +420,9 @@ def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
         "application": default_application(apps),
         "applications_error": apps_err,
         "limits": hand_limits(card),
-        "current": current_limit(ctrl),
+        # the datasheet figure of the device is information only; the slider's
+        # maximum comes from the real limits in ``caps`` (see module docstring)
+        "current": {**current_limit(ctrl), "caps": current_caps(fam, ctrl)},
         "modulation": modulation(ctrl),
         "battery": pack(fam.get("battery")),
         "has_family_doc": bool(fam),

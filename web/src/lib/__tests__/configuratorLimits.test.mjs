@@ -8,8 +8,9 @@
 //   * turns: max = the rows that fit the chosen wire — live, and NO slider
 //     combination can overflow the slot (same inequality as the solver's
 //     geometry_constraints._wire_height_max, pinned in tests/test_configure_limits.py);
-//   * current: the inverter ceiling when a controller is set, else the passport
-//     rule ("no controller"); speed: the envelope at the pack maximum, else Kv x V x m;
+//   * current: the lowest REAL limit (motor peak / demag / passport grid / controller
+//     board), named; never the bare MOSFET rating; none known = the passport
+//     rule ("no limit"); speed: the envelope at the pack maximum, else Kv x V x m;
 //   * an admin override can only NARROW; the connection warning.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,7 +23,7 @@ const P = { L0_mm: 12, N0: 7, wireH0_mm: 0.6, I0_A: 40, rpm0: 13000 };
 const FIT = { slotHeight_mm: 6.0, insulation_mm: 0.06, wireSpacingY_mm: 0.1 };
 const NO_SPEED = { rpm: null, basis: 'no_battery' };
 const inputs = (o = {}) => ({ p: P, fit: FIT, N: 7, wireH_mm: 0.6, lMaxMm: null,
-  iMaxA: null, speed: NO_SPEED, ...o });
+  iCap: null, speed: NO_SPEED, ...o });
 
 t('stack length: hand-set max wins, else the default rule is labelled default', () => {
   const d = L.physicalRanges(inputs());
@@ -70,11 +71,65 @@ t('no slider combination can overflow the slot', () => {
   assert.ok(!L.overflows(FIT, 8, 0.6));
 });
 
-t('current: inverter ceiling when a controller is set, else the passport rule', () => {
-  const inv = L.physicalRanges(inputs({ iMaxA: 120 }));
-  assert.equal(inv.I_A.basis, 'inverter'); assert.equal(inv.I_A.max, 120);
+t('current: the binding real limit is named, none known = the passport rule', () => {
+  for (const [kind, basis] of [['peak', 'motor_peak'], ['demag', 'demag'], ['grid', 'grid'], ['board', 'board']]) {
+    const r = L.physicalRanges(inputs({ iCap: { kind, A: 46 } }));
+    assert.equal(r.I_A.basis, basis); assert.equal(r.I_A.max, 46); assert.equal(r.I_A.min, 0);
+  }
   const none = L.physicalRanges(inputs());
-  assert.equal(none.I_A.basis, 'no_controller'); assert.equal(none.I_A.max, 80);   // 2 x 40
+  assert.equal(none.I_A.basis, 'no_limit'); assert.equal(none.I_A.max, 80);   // 2 x 40
+});
+
+t('current: the lowest limit binds; equal limits keep the motor first', () => {
+  const caps = L.buildCurrentCaps({
+    peak: { A: 46, s: 1 }, demag: { A: 52, s: 1 }, gridTopA: 64.7, sLive: 1,
+    board: { A: 40, device: 'IQE036N08NM6SC', n: 1 } });
+  const b = L.bindingCurrentCap(caps);
+  assert.equal(b.kind, 'board'); assert.equal(b.A, 40); assert.equal(b.device, 'IQE036N08NM6SC'); assert.equal(b.n, 1);
+  assert.equal(L.bindingCurrentCap(L.buildCurrentCaps({
+    peak: { A: 46, s: 1 }, demag: { A: 52, s: 1 }, gridTopA: 64.7, sLive: 1,
+    board: { A: 90, device: 'X', n: 2 } })).kind, 'peak');
+  assert.equal(L.bindingCurrentCap(L.buildCurrentCaps({
+    peak: { A: 46, s: 1 }, demag: { A: 46, s: 1 }, gridTopA: null, sLive: 1, board: null })).kind, 'peak');
+  assert.equal(L.bindingCurrentCap(L.buildCurrentCaps({
+    peak: { A: 60, s: 1 }, demag: { A: 52, s: 1 }, gridTopA: 64.7, sLive: 1, board: null })).kind, 'demag');
+  assert.equal(L.bindingCurrentCap([]), null);
+});
+
+t('current: motor limits move with the ampere-turns, the board does not', () => {
+  // twice the series turns per ampere -> half the current for the same ampere-turns
+  const caps = L.buildCurrentCaps({
+    peak: { A: 46, s: 1 }, demag: { A: 52, s: 1 }, gridTopA: 64.7, sLive: 2,
+    board: { A: 40, device: 'D', n: 1 } });
+  const by = Object.fromEntries(caps.map((c) => [c.kind, c.A]));
+  assert.equal(by.peak, 23); assert.equal(by.demag, 26); assert.ok(Math.abs(by.grid - 32.35) < 1e-9);
+  assert.equal(by.board, 40);
+  // fewer turns -> the saved value allows more current at the live winding
+  assert.equal(L.buildCurrentCaps({ peak: { A: 46, s: 1 }, demag: null, gridTopA: null, sLive: 0.5, board: null })[0].A, 92);
+});
+
+t('current: the passport grid top is a data bound, never lower than a saved duty', () => {
+  const caps = L.buildCurrentCaps({ peak: { A: 48.8, s: 1 }, demag: null, gridTopA: 40, sLive: 1, board: null });
+  assert.deepEqual(caps.map((c) => c.kind), ['peak']);
+  // with nothing else it is the limit (the "overload grid top")
+  assert.deepEqual(L.buildCurrentCaps({ peak: null, demag: null, gridTopA: 61, sLive: 1, board: null }), [{ kind: 'grid', A: 61 }]);
+});
+
+t('current: the peak duty is the highest duty named peak, nothing else', () => {
+  assert.equal(L.peakDutyA([{ name: 'rated', current_A: 7.17 }, { name: 'peak', current_A: 45.962 }]), 45.962);
+  assert.equal(L.peakDutyA([{ name: 'rated', current_A: 7.17 }]), null);
+  assert.equal(L.peakDutyA([{ name: 'Peak 2', current_A: 30 }, { name: 'peak', current_A: 40 }, { name: 'peak3', current_A: null }]), 40);
+  assert.equal(L.peakDutyA(undefined), null);
+});
+
+t('current: the saved peaks of the owner machines are the cap when nothing is tighter', () => {
+  // 85 L15 (7.17 A rated / 45.962 A peak), 40 L12, 40 L20, 50 L15 - the saved peak duties
+  for (const [pk, want] of [[45.962, 45.962], [48.79, 48.79], [42.3, 42.3], [53, 53]]) {
+    const b = L.bindingCurrentCap(L.buildCurrentCaps({
+      peak: { A: pk, s: 1 }, demag: null, gridTopA: pk * 1.4, sLive: 1, board: null }));
+    assert.equal(b.kind, 'peak'); assert.equal(b.A, want);
+    assert.equal(L.physicalRanges(inputs({ iCap: b })).I_A.max, want);
+  }
 });
 
 t('speed: envelope at the pack maximum (linear voltage model), else Kv x V x m', () => {

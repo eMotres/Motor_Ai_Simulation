@@ -201,6 +201,8 @@ export interface PwmVariant {
   modulation?: string | null;            // e.g. "SVPWM centred"
   m_max?: number | null;
   n_parallel?: number | null;
+  /** the controller board's continuous phase current per cooling class [A rms] (stage-3 board model) */
+  i_board_limit_A?: Record<string, number> | null;
   bus_v?: { min?: number | null; nom?: number | null; max?: number | null } | null;
   provenance?: string | Record<string, unknown> | null;
   points: Record<string, PwmVariantPoint>;

@@ -26,7 +26,7 @@ import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile } from '../common/ResultTiles';
 import {
-  scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult, type PwmVariant,
+  scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
 import {
   EMPTY_REFERENCE, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
@@ -78,6 +78,7 @@ import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationS
 import {
   physicalRanges, narrowRange, speedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
+  buildCurrentCaps, bindingCurrentCap, peakDutyA, type CurrentCap,
   type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis,
 } from '../../lib/configuratorLimits';
 import {
@@ -930,18 +931,42 @@ const ConfiguratorPanel: React.FC = () => {
       batteryValid,
     });
   }, [p, knobs, ref.poles, packMaxV, modM, batteryValid]);
+  // PHASE-CURRENT MAXIMUM = THE BINDING REAL LIMIT (owner 2026-10-20: 238 A on 85 L15 had nothing to do with the
+  // motor or a real board).  Never the transistor's bare drain-current rating: the lowest of the motor's own limits (saved peak
+  // duty, the passport's demagnetisation limit, the top of its measured current grid — ampere-turn limits, moved
+  // with the live winding) and the controller BOARD's continuous current (the selected PWM variant's, else the
+  // machine's own controller).  lib/configuratorLimits.ts names it for the label.
+  const currentCap: CurrentCap | null = useMemo(() => {
+    const caps = currentContext?.current?.caps;
+    const ownPreset = presets.find((x) => x.config === originalConfig) ?? basePreset;
+    const sAt = (k: Knobs) => turnsFactor(p, k) * (p.nP0 && k.nP ? p.nP0 / k.nP : 1);
+    const sLive = sAt(knobs);
+    const peakPre = basePreset ?? ownPreset;
+    const cc = p.current;
+    const vLim = variant?.i_board_limit_A?.favourable;
+    const board = variant
+      ? (typeof vLim === 'number' && vLim > 0 ? { A: vLim, device: variant.device, n: variant.n_parallel ?? 1 } : null)
+      : (caps?.board && caps.board.A > 0 ? { A: caps.board.A, device: caps.board.device ?? null, n: caps.board.n_parallel ?? 1 } : null);
+    const sOf = (pre: Preset | null | undefined) => sAt(pre ? presetKnobs(baseKnobs(p), pre) : baseKnobs(p));
+    return bindingCurrentCap(buildCurrentCaps({
+      peak: { A: peakDutyA(peakPre?.duty_points), s: sOf(peakPre) },
+      demag: { A: caps?.demag?.A ?? null, s: sOf(ownPreset) },
+      gridTopA: cc && cc.I_A.length >= 2 ? cc.I_A[cc.I_A.length - 1] : null,
+      sLive, board,
+    }));
+  }, [p, knobs, currentContext, presets, originalConfig, basePreset, variant]);
   const phys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
-    iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
+    iCap: currentCap,
     speed: speedLim,
-  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedLim]);
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedLim, currentCap]);
   const displayPhys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
-    iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
+    iCap: currentCap,
     speed: speedDisplayLim,
-  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedDisplayLim]);
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedDisplayLim, currentCap]);
   const ranges: Record<KnobKey, KRange> = useMemo(() => ({
     L_mm: narrowRange(phys.L_mm, overrides.L_mm), N: narrowRange(phys.N, overrides.N),
     wireH_mm: narrowRange(phys.wireH_mm, overrides.wireH_mm),
@@ -989,10 +1014,15 @@ const ConfiguratorPanel: React.FC = () => {
                tip: tx('configureLimits.wireFitTip') };
     }
     if (k === 'I_A') {
-      return b === 'inverter'
-        ? { text: tx('configureLimits.iInverter', { max: mx, device: cur?.device ?? '', n: cur?.devices_parallel ?? 1 }),
-            tip: tx('configureLimits.iInverterTip', { rating: fmt(cur?.i_d_rating_A ?? NaN, 0), tcase: fmt(cur?.t_case_c ?? NaN, 0) }) }
-        : { text: '', tip: tx('configureLimits.iNoControllerTip') };
+      const dev = currentCap?.device ?? cur?.device ?? '';
+      const nDev = currentCap?.n ?? cur?.devices_parallel ?? 1;
+      switch (b) {
+        case 'motor_peak': return { text: tx('configureLimits.iMotorPeak', { max: mx }), tip: tx('configureLimits.iMotorPeakTip') };
+        case 'demag': return { text: tx('configureLimits.iDemag', { max: mx }), tip: tx('configureLimits.iDemagTip') };
+        case 'grid': return { text: tx('configureLimits.iGrid', { max: mx }), tip: tx('configureLimits.iGridTip') };
+        case 'board': return { text: tx('configureLimits.iBoard', { max: mx, device: dev, n: nDev }), tip: tx('configureLimits.iBoardTip', { device: dev, n: nDev }) };
+        default: return { text: '', tip: tx('configureLimits.iNoLimitTip') };
+      }
     }
     if (k === 'rpm' && !batteryValid) return { text: tx('configure.invalidPack'), tip: tx('configure.invalidPackTip') };
     return speedLimitNote(tx, { basis: b, max: mx, packV: fmt(packMaxV ?? NaN, 1), m: fmt(modM, 2) });

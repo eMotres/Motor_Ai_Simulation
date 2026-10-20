@@ -27,20 +27,11 @@ const EN = load('en');
 const ZH = load('zh-CN');
 const GROUPS = ['configureDrive', 'configureLimits', 'configure', 'emTiles'];
 
-test('heat semantic keys occur once and keep EN/ZH motor/controller parity', () => {
-  for (const lng of ['en', 'zh-CN']) {
-    for (const key of ['motorLossStatorTip', 'motorHeatSplitTip']) {
-      assert.equal([...raw(lng).matchAll(new RegExp(`"${key}"\\s*:`, 'g'))].length, 1, `${lng} ${key}`);
-    }
+test('the bare heat tips: stator side, rotor side, no controller paragraph (owner 2026-10-20)', () => {
+  for (const [lng, d] of [['en', EN], ['zh-CN', ZH]]) {
+    for (const key of ['motorLossStatorTip', 'motorHeatSplitTip', 'invLossSplit']) assert.equal(d.configureDrive[key], undefined, `${lng} ${key}`);
+    for (const key of ['statorHeatTipMeasured', 'statorHeatTipUnknown', 'rotorHeatTipMeasured', 'rotorHeatTipUnknown']) assert.ok(d.configure[key], `${lng} ${key}`);
   }
-  assert.equal(EN.configureDrive.motorHeatSplitTip,
-    'Stator + rotor show motor heat, including PWM extra loss; controller loss is separate.');
-  assert.equal(ZH.configureDrive.motorHeatSplitTip,
-    '定子 + 转子显示电机发热，包含 PWM 附加损耗；控制器损耗单独计算。');
-  assert.match(EN.configure.rotorHeatTipMeasured, /motor heat; controller heat is separate/);
-  assert.match(ZH.configure.rotorHeatTipMeasured, /电机发热；控制器发热单独计算/);
-  assert.doesNotMatch(ZH.configure.rotorHeatTipMeasured, /总损耗/);
-  assert.doesNotMatch(ZH.configure.rotorHeatTipUnknown, /总损耗/);
 });
 
 const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) =>

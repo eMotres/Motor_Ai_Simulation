@@ -55,7 +55,12 @@ WITHHELD = ("withheld: measured on the CAD assembly — the full construction "
 
 #: The bytes that mark a JSON answer as possibly carrying the CAD basis.  A
 #: compact or an indented dump, either way.
-_MARKERS = (b"thermal_path", b"rotor_face_open_fraction")
+_MARKERS = (b"thermal_path", b"rotor_face_open_fraction", b"cad_overrides",
+            b"part_materials", b"construction_basis",
+            # a forced rotor-face film (its per-path numbers invert the CAD
+            # open fraction, re-audit #3 B2) in a record stored before the
+            # construction marker existed
+            b"in the wash: rotating disc")
 _CAD_TRUE = re.compile(rb'"cad"\s*:\s*true')
 
 #: The rotor-channel note that prints the measured open fraction.
@@ -251,7 +256,295 @@ def _redact_end_faces(ef: Any) -> Any:
     return ef
 
 
+# -- THE PROTECTED CONSTRUCTION SCHEMA (re-audit #3 B1), defined ONCE --------
+#
+# Every block of a die / configuration document that the full-construction
+# routes (``routes.construction``: cad_params GET / PUT / import / rebuild,
+# part_tree; ``routes.family`` part_materials GET / PUT) read or write behind
+# ``require_full_construction``:
+#
+#   * ``cad_overrides``  - the CAD-only parameter overrides (``cad_params.
+#     OVERRIDES_KEY`` / ``cad.store.CAD_OVERRIDES_KEY``): the dimensions;
+#   * ``part_materials`` - die.yaml's per-part materials of the full parts list;
+#   * ``bearings.thermal_path`` - the bearing / holder basis measured on the
+#     assembly (and, fail closed, every ``bearings`` key off the public
+#     whitelist ``PUBLIC_BEARING_KEYS``);
+#   * any OTHER ``cad_*`` key of a die / configuration document (fail closed:
+#     a construction key added tomorrow is protected until it is whitelisted
+#     here); ``cad_variant`` (full | frameless, what the catalog row says) is
+#     the one public one.
+PROTECTED_KEYS = frozenset({"thermal_path", "cad_overrides", "part_materials"})
+DOC_PUBLIC_CAD_KEYS = frozenset({"cad_variant"})
+#: The keys that make a mapping a die / configuration DOCUMENT.
+_DOC_KEYS = ("geometry_overrides", "geometry", "duties", "winding")
+
+
+def _is_catalog_doc(d: Mapping[str, Any]) -> bool:
+    return any(k in d for k in _DOC_KEYS)
+
+
+def protected_doc_keys(d: Mapping[str, Any]) -> list:
+    """The construction keys present in a die / configuration document."""
+    out = [k for k in d if k in PROTECTED_KEYS]
+    if _is_catalog_doc(d):
+        out += [k for k in d if str(k).startswith("cad_")
+                and k not in DOC_PUBLIC_CAD_KEYS and k not in out]
+    b = d.get("bearings")
+    if isinstance(b, Mapping) and set(b) - PUBLIC_BEARING_KEYS:
+        out.append("bearings")
+    return out
+
+
+# -- CAD-DERIVED COOLING PATHS (re-audit #3 B2) ------------------------------
+#
+# Hiding a film's coefficient is not enough: the public mesh gives the face
+# area, so a path's G - or its watts and the two temperatures - gives h back,
+# then the air speed, then the measured open fraction.  For a caller without
+# the gate a cooling result whose rotor-side axial paths ran on a CAD-measured
+# input returns NO per-path detail for those paths (rotor end faces in the
+# wash, rotor channels, the bearing / holder network), and its heat budget only
+# the motor-level aggregates: the losses, the heat to air, the residual.  The
+# part temperatures stay.  One line says where the detail went.
+NDA_DETAIL = "detailed cooling paths with NDA"
+#: The marker a derived record (a fitted network, a heat-path model, a stored
+#: compact map) carries when its cooling was CAD-derived.
+CONSTRUCTION_BASIS = "CAD-measured construction input"
+#: What of a heat budget stays: generation, totals and the solve's closure.
+BUDGET_PUBLIC_KEYS = frozenset({
+    "losses_W", "losses_total_W", "losses_at_bearing_nodes_W", "em_loss_total_W",
+    "mech_loss_total_W", "mech_loss_in_map_W", "mech_loss_at_nodes_W",
+    "bearing_friction_W", "bearing_friction_in_map_W",
+    "bearing_friction_at_nodes_W", "bearing_friction_not_modelled_W",
+    "windage_W", "windage_not_modelled_W", "residual_W", "residual_pct",
+    "frame", "symmetry_mult", "passes", "n_slip_ties", "n_islands_rotor",
+    "n_islands_stator", "note", "heat_to_air_W", "detail"})
+#: Paths of the fitted transient network that ride on the CAD basis.
+CAD_NETWORK_G = frozenset({"r_bearings", "s_holders", "r_s_holders",
+                           "r_channels", "m_channels"})
+CAD_SURFACES = frozenset({"rotor_ends", "magnet_ends"})
+#: Lines of a time-averaged split (``thermal_duty_cycle.average_split``) that
+#: are, or isolate by subtraction, a CAD-derived path.
+CAD_SPLIT_KEYS = frozenset({"rotor_end_faces_W", "magnet_end_faces_W",
+                            "bearings_W", "stator_holders_W", "rotor_channels_W",
+                            "magnet_channels_W", "rotor_side_W", "stator_side_W",
+                            "rotor_pct", "stator_pct", "gap_W"})
+
+
+#: The end faces that sit in the wash through the holder's windows.
+CAD_FACES = ("rotor", "magnet")
+
+
+def _forced_faces(ef: Any) -> bool:
+    """A rotor / magnet face on a forced film (a full payload says
+    ``film_kind``; a compact stored copy keeps only ``mode``)."""
+    if isinstance(ef, Mapping):
+        blocks = [ef.get(k) for k in CAD_FACES] + list(ef.values())
+    elif isinstance(ef, list):
+        blocks = ef
+    else:
+        blocks = []
+    return any(isinstance(b, Mapping) and "forced" in (str(b.get("film_kind") or ""),
+                                                       str(b.get("mode") or ""))
+               for b in blocks)
+
+
+def cooling_is_cad_sensitive(c: Any) -> bool:
+    """Did this cooling result's rotor-side axial paths run on a CAD input?
+    Fails closed on a stored record that cannot say (no source key, no bearing
+    network) but has a forced rotor-face film."""
+    if not isinstance(c, Mapping):
+        return False
+    if c.get("construction_basis"):
+        return True
+    bn = c.get("bearing_node")
+    if isinstance(bn, Mapping) and bn.get("cad"):
+        return True
+    if str(c.get("holder_open_fraction_source") or "").startswith("CAD"):
+        return True
+    rc = c.get("rotor_channels")
+    if isinstance(rc, Mapping):
+        if str(rc.get("holder_open_fraction_source") or "").startswith("CAD"):
+            return True
+        _txt = json.dumps([rc.get("notes"), rc.get("note")], ensure_ascii=False)
+        if any(t in _txt for t in _FACE_CAD_TEXT):
+            return True
+    if ("holder_open_fraction_source" not in c and "bearing_node" not in c
+            and _forced_faces(c.get("end_faces"))):
+        return True
+    return False
+
+
+def config_cooling_is_cad(die: str, cfg: str, cfg_doc: Optional[Mapping[str, Any]] = None) -> bool:
+    """Does anything this configuration's report would print rest on the CAD
+    basis?  Its own document (a protected key), any stored per-duty thermal /
+    coupled map of it, or the workspace's last thermal / coupled result.
+    Fails CLOSED: an unreadable store answers yes."""
+    try:
+        if isinstance(cfg_doc, Mapping) and protected_doc_keys(cfg_doc):
+            return True
+        from motor_ai_sim import duty_results as _dr
+        for rec in (_dr.get(die, cfg) or {}).values():
+            if not isinstance(rec, Mapping):
+                continue
+            for kind in ("thermal", "coupled"):
+                blk = rec.get(kind)
+                if isinstance(blk, Mapping) and _any_cad_cooling(blk):
+                    return True
+        from motor_ai_sim.routes import thermal as _th
+        _th._load_last()
+        for k in ("field", "coupled"):
+            e = _th._LAST.get(k) or {}
+            if _any_cad_cooling(e.get("result")):
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _any_cad_cooling(obj: Any, depth: int = 0) -> bool:
+    """A CAD-sensitive ``cooling`` block anywhere inside ``obj`` (a few levels)."""
+    if depth > 6:
+        return False
+    if isinstance(obj, Mapping):
+        c = obj.get("cooling")
+        if isinstance(c, Mapping) and cooling_is_cad_sensitive(c):
+            return True
+        return any(_any_cad_cooling(v, depth + 1) for k, v in obj.items()
+                   if isinstance(v, (Mapping, list)) and k not in (
+                       "T_node", "triangles", "vertices", "domain_per_tri"))
+    if isinstance(obj, list):
+        return any(_any_cad_cooling(v, depth + 1) for v in obj[:50]
+                   if isinstance(v, (Mapping, list)))
+    return False
+
+
+def _bearing_node_summary(bn: Mapping[str, Any]) -> Dict[str, Any]:
+    """The bearing temperatures (a part temperature) and nothing per path."""
+    ends = []
+    for e in bn.get("ends") or []:
+        if not isinstance(e, Mapping):
+            continue
+        ts = [e.get(k) for k in ("inner_ring_c", "balls_c", "outer_ring_c")
+              if isinstance(e.get(k), (int, float))]
+        ends.append({"end": e.get("end"), "card": e.get("card"),
+                     "bearing_max_c": (max(ts) if ts else None)})
+    return {"mode": bn.get("mode"), "cad": bool(bn.get("cad")),
+            "t_bearing_max_c": bn.get("t_bearing_max_c"),
+            "advisory": bn.get("advisory"), "ends": ends,
+            "notes": [NDA_DETAIL], "detail": NDA_DETAIL}
+
+
+def _aggregate_budget(hb: Mapping[str, Any]) -> Dict[str, Any]:
+    out = {k: (v if k in BUDGET_PUBLIC_KEYS else None) for k, v in hb.items()}
+    tot = hb.get("losses_total_W", hb.get("losses_W"))
+    res = hb.get("residual_W")
+    if isinstance(tot, (int, float)):
+        out["heat_to_air_W"] = round(float(tot) - float(res or 0.0), 2)
+    out["detail"] = NDA_DETAIL
+    return out
+
+
+def _withhold_face(b: Any, force: bool = False) -> Any:
+    if isinstance(b, Mapping) and (force or "forced" in (
+            str(b.get("film_kind") or ""), str(b.get("mode") or ""))):
+        return {"mode": b.get("mode"), "film_kind": b.get("film_kind") or "forced",
+                "name": b.get("name"), "note": NDA_DETAIL, "detail": NDA_DETAIL}
+    return b
+
+
+def _withhold_cad_paths(c: Mapping[str, Any]) -> Dict[str, Any]:
+    out = dict(c)
+    bn = out.get("bearing_node")
+    if isinstance(bn, Mapping) and bn.get("mode") not in (None, "off"):
+        out["bearing_node"] = _bearing_node_summary(bn)
+    rc = out.get("rotor_channels")
+    if isinstance(rc, Mapping):
+        rc2 = {"mode": rc.get("mode"), "detail": NDA_DETAIL, "notes": [NDA_DETAIL]}
+        if "note" in rc:
+            rc2["note"] = NDA_DETAIL
+        out["rotor_channels"] = rc2
+    ef = out.get("end_faces")
+    if isinstance(ef, Mapping):
+        # the rotor / magnet faces always (a compact copy cannot say which film
+        # they were on), any other forced film, and the block's own totals —
+        # a total minus the public faces is the rotor face again
+        out["end_faces"] = {k: (_withhold_face(v, force=k in CAD_FACES)
+                                if isinstance(v, Mapping) else
+                                (None if k in ("heat_removed_W", "G_W_per_K") else v))
+                            for k, v in ef.items()}
+    elif isinstance(ef, list):
+        out["end_faces"] = [_withhold_face(v) for v in ef]
+    if isinstance(out.get("heat_budget"), Mapping):
+        out["heat_budget"] = _aggregate_budget(out["heat_budget"])
+    out["holder_open_fraction_source"] = "CAD (%s)" % WITHHELD
+    out["construction_basis"] = CONSTRUCTION_BASIS
+    out["cooling_detail"] = NDA_DETAIL
+    return out
+
+
+def _redact_network(n: Mapping[str, Any]) -> Dict[str, Any]:
+    """A fitted transient network (``Network.as_record``) of a CAD-derived map."""
+    out = dict(n)
+    if isinstance(n.get("G_W_per_K"), Mapping):
+        out["G_W_per_K"] = {k: (None if (k in CAD_NETWORK_G or k in CAD_SURFACES) else v)
+                            for k, v in n["G_W_per_K"].items()}
+    if isinstance(n.get("areas_m2"), Mapping):
+        out["areas_m2"] = {k: (None if k in CAD_SURFACES else v)
+                           for k, v in n["areas_m2"].items()}
+    if isinstance(n.get("links"), Mapping):
+        links = {}
+        for k, v in n["links"].items():
+            if k in ("bearing_node", "r_channels", "m_channels") or k in CAD_NETWORK_G:
+                v = {"kind": (v or {}).get("kind"), "nodes": (v or {}).get("nodes"),
+                     "G_W_per_K": None, "basis": NDA_DETAIL}
+            links[k] = v
+        out["links"] = links
+    cal = n.get("calibration")
+    if isinstance(cal, Mapping):
+        cal = dict(cal)
+        for k in ("bearings_W", "rotor_channels_W", "rotor_channels_magnet_W"):
+            if k in cal:
+                cal[k] = None
+        for k in ("surface_G_W_per_K", "surface_t_fit_c", "surface_film_kind"):
+            if isinstance(cal.get(k), Mapping):
+                cal[k] = {kk: (None if kk in CAD_SURFACES else vv)
+                          for kk, vv in cal[k].items()}
+        out["calibration"] = cal
+    return out
+
+
+def _redact_split(sp: Mapping[str, Any]) -> Dict[str, Any]:
+    def _cad(k: str) -> bool:
+        k = str(k)
+        return (k in CAD_SPLIT_KEYS or "holder" in k
+                or ("channel" in k and k != "slot_channels_W"))
+    out = {k: (None if _cad(k) else v) for k, v in sp.items()}
+    out["detail"] = NDA_DETAIL
+    return out
+
+
+def _redact_heat_path_model(m: Mapping[str, Any]) -> Dict[str, Any]:
+    out = dict(m)
+    sinks = []
+    for s_ in m.get("sinks") or []:
+        if isinstance(s_, Mapping) and s_.get("id") in ("end_face_rotor", "end_face_magnet"):
+            s_ = {k: (v if k in ("id", "group", "label", "short", "mode", "active",
+                                 "placement") else None) for k, v in s_.items()}
+            s_["note"] = NDA_DETAIL
+            s_["detail"] = []
+        sinks.append(s_)
+    out["sinks"] = sinks
+    if isinstance(m.get("totals"), Mapping):
+        out["totals"] = {k: (None if k in ("stator_side_W", "rotor_side_W",
+                                           "stator_side_pct", "rotor_side_pct")
+                             else v) for k, v in m["totals"].items()}
+    out["detail"] = NDA_DETAIL
+    return out
+
+
 def _redact_cooling(c: Dict[str, Any]) -> Dict[str, Any]:
+    if cooling_is_cad_sensitive(c):
+        return _withhold_cad_paths(c)
     out = dict(c)
     bn = out.get("bearing_node")
     if isinstance(bn, Mapping) and bn.get("cad"):
@@ -279,16 +572,31 @@ def redact(obj: Any) -> Any:
     """``obj`` without the CAD basis (a new object; ``obj`` is not touched)."""
     if isinstance(obj, Mapping):
         d: Dict[str, Any] = {}
+        _doc = _is_catalog_doc(obj)
         for k, v in obj.items():
-            if k == "thermal_path":
+            if k in PROTECTED_KEYS:
                 continue
+            if (_doc and str(k).startswith("cad_")
+                    and k not in DOC_PUBLIC_CAD_KEYS):
+                continue                      # B1: fail closed on the schema
             if k == "bearings" and _is_config_bearings(v):
                 d[k] = public_bearings(v)
                 continue
             d[k] = redact(v)
-        if isinstance(d.get("bearing_node"), Mapping) or isinstance(
-                d.get("rotor_channels"), Mapping) or "holder_open_fraction_source" in d:
+        if (isinstance(d.get("bearing_node"), Mapping)
+                or isinstance(d.get("rotor_channels"), Mapping)
+                or "holder_open_fraction_source" in d
+                or "construction_basis" in d
+                or ("heat_budget" in d and "end_faces" in d)):
             d = _redact_cooling(d)
+        cal = d.get("calibration")
+        if ("G_W_per_K" in d and isinstance(cal, Mapping)
+                and cal.get("construction_basis")):
+            d = _redact_network(d)
+        if "rotor_side_W" in d and "stator_side_W" in d and "generated_total_W" in d:
+            d = _redact_split(d)
+        if "sinks" in d and "schema_version" in d and d.get("construction_basis"):
+            d = _redact_heat_path_model(d)
         return d
     if isinstance(obj, list):
         return [redact(v) for v in obj]
@@ -454,7 +762,10 @@ def scrub_bytes(name: str, data: bytes) -> Optional[bytes]:
             raise ValueError("unreadable gzip: %s" % exc)
         out = scrub_bytes(name[:-3], inner)
         return None if out is None else gzip.compress(out)
-    if not low.endswith(DOC_SUFFIXES) or not needs_redaction(data):
+    if not low.endswith(DOC_SUFFIXES):
+        return None
+    if not needs_redaction(data) and not (
+            low.endswith((".yaml", ".yml")) and b"cad_" in data):
         return None
     try:
         text = data.decode("utf-8")

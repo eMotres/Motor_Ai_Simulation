@@ -127,7 +127,11 @@ t('every new label and tooltip key exists in EN and ZH', () => {
   assert.equal(en.configure.massNoCad, 'Active mass (no CAD build)');
   assert.match(en.emTiles.massFullTip, /\{active\}/);
   assert.match(loc('zh-CN').emTiles.massFullTip, /\{active\}/);       // placeholders survive the translation
-  assert.match(loc('zh-CN').emTiles.massNoCadTip, /\{reason\}/);
+  // bare one-phrase tooltips (#359): at most 120 characters
+  for (const l of ['en', 'zh-CN']) {
+    for (const k of ['massFullTip', 'massNoCadTip', 'tPerMassFullTip', 'pPerMassFullTip', 'lossDensityFullTip', 'kmPerMassFullTip'])
+      assert.ok(loc(l).emTiles[k].length <= 120, `${l} ${k}`);
+  }
 });
 
 t('SummaryTable carries the full-mass fields and flux-scales the per-mass figures like the torque', () => {

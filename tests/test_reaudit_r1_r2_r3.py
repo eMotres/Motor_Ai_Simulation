@@ -239,19 +239,16 @@ def test_the_thermal_payload_withholds_the_measured_basis(thermal_last, who):
     r = client.get("/api/thermal/last", headers=thermal_last[who])
     assert r.status_code == 200, r.text[:300]
     cooling = r.json()["field"]["result"]["cooling"]
+    # re-audit #3 B2 superseded the per-field redaction: the CAD-derived paths
+    # come back with NO per-path detail, only the bearing temperature
     e = cooling["bearing_node"]["ends"][0]
-    assert all("segments_mm" not in row for row in e["resistances"])
-    for row in e["resistances"]:
-        if row["path"].startswith(("shaft", "holder")):
-            assert row["source"] == WITHHELD
-        assert row["R_K_per_W"] is None or row["R_K_per_W"] > 0     # the RESULTS stay
-    assert set(e["film"]) <= {"mode", "regime", "G_W_per_K", "air_speed_mps", "source"}
+    assert set(e) == {"end", "card", "bearing_max_c"}
+    assert cooling["bearing_node"]["detail"] == "detailed cooling paths with NDA"
     rc = cooling["rotor_channels"]
-    assert rc["holder_open_fraction"] is None and rc["face_speed_mps"] is None
-    assert rc["channels"][0]["v_mps"] is None and rc["channels"][0]["G_W_per_K"] == 0.01
+    assert set(rc) <= {"mode", "detail", "notes", "note"}
     assert "holder open fraction 0.43" not in r.text
-    assert cooling["end_faces"]["rotor"]["air_speed_mps"] is None
-    assert cooling["end_faces"]["rotor"]["heat_removed_W"] == 0.5
+    assert set(cooling["end_faces"]["rotor"]) <= {"mode", "film_kind", "name", "note", "detail"}
+    assert WITHHELD in cooling["holder_open_fraction_source"]
     assert "segments_mm" not in r.text and "0.4321" not in r.text and "5.185" not in r.text
     assert "7.778" not in r.text and "31.4 mm" not in r.text
 

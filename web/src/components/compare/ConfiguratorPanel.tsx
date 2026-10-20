@@ -24,7 +24,7 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import BoltIcon from '@mui/icons-material/Bolt';
 import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
-import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile } from '../common/ResultTiles';
+import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile, Tip } from '../common/ResultTiles';
 import {
   scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
@@ -178,6 +178,8 @@ const KnobSlider: React.FC<{
   onChange: (v: number) => void; onRangeChange?: (min: number, max: number) => void; warn?: boolean;
   /** small grey caption after the unit — e.g. the peak value of an rms field */
   sub?: string;
+  /** what the knob is (hover on the label) */
+  tip?: string;
   /** where its maximum comes from — set on the TITLE row, right after the title, in
    *  the title's own style (owner 2026-10-05: no small print); tooltip for details */
   limitNote?: { text: string; tip: string; hand?: boolean };
@@ -192,7 +194,7 @@ const KnobSlider: React.FC<{
   /** a CONTINUOUS limit inside the range (the controller board's current): a tick on the rail and, when the
    *  value is above it, one amber line under the slider - a warning, never a cap and never a block */
   marker?: { at: number; text: string; tip: string; over: boolean };
-}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand, zone, disabled, hideRange, marker }) => {
+}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, tip, limitNote, onClearHand, zone, disabled, hideRange, marker }) => {
   const delta = pctDelta(value, base);
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
@@ -209,10 +211,13 @@ const KnobSlider: React.FC<{
           gridTemplateAreas: '"label value" "note note"',
         },
       }}>
-        <Typography sx={{ ...LABEL, gridArea: 'label', minWidth: 0 }} title={limitNote?.tip}>
+        <Tip title={tip}>
+        <Typography sx={{ ...LABEL, gridArea: 'label', minWidth: 0 }}>
           {label}
         </Typography>
-        <Typography component="div" sx={{ ...LABEL, gridArea: 'note', minWidth: 0, textAlign: 'right' }} title={limitNote?.tip}>
+        </Tip>
+        <Tip title={limitNote?.tip}>
+        <Typography component="div" sx={{ ...LABEL, gridArea: 'note', minWidth: 0, textAlign: 'right' }}>
           {/* in Chinese the caption keeps its unit symbols as written (mm, rpm), not MM / RPM */}
           {limitNote?.text && <Box component="span" sx={unitCase()}>{limitNote.text}</Box>}
           {limitNote?.hand && onClearHand && (
@@ -222,6 +227,7 @@ const KnobSlider: React.FC<{
             </Box>
           )}
         </Typography>
+        </Tip>
         <Box sx={{ gridArea: 'value', display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, justifySelf: 'center' }}>
         <input value={txt ?? fmt(value, d)} type="number" step={step} readOnly={disabled}
           aria-label={label}
@@ -250,10 +256,12 @@ const KnobSlider: React.FC<{
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} name={tx('configureLimits.rangeMax', { label })} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>}
       {marker && (
-        <Typography component="div" title={marker.tip}
+        <Tip title={marker.tip}>
+        <Typography component="div"
           sx={{ fontSize: 11, color: marker.over ? '#f59e0b' : 'var(--text-3)', fontWeight: marker.over ? 700 : 400, textAlign: 'right', mt: -0.25 }}>
           {marker.text}
         </Typography>
+        </Tip>
       )}
     </Box>
   );
@@ -832,17 +840,9 @@ const ConfiguratorPanel: React.FC = () => {
   const result  = useMemo(() => scaleMotor(pMass, scaleKnobs, ref.poles), [pMass, scaleKnobs, ref.poles]);
   const motorLoss_W = motorLossesComputed ? result.P_loss_W : null;
   const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
-  const copperResistanceTempC = p.R_temp_C ?? referenceTemperatureBasis?.windingC ?? null;
-  const copperResistanceBasis = copperResistanceTempC == null
-    ? tx('emTiles.copperResistanceTempUnknown')
-    : tx('emTiles.copperResistanceTemp', { temp: fmt(copperResistanceTempC, 0) });
   const copperBreakdownTip = copperBreakdown
-    ? tx('emTiles.copperLossBreakdownTip', {
-        current: fmt(scaleKnobs.I_A, 2), resistance: fmt(result.R_ohm * 1000, 3),
-        basis: copperResistanceBasis, dc: fmt(copperBreakdown.dcW, 1),
-        total: fmt(result.P_cu_W, 1), ac: fmt(copperBreakdown.acProximityW, 1),
-      })
-    : tx('emTiles.copperLossBreakdownUnavailable');
+    ? tx('configure.copperLossTip', { dc: fmt(copperBreakdown.dcW, 1), ac: fmt(copperBreakdown.acProximityW, 1) })
+    : tx('configure.copperLossTipPlain');
   // The winding must fit ACROSS the slot (owner 2026-10-15: a wire wider than the slot mouth
   // draws the stator with a lobe).  Wire WIDTH is fixed per machine in Configure (only turns and
   // wire thickness are knobs), so there is nothing to clamp here: the line names the limit, and
@@ -1062,9 +1062,7 @@ const ConfiguratorPanel: React.FC = () => {
     ].filter(Boolean);
     return {
       line: bits.join(' · '),
-      tip: [bits.join(' · '),
-            f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
-            tx('configureDrive.variantTip')].filter(Boolean).join('\n'),
+      tip: bits.join(' · '),
     };
   })();
   const driveFactsTip = driveFacts.tip || tx('configureDrive.variantTip');
@@ -1176,7 +1174,7 @@ const ConfiguratorPanel: React.FC = () => {
     driveMode, driveAccepted: driveMode === 'sine' || drv != null, motorLossesComputed,
   });
   const pointBlankTip = driveRefusals[0]
-    ? `${driveRefusals[0].text} ${driveRefusals[0].tip}`
+    ? driveRefusals[0].text
     : tx('configureDrive.blankMissing');
   /** the EFFICIENCY tile: system (motor + controller), battery -> shaft */
   const sysEff = pointGate.showMotorLosses
@@ -1194,18 +1192,21 @@ const ConfiguratorPanel: React.FC = () => {
   })();
   /** one tile of the drive-dependent set, from its spec */
   const renderSpec = (t: DriveTileSpec) => {
-    const detail = (t.id === 'invLoss' && drv && controllerLossW(drv) != null
-      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1), b: fmt(drv.board_copper_W ?? 0, 1) })}` : '')
-      // outside the variant's computed points: read at the nearest one (never a refusal of the loaded point)
-      + (drv && driveRead && driveRead.ok && 'near' in driveRead && driveRead.near
-        ? `\n${tx('configureDrive.readNearTip', { rpm: fmt(driveRead.near.rpm, 0), amps: fmt(driveRead.near.I, 1) })}` : '');
+    // outside the variant's computed points: read at the nearest one (never a refusal of the loaded point)
+    const detail = drv && driveRead && driveRead.ok && 'near' in driveRead && driveRead.near
+      ? `\n${tx('configureDrive.readNearTip', { rpm: fmt(driveRead.near.rpm, 0), amps: fmt(driveRead.near.I, 1) })}` : '';
     const shown = pointGate.accepted ? t : { ...t, value: null, blank: 'refused' as const };
+    // T_j: which device (and how many in parallel) and the limit it is judged against
+    const tjLimit = variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null;
+    const baseTip = t.id === 'tj' && variant && tjLimit != null
+      ? tx('configureDrive.tjTipDevice', { device: variant.device, n: variant.n_parallel ?? 1, limit: fmt(tjLimit, 0) })
+      : tx(shown.tipKey);
     return (
       <MetricTile key={shown.id} label={tx(shown.labelKey)} value={shown.value} unit={shown.unit} d={shown.d}
         base={shown.value ?? 0} goodHi={shown.goodHi}
-        absLevel={shown.level} tip={tx(shown.tipKey) + detail}
+        absLevel={shown.level} tip={baseTip + detail}
         blankTip={!pointGate.accepted ? pointBlankTip : shown.blank === 'sine' ? tx('configureDrive.blankSine')
-          : shown.blank === 'refused' ? pointBlankTip : tx('configureDrive.blankMissing')} />
+          : shown.blank === 'refused' ? pointBlankTip : tx(t.id === 'tj' ? 'configureDrive.tjBlankMissing' : 'configureDrive.blankMissing')} />
     );
   };
   // ── PROPELLER: the load AND the cooling (owner 2026-10-05) ─────────────────────────────────
@@ -1453,8 +1454,7 @@ const ConfiguratorPanel: React.FC = () => {
   // no visible S1 line (owner 2026-10-15): the continuous-limit sentence and its tip ride in the
   // tooltip of the propeller label / select
   const s1Tail = s1Text ? `
-${s1Text.text}
-${s1Text.tip}` : '';
+${s1Text.text}` : '';
   const propTip = tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip') + s1Tail;
   const propSelTip = (propSummary && propSummary.power_data === 'estimated'
     ? tx('configurePropeller.estimatedTip')
@@ -1636,11 +1636,7 @@ ${s1Text.tip}` : '';
       absLevel={t.level} plain
       tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
         air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
-        surface: t.surface != null ? fmt(t.surface, 0) : '—' })
-        // which model the temperature comes from: the configuration's calibrated one, or the labelled fallback
-        + (t.id !== 'airSpeed' && thermal ? `\n${pointNow.basis === 'model' ? tx('configurePropeller.thermalBasisModel')
-          : pointNow.basis === 'anchor' ? tx('configurePropeller.thermalBasisAnchor', { duty: thermalAnchor?.duty ?? '' })
-            : tx('configurePropeller.thermalBasisLumped')}` : '')}
+        surface: t.surface != null ? fmt(t.surface, 0) : '—' })}
       blankTip={!pointGate.accepted || !pointGate.showMotorLosses ? pointBlankTip
         : tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
   );
@@ -2325,13 +2321,13 @@ ${s1Text.tip}` : '';
             </Typography>
           )}
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>{tx('configureLimits.build')}</Typography>
-          <KnobSlider label={tx('configureLimits.stackLength')} unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0}
+          <KnobSlider label={tx('configureLimits.stackLength')} tip={tx('configureLimits.stackLengthTip')} unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0}
             onChange={set('L_mm')} onRangeChange={isAdmin ? setLRange : undefined} warn={above(knobs.L_mm, ranges.L_mm)}
             limitNote={limitNote('L_mm')} onClearHand={isAdmin ? clearLMax : undefined} />
           {limitMsg && <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 0.75 }}>{limitMsg}</Typography>}
-          <KnobSlider label={rowsLabel} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns}
+          <KnobSlider label={rowsLabel} tip={tx('configureLimits.turnsPerSlotTip')} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns}
             limitNote={limitNote('N')} />
-          <KnobSlider label={tx('configureLimits.wireThickness')} unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={WIRE_STEP_MM} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit}
+          <KnobSlider label={tx('configureLimits.wireThickness')} tip={tx('configureLimits.wireThicknessTip')} unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={WIRE_STEP_MM} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit}
             limitNote={limitNote('wireH_mm')} />
           {slotFit && (
             <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }} title={tx('configure.slotMouthTip')}>
@@ -2364,7 +2360,7 @@ ${s1Text.tip}` : '';
 
           <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mt: 0.5, mb: 1, flexWrap: 'wrap' }}>
             <Typography sx={{ ...LABEL, flex: '1 1 140px', minWidth: 0 }}
-              title={connWarn ? tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) }) : undefined}>
+              title={connWarn ? tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) }) : tx('configureLimits.connectionTip')}>
               {tx('configureLimits.connection')}
               {connWarn && (
                 <Box component="span" sx={{ color: '#fbbf24', ...unitCase() }}>
@@ -2479,7 +2475,7 @@ ${s1Text.tip}` : '';
               {/* S1 controller / board build / board cooling: no user choice (owner 2026-10-15) - our drive block, as built, in the same propeller wash as the motor */}
             </Box>
           )}
-          <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
+          <KnobSlider label={tx('configureLimits.phaseCurrent')} tip={tx('configureLimits.phaseCurrentTip')} unit="A" value={knobs.I_A} base={p.I0_A}
             min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0}
             sub={tx('configureLimits.peakOf', { value: fmt(knobs.I_A * Math.SQRT2, 0) })}
             onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
@@ -2493,7 +2489,7 @@ ${s1Text.tip}` : '';
             limitNote={propLoad
               ? propellerCurrentNote(tx, { max: fmt(ranges.I_A.max, 0), basisTip: limitNote('I_A').tip })
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
-          <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
+          <KnobSlider label={tx('configureLimits.speed')} tip={tx('configureLimits.speedTip')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
             warn={above(knobs.rpm, ranges.rpm) || (speedLim.rpm != null && knobs.rpm > speedLim.rpm)} zone={cooled ? zones.rpm : null}
             hideRange={!pointGate.showBatteryDerived}
             limitNote={(() => {
@@ -2616,9 +2612,9 @@ ${s1Text.tip}` : '';
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.torque')} value={pointGate.accepted ? result.T_Nm : null} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
-              tip={KT_BASIS_TIP(result.kt_km_basis)} blankTip={pointBlankTip} />
+              tip={`${tx('configure.torqueTip')} ${KT_BASIS_TIP(result.kt_km_basis)}`} blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.power')} value={pointGate.accepted ? result.P_mech_W / 1000 : null} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
-              absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} blankTip={pointBlankTip} />
+              absLevel={propBad ? 'bad' : undefined} tip={[tx('configure.powerTip'), propBad && propLine ? propLine.text : ''].filter(Boolean).join(' ')} blankTip={pointBlankTip} />
             <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={3}
               base={baseRes.mass_kg} goodHi={false}
               tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_partial && massAnchor?.partial_reason ? ` (${massAnchor.partial_reason})` : ''}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
@@ -2628,36 +2624,36 @@ ${s1Text.tip}` : '';
             )}
             <MetricTile label={tx('configure.efficiency')} value={sysEff.value} unit="%" d={1} base={baseSysEff ?? 0} goodHi
               absLevel={propBad ? 'bad' : undefined}
-              tip={`${tx('configure.efficiencyTip')}${propBad && propLine ? ` ${propLine.text}` : ''}`}
+              tip={tx('configure.efficiencyTip')}
               blankTip={pointBlankTip} />
             {ref.passport.ripple0_pct != null && (
               <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
             )}
-            <MetricTile label={tx('configure.tPerMass')} value={pointGate.accepted ? result.torque_per_mass : null} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.pPerMass')} value={pointGate.accepted ? result.power_per_mass_W_kg / 1000 : null} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.tPerMass')} value={pointGate.accepted ? result.torque_per_mass : null} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi tip={tx('configure.tPerMassTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.pPerMass')} value={pointGate.accepted ? result.power_per_mass_W_kg / 1000 : null} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi tip={tx('configure.pPerMassTip')} blankTip={pointBlankTip} />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.totalLoss')} value={pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null} unit="W" d={0}
               base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')}
               blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? result.P_fe_W : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
-              blankTip={pointBlankTip} />
+              tip={tx('configure.ironLossTip')} blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? result.P_mag_W : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
-              blankTip={pointBlankTip} />
+              tip={tx('configure.magnetLossTip')} blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
             <MetricTile label={tx('configure.statorHeat')} value={motorHeat?.stator_W ?? null} unit="W" d={0}
               base={baseRes.P_loss_stator_W} goodHi={false}
-              tip={driveOn && !drv ? driveRefusals[0]?.text ?? tx('configureDrive.blankRefused') : tx(result.loss_split_measured ? 'configure.statorHeatTipMeasured' : 'configure.statorHeatTipUnknown') + (driveOn ? ` ${tx('configureDrive.motorLossStatorTip')}` : '')}
+              tip={tx(result.loss_split_measured ? 'configure.statorHeatTipMeasured' : 'configure.statorHeatTipUnknown')}
               blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.rotorHeat')} value={motorHeat?.rotor_W ?? null} unit="W" d={0}
               base={baseRes.P_loss_rotor_W} goodHi={false}
               absLevel={result.loss_split_measured ? undefined : 'warn'}
-              tip={driveOn && !drv ? driveRefusals[0]?.text ?? tx('configureDrive.blankRefused') : tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown') + (driveOn ? ` ${tx('configureDrive.motorHeatSplitTip')}` : '')}
+              tip={tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown')}
               blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.lossDensity')} value={pointGate.showMotorLosses ? lossDensityShown(result.loss_density_W_kg, motorLoss_W, driveMode, drv) : null} unit="W/kg" d={0}
-              base={baseRes.loss_density_W_kg} goodHi={false} blankTip={pointBlankTip} />
+              base={baseRes.loss_density_W_kg} goodHi={false} tip={tx('configure.lossDensityTip')} blankTip={pointBlankTip} />
             {/* ONE contiguous controller group at the end of the loss row (owner 2026-10-05): the PWM loss,
                 the controller loss, then T_j, the efficiencies and P cont — same cells in Sine and PWM */}
             {lossTailTiles(driveMode, drv).map(renderSpec)}
@@ -2671,15 +2667,15 @@ ${s1Text.tip}` : '';
             </Box>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.dcBusMin')} value={pointGate.accepted ? result.Vphase_peak_V * Math.sqrt(3) : null} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.vLinePeak')} value={pointGate.accepted ? result.Vline_peak_V : null} unit="V" d={1} base={baseRes.Vline_peak_V} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.vPhasePeak')} value={pointGate.accepted ? result.Vphase_peak_V : null} unit="V" d={1} base={baseRes.Vphase_peak_V} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.vLineRms')} value={pointGate.accepted ? result.Vline_rms_V : null} unit="V" d={1} base={baseRes.Vline_rms_V} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.vPhaseRms')} value={pointGate.accepted ? result.Vphase_rms_V : null} unit="V" d={1} base={baseRes.Vphase_rms_V} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.dcBusMin')} value={pointGate.accepted ? result.Vphase_peak_V * Math.sqrt(3) : null} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} tip={tx('configure.dcBusMinTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vLinePeak')} value={pointGate.accepted ? result.Vline_peak_V : null} unit="V" d={1} base={baseRes.Vline_peak_V} tip={tx('configure.vLinePeakTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vPhasePeak')} value={pointGate.accepted ? result.Vphase_peak_V : null} unit="V" d={1} base={baseRes.Vphase_peak_V} tip={tx('configure.vPhasePeakTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vLineRms')} value={pointGate.accepted ? result.Vline_rms_V : null} unit="V" d={1} base={baseRes.Vline_rms_V} tip={tx('configure.vLineRmsTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vPhaseRms')} value={pointGate.accepted ? result.Vphase_rms_V : null} unit="V" d={1} base={baseRes.Vphase_rms_V} tip={tx('configure.vPhaseRmsTip')} blankTip={pointBlankTip} />
             {/* Absolute thresholds, not "vs reference": ≤12 A/mm² is a
                 continuous-duty winding, ≤25 a short-peak one, above that the
                 copper cooks whatever the reference did. */}
-            <MetricTile label={tx('configure.currDensity')} value={J_A_mm2} unit="A/mm²" d={1} base={baseJ}
+            <MetricTile label={tx('configure.currDensity')} value={J_A_mm2} unit="A/mm²" d={1} base={baseJ} tip={tx('configure.currDensityTip')}
               absLevel={J_A_mm2 <= 12 ? 'ok' : J_A_mm2 <= 25 ? 'warn' : 'bad'} />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
@@ -2687,14 +2683,14 @@ ${s1Text.tip}` : '';
                 Simulation card shows: strand area × parallel paths, so
                 I_phase / A_phase is exactly the density above it. */}
             <MetricTile label={tx('configure.phaseSection')} value={A_phase_mm2} unit="mm²" d={2}
-              base={baseA_phase} goodHi />
+              base={baseA_phase} goodHi tip={tx('configure.phaseSectionTip')} />
             {/* Wire coating (user 2026-08-30) — measured copper over the measured
                 winding window; turns and wire height move it, so the tuner can
                 say when a variant stops being windable.  Absolute thresholds:
                 hand-wound rectangular wire lives at ~45-60 %. */}
             {result.slot_fill_pct != null && (
               <MetricTile label={tx('configure.fillFactor')} value={result.slot_fill_pct} unit="%" d={1}
-                base={p.slot_fill0_pct ?? result.slot_fill_pct}
+                base={p.slot_fill0_pct ?? result.slot_fill_pct} tip={tx('configure.fillFactorTip')}
                 absLevel={result.slot_fill_pct <= 60 ? 'ok'
                           : result.slot_fill_pct <= 75 ? 'warn' : 'bad'} />
             )}
@@ -2720,13 +2716,13 @@ ${s1Text.tip}` : '';
           ) : (result.Ld_mH != null || result.Lq_mH != null || result.psi_pm_mWb != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.Ld_mH != null && (
-                <MetricTile label="Ld" value={result.Ld_mH} unit="mH" d={3} base={baseRes.Ld_mH ?? result.Ld_mH} />
+                <MetricTile label="Ld" value={result.Ld_mH} unit="mH" d={3} base={baseRes.Ld_mH ?? result.Ld_mH} tip={tx('configure.ldTip')} />
               )}
               {result.Lq_mH != null && (
-                <MetricTile label="Lq" value={result.Lq_mH} unit="mH" d={3} base={baseRes.Lq_mH ?? result.Lq_mH} />
+                <MetricTile label="Lq" value={result.Lq_mH} unit="mH" d={3} base={baseRes.Lq_mH ?? result.Lq_mH} tip={tx('configure.lqTip')} />
               )}
               {result.psi_pm_mWb != null && (
-                <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} />
+                <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} tip={tx('configure.psiPmTip')} />
               )}
               {result.Ld_mH != null && result.Lq_mH != null && result.Ld_mH > 0 && (
                 <MetricTile label={tx('configure.lqLd')} value={result.Lq_mH / result.Ld_mH} unit="" d={2}
@@ -2744,7 +2740,7 @@ ${s1Text.tip}` : '';
               unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline}
               blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
               blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
-              labelColor="#60a5fa" valueColor="#60a5fa"
+              labelColor="#60a5fa" valueColor="#60a5fa" tip={tx('configure.kvTip')}
             />
             {(result.Kt_Nm_per_A != null || coldConstantsUnavailable) && (
               <MetricTile label={coldConstantsUnavailable ? tx('configure.kt20c') : tx('configure.kt')}
@@ -2752,19 +2748,19 @@ ${s1Text.tip}` : '';
                 blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
                 blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
                 labelColor="#60a5fa" valueColor="#60a5fa"
-                tip={KT_BASIS_TIP(result.kt_km_basis)} />
+                tip={tx('configure.ktTip')} />
             )}
             <MetricTile label={coldConstantsUnavailable ? tx('configure.km20c') : tx('configure.km')}
               value={coldConstantsUnavailable ? null : result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
               blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
               blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
               labelColor="#60a5fa" valueColor="#60a5fa"
-              tip={coldConstantsUnavailable ? undefined : KT_BASIS_TIP(result.kt_km_basis)} />
+              tip={coldConstantsUnavailable ? undefined : tx('configure.kmTip')} />
             <MetricTile label={coldConstantsUnavailable ? tx('configure.kmPerMass20c') : tx('configure.kmPerMass')}
               value={coldConstantsUnavailable ? null : result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi
               blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
               blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
-              labelColor="#60a5fa" valueColor="#60a5fa" />
+              labelColor="#60a5fa" valueColor="#60a5fa" tip={coldConstantsUnavailable ? undefined : tx('configure.kmPerMassTip')} />
           </Box>
           {referenceTemperatureBasis && (
             <Typography title={referenceTemperatureBasis.sourceRecord}

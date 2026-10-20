@@ -6944,7 +6944,8 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
 #                  the numbers are arithmetic over the run's own rpm and mass
 #                  rows plus the machine's bearing cards, so a stored result can
 #                  be given them honestly without re-solving anything.
-_SUMMARY_SHAPE_V = 20   # v20: Ld/Lq differential (tangent reluctivity), the
+_SUMMARY_SHAPE_V = 21   # v21: the FULL mass of the loaded configuration + the per-mass figures on it (2026-10-20)
+                        # v20: Ld/Lq differential (tangent reluctivity), the
                         #      secant under Ld_fp_secant_mH (2026-10-11)
                         # v19: torque_method label, Coulomb mean/ripple, the
                         #      ripple self-check flag, gap-layer floor (2026-09-30)
@@ -7150,6 +7151,13 @@ def _refresh_summary_shape(res: dict) -> dict:
             coil_temp_c=float(args["coil_temp_c"]),
             geo_override=args.get("geo_override"),
             mode_requested=args.get("mode_requested"))
+        if s.get("mass_basis"):
+            # a rebuild must not move the run onto whatever configuration is loaded NOW: the full-mass stamp it already
+            # carries names the configuration it was taken from
+            from motor_ai_sim.modules.motor_mass import _FULL_STAMP_KEYS
+            for _k, _v in s.items():
+                if _k in _FULL_STAMP_KEYS:
+                    out["summary"][_k] = _v
         return out
     except Exception as _e:   # noqa: BLE001 — a refresh failure must not eat the hit
         log.warning("summary shape refresh failed: %s", _e)
@@ -8337,4 +8345,34 @@ def _build_transient_summary(
         except Exception as _e6s:   # noqa: BLE001
             _summary_out["six_phase"] = {**sbres["six_phase"],
                                          "summary_error": str(_e6s)}
+    # THE FULL MASS of what was simulated (owner 2026-10-20).  Only the live machine: an optimizer candidate is billed on
+    # its own active mass and never reads the loaded configuration.
+    if not skip_psi_pm_probe:
+        _stamp_full_mass(_summary_out, T=_Tavg, p_mech=_Pmech, p_cu_dc=_Pcu_dc, p_loss=_ploss)
     return _summary_out
+
+
+def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, p_loss: float) -> None:
+    """Add the FULL motor mass of the simulated geometry and the per-mass figures divided by it to ``summary`` (additive: the
+    run's own ``mass_total_kg`` = EM parts + shaft tube and the active per-mass figures stay what the optimizer and every
+    stored Compare point were built on).
+
+    The non-active parts (holders, rings, bearings, screws, board ...) come from the SERVER's ``mass_summary`` of the loaded
+    die / configuration and do not change with the electromagnetic geometry.  Nothing loaded, or a configuration without a
+    CAD bill of materials: ``mass_partial = True`` and no full-mass key - the surfaces then print the active mass labelled
+    "Active mass (no CAD build)"."""
+    import math as _m
+    try:
+        from motor_ai_sim.modules import motor_mass as _mm
+        from motor_ai_sim.routes import family as _fam
+        ctx = _fam._read_ctx() or {}
+        die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
+        if die and cfg:
+            _mm.stamp_run_summary(
+                summary, die, cfg,
+                raw={"T_em_avg_Nm": T, "P_mech_W": p_mech, "P_loss_total_W": p_loss,
+                     "Km_Nm_sqrtW": (T / _m.sqrt(p_cu_dc) if p_cu_dc > 1e-9 and T > 0 else None)})
+        else:
+            summary.update(mass_partial=True, mass_partial_reason="no die / configuration is loaded")
+    except Exception as exc:                                    # noqa: BLE001 - a mass hiccup never fails a run
+        summary.update(mass_partial=True, mass_partial_reason="the full mass could not be read (%s)" % exc)

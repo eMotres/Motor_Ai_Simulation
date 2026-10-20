@@ -853,10 +853,10 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Ripple</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>THD_LL</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Eff</TableCell>
-              <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Nm/kg</TableCell>
+              <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Nm/kg (active)</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>T (Nm)</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>I (A)</TableCell>
-              <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Mass</TableCell>
+              <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Active mass</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>cost</TableCell>
             </TableRow>
           </TableHead>

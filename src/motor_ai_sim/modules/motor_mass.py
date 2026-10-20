@@ -634,6 +634,80 @@ def mass_summary(die: str, config: str, *, dies_dir: Optional[os.PathLike] = Non
             "scope": fm.scope, "kit": fm.kit}
 
 
+def run_mass_fields(die: str, config: str, run_active_kg: float, *, dies_dir: Optional[os.PathLike] = None,
+                    cad_dir: Optional[os.PathLike] = None) -> Dict[str, Any]:
+    """THE FULL MASS OF A SIMULATED GEOMETRY (owner 2026-10-20: "everywhere the full mass").
+
+    A transient run weighs only the electromagnetic parts + the shaft tube of the geometry it solved (``run_active_kg`` =
+    the summary's ``mass_total_kg``).  The parts around them - holders, rings, bearings, screws, board, pins, enamel - do not
+    change with that geometry, so the full mass of the run is its own active mass plus the configuration's non-active mass
+    (``mass_summary``: ``full_kg - active_kg``) of the loaded ``die`` / ``config``.  Returns the fields the summary carries
+    next to its active ones; the server computes them, the browser only prints them:
+
+    * ``mass_basis`` - "die / config" the non-active parts were taken from;
+    * ``mass_partial`` - True when that configuration has no CAD bill of materials (or it cannot be accounted for): then NO
+      full mass is given and every surface prints the active mass as "Active mass (no CAD build)";
+    * ``mass_non_active_kg`` / ``mass_full_kg`` - only when not partial (the non-active part of a frameless kit may be
+      negative: the kit has no shaft tube);
+    * ``mass_scope`` / ``mass_partial_reason``.
+    """
+    out: Dict[str, Any] = {"mass_basis": "%s / %s" % (die, config)}
+    try:
+        s = mass_summary(die, config, dies_dir=dies_dir, cad_dir=cad_dir)
+    except Exception as exc:                                    # noqa: BLE001 - a mass hiccup never fails a run
+        s, why = None, "the full mass could not be read (%s)" % exc
+    else:
+        why = "the catalog cannot weigh this configuration here"
+    if s is None or s.get("partial"):
+        out["mass_partial"] = True
+        out["mass_partial_reason"] = (s or {}).get("partial_reason") or why
+        return out
+    non_active = float(s["non_active_kg"])
+    out.update(mass_partial=False, mass_scope=s.get("scope") or "full motor",
+               mass_non_active_kg=round(non_active, 5), mass_full_kg=round(float(run_active_kg) + non_active, 5))
+    return out
+
+
+#: summary key of a per-mass figure over the FULL mass -> (summary key it is built from, rounding digits).  The active
+#: figures (``torque_per_mass_Nm_kg`` ...) stay what the optimizer and every stored Compare point were built on.
+_FULL_PER_MASS = (("torque_per_mass_full_Nm_kg", "T_em_avg_Nm", 3), ("power_per_mass_full_W_kg", "P_mech_W", 1),
+                  ("loss_density_full_W_kg", "P_loss_total_W", 1), ("Km_per_mass_full_Nm_sqrtW_kg", "Km_Nm_sqrtW", 4))
+
+
+_FULL_STAMP_KEYS = ("mass_basis", "mass_partial", "mass_partial_reason", "mass_scope", "mass_non_active_kg", "mass_full_kg",
+                    *(k for k, _b, _n in _FULL_PER_MASS))
+
+
+def stamp_run_summary(summary: Dict[str, Any], die: str, config: str, *, raw: Optional[Dict[str, Optional[float]]] = None,
+                      dies_dir: Optional[os.PathLike] = None, cad_dir: Optional[os.PathLike] = None) -> Dict[str, Any]:
+    """Stamp the FULL mass of ``die`` / ``config`` and the per-mass figures over it onto a run ``summary`` (in place; also
+    returned).  Additive: ``mass_total_kg`` (the run's active mass) and the active per-mass figures are not touched.
+
+    ``raw`` = the unrounded base numbers of a live run (``{"T_em_avg_Nm": .., "P_mech_W": .., "P_loss_total_W": ..,
+    "Km_Nm_sqrtW": ..}``); a stored summary passes nothing and the stored (rounded) base numbers are divided instead.  A run
+    with no mass of its own (a summary without ``mass_total_kg``) gets ``mass_partial`` and no full mass."""
+    for k in _FULL_STAMP_KEYS:                       # a re-stamp never leaves the previous configuration's numbers behind
+        summary.pop(k, None)
+    try:
+        run_kg = float(summary.get("mass_total_kg"))
+    except (TypeError, ValueError):
+        summary.update({"mass_basis": "%s / %s" % (die, config), "mass_partial": True,
+                        "mass_partial_reason": "the run carries no mass of its own"})
+        return summary
+    fields = run_mass_fields(die, config, run_kg, dies_dir=dies_dir, cad_dir=cad_dir)
+    summary.update(fields)
+    full = fields.get("mass_full_kg")
+    if not full or full <= 1e-9:
+        return summary
+    for key, base_key, nd in _FULL_PER_MASS:
+        base = (raw or {}).get(base_key)
+        if base is None:
+            base = summary.get(base_key)
+        if base is not None:
+            summary[key] = round(float(base) / full, nd)
+    return summary
+
+
 def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = None,
                     choices: Optional[Dict[str, str]] = None) -> List[MotorPart]:
     """The non-active parts of the CAD BOM (kept for callers that want only those): empty without a BOM."""

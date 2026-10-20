@@ -191,6 +191,8 @@ def test_anonymous_allowlist_is_exactly_health_me_and_sign_in():
     for ok in ("/api/health", "/api/me", "/api/me/", "/api/version",
                # the visitor's chat (2026-09-17) — rate-limited, product-only
                "/api/support/chat",
+               # the landing page's public motor preview (2026-10-20) - allow-listed numbers, cached, rate-limited
+               "/api/public/motors",
                "/api/auth/login", "/api/auth/google", "/api/auth/logout",
                # everything outside /api is the SPA's own bundle
                "/", "/index.html", "/assets/index-abc.js"):
@@ -198,7 +200,8 @@ def test_anonymous_allowlist_is_exactly_health_me_and_sign_in():
     for no in ("/api/family/tree", "/api/family/report/x/y", "/api/geometry",
                "/api/auth/users", "/api/auth/sessions", "/api/auth/password",
                "/api/health/secret", "/api/mechanical/last", "/api",
-               "/api/support", "/api/support/chat/x", "/api/admin/support"):
+               "/api/support", "/api/support/chat/x", "/api/admin/support",
+               "/api/public", "/api/public/motors/x", "/api/public/other"):
         assert anonymous_allowed(no) is False, no
 
 

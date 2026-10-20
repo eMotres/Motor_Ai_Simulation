@@ -136,6 +136,7 @@ from motor_ai_sim.routes.cluster import router as cluster_router
 from motor_ai_sim.routes.compute_nodes import (
     router as compute_nodes_router, admin_router as compute_nodes_admin_router)
 from motor_ai_sim.routes.support import router as support_router
+from motor_ai_sim.routes.public_motors import router as public_motors_router
 from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.system_graph import router as system_graph_router
 from motor_ai_sim.routes.components import router as components_router
@@ -384,6 +385,7 @@ app.include_router(cluster_router)
 app.include_router(compute_nodes_router)
 app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)
+app.include_router(public_motors_router)   # GET /api/public/motors: the landing page's motor preview (anonymous)
 app.include_router(modules_router)
 # /api/system/graph - the Simulations > System view (engineer + admin, read-only)
 app.include_router(system_graph_router)

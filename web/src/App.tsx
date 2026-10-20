@@ -82,6 +82,7 @@ import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './li
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
+import { consumeOpenInConfigure } from './lib/landingMotors';
 import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
 import { watchChunkImport } from './lib/chunkReload';
@@ -511,7 +512,9 @@ function App() {
   useEffect(() => {
     if (!authResolved || !signedIn || !standardUser || landedRef.current) return;
     landedRef.current = true;
-    setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor));
+    // a motor card on the landing page ("Open in Configure") counts as a choice made there
+    const fromLanding = consumeOpenInConfigure();
+    setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor || fromLanding));
   }, [authResolved, signedIn, standardUser, defaultMotor, setActiveTab]);
 
   // ── Tab registry — the bar AND the content are GENERATED from this list.

@@ -160,6 +160,7 @@ body{margin:0;background:#f7f6f3}
 #seo-landing .auth{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin:20px 0}
 #seo-landing .auth a{display:inline-block;padding:11px 26px;border-radius:8px;border:2px solid #1d4ed8;font-weight:600;text-decoration:none;background:#1d4ed8;color:#fff}
 #seo-landing .auth a.alt{background:#fff;color:#1d4ed8}
+#seo-landing .auth-note{text-align:center;margin:6px 0;color:#334155}
 #seo-landing .slow-note{display:none;margin:16px 0;padding:12px 16px;border:1px solid #b45309;border-radius:8px;background:#fffbeb;color:#451a03}
 #seo-landing.slow .slow-note{display:block}
 #seo-landing ol.chain{list-style:none;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:0}
@@ -172,20 +173,22 @@ body{margin:0;background:#f7f6f3}
 #seo-landing figure img{display:block;width:100%;height:auto}
 #seo-landing figcaption{padding:8px 12px;font-weight:600;border-top:1px solid #94a3b8;background:#f1f5f9}
 #seo-landing footer{margin-top:48px;padding-top:16px;border-top:1px solid #94a3b8;text-align:center;font-size:.9rem;color:#334155}
-html[data-theme="dark"] body{background:#0f172a}html[data-theme="dark"] #seo-landing{background:#0f172a;color:#f1f5f9}html[data-theme="dark"] #seo-landing a{color:#93c5fd}html[data-theme="dark"] #seo-landing h1,html[data-theme="dark"] #seo-landing h2,html[data-theme="dark"] #seo-landing h3{color:#f8fafc}html[data-theme="dark"] #seo-landing .lead{color:#e2e8f0}html[data-theme="dark"] #seo-landing footer{color:#cbd5e1}html[data-theme="dark"] #seo-landing .auth a{background:#3b82f6;border-color:#3b82f6;color:#0f172a}html[data-theme="dark"] #seo-landing .auth a.alt{background:#0f172a;color:#93c5fd;border-color:#93c5fd}html[data-theme="dark"] #seo-landing .grid>*,html[data-theme="dark"] #seo-landing footer,html[data-theme="dark"] #seo-landing figure,html[data-theme="dark"] #seo-landing figcaption{border-color:#475569}html[data-theme="dark"] #seo-landing .grid>*,html[data-theme="dark"] #seo-landing figure,html[data-theme="dark"] #seo-landing figcaption,html[data-theme="dark"] #seo-landing ol.chain li{background:#1e293b}html[data-theme="dark"] #seo-landing .slow-note{background:#451a03;color:#fef3c7;border-color:#f59e0b}html[data-theme="dark"] #seo-landing .concept{background:#fff;border-radius:12px;padding:8px}
+html[data-theme="dark"] body{background:#0f172a}html[data-theme="dark"] #seo-landing{background:#0f172a;color:#f1f5f9}html[data-theme="dark"] #seo-landing a{color:#93c5fd}html[data-theme="dark"] #seo-landing h1,html[data-theme="dark"] #seo-landing h2,html[data-theme="dark"] #seo-landing h3{color:#f8fafc}html[data-theme="dark"] #seo-landing .lead{color:#e2e8f0}html[data-theme="dark"] #seo-landing footer,html[data-theme="dark"] #seo-landing .auth-note{color:#cbd5e1}html[data-theme="dark"] #seo-landing .auth a{background:#3b82f6;border-color:#3b82f6;color:#0f172a}html[data-theme="dark"] #seo-landing .auth a.alt{background:#0f172a;color:#93c5fd;border-color:#93c5fd}html[data-theme="dark"] #seo-landing .grid>*,html[data-theme="dark"] #seo-landing footer,html[data-theme="dark"] #seo-landing figure,html[data-theme="dark"] #seo-landing figcaption{border-color:#475569}html[data-theme="dark"] #seo-landing .grid>*,html[data-theme="dark"] #seo-landing figure,html[data-theme="dark"] #seo-landing figcaption,html[data-theme="dark"] #seo-landing ol.chain li{background:#1e293b}html[data-theme="dark"] #seo-landing .slow-note{background:#451a03;color:#fef3c7;border-color:#f59e0b}html[data-theme="dark"] #seo-landing .concept{background:#fff;border-radius:12px;padding:8px}
 @media (min-width:600px){#seo-landing{padding-left:32px;padding-right:32px}}
 @media (min-width:700px){#seo-landing h1{font-size:2.4rem}#seo-landing .concept{display:block}}
 @media (min-width:900px){#seo-landing .grid.steps{grid-template-columns:repeat(5,1fr)}}
 `.trim();
 
-/** Sign in + Request access as plain links: they open the app's e-mail dialog once the
- *  bundle runs (?signin=1 / ?signup=1, see requestedAuthMode in lib/localAuth.ts) and
- *  stay visible and readable when it never does.  Same locale path, so a Chinese page
- *  stays Chinese. */
+/** The way in as plain links: "Create free account with e-mail" (the button), the one line that
+ *  says it is free, and a small "Already have an account? Sign in".  They open the app's e-mail
+ *  dialog once the bundle runs (?signup=1 / ?signin=1, see requestedAuthMode in
+ *  lib/localAuth.ts) and stay visible and readable when it never does (the Google button needs
+ *  the script, so it is only in the app).  Same locale path, so a Chinese page stays Chinese. */
 export function authLinks(L, loc) {
   const t = (k) => esc(get(L, k));
-  return `<p class="auth"><a href="${loc.path}?signin=1">${t('hero.signIn')}</a>`
-    + `<a class="alt" href="${loc.path}?signup=1">${t('hero.request')}</a></p>`;
+  return `<p class="auth"><a href="${loc.path}?signup=1">${t('hero.createEmail')}</a></p>`
+    + `<p class="auth-note"><strong>${t('hero.free')}</strong></p>`
+    + `<p class="auth-note">${t('hero.haveAccount')} <a class="plain" href="${loc.path}?signin=1">${t('hero.signInLink')}</a></p>`;
 }
 
 /** The landing text as semantic HTML (what Landing.tsx shows, without the widgets). */

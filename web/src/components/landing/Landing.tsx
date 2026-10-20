@@ -3,18 +3,21 @@
  * scroll (owner 2026-10-14: "put the whole concept on the first page as graphs
  * and pictures, so that everything is clear").
  *
- * Order of importance: what it is and the slogan, the concept diagram (idea to
- * product around the AeroStator Core machine, the open ecosystem as the outer
- * ring), the simulation pictures, why it is open and free, applications, how to
- * start.  Sign in and Request access are at the top and again at the end.
+ * Order of importance: what it is and the slogan, the way in (free account, said
+ * in one line), the public motors, the concept diagram (idea to product around
+ * the AeroStator Core machine, the open ecosystem as the outer ring), the
+ * simulation pictures, why it is open and free, applications, how to start.  The
+ * way in is at the top and again at the end.
  *
- * WHAT IT MAY TOUCH.  Nothing.  The page renders from static props, inline SVG
- * and the three WebPs in `public/landing/`; the only network the page can cause
- * is the header's own `/api/me` + `/api/version` and, when the visitor presses
- * the button, the login endpoints (every other `/api/*` route answers 401 to an
- * anonymous caller, and a landing that fires them is a console full of red).
+ * WHAT IT MAY TOUCH.  Nothing but the open routes.  The page renders from static
+ * props, inline SVG and the three WebPs in `public/landing/`; the only network the
+ * page can cause is the header's own `/api/me` + `/api/version`, the public motor
+ * preview `GET /api/public/motors` (components/landing/PublicMotors.tsx: allow-listed
+ * datasheet numbers, cached, rate-limited) and, when the visitor presses a button,
+ * the login endpoints (every other `/api/*` route answers 401 to an anonymous
+ * caller, and a landing that fires them is a console full of red).
  *
- * ONE AUTH PATH.  The button calls `useAuth().signIn()`, which opens the same
+ * ONE AUTH PATH.  The buttons call `useAuth().signIn()` (landingSignUp.ts), which opens the same
  * `LoginDialog` the header's Sign in button opens; this component never loads
  * GIS itself and only *labels* the button after the client id.
  *
@@ -35,11 +38,13 @@ import React from 'react';
 import { Box, Button, Link, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
-import { useAuth } from '../../contexts/AuthContext';
+import { forgetLandingMotor } from '../../lib/landingMotors';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 import BrandLogo from '../common/BrandLogo';
 import CookieSettingsLink from '../common/CookieSettingsLink';
 import ConceptDiagram from './ConceptDiagram';
+import PublicMotors from './PublicMotors';
+import { useSignUp } from './landingSignUp';
 import { STEP_IDS } from './conceptLayout';
 import { BoatIcon, DroneIcon, PlusIcon, RobotIcon } from './landingIcons';
 import { APP_IDS, CHAIN_IDS, DEV_LINKS, OPEN_IDS } from './landingLinks';
@@ -68,15 +73,6 @@ export const FEATURES: Feature[] = [
   { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 749 },
 ];
 
-/** The button's words.  Only a deployment that HAS a Google client id may
- *  promise Google; everywhere else the same dialog offers a password. */
-export function signInLabel(
-  clientId: string | undefined | null,
-  labels: { google: string; plain: string } = { google: 'Sign in with Google', plain: 'Sign in' },
-): string {
-  return clientId ? labels.google : labels.plain;
-}
-
 /** Is this the visitor the landing is for?  The signed-out half of App's
  *  `signedIn = !enforced || !!user`: an unenforced backend (local dev) is
  *  never shown the landing, so the dev server boots exactly as it did. */
@@ -98,43 +94,49 @@ const GoogleMark: React.FC = () => (
   </Box>
 );
 
-/** Sign in + Request access: at the top and again at the end.
- *  E-mail is a first-class method next to Google (Google is blocked in mainland
- *  China): "Request access" opens the create-account form (confirmation link by
- *  e-mail, admin approval when mail is down) instead of a mailto: that does nothing
- *  inside WeChat's browser. */
+/** The way in: at the top and again at the end.  Two free-account buttons (Google first, e-mail next
+ *  to it - Google is blocked in mainland China), one line that says what it costs, and a small
+ *  "already have an account" link.  Sign-up is automatic and free (owner rule): no approval step.
+ *  The e-mail button opens the create-account form - the old "Request access" button did exactly
+ *  that (never a contact form or a mailto:), so nothing else needed a home. */
 const AuthButtons: React.FC = () => {
   const { t } = useTranslation('landing');
-  const { signIn } = useAuth();
+  const signUp = useSignUp();
   const btn = { textTransform: 'none', fontSize: '1rem', fontWeight: 600, px: 3.5, py: 1.25,
     borderRadius: 2 } as const;
+  // a generic sign-up must not carry a motor chosen on an earlier visit to the cards below
+  const run = (f: () => void) => () => { forgetLandingMotor(); f(); };
   return (
-    <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5 }}>
-      {GOOGLE_CLIENT_ID ? (
-        <>
-          <Button variant="contained" size="large"
-            onClick={() => { void signIn({ tab: 'google' }).catch(() => {}); }}
-            startIcon={<GoogleMark />} sx={btn}>
-            {signInLabel(GOOGLE_CLIENT_ID, { google: t('hero.signInGoogle'), plain: t('hero.signIn') })}
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5 }}>
+        {GOOGLE_CLIENT_ID ? (
+          <>
+            <Button variant="contained" size="large" onClick={run(signUp.google)}
+              startIcon={<GoogleMark />} sx={btn}>
+              {t('hero.createGoogle')}
+            </Button>
+            <Button variant="outlined" size="large" onClick={run(signUp.email)} sx={btn}>
+              {t('hero.createEmail')}
+            </Button>
+          </>
+        ) : (
+          <Button variant="contained" size="large" onClick={run(signUp.email)} sx={btn}>
+            {t('hero.createEmail')}
           </Button>
-          <Button variant="outlined" size="large"
-            onClick={() => { void signIn({ tab: 'email', mode: 'signin' }).catch(() => {}); }}
-            sx={btn}>
-            {t('hero.signInEmail')}
-          </Button>
-        </>
-      ) : (
-        <Button variant="contained" size="large"
-          onClick={() => { void signIn({ tab: 'email', mode: 'signin' }).catch(() => {}); }}
-          sx={btn}>
-          {signInLabel(GOOGLE_CLIENT_ID, { google: t('hero.signInGoogle'), plain: t('hero.signIn') })}
-        </Button>
-      )}
-      <Button variant="outlined" size="large"
-        onClick={() => { void signIn({ tab: 'email', mode: 'register' }).catch(() => {}); }}
-        sx={btn}>
-        {t('hero.request')}
-      </Button>
+        )}
+      </Box>
+      <Typography component="p" data-testid="free-line" sx={{
+        fontSize: '0.95rem', fontWeight: 600, color: 'text.secondary', m: 0 }}>
+        {t('hero.free')}
+      </Typography>
+      <Typography component="p" sx={{ fontSize: '0.88rem', color: 'text.secondary', m: 0 }}>
+        {t('hero.haveAccount')}{' '}
+        <Link component="button" type="button" underline="hover" onClick={run(signUp.signIn)}
+          data-testid="have-account-signin"
+          sx={{ fontWeight: 600, fontSize: 'inherit', verticalAlign: 'baseline' }}>
+          {t('hero.signInLink')}
+        </Link>
+      </Typography>
     </Box>
   );
 };
@@ -297,6 +299,9 @@ const Landing: React.FC = () => {
           <Box sx={{ mb: 3.5 }}><HeroChain /></Box>
           <AuthButtons />
         </Box>
+
+        {/* ── The public motors, with their rated numbers (hidden when there are none) ── */}
+        <PublicMotors />
 
         {/* ── The concept diagram (wide screens) / the same five steps as cards ── */}
         <Section id="concept" title={t('concept.title')} sub={t('concept.sub')}>

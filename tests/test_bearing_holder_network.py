@@ -344,3 +344,66 @@ def test_the_real_network_on_a_mesh_closes_and_reports_signed_flows():
     assert s["t_bearing_max_c"] == pytest.approx(max(
         max(e["inner_ring_c"], e["balls_c"], e["outer_ring_c"])
         for e in s["ends"]), abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# The holder rim in the coolant jacket (2026-10-20, G2-L40)
+# ---------------------------------------------------------------------------
+
+_RIM_CAD = {"holder": {"contact_core_mm2": 60.0, "film_area_mm2": 600.0,
+                       "char_len_mm": 24.0, "coolant_area_mm2": 150.0,
+                       "arm_segments_mm": [[4.0, 40.0], [4.0, 30.0]]}}
+
+
+def _rim_net(coolant, cad=_RIM_CAD):
+    kw = dict(card=CARD_618_8, stack_m=L_STACK, shaft_area_stack_m2=49.64e-6,
+              shaft_bore_d_m=5.9e-3, stator_od_m=0.024, stator_bore_m=0.012)
+    ends = [{"end": e, "card": CARD_618_8, "f_r_n": 0.18, "p_w": 0.05,
+             "geom": bh.end_geometry(end=e, cad=cad, **kw)} for e in "AB"]
+    return bh.network(ends=ends, k_shaft=42.0, rpm=13000, t_ambient_c=T_AMB,
+                      air_mode="still", air_speed_mps=0.0, holder_wall_c={},
+                      emissivity=0.9, symmetry_mult=1, shaft_tags=[DOM_SHAFT],
+                      stator_tags=[DOM_STATOR], coolant=coolant)
+
+
+def test_a_wetted_holder_rim_closes_its_energy_and_cools_the_bearing():
+    dry = _rim_net(None)
+    assert not any(n["name"].endswith("_rim") for n in dry["nodes"])
+    # no wetted area: the jacket changes nothing at all
+    cad0 = {"holder": dict(_RIM_CAD["holder"], coolant_area_mm2=0.0)}
+    assert _rim_net({"h_W_per_m2K": 1060.0, "t_sink_c": T_AMB}, cad0) == _rim_net(None, cad0)
+    wet = _rim_net({"h_W_per_m2K": 1060.0, "t_sink_c": T_AMB, "source": "test"})
+    rim = {n["name"]: n for n in wet["nodes"]}["brgA_rim"]
+    assert rim["G_W_per_K"] == pytest.approx(1060.0 * 150e-6)
+    # the pads leave the RIM, not the holder node
+    pad = {s_["name"]: s_ for s_ in wet["sinks"]}["bearing_A_holder_stator"]
+    assert pad["node"] == "brgA_rim"
+    assert any(r_["path"] == "holder rim → coolant jacket"
+               for r_ in wet["ends"][0]["resistances"])
+    r_d = _solve(sinks=dry["sinks"], nodes=dry["nodes"], links=dry["links"])
+    r_w = _solve(sinks=wet["sinks"], nodes=wet["nodes"], links=wet["links"])
+    s_d = bh.summarize(r_d, dry, t_ambient_c=T_AMB)
+    s_w = bh.summarize(r_w, wet, t_ambient_c=T_AMB)
+    for e in s_w["ends"]:
+        # shaft side + stator side + friction leave by the air film AND the jacket
+        assert (e["shaft_to_bearing_W"] + e["stator_to_holder_W"] + e["friction_W"]
+                == pytest.approx(e["holder_to_air_W"] + e["holder_to_coolant_W"],
+                                 abs=5e-4))
+        assert e["holder_to_coolant_W"] > 0.0
+        assert T_AMB < e["holder_rim_c"] < e["holder_c"]
+    assert s_w["t_bearing_max_c"] < s_d["t_bearing_max_c"]
+    assert s_w["holders_to_coolant_W"] > 0.0 and s_d["holders_to_coolant_W"] == 0.0
+    # the delta gains the jacket on its air side, and the rim's stator leg
+    d_d, d_w = dry["ends"][0]["delta"], wet["ends"][0]["delta"]
+    assert d_w["G_rotor_air_W_per_K"] > d_d["G_rotor_air_W_per_K"]
+    assert d_w["G_stator_air_W_per_K"] > d_d["G_stator_air_W_per_K"]
+    assert d_w["coolant_sink_c"] == pytest.approx(T_AMB)
+
+
+def test_an_infinite_jacket_film_puts_the_rim_at_the_coolant():
+    t_c = 25.0
+    wet = _rim_net({"h_W_per_m2K": 1.0e9, "t_sink_c": t_c})
+    r = _solve(sinks=wet["sinks"], nodes=wet["nodes"], links=wet["links"])
+    s_ = bh.summarize(r, wet, t_ambient_c=T_AMB)
+    for e in s_["ends"]:
+        assert e["holder_rim_c"] == pytest.approx(t_c, abs=0.01)

@@ -11,7 +11,7 @@ What is pinned here (no test touches a real provider; the model is a recorder):
 * CONTEXT SANITISATION - only whitelisted keys, no secret-looking keys, no
   token / cookie / e-mail in any string, no query string in a failed call's path,
   bounded size; the identity and the build come from the server;
-* the PROMPT FOR THE ROLE - a regular account's prompt knows two tabs, staff's
+* the PROMPT FOR THE ROLE - a regular account's prompt knows three tabs (Motors, Configure, 3D model), staff's
   knows all of them (held to ``web/src/App.tsx``), a visitor gets the small one
   plus the visitor note and never a session;
 * the prompt's Configure description - every label in bold is a string the
@@ -343,12 +343,12 @@ def test_the_model_gets_the_sanitised_context_as_hidden_text(env):
     assert '"path":"/api/x"' in sp
 
 
-def test_a_regular_account_gets_the_two_tab_prompt(env):
+def test_a_regular_account_gets_the_three_tab_prompt(env):
     chat(headers=env["client"])
     sp = _system_of_last_call(env)
     assert sp.startswith(P.USER_PROMPT)
     assert "TICKET_DRAFT" in sp, "a signed-in user gets the ticket protocol"
-    assert "exactly TWO tabs" in sp
+    assert "exactly THREE tabs" in sp and "**3D model**" in sp
     assert R.missing_tab_mentions(sp) == [], "the user prompt names a tab the account has not got"
     for gone in ("**Geometry**", "**Mesh**", "**Electromagnetic**", "**Optimization**", "**Cost**"):
         assert gone not in sp, gone
@@ -441,7 +441,8 @@ def test_the_configure_section_has_no_stale_controls():
     for stale in ("FILM H", "Film h", "Performance across speed", "Efficiency map",
                   "eta drive", "Report tab", "**Report**"):
         assert stale not in p, stale
-    assert "charts are hidden" in p.lower()
+    assert "charts are hidden" not in p.lower()          # the propeller load chart exists (marker, S1 line)
+    assert "Load chart" in p and "marker line" in p and "end of propeller data" in p
 
 
 def test_the_prompts_keep_the_commercial_rules():
@@ -522,3 +523,50 @@ def test_live_gemini_answers_obey_the_rules():
         if bad:
             problems[ex["id"]] = bad
     assert problems == {}, problems
+
+
+# ── 2026-10-20: what the assistant must know after the launch week ──────────
+
+#: Machines that are private (closed motors): the static prompt must never name one.
+_PRIVATE_NAMES = ("150_35", "CIANO10", "CIANO28 150", "L155", "L180", "L35", "NUAA", "Ø200", "200 mm")
+
+
+@pytest.mark.parametrize("prompt", [P.USER_PROMPT, P.STAFF_PROMPT])
+def test_the_prompt_knows_rated_mass_and_the_platform_facts(prompt):
+    low = prompt.lower()
+    # rated is always a continuous point, with the two rated temperatures
+    assert "rated is always a continuous point" in low
+    assert "180 °C" in prompt and "70 °C" in prompt and "30 °C air" in prompt
+    assert "class n" in low and "200 °C" in prompt
+    assert "bearing never limits rated" in low
+    # the full mass is the mass shown; the active mass is separate
+    assert "full motor mass" in low and "active mass" in low
+    # public motors, 3-D, advanced simulation, production link, MCP, co-development
+    assert "initial availability expected in november 2026" in low
+    assert "CIANO14 50 L15" in prompt and "CIANO28 85 L15" in prompt and "frameless kit" in low
+    assert "simplified step" in low and "without an nda" in low
+    assert "advanced simulation access" in low and "prepare a ticket" in low
+    assert "link alone gives no access" in low and "membership" in low
+    assert "https://aerostator.com/mcp" in prompt and "agent key" in low
+    assert "work in progress and not available yet" in low
+
+
+@pytest.mark.parametrize("prompt", [P.USER_PROMPT, P.STAFF_PROMPT])
+def test_the_prompt_explains_cooling_and_the_method_briefly(prompt):
+    sec = prompt[prompt.index("## How AeroStator computes"): prompt.index("## Parameter glossary")]
+    low = sec.lower()
+    for needle in ("propeller cooling", "still air", "housed vs open frame", "liquid", "thermal model",
+                   "coupled em–thermal loop", "solve to continuous", "energy / flux-linkage",
+                   "not the maxwell stress band", "efficiency** is at the shaft", "pwm loss",
+                   "controller loss", "configure vs fem", "apache-2.0", "details are under nda",
+                   "offer to prepare a ticket"):
+        assert needle in low, needle
+    assert len(sec) < 6500, "the method section must stay compact"
+
+
+@pytest.mark.parametrize("prompt", [P.USER_PROMPT, P.STAFF_PROMPT, support.VISITOR_NOTE, P.TICKET_PROTOCOL])
+def test_the_prompts_leak_no_doc_paths_private_motors_or_patent_content(prompt):
+    assert "docs/" not in prompt and ".md" not in prompt, "no internal document paths or numbers"
+    for name in _PRIVATE_NAMES:
+        assert name not in prompt, f"private machine named in the prompt: {name}"
+    assert "PCT" not in prompt and "claim 1" not in prompt.lower()

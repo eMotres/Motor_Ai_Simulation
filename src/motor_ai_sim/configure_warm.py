@@ -129,7 +129,8 @@ def warm_propellers(*, limit_s: float = 1800.0) -> Dict[str, Any]:
                 model = s1.load_model(die, cfg)
             except Exception:                                   # noqa: BLE001 - no S1 model: no load chart
                 continue
-            drives = ["sine"] + [d for d in (pr.get("drive_variant"), pr.get("drive_variant_unmodelled"))
+            drives = ["sine"] + [d for d in (pr.get("drive_variant"), pr.get("drive_variant_unmodelled"),
+                                             pr.get("drive_variant_suggested"))
                                  if d and d in (model.get("drives") or {})]
             pack = ld.preset_pack(pr)
             props = [p for p in (cooling_options(die, cfg).get("propellers") or [])

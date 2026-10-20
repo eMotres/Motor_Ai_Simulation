@@ -154,7 +154,7 @@ def test_a_preset_falls_back_to_the_die_geometry_and_carries_its_variants():
     assert p["knobs"]["L_mm"] == 99 and p["knobs"]["N"] == 5 and p["knobs"]["wireH_mm"] == 0.7
     assert p["knobs"]["I_A"] is None and p["knobs"]["rpm"] is None         # unknown stays unknown
     assert [v["id"] for v in p["pwm_variants"]] == ["si_48k", "gan_48k"]
-    assert p["drive_variant"] == "si_48k"                                   # opens on its first variant
+    assert p["drive_variant"] is None and p["drive_variant_suggested"] == "si_48k"   # opens on Sine (owner 2026-10-20)
     assert cl.preset_of(doc, die_geo, None)["drive_variant"] is None       # no variants: Sine
 
 
@@ -179,7 +179,7 @@ def test_the_context_route_lists_the_dies_presets_and_their_own_variants(tmp_pat
     assert len(pr[0]["pwm_variants"]) == 5 and len(pr[1]["pwm_variants"]) == 3
     assert all(v["build"]["length_mm"] == 12.0 for v in pr[0]["pwm_variants"])
     assert all(v["build"]["length_mm"] == 20.0 for v in pr[1]["pwm_variants"])
-    assert pr[0]["drive_variant"] == "si_48k" and pr[0]["battery"]["cells"] == 6
+    assert pr[0]["drive_variant"] is None and pr[0]["drive_variant_suggested"] == "si_48k" and pr[0]["battery"]["cells"] == 6
     assert pr[1]["battery"]["cells"] == 12 and pr[1]["knobs"]["nP"] == 2
     assert [{k: p[k] for k in ("name", "current_A", "rpm")} for p in pr[0]["duty_points"]] == [
         {"name": "peak", "current_A": 48.79, "rpm": 14400.0},

@@ -1004,9 +1004,14 @@ def get_motor_passport(motor_id: str,
 # Configure's physical limits (owner 2026-10-05) — see motor_ai_sim.configure_limits
 # ---------------------------------------------------------------------------
 
-def _die_docs_of(fam: Optional[dict]) -> tuple:
+def _die_docs_of(fam: Optional[dict], access_info: Optional[dict] = None) -> tuple:
     """``(configuration docs, die geometry)`` of the die a family document belongs to —
-    every configuration the die has, found the way ``_family_doc_of_motor`` finds one."""
+    EVERY configuration the die has, found the way ``_family_doc_of_motor`` finds one.
+
+    Not filtered for the caller (F1, pre-launch review 2026-10-20): the Configure context built from these docs
+    is a STORED answer shared by every caller, so it must not depend on who built it.  ``access_info`` (when
+    given) receives ``{config name: [die entry name, file stem, file path, layer]}`` - what
+    ``_visible_context`` asks ``motor_access.may_see_config_file`` on EVERY request before a preset is served."""
     die = str((fam or {}).get("die") or "").strip()
     if not die:
         return [], None
@@ -1022,18 +1027,16 @@ def _die_docs_of(fam: Optional[dict]) -> tuple:
             except Exception:                                   # noqa: BLE001
                 dy = {}
             docs = []
-            from motor_ai_sim import motor_access as _ma
-            _acc = _ma.catalog_access(None)
             for f in sorted(d.glob("*.yaml")):
                 if f.name == "die.yaml":
                     continue
-                if not _ma.may_see_config_file(_acc, str(e.get("name") or die), f.stem, f,
-                                               layer=e.get("layer")):
-                    continue         # a hidden sibling configuration is not part of this die for the caller
                 c = _fsc_read_yaml(f) or {}
                 if isinstance(c, dict) and c.get("name"):
                     c.setdefault("die", die)
                     docs.append(c)
+                    if access_info is not None:
+                        access_info[str(c["name"])] = [str(e.get("name") or die), f.stem, str(f),
+                                                       e.get("layer")]
             return docs, (dy.get("geometry") if isinstance(dy.get("geometry"), dict) else None)
     except Exception:                                           # noqa: BLE001
         log.warning("configure presets: the die's configurations could not be read", exc_info=True)
@@ -1049,17 +1052,58 @@ def get_configure_context(motor_id: str,
     (the numbers are limits, not data of the owner's).
 
     STORED (``answer_store``): built once per version of its inputs (``_configure_stamp``) and read back after
-    that - the caller check (``_configure_motor``) runs on every request."""
+    that - the caller check (``_configure_motor``) and the configuration filter (``_visible_context``) run on
+    every request."""
     from motor_ai_sim import answer_store as _as
     return _as.json_response(configure_context_answer(motor_id, authorization))
 
 
 def configure_context_answer(motor_id: str, authorization: Optional[str] = None) -> Dict[str, Any]:
-    """The stored context as a dict (the route sends it to the wire; the warm-up and tests read it)."""
+    """The context as THIS caller may see it, as a dict (the route sends it to the wire; the warm-up and tests
+    read it)."""
     motor, src = _configure_motor(motor_id, authorization)
+    from motor_ai_sim import motor_access as _ma
+    return _visible_context(_stored_context(motor_id, motor, src), _ma.catalog_access(authorization))
+
+
+def _stored_context(motor_id: str, motor: dict, src: Any) -> Dict[str, Any]:
+    """THE stored context of one machine - every configuration of its die, whoever asks.  Never returned as it
+    is: ``_visible_context`` filters it for the caller (F1, pre-launch review 2026-10-20: a context filtered for
+    an admin was cached and served to an ordinary user, private presets included)."""
     from motor_ai_sim import answer_store as _as
     return _as.get_or_compute("configure_context", {"motor": motor_id, "src": str(src)}, _configure_stamp(src),
                               lambda: _configure_context_of(motor_id, motor), persist=_shared_source(src))
+
+
+def _visible_context(ctx: Dict[str, Any], acc: dict) -> Dict[str, Any]:
+    """The stored context as the caller holding ``acc`` (``motor_access.catalog_access``) may see it: only the
+    presets of configurations ``motor_access.config_visible`` lets them read, and no private bookkeeping.
+
+    The configuration rule is the one the die listing uses (``may_see_config_file`` with the file and the layer
+    the context was built from); a preset with no recorded file - an answer built some other way - is judged by
+    name (``config_allowed``), and a preset that cannot be judged is dropped."""
+    from motor_ai_sim import motor_access as _ma
+    info = ctx.get("_config_access") if isinstance(ctx.get("_config_access"), dict) else {}
+    keep = []
+    for pr in ctx.get("presets") or []:
+        if not isinstance(pr, dict):
+            continue
+        cfg = str(pr.get("config") or "")
+        try:
+            row = info.get(cfg)
+            if isinstance(row, (list, tuple)) and len(row) == 4:
+                ok = _ma.may_see_config_file(acc, str(row[0]), str(row[1]), Path(str(row[2])), layer=row[3])
+            else:
+                ok = bool(cfg) and _ma.config_allowed(acc, str(pr.get("die") or ""), cfg)
+        except Exception:                                       # noqa: BLE001 - cannot judge: not served
+            log.warning("configure context: visibility of %r could not be judged - preset withheld", cfg,
+                        exc_info=True)
+            ok = False
+        if ok:
+            keep.append(pr)
+    out = {k: v for k, v in ctx.items() if not str(k).startswith("_")}
+    out["presets"] = keep
+    return out
 
 
 def _configure_motor(motor_id: str, authorization: Optional[str]) -> tuple:
@@ -1113,6 +1157,10 @@ _CONFIGURE_CODE = ("routes/catalog.py", "configure_limits.py", "configure_load.p
                    "duty_results.py", "applications.py", "routes/propellers.py", "modules/motor_mass.py")
 
 
+#: the version of the stored Configure answers; part of every stamp (bump it to make every stored answer stale)
+CONFIGURE_STORE_VERSION = "configure-2"
+
+
 def _configure_stamp(src: Any = None) -> str:
     """The cheap input hash of every stored Configure answer: the catalogue files, every die's configuration
     files, the passport store, the duty results, the cooling registry, the propeller cards, the S1 models, the
@@ -1148,11 +1196,22 @@ def _configure_stamp(src: Any = None) -> str:
         log.debug("configure stamp: CAD BOMs unavailable", exc_info=True)
     src = Path(__file__).resolve().parents[1]
     paths += [src / f for f in _CONFIGURE_CODE]
-    return _fsc.stamp_of(sorted({str(x) for x in paths}), dirs, salt="configure-1")
+    # CONFIGURE_STORE_VERSION "configure-2" (2026-10-20, F1): answers stored before the permission fix held contexts
+    # filtered for whoever built them - the new salt makes every one of them stale (ignored, recomputed, overwritten).
+    return _fsc.stamp_of(sorted({str(x) for x in paths}), dirs, salt=CONFIGURE_STORE_VERSION)
 
 
 def _configure_context_of(motor_id: str, motor: dict) -> Dict[str, Any]:
-    """The context of one machine (no caller check - ``get_configure_context`` does it)."""
+    """The context of one machine, EVERY configuration of its die (no caller check and no caller filter -
+    ``configure_context_answer`` does both on every request).  Computed in ``motor_access.process_view`` so the
+    readers below (duty results, configuration docs) do not hide what the builder may not see: the stored answer
+    is the same whoever built it."""
+    from motor_ai_sim import motor_access as _ma
+    with _ma.process_view():
+        return _configure_context_unfiltered(motor_id, motor)
+
+
+def _configure_context_unfiltered(motor_id: str, motor: dict) -> Dict[str, Any]:
     from motor_ai_sim import configure_limits as _cl
     # Several configurations can share one die name ("CIANO14 40 new": L12, L20), and a
     # card carries no geometry of its own — the passport's base stack length is what
@@ -1163,13 +1222,16 @@ def _configure_context_of(motor_id: str, motor: dict) -> Dict[str, Any]:
         geo = {"motor_length": L0} if L0 is not None else None
     fam = _family_doc_of_motor(motor, geo)
     from motor_ai_sim import passport_store as _ps
-    docs, die_geo = _die_docs_of(fam)
+    access_info: dict = {}
+    docs, die_geo = _die_docs_of(fam, access_info)
     presets = _cl.presets_for_die(
         docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))
     ctx = {"motor_id": motor_id,
            **_cl.context(motor, fam),
            # one preset per configuration of the die, read from the machines themselves
-           "presets": presets}
+           "presets": presets,
+           # which file / layer each preset came from: _visible_context judges every preset by it (stripped)
+           "_config_access": access_info}
     s1_die = str(((ctx.get("cooling") or {}) if isinstance(ctx.get("cooling"), dict) else {}).get("die") or "")
     for pr in presets:
         # does this configuration have a FULL passport card (v1 record)?
@@ -1250,22 +1312,39 @@ def get_configure_load(motor_id: str,
 
 
 def configure_load_answer(motor_id: str, authorization: Optional[str] = None, **params: Any) -> Dict[str, Any]:
-    """The stored load as THIS caller may see it, as a dict (the route sends it to the wire; the warm-up reads it)."""
+    """The stored load as THIS caller may see it, as a dict (the route sends it to the wire; the warm-up reads it).
+
+    A configuration the caller may not see is refused BEFORE anything is read or computed for it, with the very
+    answer a configuration the machine does not have gets (404, same text) - so the name is not an oracle (F1,
+    pre-launch review 2026-10-20)."""
     motor, src = _configure_motor(motor_id, authorization)
     from motor_ai_sim import answer_store as _as
+    from motor_ai_sim import motor_access as _ma
+    acc = _ma.catalog_access(authorization)
+    ctx = _visible_context(_stored_context(motor_id, motor, src), acc)
+    config = str(params.get("config") or "")
+    if not any(p.get("config") == config for p in ctx.get("presets") or []):
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' has no configuration '{config}'")
     keyp = {k: (round(float(v), 6) if isinstance(v, float) else v) for k, v in params.items()}
     full = _as.get_or_compute("configure_load", {"motor": motor_id, "src": str(src), **keyp}, _configure_stamp(src),
-                              lambda: _configure_load_full(motor_id, motor, src, **params), persist=_shared_source(src))
-    return _gate_configure_load(full, authorization)
+                              lambda: _configure_load_full_unscoped(motor_id, motor, src, **params),
+                              persist=_shared_source(src))
+    out = _gate_configure_load(full, authorization, acc=acc)
+    out["context"] = ctx            # the stored load embeds the WHOLE context: serve the caller's view of it
+    return out
 
 
-def _gate_configure_load(full: Dict[str, Any], authorization: Optional[str]) -> Dict[str, Any]:
+def _gate_configure_load(full: Dict[str, Any], authorization: Optional[str], *,
+                         acc: Optional[dict] = None) -> Dict[str, Any]:
     """The stored answer as THIS caller may see it: the S1 limit / model and the duty anchor only for a signed-in
-    caller who may see the configuration (the /s1 rule)."""
+    caller who may see the configuration (the /s1 rule), and the embedded context filtered like
+    ``configure_context`` (``_visible_context``)."""
     from motor_ai_sim import motor_access as _ma
     gate = full.get("_gate") or {}
     out = {k: v for k, v in full.items() if k != "_gate"}
-    acc = _ma.catalog_access(authorization)
+    acc = acc if acc is not None else _ma.catalog_access(authorization)
+    if isinstance(out.get("context"), dict):
+        out["context"] = _visible_context(out["context"], acc)
     signed = acc.get("mode") != _ma.MODE_ANONYMOUS
     cfg = str(out.get("config") or "")
     if not (signed and gate.get("s1_die") and _ma.may_see_config(acc, str(gate["s1_die"]), cfg)):
@@ -1280,17 +1359,23 @@ def _gate_configure_load(full: Dict[str, Any], authorization: Optional[str]) -> 
     return out
 
 
+def _configure_load_full_unscoped(motor_id: str, motor: dict, src: Any = None, **params: Any) -> Dict[str, Any]:
+    """``_configure_load_full`` in ``motor_access.process_view``: the stored load is the same whoever built it
+    (the caller was already judged by ``configure_load_answer``; ``_gate_configure_load`` strips on serving)."""
+    from motor_ai_sim import motor_access as _ma
+    with _ma.process_view():
+        return _configure_load_full(motor_id, motor, src, **params)
+
+
 def _configure_load_full(motor_id: str, motor: dict, src: Any = None, *, config: str, duty: Optional[str], ambient_c: float,
                          propeller: Optional[str], housing_d_mm: Optional[float], drive: Optional[str],
                          pack_v_min: Optional[float], pack_v_max: Optional[float], series_rpm_max: float,
                          series_n: int) -> Dict[str, Any]:
     """The whole answer, every part computed (no caller gate: ``_gate_configure_load`` applies it on serving)."""
-    from motor_ai_sim import answer_store as _as
     from motor_ai_sim import configure_load as _ld
     from motor_ai_sim import propeller as _pp
     from motor_ai_sim.routes import propellers as _prop_routes
-    ctx = _as.get_or_compute("configure_context", {"motor": motor_id, "src": str(src)}, _configure_stamp(src),
-                             lambda: _configure_context_of(motor_id, motor), persist=_shared_source(src))
+    ctx = _stored_context(motor_id, motor, src)
     preset = next((p for p in ctx.get("presets") or [] if p.get("config") == config), None)
     if preset is None:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' has no configuration '{config}'")

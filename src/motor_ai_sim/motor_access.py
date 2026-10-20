@@ -50,6 +50,7 @@ from typing import Optional
 from motor_ai_sim.auth import ANON_OWNER, caller_identity
 from motor_ai_sim.config import DEFAULT_CONFIG_PATH
 
+import contextlib as _contextlib
 import contextvars as _contextvars
 
 from starlette.requests import Request as _Request
@@ -64,6 +65,29 @@ from starlette.requests import Request as _Request
 _UNBOUND = object()
 _REQ_AUTH: "_contextvars.ContextVar" = _contextvars.ContextVar(
     "motor_access_request_auth", default=_UNBOUND)
+
+#: True while a STORED, permission-independent answer is being computed
+#: (:func:`process_view`): the low-level readers' per-request hiding
+#: (:func:`hidden_for_request`) is off, so the stored answer is the same whoever
+#: happened to build it.  Every route that serves such an answer re-applies
+#: :func:`config_visible` for its own caller after reading it.
+_PROCESS_VIEW: "_contextvars.ContextVar" = _contextvars.ContextVar(
+    "motor_access_process_view", default=False)
+
+
+@_contextlib.contextmanager
+def process_view():
+    """Compute an answer as the PROCESS reads the catalog, not as the current caller.
+
+    For stored answers only (``answer_store``): a view filtered for whoever built it
+    must never be cached, because the next caller may hold different permissions
+    (F1, pre-launch review 2026-10-20).  The caller of this context manager MUST
+    filter the result per request before returning it."""
+    tok = _PROCESS_VIEW.set(True)
+    try:
+        yield
+    finally:
+        _PROCESS_VIEW.reset(tok)
 
 MODE_ALL = "all"
 MODE_GRANTED = "granted"
@@ -642,7 +666,7 @@ def hidden_for_request(die: str, cfg: Optional[str]) -> bool:
     by name through them is covered without each one knowing the rule.  Cheap
     path first: a ``public`` configuration costs one cached file stat.
     """
-    if not cfg or not request_is_bound():
+    if not cfg or not request_is_bound() or _PROCESS_VIEW.get():
         return False
     if config_visibility(str(die), str(cfg)) == CFG_PUBLIC:
         return False

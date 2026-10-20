@@ -86,7 +86,11 @@ def safe_app_path(raw) -> Optional[str]:
     die, config = m.group(1), m.group(2)
     out = "/production/%s/%s/documents" % (quote(die, safe=""), quote(config, safe=""))
     since, ids = "", []
-    for k, v in parse_qsl(parts.query, keep_blank_values=False, max_num_fields=20):
+    try:
+        fields = parse_qsl(parts.query, keep_blank_values=False, max_num_fields=20)
+    except ValueError:              # more than 20 fields (or a malformed query): no return path, never a 500
+        return None
+    for k, v in fields:
         if k == "since" and not since:
             if not _valid_date(v):
                 return None

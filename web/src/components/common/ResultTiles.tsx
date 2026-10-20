@@ -18,8 +18,8 @@ export const pctDelta = (cur: number, base: number) => (base ? ((cur - base) / b
 export const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1 } as const;
 export const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 
-/** the one width of every result tile */
-export const TILE_W = 132;
+/** the one width of every result tile (owner 2026-10-20: compact, eight tiles in one row) */
+export const TILE_W = 110;
 
 /** The hover text of Configure: wraps at 300 px so it never covers the tiles around it (a native `title` has no width cap). */
 export const TIP_MAX_W = 300;
@@ -79,17 +79,17 @@ export const MetricTile: React.FC<{
     <Tip title={[tip, blank ? blankTip : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef')].filter(Boolean).join('\n')}>
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: width ?? TILE_W, boxSizing: 'border-box' }}>
-      <Typography sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
+    <Box sx={{ ...PANEL, px: 0.75, py: 0.5, flex: '0 0 auto', width: width ?? TILE_W, boxSizing: 'border-box' }}>
+      <Typography sx={{ ...LABEL, fontSize: 10.5, lineHeight: '13px',
         color: labelColor ?? LABEL.color, overflow: 'hidden', whiteSpace: 'nowrap',
         textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
-      <Typography sx={{ fontSize: 16, fontWeight: 800,
+      <Typography sx={{ fontSize: 14, fontWeight: 800,
         color: blank ? (blankColor ?? 'var(--text-3)') : absLevel
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
           : valueLineColor,
-        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', minHeight: 19 }}>
-        {blank ? '—' : (display ?? fmt(value as number, d))}{!blank && <Box component="span" sx={{ fontSize: 10.5,
-          color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>}
+        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', minHeight: 17, overflow: 'hidden' }}>
+        {blank ? '—' : (display ?? fmt(value as number, d))}{!blank && <Box component="span" sx={{ fontSize: 9.5,
+          color: 'var(--text-3)', ml: 0.4, letterSpacing: '-0.02em' }}>{unit}</Box>}
       </Typography>
     </Box>
     </Tip>
@@ -108,13 +108,13 @@ export const LeadCableTile: React.FC<{ section_mm2: number }> = ({ section_mm2 }
   return c ? (
     <Tip title={tx('configure.leadCableTip', { irated: c.i_rated_A })
         + (c.suspect ? tx('configure.cableSuspectLine', { text: tx(c.awg === '10awg' ? 'configure.cableSuspect10' : 'configure.cableSuspect75') }) : '')}>
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}>
-      <Typography sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
+    <Box sx={{ ...PANEL, px: 0.75, py: 0.5, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}>
+      <Typography sx={{ ...LABEL, fontSize: 10.5, lineHeight: '13px',
         overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{tx('configure.leadCable')}</Typography>
-      <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)',
-        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+      <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)',
+        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden' }}>
         {c.awg.replace('awg', ' AWG')}
-        <Box component="span" sx={{ fontSize: 10.5, color: 'var(--text-3)', ml: 0.5 }}>
+        <Box component="span" sx={{ fontSize: 9.5, color: 'var(--text-3)', ml: 0.4, letterSpacing: '-0.02em' }}>
           Ø{c.od_mm.toFixed(1)} mm
         </Box>
       </Typography>

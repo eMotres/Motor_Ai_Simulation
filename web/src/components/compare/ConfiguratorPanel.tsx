@@ -963,6 +963,7 @@ const ConfiguratorPanel: React.FC = () => {
   }, [p, knobs, currentContext, presets, originalConfig, basePreset]); // eslint-disable-line react-hooks/exhaustive-deps
   /** the controller board's CONTINUOUS current: the selected PWM variant's, else the machine's own controller.
    *  A marker and a note on the slider, never a cap and never a block (owner 2026-10-20). */
+  const SHOW_BOARD_MARK = false;
   const boardMark = useMemo(() => {
     const caps = currentContext?.current?.caps;
     const vLim = variant?.i_board_limit_A?.favourable;
@@ -2263,16 +2264,20 @@ ${s1Text.text}` : '';
             voltage marker visible together) ── */}
         <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Box sx={{ ...PANEL, p: 2 }}>
-          <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
-          {ref.referenceOnly ? (
+          {/* the name and its one-line summary on ONE line (owner 2026-10-20: compact page) */}
+          <Box sx={{ display: 'flex', alignItems: 'baseline', columnGap: 1.5, flexWrap: 'wrap', mb: 1 }}>
+            <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)' }}>{ref.name}</Typography>
+            {!ref.referenceOnly && (
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
+                  torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}
+              </Typography>
+            )}
+          </Box>
+          {ref.referenceOnly && (
             <Alert severity="warning" sx={{ mb: 1.5, py: 0, fontSize: 12 }}>
               {tx('configure.referenceOnlyNotice')}
             </Alert>
-          ) : (
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
-              {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
-                torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}
-            </Typography>
           )}
 
           {/* i18n-guard:begin — every user-visible string below goes through tx() */}
@@ -2480,7 +2485,8 @@ ${s1Text.text}` : '';
             sub={tx('configureLimits.peakOf', { value: fmt(knobs.I_A * Math.SQRT2, 0) })}
             onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
             disabled={propLoad} zone={propLoad ? null : zones.I}
-            marker={boardMark ? {
+            // the board marker and its note are hidden for now (owner 2026-10-20: they confuse users)
+            marker={SHOW_BOARD_MARK && boardMark ? {
               at: boardMark.A, over: boardMark.over,
               text: boardMark.over
                 ? tx('configureLimits.iBoardOver', { max: fmt(boardMark.A, 0), device: boardMark.device, n: boardMark.n })
@@ -2506,15 +2512,16 @@ ${s1Text.text}` : '';
               device at a carrier, each already in the passport.  Device,
               dead time and parallel count are read-only facts of the
               variant; nothing is calculated here. */}
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-            title={variants.length ? driveFactsTip : tx('configureDrive.notComputedTip')}>
-            {tx('configureDrive.title')}
-            {!variants.length && (
-              <Box component="span" sx={{ color: '#fbbf24' }}>{' · '}{tx('configureDrive.notComputed')}</Box>
-            )}
-          </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75, flexWrap: 'nowrap', minHeight: 30 }}
+          {/* the label, Sine | PWM and the PWM choices on ONE line (owner 2026-10-20) */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, mb: 0.25, flexWrap: 'nowrap', minHeight: 30 }}
             title={variants.length ? undefined : tx('configureDrive.notComputedTip')}>
+            <Typography sx={{ ...LABEL, color: 'var(--text-4)', flex: '0 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              title={variants.length ? driveFactsTip : tx('configureDrive.notComputedTip')}>
+              {tx('configureDrive.title')}
+              {!variants.length && (
+                <Box component="span" sx={{ color: '#fbbf24' }}>{' · '}{tx('configureDrive.notComputed')}</Box>
+              )}
+            </Typography>
             <ToggleButtonGroup exclusive size="small" value={driveOn ? 'pwm' : 'sine'}
               onChange={(_, v) => {
                 if (v === 'pwm' && variants.length) setDrive(choiceOf(variant ?? resolveVariant(variants, knobs) ?? variants[0]));
@@ -2551,31 +2558,24 @@ ${s1Text.text}` : '';
           </Box>
           {/* ONE reserved two-line slot: a refusal fills it, it never pushes the blocks below
               (the tiles on the right turn to "—" at the same time) */}
-          <Box sx={{ height: 34, overflow: 'hidden', mb: 0.5 }}
+          <Box sx={{ height: 16, overflow: 'hidden' }}
             title={driveRefusals.length ? driveRefusals.map((r) => `${r.text}. ${r.tip}`).join('\n')
               : driveBuildMoved ? tx('configureDrive.buildScaledTip', { k: fmt(pwmScale, 2) })
                 : pwmWithoutVariant ? tx('configureDrive.noVariantTip') : undefined}>
             {driveRefusals.length > 0 ? (
-              <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', lineHeight: 1.3,
-                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', lineHeight: '16px',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 ⚠ {driveRefusals[0].text}{driveRefusals.length > 1 ? ` (+${driveRefusals.length - 1})` : ''}
               </Typography>
             ) : (driveBuildMoved || pwmWithoutVariant) ? (
               // a moved build keeps its PWM numbers, carried from the loaded build (owner 2026-10-19: never blank)
-              <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.3 }}>
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {tx(driveBuildMoved ? 'configureDrive.buildScaled' : 'configureDrive.noVariant')}
               </Typography>
             ) : null}
           </Box>
 
 
-          <Button onClick={reset} size="small" disabled={!tuned}
-            startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
-            title={tx('configureLimits.resetToReferenceTip')}
-            sx={{ fontSize: 11, textTransform: 'none',
-                  color: tuned ? '#60a5fa' : 'var(--text-3)', mt: 1 }}>
-            {tx('configureLimits.resetToReference')}
-          </Button>
           </Box>
           </Box>
           {/* i18n-guard:end */}

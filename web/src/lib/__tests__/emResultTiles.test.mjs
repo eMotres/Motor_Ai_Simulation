@@ -425,7 +425,7 @@ t('the part masses are the LAST row, in the same tiles: "<part> (<material>)  <k
   // the customer's (reference) part is kept and says it is not billed
   const ref = last[3];
   assert.deepEqual([ref.value, ref.unit, ref.tipKey], [0.2, 'kg modelled', 'emTiles.partRefTip']);
-  // two ordinary tiles wide, so the row keeps the grid of the rows above (TILE_W 132 + the 6 px gap)
+  // two ordinary tiles wide, so the row keeps the grid of the rows above (TILE_W + the 6 px gap)
   const w = Number(read('components/common/ResultTiles.tsx').match(/export const TILE_W = (\d+)/)[1]);
   assert.equal(E.EM_WIDE_TILE_W, 2 * w + 6);
   assert.ok(last.every((x) => x.width === E.EM_WIDE_TILE_W));

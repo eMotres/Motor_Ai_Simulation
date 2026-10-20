@@ -487,3 +487,32 @@ def test_a_limit_that_is_never_reached_leaves_the_steady_state_the_answer(
     assert out["within_limits"] is False        # it IS over
     assert ttl.limiting(out) is None            # …but there is no moment
     assert ttl.limited_line(out) == ""
+
+
+def test_the_bearing_is_judged_on_the_maps_own_seat_not_the_em_input(monkeypatch):
+    """G2-L40 peak, 2026-10-20: the time-to-limit block carried the bearing at
+    the configuration's assigned 70 °C (the first EM pass's input) beside a
+    solved bearing node at 180.6 °C.  The map's own seat wins."""
+    from motor_ai_sim.routes import coupled as cp
+    from motor_ai_sim.routes import thermal as th
+    import motor_ai_sim.thermal_capacities as tc
+    seen = {}
+    monkeypatch.setattr(th, "_dc_geometry", lambda geo: ({}, {}))
+    monkeypatch.setattr(th, "_assignments", lambda: {})
+    monkeypatch.setattr(tc, "part_capacities", lambda *a, **k: {})
+    monkeypatch.setattr(cp, "_cycle_catalogue", lambda body, d: ({}, ""))
+
+    def _limits(**kw):
+        seen["bearing"] = kw.get("bearing_temp_c")
+        return []
+    monkeypatch.setattr(cp._ttl, "part_limits", _limits)
+    field = {"cooling": {"bearing_node": {"mode": "solved",
+                                          "t_bearing_max_c": 180.6}},
+             "components": {"shaft": {"avg": 185.0}}}
+    assert cp._ttl_step({}, {}, {"x": 1}, field, bearing_temp_c=70.0,
+                        runaway=False) is None
+    assert seen["bearing"] == pytest.approx(180.6)
+    # a map with no shaft and no bearing node keeps the caller's value
+    cp._ttl_step({}, {}, {"x": 1}, {"components": {}}, bearing_temp_c=70.0,
+                 runaway=False)
+    assert seen["bearing"] == pytest.approx(70.0)

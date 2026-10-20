@@ -1315,6 +1315,14 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
                         ({}, "this run is not on a catalogued machine, so there "
                              "is no rated duty to start a warm pull from"))
 
+    # The bearing is judged on THIS map's own seat (the solved bearing node
+    # when the map carries one), never on the temperature the EM pass was
+    # handed: on a first pass that is the configuration's assigned value
+    # (70 °C on G2-L40's peak, 2026-10-20, beside a solved 180.6 °C).  Only
+    # a map with no shaft keeps the caller's value.
+    _seat = _bearing_temp(field)
+    if _seat is not None:
+        bearing_temp_c = float(_seat[0])
     limits = _ttl.part_limits(
         thermal_result=field, em_summary=em_summary,
         magnet_grade=mats.get("magnet"),

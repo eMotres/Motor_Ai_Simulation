@@ -58,7 +58,7 @@ import {
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
 import { configurePointThermal, configureMotorHeat, type ThermalEstimate } from '../../lib/thermalEstimate';
-import { ratedSpeedCap } from '../../lib/configureRatedCap';
+import { ratedSpeedCap, loadedRatedRpm } from '../../lib/configureRatedCap';
 import { s1LoadPoint, s1ThermalAt, type S1ThermalModel } from '../../lib/s1Thermal';
 import { anchoredTemperatures, anchorLossRatios, type ThermalAnchor } from '../../lib/thermalAnchor';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
@@ -325,6 +325,9 @@ const ConfiguratorPanel: React.FC = () => {
   // is applied the speed is SET there ('set'); after another preset it is only capped there ('cap').  Held until the
   // user sets a speed himself (setRpm); never carried over to another machine (cleared on every machine switch).
   const clampToS1Ref = React.useRef<'set' | 'cap' | null>(null);
+  // true from a rated-preset load until the user picks another propeller / sets a speed / switches machine: the loaded
+  // rated point keeps its own speed EXACTLY (owner 2026-10-20: current point == rated on first load)
+  const ratedExactRef = React.useRef(false);
   /** The knobs the panel opened with for THIS machine — the "ref" every
    *  percentage is measured against, and what Reset returns to. */
   const [refKnobs, setRefKnobs] = useState<Knobs | null>(null);
@@ -588,7 +591,7 @@ const ConfiguratorPanel: React.FC = () => {
     if (lastRefId.current === refId) return;   // mount / replay — not a real change
     lastRefId.current = refId;
     // nothing of the previous machine survives: no held rated speed, no propeller seed
-    clampToS1Ref.current = null;
+    clampToS1Ref.current = null; ratedExactRef.current = false;
     propRpmSeedRef.current = ''; propRpmManualEditRef.current = '';
     if (skipReset.current) { skipReset.current = false; return; }
     // A different machine → its own base point AND its own slider ranges.
@@ -1710,13 +1713,32 @@ ${s1Text.text}` : '';
   // propeller", 2026-10-19 "no overheat at all"): from the server's motor S1 limit (else the preset's own speed), lowered
   // on `pointBadAt` - the very verdict behind the red line, in Sine AND PWM - 1 % inside, a round number.
   const ratedCapStart = s1CapRpm ?? refKnobs?.rpm ?? null;
-  const ratedCapRpm = useMemo(() => {
+  const ratedBisectRpm = useMemo(() => {
     if (!propLoad || !series || ratedCapStart == null) return null;
     return ratedSpeedCap(ratedCapStart, pointBadAt, { floor: Math.max(ranges.rpm.min, 0.05 * ratedCapStart) })
       ?? s1CapRpm;
   }, [propLoad, series, ratedCapStart, s1CapRpm, p, ref.poles, thermalGeom, tLimits, ambient, driveOn, variant, driveBuildMoved, pwmScale, // eslint-disable-line react-hooks/exhaustive-deps
       devLimits, packWindow?.min, packWindow?.max, packMaxV, modM, batteryValid, motorLossesComputed, ranges.I_A.max, ranges.rpm.min,
       knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, calUsable, calModel, calDriveId, ratedWindingC]);
+  // FIRST LOAD of a rated preset with a server S1 motor answer: the loaded duty's own speed, exactly (no 1 % offset, no
+  // rounding, no bisect; the verdict stays the page's own).  No S1 answer -> the bisect above, as before.
+  const loadedRated = loadedRatedRpm({
+    presetRpm: refKnobs?.rpm,
+    s1MotorRpm: s1?.limit_motor?.rpm,
+    s1IsBound: !!s1?.limit_motor?.lower_bound,
+    fallbackCap: ratedBisectRpm,
+  });
+  const ratedExact = propLoad && clampToS1Ref.current === 'set' && ratedExactRef.current && loadedRated.exact;
+  const ratedCapRpm = ratedExact ? loadedRated.rpm : ratedBisectRpm;
+  const staleWarnRef = React.useRef('');
+  useEffect(() => {
+    if (!ratedExact || !loadedRated.stale) return;
+    const key = `${s1Key}|${loadedRated.rpm}|${s1?.limit_motor?.rpm}`;
+    if (staleWarnRef.current === key) return;
+    staleWarnRef.current = key;
+    console.warn(`Configure: the loaded rated speed ${loadedRated.rpm} rpm is above the S1 motor-limit speed `
+      + `${s1?.limit_motor?.rpm} rpm by more than 1 % (stale data); keeping the rated speed as loaded`);
+  }, [ratedExact, loadedRated.stale, loadedRated.rpm, s1Key, s1?.limit_motor?.rpm]);
   useEffect(() => {
     const how = clampToS1Ref.current;
     // one step, never two: wait for this request's S1 answer before moving the speed at all
@@ -1804,6 +1826,7 @@ ${s1Text.text}` : '';
   const set = (k: keyof Knobs) => (v: number) => { setRestoreMisfitNote(null); setKnobs((s) => ({ ...s, [k]: v })); };
   const setRpm = (v: number) => {
     clampToS1Ref.current = null;          // the user's own speed: no longer held at the rated point
+    ratedExactRef.current = false;
     setRestoreMisfitNote(null);
     if (propLoad && propRpmSeedKey) propRpmManualEditRef.current = propRpmSeedKey;
     setKnobs((s) => ({ ...s, rpm: v }));
@@ -1816,6 +1839,7 @@ ${s1Text.text}` : '';
    *  default drive.  The user's battery edit for this machine is dropped (the pack is the preset's). */
   const applyPreset = (pr: Preset | ModePreset) => {
     clampToS1Ref.current = isRatedPreset(pr) ? 'set' : 'cap';
+    ratedExactRef.current = isRatedPreset(pr);
     // a MODE button carries its own point; only a configuration-level preset takes the catalog duty's speed
     const isMode = 'key' in pr && !!pr.duty;
     const catalogPoint = cooled && propLoad ? propellerDutyRpmDefault(pr, activeDuty()) : null;
@@ -2456,6 +2480,7 @@ ${s1Text.text}` : '';
                   onChange={(e) => {
                     const at = modePresets.find((m) => m.key === matchedKey);
                     clampToS1Ref.current = s1Moved ? null : (!at || isRatedPreset(at) ? 'set' : 'cap');
+                    ratedExactRef.current = false;     // another propeller: its own S1 line, not the loaded duty's speed
                     updateCool({ propId: e.target.value });
                   }}
                   title={propSelTip}

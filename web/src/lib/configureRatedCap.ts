@@ -47,3 +47,32 @@ export function ratedSpeedCap(start: number, bad: (rpm: number) => boolean,
   }
   return null;
 }
+
+/** Loaded rated speed above the S1 motor limit by more than this fraction counts as stale data. */
+export const STALE_ABOVE_S1 = 0.01;
+
+export interface LoadedRated {
+  /** the speed to put the loaded rated point at (`null` = nothing to apply yet) */
+  rpm: number | null;
+  /** true = the loaded duty's own speed, untouched (no 1 % offset, no rounding, no bisect) */
+  exact: boolean;
+  /** exact speed is more than 1 % above the S1 motor limit: stale data, the caller logs one warning */
+  stale: boolean;
+}
+
+/**
+ * The rated speed on the FIRST load of a motor (owner 2026-10-20: "on the first load the current point and
+ * rated must coincide").  When the server answered an S1 motor limit for this propeller, the loaded rated
+ * duty is already computed on that line (backend), so the speed is the duty's OWN speed, exactly - the page
+ * does not move it and does not force a verdict.  Without an S1 answer (no request / refused / no
+ * `limit_motor`) the old guard applies: `fallbackCap` (the `ratedSpeedCap` bisect), unchanged.
+ * `s1IsBound` = the S1 "limit" is only the end of the scanned range (no real limit): never stale.
+ */
+export function loadedRatedRpm(a: { presetRpm: number | null | undefined; s1MotorRpm: number | null | undefined;
+                                    s1IsBound?: boolean; fallbackCap: number | null }): LoadedRated {
+  const preset = a.presetRpm, s1 = a.s1MotorRpm;
+  if (preset != null && Number.isFinite(preset) && preset > 0 && s1 != null && Number.isFinite(s1) && s1 > 0) {
+    return { rpm: preset, exact: true, stale: !a.s1IsBound && preset > s1 * (1 + STALE_ABOVE_S1) };
+  }
+  return { rpm: a.fallbackCap, exact: false, stale: false };
+}

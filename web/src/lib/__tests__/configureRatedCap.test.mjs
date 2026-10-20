@@ -49,3 +49,28 @@ t('configurePointThermal is configureMotorHeat -> estimateThermal -> the winding
   assert.equal(T.configurePointThermal('pwm', true, base, null, cool, geom, lim).thermal, null);   // PWM refused: nothing shown
   assert.equal(T.configurePointThermal('sine', true, base, 0, null, geom, lim).over, false);       // no cooling yet
 });
+
+t('first load with an S1 motor answer: the preset speed EXACTLY (no 0.99, no 10 rpm rounding, no bisect)', () => {
+  const r = C.loadedRatedRpm({ presetRpm: 8946.37, s1MotorRpm: 8946.37, fallbackCap: 8000 });
+  assert.deepEqual(r, { rpm: 8946.37, exact: true, stale: false });
+  // a small excess (<= 1 %) is not stale
+  assert.equal(C.loadedRatedRpm({ presetRpm: 9000, s1MotorRpm: 8946, fallbackCap: 8000 }).stale, false);
+  // below the S1 line: kept as loaded
+  assert.deepEqual(C.loadedRatedRpm({ presetRpm: 8000, s1MotorRpm: 8946, fallbackCap: 7000 }), { rpm: 8000, exact: true, stale: false });
+});
+
+t('no S1 model answer: the bisect fallback is used unchanged', () => {
+  const bad = (r) => r > 9876.5;
+  const fallbackCap = C.ratedSpeedCap(13000, bad);
+  for (const s1MotorRpm of [null, undefined, NaN, 0]) {
+    assert.deepEqual(C.loadedRatedRpm({ presetRpm: 10000, s1MotorRpm, fallbackCap }), { rpm: fallbackCap, exact: false, stale: false });
+  }
+  assert.deepEqual(C.loadedRatedRpm({ presetRpm: null, s1MotorRpm: 9000, fallbackCap: null }), { rpm: null, exact: false, stale: false });
+});
+
+t('stale data: preset above the S1 motor limit by more than 1 % keeps the exact preset speed and raises the warning flag', () => {
+  const r = C.loadedRatedRpm({ presetRpm: 10000, s1MotorRpm: 8946, fallbackCap: 8800 });
+  assert.deepEqual(r, { rpm: 10000, exact: true, stale: true });
+  // an S1 "limit" that is only the end of the scanned range is a bound, never stale
+  assert.equal(C.loadedRatedRpm({ presetRpm: 10000, s1MotorRpm: 8946, s1IsBound: true, fallbackCap: 8800 }).stale, false);
+});

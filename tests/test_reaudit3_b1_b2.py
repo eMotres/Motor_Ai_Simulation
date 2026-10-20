@@ -288,20 +288,15 @@ def test_stored_network_split_and_heat_path_copies_are_reduced_too():
     rec = net.as_record()
     assert rec["calibration"]["construction_basis"] == CPV.CONSTRUCTION_BASIS
     red = CPV.redact(rec)
-    for k in CPV.CAD_NETWORK_G | CPV.CAD_SURFACES:
-        assert red["G_W_per_K"].get(k) is None, k
-    for k in CPV.CAD_SURFACES:
-        assert (red["calibration"]["surface_G_W_per_K"] or {}).get(k) is None
-    assert red["calibration"].get("bearings_W") is None
+    # re-audit #4 superseded the per-key redaction: the whole network goes
+    assert red["withheld"] is True and "G_W_per_K" not in red and "calibration" not in red
     # 3. a time-averaged split
     split = {"generated_total_W": 30.0, "rotor_side_W": 3.0, "stator_side_W": 27.0,
              "rotor_end_faces_W": 0.6, "magnet_end_faces_W": 0.1, "housing_W": 20.0,
              "bearings_W": 0.2, "gap_W": 2.0, "rotor_pct": 10.0, "stator_pct": 90.0}
     red = CPV.redact({"network": rec, "split": split})["split"]
-    for k in ("rotor_end_faces_W", "magnet_end_faces_W", "bearings_W", "rotor_side_W",
-              "stator_side_W", "gap_W", "rotor_pct", "stator_pct"):
-        assert red[k] is None, k
-    assert red["housing_W"] == 20.0
+    # re-audit #4: only the totals of a split survive
+    assert set(red) <= {"generated_total_W", "heat_to_air_W", "closure_pct", "basis", "detail"}
     # 4. the heat-path model
     model = heat_path_model(res)
     assert model.get("construction_basis") == CPV.CONSTRUCTION_BASIS

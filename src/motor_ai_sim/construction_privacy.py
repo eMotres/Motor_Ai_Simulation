@@ -60,7 +60,11 @@ _MARKERS = (b"thermal_path", b"rotor_face_open_fraction", b"cad_overrides",
             # a forced rotor-face film (its per-path numbers invert the CAD
             # open fraction, re-audit #3 B2) in a record stored before the
             # construction marker existed
-            b"in the wash: rotating disc")
+            b"in the wash: rotating disc",
+            # a fitted transient network / its split in ANY format, marked or
+            # not (re-audit #4): the machine decides, not a marker
+            b"surface_G_W_per_K", b"raw_fits_W_per_K", b"link_kinds",
+            b"generated_total_W")
 _CAD_TRUE = re.compile(rb'"cad"\s*:\s*true')
 
 #: The rotor-channel note that prints the measured open fraction.
@@ -568,9 +572,180 @@ def _redact_cooling(c: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# -- FITTED NETWORKS ON A CAD-COOLED MACHINE (re-audit #4) -------------------
+#
+# A fitted transient network is a set of conductances FITTED to the steady
+# map: every one of them is a watt over a kelvin of that map, and an internal
+# link (magnet -> rotor: P_mag minus what the magnet faces took) gives the
+# withheld path back by subtraction.  Field-by-field redaction cannot close
+# that.  So for a caller without the gate NO fitted network of a CAD-cooled
+# machine leaves the server - fresh, stored, exported or cached alike - and its
+# split and the per-node loss series go with it: what stays is the part
+# temperatures over the cycle and the motor-level totals.
+#
+# "CAD-cooled" is decided from the MACHINE (its die / configuration documents
+# in any layer carry a CAD thermal basis), or from the record's own text naming
+# CAD.  A record whose machine cannot be determined is treated as CAD-cooled.
+NDA_NETWORK = "detailed cooling network with NDA"
+#: Text in a record that says its cooling ran on the CAD basis.
+_CAD_RECORD_TEXT = ("thermal_path", "rotor_face_open_fraction",
+                    "holder's measured windows", "measured on the assembly",
+                    "CAD: ", CONSTRUCTION_BASIS)
+_NODE_KEYS = ("winding", "stator", "rotor", "magnet")
+
+
+def _doc_has_cad_cooling(doc: Any) -> bool:
+    if not isinstance(doc, Mapping):
+        return False
+    b = doc.get("bearings")
+    if isinstance(b, Mapping) and set(b) - PUBLIC_BEARING_KEYS:
+        return True
+    try:
+        txt = json.dumps(doc, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        return True
+    return "thermal_path" in txt or "rotor_face_open_fraction" in txt
+
+
+def machine_is_cad_cooled(die: Optional[str], cfg: Optional[str]) -> bool:
+    """Does this machine's cooling rest on a CAD-measured input?  Read from
+    the machine's own documents in EVERY layer (a workspace copy of an
+    ungated caller has been scrubbed, the shared original has not).  ``True``
+    when the machine cannot be found or read (fail closed)."""
+    if not die or not cfg:
+        return True
+    try:
+        from pathlib import Path
+        import yaml
+        from motor_ai_sim import workspace as _W
+        name = str(die)
+        try:
+            name = _W.split_published_label(name)[0] or name
+        except Exception:  # noqa: BLE001
+            pass
+        dirs = []
+        try:
+            from motor_ai_sim.routes import family as _fam
+            dirs.append(Path(str(_fam._dies_dir())))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            dirs += [Path(str(l.dies_dir)) for l in _W.layers()]
+        except Exception:  # noqa: BLE001
+            pass
+        found = False
+        for dd in dirs:
+            for fn in (f"{cfg}.yaml", "die.yaml"):
+                f = dd / name / fn
+                if f.is_file():
+                    found = found or fn != "die.yaml"
+                    if _doc_has_cad_cooling(yaml.safe_load(f.read_text("utf-8"))):
+                        return True
+        return not found
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _record_names_cad(d: Mapping[str, Any]) -> bool:
+    try:
+        txt = json.dumps(d, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        return True
+    return any(t in txt for t in _CAD_RECORD_TEXT)
+
+
+def _is_network(d: Mapping[str, Any]) -> bool:
+    return isinstance(d.get("G_W_per_K"), Mapping) and any(
+        k in d for k in ("links", "calibration", "link_kinds", "areas_m2",
+                         "C_J_per_K", "h_sources"))
+
+
+def _is_split(d: Mapping[str, Any]) -> bool:
+    return "generated_total_W" in d and any(
+        k in d for k in ("rotor_side_W", "stator_side_W", "housing_W", "generated_W"))
+
+
+def _is_cycle(d: Mapping[str, Any]) -> bool:
+    return isinstance(d.get("P_W"), Mapping) and ("T_c" in d or "t_s" in d)
+
+
+def _withheld_network(d: Mapping[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"withheld": True, "detail": NDA_NETWORK}
+    for k in ("calibration_duty", "C_total_J_per_K", "active_nodes"):
+        if k in d:
+            out[k] = d[k]
+    return out
+
+
+def _withheld_split(d: Mapping[str, Any]) -> Dict[str, Any]:
+    gen = d.get("generated_total_W")
+    clo = d.get("closure_W")
+    out: Dict[str, Any] = {"generated_total_W": gen, "detail": NDA_NETWORK,
+                           "basis": d.get("basis"),
+                           "closure_pct": d.get("closure_pct")}
+    if isinstance(gen, (int, float)):
+        out["heat_to_air_W"] = round(float(gen) - float(clo or 0.0), 3)
+    return out
+
+
+def _total_series(pw: Mapping[str, Any]) -> Dict[str, Any]:
+    series = [v for v in pw.values() if isinstance(v, list)]
+    if not series:
+        return {}
+    n = min(len(v) for v in series)
+    return {"total": [round(sum(float(v[i] or 0.0) for v in series), 3) for i in range(n)]}
+
+
+class _Ctx:
+    __slots__ = ("machine", "memo", "cad_text")
+
+    def __init__(self, machine=None, memo=None, cad_text=False):
+        self.machine = machine
+        self.memo = {} if memo is None else memo
+        self.cad_text = cad_text
+
+    def at(self, machine, record: Any = None) -> "_Ctx":
+        """The context of a RECORD of ``machine``: its own text naming CAD
+        marks everything inside it."""
+        return _Ctx(machine, self.memo,
+                    self.cad_text or (record is not None and _record_names_cad(record)))
+
+    def cad(self, record: Mapping[str, Any]) -> bool:
+        if self.cad_text or _record_names_cad(record):
+            return True
+        if self.machine is None:
+            return True                                # cannot tell: fail closed
+        if self.machine not in self.memo:
+            self.memo[self.machine] = machine_is_cad_cooled(*self.machine)
+        return self.memo[self.machine]
+
+
+def _machine_of(d: Mapping[str, Any]):
+    die = d.get("die")
+    cfg = d.get("configuration", d.get("config"))
+    if isinstance(die, str) and isinstance(cfg, str) and die and cfg:
+        return (die, cfg)
+    return None
+
+
+def _is_duty_store(v: Any) -> bool:
+    """``{die: {cfg: {duty: {kind: record}}}}`` - the duty-results ledger."""
+    if not isinstance(v, Mapping) or not v:
+        return False
+    return all(isinstance(x, Mapping) and all(isinstance(y, Mapping) for y in x.values())
+               for x in v.values())
+
+
 def redact(obj: Any) -> Any:
     """``obj`` without the CAD basis (a new object; ``obj`` is not touched)."""
+    return _redact(obj, _Ctx())
+
+
+def _redact(obj: Any, ctx: "_Ctx") -> Any:
     if isinstance(obj, Mapping):
+        m = _machine_of(obj)
+        if m is not None:
+            ctx = ctx.at(m, obj)
         d: Dict[str, Any] = {}
         _doc = _is_catalog_doc(obj)
         for k, v in obj.items():
@@ -582,26 +757,37 @@ def redact(obj: Any) -> Any:
             if k == "bearings" and _is_config_bearings(v):
                 d[k] = public_bearings(v)
                 continue
-            d[k] = redact(v)
+            if k == "results" and _is_duty_store(v):
+                # the ledger: the machine of every row is its own key path
+                d[k] = {die: {cfg: _redact(rows, ctx.at((str(die), str(cfg)), rows))
+                              for cfg, rows in byc.items()}
+                        for die, byc in v.items()}
+                continue
+            d[k] = _redact(v, ctx)
         if (isinstance(d.get("bearing_node"), Mapping)
                 or isinstance(d.get("rotor_channels"), Mapping)
                 or "holder_open_fraction_source" in d
                 or "construction_basis" in d
                 or ("heat_budget" in d and "end_faces" in d)):
             d = _redact_cooling(d)
-        cal = d.get("calibration")
-        if ("G_W_per_K" in d and isinstance(cal, Mapping)
-                and cal.get("construction_basis")):
-            d = _redact_network(d)
-        if "rotor_side_W" in d and "stator_side_W" in d and "generated_total_W" in d:
-            d = _redact_split(d)
+        if _is_network(obj) and ctx.cad(obj):
+            return _withheld_network(obj)
+        if _is_split(obj) and ctx.cad(obj):
+            return _withheld_split(obj)
+        if _is_cycle(d) and ctx.cad(obj):
+            d["P_W"] = _total_series(d["P_W"])
+            d["detail"] = NDA_NETWORK
+        if (isinstance(d.get("losses_W"), Mapping)
+                and set(d["losses_W"]) & set(_NODE_KEYS)
+                and "total_W" in d and ctx.cad(obj)):
+            d["losses_W"] = None                       # the per-node split goes
         if "sinks" in d and "schema_version" in d and d.get("construction_basis"):
             d = _redact_heat_path_model(d)
         return d
     if isinstance(obj, list):
-        return [redact(v) for v in obj]
+        return [_redact(v, ctx) for v in obj]
     if isinstance(obj, tuple):
-        return tuple(redact(v) for v in obj)
+        return tuple(_redact(v, ctx) for v in obj)
     if isinstance(obj, str):
         if "holder open fraction" in obj:
             obj = _FACE_NOTE.sub(_FACE_NOTE_SUB, obj)

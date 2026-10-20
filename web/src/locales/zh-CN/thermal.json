@@ -91,5 +91,6 @@
   "coolingSourceTip": "冷却字段按电机分别记忆。“您保存的设置”是您上次为该电机设置的值；“配置默认值”来自配置的 thermal_defaults 块；“应用默认值”是其应用类型的规则（外壳形式和转子内孔会被重置，而不是沿用上一台电机的值）。修改任一冷却字段即可保存您自己的设置。",
   "coolingMismatch": "求解时为 {solved}，当前字段为 {now} - 请重新求解",
   "coolingMismatchTip": "该结果所用的外部冷却方式或外壳形式与当前字段不同。请点击“求解”，用此处显示的冷却重新计算。",
-  "coolingDetailNda": "详细的冷却路径需签署保密协议（NDA）后查看"
+  "coolingDetailNda": "详细的冷却路径需签署保密协议（NDA）后查看",
+  "coolingNetworkNda": "详细的冷却网络需签署保密协议（NDA）后查看"
 }

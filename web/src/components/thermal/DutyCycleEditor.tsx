@@ -854,7 +854,13 @@ const DutyCycleEditor: React.FC = () => {
                     </Typography>
                   </Tooltip>
                 )}
-                {split && (
+                {/* re-audit #4: without the NDA a CAD-cooled machine's fitted
+                    network and its per-path split are not sent - only the
+                    part temperatures and the totals */}
+                {Boolean((res.network as Record<string, unknown> | undefined)?.withheld) && (
+                  <Typography sx={{ ...lbl }}>{tx('coolingNetworkNda')}</Typography>
+                )}
+                {split && !(split as Record<string, unknown>).detail && (
                   <Tooltip {...TIP_PROPS} title={`Time-averaged over one cycle: the STATOR side loses ${fmt(split.stator_side_W, 1)} W (housing ${fmt(split.housing_W, 1)} W, mount ${fmt(split.mount_W, 1)} W, end turns ${fmt(split.winding_end_faces_W, 1)} W, stator end faces ${fmt(split.stator_end_faces_W, 1)} W) and the ROTOR side ${fmt(split.rotor_side_W, 1)} W (bore ${fmt(split.bore_W, 1)} W, shaft ends ${fmt(split.shaft_ends_W, 1)} W, rotor end faces ${fmt(split.rotor_end_faces_W, 1)} W, magnet end faces ${fmt(split.magnet_end_faces_W, 2)} W). ${fmt(split.gap_W, 1)} W crosses the air gap from the rotor to the stator. Generation ${fmt(split.generated_total_W, 1)} W; the balance closes to ${fmt(split.closure_pct, 3)} %.`}>
                     <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace' }}>
                       stator side {fmt(split.stator_pct, 0)} % / rotor side {fmt(split.rotor_pct, 0)} %

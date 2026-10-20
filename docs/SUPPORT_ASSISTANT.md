@@ -30,7 +30,7 @@ Nothing is filed by the model. The only write is the user's own Send.
 | Caller | Prompt | Also appended |
 |---|---|---|
 | visitor (no account) | `USER_PROMPT` | the visitor note (access-request marker), no session |
-| role `user` | `USER_PROMPT`: **Motors** and **Configure** only | ticket protocol, hidden context |
+| role `user` | `USER_PROMPT`: **Motors**, **Configure** and **3D model** only | ticket protocol, hidden context |
 | `admin` / `staff` | `STAFF_PROMPT`: every tab, held to `web/src/App.tsx` | ticket protocol, hidden context |
 
 A custom prompt saved in Admin (config/ai.system_prompt) still replaces the default for

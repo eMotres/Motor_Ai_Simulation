@@ -17,11 +17,15 @@ chat.
 
 WHAT IS IN IT (a datasheet's facts, taken from explicit whitelisted fields, never
 a free-text card or a duty note): name, stator diameter, slots/poles, stack,
-magnet and steel, the RATED point (the continuous one - ``family.config_rated_duty``,
-a short-time duty is never the rating when a continuous one exists) with rpm, A,
-N.m, kW, efficiency, limiting part and cooling, the peak / short-time duties with
-their time, KV, Kt, mass, battery, application and allowed propellers, whether a
-3-D model exists, and that the 40 mm motor is in production.  NEVER a cost, a
+magnet and steel, the RATED point (the continuous one - ``family.config_rated_duty``;
+rated is ALWAYS a continuous point: aviation / propeller motors with the coils at 180 C
+at the duty's own air, robot motors with the coils at 70 C in 30 C air; a short-time duty
+is never the rating when a continuous one exists) with rpm, A, N.m, kW, efficiency,
+limiting part and cooling, the peak / short-time duties with their time, KV, Kt, the FULL
+motor mass (CAD parts list + simulated parts) with the active mass beside it, battery,
+application and allowed propellers, whether a 3-D model exists, and that the first
+production batch of the 40 mm motor is underway (owner 2026-10-20).  Every number is read
+from the live catalog at answer time; none is typed in here.  NEVER a cost, a
 supplier, stock, an internal note or anything about an unpublished patent.
 
 WHERE IT READS FROM.  The block is about the vendor's SHARED catalog, so the tree is read in a
@@ -44,9 +48,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-#: Stator diameters (mm) of the machines that are in production (owner 2026-10-19:
-#: the 40 mm motor).  A fact about the product line, not a per-card field.
+#: Stator diameters (mm) of the machines whose first production batch is underway
+#: (owner 2026-10-19/20: the 40 mm motor, initial availability expected in November
+#: 2026).  A fact about the product line, not a per-card field.
 IN_PRODUCTION_DIAMETERS_MM = (40.0,)
+IN_PRODUCTION_TEXT = ("first production batch underway, initial availability expected in "
+                      "November 2026 (say exactly this and give no other date or price)")
 
 #: How long a rendered block is reused (seconds).
 CACHE_TTL_S = 300.0
@@ -62,6 +69,10 @@ HEADER = (
     "These are the catalog values (saved 2-D FEM results at the stated cooling). For exact live numbers "
     "the datasheet (**⭳ datasheet** on the Motors tab) and Configure are the source — say so when asked "
     "for a precise figure, and never present a number as a guarantee.\n"
+    "**Rated is always a continuous point** (it holds for ever): aviation / propeller motors with the coils at "
+    "180 °C at the duty's own air; robot motors with the coils at 70 °C in 30 °C air. **Peak** is a short-time "
+    "point and carries its time to the limit; 200 °C (class N) is the overheat limit; the bearing never limits "
+    "rated. **Mass** is the FULL motor (CAD parts list + simulated parts); the active mass is given separately.\n"
     "Answer motor questions ONLY from this list. A motor that is not listed here is not open to this "
     "caller: do not name, hint at or confirm any other motor, and never quote a price, stock, supplier "
     "or anything internal — none of that is in the list.")
@@ -159,10 +170,11 @@ def _rated_lines(d: Dict[str, Any]) -> List[str]:
         # Nothing says either way (never solved coupled): quote the point, claim nothing about the hours.
         out = [f"Rated point (a continuous rating is not established for it): {head}"]
     else:
-        # The saved rated point cannot be held for ever: say so, never pass it off as the rating.
+        # Rated is always continuous: a saved point that runs out is a record not yet recomputed, never
+        # the rating.  Quote it with its time, and say it is not the rated figure.
         words = _clean(st.get("words") or d.get("duty_label"))
-        out = [f"Rated point (short-time only, NOT a continuous rating): {head}"
-               + (f" — {words}" if words else "")]
+        out = [f"Saved point (short-time only; the continuous rated point is being recomputed, so do NOT "
+               f"call this the rating): {head}" + (f" — {words}" if words else "")]
     i_cont, t_cont = _n(cr.get("i_cont_A"), 1), _n(cr.get("torque_Nm"), 2)
     if cr.get("feasible") and i_cont:
         out.append(f"Continuous (S1) at the saved cooling: {i_cont} A rms"
@@ -198,15 +210,23 @@ def _kv_kt(rated: Dict[str, Any]) -> Optional[str]:
 
 
 def _mass(c: Dict[str, Any], rated: Dict[str, Any], mass: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The FULL motor mass (CAD parts list + simulated parts) with the active mass beside it.
+
+    Mass shown everywhere is the full mass (owner 2026-10-19); the active mass is a separate number.
+    A configuration whose full mass is incomplete says so and gives the active mass only."""
     m = mass if isinstance(mass, dict) else (c.get("mass") if isinstance(c.get("mass"), dict) else {})
     r = rated.get("result") if isinstance(rated.get("result"), dict) else {}
     kg = _n(m.get("full_kg"), 3)
+    act = _n(m.get("active_kg"), 3)
     partial = bool(m.get("partial", False))
     if not kg:                                   # no full-mass summary: the saved run's active mass, said so
         kg, partial = _n(r.get("mass_kg"), 3), True
     if not kg:
         return None
-    return (f"active mass {kg} kg (full mass incomplete)" if partial else f"mass {kg} kg (full assembled motor)")
+    if partial:
+        return f"active mass {kg} kg (full mass incomplete)"
+    kit = " (frameless kit)" if m.get("kit") else ""
+    return (f"full motor mass {kg} kg{kit}" + (f", active mass {act} kg" if act and act != kg else ""))
 
 
 def _battery(c: Dict[str, Any]) -> Optional[str]:
@@ -268,7 +288,7 @@ def render_config(die: Dict[str, Any], c: Dict[str, Any], *,
                   f"steel {_clean(c.get('steel'), 40)}" if c.get("steel") else None])
     role = str(c.get("role") or "")
     lines = [f"- **{title}** — {geom}" + (f"; {role}" if role in ("generator", "mixed") else "")
-             + ("; IN PRODUCTION" if dia is not None and any(
+             + (f"; {IN_PRODUCTION_TEXT}" if dia is not None and any(
                  abs(dia - d) < 0.5 for d in IN_PRODUCTION_DIAMETERS_MM) else "")]
     for ln in _rated_lines(rated) + _other_duties(c, rated):
         lines.append("  " + ln)

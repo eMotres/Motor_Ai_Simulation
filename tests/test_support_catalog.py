@@ -79,19 +79,37 @@ def test_a_continuous_rated_point_and_the_peak_are_quoted():
     assert "Peak: 14400 rpm, 48.8 A rms, 0.66 N·m, 1 kW" in t
     assert "short-time: 1 min 31 s from cold (winding 200 °C)" in t
     assert "KV 821 rpm/V" in t and "Kt 0.013 N·m/A rms" in t
-    assert "mass 0.123 kg" in t and "battery 6S NMC 22.2 V nominal (18–25.2 V)" in t
+    assert "full motor mass 0.123 kg" in t and "battery 6S NMC 22.2 V nominal (18–25.2 V)" in t
     assert "propeller (drone) motor" in t
     assert "prop_0" in t and "prop_7" in t and "prop_8" not in t and "(+3 more)" in t
     assert "viewable after sign-up" in t and "simplified STEP downloadable without an NDA" in t
     assert "full STEP after the online NDA" in t
-    assert "IN PRODUCTION" in t                                  # the 40 mm motor
+    assert "first production batch underway, initial availability expected in November 2026" in t  # the 40 mm motor
     assert "datasheet / Configure is the source" not in t        # that sentence lives in the prompt ...
     assert "For exact live numbers the datasheet" in t           # ... and in the block header
 
 
+def test_the_full_mass_is_quoted_with_the_active_mass_beside_it_and_a_kit_is_named():
+    c = _cfg("L15")
+    t = _render([_die("CIANO28 85 20SW1200", 85, cfgs=[c])],
+                mass_of=lambda d, cf: {"full_kg": 0.442, "active_kg": 0.426, "partial": False, "kit": True})
+    assert "full motor mass 0.442 kg (frameless kit), active mass 0.426 kg" in t
+    t2 = _render([_die()], mass_of=lambda d, cf: {"full_kg": 0.123, "active_kg": 0.094, "partial": False})
+    assert "full motor mass 0.123 kg, active mass 0.094 kg" in t2
+    t3 = _render([_die()], mass_of=lambda d, cf: {"full_kg": 0.2, "active_kg": 0.1, "partial": True})
+    assert "active mass 0.2 kg (full mass incomplete)" in t3 and "full motor mass" not in t3
+
+
+def test_the_header_states_rated_is_continuous_and_peak_is_short_time():
+    t = _render([_die()])
+    assert "Rated is always a continuous point" in t and "180 °C" in t and "70 °C" in t and "30 °C air" in t
+    assert "Peak** is a short-time" in t and "class N" in t and "bearing never limits rated" in t
+    assert "FULL motor" in t
+
+
 def test_only_the_40_mm_motor_is_marked_in_production():
     t = _render([_die("CIANO14 50 edited", 50, cfgs=[_cfg("L15")])])
-    assert "IN PRODUCTION" not in t
+    assert "production batch" not in t
 
 
 def test_a_short_time_rated_point_is_never_passed_off_as_the_rating():
@@ -99,8 +117,9 @@ def test_a_short_time_rated_point_is_never_passed_off_as_the_rating():
     c["duties"] = [_duty("rated", rpm=4000, amps=82.3, nm=31.07, kw=13.01, eff=96.3, duty_class="short_time",
                          short_time={"words": "short-time: 6 min 11 s from cold (winding 200 °C)"})]
     t = _render([_die("CIANO28 150_35 new", 150, cfgs=[c])])
-    assert "Rated point (short-time only, NOT a continuous rating)" in t
-    assert "6 min 11 s from cold" in t and "Rated (continuous)" not in t
+    # rated is ALWAYS continuous: a saved point that runs out is never presented as the rating
+    assert "Saved point (short-time only" in t and "do NOT call this the rating" in t
+    assert "6 min 11 s from cold" in t and "Rated (continuous)" not in t and "Rated point" not in t
 
 
 def test_an_unclassified_rated_point_claims_nothing_about_the_hours():

@@ -13,6 +13,7 @@ from a password account below; RIGHTS always come from our registry
 - GET  /api/auth/sessions     — the caller's own sessions
 - POST /api/auth/sessions/{sid}/revoke — sign one of them out
 - POST /api/auth/logout       — revoke the session this request is using
+- POST /api/auth/heartbeat    — "the user is here": refreshes the session's idle clock (session_activity.py)
 - POST /api/auth/register     — self-service e-mail/password sign-up (unverified)
 - POST /api/auth/verify       — consume the e-mail confirmation link
 - POST /api/auth/register/resend        — mail the confirmation link again (rate-limited)
@@ -39,7 +40,7 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from motor_ai_sim import auth_email as E
@@ -943,3 +944,19 @@ def logout(request: Request, authorization: str = Header(default=None)):
     S.record_event("logout", email=email, sid=sid, reason=det["reason"],
                    ip=ip, user_agent=ua, path="/api/auth/logout")
     return {"ok": True, "sid": sid or None}
+
+
+@router.post("/heartbeat")
+def heartbeat(request: Request, authorization: str = Header(default=None)):
+    """The web app's "the user is here" signal: sent at most once a minute, only while the tab is visible and
+    there was real input since the previous one.  It is user activity by definition (session_activity), so
+    verifying the token refreshes the session's ``last_activity``; a session already closed for idling answers
+    401 ``{"reason": "idle_timeout"}``.  Carries no content and stores nothing else."""
+    ip, ua = _who(request)
+    det = resolve_user_detail(authorization, ip=ip, user_agent=ua, path="/api/auth/heartbeat")
+    if det["user"] is None:
+        if det["reason"] == "store_unavailable":
+            return JSONResponse(status_code=503, content={"detail": "auth store busy", "reason": "store_unavailable"})
+        return JSONResponse(status_code=401, content={"detail": "Sign in required.", "reason": det["reason"]})
+    from motor_ai_sim import session_activity as _SA
+    return {"ok": True, "idleTimeoutS": _SA.idle_timeout_s()}

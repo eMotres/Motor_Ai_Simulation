@@ -87,6 +87,8 @@
       "title": "Real-time Activity",
       "totalOnline": "{total} online ({signedIn} signed in, {anonymous} anonymous)",
       "autoRefresh": "Auto-refreshes every 10 s",
+      "sessionsLine": "Active now (5 min): {active} · open sessions: {open}",
+      "sessionsTip": "Signed-in sessions with user input in the last 5 minutes, and web sessions still open. A session closes after {minutes} min with no input and no computation running.",
       "loading": "Loading real-time data…",
       "error": "Could not load real-time analytics.",
       "signedInTitle": "Active Signed-in Users",

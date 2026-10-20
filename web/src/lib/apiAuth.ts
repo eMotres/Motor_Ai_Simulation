@@ -11,6 +11,9 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\
 
 let tokenGetter: (() => Promise<string | null>) | null = null;
 
+/** Fired on `window` when the server answers that the CURRENT session was closed for idling. */
+export const AUTH_IDLE_EVENT = 'auth-idle-timeout';
+
 /** AuthProvider keeps this pointed at the current user's getIdToken(). */
 export function setTokenGetter(fn: (() => Promise<string | null>) | null): void {
   tokenGetter = fn;
@@ -122,8 +125,22 @@ export function installFetchAuth(): void {
     } catch {
       /* never let auth wiring break a request */
     }
+    // The bearer this request actually carries (to tell a late answer to an OLD token from the current one).
+    let usedToken: string | null = null;
+    try {
+      const h = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('Authorization');
+      if (h && /^Bearer /i.test(h)) usedToken = h.slice(7).trim();
+    } catch { /* ignore */ }
     // identical catalogue reads in flight share one request (lib/sharedGet)
     const res = await sharedGet(orig, API, input as RequestInfo | URL, init);
+    // The server closed this session for idling (30 min without use, sessions.py): it says so on EVERY answer to
+    // that token (X-Auth-Reason), so the app learns from any request, not only from a 401.
+    try {
+      if (usedToken && res.headers.get('x-auth-reason') === 'idle_timeout' && String(res.url || '').startsWith(API)) {
+        const cur = tokenGetter ? await tokenGetter() : null;
+        if (cur === usedToken) window.dispatchEvent(new CustomEvent(AUTH_IDLE_EVENT));
+      }
+    } catch { /* a notice must never break a request */ }
     // A call the server's role gate REFUSED must never fail silently: say why,
     // in one line (components/common/RefusedNotice).  Only the gate's own body
     // ({detail, required_role, your_role}) counts - any other 401/403 is the

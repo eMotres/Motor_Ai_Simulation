@@ -251,3 +251,63 @@ def test_the_import_route_answers_413_and_422(gate, monkeypatch):
     r = client.post(url, files={"file": ("m.FCStd", _fcstd(_doc(deep)), "application/octet-stream")}, headers=gate["admin"])
     assert r.status_code == 422 and "deeper" in r.text, r.text[:300]
     assert _no_override_written(gate)
+
+
+# -- follow-up: the per-part materials / masses, the open CAD exports ----------------------------------------------------------
+
+PM = f"/api/family/die/{DIE}/part_materials"
+
+
+@pytest.mark.parametrize("who", ["plain", "online"])
+def test_part_materials_breakdown_is_denied_without_a_verified_nda(gate, who):
+    """The per-part materials + masses are the BOM of the full construction: the same gate as the part tree / bom.csv."""
+    r = client.get(PM, params={"config": PUB}, headers=gate[who])
+    assert _nda_denied(r), (who, r.status_code, r.text[:300])
+    assert "parts" not in r.json() and "mass_kg" not in r.text
+    r = client.get(PM, headers=gate[who])                               # "the first configuration" form too
+    assert _nda_denied(r)
+    r = client.put(PM, json={"part": "screws", "material": "copper"}, headers=gate[who])
+    assert r.status_code == 403
+    assert "part_materials" not in yaml.safe_load((env_die_yaml(gate)).read_text("utf-8"))
+
+
+def env_die_yaml(gate):
+    return gate["dies_dir"] / DIE / "die.yaml"
+
+
+@pytest.mark.parametrize("who", ["verified", "flagged", "admin"])
+def test_part_materials_stay_open_to_a_verified_nda_account_and_the_admin(gate, who):
+    r = client.get(PM, params={"config": PUB}, headers=gate[who])
+    assert r.status_code == 200, (who, r.text[:300])
+    assert r.json()["config"] == PUB and "parts" in r.json()
+
+
+@pytest.mark.parametrize("who", ["plain", "verified"])
+def test_part_materials_hidden_and_missing_configurations_still_answer_alike(gate, who):
+    a = client.get(PM, params={"config": PRIV}, headers=gate[who])
+    b = client.get(PM, params={"config": NOSUCH}, headers=gate[who])
+    assert a.status_code == b.status_code and a.text.replace(PRIV, "<C>") == b.text.replace(NOSUCH, "<C>"), (a.text, b.text)
+    assert client.get("/api/family/die/NO SUCH DIE/part_materials", headers=gate[who]).status_code == 404
+
+
+def test_the_public_motor_mass_is_not_behind_the_gate(gate, monkeypatch):
+    """Only the per-part breakdown is gated: the motor mass Configure / the catalog show (mass_summary full_kg / active_kg)
+    stays public by owner decision - an ordinary caller without NDA still gets it."""
+    from motor_ai_sim.modules import motor_mass as _mm
+    monkeypatch.setattr(_mm, "mass_summary", lambda die, config, **k: {"full_kg": 0.181, "active_kg": 0.151, "partial": False})
+    r = client.get("/api/catalog/cat_pub/configure_context", headers=gate["plain"])
+    assert r.status_code == 200, r.text[:300]
+    masses = [p.get("mass") for p in r.json().get("presets") or []]
+    assert {"full_kg": 0.181, "active_kg": 0.151} in [{k: m[k] for k in ("full_kg", "active_kg")} for m in masses if m]
+    assert _nda_denied(client.get(PM, params={"config": PUB}, headers=gate["plain"]))
+
+
+@pytest.mark.parametrize("path", ["/api/freecad/export", "/api/fusion/params.csv", "/api/fusion/params.json"])
+def test_the_cad_exports_need_a_signed_in_account_but_no_nda(gate, path, monkeypatch):
+    from motor_ai_sim import auth
+    assert auth.required_role("GET", path) == "user"
+    r = client.get(path)                                               # anonymous exhibit visitor
+    assert r.status_code == 401, r.text[:200]
+    if path != "/api/freecad/export":                                  # the bundle builds solids: not run here (CPU)
+        r = client.get(path, headers=gate["plain"])                    # signed in, no NDA
+        assert r.status_code == 200, r.text[:200]

@@ -112,6 +112,9 @@ const FullPartsPanel: React.FC = () => {
   let note: React.ReactNode = null;
   if (!die) {
     note = <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tx('materialsFullNoMotor')}</Typography>;
+  } else if (!canDownload) {
+    // the per-part breakdown is the full construction (server gate: NDA + verification); one line instead of an error
+    note = <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }} data-testid="materials-full-nda">{tx('materialsFullNda')}</Typography>;
   } else if (loading && !payload) {
     note = (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

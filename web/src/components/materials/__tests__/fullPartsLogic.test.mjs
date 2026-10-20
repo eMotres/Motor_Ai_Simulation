@@ -89,7 +89,7 @@ test('every Full-mode string is translated in EN and zh-CN', () => {
     'materialsFullHint', 'materialsFullHintTip', 'materialsFullPart', 'materialsFullRole', 'materialsFullMaterial',
     'materialsFullMass', 'materialsFullEm', 'materialsFullEmTip', 'materialsFullNotEm', 'materialsFullNotEmTip',
     'materialsFullPickTitle', 'materialsFullDefaultTip', 'materialsFullChosenTip', 'materialsFullAssumedTip',
-    'materialsFullTotal', 'materialsFullTotalTip', 'materialsFullNoMotor', 'materialsFullUnavailable',
+    'materialsFullTotal', 'materialsFullTotalTip', 'materialsFullNoMotor', 'materialsFullUnavailable', 'materialsFullNda',
     'materialsFullNoCad', 'materialsFullPartial', 'materialsFullPartialTip', 'materialsFullActive', 'materialsFullActiveTip', 'materialsFullLoading', 'materialsFullLocal', 'materialsGroupMetal', 'materialsGroupSteel',
     'materialsGroupMagnet', 'materialsGroupInsulator', 'materialsGroupOther',
     ...['Structural', 'Magnetic', 'Conductor', 'Insulation', 'Fastener', 'Electronic', 'Cell', 'Other'].map((r) => `materialsRole${r}`),

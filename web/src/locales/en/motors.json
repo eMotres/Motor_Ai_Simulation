@@ -187,6 +187,7 @@
   "materialsFullTotalKitTip": "The frameless kit for robots: stator with coils and the phase board + rotor with magnets. Housing, holders, rotor carriers, bearings, shaft, screws and rings are not included. Every per-kg figure divides by it.",
   "materialsFullNoMotor": "Load a motor to see its parts.",
   "materialsFullUnavailable": "No part list for this motor here.",
+  "materialsFullNda": "The full parts list opens after the signed NDA and account verification; active-part materials are in Active mode.",
   "materialsFullNoCad": "Full mass incomplete (no CAD model yet): only the active parts and what the configuration names are listed.",
   "materialsFullLoading": "Loading parts",
   "materialsFullSaved": "Saved with the die",

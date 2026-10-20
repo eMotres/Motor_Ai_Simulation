@@ -238,6 +238,39 @@ def _safe_eval(expr, ns):
     return v
 
 
+def freecad_call_separators(expr):
+    """FreeCAD's argument separator ``;`` (``min(a; b)``) -> ``,``, decided on Python TOKENS: a ``;`` is converted only when the
+    innermost open parenthesis is a function call (it follows a NAME token).  Anywhere else - at the top level (``a; b``, a
+    statement separator) or inside a plain group (``(a; b)``) - it is refused with a ValueError.  Nothing else is rewritten;
+    the converted text still goes through :func:`_safe_eval`'s unchanged AST whitelist."""
+    if ";" not in expr:
+        return expr
+    import tokenize
+    if "\n" in expr or "\r" in expr:
+        raise ValueError("a multi-line expression is not allowed: %r" % (expr,))
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(expr).readline))
+    except (tokenize.TokenError, SyntaxError) as exc:
+        raise ValueError("bad expression %r" % (expr,)) from exc
+    skip = (tokenize.NL, tokenize.NEWLINE, tokenize.ENDMARKER, tokenize.INDENT, tokenize.DEDENT)
+    out = list(expr)
+    stack, prev = [], None                       # stack: True = call parenthesis, False = group; prev = last significant token
+    for t in toks:
+        if t.type in skip:
+            continue
+        if t.type == tokenize.OP and t.string == "(":
+            stack.append(prev is not None and prev.type == tokenize.NAME)
+        elif t.type == tokenize.OP and t.string == ")":
+            if stack:
+                stack.pop()
+        elif t.type == tokenize.OP and t.string == ";":
+            if not stack or not stack[-1]:
+                raise ValueError("';' separates the arguments of a function call only: %r" % (expr,))
+            out[t.start[1]] = ","
+        prev = t
+    return "".join(out)
+
+
 #: Longest chain of cells referring to cells that :func:`evaluate` follows (security review 2026-10-20, F5).  The real Params
 #: sheets go 5-9 deep (CIANO14 40 L12/L20 7, CIANO28 85 9, CIANO28 150 / CILN28 G2 5); a deeper chain in an upload is refused
 #: with a ValueError instead of running into Python's recursion limit.
@@ -260,6 +293,7 @@ def evaluate(exprs):
         e = str(exprs[n]).strip().lstrip("=")
         e = _NUM_UNIT.sub(lambda m: "(%s*%r)" % (m.group(1), _UNIT[m.group(2)]), e)
         e = re.sub(r"\b(mm|deg)\b", "1", e).replace("^", "**")
+        e = freecad_call_separators(e)                       # FreeCAD's min(a; b) -> min(a, b), only inside calls
         ns = dict(_FUN)
         for tok in set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", e)):
             if tok in exprs and tok not in ns:

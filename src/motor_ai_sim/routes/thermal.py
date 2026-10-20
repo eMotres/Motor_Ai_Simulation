@@ -5555,6 +5555,10 @@ def solve_thermal_field(
         "P_mech_into_map_W": round(
             (_p_brg_in if _brg_modelled else 0.0)
             + (_p_wind_gap if _wind_modelled else 0.0), 3),
+        # …and what the solve carries in its lumped BEARING NODES instead of
+        # the map's elements (re-audit #2 R8): solved heat all the same, so the
+        # whole-system budget counts it — the element budget cannot.
+        "P_mech_at_nodes_W": round(_p_brg_in if _brg_at_nodes else 0.0, 3),
         "shaft_ends_open": bool(_shaft_len_m > 0.0),
         "model": ((_mech.get("mech") or {}).get("model")
                   or "SKF frictional-moment model + analytic windage — ANALYTIC, "
@@ -5611,7 +5615,8 @@ def solve_thermal_field(
     # iteration below the temperature the stream actually reaches.  It is only a
     # seed — the passes below replace it with what each surface measured — but a
     # seed that ignores a source is a pass wasted.
-    _p_seed = P_loss_total + _p_mech_in
+    _p_seed = (P_loss_total + _p_mech_in
+               + float(mech_losses.get("P_mech_at_nodes_W") or 0.0))
     _share = (_p_seed / len(_outlet_iterating)) if _outlet_iterating else 0.0
     p_outer_est = _share if "outer" in _outlet_iterating else _p_seed
     p_bore_est = _share if "bore" in _outlet_iterating else 0.0
@@ -6718,6 +6723,11 @@ def solve_thermal_field(
                  "few per cent of it.  closure_W is the identity, as a number."),
     }
 
+    # The heat the solve generates in its lumped bearing nodes (R8), and its
+    # Norton split from the bearing network (``bearing_holder.source_split``).
+    _p_node_gen_w = _p_brg_in if _brg_at_nodes else 0.0
+    _bn_sources = (_bh.node_sources(bearing_node_blk.get("delta"), _p_node_gen_w)
+                   if (_brg_at_nodes and _bn_on) else None)
     heat_budget = {
         "rotor_heat_split": rotor_heat_split,
         "stator_heat_split": stator_heat_split,
@@ -6801,13 +6811,33 @@ def solve_thermal_field(
         # with its number rather than dropped: an engineer can then decide to
         # open the shaft-ends path, and nobody reads a closed budget as a
         # complete one.
+        # Every MODELLED watt of bearing friction — in the map's shaft
+        # elements (open shaft ends) or in the solved bearing nodes (closed
+        # ends, 2026-10-19).  It read 0 with the nodes on (re-audit #2 R8).
         "bearing_friction_W": round(
+            _p_brg_in if (_brg_modelled or _brg_at_nodes) else 0.0, 3),
+        "bearing_friction_in_map_W": round(
             _p_brg_in if _brg_modelled else 0.0, 3),
+        "bearing_friction_at_nodes_W": round(
+            _p_brg_in if _brg_at_nodes else 0.0, 3),
         "bearing_friction_not_modelled_W": round(_p_brg_dropped, 3),
         "windage_W": round(_p_wind_gap if _wind_modelled else 0.0, 4),
         "windage_not_modelled_W": round(_p_wind_dropped + _p_wind_faces, 4),
         "mech_loss_total_W": round(_p_brg_in + _p_wind_gap + _p_wind_faces, 3),
         "mech_loss_in_map_W": round(_p_mech_in, 3),
+        "mech_loss_at_nodes_W": round(_p_node_gen_w, 3),
+        # ── THE WHOLE SYSTEM (re-audit #2 R8) ────────────────────────────────
+        # `losses_W` is the ELEMENT budget (∫q dV; the residual above closes on
+        # it, with the bearing network seen as sinks on the mesh).  The solved
+        # system also generates in its lumped bearing nodes, so its input is
+        # the sum, and where that friction goes is the bearing network's own
+        # split: the rotor and stator shares a lumped transient carries on its
+        # dynamic nodes, and the holder film's share straight to the room.
+        # `bearing_node_sources_W` sums to `losses_at_bearing_nodes_W`, and
+        # `losses_W + losses_at_bearing_nodes_W == losses_total_W`.
+        "losses_at_bearing_nodes_W": round(_p_node_gen_w, 3),
+        "losses_total_W": round(_gen_w + _p_node_gen_w, 2),
+        "bearing_node_sources_W": _bn_sources,
         "symmetry_mult": sym,
         "passes": passes,
         "note": ("losses_W is ∫q dV over the SOLVED sub-mesh (× the model's "
@@ -6829,7 +6859,12 @@ def solve_thermal_field(
                  "em_loss_total_W + mech_loss_in_map_W up to the loss map's own "
                  "wedge/mesh integration; bearing friction at the shaft ends and "
                  "gap windage are inside it, and the two *_not_modelled_W lines "
-                 "are mechanical watts this cross-section has no place for."),
+                 "are mechanical watts this cross-section has no place for.  "
+                 "Friction in the solved BEARING NODES is not an element "
+                 "source: it is losses_at_bearing_nodes_W, losses_total_W is "
+                 "the whole solved system's input, and bearing_node_sources_W "
+                 "says where that friction goes (rotor, stator, straight to the "
+                 "air through the holders)."),
     }
     if gap is not None:
         gap["k_bridge"] = round(float(gap_k_bridge), 4)

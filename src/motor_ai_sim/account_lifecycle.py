@@ -612,10 +612,20 @@ def _jsonl_for(path: Path, email: str, field: str = "email") -> List[Dict[str, A
     return out
 
 
-def _add_tree(zf: zipfile.ZipFile, src: Optional[Path], arc: str, budget: List[int]) -> int:
-    """Add every regular file under ``src`` (symlinks NOT followed)."""
+def _add_tree(zf: zipfile.ZipFile, src: Optional[Path], arc: str, budget: List[int],
+              *, scrub: bool = False, withheld: Optional[List[str]] = None) -> int:
+    """Add every regular file under ``src`` (symlinks NOT followed).
+
+    ``scrub`` (re-audit #2 R5): the person does not pass the full-construction
+    gate, so every document (yaml / json / jsonl, gzipped or not) goes in
+    through ``construction_privacy.scrub_bytes`` — the CAD bearing basis never
+    leaves in the ZIP even when an older workspace copy still holds it.  A
+    document that carries the basis but cannot be parsed is left OUT and named
+    in ``withheld`` rather than shipped unread."""
     if src is None or not Path(src).is_dir():
         return 0
+    if scrub:
+        from motor_ai_sim import construction_privacy as _cp
     n = 0
     for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
         dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
@@ -628,6 +638,18 @@ def _add_tree(zf: zipfile.ZipFile, src: Optional[Path], arc: str, budget: List[i
                 raise ValueError("export exceeds ACCOUNT_EXPORT_MAX_BYTES")
             budget[0] -= size
             rel = os.path.relpath(fp, src).replace(os.sep, "/")
+            if scrub and _cp._is_doc(fn):
+                try:
+                    with open(fp, "rb") as fh:
+                        clean = _cp.scrub_bytes(fn, fh.read())
+                except (OSError, ValueError):
+                    if withheld is not None:
+                        withheld.append(f"{arc}/{rel}")
+                    continue
+                if clean is not None:
+                    zf.writestr(f"{arc}/{rel}", clean)
+                    n += 1
+                    continue
             zf.write(fp, f"{arc}/{rel}")
             n += 1
     return n
@@ -725,8 +747,20 @@ def build_export(email: str, dest: Optional[Path] = None) -> Path:
         zf.writestr("usage.json", js(usage))
         zf.writestr("admin_access.json", js(admin_access))
         if dirs["root"] is not None:
-            _add_tree(zf, dirs["workspace"], "workspace", budget)
-            _add_tree(zf, dirs["published"], "published", budget)
+            # the CAD bearing basis only for a person who passes the
+            # full-construction gate (NDA + verification), re-audit #2 R5
+            from motor_ai_sim import construction_privacy as _cp
+            _scrub = not _cp.subject_may_see_full_construction(email)
+            _withheld: List[str] = []
+            _add_tree(zf, dirs["workspace"], "workspace", budget,
+                      scrub=_scrub, withheld=_withheld)
+            _add_tree(zf, dirs["published"], "published", budget,
+                      scrub=_scrub, withheld=_withheld)
+            if _withheld:
+                zf.writestr("workspace/WITHHELD.txt", (
+                    "These files hold construction data that needs the signed "
+                    "NDA and a verified account, and could not be cleaned, so "
+                    "they are not in this export:\n" + "\n".join(_withheld) + "\n"))
         else:
             zf.writestr("workspace/NOTE.txt",
                         "Single-user installation: there is no per-account workspace.\n")

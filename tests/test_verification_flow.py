@@ -198,7 +198,8 @@ def test_a_gmail_account_gets_a_specific_question_and_no_access(env):
 
 def test_a_conflict_goes_to_manual_review_and_the_admin_is_told(env):
     network({**NET_OK, "https://api.gleif.org/api/v1/lei-records": {"data": [{"id": "X", "attributes": {"entity": {
-        "legalName": {"name": "Acme Drones Ltd"}, "legalAddress": {"country": "FR"}, "jurisdiction": "FR", "status": "ACTIVE"}}}]}})
+        "legalName": {"name": "Acme Drones Ltd"}, "legalAddress": {"country": "FR"}, "jurisdiction": "FR", "status": "ACTIVE",
+        "registeredAs": "HRB 12345"}}}]}})                 # the applicant's own number, registered in another country = a real conflict
     sign(env)
     c = case_of(CORP)
     assert c["status"] == ENG.MANUAL_REVIEW and c["reasons"][0]["code"] == "conflict" and not c["access"]["granted"]

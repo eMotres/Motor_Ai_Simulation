@@ -65,6 +65,21 @@ def test_gleif_conflicts_go_to_a_person(kw, why):
     assert e.result == EV.CONFLICT and why in e.summary
 
 
+def test_gleif_same_name_abroad_is_a_different_company_not_a_conflict():
+    # 2026-10-20: "Orbital" (CA) matched a Belgian ORBITAL and the case went to a person as a "conflict"
+    rec = gleif_record(name="ORBITAL", country="BE", jurisdiction="BE", reg="0123.456.789")
+    [e] = S.GleifSource().run(case(legal_name="Orbital", country="CA", reg_no="15068525"), ctx(FakeHttp({GLEIF: rec})))
+    assert e.result == EV.UNKNOWN and "different company" in e.summary and "BE" in e.summary
+
+
+def test_gleif_prefers_the_record_in_the_applicants_country():
+    abroad = gleif_record(country="FR", jurisdiction="FR", reg="RCS 1")["data"][0]
+    home = gleif_record()["data"][0]
+    home = dict(home, id="HOME0000000000000000")
+    [e] = S.GleifSource().run(case(), ctx(FakeHttp({GLEIF: {"data": [abroad, home]}})))
+    assert e.result == EV.PASS and e.detail["lei"] == "HOME0000000000000000"
+
+
 def test_gleif_not_found_is_unknown_never_a_failure_and_errors_are_unknown():
     [e] = S.GleifSource().run(case(), ctx(FakeHttp({GLEIF: {"data": []}})))
     assert e.result == EV.UNKNOWN

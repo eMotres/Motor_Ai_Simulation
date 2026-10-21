@@ -47,24 +47,51 @@ class GleifSource(VerificationSource):
         name, cc, reg = app["legal_name"], str(app.get("country") or "").upper(), app.get("reg_no") or ""
         attempts = [{"filter[entity.legalName]": name, "page[size]": "10"},
                     {"filter[fulltext]": name, "filter[entity.legalAddress.country]": cc, "page[size]": "10"}]
+        def _cc_of(r):
+            e = r.get("attributes", {}).get("entity", {})
+            return {str((e.get("legalAddress") or {}).get("country") or "").upper(), str(e.get("jurisdiction") or "").upper()[:2]} - {""}
+
         url, records, last = "", None, None
+        scored, seen = [], {}
         for params in attempts:
             url, records, last = self._fetch(params, ctx)
             if records is None:
                 return [Evidence("gleif", EV.CHECK_REGISTRY_COMPANY, EV.COMPANY, EV.UNKNOWN, EV.NONE, name,
                                  "GLEIF did not answer (%s)" % (last.error or "HTTP %s" % last.status), source_url=url,
                                  registry_grade=True)]
+            for r in records:
+                seen.setdefault(r.get("id") or id(r), r)
             scored = sorted(((T.company_similarity(name, (r.get("attributes", {}).get("entity", {}).get("legalName") or {}).get("name", "")), r)
-                             for r in records), key=lambda x: -x[0])
-            if scored and scored[0][0] >= C.COMPANY_NAME_AMBIGUOUS:
+                             for r in seen.values()), key=lambda x: -x[0])
+            # stop once a good match is found - in the applicant's country when one was given (a name-only search
+            # can return a same-named company abroad first; the country-filtered search may still find the home one)
+            if scored and scored[0][0] >= C.COMPANY_NAME_AMBIGUOUS and (
+                    not cc or any(s >= C.COMPANY_NAME_MATCH and cc in _cc_of(r) for s, r in scored)):
                 break
-        else:
-            scored = []
         if not scored or scored[0][0] < C.COMPANY_NAME_AMBIGUOUS:
             return [Evidence("gleif", EV.CHECK_REGISTRY_COMPANY, EV.COMPANY, EV.UNKNOWN, EV.NONE, name,
                              "no LEI record with this name (many companies have none)", source_url=url, registry_grade=True,
                              raw={"records": len(records or [])})]
         score, rec = scored[0]
+        # A name is not an identity: "Orbital" (CA) matched a Belgian ORBITAL and the case went to a human as a
+        # "conflict".  Among the records that match the name, the one in the applicant's country is THE match; a
+        # record that exists only abroad is a different company with the same name, unless its registration number
+        # is the applicant's (then the country really contradicts the application).
+        if cc:
+            matching = [(s, r) for s, r in scored if s >= C.COMPANY_NAME_MATCH]
+            home = [(s, r) for s, r in matching if cc in _cc_of(r)]
+            same_reg = [(s, r) for s, r in matching
+                        if reg and T.reg_no_equal(reg, r.get("attributes", {}).get("entity", {}).get("registeredAs") or "")]
+            if home:
+                score, rec = home[0]
+            elif same_reg:
+                score, rec = same_reg[0]
+            elif matching:
+                abroad = sorted({c for _s, r in matching for c in _cc_of(r)})
+                return [Evidence("gleif", EV.CHECK_REGISTRY_COMPANY, EV.COMPANY, EV.UNKNOWN, EV.NONE, name,
+                                 "no LEI record with this name in %s (the same name is registered in %s - a different company)"
+                                 % (cc, "/".join(abroad)), source_url=url, registry_grade=True,
+                                 raw={"records": len(seen), "abroad": abroad})]
         ent = rec.get("attributes", {}).get("entity", {})
         legal = (ent.get("legalName") or {}).get("name", "")
         addr = ent.get("legalAddress") or {}

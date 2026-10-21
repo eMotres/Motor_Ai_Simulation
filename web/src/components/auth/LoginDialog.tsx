@@ -80,7 +80,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
     }
     return (e as Error).message;
   };
-  const gButtonRef = useRef<HTMLDivElement>(null);
+  const gButtonRef = useRef<HTMLDivElement | null>(null);
   // E-mail opt-in topics (communication preferences): every box UNTICKED by default (GDPR); a ref so the GIS callback
   // registered once still reads the current boxes.  The server records them with the wording shown (comm_prefs.py).
   const [topics, setTopics] = useState<Topics>(emptyTopics());
@@ -189,17 +189,26 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
 
   // The Dialog unmounts its content on close (and the Google tab on a tab switch), so Google's button is gone
   // while gisState stays 'ready' - which hides ours: an empty box with nothing to click (owner 2026-10-21, on a
-  // second sign-in).  Whenever the box comes back empty, draw Google's button again (the script is cached).
-  // One redraw per mounted box: if Google draws nothing again, the 2.5 s check below shows the e-mail fallback.
-  const redrawnFor = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open || tab !== 'google' || gisState !== 'ready') return;
-    const box = gButtonRef.current;
-    if (box && !box.firstChild && redrawnFor.current !== box) {
-      redrawnFor.current = box;
-      startGoogle();
-    }
-  });
+  // second sign-in; only a page reload helped).  The box mounts inside the Dialog's portal AFTER this component's
+  // effects ran, so a callback ref (it fires when the node itself attaches) redraws Google's button there; the
+  // script and its initialize() are already done.  If Google draws nothing, offer the e-mail fallback.
+  const gisStateRef = useRef(gisState);
+  gisStateRef.current = gisState;
+  const setGButtonBox = (node: HTMLDivElement | null) => {
+    gButtonRef.current = node;
+    if (!node || node.firstChild || gisStateRef.current !== 'ready') return;
+    void loadGis().then((gis) => {
+      if (node.isConnected && !node.firstChild) {
+        gis.renderButton(node, { theme: 'outline', size: 'large', width: 280, text: 'signin_with' });
+      }
+      window.setTimeout(() => {
+        if (node.isConnected && !node.querySelector('iframe, [role="button"]') && node.getBoundingClientRect().height < 10) {
+          setGisState('unreachable');
+          setGisErr(t('auth.gisUnreachable'));
+        }
+      }, 2500);
+    }).catch(() => setGisState('idle'));
+  };
 
   const switchMode = (m: Mode) => {
     setMode(m); setErr(null); setInfo(null); setTouched(false);
@@ -293,7 +302,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
 
         {tab === 'google' && GOOGLE_CLIENT_ID ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, py: 1 }}>
-            <div ref={gButtonRef} />
+            <div ref={setGButtonBox} />
             {gisState !== 'ready' && (
               <Button variant="outlined" onClick={startGoogle} disabled={gisState === 'loading'}
                 data-testid="google-signin"

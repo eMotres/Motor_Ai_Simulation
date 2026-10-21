@@ -207,6 +207,34 @@ def _seeds(air: List, solid: List) -> List:
     return list(air) + list(solid)
 
 
+def _polygonize_faces(vertices, segments):
+    from shapely.geometry import LineString
+    from shapely.ops import polygonize_full
+
+    lines = [LineString([vertices[a], vertices[b]]) for a, b in segments]
+    faces, _cuts, _dangles, invalid = polygonize_full(lines)
+    if getattr(invalid, "geoms", ()):
+        raise ValueError("rotor PSLG contains an invalid polygon ring")
+    return list(getattr(faces, "geoms", ()))
+
+
+def _solid_face_seeds(vertices, segments, geom, exclusions, marker: int,
+                      max_area: float) -> List:
+    """Seed each actual PSLG face belonging to a solid material."""
+    from shapely.ops import unary_union
+
+    excluded = unary_union(exclusions) if exclusions else None
+    seeds = []
+    for face in _polygonize_faces(vertices, segments):
+        point = face.representative_point()
+        if not geom.covers(point):
+            continue
+        if excluded is not None and excluded.covers(point):
+            continue
+        seeds.append([point.x, point.y, marker, max_area])
+    return seeds
+
+
 def _part_areas(part_mesh_mm: Optional[Dict]) -> Dict[str, float]:
     """{part: target cell area mm^2} for the per-part element sizes actually
     requested.  Parts absent here keep the global/air size, so an empty request
@@ -1237,7 +1265,9 @@ def _rotor_bulk_gate(A: Dict, cdt, area: float, regions, rotor_bridge: bool,
     S = A["segments"]
     Vo, To = cdt(V, S, area, hole_pts=A.get("holes"),
                  regions=regions if regions is not None and len(regions) else None,
-                 budget=_TRI_BUDGET["v"])
+                 budget=_TRI_BUDGET["v"],
+                 fixed_segments=A.get("fixed_segments"),
+                 segment_sizes=A.get("segment_sizes"))
     if rotor_bridge and len(To):
         _ar, _ = _aspect_arr(Vo, To)
         _p995 = float(np.percentile(_ar, 99.5))
@@ -1449,10 +1479,24 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
                  "" if _nd else "; nothing droppable, refining with -YY")
         if not _nd:
             _Y = "YY"
+    if rotor_bridge:
+        V, S, _fixed, _sizes = _plan_graded_rotor_interfaces(
+            V, S, area, regions=regions, holes=A.get("holes", ()))
+        A["vertices"] = V
+        A["segments"] = S
+        A["fixed_segments"] = _fixed
+        A["segment_sizes"] = _sizes
     _be = cdt_backend()
     if _be == "gmsh":
         return _triangulate_gmsh(A, area, regions, rotor_bridge)
     return _triangulate_netgen(A, area, regions, rotor_bridge)
+
+
+def _plan_graded_rotor_interfaces(V, S, area, regions=None, holes=()):
+    """Lazy import keeps the ordinary geometry path free of backend imports."""
+    from motor_ai_sim.simulation.rotor_interface_grading import (
+        plan_rotor_interfaces)
+    return plan_rotor_interfaces(V, S, area, regions=regions, holes=holes)
 
 
 def _air_parts(annulus_poly, iron, embedded):
@@ -2158,7 +2202,7 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         # gap-air annulus [r_od, R1] — FINE (it carries the gap field)
         _air_reg += [[0.5 * (r_od + r1_band), 0.0, 9, area]]
     reg = _seeds(_air_reg,
-                 [[*steel.representative_point().coords[0], 5, a_steel]]
+                 _solid_face_seeds(V, S, iron, mags, 5, a_steel)
                  + [[mg.centroid.x, mg.centroid.y, 6, a_mag] for mg in mags])
     _xh = None
     if _patch_r is not None:                  # the patch annulus is a CDT hole
@@ -2628,7 +2672,7 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         _air_reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 9, area]]
     reg = _seeds(
         _air_reg,
-        [[*steel.intersection(W).representative_point().coords[0], 5, a_steel]]
+        _solid_face_seeds(V, S, iron, mags, 5, a_steel)
         + [[g.centroid.x, g.centroid.y, 6, a_mag] for g in mags])
     _xh = None
     if _patch_r is not None:                  # the patch is a CDT hole

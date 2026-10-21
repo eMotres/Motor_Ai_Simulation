@@ -187,6 +187,20 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
       });
   };
 
+  // The Dialog unmounts its content on close (and the Google tab on a tab switch), so Google's button is gone
+  // while gisState stays 'ready' - which hides ours: an empty box with nothing to click (owner 2026-10-21, on a
+  // second sign-in).  Whenever the box comes back empty, draw Google's button again (the script is cached).
+  // One redraw per mounted box: if Google draws nothing again, the 2.5 s check below shows the e-mail fallback.
+  const redrawnFor = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open || tab !== 'google' || gisState !== 'ready') return;
+    const box = gButtonRef.current;
+    if (box && !box.firstChild && redrawnFor.current !== box) {
+      redrawnFor.current = box;
+      startGoogle();
+    }
+  });
+
   const switchMode = (m: Mode) => {
     setMode(m); setErr(null); setInfo(null); setTouched(false);
     setPassword(''); setPassword2('');

@@ -158,7 +158,8 @@ def _ring_use_counts(S, faces, keep, key, seg_id):
 
 
 def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
-                     budget: Optional[int] = None
+                     budget: Optional[int] = None, fixed_segments=None,
+                     segment_sizes=None
                      ) -> Tuple[np.ndarray, np.ndarray]:
     """Constrained quality triangulation of the PSLG (V mm, S index pairs).
 
@@ -169,11 +170,14 @@ def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
     return gmsh_worker.call(
         "motor_ai_sim.simulation.geo_mesh_gmsh:_triangulate_gmsh_impl",
         args=(np.asarray(V, float), np.asarray(S, np.int64), float(area)),
-        kwargs=dict(hole_pts=hole_pts, regions=regions, budget=budget))
+        kwargs=dict(hole_pts=hole_pts, regions=regions, budget=budget,
+                    fixed_segments=fixed_segments,
+                    segment_sizes=segment_sizes))
 
 
 def _triangulate_gmsh_impl(V, S, area: float, hole_pts=None, regions=None,
-                           budget: Optional[int] = None
+                           budget: Optional[int] = None, fixed_segments=None,
+                           segment_sizes=None
                            ) -> Tuple[np.ndarray, np.ndarray]:
     """Worker-side body of ``triangulate_gmsh`` (never call it in the API
     process).  See the module docstring for the contract.  `budget`
@@ -189,6 +193,13 @@ def _triangulate_gmsh_impl(V, S, area: float, hole_pts=None, regions=None,
     S = np.asarray(S, np.int64).reshape(-1, 2)
     S = S[S[:, 0] != S[:, 1]]
     S = np.unique(np.sort(S, axis=1), axis=0)
+    fixed_keys = {tuple(sorted(map(int, row))) for row in
+                  np.asarray(fixed_segments if fixed_segments is not None else [],
+                             np.int64).reshape(-1, 2)}
+    size_by_edge = {tuple(sorted((int(row[0]), int(row[1])))): float(row[2])
+                    for row in np.asarray(
+                        segment_sizes if segment_sizes is not None else [],
+                        float).reshape(-1, 3)}
     nV = len(V)
     holes = np.zeros((0, 2)) if hole_pts is None else \
         np.asarray(hole_pts, float).reshape(-1, 2)
@@ -232,6 +243,14 @@ def _triangulate_gmsh_impl(V, S, area: float, hole_pts=None, regions=None,
     lfs, near = _feature_sizes(V, S)
     frozen = _ring_use_counts(S, faces, keep, key, seg_id) != 2
     h_seg = _segment_sizes(L, lfs, near, frozen, K)
+    fixed = np.asarray([tuple(map(int, row)) in fixed_keys for row in S], bool)
+    if size_by_edge:
+        missing = [tuple(map(int, row)) for row in S
+                   if tuple(map(int, row)) not in size_by_edge]
+        if missing:
+            raise GmshCDTError("explicit segment sizing misses %d normalized "
+                               "edge(s)" % len(missing))
+        h_seg = np.asarray([size_by_edge[tuple(map(int, row))] for row in S])
 
     def _vid(c):
         i = key.get((float(c[0]), float(c[1])))
@@ -325,7 +344,7 @@ def _triangulate_gmsh_impl(V, S, area: float, hole_pts=None, regions=None,
         # boundary (one kept face) and embedded segments are frozen; interior
         # interfaces (two kept faces) are subdivided by the size field
         for k, t in ltag.items():
-            if uses[k] != 2:
+            if uses[k] != 2 or fixed[k]:
                 gmsh.model.mesh.setTransfiniteCurve(abs(t), 2)
         for s, ls in emb_l.items():
             gmsh.model.mesh.embed(1, ls, 2, s)

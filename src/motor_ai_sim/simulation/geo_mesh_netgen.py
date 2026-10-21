@@ -105,7 +105,8 @@ def netgen_version() -> Optional[str]:
 
 
 def triangulate_netgen(V, S, area: float, hole_pts=None, regions=None,
-                       budget: Optional[int] = None
+                       budget: Optional[int] = None, fixed_segments=None,
+                       segment_sizes=None
                        ) -> Tuple[np.ndarray, np.ndarray]:
     """Constrained quality triangulation of the PSLG (V mm, S index pairs).
 
@@ -128,6 +129,13 @@ def triangulate_netgen(V, S, area: float, hole_pts=None, regions=None,
     S = np.asarray(S, np.int64).reshape(-1, 2)
     S = S[S[:, 0] != S[:, 1]]
     S = np.unique(np.sort(S, axis=1), axis=0)
+    fixed_keys = {tuple(sorted(map(int, row))) for row in
+                  np.asarray(fixed_segments if fixed_segments is not None else [],
+                             np.int64).reshape(-1, 2)}
+    size_by_edge = {tuple(sorted((int(row[0]), int(row[1])))): float(row[2])
+                    for row in np.asarray(
+                        segment_sizes if segment_sizes is not None else [],
+                        float).reshape(-1, 3)}
     nV = len(V)
     holes = np.zeros((0, 2)) if hole_pts is None else \
         np.asarray(hole_pts, float).reshape(-1, 2)
@@ -172,6 +180,14 @@ def triangulate_netgen(V, S, area: float, hole_pts=None, regions=None,
     uses = _ring_use_counts(S, faces, keep, key, seg_id)
     frozen = uses != 2
     h_seg = _segment_sizes(L, lfs, near, frozen, K)
+    fixed = np.asarray([tuple(map(int, row)) in fixed_keys for row in S], bool)
+    if size_by_edge:
+        missing = [tuple(map(int, row)) for row in S
+                   if tuple(map(int, row)) not in size_by_edge]
+        if missing:
+            raise NetgenCDTError("explicit segment sizing misses %d normalized "
+                                 "edge(s)" % len(missing))
+        h_seg = np.asarray([size_by_edge[tuple(map(int, row))] for row in S])
 
     def _vid(c):
         i = key.get((float(c[0]), float(c[1])))
@@ -241,7 +257,7 @@ def triangulate_netgen(V, S, area: float, hole_pts=None, regions=None,
             npiece = 0
             for k, e in ed.items():
                 n = 1
-                if not frozen[k]:
+                if not frozen[k] and not fixed[k]:
                     h = min([float(h_seg[k])] + side_tgt.get(k, []))
                     n = max(1, int(math.ceil(L[k] / h - 1e-9)))
                 e.partition = np.array([j / n for j in range(1, n)], float)

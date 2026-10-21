@@ -730,8 +730,21 @@ const SweepStudyPanel: React.FC = () => {
       const someGood = [...byVal.values()].some(e => e.bad < e.tot);
       if (badVals.length && someGood) culprits.push(`${k} = ${badVals.map(v => Math.round(v * 1000) / 1000).join(', ')}`);
     });
-    const reason = String(failed[0]?.error || '').split(':')[0].trim();
-    return { n: failed.length, total: pts.length, culprits, reason };
+    // The reason used to be the text before the first ':' - for a wrapped error that is only the class name
+    // ("couldn't be built (HTTPException)", owner 2026-10-21) while the real cause sat behind it.  Peel the
+    // wrappers (exception class, HTTP status, 'sliding-band transient failed') and show the cause's code.
+    let full = String(failed[0]?.error || '').trim();
+    for (let i = 0; i < 6; i++) {
+      const m = full.match(/^(?:[A-Za-z]+(?:Error|Exception)|\d{3}|sliding-band transient failed|solver\.em_transient failed)\s*:\s*/);
+      if (!m) break;
+      full = full.slice(m[0].length);
+    }
+    const code = full.match(/^([a-z][a-z0-9_]+):\s/);
+    const reason = (code ? code[1] : full).slice(0, 140);
+    const hint = reason === 'tdm_mesh_not_periodic'
+      ? ' The magnet eddy-current method needs identical poles: Mesh tab -> Pole/slot mesh = Periodic, or turn Template iron on.'
+      : '';
+    return { n: failed.length, total: pts.length, culprits, reason, full, hint };
   }, [result]);
 
   // ── UNSETTLED EDDY TRANSIENT (user's 90-point sweep, 2026-09-07) ─────────
@@ -1241,7 +1254,7 @@ const SweepStudyPanel: React.FC = () => {
                     + '(γ near the zero-torque angle, current far off the machine) '
                     + 'or the mode (γ counts from the q-axis in BOTH modes — '
                     + 'generator adds its 180° internally).'
-                  : `couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.`}
+                  : <span title={buildFails.full}>{`couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.${buildFails.hint}`}</span>}
               {buildFails.culprits.length
                 ? ` Always fails at: ${buildFails.culprits.join('; ')} — narrow that range.`
                 : ''}

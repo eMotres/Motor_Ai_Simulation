@@ -40,7 +40,12 @@ function useLS<T>(key: string, def: T): [T, (v: T) => void] {
 const buildGrid = (lo: number, hi: number, step: number): number[] => {
   if (!(step > 0) || hi < lo) return [Math.round(lo * 1e4) / 1e4];
   const out: number[] = [];
-  for (let v = lo; v <= hi + step * 1e-6; v += step) out.push(Math.round(v * 1e4) / 1e4);
+  // Values are stored rounded to 4 decimals and the current is stored in Arms while the card speaks peak, so
+  // 170 ... 180 A peak step 10 became 120.2082 ... 127.2792 step 7.0711 and the last point (127.2793) fell off
+  // the grid: "(1 pts)" (owner 2026-10-21).  Count the points from the span with a tolerance of a step's
+  // thousandth and snap the last one onto hi.
+  const n = Math.floor((hi - lo) / step + 1e-3);
+  for (let i = 0; i <= n; i++) out.push(Math.round((i === n && Math.abs(lo + i * step - hi) < step * 1e-3 ? hi : lo + i * step) * 1e4) / 1e4);
   return out;
 };
 const readLS = (key: string, def: number): number => {

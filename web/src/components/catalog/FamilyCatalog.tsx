@@ -29,7 +29,7 @@ import { driveLabel } from '../../lib/dutyRuns';
 // The WHOLE load — the server half (owner) and the local half the follower in
 // ActiveFamilyStrip shares (lib/dutyLocalApply, lib/familyFollow) — lives in
 // lib/dutyApply so the strip's "reload ▶" and this ▶ can never drift.
-import { applyDutyEverywhere } from '../../lib/dutyApply';
+import { applyCatalogDuty } from '../../lib/catalogDutyApply';
 import { downloadExport } from '../../lib/exportDownload';
 import {
   IDLE as RING_IDLE, newRunId, ringBusy, ringDone, ringFail, ringPoll,
@@ -47,7 +47,7 @@ import { staleCatalogDutyNames } from '../../lib/catalogCardStaleness';
 import { configButtons, configClickPlan, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
-import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
+import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
@@ -765,16 +765,12 @@ const FamilyCatalog: React.FC<{
     // wait for it): the owner lands on the Geometry tab, a standard account (Motors +
     // Configure only) on Configure.  The load goes on behind it; lib/familyLoad carries the
     // progress line - and the failure, which this panel (unmounted by the switch) cannot.
-    const token = beginFamilyLoad(die, cfg, duty);
-    setActiveTab(loadTargetTab(canWrite, standardUser));
     try {
-      const done = await applyDutyEverywhere(die, cfg, duty, canWrite);
+      const done = await applyCatalogDuty(die, cfg, duty, canWrite, () => setActiveTab(loadTargetTab(canWrite, standardUser)));
       setMsg(`✓ applied ${label} — ${done.message}`);
-      finishFamilyLoad(token);
     } catch (e: any) {
       const why = String(e?.message ?? e);
       setMsg(`✗ apply ${label}: ${why}`);
-      failFamilyLoad(token, why);
     }
     setBusy(null);
   };

@@ -417,6 +417,13 @@ from motor_ai_sim.production.routes import router as production_router
 from motor_ai_sim.production.admin_routes import router as production_admin_router
 app.include_router(production_router)
 app.include_router(production_admin_router)
+# Development projects share the Production module's authentication conventions.
+from motor_ai_sim.development.routes import router as development_router
+from motor_ai_sim.development.admin_routes import router as development_admin_router
+from motor_ai_sim.development.motors import router as development_motors_router
+app.include_router(development_router)
+app.include_router(development_admin_router)
+app.include_router(development_motors_router)
 # Directory module: /api/admin/directory
 from motor_ai_sim.directory.routes import router as directory_admin_router
 app.include_router(directory_admin_router)

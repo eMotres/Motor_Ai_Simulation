@@ -1,0 +1,24 @@
+export type ProjectStatus = 'spec' | 'design' | 'simulation' | 'quote' | 'prototype' | 'production' | 'closed';
+export interface ProjectMember { email: string; role: 'customer' | 'engineer' | 'owner'; pending?: boolean }
+export interface Completeness { filled?: number; required?: number; filled_required?: number; total_required?: number; sections?: Record<string, { filled: number; required: number; total?: number; complete?: boolean }> }
+export interface ProjectSummary {
+  id: string; title: string; customer_org: string; status: ProjectStatus; owner_engineer?: string;
+  members: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;
+  grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason: string }>;
+  can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
+  created_at?: string; updated_at?: string;
+}
+export type Localized = string | { en?: string; 'zh-CN'?: string };
+export interface SchemaColumn { id: string; label: Localized; type?: string; unit?: string }
+export interface SchemaItems { type?: string; properties?: SchemaProperty[] }
+export interface SchemaProperty { id: string; label: Localized; short_label?: Localized; help?: Localized; type?: string; unit?: string; allow_range?: boolean; required?: boolean; required_flag?: string; properties?: SchemaProperty[]; items?: SchemaItems; options?: Array<string | { value: string; label?: Localized }> }
+export interface SchemaField { id: string; label: Localized; short_label?: Localized; type?: string; unit?: string; required?: boolean; required_flag?: string; required_mark?: string; min_filled_properties?: number; allow_not_known_yet?: boolean; handled_by?: string; help?: Localized; options?: Array<string | { value: string; label?: Localized }>; choices?: Array<string | { value: string; label?: Localized }>; columns?: SchemaColumn[]; properties?: SchemaProperty[]; items?: SchemaItems; min?: number; max?: number }
+export interface SchemaSection { id: string; title: Localized; fields?: SchemaField[]; kind?: string; mission_profile?: boolean; production?: boolean }
+export interface DevelopmentSchema { sections: SchemaSection[] }
+export interface SpecVersion { version: number; author_display_name?: string; created_at?: string }
+export interface SpecState { draft: Record<string, unknown>; revision: number; completeness: Completeness; versions?: SpecVersion[] }
+export interface SpecSnapshot { version: number; author_display_name?: string; created_at?: string; spec?: Record<string, unknown>; draft?: Record<string, unknown> }
+export interface ProjectThreadMessage { author_display_name?: string; created_at: string; text: string; field_ref?: string }
+export interface MotorResult { duty?: string; operating_point?: Record<string, unknown>; electromagnetic?: Record<string, unknown>; stored_results?: Record<string, unknown>; torque_Nm?: number; power_W?: number; efficiency_pct?: number; losses_W?: number; temperatures_C?: Record<string, number> | number; computed_at?: string }
+/** `canonical_die` is used for link management; `die` is the caller's ordinary resolver alias for opening. */
+export interface ProjectMotor { die: string; canonical_die?: string; config: string; available?: boolean; duties?: Array<string | { name?: string | null }>; default_duty?: string | null; results?: MotorResult[] }

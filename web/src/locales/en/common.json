@@ -17,7 +17,8 @@
     "compare": "Configure",
     "model3d": "3D model",
     "production": "Production",
-    "admin": "Admin"
+    "admin": "Admin",
+    "development": "Development"
   },
   "status": {
     "connected": "Connected",

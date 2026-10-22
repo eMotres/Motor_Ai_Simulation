@@ -17,7 +17,8 @@
     "compare": "配置",
     "model3d": "3D 模型",
     "production": "生产",
-    "admin": "管理"
+    "admin": "管理",
+    "development": "??"
   },
   "status": {
     "connected": "已连接",

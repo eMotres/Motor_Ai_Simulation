@@ -66,6 +66,8 @@ import CompareTab from './components/compare/CompareTab';
 import Model3DPanel from './components/model3d/Model3DPanel';
 // Production is its own chunk (owner 2026-10-18): its updates never touch the Configure / Motors bundle
 const ProductionTab = lazy(watchChunkImport(() => import('./modules/production/components/ProductionPage').then((m) => ({ default: m.ProductionTab }))));
+// Development is a customer-facing project area; keep the wizard out of the initial engineering bundle.
+const DevelopmentTab = lazy(watchChunkImport(() => import('./modules/development/components/DevelopmentPage')));
 import UpdateBanner from './components/common/UpdateBanner';
 const DesignerTab = lazy(() => import('./modules/designer/DesignerTab'));
 import GeometryTab from './components/geometry/GeometryTab';
@@ -153,6 +155,22 @@ function useDesignerAllowed(signedIn: boolean): boolean {
     return () => { alive = false; };
   }, [signedIn]);
   return ok;
+}
+
+/** Customer Development visibility comes from the cheap membership index; reset when auth identity changes. */
+function useDevelopmentMember(check: boolean, identity?: string): boolean {
+  const [member, setMember] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setMember(false);
+    if (!check) return () => { alive = false; };
+    fetch(`${API_BASE}/api/projects/membership`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive) setMember(j?.has_projects === true); })
+      .catch(() => { /* no membership grant on a failed request */ });
+    return () => { alive = false; };
+  }, [check, identity]);
+  return member;
 }
 
 // ─── Geometry build timer ───────────────────────────────────────────────────
@@ -276,6 +294,8 @@ function App() {
   // account added to a production as engineer saw nothing - the server grants by membership, the tab gated by role).
   const productionMember = useProductionMember(authResolved && signedIn && !productionVisible(enforced, isAdmin, role));
   const producer = authResolved && (productionVisible(enforced, isAdmin, role) || productionMember);
+  const developmentMember = useDevelopmentMember(authResolved && signedIn && !isAdmin && role !== 'engineer', user?.email);
+  const developmentAllowed = authResolved && (isAdmin || role === 'engineer' || developmentMember || !enforced);
   // A shared documents link (/production/<die>/<config>/documents?...): once the account is known to reach the Production tab, open it
   // there - the page itself reads the link from the address bar.  Root has already checked on the server that the caller is a member.
   const shareLinkPending = useRef(parseProductionLink(window.location.pathname, window.location.search) !== null);
@@ -499,11 +519,11 @@ function App() {
     // Configure when something is selected there, else on Motors.
     // ...plus Production when it is a member of one, and Designer when the server opened it for the account.
     const tab = activeTab as string;   // the store's tab type predates these two tabs
-    const extraOk = (tab === 'production' && producer) || (tab === 'designer' && designerAllowed);
+    const extraOk = (tab === 'production' && producer) || (tab === 'designer' && designerAllowed) || (tab === 'development' && developmentAllowed);
     if (standardUser && !tabAllowed(activeTab, true) && !extraOk) {
       setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor));
     }
-  }, [activeTab, isAdmin, standardUser, signedIn, authResolved, defaultMotor, setActiveTab, producer, designerAllowed]);
+  }, [activeTab, isAdmin, standardUser, signedIn, authResolved, defaultMotor, setActiveTab, producer, designerAllowed, developmentAllowed]);
 
   // A standard account's first screen: Configure when it already has something
   // selected (his own last choice or the default motor an admin set), else the
@@ -529,7 +549,7 @@ function App() {
   const geometryActiveViewer = <><UnifiedActiveMotorScene /><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer'; showViewer: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer' | 'development'; showViewer: boolean;
     /** true: mounted from the start and display-toggled; 'visited': mounted on the first visit, then kept */
     keepMounted?: boolean | 'visited';
     render: () => React.ReactNode;
@@ -628,6 +648,9 @@ function App() {
     // kept mounted once opened (owner 2026-10-18): coming back shows the same motor, sub-tab and scroll, no reload
     { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false, keepMounted: 'visited',
       render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><ProductionTab /></Suspense> },
+    // Development projects and the customer specification wizard.
+    { id: 'development', label: 'Development', order: 78, gate: TAB_GATES.development, showViewer: false, keepMounted: 'visited',
+      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DevelopmentTab /></Suspense> },
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
     { id: 'designer', label: 'Designer', order: 95, gate: TAB_GATES.designer, showViewer: false,
       render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DesignerTab /></Suspense> },
@@ -648,7 +671,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer, designer: designerAllowed }))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer, designer: designerAllowed, development: developmentAllowed }))
     .sort((a, b) => a.order - b.order);
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.

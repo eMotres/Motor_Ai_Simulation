@@ -176,6 +176,7 @@ def test_unlink_index_failure_restores_grant_link_and_index(stage1b, monkeypatch
     headers = {"Authorization": "Bearer test"}
     assert client.post("/api/projects/alpha/motors", headers=headers,
                        json={"die": "MixedCaseDie", "config": "CfgA"}).status_code == 200
+    store.mutate_project("alpha", lambda project: project["linked_motors"][0].update(status="trial"))
     from motor_ai_sim import json_store
     real_mutate = json_store.mutate_json
 
@@ -190,7 +191,7 @@ def test_unlink_index_failure_restores_grant_link_and_index(stage1b, monkeypatch
                       headers=headers)
     assert users.get_stored_motor_grants(CUSTOMER).get("configs", []) == ["MixedCaseDie/CfgA"]
     assert store.get_project("alpha")["linked_motors"] == [
-        {"die": "MixedCaseDie", "config": "CfgA"}]
+        {"die": "MixedCaseDie", "config": "CfgA", "status": "trial"}]
     row = store.load_index()["motors"]["mixedcasedie\0cfga"]
     assert row["project_id"] == "alpha"
 

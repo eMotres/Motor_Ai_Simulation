@@ -4,7 +4,7 @@ import { comparisonNumber } from '../../components/compare/comparisonModel.ts';
 
 export interface DevelopmentComparisonRow {
   id: string; variant: string; motor: ProjectMotor; result: MotorResult; hasResult: boolean;
-  inputs: Record<string, unknown>; values: Record<string, unknown>;
+  inputs: Record<string, unknown>; values: Record<string, unknown>; history: boolean; estimate: boolean;
 }
 const finite = (v: unknown): number | undefined => comparisonNumber(v);
 const first = (...values: unknown[]) => values.find((v) => v !== null && v !== undefined && v !== '');
@@ -66,7 +66,13 @@ export function developmentComparisonRows(motors: ProjectMotor[]): DevelopmentCo
       if (part && number !== undefined && !fixedTemperatureParts.has(part)) values[`temperature:${part}`] = number;
     }
     const duty = result.duty ?? '';
-    return { id: `${die}/${motor.config}/${duty}/${index}`, variant: `${die} / ${motor.config}`, motor, result, hasResult,
+    const history = motor.kind === 'history';
+    const variant = `${die} / ${motor.config}`;
+    const provenance = (result as MotorResult & { provenance?: { kind?: string }; result_provenance?: string }).provenance;
+    const estimate = provenance?.kind === 'estimate'
+      || (result as MotorResult & { result_provenance?: string }).result_provenance === 'configure_interpolation'
+      || solved.result_provenance === 'configure_interpolation';
+    return { id: `${history ? motor.snapshot_id : 'motor'}/${die}/${motor.config}/${duty}/${index}`, variant, motor, result, hasResult, history, estimate,
       inputs: { die, config: motor.config, duty, current: first(op.current_arms, op.I_phase_rms_A, op.current_a, op.current_A, op.current_rms_a), rpm: first(op.rpm, op.speed_rpm), gamma: first(op.gamma_deg, op.gamma) }, values };
     });
   });

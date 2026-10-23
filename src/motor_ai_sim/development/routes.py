@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from motor_ai_sim import users
 from motor_ai_sim.development import access, models, store
+from motor_ai_sim.development.motors import _metric_projection
 
 router = APIRouter(prefix="/api/projects", tags=["development-projects"])
 
@@ -49,6 +51,7 @@ def _summary(project: dict, user: dict) -> dict:
             projection["owner_engineer"] = _author(owner)["author_display_name"]
         projection.pop("project_motor_grants", None)
         projection.pop("grant_removal_candidates", None)
+        projection.pop("motor_history", None)
     projection["can_edit"] = bool(engineer)
     projection["can_edit_spec"] = access.can_edit_spec(user, project)
     projection["completeness"] = models.completeness(draft.get("draft", {}))
@@ -63,6 +66,292 @@ def _summary(project: dict, user: dict) -> dict:
 def _find_project_id(project_id: str):
     if not store.valid_id(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
+
+
+def _safe_comparison(value: Any) -> dict:
+    result = _metric_projection(value)
+    if not isinstance(value, dict):
+        return result
+    temperatures = value.get("temperatures_c")
+    if isinstance(temperatures, dict):
+        import math
+        temperature_names = {"coil", "coils", "stator", "rotor", "magnet", "magnets",
+                             "bearing", "bearings", "winding", "windings", "ambient",
+                             "housing", "stator_core", "rotor_core", "sleeve", "liner",
+                             "insulation", "enamel", "slot_fill", "gap_air", "pocket_air",
+                             "shaft", "coolant"}
+        numeric = {str(name): number for name, number in temperatures.items()
+                   if str(name).casefold() in temperature_names
+                   and isinstance(number, (int, float)) and not isinstance(number, bool)
+                   and math.isfinite(float(number))}
+        if numeric:
+            result["temperatures_c"] = numeric
+    for key in ("line_peak_physical", "demag", "loss_total_partial", "mass_partial"):
+        if isinstance(value.get(key), bool):
+            result[key] = value[key]
+    for key in ("line_peak_provenance", "line_peak_source", "line_peak_reason"):
+        item = value.get(key)
+        if isinstance(item, str) and len(item) <= 48 and item.replace(".", "").replace("_", "").isalnum():
+            result[key] = item
+    return result
+
+
+def _fingerprint(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, default=str).encode("utf-8")
+        if len(encoded) > 16384:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _safe_provenance(value: Any, *, default_source: str | None = None) -> dict:
+    """Keep a small provenance witness; never persist geometry or solver payloads."""
+    value = value if isinstance(value, dict) else {}
+    source = value.get("source") or value.get("result_provenance") or default_source
+    source = str(source)[:64] if isinstance(source, str) else ""
+    explicit_kind = value.get("kind")
+    if explicit_kind not in {"estimate", "solve", "unknown"}:
+        explicit_kind = "estimate" if source == "configure_interpolation" else (
+            "solve" if source in {"fem", "solver", "simulation", "solve"} else "unknown")
+    out = {"kind": explicit_kind}
+    if source:
+        out["source"] = source
+    for key in ("run_id", "revision", "solver_version"):
+        item = value.get(key)
+        if isinstance(item, (str, int)) and not isinstance(item, bool):
+            out[key] = str(item)[:64]
+    for key in ("input_fingerprint", "geometry_fingerprint", "materials_fingerprint"):
+        item = value.get(key)
+        if isinstance(item, str) and re.fullmatch(r"[0-9a-fA-F]{64}", item):
+            out[key] = item.lower()
+        elif item is not None:
+            digest = _fingerprint(item)
+            if digest:
+                out[key] = digest
+    for key, source_key in (("geometry_fingerprint", "geometry"),
+                            ("materials_fingerprint", "materials")):
+        if key not in out and isinstance(value.get(source_key), (dict, list)):
+            digest = _fingerprint(value[source_key])
+            if digest:
+                out[key] = digest
+    return out
+
+
+def _resolved_catalog_scope(die: str, config: str) -> dict:
+    """Canonicalize one catalog identity while preserving unavailable origins."""
+    if not die or not config:
+        return {"kind": "catalog", "die": die[:160], "config": config[:120],
+                "grant_key": f"{die[:160]}/{config[:120]}"}
+    try:
+        from motor_ai_sim.routes import family
+        from motor_ai_sim.development.motors import _canonical_entry_name
+        entries = family._iter_die_entries()
+        match = next((entry for entry in entries
+                      if str(entry.get("layer") or "") in {"shared", "published"}
+                      and (_canonical_entry_name(entry).casefold() == die.casefold()
+                           or str(entry.get("name") or "").casefold() == die.casefold())), None)
+        if match is not None:
+            canonical = _canonical_entry_name(match)
+            alias = str(match.get("name") or "")
+            directory = Path(str(match.get("dir") or "")).resolve()
+            if Path(str(family._die_dir(alias))).resolve() != directory:
+                match = None
+            path = directory / f"{config}.yaml"
+        if match is not None:
+            if path.is_file():
+                return {"kind": "catalog", "die": canonical, "config": config,
+                        "grant_key": f"{canonical}/{config}"}
+            # Keep the catalog origin through a deleted/unavailable source.
+            return {"kind": "catalog", "die": canonical, "config": config,
+                    "grant_key": f"{canonical}/{config}"}
+    except Exception:
+        pass
+    return {"kind": "catalog", "die": die[:160], "config": config[:120],
+            "grant_key": f"{die[:160]}/{config[:120]}"}
+
+
+def _catalog_origin(machine: dict, supplied: Any = None, *,
+                    allow_unresolved_claim: bool = False) -> dict:
+    """Resolve origin from the machine; a client scope may only corroborate it."""
+    supplied = supplied if isinstance(supplied, dict) else {}
+    machine_die = str(machine.get("die_name") or "").strip()
+    machine_config = str(machine.get("config_name") or "").strip()
+    supplied_catalog = supplied.get("kind") == "catalog"
+    supplied_die = str(supplied.get("die") or "").strip() if supplied_catalog else ""
+    supplied_config = str(supplied.get("config") or "").strip() if supplied_catalog else ""
+
+    if machine_die or machine_config:
+        origin = _resolved_catalog_scope(machine_die, machine_config)
+        if supplied_catalog:
+            claimed = _resolved_catalog_scope(supplied_die, supplied_config)
+            equivalent = (str(origin.get("die") or "").casefold()
+                          == str(claimed.get("die") or "").casefold()
+                          and str(origin.get("config") or "") == str(claimed.get("config") or ""))
+            if not equivalent:
+                # Only admins may use a persisted scope to resolve an older
+                # alias/canonical ambiguity after the source disappears.
+                # Engineers need a frozen machine identity that is already
+                # canonical, so a forged legacy machine A + scope B cannot
+                # borrow engineer B's grant.
+                if (allow_unresolved_claim and not _catalog_source_exists(origin)
+                        and supplied_config == machine_config
+                        and supplied_die and supplied.get("grant_key") == f"{supplied_die}/{supplied_config}"):
+                    return {"kind": "catalog", "die": supplied_die,
+                            "config": supplied_config,
+                            "grant_key": f"{supplied_die}/{supplied_config}"}
+                # Legacy forged/malformed rows fail closed on every read.
+                return {"kind": "catalog", "die": "", "config": "", "grant_key": ""}
+        return origin
+    if supplied_catalog:
+        # A restored detached workspace has no catalog names of its own. Keep
+        # its previously persisted stable origin so resaving cannot weaken it.
+        return _resolved_catalog_scope(supplied_die, supplied_config)
+    return {"kind": "project"}
+
+
+def _catalog_source_exists(origin: dict) -> bool:
+    """Whether the frozen origin still has an exact catalog config file."""
+    try:
+        from motor_ai_sim.routes import family
+        from motor_ai_sim.development.motors import _canonical_entry_name
+        die, config = str(origin.get("die") or ""), str(origin.get("config") or "")
+        if not die or not config:
+            return False
+        for entry in family._iter_die_entries():
+            if (str(entry.get("layer") or "") not in {"shared", "published"}
+                    or _canonical_entry_name(entry).casefold() != die.casefold()):
+                continue
+            directory = Path(str(entry.get("dir") or "")).resolve()
+            # Existence is a property of the canonical catalog entry itself.
+            # An ordinary workspace shadow may make its alias non-actionable,
+            # but it does not turn the published source into a deleted archive.
+            # Keep the source-present path active so `_catalog_visible` applies
+            # the ordinary shadow and grant checks and fails closed.
+            if (directory / f"{config}.yaml").is_file():
+                return True
+        return False
+    except Exception:
+        # An inspection failure is not evidence that the source was removed;
+        # keep the ordinary visibility path authoritative.
+        return True
+
+
+def _catalog_visible(request: Request, origin: dict) -> bool:
+    if origin.get("kind") != "catalog":
+        return True
+    try:
+        from motor_ai_sim import motor_access
+        from motor_ai_sim.routes import family
+        from motor_ai_sim.development.motors import _canonical_entry_name, _ordinary_alias_for_canonical
+        die, config = str(origin.get("die") or ""), str(origin.get("config") or "")
+        alias = _ordinary_alias_for_canonical(family, die)
+        if not alias:
+            return False
+        entry = next((item for item in family._iter_die_entries()
+                      if str(item.get("name") or "") == alias
+                      and _canonical_entry_name(item).casefold() == die.casefold()), None)
+        if not entry:
+            return False
+        path = Path(str(entry.get("dir"))) / f"{config}.yaml"
+        if not path.is_file():
+            return False
+        authorization = request.headers.get("authorization")
+        family._require_die_access(alias, authorization, config)
+        return bool(path.is_file() and motor_access.config_visible(
+            motor_access.catalog_access(authorization),
+            alias, config, path, layer=entry.get("layer")))
+    except Exception:
+        return False
+
+
+def _snapshot_catalog_visible(request: Request, user: dict, origin: dict) -> bool:
+    """Apply ordinary source checks, with narrow recovery for a missing archive source."""
+    if origin.get("kind") != "catalog":
+        return True
+    # If the source is still present, ordinary identity, visibility, and grant
+    # checks remain authoritative, including hidden published-name shadows.
+    if _catalog_source_exists(origin):
+        return _catalog_visible(request, origin)
+    die, config = str(origin.get("die") or ""), str(origin.get("config") or "")
+    if (not die or not config
+            or origin.get("grant_key") != f"{die}/{config}"):
+        return False
+    role = str(user.get("role") or "").strip().lower()
+    if role == "admin":
+        return True
+    if role != "engineer":
+        return False
+    try:
+        from motor_ai_sim import motor_access
+        authorization = request.headers.get("authorization")
+        grants = motor_access.catalog_access(authorization).get("configs") or frozenset()
+        return motor_access.config_grant_key(die, config) in grants
+    except Exception:
+        return False
+
+
+def _safe_results(results: Any) -> list[dict]:
+    if not isinstance(results, list):
+        return []
+    allowed_kinds = {"thermal", "rotor_stress", "modes", "critical_speeds",
+                     "coupled", "em", "duty_cycle", "duty"}
+    safe = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        row = {}
+        if isinstance(item.get("duty"), str):
+            row["duty"] = item["duty"][:120]
+        if isinstance(item.get("has_result"), bool):
+            row["has_result"] = item["has_result"]
+        point = item.get("operating_point") if isinstance(item.get("operating_point"), dict) else {}
+        row["operating_point"] = {k: point[k] for k in ("rpm", "current_arms", "gamma_deg")
+                                   if isinstance(point.get(k), (int, float)) and not isinstance(point.get(k), bool)
+                                   and __import__("math").isfinite(float(point[k]))}
+        if point.get("mode") in ("motor", "generator"):
+            row["operating_point"]["mode"] = point["mode"]
+        row["electromagnetic"] = _metric_projection(item.get("electromagnetic"))
+        stored = item.get("stored_results") if isinstance(item.get("stored_results"), dict) else {}
+        row["stored_results"] = {str(name): _metric_projection(value) for name, value in stored.items()
+                                  if str(name).casefold() in allowed_kinds and isinstance(value, dict)}
+        raw_comparison = item.get("comparison") if isinstance(item.get("comparison"), dict) else {}
+        row["comparison"] = _safe_comparison(raw_comparison)
+        default_source = item.get("result_provenance")
+        if not isinstance(default_source, str):
+            default_source = raw_comparison.get("result_provenance")
+        row["provenance"] = _safe_provenance(item.get("provenance"),
+                                              default_source=default_source)
+        safe.append(row)
+    return safe
+
+
+@router.get("/{project_id}/snapshots")
+def list_snapshots(request: Request, project_id: str):
+    user, project, role = access.require_project(request, project_id)
+    rows = []
+    for item in store.list_snapshots(project_id):
+        machine = item.get("machine") if isinstance(item.get("machine"), dict) else {}
+        origin = _catalog_origin(machine, item.get("access_scope"),
+                                 allow_unresolved_claim=str(user.get("role") or "").lower() == "admin")
+        if not _snapshot_catalog_visible(request, user, origin):
+            continue
+        public = {k: item.get(k) for k in ("id", "created_at", "author_id", "author_display_name", "note", "source")}
+        if not public.get("author_display_name"):
+            public["author_display_name"] = ""
+        from motor_ai_sim.development.motors import _motor_dimensions_docs
+        dimensions = _motor_dimensions_docs(machine.get("die") or {}, machine.get("configuration") or {})
+        public.update({"die": machine.get("die_name"), "config": machine.get("config_name"),
+                       "label": machine.get("label") or "Configuration history", **dimensions})
+        results = _safe_results(item.get("results"))
+        public.update({"kind": "history", "results": results})
+        rows.append(public)
+    return {"snapshots": rows}
+
 
 
 def _readable_project(request: Request, project_id: str):

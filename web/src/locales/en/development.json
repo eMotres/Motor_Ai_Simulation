@@ -60,6 +60,7 @@
   "comparisonCount": "{variants} variants, {results} results",
   "variant": "Variant",
   "comparison": {
+    "estimate": "Estimate",
     "column": {
       "die": "Die",
       "configuration": "Configuration",
@@ -121,6 +122,35 @@
     "membership_update_failed": "Project member update failed"
   },
   "linkMotor": "Link motor",
+  "unlinkConfirm": "Results stay in the catalog; you can restore it from the list.",
+  "picker": {
+    "thisProject": "This project",
+    "catalog": "Catalog",
+    "dimensions": "Ø{diameter} mm · {slots}s/{poles}p · {stack} mm stack",
+    "search": "Search dies and configurations",
+    "restore": "Restore",
+    "restored": "Motor restored",
+    "noRestore": "No previously linked motors to restore.",
+    "linkedElsewhere": "This motor is linked to another project.",
+    "unavailable": "Unavailable",
+    "reason": {
+      "linkedElsewhere": "This motor is linked to another project.",
+      "motorUnavailable": "This motor is no longer available to you.",
+      "shareRequired": "Publish or share this motor before linking it.",
+      "unavailable": "This motor cannot be linked."
+    }
+  },
+  "snapshots": {
+    "history": "History",
+    "showHistory": "Show history",
+    "source": "Source",
+    "sourceLinkedMotor": "Linked motor",
+    "sourceUnlinkedMotor": "Unlinked motor",
+    "sourceConfigure": "Saved from Configure",
+    "sourceSimulation": "Saved from Simulation",
+    "sourceOptimization": "Applied optimization point",
+    "sourceOther": "Saved result"
+  },
   "link": "Link",
   "unlink": "Unlink",
   "noMotors": "No motors are linked yet.",
@@ -133,6 +163,8 @@
   "temperatures": "Temperatures",
   "openSimulation": "Open in Simulation",
   "openConfigure": "Open in Configure",
+  "notComputed": "Not computed",
+  "notComputedTip": "No stored solved result is available for this duty.",
   "writeMessage": "Write a project message",
   "send": "Send",
   "noEmail": "Messages stay in this project; email delivery is not enabled.",
@@ -155,8 +187,6 @@
   },
   "minimum": "Minimum",
   "maximum": "Maximum",
-  "handover": "Hand over to production",
-  "handoverTip": "Production handover is planned for a later stage.",
   "noFieldReference": "No field reference",
   "specification": "Specification",
   "configureFailed": "Could not open this project motor.",
@@ -185,5 +215,19 @@
     "coupled": "Coupled",
     "electromagnetic": "Electromagnetic",
     "duty": "Duty"
+  },
+  "projectStatusTip": "Stages: Specification > Design > Simulation > Quote > Prototype > Production > Closed.",
+  "showAllVersions": "Show all versions",
+  "motorStatus": {
+    "label": "Motor status",
+    "current": "Current",
+    "trial": "Trial / archived",
+    "tip": "Trial motors stay linked. Unlink removes the motor from this project.",
+    "updated": "Motor status updated"
+  },
+  "confirmProjectStatus": {
+    "title": "Change project status?",
+    "body": "Set this project to {status}?",
+    "confirm": "Change status"
   }
 }

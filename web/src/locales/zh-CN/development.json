@@ -60,6 +60,7 @@
   "comparisonCount": "{variants} 个变体，{results} 项结果",
   "variant": "变体",
   "comparison": {
+    "estimate": "\u4f30\u7b97",
     "column": {
       "die": "模具",
       "configuration": "配置",
@@ -121,6 +122,35 @@
     "membership_update_failed": "项目成员更新失败"
   },
   "linkMotor": "关联电机",
+  "unlinkConfirm": "结果仍保留在目录中；可从列表恢复此电机。",
+  "picker": {
+    "thisProject": "此项目",
+    "catalog": "目录",
+    "dimensions": "外径 {diameter} mm · {slots} 槽/{poles} 极 · 叠长 {stack} mm",
+    "search": "搜索定子铁芯和配置",
+    "restore": "恢复",
+    "restored": "电机已恢复",
+    "noRestore": "没有可恢复的历史关联电机。",
+    "linkedElsewhere": "此电机已关联到其他项目。",
+    "unavailable": "不可用",
+    "reason": {
+      "linkedElsewhere": "此电机已关联到其他项目。",
+      "motorUnavailable": "您当前无法访问此电机。",
+      "shareRequired": "请先发布或共享此电机，然后再关联。",
+      "unavailable": "此电机无法关联。"
+    }
+  },
+  "snapshots": {
+    "history": "历史记录",
+    "showHistory": "显示历史记录",
+    "source": "来源",
+    "sourceLinkedMotor": "已关联电机",
+    "sourceUnlinkedMotor": "已解除关联的电机",
+    "sourceConfigure": "从配置页保存",
+    "sourceSimulation": "从仿真页保存",
+    "sourceOptimization": "应用的优化点",
+    "sourceOther": "已保存结果"
+  },
   "link": "关联",
   "unlink": "解除关联",
   "noMotors": "尚未关联电机。",
@@ -133,6 +163,8 @@
   "temperatures": "温度",
   "openSimulation": "在仿真中打开",
   "openConfigure": "在配置中打开",
+  "notComputed": "未计算",
+  "notComputedTip": "此工况没有可用的已保存求解结果。",
   "writeMessage": "编写项目消息",
   "send": "发送",
   "noEmail": "消息保存在项目中；暂未启用电子邮件发送。",
@@ -155,8 +187,6 @@
   },
   "minimum": "最小值",
   "maximum": "最大值",
-  "handover": "移交至生产",
-  "handoverTip": "生产移交将在后续阶段实现。",
   "noFieldReference": "无字段引用",
   "specification": "规格",
   "configureFailed": "无法打开此项目电机。",
@@ -185,5 +215,19 @@
     "coupled": "耦合分析",
     "electromagnetic": "电磁分析",
     "duty": "工况"
+  },
+  "projectStatusTip": "阶段：规格 > 设计 > 仿真 > 报价 > 原型 > 生产 > 已关闭。",
+  "showAllVersions": "显示所有版本",
+  "motorStatus": {
+    "label": "电机状态",
+    "current": "当前",
+    "trial": "试用 / 归档",
+    "tip": "试用电机仍保留在项目中。解除关联会将电机移出项目。",
+    "updated": "电机状态已更新"
+  },
+  "confirmProjectStatus": {
+    "title": "更改项目状态？",
+    "body": "将此项目设为“{status}”？",
+    "confirm": "确认更改"
   }
 }

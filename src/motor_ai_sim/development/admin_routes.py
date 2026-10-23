@@ -96,7 +96,7 @@ def admin_unlink_motor(project_id: str, die: str, config: str,
     project = store.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    development_motors.unlink_motor(project_id, die, config)
+    development_motors.unlink_motor(project_id, die, config, actor=_email(admin_user))
     store.append_audit(project_id, _email(admin_user), "motor.unlink", "motor", f"{die}/{config}")
     return {"ok": True}
 

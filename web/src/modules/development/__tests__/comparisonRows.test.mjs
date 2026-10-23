@@ -106,3 +106,34 @@ test('physical override and ordinary zero line peaks remain visible and rankable
   assert.equal(linePeak.format(0, rows[1]), '0');
   assert.equal(linePeak.title(48, rows[0]), undefined);
 });
+
+test('history snapshots appear as distinct rows with history metadata', () => {
+  const rows = developmentComparisonRows([
+    { die: 'Synthetic-A', config: 'cfg', results: [{ duty: 'rated', has_result: true, comparison: { torque_nm: 3 } }] },
+    { die: 'Synthetic-A', config: 'cfg', kind: 'history', snapshot_id: 'snapshot-1', note: 'point A', author_display_name: 'Engineer', created_at: '2026-10-23T00:00:00Z', results: [{ duty: 'rated', has_result: true, comparison: { torque_nm: 4 } }] },
+    { die: 'Synthetic-A', config: 'cfg', kind: 'history', snapshot_id: 'snapshot-2', results: [{ duty: 'rated', has_result: true, comparison: { torque_nm: 5 } }] },
+  ]);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((row) => row.id), ['motor/Synthetic-A/cfg/rated/0', 'snapshot-1/Synthetic-A/cfg/rated/0', 'snapshot-2/Synthetic-A/cfg/rated/0']);
+  assert.deepEqual(rows.map((row) => row.history), [false, true, true]);
+  assert.equal(rows[1].motor.author_display_name, 'Engineer');
+  assert.equal(rows[1].values.torque, 4);
+});
+
+test('comparison row keeps a short variant label, keeps full note in metadata, and marks estimates', () => {
+  const noteEn = 'A'.repeat(240), noteZh = '\u6ce8\u91ca'.repeat(120);
+  const rows = developmentComparisonRows([
+    { die: 'Synthetic', config: 'cfg', kind: 'history', snapshot_id: 'en', note: noteEn,
+      results: [{ duty: 'rated', has_result: true, result_provenance: 'configure_interpolation', comparison: { torque_nm: 3 } }] },
+    { die: 'Synthetic', config: 'cfg', kind: 'history', snapshot_id: 'zh', note: noteZh,
+      results: [{ duty: 'rated', has_result: true, provenance: { kind: 'estimate', source: 'configure_interpolation' }, comparison: { torque_nm: 4 } }] },
+    { die: 'Synthetic', config: 'cfg', kind: 'history', snapshot_id: 'solve', note: noteEn,
+      results: [{ duty: 'rated', has_result: true, provenance: { kind: 'solve' }, comparison: { torque_nm: 5 } }] },
+  ]);
+  assert.equal(rows[0].variant, 'Synthetic / cfg');
+  assert.equal(rows[1].variant, rows[0].variant);
+  assert.equal(rows.every((row) => row.variant.length < 40), true);
+  assert.deepEqual(rows.map((row) => row.estimate), [true, true, false]);
+  assert.equal(rows[0].motor.note, noteEn);
+  assert.equal(rows[1].motor.note, noteZh);
+});

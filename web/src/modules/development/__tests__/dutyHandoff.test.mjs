@@ -4,12 +4,14 @@ import { readFileSync } from 'node:fs';
 
 const source = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
-test('catalog and Development enter the same catalog duty handoff', () => {
+test('catalog and Development enter the same catalog duty handoff', async () => {
   const catalog = source('../../../components/catalog/FamilyCatalog.tsx');
   const development = source('../components/DevelopmentPage.tsx');
+  const actions = source('../MotorOpenActions.tsx');
   const handoff = source('../../../lib/catalogDutyApply.ts');
   assert.match(catalog, /applyCatalogDuty\(die, cfg, duty, canWrite,/);
-  assert.match(development, /applyCatalogDuty\(motor\.die, motor\.config, duty, canWriteServer\(\),/);
+  assert.match(development, /<MotorOpenActions motor=\{r\.motor\} duty=\{r\.result\.duty\}/);
+  assert.match(actions, /applyCatalogDuty\(motor\.die, motor\.config, targetDuty, canWriteServer\(\),/);
   assert.match(handoff, /import \{ applyDutyEverywhere \} from '\.\/dutyApply'/);
   const begin = handoff.indexOf('beginFamilyLoad(');
   const switchTab = handoff.indexOf('onStart?.()');
@@ -17,8 +19,10 @@ test('catalog and Development enter the same catalog duty handoff', () => {
   const finish = handoff.indexOf('finishFamilyLoad(');
   const fail = handoff.indexOf('failFamilyLoad(');
   assert.ok(begin >= 0 && begin < switchTab && switchTab < apply && apply < finish && apply < fail);
-  assert.match(development, /firstProjectMotorDuty\(motor\.duties, motor\.default_duty\)/);
-  assert.match(development, /mode === 'simulation' \? 'simulation' : 'compare'/);
+  assert.match(actions, /motorLinkAvailability\(motor, duty, allowMotorDefault\)/);
+  const { motorLinkAvailability } = await import('../motorAvailability.ts');
+  assert.equal(motorLinkAvailability({ die: 'D', config: 'C', can_open_configure: true, configure_duty: 'server-selected' }, 'different-row').configureDuty, null);
+  assert.match(actions, /mode === 'simulation' \? 'simulation' : 'compare'/);
   assert.doesNotMatch(source('../../../App.tsx'), /motres:open-project-motor|applyDutyLocal\(/);
 });
 

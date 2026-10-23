@@ -10,15 +10,14 @@ import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { developmentApi, DevelopmentApiError } from '../api';
-import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectSummary, ProjectThreadMessage, SchemaField, SpecSnapshot, SpecState } from '../types';
+import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SpecSnapshot, SpecState } from '../types';
 import { createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, isRequired, setFieldAnswer, shallowDiff, wizardCompleteness, type SpecDraft } from '../wizardState';
-import { applyCatalogDuty } from '../../../lib/catalogDutyApply';
-import { canWriteServer } from '../../../lib/localAuth';
-import { useUIStore } from '../../../stores/uiStore';
-import { firstProjectMotorDuty } from '../motorDuty';
+import { MotorOpenActions } from '../MotorOpenActions';
 import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
 import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
 import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
+import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
+import { acceptedProjectStatus, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus';
 
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes';
 const STATUSES = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'] as const;
@@ -57,8 +56,12 @@ export default function DevelopmentPage() {
   const [projectId, setProjectId] = useState('');
   const [email, setEmail] = useState('');
   const [memberRole, setMemberRole] = useState('customer');
-  const [die, setDie] = useState('');
-  const [config, setConfig] = useState('');
+  const [picker, setPicker] = useState<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>({ this_project: [], catalog: [] });
+  const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
+  const [showAllVersions, setShowAllVersions] = useState(false);
+  const [unlinkTarget, setUnlinkTarget] = useState<ProjectMotor | null>(null);
+  const [pendingProjectStatus, setPendingProjectStatus] = useState<import('../motorStatus').PendingProjectStatus | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<ProjectMotor | null>(null);
   const [spec, setSpec] = useState<SpecState | null>(null);
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -72,6 +75,7 @@ export default function DevelopmentPage() {
   const projectEpochRef = useRef(0);
   const projectOpenEpochRef = useRef(0);
   const projectOpenInFlightRef = useRef('');
+  const motorLoadEpochRef = useRef(0);
   const failedOpenIntentRef = useRef('');
   const [versions, setVersions] = useState<SpecSnapshot[]>([]);
   const [compareVersions, setCompareVersions] = useState<[number, number] | null>(null);
@@ -81,6 +85,7 @@ export default function DevelopmentPage() {
   const canManageGlobally = isAdmin || role === 'engineer';
   const canEditSpec = !!selected && (canManageGlobally || selected.can_edit_spec === true);
   const canEditProject = !!selected && (canManageGlobally || selected.can_edit === true);
+  const canManageProjectMotors = canManageGlobally && canEditProject;
   const sections = schema?.sections ?? [];
   const activeSection = sections[step];
   const completeness = spec?.completeness ?? (spec ? wizardCompleteness(sections, spec.draft as SpecDraft) : undefined);
@@ -94,6 +99,7 @@ export default function DevelopmentPage() {
   const currentProject = selected?.id ?? '';
   const currentProjectRef = useRef(currentProject);
   currentProjectRef.current = currentProject;
+  const isCurrentProject = (id: string, token: string) => projectToken.current === token && currentProjectRef.current === id;
   useEffect(() => {
     const onLang = (lng: string) => setLang(lng);
     i18n.on('languageChanged', onLang);
@@ -116,9 +122,10 @@ export default function DevelopmentPage() {
     projectOpenInFlightRef.current = '';
     failedOpenIntentRef.current = '';
     projectToken.current = `identity:${user?.email ?? 'signed-out'}:${Date.now()}`;
+    setHistoryDetail(null);
     currentProjectRef.current = '';
-    setSelected(null); setSpec(null); setProjects([]); setMessages([]); setMotors([]); setVersions([]); setCompareVersions(null);
-    setError(''); setSubmitError([]); setFieldErrors({});
+    setSelected(null); setSpec(null); setProjects([]); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setVersions([]); setCompareVersions(null);
+    setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setSubmitError([]); setFieldErrors({});
     draftRef.current = { ...DEFAULT_DRAFT }; revisionRef.current = 0;
     if (user?.email) void refreshProjects();
   }, [user?.email, refreshProjects]);
@@ -134,7 +141,7 @@ export default function DevelopmentPage() {
     }
     if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
-    setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setError(''); setSubmitError([]);
+    setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
     setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
@@ -296,6 +303,22 @@ export default function DevelopmentPage() {
       if (projectToken.current === token && currentProjectRef.current === id) setVersions(snaps);
     } catch { /* history remains as the API supplied in the spec response */ }
   };
+  const showAllVersionsRef = useRef(showAllVersions);
+  showAllVersionsRef.current = showAllVersions;
+  const loadProjectMotors = async (id: string, token: string, showAll = showAllVersionsRef.current) => {
+    const epoch = ++motorLoadEpochRef.current;
+    try {
+      const [result, history] = await Promise.all([
+        developmentApi.motors(id, showAll),
+        showAll ? developmentApi.snapshots(id) : Promise.resolve([] as ProjectSnapshot[]),
+      ]);
+      if (epoch === motorLoadEpochRef.current && projectToken.current === token && currentProjectRef.current === id && showAllVersionsRef.current === showAll) {
+        setMotors(result); setSnapshots(history);
+      }
+    } catch (e) {
+      if (epoch === motorLoadEpochRef.current && projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e));
+    }
+  };
   useEffect(() => { if (selected?.id) { const token = projectToken.current; void loadSpecHistory(selected.id, token); } }, [selected?.id]);
 
   const openTab = async (tab: ViewTab) => {
@@ -303,8 +326,37 @@ export default function DevelopmentPage() {
     const id = selected.id; const token = projectToken.current;
     try {
       if (tab === 'messages') { const result = await developmentApi.thread(id); if (projectToken.current === token && currentProjectRef.current === id) setMessages(result); }
-      if (tab === 'motors') { const result = await developmentApi.motors(id); if (projectToken.current === token && currentProjectRef.current === id) setMotors(result); }
+      if (tab === 'motors') await loadProjectMotors(id, token);
     } catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); }
+  };
+  const changeShowAllVersions = (value: boolean) => {
+    setShowAllVersions(value);
+    showAllVersionsRef.current = value;
+    if (selected) void loadProjectMotors(selected.id, projectToken.current, value);
+  };
+  const confirmProjectStatus = async () => {
+    const pending = pendingStatusForProject(pendingProjectStatus, selected?.id ?? '');
+    const acceptedStatus = acceptedProjectStatus(pending, selected?.id ?? '', selected?.status ?? 'spec');
+    if (!pending || !selected || acceptedStatus === null) { setPendingProjectStatus((value) => cancelProjectStatus(value)); return; }
+    const id = selected.id; const token = projectToken.current;
+    setBusy(true); setError('');
+    try {
+      const updated = await developmentApi.update(id, { status: acceptedStatus });
+      if (!isCurrentProject(id, token) || updated.status !== pending.proposed) return;
+      setSelected(updated); setPendingProjectStatus((value) => cancelProjectStatus(value)); await refreshProjects();
+    } catch (err) {
+      if (isCurrentProject(id, token)) setError(err instanceof Error ? err.message : String(err));
+    } finally { if (isCurrentProject(id, token)) setBusy(false); }
+  };
+  const changeMotorStatus = async (motor: ProjectMotor, status: 'current' | 'trial') => {
+    if (!selected) return;
+    const id = selected.id; const token = projectToken.current;
+    setBusy(true); setError('');
+    try {
+      await developmentApi.setMotorStatus(id, motor.canonical_die ?? motor.die, motor.config, status);
+      if (isCurrentProject(id, token)) { await loadProjectMotors(id, token); await refreshProjects(); }
+    } catch (err) { if (isCurrentProject(id, token)) setError(err instanceof Error ? err.message : String(err)); }
+    finally { if (isCurrentProject(id, token)) setBusy(false); }
   };
   const submitCreate = async () => {
     setBusy(true); setError('');
@@ -317,12 +369,16 @@ export default function DevelopmentPage() {
     try { await developmentApi.invite(selected.id, email.trim(), memberRole); setInviteOpen(false); setEmail(''); await loadProject(selected); await refreshProjects(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
-  const submitLink = async () => {
+  const submitLink = async (item: ProjectMotorPickerItem) => {
     if (!selected) return;
+    const id = selected.id; const token = projectToken.current;
+    const isCurrent = () => projectToken.current === token && currentProjectRef.current === id;
     setBusy(true); setError('');
-    try { await developmentApi.linkMotor(selected.id, die.trim(), config.trim()); setLinkOpen(false); setDie(''); setConfig(''); setMotors(await developmentApi.motors(selected.id)); await refreshProjects(); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    try { await developmentApi.linkMotor(id, item.die, item.config); if (isCurrent()) { setLinkOpen(false); await loadProjectMotors(id, token); await refreshProjects(); } }
+    catch (e) { if (isCurrent()) setError(e instanceof Error ? e.message : String(e)); } finally { if (isCurrent()) setBusy(false); }
   };
+  const restoreMotor = async (item: ProjectMotorPickerItem) => { if (!selected) return; const id = selected.id; const token = projectToken.current; const isCurrent = () => projectToken.current === token && currentProjectRef.current === id; setBusy(true); setError(''); try { await developmentApi.linkMotor(id, item.die, item.config); const choices = await developmentApi.motorPicker(id); if (isCurrent()) { setPicker(choices); await loadProjectMotors(id, token); await refreshProjects(); } } catch (e) { if (isCurrent()) setError(e instanceof Error ? e.message : String(e)); } finally { if (isCurrent()) setBusy(false); } };
+  const confirmUnlink = async () => { if (!selected || !unlinkTarget) return; const id = selected.id; const token = projectToken.current; const isCurrent = () => projectToken.current === token && currentProjectRef.current === id; const target = unlinkTarget; setBusy(true); setError(''); try { await developmentApi.unlinkMotor(id, target.canonical_die ?? target.die, target.config); const choices = await developmentApi.motorPicker(id); if (isCurrent()) { setUnlinkTarget(null); setPicker(choices); await loadProjectMotors(id, token); await refreshProjects(); } } catch (e) { if (isCurrent()) setError(e instanceof Error ? e.message : String(e)); } finally { if (isCurrent()) setBusy(false); } };
   const postMessage = async () => {
     if (!selected || !message.trim()) return;
     const id = selected.id; const token = projectToken.current; setBusy(true); setError('');
@@ -412,7 +468,7 @@ export default function DevelopmentPage() {
   </Box>;
 
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%' }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)' }}>{selected.title}</Typography><Chip size="small" label={tr(`status.${selected.status}`)} />{canEditProject && <Select size="small" value={selected.status} onChange={async (e) => { try { const p = await developmentApi.update(selected!.id, { status: e.target.value as ProjectSummary['status'] }); setSelected(p); await refreshProjects(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } }} aria-label={tr('statusLabel')}>{STATUSES.map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select>}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)' }}>{selected.title}</Typography><HelpTip title={tr('projectStatusTip')} />{canEditProject ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{STATUSES.map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {tr(`status.${selected.status}`)}</Typography>}</Box>
     <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mb: 1.5 }}>{selected.customer_org} · {tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })}</Typography>
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     <Tabs value={view} onChange={(_, v) => void openTab(v)} sx={{ borderBottom: '1px solid var(--line-soft)', mb: 1.5 }}>
@@ -434,20 +490,20 @@ export default function DevelopmentPage() {
       </>}
     </Box>}
     {view === 'motors' && <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Typography sx={{ flex: 1, fontSize: 13, color: 'var(--text-2)' }}>{tr('motorsTip')}</Typography>{canEditProject && <Button size="small" startIcon={<AddIcon />} onClick={() => setLinkOpen(true)}>{tr('linkMotor')}</Button>}</Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Typography sx={{ flex: 1, fontSize: 13, color: 'var(--text-2)' }}>{tr('motorsTip')}</Typography>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>
       {canEditProject && !!selected.grant_removal_candidates?.length && <Tooltip title={<Stack spacing={0.4}><Typography sx={{ fontSize: 11 }}>{tr('grantReviewTip')}</Typography>{selected.grant_removal_candidates.map((candidate) => <Typography key={`${candidate.email}/${candidate.die}/${candidate.config}`} sx={{ fontSize: 11 }}>{candidate.email} · {candidate.die}/{candidate.config} · {tr(`grantReason.${candidate.reason}`)}</Typography>)}</Stack>}><Alert severity="info" sx={{ mb: 1, py: 0 }}>{tr('grantReviewCount', { count: selected.grant_removal_candidates.length })}</Alert></Tooltip>}
-      {(() => { const rows = developmentComparisonRows(motors); return <>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.7 }}>{tr('comparisonCount', { variants: motors.length, results: rows.filter((r) => r.hasResult).length })}</Typography>
-        {motors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={(r) => r.variant} labelHeader={tr('variant')} showAllInputs enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap' }}><MotorOpenLink motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} /></Box>} />}
-        {motors.length > 0 && motors.every((m) => !(m.results ?? []).length) && <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noResults')}</Typography>}
-        {canEditProject && <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap' }}>{motors.map((m) => <Button key={`${m.canonical_die ?? m.die}/${m.config}`} size="small" color="error" onClick={async () => { try { await developmentApi.unlinkMotor(selected.id, m.canonical_die ?? m.die, m.config); const [freshProject, freshMotors] = await Promise.all([developmentApi.get(selected.id), developmentApi.motors(selected.id)]); setSelected(freshProject); setMotors(freshMotors); await refreshProjects(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }}>{tr('unlink')}: {m.canonical_die ?? m.die}/{m.config}</Button>)}</Stack>}
+      {(() => { const visibleMotors = visibleProjectVersions(motors, snapshots, showAllVersions); const rows = developmentComparisonRows(visibleMotors); return <>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><Typography sx={{ flex: 1, fontSize: 11, color: 'var(--text-3)' }}>{tr('comparisonCount', { variants: visibleMotors.length, results: rows.filter((r) => r.hasResult).length })}</Typography><FormControlLabel control={<Checkbox size="small" checked={showAllVersions} onChange={(e) => changeShowAllVersions(e.target.checked)} />} label={tr('showAllVersions')} sx={{ '& .MuiFormControlLabel-label': { fontSize: 11 } }} /></Stack>
+        {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={(r) => r.history ? <Stack spacing={0.1}><Stack direction="row" spacing={0.5} alignItems="center"><Button size="small" onClick={() => setHistoryDetail(r.motor)}>{tr('snapshots.history')} · {r.variant}</Button>{r.estimate && <Chip size="small" label={tr('comparison.estimate')} />}</Stack><Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{[r.motor.author_display_name, r.motor.created_at ? new Date(r.motor.created_at).toLocaleString() : '', r.motor.source ? snapshotSourceLabel(r.motor.source, tr) : ''].filter(Boolean).join(' · ')}</Typography></Stack> : <Stack direction="row" spacing={0.5} alignItems="center"><span>{r.variant}</span>{r.estimate && <Chip size="small" label={tr('comparison.estimate')} />}</Stack>} labelHeader={tr('variant')} showAllInputs enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap' }}>{r.history ? null : <Stack direction="row" spacing={0.5} alignItems="center"><MotorOpenActions motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} /><Tooltip title={tr('motorStatus.tip')}><span>{canManageProjectMotors ? <Select size="small" value={r.motor.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(r.motor, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${r.motor.status === 'trial' ? 'trial' : 'current'}`)} />}</span></Tooltip>{canManageProjectMotors && <Button size="small" color="error" disabled={busy} onClick={() => setUnlinkTarget(r.motor)}>{tr('unlink')}</Button>}</Stack>}</Box>} />}
       </>; })()}
-      {canEditProject && <Tooltip title={tr('handoverTip')}><span><Button disabled size="small" sx={{ mt: 1 }}>{tr('handover')}</Button></span></Tooltip>}
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Paper key={`${m.created_at}-${i}`} sx={{ p: 1, bgcolor: 'var(--panel-2)' }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
     {view === 'notes' && canEditProject && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
     <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
-    <LinkDialog open={linkOpen} busy={busy} die={die} config={config} onDie={setDie} onConfig={setConfig} onClose={() => setLinkOpen(false)} onSubmit={() => void submitLink()} t={tr} />
+    <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />
+    <Dialog open={!!unlinkTarget} onClose={() => !busy && setUnlinkTarget(null)}><DialogTitle>{tr('unlink')} {unlinkTarget?.die} / {unlinkTarget?.config}?</DialogTitle><DialogContent>{tr('unlinkConfirm')}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setUnlinkTarget(null)}>{tr('cancel')}</Button><Button color="error" disabled={busy} onClick={() => void confirmUnlink()}>{tr('unlink')}</Button></DialogActions></Dialog>
+    <Dialog open={!!pendingStatusForProject(pendingProjectStatus, selected.id)} onClose={() => !busy && setPendingProjectStatus((value) => cancelProjectStatus(value))}><DialogTitle>{tr('confirmProjectStatus.title')}</DialogTitle><DialogContent>{tr('confirmProjectStatus.body', { status: pendingProjectStatus ? tr(`status.${pendingProjectStatus.proposed}`) : '' })}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setPendingProjectStatus((value) => cancelProjectStatus(value))}>{tr('cancel')}</Button><Button disabled={busy} variant="contained" onClick={() => void confirmProjectStatus()}>{tr('confirmProjectStatus.confirm')}</Button></DialogActions></Dialog>
+    <Dialog open={!!historyDetail} onClose={() => setHistoryDetail(null)} fullWidth maxWidth="sm"><DialogTitle>{tr('snapshots.history')} · {historyDetail?.die} / {historyDetail?.config}</DialogTitle><DialogContent><Stack spacing={0.7} sx={{ pt: 0.5 }}><Typography variant="body2">{historyDetail?.author_display_name} · {historyDetail?.created_at ? new Date(historyDetail.created_at).toLocaleString() : ''}</Typography>{historyDetail?.source && <Typography variant="body2">{tr('snapshots.source')}: {snapshotSourceLabel(historyDetail.source, tr)}</Typography>}{historyDetail?.note && <Tooltip title={historyDetail.note}><Typography variant="body2" noWrap sx={{ maxWidth: '100%' }}>{historyDetail.note}</Typography></Tooltip>}</Stack></DialogContent><DialogActions><Button onClick={() => setHistoryDetail(null)}>{tr('close')}</Button></DialogActions></Dialog>
     {canEditProject && <Button size="small" sx={{ mt: 1 }} onClick={() => setInviteOpen(true)}>{tr('invite')}</Button>}
     {compareVersions && <VersionDiffDialog open onClose={() => setCompareVersions(null)} a={versionA} b={versionB} t={tr} schema={schema} lang={lang} />}
   </Box>;
@@ -461,25 +517,21 @@ function MissionProfile({ draft, disabled, onChange, onUnknown, label, columns, 
 
 function CreateDialog({ open, busy, title, org, id, onTitle, onOrg, onId, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle>{t('newProject')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('projectTitle')} value={title} onChange={(e) => onTitle(e.target.value)} /><TextField label={t('customerOrg')} value={org} onChange={(e) => onOrg(e.target.value)} /><TextField label={t('projectId')} value={id} onChange={(e) => onId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} /></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !title.trim() || !org.trim() || !id.trim()} onClick={onSubmit}>{t('create')}</Button></DialogActions></Dialog>; }
 function InviteDialog({ open, busy, email, role, onEmail, onRole, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
-function LinkDialog({ open, busy, die, config, onDie, onConfig, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('linkMotor')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('die')} value={die} onChange={(e) => onDie(e.target.value)} /><TextField label={t('config')} value={config} onChange={(e) => onConfig(e.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !die.trim() || !config.trim()} onClick={onSubmit}>{t('link')}</Button></DialogActions></Dialog>; }
-function NotesPanel({ project, onSave, t }: { project: ProjectSummary; onSave: (s: string) => Promise<void>; t: (key: string) => string }) { const [value, setValue] = useState(project.notes ?? ''); return <Stack spacing={1}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('internalNotesTip')}</Typography><TextField multiline minRows={5} value={value} onChange={(e) => setValue(e.target.value)} /><Button sx={{ alignSelf: 'start' }} onClick={() => void onSave(value)}>{t('save')}</Button></Stack>; }
-function MotorOpenLink({ motor, duty: rowDuty, engineer, t }: { motor: ProjectMotor; duty?: string; engineer: boolean; t: (key: string) => string }) {
-  const { user } = useAuth();
-  const [error, setError] = useState('');
-  useEffect(() => { setError(''); }, [user?.email, motor.die, motor.config]);
-  const open = (mode: 'configure' | 'simulation') => {
-    setError('');
-    const duty = rowDuty || firstProjectMotorDuty(motor.duties, motor.default_duty);
-    if (!duty) { setError(t('noSavedDuty')); return; }
-    void applyCatalogDuty(motor.die, motor.config, duty, canWriteServer(), () => useUIStore.getState().setActiveTab((mode === 'simulation' ? 'simulation' : 'compare') as never)).catch(() => setError(t('configureFailed')));
-  };
-  return <>
-    <Button size="small" disabled={motor.available === false || !rowDuty && !firstProjectMotorDuty(motor.duties, motor.default_duty)} title={motor.available === false ? t('motorUnavailable') : undefined} onClick={() => void open('configure')}>{t('openConfigure')}</Button>
-    {engineer && <Button size="small" disabled={motor.available === false || !rowDuty && !firstProjectMotorDuty(motor.duties, motor.default_duty)} title={motor.available === false ? t('motorUnavailable') : undefined} onClick={() => void open('simulation')}>{t('openSimulation')}</Button>}
-    {error && <Tooltip title={error}><Chip size="small" color="error" label="!" /></Tooltip>}
-  </>;
-}
+function snapshotSourceLabel(source: string, t: (key: string) => string): string { return t(snapshotSourceKey(source) ?? 'snapshots.sourceOther'); }
 
+function LinkDialog({ open, busy, picker, onClose, onSubmit, onRestore, t }: { open: boolean; busy: boolean; picker: { this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }; onClose: () => void; onSubmit: (item: ProjectMotorPickerItem) => void; onRestore: (item: ProjectMotorPickerItem) => void; t: (key: string, args?: Record<string, unknown>) => string }) {
+  const [query, setQuery] = useState(''); const [selected, setSelected] = useState<ProjectMotorPickerItem | null>(null);
+  useEffect(() => { if (open) { setQuery(''); setSelected(null); } }, [open]);
+  const groups = useMemo(() => groupPickerCatalog(filterPickerCatalog(picker.catalog, query)), [picker.catalog, query]);
+  return <Dialog open={open} onClose={() => !busy && onClose()} fullWidth maxWidth="sm"><DialogTitle>{t('linkMotor')}</DialogTitle><DialogContent>
+    <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{t('picker.thisProject')}</Typography>
+    {picker.this_project.length ? picker.this_project.map((item) => <Box key={`${item.die}/${item.config}`} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.35 }}><Box sx={{ flex: 1 }}><Typography sx={{ fontSize: 12 }}>{pickerDisplayLabel(item, t)}</Typography><Tooltip title={item.unlinked_by ? `${item.unlinked_by} · ${item.unlinked_at ?? ''}` : item.unlinked_at ?? ''}><Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{item.die} / {item.config}</Typography></Tooltip></Box><Tooltip title={item.disabled ? t(pickerReasonKey(item.reason)) : ''}><span><Button size="small" disabled={busy || item.disabled} onClick={() => onRestore(item)}>{t('picker.restore')}</Button></span></Tooltip></Box>) : <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 1 }}>{t('picker.noRestore')}</Typography>}
+    <Divider sx={{ my: 1 }} /><Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{t('picker.catalog')}</Typography>
+    <TextField size="small" fullWidth placeholder={t('picker.search')} value={query} onChange={(e) => setQuery(e.target.value)} sx={{ mb: 0.7 }} />
+    <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>{groups.map(([die, items]) => <Box key={die}><Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', py: 0.45 }}>{die}</Typography>{items.map((item) => <Button key={`${die}/${item.config}`} fullWidth disabled={busy || item.disabled} onClick={() => setSelected(item)} sx={{ justifyContent: 'space-between', textAlign: 'left', color: selected === item ? 'primary.main' : 'var(--text-1)', textTransform: 'none', borderBottom: '1px solid var(--line-soft)' }}><span>{item.config} · {pickerDisplayLabel(item, t)}</span>{item.disabled && <Tooltip title={t(pickerReasonKey(item.reason))}><span>{t('picker.unavailable')}</span></Tooltip>}</Button>)}</Box>)}</Box>
+  </DialogContent><DialogActions><Button disabled={busy} onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !selected || selected.disabled} onClick={() => selected && onSubmit(selected)}>{t('link')}</Button></DialogActions></Dialog>;
+}
+function NotesPanel({ project, onSave, t }: { project: ProjectSummary; onSave: (s: string) => Promise<void>; t: (key: string) => string }) { const [value, setValue] = useState(project.notes ?? ''); return <Stack spacing={1}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('internalNotesTip')}</Typography><TextField multiline minRows={5} value={value} onChange={(e) => setValue(e.target.value)} /><Button sx={{ alignSelf: 'start' }} onClick={() => void onSave(value)}>{t('save')}</Button></Stack>; }
 function VersionHistory({ versions, onCompare, t }: { versions: SpecSnapshot[]; onCompare: (a: number, b: number) => void; t: (key: string, args?: Record<string, unknown>) => string }) { const [a, setA] = useState(''); const [b, setB] = useState(''); return <Box><Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{t('history')}</Typography>{versions.length === 0 ? <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{t('noVersions')}</Typography> : <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flexWrap: 'wrap' }}><Select size="small" value={a} displayEmpty onChange={(e) => setA(e.target.value)}><MenuItem value="">{t('versionA')}</MenuItem>{versions.map((v) => <MenuItem key={v.version} value={String(v.version)}>v{v.version}</MenuItem>)}</Select><Select size="small" value={b} displayEmpty onChange={(e) => setB(e.target.value)}><MenuItem value="">{t('versionB')}</MenuItem>{versions.map((v) => <MenuItem key={v.version} value={String(v.version)}>v{v.version}</MenuItem>)}</Select><Button size="small" disabled={!a || !b || a === b} onClick={() => onCompare(Number(a), Number(b))}>{t('compare')}</Button>{versions.map((v) => <Chip key={v.version} size="small" label={`v${v.version} · ${v.author_display_name || t('projectMember')}`} title={v.created_at ?? ''} />)}</Box>}</Box>; }
 function VersionDiffDialog({ open, onClose, a, b, t, schema, lang }: { open: boolean; onClose: () => void; a: SpecSnapshot | null; b: SpecSnapshot | null; t: (key: string) => string; schema: DevelopmentSchema | null; lang: string }) {
   const diff = useMemo(() => shallowDiff(a?.spec ?? a?.draft, b?.spec ?? b?.draft), [a, b]);

@@ -14,7 +14,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Button, Checkbox, IconButton, Tooltip, Alert,
-  CircularProgress, TextField, Popover, FormControlLabel, Divider,
+  CircularProgress, TextField, Popover, FormControlLabel,
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -30,6 +30,8 @@ import ViewColumnIcon    from '@mui/icons-material/ViewColumn';
 import HelpTip from '../common/HelpTip';
 import { partMaxLabel } from './resultRows';
 import { shownMass, perMass } from '../../lib/fullMass';
+import { SharedComparisonTable, type SharedComparisonColumn } from './SharedComparisonTable';
+import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } from './comparisonModel';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -714,20 +716,27 @@ const ComparePanel: React.FC = () => {
 
   // differing input params across the selected runs
   const allParamKeys = Array.from(new Set(selected.flatMap(s => Object.keys(s.params || {}))));
-  const diffKeys = allParamKeys.filter(k => {
-    const vals = selected.map(s => s.params?.[k]);
-    return vals.some(v => !valEq(v, vals[0]));
-  }).sort((a, b) => {
-    const ia = Object.keys(PARAM_META).indexOf(a), ib = Object.keys(PARAM_META).indexOf(b);
-    if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
-    return a.localeCompare(b);
-  });
+  const paramModelColumns: SharedComparisonColumn<SavedSim>[] = allParamKeys.map(k => ({ key: `p:${k}`, label: paramLabel(k), unit: paramUnit(k), kind: 'input', value: s => s.params?.[k] }));
 
   // A column on a mass basis (Mass, TD, PD) is ranked among the rows on the FULL basis when there are any; a row on the active
   // basis is then not coloured at all (it is not comparable) - and with no full row anywhere the active rows rank among
   // themselves, as before.
   const fullBasisRows = (r: ResultCol, rows: SavedSim[]) =>
     (r.activeBasis ? rows.filter(s => !r.activeBasis!(resultSrc(r, s))) : rows);
+  // Library rows are rendered independently of the selected subset. Compute the
+  // mixed-basis fact once per result column so cell callbacks never rescan sims.
+  const libraryHasFullBasis = new Map(resultCols.map(r => [
+    colId(r), !r.activeBasis || sims.some(s => !r.activeBasis!(resultSrc(r, s))),
+  ]));
+  const selectedHasFullBasis = new Map(resultCols.map(r => [
+    colId(r), !r.activeBasis || selected.some(s => !r.activeBasis!(resultSrc(r, s))),
+  ]));
+  const comparisonPercentValue = (r: ResultCol, s: SavedSim): number => {
+    if (r.text) return NaN;
+    const raw = resultVal(r, s);
+    if (!Number.isFinite(raw)) return NaN;
+    return r.activeBasis?.(resultSrc(r, s)) && selectedHasFullBasis.get(colId(r)) === true ? NaN : raw;
+  };
   const extentVals = (r: ResultCol, rows: SavedSim[]): number[] => {
     const full = fullBasisRows(r, rows);
     return (full.length ? full : rows).map(s => resultVal(r, s)).filter(Number.isFinite);
@@ -737,29 +746,38 @@ const ComparePanel: React.FC = () => {
   // `colId`, not on `key`: the EM summary and the mechanical block both carry an
   // `rpm`, and one extent shared between them would colour the hottest against
   // the fastest.
-  const resExtent: Record<string, { min: number; max: number }> = {};
-  resultCols.forEach(r => {
-    const nums = extentVals(r, selected);
-    if (nums.length) resExtent[colId(r)] = { min: Math.min(...nums), max: Math.max(...nums) };
+  const resultModelColumns: SharedComparisonColumn<SavedSim>[] = resultCols.map(r => ({ key: `r:${colId(r)}`, label: r.label, unit: r.unit, kind: 'result', better: r.better,
+    value: s => r.text ? resultText(r, s) : resultVal(r, s), rankValues: rows => extentVals(r, rows),
+    tolerance: 1e-9, noColor: s => {
+      if (r.text) return true;
+      const raw = resultVal(r, s);
+      if (!Number.isFinite(raw)) return false;
+      const activeOnly = !!r.activeBasis?.(resultSrc(r, s));
+      return shouldSuppressMixedBasisColor(raw, activeOnly, libraryHasFullBasis.get(colId(r)) ?? false);
+    },
+    cellSx: () => r.text ? { maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' } : {},
+    cellColor: s => r.text && resultText(r, s) === '—' ? 'var(--line)' : undefined,
+    title: (_v, s) => { if (r.text) { const text = resultText(r, s); return text === '—' ? undefined : text; } return Number.isFinite(resultVal(r, s)) && r.activeBasis?.(resultSrc(r, s)) ? ACTIVE_BASIS_TIP : undefined; },
+    format: (_v, s) => { if (r.text) return resultText(r, s); const raw = resultVal(r, s); return Number.isFinite(raw) ? `${fmtNum(raw, r.d ?? 2, r.scale ?? 1)}${r.activeBasis?.(resultSrc(r, s)) ? '*' : ''}` : '—'; },
+  }));
+  const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);
+  const libraryComparisonModel = buildComparisonModel(sims, resultModelColumns, valEq);
+  const diffKeys = selectedComparisonModel.differingInputKeys.map(k => k.slice(2)).sort((a, b) => {
+    const ia = Object.keys(PARAM_META).indexOf(a), ib = Object.keys(PARAM_META).indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
+    return a.localeCompare(b);
   });
   // Same, but across EVERY saved row — so the library table alone already shows
   // which variant leads on each metric, without having to tick rows first.
   const libExtent: Record<string, { min: number; max: number }> = {};
-  resultCols.forEach(r => {
-    const nums = extentVals(r, sims);
-    if (nums.length) libExtent[colId(r)] = { min: Math.min(...nums), max: Math.max(...nums) };
-  });
+  resultCols.forEach(r => { const extent = libraryComparisonModel.extents[`r:${colId(r)}`]; if (extent) libExtent[colId(r)] = extent; });
 
   /** Green on the best value, red on the worst — grey when a metric has no
    *  better/worse direction (speed, voltage) or every row ties. */
   const metricColor = (r: ResultCol, raw: number,
                        ext?: { min: number; max: number }): string => {
-    if (!Number.isFinite(raw) || !ext || ext.min === ext.max || !r.better) return 'var(--text-1)';
-    const best  = r.better === 'hi' ? ext.max : ext.min;
-    const worst = r.better === 'hi' ? ext.min : ext.max;
-    if (Math.abs(raw - best)  < 1e-9) return '#4ade80';
-    if (Math.abs(raw - worst) < 1e-9) return '#f87171';
-    return 'var(--text-1)';
+    const color = bestValueColor(raw, r.better, ext, 1e-9);
+    return color === 'best' ? '#4ade80' : color === 'worst' ? '#f87171' : 'var(--text-1)';
   };
 
   // Largest value per column across the SELECTED rows — the reference the Δ%
@@ -770,8 +788,6 @@ const ComparePanel: React.FC = () => {
     const ns = extentVals(r, selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });
-  const diffSet = new Set(diffKeys);
-
   /** Deviation from the column maximum, in %. 0 % = the leader. */
   const PctCell: React.FC<{ v: number; max?: number }> = ({ v, max }) => {
     const ok = Number.isFinite(v) && Number.isFinite(max as number) && Math.abs(max as number) > 1e-12;
@@ -803,7 +819,7 @@ const ComparePanel: React.FC = () => {
     }
     const raw = resultVal(r, s);
     const activeOnly = Number.isFinite(raw) && !!r.activeBasis?.(resultSrc(r, s));
-    const mixed = activeOnly && fullBasisRows(r, sims).length > 0;     // ranked among the full-basis rows only
+    const mixed = activeOnly && (libraryHasFullBasis.get(colId(r)) ?? false); // ranked among full-basis rows only
     const col = mixed ? 'var(--text-1)' : metricColor(r, raw, ext);
     return (
       <Box component="td" title={activeOnly ? ACTIVE_BASIS_TIP : undefined}
@@ -1027,61 +1043,7 @@ const ComparePanel: React.FC = () => {
           {selected.length < 2 ? (
             <Alert severity="info" sx={{ fontSize: 12 }}>Tick at least two rows above to compare them.</Alert>
           ) : (
-            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
-              {/* SAME column layout as the library above — results first, then the
-                  inputs — so the eye doesn't have to re-learn the table halfway down
-                  the screen.  Inputs that DIFFER across the selection are amber. */}
-              <Box component="thead"><Box component="tr">
-                <Box component="th" sx={{ ...TH, textAlign: 'left', left: 0, zIndex: 3, position: 'sticky' }}>Simulation</Box>
-                {resultCols.map(r => (
-                  <Box component="th" key={`r-${colId(r)}`} sx={{ ...TH, color: HDR_RESULT }}>
-                    {r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(r.unit)}{r.unit}</Box> : null}
-                  </Box>
-                ))}
-                {displayCols.map(k => (
-                  <Box component="th" key={k} sx={{ ...TH, color: diffSet.has(k) ? HDR_DIFF : 'var(--text-2)' }}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
-                  </Box>
-                ))}
-              </Box></Box>
-              <Box component="tbody">
-                {selected.map(s => [
-                  <Box component="tr" key={s.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
-                    <NameCell s={s} sticky />
-                    {resultCols.map(r => (
-                      <ResultCell key={`r-${colId(r)}`} r={r} s={s} ext={resExtent[colId(r)]} />
-                    ))}
-                    {displayCols.map(k => (
-                      <Box component="td" key={k} sx={{ ...TD, color: diffSet.has(k) ? '#fbbf24' : 'var(--text-1)' }}>
-                        {paramFmt(k, s.params?.[k])}
-                      </Box>
-                    ))}
-                  </Box>,
-                  // Δ% against the largest value in each column: 0.0 % marks the
-                  // leader, everything else reads as "how far behind".
-                  <Box component="tr" key={`${s.id}-pct`}>
-                    <Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0,
-                      bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>
-                      Δ% from max
-                    </Box>
-                    {resultCols.map(r => (
-                      // A verdict has no maximum to be a percentage of.
-                      <PctCell key={`p-${colId(r)}`} v={r.text || (r.activeBasis?.(resultSrc(r, s)) && fullBasisRows(r, selected).length > 0) ? NaN : resultVal(r, s)}
-                        max={r.text ? undefined : colMax[`r:${colId(r)}`]} />
-                    ))}
-                    {displayCols.map(k => (
-                      <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />
-                    ))}
-                  </Box>,
-                ])}
-                {diffKeys.length === 0 && (
-                  <Box component="tr"><Box component="td" {...({ colSpan: 1 + resultCols.length + displayCols.length } as any)}
-                    sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>
-                    Selected runs have identical inputs — only the results differ.
-                  </Box></Box>
-                )}
-              </Box>
-            </Box>
+            <SharedComparisonTable rows={selected} columns={[...resultModelColumns, ...displayCols.map(k => ({ key: `p:${k}`, label: paramLabel(k), unit: paramUnit(k), kind: 'input' as const, value: (s: SavedSim) => s.params?.[k], format: (_v: unknown, s: SavedSim) => paramFmt(k, s.params?.[k]) }))]} rowKey={s => s.id} rowLabel={s => s.name} labelHeader="Simulation" sameValue={valEq} showAllInputs visibleKeys={[...resultCols.map(r => `r:${colId(r)}`), ...displayCols.map(k => `p:${k}`)]} tableSx={{ borderCollapse: 'collapse', width: '100%' }} headerCellSx={TH} labelHeaderSx={{ left: 0, zIndex: 3, position: 'sticky' }} bodyCellSx={TD} inputHeaderColor={HDR_DIFF} resultHeaderColor={HDR_RESULT} unitGap={unitGap} overflow="visible" renderLabelCell={s => <NameCell s={s} sticky />} renderCell={(s, c) => c.format?.(c.value(s), s)} renderSupplementaryRows={(s) => <Box component="tr" key={`${s.id}-pct`}><Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>Δ% from max</Box>{resultCols.map(r => <PctCell key={`p-${colId(r)}`} v={comparisonPercentValue(r, s)} max={r.text ? undefined : colMax[`r:${colId(r)}`]} />)}{displayCols.map(k => <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />)}</Box>} renderAfterRows={diffKeys.length === 0 && <Box component="tr"><Box component="td" colSpan={1 + resultCols.length + displayCols.length} sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>Selected runs have identical inputs — only the results differ.</Box></Box>} />
           )}
         </Box>
       </Box>

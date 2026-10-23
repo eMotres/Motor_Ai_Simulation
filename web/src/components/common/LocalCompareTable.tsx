@@ -37,6 +37,9 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { TextPromptDialog } from './PromptDialogs';
 import type { TextPromptState } from './PromptDialogs';
 import type { LocalRow } from '../compare/resultRows';
+import { SharedComparisonTable, type SharedComparisonColumn } from '../compare/SharedComparisonTable';
+import { buildComparisonModel } from '../compare/comparisonModel';
+import { localCellText, localCellValue, localComparisonColumns, type LocalColumnDef } from './localComparisonModel';
 
 /* The row shape is the row BUILDERS' (compare/resultRows), not a second
    definition of the same thing: what a stacked variant contains is one
@@ -50,17 +53,7 @@ export type { LocalRow };
  *  coloured).  `better` is what "best" MEANS for this quantity; a column
  *  without it is never coloured, which is the honest state for a temperature
  *  nobody has decided the sign of and for text. */
-export interface ColumnDef {
-  key: string;
-  label: string;
-  unit?: string;
-  /** decimals for a numeric cell (default 1) */
-  d?: number;
-  better?: 'hi' | 'lo';
-  kind: 'input' | 'result';
-  /** full control of the cell's text — for booleans and verdicts */
-  fmt?: (v: unknown) => string;
-}
+export type ColumnDef = LocalColumnDef;
 
 /* ── Configure's table skin, copied so the two read as one control ────────── */
 const TH = {
@@ -74,28 +67,6 @@ const TD = {
   borderBottom: '1px solid var(--app-bg)', fontFamily: 'monospace',
   color: 'var(--text-1)',
 } as const;
-
-const cellOf = (r: LocalRow, c: ColumnDef): unknown =>
-  (c.kind === 'input' ? r.inputs : r.results)[c.key];
-
-/** A real number, or `undefined` — the only values that take part in the
- *  best/worst colouring and in a Δ.  A stored `true` is not a quantity. */
-const numOf = (v: unknown): number | undefined =>
-  (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
-
-const fixed = (n: number, d: number): string =>
-  n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
-
-/** What one cell prints.  An ABSENT value prints "—", which is the truth: this
- *  variant does not have that quantity (a sleeveless rotor has no sleeve
- *  stress, a still-air row has no coolant). */
-function text(v: unknown, c: ColumnDef): string {
-  if (c.fmt) return c.fmt(v);
-  if (v === null || v === undefined || v === '') return '—';
-  if (typeof v === 'boolean') return v ? 'yes' : 'no';
-  if (typeof v === 'number') return Number.isFinite(v) ? fixed(v, c.d ?? 1) : '—';
-  return String(v);
-}
 
 export interface LocalCompareTableProps {
   title: string;
@@ -117,63 +88,21 @@ const LocalCompareTable: React.FC<LocalCompareTableProps> = ({
   /* ── which columns there are at all ──────────────────────────────────────
      A column no row carries is not a column: printing "—" down a whole column
      is a quantity this machine does not have, said fifteen times. */
-  const { same, diff, results, ext } = useMemo(() => {
-    const present = columns.filter((c) => rows.some((r) => cellOf(r, c) !== undefined));
-    const ins = present.filter((c) => c.kind === 'input');
-    const res = present.filter((c) => c.kind === 'result');
-    const sameCols = rows.length
-      ? ins.filter((c) => {
-        const first = text(cellOf(rows[0], c), c);
-        return rows.every((r) => text(cellOf(r, c), c) === first);
-      })
-      : ins;
-    const diffCols = ins.filter((c) => !sameCols.includes(c));
-    /* best/worst per result column, across the rows that HAVE a number there
-       (Configure's rule: nothing is coloured while every row agrees). */
-    const e: Record<string, { min: number; max: number } | null> = {};
-    res.forEach((c) => {
-      const ns = rows.map((r) => numOf(cellOf(r, c)))
-        .filter((x): x is number => x !== undefined);
-      e[c.key] = ns.length ? { min: Math.min(...ns), max: Math.max(...ns) } : null;
-    });
-    return { same: sameCols, diff: diffCols, results: res, ext: e };
-  }, [rows, columns]);
-
-  const colourOf = (c: ColumnDef, v: unknown): string | null => {
-    const e = ext[c.key];
-    const n = numOf(v);
-    if (!e || n === undefined || !c.better || e.min === e.max) return null;
-    const best = c.better === 'hi' ? e.max : e.min;
-    const worst = c.better === 'hi' ? e.min : e.max;
-    if (Math.abs(n - best) < 1e-12) return '#4ade80';
-    if (Math.abs(n - worst) < 1e-12) return '#f87171';
-    return null;
-  };
-
-  /** The cell's own sentence: what it is, and how far it is from the FIRST
-   *  row — which is the variant every other one is being judged against. */
-  const tipOf = (c: ColumnDef, v: unknown, i: number): string => {
-    const shown = typeof v === 'string' ? v : text(v, c);
-    const head = `${c.label}${c.unit ? ` (${c.unit})` : ''}: ${shown}`;
-    const n = numOf(v);
-    const base = rows.length ? numOf(cellOf(rows[0], c)) : undefined;
-    if (i === 0 || n === undefined || base === undefined) return head;
-    const dv = n - base;
-    const d = c.d ?? 1;
-    const pct = base !== 0
-      ? ` (${dv > 0 ? '+' : ''}${((dv / Math.abs(base)) * 100).toFixed(1)} %)` : '';
-    return `${head} · Δ vs "${rows[0].name}": ${dv > 0 ? '+' : ''}${fixed(dv, d)}${pct}`;
-  };
+  const sharedColumns: SharedComparisonColumn<LocalRow>[] = useMemo(() => localComparisonColumns(rows, columns), [columns, rows]);
+  const model = useMemo(() => buildComparisonModel(rows, sharedColumns,
+    (a, b) => String(a ?? '') === String(b ?? '')), [rows, sharedColumns]);
+  const orderedSharedColumns = [...sharedColumns.filter((c) => c.kind === 'input'), ...sharedColumns.filter((c) => c.kind === 'result')];
+  const same = columns.filter((c) => c.kind === 'input' && rows.some((r) => localCellValue(r, c) !== undefined)
+    && !model.differingInputKeys.includes(`input:${c.key}`));
 
   const rename = (r: LocalRow) => setAskName({
     title: 'Rename variant', label: 'Name', initial: r.name,
     onSubmit: (v) => { const n = v.trim(); if (n) onRename?.(r.id, n); },
   });
-
   /* The inputs every row agrees on — one line, the full list in the tooltip
      (never a paragraph on a page). */
   const sameBits = rows.length
-    ? same.map((c) => `${c.label} ${text(cellOf(rows[0], c), c)}${c.unit ? ` ${c.unit}` : ''}`)
+    ? same.map((c) => `${c.label} ${localCellText(localCellValue(rows[0], c), c)}${c.unit ? ` ${c.unit}` : ''}`)
     : [];
   const sameShort = sameBits.slice(0, 4).join(' · ')
     + (sameBits.length > 4 ? ` · +${sameBits.length - 4} more` : '');
@@ -213,85 +142,13 @@ const LocalCompareTable: React.FC<LocalCompareTableProps> = ({
               </Typography>
             </Tooltip>
           )}
-          <Box sx={{ overflow: 'auto' }}>
-            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
-              <Box component="thead"><Box component="tr">
-                <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Variant</Box>
-                {diff.map((c) => (
-                  <Box component="th" key={`i_${c.key}`} sx={{ ...TH, color: '#fbbf24' }}
-                    title={`${c.label}${c.unit ? ` (${c.unit})` : ''} — an INPUT, and one that differs between these variants. Inputs identical in every row are in the line above the table.`}>
-                    {c.label}
-                    {c.unit && (
-                      <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}>
-                        {' '}{c.unit}
-                      </Box>
-                    )}
-                  </Box>
-                ))}
-                {results.map((c) => (
-                  <Box component="th" key={`r_${c.key}`} sx={{ ...TH, color: '#4ade80' }}
-                    title={`${c.label}${c.unit ? ` (${c.unit})` : ''} — a RESULT.${c.better ? ` Green is the best of the stack (${c.better === 'hi' ? 'highest' : 'lowest'}), red the worst.` : ' Not coloured: there is no better or worse for this one.'} Hover a cell for its Δ against the first row.`}>
-                    {c.label}
-                    {c.unit && (
-                      <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}>
-                        {' '}{c.unit}
-                      </Box>
-                    )}
-                  </Box>
-                ))}
-                <Box component="th" sx={{ ...TH, textAlign: 'center' }}>✕</Box>
-              </Box></Box>
-              <Box component="tbody">
-                {rows.map((r, i) => (
-                  <Box component="tr" key={r.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
-                    <Box component="td" sx={{ ...TD, textAlign: 'left',
-                      fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                      <Tooltip title={`Stacked ${r.at ? new Date(r.at).toLocaleString() : 'earlier'}${i === 0 ? ' — every Δ in this table is measured against this row.' : '.'}`}>
-                        <Box component="span" sx={{ color: i === 0 ? '#60a5fa' : 'var(--text-1)',
-                          fontWeight: 600, cursor: 'help' }}>
-                          {r.name}
-                        </Box>
-                      </Tooltip>
-                      {onRename && (
-                        <IconButton size="small" onClick={() => rename(r)} title="Rename"
-                          sx={{ color: 'var(--text-3)', p: 0.2, ml: 0.5, fontSize: 12 }}>
-                          ✎
-                        </IconButton>
-                      )}
-                    </Box>
-                    {/* The cell hints are NATIVE titles, not MUI tooltips: a
-                        full stack is sixteen rows of twenty-five columns, and
-                        four hundred poppers is a table that scrolls badly for a
-                        hint nobody has hovered yet. */}
-                    {diff.map((c) => (
-                      <Box component="td" key={`i_${c.key}`} title={tipOf(c, cellOf(r, c), i)}
-                        sx={{ ...TD, color: '#fbbf24', cursor: 'help' }}>
-                        {text(cellOf(r, c), c)}
-                      </Box>
-                    ))}
-                    {results.map((c) => {
-                      const v = cellOf(r, c);
-                      const col = colourOf(c, v);
-                      return (
-                        <Box component="td" key={`r_${c.key}`} title={tipOf(c, v, i)}
-                          sx={{ ...TD, cursor: 'help',
-                            color: col ?? 'var(--text-1)', fontWeight: col ? 700 : 400 }}>
-                          {text(v, c)}
-                        </Box>
-                      );
-                    })}
-                    <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
-                      <IconButton size="small" onClick={() => onRemove(r.id)}
-                        title="Remove this variant"
-                        sx={{ color: 'var(--text-3)', p: 0.25, '&:hover': { color: '#f87171' } }}>
-                        <DeleteOutlineIcon sx={{ fontSize: 15 }} />
-                      </IconButton>
-                    </Box>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          </Box>
+          <SharedComparisonTable rows={rows} columns={orderedSharedColumns} rowKey={(r) => r.id} labelHeader="Variant"
+            sameValue={(a, b) => String(a ?? '') === String(b ?? '')}
+            headerCellSx={TH} bodyCellSx={TD}
+            unitColor="var(--line)" unitFontWeight={400}
+            rowLabel={(r) => <><Tooltip title={`Stacked ${r.at ? new Date(r.at).toLocaleString() : 'earlier'}${r === rows[0] ? ' — every Δ in this table is measured against this row.' : '.'}`}><Box component="span" sx={{ color: r === rows[0] ? '#60a5fa' : 'var(--text-1)', fontWeight: 600, cursor: 'help' }}>{r.name}</Box></Tooltip>{onRename && <IconButton size="small" onClick={() => rename(r)} title="Rename" sx={{ color: 'var(--text-3)', p: 0.2, ml: 0.5, fontSize: 12 }}>✎</IconButton>}</>}
+            renderHeadEnd={() => <Box component="th" sx={{ ...TH, textAlign: 'center' }}>✕</Box>}
+            renderRowEnd={(r) => <Box component="td" sx={{ ...TD, textAlign: 'center' }}><IconButton size="small" onClick={() => onRemove(r.id)} title="Remove this variant" sx={{ color: 'var(--text-3)', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton></Box>} />
         </>
       )}
 

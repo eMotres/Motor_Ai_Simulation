@@ -19,6 +19,6 @@ export interface SpecVersion { version: number; author_display_name?: string; cr
 export interface SpecState { draft: Record<string, unknown>; revision: number; completeness: Completeness; versions?: SpecVersion[] }
 export interface SpecSnapshot { version: number; author_display_name?: string; created_at?: string; spec?: Record<string, unknown>; draft?: Record<string, unknown> }
 export interface ProjectThreadMessage { author_display_name?: string; created_at: string; text: string; field_ref?: string }
-export interface MotorResult { duty?: string; operating_point?: Record<string, unknown>; electromagnetic?: Record<string, unknown>; stored_results?: Record<string, unknown>; torque_Nm?: number; power_W?: number; efficiency_pct?: number; losses_W?: number; temperatures_C?: Record<string, number> | number; computed_at?: string }
+export interface MotorResult { duty?: string; has_result?: boolean; operating_point?: Record<string, unknown>; electromagnetic?: Record<string, unknown>; stored_results?: Record<string, unknown>; comparison?: Record<string, unknown>; torque_Nm?: number; power_W?: number; efficiency_pct?: number; losses_W?: number; temperatures_C?: Record<string, number> | number; computed_at?: string }
 /** `canonical_die` is used for link management; `die` is the caller's ordinary resolver alias for opening. */
 export interface ProjectMotor { die: string; canonical_die?: string; config: string; available?: boolean; duties?: Array<string | { name?: string | null }>; default_duty?: string | null; results?: MotorResult[] }

@@ -1,0 +1,108 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows.ts';
+import { buildComparisonModel } from '../../../components/compare/comparisonModel.ts';
+
+test('Development row model includes every linked variant and stored duty with absent metrics left missing', () => {
+  const motors = [
+    { die: 'Synthetic-A', config: 'cfg-1', duties: ['cruise'], results: [
+      { duty: 'cruise', has_result: true, operating_point: { current_arms: 12, rpm: 800, gamma_deg: 20 }, comparison: { torque_nm: 4, p_loss_total_w: 9, loss_total_partial: true, demag: false, temperatures_c: { winding: 77, sleeve: 66 } } },
+      { duty: 'climb', has_result: true, operating_point: { current_arms: 15, rpm: 700 }, comparison: { torque_nm: 5, efficiency_pct: 0, p_loss_total_w: 12 } },
+    ] },
+    { die: 'Synthetic-B', config: 'cfg-2', results: [{ duty: 'cruise', has_result: true, comparison: { torque_nm: 6, mass_kg: 0.4 } }] },
+    { die: 'Synthetic-C', config: 'cfg-3', duties: ['pending'], results: [] },
+  ];
+  const rows = developmentComparisonRows(motors);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map((r) => r.inputs.duty), ['cruise', 'climb', 'cruise', 'pending']);
+  assert.equal(rows.filter((r) => r.hasResult).length, 3);
+  assert.equal(rows[0].inputs.current, 12);
+  assert.equal(rows[0].values.demag, false);
+  assert.equal(rows[0].values.mass, undefined);
+  assert.equal(rows[1].values.efficiency, 0);
+  assert.equal(rows[0].values.coilTemp, 77);
+  assert.equal(rows[0].values['temperature:sleeve'], 66);
+  assert.equal(rows[3].hasResult, false);
+
+  const t = (key, args) => args?.part ? `${key}:${args.part}` : key === 'comparison.no' ? 'No' : key === 'comparison.yes' ? 'Yes' : key;
+  const columns = developmentComparisonColumns(t, rows);
+  const byKey = Object.fromEntries(columns.map((column) => [column.key, column]));
+  assert.ok(byKey.pMech);
+  assert.ok(byKey['temperature:sleeve']);
+  assert.equal(byKey['temperature:sleeve'].label, 'comparison.componentTemp:comparison.temperaturePart.sleeve');
+  assert.equal(columns.some((column) => column.key === 'temperature:winding'), false, 'fixed winding temperature is not duplicated');
+  assert.equal(byKey.demag.format(rows[0].values.demag, rows[0]), 'No');
+  assert.equal(byKey.mass.format(rows[0].values.mass, rows[0]), '-');
+  assert.equal(byKey.efficiency.format(rows[1].values.efficiency, rows[1]), '0');
+  assert.equal(byKey.losses.format(rows[0].values.losses, rows[0]), '9*');
+  assert.equal(byKey.losses.title(rows[0].values.losses, rows[0]), 'comparison.partialLosses');
+  assert.deepEqual(byKey.losses.rankValues(rows).filter((value) => value !== undefined), [12]);
+  assert.equal(byKey.losses.noColor(rows[0], rows), true);
+
+  const activeMass = { ...rows[0], values: { ...rows[0].values, mass: 1, torqueMass: 4, massPartial: true } };
+  const noMassPlaceholder = { ...rows[3], values: { ...rows[3].values, mass: undefined, torqueMass: undefined, massPartial: false } };
+  assert.deepEqual(byKey.mass.rankValues([activeMass, noMassPlaceholder]), [1]);
+  assert.deepEqual(byKey.torqueMass.rankValues([activeMass, noMassPlaceholder]), [4]);
+  assert.equal(byKey.mass.noColor(activeMass, [activeMass, noMassPlaceholder]), false);
+  assert.equal(byKey.torqueMass.noColor(activeMass, [activeMass, noMassPlaceholder]), false);
+});
+
+test('unsolved rows cannot display or rank comparison metrics even if a stale payload includes them', () => {
+  const rows = developmentComparisonRows([{ die: 'Synthetic', config: 'cfg', results: [
+    { duty: 'target', has_result: false, comparison: { torque_nm: 12, power_w: 1200, v_dc_v: 48 } },
+    { duty: 'legacy-supply', has_result: true, comparison: { v_dc_v: 48 } },
+    { duty: 'solved', has_result: true, comparison: { torque_nm: 6, power_w: 400, v_dc_required_v: 62 } },
+  ] }]);
+  assert.equal(rows[0].values.torque, undefined);
+  assert.equal(rows[0].values.power, undefined);
+  assert.equal(rows[0].values.vDc, undefined);
+  assert.equal(rows[1].values.vDc, undefined, 'legacy supplied-bus field is not needed voltage');
+  const columns = Object.fromEntries(developmentComparisonColumns((key) => key, rows).map((column) => [column.key, column]));
+  const model = buildComparisonModel(rows, Object.values(columns));
+  assert.deepEqual(model.extents.torque, { min: 6, max: 6 });
+  assert.deepEqual(model.extents.power, { min: 400, max: 400 });
+  assert.deepEqual(model.extents.vDc, { min: 62, max: 62 });
+});
+
+
+test('delta PWM model-branch peaks are blank, unranked, and explained', () => {
+  const motors = [{ die: 'Synthetic-delta', config: 'cfg', results: [
+    { duty: 'delta-pwm', has_result: true, comparison: {
+      v_line_peak_v: 55.426, line_peak_physical: false,
+      line_peak_provenance: 'delta_equivalent_star', line_peak_reason: 'model_branch_peak',
+    } },
+    { duty: 'other-flagged', has_result: true, comparison: {
+      v_line_peak_v: 51, line_peak_provenance: 'model_branch_peak',
+    } },
+  ] }];
+  const rows = developmentComparisonRows(motors);
+  assert.equal(rows[0].values.vLine, null, 'a flagged numeric payload is cleared in the web row model');
+  assert.equal(rows[1].values.vLine, null, 'unknown nonphysical provenance is fail-closed');
+  const columns = developmentComparisonColumns((key) => key, rows);
+  const linePeak = columns.find((column) => column.key === 'vLine');
+  const model = buildComparisonModel(rows, columns);
+  assert.ok(model.resultColumns.some((column) => column.key === 'vLine'), 'column remains present when all rows are blocked');
+  assert.equal(model.extents.vLine, null, 'blocked values do not enter comparison extents');
+  assert.equal(linePeak.value(rows[0]), null);
+  assert.equal(linePeak.format(linePeak.value(rows[0]), rows[0]), '-');
+  assert.equal(linePeak.title(linePeak.value(rows[0]), rows[0]), 'comparison.linePeakUnavailable');
+  assert.deepEqual(linePeak.rankValues?.(rows) ?? rows.map((row) => linePeak.value(row)), [null, null]);
+});
+
+test('physical override and ordinary zero line peaks remain visible and rankable', () => {
+  const rows = developmentComparisonRows([{ die: 'Synthetic', config: 'cfg', results: [
+    { duty: 'physical-override', has_result: true, comparison: {
+      v_line_peak_v: 48, line_peak_physical: true,
+      line_peak_provenance: 'physical_terminal_peak', line_peak_source: 'summary',
+    } },
+    { duty: 'ordinary-zero', has_result: true, comparison: { v_line_peak_v: 0 } },
+  ] }]);
+  const columns = developmentComparisonColumns((key) => key, rows);
+  const linePeak = columns.find((column) => column.key === 'vLine');
+  const model = buildComparisonModel(rows, columns);
+  assert.equal(rows[0].values.vLine, 48);
+  assert.equal(rows[1].values.vLine, 0);
+  assert.deepEqual(model.extents.vLine, { min: 0, max: 48 });
+  assert.equal(linePeak.format(0, rows[1]), '0');
+  assert.equal(linePeak.title(48, rows[0]), undefined);
+});

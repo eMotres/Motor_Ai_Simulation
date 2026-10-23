@@ -11,12 +11,14 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { developmentApi, DevelopmentApiError } from '../api';
 import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectSummary, ProjectThreadMessage, SchemaField, SpecSnapshot, SpecState } from '../types';
-import { resultKindLabel, temperatureKindForKey, temperatureLabel } from '../resultPresentation';
 import { createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, isRequired, setFieldAnswer, shallowDiff, wizardCompleteness, type SpecDraft } from '../wizardState';
 import { applyCatalogDuty } from '../../../lib/catalogDutyApply';
 import { canWriteServer } from '../../../lib/localAuth';
 import { useUIStore } from '../../../stores/uiStore';
 import { firstProjectMotorDuty } from '../motorDuty';
+import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
+import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
+import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
 
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes';
 const STATUSES = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'] as const;
@@ -68,6 +70,9 @@ export default function DevelopmentPage() {
   const [messageFieldRef, setMessageFieldRef] = useState('');
   const [motors, setMotors] = useState<ProjectMotor[]>([]);
   const projectEpochRef = useRef(0);
+  const projectOpenEpochRef = useRef(0);
+  const projectOpenInFlightRef = useRef('');
+  const failedOpenIntentRef = useRef('');
   const [versions, setVersions] = useState<SpecSnapshot[]>([]);
   const [compareVersions, setCompareVersions] = useState<[number, number] | null>(null);
   const [versionA, setVersionA] = useState<SpecSnapshot | null>(null);
@@ -107,6 +112,9 @@ export default function DevelopmentPage() {
   useEffect(() => {
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     projectEpochRef.current += 1;
+    projectOpenEpochRef.current += 1;
+    projectOpenInFlightRef.current = '';
+    failedOpenIntentRef.current = '';
     projectToken.current = `identity:${user?.email ?? 'signed-out'}:${Date.now()}`;
     currentProjectRef.current = '';
     setSelected(null); setSpec(null); setProjects([]); setMessages([]); setMotors([]); setVersions([]); setCompareVersions(null);
@@ -115,22 +123,78 @@ export default function DevelopmentPage() {
     if (user?.email) void refreshProjects();
   }, [user?.email, refreshProjects]);
 
-  const loadProject = useCallback(async (p: ProjectSummary) => {
+  const loadProject = useCallback(async (p: ProjectSummary, requestedEpoch?: number): Promise<boolean> => {
+    const openEpoch = requestedEpoch ?? ++projectOpenEpochRef.current;
     if (selected && spec) {
       try { await flushSaveRef.current(); }
-      catch { setError(tr('saveFailedShort')); return; }
+      catch {
+        if (openEpoch !== projectOpenEpochRef.current) return true;
+        setError(tr('saveFailedShort')); return false;
+      }
     }
+    if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
     setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setError(''); setSubmitError([]);
     setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
       const [detail, sp] = await Promise.all([developmentApi.get(p.id), developmentApi.spec(p.id)]);
-      if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return;
+      if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return true;
       setSelected(detail); setSpec({ ...sp, draft: normaliseDraft(sp.draft) });
       draftRef.current = normaliseDraft(sp.draft); revisionRef.current = sp.revision; saveCoordinator.setRevision(p.id, sp.revision);
-    } catch (e) { if (projectToken.current === token) setError(e instanceof Error ? e.message : String(e)); }
+      return true;
+    } catch (e) {
+      if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return true;
+      setError(e instanceof Error ? e.message : String(e)); return false;
+    }
   }, [selected, spec]);
+  useEffect(() => {
+    const openProject = async (projectId: string | null | undefined): Promise<boolean> => {
+      if (!projectId) return true;
+      if (projectOpenInFlightRef.current === projectId) return true;
+      if (selected?.id === projectId && spec) { setView('specification'); return true; }
+      projectOpenInFlightRef.current = projectId;
+      const openEpoch = ++projectOpenEpochRef.current;
+      try {
+        const known = projects.find((p) => p.id === projectId);
+        if (known) return await loadProject(known, openEpoch);
+        const project = await developmentApi.get(projectId);
+        if (openEpoch !== projectOpenEpochRef.current) return true;
+        return await loadProject(project, openEpoch);
+      } catch (e) {
+        if (openEpoch !== projectOpenEpochRef.current) return true;
+        setError(e instanceof Error ? e.message : String(e)); return false;
+      } finally {
+        if (projectOpenInFlightRef.current === projectId) projectOpenInFlightRef.current = '';
+      }
+    };
+    const openClaimed = (projectId: string) => {
+      void openProject(projectId).then((opened) => {
+        if (!opened) {
+          failedOpenIntentRef.current = projectId;
+          try { restoreProjectOpenIntent(sessionStorage, projectId); } catch { /* storage unavailable */ }
+        }
+      });
+    };
+    const consumePending = () => {
+      try {
+        const queued = sessionStorage.getItem('development.openProject');
+        if (queued && queued === failedOpenIntentRef.current) return;
+        const pending = claimProjectOpenIntent(sessionStorage);
+        if (pending) openClaimed(pending);
+      } catch { /* session storage is unavailable in some embedded contexts */ }
+    };
+    const onOpenProject = (event: Event) => {
+      const projectId = (event as CustomEvent<{ projectId?: string }>).detail?.projectId;
+      if (!projectId) return;
+      failedOpenIntentRef.current = '';
+      try { claimProjectOpenIntent(sessionStorage, projectId); } catch { /* the event still carries the project id */ }
+      openClaimed(projectId);
+    };
+    consumePending();
+    window.addEventListener(projectOpenEvent, onOpenProject);
+    return () => window.removeEventListener(projectOpenEvent, onOpenProject);
+  }, [projects, selected?.id, spec, loadProject]);
 
   const enqueueSave = useCallback((project: string, value: SpecDraft, token: string) => {
     setSaving(true); setSaveError(''); saveFailed.current = false;
@@ -372,8 +436,12 @@ export default function DevelopmentPage() {
     {view === 'motors' && <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Typography sx={{ flex: 1, fontSize: 13, color: 'var(--text-2)' }}>{tr('motorsTip')}</Typography>{canEditProject && <Button size="small" startIcon={<AddIcon />} onClick={() => setLinkOpen(true)}>{tr('linkMotor')}</Button>}</Box>
       {canEditProject && !!selected.grant_removal_candidates?.length && <Tooltip title={<Stack spacing={0.4}><Typography sx={{ fontSize: 11 }}>{tr('grantReviewTip')}</Typography>{selected.grant_removal_candidates.map((candidate) => <Typography key={`${candidate.email}/${candidate.die}/${candidate.config}`} sx={{ fontSize: 11 }}>{candidate.email} · {candidate.die}/{candidate.config} · {tr(`grantReason.${candidate.reason}`)}</Typography>)}</Stack>}><Alert severity="info" sx={{ mb: 1, py: 0 }}>{tr('grantReviewCount', { count: selected.grant_removal_candidates.length })}</Alert></Tooltip>}
-      {motors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <Stack spacing={1}>{motors.map((m) => <Paper key={`${m.canonical_die ?? m.die}/${m.config}`} sx={{ p: 1.5, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)' }}><Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}><Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{m.canonical_die ?? m.die} / {m.config}</Typography>{canEditProject && <Button size="small" color="error" onClick={async () => { try { await developmentApi.unlinkMotor(selected.id, m.canonical_die ?? m.die, m.config); const [freshProject, freshMotors] = await Promise.all([developmentApi.get(selected.id), developmentApi.motors(selected.id)]); setSelected(freshProject); setMotors(freshMotors); await refreshProjects(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }}>{tr('unlink')}</Button>}<MotorOpenLink motor={m} engineer={canManageGlobally} t={tr} /></Box>
-        {(m.results ?? []).length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 11, mt: 0.8 }}>{tr('noResults')}</Typography> : <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 0.7, mt: 1 }}>{m.results!.flatMap((r, i) => resultCards(r, i, tr)).map((card) => { const { metrics, title: resultTitle, key } = card; return <Box key={key} sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, px: 1, py: 0.7 }}><Typography sx={{ fontWeight: 600, fontSize: 11, color: 'var(--text-1)' }}>{resultTitle}</Typography><Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{metrics.torque != null && `${tr('torque')}: ${metrics.torque} N·m`}{metrics.power != null && ` · ${tr('power')}: ${metrics.power} W`}</Typography><Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{metrics.efficiency != null && `${tr('efficiency')}: ${metrics.efficiency}%`}{metrics.losses != null && ` · ${tr('losses')}: ${metrics.losses} W`}</Typography>{metrics.temperatures && <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{tr('temperatures')}: {typeof metrics.temperatures === 'number' ? `${metrics.temperatures} °C` : Object.entries(metrics.temperatures).map(([k, v]) => `${temperatureLabel(k, tr)} ${v} °C`).join(', ')}</Typography>}</Box>; })}</Box>}</Paper>)}</Stack>}
+      {(() => { const rows = developmentComparisonRows(motors); return <>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.7 }}>{tr('comparisonCount', { variants: motors.length, results: rows.filter((r) => r.hasResult).length })}</Typography>
+        {motors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={(r) => r.variant} labelHeader={tr('variant')} showAllInputs enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap' }}><MotorOpenLink motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} /></Box>} />}
+        {motors.length > 0 && motors.every((m) => !(m.results ?? []).length) && <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noResults')}</Typography>}
+        {canEditProject && <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap' }}>{motors.map((m) => <Button key={`${m.canonical_die ?? m.die}/${m.config}`} size="small" color="error" onClick={async () => { try { await developmentApi.unlinkMotor(selected.id, m.canonical_die ?? m.die, m.config); const [freshProject, freshMotors] = await Promise.all([developmentApi.get(selected.id), developmentApi.motors(selected.id)]); setSelected(freshProject); setMotors(freshMotors); await refreshProjects(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }}>{tr('unlink')}: {m.canonical_die ?? m.die}/{m.config}</Button>)}</Stack>}
+      </>; })()}
       {canEditProject && <Tooltip title={tr('handoverTip')}><span><Button disabled size="small" sx={{ mt: 1 }}>{tr('handover')}</Button></span></Tooltip>}
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Paper key={`${m.created_at}-${i}`} sx={{ p: 1, bgcolor: 'var(--panel-2)' }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
@@ -395,50 +463,19 @@ function CreateDialog({ open, busy, title, org, id, onTitle, onOrg, onId, onClos
 function InviteDialog({ open, busy, email, role, onEmail, onRole, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
 function LinkDialog({ open, busy, die, config, onDie, onConfig, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('linkMotor')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('die')} value={die} onChange={(e) => onDie(e.target.value)} /><TextField label={t('config')} value={config} onChange={(e) => onConfig(e.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !die.trim() || !config.trim()} onClick={onSubmit}>{t('link')}</Button></DialogActions></Dialog>; }
 function NotesPanel({ project, onSave, t }: { project: ProjectSummary; onSave: (s: string) => Promise<void>; t: (key: string) => string }) { const [value, setValue] = useState(project.notes ?? ''); return <Stack spacing={1}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('internalNotesTip')}</Typography><TextField multiline minRows={5} value={value} onChange={(e) => setValue(e.target.value)} /><Button sx={{ alignSelf: 'start' }} onClick={() => void onSave(value)}>{t('save')}</Button></Stack>; }
-function resultCards(r: import('../types').MotorResult, index: number, t: (key: string) => string) {
-  const cards: Array<{ key: string; title: string; metrics: ReturnType<typeof resultMetrics> }> = [];
-  const duty = r.duty || t('result');
-  cards.push({ key: `${duty}-${index}-em`, title: duty, metrics: resultMetrics({ ...(r.operating_point ?? {}), ...(r.electromagnetic ?? {}), ...(r as Record<string, unknown>) }) });
-  for (const [kind, value] of Object.entries(r.stored_results ?? {})) if (value && typeof value === 'object') cards.push({ key: `${duty}-${index}-${kind}`, title: `${duty} · ${resultKindLabel(kind, t)}`, metrics: resultMetrics(value as Record<string, unknown>) });
-  return cards.filter((c) => Object.values(c.metrics).some((v) => v != null));
-}
-function resultMetrics(value: Record<string, unknown>) {
-  const sources: Array<Record<string, unknown>> = [];
-  const walk = (x: unknown, depth = 0) => { if (!x || typeof x !== 'object' || Array.isArray(x) || depth > 4) return; const rec = x as Record<string, unknown>; sources.push(rec); Object.values(rec).forEach((child) => walk(child, depth + 1)); };
-  walk(value);
-  const pick = (...keys: string[]) => { for (const source of sources) for (const key of keys) { const found = Object.entries(source).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1]; if (found != null && Number.isFinite(Number(found))) return Number(found); } return undefined; };
-  const percent = pick('efficiency_pct', 'efficiency_percent', 'eta_pct');
-  const ratio = pick('eta_shaft', 'efficiency_shaft', 'eta_shaft_est');
-  const temps: Record<string, number> = {};
-  for (const source of sources) for (const [key, raw] of Object.entries(source)) {
-    if (key.toLowerCase().endsWith('_c') || key.toLowerCase().endsWith('temperature_c') || key.toLowerCase() === 't_max' || key.toLowerCase() === 't_min') {
-      const n = Number(raw); if (Number.isFinite(n)) { const name = temperatureKindForKey(key); temps[name] = n; }
-    }
-    if ((key.toLowerCase() === 'temperatures_c' || key.toLowerCase() === 'temperatures') && raw && typeof raw === 'object') Object.assign(temps, Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([name, temperature]) => { const key = temperatureKindForKey(name); return [key, temperature]; }))); 
-  }
-  const genericTemps = sources.map((x) => x.temperatures_C ?? x.temperatures ?? x.temperature_C).find((x) => typeof x === 'number');
-  return {
-    torque: pick('t_em_nm', 'torque_nm', 't_avg_nm', 'torque_avg_nm', 't_em_avg_nm', 'shaft_torque_nm'),
-    power: pick('p_shaft_out_w', 'p_shaft_w', 'p_out_w', 'power_w'),
-    efficiency: percent ?? (ratio == null ? undefined : (ratio * 100)),
-    losses: pick('p_loss_total_incl_mech_w', 'p_loss_total_w', 'losses_w', 'loss_w'),
-    temperatures: Object.keys(temps).length ? temps : genericTemps as number | undefined,
-  };
-}
-
-function MotorOpenLink({ motor, engineer, t }: { motor: ProjectMotor; engineer: boolean; t: (key: string) => string }) {
+function MotorOpenLink({ motor, duty: rowDuty, engineer, t }: { motor: ProjectMotor; duty?: string; engineer: boolean; t: (key: string) => string }) {
   const { user } = useAuth();
   const [error, setError] = useState('');
   useEffect(() => { setError(''); }, [user?.email, motor.die, motor.config]);
   const open = (mode: 'configure' | 'simulation') => {
     setError('');
-    const duty = firstProjectMotorDuty(motor.duties, motor.default_duty);
+    const duty = rowDuty || firstProjectMotorDuty(motor.duties, motor.default_duty);
     if (!duty) { setError(t('noSavedDuty')); return; }
     void applyCatalogDuty(motor.die, motor.config, duty, canWriteServer(), () => useUIStore.getState().setActiveTab((mode === 'simulation' ? 'simulation' : 'compare') as never)).catch(() => setError(t('configureFailed')));
   };
   return <>
-    <Button size="small" disabled={motor.available === false} title={motor.available === false ? t('motorUnavailable') : undefined} onClick={() => void open('configure')}>{t('openConfigure')}</Button>
-    {engineer && <Button size="small" disabled={motor.available === false} title={motor.available === false ? t('motorUnavailable') : undefined} onClick={() => void open('simulation')}>{t('openSimulation')}</Button>}
+    <Button size="small" disabled={motor.available === false || !rowDuty && !firstProjectMotorDuty(motor.duties, motor.default_duty)} title={motor.available === false ? t('motorUnavailable') : undefined} onClick={() => void open('configure')}>{t('openConfigure')}</Button>
+    {engineer && <Button size="small" disabled={motor.available === false || !rowDuty && !firstProjectMotorDuty(motor.duties, motor.default_duty)} title={motor.available === false ? t('motorUnavailable') : undefined} onClick={() => void open('simulation')}>{t('openSimulation')}</Button>}
     {error && <Tooltip title={error}><Chip size="small" color="error" label="!" /></Tooltip>}
   </>;
 }

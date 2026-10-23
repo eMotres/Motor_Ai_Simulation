@@ -969,6 +969,14 @@ def layers(prefer_shared: Optional[bool] = None) -> list:
     A verified signed-in admin reads the curated shared catalog first.  Their
     old workspace copies remain as a fallback for migration; an explicit
     ``False`` keeps maintenance/tests on the historical workspace-first order.
+
+    So does the PROCESS workspace (anonymous callers, the Configure warm-up,
+    CLI runs): on a layered install it is nobody's working copy, and its
+    ``dies/`` (``/srv/motres/identity/dies`` on the server) is a stale snapshot
+    of the shared catalog.  Read first, it put the 85 L15 active mass of
+    2026-10-15 (0.4496 kg) into the stored Configure answers every caller
+    shares, while a signed-in client read 0.4262 kg from ``shared/dies``.
+    One source: shared wins, the old copy is only a fallback.
     """
     ws_layer = Layer(LAYER_WORKSPACE, _ws_dies_dir())
     if not layering():
@@ -985,7 +993,7 @@ def layers(prefer_shared: Optional[bool] = None) -> list:
                  for d in mine + [d for d in owners if d.name != ws.id]]
     shared = Layer(LAYER_SHARED, Path(str(shared_root())) / "dies")
     if prefer_shared is None:
-        prefer_shared = is_verified_admin_request()
+        prefer_shared = is_verified_admin_request() or ws.is_process
     out = ([shared, ws_layer, *published] if prefer_shared
            else [ws_layer, *published, shared])
     out.extend(source_layers())

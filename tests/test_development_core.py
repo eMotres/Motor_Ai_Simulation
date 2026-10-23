@@ -236,6 +236,133 @@ def test_access_matrix(project_root, monkeypatch):
     assert access.can_edit_spec(admin, p)
 
 
+def test_admin_project_routes_require_admin_and_return_management_summary(project_root, monkeypatch):
+    project = make_project()
+    project["grant_removal_candidates"] = [
+        {"email": "customer@example.test", "die": "SYNTHETIC-DIE", "config": "A", "reason": "motor_unlinked"}
+    ]
+    store.create_project(project)
+    store.save_json("alpha", "draft.json", {"draft": {}, "revision": 0})
+    store.append_audit("alpha", "admin@example.test", "project.update", "project", "alpha", {})
+    app = FastAPI(); app.include_router(admin_router)
+    client = TestClient(app)
+    monkeypatch.setattr(auth, "_is_admin_caller", lambda token: (False, {"email": "eng@example.test", "role": "engineer"}))
+    denied = [
+        client.get("/api/admin/projects"),
+        client.post("/api/admin/projects", json={"id": "beta", "title": "Beta"}),
+        client.post("/api/admin/projects/alpha/members", json={"email": "new@example.test", "role": "customer"}),
+        client.delete("/api/admin/projects/alpha/members?email=customer%40example.test"),
+        client.post("/api/admin/projects/alpha/motors", json={"die": "SYNTHETIC-DIE", "config": "A"}),
+        client.delete("/api/admin/projects/alpha/motors?die=SYNTHETIC-DIE&config=A"),
+        client.get("/api/admin/projects/alpha/grant-removal-candidates"),
+    ]
+    assert [response.status_code for response in denied] == [403] * len(denied)
+
+    monkeypatch.setattr(auth, "_is_admin_caller", lambda token: (True, {"email": "admin@example.test", "role": "admin"}))
+    monkeypatch.setattr(auth, "resolve_user", lambda token: {"email": "admin@example.test", "role": "admin"})
+    response = client.get("/api/admin/projects")
+    assert response.status_code == 200
+    item = response.json()["projects"][0]
+    assert item["completeness"]["complete"] is False
+    assert item["members"] == project["members"]
+    assert item["motors"] == item["linked_motors"] == []
+    assert item["grant_removal_candidates"] == project["grant_removal_candidates"]
+    assert item["last_activity"]
+
+    created = client.post("/api/admin/projects", json={
+        "id": "beta", "title": "Beta", "customer_org": "Synthetic Labs"})
+    assert created.status_code == 200
+    assert store.get_project("beta")["id"] == "beta"
+    assert store.load_json("beta", "draft.json", {})["revision"] == 0
+    create_events = [json.loads(line) for line in
+                     (project_root / "beta" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert create_events[-1]["action"] == "create"
+    assert client.post("/api/admin/projects", json={
+        "id": "beta", "title": "Again", "customer_org": "Synthetic Labs"}).status_code == 409
+
+    monkeypatch.setattr(users, "get_user", lambda email: {"email": email, "disabled": False})
+    response = client.post("/api/admin/projects/alpha/members",
+                           json={"email": "new@example.test", "role": "customer"})
+    assert response.status_code == 200
+    events = [json.loads(line) for line in (project_root / "alpha" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["action"] == "invite"
+
+
+def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monkeypatch):
+    project = make_project()
+    store.create_project(project)
+    grants = {
+        "customer@example.test": {"all": False, "dies": [], "default": None, "configs": []},
+        "new@example.test": {"all": False, "dies": [], "default": None, "configs": []},
+    }
+    monkeypatch.setattr(auth, "_is_admin_caller", lambda token: (
+        True, {"email": "admin@example.test", "role": "admin"}))
+    monkeypatch.setattr(auth, "resolve_user", lambda token: {
+        "email": "admin@example.test", "role": "admin"})
+    monkeypatch.setattr(users, "get_user", lambda email: {
+        "email": email, "disabled": False, "email_verified": True})
+    monkeypatch.setattr(users, "get_stored_motor_grants", lambda email: dict(grants[email]))
+    def set_grants(email, *, all_motors, dies, default, configs):
+        grants[email] = {"all": all_motors, "dies": dies,
+                         "default": default, "configs": configs}
+    monkeypatch.setattr(users, "set_motor_grants", set_grants)
+    monkeypatch.setattr(motors, "_motor", lambda *args: (
+        Path("."), Path("."), {"is_admin": True}, {"canonical_die": "SYNTHETIC-DIE"}))
+    app = FastAPI(); app.include_router(admin_router)
+    client = TestClient(app)
+
+    linked = client.post("/api/admin/projects/alpha/motors",
+                         json={"die": "SYNTHETIC-DIE", "config": "A"})
+    assert linked.status_code == 200
+    assert store.get_project("alpha")["linked_motors"] == [
+        {"die": "SYNTHETIC-DIE", "config": "A"}]
+    assert "SYNTHETIC-DIE/A" in grants["customer@example.test"]["configs"]
+
+    added = client.post("/api/admin/projects/alpha/members",
+                        json={"email": "new@example.test", "role": "customer"})
+    assert added.status_code == 200
+    assert "SYNTHETIC-DIE/A" in grants["new@example.test"]["configs"]
+    removed = client.delete(
+        "/api/admin/projects/alpha/members?email=new%40example.test")
+    assert removed.status_code == 200
+    assert "SYNTHETIC-DIE/A" in grants["new@example.test"]["configs"]
+
+    unlinked = client.delete(
+        "/api/admin/projects/alpha/motors?die=SYNTHETIC-DIE&config=A")
+    assert unlinked.status_code == 200
+    assert store.get_project("alpha")["linked_motors"] == []
+    assert "SYNTHETIC-DIE/A" in grants["customer@example.test"]["configs"]
+    candidates = client.get(
+        "/api/admin/projects/alpha/grant-removal-candidates").json()["candidates"]
+    assert {row["email"] for row in candidates} == {
+        "customer@example.test", "new@example.test"}
+
+    events = [json.loads(line) for line in
+              (project_root / "alpha" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [event["action"] for event in events] == [
+        "motor.link", "invite", "remove", "motor.unlink"]
+
+
+def test_admin_member_remove_rolls_back_on_membership_index_failure(project_root, monkeypatch):
+    store.create_project(make_project())
+    before_project = store.get_project("alpha")
+    before_index = store.load_membership_index()
+    monkeypatch.setattr(auth, "_is_admin_caller", lambda token: (
+        True, {"email": "admin@example.test", "role": "admin"}))
+    monkeypatch.setattr(auth, "resolve_user", lambda token: {
+        "email": "admin@example.test", "role": "admin"})
+    monkeypatch.setattr(store, "sync_membership_index", lambda *args: (
+        _ for _ in ()).throw(OSError("index fail")))
+    app = FastAPI(); app.include_router(admin_router)
+    response = TestClient(app, raise_server_exceptions=False).delete(
+        "/api/admin/projects/alpha/members?email=customer%40example.test")
+    assert response.status_code == 500
+    assert store.get_project("alpha") == before_project
+    assert store.load_membership_index() == before_index
+    audit = project_root / "alpha" / "audit.jsonl"
+    assert not audit.exists()
+
+
 def test_customer_routes_private_project_and_versioned_submit(project_root, monkeypatch):
     current = {"email": "eng@example.test", "role": "engineer"}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)

@@ -19,6 +19,7 @@ import AgentActivitySection from './sections/AgentActivitySection';
 import CatalogsSection from './sections/CatalogsSection';
 import MotorsAccessSection from './sections/MotorsAccessSection';
 import ProductionAccessSection from './sections/ProductionAccessSection';
+import ProjectsSection from './sections/ProjectsSection';
 import LogsSection from './sections/LogsSection';
 import Downloads3dSection from './sections/Downloads3dSection';
 import VerificationSection from './sections/VerificationSection';
@@ -90,6 +91,7 @@ const AdminPanel: React.FC = () => {
       case 'catalogs': return <CatalogsSection />;
       case 'motorsAccess': return <MotorsAccessSection />;
       case 'productionAccess': return <ProductionAccessSection />;
+      case 'projects': return <ProjectsSection />;
       case 'mailing': return <><MailingCard /><NoticesPanel /></>;
       case 'logs': return <LogsSection />;
       case 'downloads3d': return <Downloads3dSection />;

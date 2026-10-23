@@ -183,7 +183,9 @@
     "docTitle": "工艺文件",
     "docTip": "由装配和测试步骤生成：步骤编号与流程图一致，每步附其工艺章节（n.1、n.2 …）。",
     "view": "查看",
-    "download": "下载",
+    "download": "下载 PDF",
+    "pdfUnavailable": "PDF 生成功能暂不可用，请稍后重试。",
+    "pdfTooLarge": "文档或其中的图片过大，无法生成 PDF。请逐个下载文件或使用“查看”。",
     "editSections": "编辑工艺章节",
     "hideSections": "收起章节"
   },
@@ -205,6 +207,14 @@
     "uploader": "上传人",
     "date": "日期",
     "download": "下载",
+    "downloadAllZip": "下载全部（ZIP）",
+    "zipPreparing": "正在准备 ZIP…",
+    "zipErrors": {
+      "tooLarge": "文档包过大，无法生成。请逐个下载文件。",
+      "access": "您无权下载这些文件。请检查生产项目权限和保密协议验证状态。",
+      "unavailable": "暂时无法生成 ZIP，请稍后重试。",
+      "failed": "ZIP 下载失败，请重试。"
+    },
     "uploadTip": "负责人和工程师可上传；每次下载均有记录。",
     "internal": "内部",
     "shared": "工厂可见",

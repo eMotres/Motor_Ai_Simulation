@@ -275,6 +275,36 @@ export function errorInfo(status: number, body: unknown): { code: string | null;
 /** Safe file name for a download. */
 export const safeFileName = (name: string): string => name.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'file';
 
+/** Only a known production member or administrator can start the bundle request. */
+export const canDownloadProductionDocuments = (role: CallerRole): boolean => role !== null;
+
+/** Relative route shared by the production ZIP client and its contract tests. */
+export const productionDocumentsZipPath = (die: string, config: string, lang: Lang): string =>
+  `/api/production/${encodeURIComponent(die)}/${encodeURIComponent(config)}/documents.zip?lang=${lang}`;
+
+/** Prefer the UTF-8 RFC 5987 name while retaining the ASCII filename fallback if decoding fails. */
+export function productionZipFilename(disposition: string, fallbackName: string): string {
+  const fallback = disposition.match(/filename\s*=\s*"?([^";]+)"?/i)?.[1] || fallbackName;
+  const encoded = disposition.match(/filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i);
+  if (encoded && encoded[1].toLowerCase() === 'utf-8') {
+    try { return safeFileName(decodeURIComponent(encoded[2].trim())); } catch { /* keep ASCII fallback */ }
+  }
+  return safeFileName(fallback);
+}
+
+export const productionZipErrorKey = (status: number | null): 'tooLarge' | 'access' | 'unavailable' | 'failed' =>
+  status === 413 ? 'tooLarge' : status === 403 ? 'access' : status === 503 ? 'unavailable' : 'failed';
+
+/** Process preview stays HTML; the download action asks the server for its PDF form. */
+export const productionProcessDocumentPath = (die: string, config: string, lang: Lang, mode: 'view' | 'download'): string =>
+  `/api/production/${encodeURIComponent(die)}/${encodeURIComponent(config)}/process_document?lang=${lang}${mode === 'download' ? '&download=true' : ''}`;
+
+export const productionProcessDocumentFilename = (die: string, config: string, lang: Lang): string =>
+  safeFileName(`${die}_${config}_process_${lang}.pdf`);
+
+export const processDocumentErrorKey = (mode: 'view' | 'download', status: number | null): 'pdfTooLarge' | 'pdfUnavailable' | null =>
+  mode !== 'download' ? null : status === 413 ? 'pdfTooLarge' : status === 503 ? 'pdfUnavailable' : null;
+
 // -- Procurement & Timeline ------------------------------------------------------------------------------------------------
 
 export const canEditProcurement = (role: CallerRole): boolean =>

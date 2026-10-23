@@ -372,11 +372,17 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/propellers/cooling-options"), ("GET", "/api/propellers/{prop_id}/s1"), ("GET", "/api/system/graph"),
     # bearing fit / holder strength: a hidden configuration answers 404 in-route (_gate_config), tested below
     ("GET", "/api/mechanical/bearing_fit"), ("GET", "/api/mechanical/holder_strength"), ("POST", "/api/mechanical/holder_fem_job"),
+    # linking a motor to a development project: needs a project, so a hidden configuration answers like a missing one in
+    # tests/test_development_stage1b_review.py (development.motors._motor -> _require_die_access + config_visible)
+    ("POST", "/api/projects/{project_id}/motors"),
 }
 NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog configuration
     ("POST", "/api/family/save_as_new_die"), ("POST", "/api/optimization/saved"),
     ("POST", "/api/family/duplicate"),
     ("PUT", "/api/admin/dies/{die}/configs/{cfg}/access"),         # admin-only toggle, tested below
+    # unlink drops a development project's own record, reads no configuration and answers alike for any name
+    ("DELETE", "/api/projects/{project_id}/motors"),
+    ("POST", "/api/admin/projects/{project_id}/motors"), ("DELETE", "/api/admin/projects/{project_id}/motors"),  # admin-only
 }
 
 

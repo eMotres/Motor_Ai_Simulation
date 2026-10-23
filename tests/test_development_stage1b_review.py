@@ -114,6 +114,36 @@ def test_project_engineer_cannot_share_unowned_private_shared_motor(stage1b, mon
     assert users.get_stored_motor_grants(CUSTOMER).get("configs", []) == []
 
 
+def test_link_answers_a_hidden_configuration_like_a_missing_one(stage1b, monkeypatch):
+    # The die is visible to the engineer, its private CfgA is not: linking CfgA must answer exactly like a
+    # configuration that does not exist (it used to be 404 against a 500).  Swept in tests/test_config_visibility.py.
+    client, current, shared = stage1b
+    root = _write_motor(shared / "dies")
+    (root / "CfgB.yaml").write_text("name: CfgB\nvisibility: public\n", encoding="utf-8")
+    _route_shared(monkeypatch, shared)
+    users.set_motor_grants(ENGINEER, all_motors=False, dies=["MixedCaseDie"], configs=[])
+    store.create_project(_project(members=[
+        {"email": ENGINEER, "role": "engineer"},
+        {"email": CUSTOMER, "role": "customer"},
+    ]))
+    headers = {"Authorization": "Bearer test"}
+    probe = TestClient(client.app, raise_server_exceptions=False)
+
+    def link(cfg):
+        return probe.post("/api/projects/alpha/motors", headers=headers,
+                          json={"die": "MixedCaseDie", "config": cfg})
+
+    for who, role in ((ENGINEER, "user"), (ADMIN, "admin")):
+        current.update(email=who, role=role)
+        missing = link("NoSuch")
+        assert missing.status_code == 404, (who, missing.text)
+        if who == ENGINEER:
+            hidden = link("CfgA")
+            assert hidden.status_code == 404
+            assert hidden.text.replace("CfgA", "<CFG>") == missing.text.replace("NoSuch", "<CFG>")
+    assert users.get_stored_motor_grants(CUSTOMER).get("configs", []) == []
+
+
 def test_unlink_is_add_only_and_preserves_manual_and_project_grants(stage1b, monkeypatch):
     client, _current, shared = stage1b
     _write_motor(shared / "dies")

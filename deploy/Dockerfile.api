@@ -35,10 +35,11 @@
 FROM python:3.11-slim AS base
 
 # gmsh + OCP (cadquery) native runtime libs; libgomp for MKL/OpenMP;
-# fonts-dejavu-core for the reportlab fallback path (see above).
+# fonts-dejavu-core for reportlab's existing symbol fallback, plus WQY Zen Hei
+# for embedded Chinese process-document PDFs (production/process_pdf.py).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 \
-        libgomp1 fonts-dejavu-core curl \
+        libgomp1 fonts-dejavu-core fonts-wqy-zenhei curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root service account.  Fixed uid/gid so the host bind mounts under

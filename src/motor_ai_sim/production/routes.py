@@ -6,8 +6,17 @@ web/src/modules/production/api.ts.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
+import tempfile
+import zipfile
+import hashlib
+import datetime
+import re
+import unicodedata
 from typing import Any, Optional
+from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -804,6 +813,90 @@ def freeze_schedule_baseline(request: Request, die: str, config: str):
 
 # ── process ──────────────────────────────────────────────────────────────────
 
+def _render_process_document(die: str, config: str, lang: str) -> str:
+    return _process_document_context(die, config, lang)[-1]
+
+
+def _process_document_context(die: str, config: str, lang: str):
+    from motor_ai_sim.production import process_steps as PS
+    prod = access.load_production(die, config) or {}
+    parts = (store.load_file(die, config, "parts.json") or {}).get("parts") or []
+    steps = PS.view(store.load_file(die, config, "assembly_process.json"), parts,
+                    models.product_type_of(prod))["steps"]
+    sections = (store.load_file(die, config, "process.json") or {}).get("sections") or []
+    html_doc = PS.document_html(steps, sections, "%s %s" % (die, config), prod.get("current_revision"), lang)
+    return prod, parts, steps, sections, html_doc
+
+
+def _process_step_images(die: str, config: str, user: dict, production: dict,
+                         parts: list[dict], steps: list[dict]) -> dict[int, list[dict]]:
+    """Resolve only authorized, existing image IDs associated with process steps."""
+    can_see_internal = _sees_internal(user, production)
+    blocked_ids = set() if can_see_internal else _internal_file_ids(die, config)
+    docs = (store.load_file(die, config, "documents.json") or {}).get("documents", [])
+    docs = [d for d in docs if isinstance(d, dict)]
+    # A document row is authoritative for selection, even if a part also repeats
+    # its file ID as a legacy drawing alias. Only unrepresented legacy drawings
+    # may use the raw part drawing fallback below.
+    document_file_ids = {str(d.get("file_id")) for d in docs if d.get("file_id")}
+    docs = [d for d in docs if _file_download_allowed(
+        str(d.get("file_id") or ""), die, config, user, production, blocked_ids)]
+    superseded_file_ids = {str(d.get("file_id")) for d in docs
+                           if d.get("file_id") and str(d.get("name") or d.get("filename") or "").startswith("[superseded")}
+    part_by_id = {str(p.get("id")): p for p in parts if isinstance(p, dict) and p.get("id")}
+    out: dict[int, list[dict]] = {}
+
+    def add(step_num: int, file_id: Any, name: Any) -> None:
+        file_id = str(file_id or "")
+        filename = str(name or file_id)
+        if Path(filename).suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}:
+            return
+        if not _file_download_allowed(file_id, die, config, user, production, blocked_ids):
+            return
+        existing = out.setdefault(step_num, [])
+        if any(item["file_id"] == file_id for item in existing):
+            return
+        try:
+            path = store.read_uploaded_file(die, config, file_id)
+            if path is None or not path.is_file():
+                return
+        except OSError:
+            return
+        existing.append({"file_id": file_id, "path": path, "name": filename})
+
+    for index, step in enumerate(steps):
+        number = int(step.get("n") or 0) or index + 1
+        resolved_parts = {str(p.get("id")) for p in step.get("parts_resolved") or [] if p.get("id")}
+        doc_refs = {str(ref) for ref in step.get("documents") or []}
+        current_names: set[str] = set()
+        # Match AssemblyProcess.stepDocsOf: current drawings are unscoped docs
+        # explicitly selected by document ID or linked to a resolved part.
+        # Step photos are a separate view, so retain only their explicit step link.
+        for doc in docs:
+            name = doc.get("name") or doc.get("filename")
+            if str(name or "").startswith("[superseded"):
+                continue
+            is_step_photo = doc.get("step_id") == step.get("id")
+            is_current_step_doc = (not doc.get("step_id") and
+                                   (doc.get("id") in doc_refs or
+                                    (doc.get("part_id") and str(doc.get("part_id")) in resolved_parts)))
+            if is_step_photo or (is_current_step_doc and str(name or "") not in current_names):
+                if is_current_step_doc:
+                    current_names.add(str(name or ""))
+                add(number, doc.get("file_id"), name)
+        for part_id in resolved_parts:
+            part = part_by_id.get(part_id) or {}
+            for drawing in part.get("drawing_files", []) or []:
+                if (isinstance(drawing, dict) and drawing.get("kind") == "png" and
+                        not str(drawing.get("name") or "").startswith("[superseded") and
+                        str(drawing.get("file_id") or "") not in document_file_ids and
+                        str(drawing.get("file_id") or "") not in superseded_file_ids):
+                    part_value = part.get("name")
+                    part_name = (str(part_value.get("en") or part_value.get("zh") or "Part")
+                                 if isinstance(part_value, dict) else str(part_value or "Part"))
+                    add(number, drawing.get("file_id"), drawing.get("name") or (part_name + ".png"))
+    return out
+
 @router.get("/{die}/{config}/process")
 def get_process(request: Request, die: str, config: str):
     require_member_with_full_view(request, die, config)
@@ -812,22 +905,89 @@ def get_process(request: Request, die: str, config: str):
 
 @router.get("/{die}/{config}/process_document")
 def get_process_document(request: Request, die: str, config: str, lang: str = "en", download: bool = False):
-    """The process document generated from the assembly and test steps (owner 2026-10-18): steps in the graph's
-    numbering, each with its process sections (n.1, n.2 ...); HTML to view, print or download."""
-    from motor_ai_sim.production import process_steps as PS
-    require_member_with_full_view(request, die, config)
-    prod = access.load_production(die, config) or {}
-    parts = store.load_file(die, config, "parts.json").get("parts") or []
-    steps = PS.view(store.load_file(die, config, "assembly_process.json"), parts,
-                    models.product_type_of(prod))["steps"]
-    sections = (store.load_file(die, config, "process.json") or {}).get("sections") or []
-    lang = "zh" if lang == "zh" else "en"
-    doc = PS.document_html(steps, sections, "%s %s" % (die, config), prod.get("current_revision"), lang)
+    """The process document generated from assembly/test steps; `download=true` returns an A4 PDF."""
+    user, production = require_member_with_full_view(request, die, config)
+    lang = "zh" if lang in ("zh", "zh-CN") else "en"
+    prod, parts, steps, _sections, doc = _process_document_context(die, config, lang)
     headers = {}
     if download:
-        fname = "%s_%s_process_%s.html" % (die.replace(" ", "_"), config.replace(" ", "_"), lang)
-        headers["Content-Disposition"] = 'attachment; filename="%s"' % "".join(
-            c for c in fname if c.isalnum() or c in "._-")
+        from motor_ai_sim.production import process_pdf as PDF
+        fd, temp_name = tempfile.mkstemp(prefix="production-process-", suffix=".pdf")
+        os.close(fd)
+        temp_path = Path(temp_name)
+        try:
+            images = _process_step_images(die, config, user, production, parts, steps)
+            PDF.render_process_pdf(doc, temp_path, step_images=images, lang=lang)
+            pdf_size = temp_path.stat().st_size
+            if pdf_size > MAX_PRODUCTION_ZIP_BYTES:
+                raise PDF.ProcessPdfLimitError("The process PDF exceeds the 256 MiB limit.")
+        except PDF.ProcessPdfUnavailable as exc:
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=503, detail="Process PDF is unavailable: %s" % exc)
+        except PDF.ProcessPdfLimitError as exc:
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=413, detail=str(exc))
+        except PDF.ProcessPdfRenderError as exc:
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=str(exc))
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+        try:
+            import datetime as dt
+            from motor_ai_sim import model3d as M
+            identity = {**user, "id": _email(user) or str(user.get("id") or "")}
+            rec = users.get_user(identity["id"]) or {}
+            basis = M.nda_basis(identity, rec)
+            who_for = M.recipient_of(identity, rec, basis)
+            now = dt.datetime.now(dt.timezone.utc)
+            try:
+                from motor_ai_sim.client_ip import from_request
+                ip = from_request(request)
+            except Exception:  # noqa: BLE001
+                ip = "?"
+            pdf_hash = hashlib.sha256()
+            with temp_path.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    pdf_hash.update(chunk)
+            revision = str(prod.get("current_revision") or prod.get("revision") or "")
+            ascii_slug = lambda value: re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("._-") or "production"
+            filename = "%s_%s_process_%s.pdf" % (ascii_slug(die), ascii_slug(config), lang)
+            unicode_filename = "%s_%s_process_%s.pdf" % (
+                _zip_component(die, "production"), _zip_component(config, "production"), lang)
+            M.log_download(dict(download_id=M.new_download_id(now), user=identity["id"], email=who_for["email"],
+                                name=M.customer_name(identity, rec), role=user.get("role"), company=who_for["company"],
+                                nda=basis["type"] != "internal", nda_basis=basis, die=die, config=config,
+                                motor_id="%s/%s" % (die, config), kind="production_process_pdf",
+                                file=unicode_filename, source_file=None,
+                                revision=revision, file_count=1, sha256=pdf_hash.hexdigest(), bytes=pdf_size, ip=ip,
+                                user_agent=request.headers.get("user-agent", "")[:300]))
+            _audit(_email(user), die, config, "download", "process_document_pdf", revision,
+                   {"revision": revision, "lang": lang, "file_count": 1, "bytes": pdf_size})
+            headers = {"Content-Disposition": 'attachment; filename="%s"; filename*=UTF-8\'\'%s' %
+                       (filename, quote(unicode_filename, safe="")), "Cache-Control": "no-store",
+                       "Content-Length": str(pdf_size)}
+
+            def stream_pdf():
+                try:
+                    with temp_path.open("rb") as fh:
+                        while True:
+                            chunk = fh.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            yield chunk
+                finally:
+                    temp_path.unlink(missing_ok=True)
+            iterator = stream_pdf()
+            return _TempFileStreamingResponse(iterator, archive_path=temp_path, archive_iterator=iterator,
+                                              media_type="application/pdf", headers=headers)
+        except OSError as ex:
+            temp_path.unlink(missing_ok=True)
+            log.error("production: process PDF download log not writable (%s) - download refused", ex)
+            raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
     return Response(content=doc.encode("utf-8"), media_type="text/html; charset=utf-8", headers=headers)
 
 
@@ -859,6 +1019,16 @@ def _sees_internal(user: dict, production: dict) -> bool:
 def _internal_file_ids(die: str, config: str) -> set:
     return {d.get("file_id") for d in (store.load_file(die, config, "documents.json") or {}).get("documents", [])
             if d.get("internal")}
+
+
+def _file_download_allowed(file_id: str, die: str, config: str, user: dict, production: dict,
+                           blocked_file_ids: Optional[set] = None) -> bool:
+    """Shared per-file rule for direct and bundled downloads."""
+    if not store.valid_file_id(file_id):
+        return False
+    if blocked_file_ids is None:
+        blocked_file_ids = set() if _sees_internal(user, production) else _internal_file_ids(die, config)
+    return file_id not in blocked_file_ids
 
 
 @router.get("/{die}/{config}/documents")
@@ -927,10 +1097,8 @@ def download_file(request: Request, die: str, config: str, file_id: str):
     (model3d.log_download: who, company, NDA basis, sha256, IP) plus the production audit."""
     import datetime
     from motor_ai_sim import model3d as M
-    if not store.valid_file_id(file_id):
-        raise HTTPException(status_code=404, detail="File not found")
     user, _production = require_member_with_full_view(request, die, config)
-    if not _sees_internal(user, _production) and file_id in _internal_file_ids(die, config):
+    if not _file_download_allowed(file_id, die, config, user, _production):
         raise HTTPException(status_code=404, detail="File not found")
     path = store.read_uploaded_file(die, config, file_id)
     if path is None:
@@ -977,6 +1145,328 @@ def _original_name(die: str, config: str, file_id: str) -> Optional[str]:
                 if a.get("file_id") == file_id:
                     return a.get("name")
     return None
+
+
+class _Utf8ZipInfo(zipfile.ZipInfo):
+    """Force the UTF-8 language flag for every member, including ASCII names."""
+    def _encodeFilenameFlags(self):
+        return self.filename.encode("utf-8"), self.flag_bits | 0x800
+
+
+class _TempFileStreamingResponse(StreamingResponse):
+    """Ensure staged archives are removed even if ASGI send fails before iteration."""
+    def __init__(self, *args, archive_path: Path, archive_iterator, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.archive_path = archive_path
+        self.archive_iterator = archive_iterator
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                self.archive_iterator.close()
+            except (OSError, RuntimeError):
+                pass
+            iterator = getattr(self, "body_iterator", None)
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except RuntimeError:
+                    # The task group may still be unwinding the iterator after a send failure.
+                    pass
+            try:
+                self.archive_path.unlink(missing_ok=True)
+            except OSError:
+                log.warning("production: could not remove staged archive %s", self.archive_path)
+
+
+MAX_PRODUCTION_ZIP_BYTES = 256 * 1024 * 1024
+MAX_PRODUCTION_ZIP_FILES = 5000
+
+
+def _zip_component(value: str, fallback: str = "document", max_bytes: int = 180) -> str:
+    """Make a readable ZIP component that cannot escape its folder."""
+    value = str(value or "").replace("\\", "/").split("/")[-1]
+    value = "".join(c for c in value if unicodedata.category(c) != "Cc" and c not in '<>:"|?*')
+    value = value.strip(" .")
+    stem = value.split(".", 1)[0].rstrip(" ").casefold()
+    if stem in {"con", "prn", "aux", "nul", *("com%d" % n for n in range(1, 10)), *("lpt%d" % n for n in range(1, 10))}:
+        value = "_" + value
+    if not value:
+        return fallback
+    stem, ext = os.path.splitext(value)
+    ext_bytes = ext.encode("utf-8")
+    if len(ext_bytes) >= max_bytes:
+        # Keep a useful suffix even for malformed names with a huge extension.
+        ext = ext[:max_bytes // 2]
+        while len(ext.encode("utf-8")) > max_bytes // 2:
+            ext = ext[:-1]
+        stem = ""
+    stem_budget = max(0, max_bytes - len(ext.encode("utf-8")))
+    encoded = stem.encode("utf-8")[:stem_budget]
+    while True:
+        try:
+            stem = encoded.decode("utf-8")
+            break
+        except UnicodeDecodeError:
+            encoded = encoded[:-1]
+    return (stem + ext) or fallback
+
+
+def _unique_zip_name(folder: str, name: str, used: set[str]) -> str:
+    base = _zip_component(name)
+    path = "%s/%s" % (folder, base)
+    if path.casefold() not in used:
+        used.add(path.casefold())
+        return path
+    idx = 2
+    while True:
+        suffix = " (%d)" % idx
+        base = _zip_component(name, max_bytes=180 - len(suffix.encode("utf-8")))
+        stem, ext = os.path.splitext(base)
+        path = "%s/%s%s%s" % (folder, stem or base, suffix, ext)
+        if path.casefold() not in used:
+            break
+        idx += 1
+    used.add(path.casefold())
+    return path
+
+
+def _archive_candidates(die: str, config: str, user: dict, production: dict) -> list[dict]:
+    """Resolve only files reachable from the module's existing downloadable views."""
+    can_see_internal = _sees_internal(user, production)
+    blocked_file_ids = set() if can_see_internal else _internal_file_ids(die, config)
+    candidates: dict[str, dict] = {}
+
+    def add(file_id: Any, name: Any, folder: str) -> None:
+        file_id = str(file_id or "")
+        if not _file_download_allowed(file_id, die, config, user, production, blocked_file_ids):
+            return
+        # The same uploaded file can be referenced in a document row and a part drawing.
+        if file_id not in candidates:
+            candidates[file_id] = {"file_id": file_id, "name": str(name or file_id), "folder": folder}
+
+    docs = (store.load_file(die, config, "documents.json") or {}).get("documents", [])
+    for doc in docs:
+        if isinstance(doc, dict):
+            name = doc.get("name") or doc.get("filename") or _original_name(die, config, str(doc.get("file_id") or ""))
+            folder = "process" if doc.get("step_id") else ("parts-BOM" if doc.get("part_id") else "documents")
+            add(doc.get("file_id"), name, folder)
+
+    for thread in (store.load_file(die, config, "threads.json") or {}).get("threads", []):
+        if not isinstance(thread, dict):
+            continue
+        for message in thread.get("messages", []) or []:
+            if not isinstance(message, dict):
+                continue
+            for attachment in message.get("attachments", []) or []:
+                if isinstance(attachment, dict):
+                    add(attachment.get("file_id"), attachment.get("name"), "documents")
+
+    parts = (store.load_file(die, config, "parts.json") or {}).get("parts", [])
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        part_name_value = part.get("name")
+        part_name = (str(part_name_value.get("en") or part_name_value.get("zh") or "")
+                     if isinstance(part_name_value, dict) else str(part_name_value or ""))
+        for index, drawing in enumerate(part.get("drawing_files", []) or [], 1):
+            if isinstance(drawing, dict):
+                suffix = ".pdf" if drawing.get("kind") == "pdf" else ".png"
+                fallback = "%s drawing %d%s" % (_zip_component(part_name, "Part"), index, suffix)
+                add(drawing.get("file_id"), drawing.get("name") or fallback, "drawings")
+        optional = part.get("optional_step")
+        if isinstance(optional, dict):
+            add(optional.get("file_id"), "%s optional step.step" % _zip_component(part_name, "Part"), "drawings")
+    return list(candidates.values())
+
+
+@router.get("/{die}/{config}/documents.zip")
+def download_documents_zip(request: Request, die: str, config: str, lang: str = "en"):
+    """Download all production files visible to this caller in one streamed ZIP.
+
+    The process PDF follows the requested page language; HTML is used only when
+    the PDF renderer or its CJK font is unavailable and the manifest says so.
+    Costs JSON is not a downloadable file today; internal document rows remain hidden
+    from OEM members independently of the shared-cost setting.
+    """
+    if lang not in ("en", "zh", "zh-CN"):
+        raise HTTPException(status_code=422, detail="lang must be 'en' or 'zh'")
+    lang = "zh" if lang in ("zh", "zh-CN") else "en"
+    user, production = require_member_with_full_view(request, die, config)
+    revision = str(production.get("current_revision") or "1.0")
+    candidates = _archive_candidates(die, config, user, production)
+    resolved: list[dict] = []
+    missing: list[str] = []
+    missing_seen: set[str] = set()
+    total_source_bytes = 0
+    for candidate in candidates:
+        try:
+            path = store.read_uploaded_file(die, config, candidate["file_id"])
+            size = path.stat().st_size if path is not None else None
+        except OSError:
+            path, size = None, None
+        if path is None or size is None:
+            missing_name = candidate["folder"] + "/" + _zip_component(candidate["name"])
+            if missing_name not in missing_seen:
+                missing.append(missing_name)
+                missing_seen.add(missing_name)
+            continue
+        total_source_bytes += size
+        resolved.append({**candidate, "path": path, "size": size})
+
+    if total_source_bytes > MAX_PRODUCTION_ZIP_BYTES:
+        raise HTTPException(status_code=413, detail="Production documents exceed the 256 MiB ZIP limit.")
+    # Two generated entries are always present: one process document and MANIFEST.txt.
+    if len(resolved) + 2 > MAX_PRODUCTION_ZIP_FILES:
+        raise HTTPException(status_code=413, detail="Production ZIP exceeds the %d entry limit." % MAX_PRODUCTION_ZIP_FILES)
+
+    fd, temp_name = tempfile.mkstemp(prefix="production-documents-", suffix=".zip")
+    os.close(fd)
+    temp_path = Path(temp_name)
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    used: set[str] = set()
+    manifest_rows: list[str] = []
+    written_count = 0
+    archive_bytes = 0
+    try:
+        prod, parts, steps, _sections, process_html_text = _process_document_context(die, config, lang)
+        process_html = process_html_text.encode("utf-8")
+        process_payload_path: Optional[Path] = None
+        process_fallback_note = ""
+        from motor_ai_sim.production import process_pdf as PDF
+        with tempfile.TemporaryDirectory(prefix="production-process-zip-") as work_dir:
+            process_payload_path = Path(work_dir) / "process.pdf"
+            try:
+                images = _process_step_images(die, config, user, production, parts, steps)
+                PDF.render_process_pdf(process_html_text, process_payload_path, step_images=images, lang=lang)
+                process_payload_size = process_payload_path.stat().st_size
+                process_entry_name = "%s_%s_process_%s.pdf" % (die, config, lang)
+                process_payload_is_pdf = True
+            except PDF.ProcessPdfUnavailable as exc:
+                process_payload_path = None
+                process_payload_size = len(process_html)
+                process_entry_name = "%s_%s_process_%s.html" % (die, config, lang)
+                process_payload_is_pdf = False
+                process_fallback_note = "Process PDF renderer or CJK font unavailable; HTML included instead."
+            except PDF.ProcessPdfLimitError as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
+            except PDF.ProcessPdfRenderError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            total_source_bytes += process_payload_size
+            if total_source_bytes > MAX_PRODUCTION_ZIP_BYTES:
+                raise HTTPException(status_code=413, detail="Production documents exceed the 256 MiB ZIP limit.")
+
+            with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+                for item in resolved:
+                    archive_name = _unique_zip_name(item["folder"], item["name"], used)
+                    try:
+                        with item["path"].open("rb") as source, zf.open(_Utf8ZipInfo(archive_name), "w") as target:
+                            item_bytes = 0
+                            while True:
+                                chunk = source.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                archive_bytes += len(chunk)
+                                item_bytes += len(chunk)
+                                if archive_bytes + process_payload_size > MAX_PRODUCTION_ZIP_BYTES:
+                                    raise HTTPException(status_code=413, detail="Production documents exceed the 256 MiB ZIP limit.")
+                                target.write(chunk)
+                        written_count += 1
+                        manifest_rows.append("OK\t%s\t%d bytes" % (archive_name, item_bytes))
+                    except FileNotFoundError:
+                        if archive_name not in missing_seen:
+                            missing.append(archive_name)
+                            missing_seen.add(archive_name)
+                process_name = _unique_zip_name("process", process_entry_name, used)
+                if process_payload_is_pdf and process_payload_path is not None:
+                    process_entry_bytes = 0
+                    with process_payload_path.open("rb") as source, zf.open(_Utf8ZipInfo(process_name), "w") as target:
+                        while True:
+                            chunk = source.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            process_entry_bytes += len(chunk)
+                            archive_bytes += len(chunk)
+                            if archive_bytes > MAX_PRODUCTION_ZIP_BYTES:
+                                raise HTTPException(status_code=413, detail="Production documents exceed the 256 MiB ZIP limit.")
+                            target.write(chunk)
+                    written_count += 1
+                    manifest_rows.append("OK\t%s\t%d bytes" % (process_name, process_entry_bytes))
+                else:
+                    zf.writestr(_Utf8ZipInfo(process_name), process_html)
+                    written_count += 1
+                    archive_bytes += len(process_html)
+                    manifest_rows.append("OK\t%s\t%d bytes" % (process_name, len(process_html)))
+                    manifest_rows.append("NOTE\t%s" % process_fallback_note)
+                for name in missing:
+                    manifest_rows.append("MISSING\t%s" % name)
+                manifest = "Production documents\nRevision: %s\nGenerated (UTC): %s\nLanguage: %s\nFiles included: %d\nBytes included: %d\n\n%s\n" % (
+                    revision, generated_at, lang, written_count, archive_bytes, "\n".join(manifest_rows))
+                zf.writestr(_Utf8ZipInfo("MANIFEST.txt"), manifest.encode("utf-8"))
+        archive_size = temp_path.stat().st_size
+        if archive_size > MAX_PRODUCTION_ZIP_BYTES:
+            raise HTTPException(status_code=413, detail="Production ZIP exceeds the 256 MiB archive limit.")
+        archive_sha256 = hashlib.sha256()
+        with temp_path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                archive_sha256.update(chunk)
+        import datetime as dt
+        from motor_ai_sim import model3d as M
+        identity = {**user, "id": _email(user) or str(user.get("id") or "")}
+        rec = users.get_user(identity["id"]) or {}
+        basis = M.nda_basis(identity, rec)
+        who_for = M.recipient_of(identity, rec, basis)
+        now = dt.datetime.now(dt.timezone.utc)
+        try:
+            from motor_ai_sim.client_ip import from_request
+            ip = from_request(request)
+        except Exception:  # noqa: BLE001
+            ip = "?"
+        try:
+            M.log_download(dict(download_id=M.new_download_id(now), user=identity["id"], email=who_for["email"],
+                                name=M.customer_name(identity, rec), role=user.get("role"), company=who_for["company"],
+                                nda=basis["type"] != "internal", nda_basis=basis, die=die, config=config,
+                                motor_id="%s/%s" % (die, config), kind="production_archive",
+                                file="%s_rev%s_documents.zip" % (die, revision), source_file=None,
+                                revision=revision, file_count=written_count,
+                                sha256=archive_sha256.hexdigest(), bytes=archive_size, ip=ip,
+                                user_agent=request.headers.get("user-agent", "")[:300]))
+        except OSError as ex:
+            log.error("production: archive download log not writable (%s) - download refused", ex)
+            raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
+        _audit(_email(user), die, config, "download", "documents_zip", revision,
+               {"revision": revision, "file_count": written_count, "bytes": archive_size})
+    except Exception:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+    def stream_and_cleanup():
+        try:
+            with temp_path.open("rb") as fh:
+                while True:
+                    chunk = fh.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    ascii_slug = lambda value: re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("._-") or "production"
+    filename = "%s_%s_rev%s_documents.zip" % (ascii_slug(die), ascii_slug(config), ascii_slug(revision))
+    unicode_filename = "%s_%s_rev%s_documents.zip" % (
+        _zip_component(die, "production"), _zip_component(config, "production"), _zip_component(revision, "1.0"))
+    disposition = 'attachment; filename="%s"; filename*=UTF-8\'\'%s' % (filename, quote(unicode_filename, safe=""))
+    archive_iterator = stream_and_cleanup()
+    return _TempFileStreamingResponse(archive_iterator, archive_path=temp_path, archive_iterator=archive_iterator,
+                                      media_type="application/zip",
+                                      headers={"Content-Disposition": disposition, "Cache-Control": "no-store",
+                                               "Content-Length": str(archive_size)})
 
 
 # ── threads / messages ───────────────────────────────────────────────────────

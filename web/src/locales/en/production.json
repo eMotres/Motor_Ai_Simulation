@@ -183,7 +183,9 @@
     "docTitle": "Process document",
     "docTip": "Generated from the assembly and test steps: the steps in the graph's numbering, each with its process sections (n.1, n.2 ...).",
     "view": "View",
-    "download": "Download",
+    "download": "Download PDF",
+    "pdfUnavailable": "PDF generation is unavailable. Please try again later.",
+    "pdfTooLarge": "The document or its images are too large to prepare as a PDF. Download files individually or use View.",
     "editSections": "Edit process sections",
     "hideSections": "Hide sections"
   },
@@ -205,6 +207,14 @@
     "uploader": "Uploaded by",
     "date": "Date",
     "download": "Download",
+    "downloadAllZip": "Download all (ZIP)",
+    "zipPreparing": "Preparing ZIP…",
+    "zipErrors": {
+      "tooLarge": "The document bundle is too large to prepare. Download files individually.",
+      "access": "You cannot download these documents. Check production access and NDA verification.",
+      "unavailable": "The ZIP could not be prepared. Please try again shortly.",
+      "failed": "The ZIP download failed. Please try again."
+    },
     "uploadTip": "Owner and engineer upload; every download is traced.",
     "internal": "Internal",
     "shared": "Factory sees",

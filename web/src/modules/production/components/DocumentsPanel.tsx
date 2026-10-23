@@ -1,12 +1,13 @@
 /** Documents: upload (owner/engineer/admin) and traced download (every member). */
 import React, { useRef, useState } from 'react';
-import { Box, Button, Chip, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { PartName } from './PartName';
 import HelpTip from '../../../components/common/HelpTip';
 import ProcessView from './ProcessView';
 import { useAuth } from '../../../contexts/AuthContext';
-import { downloadFile, openFileInNewWindow, processDocument, productionApi } from '../api';
+import { downloadDocumentsZip, downloadFile, openFileInNewWindow, processDocument, ProductionApiError, productionApi } from '../api';
+import { canDownloadProductionDocuments, processDocumentErrorKey, productionZipErrorKey } from '../helpers';
 import {
   canShareLink, documentsForLink, latestUploadDay, productionLinkUrl, validDay, type ProductionLink,
 } from '../../../lib/productionLink';
@@ -30,6 +31,9 @@ const DocumentsPanel: React.FC<{
   const canShare = canShareLink(ctx.role, isAdmin);
   const [sinceDay, setSinceDay] = useState<string>(() => link?.since || latestUploadDay(documents) || new Date().toISOString().slice(0, 10));
   const [copied, setCopied] = useState<'all' | 'new' | null>(null);
+  const [zipBusy, setZipBusy] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
+  const [processError, setProcessError] = useState<string | null>(null);
   const view = documentsForLink(documents, link);
   const copyLink = (kind: 'all' | 'new') => {
     const url = productionLinkUrl(window.location.origin, { die: ctx.die, config: ctx.config, ...(kind === 'new' ? { since: sinceDay } : {}) });
@@ -42,8 +46,24 @@ const DocumentsPanel: React.FC<{
   const [err, setErr] = useState<string | null>(null);
   const byId = new Map(parts.map((p) => [p.id, p]));
   const [showSections, setShowSections] = useState(false);
-  const procDoc = (lang: 'en' | 'zh', mode: 'view' | 'download') =>
-    void processDocument(ctx.die, ctx.config, lang, mode).catch((e) => setErr(t('failed', { reason: String(e) })));
+  const procDoc = (lang: 'en' | 'zh', mode: 'view' | 'download') => {
+    setProcessError(null);
+    void processDocument(ctx.die, ctx.config, lang, mode).catch((e) => {
+      const status = e instanceof ProductionApiError ? e.status : null;
+      const key = processDocumentErrorKey(mode, status);
+      setProcessError(key ? t(`process.${key}`) : t('failed', { reason: String(e) }));
+    });
+  };
+
+  const downloadZip = async () => {
+    setZipBusy(true); setZipError(null);
+    try { await downloadDocumentsZip(ctx.die, ctx.config, ctx.uiLang); }
+    catch (e) {
+      const status = e instanceof ProductionApiError ? e.status : null;
+      setZipError(t(`docs.zipErrors.${productionZipErrorKey(status)}`));
+    }
+    finally { setZipBusy(false); }
+  };
 
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -60,6 +80,11 @@ const DocumentsPanel: React.FC<{
       {/* the process document, generated from the assembly and test steps (owner 2026-10-18); its sections are edited here */}
       <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.25, mb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {canDownloadProductionDocuments(ctx.role) && <Button size="small" variant="contained" disabled={zipBusy} sx={{ textTransform: 'none' }}
+            startIcon={zipBusy ? <CircularProgress size={14} color="inherit" /> : undefined} onClick={() => void downloadZip()}>
+            {zipBusy ? t('docs.zipPreparing') : t('docs.downloadAllZip')}
+          </Button>}
+          {zipError && <Typography role="alert" sx={{ fontSize: 11, color: '#f87171' }}>{zipError}</Typography>}
           <Typography sx={{ fontSize: 13.5, fontWeight: 800 }}>{t('process.docTitle', 'Process document')}</Typography>
           <HelpTip title={t('process.docTip')} />
           <Box sx={{ flex: 1 }} />
@@ -69,6 +94,7 @@ const DocumentsPanel: React.FC<{
               <Button size="small" sx={{ textTransform: 'none' }} onClick={() => procDoc(lg, 'download')}>{t('process.download', 'Download')} {lg === 'en' ? 'EN' : '中文'}</Button>
             </React.Fragment>
           ))}
+          {processError && <Typography role="alert" sx={{ fontSize: 11, color: '#f87171' }}>{processError}</Typography>}
           {ctx.canEdit && <Button size="small" variant="outlined" sx={{ textTransform: 'none' }} onClick={() => setShowSections((v) => !v)}>
             {showSections ? t('process.hideSections', 'Hide sections') : t('process.editSections', 'Edit process sections')}</Button>}
         </Box>

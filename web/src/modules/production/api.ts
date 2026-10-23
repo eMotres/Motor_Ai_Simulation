@@ -1,6 +1,6 @@
 // Production module — fetch wrappers for /api/production/* and /api/admin/production/*
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
-import { errorInfo, safeFileName, unwrapList } from './helpers';
+import { errorInfo, productionDocumentsZipPath, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
   AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
   ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
@@ -53,17 +53,37 @@ export async function downloadFile(die: string, config: string, fileId: string, 
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** Download the caller-authorized production document bundle. The response is read as one Blob,
+ *  avoiding a second application-level copy while the browser saves large ZIP files. */
+export async function downloadDocumentsZip(die: string, config: string, lang: 'en' | 'zh'): Promise<void> {
+  const r = await fetch(`${API}${productionDocumentsZipPath(die, config, lang)}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    const e = errorInfo(r.status, body);
+    throw new ProductionApiError(r.status, e.code, e.message);
+  }
+  const blob = await r.blob();
+  const disposition = r.headers.get('content-disposition') || '';
+  const name = productionZipFilename(disposition, `${die}_${config}_documents.zip`);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 /** The process document generated from the assembly steps (owner 2026-10-18): open it in a new window or download it. */
 export async function processDocument(die: string, config: string, lang: 'en' | 'zh', mode: 'view' | 'download'): Promise<void> {
   const w = mode === 'view' ? window.open('', '_blank') : null;
   try {
-    const r = await fetch(`${API}${base(die, config)}/process_document?lang=${lang}`);
+    const r = await fetch(`${API}${productionProcessDocumentPath(die, config, lang, mode)}`);
     if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
-    const url = URL.createObjectURL(new Blob([await r.blob()], { type: 'text/html;charset=utf-8' }));
+    const type = mode === 'download' ? 'application/pdf' : 'text/html;charset=utf-8';
+    const url = URL.createObjectURL(new Blob([await r.blob()], { type }));
     if (mode === 'view') { if (w) w.location.href = url; else window.location.href = url; }
     else {
       const a = document.createElement('a');
-      a.href = url; a.download = safeFileName(`${die}_${config}_process_${lang}.html`);
+      a.href = url; a.download = productionProcessDocumentFilename(die, config, lang);
       document.body.appendChild(a); a.click(); a.remove();
     }
     window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);

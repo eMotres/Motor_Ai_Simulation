@@ -80,6 +80,46 @@ t('caller standing and what each role may do', () => {
   assert.equal(H.canAckRole('oem'), true);
 });
 
+t('ZIP download visibility and route follow member role and selected language', () => {
+  for (const role of ['owner', 'engineer', 'oem', 'admin']) assert.equal(H.canDownloadProductionDocuments(role), true);
+  assert.equal(H.canDownloadProductionDocuments(null), false);
+  assert.equal(H.productionDocumentsZipPath('L12/alpha', '40%', 'zh'), '/api/production/L12%2Falpha/40%25/documents.zip?lang=zh');
+  assert.equal(H.productionDocumentsZipPath('L12', '40', 'en'), '/api/production/L12/40/documents.zip?lang=en');
+});
+
+t('ZIP filename prefers decoded RFC 5987 UTF-8 revision name and falls back safely', () => {
+  assert.equal(H.productionZipFilename(
+    `attachment; filename="L12_rev1.2_documents.zip"; filename*=UTF-8''L12_%E8%BD%B4_rev1.2_documents.zip`,
+    'fallback.zip',
+  ), 'L12_\u8f74_rev1.2_documents.zip');
+  assert.equal(H.productionZipFilename(
+    `attachment; filename="L12_rev1.2_documents.zip"; filename*=UTF-8''%E0%A4%A`,
+    'fallback.zip',
+  ), 'L12_rev1.2_documents.zip');
+  assert.equal(H.productionZipFilename('attachment', 'fallback.zip'), 'fallback.zip');
+});
+
+t('ZIP error status maps to a localized UI message key', () => {
+  assert.equal(H.productionZipErrorKey(413), 'tooLarge');
+  assert.equal(H.productionZipErrorKey(403), 'access');
+  assert.equal(H.productionZipErrorKey(503), 'unavailable');
+  assert.equal(H.productionZipErrorKey(500), 'failed');
+  assert.equal(H.productionZipErrorKey(null), 'failed');
+});
+
+t('process document view stays HTML while download requests and names a PDF', () => {
+  assert.equal(H.productionProcessDocumentPath('L12', '40', 'en', 'view'),
+    '/api/production/L12/40/process_document?lang=en');
+  assert.equal(H.productionProcessDocumentPath('L12', '40', 'zh', 'download'),
+    '/api/production/L12/40/process_document?lang=zh&download=true');
+  assert.equal(H.productionProcessDocumentFilename('L12', '40', 'zh'), 'L12_40_process_zh.pdf');
+  assert.equal(H.processDocumentErrorKey('download', 503), 'pdfUnavailable');
+  assert.equal(H.processDocumentErrorKey('download', 413), 'pdfTooLarge');
+  assert.equal(H.processDocumentErrorKey('view', 503), null);
+  assert.equal(H.processDocumentErrorKey('view', 413), null);
+  assert.equal(H.processDocumentErrorKey('download', 500), null);
+});
+
 t('OEM members without a signed NDA are flagged; other roles are not', () => {
   const p = {
     members: [{ email: 'p@x.com', role: 'oem' }, { email: 'e@x.com', role: 'engineer' }],

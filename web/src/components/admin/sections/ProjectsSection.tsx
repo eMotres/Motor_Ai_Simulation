@@ -1,7 +1,7 @@
 /** Admin view for Development projects and their access links. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Autocomplete, Box, Button, Chip, CircularProgress, Divider, Drawer, IconButton, MenuItem,
+  Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Drawer, IconButton, MenuItem,
   Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -9,9 +9,11 @@ import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useTranslation } from 'react-i18next';
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
-import type { ProjectMember, ProjectStatus } from '../../../modules/development/types';
+import type { ProjectMember, ProjectMotor, ProjectMotorPickerItem, ProjectStatus } from '../../../modules/development/types';
 import { useUIStore } from '../../../stores/uiStore';
 import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, projectMotorKey, projectOpenEvent, projectOpenIntent, projectRoleBody, validProjectId } from '../adminProjectsModel';
+import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey } from '../../../modules/development/pickerModel';
+import { MotorOpenActions } from '../../../modules/development/MotorOpenActions';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const ROLES: ProjectMember['role'][] = ['customer', 'engineer', 'owner'];
@@ -21,12 +23,11 @@ const CHIP = { height: 18, fontSize: 10.5, fontWeight: 700 } as const;
 interface ProjectRow {
   id: string; title: string; customer_org?: string; status: ProjectStatus;
   completeness?: { filled_required?: number; total_required?: number; filled?: number; required?: number };
-  members: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;
+  members: ProjectMember[]; linked_motors: Array<{ die: string; config: string; status?: 'current' | 'trial' }>;
   pending_invites?: ProjectMember[];
   last_activity?: string | null;
   grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason?: string }>;
 }
-interface MotorLite { die: string; config: string }
 const msg = (j: any, status: number) => typeof j?.detail === 'string' ? j.detail : j?.detail?.message ?? `HTTP ${status}`;
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${API}${path}`, init);
@@ -43,7 +44,6 @@ const ProjectsSection: React.FC = () => {
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [rows, setRows] = useState<ProjectRow[]>([]);
   const [users, setUsers] = useState<RegistryUser[]>([]);
-  const [motors, setMotors] = useState<MotorLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -60,14 +60,12 @@ const ProjectsSection: React.FC = () => {
     const epoch = ++loadEpoch.current;
     setLoading(true); setError(null);
     try {
-      const [p, u, m] = await Promise.all([
+      const [p, u] = await Promise.all([
         request<{ projects: ProjectRow[] }>('/api/admin/projects'),
         request<{ users: RegistryUser[] }>('/api/auth/users').catch(() => ({ users: [] })),
-        request<{ dies?: Array<{ name: string; config_names?: string[] }> }>('/api/admin/dies').catch(() => ({ dies: [] })),
       ]);
       if (epoch !== loadEpoch.current) return;
       setRows(p.projects ?? []); setUsers(u.users ?? []);
-      setMotors((m.dies ?? []).flatMap((d) => (d.config_names ?? []).map((config) => ({ die: d.name, config }))));
     } catch (e) { if (epoch === loadEpoch.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (epoch === loadEpoch.current) setLoading(false); }
   }, []);
@@ -113,7 +111,7 @@ const ProjectsSection: React.FC = () => {
       })}{filtered.length === 0 && <TableRow><TableCell colSpan={6} sx={{ textAlign: 'center', color: 'var(--text-4)', py: 3 }}>{t('projects.empty')}</TableCell></TableRow>}</TableBody>
     </Table></Paper>}
     <Drawer anchor="right" open={!!current} onClose={() => setSelectedId(null)} PaperProps={{ sx: { width: { xs: '100%', sm: 430 }, bgcolor: 'var(--panel)', p: 2.5, overflowY: 'auto' } }}>
-      {current && <ProjectDrawer project={current} users={users} motors={motors} onClose={() => setSelectedId(null)} onChanged={changed} onManageGrants={setCandidateUser} onOpenProject={() => { const intent = projectOpenIntent(current.id); try { sessionStorage.setItem(intent.storageKey, intent.projectId); } catch { /* Event path still opens while the page is mounted. */ } setSelectedId(null); setActiveTab('development' as never); window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: intent.projectId } })); }} />}
+      {current && <ProjectDrawer project={current} users={users} onClose={() => setSelectedId(null)} onChanged={changed} onManageGrants={setCandidateUser} onOpenProject={() => { const intent = projectOpenIntent(current.id); try { sessionStorage.setItem(intent.storageKey, intent.projectId); } catch { /* Event path still opens while the page is mounted. */ } setSelectedId(null); setActiveTab('development' as never); window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: intent.projectId } })); }} />}
     </Drawer>
     <CreateProject open={createOpen} id={createId} title={createTitle} org={createOrg} error={error} busy={creating} onId={setCreateId} onTitle={setCreateTitle} onOrg={setCreateOrg} onClose={() => setCreateOpen(false)} onCreate={() => void create()} />
     <MotorsDialog user={candidateUser} onClose={() => setCandidateUser(null)} onSaved={() => { setCandidateUser(null); changed(t('projects.grantsUpdated')); }} />
@@ -131,19 +129,28 @@ const CreateProject: React.FC<{ open: boolean; id: string; title: string; org: s
   </Drawer>;
 };
 
-const ProjectDrawer: React.FC<{ project: ProjectRow; users: RegistryUser[]; motors: MotorLite[]; onClose: () => void; onChanged: (s: string) => void; onManageGrants: (u: RegistryUser | null) => void; onOpenProject: () => void }> = ({ project, users, motors, onClose, onChanged, onManageGrants, onOpenProject }) => {
+const ProjectDrawer: React.FC<{ project: ProjectRow; users: RegistryUser[]; onClose: () => void; onChanged: (s: string) => void; onManageGrants: (u: RegistryUser | null) => void; onOpenProject: () => void }> = ({ project, users, onClose, onChanged, onManageGrants, onOpenProject }) => {
   const { t } = useTranslation('admin');
   const { t: td } = useTranslation('development');
   const [email, setEmail] = useState<string | null>(null); const [role, setRole] = useState<ProjectMember['role']>('customer');
-  const [motorKey, setMotorKey] = useState<MotorLite | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
+  const [picker, setPicker] = useState<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>({ this_project: [], catalog: [] }); const [pickerOpen, setPickerOpen] = useState(false); const [pickerSearch, setPickerSearch] = useState(''); const [unlinkTarget, setUnlinkTarget] = useState<{ die: string; config: string } | null>(null);
+  const [linkedMotors, setLinkedMotors] = useState<ProjectMotor[] | null>(null);
+  const pickerEpoch = useRef(0);
+  const linkedMotorEpoch = useRef(0);
+  const currentProjectId = useRef(project.id); currentProjectId.current = project.id;
+  const loadPicker = useCallback(async (id?: string) => { const targetId = id ?? currentProjectId.current; const epoch = ++pickerEpoch.current; try { const value = await request<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>(`/api/projects/${enc(targetId)}/motors/picker`); if (pickerEpoch.current === epoch && targetId === currentProjectId.current) setPicker(value); } catch { if (pickerEpoch.current === epoch && targetId === currentProjectId.current) setPicker({ this_project: [], catalog: [] }); } }, []);
+  const loadLinkedMotors = useCallback(async (id?: string) => { const targetId = id ?? currentProjectId.current; const epoch = ++linkedMotorEpoch.current; try { const value = await request<{ motors: ProjectMotor[] }>(`/api/projects/${enc(targetId)}/motors?show_all=true`); if (epoch === linkedMotorEpoch.current && targetId === currentProjectId.current) setLinkedMotors(value.motors ?? []); } catch { if (epoch === linkedMotorEpoch.current && targetId === currentProjectId.current) setLinkedMotors(null); } }, []);
+  useEffect(() => { setBusy(false); setError(null); setPickerOpen(false); setPickerSearch(''); setUnlinkTarget(null); setLinkedMotors(null); void loadPicker(project.id); void loadLinkedMotors(project.id); return () => { pickerEpoch.current += 1; linkedMotorEpoch.current += 1; }; }, [project.id, loadPicker, loadLinkedMotors]);
   const act = async (path: string, method: string, body?: unknown, ok = t('projects.saved')) => {
+    const id = project.id;
     setBusy(true); setError(null);
-    try { await request(path, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) }); onChanged(ok); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    try { await request(path, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) }); if (id !== currentProjectId.current) return false; onChanged(ok); await Promise.all([loadPicker(id), loadLinkedMotors(id)]); return true; }
+    catch (e) { if (id === currentProjectId.current) setError(e instanceof Error ? e.message : String(e)); return false; } finally { if (id === currentProjectId.current) setBusy(false); }
   };
   const visibleMembers = projectAdminMembers(project.members ?? [], project.pending_invites ?? []);
+  const adminMotors: ProjectMotor[] = linkedMotors ?? (project.linked_motors ?? []).map((motor) => ({ ...motor, status: motor.status ?? 'current' }));
   const memberEmails = new Set(visibleMembers.map((m) => m.email.toLowerCase()));
-  const linked = new Set((project.linked_motors ?? []).map((m) => projectMotorKey(m.die, m.config)));
   const candidateUserFor = (emailValue: string) => users.find((u) => u.email.toLowerCase() === emailValue.toLowerCase()) ?? null;
   return <>
     <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}><Box sx={{ flex: 1 }}><Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>{project.title}</Typography><Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{project.id}</Typography></Box><IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton></Box>
@@ -155,8 +162,14 @@ const ProjectDrawer: React.FC<{ project: ProjectRow; users: RegistryUser[]; moto
       {ROLES.map((r) => <MenuItem key={r} value={r}>{t(`projects.role.${r}`)}</MenuItem>)}</TextField><Button size="small" disabled={busy || !email} onClick={() => { if (email) void act(`/api/admin/projects/${enc(project.id)}/members`, 'POST', { email, role }, t('projects.memberAdded')); }} sx={{ textTransform: 'none' }}>{t('projects.add')}</Button></Box>
     <Divider sx={{ my: 1.5, borderColor: 'var(--line-soft)' }} />
     <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', mb: 0.5 }}>{t('projects.motors')}</Typography>
-    {(project.linked_motors ?? []).map((m) => <Box key={projectMotorKey(m.die, m.config)} sx={{ display: 'flex', alignItems: 'center', py: 0.2 }}><Typography sx={{ flex: 1, fontSize: 12 }}>{m.die} / {m.config}</Typography><IconButton size="small" disabled={busy} aria-label={t('projects.unlinkMotor')} onClick={() => void act(adminProjectPaths.motor(project.id, m.die, m.config), 'DELETE', undefined, t('projects.motorUnlinked'))}><CloseIcon sx={{ fontSize: 14 }} /></IconButton></Box>)}
-    <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}><Autocomplete size="small" options={motors.filter((m) => !linked.has(projectMotorKey(m.die, m.config)))} getOptionLabel={(m) => `${m.die} / ${m.config}`} value={motorKey} onChange={(_, v) => setMotorKey(v)} sx={{ flex: 1 }} renderInput={(params) => <TextField {...params} label={t('projects.motor')} />} /><Button size="small" disabled={busy || !motorKey} onClick={() => { if (motorKey) void act(adminProjectPaths.motors(project.id), 'POST', motorKey, t('projects.motorLinked')); }} sx={{ textTransform: 'none' }}>{t('projects.link')}</Button></Box>
+    {adminMotors.map((m) => <Box key={projectMotorKey(m.canonical_die ?? m.die, m.config) + (m.snapshot_id ?? '')} sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, py: 0.2 }}><Typography sx={{ flex: '1 0 100%', fontSize: 12, overflowWrap: 'anywhere' }}>{m.canonical_die ?? m.die} / {m.config}</Typography>{m.kind !== 'history' && <><MotorOpenActions motor={m} allowMotorDefault engineer t={td} /><Tooltip title={td('motorStatus.tip')}><TextField select size="small" value={m.status === 'trial' ? 'trial' : 'current'} disabled={busy} aria-label={td('motorStatus.label')} sx={{ width: 125 }} onChange={async (e) => { const status = e.target.value as 'current' | 'trial'; const motorDie = m.canonical_die ?? m.die; await act('/api/projects/' + enc(project.id) + '/motors/status', 'PATCH', { die: motorDie, config: m.config, status }, td('motorStatus.updated')); }}>{['current', 'trial'].map((status) => <MenuItem key={status} value={status}>{td(`motorStatus.${status}`)}</MenuItem>)}</TextField></Tooltip><IconButton size="small" disabled={busy} aria-label={t('projects.unlinkMotor')} onClick={() => setUnlinkTarget({ die: m.canonical_die ?? m.die, config: m.config })}><CloseIcon sx={{ fontSize: 14 }} /></IconButton></>}</Box>)}
+    <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}><Button size="small" disabled={busy} onClick={() => { setPickerOpen(true); void loadPicker(); }} sx={{ textTransform: 'none' }}>{td('linkMotor')}</Button></Box>
+    <Dialog open={pickerOpen} onClose={() => !busy && setPickerOpen(false)} fullWidth maxWidth="sm"><DialogTitle>{td('linkMotor')}</DialogTitle><DialogContent>
+      <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{td('picker.thisProject')}</Typography>{picker.this_project.map((item) => <Box key={`${item.die}/${item.config}`} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.3 }}><Tooltip title={`${item.unlinked_by ?? ''} ${item.unlinked_at ?? ''}`}><Typography sx={{ flex: 1, fontSize: 11 }}>{pickerDisplayLabel(item, td)} · {item.die}/{item.config}</Typography></Tooltip><Tooltip title={item.disabled ? td(pickerReasonKey(item.reason)) : ''}><span><Button size="small" disabled={busy || item.disabled} onClick={() => void act(adminProjectPaths.motors(project.id), 'POST', { die: item.die, config: item.config }, td('picker.restored'))}>{td('picker.restore')}</Button></span></Tooltip></Box>)}
+      <Divider sx={{ my: 1 }} /><Typography sx={{ fontSize: 12, fontWeight: 700 }}>{td('picker.catalog')}</Typography><TextField size="small" fullWidth placeholder={td('picker.search')} value={pickerSearch} onChange={(e) => setPickerSearch(e.target.value)} sx={{ my: 0.75 }} />
+      <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>{groupPickerCatalog(filterPickerCatalog(picker.catalog, pickerSearch)).map(([die, items]) => <Box key={die}><Typography sx={{ fontSize: 11, fontWeight: 700 }}>{die}</Typography>{items.map((item) => <Box key={`${die}/${item.config}`} sx={{ display: 'flex', alignItems: 'center', py: 0.25 }}><Tooltip title={item.disabled ? td(pickerReasonKey(item.reason)) : ''}><Typography sx={{ flex: 1, fontSize: 11, color: item.disabled ? 'var(--text-4)' : 'var(--text-1)' }}>{item.config} · {pickerDisplayLabel(item, td)}</Typography></Tooltip><Button size="small" disabled={busy || item.disabled} onClick={() => void act(adminProjectPaths.motors(project.id), 'POST', { die: item.die, config: item.config }, t('projects.motorLinked'))}>{td('link')}</Button></Box>)}</Box>)}</Box>
+    </DialogContent><DialogActions><Button disabled={busy} onClick={() => setPickerOpen(false)}>{td('close')}</Button></DialogActions></Dialog>
+    <Dialog open={!!unlinkTarget} onClose={() => !busy && setUnlinkTarget(null)}><DialogTitle>{td('unlink')} {unlinkTarget?.die} / {unlinkTarget?.config}?</DialogTitle><DialogContent>{td('unlinkConfirm')}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setUnlinkTarget(null)}>{td('cancel')}</Button><Button color="error" disabled={busy} onClick={async () => { if (unlinkTarget && await act(adminProjectPaths.motor(project.id, unlinkTarget.die, unlinkTarget.config), 'DELETE', undefined, t('projects.motorUnlinked'))) setUnlinkTarget(null); }}>{td('unlink')}</Button></DialogActions></Dialog>
     <Divider sx={{ my: 1.5, borderColor: 'var(--line-soft)' }} />
     <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', mb: 0.5 }}>{t('projects.grantCandidates')}</Typography>
     <Tooltip title={td('grantReviewTip')}><Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', mb: 0.5 }}>{td('grantReviewCount', { count: project.grant_removal_candidates?.length ?? 0 })}</Typography></Tooltip>

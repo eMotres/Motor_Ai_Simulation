@@ -153,9 +153,12 @@ def append_jsonl(project_id: str, name: str, entry: dict) -> None:
     ensure_writable()
     path = _file(project_id, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n"
+    line = json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\r\n"
     with json_store.lock_for(path):
-        with path.open("a", encoding="utf-8", newline="\n") as stream:
+        # The serialized line already contains CRLF. Disable newline
+        # translation so Windows does not turn it into CRCRLF and introduce
+        # blank, non-JSON audit records.
+        with path.open("a", encoding="utf-8", newline="") as stream:
             stream.write(line)
 
 
@@ -163,6 +166,90 @@ def append_audit(project_id: str, actor_email: str, action: str, entity: str, en
     from datetime import datetime, timezone
     append_jsonl(project_id, "audit.jsonl", {"time": datetime.now(timezone.utc).isoformat(), "actor_email": actor_email.lower(),
                                                "action": action, "entity": entity, "entity_id": entity_id, "details": details or {}})
+
+
+def save_snapshot(project_id: str, snapshot: dict) -> dict:
+    """Persist a versioned project-only machine snapshot; never writes catalog data."""
+    ensure_writable()
+    snapshot_id = str(snapshot.get("id") or "")
+    if not valid_id(snapshot_id):
+        raise ValueError("invalid snapshot id")
+    path = _file(project_id, f"snapshots/{snapshot_id}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with json_store.lock_for(path):
+        if path.exists():
+            raise FileExistsError(snapshot_id)
+        json_store.atomic_write_json(path, snapshot)
+    return snapshot
+
+
+def list_snapshots(project_id: str) -> list[dict]:
+    directory = _file(project_id, "snapshots")
+    if not directory.is_dir():
+        return []
+    rows = []
+    for path in sorted(directory.glob("*.json")):
+        value = _read(path, None)
+        if isinstance(value, dict) and value.get("version") == 1:
+            rows.append(value)
+    return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
+
+
+def motor_history(project_id: str, project: dict | None = None) -> list[dict]:
+    """Read stage-3 events plus legacy audit/grant history for Restore rows."""
+    project = project if isinstance(project, dict) else get_project(project_id) or {}
+    rows = [dict(row) for row in project.get("motor_history", []) if isinstance(row, dict)]
+    known = {(str(row.get("die") or "").casefold(), str(row.get("config") or "").casefold())
+             for row in rows}
+    audit_path = _file(project_id, "audit.jsonl")
+    events: dict[tuple[str, str], list[dict]] = {}
+    try:
+        with audit_path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(event, dict) or event.get("entity") != "motor":
+                    continue
+                die, sep, config = str(event.get("entity_id") or "").partition("/")
+                if not sep or not die or not config or event.get("action") not in ("motor.link", "motor.unlink"):
+                    continue
+                events.setdefault((die.casefold(), config.casefold()), []).append({
+                    "die": die, "config": config, "action": event.get("action"),
+                    "time": event.get("time"), "actor": event.get("actor_email") or ""})
+    except OSError:
+        pass
+    for key, history in events.items():
+        if key in known:
+            continue
+        linked_at = linked_by = None
+        for event in history:
+            if event["action"] == "motor.link":
+                linked_at, linked_by = event["time"], event["actor"]
+            else:
+                rows.append({"die": event["die"], "config": event["config"],
+                             "linked_at": linked_at, "linked_by": linked_by,
+                             "unlinked_at": event["time"], "unlinked_by": event["actor"]})
+                linked_at = linked_by = None
+        if linked_at or linked_by:
+            rows.append({"die": history[-1]["die"], "config": history[-1]["config"],
+                         "linked_at": linked_at, "linked_by": linked_by})
+    # Stage 2 projects already kept a provenance ledger for project-added grants;
+    # use its canonical identities as an unknown-time fallback when logs are absent.
+    for key, item in (project.get("project_motor_grants") or {}).items():
+        if isinstance(item, dict):
+            grant = str(item.get("grant_key") or "")
+            die, sep, config = grant.partition("/")
+        else:
+            die, sep, config = str(key).partition("\0")
+        identity = (die.casefold(), config.casefold())
+        if sep and die and config and identity not in known and not any(
+                (str(row.get("die") or "").casefold(), str(row.get("config") or "").casefold()) == identity
+                for row in rows):
+            rows.append({"die": die, "config": config, "linked_at": None,
+                         "linked_by": None, "unlinked_at": None, "unlinked_by": None})
+    return rows
 
 
 def list_projects() -> list[dict]:

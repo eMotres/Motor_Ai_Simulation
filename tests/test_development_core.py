@@ -315,7 +315,7 @@ def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monk
                          json={"die": "SYNTHETIC-DIE", "config": "A"})
     assert linked.status_code == 200
     assert store.get_project("alpha")["linked_motors"] == [
-        {"die": "SYNTHETIC-DIE", "config": "A"}]
+        {"die": "SYNTHETIC-DIE", "config": "A", "status": "current"}]
     assert "SYNTHETIC-DIE/A" in grants["customer@example.test"]["configs"]
 
     added = client.post("/api/admin/projects/alpha/members",

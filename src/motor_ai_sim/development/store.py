@@ -336,12 +336,3 @@ def rebuild_membership_index() -> dict:
         result = {email: sorted(set(ids)) for email, ids in rebuilt.items()}
         json_store.atomic_write_json(membership_index_path(), result)
         return result
-
-
-# Programme storage and transaction helpers
-from motor_ai_sim.development.programme_store import (
-    get_programme,
-    get_manifest,
-    commit_programme,
-    recover_programme,
-)

@@ -1,626 +1,542 @@
-"""Development Programme domain models, invariants, and validation.
+"""Development programme records: components, variants, positions, instances, connections.
 
-Implements Stage 1 of Development Programme:
-- Programme -> Components -> Variants -> Instances -> Connections
-- Quantity reconciliation (4 M1 + 1 G1 + 1 G2 machines; 7 converters: 4 Max + 3 75 kW)
-- Duplicate connection detection (prevent duplicate machine/converter port bindings)
-- Multi-port machine support (e.g. G1 is one machine with two winding ports: W1, W2)
-- Strict cross-project reference prevention
-- Archive semantics (archived items retain position and history)
-- Source-hash stale reference tracking (never silently repinned)
-- Immutable spec/design/contract/publication reference types
+A programme is one product (a boat, a vehicle) built from several machines and
+converters. Its document is pure data; this module only normalizes it and checks
+its invariants. Storage and revisions live in ``programme_store``.
+
+    programme
+      components[]   machine | converter | other, with named ports
+        variants[]   design alternatives, current | trial | history, optional catalog link
+      positions[]    installed slots; each active position holds exactly one unit
+      instances[]    physical lots of one component/variant: quantity + allocations to positions
+      connections[]  two (position, port) ends, e.g. converter AC port <-> machine winding
+
+A generator with two windings is ONE machine component with two winding ports;
+each port is fed by its own converter position through its own connection.
+
+Ids are local lowercase slugs, unique per collection inside one programme. A
+reference may also be written source-scoped (``<programme>/<collection>/<id>``);
+a scoped reference naming another programme is rejected, never resolved.
+Catalog links pin the content hash of the configuration they were made against;
+a hash that no longer matches is reported stale and is never re-pinned here.
 """
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import re
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable
 
-# Domain enums and constants
+PROGRAMME_SCHEMA_VERSION = 1
 COMPONENT_KINDS = ("machine", "converter", "other")
 VARIANT_STATUSES = ("current", "trial", "history")
-ALLOCATION_STATES = ("allocated", "unassigned", "archived", "spare")
-CONNECTION_STATUSES = ("active", "proposed", "reviewed", "archived")
-CONTRACT_STATUSES = ("proposed", "effective", "superseded", "proposed_fixture", "effective_fixture")
-DESIGN_BASELINE_STATUSES = ("approved", "candidate", "superseded")
-PUBLICATION_STATUSES = ("draft", "published", "withdrawn")
+COLLECTIONS = ("components", "positions", "instances", "connections")
+DEFAULT_PORT_KIND = {"machine": "winding", "converter": "ac", "other": "port"}
+REFERENCE_SOURCES = ("catalog",)
+# Route segments under /programmes that must never be read as a programme id.
+RESERVED_IDS = frozenset({"capabilities", "grant-removal-candidates"})
+MAX_ID_LENGTH = 64
 
-_IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9]+(?:[-_][a-zA-Z0-9]+)*$")
+_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_HASH = re.compile(r"^[0-9a-f]{64}$")
+
+_TOP_FIELDS = {"id", "title", "programme_schema_version", "notes", *COLLECTIONS}
+_COMPONENT_FIELDS = {"id", "programme_id", "kind", "name", "ports", "variants", "archived", "notes"}
+_PORT_FIELDS = {"id", "kind", "multi", "label"}
+_VARIANT_FIELDS = {"id", "programme_id", "status", "label", "ref", "archived", "notes"}
+_REF_FIELDS = {"source", "die", "config", "content_hash"}
+_POSITION_FIELDS = {"id", "programme_id", "name", "component", "archived", "notes"}
+_INSTANCE_FIELDS = {"id", "programme_id", "component", "variant", "quantity", "allocations", "archived", "notes"}
+_CONNECTION_FIELDS = {"id", "programme_id", "ends", "archived", "notes"}
+_END_FIELDS = {"position", "port"}
 
 
 class ProgrammeError(Exception):
-    """Base error for programme operations."""
+    """Base error; ``errors`` is a list of ``{code, path, message}`` issues."""
+
+    def __init__(self, message: str, errors: list[dict] | None = None):
+        super().__init__(message)
+        self.errors = list(errors or [])
 
 
-class ProgrammeInvariantError(ProgrammeError):
-    """Raised when a programme domain invariant is violated."""
+class ProgrammeInvalid(ProgrammeError):
+    """The document, or the change from the previous revision, breaks an invariant."""
 
 
-class QuantityInvariantError(ProgrammeInvariantError):
-    """Raised when component/variant quantities fail to reconcile."""
+def issue(code: str, path: str, message: str) -> dict:
+    return {"code": code, "path": path, "message": message}
 
 
-class DuplicateConnectionError(ProgrammeInvariantError):
-    """Raised when duplicate or conflicting connections are detected."""
+def valid_id(value: Any) -> bool:
+    return isinstance(value, str) and len(value) <= MAX_ID_LENGTH and bool(_ID.fullmatch(value))
 
 
-class CrossProjectReferenceError(ProgrammeInvariantError):
-    """Raised when a reference escapes project boundary."""
+def valid_programme_id(value: Any) -> bool:
+    return valid_id(value) and value not in RESERVED_IDS
 
 
-class InvalidIdentifierError(ProgrammeError):
-    """Raised when an identifier fails validation."""
+def scoped_id(programme_id: str, collection: str, local_id: str) -> str:
+    return f"{programme_id}/{collection}/{local_id}"
 
 
-class StaleReferenceError(ProgrammeError):
-    """Raised when a referenced source hash does not match."""
+def _local_ref(value: Any, programme_id: str, collection: str, path: str, errors: list[dict]) -> str | None:
+    """Resolve a local or source-scoped reference to a local id, recording why it cannot be."""
+    if not isinstance(value, str) or not value:
+        errors.append(issue("invalid_reference", path, f"expected a {collection} id"))
+        return None
+    if "/" in value:
+        parts = value.split("/")
+        if len(parts) != 3:
+            errors.append(issue("invalid_reference", path, f"scoped reference must be <programme>/{collection}/<id>"))
+            return None
+        owner, scope, local = parts
+        if owner != programme_id:
+            errors.append(issue("cross_programme_reference", path,
+                                f"reference {value!r} belongs to another programme"))
+            return None
+        if scope != collection:
+            errors.append(issue("invalid_reference", path, f"reference {value!r} is not a {collection} id"))
+            return None
+        value = local
+    if not valid_id(value):
+        errors.append(issue("invalid_id", path, f"{value!r} is not a lowercase slug of at most {MAX_ID_LENGTH} characters"))
+        return None
+    return value
 
 
-class ConcurrencyConflictError(ProgrammeError):
-    """Raised on optimistic concurrency revision mismatch."""
+def _check_fields(item: dict, allowed: set, path: str, errors: list[dict]) -> None:
+    for key in sorted(set(item) - allowed):
+        errors.append(issue("unknown_field", f"{path}.{key}", f"unknown field {key!r}"))
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _check_owner(item: dict, programme_id: str, path: str, errors: list[dict]) -> None:
+    owner = item.get("programme_id")
+    if owner is not None and owner != programme_id:
+        errors.append(issue("cross_programme_reference", f"{path}.programme_id",
+                            f"record belongs to programme {owner!r}, not {programme_id!r}"))
 
 
-def validate_identifier(name: str, label: str = "id") -> str:
-    """Validate that an identifier is safe, non-empty, and free of path traversal."""
-    if not isinstance(name, str) or not name.strip():
-        raise InvalidIdentifierError(f"{label} must be non-empty text")
-    name = name.strip()
-    if "/" in name or "\\" in name or ".." in name or "\0" in name:
-        raise InvalidIdentifierError(f"{label} contains invalid path characters: {name}")
-    if not _IDENTIFIER_RE.fullmatch(name):
-        raise InvalidIdentifierError(f"{label} has invalid format: {name!r}")
-    if len(name) > 128:
-        raise InvalidIdentifierError(f"{label} exceeds 128 characters: {name}")
-    return name
+def _text(value: Any, path: str, errors: list[dict], *, limit: int = 200, required: bool = False) -> str:
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        errors.append(issue("invalid_value", path, "expected text"))
+        return ""
+    value = value.strip()
+    if required and not value:
+        errors.append(issue("required", path, "required"))
+    if len(value) > limit:
+        errors.append(issue("invalid_value", path, f"longer than {limit} characters"))
+    return value
 
 
-def normalize_variant(data: Any, parent_component_id: str) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("variant must be an object")
-    var_id = validate_identifier(str(data.get("id") or ""), f"component[{parent_component_id}].variant.id")
-    status = str(data.get("status") or "current")
-    if status not in VARIANT_STATUSES:
-        raise ValueError(f"variant status must be one of {VARIANT_STATUSES}, got {status}")
-    label = str(data.get("label") or var_id).strip()
-    die = str(data.get("die") or "").strip() or None
-    config = str(data.get("config") or "").strip() or None
-    source_hash = data.get("source_hash")
-    if source_hash is not None:
-        source_hash = str(source_hash).strip()
-        if not re.fullmatch(r"^[0-9a-fA-F]{64}$", source_hash):
-            raise ValueError(f"variant {var_id} source_hash must be a 64-char hex string")
-        source_hash = source_hash.lower()
-
-    planned_qty = data.get("planned_quantity")
-    if planned_qty is not None:
-        if isinstance(planned_qty, bool) or not isinstance(planned_qty, int) or planned_qty < 0:
-            raise ValueError(f"variant {var_id} planned_quantity must be a non-negative integer")
-
-    return {
-        "id": var_id,
-        "component_id": parent_component_id,
-        "label": label,
-        "status": status,
-        "die": die,
-        "config": config,
-        "source_hash": source_hash,
-        "stale": bool(data.get("stale", False)),
-        "planned_quantity": planned_qty,
-        "overrides": copy.deepcopy(data.get("overrides", {})) if isinstance(data.get("overrides"), dict) else {},
-        "archived": bool(data.get("archived", False)),
-    }
+def _flag(value: Any, path: str, errors: list[dict]) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        errors.append(issue("invalid_value", path, "expected true or false"))
+        return False
+    return value
 
 
-def normalize_component(data: Any, project_id: str) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("component must be an object")
-    comp_id = validate_identifier(str(data.get("id") or ""), "component.id")
-    kind = str(data.get("kind") or "machine")
+def _list(value: Any, path: str, errors: list[dict]) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        errors.append(issue("invalid_value", path, "expected a list"))
+        return []
+    return value
+
+
+def _record_id(item: Any, path: str, seen: set, errors: list[dict]) -> str | None:
+    if not isinstance(item, dict):
+        errors.append(issue("invalid_value", path, "expected an object"))
+        return None
+    value = item.get("id")
+    if not valid_id(value):
+        errors.append(issue("invalid_id", f"{path}.id", f"{value!r} is not a lowercase slug of at most {MAX_ID_LENGTH} characters"))
+        return None
+    if value in seen:
+        errors.append(issue("duplicate_id", f"{path}.id", f"duplicate id {value!r}"))
+        return None
+    seen.add(value)
+    return value
+
+
+def _catalog_segment(value: Any, path: str, errors: list[dict]) -> str:
+    text = _text(value, path, errors, limit=128, required=True)
+    if text and (text in (".", "..") or any(ch in text for ch in "/\\\0") or not text.isprintable()):
+        errors.append(issue("invalid_value", path, "catalog names cannot contain path separators or control characters"))
+    return text
+
+
+def _normalize_ref(value: Any, programme_id: str, path: str, errors: list[dict]) -> dict | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        errors.append(issue("invalid_value", path, "expected an object or null"))
+        return None
+    source = value.get("source")
+    if source not in REFERENCE_SOURCES:
+        code = "cross_programme_reference" if source in ("project", "programme") else "unsupported_reference_source"
+        errors.append(issue(code, f"{path}.source",
+                            "only catalog configurations can be linked; project data stays in its own project"))
+        return None
+    _check_fields(value, _REF_FIELDS, path, errors)
+    content_hash = value.get("content_hash")
+    if content_hash is not None and not (isinstance(content_hash, str) and _HASH.fullmatch(content_hash)):
+        errors.append(issue("invalid_value", f"{path}.content_hash", "expected a lowercase sha256 hex digest"))
+        content_hash = None
+    return {"source": source, "die": _catalog_segment(value.get("die"), f"{path}.die", errors),
+            "config": _catalog_segment(value.get("config"), f"{path}.config", errors),
+            "content_hash": content_hash}
+
+
+def _normalize_component(item: dict, programme_id: str, path: str, errors: list[dict]) -> dict:
+    _check_fields(item, _COMPONENT_FIELDS, path, errors)
+    _check_owner(item, programme_id, path, errors)
+    kind = item.get("kind")
     if kind not in COMPONENT_KINDS:
-        raise ValueError(f"component kind must be one of {COMPONENT_KINDS}, got {kind}")
-
-    planned_qty = data.get("planned_quantity", data.get("quantity", 1))
-    if isinstance(planned_qty, bool) or not isinstance(planned_qty, int) or planned_qty < 0:
-        raise ValueError(f"component {comp_id} planned_quantity must be a non-negative integer")
-
-    # Placement groups
-    pg = data.get("placement_groups") or []
-    if not isinstance(pg, list):
-        raise ValueError(f"component {comp_id} placement_groups must be a list")
-    placement_groups = [str(g).strip() for g in pg if str(g).strip()]
-
-    # Ports (e.g. machine winding ports like W1, W2)
-    declared_ports = data.get("ports")
-    if declared_ports is None:
-        ports = ["W1"] if kind == "machine" else (["AC"] if kind == "converter" else ["default"])
-    else:
-        if not isinstance(declared_ports, list) or not declared_ports:
-            raise ValueError(f"component {comp_id} ports must be a non-empty list")
-        ports = []
-        for port in declared_ports:
-            p_id = validate_identifier(str(port or ""), f"component[{comp_id}].port")
-            if p_id in ports:
-                raise ValueError(f"duplicate port {p_id} in component {comp_id}")
-            ports.append(p_id)
-
-    # Variants
-    variants_raw = data.get("variants") or []
-    if not isinstance(variants_raw, list):
-        raise ValueError(f"component {comp_id} variants must be a list")
-    variants = []
-    seen_var_ids = set()
-    for item in variants_raw:
-        var = normalize_variant(item, comp_id)
-        if var["id"] in seen_var_ids:
-            raise ValueError(f"duplicate variant id {var['id']} in component {comp_id}")
-        seen_var_ids.add(var["id"])
-        variants.append(var)
-
-    return {
-        "id": comp_id,
-        "name": str(data.get("name") or data.get("label") or comp_id).strip(),
-        "kind": kind,
-        "planned_quantity": planned_qty,
-        "placement_groups": placement_groups,
-        "ports": ports,
-        "variants": variants,
-        "archived": bool(data.get("archived", False)),
-        "notes": str(data.get("notes") or "").strip(),
-    }
-
-
-def normalize_instance(data: Any, project_id: str, valid_components: dict[str, dict]) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("instance must be an object")
-    inst_id = validate_identifier(str(data.get("id") or ""), "instance.id")
-    comp_id = str(data.get("component") or data.get("component_id") or "").strip()
-    if not comp_id or comp_id not in valid_components:
-        raise CrossProjectReferenceError(f"instance {inst_id} references unknown or foreign component: {comp_id}")
-
-    # Check for foreign project tag if present
-    ref_project = data.get("project_id")
-    if ref_project is not None and str(ref_project) != project_id:
-        raise CrossProjectReferenceError(f"instance {inst_id} has foreign project_id: {ref_project}")
-
-    component = valid_components[comp_id]
-    variant_id = data.get("variant") or data.get("variant_id")
-    if variant_id:
-        variant_id = str(variant_id).strip()
-        comp_var_ids = {v["id"] for v in component.get("variants", [])}
-        if comp_var_ids and variant_id not in comp_var_ids:
-            raise ValueError(f"instance {inst_id} references unknown variant {variant_id} for component {comp_id}")
-    else:
-        variant_id = None
-
-    state = str(data.get("allocation_state") or data.get("state") or "allocated")
-    if state not in ALLOCATION_STATES:
-        raise ValueError(f"instance allocation_state must be one of {ALLOCATION_STATES}, got {state}")
-
-    serial = data.get("serial")
-    if serial is not None:
-        serial = str(serial).strip() or None
-
-    return {
-        "id": inst_id,
-        "component_id": comp_id,
-        "position": str(data.get("position") or inst_id).strip(),
-        "variant_id": variant_id,
-        "allocation_state": state,
-        "serial": serial,
-        "production_ref": str(data.get("production_ref") or "").strip() or None,
-        "assigned_design_baseline": str(data.get("assigned_design_baseline") or "").strip() or None,
-        "archived": bool(data.get("archived", False) or state == "archived"),
-    }
-
-
-def normalize_connection(data: Any, project_id: str, valid_instances: dict[str, dict], valid_components: dict[str, dict]) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("connection must be an object")
-
-    # Cross-project reference checks
-    ref_project = data.get("project_id")
-    if ref_project is not None and str(ref_project) != project_id:
-        raise CrossProjectReferenceError(f"connection has foreign project_id: {ref_project}")
-
-    converter_id = str(data.get("converter") or data.get("converter_instance_id") or "").strip()
-    if not converter_id or converter_id not in valid_instances:
-        raise CrossProjectReferenceError(f"connection references unknown converter instance: {converter_id}")
-
-    conv_inst = valid_instances[converter_id]
-    conv_comp = valid_components.get(conv_inst["component_id"], {})
-    if conv_comp.get("kind") != "converter":
-        raise ValueError(f"converter instance {converter_id} belongs to kind {conv_comp.get('kind')}, expected converter")
-
-    conv_port = str(data.get("converter_port") or "AC").strip()
-
-    machine_id = str(data.get("machine") or data.get("machine_instance_id") or "").strip()
-    if not machine_id or machine_id not in valid_instances:
-        raise CrossProjectReferenceError(f"connection references unknown machine instance: {machine_id}")
-
-    mach_inst = valid_instances[machine_id]
-    mach_comp = valid_components.get(mach_inst["component_id"], {})
-    if mach_comp.get("kind") != "machine":
-        raise ValueError(f"machine instance {machine_id} belongs to kind {mach_comp.get('kind')}, expected machine")
-
-    mach_port = str(data.get("port") or data.get("machine_port") or "W1").strip()
-    allowed_ports = mach_comp.get("ports", ["W1"])
-    if mach_port not in allowed_ports:
-        raise ValueError(f"port {mach_port} not in declared machine ports {allowed_ports} for component {mach_comp.get('id')}")
-
-    default_id = f"{converter_id}:{conv_port}->{machine_id}:{mach_port}"
-    conn_id = str(data.get("id") or default_id).strip()
-
-    status = str(data.get("status") or "active")
-    if status not in CONNECTION_STATUSES:
-        raise ValueError(f"connection status must be one of {CONNECTION_STATUSES}, got {status}")
-
-    return {
-        "id": conn_id,
-        "converter_instance_id": converter_id,
-        "converter_port": conv_port,
-        "machine_instance_id": machine_id,
-        "machine_port": mach_port,
-        "status": status,
-        "archived": bool(data.get("archived", False) or status == "archived"),
-        "notes": str(data.get("notes") or "").strip(),
-    }
-
-
-def normalize_contract_baseline(data: Any) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("contract baseline must be an object")
-    rev = str(data.get("revision") or "").strip()
-    if not rev:
-        raise ValueError("contract baseline revision required")
-    status = str(data.get("status") or "proposed")
-    mapping = data.get("mapping") or {}
-    if not isinstance(mapping, dict):
-        raise ValueError("contract baseline mapping must be an object")
-    return {
-        "revision": rev,
-        "status": status,
-        "mapping": {str(k): str(v) for k, v in mapping.items()},
-        "approvals": copy.deepcopy(data.get("approvals", [])),
-        "created_at": str(data.get("created_at") or now()),
-    }
-
-
-def normalize_programme(data: Any, project_id: str) -> dict:
-    """Normalize and validate all entities in a programme document."""
-    if not isinstance(data, dict):
-        raise ValueError("programme must be an object")
-
-    p_id = validate_identifier(str(data.get("project_id") or data.get("id") or project_id), "programme.project_id")
-    if p_id != project_id:
-        raise CrossProjectReferenceError(f"programme project_id mismatch: expected {project_id}, got {p_id}")
-
-    title = str(data.get("programme") or data.get("title") or "Programme").strip()
-    revision = int(data.get("revision", 1))
-    if revision < 0:
-        raise ValueError("revision must be non-negative")
-
-    # Components
-    components_raw = data.get("components") or []
-    if not isinstance(components_raw, list):
-        raise ValueError("components must be a list")
-    components = []
-    comp_map = {}
-    for item in components_raw:
-        c = normalize_component(item, project_id)
-        if c["id"] in comp_map:
-            raise ValueError(f"duplicate component id: {c['id']}")
-        components.append(c)
-        comp_map[c["id"]] = c
-
-    # Instances (from 'units' or 'instances')
-    instances_raw = data.get("units") or data.get("instances") or []
-    if not isinstance(instances_raw, list):
-        raise ValueError("instances must be a list")
-    instances = []
-    inst_map = {}
-    for item in instances_raw:
-        inst = normalize_instance(item, project_id, comp_map)
-        if inst["id"] in inst_map:
-            raise ValueError(f"duplicate instance id: {inst['id']}")
-        instances.append(inst)
-        inst_map[inst["id"]] = inst
-
-    # Connections
-    conns_raw = data.get("connections") or []
-    if not isinstance(conns_raw, list):
-        raise ValueError("connections must be a list")
-    connections = []
-    conn_map = {}
-    for item in conns_raw:
-        conn = normalize_connection(item, project_id, inst_map, comp_map)
-        if conn["id"] in conn_map:
-            raise DuplicateConnectionError(f"duplicate connection id: {conn['id']}")
-        connections.append(conn)
-        conn_map[conn["id"]] = conn
-
-    # Contract baselines
-    cb_raw = data.get("contract_baselines") or []
-    contract_baselines = [normalize_contract_baseline(b) for b in cb_raw] if isinstance(cb_raw, list) else []
-
-    # Extra immutable reference fields
-    design_baselines = copy.deepcopy(data.get("design_baselines", []))
-    obligations = copy.deepcopy(data.get("obligations", []))
-    publications = copy.deepcopy(data.get("publication_refs", []))
-    admins = [str(a).strip().lower() for a in data.get("admins", []) if str(a).strip()]
-
-    return {
-        "synthetic": bool(data.get("synthetic", False)),
-        "project_id": project_id,
-        "title": title,
-        "kind": "programme",
-        "schema_version": int(data.get("schema_version", 2)),
-        "programme_schema_version": int(data.get("programme_schema_version", 1)),
-        "revision": revision,
-        "admins": admins,
-        "components": components,
-        "instances": instances,
-        "connections": connections,
-        "contract_baselines": contract_baselines,
-        "design_baselines": design_baselines,
-        "obligations": obligations,
-        "publication_refs": publications,
-        "archived": bool(data.get("archived", False)),
-        "created_at": str(data.get("created_at") or now()),
-        "updated_at": str(data.get("updated_at") or now()),
-    }
-
-
-def validate_programme_invariants(
-    programme: dict,
-    *,
-    catalog_lookup: Callable[[str, str], str | None] | None = None,
-    strict_quantities: bool = True,
-) -> dict:
-    """Validate all domain invariants for a programme:
-    1. Quantity reconciliation: allocated instances match component planned_quantity.
-    2. Variant reconciliation: allocated variant instances match converter totals.
-    3. Duplicate connections: no machine port or converter port is bound to multiple active connections.
-    4. Multi-port machines: one machine instance can have multiple distinct winding ports (e.g. G1.W1 and G1.W2).
-    5. Archived semantics: archived items do not count towards active allocations or active connections.
-    6. Stale reference detection: catalog source hash mismatch marks reference stale; NEVER silently repins.
-    7. Cross-project references: strictly rejected.
-    """
-    comp_map = {c["id"]: c for c in programme.get("components", [])}
-    inst_map = {i["id"]: i for i in programme.get("instances", [])}
-    conns = programme.get("connections", [])
-
-    # 1. Quantity reconciliation per component
-    component_counts: dict[str, dict] = {}
-    for comp_id, comp in comp_map.items():
-        if comp.get("archived"):
+        errors.append(issue("invalid_value", f"{path}.kind", f"kind must be one of {', '.join(COMPONENT_KINDS)}"))
+        kind = "other"
+    ports, port_ids = [], set()
+    raw_ports = _list(item.get("ports"), f"{path}.ports", errors)
+    if not raw_ports:
+        errors.append(issue("required", f"{path}.ports", "a component needs at least one port"))
+    for p_index, port in enumerate(raw_ports):
+        p_path = f"{path}.ports[{p_index}]"
+        port_id = _record_id(port, p_path, port_ids, errors)
+        if port_id is None:
             continue
-        planned = comp.get("planned_quantity", 0)
-        # Active allocated instances
-        allocated = [
-            i for i in programme.get("instances", [])
-            if i["component_id"] == comp_id and i["allocation_state"] == "allocated" and not i.get("archived")
-        ]
-        spares = [
-            i for i in programme.get("instances", [])
-            if i["component_id"] == comp_id and i["allocation_state"] == "spare" and not i.get("archived")
-        ]
-        archived = [
-            i for i in programme.get("instances", [])
-            if i["component_id"] == comp_id and (i["allocation_state"] == "archived" or i.get("archived"))
-        ]
-        unassigned = [
-            i for i in programme.get("instances", [])
-            if i["component_id"] == comp_id and i["allocation_state"] == "unassigned" and not i.get("archived")
-        ]
+        _check_fields(port, _PORT_FIELDS, p_path, errors)
+        port_kind = port.get("kind", DEFAULT_PORT_KIND[kind])
+        if not valid_id(port_kind):
+            errors.append(issue("invalid_value", f"{p_path}.kind", "port kind must be a lowercase slug"))
+            port_kind = DEFAULT_PORT_KIND[kind]
+        ports.append({"id": port_id, "kind": port_kind, "multi": _flag(port.get("multi"), f"{p_path}.multi", errors),
+                      "label": _text(port.get("label"), f"{p_path}.label", errors)})
+    variants, variant_ids = [], set()
+    for v_index, variant in enumerate(_list(item.get("variants"), f"{path}.variants", errors)):
+        v_path = f"{path}.variants[{v_index}]"
+        variant_id = _record_id(variant, v_path, variant_ids, errors)
+        if variant_id is None:
+            continue
+        _check_fields(variant, _VARIANT_FIELDS, v_path, errors)
+        _check_owner(variant, programme_id, v_path, errors)
+        status = variant.get("status", "trial")
+        if status not in VARIANT_STATUSES:
+            errors.append(issue("invalid_value", f"{v_path}.status", f"status must be one of {', '.join(VARIANT_STATUSES)}"))
+            status = "trial"
+        variants.append({"id": variant_id, "status": status, "label": _text(variant.get("label"), f"{v_path}.label", errors),
+                         "ref": _normalize_ref(variant.get("ref"), programme_id, f"{v_path}.ref", errors),
+                         "archived": _flag(variant.get("archived"), f"{v_path}.archived", errors),
+                         "notes": _text(variant.get("notes"), f"{v_path}.notes", errors, limit=2000)})
+    current = [v["id"] for v in variants if v["status"] == "current" and not v["archived"]]
+    if len(current) > 1:
+        errors.append(issue("multiple_current_variants", f"{path}.variants",
+                            f"only one active variant can be current, found {', '.join(current)}"))
+    return {"id": item["id"], "kind": kind, "name": _text(item.get("name"), f"{path}.name", errors),
+            "ports": ports, "variants": variants, "archived": _flag(item.get("archived"), f"{path}.archived", errors),
+            "notes": _text(item.get("notes"), f"{path}.notes", errors, limit=2000)}
 
-        actual_allocated = len(allocated)
-        diff = actual_allocated - planned
-        component_counts[comp_id] = {
-            "planned": planned,
-            "allocated": actual_allocated,
-            "spares": len(spares),
-            "archived": len(archived),
-            "unassigned": len(unassigned),
-            "gap": max(0, -diff),
-            "excess": max(0, diff),
-            "reconciled": diff == 0,
-        }
 
-        if strict_quantities and diff != 0:
-            if diff < 0:
-                raise QuantityInvariantError(
-                    f"Component '{comp_id}' allocation gap: planned {planned}, allocated {actual_allocated} (missing {abs(diff)})"
-                )
+def normalize(data: Any, programme_id: str) -> tuple[dict, list[dict]]:
+    """Return ``(document, issues)``; the document is usable only when ``issues`` is empty."""
+    errors: list[dict] = []
+    if not valid_programme_id(programme_id):
+        raise ProgrammeInvalid("invalid programme id", [issue("invalid_id", "id", f"{programme_id!r} is not a valid programme id")])
+    if not isinstance(data, dict):
+        raise ProgrammeInvalid("programme must be an object", [issue("invalid_value", "", "expected an object")])
+    _check_fields(data, _TOP_FIELDS, "programme", errors)
+    if data.get("id", programme_id) != programme_id:
+        errors.append(issue("cross_programme_reference", "id", f"document is for programme {data.get('id')!r}"))
+    if data.get("programme_schema_version", PROGRAMME_SCHEMA_VERSION) != PROGRAMME_SCHEMA_VERSION:
+        errors.append(issue("unsupported_schema", "programme_schema_version",
+                            f"only programme schema {PROGRAMME_SCHEMA_VERSION} is supported"))
+
+    components, ids = [], set()
+    for index, item in enumerate(_list(data.get("components"), "components", errors)):
+        path = f"components[{index}]"
+        if _record_id(item, path, ids, errors) is not None:
+            components.append(_normalize_component(item, programme_id, path, errors))
+    by_component = {c["id"]: c for c in components}
+
+    positions, ids = [], set()
+    for index, item in enumerate(_list(data.get("positions"), "positions", errors)):
+        path = f"positions[{index}]"
+        if _record_id(item, path, ids, errors) is None:
+            continue
+        _check_fields(item, _POSITION_FIELDS, path, errors)
+        _check_owner(item, programme_id, path, errors)
+        component = _local_ref(item.get("component"), programme_id, "components", f"{path}.component", errors)
+        if component is not None and component not in by_component:
+            errors.append(issue("unknown_reference", f"{path}.component", f"no component {component!r}"))
+        positions.append({"id": item["id"], "name": _text(item.get("name"), f"{path}.name", errors),
+                          "component": component, "archived": _flag(item.get("archived"), f"{path}.archived", errors),
+                          "notes": _text(item.get("notes"), f"{path}.notes", errors, limit=2000)})
+    by_position = {p["id"]: p for p in positions}
+
+    instances, ids = [], set()
+    for index, item in enumerate(_list(data.get("instances"), "instances", errors)):
+        path = f"instances[{index}]"
+        if _record_id(item, path, ids, errors) is None:
+            continue
+        _check_fields(item, _INSTANCE_FIELDS, path, errors)
+        _check_owner(item, programme_id, path, errors)
+        component = _local_ref(item.get("component"), programme_id, "components", f"{path}.component", errors)
+        if component is not None and component not in by_component:
+            errors.append(issue("unknown_reference", f"{path}.component", f"no component {component!r}"))
+        variant = item.get("variant")
+        if variant is not None:
+            if not valid_id(variant):
+                errors.append(issue("invalid_id", f"{path}.variant", f"{variant!r} is not a variant id"))
+                variant = None
+            elif component in by_component and variant not in {v["id"] for v in by_component[component]["variants"]}:
+                errors.append(issue("unknown_reference", f"{path}.variant", f"component {component!r} has no variant {variant!r}"))
+        quantity = item.get("quantity", 1)
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
+            errors.append(issue("invalid_value", f"{path}.quantity", "quantity must be a positive integer"))
+            quantity = 1
+        allocations = []
+        for a_index, raw in enumerate(_list(item.get("allocations"), f"{path}.allocations", errors)):
+            position = _local_ref(raw, programme_id, "positions", f"{path}.allocations[{a_index}]", errors)
+            if position is None:
+                continue
+            if position in allocations:
+                errors.append(issue("duplicate_allocation", f"{path}.allocations[{a_index}]",
+                                    f"position {position!r} is listed twice"))
+                continue
+            allocations.append(position)
+        instances.append({"id": item["id"], "component": component, "variant": variant, "quantity": quantity,
+                          "allocations": allocations, "archived": _flag(item.get("archived"), f"{path}.archived", errors),
+                          "notes": _text(item.get("notes"), f"{path}.notes", errors, limit=2000)})
+
+    connections, ids = [], set()
+    for index, item in enumerate(_list(data.get("connections"), "connections", errors)):
+        path = f"connections[{index}]"
+        if _record_id(item, path, ids, errors) is None:
+            continue
+        _check_fields(item, _CONNECTION_FIELDS, path, errors)
+        _check_owner(item, programme_id, path, errors)
+        raw_ends = _list(item.get("ends"), f"{path}.ends", errors)
+        ends = []
+        if len(raw_ends) != 2:
+            errors.append(issue("invalid_value", f"{path}.ends", "a connection has exactly two ends"))
+        for e_index, end in enumerate(raw_ends[:2]):
+            e_path = f"{path}.ends[{e_index}]"
+            if not isinstance(end, dict):
+                errors.append(issue("invalid_value", e_path, "expected {position, port}"))
+                continue
+            _check_fields(end, _END_FIELDS, e_path, errors)
+            position = _local_ref(end.get("position"), programme_id, "positions", f"{e_path}.position", errors)
+            port = end.get("port")
+            if not valid_id(port):
+                errors.append(issue("invalid_id", f"{e_path}.port", f"{port!r} is not a port id"))
+                port = None
+            ends.append({"position": position, "port": port})
+        connections.append({"id": item["id"], "ends": ends,
+                            "archived": _flag(item.get("archived"), f"{path}.archived", errors),
+                            "notes": _text(item.get("notes"), f"{path}.notes", errors, limit=2000)})
+
+    document = {"id": programme_id, "title": _text(data.get("title"), "title", errors, required=True),
+                "programme_schema_version": PROGRAMME_SCHEMA_VERSION,
+                "notes": _text(data.get("notes"), "notes", errors, limit=2000),
+                "components": components, "positions": positions, "instances": instances, "connections": connections}
+    if not errors:
+        errors.extend(_topology_issues(document, by_component, by_position))
+    return document, errors
+
+
+def _topology_issues(doc: dict, by_component: dict, by_position: dict) -> list[dict]:
+    """Cross-record invariants, checked once every record is individually valid."""
+    errors: list[dict] = []
+    for index, position in enumerate(doc["positions"]):
+        if not position["archived"] and by_component[position["component"]]["archived"]:
+            errors.append(issue("archived_reference", f"positions[{index}].component",
+                                f"active position {position['id']!r} uses archived component {position['component']!r}"))
+
+    holders: dict[str, list[str]] = {}
+    for index, instance in enumerate(doc["instances"]):
+        path = f"instances[{index}]"
+        if instance["archived"]:
+            continue  # history: an archived lot no longer fills any position
+        if by_component[instance["component"]]["archived"]:
+            errors.append(issue("archived_reference", f"{path}.component",
+                                f"active lot {instance['id']!r} uses archived component {instance['component']!r}"))
+        if len(instance["allocations"]) > instance["quantity"]:
+            errors.append(issue("allocation_excess", f"{path}.allocations",
+                                f"lot {instance['id']!r} has {instance['quantity']} unit(s) but is allocated to "
+                                f"{len(instance['allocations'])} positions"))
+        for a_index, position_id in enumerate(instance["allocations"]):
+            a_path = f"{path}.allocations[{a_index}]"
+            position = by_position.get(position_id)
+            if position is None:
+                errors.append(issue("unknown_reference", a_path, f"no position {position_id!r}"))
+                continue
+            if position["archived"]:
+                errors.append(issue("archived_reference", a_path, f"position {position_id!r} is archived"))
+                continue
+            if position["component"] != instance["component"]:
+                errors.append(issue("allocation_component_mismatch", a_path,
+                                    f"position {position_id!r} takes {position['component']!r}, lot {instance['id']!r} "
+                                    f"is {instance['component']!r}"))
+                continue
+            holders.setdefault(position_id, []).append(instance["id"])
+    for index, position in enumerate(doc["positions"]):
+        if position["archived"]:
+            continue
+        held = holders.get(position["id"], [])
+        if not held:
+            errors.append(issue("allocation_gap", f"positions[{index}]", f"position {position['id']!r} has no unit allocated"))
+        elif len(held) > 1:
+            errors.append(issue("allocation_excess", f"positions[{index}]",
+                                f"position {position['id']!r} is allocated to {', '.join(held)}"))
+
+    pairs: dict[tuple, str] = {}
+    port_use: dict[tuple, list[str]] = {}
+    for index, connection in enumerate(doc["connections"]):
+        path = f"connections[{index}]"
+        keys = []
+        for e_index, end in enumerate(connection["ends"]):
+            e_path = f"{path}.ends[{e_index}]"
+            position = by_position.get(end["position"])
+            if position is None:
+                errors.append(issue("unknown_reference", f"{e_path}.position", f"no position {end['position']!r}"))
+                continue
+            component = by_component[position["component"]]
+            port = next((p for p in component["ports"] if p["id"] == end["port"]), None)
+            if port is None:
+                errors.append(issue("unknown_reference", f"{e_path}.port",
+                                    f"component {component['id']!r} has no port {end['port']!r}"))
+                continue
+            if position["archived"] and not connection["archived"]:
+                errors.append(issue("archived_reference", f"{e_path}.position",
+                                    f"active connection {connection['id']!r} ends at archived position {position['id']!r}"))
+            keys.append(((position["id"], port["id"]), port))
+        if len(keys) != 2 or connection["archived"]:
+            continue
+        if keys[0][0][0] == keys[1][0][0]:
+            errors.append(issue("self_connection", path, "a connection must join two different positions"))
+            continue
+        pair = tuple(sorted(k for k, _ in keys))
+        if pair in pairs:
+            errors.append(issue("duplicate_connection", path,
+                                f"connection {connection['id']!r} duplicates {pairs[pair]!r}"))
+            continue
+        pairs[pair] = connection["id"]
+        for key, port in keys:
+            port_use.setdefault(key, []).append(connection["id"])
+            if not port["multi"] and len(port_use[key]) > 1:
+                errors.append(issue("duplicate_connection", path,
+                                    f"port {key[0]}.{key[1]} is already connected by {port_use[key][0]!r}"))
+    return errors
+
+
+def transition_issues(previous: dict | None, current: dict) -> list[dict]:
+    """Archive, never delete; identities and pinned references never change in place."""
+    if previous is None:
+        return []
+    errors: list[dict] = []
+    for collection in COLLECTIONS:
+        new = {item["id"]: item for item in current[collection]}
+        for old in previous.get(collection, []):
+            item = new.get(old["id"])
+            if item is None:
+                errors.append(issue("record_deleted", f"{collection}.{old['id']}",
+                                    f"{collection[:-1]} {old['id']!r} was removed; archive it instead"))
+                continue
+            for field in {"components": ("kind",), "positions": ("component",),
+                          "instances": ("component",), "connections": ("ends",)}[collection]:
+                if item[field] != old[field]:
+                    errors.append(issue("immutable_field", f"{collection}.{old['id']}.{field}",
+                                        f"{field} cannot change; archive {old['id']!r} and add a new record"))
+            if collection != "components":
+                continue
+            ports = {p["id"] for p in item["ports"]}
+            for port in old["ports"]:
+                if port["id"] not in ports:
+                    errors.append(issue("record_deleted", f"components.{old['id']}.ports.{port['id']}",
+                                        f"port {port['id']!r} was removed"))
+            variants = {v["id"]: v for v in item["variants"]}
+            for variant in old["variants"]:
+                now_variant = variants.get(variant["id"])
+                if now_variant is None:
+                    errors.append(issue("record_deleted", f"components.{old['id']}.variants.{variant['id']}",
+                                        f"variant {variant['id']!r} was removed; set its status to history instead"))
+                elif variant["ref"] is not None and now_variant["ref"] != variant["ref"]:
+                    errors.append(issue("reference_repinned", f"components.{old['id']}.variants.{variant['id']}.ref",
+                                        "a pinned catalog link cannot change; add a new variant for the new configuration"))
+    return errors
+
+
+def pin_new_references(previous: dict | None, current: dict,
+                       lookup: Callable[[str, str], str | None] | None) -> list[dict]:
+    """Pin the content hash of catalog links made in this revision. Mutates ``current``."""
+    errors: list[dict] = []
+    pinned_before = {(c["id"], v["id"]) for c in (previous or {}).get("components", [])
+                     for v in c["variants"] if v["ref"] is not None}
+    for component in current["components"]:
+        for variant in component["variants"]:
+            ref = variant["ref"]
+            if ref is None or ref["content_hash"] is not None or (component["id"], variant["id"]) in pinned_before:
+                continue
+            content_hash = lookup(ref["die"], ref["config"]) if lookup else None
+            if content_hash is None:
+                errors.append(issue("unresolved_reference", f"components.{component['id']}.variants.{variant['id']}.ref",
+                                    f"catalog configuration {ref['die']}/{ref['config']} could not be resolved to pin it"))
             else:
-                raise QuantityInvariantError(
-                    f"Component '{comp_id}' allocation excess: planned {planned}, allocated {actual_allocated} (excess {diff})"
-                )
-
-    # 2. Variant reconciliation for converter components
-    variant_counts: dict[str, dict] = {}
-    for comp_id, comp in comp_map.items():
-        if comp.get("kind") != "converter" or comp.get("archived"):
-            continue
-        variants = comp.get("variants", [])
-        if not variants:
-            continue
-        total_var_planned = 0
-        comp_instances = [
-            i for i in programme.get("instances", [])
-            if i["component_id"] == comp_id and i["allocation_state"] == "allocated" and not i.get("archived")
-        ]
-        for var in variants:
-            v_id = var["id"]
-            v_planned = var.get("planned_quantity")
-            v_allocated = [i for i in comp_instances if i.get("variant_id") == v_id]
-            actual = len(v_allocated)
-            variant_counts[f"{comp_id}/{v_id}"] = {
-                "planned": v_planned,
-                "allocated": actual,
-                "reconciled": v_planned is None or actual == v_planned,
-            }
-            if v_planned is not None:
-                total_var_planned += v_planned
-                if strict_quantities and actual != v_planned:
-                    raise QuantityInvariantError(
-                        f"Converter variant '{comp_id}/{v_id}' mismatch: planned {v_planned}, allocated {actual}"
-                    )
-        if strict_quantities and total_var_planned > 0 and total_var_planned != comp.get("planned_quantity", 0):
-            raise QuantityInvariantError(
-                f"Converter variants total planned {total_var_planned} does not match component planned {comp.get('planned_quantity')}"
-            )
-
-    # 3. Connection integrity & duplicate prevention
-    seen_machine_endpoints: dict[tuple[str, str], str] = {}
-    seen_converter_endpoints: dict[tuple[str, str], str] = {}
-    stale_references: list[dict] = []
-
-    for conn in conns:
-        if conn.get("archived") or conn.get("status") == "archived":
-            continue
-
-        c_inst_id = conn["converter_instance_id"]
-        c_port = conn["converter_port"]
-        m_inst_id = conn["machine_instance_id"]
-        m_port = conn["machine_port"]
-
-        # Ensure instances are active
-        c_inst = inst_map.get(c_inst_id)
-        if not c_inst or c_inst.get("archived") or c_inst.get("allocation_state") == "archived":
-            raise ProgrammeInvariantError(f"Connection {conn['id']} references archived or missing converter {c_inst_id}")
-
-        m_inst = inst_map.get(m_inst_id)
-        if not m_inst or m_inst.get("archived") or m_inst.get("allocation_state") == "archived":
-            raise ProgrammeInvariantError(f"Connection {conn['id']} references archived or missing machine {m_inst_id}")
-
-        # Machine endpoint uniqueness: (m_inst_id, m_port)
-        m_key = (m_inst_id, m_port)
-        if m_key in seen_machine_endpoints:
-            prev_conn = seen_machine_endpoints[m_key]
-            raise DuplicateConnectionError(
-                f"Machine port {m_inst_id}.{m_port} already connected by {prev_conn}; cannot also connect via {conn['id']}"
-            )
-        seen_machine_endpoints[m_key] = conn["id"]
-
-        # Converter endpoint uniqueness: (c_inst_id, c_port)
-        c_key = (c_inst_id, c_port)
-        if c_key in seen_converter_endpoints:
-            prev_conn = seen_converter_endpoints[c_key]
-            raise DuplicateConnectionError(
-                f"Converter port {c_inst_id}.{c_port} already connected by {prev_conn}; cannot also connect via {conn['id']}"
-            )
-        seen_converter_endpoints[c_key] = conn["id"]
-
-    # 4. Check for stale references (source hash mismatch)
-    if catalog_lookup:
-        for comp in comp_map.values():
-            for var in comp.get("variants", []):
-                die = var.get("die")
-                config = var.get("config")
-                recorded_hash = var.get("source_hash")
-                if die and config and recorded_hash:
-                    actual_hash = catalog_lookup(die, config)
-                    if actual_hash and actual_hash.lower() != recorded_hash.lower():
-                        # Mark stale! Invariant: NEVER silently update recorded_hash
-                        var["stale"] = True
-                        stale_references.append({
-                            "type": "variant",
-                            "component_id": comp["id"],
-                            "variant_id": var["id"],
-                            "die": die,
-                            "config": config,
-                            "recorded_hash": recorded_hash,
-                            "actual_hash": actual_hash,
-                        })
-
-    return {
-        "reconciled": True,
-        "components": component_counts,
-        "variants": variant_counts,
-        "active_connections": len(seen_machine_endpoints),
-        "stale_references": stale_references,
-    }
+                ref["content_hash"] = content_hash
+    return errors
 
 
-def load_synthetic_fixture() -> dict:
-    """Load the approved Stage 1 synthetic fixture (4 M1 + 1 G1 + 1 G2; 7 converters; one G1 instance / two ports)."""
-    fixture_path = Path(__file__).resolve().parents[3] / "_scratch" / "prog" / "programme_fixture.json"
-    if fixture_path.is_file():
-        raw = json.loads(fixture_path.read_text(encoding="utf-8"))
-    else:
-        # Canonical fallback if fixture file path is not resolved
-        raw = {
-            "synthetic": True,
-            "programme": "Example hydrofoil boat",
-            "project_id": "example-hydrofoil",
-            "components": [
-                {"id": "M1", "quantity": 4, "kind": "machine", "ports": ["W1"]},
-                {"id": "G1", "quantity": 1, "kind": "machine", "ports": ["W1", "W2"]},
-                {"id": "G2", "quantity": 1, "kind": "machine", "ports": ["W1"]},
-                {"id": "CTRL", "quantity": 7, "kind": "converter", "ports": ["AC"],
-                 "variants": [
-                     {"id": "Max", "planned_quantity": 4, "status": "current"},
-                     {"id": "75kW", "planned_quantity": 3, "status": "current"}
-                 ]},
-            ],
-            "units": [
-                {"id": "M1-P-A1", "component": "M1"},
-                {"id": "C01", "component": "CTRL", "variant": "Max"},
-                {"id": "M1-P-A2", "component": "M1"},
-                {"id": "C02", "component": "CTRL", "variant": "Max"},
-                {"id": "M1-P-B1", "component": "M1"},
-                {"id": "C03", "component": "CTRL", "variant": "Max"},
-                {"id": "M1-P-B2", "component": "M1"},
-                {"id": "C04", "component": "CTRL", "variant": "Max"},
-                {"id": "G1-01", "component": "G1"},
-                {"id": "G2-01", "component": "G2"},
-                {"id": "C05", "component": "CTRL", "variant": "75kW"},
-                {"id": "C06", "component": "CTRL", "variant": "75kW"},
-                {"id": "C07", "component": "CTRL", "variant": "75kW"},
-            ],
-            "connections": [
-                {"converter": "C01", "machine": "M1-P-A1", "port": "W1"},
-                {"converter": "C02", "machine": "M1-P-A2", "port": "W1"},
-                {"converter": "C03", "machine": "M1-P-B1", "port": "W1"},
-                {"converter": "C04", "machine": "M1-P-B2", "port": "W1"},
-                {"converter": "C05", "machine": "G1-01", "port": "W1"},
-                {"converter": "C06", "machine": "G1-01", "port": "W2"},
-                {"converter": "C07", "machine": "G2-01", "port": "W1"},
-            ],
-            "contract_baselines": [
-                {"revision": "2.0", "status": "effective_fixture", "mapping": {
-                    "M1": "M1-S4", "G1": "G1-S2", "G2": "G2-S5", "CTRL": "Platform-S3",
-                    "CTRL/Max": "Max-S2", "CTRL/75kW": "75-S2"
-                }},
-                {"revision": "3.0", "status": "proposed_fixture", "mapping": {
-                    "M1": "M1-S5", "G1": "G1-S3", "G2": "G2-S5", "CTRL": "Platform-S4",
-                    "CTRL/Max": "Max-S3", "CTRL/75kW": "75-S2"
-                }}
-            ],
-        }
+def validated(data: Any, programme_id: str, previous: dict | None = None,
+              lookup: Callable[[str, str], str | None] | None = None) -> dict:
+    """Normalize ``data`` as the next revision after ``previous``; raise ``ProgrammeInvalid`` on any issue."""
+    document, errors = normalize(copy.deepcopy(data), programme_id)
+    if not errors:
+        errors = transition_issues(previous, document) + pin_new_references(previous, document, lookup)
+    if errors:
+        raise ProgrammeInvalid(f"programme has {len(errors)} issue(s)", errors)
+    return document
 
-    # Ensure component kind and ports on raw fixture if missing
-    for c in raw.get("components", []):
-        if c.get("id") in ("M1", "G1", "G2"):
-            c.setdefault("kind", "machine")
-            if c.get("id") == "G1":
-                c.setdefault("ports", ["W1", "W2"])
-            else:
-                c.setdefault("ports", ["W1"])
-        elif c.get("id") == "CTRL":
-            c.setdefault("kind", "converter")
-            c.setdefault("ports", ["AC"])
-            c.setdefault("variants", [
-                {"id": "Max", "planned_quantity": 4, "status": "current"},
-                {"id": "75kW", "planned_quantity": 3, "status": "current"},
-            ])
 
-    return normalize_programme(raw, str(raw.get("project_id") or "example-hydrofoil"))
+def reconciliation(doc: dict) -> dict:
+    """Per-component counts for review; read-only, never repairs anything."""
+    rows = {}
+    for component in doc["components"]:
+        cid = component["id"]
+        active = [p["id"] for p in doc["positions"] if p["component"] == cid and not p["archived"]]
+        archived = [p["id"] for p in doc["positions"] if p["component"] == cid and p["archived"]]
+        lots = [i for i in doc["instances"] if i["component"] == cid and not i["archived"]]
+        filled = {p for lot in lots for p in lot["allocations"] if p in active}
+        units = sum(lot["quantity"] for lot in lots)
+        allocated = sum(len(lot["allocations"]) for lot in lots)
+        rows[cid] = {"kind": component["kind"], "archived": component["archived"],
+                     "positions": len(active), "archived_positions": len(archived),
+                     "filled_positions": len(filled), "gaps": sorted(set(active) - filled),
+                     "units": units, "allocated_units": allocated, "spare_units": max(0, units - allocated),
+                     "spare_lots": sorted(lot["id"] for lot in lots if not lot["allocations"]),
+                     "archived_lots": sorted(i["id"] for i in doc["instances"] if i["component"] == cid and i["archived"])}
+    return {"components": rows,
+            "active_connections": sum(1 for c in doc["connections"] if not c["archived"]),
+            "archived_connections": sum(1 for c in doc["connections"] if c["archived"])}
+
+
+def reference_status(doc: dict, lookup: Callable[[str, str], str | None] | None) -> list[dict]:
+    """Compare every pinned catalog link with the catalog as it is now; never re-pins."""
+    rows = []
+    for component in doc["components"]:
+        for variant in component["variants"]:
+            ref = variant["ref"]
+            if ref is None:
+                continue
+            current = None
+            if lookup is not None:
+                try:
+                    current = lookup(ref["die"], ref["config"])
+                except Exception:  # noqa: BLE001 - an unreadable catalog reads as missing, not as a 500
+                    current = None
+            state = "missing" if current is None else ("current" if current == ref["content_hash"] else "stale")
+            rows.append({"component": component["id"], "variant": variant["id"], "die": ref["die"],
+                         "config": ref["config"], "pinned_hash": ref["content_hash"], "catalog_hash": current,
+                         "state": state})
+    return rows

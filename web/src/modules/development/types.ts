@@ -3,7 +3,6 @@ export interface ProjectMember { email: string; role: 'customer' | 'engineer' | 
 export interface Completeness { filled?: number; required?: number; filled_required?: number; total_required?: number; answered?: number; unknown?: number; missing?: number; invalid?: number; sections?: Record<string, { filled: number; required: number; total?: number; complete?: boolean }> }
 export interface ProjectSummary {
   id: string; title: string; customer_org: string; status: ProjectStatus; owner_engineer?: string;
-  kind?: 'programme' | 'project'; programme_schema_version?: number; programme_revision?: number;
   members: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;
   grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason: string }>;
   can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
@@ -31,121 +30,32 @@ export interface ProjectMotor { die: string; canonical_die?: string; config: str
 export interface ProjectMotorPickerItem { die: string; config: string; label?: string; diameter_mm?: number; slots?: number; poles?: number; stack_mm?: number; linked_at?: string; unlinked_at?: string; unlinked_by?: string; disabled?: boolean; reason?: string }
 export interface ProjectSnapshot { id: string; kind: 'history'; die?: string; config?: string; label?: string; diameter_mm?: number; slots?: number; poles?: number; stack_mm?: number; created_at?: string; author_display_name?: string; note?: string; source?: string; results?: MotorResult[] }
 
-
-export type ComponentKind = 'machine' | 'converter' | 'other';
-export type VariantStatus = 'current' | 'trial' | 'history';
-export type AllocationState = 'allocated' | 'unassigned' | 'archived' | 'spare';
-export type ConnectionStatus = 'active' | 'proposed' | 'reviewed' | 'archived';
-export type ContractStatus = 'proposed' | 'effective' | 'superseded' | 'proposed_fixture' | 'effective_fixture';
-
-export interface ProgrammeVariant {
-  id: string;
-  component_id: string;
-  label: string;
-  status: VariantStatus;
-  die?: string | null;
-  config?: string | null;
-  source_hash?: string | null;
-  stale?: boolean;
-  planned_quantity?: number | null;
-  overrides?: Record<string, unknown>;
-  archived?: boolean;
+// Programme records (Stage 1: admin-only, hidden unless the server reports the capability).
+export type ProgrammeComponentKind = 'machine' | 'converter' | 'other';
+export type ProgrammeVariantStatus = 'current' | 'trial' | 'history';
+export interface ProgrammeCatalogRef { source: 'catalog'; die: string; config: string; content_hash: string | null }
+export interface ProgrammePort { id: string; kind: string; multi: boolean; label: string }
+export interface ProgrammeVariant { id: string; status: ProgrammeVariantStatus; label: string; ref: ProgrammeCatalogRef | null; archived: boolean; notes: string }
+export interface ProgrammeComponent { id: string; kind: ProgrammeComponentKind; name: string; ports: ProgrammePort[]; variants: ProgrammeVariant[]; archived: boolean; notes: string }
+export interface ProgrammePosition { id: string; name: string; component: string; archived: boolean; notes: string }
+export interface ProgrammeInstance { id: string; component: string; variant: string | null; quantity: number; allocations: string[]; archived: boolean; notes: string }
+export interface ProgrammeConnectionEnd { position: string; port: string }
+export interface ProgrammeConnection { id: string; ends: [ProgrammeConnectionEnd, ProgrammeConnectionEnd]; archived: boolean; notes: string }
+export interface ProgrammeDocument {
+  id: string; title: string; programme_schema_version: 1; notes: string;
+  components: ProgrammeComponent[]; positions: ProgrammePosition[]; instances: ProgrammeInstance[]; connections: ProgrammeConnection[];
 }
-
-export interface ProgrammeComponent {
-  id: string;
-  name: string;
-  kind: ComponentKind;
-  planned_quantity: number;
-  placement_groups?: string[];
-  ports?: string[];
-  variants?: ProgrammeVariant[];
-  archived?: boolean;
-  notes?: string;
+export interface ProgrammeIssue { code: string; path: string; message: string }
+export interface ProgrammeRevisionEntry { revision: number; file: string; sha256: string; committed_at: string; committed_by: string; idempotency_key: string | null; request_sha256: string }
+export interface ProgrammeComponentReconciliation {
+  kind: ProgrammeComponentKind; archived: boolean; positions: number; archived_positions: number; filled_positions: number; gaps: string[];
+  units: number; allocated_units: number; spare_units: number; spare_lots: string[]; archived_lots: string[];
 }
-
-export interface ProgrammeInstance {
-  id: string;
-  component_id: string;
-  position: string;
-  variant_id?: string | null;
-  allocation_state: AllocationState;
-  serial?: string | null;
-  production_ref?: string | null;
-  assigned_design_baseline?: string | null;
-  archived?: boolean;
+export interface ProgrammeReconciliation { components: Record<string, ProgrammeComponentReconciliation>; active_connections: number; archived_connections: number }
+export interface ProgrammeReferenceStatus { component: string; variant: string; die: string; config: string; pinned_hash: string | null; catalog_hash: string | null; state: 'current' | 'stale' | 'missing' }
+export interface ProgrammeRevision {
+  programme_id: string; revision: number; parent_revision: number | null; committed_at: string; committed_by: string;
+  idempotency_key: string | null; request_sha256: string; programme: ProgrammeDocument;
+  reconciliation: ProgrammeReconciliation; references: ProgrammeReferenceStatus[]; history?: ProgrammeRevisionEntry[];
 }
-
-export interface ProgrammeConnection {
-  id: string;
-  converter_instance_id: string;
-  converter_port: string;
-  machine_instance_id: string;
-  machine_port: string;
-  status: ConnectionStatus;
-  archived?: boolean;
-  notes?: string;
-}
-
-export interface ContractBaseline {
-  revision: string;
-  status: ContractStatus;
-  mapping: Record<string, string>;
-  approvals?: Array<{ author?: string; approved_at?: string }>;
-  created_at?: string;
-}
-
-export interface ProgrammeFileManifest {
-  sha256: string;
-  bytes: number;
-}
-
-export interface ProgrammeManifest {
-  manifest_version: number;
-  project_id: string;
-  revision: number;
-  committed_at: string;
-  idempotency_key?: string | null;
-  actor_email?: string;
-  files: Record<string, ProgrammeFileManifest>;
-  summary: {
-    components_count: number;
-    instances_count: number;
-    connections_count: number;
-    contract_baselines_count?: number;
-    reconciliation?: Record<string, unknown>;
-  };
-}
-
-export interface ProgrammeRecord {
-  synthetic?: boolean;
-  project_id: string;
-  title: string;
-  kind: 'programme';
-  schema_version: number;
-  programme_schema_version: number;
-  revision: number;
-  admins?: string[];
-  components: ProgrammeComponent[];
-  instances: ProgrammeInstance[];
-  connections: ProgrammeConnection[];
-  contract_baselines?: ContractBaseline[];
-  design_baselines?: Array<Record<string, unknown>>;
-  obligations?: Array<Record<string, unknown>>;
-  publication_refs?: Array<Record<string, unknown>>;
-  archived?: boolean;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface ProgrammeOverview {
-  programme: ProgrammeRecord;
-  manifest?: ProgrammeManifest;
-}
-
-export interface DevelopmentCapabilities {
-  capabilities: {
-    programme: boolean;
-  };
-  programme: boolean;
-}
+export interface ProgrammeCapabilities { programmes: { enabled: boolean; schema_version: number; migration: 'dry-run-only' } }

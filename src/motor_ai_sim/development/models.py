@@ -596,37 +596,3 @@ def validation_errors_for_mission(draft: dict) -> list[dict]:
             errors.append({"field": f"mission_profile[{i}].direct_drive_confirmed", "section": "mission_profile",
                            "message": "Confirm direct drive before using a load-shaft catalog point as a motor point"})
     return errors
-
-
-def is_programme(project: dict | None) -> bool:
-    """Return True if project is a Development Programme record."""
-    return bool(isinstance(project, dict) and project.get("kind") == "programme")
-
-
-# Re-export programme domain types and invariants
-from motor_ai_sim.development.programme import (
-    COMPONENT_KINDS,
-    VARIANT_STATUSES,
-    ALLOCATION_STATES,
-    CONNECTION_STATUSES,
-    CONTRACT_STATUSES,
-    DESIGN_BASELINE_STATUSES,
-    PUBLICATION_STATUSES,
-    ProgrammeError,
-    ProgrammeInvariantError,
-    QuantityInvariantError,
-    DuplicateConnectionError,
-    CrossProjectReferenceError,
-    InvalidIdentifierError,
-    StaleReferenceError,
-    ConcurrencyConflictError,
-    validate_identifier,
-    normalize_variant,
-    normalize_component,
-    normalize_instance,
-    normalize_connection,
-    normalize_contract_baseline,
-    normalize_programme,
-    validate_programme_invariants,
-    load_synthetic_fixture,
-)

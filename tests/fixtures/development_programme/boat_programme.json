@@ -1,0 +1,379 @@
+{
+  "id": "demo-foil-boat",
+  "title": "Synthetic hydrofoil boat",
+  "notes": "Synthetic test fixture; no real product or customer data.",
+  "components": [
+    {
+      "id": "traction-motor",
+      "kind": "machine",
+      "name": "Traction motor",
+      "ports": [
+        {
+          "id": "w1",
+          "kind": "winding"
+        }
+      ],
+      "variants": [
+        {
+          "id": "tm-a",
+          "status": "current",
+          "label": "Baseline",
+          "ref": {
+            "source": "catalog",
+            "die": "synthetic-die-t",
+            "config": "tm-a",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "id": "tm-b",
+          "status": "trial",
+          "label": "Longer stack",
+          "ref": {
+            "source": "catalog",
+            "die": "synthetic-die-t",
+            "config": "tm-b",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      ]
+    },
+    {
+      "id": "main-generator",
+      "kind": "machine",
+      "name": "Main generator (dual winding)",
+      "ports": [
+        {
+          "id": "w1",
+          "kind": "winding"
+        },
+        {
+          "id": "w2",
+          "kind": "winding"
+        }
+      ],
+      "variants": [
+        {
+          "id": "gen-a",
+          "status": "current",
+          "ref": {
+            "source": "catalog",
+            "die": "synthetic-die-g",
+            "config": "gen-a",
+            "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        }
+      ]
+    },
+    {
+      "id": "backup-generator",
+      "kind": "machine",
+      "name": "Backup generator",
+      "ports": [
+        {
+          "id": "w1",
+          "kind": "winding"
+        }
+      ],
+      "variants": [
+        {
+          "id": "bgen-a",
+          "status": "current",
+          "ref": {
+            "source": "catalog",
+            "die": "synthetic-die-b",
+            "config": "bgen-a",
+            "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        }
+      ]
+    },
+    {
+      "id": "inverter-a",
+      "kind": "converter",
+      "name": "Traction inverter",
+      "ports": [
+        {
+          "id": "ac",
+          "kind": "ac"
+        },
+        {
+          "id": "dc",
+          "kind": "dc",
+          "multi": true
+        }
+      ],
+      "variants": [
+        {
+          "id": "inv-a-r1",
+          "status": "current"
+        }
+      ]
+    },
+    {
+      "id": "inverter-b",
+      "kind": "converter",
+      "name": "Generator rectifier",
+      "ports": [
+        {
+          "id": "ac",
+          "kind": "ac"
+        },
+        {
+          "id": "dc",
+          "kind": "dc",
+          "multi": true
+        }
+      ],
+      "variants": [
+        {
+          "id": "inv-b-r1",
+          "status": "current"
+        }
+      ]
+    }
+  ],
+  "positions": [
+    {
+      "id": "tm-port-fwd",
+      "name": "tm-port-fwd",
+      "component": "traction-motor"
+    },
+    {
+      "id": "tm-port-aft",
+      "name": "tm-port-aft",
+      "component": "traction-motor"
+    },
+    {
+      "id": "tm-stbd-fwd",
+      "name": "tm-stbd-fwd",
+      "component": "traction-motor"
+    },
+    {
+      "id": "tm-stbd-aft",
+      "name": "tm-stbd-aft",
+      "component": "traction-motor"
+    },
+    {
+      "id": "tm-centre",
+      "name": "Centre pod (dropped)",
+      "component": "traction-motor",
+      "archived": true
+    },
+    {
+      "id": "gen-main",
+      "component": "main-generator"
+    },
+    {
+      "id": "gen-backup",
+      "component": "backup-generator"
+    },
+    {
+      "id": "inv-a-1",
+      "component": "inverter-a"
+    },
+    {
+      "id": "inv-a-2",
+      "component": "inverter-a"
+    },
+    {
+      "id": "inv-a-3",
+      "component": "inverter-a"
+    },
+    {
+      "id": "inv-a-4",
+      "component": "inverter-a"
+    },
+    {
+      "id": "inv-b-1",
+      "component": "inverter-b"
+    },
+    {
+      "id": "inv-b-2",
+      "component": "inverter-b"
+    },
+    {
+      "id": "inv-b-3",
+      "component": "inverter-b"
+    }
+  ],
+  "instances": [
+    {
+      "id": "tm-lot-1",
+      "component": "traction-motor",
+      "variant": "tm-a",
+      "quantity": 4,
+      "allocations": [
+        "tm-port-fwd",
+        "tm-port-aft",
+        "tm-stbd-fwd",
+        "tm-stbd-aft"
+      ]
+    },
+    {
+      "id": "tm-spare-1",
+      "component": "traction-motor",
+      "variant": "tm-a",
+      "quantity": 1,
+      "allocations": []
+    },
+    {
+      "id": "tm-proto-1",
+      "component": "traction-motor",
+      "variant": "tm-a",
+      "quantity": 1,
+      "allocations": [
+        "tm-centre"
+      ],
+      "archived": true
+    },
+    {
+      "id": "gen-main-1",
+      "component": "main-generator",
+      "variant": "gen-a",
+      "quantity": 1,
+      "allocations": [
+        "gen-main"
+      ]
+    },
+    {
+      "id": "gen-backup-1",
+      "component": "backup-generator",
+      "variant": "bgen-a",
+      "quantity": 1,
+      "allocations": [
+        "gen-backup"
+      ]
+    },
+    {
+      "id": "inv-a-lot-1",
+      "component": "inverter-a",
+      "variant": "inv-a-r1",
+      "quantity": 4,
+      "allocations": [
+        "inv-a-1",
+        "inv-a-2",
+        "inv-a-3",
+        "inv-a-4"
+      ]
+    },
+    {
+      "id": "inv-b-lot-1",
+      "component": "inverter-b",
+      "variant": "inv-b-r1",
+      "quantity": 3,
+      "allocations": [
+        "inv-b-1",
+        "inv-b-2",
+        "inv-b-3"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c-tm-port-fwd",
+      "ends": [
+        {
+          "position": "inv-a-1",
+          "port": "ac"
+        },
+        {
+          "position": "tm-port-fwd",
+          "port": "w1"
+        }
+      ]
+    },
+    {
+      "id": "c-tm-port-aft",
+      "ends": [
+        {
+          "position": "inv-a-2",
+          "port": "ac"
+        },
+        {
+          "position": "tm-port-aft",
+          "port": "w1"
+        }
+      ]
+    },
+    {
+      "id": "c-tm-stbd-fwd",
+      "ends": [
+        {
+          "position": "inv-a-3",
+          "port": "ac"
+        },
+        {
+          "position": "tm-stbd-fwd",
+          "port": "w1"
+        }
+      ]
+    },
+    {
+      "id": "c-tm-stbd-aft",
+      "ends": [
+        {
+          "position": "inv-a-4",
+          "port": "ac"
+        },
+        {
+          "position": "tm-stbd-aft",
+          "port": "w1"
+        }
+      ]
+    },
+    {
+      "id": "c-gen-main-w1",
+      "ends": [
+        {
+          "position": "inv-b-1",
+          "port": "ac"
+        },
+        {
+          "position": "gen-main",
+          "port": "w1"
+        }
+      ]
+    },
+    {
+      "id": "c-gen-main-w2",
+      "ends": [
+        {
+          "position": "inv-b-2",
+          "port": "ac"
+        },
+        {
+          "position": "gen-main",
+          "port": "w2"
+        }
+      ]
+    },
+    {
+      "id": "c-gen-backup-w1",
+      "ends": [
+        {
+          "position": "inv-b-3",
+          "port": "ac"
+        },
+        {
+          "position": "gen-backup",
+          "port": "w1"
+        }
+      ]
+    },
+    {
+      "id": "c-tm-centre",
+      "archived": true,
+      "ends": [
+        {
+          "position": "inv-a-4",
+          "port": "dc"
+        },
+        {
+          "position": "tm-centre",
+          "port": "w1"
+        }
+      ]
+    }
+  ]
+}

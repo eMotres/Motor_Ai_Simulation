@@ -109,8 +109,6 @@ def _customer_spec(value: dict) -> dict:
 
 
 def _summary(project: dict, user: dict) -> dict:
-    from motor_ai_sim.development.legacy_adapter import LegacyReadAdapter
-    project = LegacyReadAdapter.sanitize_legacy_summary(project)
     role = access.membership(_email(user), project)
     engineer = access.is_engineer(user) or role in ("owner", "engineer")
     draft = store.load_json(project["id"], "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0})
@@ -427,24 +425,6 @@ def list_snapshots(request: Request, project_id: str):
 def _readable_project(request: Request, project_id: str):
     _find_project_id(project_id)
     return access.require_project(request, project_id)
-
-
-def is_programme_enabled() -> bool:
-    import os
-    val = os.environ.get("MOTOR_AI_SIM_PROGRAMME_ENABLED", "").strip().lower()
-    return val in ("1", "true", "yes", "on")
-
-
-@router.get("/capabilities")
-def get_capabilities(request: Request):
-    access.require_signed_in(request)
-    enabled = is_programme_enabled()
-    return {
-        "capabilities": {
-            "programme": enabled,
-        },
-        "programme": enabled,
-    }
 
 
 @router.get("/schema")

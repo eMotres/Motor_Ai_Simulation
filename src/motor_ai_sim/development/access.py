@@ -18,8 +18,6 @@ def membership(email: str, project: dict) -> str | None:
 
 
 def can_view(user: dict, project: dict) -> bool:
-    if project.get('kind') == 'programme' and str(user.get('role') or '').lower() != 'admin':
-        return False
     return is_engineer(user) or membership(str(user.get("email") or ""), project) is not None
 
 

@@ -110,46 +110,8 @@ def admin_grant_removal_candidates(project_id: str,
     return {"candidates": list(project.get("grant_removal_candidates") or [])}
 
 
-@router.get("/programme/fixture")
-def admin_programme_fixture(admin_user: dict = Depends(auth.require_admin)):
-    return {"fixture": models.load_synthetic_fixture()}
+# Programme routes are admin-only and live under this router; they are registered
+# after the project routes above so an existing path keeps resolving as before.
+from motor_ai_sim.development import programme_routes  # noqa: E402
 
-
-@router.get("/{project_id}/programme")
-def admin_get_programme(project_id: str, admin_user: dict = Depends(auth.require_admin)):
-    programme = store.get_programme(project_id)
-    manifest = store.get_manifest(project_id)
-    if not programme and not manifest:
-        raise HTTPException(status_code=404, detail="Programme not found")
-    return {"programme": programme, "manifest": manifest}
-
-
-@router.put("/{project_id}/programme")
-async def admin_save_programme(project_id: str, request: Request,
-                               admin_user: dict = Depends(auth.require_admin)):
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Expected JSON object")
-    expected_revision = body.get("expected_revision")
-    idempotency_key = body.get("idempotency_key")
-    prog_data = body.get("programme") if "programme" in body else body
-    try:
-        result = store.commit_programme(
-            project_id,
-            prog_data,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-            actor_email=_email(admin_user),
-        )
-        return result
-    except models.ConcurrencyConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    except models.ProgrammeInvariantError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-
-@router.post("/{project_id}/programme/recover")
-def admin_recover_programme(project_id: str, admin_user: dict = Depends(auth.require_admin)):
-    return store.recover_programme(project_id)
+router.include_router(programme_routes.router)

@@ -1516,10 +1516,42 @@ def range_distance(P, w: np.ndarray) -> float:
     return float(np.linalg.norm(w - np.asarray(P @ y).ravel())) / nw
 
 
+def period_map_transpose(source: np.ndarray, rotor_dofs: np.ndarray,
+                           period_map: Tuple[np.ndarray, np.ndarray], *,
+                           half_neg: bool = False) -> np.ndarray:
+    """Apply the exact transpose of the rotor gather used by TDM's state map.
+
+    ``period_map`` is ``(perm, signs)`` with
+    ``H[rotor[i], rotor[perm[i]]] = signs[i]``. Repeated targets are valid:
+    H.T must scatter-add each rotor load. Stator loads are unchanged, except
+    for the global sign in a half-period anti-periodic map.
+    """
+    f = np.asarray(source, dtype=float).reshape(-1)
+    rotor = np.asarray(rotor_dofs, dtype=np.intp).reshape(-1)
+    perm, signs = period_map
+    perm = np.asarray(perm, dtype=np.intp).reshape(-1)
+    signs = np.asarray(signs, dtype=float).reshape(-1)
+    if rotor.size != perm.size or signs.size != perm.size:
+        raise ValueError("rotor, permutation and sign lengths must match")
+    if np.unique(rotor).size != rotor.size:
+        raise ValueError("rotor dof indices must be unique")
+    if np.any(rotor < 0) or np.any(rotor >= f.size):
+        raise ValueError("rotor dof index outside source vector")
+    if np.any(perm < 0) or np.any(perm >= rotor.size):
+        raise ValueError("period-map target outside rotor dofs")
+    global_sign = -1.0 if half_neg else 1.0
+    out = global_sign * f.copy()
+    out[rotor] = 0.0
+    np.add.at(out, rotor[perm], global_sign * signs * f[rotor])
+    return out
+
+
 def period_map_checks(*, wrap: Callable, wrapf: Callable, P_from, P_to, P_start,
                       P_fwd, K, Msig, GT, S_raw: np.ndarray, f_mag: np.ndarray,
                       n_vec: int = 3, seed: int = 0,
-                      tol: Optional[Dict[str, float]] = None
+                      tol: Optional[Dict[str, float]] = None,
+                      source_work: bool = False,
+                      wrap_transpose: Optional[Callable] = None
                       ) -> Tuple[bool, Dict[str, Any]]:
     """The checks of a period map H (``wrap``: one (half) period back, ``wrapf``:
     forward) that every TDM set-up runs (second Codex review, finding 7):
@@ -1533,7 +1565,8 @@ def period_map_checks(*, wrap: Callable, wrapf: Callable, P_from, P_to, P_start,
         the constrained space;
       * conductor bodies: every body maps onto a whole body of equal
         conductance (:func:`body_map_deviation`);
-      * magnet source: ||H f - f|| / ||f||.
+      * magnet source: legacy raw-vector check by default; optionally, the
+        dual-load work defect on the constrained primal space.
 
     Returns (ok, record); ``ok`` is False when any deviation exceeds ``tol``
     (default :data:`MAP_CHECK_RTOL`), and the record names it."""
@@ -1576,11 +1609,30 @@ def period_map_checks(*, wrap: Callable, wrapf: Callable, P_from, P_to, P_start,
     ops = max(bilinear_invariance(K, us, hus), bilinear_invariance(Msig, us, hus))
     bod, image = body_map_deviation(GT, S_raw, us, hus)
     f = np.asarray(f_mag, float)
-    src = float(np.linalg.norm(np.asarray(wrap(f), float) - f)
-                / max(float(np.linalg.norm(f)), 1e-300))
+    src_raw = float(np.linalg.norm(np.asarray(wrap(f), float) - f)
+                    / max(float(np.linalg.norm(f)), 1e-300))
+    src = src_raw
+    src_work = None
+    if source_work:
+        if wrap_transpose is None:
+            raise ValueError("source_work requires the exact period-map transpose")
+        # Loads are dual vectors. Restrict H.T f - f to independent constrained
+        # DOFs so duplicate cut-node loads are summed before comparing work.
+        htf = np.asarray(wrap_transpose(f), float)
+        delta = np.asarray(P_from.T @ (htf - f)).ravel()
+        ref = np.asarray(P_from.T @ f).ravel()
+        num = float(np.linalg.norm(delta))
+        den = float(np.linalg.norm(ref))
+        src_work = (num / den if den > 0.0 else
+                    (0.0 if num == 0.0 else float("inf")))
+        src = src_work
     dev = {"inverse": inv, "constrained": con, "operators": ops, "bodies": bod,
            "source": src}
-    bad = {k: v for k, v in dev.items() if not (v <= tol[k])}
+    if source_work:
+        dev["source_raw"] = src_raw
+        dev["source_work"] = src_work
+    bad = {k: v for k, v in dev.items()
+           if k in tol and not (v <= tol[k])}
     rec = {"ok": not bad, "dev": dev, "tol": tol, "failed": sorted(bad),
            "inverse_all_dofs": inv_all, "inverse_unconstrained": inv_any,
            "bodies": len(image),

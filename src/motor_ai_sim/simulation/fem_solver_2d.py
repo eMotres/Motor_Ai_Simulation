@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import math
+import json
 import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Tuple, Optional, Literal
@@ -135,6 +136,17 @@ from motor_ai_sim.simulation.rotor_window import (
     commensurate_rotor_window as _commensurate_rotor_window,
     commensurate_rotor_potential_window as _commensurate_rotor_potential_window,
     period_shift_map as _period_shift_map,
+)
+from motor_ai_sim.simulation.safe_warm_cache import (
+    SAFE_CACHE_SCHEMA as _SAFE_WARM_CACHE_SCHEMA,
+    exact_region_transfer as _safe_exact_region_transfer,
+    exact_tagged_br_transfer as _safe_exact_tagged_br_transfer,
+    identity_digest as _safe_identity_digest,
+    magnet_material_identity as _safe_magnet_material_identity,
+    mesh_entity_digest as _safe_mesh_entity_digest,
+    validate_current_history as _safe_validate_current_history,
+    rewind_rotor_dofs as _safe_rewind_rotor_dofs,
+    restore_br_bundle as _safe_restore_br_bundle,
 )
 from motor_ai_sim.simulation.periodic_accel import (
     rre_extrapolate as _acc_rre,
@@ -3003,6 +3015,11 @@ def _warm_cache_disabled() -> bool:
     return _os_sb.environ.get("SB_NO_WARM_CACHE") == "1" or bool(_NO_WARM_CACHE_CTX.get())
 
 
+def _safe_warm_cache_enabled() -> bool:
+    """New, independently gated strict warm-cache path; default remains legacy."""
+    return _os_sb.environ.get("SB_SAFE_WARM_CACHE") == "1"
+
+
 def _warm_cache_path():
     # Per WORKSPACE (Stage 1).  Cross-user seeding would seed the WRONG MACHINE:
     # the seed is a field state, and a field state from someone else's geometry
@@ -3065,6 +3082,90 @@ def _geo_fingerprint(geo: dict) -> str:
         return ""
 
 
+def _safe_circuit_identity(ed_con, ed_paths, geo, *, resolved_bonding=None,
+                           strand_group=None, series_paths=None):
+    """Exact identity of the resolved bordered conductor equations."""
+    return _safe_identity_digest({
+        "rows": [{k: c.get(k) for k in
+                  ("key", "tag", "tags", "signs", "phase", "slot", "coil",
+                   "Iunit", "S")} for c in ed_con],
+        "paths": (None if ed_paths is None else {
+            "paths": ed_paths.get("paths"), "group": ed_paths.get("group"),
+            "rep": ed_paths.get("rep"), "n_group": ed_paths.get("n_group")}),
+        "resolved": {
+            "strand_bonding": str(resolved_bonding if resolved_bonding is not None
+                                  else geo.get("strand_bonding", "") or ""),
+            "strand_group": (None if strand_group is None else int(strand_group)),
+            "series_paths": (None if series_paths is None else bool(series_paths)),
+            "strand_mirror": str(_os_sb.environ.get("SB_STRAND_MIRROR", "")),
+            "wire_split": int(geo.get("wire_split", 1) or 1),
+            "eddy_loss_at": ("step" if _os_sb.environ.get(
+                "SB_EDDY_LOSS_AT", "mid") == "step" else "mid"),
+        },
+    })
+
+
+def _safe_physical_boundary_digest(mesh, cell_regions, *, gap_regions=()):
+    """Hash resolved material/domain interfaces, independent of triangulation.
+
+    Interior edges between equal regions are deliberately absent.  An edge
+    between the motion-band and air-gap labels is also absent because it is a
+    discretisation boundary, while both regions' interfaces with physical
+    rotor/stator domains and the exterior remain provenance.
+    """
+    points = np.asarray(mesh.p, float).T
+    triangles = np.asarray(mesh.t, int).T
+    if (points.ndim != 2 or points.shape[1] != 2
+            or not np.all(np.isfinite(points))
+            or triangles.ndim != 2 or triangles.shape[1] != 3
+            or np.any(triangles < 0) or np.any(triangles >= points.shape[0])):
+        raise ValueError("resolved mesh coordinates/connectivity are malformed")
+    if isinstance(cell_regions, Mapping):
+        regions = np.full(triangles.shape[0], -1, int)
+        for region, indices in cell_regions.items():
+            indices = np.asarray(indices, int).reshape(-1)
+            if (np.any(indices < 0) or np.any(indices >= regions.size)
+                    or np.any(regions[indices] != -1)):
+                raise ValueError("resolved mesh region map overlaps or is out of range")
+            regions[indices] = int(region)
+        if np.any(regions == -1):
+            raise ValueError("resolved mesh region map is incomplete")
+    else:
+        regions = np.asarray(cell_regions, int).reshape(-1)
+    if triangles.shape[0] != regions.size:
+        raise ValueError("cell-region labels do not match the resolved mesh")
+    owners = {}
+    for tri, region in zip(triangles, regions):
+        for a, b in ((tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])):
+            edge = tuple(sorted((int(a), int(b))))
+            owners.setdefault(edge, []).append(int(region))
+    gap_regions = {int(value) for value in gap_regions}
+    records = []
+    for (a, b), adjacent in owners.items():
+        if len(adjacent) not in (1, 2):
+            raise ValueError("resolved mesh contains a nonmanifold edge")
+        pair = tuple(sorted(adjacent if len(adjacent) == 2
+                            else adjacent + [-1]))
+        if pair[0] == pair[1]:
+            continue
+        if len(adjacent) == 2 and set(pair) <= gap_regions:
+            continue
+        p0 = tuple(float(value).hex() for value in points[a])
+        p1 = tuple(float(value).hex() for value in points[b])
+        records.append((min(p0, p1), max(p0, p1), pair))
+    return _safe_identity_digest(sorted(records))
+
+
+def _safe_cold_seed_bundle(n_dof, n_con, nu_base):
+    """Canonical pristine state installed after any safe-seed abort."""
+    return {
+        "A": np.zeros(int(n_dof)), "A2": None, "hed": None,
+        "Ib": None, "Ib2": None, "U": np.zeros(int(n_con)),
+        "A2_prev": None, "nu_conv2": None,
+        "nu_all2": np.asarray(nu_base, float).copy(),
+    }
+
+
 def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
     """The last published eddy state: memory first, then the disk mirror.
 
@@ -3076,6 +3177,14 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
     """
     wc = _SB_WARM_CACHE.get("last")
     if wc is not None and not disk_only:
+        if not _safe_warm_cache_enabled() and isinstance(wc.get("meta"), Mapping):
+            # A safe entry produced earlier in this process may carry old v2
+            # identity metadata.  Present a legacy view without mutating the
+            # cached object, so toggling B off behaves exactly like HEAD.
+            if "safe_identity" in wc["meta"]:
+                wc = dict(wc)
+                wc["meta"] = {k: v for k, v in wc["meta"].items()
+                              if k != "safe_identity"}
         return wc
     try:
         p = _warm_cache_path()
@@ -3096,6 +3205,20 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                   # sector count the state was solved on (0 = unknown, written
                   # before 2026-09-07); a seed from another symmetry is refused
                   "nsect": (int(z["nsect"]) if "nsect" in _f else 0)}
+            if _safe_warm_cache_enabled() and "safe_schema" in _f:
+                wc["safe_schema"] = str(z["safe_schema"])
+            if _safe_warm_cache_enabled() and "safe_identity" in _f:
+                wc["safe_identity"] = str(z["safe_identity"])
+            if _safe_warm_cache_enabled() and "dof_region" in _f:
+                wc["dof_region"] = np.asarray(z["dof_region"], int)
+            if _safe_warm_cache_enabled() and "edcon_fp" in _f:
+                wc["edcon_fp"] = str(z["edcon_fp"])
+            if _safe_warm_cache_enabled() and "eddy_complete" in _f:
+                wc["eddy_complete"] = bool(z["eddy_complete"])
+            if _safe_warm_cache_enabled() and "demag_complete" in _f:
+                wc["demag_complete"] = bool(z["demag_complete"])
+            if _safe_warm_cache_enabled() and "demag_history_json" in _f:
+                wc["demag_history"] = json.loads(str(z["demag_history_json"]))
             # The Br RATCHET state (2026-09-06).  OPTIONAL by construction: a
             # cache written before this existed, or by a run with demag off,
             # carries none and the reader must not care.
@@ -3103,6 +3226,8 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                 wc["br_val"] = np.asarray(z["br_val"], float)
                 wc["br_cen"] = np.asarray(z["br_cen"], float)
                 wc["br_tag"] = np.asarray(z["br_tag"], int)
+            if _safe_warm_cache_enabled() and "br_mat" in _f:
+                wc["br_mat"] = np.asarray(z["br_mat"]).astype(str)
             # per-group same-angle reference (2026-09-24); optional
             wc["solid_grp"] = {_fk[len("solid_grp_"):]: np.asarray(z[_fk], float)
                                for _fk in _f if _fk.startswith("solid_grp_")}
@@ -3112,34 +3237,152 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                 wc["meta"]["ts"] = str(z["ts"])
             if "A2" in _f:
                 wc["A2"] = z["A2"]
+            if (_safe_warm_cache_enabled()
+                    and wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA
+                    and wc["meta"].get("ts") == "bdf2"
+                    and {"Ib_prev_net", "Ib_prev_imposed", "Ib_prev2_net",
+                         "Ib_prev2_imposed"} <= _f):
+                wc["Ib_prev"] = (z["Ib_prev_net"], z["Ib_prev_imposed"])
+                wc["Ib_prev2"] = (z["Ib_prev2_net"], z["Ib_prev2_imposed"])
         return wc
     except Exception:
         return None
 
 
 def _warm_cache_store(wc: dict) -> None:
+    _safe_on_wc = _safe_warm_cache_enabled()
+    if _safe_on_wc and wc.get("safe_schema"):
+        try:
+            _meta_safe = wc.get("meta")
+            if (not isinstance(wc.get("safe_identity"), str)
+                    or not wc.get("safe_identity")
+                    or not isinstance(_meta_safe, Mapping)
+                    or wc.get("eddy_complete") is not True):
+                raise ValueError("safe provenance or convergence flags are missing")
+            for _key in ("npd", "temp", "mscale"):
+                if (isinstance(_meta_safe[_key], (bool, np.bool_))
+                        or not isinstance(_meta_safe[_key],
+                                          (int, float, np.integer, np.floating))
+                        or not math.isfinite(float(_meta_safe[_key]))):
+                    raise ValueError("meta.%s is non-finite" % _key)
+            if not isinstance(wc.get("edcon_fp"), str) or not wc["edcon_fp"]:
+                raise ValueError("conductor identity is missing")
+            _raw_a = np.asarray(wc["A"])
+            _raw_xy = np.asarray(wc["doflocs"])
+            _raw_u = np.asarray(wc["Ued"])
+            _raw_solid = np.asarray(wc["solid"])
+            if any(_x.dtype.kind not in "iuf" for _x in
+                   (_raw_a, _raw_xy, _raw_u, _raw_solid)):
+                raise ValueError("A/Ued/solid/DOF arrays must be numeric")
+            _a, _xy = _raw_a.astype(float), _raw_xy.astype(float)
+            _u, _solid = _raw_u.astype(float), _raw_solid.astype(float)
+            if (_a.ndim != 1 or not _a.size or _xy.shape != (_a.size, 2)
+                    or _u.ndim != 1 or _solid.ndim != 1
+                    or not all(np.all(np.isfinite(_x)) for _x in (_a, _xy, _u, _solid))):
+                raise ValueError("A/Ued/solid/DOF arrays are malformed or non-finite")
+            _regions = np.asarray(wc.get("dof_region"))
+            if (_regions.shape != (_a.size,) or _regions.dtype.kind not in "iu"
+                    or np.any(~np.isin(_regions, (0, 1)))):
+                raise ValueError("DOF region labels are malformed")
+            for _group, _values in (wc.get("solid_grp") or {}).items():
+                _group_raw = np.asarray(_values)
+                if _group_raw.dtype.kind not in "iuf":
+                    raise ValueError("solid reference %s must be numeric" % _group)
+                _group_arr = _group_raw.astype(float)
+                if (_group_arr.shape != _solid.shape
+                        or not np.all(np.isfinite(_group_arr))):
+                    raise ValueError("solid reference %s is malformed or non-finite" % _group)
+            if wc.get("meta", {}).get("ts") == "bdf2":
+                _ib_history = _safe_validate_current_history(
+                    (wc.get("Ib_prev"), wc.get("Ib_prev2")))
+                if _ib_history is None:
+                    raise ValueError("BDF2 current history is malformed or non-finite")
+                _a2 = np.asarray(wc.get("A2"))
+                if _a2.dtype.kind not in "iuf":
+                    raise ValueError("BDF2 second history must be numeric")
+                _a2 = _a2.astype(float)
+                if _a2.shape != _a.shape or not np.all(np.isfinite(_a2)):
+                    raise ValueError("BDF2 second history is malformed or non-finite")
+            for _key in ("br_val", "br_cen", "br_tag", "br_mat"):
+                if wc.get(_key) is not None:
+                    _arr = np.asarray(wc[_key])
+                    if _arr.dtype.kind in "iufc" and not np.all(np.isfinite(_arr)):
+                        raise ValueError("%s contains non-finite values" % _key)
+            if wc.get("br_val") is not None:
+                _br, _cen = np.asarray(wc["br_val"]), np.asarray(wc["br_cen"])
+                if _br.dtype.kind not in "iuf" or _cen.dtype.kind not in "iuf":
+                    raise ValueError("Br values/centroids must be numeric")
+                _br, _cen = _br.astype(float), _cen.astype(float)
+                if (_br.ndim != 1 or not _br.size or _cen.shape != (_br.size, 2)
+                        or np.asarray(wc.get("br_tag")).shape != _br.shape
+                        or np.asarray(wc.get("br_mat")).shape != _br.shape
+                        or not np.all(np.isfinite(_br)) or np.any(_br < 0.0)
+                        or np.any(_br > 1.0) or not np.all(np.isfinite(_cen))):
+                    raise ValueError("Br values/coordinates/material labels are malformed")
+            for _key in ("I", "rpm", "gam"):
+                if not math.isfinite(float(wc[_key])):
+                    raise ValueError("%s is non-finite" % _key)
+            json.dumps(wc.get("demag_history"), allow_nan=False)
+        except (KeyError, TypeError, ValueError, OverflowError) as _invalid:
+            log.warning("P2 safe warm cache: publication skipped (%s)", _invalid)
+            return
     _SB_WARM_CACHE["last"] = wc
     try:
         p = _warm_cache_path()
-        tmp = p.with_suffix(".npz.tmp%d" % _os_sb.getpid())
+        import tempfile as _tempfile_wc
+        _fd_wc, _tmp_name_wc = _tempfile_wc.mkstemp(
+            prefix=p.name + ".", suffix=".npz.tmp", dir=str(p.parent))
+        from pathlib import Path as _Path_wc
+        tmp = _Path_wc(_tmp_name_wc)
         m = wc["meta"]
         _extra = {_k: wc[_k] for _k in ("br_val", "br_cen", "br_tag")
                   if wc.get(_k) is not None}
+        if _safe_on_wc and wc.get("br_mat") is not None:
+            _extra["br_mat"] = wc["br_mat"]
+        if _safe_on_wc and wc.get("dof_region") is not None:
+            _extra["dof_region"] = wc["dof_region"]
+        if _safe_on_wc and wc.get("safe_schema"):
+            _extra["safe_schema"] = str(wc["safe_schema"])
+        if _safe_on_wc and wc.get("safe_identity"):
+            _extra["safe_identity"] = str(wc["safe_identity"])
+        if _safe_on_wc and wc.get("edcon_fp"):
+            _extra["edcon_fp"] = str(wc["edcon_fp"])
+        if _safe_on_wc and wc.get("eddy_complete") is not None:
+            _extra["eddy_complete"] = bool(wc["eddy_complete"])
+        if _safe_on_wc and wc.get("demag_complete") is not None:
+            _extra["demag_complete"] = bool(wc["demag_complete"])
+        if _safe_on_wc and wc.get("demag_history") is not None:
+            _extra["demag_history_json"] = json.dumps(
+                wc["demag_history"], sort_keys=True, separators=(",", ":"),
+                allow_nan=False)
         for _gk, _gv in (wc.get("solid_grp") or {}).items():
             _extra["solid_grp_" + str(_gk)] = np.asarray(_gv, float)
         if m.get("ts"):
             _extra["ts"] = str(m["ts"])
         if wc.get("A2") is not None:
             _extra["A2"] = wc["A2"]
-        np.savez(tmp, doflocs=wc["doflocs"], A=wc["A"], Ued=wc["Ued"],
-                 solid=wc["solid"],
-                 nspp=m["nspp"], npd=m["npd"], conn=m["conn"], temp=m["temp"],
-                 mscale=m["mscale"], I=wc["I"], rpm=wc["rpm"], gam=wc["gam"],
-                 geo_fp=str(wc.get("geo_fp") or ""),
-                 nspp_req=int(wc.get("nspp_req") or m["nspp"]),
-                 nsect=int(wc.get("nsect") or 0), **_extra)
-        # np.savez may append ".npz" to the tmp name — resolve what it wrote.
-        src = tmp if tmp.is_file() else tmp.with_suffix(tmp.suffix + ".npz")
+        if (_safe_on_wc and wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA
+                and wc.get("meta", {}).get("ts") == "bdf2"
+                and wc.get("Ib_prev") is not None
+                and wc.get("Ib_prev2") is not None):
+            _extra["Ib_prev_net"] = wc["Ib_prev"][0]
+            _extra["Ib_prev_imposed"] = wc["Ib_prev"][1]
+            _extra["Ib_prev2_net"] = wc["Ib_prev2"][0]
+            _extra["Ib_prev2_imposed"] = wc["Ib_prev2"][1]
+        # Write through the already-created handle.  Passing a pathname makes
+        # numpy append ``.npz`` and leaves the mkstemp placeholder behind.
+        _tmp_file_wc = _os_sb.fdopen(_fd_wc, "wb")
+        _fd_wc = None  # fdopen now owns it; outer cleanup must not close it again.
+        with _tmp_file_wc:
+            np.savez(_tmp_file_wc, doflocs=wc["doflocs"], A=wc["A"],
+                     Ued=wc["Ued"], solid=wc["solid"], nspp=m["nspp"],
+                     npd=m["npd"], conn=m["conn"], temp=m["temp"],
+                     mscale=m["mscale"], I=wc["I"], rpm=wc["rpm"],
+                     gam=wc["gam"], geo_fp=str(wc.get("geo_fp") or ""),
+                     nspp_req=int(wc.get("nspp_req") or m["nspp"]),
+                     nsect=int(wc.get("nsect") or 0), **_extra)
+            _tmp_file_wc.flush()
+        src = tmp
         # RETRY the replace.  On Windows an open READ handle blocks the rename
         # (measured: os.replace over a file another process holds open raises
         # WinError 5), and a reader is exactly what this cache is for — a
@@ -3162,7 +3405,17 @@ def _warm_cache_store(wc: dict) -> None:
         except Exception:
             pass
     except Exception:   # the disk mirror is best-effort, never fails a run
-        pass
+        try:
+            if locals().get("_fd_wc") is not None:
+                _os_sb.close(_fd_wc)
+                _fd_wc = None
+        except Exception:
+            pass
+        try:
+            if "tmp" in locals() and tmp.is_file():
+                tmp.unlink()
+        except Exception:
+            pass
 
 
 def _warm_cache_meta() -> Optional[dict]:
@@ -3238,7 +3491,8 @@ def _seed_across_steps_ok(cached_meta, wmeta) -> bool:
 
 
 def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
-                      rpm: float, gamma_deg: float, n_sectors: Optional[int] = None):
+                      rpm: float, gamma_deg: float, n_sectors: Optional[int] = None,
+                      need_br: bool = False, safe_identity: Optional[str] = None):
     """May this cached state seed THIS run?  ``(ok, why_not)``.
 
     ONE gate for both halves of the seed (the eddy history and the Br map), so
@@ -3259,6 +3513,121 @@ def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
     """
     if wc is None:
         return False, "no cached state"
+    if _safe_warm_cache_enabled():
+        try:
+            def _safe_num(value):
+                if (isinstance(value, (bool, np.bool_))
+                        or not isinstance(value, (int, float, np.integer, np.floating))):
+                    return None
+                _number = float(value)
+                return _number if math.isfinite(_number) else None
+
+            if not isinstance(wc, Mapping) or not isinstance(wmeta, Mapping):
+                return False, "cache provenance has an invalid type"
+            if wc.get("safe_schema") != _SAFE_WARM_CACHE_SCHEMA:
+                return False, "cache has unknown or legacy provenance"
+            _identity = wc.get("safe_identity")
+            _expected_identity = (safe_identity if safe_identity is not None
+                                  else wmeta.get("safe_identity"))
+            if (not isinstance(_identity, str) or not _identity
+                    or _identity != _expected_identity):
+                return False, "machine/material/operating-point/conductor identity differs"
+            if not isinstance(wc.get("meta"), Mapping) or wc.get("meta") != wmeta:
+                return False, "different or malformed resolved schedule/machine settings"
+            if wc.get("eddy_complete") is not True:
+                return False, "parent eddy history did not converge"
+            _requested_op = [_safe_num(x) for x in (I_phase_rms, rpm, gamma_deg)]
+            if any(x is None for x in _requested_op):
+                return False, "requested current, speed or gamma is non-finite"
+            _cached_op = [_safe_num(wc.get(k)) for k in ("I", "rpm", "gam")]
+            if any(x is None for x in _cached_op):
+                return False, "cached current, speed or gamma is non-finite"
+            if _cached_op != _requested_op:
+                return False, "current, speed or gamma differs"
+            _Araw, _xyraw = np.asarray(wc.get("A")), np.asarray(wc.get("doflocs"))
+            if _Araw.dtype.kind not in "iuf" or _xyraw.dtype.kind not in "iuf":
+                return False, "cached eddy field/coordinates have non-numeric types"
+            _A, _xy = _Araw.astype(float), _xyraw.astype(float)
+            if (_A.ndim != 1 or not _A.size or _xy.shape != (_A.size, 2)
+                    or not np.all(np.isfinite(_A)) or not np.all(np.isfinite(_xy))):
+                return False, "cached eddy field/coordinates are malformed or non-finite"
+            _ts = wc.get("meta", {}).get("ts")
+            _A2 = wc.get("A2")
+            if _ts == "bdf2":
+                _ib_history = _safe_validate_current_history(
+                    (wc.get("Ib_prev"), wc.get("Ib_prev2")))
+                if _ib_history is None:
+                    return False, "cached BDF2 current history is missing or malformed"
+                _A2 = np.asarray(_A2)
+                if _A2.dtype.kind not in "iuf":
+                    return False, "cached BDF2 second history has a non-numeric type"
+                _A2 = _A2.astype(float)
+                if _A2.shape != _A.shape or not np.all(np.isfinite(_A2)):
+                    return False, "cached BDF2 second history level is malformed"
+            if bool(need_br):
+                if wc.get("demag_complete") is not True:
+                    return False, "parent demagnetisation ratchet did not converge"
+                _br, _cen = np.asarray(wc.get("br_val")), np.asarray(wc.get("br_cen"))
+                if _br.dtype.kind not in "iuf" or _cen.dtype.kind not in "iuf":
+                    return False, "cached Br values/coordinates have non-numeric types"
+                _br, _cen = _br.astype(float), _cen.astype(float)
+                _tag = np.asarray(wc.get("br_tag"))
+                _mat = np.asarray(wc.get("br_mat"))
+                if (_br.ndim != 1 or not _br.size or _cen.shape != (_br.size, 2)
+                        or _tag.shape != _br.shape or _mat.shape != _br.shape
+                        or not np.all(np.isfinite(_br)) or np.any(_br < 0.0)
+                        or np.any(_br > 1.0) or not np.all(np.isfinite(_cen))):
+                    return False, "cached Br state is malformed or non-finite"
+                _dh = wc.get("demag_history")
+                if not isinstance(_dh, Mapping) or _dh.get("validated") is not True:
+                    return False, "parent lacks validated full rotor-image history"
+                _ih = _dh.get("image_history")
+                _passes = _dh.get("prepass")
+                _torque = _dh.get("last_torque")
+                if not isinstance(_ih, Mapping) or _ih.get("complete") is not True:
+                    return False, "parent rotor-image history is incomplete"
+                _cycle_raw = _ih.get("cycle_periods")
+                _nprev_raw = _dh.get("prepass_periods")
+                if (isinstance(_nprev_raw, bool)
+                        or not isinstance(_nprev_raw, (int, np.integer))):
+                    return False, "parent rotor-image pre-pass count is malformed"
+                _nprev = int(_nprev_raw)
+                if _cycle_raw is None:
+                    _cycle = 1
+                elif (isinstance(_cycle_raw, bool)
+                      or not isinstance(_cycle_raw, (int, np.integer))):
+                    return False, "parent rotor-image cycle count is malformed"
+                else:
+                    _cycle = int(_cycle_raw)
+                if _cycle < 1 or _nprev < _cycle or not isinstance(_passes, list):
+                    return False, "parent rotor-image history has invalid period counts"
+                if len(_passes) != _nprev or not _passes:
+                    return False, "parent pre-pass history is incomplete"
+                for _pass in _passes:
+                    if not isinstance(_pass, Mapping):
+                        return False, "parent pre-pass record has an invalid type"
+                    _pass_torque = _pass.get("torque")
+                    if not isinstance(_pass_torque, Mapping):
+                        return False, "parent pre-pass torque record is malformed"
+                    _nums = [_safe_num(_pass.get("per_magnet_mean_max")),
+                             _safe_num(_pass.get("element_max")),
+                             _safe_num(_pass_torque.get("T_mean")),
+                             _safe_num(_pass_torque.get("ripple_pct"))]
+                    if any(x is None for x in _nums):
+                        return False, "parent pre-pass history contains non-finite values"
+                if not isinstance(_torque, Mapping):
+                    return False, "parent final torque reference is malformed"
+                _last = [_safe_num(_torque.get("T_mean")),
+                         _safe_num(_torque.get("ripple_pct"))]
+                if any(x is None for x in _last):
+                    return False, "parent final torque reference is non-finite"
+            if n_sectors is not None:
+                _ns_run = 1 if int(n_sectors) <= 1 else int(n_sectors)
+                if int(wc.get("nsect")) != _ns_run:
+                    return False, "sector discretisation differs"
+            return True, ""
+        except (KeyError, TypeError, ValueError, OverflowError, IndexError):
+            return False, "cache provenance or history contains malformed values"
     if wc.get("meta") != wmeta and not _seed_across_steps_ok(wc.get("meta"), wmeta):
         return False, ("different schedule or machine (steps/period, periods, "
                        "winding, coil temperature or magnet scale)")
@@ -4373,6 +4742,9 @@ def _fem_transient_sliding_band_once(
                              paired_stator=True)
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
+    # Early Br image restoration needs the electrical-period angle before the
+    # frame schedule closure is built.
+    period_mech = 360.0 / pole_pairs
     # Sector boundary sign: ANTI-periodic (−1) only when the sector spans an
     # ODD number of poles (e.g. NS=4 → 7 poles); PERIODIC (+1) for an EVEN pole
     # count (NS=2 → 14 poles).  Mirrors the static solve's `anti_periodic =
@@ -5388,6 +5760,7 @@ def _fem_transient_sliding_band_once(
     # magnet_scale lets the torque decomposition turn the PMs OFF (=0 →
     # reluctance-only torque) or weaken them, without touching geometry.
     _br_glob = np.full(_nt_r, float(magnet_scale))   # per-element Br factor (demag de-rating × magnet_scale)
+    _br_seed_original = _br_glob.copy()
     # per-phase unit-current stator source vectors
     f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),
               'C': np.zeros(half["s"]["n"])}
@@ -5710,6 +6083,72 @@ def _fem_transient_sliding_band_once(
               "conn": "np%d" % int(n_parallel),
               "temp": round(float(coil_temp_c), 1),
               "mscale": float(magnet_scale)}
+    if _safe_warm_cache_enabled():
+        try:
+            _safe_s_tags = [int(t) for t in half["s"]["cells"]
+                            if _sigma_of_tag(int(t)) > 0.0]
+            _safe_r_tags = ([int(t) for t in half["r"]["cells"]
+                             if _sigma_of_tag(int(t)) > 0.0]
+                            if rotor_eddy else [])
+            _safe_m_tags = [int(t) for t, ix in half["r"]["cells"].items()
+                            if np.intersect1d(np.asarray(ix, int), _mag_idx).size]
+            _safe_identity = _safe_identity_digest({
+                "schema": _SAFE_WARM_CACHE_SCHEMA,
+                "geometry": geo,
+                "resolved_geometry": _geo_fp,
+                "resolved_motor_parameters": dict(motor.parameters),
+                "physical_geometry_options": {
+                    "stator_fillet_mm": float(stator_fillet_mm),
+                    "outer_air_factor": float(outer_air_factor),
+                },
+                # Include every physical region, including nonconducting iron.
+                # Only the intentionally variable air-gap/band discretization is
+                # omitted; geometry controls above still key the physical gap.
+                "physical_regions": {
+                    "stator": _safe_physical_boundary_digest(
+                        half["s"]["mesh"], half["s"]["cells"],
+                        gap_regions=(DOM_AIRGAP, DOM_BAND)),
+                    "rotor": _safe_physical_boundary_digest(
+                        half["r"]["mesh"], half["r"]["cells"],
+                        gap_regions=(DOM_AIRGAP, DOM_BAND)),
+                },
+                "materials": {"stator": mats_full, "rotor": matr0},
+                "resolved_material_cards": _noload_material_fingerprint(),
+                "coil_temp_C": float(coil_temp_c),
+                "magnet_temp_C": (None if magnet_temp_c is None
+                                  else float(magnet_temp_c)),
+                "current_A": float(I_phase_rms), "gamma_deg": float(gamma_deg),
+                "daxis_eff_deg": float(daxis_eff),
+                "rpm": float(rpm), "rotor_angle0_deg": float(rotor_angle0_deg),
+                "source": {"class": type(_src).__qualname__,
+                           "star_delta": str(star_delta or "star").lower(),
+                           "six_phase": bool(six_phase)},
+                "physics": {"demag": bool(demag),
+                            "rotor_eddy": bool(rotor_eddy),
+                            "frozen_nu": bool(frozen_nu)},
+                "winding": {"n_parallel": int(n_parallel),
+                            "connection": str(connection or ""),
+                            "wire_split": int(geo.get("wire_split", 1) or 1)},
+                "schedule": {"steps": int(n_steps_per_period),
+                             "periods": float(n_periods),
+                             "eddy_method": str(_eddy_method),
+                             "time_scheme": ("be" if _os_sb.environ.get(
+                                 "SB_EDDY_BE") == "1" else "bdf2"),
+                             "n_sectors": int(n_sectors),
+                             "bc_sign": int(_bc_sign),
+                             "element_order": int(element_order)},
+                "conductor_mesh": {
+                    "stator": _safe_mesh_entity_digest(
+                        half["s"]["mesh"], half["s"]["cells"], _safe_s_tags),
+                    "rotor": _safe_mesh_entity_digest(
+                        half["r"]["mesh"], half["r"]["cells"], _safe_r_tags)},
+                "magnet_mesh": _safe_mesh_entity_digest(
+                    half["r"]["mesh"], half["r"]["cells"], _safe_m_tags),
+            })
+        except Exception as _safe_ie:
+            _safe_identity = ""
+            log.info("P2 safe warm cache: identity unavailable (%s) - cold start",
+                     _safe_ie)
     # The eddy TIME SCHEME is part of the discretisation too: a backward-Euler
     # state (and its same-angle loss reference, ~10 % lower on the reference motor
     # magnets) is not the BDF2 orbit.  Only the BDF2 key carries it, so a
@@ -5723,19 +6162,32 @@ def _fem_transient_sliding_band_once(
     # second run in the same process does not touch the disk at all.
     _wc_seed = None
     _wc_ok, _wc_why = False, "not a coupled-eddy current-drive run"
-    if eddy and not _vdrive and not _warm_cache_disabled():
+    _safe_drive_ok = (drive == "current" and waveform is None
+                      and excitation is None and six_phase is None
+                      and str(star_delta or "star").lower() == "star")
+    if (_safe_warm_cache_enabled() and not _safe_drive_ok):
+        log.info("P2 safe warm cache: COLD start (only built-in sinusoidal current drive is supported)")
+    if (eddy and not _vdrive and not _warm_cache_disabled()
+            and (not _safe_warm_cache_enabled() or _safe_drive_ok)):
         _wc_seed = _warm_cache_load()
         _wc_ok, _wc_why = _warm_seed_accept(_wc_seed, _wmeta, I_phase_rms, rpm,
-                                            gamma_deg, n_sectors=int(n_sectors))
+                                            gamma_deg, n_sectors=int(n_sectors),
+                                            need_br=bool(demag),
+                                            safe_identity=(_safe_identity if
+                                                _safe_warm_cache_enabled() else None))
         if not _wc_ok:
             _wc_seed = None
+    _Ib_seed_restore = None
+    _safe_br_pending = None
     _dm_seeded = False        # the Br ratchet continues a previous point's magnet
     _dm_seed_from = None      # …and this is whose (honesty fields in the result)
+    _dm_inherited_history = None
     # SWEEP MODE ONLY, and only on the path that publishes such a state: the
     # coupled-eddy current drive.  A magnetostatic or voltage run has a
     # different settling scheme (`_dmskip` / the voltage prefix) and never
     # publishes a Br map, so it must not consume one either.
-    if (_seed_from_previous() and demag and _dmst is not None and eddy
+    if ((_seed_from_previous() or _safe_warm_cache_enabled())
+            and demag and _dmst is not None and eddy
             and not _vdrive and _wc_seed is not None
             and _wc_seed.get("br_val") is not None and _mag_idx.size
             and not _br_withheld_across_steps(_wc_seed, _wmeta)):
@@ -5746,13 +6198,37 @@ def _fem_transient_sliding_band_once(
             _tag_r = np.zeros(int(_br_glob.size), int)
             for _tg, _ix in half["r"]["cells"].items():
                 _tag_r[np.asarray(_ix, int)] = int(_tg)
-            _proj = _project_br(_wc_seed, _cen_r[_mag_idx], _tag_r[_mag_idx])
-            if _proj is not None:
+            if _safe_warm_cache_enabled():
+                _mat_id = np.asarray([
+                    _safe_magnet_material_identity(matr0.get(int(_tg)))
+                    for _tg in _tag_r[_mag_idx]], dtype=str)
+                _safe_br_mat = np.asarray(_wc_seed.get("br_mat", ())).astype(str)
+                _safe_br_tag = np.asarray(_wc_seed.get("br_tag", ()), int)
+                _safe_br_cen = np.asarray(_wc_seed.get("br_cen"), float)
+                _safe_br_val = np.asarray(_wc_seed.get("br_val", ()), float)
+                if (_safe_br_mat.shape != _mat_id.shape
+                        or _safe_br_tag.shape != _mat_id.shape
+                        or not np.array_equal(_safe_br_mat, _mat_id)):
+                    _proj = None
+                    _safe_br_why = "magnet material identity differs"
+                else:
+                    _br_ordered, _br_map_info = _safe_exact_tagged_br_transfer(
+                        _safe_br_cen, _safe_br_tag, _safe_br_val,
+                        _cen_r[_mag_idx], _tag_r[_mag_idx], _mat_id)
+                    if _br_ordered is None:
+                        _proj, _safe_br_why = None, _br_map_info.get("reason")
+                    else:
+                        _proj = np.asarray(_br_ordered, float).copy()
+                        _safe_br_info = {"mapped_magnets": int(_proj.size),
+                                         "material_fixed": True}
+                        _safe_br_why = None
+            else:
+                _proj = _project_br(_wc_seed, _cen_r[_mag_idx], _tag_r[_mag_idx])
+                _safe_br_why = None
+            if _proj is not None and not _safe_warm_cache_enabled():
+                # Verbatim HEAD legacy semantics, including mutation before
+                # metadata conversion/log formatting and its exception effects.
                 _kept, _nhit = _proj
-                # `_br_glob` folds magnet_scale; the cache stores the pure
-                # de-rating factor (1.0 = pristine), so a run at another scale
-                # could not silently inherit this one's weakening — and the
-                # scale is a meta term anyway.
                 _br_glob[_mag_idx] = float(magnet_scale) * np.clip(_kept, 0.0, 1.0)
                 _dm_seeded = True
                 _dm_seed_from = {
@@ -5771,9 +6247,39 @@ def _fem_transient_sliding_band_once(
                     _nhit, int(_mag_idx.size), float(_wc_seed["I"]),
                     float(_wc_seed["gam"]), str(_wc_seed.get("geo_fp") or "?"),
                     100.0 * float(np.min(_kept)), 100.0 * float(np.max(_kept)))
+                _proj = None
+            if _proj is not None:
+                _kept = _proj
+                _nhit = int(_kept.size)
+                # `_br_glob` folds magnet_scale; the cache stores the pure
+                # de-rating factor (1.0 = pristine), so a run at another scale
+                # could not silently inherit this one's weakening — and the
+                # scale is a meta term anyway.
+                _kept = np.asarray(_kept, dtype=float)
+                if (_kept.shape != (_mag_idx.size,)
+                        or not np.all(np.isfinite(_kept))):
+                    raise ValueError("projected Br factors are malformed or non-finite")
+                _br_candidate = float(magnet_scale) * np.clip(_kept, 0.0, 1.0)
+                _seed_from_candidate = {
+                    "I": float(_wc_seed["I"]), "gam": float(_wc_seed["gam"]),
+                    "rpm": float(_wc_seed["rpm"]),
+                    "geometry_fingerprint": str(_wc_seed.get("geo_fp") or ""),
+                    "same_geometry": bool(_wc_seed.get("geo_fp") == _geo_fp),
+                }
+                _kept_min, _kept_max = float(np.min(_kept)), float(np.max(_kept))
+                # Do not mutate irreversible magnet state until the final,
+                # resolved conductor circuit has authenticated this cache.
+                _safe_br_pending = (_br_candidate, _seed_from_candidate,
+                                    _wc_seed.get("demag_history"), _nhit,
+                                    _kept_min, _kept_max)
+            elif _safe_warm_cache_enabled():
+                _wc_seed = None
+                _wc_ok, _wc_why = False, _safe_br_why or "Br image map unavailable"
+                log.info("P2 safe warm cache: COLD start (%s)", _wc_why)
         except Exception as _dse:   # a bad seed may never fail a run
             log.info("P2 demag seed skipped (%s)", _dse)
             _dm_seeded = False; _dm_seed_from = None
+            _dm_inherited_history = None
     # Non-laminated solid conductors that ALSO carry rotating-field eddy losses
     # (in addition to magnets): the COILS (solid copper bars, stator side) and
     # the SHAFT (solid steel, rotor side).
@@ -7450,20 +7956,16 @@ def _fem_transient_sliding_band_once(
     # per-frame schedule that cannot be spliced, so it keeps today's behaviour).
     #
     # ── ONCE PER SWEEP (user 2026-09-06) ─────────────────────────────────────
-    # "the demagnetization pass is done once per sweep only".  When
-    # the warm cache handed this run a Br map (`_dm_seeded`, sweep mode only —
-    # see the seed block above), the pre-pass has ALREADY been paid for by the
-    # point that published it and the magnet arrives settled: its length here
-    # is 0.  The ratchet still stays FROZEN through the warm-up probe — the
-    # seed is projected onto a different mesh and the probe is exactly the
-    # transient of that projection relaxing, which is not a field the machine
-    # was ever in — and turns ON at the handoff, i.e. from the first REPORTED
-    # frame.  So the splice below costs one re-solved frame instead of a whole
-    # electrical period, and the reported window is still measured on a magnet
-    # the ratchet is actively watching.
+    # A legacy sweep Br seed may omit this pre-pass; the safe warm-cache path
+    # carries validated image history but still requires one fresh ratchet
+    # period before measurement.  In both paths the ratchet stays frozen during
+    # the warm-up probe, whose projected seed relaxation is not a physical
+    # machine state, and turns on at the configured handoff.  The safe path
+    # therefore does not treat inherited history as proof that this run's
+    # demagnetization has settled.
     _dm_freeze_warm = bool(demag and _dmst is not None and eddy and not _vdrive)
     _dm_ratchet = not _dm_freeze_warm   # may `_dmst.update` be applied at all?
-    _dm_pre_len = (0 if _dm_seeded
+    _dm_pre_len = (0 if (_dm_seeded and not _safe_warm_cache_enabled())
                    else (int(n_steps_per_period) if _dm_freeze_warm else 0))
     _dm_prepass = False             # the pre-pass has been spliced in
     _dm_pre_logged = False          # its one summary line has been emitted
@@ -7638,10 +8140,16 @@ def _fem_transient_sliding_band_once(
         from motor_ai_sim.simulation.time_periodic import (
             image_min_br as _imb, br_change as _brc)
         _maps, _L, _minfo = _dm_image()
-        _rec: Dict[str, Any] = {"cycle_periods": _L, "pre_pass_periods": int(n_periods)}
+        _inherited_periods = (int((_dm_inherited_history or {}).get(
+            "prepass_periods", 0)) if _dm_seeded else 0)
+        _n_history = int(n_periods) + _inherited_periods
+        _rec: Dict[str, Any] = {"cycle_periods": _L,
+                                "pre_pass_periods": _n_history}
+        if _safe_warm_cache_enabled():
+            _rec["inherited_pre_pass_periods"] = _inherited_periods
         if _maps is None:
             _rec["error"] = "no pole image map of the magnets (%s)" % (_minfo,)
-            _rec["complete"] = bool(_L is not None and n_periods >= _L)
+            _rec["complete"] = bool(_L is not None and _n_history >= _L)
             return _rec, _rec["complete"]
         _gap = _brc(_dmst.mags, _imb(_dmst.mags, _br_glob, _maps), _br_glob,
                     _dm_areas())
@@ -7651,7 +8159,7 @@ def _fem_transient_sliding_band_once(
         # dangerous instant at every rotor image (fourth Codex review: a small
         # area-mean image gap after a few quiet periods is not that history;
         # the gap is recorded, not a shortcut)
-        _ok = bool(_L is not None and n_periods >= _L)
+        _ok = bool(_L is not None and _n_history >= _L)
         _rec["complete"] = _ok
         return _rec, _ok
 
@@ -7659,6 +8167,10 @@ def _fem_transient_sliding_band_once(
         """The observable drift between the last two pre-pass periods."""
         from motor_ai_sim.simulation.time_periodic import owner_limits as _olim
         _t = [p_.get("torque") for p_ in passes[-2:]]
+        if len(_t) < 2 and passes and _dm_seeded:
+            _prior = ((_dm_inherited_history or {}).get("last_torque") or None)
+            if _prior is not None:
+                _t = [_prior, passes[-1].get("torque")]
         if len(_t) < 2 or any(x is None for x in _t):
             return {"ok": False, "why": "fewer than two pre-pass periods with torque"}
         _lim = _olim(_t[1]["ripple_pct"])
@@ -7888,6 +8400,12 @@ def _fem_transient_sliding_band_once(
                 _o[_td_rdf] = (-_ss if neg else _ss) * np.asarray(v, float)[_td_rdf[_jj]]
                 return _o
 
+            def _td_apply_transpose(mp, neg, v):
+                return _tdm.period_map_transpose(
+                    v, _td_rdf, mp, half_neg=neg)
+
+            _td_source_work = _os_sb.environ.get("SB_TDM_SOURCE_WORK", "0") == "1"
+
             # The FULL period by default (Codex review 2026-09-30).  The HALF
             # period (anti-periodic, half the frames) is opt-in, SB_TDM_HALF=1,
             # and taken only when the excitation is half-wave symmetric, the
@@ -7957,6 +8475,9 @@ def _fem_transient_sliding_band_once(
                         P_start=_td_ops(0)[0], P_fwd=_td_ops(_Nb)[0],
                         K=_td_K_chk, Msig=_Msig2, GT=_G2.T.tocsr(), S_raw=_S_con,
                         f_mag=f_mag2,
+                        source_work=_td_source_work,
+                        wrap_transpose=lambda v: _td_apply_transpose(
+                            _td_back, True, v),
                         tol={_kk: min(_vv, _tdm.HALF_SYMMETRY_RTOL)
                              for _kk, _vv in _tdm.MAP_CHECK_RTOL.items()})
                     _tdm_fdev = float(_td_half_chk["dev"]["source"])
@@ -7985,6 +8506,9 @@ def _fem_transient_sliding_band_once(
                 P_start=_td_ops(0)[0], P_fwd=_td_ops(_td_N)[0],
                 K=_td_K_chk, Msig=_Msig2, GT=_G2.T.tocsr(), S_raw=_S_con,
                 f_mag=f_mag2,
+                source_work=_td_source_work,
+                wrap_transpose=lambda v: _td_apply_transpose(
+                    _td_back, _td_neg, v),
                 tol=(None if not _td_neg else
                      {_kk: min(_vv, _tdm.HALF_SYMMETRY_RTOL)
                       for _kk, _vv in _tdm.MAP_CHECK_RTOL.items()}))
@@ -8930,8 +9454,9 @@ def _fem_transient_sliding_band_once(
     # fresh magnet under load always does), the quiet test refuses the handoff
     # and the run extends — the seed carries no Br state into an interactive
     # run, so it keeps its full pre-ratchet period and its reproducibility.
-    # DEMAG runs, SWEEP MODE: the Br map came in with the seed (see the block
-    # beside `_dmst`), so the pre-pass is skipped instead.
+    # DEMAG runs, legacy optimizer mode may skip its pre-pass after a Br seed.
+    # Safe cache mode requires inherited image-history proof and still runs a
+    # fresh verification period before the reported window.
     _warm_seeded = False   # the eddy history continues the previous run's
     # A seed projected from a DIFFERENT geometry can be a bad Newton start:
     # the sweep of 2026-09-06 (air_gap 1.6 → 2.1 with the live machine's seed)
@@ -8941,28 +9466,193 @@ def _fem_transient_sliding_band_once(
     # re-solved COLD (zero history, no reference gauge) exactly once — the
     # settle test then extends the march as it would on any cold run.
     _seed_cold_retry_done = False
+    _warm_seed_pending = None
+    _safe_edcon_fp = (_safe_circuit_identity(
+        _ed_con, _ed_paths, geo, resolved_bonding=_bond_s,
+        strand_group=strand_group, series_paths=series_paths)
+                      if _safe_warm_cache_enabled() else None)
     _wc_A = None          # near-final frame stashed for the NEXT run's seed
     _wc_A2 = None         # …and the one before it (BDF2's second level)
+    _wc_Ib_prev = None
+    _wc_Ib_prev2 = None
     _wc_Ued = None
     _warm_ref = None      # previous run's per-frame solid loss (same angles)
     _warm_ref_grp: Dict[str, Any] = {}   # …and per conductor group
+    def _rollback_safe_br_seed(reason):
+        nonlocal f_mag2, _dm_seeded, _dm_seed_from, _dm_inherited_history
+        nonlocal _warm_ref, _warm_ref_grp
+        nonlocal _warm_seed_pending, _Ib_seed_restore, _warm_seeded
+        nonlocal _Aed_prev, _Aed_prev2, _hed_prev, _Ib_prev, _Ib_prev2, _Ued
+        nonlocal _A2_prev, _nu_conv2, nu_all2, _safe_br_pending
+        nonlocal _static_seed_info
+        if not _safe_warm_cache_enabled():
+            return
+        if _dm_seeded:
+            _safe_restore_br_bundle(
+                _br_seed_original, _br_glob, dm_seeded=_dm_seeded,
+                dm_seed_from=_dm_seed_from, mx_all=_mx_all, my_all=_my_all,
+                nst=nst, mx=_Mx_glob, my=_My_glob, magnet_scale=magnet_scale)
+            f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                         my=b2_0.interpolate(_my_all))
+            _drv.f_mag = f_mag2
+        _dm_seeded, _dm_seed_from = False, None
+        _dm_inherited_history = None
+        _warm_ref, _warm_ref_grp = None, {}
+        _warm_seed_pending = None; _Ib_seed_restore = None
+        _safe_br_pending = None
+        _warm_seeded = False
+        _cold = _safe_cold_seed_bundle(N2, len(_ed_con), nu_base2)
+        _Aed_prev = _cold["A"]; _Aed_prev2 = _cold["A2"]
+        _hed_prev = _cold["hed"]
+        _Ib_prev = _cold["Ib"]; _Ib_prev2 = _cold["Ib2"]
+        _Ued = _cold["U"]
+        _A2_prev = _cold["A2_prev"]; _nu_conv2 = _cold["nu_conv2"]
+        nu_all2 = _cold["nu_all2"]
+        _static_seed_info = None
+        log.info("P2 safe warm cache: Br seed rolled back (%s); cold demag pre-pass required",
+                 reason)
+    if (_safe_warm_cache_enabled() and _eddy_method == "tdm"
+            and (_wc_seed is not None or _safe_br_pending is not None)):
+        _wc_seed = None; _safe_br_pending = None
+        _wc_ok, _wc_why = False, "safe cache reuse is unavailable for TDM"
+        log.info("P2 safe warm cache: COLD TDM start (safe reuse is not qualified "
+                 "for TDM; no Br or field seed was consumed)")
     if (eddy and not _vdrive and n_total >= 8 and _wc_seed is not None
             and _eddy_method != "tdm"):      # TDM solves the orbit, no seed
         _wc = _wc_seed
         try:
-            from scipy.spatial import cKDTree as _KDT
-            _widx = _KDT(_wc["doflocs"]).query(
-                np.asarray(b2.doflocs.T, dtype=np.float32), k=1)[1]
-            _Aed_prev = np.asarray(_wc["A"], float)[_widx]
-            # BDF2 needs the level before it too; a seed published by a BDF2
-            # run carries it (frame n_total−4), an older one does not → the
-            # first step is backward Euler.
-            if (_eddy_bdf2 and _wc.get("A2") is not None
-                    and len(_wc["A2"]) == len(_wc["A"])):
-                _Aed_prev2 = np.asarray(_wc["A2"], float)[_widx]
-                _hed_prev = float(dt)
-            if len(_wc["Ued"]) == len(_ed_con):
-                _Ued = np.asarray(_wc["Ued"], float).copy()
+            if _safe_warm_cache_enabled():
+                if _wc.get("edcon_fp") != _safe_edcon_fp:
+                    raise RuntimeError("conductor constraint identity differs")
+                _src_regions = _wc.get("dof_region")
+                if _src_regions is None:
+                    raise RuntimeError("cache lacks stator/rotor DOF regions")
+                _edf_safe = np.asarray(b2.element_dofs, int)
+                _rdf_safe = np.unique(_edf_safe[:, nst:].ravel())
+                _sdf_safe = np.unique(_edf_safe[:, :nst].ravel())
+                if np.intersect1d(_rdf_safe, _sdf_safe).size:
+                    raise RuntimeError("stator and rotor halves share DOFs")
+                _regions_safe = np.full(N2, -1, int)
+                _regions_safe[_sdf_safe] = 0
+                _regions_safe[_rdf_safe] = 1
+                _required_safe = np.asarray(_Msig2.diagonal()).ravel() > 0.0
+                _mapped_a, _map_info = _safe_exact_region_transfer(
+                    np.asarray(_wc["doflocs"], float).T,
+                    np.asarray(_wc["A"], float),
+                    np.asarray(_src_regions, int),
+                    np.asarray(b2.doflocs, float), _regions_safe,
+                    _required_safe, tolerance_m=1e-12)
+                if _mapped_a is None:
+                    raise RuntimeError(_map_info.get("reason", "DOF map failed"))
+                _wa, _wm = _mapped_a
+                _rew_a, _rew_info = _safe_rewind_rotor_dofs(
+                    _wa, _rdf_safe,
+                    np.asarray(b2.doflocs, float)[:, _rdf_safe],
+                    float(np.sqrt(np.min(_triangle_areas(half["r"]["mesh"])))),
+                    n_sectors=int(NS), bc_sign=int(_bc_sign),
+                    electrical_period_rad=math.radians(float(period_mech)),
+                    period_shift_map=_period_shift_map,
+                    window_periods=float(n_periods))
+                if _rew_a is None or not np.all(np.isfinite(_rew_a[_required_safe])):
+                    raise RuntimeError((_rew_info or {}).get(
+                        "reason", "rotor image leaves an unmapped conductor DOF"))
+                _rew_mask_a, _ = _safe_rewind_rotor_dofs(
+                    np.asarray(_wm, float), _rdf_safe,
+                    np.asarray(b2.doflocs, float)[:, _rdf_safe],
+                    float(np.sqrt(np.min(_triangle_areas(half["r"]["mesh"])))),
+                    n_sectors=int(NS), bc_sign=int(_bc_sign),
+                    electrical_period_rad=math.radians(float(period_mech)),
+                    period_shift_map=_period_shift_map,
+                    window_periods=float(n_periods))
+                _rew_a2 = None
+                _wm2 = None
+                if _eddy_bdf2:
+                    if (_wc.get("A2") is None
+                            or len(_wc["A2"]) != len(_wc["A"])):
+                        raise RuntimeError("BDF2 cache lacks its second history level")
+                    _mapped_a2, _map_info2 = _safe_exact_region_transfer(
+                        np.asarray(_wc["doflocs"], float).T,
+                        np.asarray(_wc["A2"], float),
+                        np.asarray(_src_regions, int),
+                        np.asarray(b2.doflocs, float), _regions_safe,
+                        _required_safe, tolerance_m=1e-12)
+                    if _mapped_a2 is None:
+                        raise RuntimeError(_map_info2.get("reason", "A2 DOF map failed"))
+                    _rew_a2, _rew_info2 = _safe_rewind_rotor_dofs(
+                        _mapped_a2[0], _rdf_safe,
+                        np.asarray(b2.doflocs, float)[:, _rdf_safe],
+                        float(np.sqrt(np.min(_triangle_areas(half["r"]["mesh"])))),
+                        n_sectors=int(NS), bc_sign=int(_bc_sign),
+                        electrical_period_rad=math.radians(float(period_mech)),
+                        period_shift_map=_period_shift_map,
+                        window_periods=float(n_periods))
+                    _wm2 = _mapped_a2[1]
+                    if _rew_a2 is None or not np.all(np.isfinite(_rew_a2[_required_safe])):
+                        raise RuntimeError((_rew_info2 or {}).get(
+                            "reason", "A2 rotor image leaves an unmapped conductor DOF"))
+                    _rew_mask_a2, _ = _safe_rewind_rotor_dofs(
+                        np.asarray(_wm2, float), _rdf_safe,
+                        np.asarray(b2.doflocs, float)[:, _rdf_safe],
+                        float(np.sqrt(np.min(_triangle_areas(half["r"]["mesh"])))),
+                        n_sectors=int(NS), bc_sign=int(_bc_sign),
+                        electrical_period_rad=math.radians(float(period_mech)),
+                        period_shift_map=_period_shift_map,
+                        window_periods=float(n_periods))
+                _mask_a = (np.abs(np.asarray(_rew_mask_a, float)) > 0.5) & np.isfinite(_rew_a)
+                _mask_a2 = (None if _rew_a2 is None else
+                            ((np.abs(np.asarray(_rew_mask_a2, float)) > 0.5)
+                             & np.isfinite(_rew_a2)))
+                _Ib_seed = None
+                if _eddy_bdf2:
+                    _Ib_seed = _safe_validate_current_history(
+                        (_wc.get("Ib_prev"), _wc.get("Ib_prev2")),
+                        expected_size=len(_ed_con))
+                    if _Ib_seed is None:
+                        raise RuntimeError("cached BDF2 current history does not match the exact conductor constraints")
+                # Every field and current component is valid now.  Only now may
+                # the staged irreversible Br state become visible to the static
+                # fill and subsequent march.
+                if _safe_br_pending is not None:
+                    (_br_candidate, _seed_from_candidate, _history_candidate,
+                     _nhit, _kept_min, _kept_max) = _safe_br_pending
+                    _br_glob[_mag_idx] = _br_candidate
+                    _dm_seeded = True; _dm_seed_from = _seed_from_candidate
+                    _dm_inherited_history = _history_candidate
+                    _mx_all[nst:] = _Mx_glob * _br_glob
+                    _my_all[nst:] = _My_glob * _br_glob
+                    f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                                 my=b2_0.interpolate(_my_all))
+                    _drv.f_mag = f_mag2
+                    _safe_br_pending = None
+                    log.info("P2 safe demag seed: inherited validated Br history "
+                             "from parent (%d/%d magnet elements; %.2f%%..%.2f%% "
+                             "retained); one fresh verification pre-pass period "
+                             "is required", _nhit, int(_mag_idx.size),
+                             100.0 * _kept_min, 100.0 * _kept_max)
+                _Ued = np.zeros(len(_ed_con), float)
+                _warm_seed_pending = (_rew_a, _mask_a, _rew_a2, _mask_a2)
+                _Ib_seed_restore = _Ib_seed
+                # Keep even a complete map staged until the static transaction
+                # and (for BDF2) both current-history levels can commit together.
+                _warm_seeded = False
+                log.info("P2 safe warm cache: image-aware exact DOF map %d/%d; "
+                         "conductor coverage complete; %s",
+                         int(np.count_nonzero(_mask_a)), N2,
+                         "full field" if _warm_seeded else "static belt fill pending")
+            else:
+                from scipy.spatial import cKDTree as _KDT
+                _widx = _KDT(_wc["doflocs"]).query(
+                    np.asarray(b2.doflocs.T, dtype=np.float32), k=1)[1]
+                _Aed_prev = np.asarray(_wc["A"], float)[_widx]
+                # BDF2 needs the level before it too; a seed published by a BDF2
+                # run carries it (frame n_total−4), an older one does not → the
+                # first step is backward Euler.
+                if (_eddy_bdf2 and _wc.get("A2") is not None
+                        and len(_wc["A2"]) == len(_wc["A"])):
+                    _Aed_prev2 = np.asarray(_wc["A2"], float)[_widx]
+                    _hed_prev = float(dt)
+                if len(_wc["Ued"]) == len(_ed_con):
+                    _Ued = np.asarray(_wc["Ued"], float).copy()
             # SAME-ANGLE REFERENCE — only from a parent at the SAME operating
             # point.  This gauge can only make the handoff test more permissive
             # (it passes the probe when each sample matches the parent's
@@ -8981,12 +9671,14 @@ def _fem_transient_sliding_band_once(
                 _warm_ref_grp = {str(_gk): np.asarray(_gv, float)
                                  for _gk, _gv in _wrg.items()
                                  if len(_gv) == n_total}
-            _warm_seeded = True
-            log.info("P2 eddy warm cache: eddy history seeded from the "
-                     "previous run (%d → %d dofs; parent %.4g A / %.4g deg%s)",
-                     len(_wc["A"]), N2, float(_wc["I"]), float(_wc["gam"]),
-                     ", sweep mode" if _seed_from_previous() else "")
+            if not _safe_warm_cache_enabled():
+                _warm_seeded = True
+                log.info("P2 eddy warm cache: eddy history seeded from the "
+                         "previous run (%d → %d dofs; parent %.4g A / %.4g deg%s)",
+                         len(_wc["A"]), N2, float(_wc["I"]), float(_wc["gam"]),
+                         ", sweep mode" if _seed_from_previous() else "")
         except Exception as _wce:   # a bad seed must never fail the run
+            _rollback_safe_br_seed("eddy-history validation failed: %s" % _wce)
             _warm_seeded = False
             _Aed_prev2 = None; _hed_prev = None
             log.info("P2 eddy warm cache: seed skipped (%s)", _wce)
@@ -9030,7 +9722,8 @@ def _fem_transient_sliding_band_once(
         _static_seed_info = None
     # SB_EDDY_ZERO_START=1: the pre-2026-09-24 cold start from A = 0 — for the
     # test that reproduces the start-up transient, never a production knob.
-    if (eddy and not _vdrive and not _warm_seeded and not frozen_nu
+    if (eddy and not _vdrive and (not _warm_seeded or _warm_seed_pending is not None)
+            and not frozen_nu
             and _fseq and _ed_con and _eddy_method != "tdm"
             and _os_sb.environ.get("SB_EDDY_ZERO_START") != "1"):
         try:
@@ -9091,6 +9784,43 @@ def _fem_transient_sliding_band_once(
             _static_seed_info = {"error": "%s: %s" % (type(_e_ss).__name__, _e_ss)}
             log.warning("P2 eddy warm-up: static start failed (%s) — starting "
                         "from A = 0", _e_ss)
+    if _safe_warm_cache_enabled() and _warm_seed_pending is not None:
+        _pa, _pm, _pa2, _pm2 = _warm_seed_pending
+        _commit_history = (None if not _eddy_bdf2 else
+            _safe_validate_current_history(
+                _Ib_seed_restore or (None, None), expected_size=len(_ed_con)))
+        _commit_valid = (not _eddy_bdf2 or
+                         (_pa2 is not None and _pm2 is not None
+                          and _commit_history is not None))
+        if (_static_seed_info and _static_seed_info.get("converged")
+                and _commit_valid):
+            _static_base = np.asarray(_Aed_prev, float).copy()
+            _Aed_prev = _static_base.copy()
+            _Aed_prev[np.asarray(_pm, bool)] = np.asarray(_pa, float)[np.asarray(_pm, bool)]
+            if _pa2 is not None and _pm2 is not None:
+                _Aed_prev2 = _static_base.copy()
+                _Aed_prev2[np.asarray(_pm2, bool)] = (
+                    np.asarray(_pa2, float)[np.asarray(_pm2, bool)])
+                _hed_prev = float(dt)
+            if _commit_history is not None:
+                _Ib_prev, _Ib_prev2 = _commit_history
+                _hed_prev = float(dt)
+            _warm_seeded = True
+            _Ib_seed_restore = None
+            log.info("P2 safe warm cache: exact conductor state overlaid on "
+                     "converged static field (%d/%d DOFs carried)",
+                     int(np.count_nonzero(_pm)), N2)
+        else:
+            _rollback_safe_br_seed(
+                "cold static fill did not converge" if _commit_valid
+                else "BDF2 field/current bundle became incomplete before commit")
+            _Ued = np.zeros(len(_ed_con), float)
+            _Aed_prev2 = None; _hed_prev = None
+            _warm_ref = None; _warm_ref_grp = {}
+            _warm_seeded = False
+            log.info("P2 safe warm cache: eddy field cold start (static "
+                     "fallback did not converge)")
+        _warm_seed_pending = None
     _cancel_point("first time step")
     _fi = 0
     while _fi < len(_fseq):
@@ -9157,7 +9887,9 @@ def _fem_transient_sliding_band_once(
                      "%.2f %% entering the reported window.",
                      _n_warm, _n_dmpre,
                      (" — SKIPPED, this run CONTINUES the previous point's "
-                      "magnet (sweep mode, user 2026-09-06)" if _dm_seeded
+                      "magnet (sweep mode)"
+                      if (_dm_seeded and (_dm_pre_len == 0
+                          if _safe_warm_cache_enabled() else True))
                       else ""),
                      100.0 * _kept_pre)
         theta = (_sched_th[k] if k >= 0 else
@@ -9354,6 +10086,12 @@ def _fem_transient_sliding_band_once(
                                 "converge at frame %d (%d its, rrel=%.2e) — "
                                 "restarting the warm-up COLD", k, _nit, _res)
                     _seed_cold_retry_done = True
+                    _rollback_safe_br_seed("seeded Newton warm-up retry")
+                    if _safe_warm_cache_enabled():
+                        _A_start = np.zeros(N2)
+                        _nu_start = nu_base2.copy()
+                    if _safe_warm_cache_enabled() and _dm_freeze_warm:
+                        _dm_pre_len = int(n_steps_per_period)
                     _warm_seeded = False
                     _warm_ref = None
                     _warm_ref_grp = {}
@@ -10496,7 +11234,7 @@ def _fem_transient_sliding_band_once(
                             _Aed_prev = _period_shift(A2)
                             _A2_prev = _period_shift(A2)
                         elif k >= 0:
-                            # Seeded magnet, no pre-pass: re-solve THIS frame
+                            # No fresh pre-pass: re-solve THIS frame
                             # with the ratchet on, from the SAME history it was
                             # just solved from (`_Aed_prev`, `_Aed_prev2` are
                             # untouched).
@@ -10510,7 +11248,10 @@ def _fem_transient_sliding_band_once(
                             "P2 demag %s: %d frame(s) at θ<0 with the Br "
                             "ratchet ACTIVE, on the settled eddy field (the "
                             "%d warm-up frame(s) ran it FROZEN).",
-                            ("ratchet unfrozen at the handoff (pre-pass "
+                            ("ratchet unfrozen at handoff (inherited Br image history "
+                             "accepted; fresh verification pre-pass)"
+                             if _dm_seeded and _safe_warm_cache_enabled()
+                             else "ratchet unfrozen at the handoff (pre-pass "
                              "SKIPPED — seeded magnet)" if _dm_seeded
                              else "pre-pass"), _dm_pre_len, _n_warm)
                         continue
@@ -10581,9 +11322,12 @@ def _fem_transient_sliding_band_once(
             if _tdm_rep is not None and k >= 0:
                 # the reported frame, for the TDM acceptance gate after the loop
                 _tdm_rep[int(k)] = (A2.copy(), np.asarray(_Ued, float).copy())
-            if (_eddy_bdf2 and not _vdrive and k == n_total - 4
-                    and n_total >= 8 and not _warm_cache_disabled()):
+            if (_eddy_bdf2 and not _vdrive
+                    and k == n_total - 4 and n_total >= 8
+                    and not _warm_cache_disabled()):
                 _wc_A2 = A2.astype(float, copy=True)   # the seed's A_{k−2}
+                if _safe_warm_cache_enabled():
+                    _wc_Ib_prev2 = tuple(np.asarray(_x, float).copy() for _x in _Ib_k)
             if (eddy and not _vdrive and k == n_total - 3 and n_total >= 8
                     and not _warm_cache_disabled()):
                 # Stash this frame (angle ≡ −3 steps) for the NEXT run's seed;
@@ -10591,6 +11335,8 @@ def _fem_transient_sliding_band_once(
                 # the whole measured window exist (the same-angle reference the
                 # next run's probe is judged against).
                 _wc_A = A2.astype(float, copy=True)
+                if _safe_warm_cache_enabled() and _eddy_bdf2:
+                    _wc_Ib_prev = tuple(np.asarray(_x, float).copy() for _x in _Ib_k)
                 _wc_Ued = np.asarray(_Ued, float).copy()
             if k >= 0:
                 _ed_cu.append(_pg.get("cu", 0.0) * _wsc)
@@ -11040,7 +11786,7 @@ def _fem_transient_sliding_band_once(
         if _mag_idx.size:                      # magnet B for the loss-density map
             _hmx2.append(_bx_el[_mag_idx + nst])
             _hmy2.append(_by_el[_mag_idx + nst])
-        if rotor_eddy:
+        if rotor_eddy and not _GAP_PROBE_CTX.get():
             # rotor-frame nodal A (magnet/shaft eddy via honest_rotor_eddy)
             _histA_rot2.append(A2[_rot_vdof].copy())
         if _anim_idx and k in _anim_idx:
@@ -11171,6 +11917,9 @@ def _fem_transient_sliding_band_once(
                         or (_dm_passes[-1].get("element_warning")
                             if _dm_passes else None)),
             "prepass_periods": len(_dm_passes),
+            **({"inherited_prepass_periods": int(
+                (_dm_inherited_history or {}).get("prepass_periods", 0)
+                if _dm_seeded else 0)} if _safe_warm_cache_enabled() else {}),
             "prepass_periods_max": int(_dm_cap()),
             "prepass": [{_kk: (float("%.4g" % _vv) if isinstance(_vv, float) else _vv)
                          for _kk, _vv in _p_.items()} for _p_ in _dm_passes]})
@@ -11806,7 +12555,8 @@ def _fem_transient_sliding_band_once(
     # here from the per-frame lists (same expression and _wsc scaling as the
     # settle gauge's samples).
     _wc_pending: List[Dict[str, Any]] = []   # published after the TDM error-estimate verdict
-    if _wc_A is not None:
+    if (_wc_A is not None
+            and (not _safe_warm_cache_enabled() or _safe_drive_ok)):
         try:
             _solid_ref = [
                 ((_ed_mag[_i] + _ed_sh[_i])
@@ -11834,12 +12584,80 @@ def _fem_transient_sliding_band_once(
                            / max(float(magnet_scale), 1e-12))
                 _br_cen = _cen_pub[_mag_idx]
                 _br_tag = _tg_pub[_mag_idx]
-            if len(_solid_ref) == n_total:
+                _br_mat = (np.asarray([
+                    _safe_magnet_material_identity(matr0.get(int(_tg)))
+                    for _tg in _br_tag], dtype=str)
+                    if _safe_warm_cache_enabled() else None)
+            else:
+                _br_mat = None
+            _dof_region_pub = None
+            if _safe_warm_cache_enabled():
+                _edf_pub = np.asarray(b2.element_dofs, int)
+                _rdf_pub = np.unique(_edf_pub[:, nst:].ravel())
+                _sdf_pub = np.unique(_edf_pub[:, :nst].ravel())
+                if np.intersect1d(_rdf_pub, _sdf_pub).size:
+                    raise RuntimeError("cannot publish cache with shared rotor/stator DOFs")
+                _dof_region_pub = np.full(N2, -1, int)
+                _dof_region_pub[_sdf_pub] = 0
+                _dof_region_pub[_rdf_pub] = 1
+                if np.any(_dof_region_pub < 0):
+                    raise RuntimeError("cannot publish cache with unclassified DOFs")
+            _demag_history_pub = None
+            if (_safe_warm_cache_enabled() and demag and _dm_settle
+                    and _dm_settle.get("settled") is True):
+                _history0 = (_dm_inherited_history or {}) if _dm_seeded else {}
+                _pass_rows = list(_history0.get("prepass") or [])
+                for _pr in (_dm_settle.get("prepass") or []):
+                    _tq = _pr.get("torque") or {}
+                    if "T_mean" in _tq and "ripple_pct" in _tq:
+                        _pass_rows.append({
+                            "frames": int(_pr.get("frames", 0)),
+                            "per_magnet_mean_max": float(_pr.get(
+                                "per_magnet_mean_max", 0.0)),
+                            "element_max": float(_pr.get("element_max", 0.0)),
+                            "torque": {"T_mean": float(_tq["T_mean"]),
+                                       "ripple_pct": float(_tq["ripple_pct"]),
+                                       "torque_method": str(_tq.get(
+                                           "torque_method", ""))}})
+                _last_torque_pub = (_pass_rows[-1].get("torque")
+                                    if _pass_rows else None)
+                _image_pub = _dm_settle.get("image_history") or {}
+                if (_image_pub.get("complete") and _pass_rows
+                        and _last_torque_pub):
+                    _demag_history_pub = {
+                        "validated": True,
+                        "prepass_periods": int(len(_pass_rows)),
+                        "image_history": {
+                            "complete": True,
+                            "cycle_periods": (None if _image_pub.get("cycle_periods") is None
+                                              else int(_image_pub["cycle_periods"])),
+                            "inherited_pre_pass_periods": int(
+                                _image_pub.get("pre_pass_periods", 0)),
+                            "image_gap": {
+                                k: float(v) for k, v in
+                                (_image_pub.get("image_gap") or {}).items()
+                                if isinstance(v, (int, float, np.number))}},
+                        "prepass": _pass_rows,
+                        "last_torque": dict(_last_torque_pub)}
+            _safe_publish_ok = True
+            if _safe_warm_cache_enabled():
+                _safe_publish_ok = bool(_warm_quiet)
+                if demag:
+                    _safe_publish_ok = (_safe_publish_ok and _dm_settle is not None
+                                        and _dm_settle.get("settled") is True
+                                        and _demag_history_pub is not None)
+                if not _safe_publish_ok:
+                    log.info("P2 safe warm cache: publication skipped (eddy or demag state is not affirmatively settled)")
+            if len(_solid_ref) == n_total and _safe_publish_ok:
                 _wc_pending.append({
                     "doflocs": np.asarray(b2.doflocs.T,
-                                          dtype=np.float32).copy(),
+                        dtype=(np.float64 if _safe_warm_cache_enabled()
+                               else np.float32)).copy(),
                     "A": _wc_A, "Ued": _wc_Ued,
                     "A2": _wc_A2,
+                    **({"Ib_prev": _wc_Ib_prev,
+                        "Ib_prev2": _wc_Ib_prev2}
+                       if _safe_warm_cache_enabled() and _eddy_bdf2 else {}),
                     "solid": np.asarray(_solid_ref, float),
                     # per conductor group, for the per-group same-angle test
                     "solid_grp": {_gk: np.asarray(_gl, float) for _gk, _gl in
@@ -11863,6 +12681,17 @@ def _fem_transient_sliding_band_once(
                     # a different conductor set) - see _warm_seed_accept.
                     "nsect": (1 if int(n_sectors) <= 1 else int(n_sectors)),
                     "br_val": _br_pub, "br_cen": _br_cen, "br_tag": _br_tag,
+                    **({
+                        "br_mat": _br_mat,
+                        "safe_schema": _SAFE_WARM_CACHE_SCHEMA,
+                        "safe_identity": _safe_identity,
+                        "dof_region": _dof_region_pub,
+                        "edcon_fp": _safe_edcon_fp,
+                        "eddy_complete": bool(_warm_quiet),
+                        "demag_complete": bool(_dm_settle is not None
+                                               and _dm_settle.get("settled") is True),
+                        "demag_history": _demag_history_pub,
+                    } if _safe_warm_cache_enabled() else {}),
                 })
         except Exception:   # best-effort, never fails the run
             pass
@@ -13694,6 +14523,170 @@ def em_transient_eval(
     return _solve_with_gap_refinement(_kw, gap_refine=bool(gap_refine))
 
 
+# Opt-in until a physical qualification demonstrates that the probe rule is safe.
+_GAP_PROBE_TAVG_REL_TOL = 0.0005  # 0.05 % of |mean torque|
+_GAP_PROBE_RIPPLE_REL_TOL = 0.05  # 5 % of adjacent-probe ripple
+_GAP_PROBE_RIPPLE_TORQUE_FLOOR_REL = 0.0005  # 0.05 % of |mean torque|
+_GAP_PROBE_CTX = _ctxv.ContextVar("sb_gap_probe_mode", default=False)
+
+
+def _gap_probe_converged(previous: dict, current: dict) -> bool:
+    """Test mean torque and peak-to-peak ripple convergence between probes."""
+    try:
+        t0, t1 = float(previous["T_avg_Nm"]), float(current["T_avg_Nm"])
+        r0, r1 = float(previous["T_ripple_pp_Nm"]), float(current["T_ripple_pp_Nm"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not all(math.isfinite(v) for v in (t0, t1, r0, r1)):
+        return False
+    tscale = max(abs(t0), abs(t1), 1e-12)
+    rtol = max(_GAP_PROBE_RIPPLE_REL_TOL * max(abs(r0), abs(r1)),
+               _GAP_PROBE_RIPPLE_TORQUE_FLOOR_REL * tscale)
+    return (abs(t1 - t0) < _GAP_PROBE_TAVG_REL_TOL * tscale
+            and abs(r1 - r0) < rtol)
+
+
+def _gap_probe_progress(progress_cb, layer):
+    if progress_cb is None:
+        return None
+    label = "gap probe %g/side" % float(layer)
+
+    def report(*args):
+        values = list(args) + [None] * (4 - len(args))
+        done, total, phase, detail = values[:4]
+        stage = label if not phase else "%s: %s" % (label, phase)
+        for cb_args in ((done, total, stage, detail), (done, total, stage),
+                        (done, total)):
+            try:
+                progress_cb(*cb_args)
+                return
+            except TypeError:
+                continue
+    return report
+
+
+def _run_gap_probe(probe_kw: dict, layer: float) -> Dict:
+    """Run an isolated probe while retaining the radial mesh and cancellation path."""
+    token = _GAP_PROBE_CTX.set(True)
+    try:
+        call_kw = dict(probe_kw, gap_layers=float(layer),
+                       progress_cb=_gap_probe_progress(probe_kw.get("progress_cb"), layer))
+        return fem_transient_sliding_band(**call_kw)
+    finally:
+        _GAP_PROBE_CTX.reset(token)
+
+
+def _solve_with_gap_probes(kw: dict) -> Dict:
+    """Choose gap rows from cheap same-duty magnetostatic probes, then solve once."""
+    from motor_ai_sim.simulation.virtual_work_torque import (
+        SELF_CHECK_GATE as gate, GAP_LAYERS_AUTO_MAX as gl_max,
+        next_gap_layers as next_gl)
+
+    def self_check(r):
+        raw = ((r.get("coulomb_torque") or {}).get("layer_self_check") or {}).get(
+            "rel_to_ripple_scale")
+        try:
+            return None if raw is None else float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    requested = float(kw.get("gap_layers") or 1.0)
+    # Hold the requested window, excitation, geometry, sectors, temperatures,
+    # rotor eddy mesh setting and slip ring; disable only dynamic histories and
+    # expensive secondary outputs that cannot affect the torque mesh check.
+    probe_kw = dict(kw, eddy=False, demag=False, inc_ldq=False,
+                    return_field=False, return_frames=0)
+    probes, ring = [], None
+    prev = None
+    layer = requested
+    reason = "initial_layer"
+    converged = False
+    probe_failure = None
+
+    while True:
+        try:
+            probe = _run_gap_probe(probe_kw, layer)
+        except Exception as exc:
+            probe_failure = "%s: %s" % (type(exc).__name__, exc)
+            reason = "probe_failed"
+            log.warning("SB gap probe failed at %g/side (%s); using the requested "
+                        "gap for one full solve", layer, probe_failure)
+            break
+        layer = float(probe.get("gap_layers_effective") or layer)
+        eps = self_check(probe)
+        if ring is None:
+            ring = int(probe.get("slip_nodes_per_period") or 0) or None
+        if ring is not None:
+            probe_kw["slip_per_period"] = ring
+        attempt = {"kind": "magnetostatic_probe", "gap_layers_per_side": layer,
+                   "self_check_rel_to_ripple_scale": eps,
+                   "T_avg_Nm": probe.get("T_avg_Nm"),
+                   "T_ripple_pp_Nm": probe.get("T_ripple_pp_Nm"),
+                   "solve_wall_s": probe.get("solve_wall_s")}
+        attempt["converged_from_previous"] = (
+            False if prev is None else _gap_probe_converged(prev, attempt))
+        probes.append(attempt)
+
+        if eps is not None and math.isfinite(float(eps)) and float(eps) <= gate:
+            reason = "ring_check_passed_on_probe"
+            break
+        if attempt["converged_from_previous"]:
+            reason, converged = "successive_probe_torque_and_ripple_converged", True
+            break
+        nxt = next_gl(layer, eps, gl_max)
+        if nxt is None:
+            reason = "probe_layer_cap_reached" if layer >= gl_max else "probe_check_unavailable"
+            break
+        prev = attempt
+        layer = float(nxt)
+
+    # Probe states are discarded. On a numerical probe error, retry once only
+    # at the originally requested gap; cancellation BaseExceptions propagate.
+    selected = requested if probe_failure else layer
+    full_kw = dict(kw)
+    if not probe_failure:
+        full_kw.update(gap_layers=selected, slip_per_period=ring)
+    result = fem_transient_sliding_band(**full_kw)
+    final_eps = self_check(result)
+    final_layer = float(result.get("gap_layers_effective") or selected)
+    passed = (final_eps is not None and math.isfinite(float(final_eps))
+              and float(final_eps) <= gate)
+    full_attempt = {"kind": "full_transient", "gap_layers_per_side": final_layer,
+                    "self_check_rel_to_ripple_scale": final_eps,
+                    "T_avg_Nm": result.get("T_avg_Nm"),
+                    "T_ripple_pp_Nm": result.get("T_ripple_pp_Nm"),
+                    "eddy_settled": result.get("eddy_settled"),
+                    "solve_wall_s": result.get("solve_wall_s")}
+    attempts = probes + [full_attempt]
+    initial_effective = (float(probes[0]["gap_layers_per_side"]) if probes else requested)
+    changed = not probe_failure and final_layer > initial_effective
+    note = "gap layers %g to %g selected by %s" % (
+        initial_effective, final_layer, reason.replace("_", " "))
+    if probe_failure:
+        note += " (probe failed: %s; used requested layer)" % probe_failure
+    if final_eps is None or not math.isfinite(float(final_eps)):
+        note += " (full transient ring check unavailable; ripple flagged)"
+    elif not passed:
+        note += " (full transient ring disagreement %.1f %% > %.0f %% gate; ripple flagged)" % (
+            100.0 * float(final_eps), 100.0 * gate)
+    if result.get("eddy_settled") is False:
+        note += "; full transient eddy warm-up had not settled"
+    result["gap_refinement"] = {
+        "applied": bool(changed), "used_probe": True,
+        "gate_rel_to_ripple_scale": gate,
+        "gap_layers_per_side": final_layer,
+        "self_check_rel_to_ripple_scale": final_eps,
+        "eddy_unsettled": bool(result.get("eddy_settled") is False),
+        "probe_converged": converged, "selection_reason": reason,
+        "probe_fallback_reason": probe_failure,
+        "passed": bool(passed),
+        "persist_gap_layers": final_layer if changed and passed else None,
+        "attempts": attempts, "first": probes[0] if probes else None}
+    result["gap_layers_requested"] = kw.get("gap_layers")
+    result["gap_layers_note"] = note
+    return result
+
+
 def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     """Solve, then apply the MEASURED air-gap rule (owner 2026-09-30).
 
@@ -13728,6 +14721,13 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     from motor_ai_sim.simulation.virtual_work_torque import (
         SELF_CHECK_GATE as _gate, GAP_LAYERS_AUTO_MAX as _gl_max,
         next_gap_layers as _next_gl)
+    if (_os_sb.environ.get("SB_GAP_PROBE", "0") == "1" and gap_refine
+            and kw.get("sampling_purpose") not in ("optimization", "internal_probe")
+            and not bool(kw.get("airgap_macro"))
+            and kw.get("drive", "current") == "current"
+            and kw.get("excitation") is None
+            and _os_sb.environ.get("SB_GAP_REFINE", "1") != "0"):
+        return _solve_with_gap_probes(kw)
     res = fem_transient_sliding_band(**kw)
 
     def _sc(r):

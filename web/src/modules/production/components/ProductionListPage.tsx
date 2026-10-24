@@ -9,6 +9,7 @@ import BilingualText from './BilingualText';
 import { productionApi } from '../api';
 import { callerRole } from '../helpers';
 import type { Production } from '../types';
+import { NARROW } from '../../../lib/narrowLayout';
 
 const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onOpen }) => {
   const { t } = useTranslation('production');
@@ -45,6 +46,8 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
       {!loading && !err && items && items.length > 0 && (
         <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
           <Table size="small" sx={{
+            /* Phone: keep the columns readable and scroll the table sideways (the Paper scrolls). */
+            [NARROW]: { minWidth: 680 },
             '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
             '& th': { color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
           }}>

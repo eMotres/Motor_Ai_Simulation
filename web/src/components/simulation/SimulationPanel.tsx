@@ -72,6 +72,7 @@ import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { storedGapLayers, storedMeshFields } from '../../lib/meshSettings';
+import { narrowSplitColumn, narrowSplitOuter } from '../../lib/narrowLayout';
 
 // UI strings: locales/<lng>/simulation.json (docs/I18N.md).
 const tx = nsT('simulation');
@@ -1775,13 +1776,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
+    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)', ...narrowSplitOuter }}>
 
       {/* ── LEFT: controls ── */}
       <Box sx={{
         width: 320, flexShrink: 0, overflowY: 'auto',
         borderRight: '1px solid var(--line-soft)', p: 2,
-        display: 'flex', flexDirection: 'column', gap: 2,
+        display: 'flex', flexDirection: 'column', gap: 2, ...narrowSplitColumn,
       }}>
 
         {/* Winding connection */}
@@ -3041,7 +3042,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       </Box>
 
       {/* ── RIGHT: results ── */}
-      <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <Box data-split-workspace sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
         {/* Live solve progress — PINNED to the very top of the page (sticky),
             visible without scrolling wherever the solve was launched from. */}
         {/* The ORCHESTRATOR's counter, only while the toggle is on: which

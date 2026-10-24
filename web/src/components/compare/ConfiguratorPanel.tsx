@@ -2950,7 +2950,8 @@ ${s1Text.text}` : '';
       {narrow && (
         <Box role="status" aria-live="off" title={tx('configure.compactBarTip')}
           sx={{ position: 'sticky', bottom: 0, zIndex: 5, flex: '0 0 auto', display: 'flex', flexWrap: 'wrap', alignItems: 'center',
-                columnGap: 1.75, rowGap: 0.25, px: 1.5, py: 0.6, bgcolor: 'var(--panel)', borderTop: '1px solid var(--line)',
+                // pr 8: the floating help button sits over the bar's right end on a phone.
+                columnGap: 1.75, rowGap: 0.25, pl: 1.5, pr: 8, py: 0.6, bgcolor: 'var(--panel)', borderTop: '1px solid var(--line)',
                 boxShadow: '0 -2px 8px rgba(0,0,0,0.18)', ...holdSx }}>
           {compactTiles.map((c) => (
             <Box key={c.id} sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, minWidth: 0 }}>

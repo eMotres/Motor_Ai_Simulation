@@ -78,6 +78,7 @@ const WEBGL_OK = (() => {
   } catch { return false; }
 })();
 import Viewcube from '../viewer3d/Viewcube';
+import { narrowSplitColumn, narrowSplitOuter } from '../../lib/narrowLayout';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -879,13 +880,13 @@ const MeshPanel: React.FC = () => {
   };
 
   return (
-    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
+    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)', ...narrowSplitOuter }}>
 
       {/* ── LEFT: controls ── */}
       <Box sx={{
         width: 320, flexShrink: 0, overflowY: 'auto',
         borderRight: '1px solid var(--line-soft)', p: 2,
-        display: 'flex', flexDirection: 'column', gap: 2,
+        display: 'flex', flexDirection: 'column', gap: 2, ...narrowSplitColumn,
       }}>
 
         {view === 'fem' && (
@@ -1381,7 +1382,7 @@ const MeshPanel: React.FC = () => {
       </Box>
 
       {/* ── RIGHT: preview ── */}
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3, gap: 2,
+      <Box data-split-workspace sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3, gap: 2,
         overflow: 'auto' }}>
 
         <Box>

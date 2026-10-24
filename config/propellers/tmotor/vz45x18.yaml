@@ -1,0 +1,66 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-20: T-Motor heavy-lift props of 42-47 in with a published torque column, for motors that
+# need more propeller torque at 3500-4500 rpm than the G40x13.1 absorbs.
+schema: propeller-1
+id: tmotor_vz45x18
+vendor: T-MOTOR
+model: VZ45*18
+series: VZ series (VTOL carbon fiber, one-piece straight)
+status: current
+product_url: https://store.tmotor.com/product/vz45-18-carbon-fiber-vtol-propeller.html
+source_urls:
+- https://store.tmotor.com/product/vz45-18-carbon-fiber-vtol-propeller.html
+accessed: '2026-10-20'
+geometry:
+  diameter_in: 45.0
+  diameter_mm: 1143.0
+  disc_diameter_mm: 1148.9   # spec table: "Diameter 45 (1148.9mm)"
+  pitch_in: 18.0
+  pitch_mm: 457.2
+  blades: null               # "One-Piece Straight Propeller"; the blade count is not stated
+material: resin-based carbon fiber composite + PMI foam core, matte
+mass_single_blade_g: 285
+hub: {bore_mm: 14.0, bolt_circle_mm: 34.0, mount: "flange, 6 x 5 mm holes"}
+published_limits:
+  recommended_max_rpm: 3380
+  recommended_max_thrust_kg: 60
+  limit_rpm: 3780
+  limit_thrust_kg: 75
+  recommended_solution: "VL1180 KV60 + VL300A / VL1380 KV60 + VL300A"
+  application: "VTOL fixed-wing UAVs, multicopter mode"
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.1924
+  density_basis: "T-Motor states 'Ambient Temperature 22 C, Altitude 25 m' for the table; density = ISA pressure at 25 m and 22 C (dry air)"
+  tables:
+    - id: vz45x18_lab
+      source_url: https://store.tmotor.com/product/vz45-18-carbon-fiber-vtol-propeller.html
+      accessed: '2026-10-20'
+      test_motor: "T-MOTOR laboratory propeller test (motor not named)"
+      prop_label_in_source: "VZ45*18"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["rpm", "torque_Nm", "thrust_gf", "output_power_W", "efficiency_gf_per_W"]
+      note: "propeller-level table: torque, thrust and OUTPUT (shaft) power; output power = 2 pi n tau within 0.3 % on every row"
+      rows:
+      - {rpm: 980, thrust_g: 5122, torque_Nm: 2.76, Pshaft_W: 282.97}
+      - {rpm: 1180, thrust_g: 7303, torque_Nm: 3.85, Pshaft_W: 475.43}
+      - {rpm: 1380, thrust_g: 9919, torque_Nm: 5.18, Pshaft_W: 749.17}
+      - {rpm: 1580, thrust_g: 12969, torque_Nm: 6.77, Pshaft_W: 1119.67}
+      - {rpm: 1780, thrust_g: 16455, torque_Nm: 8.60, Pshaft_W: 1602.41}
+      - {rpm: 1980, thrust_g: 20375, torque_Nm: 10.67, Pshaft_W: 2212.89}
+      - {rpm: 2180, thrust_g: 24731, torque_Nm: 12.99, Pshaft_W: 2966.58}
+      - {rpm: 2380, thrust_g: 29522, torque_Nm: 15.56, Pshaft_W: 3878.98}
+      - {rpm: 2580, thrust_g: 34747, torque_Nm: 18.38, Pshaft_W: 4965.55}
+      - {rpm: 2780, thrust_g: 40408, torque_Nm: 21.44, Pshaft_W: 6241.80}
+      - {rpm: 2980, thrust_g: 46504, torque_Nm: 24.75, Pshaft_W: 7723.20}
+      - {rpm: 3180, thrust_g: 53034, torque_Nm: 28.30, Pshaft_W: 9425.23}
+      - {rpm: 3380, thrust_g: 60000, torque_Nm: 32.10, Pshaft_W: 11363.39}
+      - {rpm: 3580, thrust_g: 67400, torque_Nm: 36.15, Pshaft_W: 13553.15}
+      - {rpm: 3780, thrust_g: 75236, torque_Nm: 40.45, Pshaft_W: 16010.00}
+notes:
+- The published 'Output Power (W)' is shaft power (equal to torque x omega); there is no electrical column in this table.
+- T-Motor publishes no 46 in propeller (store.tmotor.com and uav-en.tmotor.com, checked 2026-10-20); the 45 in VZ45*18 and the 47 in NS47*18 are the nearest sizes with a torque column.

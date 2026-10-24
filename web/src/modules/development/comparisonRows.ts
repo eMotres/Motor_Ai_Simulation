@@ -46,8 +46,20 @@ export function developmentComparisonRows(motors: ProjectMotor[]): DevelopmentCo
     ) ? 'delta_equivalent_star' : undefined;
     const temperatures = solved.temperatures_c && typeof solved.temperatures_c === 'object' && !Array.isArray(solved.temperatures_c)
       ? solved.temperatures_c as Record<string, unknown> : {};
+    // Key point columns (owner 2026-10-25): power, torque, speed, current and phase voltage peak on EVERY row.  Until a
+    // solve exists, torque and power show the duty's requested targets, marked as targets.
+    const rpmIn = finite(first(op.rpm, op.speed_rpm));
+    const targetTorque = finite(op.torque_nm);
+    const targetPowerW = finite(op.power_kw) !== undefined ? finite(op.power_kw)! * 1000
+      : targetTorque !== undefined && rpmIn !== undefined ? targetTorque * rpmIn * Math.PI / 30 : undefined;
+    const solvedTorque = finite(solved.torque_nm), solvedPower = finite(solved.power_w);
+    const keyTorque = solvedTorque ?? targetTorque, keyPowerW = solvedPower ?? targetPowerW;
     const values: Record<string, unknown> = {
-      torque: finite(solved.torque_nm), power: finite(solved.power_w), efficiency: finite(solved.efficiency_pct),
+      torque: solvedTorque, power: solvedPower, efficiency: finite(solved.efficiency_pct),
+      keyTorque, keyPowerKw: keyPowerW === undefined ? undefined : keyPowerW / 1000,
+      keyTorqueTarget: solvedTorque === undefined && targetTorque !== undefined,
+      keyPowerTarget: solvedPower === undefined && targetPowerW !== undefined,
+      vPhase: finite(solved.v_phase_peak_v),
       losses: finite(solved.p_loss_total_w), lossPartial: solved.loss_total_partial === true,
       pCu: finite(solved.p_cu_w), pFe: finite(solved.p_fe_w), pSolid: finite(solved.p_solid_w), pMag: finite(solved.p_mag_w), pMech: finite(solved.p_mech_total_w),
       mass: finite(solved.mass_kg), torqueMass: finite(solved.torque_to_mass_nm_kg), massPartial: solved.mass_partial === true, ripple: finite(solved.ripple_pct),
@@ -117,10 +129,20 @@ export function developmentComparisonColumns(t: (key: string, args?: Record<stri
         : key.slice('temperature:'.length).replace(/_/g, ' ') }),
       unit: '°C', kind: 'result', better: 'lo', value: (r) => r.values[key], format: (v) => formatValue(v, false, t),
     }));
+  // Die and configuration are already in the row label (Variant) - no second copy of them (owner 2026-10-25).
+  const keyPoint = (key: string, label: string, unit: string, targetFlag?: string, digits = 1): SharedComparisonColumn<DevelopmentComparisonRow> => ({
+    key, label: t(`comparison.column.${label}`), unit, kind: 'input', value: (r) => r.values[key],
+    format: (v, r) => { const n = finite(v); return n === undefined ? '-' : `${Number(n.toFixed(digits))}${targetFlag && r.values[targetFlag] === true ? '*' : ''}`; },
+    title: (_v, r) => targetFlag && r.values[targetFlag] === true ? t('comparison.targetValue') : undefined,
+    cellColor: () => 'var(--text-1)',
+  });
+  const neutral = (column: SharedComparisonColumn<DevelopmentComparisonRow>) => ({ ...column, cellColor: () => 'var(--text-1)' });
   return [
-    input('die', 'die'), input('config', 'configuration'), input('duty', 'duty'),
-    input('current', 'current', 'A'), input('rpm', 'speed', 'rpm'), input('gamma', 'gamma', '°'),
-    result('torque', 'torque', 'N·m', 'hi'), result('power', 'power', 'W', 'hi'), result('efficiency', 'efficiency', '%', 'hi'),
+    neutral(input('duty', 'duty')),
+    keyPoint('keyPowerKw', 'power', 'kW', 'keyPowerTarget', 1), keyPoint('keyTorque', 'torque', 'N·m', 'keyTorqueTarget', 1),
+    neutral(input('rpm', 'speed', 'rpm')), neutral(input('current', 'current', 'A')),
+    keyPoint('vPhase', 'phasePeak', 'V', undefined, 1), neutral(input('gamma', 'gamma', '°')),
+    result('efficiency', 'efficiency', '%', 'hi'),
     losses, result('pCu', 'copperLoss', 'W', 'lo'), result('pFe', 'ironLoss', 'W', 'lo'), result('pMag', 'magnetLoss', 'W', 'lo'), result('pSolid', 'solidLoss', 'W', 'lo'), result('pMech', 'mechanicalLoss', 'W', 'lo'),
     mass, torqueMass, result('ripple', 'ripple', '%', 'lo'),
     (() => {

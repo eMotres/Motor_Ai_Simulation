@@ -167,7 +167,9 @@ def test_comparison_projection_uses_stored_duty_metrics_and_omits_missing_values
                         "constants_20c": {"T_em_avg_Nm": 9999}},
         }
     })
-    assert rows[0]["operating_point"] == {"rpm": 1000, "current_arms": 8, "gamma_deg": 12}
+    # the duty targets travel as INPUTS (shown until solved); they never enter the solved comparison below
+    assert rows[0]["operating_point"] == {"rpm": 1000, "current_arms": 8, "gamma_deg": 12,
+                                          "torque_nm": 15, "power_kw": 0.9}
     assert rows[0]["comparison"] == {
         "torque_nm": 8, "power_w": 700, "efficiency_pct": 0.5,
         "p_loss_total_w": 49, "p_cu_w": 20, "p_fe_w": 12, "p_mag_w": 3, "p_solid_w": 5,

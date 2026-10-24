@@ -180,8 +180,15 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
       if (p.sim.connection) {
         const wr = await fetch(`${API}/api/winding/config`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          // The six-phase split travels with the connection (owner 2026-10-25: a two-winding configuration loaded
+          // as a plain 3-phase machine).  phases is always sent, so a 3-phase load also clears a previous 6-phase one.
           body: JSON.stringify({ connection: p.sim.connection,
-                                 layers: p.winding?.layers }),
+                                 layers: p.winding?.layers,
+                                 phases: Number(p.winding?.phases) === 6 ? 6 : 3,
+                                 ...(Number(p.winding?.phases) === 6 ? {
+                                   set1_paths: String(p.winding?.set1_paths ?? ''),
+                                   set_neutrals: String(p.winding?.set_neutrals || 'isolated'),
+                                 } : {}) }),
         });
         if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
       }

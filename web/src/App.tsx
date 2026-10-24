@@ -15,6 +15,7 @@ import {
   Menu,
   MenuItem,
   CircularProgress,
+  useMediaQuery,
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -251,6 +252,7 @@ const GeometryBuildTimer: React.FC = () => {
 
 function App() {
   const [themeMode, setThemeMode] = useState<AppMode>(() => loadThemeMode());
+  const narrow = useMediaQuery('(max-width:899.95px)');
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab } = useUIStore();
@@ -699,18 +701,23 @@ function App() {
         >
           <Toolbar variant="dense" sx={{ gap: 1, flexWrap: 'wrap', py: 0.5, minHeight: 'auto' }}>
             <BrandLogo size={28} />
-            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3 }}>
+            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3, whiteSpace: 'nowrap', fontSize: { xs: '1.05rem', sm: '1.25rem' } }}>
               AeroStator{' '}
               <Box component="span" sx={{ fontWeight: 300, opacity: 0.7 }}>Core</Box>
             </Typography>
-            <VersionBadge />
+            {/* Phone width: the version badge and the connection chip leave the bar so brand, account and theme fit. */}
+            <Box sx={{ display: { xs: 'none', sm: 'contents' } }}>
+              <VersionBadge />
+            </Box>
 
             {isLoading && <CircularProgress size={18} sx={{ mr: 1 }} />}
-            {(connectedToApi || (!signedIn && backendUp)) ? (
-              <Chip icon={<CloudSyncIcon />} label={tr('status.connected')} color="success" size="small" />
-            ) : (
-              <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small" />
-            )}
+            <Box sx={{ display: { xs: 'none', sm: 'contents' } }}>
+              {(connectedToApi || (!signedIn && backendUp)) ? (
+                <Chip icon={<CloudSyncIcon />} label={tr('status.connected')} color="success" size="small" />
+              ) : (
+                <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small" />
+              )}
+            </Box>
 
             <Box sx={{ flexGrow: 1 }} />
 
@@ -753,7 +760,10 @@ function App() {
           <Tabs
             value={barValue(activeTab)}
             onChange={(_, v) => { if (v !== SIMULATIONS_BAR_ID) setActiveTab(v); }}
-            variant="fullWidth"
+            /* Thirteen tabs do not fit a phone: below md they scroll sideways instead of squeezing to unreadable widths. */
+            variant={narrow ? 'scrollable' : 'fullWidth'}
+            scrollButtons={narrow ? 'auto' : false}
+            allowScrollButtonsMobile
             sx={{ minHeight: 40 }}
           >
             {entries.map((e) => e.kind === 'simulations' ? (

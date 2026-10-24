@@ -77,16 +77,19 @@ const LandingShell: React.FC = () => {
             borderColor: 'divider', flexShrink: 0 }}>
           <Toolbar variant="dense" sx={{ gap: 1 }}>
             <BrandLogo size={28} />
-            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3 }}>
+            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3, whiteSpace: 'nowrap', fontSize: { xs: '1.05rem', sm: '1.25rem' } }}>
               AeroStator{' '}
               <Box component="span" sx={{ fontWeight: 300, opacity: 0.7 }}>Core</Box>
             </Typography>
-            <VersionBadge />
-            {backendUp ? (
-              <Chip icon={<CloudSyncIcon />} label={tr('status.connected')} color="success" size="small" />
-            ) : (
-              <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small" />
-            )}
+            {/* Phone width: the version badge and the connection chip leave the bar so brand, language, sign-in and theme fit. */}
+            <Box sx={{ display: { xs: 'none', sm: 'contents' } }}>
+              <VersionBadge />
+              {backendUp ? (
+                <Chip icon={<CloudSyncIcon />} label={tr('status.connected')} color="success" size="small" />
+              ) : (
+                <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small" />
+              )}
+            </Box>
             <Box sx={{ flexGrow: 1 }} />
             <AuthButton />
             <Tooltip title={themeMode === 'light' ? tr('theme.dark') : tr('theme.light')}>

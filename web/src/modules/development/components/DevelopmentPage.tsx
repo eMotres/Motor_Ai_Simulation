@@ -1,27 +1,34 @@
+import { deliveryConflicts, matchesFieldReference } from '../reviewPresentation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
+  import {
+  Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
   Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField,
   Tooltip, Typography, Checkbox,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import HelpTip from '../../../components/common/HelpTip';
-import { useAuth } from '../../../contexts/AuthContext';
-import { useTranslation } from 'react-i18next';
-import { developmentApi, DevelopmentApiError } from '../api';
-import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SpecSnapshot, SpecState } from '../types';
-import { createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, isRequired, setFieldAnswer, shallowDiff, wizardCompleteness, type SpecDraft } from '../wizardState';
-import { MotorOpenActions } from '../MotorOpenActions';
-import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
-import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
-import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
-import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
-import { acceptedProjectStatus, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus';
-
+  import AddIcon from '@mui/icons-material/Add';
+  import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+  import HelpTip from '../../../components/common/HelpTip';
+  import { useAuth } from '../../../contexts/AuthContext';
+  import { useTranslation } from 'react-i18next';
+  import { developmentApi, DevelopmentApiError } from '../api';
+  import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SpecSnapshot, SpecState } from '../types';
+  import LoadSection from './LoadSection';
+  import MissionProfileEditor from './MissionProfileEditor';
+  import type { MissionRow } from '../missionProfileState';
+  import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
+  import { buildSpecificationCards, type SpecificationField } from '../specificationLayout';
+  import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
+  import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
+  import { createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { MotorOpenActions } from '../MotorOpenActions';
+  import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
+  import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
+  import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
+  import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
+  import { acceptedProjectStatus, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus';
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes';
 const STATUSES = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'] as const;
-const DEFAULT_DRAFT: SpecDraft = { fields: {}, mission_profile: [], production: {} };
+const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
 const localeValue = (v: unknown, lang: string): string => {
   if (typeof v === 'string') return v;
   if (v && typeof v === 'object') {
@@ -31,12 +38,28 @@ const localeValue = (v: unknown, lang: string): string => {
   return '';
 };
 const completenessNumbers = (c?: Completeness) => ({ filled: c?.filled_required ?? c?.filled ?? 0, total: c?.total_required ?? c?.required ?? 0 });
+const retainedS1Range = (draft: SpecDraft): Record<string, unknown> | null => {
+  const provenance = draft.provenance as Record<string, unknown> | undefined;
+  const history = provenance?.schema_migrations as Array<Record<string, unknown>> | undefined;
+  const legacy = history?.at(-1)?.legacy_1_4;
+  if (!legacy || typeof legacy !== 'object') return null;
+  const answer = legacy as Record<string, unknown>;
+  return answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : answer;
+};
+const readableRange = (value: unknown): string => {
+  if (value == null) return '';
+  if (typeof value !== 'object') return String(value);
+  const range = value as Record<string, unknown>;
+  if ('value' in range) return readableRange(range.value);
+  const lo = range.minimum ?? range.min ?? range.from;
+  const hi = range.maximum ?? range.max ?? range.to;
+  return lo == null && hi == null ? '' : `${lo ?? '—'}–${hi ?? '—'}`;
+};
 const normaliseDraft = (value: unknown): SpecDraft => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ...DEFAULT_DRAFT, fields: {}, production: {} };
   const d = value as SpecDraft;
   return { ...DEFAULT_DRAFT, ...d, fields: { ...(d.fields ?? {}) }, production: { ...((d.production && typeof d.production === 'object') ? d.production as object : {}) }, mission_profile: Array.isArray(d.mission_profile) ? d.mission_profile : [] };
 };
-
 /** Project list, specification wizard and collaboration views for the Development tab. */
 export default function DevelopmentPage() {
   const { t: tr, i18n } = useTranslation('development');
@@ -63,6 +86,10 @@ export default function DevelopmentPage() {
   const [pendingProjectStatus, setPendingProjectStatus] = useState<import('../motorStatus').PendingProjectStatus | null>(null);
   const [historyDetail, setHistoryDetail] = useState<ProjectMotor | null>(null);
   const [spec, setSpec] = useState<SpecState | null>(null);
+  const [migrationPreview, setMigrationPreview] = useState<Awaited<ReturnType<typeof developmentApi.migrationPreview>>['preview'] | null>(null);
+  const [migrationOpen, setMigrationOpen] = useState(false);
+  const [migrationAck, setMigrationAck] = useState(false);
+  const [migrationBusy, setMigrationBusy] = useState(false);
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -71,6 +98,10 @@ export default function DevelopmentPage() {
   const [messages, setMessages] = useState<ProjectThreadMessage[]>([]);
   const [message, setMessage] = useState('');
   const [messageFieldRef, setMessageFieldRef] = useState('');
+  const [reviewField, setReviewField] = useState('');
+  const [reviewComment, setReviewComment] = useState('');
+  const [fieldReviewOpen, setFieldReviewOpen] = useState(false);
+  const [reloadPreview, setReloadPreview] = useState<{ project: string; token: string; fresh: SpecState } | null>(null);
   const [motors, setMotors] = useState<ProjectMotor[]>([]);
   const projectEpochRef = useRef(0);
   const projectOpenEpochRef = useRef(0);
@@ -86,9 +117,8 @@ export default function DevelopmentPage() {
   const canEditSpec = !!selected && (canManageGlobally || selected.can_edit_spec === true);
   const canEditProject = !!selected && (canManageGlobally || selected.can_edit === true);
   const canManageProjectMotors = canManageGlobally && canEditProject;
-  const sections = schema?.sections ?? [];
-  const activeSection = sections[step];
-  const completeness = spec?.completeness ?? (spec ? wizardCompleteness(sections, spec.draft as SpecDraft) : undefined);
+  const sections = useMemo(() => schema ? buildSpecificationCards(schema) : [], [schema]);
+  const completeness = spec ? wizardCompleteness(sections, spec.draft as SpecDraft) : undefined;
   const completeCounts = completenessNumbers(completeness);
   const draftRef = useRef<SpecDraft>(DEFAULT_DRAFT);
   const revisionRef = useRef(0);
@@ -105,13 +135,12 @@ export default function DevelopmentPage() {
     i18n.on('languageChanged', onLang);
     return () => { i18n.off('languageChanged', onLang); };
   }, [i18n]);
-
   const refreshProjects = useCallback(async () => {
     const epoch = projectEpochRef.current;
     setLoading(true); setError('');
     try {
       const [list, s] = await Promise.all([developmentApi.list(), developmentApi.schema()]);
-      if (epoch === projectEpochRef.current) { setProjects(list); setSchema(s); }
+      if (epoch === projectEpochRef.current) { setProjects(list); if (!currentProjectRef.current) setSchema(s); }
     } catch (e) { if (epoch === projectEpochRef.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (epoch === projectEpochRef.current) setLoading(false); }
   }, []);
@@ -125,11 +154,10 @@ export default function DevelopmentPage() {
     setHistoryDetail(null);
     currentProjectRef.current = '';
     setSelected(null); setSpec(null); setProjects([]); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setVersions([]); setCompareVersions(null);
-    setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setSubmitError([]); setFieldErrors({});
+    setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setSubmitError([]); setFieldErrors({});
     draftRef.current = { ...DEFAULT_DRAFT }; revisionRef.current = 0;
     if (user?.email) void refreshProjects();
   }, [user?.email, refreshProjects]);
-
   const loadProject = useCallback(async (p: ProjectSummary, requestedEpoch?: number): Promise<boolean> => {
     const openEpoch = requestedEpoch ?? ++projectOpenEpochRef.current;
     if (selected && spec) {
@@ -142,13 +170,19 @@ export default function DevelopmentPage() {
     if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
     setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
-    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
+    setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
       const [detail, sp] = await Promise.all([developmentApi.get(p.id), developmentApi.spec(p.id)]);
-      if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return true;
-      setSelected(detail); setSpec({ ...sp, draft: normaliseDraft(sp.draft) });
-      draftRef.current = normaliseDraft(sp.draft); revisionRef.current = sp.revision; saveCoordinator.setRevision(p.id, sp.revision);
+      if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return true;      void developmentApi.thread(p.id).then((thread) => { if (projectToken.current === token && currentProjectRef.current === p.id) setMessages(thread); }).catch(() => {});
+      {
+        const versionSchema = sp.schema ?? await developmentApi.schema(sp.schema_version ?? 1);
+        if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return true;
+        setSchema(versionSchema);
+      }
+      const loadedDraft = { ...normaliseDraft(sp.draft), schema_version: sp.schema_version ?? 1 };
+      setSelected(detail); setSpec({ ...sp, draft: loadedDraft });
+      draftRef.current = loadedDraft; revisionRef.current = sp.revision; saveCoordinator.setRevision(p.id, sp.revision);
       return true;
     } catch (e) {
       if (projectToken.current !== token || identityEpoch !== projectEpochRef.current) return true;
@@ -202,19 +236,18 @@ export default function DevelopmentPage() {
     window.addEventListener(projectOpenEvent, onOpenProject);
     return () => window.removeEventListener(projectOpenEvent, onOpenProject);
   }, [projects, selected?.id, spec, loadProject]);
-
   const enqueueSave = useCallback((project: string, value: SpecDraft, token: string) => {
     setSaving(true); setSaveError(''); saveFailed.current = false;
     const current = () => projectToken.current === token && currentProjectRef.current === project;
     const pending = saveCoordinator.enqueue(project, value, current).then(() => {
       if (!current()) return;
       revisionRef.current = saveCoordinator.revision(project);
-      setSpec((old) => old ? { ...old, revision: revisionRef.current, completeness: wizardCompleteness(sections, value) } : old);
+      setSpec((old) => old ? { ...old, revision: revisionRef.current, completeness: wizardCompleteness(sections, draftRef.current) } : old);
     }).catch((e: unknown) => {
       saveFailed.current = true;
       if (current()) setSaveError(tr('saveFailedShort'));
       throw e;
-    }).finally(() => { if (current()) setSaving(false); });
+    }).finally(() => { if (current() && value === draftRef.current && !saveTimer.current) setSaving(false); });
     return pending;
   }, [saveCoordinator, sections, tr]);
   const flushSave = useCallback(async () => {
@@ -229,27 +262,62 @@ export default function DevelopmentPage() {
   flushSaveRef.current = flushSave;
   const reloadDraft = async () => {
     if (!selected) return;
-    const id = selected.id; const token = projectToken.current;
+    const project = selected.id, token = projectToken.current;
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    await saveCoordinator.flush().catch(() => {});
     try {
-      const fresh = await developmentApi.spec(id);
-      if (projectToken.current !== token || currentProjectRef.current !== id) return;
-      const draft = normaliseDraft(fresh.draft);
-      draftRef.current = draft; revisionRef.current = fresh.revision; saveCoordinator.setRevision(id, fresh.revision);
-      saveFailed.current = false; setSaveError(''); setFieldErrors({}); setSubmitError([]);
-      setSpec((old) => old ? { ...old, ...fresh, draft } : old);
+      const fresh = await developmentApi.spec(project);
+      if (projectToken.current === token && currentProjectRef.current === project) setReloadPreview({ project, token, fresh });
     } catch { if (projectToken.current === token) setError(tr('reloadFailed')); }
   };
-
+  const confirmReload = () => {
+    if (!reloadPreview || reloadPreview.token !== projectToken.current || reloadPreview.project !== currentProjectRef.current) return;
+    const { fresh, project } = reloadPreview;
+    const draft = { ...normaliseDraft(fresh.draft), schema_version: fresh.schema_version ?? 1 };
+    draftRef.current = draft; revisionRef.current = fresh.revision; saveCoordinator.setRevision(project, fresh.revision);
+    saveFailed.current = false; setSaveError(''); setSaving(false); setFieldErrors({}); setSubmitError([]);
+    if (fresh.schema) setSchema(fresh.schema);
+    setSpec({ ...fresh, draft }); setReloadPreview(null);
+  };
+  const requestMigrationPreview = async () => {
+    if (!selected || !spec || !canEditSpec || (spec.schema_version ?? 1) >= 2) return;
+    const id = selected.id, token = projectToken.current;
+    setMigrationBusy(true); setError('');
+    try {
+      await flushSave();
+      if (!isCurrentProject(id, token)) return;
+      const result = await developmentApi.migrationPreview(id);
+      if (!isCurrentProject(id, token)) return;
+      setMigrationPreview(result.preview); setMigrationAck(!result.preview.requires_acknowledgement); setMigrationOpen(true);
+    } catch (e) { if (isCurrentProject(id, token)) setError(e instanceof Error ? e.message : String(e)); }
+    finally { if (isCurrentProject(id, token)) setMigrationBusy(false); }
+  };
+  const applyMigration = async () => {
+    if (!selected || !migrationPreview || !canApplyMigrationPreview(migrationPreview as MigrationPreviewView, revisionRef.current, migrationAck)) return;
+    const id = selected.id, token = projectToken.current;
+    setMigrationBusy(true); setError('');
+    try {
+      // Fetch the immutable target schema before mutating the saved draft or local refs.
+      const nextSchema = await developmentApi.schema(2);      if (!isCurrentProject(id, token)) return;      if (!canApplyMigrationPreview(migrationPreview as MigrationPreviewView, revisionRef.current, migrationAck)) {        setError(tr('migration.stale')); return;      }
+      const result = await developmentApi.migrationApply(id, { revision: migrationPreview.source_revision, source_sha256: migrationPreview.source_sha256, acknowledge_point: migrationAck });
+      if (!isCurrentProject(id, token)) return;
+      const draft = { ...normaliseDraft(result.draft), schema_version: result.schema_version };
+      setSchema(nextSchema);      draftRef.current = draft; revisionRef.current = result.revision; saveCoordinator.setRevision(id, result.revision);
+      saveFailed.current = false;
+      setSpec((old) => old ? { ...old, draft, revision: result.revision, schema_version: result.schema_version, schema: nextSchema, completeness: result.completeness } : old);
+      setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false);
+    } catch (e) { if (isCurrentProject(id, token)) { if (e instanceof DevelopmentApiError && e.status === 409) { setError(tr('migration.stale')); } else setError(e instanceof Error ? e.message : String(e)); } }
+    finally { if (isCurrentProject(id, token)) setMigrationBusy(false); }
+  };
   const updateDraft = useCallback((fn: (d: SpecDraft) => SpecDraft) => {
-    if (!selected || !spec || !canEditSpec || busy) return;
-    const next = fn(draftRef.current); draftRef.current = next;
+    if (!selected || !spec || !canEditSpec || busy || migrationBusy || !!reloadPreview) return;
+    const next = fn(draftRef.current); draftRef.current = next;    setSaving(true);
     setSpec((old) => old ? { ...old, draft: next, completeness: wizardCompleteness(sections, next) } : old);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     const p = selected.id; const token = projectToken.current;
     saveTimer.current = setTimeout(() => { saveTimer.current = null; void enqueueSave(p, draftRef.current, token).catch(() => {}); }, 650);
-  }, [selected, spec, canEditSpec, sections, enqueueSave, busy]);
+  }, [selected, spec, canEditSpec, sections, enqueueSave, busy, migrationBusy, reloadPreview]);
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
-
   const setAnswer = (field: SchemaField, value: unknown, production = false) => updateDraft((d) => {
     const old = production ? ((d.production as Record<string, { value?: unknown; status?: 'filled' | 'missing' | 'not_known_yet' }>)?.[field.id] ?? {}) : fieldAnswer(d, field.id);
     const complete = fieldAnswerComplete(field, { value, status: 'filled' });
@@ -264,9 +332,9 @@ export default function DevelopmentPage() {
     if (production) return { ...d, production: { ...(d.production as object), [field.id]: answer } };
     return setFieldAnswer(d, field.id, answer);
   });
-
   const onSubmitSpec = async () => {
     if (!selected || !spec) return;
+    const missing = requiredFieldIds(sections, draftRef.current);    if (missing.length) {      setSubmitError(missing.map((id) => `${label(sections.flatMap((s) => s.fields).find((f) => f.id === id)?.short_label ?? id)}: ${tr('validationError')}`));      setFieldErrors(Object.fromEntries(missing.map((id) => [id, tr('validationError')])));      const first = sections.findIndex((s) => s.fields.some((f) => missing.includes(f.id)));      if (first >= 0) { setStep(first); document.getElementById(`spec-card-${sections[first].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }      document.getElementById(`spec-field-${missing[0]}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus();      return;    }
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     setBusy(true); setSubmitError([]); setFieldErrors({});
     const token = projectToken.current;
@@ -320,7 +388,6 @@ export default function DevelopmentPage() {
     }
   };
   useEffect(() => { if (selected?.id) { const token = projectToken.current; void loadSpecHistory(selected.id, token); } }, [selected?.id]);
-
   const openTab = async (tab: ViewTab) => {
     setView(tab); if (!selected) return;
     const id = selected.id; const token = projectToken.current;
@@ -385,78 +452,77 @@ export default function DevelopmentPage() {
     try { await developmentApi.postMessage(id, message.trim(), messageFieldRef || undefined); const thread = await developmentApi.thread(id); if (projectToken.current === token && currentProjectRef.current === id) { setMessage(''); setMessageFieldRef(''); setMessages(thread); } }
     catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); } finally { if (projectToken.current === token) setBusy(false); }
   };
-
-  const label = (v: unknown) => localeValue(v, lang);
-  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; options?: Array<string | { value: string; label?: unknown }>; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false): React.ReactNode => {
+  const postFieldReview = async () => {    if (!selected || !reviewField || !reviewComment.trim()) return;    const id = selected.id, token = projectToken.current;    const rowId = reviewField.startsWith('mission_profile:') ? reviewField.slice('mission_profile:'.length) : undefined;    setBusy(true); setError('');    try {      if (canEditSpec) await flushSave();      if (projectToken.current !== token || currentProjectRef.current !== id) return;      await developmentApi.postMessage(id, reviewComment.trim(), reviewField, { revision: revisionRef.current, row_id: rowId });      const thread = await developmentApi.thread(id);      if (projectToken.current === token && currentProjectRef.current === id) { setReviewComment(''); setMessages(thread); }    }    catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); }    finally { if (projectToken.current === token) setBusy(false); }  };  const resolveReviewMessage = async (messageId: string, resolved: boolean) => {    if (!selected) return;    const id = selected.id, token = projectToken.current;    try { await developmentApi.resolveMessage(id, messageId, resolved); const thread = await developmentApi.thread(id); if (projectToken.current === token && currentProjectRef.current === id) setMessages(thread); }    catch (e) { if (projectToken.current === token) setError(e instanceof Error ? e.message : String(e)); }  };  const openFieldReview = (fieldRef: string) => {    setReviewField(fieldRef);    setFieldReviewOpen(true);  };  const label = (v: unknown) => localeValue(v, lang);
+  const sectionTitle = (v: unknown) => { const value = label(v); return value.startsWith('wizard.') ? tr(value) : value; };
+  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false): React.ReactNode => {
     const kind = shape.type ?? 'string';
     const options = shape.options ?? [];
     const text = (v: unknown) => v == null ? '' : String(v);
-    const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <TextField size="small" fullWidth type={type === 'number' ? 'number' : type === 'date' || unit === 'date' ? 'date' : 'text'} value={text(v)} disabled={!canEditSpec || busy || locked} onChange={(e) => update(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} />;
+    const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <TextField size="small" fullWidth type={type === 'number' ? 'number' : type === 'date' || unit === 'date' ? 'date' : 'text'} value={text(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`, min: type === 'number' ? shape.min : undefined, max: type === 'number' ? shape.max : undefined, step: type === 'number' ? 'any' : undefined }} InputProps={unit && unit !== 'date' ? { endAdornment: <InputAdornment position="end">{unit}</InputAdornment> } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onChange={(e) => update(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} />;
     if (shape.allow_range) {
       if (typeof value === 'number' || (typeof value === 'string' && value.trim())) return input(value, onChange, 'number', shape.unit);
       const bounds = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-      return <Box sx={{ display: 'flex', gap: 0.5 }}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" label={tr(part)} disabled={!canEditSpec || busy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Box>;
+      return <Box sx={{ display: 'flex', gap: 0.5 }}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" label={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: <InputAdornment position="end">{shape.unit}</InputAdornment> } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Box>;
     }
     if (kind === 'array') {
       const rows = Array.isArray(value) ? value : [];
       const item = shape.items ?? {};
       if (item.type === 'object' && item.properties?.length) return <Stack spacing={0.8} sx={{ gridColumn: '1 / -1' }}>
         {rows.map((row, index) => <Paper key={`${keyPrefix}-${index}`} variant="outlined" sx={{ p: 0.8 }}><Stack spacing={0.6}>
-          {item.properties!.map((prop: any) => <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: 'minmax(100px,0.7fr) minmax(130px,1fr)', gap: 0.6, alignItems: 'center' }}><Tooltip title={label(prop.help ?? prop.label)}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label(prop.short_label ?? prop.label)}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>{renderTypedValue(prop, (row as Record<string, unknown>)?.[prop.id], (next) => { const nextRows = [...rows]; nextRows[index] = { ...((row && typeof row === 'object') ? row as object : {}), [prop.id]: next }; onChange(nextRows); }, `${keyPrefix}-${index}-${prop.id}`, locked)}</Box>)}
-          <Button size="small" disabled={!canEditSpec || busy || locked} onClick={() => onChange(rows.filter((_, i) => i !== index))}>{tr('removeRow')}</Button>
+          {item.properties!.map((prop: any) => <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0,0.7fr) minmax(0,1fr)' }, gap: 0.6, alignItems: 'center' }}><Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label(prop.short_label ?? prop.label)}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>{renderTypedValue(prop, (row as Record<string, unknown>)?.[prop.id], (next) => { const nextRows = [...rows]; nextRows[index] = { ...((row && typeof row === 'object') ? row as object : {}), [prop.id]: next }; onChange(nextRows); }, `${keyPrefix}-${index}-${prop.id}`, locked)}</Box>)}
+          <Button size="small" disabled={!canEditSpec || busy || migrationBusy || locked} onClick={() => onChange(rows.filter((_, i) => i !== index))}>{tr('removeRow')}</Button>
         </Stack></Paper>)}
-        <Button size="small" disabled={!canEditSpec || busy || locked} onClick={() => onChange([...rows, Object.fromEntries((item.properties ?? []).map((prop: any) => [prop.id, '']))])}>{tr('addRow')}</Button>
+        <Button size="small" disabled={!canEditSpec || busy || migrationBusy || locked} onClick={() => onChange([...rows, Object.fromEntries((item.properties ?? []).map((prop: any) => [prop.id, '']))])}>{tr('addRow')}</Button>
       </Stack>;
-      return <TextField size="small" fullWidth multiline minRows={2} disabled={!canEditSpec || busy || locked} value={rows.join(', ')} onChange={(e) => onChange(e.target.value.split(',').map((part) => part.trim()).filter(Boolean).map((part) => item.type === 'number' ? Number(part) : part))} />;
+      return <TextField size="small" fullWidth multiline minRows={2} disabled={!canEditSpec || busy || migrationBusy || locked} value={rows.join(', ')} onChange={(e) => onChange(e.target.value.split(',').map((part) => part.trim()).filter(Boolean).map((part) => item.type === 'number' ? Number(part) : part))} />;
     }
     if (kind === 'object' && shape.properties?.length) {
       const object = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-      return <Stack spacing={0.6} sx={{ gridColumn: '1 / -1' }}>{shape.properties.map((prop: any) => <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: 'minmax(110px,0.7fr) minmax(130px,1fr)', gap: 0.6, alignItems: 'center' }}><Tooltip title={label(prop.help ?? prop.label)}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label(prop.short_label ?? prop.label)}{(prop.required || prop.required_flag === 'E') && <Box component="span" sx={{ color: '#f87171' }}> *</Box>}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>{renderTypedValue(prop, object[prop.id], (next) => onChange({ ...object, [prop.id]: next }), `${keyPrefix}-${prop.id}`, locked)}</Box>)}</Stack>;
+      return <Stack spacing={0.6} sx={{ gridColumn: '1 / -1' }}>{shape.properties.map((prop: any) => <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0,0.7fr) minmax(0,1fr)' }, gap: 0.6, alignItems: 'center' }}><Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label(prop.short_label ?? prop.label)}{(prop.required || prop.required_flag === 'E') && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>{renderTypedValue(prop, object[prop.id], (next) => onChange({ ...object, [prop.id]: next }), `${keyPrefix}-${prop.id}`, locked)}</Box>)}</Stack>;
     }
-    if (options.length) return <Select size="small" displayEmpty disabled={!canEditSpec || busy || locked} value={text(value)} onChange={(e) => onChange(e.target.value)}><MenuItem value="">?</MenuItem>{options.map((option) => { const v = typeof option === 'string' ? option : option.value; return <MenuItem key={v} value={v}>{typeof option === 'string' ? option : label(option.label) || v}</MenuItem>; })}</Select>;
-    if (kind === 'boolean') return <Select size="small" displayEmpty disabled={!canEditSpec || busy || locked} value={value == null || value === '' ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? '' : e.target.value === 'true')}><MenuItem value="">?</MenuItem><MenuItem value="true">{tr('yes')}</MenuItem><MenuItem value="false">{tr('no')}</MenuItem></Select>;
+    if (options.length) return <Select size="small" displayEmpty inputProps={{ 'aria-label': label(shape.short_label ?? shape.label) }} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(value)} onChange={(e) => onChange(e.target.value)}><MenuItem value="">?</MenuItem>{options.map((option) => { const v = typeof option === 'string' ? option : option.value; return <MenuItem key={v} value={v}>{typeof option === 'string' ? option : label(option.label) || v}</MenuItem>; })}</Select>;
+    if (kind === 'boolean') return <Select size="small" displayEmpty disabled={!canEditSpec || busy || migrationBusy || locked} value={value == null || value === '' ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? '' : e.target.value === 'true')}><MenuItem value="">?</MenuItem><MenuItem value="true">{tr('yes')}</MenuItem><MenuItem value="false">{tr('no')}</MenuItem></Select>;
     return input(value, onChange, kind, shape.unit);
   };
-  const renderField = (f: SchemaField, prod = false) => {
+  const renderField = (f: SpecificationField, prod = false) => {
     if (f.handled_by === 'mission_profile' || f.id === '1_3') return null;
     if (f.id === 'mission_profile') return <MissionProfile key={f.id} draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => markUnknown(f, unknown, prod)} onChange={(rows) => updateDraft((d) => {
-      return { ...d, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' };
+      return { ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' };
     })} label={label(f.label)} columns={f.columns ?? []} error={fieldErrors[f.id]} />;
     const store = prod ? (draftRef.current.production as Record<string, { value?: unknown; status?: 'filled' | 'missing' | 'not_known_yet' }>) : draftRef.current.fields ?? {};
     const raw = store[f.id];
     const answer = raw && typeof raw === 'object' ? raw as { value?: unknown; status?: 'filled' | 'missing' | 'not_known_yet' } : { value: raw };
     const unknown = answer.status === 'not_known_yet';
     const val = answer.value == null ? '' : typeof answer.value === 'string' || typeof answer.value === 'number' ? String(answer.value) : '';
-    const required = isRequired(f);
+    const required = fieldRequired(f, draftRef.current);
     const options = f.options ?? f.choices;
-    return <Box key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(220px, 0.8fr) minmax(240px, 1fr)' }, gap: 1.2, alignItems: 'start', py: 1, borderBottom: '1px solid var(--line-soft)' }}>
-      <Box><Tooltip title={label(f.help ?? f.label)}><Typography sx={{ color: 'var(--text-1)', fontSize: 12.5, fontWeight: 600 }}>{label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: '#f87171' }}> *</Box>}</Typography></Tooltip>{f.unit && <Typography sx={{ color: 'var(--text-4)', fontSize: 11 }}>{f.unit}</Typography>}</Box>
+    return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 0.8fr) minmax(0, 1fr)' }, gap: 1.2, alignItems: 'start', py: 1, borderBottom: '1px solid var(--line-soft)' }}>
+      <Box><Tooltip title={label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-1)', fontSize: 13, fontWeight: 600 }}>{label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip><Button size="small" sx={{ px: 0, minWidth: 0, fontSize: 10.5 }} onClick={() => openFieldReview(`${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`)}>{tr('fieldReview')}</Button>{f.id === '1_4' && (spec?.schema_version ?? 1) >= 2 && retainedS1Range(draftRef.current) && <><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.retainedRange')}: {tr('field.torque')} {readableRange(retainedS1Range(draftRef.current)?.torque_Nm)} N&#183;m &#183; {tr('field.speed')} {readableRange(retainedS1Range(draftRef.current)?.speed_rpm)} rpm</Typography><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.legacyInputPower')}: {readableRange(retainedS1Range(draftRef.current)?.input_power_W)} W &#183; {tr('migration.legacyOutputPower')}: {readableRange(retainedS1Range(draftRef.current)?.output_power_W)} W</Typography></>}</Box>
       <Stack spacing={0.5}>
         {f.properties?.length ? (
           <Stack spacing={0.7}>
             {f.properties.map((prop) => {
               const objectValue = answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : {};
-              const updateProperty = (value: unknown) => setAnswer(f, { ...objectValue, [prop.id]: value }, prod);
-              return <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: 'minmax(120px,0.7fr) minmax(150px,1fr)', gap: 0.7, alignItems: 'center' }}>
-                <Tooltip title={label(prop.help ?? prop.label)}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: '#f87171' }}> *</Box>}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>
-                {renderTypedValue(prop, objectValue[prop.id], updateProperty, `${f.id}-${prop.id}`, unknown)}
+              const updateProperty = (value: unknown) => {                if ((spec?.schema_version ?? 1) >= 2 && f.id === '1_4' && prop.id === 'shaft_power_W') return;                const nextValue = { ...objectValue, [prop.id]: value };                const safeValue = (spec?.schema_version ?? 1) >= 2 && f.id === '1_4' ? withS1DerivedPower(nextValue) : nextValue;                setAnswer(f, safeValue, prod);              };
+              return <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0,0.7fr) minmax(0,1fr)' }, gap: 0.7, alignItems: 'center' }}>
+                <Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>
+                {prop.id === 'shaft_power_W' && f.id === '1_4' && (spec?.schema_version ?? 1) >= 2 ? <TextField size="small" fullWidth disabled value={unknown || objectValue[prop.id] == null ? '—' : Number(objectValue[prop.id]).toFixed(2)} InputProps={{ endAdornment: <InputAdornment position="end">{prop.unit ?? 'W'}</InputAdornment> }} inputProps={{ 'aria-label': `${label(prop.short_label ?? prop.label)} (${prop.unit ?? 'W'})` }} /> : renderTypedValue(prop, objectValue[prop.id], updateProperty, `${f.id}-${prop.id}`, unknown)}
               </Box>;
             })}
           </Stack>
         ) : options?.length ? (
-          <Select size="small" fullWidth displayEmpty disabled={!canEditSpec || busy || unknown} value={val} onChange={(ev) => setAnswer(f, ev.target.value, prod)}>
+          <Select size="small" fullWidth displayEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} value={val} onChange={(ev) => setAnswer(f, ev.target.value, prod)}>
             <MenuItem value=""><em>?</em></MenuItem>{options.map((o) => { const value = typeof o === 'string' ? o : o.value; return <MenuItem key={value} value={value}>{typeof o === 'string' ? o : label(o.label) || value}</MenuItem>; })}
           </Select>
         ) : (
           renderTypedValue(f, answer.value, (next) => setAnswer(f, next, prod), f.id, unknown)
         )}
-        {f.allow_not_known_yet !== false && <FormControlLabel sx={{ my: -0.6 }} control={<Checkbox size="small" checked={unknown} disabled={!canEditSpec || busy} onChange={(ev) => markUnknown(f, ev.target.checked, prod)} />} label={<Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{tr('unknown')}</Typography>} />}
-        {fieldErrors[f.id] && <Typography role="alert" sx={{ color: '#f87171', fontSize: 11 }}>{tr('validationError')}</Typography>}
-        {required && !fieldAnswerComplete(f, { ...answer, not_known_yet: unknown }) && <Typography role="alert" sx={{ color: '#f87171', fontSize: 11 }}>{tr('requiredMissing')}</Typography>}
+        {f.allow_not_known_yet !== false && <FormControlLabel sx={{ my: -0.6 }} control={<Checkbox size="small" checked={unknown} disabled={!canEditSpec || busy || migrationBusy} onChange={(ev) => markUnknown(f, ev.target.checked, prod)} />} label={<Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{tr('unknown')}</Typography>} />}
+        {fieldErrors[f.id] && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('validationError')}</Typography>}
+        {required && !fieldAnswerComplete(f, { ...answer, not_known_yet: unknown }) && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('requiredMissing')}</Typography>}
       </Stack>
     </Box>;
   };
-
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
     <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}><Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tr('title')}</Typography><HelpTip title={tr('titleTip')} /><Box sx={{ flex: 1 }} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</Box>
@@ -466,7 +532,6 @@ export default function DevelopmentPage() {
     </Paper>; })}</Box>}
     <CreateDialog open={createOpen} busy={busy} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
-
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%' }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)' }}>{selected.title}</Typography><HelpTip title={tr('projectStatusTip')} />{canEditProject ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{STATUSES.map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {tr(`status.${selected.status}`)}</Typography>}</Box>
     <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mb: 1.5 }}>{selected.customer_org} · {tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })}</Typography>
@@ -476,16 +541,27 @@ export default function DevelopmentPage() {
     </Tabs>
     {view === 'specification' && <Box>
       {!schema || !spec ? <CircularProgress size={18} /> : <>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('step', { current: step + 1, total: sections.length })}</Typography><Box sx={{ flex: 1, height: 6, bgcolor: 'var(--panel)', borderRadius: 3 }}><Box sx={{ height: '100%', width: `${completeCounts.total ? Math.min(100, completeCounts.filled / completeCounts.total * 100) : 0}%`, bgcolor: 'primary.main', borderRadius: 3 }} /></Box><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })}</Typography><HelpTip title={tr('requiredTip')} /></Box>
-        <Box sx={{ display: 'flex', gap: 0.7, overflowX: 'auto', pb: 1 }}>{sections.map((s, i) => { const n = spec.completeness?.sections?.[s.id]; return <Chip key={s.id} clickable onClick={() => setStep(i)} variant={i === step ? 'filled' : 'outlined'} color={i === step ? 'primary' : 'default'} label={`${i + 1}. ${label(s.title)}${n ? ` (${n.filled}/${n.required})` : ''}`} sx={{ flexShrink: 0 }} />; })}</Box>
-        <Paper sx={{ p: { xs: 1.3, md: 2 }, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 1 }}><Typography sx={{ fontWeight: 700, color: 'var(--text-0)' }}>{activeSection ? label(activeSection.title) : ''}</Typography><HelpTip title={tr('requiredTip')} /></Box>
-          {activeSection?.fields?.map((f) => renderField(f, activeSection.id === 'production' || activeSection.production))}
-          {activeSection?.id === 'production' && <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mt: 1 }}>{tr('productionTip')}</Typography>}
-        </Paper>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('wizard.counts', { answered: completeness?.answered ?? 0, required: completeCounts.total, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Box sx={{ flex: 1, height: 6, bgcolor: 'var(--panel)', borderRadius: 3 }}><Box sx={{ height: '100%', width: `${completeCounts.total ? Math.min(100, (completeness?.answered ?? 0) / completeCounts.total * 100) : 0}%`, bgcolor: 'primary.main', borderRadius: 3 }} /></Box><HelpTip title={tr('requiredTip')} /></Box>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '232px minmax(0, 1fr)' }, gap: 1.5, alignItems: 'start' }}>
+          <Paper sx={{ p: 1, display: { xs: 'none', md: 'block' }, position: 'sticky', top: 8, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)' }}>
+            <Typography sx={{ px: 1, py: 0.6, color: 'var(--text-3)', fontSize: 11, fontWeight: 700 }}>{tr('wizard.sections')}</Typography>
+            {sections.map((s, i) => { const c = sectionAnswerCounts(s, draftRef.current), state = sectionStatus(s, draftRef.current); return <Button key={s.id} fullWidth onClick={() => { setStep(i); document.getElementById(`spec-card-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} variant={step === i ? 'contained' : 'text'} sx={{ justifyContent: 'flex-start', textAlign: 'left', mb: 0.3, fontSize: 12, textTransform: 'none' }}><Typography component="span" noWrap sx={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, textAlign: 'left' }}>{sectionTitle(s.title)}</Typography><Tooltip title={tr(`wizard.section.${state}`)}><Chip size="small" variant="outlined" label={`${c.answered}/${c.required} · ?${c.unknown} · !${c.missing + c.invalid}`} sx={{ ml: 0.5, height: 21 }} /></Tooltip></Button>; })}
+          </Paper>
+          <Box>
+            <Select size="small" fullWidth value={String(step)} onChange={(e) => { const i = Number(e.target.value); setStep(i); document.getElementById(`spec-card-${sections[i]?.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} sx={{ display: { xs: 'flex', md: 'none' }, mb: 1 }} aria-label={tr('wizard.sections')}>
+              {sections.map((s, i) => <MenuItem key={s.id} value={String(i)}>{sectionTitle(s.title)}</MenuItem>)}
+            </Select>
+            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const delegated = section.id === 'load' ? new Set(['load_type', 'load_source', 'load_inertia_kg_m2', 'startup_mode', 'load_characteristic']) : new Set<string>();                const fields = section.fields.filter((f) => !delegated.has(f.id) && f.id !== 'mission_profile');                const required = fields.filter((f) => fieldRequired(f, draftRef.current) && !f.handled_by);                const optional = fields.filter((f) => !fieldRequired(f, draftRef.current) && !f.handled_by);                const state = sectionStatus(section, draftRef.current); const sectionComments = messages.filter(message => !message.resolved && ((section.fields ?? []).some(field => matchesFieldReference(message.field_ref, `${field.storage_namespace ?? 'fields'}.${field.id}`)) || (section.id === 'mission' && message.field_ref?.startsWith('mission_profile:'))));                return <Paper id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: 1.3, md: 2 }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)' }}>
+
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 1 }}><Typography sx={{ fontWeight: 700, fontSize: 16, flex: 1, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography>{sectionComments.length > 0 && <Chip size="small" color="warning" variant="outlined" label={String(sectionComments.length) + ' ' + tr('openComments')} />}<Chip size="small" variant="outlined" label={tr(`wizard.section.${state}`)} /><HelpTip title={tr('requiredTip')} /></Box>
+                  {section.id === 'load' && ((spec.schema_version ?? 1) < 2 ? <Alert severity="info">{tr('newLoadNotice')}</Alert> : <LoadSection value={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} engineerView={canEditProject} onReview={openFieldReview} onChange={(v) => updateDraft((d) => writeLoadDraft(d, v))} t={tr} locale={lang} />)}                  {section.id === 'mission' && ((spec.schema_version ?? 1) < 2 ? <MissionProfile draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' }))} label={tr('wizard.mission')} columns={section.fields.find((field) => field.id === 'mission_profile')?.columns ?? []} /> : <MissionProfileEditor rows={(draftRef.current.mission_profile ?? []) as unknown as MissionRow[]} load={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} onReview={openFieldReview} unknown={draftRef.current.mission_profile_status === 'not_known_yet'} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' }))} t={tr} />)}                  {required.map((f) => renderField(f, f.storage_namespace === 'production'))}                  {optional.length > 0 && <details><summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600, color: 'var(--text-2)', padding: '8px 0' }}>{tr('wizard.advancedCount', { count: optional.length })}</summary><Box sx={{ mt: 0.5 }}>{optional.map((f) => renderField(f, f.storage_namespace === 'production'))}</Box></details>}                  {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tr('wizard.reviewHint')}</Typography>{submitError.map((x, i) => <Alert key={i} severity="error">{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} /><Button variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></Stack>}                  {section.id === 'delivery' && deliveryConflicts(draftRef.current).length > 0 && <Alert severity="warning">{tr('deliveryConflict')}</Alert>}{section.id === 'delivery' && <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mt: 1 }}>{tr('productionTip')}</Typography>}
+                </Paper>;              })}            </Stack>
+          </Box>
+        </Box>
+        {canEditSpec && (spec.schema_version ?? 1) < 2 && <Alert severity="warning" sx={{ mt: 1.2 }} action={<Button color="inherit" size="small" disabled={migrationBusy || saving} onClick={() => void requestMigrationPreview()}>{tr('migration.action')}</Button>}>{tr('migration.body')}</Alert>}
         {submitError.length > 0 && <Alert severity="error" sx={{ mt: 1 }}><Typography sx={{ fontWeight: 700, fontSize: 12 }}>{tr('submitBlocked')}</Typography>{submitError.map((x, i) => <Typography key={`${i}-${x}`} sx={{ fontSize: 12 }}>• {x}</Typography>)}</Alert>}
-        {saveError && <Alert severity="error" sx={{ mt: 1 }}>{tr('saveFailed', { reason: saveError })}<Button size="small" onClick={() => void reloadDraft()}>{tr('reloadDraft')}</Button></Alert>}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.2 }}><Typography sx={{ flex: 1, fontSize: 11, color: saving ? 'var(--text-3)' : '#34d399' }}>{saving ? tr('saving') : tr('autosaved')}</Typography><Button size="small" disabled={busy || step <= 0} onClick={() => setStep((v) => Math.max(0, v - 1))}>{tr('previous')}</Button><Button size="small" disabled={busy || step >= sections.length - 1} onClick={() => setStep((v) => Math.min(sections.length - 1, v + 1))}>{tr('next')}</Button><Button size="small" variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr('submit')}</Button></Box>
+        {saveError && <Alert severity="error" sx={{ mt: 1 }}>{tr('saveFailed', { reason: saveError })}<Button size="small" onClick={() => selected && void enqueueSave(selected.id, draftRef.current, projectToken.current).catch(() => {})}>{tr('retrySave')}</Button><Button size="small" onClick={() => void reloadDraft()}>{tr('reloadDraft')}</Button></Alert>}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.2 }}><Typography role="status" sx={{ flex: 1, fontSize: 11, color: saveError ? 'error.main' : saving ? 'var(--text-3)' : 'success.main' }}>{saveError ? tr('saveFailedShort') : saving ? tr('saving') : tr('autosaved')}</Typography><Button size="small" disabled={busy || step <= 0} onClick={() => setStep((v) => Math.max(0, v - 1))}>{tr('previous')}</Button><Button size="small" disabled={busy || step >= sections.length - 1} onClick={() => setStep((v) => Math.min(sections.length - 1, v + 1))}>{tr('next')}</Button></Box>
         <Divider sx={{ my: 1.5 }} /><VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); const va = versions.find((v) => v.version === a); const vb = versions.find((v) => v.version === b); setVersionA(va ?? null); setVersionB(vb ?? null); }} t={tr} />
       </>}
     </Box>}
@@ -503,24 +579,41 @@ export default function DevelopmentPage() {
     <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />
     <Dialog open={!!unlinkTarget} onClose={() => !busy && setUnlinkTarget(null)}><DialogTitle>{tr('unlink')} {unlinkTarget?.die} / {unlinkTarget?.config}?</DialogTitle><DialogContent>{tr('unlinkConfirm')}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setUnlinkTarget(null)}>{tr('cancel')}</Button><Button color="error" disabled={busy} onClick={() => void confirmUnlink()}>{tr('unlink')}</Button></DialogActions></Dialog>
     <Dialog open={!!pendingStatusForProject(pendingProjectStatus, selected.id)} onClose={() => !busy && setPendingProjectStatus((value) => cancelProjectStatus(value))}><DialogTitle>{tr('confirmProjectStatus.title')}</DialogTitle><DialogContent>{tr('confirmProjectStatus.body', { status: pendingProjectStatus ? tr(`status.${pendingProjectStatus.proposed}`) : '' })}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setPendingProjectStatus((value) => cancelProjectStatus(value))}>{tr('cancel')}</Button><Button disabled={busy} variant="contained" onClick={() => void confirmProjectStatus()}>{tr('confirmProjectStatus.confirm')}</Button></DialogActions></Dialog>
-    <Dialog open={!!historyDetail} onClose={() => setHistoryDetail(null)} fullWidth maxWidth="sm"><DialogTitle>{tr('snapshots.history')} · {historyDetail?.die} / {historyDetail?.config}</DialogTitle><DialogContent><Stack spacing={0.7} sx={{ pt: 0.5 }}><Typography variant="body2">{historyDetail?.author_display_name} · {historyDetail?.created_at ? new Date(historyDetail.created_at).toLocaleString() : ''}</Typography>{historyDetail?.source && <Typography variant="body2">{tr('snapshots.source')}: {snapshotSourceLabel(historyDetail.source, tr)}</Typography>}{historyDetail?.note && <Tooltip title={historyDetail.note}><Typography variant="body2" noWrap sx={{ maxWidth: '100%' }}>{historyDetail.note}</Typography></Tooltip>}</Stack></DialogContent><DialogActions><Button onClick={() => setHistoryDetail(null)}>{tr('close')}</Button></DialogActions></Dialog>
+        <Dialog open={fieldReviewOpen} onClose={() => setFieldReviewOpen(false)} fullWidth maxWidth="sm"><DialogTitle>{tr('fieldReview')}: {reviewField.startsWith('mission_profile:') ? tr('field.missionProfileRow', { row: reviewField.slice('mission_profile:'.length) }) : (() => { const id = reviewField.split('.').pop(); const field = sections.flatMap((section) => section.fields).find((item) => item.id === id); return field ? label(field.short_label ?? field.label) : reviewField; })()}</DialogTitle><DialogContent><Stack spacing={0.8} sx={{ pt: 0.5 }}>{messages.filter((message) => matchesFieldReference(message.field_ref, reviewField)).map((message, index) => <Paper key={message.id ?? `${message.created_at}-${index}`} variant="outlined" sx={{ p: 1 }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{message.author_display_name || tr('projectMember')} · {message.version ? `v${message.version}` : tr('currentDraft')}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>{message.text}</Typography>{message.resolved && <Chip size="small" label={tr('resolved')} />}{canEditSpec && message.id && <Button size="small" onClick={() => void resolveReviewMessage(message.id!, !message.resolved)}>{message.resolved ? tr('reopen') : tr('resolve')}</Button>}</Paper>)}{!messages.some((message) => matchesFieldReference(message.field_ref, reviewField)) && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tr('noFieldComments')}</Typography>}{canEditSpec && <><TextField size="small" multiline minRows={3} value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} placeholder={tr('writeFieldReview')} /><Button disabled={busy || !reviewComment.trim()} onClick={() => void postFieldReview()}>{tr('addFieldReview')}</Button></>}</Stack></DialogContent><DialogActions><Button onClick={() => setFieldReviewOpen(false)}>{tr('close')}</Button></DialogActions></Dialog>    <Dialog open={!!historyDetail} onClose={() => setHistoryDetail(null)} fullWidth maxWidth="sm"><DialogTitle>{tr('snapshots.history')} · {historyDetail?.die} / {historyDetail?.config}</DialogTitle><DialogContent><Stack spacing={0.7} sx={{ pt: 0.5 }}><Typography variant="body2">{historyDetail?.author_display_name} · {historyDetail?.created_at ? new Date(historyDetail.created_at).toLocaleString() : ''}</Typography>{historyDetail?.source && <Typography variant="body2">{tr('snapshots.source')}: {snapshotSourceLabel(historyDetail.source, tr)}</Typography>}{historyDetail?.note && <Tooltip title={historyDetail.note}><Typography variant="body2" noWrap sx={{ maxWidth: '100%' }}>{historyDetail.note}</Typography></Tooltip>}</Stack></DialogContent><DialogActions><Button onClick={() => setHistoryDetail(null)}>{tr('close')}</Button></DialogActions></Dialog>
     {canEditProject && <Button size="small" sx={{ mt: 1 }} onClick={() => setInviteOpen(true)}>{tr('invite')}</Button>}
     {compareVersions && <VersionDiffDialog open onClose={() => setCompareVersions(null)} a={versionA} b={versionB} t={tr} schema={schema} lang={lang} />}
+    <Dialog open={!!reloadPreview} onClose={() => setReloadPreview(null)} fullWidth maxWidth="md">
+      <DialogTitle>{tr('reloadReview')}</DialogTitle><DialogContent>
+        <Typography variant="body2" sx={{ mb: 1 }}>{tr('reloadConfirm')}</Typography>
+        {reloadPreview && semanticSpecificationDiff(draftRef.current, reloadPreview.fresh.draft, { before: schema ?? undefined, after: reloadPreview.fresh.schema }).map((entry, index) => <Box key={index} sx={{ py: 0.6, borderBottom: '1px solid var(--line-soft)' }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 600 }}>{formatDiffLabel(entry, reloadPreview.fresh.schema ?? schema ?? undefined, lang, key => tr(key.replace('versionDiff.property.', 'diffProperty.')))}</Typography>
+          <Typography sx={{ fontSize: 12 }}>{tr('reloadLocal')}: {formatDiffValue(entry.before, entry, schema ?? undefined, lang, tr)} · {tr('reloadServer')}: {formatDiffValue(entry.after, entry, reloadPreview.fresh.schema ?? schema ?? undefined, lang, tr)}</Typography>
+        </Box>)}
+      </DialogContent><DialogActions><Button onClick={() => setReloadPreview(null)}>{tr('cancel')}</Button><Button color="warning" onClick={confirmReload}>{tr('reloadDraft')}</Button></DialogActions>
+    </Dialog>
+    <Dialog open={migrationOpen} onClose={() => !migrationBusy && setMigrationOpen(false)} fullWidth maxWidth="sm">
+      <DialogTitle>{tr('migration.title')}</DialogTitle>
+      <DialogContent><Stack spacing={1.2} sx={{ pt: 0.5 }}>
+        <Typography variant="body2">{tr('migration.body')}</Typography>
+        {(() => {          const candidate = migrationS1Candidate(migrationPreview as MigrationPreviewView | null);          const old = (migrationPreview?.draft.provenance as Record<string, unknown> | undefined)?.schema_migrations as Array<Record<string, unknown>> | undefined;          const previous = old?.at(-1)?.legacy_1_4;          const oldAnswer = previous && typeof previous === 'object' ? previous as Record<string, unknown> : {}; const oldPoint = oldAnswer.value && typeof oldAnswer.value === 'object' ? oldAnswer.value as Record<string, unknown> : oldAnswer;          const rangeValue = (key: string) => {            const x = oldPoint[key];            if (x && typeof x === 'object') { const outer = x as Record<string, unknown>; const r = outer.value && typeof outer.value === 'object' ? outer.value as Record<string, unknown> : outer; const min = r.minimum ?? r.min ?? r.from; const max = r.maximum ?? r.max ?? r.to; return `${min ?? '—'}–${max ?? '—'}`; }            return x == null ? '—' : String(x);          };          const stale = !!migrationPreview && migrationPreview.source_revision !== revisionRef.current;          return <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'var(--panel-2)' }}>            <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{tr('migration.preview')}</Typography>            <Typography sx={{ fontSize: 12 }}>{label(schema?.sections.find((s) => s.id === '1')?.fields?.find((f) => f.id === '1_4')?.short_label ?? schema?.sections.find((s) => s.id === '1')?.fields?.find((f) => f.id === '1_4')?.label) || tr('specification')}</Typography>            {candidate ? <Stack direction="row" spacing={1.2} flexWrap="wrap"><Typography sx={{ fontSize: 12 }}>{tr('field.torque')}: {candidate.torque_Nm} N·m</Typography><Typography sx={{ fontSize: 12 }}>{tr('field.speed')}: {candidate.speed_rpm} rpm</Typography><Typography sx={{ fontSize: 12 }}>{tr('field.power')}: {candidate.shaft_power_W.toFixed(2)} W</Typography></Stack> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('unknown')}</Typography>}            {previous !== undefined && <><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tr('migration.retainedRange')}: {tr('field.torque')} {rangeValue('torque_Nm')} N·m · {tr('field.speed')} {rangeValue('speed_rpm')} rpm</Typography><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tr('migration.legacyInputPower')}: {rangeValue('input_power_W')} W &#183; {tr('migration.legacyOutputPower')}: {rangeValue('output_power_W')} W</Typography></>}            {migrationPreview?.issues.map((issue, i) => { const key = `migration.issues.${issue.code}`; const translated = tr(key); return <Typography key={`${issue.code}-${i}`} role="status" sx={{ fontSize: 12, mt: 0.5 }}>{translated === key ? tr('migration.issueFallback') : translated}</Typography>; })}            {stale && <Alert severity="warning">{tr('migration.stale')}</Alert>}          </Paper>
+;        })()}
+        {migrationPreview?.requires_acknowledgement && <FormControlLabel control={<Checkbox checked={migrationAck} onChange={(e) => setMigrationAck(e.target.checked)} />} label={<Typography sx={{ fontSize: 12 }}>{tr('migration.ack')}</Typography>} />}
+      </Stack></DialogContent>
+      <DialogActions><Button disabled={migrationBusy} onClick={() => setMigrationOpen(false)}>{tr('migration.cancel')}</Button><Button variant="contained" disabled={migrationBusy || !migrationPreview || !canApplyMigrationPreview(migrationPreview as MigrationPreviewView, revisionRef.current, migrationAck)} onClick={() => void applyMigration()}>{migrationBusy ? <CircularProgress size={16} /> : tr('migration.apply')}</Button></DialogActions>
+    </Dialog>
   </Box>;
 }
-
 function MissionProfile({ draft, disabled, onChange, onUnknown, label, columns, lang, t, error }: { draft: SpecDraft; disabled: boolean; onChange: (rows: Array<Record<string, unknown>>) => void; onUnknown: (unknown: boolean) => void; label: string; columns: Array<{ id: string; label: unknown; unit?: string }>; lang: string; t: (key: string) => string; error?: string }) {
   const rows = draft.mission_profile ?? [];
   const keys = columns.length ? columns : [{ id: 'phase', label: 'Phase' }, { id: 'torque_Nm', label: 'Torque', unit: 'N·m' }, { id: 'speed_rpm', label: 'Speed', unit: 'rpm' }, { id: 'duration_s', label: 'Duration', unit: 's' }, { id: 'battery_voltage_V', label: 'Battery voltage', unit: 'V' }];
   return <Box sx={{ py: 1, borderBottom: '1px solid var(--line-soft)' }}><Typography sx={{ color: 'var(--text-1)', fontSize: 12.5, fontWeight: 600, mb: 0.7 }}>{label} *</Typography><Box sx={{ overflowX: 'auto' }}><Box sx={{ minWidth: 700 }}><Box sx={{ display: 'grid', gridTemplateColumns: `repeat(${keys.length}, minmax(110px,1fr)) 36px`, gap: 0.5, mb: 0.5 }}>{keys.map((c) => <Typography key={c.id} sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{localeValue(c.label, lang)}{c.unit ? ` (${c.unit})` : ''}</Typography>)}<span /></Box>{rows.map((r, ix) => <Box key={ix} sx={{ display: 'grid', gridTemplateColumns: `repeat(${keys.length}, minmax(110px,1fr)) 36px`, gap: 0.5, mb: 0.5 }}>{keys.map((c) => <TextField key={c.id} size="small" disabled={disabled} type={c.id === 'phase' ? 'text' : 'number'} value={r[c.id] ?? ''} inputProps={{ 'aria-label': `${label} ${localeValue(c.label, lang)}` }} onChange={(e) => { const copy = rows.map((x) => ({ ...x })); copy[ix][c.id] = c.id === 'phase' ? e.target.value : e.target.value === '' ? '' : Number(e.target.value); onChange(copy); }} />)}<IconButton size="small" disabled={disabled} aria-label={t('remove')} onClick={() => onChange(rows.filter((_, i) => i !== ix))}>×</IconButton></Box>)}</Box></Box><Button size="small" disabled={disabled} onClick={() => onChange([...rows, Object.fromEntries(keys.map((c) => [c.id, '']))])}>{t('addPhase')}</Button>{<FormControlLabel control={<Checkbox size="small" disabled={disabled} checked={draft.mission_profile_status === 'not_known_yet'} onChange={(e) => onUnknown(e.target.checked)} />} label={<Typography sx={{ fontSize: 11 }}>{t('unknown')}</Typography>} />}<Typography sx={{ color: 'var(--text-4)', fontSize: 10.5 }}>{error || (rows.length === 0 && draft.mission_profile_status !== 'not_known_yet' ? t('requiredMissing') : '')}</Typography></Box>;
 }
-
 function CreateDialog({ open, busy, title, org, id, onTitle, onOrg, onId, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle>{t('newProject')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('projectTitle')} value={title} onChange={(e) => onTitle(e.target.value)} /><TextField label={t('customerOrg')} value={org} onChange={(e) => onOrg(e.target.value)} /><TextField label={t('projectId')} value={id} onChange={(e) => onId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} /></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !title.trim() || !org.trim() || !id.trim()} onClick={onSubmit}>{t('create')}</Button></DialogActions></Dialog>; }
 function InviteDialog({ open, busy, email, role, onEmail, onRole, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
 function snapshotSourceLabel(source: string, t: (key: string) => string): string { return t(snapshotSourceKey(source) ?? 'snapshots.sourceOther'); }
-
 function LinkDialog({ open, busy, picker, onClose, onSubmit, onRestore, t }: { open: boolean; busy: boolean; picker: { this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }; onClose: () => void; onSubmit: (item: ProjectMotorPickerItem) => void; onRestore: (item: ProjectMotorPickerItem) => void; t: (key: string, args?: Record<string, unknown>) => string }) {
-  const [query, setQuery] = useState(''); const [selected, setSelected] = useState<ProjectMotorPickerItem | null>(null);
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<ProjectMotorPickerItem | null>(null);
   useEffect(() => { if (open) { setQuery(''); setSelected(null); } }, [open]);
   const groups = useMemo(() => groupPickerCatalog(filterPickerCatalog(picker.catalog, query)), [picker.catalog, query]);
   return <Dialog open={open} onClose={() => !busy && onClose()} fullWidth maxWidth="sm"><DialogTitle>{t('linkMotor')}</DialogTitle><DialogContent>
@@ -531,12 +624,10 @@ function LinkDialog({ open, busy, picker, onClose, onSubmit, onRestore, t }: { o
     <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>{groups.map(([die, items]) => <Box key={die}><Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', py: 0.45 }}>{die}</Typography>{items.map((item) => <Button key={`${die}/${item.config}`} fullWidth disabled={busy || item.disabled} onClick={() => setSelected(item)} sx={{ justifyContent: 'space-between', textAlign: 'left', color: selected === item ? 'primary.main' : 'var(--text-1)', textTransform: 'none', borderBottom: '1px solid var(--line-soft)' }}><span>{item.config} · {pickerDisplayLabel(item, t)}</span>{item.disabled && <Tooltip title={t(pickerReasonKey(item.reason))}><span>{t('picker.unavailable')}</span></Tooltip>}</Button>)}</Box>)}</Box>
   </DialogContent><DialogActions><Button disabled={busy} onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !selected || selected.disabled} onClick={() => selected && onSubmit(selected)}>{t('link')}</Button></DialogActions></Dialog>;
 }
-function NotesPanel({ project, onSave, t }: { project: ProjectSummary; onSave: (s: string) => Promise<void>; t: (key: string) => string }) { const [value, setValue] = useState(project.notes ?? ''); return <Stack spacing={1}><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('internalNotesTip')}</Typography><TextField multiline minRows={5} value={value} onChange={(e) => setValue(e.target.value)} /><Button sx={{ alignSelf: 'start' }} onClick={() => void onSave(value)}>{t('save')}</Button></Stack>; }
-function VersionHistory({ versions, onCompare, t }: { versions: SpecSnapshot[]; onCompare: (a: number, b: number) => void; t: (key: string, args?: Record<string, unknown>) => string }) { const [a, setA] = useState(''); const [b, setB] = useState(''); return <Box><Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{t('history')}</Typography>{versions.length === 0 ? <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{t('noVersions')}</Typography> : <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flexWrap: 'wrap' }}><Select size="small" value={a} displayEmpty onChange={(e) => setA(e.target.value)}><MenuItem value="">{t('versionA')}</MenuItem>{versions.map((v) => <MenuItem key={v.version} value={String(v.version)}>v{v.version}</MenuItem>)}</Select><Select size="small" value={b} displayEmpty onChange={(e) => setB(e.target.value)}><MenuItem value="">{t('versionB')}</MenuItem>{versions.map((v) => <MenuItem key={v.version} value={String(v.version)}>v{v.version}</MenuItem>)}</Select><Button size="small" disabled={!a || !b || a === b} onClick={() => onCompare(Number(a), Number(b))}>{t('compare')}</Button>{versions.map((v) => <Chip key={v.version} size="small" label={`v${v.version} · ${v.author_display_name || t('projectMember')}`} title={v.created_at ?? ''} />)}</Box>}</Box>; }
-function VersionDiffDialog({ open, onClose, a, b, t, schema, lang }: { open: boolean; onClose: () => void; a: SpecSnapshot | null; b: SpecSnapshot | null; t: (key: string) => string; schema: DevelopmentSchema | null; lang: string }) {
-  const diff = useMemo(() => shallowDiff(a?.spec ?? a?.draft, b?.spec ?? b?.draft), [a, b]);
-  const labels = new Map<string, string>();
-  for (const section of schema?.sections ?? []) for (const field of section.fields ?? []) { labels.set(field.id, localeValue(field.short_label ?? field.label, lang)); for (const prop of field.properties ?? []) labels.set(`${field.id}.${prop.id}`, localeValue(prop.short_label ?? prop.label, lang)); }
-  const display = (path: string) => path.split('.').map((part, i, all) => labels.get(all.slice(0, i + 1).join('.')) ?? labels.get(part) ?? (part === 'fields' || part === 'production' ? '' : part)).filter(Boolean).join(' ? ') || t('specification');
-  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="md"><DialogTitle>{t('versionDiff')}</DialogTitle><DialogContent>{diff.length ? diff.map((d) => <Box key={d.path} sx={{ py: 0.6, borderBottom: '1px solid var(--line-soft)' }}><Typography sx={{ fontWeight: 700, fontSize: 12 }}>{display(d.path)}</Typography><Typography sx={{ fontSize: 11, color: '#fca5a5' }}>? {JSON.stringify(d.before) ?? '?'}</Typography><Typography sx={{ fontSize: 11, color: '#86efac' }}>+ {JSON.stringify(d.after) ?? '?'}</Typography></Box>) : <Typography sx={{ fontSize: 12 }}>{t('noDiff')}</Typography>}</DialogContent><DialogActions><Button onClick={onClose}>{t('close')}</Button></DialogActions></Dialog>;
+function NotesPanel({ project, onSave, t }: { project: ProjectSummary; onSave: (s: string) => Promise<void>; t: (key: string) => string }) { const [value, setValue] = useState(project.notes ?? ''); return <Stack spacing={1}><Typography tabIndex={0} sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('internalNotesTip')}</Typography><TextField multiline minRows={5} value={value} onChange={(e) => setValue(e.target.value)} /><Button sx={{ alignSelf: 'start' }} onClick={() => void onSave(value)}>{t('save')}</Button></Stack>; }
+function VersionHistory({ versions, onCompare, t }: { versions: SpecSnapshot[]; onCompare: (a: number, b: number) => void; t: (key: string, args?: Record<string, unknown>) => string }) { const [a, setA] = useState('');
+  const [b, setB] = useState(''); return <Box><Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{t('history')}</Typography>{versions.length === 0 ? <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{t('noVersions')}</Typography> : <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flexWrap: 'wrap' }}><Select size="small" value={a} displayEmpty onChange={(e) => setA(e.target.value)}><MenuItem value="">{t('versionA')}</MenuItem>{versions.map((v) => <MenuItem key={v.version} value={String(v.version)}>v{v.version}</MenuItem>)}</Select><Select size="small" value={b} displayEmpty onChange={(e) => setB(e.target.value)}><MenuItem value="">{t('versionB')}</MenuItem>{versions.map((v) => <MenuItem key={v.version} value={String(v.version)}>v{v.version}</MenuItem>)}</Select><Button size="small" disabled={!a || !b || a === b} onClick={() => onCompare(Number(a), Number(b))}>{t('compare')}</Button>{versions.map((v) => <Chip key={v.version} size="small" label={`v${v.version} · ${v.author_display_name || t('projectMember')}`} title={v.created_at ?? ''} />)}</Box>}</Box>; }
+function VersionDiffDialog({ open, onClose, a, b, t, schema, lang }: { open: boolean; onClose: () => void; a: SpecSnapshot | null; b: SpecSnapshot | null; t: (key: string, args?: Record<string, unknown>) => string; schema: DevelopmentSchema | null; lang: string }) {
+  const before = a?.spec ?? a?.draft;  const after = b?.spec ?? b?.draft;  const diff = useMemo(() => semanticSpecificationDiff(before, after, {    before: a?.schema ?? schema ?? undefined,    after: b?.schema ?? schema ?? undefined,  }), [a, b, schema]);
+  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="md"><DialogTitle>{t('versionDiff')} · {t('versionFrom', { version: a?.version ?? '?' })} → {t('versionTo', { version: b?.version ?? '?' })}</DialogTitle><DialogContent>{diff.length ? diff.map((entry, index) => {    const fieldLabel = formatDiffLabel(entry, b?.schema ?? a?.schema ?? schema ?? undefined, lang, (key) => t(key.replace('versionDiff.property.', 'diffProperty.')));    const row = entry.rowId ? [...(Array.isArray(after?.mission_profile) ? after.mission_profile : []), ...(Array.isArray(before?.mission_profile) ? before.mission_profile : [])].find((item: any) => String(item.row_id ?? '') === entry.rowId) : undefined;    const label = row?.phase ? `${String(row.phase)} · ${fieldLabel}` : fieldLabel;    return <Box key={`${entry.namespace}:${entry.fieldId}:${entry.rowId ?? ''}:${entry.path}:${index}`} sx={{ py: 0.8, borderBottom: '1px solid var(--line-soft)' }}><Typography sx={{ fontWeight: 700, fontSize: 12 }}>{label}</Typography><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{t(`versionChange.${entry.change}`)}</Typography><Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('versionBefore')}: {formatDiffValue(entry.before, entry, a?.schema ?? schema ?? undefined, lang, t)}</Typography><Typography sx={{ fontSize: 11, color: 'var(--text-1)' }}>{t('versionAfter')}: {formatDiffValue(entry.after, entry, b?.schema ?? schema ?? undefined, lang, t)}</Typography></Box>;  }) : <Typography sx={{ fontSize: 12 }}>{t('noDiff')}</Typography>}</DialogContent><DialogActions><Button onClick={onClose}>{t('close')}</Button></DialogActions></Dialog>;
 }

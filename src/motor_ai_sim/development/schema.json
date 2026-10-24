@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "locale_source": "en",
   "locales": [
     "en",
@@ -24,7 +24,12 @@
           "type": "string",
           "unit": "",
           "required": true,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Application",
+            "zh-CN": "应用场景"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_2",
@@ -36,7 +41,12 @@
           "type": "string",
           "unit": "",
           "required": true,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Mode and rotation",
+            "zh-CN": "工作模式与旋转方向"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_3",
@@ -49,14 +59,19 @@
           "unit": "",
           "required": false,
           "allow_not_known_yet": true,
-          "handled_by": "mission_profile"
+          "handled_by": "mission_profile",
+          "short_label": {
+            "en": "Mission profile",
+            "zh-CN": "任务剖面"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_4",
           "checklist_id": "1.4",
           "label": {
-            "en": "Continuous operating point(s): torque and speed (S1)",
-            "zh-CN": "连续工作点：转矩和转速（S1）"
+            "en": "Maximum continuous operating point (S1)",
+            "zh-CN": "最大连续工作点（S1）"
           },
           "type": "object",
           "unit": "",
@@ -72,7 +87,10 @@
               "type": "number",
               "unit": "N·m",
               "required": true,
-              "allow_range": true
+              "short_label": {
+                "en": "Torque",
+                "zh-CN": "转矩"
+              }
             },
             {
               "id": "speed_rpm",
@@ -83,19 +101,36 @@
               "type": "number",
               "unit": "rpm",
               "required": true,
-              "allow_range": true
+              "short_label": {
+                "en": "Speed",
+                "zh-CN": "转速"
+              }
             },
             {
-              "id": "input_power_W",
-              "label": {"en": "Electrical input power", "zh-CN": "电气输入功率"},
-              "type": "number", "unit": "W", "required": false, "min": 0, "allow_range": true
-            },
-            {
-              "id": "output_power_W",
-              "label": {"en": "Mechanical or electrical output power", "zh-CN": "机械或电气输出功率"},
-              "type": "number", "unit": "W", "required": false, "min": 0, "allow_range": true
+              "id": "shaft_power_W",
+              "label": {
+                "en": "Derived shaft power",
+                "zh-CN": "计算轴功率"
+              },
+              "short_label": {
+                "en": "Power",
+                "zh-CN": "功率"
+              },
+              "type": "number",
+              "unit": "W",
+              "required": false,
+              "read_only": true
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Continuous S1 point",
+            "zh-CN": "S1 连续工作点"
+          },
+          "help": {
+            "en": "Enter one torque and speed point. Shaft power is derived from torque and speed.",
+            "zh-CN": "输入一个转矩和转速工作点。轴功率由转矩和转速计算。"
+          },
+          "presentation_group": "continuous"
         },
         {
           "id": "1_5",
@@ -155,10 +190,22 @@
             },
             {
               "id": "output_power_W",
-              "label": {"en": "Peak output power", "zh-CN": "峰值输出功率"},
-              "type": "number", "unit": "W", "required": false, "min": 0, "allow_range": true
+              "label": {
+                "en": "Peak output power",
+                "zh-CN": "峰值输出功率"
+              },
+              "type": "number",
+              "unit": "W",
+              "required": false,
+              "min": 0,
+              "allow_range": true
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Peak operating point",
+            "zh-CN": "峰值工作点"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_6",
@@ -206,7 +253,12 @@
               "unit": "",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Speed limits",
+            "zh-CN": "转速限制"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_7",
@@ -221,7 +273,12 @@
           "allow_not_known_yet": true,
           "min": 0,
           "max": 100,
-          "allow_range": true
+          "allow_range": true,
+          "short_label": {
+            "en": "Efficiency target",
+            "zh-CN": "效率目标"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_8",
@@ -258,8 +315,15 @@
             },
             {
               "id": "cogging_torque_Nm",
-              "label": {"en": "Cogging / starting drag torque", "zh-CN": "齿槽／启动阻力转矩"},
-              "type": "number", "unit": "N·m", "required": false, "min": 0, "allow_range": true
+              "label": {
+                "en": "Cogging / starting drag torque",
+                "zh-CN": "齿槽／启动阻力转矩"
+              },
+              "type": "number",
+              "unit": "N·m",
+              "required": false,
+              "min": 0,
+              "allow_range": true
             },
             {
               "id": "avoid_frequencies_Hz",
@@ -271,7 +335,12 @@
               "unit": "Hz",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Ripple and cogging",
+            "zh-CN": "转矩脉动与齿槽转矩"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_9",
@@ -284,7 +353,12 @@
           "unit": "dB(A)",
           "required": false,
           "allow_not_known_yet": true,
-          "min": 0
+          "min": 0,
+          "short_label": {
+            "en": "Noise limit",
+            "zh-CN": "噪声限制"
+          },
+          "presentation_group": "1"
         },
         {
           "id": "1_10",
@@ -328,9 +402,15 @@
               "unit": "cycles",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Service life",
+            "zh-CN": "使用寿命"
+          },
+          "presentation_group": "1"
         }
-      ]
+      ],
+      "presentation_order": 1
     },
     {
       "id": "2",
@@ -405,7 +485,12 @@
               "required": true,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Battery and voltage",
+            "zh-CN": "电池与电压"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_2",
@@ -446,7 +531,12 @@
                 ]
               }
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Operating voltages",
+            "zh-CN": "各工作点电压"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_3",
@@ -482,7 +572,12 @@
               "required": false,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Battery current",
+            "zh-CN": "电池电流"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_4",
@@ -516,7 +611,12 @@
               "unit": "",
               "required": true
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Controller",
+            "zh-CN": "控制器"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_5",
@@ -551,7 +651,12 @@
               "required": true,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Power devices",
+            "zh-CN": "功率器件"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_6",
@@ -598,7 +703,12 @@
               "required": true,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Phase current limits",
+            "zh-CN": "相电流限制"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_7",
@@ -643,7 +753,12 @@
               "unit": "",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Switching and control",
+            "zh-CN": "开关频率与控制"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_8",
@@ -655,7 +770,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Position sensing",
+            "zh-CN": "位置检测"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_9",
@@ -689,7 +809,12 @@
               "unit": "",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Phases and redundancy",
+            "zh-CN": "相数与冗余"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_10",
@@ -701,7 +826,12 @@
           "type": "string",
           "unit": "m",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Controller cable",
+            "zh-CN": "控制器连接电缆"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_11",
@@ -713,7 +843,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Insulation",
+            "zh-CN": "绝缘要求"
+          },
+          "presentation_group": "2"
         },
         {
           "id": "2_12",
@@ -725,9 +860,15 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Temperature sensing",
+            "zh-CN": "温度检测"
+          },
+          "presentation_group": "2"
         }
-      ]
+      ],
+      "presentation_order": 5
     },
     {
       "id": "3",
@@ -768,10 +909,27 @@
               "unit": "",
               "required": false,
               "properties": [
-                {"id": "mode", "label": {"en": "Airflow mode", "zh-CN": "气流方式"},
-                 "type": "string", "unit": "", "required": false},
-                {"id": "speed_mps", "label": {"en": "Air speed", "zh-CN": "空气速度"},
-                 "type": "number", "unit": "m/s", "required": false, "min": 0}
+                {
+                  "id": "mode",
+                  "label": {
+                    "en": "Airflow mode",
+                    "zh-CN": "气流方式"
+                  },
+                  "type": "string",
+                  "unit": "",
+                  "required": false
+                },
+                {
+                  "id": "speed_mps",
+                  "label": {
+                    "en": "Air speed",
+                    "zh-CN": "空气速度"
+                  },
+                  "type": "number",
+                  "unit": "m/s",
+                  "required": false,
+                  "min": 0
+                }
               ]
             },
             {
@@ -816,7 +974,12 @@
               "required": false,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Cooling conditions",
+            "zh-CN": "冷却条件"
+          },
+          "presentation_group": "3"
         },
         {
           "id": "3_2",
@@ -863,7 +1026,12 @@
               "required": true,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Ambient conditions",
+            "zh-CN": "环境条件"
+          },
+          "presentation_group": "3"
         },
         {
           "id": "3_3",
@@ -875,7 +1043,12 @@
           "type": "string",
           "unit": "",
           "required": true,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Housing protection",
+            "zh-CN": "外壳防护"
+          },
+          "presentation_group": "3"
         },
         {
           "id": "3_4",
@@ -887,7 +1060,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Exposure",
+            "zh-CN": "环境介质"
+          },
+          "presentation_group": "3"
         },
         {
           "id": "3_5",
@@ -899,9 +1077,15 @@
           "type": "number",
           "unit": "°C",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Surface temperature",
+            "zh-CN": "表面温度"
+          },
+          "presentation_group": "3"
         }
-      ]
+      ],
+      "presentation_order": 6
     },
     {
       "id": "4",
@@ -944,7 +1128,12 @@
               "required": true,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Size envelope",
+            "zh-CN": "外形尺寸限制"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_2",
@@ -980,7 +1169,12 @@
               "required": false,
               "min": 0
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Mass target",
+            "zh-CN": "质量目标"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_3",
@@ -992,7 +1186,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Mounting",
+            "zh-CN": "安装方式"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_4",
@@ -1004,7 +1203,12 @@
           "type": "string",
           "unit": "",
           "required": true,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Output interface",
+            "zh-CN": "输出接口"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_5",
@@ -1016,7 +1220,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Bearings",
+            "zh-CN": "轴承配置"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_6",
@@ -1104,7 +1313,12 @@
               "required": false
             }
           ],
-          "min_filled_properties": 1
+          "min_filled_properties": 1,
+          "short_label": {
+            "en": "Shaft loads",
+            "zh-CN": "轴端载荷"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_7",
@@ -1116,7 +1330,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Vibration and shock",
+            "zh-CN": "振动与冲击"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_8",
@@ -1128,7 +1347,12 @@
           "type": "string",
           "unit": "mm",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Balance and runout",
+            "zh-CN": "平衡与跳动"
+          },
+          "presentation_group": "4"
         },
         {
           "id": "4_9",
@@ -1140,9 +1364,426 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Material restrictions",
+            "zh-CN": "材料限制"
+          },
+          "presentation_group": "4"
+        },
+        {
+          "id": "load_type",
+          "label": {
+            "en": "Load type",
+            "zh-CN": "负载类型"
+          },
+          "short_label": {
+            "en": "Load type",
+            "zh-CN": "负载类型"
+          },
+          "help": {
+            "en": "Choose the driven load. Unsupported catalog types remain manual or unknown.",
+            "zh-CN": "选择驱动负载。没有兼容目录数据时请使用手动特性或标记为未知。"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "options": [
+            {
+              "value": "air_propeller",
+              "label": {
+                "en": "Air propeller",
+                "zh-CN": "空气螺旋桨"
+              }
+            },
+            {
+              "value": "marine_propeller",
+              "label": {
+                "en": "Marine propeller",
+                "zh-CN": "船用螺旋桨"
+              }
+            },
+            {
+              "value": "water_jet",
+              "label": {
+                "en": "Water jet",
+                "zh-CN": "喷水推进器"
+              }
+            },
+            {
+              "value": "wheel",
+              "label": {
+                "en": "Wheel",
+                "zh-CN": "车轮"
+              }
+            },
+            {
+              "value": "pump",
+              "label": {
+                "en": "Pump",
+                "zh-CN": "泵"
+              }
+            },
+            {
+              "value": "engine_driven_generator",
+              "label": {
+                "en": "Engine-driven generator",
+                "zh-CN": "发动机驱动发电机"
+              }
+            }
+          ],
+          "presentation_group": "load"
+        },
+        {
+          "id": "load_source",
+          "label": {
+            "en": "Load data source",
+            "zh-CN": "负载数据来源"
+          },
+          "short_label": {
+            "en": "Load data source",
+            "zh-CN": "来源"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "options": [
+            {
+              "value": "catalog",
+              "label": {
+                "en": "Catalog",
+                "zh-CN": "目录"
+              }
+            },
+            {
+              "value": "manual",
+              "label": {
+                "en": "Manual",
+                "zh-CN": "手动"
+              }
+            }
+          ],
+          "presentation_group": "load"
+        },
+        {
+          "id": "load_inertia_kg_m2",
+          "label": {
+            "en": "Load-side inertia",
+            "zh-CN": "负载侧转动惯量"
+          },
+          "short_label": {
+            "en": "Load-side inertia",
+            "zh-CN": "惯量"
+          },
+          "type": "number",
+          "unit": "kg·m²",
+          "required": false,
+          "min": 0,
+          "allow_not_known_yet": true,
+          "presentation_group": "load"
+        },
+        {
+          "id": "startup_mode",
+          "label": {
+            "en": "Startup mode",
+            "zh-CN": "启动方式"
+          },
+          "short_label": {
+            "en": "Startup mode",
+            "zh-CN": "启动"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true,
+          "options": [
+            {
+              "value": "loaded",
+              "label": {
+                "en": "Loaded",
+                "zh-CN": "带载"
+              }
+            },
+            {
+              "value": "unloaded",
+              "label": {
+                "en": "Unloaded",
+                "zh-CN": "空载"
+              }
+            },
+            {
+              "value": "soft_start",
+              "label": {
+                "en": "Soft start",
+                "zh-CN": "软启动"
+              }
+            },
+            {
+              "value": "other",
+              "label": {
+                "en": "Other",
+                "zh-CN": "其他"
+              }
+            }
+          ],
+          "presentation_group": "load"
+        },
+        {
+          "id": "load_characteristic",
+          "label": {
+            "en": "Load characteristic",
+            "zh-CN": "负载特性"
+          },
+          "short_label": {
+            "en": "Load characteristic",
+            "zh-CN": "负载曲线"
+          },
+          "type": "object",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "catalog_id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "catalog_type",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "medium",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "catalog_revision",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "content_digest",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "calculation_model",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "conditions",
+              "type": "object",
+              "required": false,
+              "properties": [
+                {
+                  "id": "temperature_C",
+                  "type": "number",
+                  "required": false
+                },
+                {
+                  "id": "altitude_m",
+                  "type": "number",
+                  "required": false
+                },
+                {
+                  "id": "pressure_Pa",
+                  "type": "number",
+                  "required": false
+                }
+              ]
+            },
+            {
+              "id": "units",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "shaft_side",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "valid_domain",
+              "type": "object",
+              "required": false,
+              "properties": [
+                {
+                  "id": "min_rpm",
+                  "type": "number",
+                  "required": false
+                },
+                {
+                  "id": "max_rpm",
+                  "type": "number",
+                  "required": false
+                }
+              ]
+            },
+            {
+              "id": "samples",
+              "type": "array",
+              "required": false,
+              "items": {
+                "type": "object",
+                "properties": [
+                  {
+                    "id": "rpm",
+                    "type": "number"
+                  },
+                  {
+                    "id": "torque_Nm",
+                    "type": "number"
+                  },
+                  {
+                    "id": "quality",
+                    "type": "string"
+                  },
+                  {
+                    "id": "extrapolated",
+                    "type": "boolean"
+                  },
+                  {
+                    "id": "shaft_power_W",
+                    "type": "number"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "source_snapshot",
+              "type": "object",
+              "required": false,
+              "properties": [
+                {
+                  "id": "catalog_id",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "vendor",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "model",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "data_quality",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "power_data",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "catalog_type",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "calculation_model",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "content_digest",
+                  "type": "string",
+                  "required": false
+                },
+                {
+                  "id": "pitch_in",
+                  "type": "number",
+                  "required": false
+                },
+                {
+                  "id": "source_urls",
+                  "label": { "en": "Source links", "zh-CN": "\u6765\u6e90\u94fe\u63a5" },
+                  "type": "array",
+                  "required": false,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "id": "fit_ct",
+                  "label": { "en": "Thrust coefficient fit", "zh-CN": "\u63a8\u529b\u7cfb\u6570\u62df\u5408" },
+                  "type": "object",
+                  "required": false,
+                  "properties": [
+                    { "id": "c_ref", "label": { "en": "Reference coefficient", "zh-CN": "\u53c2\u8003\u7cfb\u6570" }, "type": "number", "required": false },
+                    { "id": "rpm_ref", "label": { "en": "Reference speed", "zh-CN": "\u53c2\u8003\u8f6c\u901f" }, "type": "number", "required": false },
+                    { "id": "k", "label": { "en": "Exponent", "zh-CN": "\u6307\u6570" }, "type": "number", "required": false },
+                    { "id": "rpm_min", "label": { "en": "Minimum tested speed", "zh-CN": "\u6700\u4f4e\u6d4b\u8bd5\u8f6c\u901f" }, "type": "number", "required": false },
+                    { "id": "rpm_max", "label": { "en": "Maximum tested speed", "zh-CN": "\u6700\u9ad8\u6d4b\u8bd5\u8f6c\u901f" }, "type": "number", "required": false },
+                    { "id": "rms_rel", "label": { "en": "Relative RMS residual", "zh-CN": "\u76f8\u5bf9\u5747\u65b9\u6839\u6b8b\u5dee" }, "type": "number", "required": false },
+                    { "id": "n_used", "label": { "en": "Points used", "zh-CN": "\u4f7f\u7528\u70b9\u6570" }, "type": "number", "required": false }
+                  ]
+                },
+                {
+                  "id": "fit_cp",
+                  "label": { "en": "Power coefficient fit", "zh-CN": "\u529f\u7387\u7cfb\u6570\u62df\u5408" },
+                  "type": "object",
+                  "required": false,
+                  "properties": [
+                    { "id": "c_ref", "label": { "en": "Reference coefficient", "zh-CN": "\u53c2\u8003\u7cfb\u6570" }, "type": "number", "required": false },
+                    { "id": "rpm_ref", "label": { "en": "Reference speed", "zh-CN": "\u53c2\u8003\u8f6c\u901f" }, "type": "number", "required": false },
+                    { "id": "k", "label": { "en": "Exponent", "zh-CN": "\u6307\u6570" }, "type": "number", "required": false },
+                    { "id": "rpm_min", "label": { "en": "Minimum tested speed", "zh-CN": "\u6700\u4f4e\u6d4b\u8bd5\u8f6c\u901f" }, "type": "number", "required": false },
+                    { "id": "rpm_max", "label": { "en": "Maximum tested speed", "zh-CN": "\u6700\u9ad8\u6d4b\u8bd5\u8f6c\u901f" }, "type": "number", "required": false },
+                    { "id": "rms_rel", "label": { "en": "Relative RMS residual", "zh-CN": "\u76f8\u5bf9\u5747\u65b9\u6839\u6b8b\u5dee" }, "type": "number", "required": false },
+                    { "id": "n_used", "label": { "en": "Points used", "zh-CN": "\u4f7f\u7528\u70b9\u6570" }, "type": "number", "required": false }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "calculation_model_version",
+              "type": "string",
+              "required": false
+            },
+            {
+              "id": "requested_conditions",
+              "type": "object",
+              "required": false,
+              "properties": [
+                {
+                  "id": "temperature_C",
+                  "type": "number",
+                  "required": false
+                },
+                {
+                  "id": "altitude_m",
+                  "type": "number",
+                  "required": false
+                },
+                {
+                  "id": "pressure_Pa",
+                  "type": "number",
+                  "required": false
+                }
+              ]
+            }
+          ],
+          "presentation_group": "load",
+          "required_when": {
+            "field": "load_source",
+            "in": [
+              "catalog",
+              "manual"
+            ]
+          }
         }
-      ]
+      ],
+      "presentation_order": 7
     },
     {
       "id": "5",
@@ -1161,7 +1802,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Standards",
+            "zh-CN": "适用标准"
+          },
+          "presentation_group": "5"
         },
         {
           "id": "5_2",
@@ -1173,7 +1819,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Failure cases",
+            "zh-CN": "故障工况"
+          },
+          "presentation_group": "5"
         },
         {
           "id": "5_3",
@@ -1185,7 +1836,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Reliability",
+            "zh-CN": "可靠性"
+          },
+          "presentation_group": "5"
         },
         {
           "id": "5_4",
@@ -1197,9 +1853,15 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Test requirements",
+            "zh-CN": "试验要求"
+          },
+          "presentation_group": "5"
         }
-      ]
+      ],
+      "presentation_order": 8
     },
     {
       "id": "6",
@@ -1256,7 +1918,12 @@
               "min": 0,
               "allow_range": true
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Required quantities",
+            "zh-CN": "需求数量"
+          },
+          "presentation_group": "6"
         },
         {
           "id": "6_2",
@@ -1300,7 +1967,12 @@
               "unit": "date",
               "required": true
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Required dates",
+            "zh-CN": "需求日期"
+          },
+          "presentation_group": "6"
         },
         {
           "id": "6_3",
@@ -1335,7 +2007,12 @@
               "unit": "",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Target budget",
+            "zh-CN": "目标预算"
+          },
+          "presentation_group": "6"
         },
         {
           "id": "6_4",
@@ -1347,7 +2024,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Deliverables",
+            "zh-CN": "交付物"
+          },
+          "presentation_group": "6"
         },
         {
           "id": "6_5",
@@ -1359,9 +2041,15 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "NDA and ownership",
+            "zh-CN": "保密与知识产权"
+          },
+          "presentation_group": "6"
         }
-      ]
+      ],
+      "presentation_order": 8
     },
     {
       "id": "mission_profile",
@@ -1426,9 +2114,15 @@
               "type": "number",
               "unit": "V"
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Mission phases",
+            "zh-CN": "任务阶段"
+          },
+          "presentation_group": "mission_profile"
         }
-      ]
+      ],
+      "presentation_order": 4
     },
     {
       "id": "production",
@@ -1484,7 +2178,12 @@
               "min": 0,
               "allow_range": true
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Production quantities",
+            "zh-CN": "生产计划数量"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "timeline",
@@ -1527,7 +2226,12 @@
               "unit": "date",
               "required": false
             }
-          ]
+          ],
+          "short_label": {
+            "en": "Production dates",
+            "zh-CN": "生产计划日期"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "target_price",
@@ -1539,7 +2243,12 @@
           "unit": "currency",
           "required": false,
           "allow_not_known_yet": true,
-          "allow_range": true
+          "allow_range": true,
+          "short_label": {
+            "en": "Production target price",
+            "zh-CN": "生产目标价格"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "tests",
@@ -1553,7 +2262,12 @@
           "allow_not_known_yet": true,
           "items": {
             "type": "string"
-          }
+          },
+          "short_label": {
+            "en": "Tests",
+            "zh-CN": "测试"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "certification",
@@ -1567,7 +2281,12 @@
           "allow_not_known_yet": true,
           "items": {
             "type": "string"
-          }
+          },
+          "short_label": {
+            "en": "Certification",
+            "zh-CN": "认证"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "packaging_delivery",
@@ -1578,7 +2297,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Packaging and delivery",
+            "zh-CN": "包装和交付"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "controller_supplier",
@@ -1589,7 +2313,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Controller supplied by",
+            "zh-CN": "控制器供应方"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "magnets_supplier",
@@ -1600,7 +2329,12 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Magnets supplied by",
+            "zh-CN": "磁体供应方"
+          },
+          "presentation_group": "production"
         },
         {
           "id": "housing_supplier",
@@ -1611,13 +2345,82 @@
           "type": "string",
           "unit": "",
           "required": false,
-          "allow_not_known_yet": true
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Housing supplied by",
+            "zh-CN": "机壳供应方"
+          },
+          "presentation_group": "production"
         }
-      ]
+      ],
+      "presentation_order": 8
     }
   ],
   "range_value_shape": {
     "minimum": "number|null",
     "maximum": "number|null"
-  }
+  },
+  "presentation": [
+    {
+      "id": "application",
+      "order": 1,
+      "fields": [
+        "1_1",
+        "1_2"
+      ]
+    },
+    {
+      "id": "continuous",
+      "order": 2,
+      "fields": [
+        "1_4",
+        "1_5",
+        "1_6"
+      ]
+    },
+    {
+      "id": "load",
+      "order": 3,
+      "fields": [
+        "load_type",
+        "load_source",
+        "load_inertia_kg_m2",
+        "startup_mode",
+        "load_characteristic",
+        "4_6"
+      ]
+    },
+    {
+      "id": "mission",
+      "order": 4,
+      "fields": [
+        "1_3"
+      ]
+    },
+    {
+      "id": "electrical",
+      "order": 5,
+      "fields": []
+    },
+    {
+      "id": "cooling_environment",
+      "order": 6,
+      "fields": []
+    },
+    {
+      "id": "mechanical",
+      "order": 7,
+      "fields": []
+    },
+    {
+      "id": "delivery_testing",
+      "order": 8,
+      "fields": []
+    },
+    {
+      "id": "review",
+      "order": 9,
+      "fields": []
+    }
+  ]
 }

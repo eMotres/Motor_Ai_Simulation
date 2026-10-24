@@ -310,8 +310,18 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
                 {gisState === 'loading' ? <CircularProgress size={18} sx={{ color: 'inherit' }} /> : t('auth.google.signIn')}
               </Button>
             )}
-            {consentBox}
-            <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.75 }}>{t('auth.consent.newAccountOnly')}</Typography>
+            {/* The e-mail topics are asked only when creating an account (owner 2026-10-24); a returning user
+                changes them on the account page (CommPrefsPage), not at every sign-in. */}
+            {mode === 'register' ? (
+              <>
+                {consentBox}
+                <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.75 }}>{t('auth.consent.newAccountOnly')}</Typography>
+              </>
+            ) : (
+              <Link component="button" type="button" sx={{ fontSize: 12 }} onClick={() => switchMode('register')}>
+                {t('auth.link.createAccount')}
+              </Link>
+            )}
             {termsLine}
             {gisErr && (
               <Typography variant="caption" color="error" role="alert">

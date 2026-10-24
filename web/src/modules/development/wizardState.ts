@@ -1,4 +1,5 @@
 import type { Completeness, SchemaField, SchemaSection } from './types';
+import type { SpecificationField } from './specificationLayout';
 
 export interface FieldAnswer { value?: unknown; status?: 'filled' | 'not_known_yet' | 'missing'; not_known_yet?: boolean }
 export type SpecDraft = Record<string, unknown> & { fields?: Record<string, FieldAnswer>; mission_profile?: Array<Record<string, unknown>>; mission_profile_status?: 'filled' | 'not_known_yet' | 'missing' };
@@ -9,7 +10,39 @@ export function fieldAnswer(draft: SpecDraft, id: string): FieldAnswer {
 export function setFieldAnswer(draft: SpecDraft, id: string, answer: FieldAnswer): SpecDraft {
   return { ...draft, fields: { ...(draft.fields ?? {}), [id]: answer } };
 }
+/** Recalculate the display-only S1 power or remove a stale derived value when either input is blank. */
+export function withS1DerivedPower(value: Record<string, unknown>): Record<string, unknown> {
+  const torque = value.torque_Nm, speed = value.speed_rpm;
+  if (typeof torque === 'number' && Number.isFinite(torque) && typeof speed === 'number' && Number.isFinite(speed)) {
+    return { ...value, shaft_power_W: torque * 2 * Math.PI * speed / 60 };
+  }
+  const next = { ...value }; delete next.shaft_power_W; return next;
+}
 export function isRequired(f: SchemaField): boolean { return f.required === true || f.required_flag === 'E'; }
+export function isConditionallyRequired(f: SchemaField, draft: SpecDraft): boolean {
+  const condition = (f as SchemaField & { required_when?: { field: string; in: unknown[] } }).required_when;
+  if (!condition) return false;
+  const answer = fieldAnswer(draft, condition.field);
+  return answer.status === 'filled' && condition.in.includes(answer.value);
+}
+export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return isRequired(f) || isConditionallyRequired(f, draft); }
+export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {
+  return (field as SpecificationField).storage_namespace ?? (section.id === 'production' || section.production ? 'production' : 'fields');
+}
+export function fieldValueValid(field: SchemaField, value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return false;
+  if (field.allow_range && typeof value === 'object') {
+    const bounds = value as Record<string, unknown>, lo = Number(bounds.minimum), hi = Number(bounds.maximum);
+    return bounds.minimum !== null && bounds.minimum !== undefined && bounds.minimum !== '' && bounds.maximum !== null && bounds.maximum !== undefined && bounds.maximum !== '' && Number.isFinite(lo) && Number.isFinite(hi) && lo <= hi;
+  }
+  if (field.type === 'number') {
+    const n = typeof value === 'number' ? value : Number(value);
+    return typeof value !== 'boolean' && Number.isFinite(n) && (field.min === undefined || n >= field.min) && (field.max === undefined || n <= field.max);
+  }
+  const options = field.options ?? field.choices;
+  if (options?.length) return options.some((o) => (typeof o === 'string' ? o : o.value) === value);
+  return true;
+}
 export function answerComplete(a: FieldAnswer): boolean {
   if (a.status === 'not_known_yet' || a.not_known_yet === true) return true;
   if (a.value && typeof a.value === 'object' && !Array.isArray(a.value)) {
@@ -19,11 +52,12 @@ export function answerComplete(a: FieldAnswer): boolean {
   return a.value !== undefined && a.value !== null && String(a.value).trim() !== '';
 }
 
-export function schemaValueComplete(schema: { type?: string; required?: boolean; allow_range?: boolean; properties?: Array<{ id: string; required?: boolean; required_flag?: string; type?: string; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {
+export function schemaValueComplete(schema: { type?: string; min?: number; max?: number; required?: boolean; allow_range?: boolean; properties?: Array<{ id: string; required?: boolean; required_flag?: string; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {
   if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return false;
   if (schema.allow_range && typeof value === 'object') {
     const bounds = value as Record<string, unknown>;
-    return bounds.minimum != null && bounds.maximum != null && bounds.minimum !== '' && bounds.maximum !== '';
+    const min = Number(bounds.minimum), max = Number(bounds.maximum);
+    return bounds.minimum !== null && bounds.minimum !== undefined && bounds.minimum !== '' && bounds.maximum !== null && bounds.maximum !== undefined && bounds.maximum !== '' && Number.isFinite(min) && Number.isFinite(max) && min <= max && (schema.min === undefined || min >= schema.min) && (schema.max === undefined || max <= schema.max);
   }
   if (schema.type === 'array') {
     if (!Array.isArray(value)) return false;
@@ -39,13 +73,13 @@ export function schemaValueComplete(schema: { type?: string; required?: boolean;
     const required = schema.properties.filter((p) => p.required === true || p.required_flag === 'E');
     return required.every((p) => schemaValueComplete(p, record[p.id]));
   }
-  if (schema.type === 'number') return Number.isFinite(Number(value));
+  if (schema.type === 'number') return typeof value !== 'boolean' && (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isFinite(Number(value)) && (schema.min === undefined || Number(value) >= schema.min) && (schema.max === undefined || Number(value) <= schema.max);
   return true;
 }
 
 export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): boolean {
   if (answer.status === 'not_known_yet' || answer.not_known_yet === true) return true;
-  if (answer.status !== 'filled') return false;
+  if (answer.status !== 'filled' || !fieldValueValid(field, answer.value)) return false;
   const value = answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : {};
   const required = field.properties?.filter((property) => property.required === true || property.required_flag === 'E') ?? [];
   if (field.properties?.length && !required.every((property) => schemaValueComplete(property, value[property.id]))) return false;
@@ -59,28 +93,51 @@ export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): bo
 
 export function missionProfileComplete(draft: SpecDraft): boolean {
   const rows = draft.mission_profile ?? [];
-  return rows.length > 0 && rows.every((row) => ['phase', 'torque_Nm', 'speed_rpm', 'duration_s', 'battery_voltage_V'].every((key) => row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== ''));
+  return rows.length > 0 && rows.every((row) => typeof row.phase === 'string' && !!row.phase.trim() && ['torque_Nm', 'speed_rpm'].every((key) => typeof row[key] === 'number' && Number.isFinite(row[key])) && ['duration_s', 'battery_voltage_V'].every((key) => typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] >= 0));
 }
 
+export interface SectionAnswerCounts { answered: number; unknown: number; missing: number; invalid: number; required: number; filled: number }
+export function sectionAnswerCounts(section: SchemaSection, draft: SpecDraft): SectionAnswerCounts {
+  const counts: SectionAnswerCounts = { answered: 0, unknown: 0, missing: 0, invalid: 0, required: 0, filled: 0 };
+  for (const field of (section.fields ?? []).filter((f) => fieldRequired(f, draft) && !f.handled_by)) {
+    counts.required++;
+    if (field.id === 'mission_profile') {
+      if (draft.mission_profile_status === 'not_known_yet') counts.unknown++;
+      else if (missionProfileComplete(draft)) counts.answered++;
+      else if ((draft.mission_profile?.length ?? 0) > 0) counts.invalid++;
+      else counts.missing++;
+      continue;
+    }
+    const source = answerNamespace(section, field) === 'production' ? draft.production as Record<string, FieldAnswer> | undefined : draft.fields;
+    const raw = source?.[field.id];
+    const answer = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as FieldAnswer : { value: raw };
+    if (answer.status === 'not_known_yet' || answer.not_known_yet === true) counts.unknown++;
+    else if (answer.status === 'missing') counts.missing++;
+    else if (fieldAnswerComplete(field, answer)) counts.answered++;
+    else if (answer.value !== undefined && answer.value !== null && answer.value !== '') counts.invalid++;
+    else counts.missing++;
+  }
+  counts.filled = counts.answered + counts.unknown;
+  return counts;
+}
 export function sectionCompleteness(section: SchemaSection, draft: SpecDraft): { filled: number; required: number } {
-  const fields = (section.fields ?? []).filter((f) => isRequired(f) && !f.handled_by);
-  return { required: fields.length, filled: fields.filter((f) => {
-    if (f.id === 'mission_profile') return draft.mission_profile_status === 'not_known_yet' || (draft.mission_profile_status === 'filled' && missionProfileComplete(draft));
-    const src = section.id === 'production' ? draft.production as Record<string, FieldAnswer> | undefined : draft.fields;
-    const raw = src?.[f.id];
-    const answer = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { value: raw };
-    return fieldAnswerComplete(f, answer);
-  }).length };
+  const counts = sectionAnswerCounts(section, draft);
+  return { required: counts.required, filled: counts.filled };
 }
 export function wizardCompleteness(sections: SchemaSection[], draft: SpecDraft): Completeness {
   const counts = Object.fromEntries(sections.map((section) => { const count = sectionCompleteness(section, draft); return [section.id, { ...count, total: count.required, complete: count.filled === count.required }]; }));
-  const totals = Object.values(counts).reduce((a, b) => ({ filled: a.filled + b.filled, required: a.required + b.required }), { filled: 0, required: 0 });
-  return { ...totals, filled_required: totals.filled, total_required: totals.required, sections: counts };
+  const answerCounts = sections.map((section) => sectionAnswerCounts(section, draft));
+  const unknown = answerCounts.reduce((n, c) => n + c.unknown, 0);
+  const invalid = answerCounts.reduce((n, c) => n + c.invalid, 0);
+  const answered = answerCounts.reduce((n, c) => n + c.answered, 0);
+  const filled = Object.values(counts).reduce((n, c) => n + c.filled, 0);
+  const required = Object.values(counts).reduce((n, c) => n + c.required, 0);
+  return { filled, required, filled_required: filled, total_required: required, answered, unknown, missing: Math.max(0, required - answered - unknown - invalid), invalid, sections: counts };
 }
 export function requiredFieldIds(sections: SchemaSection[], draft: SpecDraft): string[] {
-  return sections.flatMap((s) => (s.fields ?? []).filter((f) => isRequired(f) && !f.handled_by).filter((f) => {
+  return sections.flatMap((s) => (s.fields ?? []).filter((f) => fieldRequired(f, draft) && !f.handled_by).filter((f) => {
     if (f.id === 'mission_profile') return draft.mission_profile_status !== 'not_known_yet' && !(draft.mission_profile_status === 'filled' && missionProfileComplete(draft));
-    const src = s.id === 'production' ? draft.production as Record<string, FieldAnswer> | undefined : draft.fields;
+    const src = answerNamespace(s, f) === 'production' ? draft.production as Record<string, FieldAnswer> | undefined : draft.fields;
     const raw = src?.[f.id];
     return !fieldAnswerComplete(f, raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { value: raw });
   }).map((f) => f.id));
@@ -95,6 +152,48 @@ export function shallowDiff(a: unknown, b: unknown): Array<{ path: string; befor
     } else out.push({ path: prefix || 'specification', before: x, after: y });
   };
   walk(a, b, ''); return out;
+}
+
+/** Counts each required specification field as answered, explicitly unknown, or missing. */
+export function sectionStatus(section: SchemaSection, draft: SpecDraft): 'complete' | 'unknown' | 'missing' {
+  const c = sectionAnswerCounts(section, draft);
+  return c.missing || c.invalid ? 'missing' : c.unknown ? 'unknown' : 'complete';
+}
+
+export function groupSpecificationSections(source: SchemaSection[], groups: Array<{ id: string; title: string; fieldIds: string[] }>): SchemaSection[] {
+  const allFields = source.flatMap((section) => section.fields ?? []);
+  const production = source.find((section) => section.id === 'production' || section.production);
+  const assigned = new Set<string>();
+  const laidOut = groups.map((group) => {
+    const fields = group.fieldIds.map((id) => allFields.find((field) => field.id === id)).filter((field): field is SchemaField => !!field);
+    fields.forEach((field) => assigned.add(field.id));
+    return { id: group.id, title: group.title, fields, production: false } as SchemaSection;
+  });
+  const delivery = laidOut.find((section) => section.id === 'delivery');
+  if (delivery && production) {
+    delivery.fields = [...(production.fields ?? [])];
+    delivery.production = true;
+    for (const field of production.fields ?? []) assigned.add(field.id);
+  }
+  for (const section of source) {
+    if (section === production) continue;
+    const extras = (section.fields ?? []).filter((field) => !assigned.has(field.id) && field.id !== '1_3' && field.id !== 'mission_profile' && !field.handled_by);
+    if (!extras.length) continue;
+    const matching = laidOut.find((target) => target.fields?.some((field) => (section.fields ?? []).some((candidate) => candidate.id === field.id)));
+    if (matching) { matching.fields = [...(matching.fields ?? []), ...extras]; extras.forEach((field) => assigned.add(field.id)); }
+  }
+  return [...laidOut, { id: 'review', title: 'wizard.review', fields: [], kind: 'review' }];
+}
+
+/** Semantic diff includes wrapper status and values while ignoring object key order. */
+export function specificationDiff(a: unknown, b: unknown): Array<{ path: string; before: unknown; after: unknown }> {
+  const normalize = (draft: unknown): unknown => {
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return draft;
+    const root = structuredClone(draft as Record<string, unknown>);
+    if (Array.isArray(root.mission_profile)) root.mission_profile = Object.fromEntries((root.mission_profile as Array<Record<string, unknown>>).map((row, index) => [String(row.row_id ?? `legacy-${index}`), row]));
+    return root;
+  };
+  return shallowDiff(normalize(a), normalize(b));
 }
 
 

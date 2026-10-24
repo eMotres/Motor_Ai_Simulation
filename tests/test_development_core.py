@@ -156,7 +156,7 @@ def _all_unknown_draft():
                 continue
             target = production if section["id"] == "production" else fields
             target[field["id"]] = {"value": None, "status": "not_known_yet"}
-    return {"fields": fields, "mission_profile": [], "mission_profile_status": "not_known_yet",
+    return {"schema_version": 2, "fields": fields, "mission_profile": [], "mission_profile_status": "not_known_yet",
             "production": production}
 
 
@@ -423,7 +423,7 @@ def test_draft_autosave_conflict_returns_409(project_root, monkeypatch):
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
     store.create_project(make_project())
-    store.save_json("alpha", "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}}, "revision": 0, "version": None})
+    store.save_json("alpha", "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}}, "schema_version": 2, "revision": 0, "version": None})
     app = FastAPI(); app.include_router(router)
     client = TestClient(app)
     draft = models.normalize_draft(_all_unknown_draft())
@@ -438,7 +438,7 @@ def test_partial_structured_row_autosaves_but_submit_requires_nested_cells(proje
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
     store.create_project(make_project())
-    store.save_json("alpha", "draft.json", {"draft": {}, "revision": 0, "version": None})
+    store.save_json("alpha", "draft.json", {"draft": {"schema_version": 2}, "schema_version": 2, "revision": 0, "version": None})
     app = FastAPI(); app.include_router(router)
     client = TestClient(app)
     headers = {"Authorization": "Bearer dev"}
@@ -513,8 +513,8 @@ def test_concurrent_submit_endpoint_has_one_winner(project_root, monkeypatch):
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
     store.create_project(make_project())
-    store.save_json("alpha", "draft.json", {"draft": {"fields": {}, "mission_profile": [],
-                    "mission_profile_status": "missing", "production": {}}, "revision": 0, "version": None})
+    store.save_json("alpha", "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [],
+                    "mission_profile_status": "missing", "production": {}}, "schema_version": 2, "revision": 0, "version": None})
     app = FastAPI(); app.include_router(router)
     client = TestClient(app)
     headers = {"Authorization": "Bearer dev"}

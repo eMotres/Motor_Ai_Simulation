@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -8,46 +9,73 @@ from typing import Any
 SCHEMA_PATH = Path(__file__).with_name("schema.json")
 
 
-def schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+def schema(version: int | None = None) -> dict:
+    path = SCHEMA_PATH.with_name("schema_v1.json") if version == 1 else SCHEMA_PATH
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _field_map() -> dict[str, tuple[dict, dict]]:
+def _field_map(version: int | None = None) -> dict[str, tuple[dict, dict]]:
     result = {}
-    for section in schema()["sections"]:
+    for section in schema(version)["sections"]:
         for field in section["fields"]:
             result[field["id"]] = (section, field)
     return result
 
 
-def normalize_draft(value: Any) -> dict:
+def normalize_draft(value: Any, *, schema_version: int | None = None) -> dict:
     if not isinstance(value, dict):
         raise ValueError("draft must be an object")
-    extra = set(value) - {"fields", "mission_profile", "mission_profile_status", "production", "provenance"}
+    version = value.get("schema_version", 1) if schema_version is None else schema_version
+    if version not in (1, 2):
+        raise ValueError("unsupported schema_version")
+    active_schema = schema(version)
+    extra = set(value) - {"schema_version", "fields", "mission_profile", "mission_profile_status", "production", "provenance"}
     if extra:
         raise ValueError("unknown draft keys: " + ", ".join(sorted(extra)))
-    out = {"fields": {}, "mission_profile": [], "mission_profile_status": value.get("mission_profile_status", "missing"), "production": {}}
+    out = {"schema_version": version, "fields": {}, "mission_profile": [], "mission_profile_status": value.get("mission_profile_status", "missing"), "production": {}}
     if out["mission_profile_status"] not in ("missing", "filled", "not_known_yet"):
         raise ValueError("mission_profile_status must be missing, filled, or not_known_yet")
     fields = value.get("fields", {})
     if not isinstance(fields, dict):
         raise ValueError("fields must be an object")
-    known = _field_map()
-    prod_ids = {f["id"] for f in schema()["sections"][-1]["fields"]}
+    known = _field_map(version)
+    prod_section = next((s for s in active_schema["sections"] if s["id"] == "production"), None)
     for field_id, answer in fields.items():
         if field_id not in known or field_id == "mission_profile":
             raise ValueError(f"unknown field: {field_id}")
         if known[field_id][0]["id"] == "production":
             raise ValueError(f"production field must be placed under production: {field_id}")
-        out["fields"][field_id] = _normalize_answer(answer, known[field_id][1], field_id)
+        normalized_answer = _normalize_answer(answer, known[field_id][1], field_id)
+        if version == 2 and field_id == "1_4" and normalized_answer.get("status") == "filled":
+            point = normalized_answer.get("value") or {}
+            torque, speed = point.get("torque_Nm"), point.get("speed_rpm")
+            if isinstance(torque, (int, float)) and isinstance(speed, (int, float)):
+                derived = torque * 2 * __import__("math").pi * speed / 60
+                if not __import__("math").isfinite(derived):
+                    raise ValueError("1_4 shaft power is outside the finite numeric range")
+                supplied = point.get("shaft_power_W")
+                if supplied is not None and abs(float(supplied) - derived) > max(1e-6, abs(derived) * 1e-6):
+                    raise ValueError("1_4.shaft_power_W does not match torque and speed")
+                point["shaft_power_W"] = derived
+        if version == 2 and field_id in ("load_type", "load_source") and normalized_answer.get("status") == "filled":
+            choice = normalized_answer.get("value")
+            allowed = {item.get("value", item) if isinstance(item, dict) else item for item in known[field_id][1].get("options", [])}
+            if choice not in allowed:
+                raise ValueError(f"{field_id}: unsupported choice")
+        out["fields"][field_id] = normalized_answer
+    if version == 2:
+        load_answer = out["fields"].get("load_characteristic", {})
+        if load_answer.get("status") == "filled":
+            _validate_load_characteristic(load_answer.get("value") or {}, out["fields"])
     mission = value.get("mission_profile", [])
     if not isinstance(mission, list):
         raise ValueError("mission_profile must be an array")
-    row_keys = {"phase", "torque_Nm", "speed_rpm", "duration_s", "battery_voltage_V"}
+    row_keys = {"phase", "torque_Nm", "speed_rpm", "duration_s", "battery_voltage_V", "row_id", "rpm", "voltage_V", "source", "source_kind", "source_ref", "sample_id", "source_snapshot", "conditions", "stale", "override", "override_fields", "shaft_side", "direct_drive_confirmed"}
+    seen_row_ids = set()
     for i, row in enumerate(mission):
         if not isinstance(row, dict):
             raise ValueError(f"mission_profile[{i}] must be an object")
@@ -55,9 +83,13 @@ def normalize_draft(value: Any) -> dict:
         if extra_row:
             raise ValueError(f"mission_profile[{i}] has unknown fields: {', '.join(sorted(extra_row))}")
         normalized = {}
+        aliases = {"speed_rpm": "rpm", "battery_voltage_V": "voltage_V"}
         for key, typ in (("phase", str), ("torque_Nm", (int, float)), ("speed_rpm", (int, float)),
                          ("duration_s", (int, float)), ("battery_voltage_V", (int, float))):
-            item = row.get(key)
+            alias = aliases.get(key)
+            if key in row and alias in row and row[key] != row[alias]:
+                raise ValueError(f"mission_profile[{i}].{key} conflicts with {alias}")
+            item = row.get(key, row.get(alias) if alias else None)
             if item == "":
                 item = None
             if item is not None and (not isinstance(item, typ) or isinstance(item, bool) or
@@ -68,13 +100,71 @@ def normalize_draft(value: Any) -> dict:
             if key == "battery_voltage_V" and item is not None and item < 0:
                 raise ValueError(f"mission_profile[{i}].{key} must be non-negative")
             normalized[key] = item
+        for key in ("row_id", "source", "source_kind", "source_ref", "sample_id", "source_snapshot", "conditions", "stale", "override", "override_fields", "shaft_side", "direct_drive_confirmed"):
+            if key not in row:
+                continue
+            item = row[key]
+            if key in ("row_id", "source", "source_kind", "source_ref", "sample_id") and not isinstance(item, str):
+                raise ValueError(f"mission_profile[{i}].{key} must be text")
+            if key == "row_id" and (not item.strip() or len(item) > 128):
+                raise ValueError(f"mission_profile[{i}].row_id must contain 1 to 128 characters")
+            if key in ("stale", "direct_drive_confirmed") and not isinstance(item, bool):
+                raise ValueError(f"mission_profile[{i}].{key} must be boolean")
+            if key == "shaft_side" and item not in ("load", "motor"):
+                raise ValueError(f"mission_profile[{i}].shaft_side must be load or motor")
+            if key in ("source_snapshot", "conditions", "override", "override_fields"):
+                if not isinstance(item, dict):
+                    raise ValueError(f"mission_profile[{i}].{key} must be an object")
+                nested_allow = {
+                    "source_snapshot": {"catalog_id", "catalog_type", "calculation_model", "vendor", "model", "data_quality", "power_data", "temperature_C", "altitude_m", "pressure_Pa", "extrapolated", "rpm_range_tested", "pitch_in", "digest", "sha256", "content_digest", "direct_drive_confirmed", "shaft_side"},
+                    "conditions": {"temperature_C", "altitude_m", "pressure_Pa"},
+                    "override": {"rpm", "torque_Nm"}, "override_fields": {"rpm", "torque_Nm"},
+                }[key]
+                if set(item) - nested_allow:
+                    raise ValueError(f"mission_profile[{i}].{key} has unknown fields")
+                if key in ("override", "override_fields") and any(not isinstance(v, bool) for v in item.values()):
+                    raise ValueError(f"mission_profile[{i}].{key} values must be boolean")
+                if key == "conditions" and any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                                                or (name == "pressure_Pa" and v <= 0) for name, v in item.items()):
+                    raise ValueError(f"mission_profile[{i}].conditions values must be finite and pressure positive")
+                if key == "source_snapshot":
+                    text_keys = {"catalog_id", "catalog_type", "calculation_model", "vendor", "model", "data_quality", "power_data", "digest", "sha256", "content_digest"}
+                    numeric_keys = {"temperature_C", "altitude_m", "pressure_Pa", "pitch_in"}
+                    for name, nested in item.items():
+                        valid = ((name in text_keys and isinstance(nested, str))
+                                 or (name in numeric_keys and isinstance(nested, (int, float)) and not isinstance(nested, bool) and __import__("math").isfinite(nested))
+                                 or (name in {"extrapolated", "direct_drive_confirmed"} and isinstance(nested, bool))
+                                 or (name == "shaft_side" and nested in ("load", "motor")))
+                        if name == "rpm_range_tested":
+                            valid = (isinstance(nested, (list, tuple)) and len(nested) == 2
+                                     and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                             and math.isfinite(v) and v >= 0 for v in nested)
+                                     and nested[0] <= nested[1])
+                        if name == "pressure_Pa":
+                            valid = isinstance(nested, (int, float)) and not isinstance(nested, bool) and math.isfinite(nested) and nested > 0
+                        if name == "pitch_in":
+                            valid = isinstance(nested, (int, float)) and not isinstance(nested, bool) and math.isfinite(nested) and nested > 0
+                        if not valid:
+                            raise ValueError(f"mission_profile[{i}].source_snapshot.{name} has invalid type or value")
+            normalized[key] = item
+        if version == 2:
+            import uuid
+            row_id = normalized.get("row_id") or str(uuid.uuid5(uuid.NAMESPACE_URL, f"dev-spec-row:{i}:{json.dumps(normalized, sort_keys=True, separators=(',', ':'))}"))
+            if row_id in seen_row_ids:
+                raise ValueError(f"mission_profile[{i}].row_id must be unique")
+            seen_row_ids.add(row_id)
+            normalized["row_id"] = row_id
+            source = normalized.get("source", normalized.get("source_kind", "manual"))
+            if source not in ("manual", "catalog"):
+                raise ValueError(f"mission_profile[{i}].source must be manual or catalog")
+            normalized["source"] = source
         out["mission_profile"].append(normalized)
     if out["mission_profile"] and out["mission_profile_status"] == "missing":
         out["mission_profile_status"] = "filled"
     production = value.get("production", {})
     if not isinstance(production, dict):
         raise ValueError("production must be an object")
-    prod_fields = {f["id"]: f for f in schema()["sections"][-1]["fields"]}
+    prod_fields = {f["id"]: f for f in (prod_section or {}).get("fields", [])}
     for field_id, answer in production.items():
         if field_id not in prod_fields:
             raise ValueError(f"unknown production field: {field_id}")
@@ -160,6 +250,11 @@ def _normalize_answer(answer: Any, field: dict, field_id: str) -> dict:
                     _validate_typed_item(element, field["items"], f"{field_id}[{index}]")
         if typ == "boolean" and not isinstance(value, bool):
             raise ValueError(f"{field_id}: boolean required")
+    if field.get("options") and status == "filled":
+        allowed = {option.get("value", option) if isinstance(option, dict) else option
+                   for option in field["options"]}
+        if not any(value == option for option in allowed):
+            raise ValueError(f"{field_id}: unsupported choice")
     return {"value": value, "status": status}
 
 
@@ -215,6 +310,8 @@ def _validate_typed_item(value: Any, spec: dict, path: str, *, require_complete:
         if isinstance(item_spec, dict):
             for index, item in enumerate(value):
                 _validate_typed_item(item, item_spec, f"{path}[{index}]", require_complete=require_complete)
+    if spec.get("options") and not any(value == option for option in spec["options"]):
+        raise ValueError(f"{path}: unsupported choice")
 
 
 def _value_present(value: Any, spec: dict | None = None) -> bool:
@@ -260,15 +357,107 @@ def _answer_complete(answer: dict, field: dict) -> bool:
     return True
 
 
+def _validate_load_characteristic(value: dict, fields: dict) -> None:
+    load_type_answer = fields.get("load_type") if isinstance(fields.get("load_type"), dict) else {}
+    source_answer = fields.get("load_source") if isinstance(fields.get("load_source"), dict) else {}
+    load_type = load_type_answer.get("value") if load_type_answer.get("status") == "filled" else None
+    source = source_answer.get("value") if source_answer.get("status") == "filled" else None
+    if source not in ("catalog", "manual"):
+        raise ValueError("load_characteristic.source: choose catalog or manual before adding a curve")
+    if source == "catalog" and load_type != "air_propeller":
+        raise ValueError("load_characteristic: no reviewed compatible catalog model for this load type")
+    samples = value.get("samples", [])
+    if not isinstance(samples, list) or len(samples) < (1 if source == "catalog" else 2):
+        raise ValueError("load_characteristic.samples: add a usable curve sample")
+    if not isinstance(value.get("units"), str) or not value["units"].strip():
+        raise ValueError("load_characteristic.units: units are required")
+    if value["units"] not in ("rpm,N·m,W", "rpm, N·m, W"):
+        raise ValueError("load_characteristic.units: expected canonical rpm, N·m, and W units")
+    if not isinstance(value.get("shaft_side"), str) or not value["shaft_side"].strip():
+        raise ValueError("load_characteristic.shaft_side: shaft side is required")
+    if samples:
+        rpms = [sample.get("rpm") for sample in samples]
+        if any(isinstance(rpm, bool) or not isinstance(rpm, (int, float)) or not math.isfinite(float(rpm)) or rpm < 0 for rpm in rpms):
+            raise ValueError("load_characteristic.samples.rpm: finite number required")
+        if any(b <= a for a, b in zip(rpms, rpms[1:])):
+            raise ValueError("load_characteristic.samples: RPM values must be strictly increasing")
+        for index, sample in enumerate(samples):
+            torque, power, rpm = sample.get("torque_Nm"), sample.get("shaft_power_W"), sample.get("rpm")
+            if isinstance(torque, bool) or not isinstance(torque, (int, float)) or not __import__("math").isfinite(torque):
+                raise ValueError(f"load_characteristic.samples[{index}].torque_Nm: finite number required")
+            expected = torque * 2 * __import__("math").pi * rpm / 60
+            if (not math.isfinite(expected) or isinstance(power, bool) or not isinstance(power, (int, float))
+                    or not math.isfinite(power) or abs(power - expected) > max(1e-6, abs(expected) * 1e-5)):
+                raise ValueError(f"load_characteristic.samples[{index}].shaft_power_W: inconsistent with torque and RPM")
+            if not isinstance(sample.get("quality"), str) or not sample["quality"].strip():
+                raise ValueError(f"load_characteristic.samples[{index}].quality: quality is required")
+            if not isinstance(sample.get("extrapolated"), bool):
+                raise ValueError(f"load_characteristic.samples[{index}].extrapolated: boolean required")
+    domain = value.get("valid_domain")
+    if not isinstance(domain, dict) or domain.get("min_rpm") is None or domain.get("max_rpm") is None:
+        raise ValueError("load_characteristic.valid_domain: RPM bounds are required")
+    low, high = domain["min_rpm"], domain["max_rpm"]
+    if any(isinstance(bound, bool) or not isinstance(bound, (int, float)) or not math.isfinite(float(bound)) for bound in (low, high)):
+        raise ValueError("load_characteristic.valid_domain: RPM bounds must be finite numbers")
+    if low < 0 or high < 0:
+        raise ValueError("load_characteristic.valid_domain: RPM bounds must be non-negative")
+    if low > high:
+        raise ValueError("load_characteristic.valid_domain: minimum RPM exceeds maximum")
+    if source == "catalog" and value.get("catalog_type") != "air_propeller":
+        raise ValueError("load_characteristic.catalog_type: incompatible catalog record")
+    if source == "catalog" and value.get("medium") != "air":
+        raise ValueError("load_characteristic.medium: catalog model must use air")
+    if source == "catalog" and (not value.get("catalog_id") or not value.get("content_digest") or not value.get("calculation_model")):
+        raise ValueError("load_characteristic: catalog ID, content digest, and calculation model are required")
+    if value.get("units") != "rpm,N·m,W":
+        raise ValueError("load_characteristic.units: expected rpm,N·m,W")
+    if value.get("shaft_side") not in ("motor", "load"):
+        raise ValueError("load_characteristic.shaft_side: expected motor or load")
+
+
+def _conditional_required(field: dict, draft: dict) -> bool:
+    condition = field.get("required_when")
+    if not isinstance(condition, dict):
+        return False
+    answer = draft.get("fields", {}).get(condition.get("field"), {})
+    return answer.get("status") == "filled" and answer.get("value") in condition.get("in", [])
+
+
+def _load_characteristic_complete(answer: dict, fields: dict) -> bool:
+    source_answer = fields.get("load_source", {})
+    source = source_answer.get("value") if isinstance(source_answer, dict) and source_answer.get("status") == "filled" else None
+    if source not in ("catalog", "manual"):
+        return True
+    if not isinstance(answer, dict) or answer.get("status") != "filled":
+        return _answer_complete(answer, {"type": "object"})
+    value = answer.get("value")
+    if not isinstance(value, dict):
+        return False
+    samples = value.get("samples")
+    if not isinstance(samples, list) or len(samples) < (2 if source == "manual" else 1):
+        return False
+    domain = value.get("valid_domain")
+    domain_ok = isinstance(domain, dict) and domain.get("min_rpm") is not None and domain.get("max_rpm") is not None
+    samples_ok = all(isinstance(item, dict) and bool(item.get("quality")) and isinstance(item.get("extrapolated"), bool)
+                    and isinstance(item.get("shaft_power_W"), (int, float)) for item in samples)
+    if source == "catalog":
+        return bool(value.get("catalog_id")) and bool(value.get("content_digest")) and bool(value.get("calculation_model")) and bool(value.get("units")) and bool(value.get("shaft_side")) and value.get("medium") == "air" and value.get("catalog_type") == "air_propeller" and domain_ok and samples_ok
+    return bool(value.get("units")) and bool(value.get("shaft_side")) and domain_ok and samples_ok
+
+
 def completeness(draft: dict) -> dict:
+    schema_version = int(draft.get("schema_version", 1))
+    active_schema = schema(schema_version)
     required_by_section = {}
     section_fields = {}
-    for section in schema()["sections"]:
+    for section in active_schema["sections"]:
         section_fields[section["id"]] = {field["id"]: field for field in section["fields"]}
-        required_by_section[section["id"]] = [field["id"] for field in section["fields"] if field.get("required")]
-    section_stats, total, filled = {}, 0, 0
+        required_by_section[section["id"]] = [field["id"] for field in section["fields"] if field.get("required") or _conditional_required(field, draft)]
+    section_stats, total, filled, answered, unknown, missing, invalid = {}, 0, 0, 0, 0, 0, 0
     for section_id, ids in required_by_section.items():
         section_filled = 0
+        section_answered = 0
+        section_unknown = 0
         for field_id in ids:
             if section_id == "mission_profile":
                 status = draft.get("mission_profile_status", "missing")
@@ -276,23 +465,39 @@ def completeness(draft: dict) -> dict:
             else:
                 area = draft.get("production", {}) if section_id == "production" else draft.get("fields", {})
                 answer = area.get(field_id, {})
-                valid = _answer_complete(answer, section_fields[section_id][field_id])
-            if valid:
+                if field_id == "load_characteristic" and schema_version == 2:
+                    valid = _load_characteristic_complete(answer, draft.get("fields", {}))
+                else:
+                    valid = _answer_complete(answer, section_fields[section_id][field_id])
+            status = (draft.get("mission_profile_status", "missing") if section_id == "mission_profile"
+                      else (draft.get("production", {}) if section_id == "production" else draft.get("fields", {})).get(field_id, {}).get("status", "missing"))
+            if valid and status != "not_known_yet":
                 section_filled += 1
+            if status == "not_known_yet":
+                unknown += 1
+                section_unknown += 1
+            elif valid:
+                answered += 1
+                section_answered += 1
+            elif status == "filled":
+                invalid += 1
+            else:
+                missing += 1
         total += len(ids)
         filled += section_filled
-        section_stats[section_id] = {"filled": section_filled, "required": len(ids), "total_required": len(ids),
-                                     "complete": section_filled == len(ids)}
-    return {"total_required": total, "filled_required": filled, "sections": section_stats,
-            "complete": total == filled}
+        section_stats[section_id] = {"filled": section_answered + section_unknown, "filled_known": section_filled,
+                                     "answered": section_answered, "required": len(ids), "total_required": len(ids),
+                                     "unknown": section_unknown, "complete": section_answered + section_unknown == len(ids)}
+    return {"total_required": total, "filled_required": answered + unknown, "filled_known": filled, "answered": answered, "unknown": unknown,
+            "missing": missing, "invalid": invalid, "sections": section_stats, "complete": total == answered + unknown}
 
 
 def validation_errors(draft: dict) -> list[dict]:
     errors = []
-    for section in schema()["sections"]:
+    for section in schema(int(draft.get("schema_version", 1)))["sections"]:
         sid = section["id"]
         for field in section["fields"]:
-            if not field.get("required"):
+            if not (field.get("required") or _conditional_required(field, draft)):
                 continue
             fid = field["id"]
             if sid == "mission_profile":
@@ -304,6 +509,11 @@ def validation_errors(draft: dict) -> list[dict]:
             else:
                 area = draft.get("production", {}) if sid == "production" else draft.get("fields", {})
                 answer = area.get(fid, {})
+                if fid == "load_characteristic" and answer.get("status") == "filled":
+                    try:
+                        _validate_load_characteristic(answer.get("value") or {}, draft.get("fields", {}))
+                    except ValueError as exc:
+                        errors.append({"field": str(exc).split(":", 1)[0], "section": sid, "message": str(exc).split(":", 1)[-1].strip()})
                 if answer.get("status") not in ("filled", "not_known_yet"):
                     errors.append({"field": f"production.{fid}" if sid == "production" else fid, "section": sid,
                                    "message": "Required field must be filled or marked not known yet"})
@@ -365,7 +575,7 @@ def project_record(project_id: str, body: dict, email: str) -> dict:
 
 
 def version_record(n: int, email: str, draft: dict, source_revision: int | None = None) -> dict:
-    record = {"version": n, "author_email": email.lower(), "created_at": now(), "draft": draft}
+    record = {"version": n, "schema_version": int(draft.get("schema_version", 1)), "author_email": email.lower(), "created_at": now(), "draft": draft}
     if source_revision is not None:
         record["source_revision"] = source_revision
     return record
@@ -377,8 +587,12 @@ def validation_errors_for_mission(draft: dict) -> list[dict]:
     if not rows:
         return [{"field": "mission_profile", "section": "mission_profile", "message": "Add at least one complete phase or mark not known yet"}]
     for i, row in enumerate(rows):
-        missing = [k for k in ("phase", "torque_Nm", "speed_rpm", "duration_s", "battery_voltage_V")
-                   if row.get(k) is None or (isinstance(row.get(k), str) and not row[k].strip())]
+        missing = [k for k in ("phase", "torque_Nm", "rpm", "duration_s", "voltage_V")
+                   if row.get(k, row.get({"rpm": "speed_rpm", "voltage_V": "battery_voltage_V"}.get(k, ""))) is None or
+                   (isinstance(row.get(k, row.get({"rpm": "speed_rpm", "voltage_V": "battery_voltage_V"}.get(k, ""))), str) and not row.get(k, row.get({"rpm": "speed_rpm", "voltage_V": "battery_voltage_V"}.get(k, ""))).strip())]
         for key in missing:
             errors.append({"field": f"mission_profile[{i}].{key}", "section": "mission_profile", "message": "Required mission value is missing"})
+        if row.get("source") == "catalog" and row.get("shaft_side") == "load" and row.get("direct_drive_confirmed") is not True:
+            errors.append({"field": f"mission_profile[{i}].direct_drive_confirmed", "section": "mission_profile",
+                           "message": "Confirm direct drive before using a load-shaft catalog point as a motor point"})
     return errors

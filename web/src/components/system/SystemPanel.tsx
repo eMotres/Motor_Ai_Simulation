@@ -33,6 +33,7 @@ import type { Layout } from '../../lib/systemGraphLayout';
 import { buildWiring, roundedPath, summarize, validateWiring } from '../../lib/systemGraphRoute';
 import type { Pt, Route, Violation } from '../../lib/systemGraphRoute';
 import SystemComposer from './SystemComposer';
+import { NARROW } from '../../lib/narrowLayout';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const VIEW_KEY = 'system.view';
@@ -337,7 +338,7 @@ export default function SystemPanel() {
                 label={<Typography variant="body2">{tr('system.showAll')}</Typography>} />
             </Tooltip>
             <Tooltip title={tr('system.pickTip')}>
-              <Stack direction="row" spacing={1}>
+              <Stack direction="row" spacing={1} sx={{ [NARROW]: { flexWrap: 'wrap', rowGap: 1, maxWidth: '100%', '& .MuiTextField-root': { maxWidth: '100%' } } }}>
                 <TextField select size="small" label={tr('system.pick.die')} sx={{ minWidth: 150, ...PICK_SX }} value={motor?.die ?? ''}
                   onChange={(e) => {
                     const d = dies.find((x) => x.name === e.target.value);

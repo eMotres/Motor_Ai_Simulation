@@ -68,6 +68,7 @@ import type {
   Proposal,
   Thread,
 } from '../types';
+import { NARROW } from '../../../lib/narrowLayout';
 
 const PRESET_EXTRAS: Array<{ en: string; zh: string; defaultAmount: number }> = [
   { en: 'Packaging', zh: '包装', defaultAmount: 15 },
@@ -528,8 +529,9 @@ const BomTable: React.FC<BomTableProps> = ({
 
       {/* Main BOM Table */}
       {/* overflow 'clip' (not 'hidden'): keeps the rounded corners without becoming a scroll box, so the header can stick */}
-      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'clip' }}>
-        <Table size="small" sx={{ '& td, & th': { borderColor: 'var(--line-soft)', fontSize: 12.5, py: 0.6 },
+      {/* Phone: the table keeps readable columns and the Paper scrolls sideways (the sticky header gives way there). */}
+      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'clip', [NARROW]: { overflowX: 'auto' } }}>
+        <Table size="small" sx={{ [NARROW]: { minWidth: 720 }, '& td, & th': { borderColor: 'var(--line-soft)', fontSize: 12.5, py: 0.6 },
           // the column header stays visible under the fixed tab menu while the page scrolls (owner 2026-10-17)
           '& thead th': { position: 'sticky', top: STICKY_TABS_PX, zIndex: 15, bgcolor: 'var(--panel)' } }}>
           <TableHead>

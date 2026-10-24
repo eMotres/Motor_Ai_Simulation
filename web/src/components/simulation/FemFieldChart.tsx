@@ -63,6 +63,7 @@ function useMatOverrideReady(): boolean {
 // own: that is exactly how the views drifted apart.
 import { EM_MENU, emOutputs, outlinesFromMesh } from './fieldView';
 import { storedMeshQuery } from '../../lib/meshSettings';
+import { NARROW } from '../../lib/narrowLayout';
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
 function readMeshSetting<T>(key: string, def: T): T {
@@ -791,7 +792,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           field chart as a compact horizontal row. */}
       {payload && (
         <Box sx={{ display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1 }}>
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1,
+          [NARROW]: { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' } }}>
           {(isEddy
             ? [
                 { label: 'Copper loss', value: payload.P_cu_W == null ? '—' : `${payload.P_cu_W.toFixed(0)} W`, tip: payload.P_cu_W == null ? tx('lossNotComputed') : undefined },

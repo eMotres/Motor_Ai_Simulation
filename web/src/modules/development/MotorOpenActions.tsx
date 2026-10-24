@@ -18,7 +18,10 @@ export function MotorOpenActions({ motor, duty, allowMotorDefault = false, engin
     {availability.configureDuty && <Button size="small" onClick={() => open('configure', availability.configureDuty!)}>{t('openConfigure')}</Button>}
     {availability.simulationDuty
       ? engineer && <Button size="small" onClick={() => open('simulation', availability.simulationDuty!)}>{t('openSimulation')}</Button>
-      : <Tooltip title={t('notComputedTip')}><Chip size="small" label={t('notComputed')} sx={{ color: 'var(--text-4)', bgcolor: 'var(--panel-2)' }} /></Tooltip>}
+      : <>
+        {engineer && availability.loadDuty && <Tooltip title={t('loadSimulationTip')}><Button size="small" onClick={() => open('simulation', availability.loadDuty!)}>{t('loadSimulation')}</Button></Tooltip>}
+        <Tooltip title={t('notComputedTip')}><Chip size="small" label={t('notComputed')} sx={{ color: 'var(--text-4)', bgcolor: 'var(--panel-2)' }} /></Tooltip>
+      </>}
     {error && <Tooltip title={error}><Chip size="small" color="error" label="!" /></Tooltip>}
   </>;
 }

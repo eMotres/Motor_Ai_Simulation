@@ -302,6 +302,8 @@
   "openSimulation": "Open in Simulation",
   "openConfigure": "Open in Configure",
   "notComputed": "Not computed",
+  "loadSimulation": "Load into Simulation",
+  "loadSimulationTip": "Loads this configuration and duty into Simulation, ready to Run.",
   "notComputedTip": "No stored solved result is available for this duty.",
   "writeMessage": "Write a project message",
   "send": "Send",

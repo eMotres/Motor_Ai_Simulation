@@ -293,10 +293,16 @@ def _motor(request: Request, die: str, config: str) -> tuple[Path, Path, dict, d
     from motor_ai_sim import motor_access
     authorization = request.headers.get("authorization")
     family._require_die_access(die, authorization, config)
-    die_dir = Path(str(family._die_dir(die))).resolve(strict=True)
-    cfg_path = Path(str(family._cfg_file(die, config))).resolve(strict=True)
+    # A missing configuration answers exactly like a hidden one (the 404
+    # _require_die_access gives), never a 500: otherwise the link is an oracle.
+    missing = HTTPException(404, detail=family._config_missing_detail(die, config))
+    try:
+        die_dir = Path(str(family._die_dir(die))).resolve(strict=True)
+        cfg_path = Path(str(family._cfg_file(die, config))).resolve(strict=True)
+    except (OSError, HTTPException):
+        raise missing from None
     if die_dir not in cfg_path.parents or not cfg_path.is_file():
-        raise HTTPException(404, detail="Motor configuration not found")
+        raise missing
     ident = _identity(request)
     # The ordinary resolver is authoritative. Match the catalog entry by both
     # its request alias and the exact resolved directory; raw die names can
@@ -311,7 +317,7 @@ def _motor(request: Request, die: str, config: str) -> tuple[Path, Path, dict, d
         raise HTTPException(403, detail="Publish or copy the motor to the shared catalog before linking it")
     access_doc = motor_access.catalog_access(authorization)
     if not motor_access.config_visible(access_doc, die, config, cfg_path, layer=layer):
-        raise HTTPException(404, detail="Motor configuration not found")
+        raise missing
     # Share authority comes from the resolved namespace, never the request body.
     canonical_die = die
     published = resolved_entry if layer == "published" else None

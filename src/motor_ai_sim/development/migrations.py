@@ -108,3 +108,7 @@ def apply_acknowledgement(preview: dict, acknowledged: bool) -> dict:
     if records:
         records[-1]["acknowledged"] = bool(acknowledged)
     return result
+
+
+# Re-export offline dry-run programme migration
+from motor_ai_sim.development.convert_programme import dry_run_migrate_project

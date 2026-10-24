@@ -61,8 +61,11 @@ const AuthMenu: React.FC = () => {
       <Button size="small" variant="text"
         startIcon={<LogoutIcon sx={{ fontSize: 15 }} />}
         onClick={() => logout().catch(() => {})}
-        sx={{ textTransform: 'none', fontSize: '0.72rem', color: 'var(--text-2)' }}>
-        {t('account.signOut')}
+        aria-label={t('account.signOut')}
+        sx={{ textTransform: 'none', fontSize: '0.72rem', color: 'var(--text-2)', minWidth: { xs: 0, sm: 64 },
+          '& .MuiButton-startIcon': { mr: { xs: 0, sm: 1 } } }}>
+        {/* Phone width: icon only, so the whole header stays on one row. */}
+        <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>{t('account.signOut')}</Box>
       </Button>
 
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>

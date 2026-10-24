@@ -89,6 +89,7 @@ import { consumeOpenInConfigure } from './lib/landingMotors';
 import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
 import { watchChunkImport } from './lib/chunkReload';
+import { narrowSplitColumn, narrowSplitOuter } from './lib/narrowLayout';
 
 // The signed-in account menu is its own chunk (AuthButton lazy-loads it); start fetching it
 // together with the workspace so the avatar does not pop in late.
@@ -570,18 +571,18 @@ function App() {
     { id: 'materials', label: 'Materials', order: 30, gate: TAB_GATES.materials, showViewer: true,
       render: () => (
         <MaterialsCatalogPanel materialView={
-          <Box sx={{ display: 'flex', height: '100%' }}>
+          <Box sx={{ display: 'flex', height: '100%', ...narrowSplitOuter }}>
           {/* Library tree — full-height column on the left */}
-          <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
+          <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider', ...narrowSplitColumn }}>
             <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
               selected={selectedMaterial} onSelect={setSelectedMaterial}
               canAdd={isAdmin} onAdd={handleAddGlobal} />
             <WireStockTable />
           </Box>
-          <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
+          <Box data-split-divider onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
             bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
           {/* Right area — HORIZONTAL split: geometry on top, material props below */}
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Box data-split-workspace sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ height: '50%', overflow: 'hidden', position: 'relative',
               borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'var(--panel-2)' }}>
               <UnifiedActiveMotorScene force3d />
@@ -732,7 +733,7 @@ function App() {
               </IconButton>
             </Tooltip>
             <Tooltip title={tr('actions.resetDefaults')}>
-              <IconButton size="small" onClick={resetToDefaults}>
+              <IconButton size="small" onClick={resetToDefaults} sx={{ display: { xs: 'none', sm: 'inline-flex' } }}>
                 <RefreshIcon fontSize="small" />
               </IconButton>
             </Tooltip>

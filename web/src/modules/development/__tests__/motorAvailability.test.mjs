@@ -5,8 +5,19 @@ import { motorLinkAvailability } from '../motorAvailability.ts';
 
 test('missing server availability flags fail closed for configure and simulation', () => {
   assert.deepEqual(motorLinkAvailability({ die: 'D', config: 'C', duties: ['rated'] }, 'rated'), {
-    configureDuty: null, simulationDuty: null,
+    configureDuty: null, simulationDuty: null, loadDuty: null,
   });
+});
+
+test('an unsolved duty of an available motor can still be loaded into Simulation', () => {
+  const motor = { die: 'D', config: 'C', available: true, results: [
+    { duty: 'takeoff', has_result: false, can_open_simulation: false },
+    { duty: 'rated', can_open_simulation: true },
+  ] };
+  assert.equal(motorLinkAvailability(motor, 'takeoff').loadDuty, 'takeoff');
+  assert.equal(motorLinkAvailability(motor, 'rated').loadDuty, null);
+  assert.equal(motorLinkAvailability(motor, 'unknown').loadDuty, null);
+  assert.equal(motorLinkAvailability({ ...motor, available: false }, 'takeoff').loadDuty, null);
 });
 
 test('configure requires explicit server approval and its loadable duty', () => {

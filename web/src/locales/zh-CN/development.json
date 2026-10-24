@@ -302,6 +302,8 @@
   "openSimulation": "在仿真中打开",
   "openConfigure": "在配置中打开",
   "notComputed": "未计算",
+  "loadSimulation": "载入仿真",
+  "loadSimulationTip": "将此配置和工况载入仿真，可直接运行。",
   "notComputedTip": "此工况没有可用的已保存求解结果。",
   "writeMessage": "编写项目消息",
   "send": "发送",

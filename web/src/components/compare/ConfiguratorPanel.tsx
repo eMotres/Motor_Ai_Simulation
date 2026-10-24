@@ -2176,9 +2176,9 @@ ${s1Text.text}` : '';
     preset: baseConfig, presetModified: modified,
     knobs: { stackLength_mm: knobs.L_mm, turnsPerSlot: knobs.N, wire_mm: knobs.wireH_mm,
       connection: connLabel(knobs.nP, ref.geo.numSlots), current_A_rms: knobs.I_A,
-      current_per_inverter_A_rms: currentPerInverter(phaseTopology, knobs.I_A),
-      current_basis: phaseSets === 2 ? 'equivalent_three_phase_total' : 'phase_current',
-      phase_count: phaseSets === 2 ? 6 : 3, phase_sets: phaseSets, speed_rpm: knobs.rpm },
+      ...(phaseSets === 2 ? { current_per_inverter_A_rms: currentPerInverter(phaseTopology, knobs.I_A),
+        current_basis: 'equivalent_three_phase_total', phase_count: 6, phase_sets: phaseSets } : {}),
+      speed_rpm: knobs.rpm },
     drive: { mode: driveMode, transistor: variant?.device ?? null,
       pwm_kHz: variant ? Number(variant.carrier_hz) / 1000 : null },
     propeller: cooled && propSummary
@@ -2975,7 +2975,7 @@ ${s1Text.text}` : '';
           winding knobs are turned, the charge map reads below it. ── */}
       {canCharge(p) ? (
         <Box sx={{ px: 2, pb: 1.5 }}>
-          <ChargePanel p={p} knobs={scaleKnobs} poles={ref.poles} result={result}
+          <ChargePanel p={p} knobs={safeScaleKnobs} poles={ref.poles} result={result}
             onPickCurrent={(I) => setKnobs((s) => ({ ...s, I_A: I }))} />
         </Box>
       ) : String(p.role ?? p.mode0 ?? '').toLowerCase() === 'generator' && !p.battery ? (
@@ -2990,7 +2990,7 @@ ${s1Text.text}` : '';
       {/* ── PERFORMANCE VS SPEED ── */}
       {SHOW_CONFIGURE_CHARTS && (
         <Box sx={{ px: 2, pb: 1.5, ...holdSx }}>
-          {pointGate.showBatteryDerived && batteryNumbers && <PerformanceCharts p={p} knobs={scaleKnobs} packMin={batteryNumbers.cells * batteryNumbers.min} packMax={batteryNumbers.cells * batteryNumbers.max} />}
+          {pointGate.showBatteryDerived && batteryNumbers && <PerformanceCharts p={p} knobs={safeScaleKnobs} packMin={batteryNumbers.cells * batteryNumbers.min} packMax={batteryNumbers.cells * batteryNumbers.max} />}
         </Box>
       )}
       {narrow && (

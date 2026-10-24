@@ -209,5 +209,10 @@ def test_generate_passport_applies_target_six_phase_to_every_route_call(monkeypa
     assert all(call["n_sectors"] == 1 for call in stub.calls)
     assert result["passport"]["phase_sets"] == 2
     assert result["passport"]["six_phase"]["current_per_inverter_A"] == 15.0
+    # Full phase voltage per set on the passport's own (star-equivalent
+    # fundamental) basis, the same number the card builder copies.
+    assert result["passport"]["six_phase"]["voltage_per_set_V"] is not None
+    assert result["passport"]["six_phase"]["voltage_per_set_V"] == \
+        result["passport"].get("Vload0_fund_V")
     assert result["passport"]["six_phase"]["copper_loss_per_set_W"] > 0.0
     assert not has_six_phase_override()

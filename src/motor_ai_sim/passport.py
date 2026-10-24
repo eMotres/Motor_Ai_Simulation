@@ -694,8 +694,10 @@ def generate_passport(
         pass
 
     passport = {
-        **_phase_meta(_six, float(I0),
-                      sa.get("V1_phase_V", sa.get("V_phase_peak_V"))),
+        # Per-set voltage on the passport's own basis: the star-equivalent
+        # loaded fundamental, exactly Vload0_fund_V (raw summary V1 is the
+        # winding voltage, sqrt(3) high in delta).
+        **_phase_meta(_six, float(I0), (_Vload1 * _kV) if _Vload1 else None),
         # The Mesh settings every solve of this passport used, where each came
         # from, and a note when a labelled fallback was needed.
         "mesh_settings": {"mesh_size_mm": mesh_size_mm, "n_sectors": NSECT, **_MESH},

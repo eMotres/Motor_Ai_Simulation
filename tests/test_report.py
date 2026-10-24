@@ -2043,7 +2043,9 @@ def test_k_the_robot_joints_cooling_is_on_the_page():
     assert cmp_rows["Removed off the end faces [W]"] == "6.4"
     assert cmp_rows["  of which the end windings [W]"] == "4.4"
     assert cmp_rows["  of which radiation [W]"] == "1.8"
-    assert cmp_rows["Stator heat out into the mount [W]"] == "52"
+    # the stator split's housing / mount / end-face rows repeated the rows
+    # above (cleanup 2026-10-25) and are gone
+    assert "Stator heat out into the mount [W]" not in cmp_rows
     assert cmp_rows["Stator side (housing + mount + end faces) [W]"] == "60.4"
     assert cmp_rows["Rotor side (bore + shaft + end faces) [W]"] == "2"
     assert cmp_rows["Housing boundary"].startswith("still air 40 °C")
@@ -2144,7 +2146,6 @@ def test_k3_the_per_duty_store_carries_every_new_cooling_key():
                   "Removed off the end faces [W]",
                   "  of which the end windings [W]",
                   "  of which radiation [W]",
-                  "Stator heat out into the mount [W]",
                   "Stator side (housing + mount + end faces) [W]",
                   "Rotor side (bore + shaft + end faces) [W]",
                   "Housing boundary", "Bore boundary"):
@@ -2756,21 +2757,21 @@ class TestTheRestOfThe20260914Pass:
         assert "coolest SOLID point 80" in txt
         assert "in air" in txt
 
-    def test_c4_a_split_that_exists_prints_zero_under_every_duty(self):
+    def test_c4_the_repeated_rotor_split_rows_are_gone(self):
+        """Cleanup 2026-10-25: the rotor's bore and axial-end-face shares
+        repeated 'Removed through the bore' and the end-face sub-rows."""
         from motor_ai_sim import report as R
 
         with_keys = {"cooling": {"heat_budget": {"rotor_heat_split": {
-            "rotor_W": 201.4, "axial_end_faces_W": 0.0,
+            "rotor_W": 201.4, "gap_W": 1.0, "gap_pct": 0.5, "bore_W": 2.0,
+            "bore_pct": 1.0, "axial_end_faces_W": 0.0,
             "axial_end_faces_pct": 0.0}}}}
-        without = {"cooling": {"heat_budget": {"rotor_heat_split": {
-            "rotor_W": 510.5}}}}
         rows = dict((r[0], r[1:]) for r in R.thermal_compare_rows([
             {"duty": "rated", "em": {}, "d": {},
-             "res": {"thermal": with_keys}},
-            {"duty": "peak", "em": {}, "d": {}, "res": {"thermal": without}},
-        ])[1])
-        assert rows["Rotor heat out off the rotor / magnet end faces [W]"] \
-            == ["0", "0"]
+             "res": {"thermal": with_keys}}])[1])
+        assert "Rotor heat out across the gap [W]" in rows
+        assert "Rotor heat out off the bore [W]" not in rows
+        assert "Rotor heat out off the rotor / magnet end faces [W]" not in rows
 
     def test_c3_the_bearing_card_verdict_is_printed(self):
         from motor_ai_sim import report as R

@@ -141,7 +141,7 @@
           },
           "type": "object",
           "unit": "",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {

@@ -1,0 +1,1623 @@
+{
+  "schema_version": 1,
+  "locale_source": "en",
+  "locales": [
+    "en",
+    "zh-CN"
+  ],
+  "not_known_yet_value": "not_known_yet",
+  "sections": [
+    {
+      "id": "1",
+      "title": {
+        "en": "1. Application and duty",
+        "zh-CN": "应用和任务要求"
+      },
+      "fields": [
+        {
+          "id": "1_1",
+          "checklist_id": "1.1",
+          "label": {
+            "en": "Application and machine type (aircraft, drone, robot joint, vehicle, marine, generator)",
+            "zh-CN": "应用和设备类型（航空器、无人机、机器人关节、车辆、船舶、发电机）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "1_2",
+          "checklist_id": "1.2",
+          "label": {
+            "en": "Motor or generator mode (or both, regeneration) and direction of rotation (one / both)",
+            "zh-CN": "电动机或发电机模式（或两者兼有、再生制动）及旋转方向（单向／双向）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "1_3",
+          "checklist_id": "1.3",
+          "label": {
+            "en": "Mission profile: each phase with torque, speed and duration (takeoff, climb, cruise, landing ...)",
+            "zh-CN": "任务曲线：各阶段的转矩、转速和持续时间（起飞、爬升、巡航、着陆等）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true,
+          "handled_by": "mission_profile"
+        },
+        {
+          "id": "1_4",
+          "checklist_id": "1.4",
+          "label": {
+            "en": "Continuous operating point(s): torque and speed (S1)",
+            "zh-CN": "连续工作点：转矩和转速（S1）"
+          },
+          "type": "object",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "torque_Nm",
+              "label": {
+                "en": "Torque",
+                "zh-CN": "转矩"
+              },
+              "type": "number",
+              "unit": "N·m",
+              "required": true,
+              "allow_range": true
+            },
+            {
+              "id": "speed_rpm",
+              "label": {
+                "en": "Speed",
+                "zh-CN": "转速"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": true,
+              "allow_range": true
+            },
+            {
+              "id": "input_power_W",
+              "label": {"en": "Electrical input power", "zh-CN": "电气输入功率"},
+              "type": "number", "unit": "W", "required": false, "min": 0, "allow_range": true
+            },
+            {
+              "id": "output_power_W",
+              "label": {"en": "Mechanical or electrical output power", "zh-CN": "机械或电气输出功率"},
+              "type": "number", "unit": "W", "required": false, "min": 0, "allow_range": true
+            }
+          ]
+        },
+        {
+          "id": "1_5",
+          "checklist_id": "1.5",
+          "label": {
+            "en": "Peak torque and speed, how long and how often (s, duty cycle)",
+            "zh-CN": "峰值转矩和转速、持续时间及频次（秒、占空周期）"
+          },
+          "type": "object",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "torque_Nm",
+              "label": {
+                "en": "Torque",
+                "zh-CN": "转矩"
+              },
+              "type": "number",
+              "unit": "N·m",
+              "required": true,
+              "allow_range": true
+            },
+            {
+              "id": "speed_rpm",
+              "label": {
+                "en": "Speed",
+                "zh-CN": "转速"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": true,
+              "allow_range": true
+            },
+            {
+              "id": "duration_s",
+              "label": {
+                "en": "Duration",
+                "zh-CN": "持续时间"
+              },
+              "type": "number",
+              "unit": "s",
+              "required": true,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "frequency",
+              "label": {
+                "en": "Frequency",
+                "zh-CN": "频次"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false
+            },
+            {
+              "id": "output_power_W",
+              "label": {"en": "Peak output power", "zh-CN": "峰值输出功率"},
+              "type": "number", "unit": "W", "required": false, "min": 0, "allow_range": true
+            }
+          ]
+        },
+        {
+          "id": "1_6",
+          "checklist_id": "1.6",
+          "label": {
+            "en": "Maximum speed and overspeed (proof / runaway)",
+            "zh-CN": "最高转速及超速要求（验证／失控）"
+          },
+          "type": "object",
+          "unit": "rpm",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "maximum_rpm",
+              "label": {
+                "en": "Maximum speed",
+                "zh-CN": "最高转速"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": true,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "overspeed_rpm",
+              "label": {
+                "en": "Overspeed",
+                "zh-CN": "超速"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": false,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "proof_or_runaway",
+              "label": {
+                "en": "Proof / runaway condition",
+                "zh-CN": "验证／失控条件"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": "1_7",
+          "checklist_id": "1.7",
+          "label": {
+            "en": "Required efficiency at the key points",
+            "zh-CN": "关键工作点的效率要求"
+          },
+          "type": "number",
+          "unit": "%",
+          "required": false,
+          "allow_not_known_yet": true,
+          "min": 0,
+          "max": 100,
+          "allow_range": true
+        },
+        {
+          "id": "1_8",
+          "checklist_id": "1.8",
+          "label": {
+            "en": "Allowed torque ripple and cogging (% pk-pk), frequencies to avoid (resonances)",
+            "zh-CN": "允许的转矩脉动和齿槽转矩（峰峰值百分比）、需避开的频率（共振）"
+          },
+          "type": "object",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "torque_ripple_pct_pkpk",
+              "label": {
+                "en": "Torque ripple",
+                "zh-CN": "转矩脉动"
+              },
+              "type": "number",
+              "unit": "% pk-pk",
+              "required": false,
+              "allow_range": true
+            },
+            {
+              "id": "cogging_pct_pkpk",
+              "label": {
+                "en": "Cogging torque",
+                "zh-CN": "齿槽转矩"
+              },
+              "type": "number",
+              "unit": "% pk-pk",
+              "required": false
+            },
+            {
+              "id": "cogging_torque_Nm",
+              "label": {"en": "Cogging / starting drag torque", "zh-CN": "齿槽／启动阻力转矩"},
+              "type": "number", "unit": "N·m", "required": false, "min": 0, "allow_range": true
+            },
+            {
+              "id": "avoid_frequencies_Hz",
+              "label": {
+                "en": "Frequencies to avoid",
+                "zh-CN": "需避开的频率"
+              },
+              "type": "array",
+              "unit": "Hz",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": "1_9",
+          "checklist_id": "1.9",
+          "label": {
+            "en": "Acoustic noise limit",
+            "zh-CN": "噪声限值"
+          },
+          "type": "number",
+          "unit": "dB(A)",
+          "required": false,
+          "allow_not_known_yet": true,
+          "min": 0
+        },
+        {
+          "id": "1_10",
+          "checklist_id": "1.10",
+          "label": {
+            "en": "Life (hours, cycles, start/stops)",
+            "zh-CN": "寿命（小时、循环次数、启停次数）"
+          },
+          "type": "object",
+          "unit": "h, cycles",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "hours",
+              "label": {
+                "en": "Operating life",
+                "zh-CN": "运行寿命"
+              },
+              "type": "number",
+              "unit": "h",
+              "required": false
+            },
+            {
+              "id": "cycles",
+              "label": {
+                "en": "Cycles",
+                "zh-CN": "循环次数"
+              },
+              "type": "number",
+              "unit": "cycles",
+              "required": false
+            },
+            {
+              "id": "start_stops",
+              "label": {
+                "en": "Start/stops",
+                "zh-CN": "启停次数"
+              },
+              "type": "number",
+              "unit": "cycles",
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "title": {
+        "en": "2. Electrical supply and drive",
+        "zh-CN": "电气电源和驱动"
+      },
+      "fields": [
+        {
+          "id": "2_1",
+          "checklist_id": "2.1",
+          "label": {
+            "en": "Battery: chemistry, cells in series, V min under load / nominal / max",
+            "zh-CN": "电池：化学体系、串联节数、负载最低／标称／最高电压"
+          },
+          "type": "object",
+          "unit": "V",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "chemistry",
+              "label": {
+                "en": "Chemistry",
+                "zh-CN": "化学体系"
+              },
+              "type": "string",
+              "unit": "",
+              "required": true
+            },
+            {
+              "id": "series_cells",
+              "label": {
+                "en": "Cells in series",
+                "zh-CN": "串联节数"
+              },
+              "type": "number",
+              "unit": "cells",
+              "required": true,
+              "min": 1
+            },
+            {
+              "id": "voltage_min_V",
+              "label": {
+                "en": "Minimum under load",
+                "zh-CN": "负载最低电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "voltage_nominal_V",
+              "label": {
+                "en": "Nominal voltage",
+                "zh-CN": "标称电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "voltage_max_V",
+              "label": {
+                "en": "Maximum voltage",
+                "zh-CN": "最高电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": true,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "2_2",
+          "checklist_id": "2.2",
+          "label": {
+            "en": "At which voltage each operating point must be reached (especially peak and max speed at V min)",
+            "zh-CN": "各工作点必须达到的电压（尤其是最低电压下的峰值和最高转速）"
+          },
+          "type": "object",
+          "unit": "V",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "operating_point_voltages",
+              "label": {
+                "en": "Voltage by operating point",
+                "zh-CN": "各工作点电压"
+              },
+              "type": "array",
+              "unit": "V",
+              "required": true,
+              "items": {
+                "type": "object",
+                "properties": [
+                  {
+                    "id": "operating_point",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "id": "voltage_V",
+                    "type": "number",
+                    "unit": "V",
+                    "min": 0,
+                    "required": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "2_3",
+          "checklist_id": "2.3",
+          "label": {
+            "en": "Battery current limits (continuous / peak)",
+            "zh-CN": "电池电流限制（连续／峰值）"
+          },
+          "type": "object",
+          "unit": "A",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "continuous_A",
+              "label": {
+                "en": "Continuous current",
+                "zh-CN": "连续电流"
+              },
+              "type": "number",
+              "unit": "A",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "peak_A",
+              "label": {
+                "en": "Peak current",
+                "zh-CN": "峰值电流"
+              },
+              "type": "number",
+              "unit": "A",
+              "required": false,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "2_4",
+          "checklist_id": "2.4",
+          "label": {
+            "en": "Controller: manufacturer and model, or own design; who supplies it",
+            "zh-CN": "控制器：制造商和型号或自研；供应方"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "manufacturer_model",
+              "label": {
+                "en": "Manufacturer and model / own design",
+                "zh-CN": "制造商和型号／自研"
+              },
+              "type": "string",
+              "unit": "",
+              "required": true
+            },
+            {
+              "id": "supplier",
+              "label": {
+                "en": "Supplier",
+                "zh-CN": "供应方"
+              },
+              "type": "string",
+              "unit": "",
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "2_5",
+          "checklist_id": "2.5",
+          "label": {
+            "en": "Power devices: SiC / IGBT / GaN, voltage class",
+            "zh-CN": "功率器件：SiC／IGBT／GaN，电压等级"
+          },
+          "type": "object",
+          "unit": "V",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "device_type",
+              "label": {
+                "en": "Device type",
+                "zh-CN": "器件类型"
+              },
+              "type": "string",
+              "unit": "",
+              "required": true
+            },
+            {
+              "id": "voltage_class_V",
+              "label": {
+                "en": "Voltage class",
+                "zh-CN": "电压等级"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": true,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "2_6",
+          "checklist_id": "2.6",
+          "label": {
+            "en": "Phase current limit: continuous and peak (A rms) and peak duration",
+            "zh-CN": "相电流限制：连续值和峰值（A RMS）及峰值持续时间"
+          },
+          "type": "object",
+          "unit": "A rms",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "continuous_Arms",
+              "label": {
+                "en": "Continuous phase current",
+                "zh-CN": "连续相电流"
+              },
+              "type": "number",
+              "unit": "A rms",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "peak_Arms",
+              "label": {
+                "en": "Peak phase current",
+                "zh-CN": "峰值相电流"
+              },
+              "type": "number",
+              "unit": "A rms",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "peak_duration_s",
+              "label": {
+                "en": "Peak duration",
+                "zh-CN": "峰值持续时间"
+              },
+              "type": "number",
+              "unit": "s",
+              "required": true,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "2_7",
+          "checklist_id": "2.7",
+          "label": {
+            "en": "Switching frequency, modulation (SVPWM / DPWM), field weakening allowed",
+            "zh-CN": "开关频率、调制方式（SVPWM／DPWM）、是否允许弱磁"
+          },
+          "type": "object",
+          "unit": "Hz",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "switching_frequency_Hz",
+              "label": {
+                "en": "Switching frequency",
+                "zh-CN": "开关频率"
+              },
+              "type": "number",
+              "unit": "Hz",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "modulation",
+              "label": {
+                "en": "Modulation",
+                "zh-CN": "调制方式"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false
+            },
+            {
+              "id": "field_weakening",
+              "label": {
+                "en": "Field weakening allowed",
+                "zh-CN": "是否允许弱磁"
+              },
+              "type": "boolean",
+              "unit": "",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": "2_8",
+          "checklist_id": "2.8",
+          "label": {
+            "en": "Position sensor: resolver / encoder / Hall / sensorless",
+            "zh-CN": "位置传感器：旋变／编码器／霍尔／无传感器"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "2_9",
+          "checklist_id": "2.9",
+          "label": {
+            "en": "Number of phases and redundancy (one 3-phase, dual 3-phase, 6-phase)",
+            "zh-CN": "相数和冗余（单三相、双三相、六相）"
+          },
+          "type": "object",
+          "unit": "phases",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "phase_count",
+              "label": {
+                "en": "Number of phases",
+                "zh-CN": "相数"
+              },
+              "type": "number",
+              "unit": "phases",
+              "required": false
+            },
+            {
+              "id": "redundancy",
+              "label": {
+                "en": "Redundancy",
+                "zh-CN": "冗余"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": "2_10",
+          "checklist_id": "2.10",
+          "label": {
+            "en": "Cable length motor - controller, connector type",
+            "zh-CN": "电机至控制器的电缆长度、连接器类型"
+          },
+          "type": "string",
+          "unit": "m",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "2_11",
+          "checklist_id": "2.11",
+          "label": {
+            "en": "Insulation requirements: class, hipot, partial discharge (800 V class), creepage",
+            "zh-CN": "绝缘要求：等级、耐压、局部放电（800 V等级）、爬电距离"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "2_12",
+          "checklist_id": "2.12",
+          "label": {
+            "en": "Temperature sensors wanted (type, number, location)",
+            "zh-CN": "所需温度传感器（类型、数量、位置）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "title": {
+        "en": "3. Cooling and environment",
+        "zh-CN": "冷却和环境"
+      },
+      "fields": [
+        {
+          "id": "3_1",
+          "checklist_id": "3.1",
+          "label": {
+            "en": "Cooling: air (still / forced / propeller wash / ram air, speed through the motor) or liquid (coolant, inlet temperature, flow, pressure drop)",
+            "zh-CN": "冷却方式：空气（静止／强制／螺旋桨气流／冲压空气及流经电机的速度）或液冷（冷却液、入口温度、流量、压降）"
+          },
+          "type": "object",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "cooling_type",
+              "label": {
+                "en": "Cooling type",
+                "zh-CN": "冷却方式"
+              },
+              "type": "string",
+              "unit": "",
+              "required": true
+            },
+            {
+              "id": "airflow",
+              "label": {
+                "en": "Airflow details",
+                "zh-CN": "气流信息"
+              },
+              "type": "object",
+              "unit": "",
+              "required": false,
+              "properties": [
+                {"id": "mode", "label": {"en": "Airflow mode", "zh-CN": "气流方式"},
+                 "type": "string", "unit": "", "required": false},
+                {"id": "speed_mps", "label": {"en": "Air speed", "zh-CN": "空气速度"},
+                 "type": "number", "unit": "m/s", "required": false, "min": 0}
+              ]
+            },
+            {
+              "id": "coolant",
+              "label": {
+                "en": "Coolant",
+                "zh-CN": "冷却液"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false
+            },
+            {
+              "id": "inlet_temperature_C",
+              "label": {
+                "en": "Coolant inlet temperature",
+                "zh-CN": "冷却液入口温度"
+              },
+              "type": "number",
+              "unit": "°C",
+              "required": false
+            },
+            {
+              "id": "flow_rate",
+              "label": {
+                "en": "Flow",
+                "zh-CN": "流量"
+              },
+              "type": "number",
+              "unit": "",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "pressure_drop_Pa",
+              "label": {
+                "en": "Pressure drop",
+                "zh-CN": "压降"
+              },
+              "type": "number",
+              "unit": "Pa",
+              "required": false,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "3_2",
+          "checklist_id": "3.2",
+          "label": {
+            "en": "Ambient temperature range (min / max) and altitude",
+            "zh-CN": "环境温度范围（最低／最高）和海拔"
+          },
+          "type": "object",
+          "unit": "°C, m",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "temperature_min_C",
+              "label": {
+                "en": "Minimum ambient temperature",
+                "zh-CN": "最低环境温度"
+              },
+              "type": "number",
+              "unit": "°C",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "temperature_max_C",
+              "label": {
+                "en": "Maximum ambient temperature",
+                "zh-CN": "最高环境温度"
+              },
+              "type": "number",
+              "unit": "°C",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "altitude_m",
+              "label": {
+                "en": "Altitude",
+                "zh-CN": "海拔"
+              },
+              "type": "number",
+              "unit": "m",
+              "required": true,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "3_3",
+          "checklist_id": "3.3",
+          "label": {
+            "en": "Housing: open (air through the motor) or closed; IP rating",
+            "zh-CN": "机壳：开放式（空气流经电机）或封闭式；IP等级"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "3_4",
+          "checklist_id": "3.4",
+          "label": {
+            "en": "Dust, water, salt, fuel / oil exposure",
+            "zh-CN": "粉尘、水、盐、燃油／油液暴露"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "3_5",
+          "checklist_id": "3.5",
+          "label": {
+            "en": "Max allowed surface temperature (touch, neighbouring parts)",
+            "zh-CN": "允许的最高表面温度（触碰和邻近部件）"
+          },
+          "type": "number",
+          "unit": "°C",
+          "required": false,
+          "allow_not_known_yet": true
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "title": {
+        "en": "4. Mechanical and interfaces",
+        "zh-CN": "机械和接口"
+      },
+      "fields": [
+        {
+          "id": "4_1",
+          "checklist_id": "4.1",
+          "label": {
+            "en": "Envelope: maximum outer diameter and length (with housing)",
+            "zh-CN": "外形尺寸：最大外径和长度（含机壳）"
+          },
+          "type": "object",
+          "unit": "mm",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "outer_diameter_mm",
+              "label": {
+                "en": "Maximum outer diameter",
+                "zh-CN": "最大外径"
+              },
+              "type": "number",
+              "unit": "mm",
+              "required": true,
+              "min": 0
+            },
+            {
+              "id": "length_mm",
+              "label": {
+                "en": "Maximum length",
+                "zh-CN": "最大长度"
+              },
+              "type": "number",
+              "unit": "mm",
+              "required": true,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "4_2",
+          "checklist_id": "4.2",
+          "label": {
+            "en": "Mass target (active and complete motor)",
+            "zh-CN": "质量目标（有源部分和整机）"
+          },
+          "type": "object",
+          "unit": "kg",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "active_mass_kg",
+              "label": {
+                "en": "Active mass target",
+                "zh-CN": "有源部分质量目标"
+              },
+              "type": "number",
+              "unit": "kg",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "complete_mass_kg",
+              "label": {
+                "en": "Complete motor mass target",
+                "zh-CN": "整机质量目标"
+              },
+              "type": "number",
+              "unit": "kg",
+              "required": false,
+              "min": 0
+            }
+          ]
+        },
+        {
+          "id": "4_3",
+          "checklist_id": "4.3",
+          "label": {
+            "en": "Mounting: flange / frame, bolt pattern, inner or outer rotor preference",
+            "zh-CN": "安装方式：法兰／机架、螺栓孔位、内转子或外转子偏好"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "4_4",
+          "checklist_id": "4.4",
+          "label": {
+            "en": "Output: shaft or hub interface to the load (propeller hub, gearbox, wheel)",
+            "zh-CN": "输出端：连接负载的轴或轮毂接口（螺旋桨轮毂、齿轮箱、车轮）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "4_5",
+          "checklist_id": "4.5",
+          "label": {
+            "en": "Bearings in the motor or in the customer's structure",
+            "zh-CN": "轴承由电机还是客户结构承载"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "4_6",
+          "checklist_id": "4.6",
+          "label": {
+            "en": "Loads: axial thrust (and reverse), radial loads, bending moment, gyroscopic moment, tilt rates and accelerations",
+            "zh-CN": "载荷：轴向推力（及反向推力）、径向载荷、弯矩、陀螺力矩、倾斜角速度和加速度"
+          },
+          "type": "object",
+          "unit": "N, N·m",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "axial_thrust_N",
+              "label": {
+                "en": "Axial thrust",
+                "zh-CN": "轴向推力"
+              },
+              "type": "number",
+              "unit": "N",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "reverse_thrust_N",
+              "label": {
+                "en": "Reverse thrust",
+                "zh-CN": "反向推力"
+              },
+              "type": "number",
+              "unit": "N",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "radial_load_N",
+              "label": {
+                "en": "Radial load",
+                "zh-CN": "径向载荷"
+              },
+              "type": "number",
+              "unit": "N",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "bending_moment_Nm",
+              "label": {
+                "en": "Bending moment",
+                "zh-CN": "弯矩"
+              },
+              "type": "number",
+              "unit": "N·m",
+              "required": false
+            },
+            {
+              "id": "gyroscopic_moment_Nm",
+              "label": {
+                "en": "Gyroscopic moment",
+                "zh-CN": "陀螺力矩"
+              },
+              "type": "number",
+              "unit": "N·m",
+              "required": false
+            },
+            {
+              "id": "tilt_rate",
+              "label": {
+                "en": "Tilt rate",
+                "zh-CN": "倾斜角速度"
+              },
+              "type": "number",
+              "unit": "",
+              "required": false
+            },
+            {
+              "id": "acceleration",
+              "label": {
+                "en": "Acceleration",
+                "zh-CN": "加速度"
+              },
+              "type": "number",
+              "unit": "",
+              "required": false
+            }
+          ],
+          "min_filled_properties": 1
+        },
+        {
+          "id": "4_7",
+          "checklist_id": "4.7",
+          "label": {
+            "en": "Vibration and shock spectra, critical speed / stiffness requirements",
+            "zh-CN": "振动和冲击谱、临界转速／刚度要求"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "4_8",
+          "checklist_id": "4.8",
+          "label": {
+            "en": "Balance grade, runout",
+            "zh-CN": "平衡等级、跳动"
+          },
+          "type": "string",
+          "unit": "mm",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "4_9",
+          "checklist_id": "4.9",
+          "label": {
+            "en": "Material restrictions (e.g. no rare earth, aerospace materials)",
+            "zh-CN": "材料限制（例如禁用稀土、航空材料）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "title": {
+        "en": "5. Safety, certification, testing",
+        "zh-CN": "安全、认证和测试"
+      },
+      "fields": [
+        {
+          "id": "5_1",
+          "checklist_id": "5.1",
+          "label": {
+            "en": "Standards / certification basis (e.g. EASA SC-VTOL, DO-160, ISO 26262, IEC 60034)",
+            "zh-CN": "标准／认证依据（如EASA SC-VTOL、DO-160、ISO 26262、IEC 60034）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "5_2",
+          "checklist_id": "5.2",
+          "label": {
+            "en": "Failure cases to cover: phase short circuit, demagnetisation at fault current, loss of one channel",
+            "zh-CN": "需覆盖的故障情形：相间短路、故障电流下退磁、单通道失效"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "5_3",
+          "checklist_id": "5.3",
+          "label": {
+            "en": "Reliability / MTBF targets, traceability of materials",
+            "zh-CN": "可靠性／MTBF目标、材料可追溯性"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "5_4",
+          "checklist_id": "5.4",
+          "label": {
+            "en": "Tests we must run or support (bench, thermal, endurance, EMC)",
+            "zh-CN": "需执行或支持的测试（台架、热、耐久、EMC）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "title": {
+        "en": "6. Project and commercial",
+        "zh-CN": "项目和商务"
+      },
+      "fields": [
+        {
+          "id": "6_1",
+          "checklist_id": "6.1",
+          "label": {
+            "en": "Quantities: prototypes, pre-series, series per year",
+            "zh-CN": "数量：原型机、预生产、年产量"
+          },
+          "type": "object",
+          "unit": "units",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "prototypes",
+              "label": {
+                "en": "Prototypes",
+                "zh-CN": "原型机"
+              },
+              "type": "number",
+              "unit": "units",
+              "required": true,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "pre_series",
+              "label": {
+                "en": "Pre-series",
+                "zh-CN": "预生产"
+              },
+              "type": "number",
+              "unit": "units",
+              "required": true,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "series_per_year",
+              "label": {
+                "en": "Series per year",
+                "zh-CN": "年产量"
+              },
+              "type": "number",
+              "unit": "units",
+              "required": true,
+              "min": 0,
+              "allow_range": true
+            }
+          ]
+        },
+        {
+          "id": "6_2",
+          "checklist_id": "6.2",
+          "label": {
+            "en": "Timeline: simulation, prototype, series",
+            "zh-CN": "时间计划：仿真、原型机、量产"
+          },
+          "type": "object",
+          "unit": "date",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "simulation_date",
+              "label": {
+                "en": "Simulation",
+                "zh-CN": "仿真"
+              },
+              "type": "string",
+              "unit": "date",
+              "required": true
+            },
+            {
+              "id": "prototype_date",
+              "label": {
+                "en": "Prototype",
+                "zh-CN": "原型机"
+              },
+              "type": "string",
+              "unit": "date",
+              "required": true
+            },
+            {
+              "id": "series_date",
+              "label": {
+                "en": "Series",
+                "zh-CN": "量产"
+              },
+              "type": "string",
+              "unit": "date",
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "6_3",
+          "checklist_id": "6.3",
+          "label": {
+            "en": "Target price / budget",
+            "zh-CN": "目标价格／预算"
+          },
+          "type": "object",
+          "unit": "currency",
+          "required": false,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "amount",
+              "label": {
+                "en": "Target amount",
+                "zh-CN": "目标金额"
+              },
+              "type": "number",
+              "unit": "currency",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "currency",
+              "label": {
+                "en": "Currency",
+                "zh-CN": "货币"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": "6_4",
+          "checklist_id": "6.4",
+          "label": {
+            "en": "Deliverables expected (simulation report, STEP model, drawings, prototypes, test report)",
+            "zh-CN": "预期交付物（仿真报告、STEP模型、图纸、原型机、测试报告）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "6_5",
+          "checklist_id": "6.5",
+          "label": {
+            "en": "NDA / IP terms, who owns the design",
+            "zh-CN": "NDA／知识产权条款、设计所有权"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        }
+      ]
+    },
+    {
+      "id": "mission_profile",
+      "title": {
+        "en": "Mission profile",
+        "zh-CN": "任务曲线"
+      },
+      "fields": [
+        {
+          "id": "mission_profile",
+          "checklist_id": "1.3",
+          "label": {
+            "en": "Mission phases",
+            "zh-CN": "任务阶段"
+          },
+          "type": "table",
+          "required": true,
+          "allow_not_known_yet": true,
+          "columns": [
+            {
+              "id": "phase",
+              "label": {
+                "en": "Phase",
+                "zh-CN": "阶段"
+              },
+              "type": "string",
+              "unit": ""
+            },
+            {
+              "id": "torque_Nm",
+              "label": {
+                "en": "Torque",
+                "zh-CN": "转矩"
+              },
+              "type": "number",
+              "unit": "N·m"
+            },
+            {
+              "id": "speed_rpm",
+              "label": {
+                "en": "Speed",
+                "zh-CN": "转速"
+              },
+              "type": "number",
+              "unit": "rpm"
+            },
+            {
+              "id": "duration_s",
+              "label": {
+                "en": "Duration",
+                "zh-CN": "持续时间"
+              },
+              "type": "number",
+              "unit": "s"
+            },
+            {
+              "id": "battery_voltage_V",
+              "label": {
+                "en": "Battery voltage",
+                "zh-CN": "电池电压"
+              },
+              "type": "number",
+              "unit": "V"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "production",
+      "title": {
+        "en": "Production launch",
+        "zh-CN": "量产启动"
+      },
+      "fields": [
+        {
+          "id": "quantities",
+          "label": {
+            "en": "Quantities: prototypes, pre-series, series per year",
+            "zh-CN": "数量：原型机、预生产、年产量"
+          },
+          "type": "object",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "prototypes",
+              "label": {
+                "en": "Prototypes",
+                "zh-CN": "原型机"
+              },
+              "type": "number",
+              "unit": "units",
+              "required": false,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "pre_series",
+              "label": {
+                "en": "Pre-series",
+                "zh-CN": "预生产"
+              },
+              "type": "number",
+              "unit": "units",
+              "required": false,
+              "min": 0,
+              "allow_range": true
+            },
+            {
+              "id": "series_per_year",
+              "label": {
+                "en": "Series per year",
+                "zh-CN": "年产量"
+              },
+              "type": "number",
+              "unit": "units",
+              "required": false,
+              "min": 0,
+              "allow_range": true
+            }
+          ]
+        },
+        {
+          "id": "timeline",
+          "label": {
+            "en": "Timeline: simulation, prototype, series",
+            "zh-CN": "时间计划：仿真、原型机、量产"
+          },
+          "type": "object",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "simulation_date",
+              "label": {
+                "en": "Simulation",
+                "zh-CN": "仿真"
+              },
+              "type": "string",
+              "unit": "date",
+              "required": false
+            },
+            {
+              "id": "prototype_date",
+              "label": {
+                "en": "Prototype",
+                "zh-CN": "原型机"
+              },
+              "type": "string",
+              "unit": "date",
+              "required": false
+            },
+            {
+              "id": "series_date",
+              "label": {
+                "en": "Series",
+                "zh-CN": "量产"
+              },
+              "type": "string",
+              "unit": "date",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": "target_price",
+          "label": {
+            "en": "Target price / budget",
+            "zh-CN": "目标价格／预算"
+          },
+          "type": "number",
+          "unit": "currency",
+          "required": false,
+          "allow_not_known_yet": true,
+          "allow_range": true
+        },
+        {
+          "id": "tests",
+          "label": {
+            "en": "Tests",
+            "zh-CN": "测试"
+          },
+          "type": "array",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "id": "certification",
+          "label": {
+            "en": "Certification",
+            "zh-CN": "认证"
+          },
+          "type": "array",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "id": "packaging_delivery",
+          "label": {
+            "en": "Packaging and delivery",
+            "zh-CN": "包装和交付"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "controller_supplier",
+          "label": {
+            "en": "Controller supplied by",
+            "zh-CN": "控制器供应方"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "magnets_supplier",
+          "label": {
+            "en": "Magnets supplied by",
+            "zh-CN": "磁体供应方"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        },
+        {
+          "id": "housing_supplier",
+          "label": {
+            "en": "Housing supplied by",
+            "zh-CN": "机壳供应方"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": true
+        }
+      ]
+    }
+  ],
+  "range_value_shape": {
+    "minimum": "number|null",
+    "maximum": "number|null"
+  }
+}

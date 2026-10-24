@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,13 +31,80 @@ def _author(email: str) -> dict:
     return {"author_id": hashlib.sha256(email.encode("utf-8")).hexdigest()[:20], "author_display_name": name}
 
 
+def _customer_legacy_s1(value: Any) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    answer = {}
+    if value.get("status") in ("filled", "not_known_yet", "missing"):
+        answer["status"] = value["status"]
+    old_value = value.get("value")
+    if isinstance(old_value, dict):
+        allowed = {"torque_Nm", "speed_rpm", "input_power_W", "output_power_W"}
+        safe_value = {}
+        for key, item in old_value.items():
+            if key not in allowed:
+                continue
+            if isinstance(item, dict):
+                bounds = {name: bound for name, bound in item.items() if name in ("minimum", "maximum")
+                          and (bound is None or isinstance(bound, (int, float)) and not isinstance(bound, bool)
+                               and math.isfinite(float(bound)))}
+                if bounds:
+                    safe_value[key] = bounds
+            elif item is None or isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(float(item)):
+                safe_value[key] = item
+        answer["value"] = safe_value
+    return answer or None
+
+
+def _customer_migration_issues(value: Any) -> list[dict]:
+    allowed = {
+        "s1_range_collapsed_to_maxima": {"1_4"},
+        "legacy_power_semantics_preserved": {"1_4.input_power_W", "1_4.output_power_W"},
+        "s1_maximum_missing": {"1_4"},
+    }
+    result = []
+    if not isinstance(value, list):
+        return result
+    for issue in value:
+        if not isinstance(issue, dict) or issue.get("code") not in allowed:
+            continue
+        field = issue.get("field")
+        if field not in allowed[issue["code"]]:
+            continue
+        result.append({"code": issue["code"], "field": field})
+    return result
+
+
 def _customer_spec(value: dict) -> dict:
     out = copy.deepcopy(value)
     if "author_email" in out:
         out.update(_author(out.pop("author_email")))
     draft = out.get("draft")
     if isinstance(draft, dict):
-        draft["provenance"] = {}
+        provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
+        def safe_row_map(item: dict) -> list[dict]:
+            mappings = item.get("mission_row_index_map", [])
+            if not isinstance(mappings, list):
+                return []
+            return [{"legacy_index": mapping["legacy_index"], "row_id": mapping["row_id"]}
+                    for mapping in mappings
+                    if isinstance(mapping, dict)
+                    and isinstance(mapping.get("legacy_index"), int)
+                    and not isinstance(mapping.get("legacy_index"), bool)
+                    and mapping["legacy_index"] >= 0
+                    and isinstance(mapping.get("row_id"), str)
+                    and 0 < len(mapping["row_id"]) <= 128]
+        safe_migrations = [
+            {"from_schema_version": 1, "to_schema_version": 2,
+             "source_revision": item.get("source_revision"),
+             "legacy_1_4": _customer_legacy_s1(item.get("legacy_1_4")),
+             "mission_row_index_map": safe_row_map(item),
+             "acknowledged": bool(item.get("acknowledged")),
+             "issues": _customer_migration_issues(item.get("issues", []))}
+            for item in provenance.get("schema_migrations", [])
+            if isinstance(item, dict) and item.get("from_schema_version") == 1
+        ]
+        draft["provenance"] = {"schema_migrations": safe_migrations} if safe_migrations else {}
     return out
 
 
@@ -362,7 +430,12 @@ def _readable_project(request: Request, project_id: str):
 @router.get("/schema")
 def get_schema(request: Request):
     access.require_signed_in(request)
-    return models.schema()
+    raw_version = request.query_params.get("version")
+    if raw_version is None:
+        return models.schema()
+    if raw_version not in ("1", "2"):
+        raise HTTPException(status_code=422, detail="version must be 1 or 2")
+    return models.schema(int(raw_version))
 
 
 @router.get("")
@@ -397,7 +470,7 @@ async def create_project(request: Request):
         raise HTTPException(status_code=409, detail="Project already exists")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    store.save_json(project_id, "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0, "version": None, "updated_at": project["created_at"]})
+    store.save_json(project_id, "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "schema_version": 2, "revision": 0, "version": None, "updated_at": project["created_at"]})
     store.append_audit(project_id, _email(user), "create", "project", project_id, {})
     return _summary(project, user)
 
@@ -454,12 +527,90 @@ def _versions(project_id: str) -> list[dict]:
 @router.get("/{project_id}/spec")
 def get_spec(request: Request, project_id: str):
     user, _, _ = _readable_project(request, project_id)
-    versions = _versions(project_id)  # also recovers an interrupted submit
+    versions = _versions(project_id)
     wrapper = _draft_wrapper(project_id)
     store.append_audit(project_id, _email(user), "read", "spec_draft", "draft", {})
-    return {"draft": _customer_spec({"draft": wrapper.get("draft", {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}})})["draft"] if not access.is_engineer(user) else wrapper.get("draft", {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}),
-            "revision": wrapper.get("revision", 0), "version": wrapper.get("version"),
-            "completeness": models.completeness(wrapper.get("draft", {})), "versions": [_customer_spec(v) for v in versions]}
+    stored_draft = wrapper.get("draft", {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}})
+    schema_version = wrapper.get("schema_version", stored_draft.get("schema_version", 1))
+    return {"draft": _customer_spec({"draft": stored_draft})["draft"] if not access.is_engineer(user) else stored_draft,
+            "revision": wrapper.get("revision", 0), "version": wrapper.get("version"), "schema_version": schema_version,
+            "schema": models.schema(int(schema_version)), "completeness": models.completeness(wrapper.get("draft", {})), "versions": [_customer_spec(v) for v in versions]}
+
+
+@router.post("/{project_id}/spec/migration/preview")
+async def preview_spec_migration(request: Request, project_id: str):
+    user, _, _ = access.require_spec_editor(request, project_id)
+    wrapper = _draft_wrapper(project_id)
+    draft = wrapper.get("draft", {})
+    version = int(wrapper.get("schema_version", draft.get("schema_version", 1)))
+    if version >= 2:
+        raise HTTPException(status_code=409, detail="Specification already uses schema version 2")
+    from motor_ai_sim.development import migrations
+    preview = migrations.preview_v1_to_v2(draft, source_revision=int(wrapper.get("revision", 0)))
+    if not access.is_engineer(user):
+        preview = copy.deepcopy(preview)
+        preview["draft"] = _customer_spec({"draft": preview["draft"]})["draft"]
+    return {"preview": preview, "revision": wrapper.get("revision", 0)}
+
+
+@router.post("/{project_id}/spec/migration/apply")
+async def apply_spec_migration(request: Request, project_id: str):
+    user, _, _ = access.require_spec_editor(request, project_id)
+    body = await request.json()
+    if not isinstance(body, dict) or isinstance(body.get("revision"), bool) or not isinstance(body.get("revision"), int):
+        raise HTTPException(status_code=422, detail="revision must be an integer")
+    expected = body["revision"]
+    acknowledge = body.get("acknowledge_point", False)
+    if not isinstance(acknowledge, bool):
+        raise HTTPException(status_code=422, detail="acknowledge_point must be boolean")
+    from motor_ai_sim import json_store
+    from motor_ai_sim.development import migrations
+    path = store._file(project_id, "draft.json")
+    ensure = getattr(store, "ensure_writable", None)
+    if ensure:
+        try:
+            ensure()
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Project store is read-only") from exc
+    result = {}
+    no_op = False
+    with json_store.lock_for(path):
+        current = json_store.read_json(path, {"draft": {}, "revision": 0, "schema_version": 1})
+        draft = current.get("draft", {})
+        current_version = int(current.get("schema_version", draft.get("schema_version", 1)))
+        if current_version >= 2:
+            records = draft.get("provenance", {}).get("schema_migrations", [])
+            already_applied = any(isinstance(item, dict) and item.get("from_schema_version") == 1
+                                  and item.get("source_revision") == expected
+                                  and item.get("source_sha256") == body.get("source_sha256")
+                                  for item in records) and int(current.get("revision", 0)) == expected + 1
+            if already_applied:
+                result.update(current)
+                no_op = True
+            else:
+                raise HTTPException(status_code=409, detail="Specification already uses schema version 2")
+        if result:
+            pass
+        elif int(current.get("revision", 0)) != expected:
+            raise HTTPException(status_code=409, detail={"message": "Draft changed; request a new migration preview", "revision": current.get("revision", 0)})
+        if result:
+            pass
+        else:
+            preview = migrations.preview_v1_to_v2(draft, source_revision=expected)
+            if body.get("source_sha256") != preview["source_sha256"]:
+                raise HTTPException(status_code=409, detail="Draft differs from migration preview")
+            try:
+                migrated = migrations.apply_acknowledgement(preview, acknowledge)
+                normalized = models.normalize_draft(migrated)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            current.update({"draft": normalized, "schema_version": 2, "revision": expected + 1, "updated_at": models.now()})
+            json_store.atomic_write_json(path, current)
+            result.update(current)
+    if not no_op:
+        store.append_audit(project_id, _email(user), "migrate", "spec_draft", "draft", {"from_schema_version": 1, "to_schema_version": 2, "revision": result["revision"]})
+    response_draft = result["draft"] if access.is_engineer(user) else _customer_spec({"draft": result["draft"]})["draft"]
+    return {"draft": response_draft, "revision": result["revision"], "schema_version": 2, "completeness": models.completeness(result["draft"])}
 
 
 @router.put("/{project_id}/spec")
@@ -469,7 +620,6 @@ async def put_spec(request: Request, project_id: str):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
     try:
-        draft = models.normalize_draft(body.get("draft"))
         raw_revision = body.get("revision")
         if isinstance(raw_revision, bool) or not isinstance(raw_revision, int):
             raise ValueError("revision must be an integer")
@@ -484,15 +634,36 @@ async def put_spec(request: Request, project_id: str):
         if current_revision != expected:
             result["conflict"] = current_revision
             return
-        current.update({"draft": draft, "revision": current_revision + 1, "updated_at": models.now()})
+        persisted_version = int(current.get("schema_version", current.get("draft", {}).get("schema_version", 1)))
+        try:
+            requested_version = int(body.get("schema_version", persisted_version))
+        except (ValueError, TypeError):
+            result["validation_error"] = "schema_version must be 1 or 2"
+            return
+        if requested_version != persisted_version:
+            result["version_conflict"] = persisted_version
+            return
+        try:
+            draft = models.normalize_draft(body.get("draft"), schema_version=persisted_version)
+        except (ValueError, TypeError) as exc:
+            result["validation_error"] = str(exc)
+            return
+        if not access.is_engineer(user):
+            draft["provenance"] = copy.deepcopy(current.get("draft", {}).get("provenance", {}))
+        draft["schema_version"] = persisted_version
+        current.update({"draft": draft, "schema_version": persisted_version, "revision": current_revision + 1, "updated_at": models.now()})
         result["saved"] = copy.deepcopy(current)
     store.mutate_json(project_id, "draft.json", mutate, default={"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0, "version": None})
     if result.get("conflict") is not None:
         raise HTTPException(status_code=409, detail={"message": "Draft changed; reload before saving", "revision": result["conflict"]})
+    if result.get("version_conflict") is not None:
+        raise HTTPException(status_code=409, detail={"message": "Draft schema changed; reload and migrate", "schema_version": result["version_conflict"]})
+    if result.get("validation_error") is not None:
+        raise HTTPException(status_code=422, detail=result["validation_error"])
     saved = result["saved"]
     store.append_audit(project_id, _email(user), "autosave", "spec_draft", "draft", {"revision": saved["revision"]})
     response_draft = saved["draft"] if access.is_engineer(user) else _customer_spec({"draft": saved["draft"]})["draft"]
-    return {"draft": response_draft, "revision": saved["revision"], "version": saved.get("version"),
+    return {"draft": response_draft, "revision": saved["revision"], "version": saved.get("version"), "schema_version": saved.get("schema_version", 1),
             "completeness": models.completeness(saved["draft"])}
 
 
@@ -517,7 +688,7 @@ async def submit_spec(request: Request, project_id: str):
         if int(current.get("revision", 0)) != expected:
             raise HTTPException(status_code=409, detail={"message": "Draft changed; reload before submitting", "revision": current.get("revision", 0)})
         try:
-            draft = models.normalize_draft(current.get("draft", {}))
+            draft = models.normalize_draft(current.get("draft", {}), schema_version=int(current.get("schema_version", current.get("draft", {}).get("schema_version", 1))))
         except ValueError as exc:
             store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "reason": str(exc)})
             raise HTTPException(status_code=422, detail={"message": "Stored specification is invalid", "errors": [{"field": "draft", "message": str(exc)}]})
@@ -565,7 +736,10 @@ def get_spec_version(request: Request, project_id: str, number: int):
     for item in versions:
         if int(item.get("version", -1)) == number:
             store.append_audit(project_id, _email(user), "read", "spec_version", str(number), {})
-            return _customer_spec(item)
+            projected = item if access.is_engineer(user) else _customer_spec(item)
+            projected["schema_version"] = int(item.get("schema_version", item.get("draft", {}).get("schema_version", 1)))
+            projected["schema"] = models.schema(projected["schema_version"])
+            return projected
     raise HTTPException(status_code=404, detail="Specification version not found")
 
 
@@ -629,7 +803,22 @@ def get_thread(request: Request, project_id: str):
     user, _, _ = _readable_project(request, project_id)
     messages = _read_jsonl(project_id, "thread.jsonl")
     store.append_audit(project_id, _email(user), "read", "thread", "", {})
-    return {"messages": [_customer_spec(m) for m in messages]}
+    resolutions = {}
+    for event in messages:
+        if event.get("kind") == "resolution" and event.get("resolves_id"):
+            resolutions[str(event["resolves_id"])] = event
+    projected = []
+    for message in messages:
+        if message.get("kind") == "resolution":
+            continue
+        item = dict(message)
+        resolution = resolutions.get(str(item.get("id")))
+        item["resolved"] = bool(resolution.get("resolved", True)) if resolution is not None else False
+        if resolution:
+            item["resolved_at"] = resolution.get("created_at")
+            item["resolved_by"] = resolution.get("resolved_by")
+        projected.append(_customer_spec(item))
+    return {"messages": projected}
 
 
 @router.post("/{project_id}/thread")
@@ -642,12 +831,47 @@ async def post_thread(request: Request, project_id: str):
     field_ref = body.get("field_ref")
     if field_ref is not None and not isinstance(field_ref, str):
         raise HTTPException(status_code=422, detail="field_ref must be text")
+    row_id = body.get("row_id")
+    version = body.get("version")
+    revision = body.get("revision")
+    if row_id is not None and (not isinstance(row_id, str) or len(row_id) > 128):
+        raise HTTPException(status_code=422, detail="row_id must be text")
+    if version is not None and (isinstance(version, bool) or not isinstance(version, int) or version < 1):
+        raise HTTPException(status_code=422, detail="version must be a positive integer")
+    if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
+        raise HTTPException(status_code=422, detail="revision must be a non-negative integer")
     message = {"id": __import__("secrets").token_urlsafe(12), "author_email": _email(user),
-               "created_at": datetime.now(timezone.utc).isoformat(), "text": text, "field_ref": field_ref}
+               "created_at": datetime.now(timezone.utc).isoformat(), "text": text, "field_ref": field_ref,
+               "row_id": row_id, "version": version, "revision": revision}
     store.append_jsonl(project_id, "thread.jsonl", message)
     store.append_audit(project_id, _email(user), "post", "thread_message", message["id"], {"field_ref": field_ref})
     notify_project_members(project_id, message)
     return _customer_spec(message)
+
+
+@router.post("/{project_id}/thread/{message_id}/resolve")
+async def resolve_thread_message(request: Request, project_id: str, message_id: str):
+    user, project, _ = access.require_project(request, project_id)
+    if not access.can_edit_spec(user, project):
+        raise HTTPException(status_code=403, detail="Verified project member access required to resolve discussion")
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("resolved"), bool):
+        raise HTTPException(status_code=422, detail="resolved boolean required")
+    messages = _read_jsonl(project_id, "thread.jsonl")
+    target = next((m for m in messages if m.get("id") == message_id and m.get("kind") != "resolution"), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Thread message not found")
+    existing = next((m for m in reversed(messages) if m.get("kind") == "resolution" and m.get("resolves_id") == message_id), None)
+    if existing and bool(existing.get("resolved")) == body["resolved"]:
+        return {"id": message_id, "resolved": body["resolved"], "resolved_at": existing.get("created_at")}
+    if not body["resolved"] and not existing:
+        return {"id": message_id, "resolved": False}
+    event = {"id": __import__("secrets").token_urlsafe(12), "kind": "resolution", "resolves_id": message_id,
+             "resolved": body["resolved"], "resolved_by": _author(_email(user))["author_display_name"],
+             "author_email": _email(user), "created_at": datetime.now(timezone.utc).isoformat()}
+    store.append_jsonl(project_id, "thread.jsonl", event)
+    store.append_audit(project_id, _email(user), "project_thread_resolved" if body["resolved"] else "project_thread_reopened", "thread_message", message_id, {"resolved": body["resolved"]})
+    return {"id": message_id, "resolved": body["resolved"], "resolved_at": event["created_at"]}
 
 
 @router.post("/{project_id}/members")

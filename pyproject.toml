@@ -96,7 +96,7 @@ motor-sim = "motor_ai_sim.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-motor_ai_sim = ["py.typed", "development/schema.json"]
+motor_ai_sim = ["py.typed", "development/schema.json", "development/schema_v1.json"]
 
 [tool.black]
 line-length = 100

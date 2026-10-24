@@ -12,6 +12,7 @@ import {
   canShareLink, documentsForLink, latestUploadDay, productionLinkUrl, validDay, type ProductionLink,
 } from '../../../lib/productionLink';
 import type { DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
+import { NARROW } from '../../../lib/narrowLayout';
 
 const NEW_BG = 'rgba(37, 99, 235, 0.10)';
 
@@ -136,6 +137,7 @@ const DocumentsPanel: React.FC<{
       {documents.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('docs.none')}</Typography> : (
         <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
           <Table size="small" sx={{
+            [NARROW]: { minWidth: 680 },  // phone: readable columns, the Paper scrolls sideways
             '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
             '& th': { color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
           }}>

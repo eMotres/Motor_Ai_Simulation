@@ -146,3 +146,10 @@ input[type="number"] {
   min-height: 48px;
   font-size: 0.75rem;
 }
+
+/* A tooltip must never cover an open dropdown: while a Select/Menu list is open, every tooltip popper is hidden
+   (owner 2026-10-25: the motor-status hint covered the Current / Trial options). */
+body:has(.MuiMenu-root) .MuiTooltip-popper,
+body:has(.MuiPopover-root .MuiMenu-list) .MuiTooltip-popper {
+  display: none;
+}

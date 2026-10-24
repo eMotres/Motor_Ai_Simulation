@@ -560,7 +560,7 @@ export default function DevelopmentPage() {
     <Tabs value={view} onChange={(_, v) => void openTab(v)} sx={{ borderBottom: '1px solid var(--line-soft)', mb: 1.5 }}>
       <Tab value="specification" label={tr('tabs.specification')} /><Tab value="motors" label={tr('tabs.motors')} /><Tab value="messages" label={tr('tabs.messages')} />{canEditProject && <Tab value="notes" label={tr('tabs.notes')} />}
     </Tabs>
-    {view === 'specification' && <Box sx={{ maxWidth: 1196, mx: 'auto', minWidth: 0, '& .MuiInputBase-root': { bgcolor: 'var(--input-bg)', borderRadius: '8px', fontSize: 14 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' }, '& .MuiInputBase-input': { boxSizing: 'border-box', px: '9px', py: '7px', height: 'auto' }, '& .MuiSelect-select': { pr: '32px !important' } }}>
+    {view === 'specification' && <Box sx={{ maxWidth: 1196, minWidth: 0, '& .MuiInputBase-root': { bgcolor: 'var(--input-bg)', borderRadius: '8px', fontSize: 14 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' }, '& .MuiInputBase-input': { boxSizing: 'border-box', px: '9px', py: '7px', height: 'auto' }, '& .MuiSelect-select': { pr: '32px !important' } }}>
       {!schema || !spec ? <CircularProgress size={18} /> : <>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: '220px minmax(0, 1fr)' }, gap: '13px', alignItems: 'start', minWidth: 0 }}>
           <Paper elevation={0} sx={{ p: '9px', display: { xs: 'none', md: 'block' }, position: 'sticky', top: 8, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>

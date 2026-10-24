@@ -565,3 +565,18 @@ def test_customer_projection_hides_member_emails_from_metadata_thread_and_versio
     assert "eng@example.test" not in str(answer)
     assert "C:/internal" not in str(answer) and answer["draft"]["provenance"] == {}
     assert answer["author_display_name"] == "Friendly Name"
+
+
+def test_pending_invite_is_claimed_by_a_verified_sign_in(project_root, monkeypatch):
+    from motor_ai_sim.development import routes as R
+    store.create_project(make_project())
+    accounts = {}
+    monkeypatch.setattr(users, "get_user", lambda email: accounts.get(email))
+    R._apply_member("alpha", "late@example.test", "owner")
+    assert [m["email"] for m in store.get_project("alpha")["pending_invites"]] == ["late@example.test"]
+    assert R.claim_pending_invites("late@example.test") == []          # still no account: stays pending
+    accounts["late@example.test"] = {"email": "late@example.test"}
+    assert R.claim_pending_invites("Late@Example.test") == ["alpha"]
+    project = store.get_project("alpha")
+    assert {"email": "late@example.test", "role": "owner"} in project["members"]
+    assert project["pending_invites"] == []

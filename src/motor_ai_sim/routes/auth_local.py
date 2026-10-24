@@ -76,6 +76,14 @@ def _start_session(email: str, *, method: str, request: Optional[Request]) -> st
     ip, ua = _who(request)
     from motor_ai_sim import workspace as W
     W.provision(email)
+    # Development invites sent before this account existed become memberships now - only for a verified address
+    # (Google always is; a password account after its e-mail link). Never blocks the sign-in.
+    if method == "google" or U.is_verified(U.get_user(email)):
+        try:
+            from motor_ai_sim.development.routes import claim_pending_invites
+            claim_pending_invites(email)
+        except Exception:  # noqa: BLE001
+            log.exception("development invite claim failed for a sign-in")
     sid = S.create(email, expires=time.time() + U._TOKEN_TTL_S,
                    login_method=method, ip=ip, user_agent=ua)
     token = U.issue_token(email, sid=sid)

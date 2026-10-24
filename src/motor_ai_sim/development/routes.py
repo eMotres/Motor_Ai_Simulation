@@ -874,14 +874,9 @@ async def resolve_thread_message(request: Request, project_id: str, message_id: 
     return {"id": message_id, "resolved": body["resolved"], "resolved_at": event["created_at"]}
 
 
-@router.post("/{project_id}/members")
-async def add_member(request: Request, project_id: str):
-    user, _, _ = access.require_project(request, project_id, edit=True)
-    body = await request.json()
-    email = str(body.get("email") or "").strip().lower() if isinstance(body, dict) else ""
-    role = str(body.get("role") or "customer") if isinstance(body, dict) else "customer"
-    if not email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or role not in ("customer", "engineer", "owner"):
-        raise HTTPException(status_code=422, detail="Valid email and role required")
+def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
+    """Add or re-role `email` on a project: a member when the account exists, else a pending invite.
+    Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim."""
     entry = {"email": email, "role": role}
     from motor_ai_sim.development.motors import transaction, _sync_grants, _mark_removal_candidates, _key
     with transaction(), users._LOCK:
@@ -936,6 +931,38 @@ async def add_member(request: Request, project_id: str):
             store.save_json(project_id, "project.json", restored)
             store.save_membership_index(membership_before)
             raise
+    return entry, bool(account)
+
+
+def claim_pending_invites(email: str) -> list[str]:
+    """Turn every pending invite for `email` into a membership (called at sign-in with a VERIFIED address).
+
+    Without this an invite to an address that had no account stayed pending forever (CR-HF-75, 2026-10-25).
+    Only a verified address may claim: someone registering a stranger's address must not inherit the projects."""
+    email = str(email or "").strip().lower()
+    claimed: list[str] = []
+    for project in store.list_projects():
+        invite = next((m for m in project.get("pending_invites", []) if str(m.get("email", "")).lower() == email), None)
+        if not invite:
+            continue
+        role = str(invite.get("role") or "customer")
+        _entry, found = _apply_member(project["id"], email, role)
+        if found:
+            store.append_audit(project["id"], email, "invite_claimed", "member", email, {"role": role})
+            claimed.append(project["id"])
+    return claimed
+
+
+@router.post("/{project_id}/members")
+async def add_member(request: Request, project_id: str):
+    user, _, _ = access.require_project(request, project_id, edit=True)
+    body = await request.json()
+    email = str(body.get("email") or "").strip().lower() if isinstance(body, dict) else ""
+    role = str(body.get("role") or "customer") if isinstance(body, dict) else "customer"
+    if not email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or role not in ("customer", "engineer", "owner"):
+        raise HTTPException(status_code=422, detail="Valid email and role required")
+    entry, found = _apply_member(project_id, email, role)
+    account = found
     store.append_audit(project_id, _email(user), "invite", "member", email, {"role": role, "pending": not bool(account)})
     return {"member": entry if account else None, "pending": not bool(account)}
 

@@ -88,6 +88,18 @@ def _snap(work: Path, M: str) -> Dict[str, Any]:
     return json.load(open(work / "out" / M / "snapshot.json", encoding="utf-8"))
 
 
+def _refuse_unqualified_six_phase_task(work: Path, machine: str, task: str) -> None:
+    """Stop full-card studies whose models have not been qualified for two sets."""
+    if task not in ("stage_a", "coupled", "cooling", "pwm", "propanchor"):
+        return
+    from motor_ai_sim.passport_winding import snapshot_six_phase
+    if snapshot_six_phase(_snap(work, machine)):
+        raise SystemExit(
+            "%s: %s is unavailable for six-phase passports; build the Stage 1 "
+            "card and qualify the 3-D, dual-inverter, or thermal model first"
+            % (machine, task))
+
+
 def _state(work: Path, M: str) -> Dict[str, Any]:
     return json.load(open(work / "out" / M / "state.json", encoding="utf-8"))
 
@@ -955,6 +967,8 @@ def main(argv=None) -> None:
           "pwm": task_pwm, "demagseq": task_demagseq, "cooling": task_cooling, "demagtemp": task_demagtemp,
           "propanchor": task_propanchor,
           "parallel": task_parallel}[a.task]
+    if a.task != "parallel":
+        _refuse_unqualified_six_phase_task(work, a.machine, a.task)
     fn(work, a)
 
 

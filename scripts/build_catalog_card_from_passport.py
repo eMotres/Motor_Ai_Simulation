@@ -43,9 +43,35 @@ def _val(block: Dict[str, Any], key: str) -> float:
     return float(block[key]["value"])
 
 
+def _copy_phase_metadata(out: Dict[str, Any], sp: Dict[str, Any], I0: float) -> None:
+    """Keep set topology on assembled cards while storing current on equivalent-total basis."""
+    phase_count = int(sp.get("phase_count") or 3)
+    if phase_count not in (3, 6):
+        raise ValueError(f"unsupported passport phase_count={phase_count}")
+    if phase_count == 3:
+        return
+    six = dict(sp.get("six_phase") or {})
+    six["current_per_inverter_A"] = I0 / 2.0
+    out.update({"phase_count": 6, "phase_sets": 2,
+                "current_basis": "equivalent_three_phase_total", "six_phase": six})
+
+
 def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
     """The ``passport`` dict (inner block) of the card."""
     sp = static["passport"]["passport"]
+    static_phase_count = int(sp.get("phase_count") or 3)
+    full_phase_count = int(full.get("phase_count") or 3)
+    if static_phase_count != full_phase_count:
+        raise ValueError(
+            "passport source topology mismatch: static is %d-phase, full record is %d-phase"
+            % (static_phase_count, full_phase_count))
+    if static_phase_count == 6:
+        static_six = sp.get("six_phase") if isinstance(sp.get("six_phase"), dict) else {}
+        full_six = full.get("six_phase") if isinstance(full.get("six_phase"), dict) else {}
+        for key in ("set_connection", "neutrals", "n_parallel", "set1_paths",
+                    "set2_paths", "slot_set"):
+            if key in static_six and key in full_six and static_six[key] != full_six[key]:
+                raise ValueError(f"passport source topology mismatch: six_phase.{key}")
     cold = full["card"]["constants_cold"]
     hot_mtpa = {round(float(m["fI"]), 4): m for m in full["hot_map"]["mtpa"]}
     k_levels = {round(float(k["fI"]), 4): k for k in full["cold"]["k_levels"]}
@@ -54,6 +80,7 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
     pp = int(static["poles"]) // 2
 
     out: Dict[str, Any] = {k: sp[k] for k in STATIC_KEYS if k in sp}
+    _copy_phase_metadata(out, sp, I0)
 
     # -- 20 degC constants ---------------------------------------------------
     psi_c = _val(cold, "psi_PM_Wb")
@@ -104,9 +131,18 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
     out["Vload0_fund_V"] = cur["V_peak_V"][i0_i]
 
     # -- loss grid (card state), rows = currents, cols = rpm ------------------
-    rpms = [250.0, 500.0, 1000.0, 1500.0, 2000.0]
     pts_l = [p for p in full["loss_grid"]["points"] if p.get("groups_W")]
-    cur_l = sorted({float(p["I_rms"]) for p in pts_l if p["rpm"] in rpms})
+    if int(out.get("phase_count") or 3) == 6:
+        rpms = sorted({float(p["rpm"]) for p in pts_l})
+        pairs = {(float(p["rpm"]), float(p["I_rms"])) for p in pts_l}
+        currents = sorted({i for _, i in pairs})
+        rpms = [r for r in rpms if all((r, i) in pairs for i in currents)]
+        cur_l = [i for i in currents if all((r, i) in pairs for r in rpms)]
+        if not rpms or not cur_l:
+            raise ValueError("six-phase passport loss points do not form a complete current-speed grid")
+    else:
+        rpms = [250.0, 500.0, 1000.0, 1500.0, 2000.0]
+        cur_l = sorted({float(p["I_rms"]) for p in pts_l if p["rpm"] in rpms})
     grid: Dict[str, Any] = {"I_A": cur_l, "rpm": rpms, "Pfe_W": [], "Pmag_W": [], "cuAC": [],
                             "Pcu_dc_W": [], "Pcu_ac_W": []}
     by = {(float(p["rpm"]), float(p["I_rms"])): p for p in pts_l}
@@ -132,12 +168,32 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
     out["P_fe_rotor0_W"] = float(g0["P_fe_rotor_W"])
     out["ripple0_pct"] = round(float(by[(n0, I0)]["T_ripple_pct"]), 2)
     out["speed"] = {"rpm": rpms, "Pfe_W": grid["Pfe_W"][ri], "Pmag_W": grid["Pmag_W"][ri]}
+    if int(out.get("phase_count") or 3) == 6:
+        six = dict(out.get("six_phase") or {})
+        six["voltage_per_set_V"] = out["Vload0_fund_V"]
+        six["resistance_per_set_ohm"] = 2.0 * out["R0_ohm"]
+        six["resistance_basis"] = "one set has half the parallel paths: 2 x equivalent phase resistance"
+        pcu_set = (grid["Pcu_dc_W"][ri][ci] + grid["Pcu_ac_W"][ri][ci]) / 2.0
+        six["copper_loss_per_set_W"] = pcu_set
+        six["losses_per_set_W"] = {"copper_W": pcu_set, "iron_W": None,
+                                    "magnet_W": None, "shaft_W": None}
+        six["loss_allocation_note"] = (
+            "base card-state copper is split equally; iron and rotor losses remain machine totals")
+        out["six_phase"] = six
 
     # -- 3-D end effect (Stage A, own stack) ----------------------------------
-    k = float(full["stage2_3d"]["k_psi"]["value"])
-    out["end3d"] = {"k_flux": k, "k_flux_vs_L": None,
-                    "fidelity": "Stage A k_flux_self at the own stack (2-D check failed, raw k_flux not used)",
-                    "k_T": float(full["stage2_3d"]["k_T"]["value"])}
+    stage_a = full.get("stage2_3d") if isinstance(full.get("stage2_3d"), dict) else {}
+    k_psi = (stage_a.get("k_psi") or {}).get("value")
+    k_t = (stage_a.get("k_T") or {}).get("value")
+    if k_psi is not None and k_t is not None:
+        k = float(k_psi)
+        out["end3d"] = {"k_flux": k, "k_flux_vs_L": None,
+                        "fidelity": "Stage A k_flux_self at the own stack (2-D check failed, raw k_flux not used)",
+                        "k_T": float(k_t)}
+    elif int(out.get("phase_count") or 3) == 6:
+        out["end3d"] = None
+    else:
+        raise ValueError("full passport is missing its Stage A 3-D coefficients")
     out["pwm"] = None
     out["source_note"] = (
         "assembled from the full passport %s (no solve): 20 degC - T0, Vemf0, R0, Ld/Lq, torque curve "
@@ -146,6 +202,10 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
         "(hot x measured cold/hot ratio)" % (
             full.get("machine", {}).get("tag"),
             full["inputs"]["temperatures"]["hot_magnet_c"], full["inputs"]["temperatures"]["hot_coil_c"]))
+    if int(out.get("phase_count") or 3) == 6:
+        out["source_note"] += "; two in-phase 3-phase sets share phase current equally and retain full phase voltage per set"
+        if out.get("end3d") is None:
+            out["source_note"] += "; Stage A 3-D correction unavailable, Configure remains on 2-D values"
     return out
 
 

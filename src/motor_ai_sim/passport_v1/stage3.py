@@ -605,6 +605,9 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
     ``pwm_fem``: {class_id: [anchor, ...]} from the PWM FEM task (anchor =
     {tag, rpm, I, dP_harm_W, m_index}).
     ``variants``: [{id, device, carrier_hz, dead_time_s, fem_class}]."""
+    from motor_ai_sim.passport_winding import snapshot_six_phase
+    if snapshot_six_phase(snap):
+        raise ValueError("six-phase PWM/controller passport stage is not validated")
     from motor_ai_sim.inverter.devices import get_device
     bat = snap["battery"]
     v_dc = float(bat["v_nom"])

@@ -659,9 +659,23 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
     L = float(snap["geometry"]["motor_length"])
     v_dc = float(snap["battery"]["v_nom"])
     spec_m = dict(spec_m or {})
-    s2 = stage2_block(full, repo, L, str((spec_m.get("k3d") or {}).get("k_T")
-                                         or "stage_b_inherited"))
+    from motor_ai_sim.passport_winding import snapshot_six_phase
+    six_phase = bool(snapshot_six_phase(snap))
+    s2 = ({"status": "unavailable: six-phase 3-D validation not implemented",
+           "L_mm": L, "k_psi": {"value": None}, "k_T": {"value": None},
+           "k_L": {"value": None}} if six_phase else
+          stage2_block(full, repo, L, str((spec_m.get("k3d") or {}).get("k_T")
+                                           or "stage_b_inherited")))
     rec["stage2_3d"] = s2
+    if six_phase:
+        rec["stage3_pwm_controller"] = {
+            "status": "unavailable: six-phase PWM/controller validation not implemented"}
+        rec["coupled_thermal"] = {
+            "status": "unavailable: six-phase thermal validation not implemented"}
+        rec["labels"] = ["2-D FEM (six-phase stage 1)",
+                         "3-D, PWM/controller, thermal, and fault studies unavailable"]
+        rec["full_card_status"] = "stage 1 only; six-phase full-card studies are unqualified"
+        return rec
     rec["mechanical"] = mech_block(full, M)
     cp = _load(full / f"coupled_{M}.json")
     rec["coupled_thermal"] = ({"converged": (cp.get("coupling") or {}).get("converged"),
@@ -1012,6 +1026,33 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
 
 
 def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
+    if rec.get("full_card_status"):
+        c = rec["card"]
+        rows = []
+        for name, point in (("rated", c.get("rated_point") or {}),
+                            ("peak", c.get("peak_point") or {})):
+            rows.append([name, point.get("rpm"), point.get("I_rms"),
+                         (point.get("six_phase") or {}).get("current_per_inverter_A"),
+                         _v(point.get("T_operating_Nm")),
+                         _v(point.get("P_loss_em_W"))])
+        six = rec.get("six_phase") or {}
+        body = [f"<h1>{Hh.esc(rec['machine']['die'])} · {M} — motor passport</h1>",
+                '<p class="sub">2 x 3-phase, in phase; current is reported per inverter. '
+                + Hh.esc(rec["full_card_status"]) + "</p>",
+                Hh.table(["point", "rpm", "current A rms (machine total)",
+                          "current A rms per inverter",
+                          "2-D operating torque N·m", "2-D loss W"], rows),
+                "<h2>Per-inverter basis</h2>",
+                Hh.table(["quantity", "value"], [
+                    ["current basis", rec.get("current_basis")],
+                    ["sets", rec.get("phase_sets")],
+                    ["connection", six.get("set_connection")],
+                    ["voltage", "full phase voltage per set"],
+                    ["current", "half equivalent machine phase current per inverter"]]),
+                "<h2>Unavailable studies</h2><p>Stage A 3-D, dual-inverter PWM/controller, "
+                "thermal distribution, and single-set fault cases are not qualified.</p>"]
+        return Hh.page(f"{M} passport (Stage 1)", "".join(body),
+                       f"{title} motor passport {M}")
     c = rec["card"]
     rp, pk = c["rated_point"], c["peak_point"]
     s2 = rec["stage2_3d"]
@@ -1385,6 +1426,13 @@ def H_(s):
 
 
 def compare_html(recs: Mapping[str, Mapping[str, Any]]) -> str:
+    if any(r.get("full_card_status") for r in recs.values()):
+        rows = [[m, r.get("full_card_status"), r.get("phase_sets"),
+                 r.get("current_basis")] for m, r in recs.items()]
+        return Hh.page("Passport comparison (Stage 1)",
+                       "<h1>Passport comparison — qualified stages</h1>" +
+                       Hh.table(["machine", "status", "phase sets", "current basis"], rows),
+                       "Motor passport comparison")
     Ms = list(recs)
     o = ["<h1>Ø40 passport — L12 vs L20</h1>",
          '<p class="sub">Same die, 12 / 20 mm stack, 6S / 12S. Card torque = operating × k_T '

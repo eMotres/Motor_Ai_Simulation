@@ -7,6 +7,14 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 export interface ConfigureContext {
   motor_id: string;
+  phase_count?: number;
+  phase_sets?: number;
+  current_basis?: string | null;
+  current_per_inverter_A?: number | null;
+  phase_voltage_limit_per_set_V?: number | null;
+  six_phase?: Record<string, unknown> | null;
+  phase_model_supported?: boolean;
+  phase_model_status?: string;
   limits: { L_max_mm: number | null; set_by?: string | null; set_at?: string | null };
   current: {
     set: boolean; reason?: string; device?: string; devices_parallel?: number;

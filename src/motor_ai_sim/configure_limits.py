@@ -262,16 +262,33 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
     split = _num(geo.get("wire_split"))
     vs = [v for v in (variants or []) if isinstance(v, dict) and v.get("id")]
     ctrl = doc.get("controller") if isinstance(doc.get("controller"), dict) else {}
+    try:
+        phase_count = int(wnd.get("phases") or 3)
+    except (TypeError, ValueError):
+        raise ValueError(f"configuration {doc.get('name')!r} has an invalid winding phase count")
+    if phase_count not in (3, 6):
+        raise ValueError(f"configuration {doc.get('name')!r} uses unsupported {phase_count}-phase winding")
+    phase_model_supported = (phase_count == 3 or
+                             (n_par is not None and n_par.is_integer() and int(n_par) % 2 == 0))
+    current_arms = _num((duty or {}).get("current_arms"))
     return {
         "config": str(doc.get("name") or ""),
         "die": str(doc.get("die") or ""),
+        "phase_count": phase_count,
+        "phase_sets": 2 if phase_count == 6 else 1,
+        "phase_model_supported": phase_model_supported,
+        "phase_model_status": "ready" if phase_model_supported else "unsupported_parallel_path",
+        "current_basis": "equivalent_three_phase_total" if phase_count == 6 else "phase_current",
+        "current_per_inverter_A": current_arms / 2.0 if phase_count == 6 and current_arms is not None else current_arms,
+        "winding": {k: wnd.get(k) for k in ("phases", "connection", "set1_paths", "set_neutrals")
+                    if k in wnd},
         "knobs": {
             "L_mm": _num(geo.get("motor_length")),
             "N": _num(geo.get("num_wires_per_slot")),
             "wireH_mm": _num(geo.get("wire_height")),
             "split": split if split is not None else 1.0,
             "nP": n_par if n_par is not None else 1.0,
-            "I_A": _num((duty or {}).get("current_arms")),
+            "I_A": current_arms,
             "rpm": _num((duty or {}).get("rpm")),
         },
         "duty": (duty or {}).get("name"),

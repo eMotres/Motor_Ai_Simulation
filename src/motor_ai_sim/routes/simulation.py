@@ -4931,8 +4931,11 @@ def get_fem_transient(
     # SIX PHASES (two in-phase 3-phase sets) — resolved and validated here,
     # before anything is solved; None on a 3-phase winding.
     try:
-        _six_spec = _effective_six_phase(
-            star_delta, _effective_winding(n_parallel, connection)[0])
+        from motor_ai_sim.passport_winding import (has_six_phase_override,
+                                                    six_phase_override)
+        _six_spec = (six_phase_override() if has_six_phase_override() else
+                     _effective_six_phase(
+                         star_delta, _effective_winding(n_parallel, connection)[0]))
     except ValueError as _e6:
         raise HTTPException(status_code=400, detail=str(_e6))
     _eq_star = (_drive in ("voltage",) + _pwm_like and _sd_eff == "delta")
@@ -5134,7 +5137,7 @@ def get_fem_transient(
         # factorization, which dominates P2 wall-time, shrinks steeply).  So
         # if the caller left n_sectors at the full motor (≤1), auto-use the
         # machine's natural rotational symmetry gcd(slots, poles) = num_seg.
-        if int(n_sectors) <= 1:
+        if int(n_sectors) <= 1 and not _six_spec:
             try:
                 from math import gcd as _gcd
                 from motor_ai_sim.config import get_config as _gc2
@@ -5282,6 +5285,14 @@ def get_fem_transient(
                                      round(float(_batt.i_charge_max_a), 4))
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
+    if _six_spec:
+        # A six-phase split and its three-phase equivalent have the same URL
+        # inputs but different source bookkeeping and per-set result blocks.
+        # Append only for six phase so every existing three-phase key stays
+        # byte-identical.
+        _sb_key_fields["six_phase"] = tuple(
+            (k, tuple(v) if isinstance(v, list) else v)
+            for k, v in sorted(_six_spec.items()) if k != "note")
     _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit

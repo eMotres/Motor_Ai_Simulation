@@ -161,7 +161,7 @@ def loss_point_block(recs, jid, mech: Mapping[str, Any]) -> Dict[str, Any]:
     Pm = mech.get("P_W") if mech else None
     eff = LS.efficiency_shaft(float(r["T_avg_Nm"]), rpm, P_em, float(Pm or 0.0))
     ds = r.get("demag_summary") or {}
-    return {
+    out = {
         "id": jid, "rpm": rpm, "I_rms": float(rec["kw"]["I_phase_rms"]),
         "gamma": float(rec["kw"]["gamma_deg"]), "i_d": r.get("i_d_A"), "i_q": r.get("i_q_A"),
         "T_Nm": r.get("T_avg_Nm"), "T_ripple_pct": r.get("T_ripple_pct"),
@@ -186,6 +186,18 @@ def loss_point_block(recs, jid, mech: Mapping[str, Any]) -> Dict[str, Any]:
         "n_steps_per_period": r.get("n_steps_per_period"),
         "wall_s": rec.get("wall_s"),
     }
+    if r.get("six_phase"):
+        out["six_phase"] = dict(r["six_phase"])
+    return out
+
+
+def six_phase_peak_copper_per_set(groups: Mapping[str, Any]) -> Optional[float]:
+    """Allocate interpolated copper only when both DC and AC terms exist."""
+    dc = groups.get("P_cu_dc_W")
+    ac = groups.get("P_cu_ac_W")
+    if dc is None or ac is None:
+        return None
+    return (float(dc) + float(ac)) / 2.0
 
 
 def _cu_alpha(snap) -> float:
@@ -759,4 +771,28 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                           "critical speed and rotor stress limits (§5.5)",
                           "generator quadrant of the map"],
     }
+    from motor_ai_sim.passport_winding import snapshot_six_phase
+    six_phase_spec = snapshot_six_phase(snap)
+    if six_phase_spec:
+        rated_six = dict((rated_blk or {}).get("six_phase") or {})
+        peak_six = {
+            "current_per_inverter_A": I_pk / 2.0,
+            "current_basis": "equivalent machine phase current / 2",
+            "voltage_per_set_V": None,
+            "voltage_basis": "not solved at interpolated peak point",
+            "losses_per_set_W": {
+                "copper_W": six_phase_peak_copper_per_set(pk_loss.get("groups") or {}),
+                "iron_W": None, "magnet_W": None, "shaft_W": None},
+        }
+        card["rated_point"]["six_phase"] = rated_six
+        card["peak_point"]["six_phase"] = peak_six
+        rec.update({"phase_count": 6, "phase_sets": 2,
+                    "current_basis": "equivalent_three_phase_total",
+                    "six_phase": {**six_phase_spec,
+                                  "fault_cases": {
+                                      "status": "unavailable",
+                                      "note": "balanced both-set solves do not qualify single-set faults"}},
+                    "stage2_3d": {"status": "unavailable: six-phase 3-D validation not implemented"},
+                    "stage3_pwm_controller": {
+                        "status": "unavailable: six-phase PWM/controller validation not implemented"}})
     return rec

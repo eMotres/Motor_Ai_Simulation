@@ -32,6 +32,15 @@ export interface Passport {
   L0_mm: number;       // base lamination length (motor_length)
   wireH0_mm: number;   // base wire thickness (wire_height); wire_width fixed
   I0_A: number;        // base phase current (rms)
+  /** Six-phase two-inverter machines report the same 3-phase-equivalent basis internally. */
+  phase_count?: 3 | 6;
+  phase_sets?: number;
+  current_basis?: 'equivalent_three_phase_total' | string;
+  six_phase?: {
+    current_per_inverter_A?: number | null;
+    voltage_per_set_V?: number | null;
+    [key: string]: unknown;
+  } | null;
   rpm0: number;        // base speed
   nP0: number;         // base parallel paths (4S→1, 2P·2S→2, 4P→4); 4 coils/phase
   /** STRANDS IN HAND the base point was measured at (geometry.wire_parallel,
@@ -163,6 +172,30 @@ export interface Passport {
    *  it — `mode0` above says which convention the numbers were SOLVED in. Only
    *  a generator gets the charging block. */
   role?: string | null;
+}
+
+/** Number of independent 3-phase inverter sets represented by a passport. */
+export function phaseSetCount(p: { phase_count?: number | null }): number {
+  return p.phase_count === 6 ? 2 : 1;
+}
+
+/** Configure's per-inverter display value; the scaling model keeps equivalent total phase current. */
+export function currentPerInverter(p: { phase_count?: number | null }, equivalentPhaseCurrent_A: number): number {
+  return equivalentPhaseCurrent_A / phaseSetCount(p);
+}
+
+/** Convert a per-inverter Configure entry back to the equivalent 3-phase model basis. */
+export function equivalentPhaseCurrent(p: { phase_count?: number | null }, currentPerInverter_A: number): number {
+  return currentPerInverter_A * phaseSetCount(p);
+}
+
+/** Render-safe fixed connection for a two-set passport; invalid stale metadata uses a temporary even path. */
+export function safeConfigureParallelPaths(
+  p: { phase_count?: number | null; nP0?: number | null }, requested: number,
+): number {
+  if (p.phase_count !== 6) return requested;
+  return Number.isInteger(p.nP0) && Number(p.nP0) > 0 && Number(p.nP0) % 2 === 0
+    ? Number(p.nP0) : 2;
 }
 
 /** A pack as the family yaml stores it. */
@@ -348,6 +381,9 @@ export function turnsFactor(p: Passport, k: Knobs): number {
 /** Instant analytical scaling of a passport to a new (length, turns, wire, I, rpm).
  *  `poles` (optional) enables ψ_PM — the electrical frequency needs it. */
 export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult {
+  if (p.phase_count === 6 && (!Number.isInteger(k.nP) || k.nP % 2 !== 0)) {
+    throw new RangeError('Configure cannot scale a six-phase winding with an odd or single parallel path');
+  }
   const fN = turnsFactor(p, k);
   const fL = p.L0_mm ? k.L_mm / p.L0_mm : 1;
   const fH = p.wireH0_mm ? k.wireH_mm / p.wireH0_mm : 1;

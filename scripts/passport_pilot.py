@@ -142,6 +142,26 @@ def cmd_prepare(a: argparse.Namespace) -> None:
             if (abs(pk["rpm"] - spec["owner_peak"]["rpm"]) > 1e-9
                     or abs(pk["current_arms"] - spec["owner_peak"]["I_arms"]) > 1e-9):
                 raise SystemExit(f"{M}: peak duty disagrees with the owner's")
+        # Delta machine: the passport runs on the WINDING basis (2026-10-13, L155).  The
+        # duty setpoint is the TERMINAL current; the route divides it by sqrt(3) before
+        # it calls the solver (routes.simulation: "_I_wind"), the passport jobs call the
+        # solver directly, so the snapshot hands them the winding current.  Everything
+        # downstream (psi map, R, V, loss plans) is then on that basis; the voltage limit
+        # is m*Vdc (psimap.set_winding_basis).  The terminal values stay in the snapshot.
+        term_rd = rd["current_arms"]
+        if str(snap["winding"].get("star_delta") or "star").lower().startswith("d"):
+            k = math.sqrt(3.0)
+            snap["current_basis"] = {
+                "delta": True, "basis": "winding (terminal / sqrt(3))",
+                "rated_terminal_arms": rd["current_arms"],
+                "peak_terminal_arms": (snap["peak_duty"]["current_arms"]
+                                       if snap.get("peak_duty") else None),
+                "source": "routes.simulation _I_wind = I_terminal / sqrt(3) for delta; "
+                          "voltage limit m*Vdc (winding carries the line voltage)"}
+            rd["current_arms"] = rd["current_arms"] / k
+            if snap.get("peak_duty"):
+                snap["peak_duty"]["current_arms"] = snap["peak_duty"]["current_arms"] / k
+            snap["signatures"] = S.signatures(snap)
         # sandbox machine config
         ws = work / f"ws_{M}"
         ws.mkdir(parents=True, exist_ok=True)
@@ -155,7 +175,7 @@ def cmd_prepare(a: argparse.Namespace) -> None:
             msh[k] = snap["mesh"][k]
         c["mesh"] = msh
         sim = dict(c.get("simulation") or {})
-        sim.update(max_current=rd["current_arms"], current_a=rd["current_arms"],
+        sim.update(max_current=term_rd, current_a=term_rd,
                    rpm=rd["rpm"], gamma_deg=rd["gamma_deg"],
                    phase_offset_deg=rd["gamma_deg"], coil_temp_c=rd["coil_temp_c"],
                    end_winding_factor=rd["end_winding_factor"],

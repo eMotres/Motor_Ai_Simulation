@@ -881,7 +881,7 @@ const ComparePanel: React.FC = () => {
 
       {/* ══ TOP: library of all saved simulations ══ */}
       <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0, borderBottom: '2px solid var(--line-soft)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1, flexWrap: 'wrap', rowGap: 0.5 }}>
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>
             Saved simulations
           </Typography>

@@ -3,6 +3,7 @@ import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
 import Tooltip from '@mui/material/Tooltip';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTranslation } from 'react-i18next';
 
 /** The idle limit named on screen (server default, sessions.py / session_activity.py). */
@@ -14,8 +15,10 @@ export const IDLE_MINUTES = 30;
  */
 const IdleSignedOutNotice: React.FC<{ open: boolean; onSignIn: () => void; onClose: () => void }> = ({ open, onSignIn, onClose }) => {
   const { t } = useTranslation('common');
+  // On a phone a top notice covers the whole header (brand, account, theme): show it at the bottom there.
+  const phone = useMediaQuery('(max-width:767.95px)');
   return (
-    <Snackbar open={open} anchorOrigin={{ vertical: 'top', horizontal: 'center' }} onClose={(_e, reason) => { if (reason !== 'clickaway') onClose(); }}>
+    <Snackbar open={open} anchorOrigin={{ vertical: phone ? 'bottom' : 'top', horizontal: 'center' }} onClose={(_e, reason) => { if (reason !== 'clickaway') onClose(); }}>
       <Alert severity="info" variant="filled" sx={{ fontSize: 13, alignItems: 'center' }}
         action={<Button color="inherit" size="small" onClick={onSignIn}>{t('auth.cta.signin')}</Button>}>
         <Tooltip title={t('auth.idleClosedTip', { minutes: IDLE_MINUTES })}>

@@ -108,3 +108,10 @@ def admin_grant_removal_candidates(project_id: str,
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"candidates": list(project.get("grant_removal_candidates") or [])}
+
+
+# Programme routes are admin-only and live under this router; they are registered
+# after the project routes above so an existing path keeps resolving as before.
+from motor_ai_sim.development import programme_routes  # noqa: E402
+
+router.include_router(programme_routes.router)

@@ -1,4 +1,4 @@
-import type { DevelopmentSchema, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
+import type { DevelopmentSchema, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot, ProgrammeCapabilities } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const enc = encodeURIComponent;
@@ -43,4 +43,9 @@ export const developmentApi = {
   linkMotor: (id: string, die: string, config: string) => call<unknown>('POST', `${p(id)}/motors`, { die, config }),
   unlinkMotor: (id: string, die: string, config: string) => call<unknown>('DELETE', `${p(id)}/motors?die=${enc(die)}&config=${enc(config)}`),
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
+  // Programmes are admin-only in Stage 1: any refusal (403 for non-admins, an older server) reads as "not available".
+  programmesEnabled: async () => {
+    try { return (await call<ProgrammeCapabilities>('GET', '/api/admin/projects/programmes/capabilities')).programmes.enabled === true; }
+    catch { return false; }
+  },
 };

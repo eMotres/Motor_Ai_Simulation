@@ -59,8 +59,10 @@ test('unsolved rows cannot display or rank comparison metrics even if a stale pa
   assert.equal(rows[1].values.vDc, undefined, 'legacy supplied-bus field is not needed voltage');
   const columns = Object.fromEntries(developmentComparisonColumns((key) => key, rows).map((column) => [column.key, column]));
   const model = buildComparisonModel(rows, Object.values(columns));
-  assert.deepEqual(model.extents.torque, { min: 6, max: 6 });
-  assert.deepEqual(model.extents.power, { min: 400, max: 400 });
+  // torque / power are key-point columns now (unranked); a stale payload of an unsolved row still never shows
+  assert.equal(rows[0].values.keyTorque, undefined);
+  assert.equal(rows[0].values.keyPowerKw, undefined);
+  assert.equal(rows[2].values.keyTorque, 6);
   assert.deepEqual(model.extents.vDc, { min: 62, max: 62 });
 });
 
@@ -136,4 +138,26 @@ test('comparison row keeps a short variant label, keeps full note in metadata, a
   assert.deepEqual(rows.map((row) => row.estimate), [true, true, false]);
   assert.equal(rows[0].motor.note, noteEn);
   assert.equal(rows[1].motor.note, noteZh);
+});
+
+test('every row shows power, torque, speed, current and phase peak; targets until solved, no die/config copies', () => {
+  const rows = developmentComparisonRows([{ die: 'D', config: 'C', results: [
+    { duty: 'takeoff', has_result: false, operating_point: { current_arms: 213, rpm: 900, gamma_deg: 3.5, torque_nm: 1100 } },
+    { duty: 'cruise', has_result: true, operating_point: { current_arms: 152, rpm: 600, torque_nm: 800 },
+      comparison: { torque_nm: 805, power_w: 50580, efficiency_pct: 96, v_phase_peak_v: 301.2 } },
+  ] }]);
+  const columns = developmentComparisonColumns((key) => key, rows);
+  const keys = columns.map((column) => column.key);
+  assert.deepEqual(keys.slice(0, 7), ['duty', 'keyPowerKw', 'keyTorque', 'rpm', 'current', 'vPhase', 'gamma']);
+  assert.equal(keys.includes('die'), false);
+  assert.equal(keys.includes('config'), false);
+  const byKey = Object.fromEntries(columns.map((column) => [column.key, column]));
+  assert.equal(byKey.keyTorque.format(rows[0].values.keyTorque, rows[0]), '1100*');
+  assert.equal(byKey.keyTorque.title(rows[0].values.keyTorque, rows[0]), 'comparison.targetValue');
+  assert.equal(byKey.keyPowerKw.format(rows[0].values.keyPowerKw, rows[0]), '103.7*');
+  assert.equal(byKey.vPhase.format(rows[0].values.vPhase, rows[0]), '-');
+  assert.equal(byKey.keyTorque.format(rows[1].values.keyTorque, rows[1]), '805');
+  assert.equal(byKey.keyPowerKw.format(rows[1].values.keyPowerKw, rows[1]), '50.6');
+  assert.equal(byKey.vPhase.format(rows[1].values.vPhase, rows[1]), '301.2');
+  assert.equal(rows[0].values.torque, undefined, 'targets never leak into the solved result columns');
 });

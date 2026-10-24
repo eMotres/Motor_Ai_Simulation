@@ -696,6 +696,11 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     if power is not None:
         comparison["power_w"] = power
 
+    # Phase voltage peak of the solved waveform (owner 2026-10-25: every row shows it).
+    phase_peak = _first(primary + [coupled_em], "v_phase_peak_v")
+    if phase_peak is not None:
+        comparison["v_phase_peak_v"] = phase_peak
+
     efficiency_pct = _first(primary, "efficiency_pct", "efficiency_percent", "eta_pct")
     if efficiency_pct is None:
         efficiency_ratio = _first([summary, coupled], "efficiency_shaft", "eta_shaft",
@@ -959,7 +964,9 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
         out.append({"duty": name, "has_result": has_result,
                     "can_open_simulation": can_open_simulation,
                     "can_open_configure": can_open_configure,
-                    "operating_point": {k: duty[k] for k in ("rpm", "current_arms", "mode", "gamma_deg") if k in duty},
+                    # torque_nm / power_kw are the duty's requested TARGETS (DutySpec) - shown until a solve exists.
+                    "operating_point": {k: duty[k] for k in ("rpm", "current_arms", "mode", "gamma_deg", "torque_nm", "power_kw")
+                                        if k in duty and duty[k] is not None},
                     "electromagnetic": em,
                     "stored_results": {str(kind): _metric_projection(row) for kind, row in stored_duty.items()
                                        if isinstance(row, dict) and _metric_projection(row)},

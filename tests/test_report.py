@@ -1212,9 +1212,9 @@ class TestWarningRules:
 
     def test_a_minimum_rule_has_three_bands(self):
         """A safety factor is the other way round: BELOW the limit is red."""
-        from motor_ai_sim.report import NEAR_PCT
+        from motor_ai_sim.report import NEAR_PCT, SF_ACCEPT
 
-        L = 2.0
+        L = SF_ACCEPT          # the acceptance level (3 since 2026-10-25)
         assert _fires({"sf_min": L * 0.99}, "safety_factor")["level"] == "red"
         assert _fires({"sf_min": L * (1.0 + NEAR_PCT / 100.0 / 2.0)},
                       "safety_factor")["level"] == "amber"
@@ -2450,8 +2450,8 @@ class TestB4B5OneStressBehindEverySafetyFactor:
         ws = R.duty_warnings(self._ctx())
         w = next(w for w in ws if w["quantity"] == "Safety factor (magnet)")
         assert abs(w["value"] - self.MAGNET["safety_factor"]) < 1e-12
-        assert w["limit"] == 2.0
-        assert w["level"] == "amber", "SF 2.05 against an acceptance level of 2"
+        assert w["limit"] == R.SF_ACCEPT == 3.0
+        assert w["level"] == "red", "SF 2.05 against the acceptance level of 3 (owner 2026-10-25)"
 
     def test_the_part_rule_does_not_repeat_the_minimum(self):
         from motor_ai_sim import report as R
@@ -8497,7 +8497,7 @@ class TestL13ServerAuditOf20260919:
         vmin, vmax = R._map_png(verts, tris, values, label="safety factor",
                                 vmax_fixed=2.0 * R.SF_ACCEPT, reverse=True,
                                 range_only=True)
-        assert vmax == 4.0
+        assert vmax == 2.0 * R.SF_ACCEPT
         # Never the degenerate `vmin == vmax` this bug produced — the caption
         # promises "the bar stops at 4" and the bar must actually span a
         # range to say so.
@@ -8515,7 +8515,7 @@ class TestL13ServerAuditOf20260919:
         vmin, vmax = R._map_png(verts, tris, values, label="safety factor",
                                 vmax_fixed=2.0 * R.SF_ACCEPT, reverse=True,
                                 range_only=True)
-        assert vmax == 4.0
+        assert vmax == 2.0 * R.SF_ACCEPT
         assert vmin == 1.5
 
 

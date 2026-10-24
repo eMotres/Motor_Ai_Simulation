@@ -32,7 +32,7 @@ export const SF_TOP = 8;
 /** The red line of the acceptance view: an element below it has no margin
  *  worth the name.  It is what the AUTO bands fall back on while any of the
  *  rotor is still within reach of it (2026-09-09). */
-export const SF_ACCEPT = 2;
+export const SF_ACCEPT = 3;   // owner 2026-10-25: rotor SF >= 3 (averaged); report.SF_ACCEPT is the same
 
 /** Round a safety factor to a number a legend can carry — 1, 2, 5 × 10ⁿ.
  *  The auto bands are read off a distribution, and "the 5th percentile is

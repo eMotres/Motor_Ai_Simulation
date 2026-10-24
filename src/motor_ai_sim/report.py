@@ -1847,8 +1847,9 @@ def _mech_map(res: Optional[Dict[str, Any]],
 
 
 #: Where a rotor is judged.  Below this the part is not accepted; the safety-
-#: factor map's bar stops at twice it, because "safer than 4" is one answer.
-SF_ACCEPT = 2.0
+#: factor map's bar stops at twice it, because "safer than 6" is one answer.
+#: Owner 2026-10-25: SF >= 3 on the AVERAGED stress (was 2).
+SF_ACCEPT = 3.0
 
 
 def _mech_extra_maps(res: Optional[Dict[str, Any]],
@@ -3688,7 +3689,7 @@ def _sf_bars_png(case: Dict[str, Any], width_cm: float = SIDE_CHART_CM,
         import numpy as np
         labels = [r[0] for r in rows][::-1]
         vals = np.array([r[1] for r in rows], float)[::-1]
-        lim = float(SF_ACCEPT) if _numf(SF_ACCEPT) else 2.0
+        lim = float(SF_ACCEPT) if _numf(SF_ACCEPT) else 3.0
         fig, ax = _fig(width_cm, px, aspect=0.72)
         # ONE COLOUR LANGUAGE FOR A SAFETY FACTOR (A2-3).  The bands used to be
         # this chart's own — orange for anything between 1.0 and the acceptance
@@ -5985,7 +5986,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         "safety_factor", duty,
         "Mechanical safety factor%s" % (
             " (%s)" % ctx["sf_min_part"] if ctx.get("sf_min_part") else ""),
-        ctx.get("sf_min"), ctx.get("sf_limit", 2.0), "",
+        ctx.get("sf_min"), ctx.get("sf_limit", SF_ACCEPT), "",
         "Thicken the sleeve or raise its interference, shorten the magnet "
         "overhang, add material at the bridge root%s.%s"
         % (overspeed_remedy_clause(ctx.get("overspeed_factor"),
@@ -6002,7 +6003,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue                      # the row above already names it
         out.append(_warn(
             "part_safety_factor", duty, "Safety factor (%s)" % _part,
-            _sf, ctx.get("sf_limit", 2.0), "",
+            _sf, ctx.get("sf_limit", SF_ACCEPT), "",
             "Same levers as the row above: more section, more interference, a "
             "stronger card, or a lower speed case."
             + rotor_bridge_remedy(_part, ctx),
@@ -18669,7 +18670,7 @@ def _criterion_words(cols: List[Dict[str, Any]], part: str) -> str:
 #: The owner's acceptance target for the rotor mechanics (2026-10-25): safety
 #: factor >= 3 on the AVERAGED stress, in the worst case (overspeed + peak
 #: torque + magnetic pull).
-ROTOR_SF_TARGET = 3.0
+ROTOR_SF_TARGET = SF_ACCEPT
 
 
 def rotor_sf_cell(sf: Any) -> str:

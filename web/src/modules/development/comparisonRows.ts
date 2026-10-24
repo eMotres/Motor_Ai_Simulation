@@ -59,7 +59,7 @@ export function developmentComparisonRows(motors: ProjectMotor[]): DevelopmentCo
       keyTorque, keyPowerKw: keyPowerW === undefined ? undefined : keyPowerW / 1000,
       keyTorqueTarget: solvedTorque === undefined && targetTorque !== undefined,
       keyPowerTarget: solvedPower === undefined && targetPowerW !== undefined,
-      vPhase: finite(solved.v_phase_peak_v),
+      vPhase: finite(solved.v_phase_peak_v), k3d: finite(solved.k_3d),
       losses: finite(solved.p_loss_total_w), lossPartial: solved.loss_total_partial === true,
       pCu: finite(solved.p_cu_w), pFe: finite(solved.p_fe_w), pSolid: finite(solved.p_solid_w), pMag: finite(solved.p_mag_w), pMech: finite(solved.p_mech_total_w),
       mass: finite(solved.mass_kg), torqueMass: finite(solved.torque_to_mass_nm_kg), massPartial: solved.mass_partial === true, ripple: finite(solved.ripple_pct),
@@ -133,7 +133,8 @@ export function developmentComparisonColumns(t: (key: string, args?: Record<stri
   const keyPoint = (key: string, label: string, unit: string, targetFlag?: string, digits = 1): SharedComparisonColumn<DevelopmentComparisonRow> => ({
     key, label: t(`comparison.column.${label}`), unit, kind: 'input', value: (r) => r.values[key],
     format: (v, r) => { const n = finite(v); return n === undefined ? '-' : `${Number(n.toFixed(digits))}${targetFlag && r.values[targetFlag] === true ? '*' : ''}`; },
-    title: (_v, r) => targetFlag && r.values[targetFlag] === true ? t('comparison.targetValue') : undefined,
+    title: (_v, r) => targetFlag && r.values[targetFlag] === true ? t('comparison.targetValue')
+      : finite(r.values.k3d) !== undefined && key !== 'current' ? `${t('comparison.corrected3d')} (k_3d = ${Number(finite(r.values.k3d)!.toFixed(4))})` : undefined,
     cellColor: () => 'var(--text-1)',
   });
   const neutral = (column: SharedComparisonColumn<DevelopmentComparisonRow>) => ({ ...column, cellColor: () => 'var(--text-1)' });

@@ -926,7 +926,8 @@ class ContactSolution:
     #: The force the closed SEPARATION pairs pull with (two-sided penalty
     #: spring across a positive gap) and push with, N/m of stack, and the tension
     #: share — see ``TENSION_FRAC_TOL``.  ``consistent`` is False when that share
-    #: is above the tolerance: the state is a (partly) TIED rotor, i.e. the
+    #: is above the tolerance AND tension exceeds the elastic/load force
+    #: resolution: the state is a (partly) TIED rotor, i.e. the
     #: bonded answer, and ``converged`` is then never True.
     tension_n_per_m: float = 0.0
     compression_n_per_m: float = 0.0
@@ -1162,6 +1163,10 @@ FREEZE_MARGIN_FRAC = 1e-6
 #: rotor (2026-10-25).  5 % is clear of both: room for an answer that is right
 #: to within its own round-off, and twenty times short of a joint that pulls.
 TENSION_FRAC_TOL = 5e-2
+
+# Relative force resolution of the constrained penalty solve.  Unlike a fixed
+# stress cutoff this follows both mechanical loads and thermal eigenstrain.
+CONTACT_FORCE_REL_TOL = 1e-7
 
 #: How many iterations a load step may run WITHOUT improving on the best
 #: iterate it has already found before it is called finished (2026-09-09).
@@ -1745,6 +1750,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     kscale = float(K.diagonal().mean())
     s = math.sqrt(max(kscale, 1e-30))
     kc = CONTACT_STIFFNESS * kscale
+    K_abs = abs(K)
     kt = TANGENT_REG * kc
     nv = cs.mesh.p.shape[1]
     solve_fn = solve_fn or _solver()[1]
@@ -2048,7 +2054,19 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # bonded rotor was once reported as a converged separation answer.
         ten_cur = separation_tension(gap, closed, uni, kc, tol_g)
         tfrac_cur = tension_fraction(ten_cur[0], ten_cur[1])
-        tbad_cur = tfrac_cur > TENSION_FRAC_TOL
+        # A free thermal expansion has large, cancelling element forces but
+        # zero contact traction.  A ratio of two round-off forces can still be
+        # 100% tension.  Resolve forces against the uncancelled elastic/load
+        # scale (N/m of stack), including the seating spring's preload.  1e-7
+        # allows seven digits of force cancellation in the bordered penalty
+        # solve, well above double-precision round-off, while remaining orders
+        # below a real load path.  Do not enlarge the active-set gap tolerance:
+        # physically opening contacts must still release, even at low load.
+        force_tol = CONTACT_FORCE_REL_TOL * float(
+            np.abs(f_step).sum() + np.sum(K_abs @ np.abs(u))
+            + kc * np.abs(g0[uni & closed]).sum())
+        tbad_cur = (ten_cur[0] > force_tol
+                    and tfrac_cur > TENSION_FRAC_TOL)
 
         # ── SEATING: a loose part travels until it lands (2026-09-09) ────────
         # "the magnet should seat on the tongue, like in Fusion" — see the module
@@ -2505,13 +2523,36 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
 
     lab = _components(cs, closed, nv)
     main = np.bincount(lab).argmax()
+    lab_dof_final = _dof_components(basis, lab, cs.mesh)
+    f_final = f + f_ramp if _ramp else f
+    loaded_components = set()
+    for comp in np.unique(lab):
+        dx = ix_all[lab_dof_final[ix_all] == comp]
+        dy = iy_all[lab_dof_final[iy_all] == comp]
+        # A disconnected body only runs away if an applied resultant drives
+        # one of its rigid modes.  Eigenstrain is self-equilibrated; the border
+        # may absorb its rounding residual, but cannot be a real support.
+        # Include torque (divided by the body's radius to give force units),
+        # so a pure couple cannot evade the loose-body refusal.
+        cx = float(basis.doflocs[0, dx].mean())
+        cy = float(basis.doflocs[1, dy].mean())
+        arm = max(float(np.hypot(basis.doflocs[0, dx] - cx,
+                                 basis.doflocs[1, dx] - cy).max()), 1e-30)
+        moment = float(((basis.doflocs[0, dy] - cx) * f_final[dy]).sum()
+                       - ((basis.doflocs[1, dx] - cy) * f_final[dx]).sum())
+        resultant = max(math.hypot(float(f_final[dx].sum()),
+                                  float(f_final[dy].sum())), abs(moment) / arm)
+        scale = float(np.abs(f_final[dx]).sum() + np.abs(f_final[dy]).sum())
+        if resultant > SEAT_LOAD_REL * scale:
+            loaded_components.add(int(comp))
     free_parts: List[str] = []
     for pid, name in PART_NAMES.items():
         m = cs.part_tri == pid
         if not m.any():
             continue
         vs = np.unique(cs.mesh.t.T[m])
-        if not (lab[vs] == main).any():
+        if (not (lab[vs] == main).any()
+                and any(int(c) in loaded_components for c in lab[vs])):
             free_parts.append(name)
     # v1's number, deliberately: |R^T f| / |f| for the THREE rigid modes of the
     # whole rotor.  It answers "is the load self-equilibrated", which is a

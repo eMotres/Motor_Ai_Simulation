@@ -604,6 +604,10 @@ def _rotor_stress_summary(params: Dict[str, Any], out: Dict[str, Any]) -> str:
             bits.append("sector")
         if params.get("loads") and params.get("loads") != "both":
             bits.append(str(params["loads"]))
+        if (out.get("retention") or {}).get("status") == "fail":
+            # A FAIL carries no SF to summarise (2026-10-25, owner rule).
+            bits.append("NOT RETAINED — FAIL")
+            return ", ".join(bits)
         sf = _min_safety_factor(out)
         if sf is not None:
             bits.append(f"SF {sf:.2f}")
@@ -917,10 +921,12 @@ def rotor_stress(
 
         stack_mm = float(motor.parameters.get("motor_length") or 0.0)
         contact_fallback: Optional[Dict[str, Any]] = None
-        # The key the REQUEST hashes to.  A fallback below re-keys the solve on
-        # the bonded spec; the answer is then filed under both, so the same
-        # request pressed again is a cache hit and not a second runaway.
+        # The key the REQUEST hashes to.  Since 2026-10-25 the answer is filed
+        # under this key ONLY: a separation joint that ran away is a FAIL of the
+        # separation request, and the bonded INFO numbers it carries must never
+        # be what a genuine bonded request is served from the cache.
         requested_key = key
+        cspec_requested = dict(cspec)
 
         def _solve(spec):
             return rsm.solve_rotor_stress(
@@ -935,19 +941,23 @@ def rotor_stress(
                 progress=_progress.callback())
 
         try:
-            # A SEPARATION joint that does not retain its part is, on a built
-            # machine, a GLUED (or pressed) part: 2026-09-09, the G2's and the
-            # 40 mm's magnets sit in pockets with a gap above them, and a hub
-            # on a fit-less, frictionless shaft opens under its own growth —
-            # the contact set the user chose for the Ø200, whose iron lips DO
-            # hold the magnets, followed them onto both machines ("I set
-            # separation everywhere").  Rather than refuse a machine the user
-            # cannot tell apart from a working one, the joint that ran away is
-            # solved BONDED and the answer says so, in the result and on the
-            # panel (`contact_fallback`).  ONE joint per pass, in the order the
-            # solver names them, because bonding the first may be all the
-            # second needed; a runaway that names no separation joint — or one
-            # already bonded — is the refusal it always was.
+            # A SEPARATION joint that does not retain its part (2026-09-09 —
+            # the G2's and the 40 mm's magnets sit in pockets with a gap above
+            # them; a hub on a fit-less, frictionless shaft opens under its own
+            # growth) used to be solved BONDED and the bonded answer reported,
+            # SF and all, with a `contact_fallback` note beside it.
+            #
+            # OWNER RULE (2026-10-25): the magnets are retained by the rotor
+            # iron ALONE — no adhesive.  A separation joint that runs away is
+            # therefore a FAIL of the geometry ("magnets not retained without
+            # adhesive"), never a passing SF.  The bonded solve is still run —
+            # one joint per pass, in the order the solver names them, because
+            # bonding the first may be all the second needed — but ONLY as
+            # labelled information: every safety factor it produced is moved
+            # under `sf_info` with a label saying it is a glued rotor, and the
+            # answer's `retention` says FAIL.  A runaway that names no
+            # separation joint — or one already bonded — is the refusal it
+            # always was.
             bonded_so_far: list = []
             while True:
                 try:
@@ -962,15 +972,19 @@ def rotor_stress(
                     fb = dict(cspec)
                     fb[pair] = ctc.ContactSpec("bonded", 0.0)
                     log.warning("rotor stress: %s ran away with %s = separation"
-                                " — solving it bonded", exc.case, pair)
+                                " — FAIL (not retained without adhesive); "
+                                "solving it bonded for information only",
+                                exc.case, pair)
                     cspec = fb
                     bonded_so_far.append(pair)
                     entry = {
                         "pair": pair, "from": "separation", "to": "bonded",
+                        "valid": False, "info_only": True,
                         "open_fraction": exc.open_fraction,
                         "reason": ("the %s joint does not retain the part in "
                                    "the separation model (%s%% of it open at "
-                                   "%s rpm) — solved as a glued joint"
+                                   "%s rpm) — magnets not retained without "
+                                   "adhesive"
                                    % (pair,
                                       ("%.0f" % (100.0 * exc.open_fraction)
                                        if exc.open_fraction is not None else "?"),
@@ -984,13 +998,20 @@ def rotor_stress(
                         contact_fallback["entries"].append(entry)
                         contact_fallback["reason"] += "; " + entry["reason"]
             if bonded_so_far:
-                key = _cache_key(geo_ov, assign, speed, overspeed_factor,
-                                 interference_mm, mesh_size_mm, order, cspec,
-                                 case_mode, load_mode, torque or 0.0,
-                                 rotor_temp_c, sleeve_temp_c, part_temps or None,
-                                 sym_mode)
-                _params["contacts"] = {k: {"type": v.type, "mu": v.mu}
-                                       for k, v in cspec.items()}
+                rsm.mark_result_not_retained(
+                    out, [e["reason"] for e in contact_fallback["entries"]],
+                    "INFO ONLY — the same rotor solved with "
+                    + ", ".join(bonded_so_far) + " BONDED (glued). The "
+                    "magnets are retained by the iron alone, so this is not a "
+                    "valid safety factor")
+                # What was SOLVED is kept for the record; `contacts` says what
+                # was ASKED, which is what this answer is a verdict on.
+                out["contacts_info_solve"] = out.get("contacts")
+                out["contacts"] = {
+                    k: {**((out.get("contacts_info_solve") or {}).get(k) or {}),
+                        "type": v.type, "mu": v.mu}
+                    for k, v in cspec_requested.items()}
+                cspec = cspec_requested
         except rsm.MissingMechanicalProperty as exc:
             # The whole point of the 422: name the part, the material and the key,
             # so the fix is an edit to one record and not a guess.
@@ -1035,12 +1056,11 @@ def rotor_stress(
         if key != requested_key:
             rsm.cache_put(requested_key, out)
         # ── persistent history (2026-09-22) ─────────────────────────────────
-        # Filed under the key the SOLVE actually ran under (the bonded
-        # fallback may have re-keyed it above) and, when that differs, also
+        # Filed under the key the SOLVE ran under and, when that differs, also
         # under the ORIGINAL requested key — mirroring the two
-        # ``rsm.cache_put`` calls just above, so a plain repeat of the request
-        # the user actually typed is a history hit even though it silently
-        # solved bonded last time.
+        # ``rsm.cache_put`` calls just above.  Since 2026-10-25 the two are the
+        # same key: a runaway's bonded INFO solve is never re-keyed onto the
+        # bonded spec (see the fallback above).
         final_history_key = _rotor_stress_history_key(key)
         summary = _rotor_stress_summary(_params, out)
         _ROTOR_STRESS_HISTORY.put(final_history_key, params=dict(_params),
@@ -1373,6 +1393,10 @@ def limit_speed(
                 # speed nobody asked to see reported.
                 return 0.0, (exc.pair or None), {}, None
             _case_name, case = next(iter(out["cases"].items()))
+            if rsm.case_failed(case):
+                # Not retained without adhesive at this speed (2026-10-25): a
+                # FAIL is below any target factor, exactly like a runaway.
+                return 0.0, case.get("sf_min_part"), {}, out
             return case["sf_min"], case["sf_min_part"], case["sf_min_per_part"], out
 
         try:
@@ -1409,6 +1433,19 @@ def limit_speed(
                             "value": "separation", "kind": "unretained_part",
                             "message": "see /rotor_stress at this rpm for the "
                                        "full refusal"}]})
+        _case0 = next(iter((out0.get("cases") or {}).values()), None)
+        if rsm.case_failed(_case0):
+            # The analysed case is a retention FAIL (2026-10-25): no SF to
+            # search a limit speed from, and the reason is the case's own.
+            raise HTTPException(
+                status_code=422,
+                detail={"error": ("the analysed case is not retained at "
+                                  f"{rpm0:,.0f} rpm — "
+                                  + str(_case0["retention"]["message"])),
+                        "invalid_parameters": [{
+                            "field": "contacts", "value": "separation",
+                            "kind": "unretained_part",
+                            "message": str(_case0["retention"]["message"])}]})
 
         def _solve_for_search(cand_rpm: float):
             sf, part, per_part, _out = _solve_rpm(cand_rpm)
@@ -1687,6 +1724,9 @@ def _auto_limit_speed(out: Dict[str, Any],
                 except rsm.RotorRanAway as exc:
                     return 0.0, (exc.pair or None), {}
                 _name, sol_case = next(iter(sol["cases"].items()))
+                if rsm.case_failed(sol_case):
+                    # not retained without adhesive — below any target
+                    return 0.0, sol_case.get("sf_min_part"), {}
                 return (sol_case["sf_min"], sol_case["sf_min_part"],
                        sol_case["sf_min_per_part"])
 

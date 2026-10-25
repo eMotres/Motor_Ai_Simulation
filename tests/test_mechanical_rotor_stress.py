@@ -623,10 +623,28 @@ def test_single_mode_solves_exactly_one_case_named_by_its_speed(single_case_resu
 
 def test_single_mode_keeps_the_safety_factors_and_the_verdict(single_case_result):
     c = single_case_result["cases"]["23,000 rpm"]
-    assert c["sf_min"] is not None and math.isfinite(c["sf_min"])
-    assert c["sf_min_p05"] is not None and c["sf_min_p05"] >= c["sf_min"] - 1e-9
-    assert c["sf_min_part"] in c["parts"]
-    for name, s in c["sf_min_per_part"].items():
+    # OWNER RULE (2026-10-25): magnets are retained by the iron alone.  A
+    # separation answer that does not converge is a retention FAIL, and then
+    # the factors are not printed as factors: they ride under `sf_info`,
+    # labelled.  The sandbox machine's 23,000 rpm answer is one of those (its
+    # contact never settled; it used to print SF 0.18 regardless), so both
+    # shapes are checked — whichever this machine gives, nothing is lost.
+    assert c["retention"]["status"] in ("pass", "fail")
+    if c["retention"]["status"] == "fail":
+        assert c["sf_min"] is None and c["sf_min_p05"] is None
+        assert c["retention"]["reasons"] and "not retained" in c["retention"]["message"]
+        sf = c["sf_info"]
+        assert "INFO ONLY" in sf["label"]
+        assert sf["sf_min"] is not None and math.isfinite(sf["sf_min"])
+        assert sf["sf_min_p05"] >= sf["sf_min"] - 1e-9
+        assert sf["sf_min_part"] in c["parts"]
+        per = sf["per_part"]
+    else:
+        assert c["sf_min"] is not None and math.isfinite(c["sf_min"])
+        assert c["sf_min_p05"] is not None and c["sf_min_p05"] >= c["sf_min"] - 1e-9
+        assert c["sf_min_part"] in c["parts"]
+        per = c["sf_min_per_part"]
+    for name, s in per.items():
         assert 0.0 < s["min"] <= s["p05"] + 1e-9, name
         assert s["criterion"], name
     assert c["magnet_retention"]["verdict"]

@@ -1909,6 +1909,18 @@ def _side_case(res: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return ((res.get("cases") or {}).get(name) or {}) if name else {}
 
 
+#: What a rotor-stress case that does not retain its magnets WITHOUT adhesive
+#: says where a safety factor would be (owner rule 2026-10-25).
+ROTOR_NOT_RETAINED = "not retained — fails"
+
+
+def case_not_retained(case: Optional[Dict[str, Any]]) -> bool:
+    """True when a rotor-stress case (full or compact) is a retention FAIL."""
+    return bool(isinstance(case, dict)
+                and str(((case.get("retention") or {}).get("status")) or "")
+                == "fail")
+
+
 def _worst_sf(case: Optional[Dict[str, Any]]) -> Optional[float]:
     """The lowest safety factor of a rotor-stress case — the one number a
     mechanical picture is read for."""
@@ -5796,6 +5808,19 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "stress behind it is the AVERAGED peak of the part's own "
                 "criterion, with p99.5 printed beside it as the singularity "
                 "gauge")
+    if ctx.get("rotor_not_retained"):
+        # A retention FAIL (owner rule 2026-10-25): the magnets are held by
+        # the iron alone, and this solve says they are not — RED, with no SF,
+        # because there is none to quote.
+        out.append({
+            "rule": "rotor_retention", "level": "red", "duty": duty,
+            "quantity": "Rotor retention (no adhesive): %s" % ROTOR_NOT_RETAINED,
+            "value": None, "limit": None, "unit": "", "kind": "min",
+            "margin_pct": None,
+            "remedy": ("Thicken the bridges / the pocket lips so the iron "
+                       "retains the magnets, or close the pocket clearance — "
+                       "a glued (bonded) answer is information only."),
+            "note": str(ctx["rotor_not_retained"])})
     out.append(_warn(
         "safety_factor", duty,
         "Mechanical safety factor%s" % (
@@ -8370,6 +8395,13 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         parts = ms.get("parts") or {}
         ctx["sf_min"] = _numf(ms.get("sf_min"))
         ctx["sf_min_part"] = ms.get("sf_min_part")
+        # "not retained — fails" (owner rule 2026-10-25, no adhesive): a FAIL
+        # has no SF, and the reason is what the warnings row prints instead.
+        _ret = ms.get("retention") if isinstance(ms.get("retention"), dict) else {}
+        if str(_ret.get("status") or "") == "fail":
+            ctx["rotor_not_retained"] = str(_ret.get("message")
+                                            or _ret.get("verdict")
+                                            or ROTOR_NOT_RETAINED)
         sl = parts.get("sleeve") or {}
         ctx["sleeve_hoop_mpa"] = _numf(sl.get("hoop_max_mpa"))
         ctx["sleeve_strength_mpa"] = _numf(sl.get("strength_mpa"))
@@ -16389,6 +16421,9 @@ def mech_part_rows(case: Dict[str, Any]) -> List[List[str]]:
     """
     prows = [["Part", "Material", "VM p99.5", "VM peak",
               "VM peak, unaveraged", "Criterion", "Strength", "SF"]]
+    # A retention FAIL has no safety factor (owner rule 2026-10-25): the SF
+    # cell says so instead of printing "—", which would read as "not solved".
+    failed = case_not_retained(case)
     for name, p in sorted((case.get("parts") or {}).items()):
         if not isinstance(p, dict):
             continue
@@ -16399,7 +16434,7 @@ def mech_part_rows(case: Dict[str, Any]) -> List[List[str]]:
             _fmt(p.get("von_mises_max_unaveraged_mpa"), 1, "MPa"),
             _fmt(p.get("governing_stress_mpa"), 1, "MPa"),
             _fmt(p.get("strength_mpa"), 0, "MPa"),
-            _fmt(p.get("safety_factor"), 2)])
+            ("FAIL" if failed else _fmt(p.get("safety_factor"), 2))])
     return prows
 
 
@@ -16435,6 +16470,18 @@ def mech_extra_captions() -> List[Tuple[str, str, str]]:
 
 
 def mech_percentile_text(case: Dict[str, Any]) -> str:
+    # A retention FAIL first (owner rule 2026-10-25): there is no lowest
+    # safety factor to quote, and the reason is the sentence.
+    if case_not_retained(case):
+        return ("Rotor %s — %s. The magnets are retained by the rotor iron "
+                "alone (no adhesive), so no safety factor is quoted; any "
+                "strength-over-stress figure stored with this case is "
+                "information only." % (
+                    ROTOR_NOT_RETAINED,
+                    "; ".join(str(r) for r in
+                              ((case.get("retention") or {}).get("reasons")
+                               or [])) or "the separation solve does not "
+                                          "retain the magnets"))
     # …and where the lowest factor is the ROTOR's, the standing policy sentence
     # rides with it (user 2026-09-15), with the sleeve's own factor beside it:
     # the bridges are assembly features, the sleeve is the retention.
@@ -18353,7 +18400,10 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
     R("Speed solved [rpm]", lambda c: (_m(c) or {}).get("rpm"), 0)
     R("Overspeed factor", lambda c: (_m(c) or {}).get("overspeed_factor"), 2)
     S("Case", lambda c: (_m(c) or {}).get("case"))
-    R("Lowest safety factor", lambda c: (_m(c) or {}).get("sf_min"), 2)
+    rows.append(["Lowest safety factor"] + _col_vals(
+        cols, lambda c: (NOT_SOLVED if _m(c) is None
+                         else (ROTOR_NOT_RETAINED if case_not_retained(_m(c))
+                               else _fmt((_m(c) or {}).get("sf_min"), 2)))))
     S("…on part", lambda c: (_m(c) or {}).get("sf_min_part"))
     # THE ROTOR'S OWN ROW NEEDS ITS SENTENCE (user 2026-09-15).  The bridges
     # between the poles are assembly features; the factor on them stays, and so

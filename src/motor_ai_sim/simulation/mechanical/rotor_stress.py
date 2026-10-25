@@ -214,6 +214,127 @@ def runaway_verdict(u_max_m: float, r_out_m: float, free_parts: List[str],
 
 
 # ---------------------------------------------------------------------------
+# Retention without adhesive — a FAIL, never a safety factor (2026-10-25)
+# ---------------------------------------------------------------------------
+# OWNER RULE: the magnets are retained ONLY by the rotor iron, no glue.  A
+# separation-contact answer that did not converge, that ended in a state its
+# joints cannot be in (a separable pair carrying tension — the tied, i.e.
+# bonded, rotor), or whose own verdict is "not retained" is a FAIL of the
+# geometry.  Its safety factors are not a sizing number and are not printed as
+# one: they are moved under ``sf_info`` with a label saying what they are, and
+# every SF field a panel, a table or a search reads is set to None.  Found on
+# the eVTOL rotor-sizing run, where an all-tied "separation" answer printed an
+# SF beside "poles held: no — every separation joint is open".
+
+NOT_RETAINED = "not retained — fails"
+
+#: The element-field tension across a shut, pressure-less separation joint
+#: that counts as the joint PULLING (the cross-check in
+#: ``retention_fail_reasons``), MPa.  A tenth of an MPa is far above the
+#: recovery's round-off on a joint that only touches and far below what a
+#: magnet hanging on its pocket at speed pulls with.
+TIED_TENSION_MIN_MPA = 0.1
+
+#: The SF fields a case carries, all of which go to None on a FAIL.
+_CASE_SF_KEYS = ("sf_min", "sf_min_unaveraged", "sf_min_p05")
+
+
+def retention_fail_reasons(sol, ifaces: Dict[str, Any],
+                           retention: Optional[Dict[str, Any]],
+                           torque_path: Optional[Dict[str, Any]],
+                           loaded: bool) -> List[str]:
+    """Why this case's SEPARATION answer is not a retained rotor — empty when
+    it is.  Only joints of type ``separation`` are judged: a model with none
+    has nothing that could fail to retain."""
+    sep = {lb: v for lb, v in (ifaces or {}).items()
+           if v and v.get("type") == "separation" and v.get("n_facets")}
+    if not sep:
+        return []
+    reasons: List[str] = []
+    resid = float(getattr(sol, "residual", 0.0) or 0.0)
+    if not bool(getattr(sol, "consistent", True)):
+        reasons.append(
+            "the separation contact ended TIED — "
+            f"{100.0 * float(getattr(sol, 'tension_frac', 0.0)):.0f} % of the "
+            "normal force across "
+            f"{int(getattr(sol, 'n_tensile_pairs', 0))} separable pair(s) is "
+            "tension, which a separation joint cannot carry (this is the bonded "
+            "answer, not a separation one)")
+    elif not bool(getattr(sol, "converged", True)):
+        reasons.append("the separation contact did not converge"
+                       + (f" ({resid * 1e6:,.2f} µm out)" if resid > 0 else ""))
+    if loaded:
+        # The independent cross-check, from the ELEMENT stresses rather than
+        # from the solver's own state: a joint that is mostly SHUT, carries no
+        # contact pressure anywhere and shows tension across it in the field is
+        # the tied state whatever the active set says about itself.  The
+        # tension has to be a stress and not round-off: a joint that merely
+        # touches with nothing to carry reads ~0 either side of the line.
+        for lb, v in sep.items():
+            if (float(v.get("open_fraction") or 0.0) < 0.5
+                    and float(v.get("pressure_max_mpa") or 0.0) <= 0.0
+                    and float(v.get("normal_max_mpa") or 0.0)
+                    > TIED_TENSION_MIN_MPA):
+                reasons.append(
+                    f"{lb} is {100.0 * (1.0 - float(v['open_fraction'])):.0f} % "
+                    "shut with no contact pressure and "
+                    f"{float(v['normal_max_mpa']):.2f} MPa of tension across it")
+    verdict = str((retention or {}).get("verdict") or "")
+    if "not retained" in verdict:
+        reasons.append(f"magnet retention: {verdict}")
+    if torque_path and torque_path.get("held") is False:
+        reasons.append(f"torque path: {torque_path.get('verdict')}")
+    return reasons
+
+
+def mark_not_retained(case: Dict[str, Any], reasons: List[str],
+                      info_label: str) -> Dict[str, Any]:
+    """Turn ONE case into a FAIL in place: every SF to None, the numbers kept
+    under ``case['sf_info']`` with ``info_label`` saying what they are."""
+    info: Dict[str, Any] = {"label": info_label}
+    for k in _CASE_SF_KEYS + ("sf_min_part", "sf_min_p05_part"):
+        if k in case:
+            info[k] = case.get(k)
+    per = case.get("sf_min_per_part")
+    if per:
+        info["per_part"] = per
+    for name, p in (case.get("parts") or {}).items():
+        if isinstance(p, dict) and p.get("safety_factor") is not None:
+            info.setdefault("parts", {})[name] = p["safety_factor"]
+            p["safety_factor"] = None
+    for k in _CASE_SF_KEYS:
+        if k in case:
+            case[k] = None
+    if "sf_min_per_part" in case:
+        case["sf_min_per_part"] = {}
+    case["sf_info"] = info
+    case["retention"] = {"status": "fail", "verdict": NOT_RETAINED,
+                         "reasons": list(reasons),
+                         "message": f"{NOT_RETAINED}: {'; '.join(reasons)}"}
+    return case
+
+
+def mark_result_not_retained(out: Dict[str, Any], reasons: List[str],
+                             info_label: str) -> Dict[str, Any]:
+    """Every case of ``out`` a FAIL (the route's B3 path: the separation solve
+    ran away and the only numbers there are come from a bonded INFO solve)."""
+    for case in (out.get("cases") or {}).values():
+        if isinstance(case, dict):
+            mark_not_retained(case, reasons, info_label)
+    out["retention"] = {"status": "fail", "verdict": NOT_RETAINED,
+                        "failed_cases": list((out.get("cases") or {}).keys()),
+                        "reasons": list(reasons),
+                        "message": f"{NOT_RETAINED}: {'; '.join(reasons)}"}
+    return out
+
+
+def case_failed(case: Optional[Dict[str, Any]]) -> bool:
+    """True when a rotor-stress case is a retention FAIL (no SF to read)."""
+    return bool(isinstance(case, dict)
+                and (case.get("retention") or {}).get("status") == "fail")
+
+
+# ---------------------------------------------------------------------------
 # Material properties
 # ---------------------------------------------------------------------------
 
@@ -1988,6 +2109,99 @@ def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
     }
 
 
+#: How far a part's MESHED area (scaled to the machine) may differ from its
+#: DRAWN area before the solve says so (2026-10-25, B1).  0.5 % is the accuracy
+#: the user's mass budget is read to, and far above what the mesher's own
+#: boundary sampling costs (measured 0.01-0.05 % on the Ø400 and the 4-pole
+#: fixture).  A FULL model past it gets a note; past ``MASS_REFUSE_TOL`` — a
+#: part that is not the drawn part at all — it is refused, and a SECTOR is
+#: refused past ``MASS_CHECK_TOL`` already, because a sector is a model of the
+#: full machine and the full model is always there to solve instead.
+MASS_CHECK_TOL = 5e-3
+MASS_REFUSE_TOL = 5e-2
+
+
+def _drawn_part_areas_mm2(polys: dict) -> Dict[str, float]:
+    """Each rotor part's DRAWN area, mm², with the mesher's own precedence:
+    shaft, magnets and sleeve are taken as drawn (in that order, each minus
+    the ones before it) and the core is what is left of the rotor polygon —
+    exactly how ``_build_rotor_mesh_impl`` tags a triangle whose centroid two
+    polygons both contain."""
+    from shapely.ops import unary_union
+
+    taken = None
+    out: Dict[str, float] = {}
+
+    def _take(name, g):
+        nonlocal taken
+        if g is None or g.is_empty:
+            return
+        if not g.is_valid:
+            g = g.buffer(0)
+        own = g if taken is None else g.difference(taken)
+        out[name] = out.get(name, 0.0) + float(own.area)
+        taken = g if taken is None else unary_union([taken, g])
+
+    _take("shaft", polys.get("shaft"))
+    mags = [mp for mp, _pol in (polys.get("magnets") or [])
+            if mp is not None and not mp.is_empty]
+    if mags:
+        _take("magnet", unary_union([m if m.is_valid else m.buffer(0)
+                                     for m in mags]))
+    _take("sleeve", polys.get("sleeve"))
+    _take("rotor", polys.get("rotor"))
+    return {k: v for k, v in out.items() if v > 0.0}
+
+
+def _mass_check(polys_all: dict, mesh, part_tri: np.ndarray, n_sym: int,
+                sector: bool) -> Dict[str, Any]:
+    """Meshed part areas × ``n_sym`` against the drawn cross-section.
+
+    Returns ``{drawn_mm2, meshed_mm2, rel_diff, worst_part, worst_rel, notes}``
+    and raises when the mesh is not the machine: ``symmetry.NotPeriodic`` on a
+    sector past ``MASS_CHECK_TOL`` (solve full instead), ``ValueError`` on a
+    full model past ``MASS_REFUSE_TOL``.
+    """
+    drawn = _drawn_part_areas_mm2(polys_all)
+    p = mesh.p.T * 1e3                                   # mm
+    t = mesh.t
+    v0, v1, v2 = p[t[0]], p[t[1]], p[t[2]]
+    a = 0.5 * np.abs((v1[:, 0] - v0[:, 0]) * (v2[:, 1] - v0[:, 1])
+                     - (v2[:, 0] - v0[:, 0]) * (v1[:, 1] - v0[:, 1]))
+    meshed: Dict[str, float] = {}
+    for name, pid in (("rotor", PART_ROTOR), ("magnet", PART_MAGNET),
+                      ("sleeve", PART_SLEEVE), ("shaft", PART_SHAFT)):
+        m = part_tri == pid
+        if m.any():
+            meshed[name] = float(a[m].sum()) * float(n_sym)
+    rel: Dict[str, float] = {}
+    for name in sorted(set(drawn) | set(meshed)):
+        d, g = drawn.get(name, 0.0), meshed.get(name, 0.0)
+        rel[name] = (g - d) / d if d > 0.0 else (math.inf if g > 0.0 else 0.0)
+    worst = max(rel, key=lambda k_: abs(rel[k_])) if rel else None
+    worst_rel = abs(rel[worst]) if worst else 0.0
+    notes: List[str] = []
+    if worst and worst_rel > MASS_CHECK_TOL:
+        lines = ", ".join(
+            f"{k} {meshed.get(k, 0.0):,.1f} mm² meshed vs {drawn.get(k, 0.0):,.1f} "
+            f"drawn ({100.0 * rel[k]:+.2f} %)" for k in rel
+            if abs(rel[k]) > MASS_CHECK_TOL)
+        model = (f"the {n_sym}-sector model, scaled to the machine,"
+                 if sector else "the mesh")
+        msg = (f"{model} does not carry the drawn rotor parts: {lines} — its "
+               "masses, body forces and stresses would be another machine's")
+        if sector:
+            from motor_ai_sim.simulation.mechanical.symmetry import NotPeriodic
+            raise NotPeriodic(msg + ". Solve symmetry='full'.")
+        if worst_rel > MASS_REFUSE_TOL:
+            raise ValueError(msg + ".")
+        notes.append(msg + f" (more than {100.0 * MASS_CHECK_TOL:.1f} %).")
+        _log.warning("rotor stress: %s", notes[-1])
+    return {"drawn_mm2": drawn, "meshed_mm2": meshed, "rel_diff": rel,
+            "worst_part": worst, "worst_rel": worst_rel,
+            "tolerance": MASS_CHECK_TOL, "notes": notes}
+
+
 def _scale_retention(rep: Dict[str, Any], n_sym: int) -> Dict[str, Any]:
     """A sector's retention report, read as the MACHINE's (2026-09-09).
 
@@ -2089,8 +2303,11 @@ def _torque_path(ifaces: Dict[str, Any], torque_nm: float, sol,
     # reaction that does not match the applied torque are not questions of
     # tolerance.
     resid = float(getattr(sol, "residual", 0.0) or 0.0)
-    settled = bool(sol.converged) or (
-        r_out_m > 0.0 and resid <= TORQUE_PATH_RESIDUAL_FRAC * r_out_m)
+    # …and never a TIED state (2026-10-25): its residual is nanometres because
+    # the springs holding the separable pairs shut are what make it so.
+    settled = bool(getattr(sol, "consistent", True)) and (
+        bool(sol.converged) or (
+            r_out_m > 0.0 and resid <= TORQUE_PATH_RESIDUAL_FRAC * r_out_m))
     if not settled or sol.free_parts or sol.n_components > 1 or off_balance:
         # n_components > 1 is the sharpest of the three and the least obvious.
         # With the bore held, everything ON the torque path is one body; a
@@ -2100,7 +2317,10 @@ def _torque_path(ifaces: Dict[str, Any], torque_nm: float, sol,
         # (`free_parts` does not catch it: it asks whether the PART has any
         # element left on the main body, so one loose magnet out of ten is
         # invisible to it.)
-        if not settled:
+        if not bool(getattr(sol, "consistent", True)):
+            why = ("the separation contact ended tied — separable pairs carry "
+                   "tension")
+        elif not settled:
             why = (f"the contact did not settle — {resid * 1e6:,.2f} µm out"
                    if resid > 0 else "the contact did not settle")
         elif sol.free_parts:
@@ -2474,6 +2694,20 @@ def solve_rotor_stress(polys: dict,
         C_elem[m] = part_C(pm, phi[m])
         rho_elem[m] = pm.density
         present[name] = m
+
+    # ── the parts the mesh carries ARE the machine's (2026-10-25, B1) ───────
+    # Every mass, every body force and every stress below is integrated over
+    # the triangles' part tags, so a mesh that labels the wrong part is a wrong
+    # answer everywhere at once — and it reads as a perfectly healthy one.  On
+    # an eVTOL 56-pole outer rotor a sector solve once reported rotor iron
+    # 12.14 kg and magnets 0.51 kg against the full model's 4.985 / 7.530: the
+    # total was right to 0.1 % and 93 % of the magnet area had come out tagged
+    # as iron.  So the meshed area of every part, scaled to the machine, is
+    # checked against the DRAWN cross-section (``polys_all``, the full rotor,
+    # with the mesher's own precedence), and a sector that does not carry the
+    # machine is refused rather than reported.
+    mass_check = _mass_check(polys_all, mesh, part_tri, n_sym,
+                             sector=sector_plan is not None)
 
     omega = rpm * 2.0 * math.pi / 60.0
 
@@ -3141,6 +3375,14 @@ def solve_rotor_stress(polys: dict,
                 # is intensive and is the same number either way.
                 "mass_kg": (float((area[m] * pm.density).sum() * L) * n_sym
                             if L > 0 else None),
+                # …and the same part's mass off the DRAWN cross-section, which
+                # does not depend on the mesh or on the symmetry (2026-10-25).
+                # The two agree to ``MASS_CHECK_TOL`` or the solve says so in
+                # ``mass_check`` (a sector is refused outright).
+                "mass_drawn_kg": (float(mass_check["drawn_mm2"].get(name, 0.0)
+                                        * 1e-6 * pm.density * L)
+                                  if L > 0 and name in mass_check["drawn_mm2"]
+                                  else None),
             }
 
         rep = ctc.facet_report(cs, sol)
@@ -3337,6 +3579,14 @@ def solve_rotor_stress(polys: dict,
                 "friction_note": getattr(sol, "friction_note", None),
                 "step_residuals_um": [float(x) * 1e6 for x in sol.step_residuals],
                 "n_frozen_pairs": int(sol.n_frozen),
+                # Whether the returned state is one a separation joint can be
+                # in at all (2026-10-25): the tension the closed separable
+                # pairs pull with, as a share of their normal force.  False is
+                # the TIED rotor — the bonded answer — and the case is a FAIL.
+                "consistent": bool(getattr(sol, "consistent", True)),
+                "tension_frac": float(getattr(sol, "tension_frac", 0.0)),
+                "n_tensile_pairs": int(getattr(sol, "n_tensile_pairs", 0)),
+                "cycled": bool(getattr(sol, "cycled", False)),
                 "n_bodies": int(sol.n_components),
                 "unretained_parts": list(sol.free_parts),
                 # Parts that came loose and were TRAVELLED onto a surface
@@ -3401,6 +3651,21 @@ def solve_rotor_stress(polys: dict,
             "torque_balance": balance,
             "torque_path": torque_path,
         }
+        # ── retained WITHOUT adhesive, or a FAIL (2026-10-25) ────────────────
+        # See ``retention_fail_reasons``: a separation answer that did not
+        # converge, ended tied, or says "not retained" carries no SF.
+        _loaded = (omega * math.sqrt(k) * float(use_centrifugal) > 0.0
+                   or bool(use_torque and torque_nm))
+        _why = retention_fail_reasons(sol, ifaces,
+                                      results[case]["magnet_retention"],
+                                      torque_path, _loaded)
+        if _why:
+            mark_not_retained(
+                results[case], _why,
+                "INFO ONLY — strength over stress of a separation solve that "
+                "does not retain the magnets; not a safety factor")
+        else:
+            results[case]["retention"] = {"status": "pass", "reasons": []}
         if with_field:
             # Rounded on float64 so the JSON carries "115.923" and not the
             # 17-digit expansion of a float32 — a third of the payload size.
@@ -3656,7 +3921,23 @@ def solve_rotor_stress(polys: dict,
                       for n, pm in mech.items()},
         "cases": results,
         "lift_off_rpm": lift_off,
+        # meshed vs drawn part areas, machine scale (2026-10-25, B1)
+        "mass_check": {k: v for k, v in mass_check.items()},
     }
+    # ── the ANSWER's retention verdict (2026-10-25) ─────────────────────────
+    # A FAIL in any case is a FAIL of the geometry: the overspeed case is the
+    # one the rotor is sized on, and a separation answer that does not retain
+    # the magnets there has no safety factor to quote anywhere.
+    _failed = [cn for cn, c in results.items() if case_failed(c)]
+    if _failed:
+        _msgs = [f"{cn}: {results[cn]['retention']['message']}" for cn in _failed]
+        out["retention"] = {
+            "status": "fail", "verdict": NOT_RETAINED, "failed_cases": _failed,
+            "reasons": [r for cn in _failed
+                        for r in results[cn]["retention"]["reasons"]],
+            "message": f"{NOT_RETAINED} — " + " | ".join(_msgs)}
+    else:
+        out["retention"] = {"status": "pass", "failed_cases": [], "reasons": []}
     if with_field:
         ext = np.abs(ps * 1e3).max()
         out["field"] = {

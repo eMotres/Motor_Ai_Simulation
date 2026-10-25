@@ -129,6 +129,14 @@ CENTROID_TOL_FRAC = 0.05
 #: set inside an asymmetric core is a rotor whose poles are NOT identical.
 CORE_SYMDIFF_FRAC = 3e-3
 
+#: How far ``n`` times a part's area in the WEDGE may differ from the same
+#: part's area in the full cross-section (2026-10-25).  A clip of a periodic
+#: section is exact to shapely's arithmetic (1e-9 measured on the ring and the
+#: 56-pole Ø400), so this only has to clear the cut faces' snapping and the
+#: near-face station drop — microns on a part hundreds of mm² big.  0.5 % is
+#: the accuracy a mass is read to; past it the wedge is not 1/n of this rotor.
+SECTOR_AREA_TOL = 5e-3
+
 
 class NotPeriodic(ValueError):
     """This cross-section cannot be reduced to a sector, and why.
@@ -397,7 +405,47 @@ def sector_polys(polys: dict, plan: SectorPlan) -> dict:
             "the sector wedge came out empty — no rotor solid falls between "
             f"{math.degrees(plan.cut_angle_rad):.3f}° and "
             f"{math.degrees(plan.cut_angle_b_rad):.3f}°")
+    _check_area_conservation(polys, out, plan)
     return out
+
+
+def _part_areas(polys: dict) -> Dict[str, float]:
+    """mm² of every rotor body CLASS the sector cut touches."""
+    out: Dict[str, float] = {}
+    for name in ("shaft", "rotor", "sleeve"):
+        g = polys.get(name)
+        if g is not None and not g.is_empty:
+            out[name] = float(g.area)
+    mags = [mp for mp, _pol in (polys.get("magnets") or []) if mp is not None]
+    if mags:
+        out["magnets"] = float(sum(float(m.area) for m in mags))
+    return out
+
+
+def _check_area_conservation(polys: dict, sec: dict, plan: SectorPlan) -> None:
+    """``n`` wedges must be the rotor, part by part (2026-10-25, B1).
+
+    Every extensive number of a sector answer is ``n`` times the wedge's, so
+    a wedge that holds anything but exactly ``1/n`` of each part — a pocket
+    that lost its hole in the clip, a magnet that came back as a sliver, an
+    ``n`` that is not the rotor's periodicity — reports another machine's
+    masses with the full model's confidence.  Refused by name instead.
+    """
+    full = _part_areas(polys)
+    wedge = _part_areas(sec)
+    n = int(plan.n_sectors)
+    bad = []
+    for name in sorted(set(full) | set(wedge)):
+        a_full = full.get(name, 0.0)
+        a_sec = wedge.get(name, 0.0) * n
+        ref = max(a_full, 1e-12)
+        if abs(a_sec - a_full) > SECTOR_AREA_TOL * ref:
+            bad.append(f"{name} {a_sec:,.1f} mm² ({n} × {wedge.get(name, 0.0):,.2f}) "
+                       f"against {a_full:,.1f} mm² drawn")
+    if bad:
+        raise NotPeriodic(
+            f"the {n}-sector wedge is not 1/{n} of this rotor: "
+            + "; ".join(bad) + ". Solve symmetry='full'.")
 
 
 def _wedge(polys: dict, plan: SectorPlan):

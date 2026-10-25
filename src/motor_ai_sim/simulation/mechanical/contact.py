@@ -922,6 +922,20 @@ class ContactSolution:
     #: moment the held boundary fed back, N·m per metre of stack.  Equal and
     #: opposite to whatever moment the load applied — that is the check.
     hold_torque_n_m_per_m: float = 0.0
+    #: ── CONSISTENCY of the returned state (2026-10-25) ─────────────────────
+    #: The force the closed SEPARATION pairs pull with (two-sided penalty
+    #: spring across a positive gap) and push with, N/m of stack, and the tension
+    #: share — see ``TENSION_FRAC_TOL``.  ``consistent`` is False when that share
+    #: is above the tolerance: the state is a (partly) TIED rotor, i.e. the
+    #: bonded answer, and ``converged`` is then never True.
+    tension_n_per_m: float = 0.0
+    compression_n_per_m: float = 0.0
+    tension_frac: float = 0.0
+    n_tensile_pairs: int = 0
+    consistent: bool = True
+    #: True when the active set CYCLED (repeated a configuration it had already
+    #: left) — reported beside ``converged`` instead of only in the log.
+    cycled: bool = False
 
 
 def _pair_rows(cs: ContactSystem, sel: np.ndarray, tangential: bool):
@@ -1132,6 +1146,23 @@ FREEZE_FLIPS = 3
 #: third of the joint's iron inside the magnets.
 FREEZE_MARGIN_FRAC = 1e-6
 
+#: How much of the normal force a SEPARATION joint carries may be TENSION before
+#: the state is declared inconsistent (2026-10-25, B2 of the eVTOL rotor-sizing
+#: review).  A separable pair cannot pull; the penalty spring that models it is
+#: two-sided, so a pair the active set holds CLOSED with a positive gap pulls
+#: with ``k_c * gap``.  That gap is nanometres (``k_c`` is ten times the stiffest
+#: element), so a GAP residual cannot see it: the all-tied iterate — every pair
+#: closed, every one a few nm apart, the bonded answer — passed
+#: ``viol <= freeze_margin`` (0.2 µm on a Ø400) and was reported as a converged
+#: ``separation`` solve with 0 % open, 0 MPa contact pressure and the bonded
+#: OD growth (8.4 µm against the 35–61 µm of its open neighbours).  Measured as
+#: a FORCE the same state is 100 % tension.  A settled active set carries none
+#: (every closed pair has ``gap <= tol_g``); the sets this loop accepts on its
+#: margin after cycling were measured at up to 0.8 % on a 56-pole Ø400 spoke
+#: rotor (2026-10-25).  5 % is clear of both: room for an answer that is right
+#: to within its own round-off, and twenty times short of a joint that pulls.
+TENSION_FRAC_TOL = 5e-2
+
 #: How many iterations a load step may run WITHOUT improving on the best
 #: iterate it has already found before it is called finished (2026-09-09).
 #:
@@ -1226,6 +1257,30 @@ SEAT_GRAD_TOL = 1e-6
 #: out at nanometres and one on a mechanism at millimetres, so 1e-3 of the radius
 #: (73 µm on the G2) sits five orders of magnitude clear of both.
 SEAT_LOOSE_FRAC = 1e-3
+
+
+def separation_tension(gap: np.ndarray, closed: np.ndarray, uni: np.ndarray,
+                       kc: float, tol_g: float) -> Tuple[float, float, int]:
+    """``(tension, compression, n_tensile)`` carried by the closed SEPARATION
+    pairs, N per metre of stack (see ``TENSION_FRAC_TOL``).
+
+    ``tension`` is what the two-sided penalty spring pulls with on pairs the
+    active set holds closed across a positive gap — a force a separable joint
+    cannot carry, and the one thing the reported pressure hides (it is clamped
+    at zero).  ``compression`` is what the closed pairs push with.
+    """
+    act = np.asarray(uni, dtype=bool) & np.asarray(closed, dtype=bool)
+    ten = act & (gap > tol_g)
+    comp = act & (gap < 0.0)
+    return (float(kc * gap[ten].sum()), float(kc * (-gap[comp]).sum()),
+            int(ten.sum()))
+
+
+def tension_fraction(tension: float, compression: float) -> float:
+    """Tension's share of the normal force a separation joint carries; 0 when
+    the joint carries nothing at all (an unloaded joint is not inconsistent)."""
+    tot = float(tension) + float(compression)
+    return float(tension) / tot if tot > 0.0 else 0.0
 
 
 def _body_rows(cs: ContactSystem, sel: np.ndarray, mine_is_a: np.ndarray,
@@ -1804,11 +1859,19 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     f_step = f if not _ramp else f + lambdas[0] * f_ramp
     step_res: List[float] = []
     #: the least-violating iterate seen IN THIS STEP (see the residual below)
-    best: Dict[str, Any] = {"viol": math.inf, "it": 0}
+    best: Dict[str, Any] = {"viol": math.inf, "it": 0, "tbad": True}
     #: …and how many iterations ago it was seen.  See ``SET_STALL``.
     stall = 0
     viol = 0.0
     it = 0
+    #: the TENSION the separation pairs carried in the solve that produced the
+    #: current ``u`` (see ``TENSION_FRAC_TOL``) — the iterate's own, judged
+    #: against the set it was ASSEMBLED with, because that set is what ``u``
+    #: is the answer to.  Regrading it afterwards hides exactly that.
+    ten_cur = (0.0, 0.0, 0)
+    tfrac_cur = 0.0
+    tbad_cur = False
+    cycled = False
     from motor_ai_sim import jobs as _jobs
     for it in range(1, max_iter * n_steps + 1):
         # STOP REACHES THE CONTACT ITERATION (2026-09-25): inside a job whose
@@ -1978,6 +2041,14 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # out, and that "best" answer is a fully bonded rotor.
         _bad = uni & (closed != (gap <= tol_g))
         viol = float(np.linalg.norm(gap[_bad])) if _bad.any() else 0.0
+        # …and the same disagreement as a FORCE (2026-10-25): what the closed
+        # separation pairs that came back apart are PULLING with.  The gap norm
+        # above cannot tell a nearly-settled set from the all-tied one — a
+        # penalty spring in tension opens by nanometres — and that is how the
+        # bonded rotor was once reported as a converged separation answer.
+        ten_cur = separation_tension(gap, closed, uni, kc, tol_g)
+        tfrac_cur = tension_fraction(ten_cur[0], ten_cur[1])
+        tbad_cur = tfrac_cur > TENSION_FRAC_TOL
 
         # ── SEATING: a loose part travels until it lands (2026-09-09) ────────
         # "the magnet should seat on the tongue, like in Fusion" — see the module
@@ -2195,7 +2266,11 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # first, whose active set is the warm start's GUESS and not the answer to
         # any solve — everything closed, which is the bonded rotor v1 was.
         stall += 1
-        if it > 1 and not moved_now and viol < best["viol"]:
+        # Ranked TENSION FIRST (2026-10-25): an iterate whose separation joints
+        # are pulling is the tied rotor, however small its gaps, and it may
+        # never be preferred to one that is not.
+        if (it > 1 and not moved_now
+                and (tbad_cur, viol) < (best["tbad"], best["viol"])):
             stall = 0
             # ``kt_sec`` rides with it (2026-09-09, the load path): the next load
             # step starts from this state, and a stick/slip set restored without
@@ -2204,7 +2279,8 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
                         lam_t=lam_t.copy(), gap=gap.copy(), slip=slip.copy(),
                         closed=closed.copy(), stick=stick.copy(), g0=g0.copy(),
                         u_seat=u_seat.copy(), kt_sec=kt_sec.copy(),
-                        hold_mult=np.array(hold_mult))
+                        hold_mult=np.array(hold_mult), tbad=tbad_cur,
+                        ten=ten_cur, tfrac=tfrac_cur)
 
         # ── active set: a pair is closed iff it is penetrating ──────────────
         # "<=" and not "<": g = 0 with p = 0 satisfies the complementarity
@@ -2317,7 +2393,11 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # flip no longer move the solution — the pairs on the boundary carry
         # ~zero force, so which side of it they sit on is not a result.
         state = np.packbits(np.concatenate([closed, stick])).tobytes()
-        if set_same or (it_step > 1 and du < 1e-9):
+        # "The solution stopped moving" only counts when the solution is not
+        # the tied rotor: a set that keeps every separation pair shut in
+        # tension also stops moving (2026-10-25).  `set_same` needs no such
+        # guard — a set that repeats has no closed pair with a positive gap.
+        if set_same or (it_step > 1 and du < 1e-9 and not tbad_cur):
             converged = True
         elif state in seen:
             # Cycling between two configurations.  It happens when a part has
@@ -2326,6 +2406,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
             # another twenty solves buys nothing, and ``free_parts`` below says
             # what the answer actually is.
             log.warning("contact active set cycled at iteration %d", it)
+            cycled = True
         elif it_step < max_iter and not (best["it"] and stall >= SET_STALL):
             seen.add(state)
             continue                     # …this load step is not finished
@@ -2338,7 +2419,8 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # It matters twice over now — this state is also what the NEXT load step
         # starts from, so handing on the worst iterate would walk the error up
         # the ramp.
-        if not converged and best["it"] and best["viol"] < viol:
+        if (not converged and best["it"]
+                and (best["tbad"], best["viol"]) < (tbad_cur, viol)):
             log.info("contact: iteration %d violated by %.3g µm against %.3g µm "
                      "at the cap — reporting iteration %d",
                      best["it"], best["viol"] * 1e6, viol * 1e6, best["it"])
@@ -2348,7 +2430,8 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
             g0, u_seat, hold_mult = best["g0"], best["u_seat"], best["hold_mult"]
             kt_sec = best["kt_sec"]
             viol = best["viol"]
-        if not converged and viol <= freeze_margin:
+            ten_cur, tfrac_cur, tbad_cur = best["ten"], best["tfrac"], best["tbad"]
+        if not converged and viol <= freeze_margin and not tbad_cur:
             # The active set never repeated — but the iterate being RETURNED
             # satisfies the complementarity conditions to within the penalty
             # method's own penetration (``FREEZE_MARGIN_FRAC``, 73 nm on the G2,
@@ -2357,6 +2440,10 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
             # left for another solve to find.  Reporting that as "did not
             # settle" cost the hot G2's torque path its verdict on an answer
             # whose residual was 0.000 µm (2026-09-09).
+            # NOT when the iterate's closed separation pairs are pulling
+            # (2026-10-25): their gaps are nanometres BECAUSE the spring holds
+            # them, so "within the margin" said nothing about them — the
+            # all-tied rotor passed this test.
             converged = True
         step_res.append(0.0 if converged else float(viol))
         if step >= n_steps:
@@ -2384,7 +2471,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         converged = False
         viol = 0.0
         seen.clear()
-        best = {"viol": math.inf, "it": 0}
+        best = {"viol": math.inf, "it": 0, "tbad": True}
         stall = 0
         flips[:] = 0
         flip_amp[:] = 0.0
@@ -2441,6 +2528,19 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     # (2026-09-09).
     R_all, _ = _rigid_basis(basis, np.zeros(nv, dtype=np.int64), cs.mesh,
                             cyclic_vertices=cyc_vertices)
+    # ── is the returned state a SEPARATION answer at all? (2026-10-25) ───────
+    # Judged on the iterate whose ``u`` is returned, against the set it was
+    # assembled with.  A state whose separation pairs pull is never converged,
+    # whatever the loop above concluded; the caller (``rotor_stress``) turns it
+    # into a FAIL rather than grade the tied rotor as if the joints were free
+    # to open.
+    consistent = not tbad_cur
+    if not consistent:
+        if converged:
+            log.warning("contact: the returned state carries %.0f %% of its "
+                        "normal force as TENSION across %d separation pair(s) "
+                        "— not converged", 100.0 * tfrac_cur, ten_cur[2])
+        converged = False
     # With a held boundary the load is DELIBERATELY not self-equilibrated (a
     # torque has to be reacted somewhere), so the residual is only a geometry
     # check when nothing is held.  Reported as 0 rather than as a large number
@@ -2474,7 +2574,10 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         load_steps=n_steps, step_residuals=[float(x) for x in step_res],
         hold_mult=(hold_mult if n_hold else None),
         cyclic_mult=(cyc_mult if n_cyc else None),
-        hold_torque_n_m_per_m=hold_torque)
+        hold_torque_n_m_per_m=hold_torque,
+        tension_n_per_m=float(ten_cur[0]), compression_n_per_m=float(ten_cur[1]),
+        tension_frac=float(tfrac_cur), n_tensile_pairs=int(ten_cur[2]),
+        consistent=bool(consistent), cycled=bool(cycled))
 
 
 # ---------------------------------------------------------------------------

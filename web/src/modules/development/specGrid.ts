@@ -29,23 +29,23 @@ export function labelChars(label: string): number {
   return n;
 }
 /** Every label a menu offers, in every language (a language switch must not truncate the chosen value). */
-export function optionLabels(options: Array<string | number | { value?: string | number; label?: Localized }> | undefined): string[] {
+export function optionLabels(options: ReadonlyArray<string | number | { value?: string | number; label?: unknown }> | undefined): string[] {
   const out: string[] = [];
   for (const option of options ?? []) {
     if (typeof option === 'number') continue; // numeric menus are short
     if (typeof option === 'string') { out.push(option); continue; }
     if (!option) continue;
-    for (const lang of LANGS) { const label = text(option.label, lang); if (label) out.push(label); }
+    for (const lang of LANGS) { const label = text(option.label as Localized, lang); if (label) out.push(label); }
     if (typeof option.value === 'string' && option.value) out.push(option.value);
   }
   return Array.from(new Set(out));
 }
 /** The longest label of a menu, in `ch`. */
-export function longestOptionChars(options: Array<string | number | { value?: string | number; label?: Localized }> | undefined): number {
+export function longestOptionChars(options: ReadonlyArray<string | number | { value?: string | number; label?: unknown }> | undefined): number {
   return optionLabels(options).reduce((n, label) => Math.max(n, labelChars(label)), 0);
 }
 /** CSS min width of a select / autocomplete: at least as wide as its longest option (plus the arrow and padding); capped. */
-export function optionsMinWidth(options: Array<string | number | { value?: string | number; label?: Localized }> | undefined, cap = 46): string | undefined {
+export function optionsMinWidth(options: ReadonlyArray<string | number | { value?: string | number; label?: unknown }> | undefined, cap = 46): string | undefined {
   const chars = Math.min(cap, longestOptionChars(options));
   return chars > 0 ? `calc(${chars}ch + 60px)` : undefined;
 }

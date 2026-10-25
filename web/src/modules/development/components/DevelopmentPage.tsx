@@ -36,6 +36,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
   import { acceptedProjectStatus, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus';
   import { NARROW } from '../../../lib/narrowLayout';
+  import { clearView, readView, writeView } from '../../../lib/viewMemory';
+  import { developmentViewScope, parseDevelopmentView, restorableView, type DevelopmentView } from '../viewState';
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes';
 const STATUSES = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'] as const;
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
@@ -210,6 +212,41 @@ export default function DevelopmentPage() {
       setError(e instanceof Error ? e.message : String(e)); return false;
     }
   }, [selected, spec]);
+  // A reload reopens the same project, tab and card (lib/viewMemory.ts).  Once per identity, after the project list is
+  // known; a pending "open this project" link wins; a project that is gone or no longer visible is dropped silently.
+  const viewRestoredFor = useRef('');
+  const restoringView = useRef(false);
+  const [pendingView, setPendingView] = useState<DevelopmentView | null>(null);
+  useEffect(() => {
+    const identity = user?.email;
+    if (!identity || loading || selected || viewRestoredFor.current === identity) return;
+    viewRestoredFor.current = identity;
+    let linkPending = false;
+    try { linkPending = !!sessionStorage.getItem('development.openProject'); } catch { /* storage blocked */ }
+    const saved = readView(developmentViewScope(identity), parseDevelopmentView);
+    const known = saved ? projects.find((item) => item.id === saved.project) : undefined;
+    if (!saved || !known || linkPending) { if (saved && !known) clearView(developmentViewScope(identity)); return; }
+    restoringView.current = true;
+    void loadProject(known).then((opened) => {
+      if (opened) { setPendingView(saved); return; }
+      restoringView.current = false;
+      clearView(developmentViewScope(identity)); setSelected(null); setSpec(null); setError('');
+    });
+  }, [user?.email, loading, projects, selected, loadProject]);
+  useEffect(() => {
+    if (!pendingView || !selected || !spec || selected.id !== pendingView.project) return;
+    const next = restorableView(pendingView, sections.length, canEditProject);
+    setPendingView(null);
+    setStep(next.step);
+    if (next.view === 'specification') { setView('specification'); if (next.step > 0) showCard(next.step); } else void openTab(next.view);
+    restoringView.current = false;
+  }, [pendingView, selected, spec, sections.length, canEditProject]);
+  useEffect(() => {
+    const identity = user?.email;
+    if (!identity || viewRestoredFor.current !== identity || restoringView.current || pendingView) return;
+    if (selected) writeView(developmentViewScope(identity), { project: selected.id, view, step });
+    else clearView(developmentViewScope(identity));
+  }, [user?.email, selected?.id, view, step, pendingView]);
   useEffect(() => {
     const openProject = async (projectId: string | null | undefined): Promise<boolean> => {
       if (!projectId) return true;

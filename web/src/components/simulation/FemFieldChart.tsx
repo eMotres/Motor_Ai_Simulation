@@ -64,6 +64,8 @@ function useMatOverrideReady(): boolean {
 import { EM_MENU, emOutputs, outlinesFromMesh } from './fieldView';
 import { storedMeshQuery } from '../../lib/meshSettings';
 import { NARROW } from '../../lib/narrowLayout';
+import { oneOf } from '../../lib/viewMemory';
+import { useRememberedView } from '../../lib/useRememberedView';
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
 function readMeshSetting<T>(key: string, def: T): T {
@@ -136,7 +138,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // flight (cache probe, never a solve) — keeps the "not solved" line from
   // flashing before an answer that is usually instant.
   const [azProbing, setAzProbing] = useState<boolean>(false);
-  const [mode,    setMode]    = useState<FieldMode>('Az');
+  const [mode,    setMode]    = useRememberedView<FieldMode>('simulation.fieldMode', 'Az', oneOf(['Az', 'Bmag', 'J', 'Jeddy', 'Loss', 'Demag'] as const));
   // Eddy-solve payload (J⟳ / Loss views) — separate from the fast magnetostatic
   // one, lazily fetched on first selection and re-fetched when γ / I change.
   const [eddyPayload, setEddyPayload] = useState<FemPayload | null>(null);

@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, Tab, Tabs } from '@mui/material';
 import { useTranslation } from 'react-i18next';
+import { oneOf } from '../../lib/viewMemory';
+import { useRememberedView } from '../../lib/useRememberedView';
 import CatalogBrowser from '../catalogBrowser/CatalogBrowser';
 import WireStockTable from './WireStockTable';
 import PropellersCatalogPanel from './PropellersCatalogPanel';
@@ -22,7 +24,7 @@ interface Props {
 
 const MaterialsCatalogPanel: React.FC<Props> = ({ materialView }) => {
   useTranslation('motors');
-  const [view, setView] = useState<MaterialsCatalogView>('materials');
+  const [view, setView] = useRememberedView<MaterialsCatalogView>('materials.catalogView', 'materials', oneOf(MATERIALS_CATALOG_VIEWS.map((v) => v.id)));
   // Active = the tab as it was (the parts the electromagnetic simulation uses); Full = the whole motor.  The SAME switch and the
   // SAME state as the Geometry tab (owner 2026-10-15): switching it here switches Geometry too.
   const [mode] = useConstructionScope();

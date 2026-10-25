@@ -18,16 +18,18 @@ const CARDS: Array<{ id: SpecificationCardId; title: string; legacy_ids: string[
   { id: 'key', title: 'wizard.keyData', legacy_ids: ['application', 'continuous', 'electrical', 'cooling'] },
   { id: 'requirements', title: 'wizard.requirements', legacy_ids: ['mechanical'] },
   { id: 'mission', title: 'wizard.mission', legacy_ids: [] },
-  { id: 'more', title: 'wizard.moreDetails', legacy_ids: ['load', 'delivery'] },
   { id: 'review', title: 'wizard.review', legacy_ids: [] },
 ];
 
-function cardFor(field: SchemaField, namespace: 'fields' | 'production'): SpecificationCardId {
-  if (namespace === 'production') return 'more';
+/** null = not on the specification page.  Owner 2026-10-25: the specification asks only what is needed to design
+ *  the motor right; the former "More details" card is gone (its fields stay in the stored data and the schema, and
+ *  the details land in the report).  The load TYPE is asked in the key block together with the cooling. */
+function cardFor(field: SchemaField, namespace: 'fields' | 'production'): SpecificationCardId | null {
+  if (namespace === 'production') return null;
   if (field.id === 'mission_profile') return 'mission';
-  if (KEY_FIELDS.includes(field.id)) return 'key';
+  if (KEY_FIELDS.includes(field.id) || field.id === 'load_type') return 'key';
   if (REQUIREMENT_FIELDS.includes(field.id) || SECOND_TIER_FIELDS.includes(field.id)) return 'requirements';
-  return 'more';
+  return null;
 }
 
 const ORDER = [...KEY_FIELDS, ...REQUIREMENT_FIELDS, ...SECOND_TIER_FIELDS, 'mission_profile', ...MORE_FIRST_FIELDS, ...LOAD_FIELDS];
@@ -38,8 +40,8 @@ const rank = (field: SpecificationField, schemaIndex: number) => {
 };
 
 /** Groups schema fields into the specification cards while retaining their backend storage
- *  namespace and source section.  Every schema field lands in exactly one card: anything not
- *  listed above goes to "More details", in schema order. */
+ *  namespace and source section.  A field lands in at most one card; one not listed above is
+ *  not shown (its stored value is kept). */
 export function buildSpecificationCards(schema: DevelopmentSchema): SpecificationCard[] {
   const cards: SpecificationCard[] = CARDS.map((c) => ({ ...c, fields: [], kind: c.id === 'review' ? 'review' : undefined }));
   const byId = new Map(cards.map((card) => [card.id, card]));
@@ -49,7 +51,8 @@ export function buildSpecificationCards(schema: DevelopmentSchema): Specificatio
     const namespace = section.id === 'production' ? 'production' : 'fields';
     const laidOut: SpecificationField = { ...field, storage_namespace: namespace, source_section_id: section.id };
     order.set(laidOut, rank(laidOut, index++));
-    byId.get(cardFor(field, namespace))!.fields.push(laidOut);
+    const card = cardFor(field, namespace);
+    if (card) byId.get(card)!.fields.push(laidOut);
   }
   for (const card of cards) card.fields.sort((a, b) => order.get(a)! - order.get(b)!);
   return cards;

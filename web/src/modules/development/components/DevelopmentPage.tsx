@@ -749,7 +749,7 @@ export default function DevelopmentPage() {
                       {byId('3_1') && <Stack spacing={1.2} sx={{ minWidth: 0 }}>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</Stack>}
                       {byId('3_2') && renderField(byId('3_2')!, false, false)}
                     </Box>
-                    {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2'].includes(f.id)).map((f) => renderField(f))}
+                    {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2', 'load_type'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>
                     {byId('4_6') && <Box sx={{ mb: 1.5 }}>{renderLoads(byId('4_6')!, readLoadDraft(draftRef.current).load_type)}</Box>}

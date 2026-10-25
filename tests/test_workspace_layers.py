@@ -290,6 +290,33 @@ def test_verified_admin_reads_shared_before_legacy_workspace_copy(env):
         assert W.resolve_die_dir(DIE, prefer_shared=False) == own
 
 
+def test_process_workspace_reads_shared_before_its_stale_copy_and_never_forks(env, monkeypatch):
+    # The server's /srv/motres/identity/dies: a 2026-10-15 snapshot of the shared catalog in the PROCESS workspace
+    # (anonymous callers, the Configure warm-up, CLI runs).  Read first, it fed stale masses into the stored Configure
+    # answers every caller shares.  One source: shared wins; and the process never forks a shared die into its copy.
+    from fastapi import HTTPException
+    from motor_ai_sim import config as C, workspace as W
+    from motor_ai_sim.routes import family as F
+    identity = env["tree"] / "identity"
+    stale = identity / "dies" / DIE
+    stale.mkdir(parents=True)
+    shutil.copytree(env["shared"] / "dies" / DIE, stale, dirs_exist_ok=True)
+    (stale / f"{CFG}.yaml").write_text(yaml.safe_dump({"name": CFG, "duties": [{"name": "stale local"}]}),
+                                       encoding="utf-8")
+    shutil.copy2(env["shared"] / "motor_config.yaml", identity / "motor_config.yaml")
+    monkeypatch.setattr(C, "DEFAULT_CONFIG_PATH", str(identity / "motor_config.yaml"))
+    with W.use_workspace(None), W.use_caller(None):
+        assert W.workspace().is_process and W.workspace().root == identity
+        assert W.resolve_die_dir(DIE) == env["shared"] / "dies" / DIE
+        assert next(d for d in W.iter_dies() if d["name"] == DIE)["layer"] == "shared"
+        assert W.resolve_die_dir(DIE, prefer_shared=False) == stale        # the old copy is only a fallback
+        before = {p.name: p.read_bytes() for p in stale.glob("*.yaml")}
+        with pytest.raises(HTTPException) as err:
+            F._write_target(F._cfg_file(DIE, CFG))
+        assert err.value.status_code == 409
+        assert {p.name: p.read_bytes() for p in stale.glob("*.yaml")} == before
+
+
 def test_ordinary_user_retains_private_workspace_precedence(env):
     from motor_ai_sim import auth, workspace as W
     own = _ws_die(env, A)

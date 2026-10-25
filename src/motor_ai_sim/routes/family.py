@@ -412,7 +412,15 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
 
     Idempotent, and it never overwrites a file that is already here: a second
     save of the same die must not undo the first.
+
+    Never into the PROCESS workspace: it reads the shared catalog first
+    (``workspace.layers``), so a fork into its ``dies/`` would never be read
+    back - a lost save and a second copy to keep in sync.  Loud, not silent.
     """
+    if _WS.workspace().is_process:
+        raise HTTPException(409, detail=(
+            "the process workspace never forks the shared catalog - save as a "
+            "signed-in account (its own workspace) or as a verified admin"))
     # the layer the configurations are copied FROM, settled before the copy: once
     # die.yaml lands here the name resolves to the workspace (the caller's own)
     _src_layer = _classify_die_dir(src_dir)[0]

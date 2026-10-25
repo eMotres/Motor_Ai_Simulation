@@ -396,9 +396,11 @@ def test_the_baseline_die_survives_the_owners_working_copy_in_the_process_worksp
     from fastapi import Response
 
     from motor_ai_sim.routes import family as fam
-    # the control: read in the process workspace, the shared die is shadowed by the working copy
-    seen = {d["name"]: d.get("layer") for d in fam.tree_for_access(Response(), SC._visitor_access())["dies"]}
-    assert seen.get(BASE) == "workspace"
+    # the control: the process workspace reads the shared catalog FIRST (workspace.layers, 2026-10-23) - its working
+    # copy no longer shadows the shared die, so the tree itself keeps the private L13 hidden
+    tree = {d["name"]: d for d in fam.tree_for_access(Response(), SC._visitor_access())["dies"]}
+    assert tree[BASE].get("layer") == "shared"
+    assert "L13" not in [c["name"] for c in tree[BASE].get("configs") or []]
     # the block reads the shared catalog: both open configurations, never the private one
     t = SC.published_motors_block(None, visitor=True)
     assert _names(t) == [f"{BASE} / L12", f"{BASE} / L20"]

@@ -1076,6 +1076,24 @@ def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
 # carries the flag (its requested steps met 6 samples/cycle), because then it
 # IS the same resolution; the flag is what is certified, not the label.
 _FINAL_PURPOSE = "cogging_quality"
+#: A final (standard) re-solve costs ~6x a search eval (the "6x quality"
+#: shortlist); its hang cap is priced at that, up to 4 h per solve.
+_FINAL_COST_FACTOR = 6.0
+_FINAL_CAP_MAX_S = 4 * 3600.0
+
+
+def eval_hang_cap(median_s: float, expect_s: float, sampling_purpose: str) -> float:
+    """The hang cap of one subprocess eval: 4x the measured median or 3x the frame
+    estimate, floored at 300 s and capped at 1 h.  A FINAL (standard) re-solve
+    costs ~6x a search eval, but the median was measured on search evals and the
+    estimate priced the search's steps, so its cap was a search-eval cap: on the
+    Ø400 (2026-10-25) baseline A took 2097 s, was killed as a "timeout" and failed
+    the whole final validation.  The final is priced at its own cost, up to 4 h;
+    the cap still only guards against hangs."""
+    cap = min(3600.0, max(300.0, 4.0 * median_s, 3.0 * expect_s))
+    if sampling_purpose == _FINAL_PURPOSE:
+        cap = min(_FINAL_CAP_MAX_S, max(cap, _FINAL_COST_FACTOR * max(4.0 * median_s, 3.0 * expect_s)))
+    return cap
 _FINAL_OK_PURPOSES = ("cogging_quality", "standard")
 
 
@@ -1527,7 +1545,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         # -> 231 s median at 10 concurrent).
         _contention = min(4.0, max(1.0, float(_scan_worker_count()) / 2.5))
         _expect = _frames * _per_frame * _contention
-        _cap = min(3600.0, max(300.0, 4.0 * _med, 3.0 * _expect))
+        _cap = eval_hang_cap(_med, _expect, sampling_purpose)
         # Popen rather than subprocess.run, so the process can be REGISTERED
         # (and killed by its owner's Stop — see _kill_live_evals).  Same
         # semantics otherwise: stdin fed, both streams captured, the hang cap

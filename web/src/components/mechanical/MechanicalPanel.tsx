@@ -151,7 +151,13 @@ type Row = {
 /** The safety factor a part is judged by — strength over the governing
  *  AVERAGED stress, which is the stress printed on the tile.  The two divide:
  *  the band's 2500 MPa over its 1559 MPa of averaged hoop IS its 1.60. */
+/** "not retained — fails" (owner rule 2026-10-25): no adhesive, so a
+ *  separation answer that does not retain the magnets has NO safety factor. */
+const NOT_RETAINED = 'not retained — fails';
+const caseFailed = (c?: CaseResult | null) => c?.retention?.status === 'fail';
+
 function sfOf(c: CaseResult, part: string, p: PartResult): number | null {
+  if (caseFailed(c)) return null;
   const s = c.sf_min_per_part?.[part];
   const v = s?.averaged ?? p.safety_factor ?? s?.p05 ?? s?.min;
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -178,6 +184,7 @@ function unavgTip(p: PartResult, unavg?: number | null): string {
 }
 
 function sfSub(c: CaseResult, part: string, p: PartResult): string {
+  if (caseFailed(c)) return NOT_RETAINED;
   const sf = sfOf(c, part, p);
   const str = p.strength_mpa ? `${p.strength_mpa.toFixed(0)} MPa` : '';
   if (sf === null) return str;
@@ -1090,16 +1097,28 @@ const MechanicalPanel: React.FC = () => {
             </Typography>
           </Tooltip>
         )}
-        {/* A separation joint that does not retain its part was solved BONDED
-            (2026-09-09): the magnet is glued on the built machine, and the
-            small-displacement model cannot follow a part that has nothing to
-            press against.  One line, the whole story in the tooltip. */}
+        {/* RETENTION WITHOUT ADHESIVE (owner rule 2026-10-25): a separation
+            answer that did not converge, ended tied, ran away or says "not
+            retained" is a FAIL of the geometry.  Red, first, and no SF: the
+            tiles say "not retained — fails" where the factor would be. */}
+        {res?.retention?.status === 'fail' && (
+          <Tooltip title={`${res.retention.message ?? NOT_RETAINED}. The magnets are retained by the rotor iron alone (no adhesive), so this geometry fails and no safety factor is quoted.`}>
+            <Typography sx={{ ...lbl, mt: 0.75, color: '#f87171', fontWeight: 700,
+              cursor: 'help', borderBottom: '1px dotted #f87171', display: 'inline-block' }}>
+              ✖ Rotor {NOT_RETAINED}: {(res.retention.reasons[0] ?? '').slice(0, 110)}
+            </Typography>
+          </Tooltip>
+        )}
+        {/* A separation joint that ran away was solved BONDED (2026-09-09) —
+            since 2026-10-25 for INFORMATION only: a glued magnet is not the
+            owner's machine, and the answer above is a FAIL.  One line, the
+            whole story in the tooltip. */}
         {res?.contact_fallback && (
-          <Tooltip title={`${res.contact_fallback.reason}. The contact you asked for (${res.contact_fallback.from}) was tried first and refused: ${res.contact_fallback.refusal ?? '—'} Pick Bonded for this pair on the Contacts row to make it explicit, or change the pocket so the magnet has a face to press on at standstill.`}>
+          <Tooltip title={`${res.contact_fallback.reason}. The contact you asked for (${res.contact_fallback.from}) was tried first and ran away: ${res.contact_fallback.refusal ?? '—'} The ${res.contact_fallback.to} (glued) solve is kept as information only — its numbers are under sf_info, not on the tiles. Change the pocket or the bridges so the iron retains the magnet.`}>
             <Typography sx={{ ...lbl, mt: 0.75, color: '#fbbf24', cursor: 'help',
               borderBottom: '1px dotted #fbbf24', display: 'inline-block' }}>
               ⚠ {(res.contact_fallback.pairs ?? [res.contact_fallback.pair])
-                .map((p) => CONTACT_LABEL[p as keyof typeof CONTACT_LABEL] ?? p).join(', ')} solved {res.contact_fallback.to} — the separation model leaves the part unretained
+                .map((p) => CONTACT_LABEL[p as keyof typeof CONTACT_LABEL] ?? p).join(', ')} {res.contact_fallback.to} solve is INFO only — magnets not retained without adhesive
             </Typography>
           </Tooltip>
         )}

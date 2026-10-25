@@ -4274,8 +4274,13 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
     if isinstance(r.get("contact_fallback"), dict):
         # The route solved a joint bonded because separation left the part
         # unretained (2026-09-09) — carried into the block so the summary line
-        # says it too.
+        # says it too.  Since 2026-10-25 that bonded solve is INFO only and the
+        # answer is a retention FAIL (below).
         out["contact_fallback"] = r["contact_fallback"]
+    if isinstance(r.get("retention"), dict):
+        # "not retained — fails" (owner rule 2026-10-25, no adhesive): the
+        # verdict rides with the line, and `sf_min` above is then None.
+        out["retention"] = r["retention"]
     if temps_note:
         out["temps_note"] = temps_note
     return out

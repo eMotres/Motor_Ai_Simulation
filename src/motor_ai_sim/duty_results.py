@@ -1173,6 +1173,11 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             "sf_min_part": case.get("sf_min_part"),
             "sf_min_p05": _f(case.get("sf_min_p05")),
             "sf_min_unaveraged": _f(case.get("sf_min_unaveraged")),
+            # "not retained — fails" (owner rule 2026-10-25, no adhesive): a
+            # FAIL carries no SF above, and the reason has to survive the
+            # compaction or the report reads the missing SF as "not solved".
+            "retention": _pick(case.get("retention") or res.get("retention"),
+                               ("status", "verdict", "reasons", "message")),
             "parts": parts,
             "interfaces": ifaces,
             "rotor_od_growth_um": _f(case.get("rotor_od_growth_um")),

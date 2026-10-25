@@ -219,8 +219,25 @@ export interface PartSafety {
   criterion: string;
 }
 
+/** "not retained — fails" (owner rule 2026-10-25): the magnets are retained by
+ *  the rotor iron ALONE, no adhesive.  A separation answer that did not
+ *  converge, ended tied (a separable pair in tension — the bonded answer), or
+ *  says "not retained" is a FAIL: every SF field is then null and the numbers
+ *  ride under `sf_info` with a label saying they are information only. */
+export interface RetentionStatus {
+  status: 'pass' | 'fail';
+  verdict?: string;
+  reasons: string[];
+  message?: string;
+  failed_cases?: string[];
+}
+
 export interface CaseResult {
   rpm: number;
+  retention?: RetentionStatus;
+  /** on a FAIL only: what the SF fields held, labelled INFO ONLY */
+  sf_info?: { label: string; sf_min?: number | null; sf_min_part?: string | null;
+              parts?: Record<string, number> };
   parts: Record<string, PartResult>;
   sf_min_per_part: Record<string, PartSafety>;
   sf_min: number | null;
@@ -495,11 +512,16 @@ export interface RotorStress {
    *  with a gap above them — the G2, the 40 mm).  Said, never silent. */
   contact_fallback?: {
     pair: string; from: string; to: string;
+    /** since 2026-10-25 always false: the bonded solve is INFO only and the
+     *  answer is a retention FAIL (`retention`) */
+    valid?: boolean; info_only?: boolean;
     open_fraction?: number | null; reason: string; refusal?: string;
     /** every joint bonded in turn, first to last (`pair` is the first) */
     pairs?: string[];
   };
   contacts: Record<string, ContactSpec & { n_facets: number }>;
+  /** the answer's retention verdict — FAIL if any case fails (2026-10-25) */
+  retention?: RetentionStatus;
   materials: Record<string, MechMaterial>;
   cases: Record<CaseName, CaseResult>;
   lift_off_rpm: Record<string, number | null>;

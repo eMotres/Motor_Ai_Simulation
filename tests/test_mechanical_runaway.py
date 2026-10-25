@@ -101,8 +101,8 @@ def test_a_magnet_floating_short_of_its_pocket_bottom_is_refused():
     this fixture has none facing outward: the 0.1 mm sliver belongs to no part's
     polygon, so it is not meshed and the magnet's outer face is a free surface
     looking at another free surface.  "Not retained" therefore stays the answer
-    here, and the route's bonded fallback (a glued magnet, which is what the
-    built 40 mm has) stays what it does about it.
+    here.  Since 2026-10-25 the route's bonded re-solve is INFORMATION only and
+    the answer a FAIL (owner rule: no adhesive) — see the route tests below.
     """
     with pytest.raises(rs.RotorRanAway) as ei:
         _solve(GAP)
@@ -149,11 +149,15 @@ def test_the_same_pocket_closed_holds_the_magnet_with_separation():
     assert case["interfaces"]["magnet_rotor"]["open_fraction"] < 0.9
 
 
-def test_the_route_solves_an_unretained_separation_joint_bonded_and_says_so(monkeypatch):
+def test_the_route_fails_an_unretained_separation_joint_and_keeps_bonded_as_info(monkeypatch):
     """2026-09-09 morning, the G2: "rotor stress at 3,000 rpm did not solve — a
-    piece of the rotor is held by nothing".  On a built machine an unretained
-    magnet is a glued magnet, so the route re-solves that joint bonded and
-    reports the substitution instead of refusing a machine that works."""
+    piece of the rotor is held by nothing".  The route used to re-solve that
+    joint bonded and report the bonded SF as the answer.
+
+    OWNER RULE (2026-10-25, B3 of the eVTOL rotor review): magnets are retained
+    by the rotor iron ALONE, no adhesive.  A separation joint that runs away is
+    a FAIL — "magnets not retained without adhesive" — and the bonded solve may
+    only be shown as labelled information: no SF field carries its number."""
     from fastapi.testclient import TestClient
     from motor_ai_sim.api import app
 
@@ -182,8 +186,20 @@ def test_the_route_solves_an_unretained_separation_joint_bonded_and_says_so(monk
     assert [c["magnet_rotor"] for c in calls] == ["separation", "bonded"]
     fb = d["contact_fallback"]
     assert fb["pair"] == "magnet_rotor" and fb["to"] == "bonded"
-    assert "glued" in fb["reason"] and "93%" in fb["reason"]
-    assert d["cases"]["3,000 rpm"]["sf_min"] == pytest.approx(2.4)
+    assert fb["valid"] is False and fb["info_only"] is True
+    assert "not retained without adhesive" in fb["reason"] and "93%" in fb["reason"]
+    # the answer is a FAIL of the SEPARATION request…
+    assert d["retention"]["status"] == "fail"
+    assert "not retained" in d["retention"]["message"]
+    assert d["contacts"]["magnet_rotor"]["type"] == "separation"
+    case = d["cases"]["3,000 rpm"]
+    assert case["retention"]["status"] == "fail"
+    # …no SF anywhere a panel, table or search reads one…
+    assert case["sf_min"] is None and case["sf_min_p05"] is None
+    # …and the bonded number only as labelled information.
+    assert case["sf_info"]["sf_min"] == pytest.approx(2.4)
+    assert "INFO ONLY" in case["sf_info"]["label"]
+    assert "BONDED" in case["sf_info"]["label"]
 
 
 def test_every_floating_separation_joint_is_bonded_in_turn(monkeypatch):
@@ -220,7 +236,43 @@ def test_every_floating_separation_joint_is_bonded_in_turn(monkeypatch):
     fb = r.json()["contact_fallback"]
     assert fb["pairs"] == ["magnet_rotor", "shaft_rotor"]
     assert fb["pair"] == "magnet_rotor" and len(fb["entries"]) == 2
-    assert r.json()["contacts"]["shaft_rotor"]["type"] == "bonded"
+    # what was SOLVED (for information) is bonded; what the answer is a
+    # verdict on — the request — stays separation, and it is a FAIL
+    assert r.json()["contacts_info_solve"]["shaft_rotor"]["type"] == "bonded"
+    assert r.json()["contacts"]["shaft_rotor"]["type"] == "separation"
+    assert r.json()["retention"]["status"] == "fail"
+    assert r.json()["cases"]["3,000 rpm"]["sf_min"] is None
+
+
+def test_the_bonded_info_solve_is_never_filed_under_the_bonded_request(monkeypatch):
+    """The fallback used to file its answer under the BONDED spec's cache key
+    too, so a genuine bonded request was then served the fallback.  With the
+    fallback a FAIL (2026-10-25) that would hand a glued request a 'not
+    retained' verdict — and the reverse for the separation request.  One key:
+    the request's."""
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.api import app
+
+    def fake_solve(polys, assign, rpm, osf, interf, **kw):
+        specs = {k: v.type for k, v in kw["contacts"].items()}
+        if specs.get("magnet_rotor") == "separation":
+            raise rs.RotorRanAway("3,000 rpm", 3000.0, "magnet_rotor", 0.9, ["x"])
+        return {"primary_case": "3,000 rpm", "rpm": 3000.0, "cases": {
+            "3,000 rpm": {"sf_min": 2.0, "sf_min_part": "rotor"}},
+            "interference_effective_mm": 0.0, "contacts": {
+                k: {"type": t, "mu": 0.0, "n_facets": 1} for k, t in specs.items()},
+            "mesh": {"n_nodes": 1, "n_triangles": 1, "mesh_size_mm": 1.5}}
+    keys = []
+    monkeypatch.setattr(rs, "solve_rotor_stress", fake_solve, raising=True)
+    monkeypatch.setattr(rs, "cache_get", lambda key: None, raising=True)
+    monkeypatch.setattr(rs, "cache_put", lambda key, out: keys.append(key),
+                        raising=True)
+    r = TestClient(app).get("/api/mechanical/rotor_stress",
+                            params={"cases": "single", "rpm": 3000,
+                                    "loads": "centrifugal", "field": "false"})
+    assert r.status_code == 200, r.text[:400]
+    assert len(set(keys)) == 1, keys
+    assert "bonded" not in repr(keys[0]) or "separation" in repr(keys[0])
 
 
 def test_a_second_runaway_is_still_the_refusal(monkeypatch):

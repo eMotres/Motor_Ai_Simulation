@@ -590,10 +590,16 @@ def test_a_part_with_no_load_path_is_bonded_or_refused_never_quoted(client):
     fb = out.get("contact_fallback")
     if fb:
         # a joint was bonded to close the path — the record names it and the
-        # solved contact set agrees
+        # INFO solve's contact set agrees.  Since 2026-10-25 (owner rule: no
+        # adhesive) that bonded solve is information only: the answer is a
+        # retention FAIL and quotes no safety factor.
         assert fb["from"] == "separation" and fb["to"] == "bonded"
+        assert fb["valid"] is False
         for pair in fb.get("pairs", [fb["pair"]]):
-            assert out["contacts"][pair]["type"] == "bonded"
+            assert out["contacts_info_solve"][pair]["type"] == "bonded"
+            assert out["contacts"][pair]["type"] == "separation"
+        assert out["retention"]["status"] == "fail"
+        assert c["sf_min"] is None
     tp = c["torque_path"]
     # a real yes/no when a separation joint with friction remains on the path;
     # "there is no separation joint" when the fallback bonded them all; the
@@ -609,6 +615,11 @@ def test_a_part_with_no_load_path_is_bonded_or_refused_never_quoted(client):
     assert (isinstance(tp["held"], bool)
             or "no separation joint" in tp["verdict"]
             or (not c["contact"]["converged"] and "did not settle" in tp["verdict"])
+            # 2026-10-25: an unsettled set whose separable pairs are PULLING
+            # is named for what it is — the tied rotor — and the case is a
+            # retention FAIL with no SF (owner rule: no adhesive)
+            or (not c["contact"]["consistent"] and "ended tied" in tp["verdict"]
+                and c["retention"]["status"] == "fail" and c["sf_min"] is None)
             or (tp["held"] is None and "form-locked" in tp["verdict"]))
     assert "ran away" not in tp["verdict"]
 

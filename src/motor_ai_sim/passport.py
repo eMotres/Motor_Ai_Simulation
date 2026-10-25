@@ -242,7 +242,13 @@ def generate_passport(
     _solve_status: List[Dict[str, Any]] = []
 
     def get_fem_transient(**kw):
-        d = _gft(**kw)
+        from motor_ai_sim.passport_winding import (set_six_phase_override,
+                                                    reset_six_phase_override)
+        _six_token = set_six_phase_override(_six)
+        try:
+            d = _gft(**kw)
+        finally:
+            reset_six_phase_override(_six_token)
         s = (d.get("summary") or {}) if isinstance(d, dict) else {}
 
         def _g(k):
@@ -290,6 +296,19 @@ def generate_passport(
     g = merge_geo_override(_mgeo if _mgeo else (cfg.get("geometry", {}) or {}),
                            None)
     wind = cfg.get("winding", {}) or {}
+    if machine is not None and "winding" in machine:
+        wind = dict(machine.get("winding") or {})
+    from motor_ai_sim.passport_winding import (resolved_six_phase as _resolve6,
+                                                passport_phase_metadata as _phase_meta)
+    _six = _resolve6(wind, g, _mconn)
+    if _six and machine is not None and "winding" in machine:
+        active_w = dict(cfg.get("winding") or {})
+        target_layout = " ".join(str(wind.get("layout") or "").lower().split())
+        active_layout = " ".join(str(active_w.get("layout") or "").lower().split())
+        if (int(wind.get("layers") or 1) != int(active_w.get("layers") or 1)
+                or target_layout != active_layout):
+            raise ValueError(
+                "six-phase passport requires target and active winding layers/layout to match")
     sim = cfg.setdefault("simulation", {})
     # Operating point from the motor itself (its loaded preset), not hard-coded:
     # max_current = phase RMS [A], phase_offset_deg = load angle gamma [deg].
@@ -364,6 +383,8 @@ def generate_passport(
              "gap_layers": _mv["gap_layers"]}
     if _msrc["n_sectors"] != _MFB_SRC and _sym % max(1, int(_mv["n_sectors"])) == 0:
         NSECT = int(_mv["n_sectors"])
+    if _six:
+        NSECT = 1
     _mesh_note = _mfb(_msrc, _mv)
 
     def run(I: float, length: Optional[float] = None, eddy: bool = False,
@@ -646,8 +667,13 @@ def generate_passport(
     _batt = dict(battery or {})
     _vnom = float(_batt.get("v_nom") or 0.0)
     if str(pwm or "").strip().lower() not in ("", "off", "none", "0", "false"):
-        from motor_ai_sim.passport_pwm import measure_pwm
-        pwm_block = measure_pwm(
+        if _six:
+            pwm_skipped.append({"code": "six_phase_not_supported",
+                                "reason": "PWM/controller passport stage is not validated for two in-phase sets"})
+            pwm_block = {"status": "unavailable: six-phase PWM/controller validation not implemented"}
+        else:
+            from motor_ai_sim.passport_pwm import measure_pwm
+            pwm_block = measure_pwm(
             solve=_solve_pt, I0_A=I0, rpm0=rpm0,
             rpms=(loss_grid["rpm"] or rpms),
             pole_pairs=max(1, int(g.get("num_poles", 0) or 0) // 2),
@@ -668,6 +694,10 @@ def generate_passport(
         pass
 
     passport = {
+        # Per-set voltage on the passport's own basis: the star-equivalent
+        # loaded fundamental, exactly Vload0_fund_V (raw summary V1 is the
+        # winding voltage, sqrt(3) high in delta).
+        **_phase_meta(_six, float(I0), (_Vload1 * _kV) if _Vload1 else None),
         # The Mesh settings every solve of this passport used, where each came
         # from, and a note when a labelled fallback was needed.
         "mesh_settings": {"mesh_size_mm": mesh_size_mm, "n_sectors": NSECT, **_MESH},
@@ -777,6 +807,19 @@ def generate_passport(
                  if str(role or "").strip().lower() in ("motor", "generator")
                  else str(mode or "motor")),
     }
+    if _six:
+        _pcu_set = _series_mean(A, "P_cu_W") / 2.0
+        passport["six_phase"].update({
+            "copper_loss_per_set_W": _pcu_set,
+            "losses_per_set_W": {"copper_W": _pcu_set, "iron_W": None,
+                                  "magnet_W": None, "shaft_W": None},
+            "resistance_per_set_ohm": 2.0 * R_A,
+            "resistance_basis": (
+                "one set has half the parallel paths: 2 x stored equivalent-star phase resistance"),
+            "loss_allocation_note": (
+                "balanced winding symmetry allocation; only copper is allocated "
+                "per set, while machine iron and rotor losses remain totals"),
+        })
     fit = {
         "slotHeight_mm": float(g.get("slot_height", 0.0) or 0.0),
         "insulation_mm": float(g.get("insulation_thickness", 0.0) or 0.0),

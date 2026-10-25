@@ -119,7 +119,9 @@ const compact = (o: Record<string, unknown>): Record<string, unknown> => {
 export interface ConfigureSnapshotInput {
   machine: { name: string; die?: string | null; configuration?: string | null; fullCard?: boolean | null };
   preset?: string | null; presetModified?: boolean;
-  knobs: { stackLength_mm: number; turnsPerSlot: number; wire_mm: number; connection: string; current_A_rms: number; speed_rpm: number };
+  knobs: { stackLength_mm: number; turnsPerSlot: number; wire_mm: number; connection: string; current_A_rms: number; speed_rpm: number;
+    /** two-set (six-phase) machines only: current_A_rms stays the equivalent 3-phase total */
+    current_per_inverter_A_rms?: number; current_basis?: string; phase_count?: number; phase_sets?: number };
   drive: { mode: 'sine' | 'pwm'; transistor?: string | null; pwm_kHz?: number | null };
   propeller?: { name: string; ambient_C: number; load: 'propeller' | 'manual' } | null;
   battery: { cells: number; cellV: [number, number, number]; pack_V: [number, number]; edited: boolean } | null;
@@ -143,6 +145,9 @@ export function buildConfigureSnapshot(i: ConfigureSnapshotInput): { machine: Sn
         stackLength_mm: round3(i.knobs.stackLength_mm), turnsPerSlot: round3(i.knobs.turnsPerSlot),
         wire_mm: round3(i.knobs.wire_mm), connection: i.knobs.connection,
         current_A_rms: round3(i.knobs.current_A_rms), speed_rpm: round3(i.knobs.speed_rpm),
+        current_per_inverter_A_rms: round3(i.knobs.current_per_inverter_A_rms),
+        current_basis: i.knobs.current_basis ?? null, phase_count: i.knobs.phase_count ?? null,
+        phase_sets: i.knobs.phase_sets ?? null,
       }),
       drive: compact({ mode: i.drive.mode, transistor: i.drive.transistor ?? null, pwm_kHz: round3(i.drive.pwm_kHz ?? NaN) }),
       propeller: i.propeller ? compact({ name: i.propeller.name, ambient_C: round3(i.propeller.ambient_C), load: i.propeller.load }) : null,

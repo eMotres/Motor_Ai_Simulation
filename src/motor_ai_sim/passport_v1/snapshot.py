@@ -228,9 +228,16 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
     geo = resolve_geometry(die, cfg)
     winding = dict(_req(cfg, "winding", "configuration"))
     winding.setdefault("star_delta", "star")
+    from motor_ai_sim.passport_winding import resolved_six_phase
+    six_phase = resolved_six_phase(winding, geo, winding.get("connection"))
     rd = find_duty(cfg, rated_duty)
     pk = find_duty(cfg, peak_duty) if peak_duty else None
     mesh = duty_mesh_settings(rd)
+    if six_phase:
+        # A reduced sector can contain only one set of the configured split.
+        # Whole-ring solves are the conservative periodicity choice.
+        mesh["requested_n_sectors"] = mesh["n_sectors"]
+        mesh["n_sectors"] = 1
     m_rd = rd.get("mesh") or {}
 
     def _f(v):
@@ -308,6 +315,9 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
         "role": cfg.get("role"),
         "geometry": geo,
         "winding": winding,
+        **({"phase_count": 6, "phase_sets": 2,
+            "current_basis": "equivalent_three_phase_total",
+            "six_phase_spec": six_phase} if six_phase else {}),
         "materials": mats,
         "material_cards": cards,
         "temperatures": temps,

@@ -115,6 +115,14 @@ t('the Configure snapshot rounds, drops blanks and keeps the red lines', () => {
   assert.ok(!('editedByUser' in s.configure.battery));
   const withCard = C.buildConfigureSnapshot({ ...INPUT, machine: { ...INPUT.machine, fullCard: true } });
   assert.equal(withCard.machine.fullCard, true);
+  assert.deepEqual(Object.keys(s.configure.knobs).sort(),
+    ['connection', 'current_A_rms', 'speed_rpm', 'stackLength_mm', 'turnsPerSlot', 'wire_mm'],
+    'a three-phase snapshot carries no phase-set fields');
+  const six = C.buildConfigureSnapshot({ ...INPUT, knobs: { ...INPUT.knobs, current_per_inverter_A_rms: 20.05,
+    current_basis: 'equivalent_three_phase_total', phase_count: 6, phase_sets: 2 } });
+  assert.equal(six.configure.knobs.current_per_inverter_A_rms, 20.1);
+  assert.equal(six.configure.knobs.current_basis, 'equivalent_three_phase_total');
+  assert.equal(six.configure.knobs.phase_sets, 2);
 });
 
 t('the context carries Configure values only while the user is on Configure', () => {

@@ -161,6 +161,8 @@ def scalars(res: Mapping[str, Any]) -> Dict[str, Any]:
         "structured_gap_effective": g("structured_gap_effective"),
         "magnet_segmentation": g("magnet_segmentation"),
     }
+    if g("six_phase") is not None:
+        out["six_phase"] = g("six_phase")
     return out
 
 
@@ -173,7 +175,7 @@ def base_kwargs(snap: Mapping[str, Any], *, daxis_deg: Optional[float]) -> Dict[
     m = snap["mesh"]
     w = snap["winding"]
     rd = snap["rated_duty"]
-    return dict(
+    out = dict(
         connection=str(w["connection"]),
         star_delta=str(w.get("star_delta") or "star"),
         strand_bonding=None,                  # the geometry decides (route rule)
@@ -190,6 +192,17 @@ def base_kwargs(snap: Mapping[str, Any], *, daxis_deg: Optional[float]) -> Dict[
         geo_override=dict(snap["geometry"]),
         inc_ldq=True, drive="current",
     )
+    six_phase = snap.get("six_phase_spec")
+    if not six_phase and int(w.get("phases") or 3) == 6:
+        # Snapshots written before six_phase_spec was introduced still carry
+        # the authoritative winding and geometry. Resolve them here or fail
+        # loudly; silently solving them as three phase would corrupt a card.
+        from motor_ai_sim.passport_winding import resolved_six_phase
+        six_phase = resolved_six_phase(w, snap["geometry"], w.get("connection"))
+    if six_phase:
+        out["six_phase"] = dict(six_phase)
+        out["n_sectors"] = 1
+    return out
 
 
 def static_job(jid: str, base: Mapping[str, Any], *, I_rms: float, gamma_deg: float,
@@ -292,6 +305,41 @@ def run_job(job: Mapping[str, Any], out_dir: str) -> Dict[str, Any]:
         res = em_transient_eval(**job["kw"])
         rec["ok"] = True
         rec["r"] = prune(scalars(res))
+        if job["kw"].get("six_phase"):
+            from motor_ai_sim.winding_sets import per_set_values
+            six = dict(res.get("six_phase") or {})
+            terminals = dict(res)
+            from motor_ai_sim.simulation.postproc import voltage_harmonics
+            vh = voltage_harmonics(res)
+            if vh.get("V1_phase_V"):
+                terminals["V1_phase_V"] = vh["V1_phase_V"]
+            drive = str(job["kw"].get("drive") or "current")
+            if drive == "current" and not (terminals.get("I_phase_rms_A")
+                                             or terminals.get("I_phase_rms_solved_A")):
+                terminals["I_phase_rms_A"] = job["kw"].get("I_phase_rms")
+                terminals["I_phase_rms_solved_A"] = job["kw"].get("I_phase_rms")
+            per_set = per_set_values(terminals, job["kw"]["six_phase"])
+            solved = next((s.get("I_phase_rms_A") for s in per_set["sets"]
+                           if s.get("I_phase_rms_A") is not None), None)
+            per_set["current_per_inverter_A"] = solved
+            per_set["current_basis"] = (
+                "imposed equivalent machine phase current / 2" if drive == "current"
+                else "solved RMS machine phase current / 2")
+            pcu = _mean(res.get("P_cu_W"))
+            per_set["copper_loss_per_set_W"] = None if pcu is None else pcu / 2.0
+            per_set["losses_per_set_W"] = {
+                "copper_W": per_set["copper_loss_per_set_W"],
+                "iron_W": None, "magnet_W": None, "shaft_W": None}
+            r_phase = res.get("R_phase_ohm")
+            per_set["resistance_per_set_ohm"] = (
+                None if r_phase is None else 2.0 * float(r_phase))
+            per_set["resistance_basis"] = (
+                "one set has half the parallel paths: 2 x equivalent machine phase resistance")
+            per_set["loss_allocation_note"] = (
+                "balanced winding symmetry allocation; only copper is allocated "
+                "per set, while machine iron and rotor losses remain totals")
+            six.update(per_set)
+            rec["r"]["six_phase"] = prune(six)
         raw = prune(res)
         p = Path(out_dir) / "raw" / (job["id"] + ".json.gz")
         p.parent.mkdir(parents=True, exist_ok=True)

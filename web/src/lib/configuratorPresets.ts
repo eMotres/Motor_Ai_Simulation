@@ -35,6 +35,13 @@ export interface PresetDutyPoint {
 export interface Preset {
   config: string;
   die: string;
+  phase_count?: number;
+  phase_sets?: number;
+  current_basis?: string;
+  current_per_inverter_A?: number | null;
+  phase_model_supported?: boolean;
+  phase_model_status?: string;
+  winding?: { phases?: number; connection?: string; set1_paths?: string; set_neutrals?: string };
   knobs: PresetKnobs;
   duty?: string | null;
   /** Named catalog operating points, used only for Propeller-mode defaults. */

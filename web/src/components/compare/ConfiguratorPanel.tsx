@@ -5,7 +5,7 @@
  * plan-1 user is allowed to change — lamination length, turns, wire thickness,
  * the winding connection — plus the operating point (current & speed).
  * Torque / power / voltage / efficiency / mass recompute INSTANTLY from the
- * passport via scaleMotor() — no FEM.  Snapshot configs and compare them.
+ * passport via scaleConfigureMotor() — no FEM.  Snapshot configs and compare them.
  *
  * The physics is analytical and FEM-validated (see motorScaling.ts):
  *   length L : T,EMF,iron,magnet,mass ∝ L ; R = R_active·L + R_end
@@ -26,7 +26,9 @@ import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile, Tip } from '../common/ResultTiles';
 import {
-  scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs, type ScaledResult, type PwmVariant,
+  scaleMotor, maxCurrent, turnsFactor, phaseSetCount, currentPerInverter, equivalentPhaseCurrent,
+  safeConfigureParallelPaths,
+  type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
 import {
   EMPTY_REFERENCE, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
@@ -127,6 +129,11 @@ const withDrive = (k: Knobs, refId: string): Knobs => {
   const c = readDriveChoice(raw, refId);
   return c ? { ...k, ...c } : k;
 };
+
+function scaleConfigureMotor(p: Passport, k: Knobs, poles?: number) {
+  const safe = p.phase_count === 6 ? { ...k, nP: safeConfigureParallelPaths(p, k.nP) } : k;
+  return scaleMotor(p, safe, poles);
+}
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -825,22 +832,38 @@ const ConfiguratorPanel: React.FC = () => {
   // their computed points; nothing is calculated live here.  Sine is the
   // default and the whole block is inert unless the user picks PWM: with it
   // off `scaleKnobs === knobs`, so every Sine number is the one it always was.
+  const phaseTopology = { phase_count: p.phase_count ?? basePreset?.phase_count ?? currentContext?.phase_count };
+  const phaseSets = phaseSetCount(phaseTopology);
   const variants = useMemo(
-    () => usableVariants(selectConfigureVariants(
+    () => phaseSets === 2 ? [] : usableVariants(selectConfigureVariants(
       ref.referenceOnly === true,
       basePreset?.pwm_variants,
       p.pwm_variants,
     )),
-    [p, basePreset, ref.referenceOnly]);
+    [p, basePreset, ref.referenceOnly, phaseSets]);
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn ? (resolveVariant(variants, knobs) ?? null) : null;
   /** the drive choice that names a variant: its id AND its (transistor, frequency) pair */
   const choiceOf = (v: PwmVariant): Partial<Knobs> =>
     ({ drive: 'pwm', drive_variant: v.id, drive_device: v.device, drive_carrier_hz: Number(v.carrier_hz) });
-  // scaleMotor() is the SINE model and never sees the drive; `scaleKnobs` stays as
+  // scaleConfigureMotor() is the SINE model and never sees the drive; `scaleKnobs` stays as
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
-  const result  = useMemo(() => scaleMotor(pMass, scaleKnobs, ref.poles), [pMass, scaleKnobs, ref.poles]);
+  const sixPhasePassportReady = phaseSets !== 2 ||
+    (Number.isInteger(p.nP0) && p.nP0 > 0 && p.nP0 % 2 === 0 &&
+      basePreset?.phase_model_supported !== false &&
+      (currentContext?.phase_model_supported ?? (p.phase_count === 6 &&
+        p.current_basis === 'equivalent_three_phase_total' && !!p.six_phase?.current_per_inverter_A)) === true);
+  const phaseTopologyMismatch = !!basePreset?.phase_count &&
+    (p.phase_count != null ? p.phase_count !== basePreset.phase_count : basePreset.phase_count === 6);
+  // Keep hooks render-safe while a stale/mixed card is being rejected below.
+  // The substitute is never displayed or exported; it only prevents scaleMotor's
+  // fail-closed six-phase guard from throwing during this render.
+  const safeScaleKnobs = phaseSets === 2 && (!Number.isInteger(scaleKnobs.nP) || scaleKnobs.nP % 2 !== 0)
+    ? { ...scaleKnobs, nP: (Number.isInteger(p.nP0) && p.nP0 % 2 === 0) ? p.nP0 : 2 }
+    : scaleKnobs;
+  const result = useMemo(() => scaleConfigureMotor(pMass, safeScaleKnobs, ref.poles),
+    [pMass, safeScaleKnobs, ref.poles]);
   const motorLoss_W = motorLossesComputed ? result.P_loss_W : null;
   const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
   const copperBreakdownTip = copperBreakdown
@@ -922,8 +945,8 @@ const ConfiguratorPanel: React.FC = () => {
   };
   const modM = currentContext?.modulation.m ?? DEFAULT_MODULATION;
   const speedLim = useMemo(() => {
-    const at0 = scaleMotor(p, { ...knobs, rpm: 0 }, ref.poles);
-    const at1k = scaleMotor(p, { ...knobs, rpm: 1000 }, ref.poles);
+    const at0 = scaleConfigureMotor(p, { ...knobs, rpm: 0 }, ref.poles);
+    const at1k = scaleConfigureMotor(p, { ...knobs, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
     return speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
@@ -936,8 +959,8 @@ const ConfiguratorPanel: React.FC = () => {
   // current-dependent cap remains available through speedLim for validation;
   // using the live current here made the thumb move when only current changed.
   const speedDisplayLim = useMemo(() => {
-    const at0 = scaleMotor(p, { ...knobs, I_A: 0, rpm: 0 }, ref.poles);
-    const at1k = scaleMotor(p, { ...knobs, I_A: 0, rpm: 1000 }, ref.poles);
+    const at0 = scaleConfigureMotor(p, { ...knobs, I_A: 0, rpm: 0 }, ref.poles);
+    const at1k = scaleConfigureMotor(p, { ...knobs, I_A: 0, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
     return speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
@@ -973,8 +996,8 @@ const ConfiguratorPanel: React.FC = () => {
     const board = variant
       ? (typeof vLim === 'number' && vLim > 0 ? { A: vLim, device: variant.device, n: variant.n_parallel ?? 1 } : null)
       : (caps?.board && caps.board.A > 0 ? { A: caps.board.A, device: caps.board.device ?? null, n: caps.board.n_parallel ?? 1 } : null);
-    return boardMarker(board, knobs.I_A);
-  }, [currentContext, variant, knobs.I_A]);
+    return boardMarker(board, currentPerInverter(phaseTopology, knobs.I_A));
+  }, [currentContext, variant, knobs.I_A, phaseSets]);
   const phys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
@@ -1018,7 +1041,8 @@ const ConfiguratorPanel: React.FC = () => {
   /** one short line under a slider: where its maximum comes from (+ tooltip) */
   const limitNote = (k: KnobKey): { text: string; tip: string; hand?: boolean } => {
     const b: LimitBasis = (phys as Record<KnobKey, PhysRange>)[k].basis;
-    const mx = fmt(ranges[k].max, k === 'wireH_mm' ? 1 : 0);
+    const mx = fmt(k === 'I_A' ? currentPerInverter(phaseTopology, ranges[k].max) : ranges[k].max,
+      k === 'wireH_mm' ? 1 : 0);
     if (k === 'L_mm') {
       return b === 'hand'
         ? { text: tx('configureLimits.lHand', { max: mx }), tip: tx('configureLimits.lHandTip'), hand: true }
@@ -1075,7 +1099,7 @@ const ConfiguratorPanel: React.FC = () => {
   // showed −92.7 % with nothing touched — it was being compared to another
   // configuration's base build).  refKnobs is set when a machine is adopted;
   // it falls back to the passport base when nothing is loaded.
-  const baseRes = useMemo(() => scaleMotor(pMass, refKnobs ?? baseKnobs(p), ref.poles),
+  const baseRes = useMemo(() => scaleConfigureMotor(pMass, refKnobs ?? baseKnobs(p), ref.poles),
                           [pMass, p, ref.poles, refKnobs]);
   const iMax    = useMemo(() => maxCurrent(p, knobs), [p, knobs]);
 
@@ -1464,7 +1488,7 @@ ${s1Text.text}` : '';
     ? tx('configurePropeller.estimatedTip')
     : tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')) + s1Tail;
   /** the torque of the passport at a current — every other knob as given */
-  const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
+  const torqueAtI = (k: Knobs) => (I: number) => scaleConfigureMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
   // THE thermal model applies to the loaded configuration's own build, in the propeller's wash it was fitted to, with a
   // drive it computed (`undefined` = a PWM variant it does not carry).  Anywhere else the lumped estimate stands in.
   // (a PWM variant the model does not carry falls back to its Sine losses, like the S1 limit - s1DriveFellBack)
@@ -1567,7 +1591,7 @@ ${s1Text.text}` : '';
   /** record / page losses at the record's point: the stored point IS the record, the loss model only carries the change */
   const anchorRatios = useMemo(() => {
     if (!anchorUsable || !thermalAnchor) return null;
-    const r = scaleMotor(p, { ...knobs, rpm: thermalAnchor.point.rpm, I_A: thermalAnchor.point.I_A }, ref.poles);
+    const r = scaleConfigureMotor(p, { ...knobs, rpm: thermalAnchor.point.rpm, I_A: thermalAnchor.point.I_A }, ref.poles);
     return anchorLossRatios(thermalAnchor, { P_cu_W: r.P_cu_W, P_rotor_W: r.P_mag_W, P_total_W: r.P_cu_W + r.P_fe_W + r.P_mag_W });
   }, [anchorUsable, thermalAnchor, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split]); // eslint-disable-line react-hooks/exhaustive-deps
   const judgePoint = (mode: 'sine' | 'pwm', accepted: boolean, base: Parameters<typeof configurePointThermal>[2],
@@ -1651,7 +1675,7 @@ ${s1Text.text}` : '';
     const okAt = (rpm: number, I: number): boolean | null => {
       const pt = seriesAt(series, rpm);
       if (!pt || pt.h_W_m2K == null) return null;
-      const r = scaleMotor(p, { ...knobs, rpm, I_A: I }, ref.poles);
+      const r = scaleConfigureMotor(p, { ...knobs, rpm, I_A: I }, ref.poles);
       const j = judgePoint('sine', true, { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W,
         P_mag_W: r.P_mag_W, stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W }, 0,
         { h_Wm2K: pt.h_W_m2K, ambient_C: ambient }, rpm, I, knobs.L_mm);
@@ -1682,9 +1706,9 @@ ${s1Text.text}` : '';
     const ld = propCurrentAt(knobs, rpm, pt);
     if (!ld.ok) return true;                                  // the motor cannot carry the propeller here
     const kI: Knobs = { ...k, I_A: ld.I_A };
-    const r = scaleMotor(p, kI, ref.poles);
-    const at0 = scaleMotor(p, { ...kI, rpm: 0 }, ref.poles);
-    const at1k = scaleMotor(p, { ...kI, rpm: 1000 }, ref.poles);
+    const r = scaleConfigureMotor(p, kI, ref.poles);
+    const at0 = scaleConfigureMotor(p, { ...kI, rpm: 0 }, ref.poles);
+    const at1k = scaleConfigureMotor(p, { ...kI, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
     const lim = speedLimit({ vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
       v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null, batteryValid });
@@ -1787,7 +1811,10 @@ ${s1Text.text}` : '';
   // typed, so the user is not told about it three screens later by the solver.
   const badTurns = kPar > 1 && (Math.round(knobs.N) % kPar) !== 0;
   // winding connections are derived from THIS reference's slot count (C = slots/6)
-  const conns = useMemo(() => windingConnections(ref.geo.numSlots), [ref.geo.numSlots]);
+  const conns = useMemo(() => {
+    const choices = windingConnections(ref.geo.numSlots);
+    return phaseSets === 2 ? choices.filter((c) => c.nP === p.nP0) : choices;
+  }, [ref.geo.numSlots, phaseSets, p.nP0]);
   useEffect(() => {
     if (conns.length && !conns.some((c) => c.nP === knobs.nP)) setKnobs((s) => ({ ...s, nP: conns[0].nP }));
   }, [conns]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2133,7 +2160,13 @@ ${s1Text.text}` : '';
     { label: tx('configure.colTurns'),  get: (c) => `${c.knobs.N}` },
     { label: tx('configure.colLength'), get: (c) => fmt(c.knobs.L_mm, 0) },
     { label: tx('configure.colWireH'), get: (c) => fmt(c.knobs.wireH_mm, 2) },
-    { label: tx('configure.colCurrent'),      get: (c) => fmt(c.knobs.I_A, 0) },
+    { label: tx('configure.colCurrent'), get: (c) => {
+      const rowPassport = allRefs.find((r) => r.id === c.refId)?.passport ?? p;
+      const rowTopology = { phase_count: rowPassport.phase_count };
+      return phaseSetCount(rowTopology) === 2
+        ? `${fmt(currentPerInverter(rowTopology, c.knobs.I_A), 0)} / inverter`
+        : fmt(c.knobs.I_A, 0);
+    } },
     { label: 'rpm',    get: (c) => fmt(c.knobs.rpm, 0) },   // a unit symbol: never translated
   ];
   // What is on this screen, for the help assistant (support widget): the knobs, the drive, the
@@ -2142,7 +2175,10 @@ ${s1Text.text}` : '';
     machine: { name: ref.name, die: catId, configuration: baseConfig },
     preset: baseConfig, presetModified: modified,
     knobs: { stackLength_mm: knobs.L_mm, turnsPerSlot: knobs.N, wire_mm: knobs.wireH_mm,
-      connection: connLabel(knobs.nP, ref.geo.numSlots), current_A_rms: knobs.I_A, speed_rpm: knobs.rpm },
+      connection: connLabel(knobs.nP, ref.geo.numSlots), current_A_rms: knobs.I_A,
+      ...(phaseSets === 2 ? { current_per_inverter_A_rms: currentPerInverter(phaseTopology, knobs.I_A),
+        current_basis: 'equivalent_three_phase_total', phase_count: 6, phase_sets: phaseSets } : {}),
+      speed_rpm: knobs.rpm },
     drive: { mode: driveMode, transistor: variant?.device ?? null,
       pwm_kHz: variant ? Number(variant.carrier_hz) / 1000 : null },
     propeller: cooled && propSummary
@@ -2179,6 +2215,11 @@ ${s1Text.text}` : '';
     ].filter(Boolean),
   });
 
+
+  if (phaseTopologyMismatch || currentContext?.phase_model_supported === false
+      || basePreset?.phase_model_supported === false || (phaseSets === 2 && !sixPhasePassportReady)) {
+    return <Box sx={{ p: 1 }}><Alert severity="warning">{tx('configureLimits.phasePassportMissing')}</Alert></Box>;
+  }
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'auto' }}>
@@ -2505,10 +2546,14 @@ ${s1Text.text}` : '';
               {/* S1 controller / board build / board cooling: no user choice (owner 2026-10-15) - our drive block, as built, in the same propeller wash as the motor */}
             </Box>
           )}
-          <KnobSlider label={tx('configureLimits.phaseCurrent')} tip={tx('configureLimits.phaseCurrentTip')} unit="A" value={knobs.I_A} base={p.I0_A}
-            min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0}
-            sub={tx('configureLimits.peakOf', { value: fmt(knobs.I_A * Math.SQRT2, 0) })}
-            onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
+          <KnobSlider label={tx(phaseSets === 2 ? 'configureLimits.phaseCurrentPerInverter' : 'configureLimits.phaseCurrent')}
+            tip={tx(phaseSets === 2 ? 'configureLimits.phaseCurrentPerInverterTip' : 'configureLimits.phaseCurrentTip')}
+            unit="A" value={currentPerInverter(phaseTopology, knobs.I_A)} base={currentPerInverter(phaseTopology, p.I0_A)}
+            min={ranges.I_A.min / phaseSets} max={ranges.I_A.max / phaseSets} step={1} d={0}
+            sub={tx('configureLimits.peakOf', { value: fmt(currentPerInverter(phaseTopology, knobs.I_A) * Math.SQRT2, 0) })}
+            onChange={(I) => setKnobs((s) => ({ ...s, I_A: equivalentPhaseCurrent(phaseTopology, I) }))}
+            onRangeChange={isAdmin ? (min, max) => setRange('I_A')(min * phaseSets, max * phaseSets) : undefined}
+            warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
             disabled={propLoad} zone={propLoad ? null : zones.I}
             // the board marker and its note are hidden for now (owner 2026-10-20: they confuse users)
             marker={SHOW_BOARD_MARK && boardMark ? {
@@ -2518,7 +2563,7 @@ ${s1Text.text}` : '';
                 : tx('configureLimits.iBoardMark', { max: fmt(boardMark.A, 0), device: boardMark.device, n: boardMark.n }),
               tip: tx('configureLimits.iBoardMarkTip', { max: fmt(boardMark.A, 0), device: boardMark.device, n: boardMark.n }) } : undefined}
             limitNote={propLoad
-              ? propellerCurrentNote(tx, { max: fmt(ranges.I_A.max, 0), basisTip: limitNote('I_A').tip })
+              ? propellerCurrentNote(tx, { max: fmt(currentPerInverter(phaseTopology, ranges.I_A.max), 0), basisTip: limitNote('I_A').tip })
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
           <KnobSlider label={tx('configureLimits.speed')} tip={tx('configureLimits.speedTip')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
             warn={above(knobs.rpm, ranges.rpm) || (speedLim.rpm != null && knobs.rpm > speedLim.rpm)} zone={cooled ? zones.rpm : null}
@@ -2610,7 +2655,8 @@ ${s1Text.text}` : '';
           <Box sx={{ flex: '1 1 300px', minWidth: 0 }}>
             <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={updateBattery}
               machinePack={machinePack} onReset={resetBattery}
-              stockNote={!batteryKnown} vDcTip={tx('configure.motorVTip', { I: fmt(knobs.I_A, 1), rpm: fmt(knobs.rpm, 0) })} />
+              stockNote={!batteryKnown} vDcTip={tx('configure.motorVTip', {
+                I: fmt(currentPerInverter(phaseTopology, knobs.I_A), 1), rpm: fmt(knobs.rpm, 0) })} />
           </Box>
           <GeometryProjections ref0={ref} knobs={knobs} />
         </Box>
@@ -2929,7 +2975,7 @@ ${s1Text.text}` : '';
           winding knobs are turned, the charge map reads below it. ── */}
       {canCharge(p) ? (
         <Box sx={{ px: 2, pb: 1.5 }}>
-          <ChargePanel p={p} knobs={scaleKnobs} poles={ref.poles} result={result}
+          <ChargePanel p={p} knobs={safeScaleKnobs} poles={ref.poles} result={result}
             onPickCurrent={(I) => setKnobs((s) => ({ ...s, I_A: I }))} />
         </Box>
       ) : String(p.role ?? p.mode0 ?? '').toLowerCase() === 'generator' && !p.battery ? (
@@ -2944,7 +2990,7 @@ ${s1Text.text}` : '';
       {/* ── PERFORMANCE VS SPEED ── */}
       {SHOW_CONFIGURE_CHARTS && (
         <Box sx={{ px: 2, pb: 1.5, ...holdSx }}>
-          {pointGate.showBatteryDerived && batteryNumbers && <PerformanceCharts p={p} knobs={scaleKnobs} packMin={batteryNumbers.cells * batteryNumbers.min} packMax={batteryNumbers.cells * batteryNumbers.max} />}
+          {pointGate.showBatteryDerived && batteryNumbers && <PerformanceCharts p={p} knobs={safeScaleKnobs} packMin={batteryNumbers.cells * batteryNumbers.min} packMax={batteryNumbers.cells * batteryNumbers.max} />}
         </Box>
       )}
       {narrow && (

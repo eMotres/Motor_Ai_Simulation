@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import APIRouter, Header, HTTPException, Query
 
 import logging
+import math
 import threading
 
 from motor_ai_sim.auth import caller_identity as _caller_identity
@@ -794,6 +795,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
         # Simulation tab (measured 2026-08-30: the whole catalog was
         # regenerated as motors while two large reference die machines are generators).
         _fam = _family_doc_of_motor(motor, machine["geometry"]) or {}
+        machine["winding"] = dict(_fam.get("winding") or {})
         _role = str(_fam.get("role") or "").strip().lower() or None
         if _role not in ("motor", "generator"):
             _role = _role_of_motor(motor)
@@ -1160,7 +1162,7 @@ _CONFIGURE_CODE = ("routes/catalog.py", "configure_limits.py", "configure_load.p
 
 
 #: the version of the stored Configure answers; part of every stamp (bump it to make every stored answer stale)
-CONFIGURE_STORE_VERSION = "configure-2"
+CONFIGURE_STORE_VERSION = "configure-3"
 
 
 def _configure_stamp(src: Any = None) -> str:
@@ -1230,10 +1232,14 @@ def _configure_context_unfiltered(motor_id: str, motor: dict) -> Dict[str, Any]:
         docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))
     ctx = {"motor_id": motor_id,
            **_cl.context(motor, fam),
+           **_passport_winding_context(motor, fam),
            # one preset per configuration of the die, read from the machines themselves
            "presets": presets,
            # which file / layer each preset came from: _visible_context judges every preset by it (stripped)
            "_config_access": access_info}
+    v_phase_limit = _phase_voltage_limit_per_set(ctx)
+    if v_phase_limit is not None:
+        ctx["phase_voltage_limit_per_set_V"] = v_phase_limit
     s1_die = str(((ctx.get("cooling") or {}) if isinstance(ctx.get("cooling"), dict) else {}).get("die") or "")
     for pr in presets:
         # does this configuration have a FULL passport card (v1 record)?
@@ -1242,6 +1248,67 @@ def _configure_context_unfiltered(motor_id: str, motor: dict) -> Dict[str, Any]:
         _drive_the_s1_model_carries(pr, s1_die)
         pr["mass"] = _preset_mass(str(pr.get("die") or ""), str(pr.get("config") or ""))
     return ctx
+
+
+def _phase_voltage_limit_per_set(ctx: dict) -> Optional[float]:
+    """Per-set phase-peak ceiling from the full bus and modulation index."""
+    if not isinstance(ctx, dict) or ctx.get("phase_count") != 6:
+        return None
+    batt = ctx.get("battery") if isinstance(ctx.get("battery"), dict) else {}
+    mod = ctx.get("modulation") if isinstance(ctx.get("modulation"), dict) else {}
+    v_bus, m_index = batt.get("v_max"), mod.get("m")
+    if not isinstance(v_bus, (int, float)) or not isinstance(m_index, (int, float)):
+        return None
+    return round(float(v_bus) * float(m_index) / math.sqrt(3.0), 3)
+
+
+def _passport_winding_context(motor: dict, fam: Optional[dict] = None) -> Dict[str, Any]:
+    """Expose the passport's current and voltage bases used by Configure."""
+    card = motor.get("passport") if isinstance(motor, dict) else None
+    passport = card.get("passport") if isinstance(card, dict) else None
+    passport = passport if isinstance(passport, dict) else {}
+    winding = (fam or {}).get("winding") if isinstance((fam or {}).get("winding"), dict) else {}
+    raw_phase_count = winding.get("phases") if "phases" in winding else passport.get("phase_count")
+    try:
+        phase_count = int(raw_phase_count) if raw_phase_count not in (None, "") else 3
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid Configure winding phase count: {raw_phase_count!r}") from exc
+    if phase_count not in (3, 6):
+        raise ValueError(f"unsupported Configure passport phase_count={phase_count}")
+    out: Dict[str, Any] = {"phase_count": phase_count}
+    raw_passport_phase_count = passport.get("phase_count")
+    try:
+        passport_phase_count = int(raw_passport_phase_count) if raw_passport_phase_count not in (None, "") else 3
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid passport phase count: {raw_passport_phase_count!r}") from exc
+    if phase_count == 3:
+        if passport_phase_count != 3:
+            out.update({"phase_model_supported": False,
+                        "phase_model_status": "passport_winding_mismatch"})
+        return out
+    six = passport.get("six_phase") if isinstance(passport.get("six_phase"), dict) else {}
+    try:
+        n_parallel = int(passport.get("nP0") or 0)
+    except (TypeError, ValueError):
+        n_parallel = 0
+    ready = (passport_phase_count == 6
+             and passport.get("current_basis") == "equivalent_three_phase_total"
+             and isinstance(six.get("current_per_inverter_A"), (int, float))
+             and math.isfinite(float(six.get("current_per_inverter_A")))
+             and (not isinstance(passport.get("I0_A"), (int, float))
+                  or math.isclose(float(six.get("current_per_inverter_A")), float(passport["I0_A"]) / 2,
+                                  rel_tol=1e-6, abs_tol=1e-6))
+             and n_parallel > 0 and n_parallel % 2 == 0)
+    out.update({
+        "phase_sets": 2,
+        "current_basis": passport.get("current_basis") or "equivalent_three_phase_total",
+        "current_per_inverter_A": six.get("current_per_inverter_A") if ready else None,
+        "six_phase": six,
+        "phase_model_supported": ready,
+        "phase_model_status": ("ready" if ready else "unsupported_parallel_path"
+                               if passport_phase_count == 6 and n_parallel % 2 else "passport_requires_regeneration"),
+    })
+    return out
 
 
 def _preset_mass(die: str, config: str) -> Optional[Dict[str, Any]]:

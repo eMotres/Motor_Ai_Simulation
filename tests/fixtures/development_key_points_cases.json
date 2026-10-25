@@ -1,0 +1,23 @@
+[
+  {"id": "four-propulsion-points",
+   "rows": [["Takeoff", 80, 2400, 60], ["Cruise", 40, 2800, "continuous"], ["Landing", 55, 2000, 30], ["Peak", 110, 2200, 5]],
+   "continuous": "Cruise", "peak": "Peak"},
+  {"id": "longest-wins-without-continuous",
+   "rows": [["A", 30, 1000, 10], ["B", 20, 1000, 90], ["C", 50, 1000, 90]],
+   "continuous": "C", "peak": null},
+  {"id": "several-continuous-take-the-highest-torque",
+   "rows": [["Hover", 30, 1000, "continuous"], ["Cruise", 20, 3000, "continuous"], ["Boost", 45, 900, 8]],
+   "continuous": "Hover", "peak": "Boost"},
+  {"id": "single-continuous-point-has-no-peak",
+   "rows": [["Only", 10, 500, "continuous"]],
+   "continuous": "Only", "peak": null},
+  {"id": "incomplete-rows-do-not-take-part",
+   "rows": [["x", null, 500, "continuous"], ["y", 5, 500, 0]],
+   "continuous": null, "peak": null},
+  {"id": "equal-torque-is-not-a-peak",
+   "rows": [["Cruise", 40, 2800, "continuous"], ["Same", 40, 3000, 20]],
+   "continuous": "Cruise", "peak": null},
+  {"id": "tie-on-torque-takes-the-higher-speed-then-the-earlier-row",
+   "rows": [["Cruise", 10, 100, "continuous"], ["P1", 50, 100, 5], ["P2", 50, 200, 5], ["P3", 50, 200, 7]],
+   "continuous": "Cruise", "peak": "P2"}
+]

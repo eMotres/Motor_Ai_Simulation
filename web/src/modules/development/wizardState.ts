@@ -1,5 +1,6 @@
 import type { Completeness, SchemaField, SchemaSection } from './types';
 import type { SpecificationField } from './specificationLayout';
+import { KEY_POINTS_ID, keyPointsSlotState, keyPointsValid, type KeyPoint } from './keyPoints.ts';
 
 export interface FieldAnswer { value?: unknown; status?: 'filled' | 'not_known_yet' | 'missing'; not_known_yet?: boolean }
 export type SpecDraft = Record<string, unknown> & { fields?: Record<string, FieldAnswer>; mission_profile?: Array<Record<string, unknown>>; mission_profile_status?: 'filled' | 'not_known_yet' | 'missing' };
@@ -86,6 +87,8 @@ export function schemaValueComplete(schema: { type?: string; min?: number; max?:
 
 export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): boolean {
   if (answer.status === 'not_known_yet' || answer.not_known_yet === true) return true;
+  // key operating points: every named point has torque, speed and a duration that is continuous or > 0 s
+  if (field.id === KEY_POINTS_ID) return answer.status === 'filled' && Array.isArray(answer.value) && keyPointsValid(answer.value as KeyPoint[]);
   if (answer.status !== 'filled' || !fieldValueValid(field, answer.value)) return false;
   const value = answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : {};
   const required = field.properties?.filter((property) => property.required === true || property.required_flag === 'E') ?? [];
@@ -143,6 +146,7 @@ export function sectionAnswerCounts(section: SchemaSection, draft: SpecDraft): S
       else counts.missing++;
       continue;
     }
+    if (field.id === KEY_POINTS_ID) { counts[keyPointsSlotState(draft)]++; continue; }
     const source = answerNamespace(section, field) === 'production' ? draft.production as Record<string, FieldAnswer> | undefined : draft.fields;
     const raw = source?.[field.id];
     const answer = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as FieldAnswer : { value: raw };
@@ -172,6 +176,7 @@ export function wizardCompleteness(sections: SchemaSection[], draft: SpecDraft):
 export function requiredFieldIds(sections: SchemaSection[], draft: SpecDraft): string[] {
   return sections.flatMap((s) => (s.fields ?? []).filter((f) => fieldRequired(f, draft) && !f.handled_by).filter((f) => {
     if (f.id === 'mission_profile') return draft.mission_profile_status !== 'not_known_yet' && !(draft.mission_profile_status === 'filled' && missionProfileComplete(draft));
+    if (f.id === KEY_POINTS_ID) return !['answered', 'unknown'].includes(keyPointsSlotState(draft));
     const src = answerNamespace(s, f) === 'production' ? draft.production as Record<string, FieldAnswer> | undefined : draft.fields;
     const raw = src?.[f.id];
     return !fieldAnswerComplete(f, raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { value: raw });

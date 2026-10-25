@@ -77,6 +77,21 @@ def test_derivation_is_deterministic():
     assert models.derive_continuous_peak([_point("x", None, 500, "continuous")]) == (None, None)
 
 
+def _shared_cases():
+    import json
+    from pathlib import Path
+    return json.loads((Path(__file__).parent / "fixtures" / "development_key_points_cases.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", _shared_cases(), ids=lambda c: c["id"])
+def test_derivation_matches_the_shared_cases_the_web_also_runs(case):
+    """tests/fixtures/development_key_points_cases.json is read by this test and by the web's keyPoints.test.mjs."""
+    rows = [_point(*r) for r in case["rows"]]
+    cont, peak = models.derive_continuous_peak(rows)
+    assert (cont["name"] if cont else None) == case["continuous"]
+    assert (peak["name"] if peak else None) == case["peak"]
+
+
 def test_a_point_without_peak_clears_the_peak_but_keeps_its_period():
     draft = _all_unknown_draft()
     draft["fields"]["1_5"] = {"status": "filled", "value": {"torque_Nm": 99, "speed_rpm": 1, "frequency": "twice a flight", "period_s": 120}}

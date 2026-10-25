@@ -8,7 +8,7 @@
  * drive the motor — and down to what state of charge.
  */
 import React, { useMemo } from 'react';
-import { Box, Typography, ToggleButton, ToggleButtonGroup, Button } from '@mui/material';
+import { Box, Typography, ToggleButton, ToggleButtonGroup, Button, Tooltip } from '@mui/material';
 import BatteryChargingFullIcon from '@mui/icons-material/BatteryChargingFull';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -103,6 +103,8 @@ export const BatteryInputs: React.FC<{
       {/* inputs */}
       <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 2, flexWrap: 'wrap', mb: 1.5 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+          {/* a stored chemistry outside the two buttons (e.g. "LiPo") is told in the tooltip, not a caption (owner 2026-10-25) */}
+          <Tooltip title={chemistryNote ? tx('configure.chemistryStored', { value: chemistryNote }) : ''}>
           <ToggleButtonGroup exclusive size="small" value={selectedType === undefined ? bat.type : selectedType} disabled={disabled} onChange={(_, v) => setType(v)}>
             {(['NMC', 'LFP'] as CellType[]).map((t) => (
               <ToggleButton key={t} value={t} sx={{ px: 1.5, py: 0.3, fontSize: 12, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
@@ -111,7 +113,7 @@ export const BatteryInputs: React.FC<{
               </ToggleButton>
             ))}
           </ToggleButtonGroup>
-          {chemistryNote && <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', maxWidth: 220, overflowWrap: 'anywhere' }}>{tx('configure.chemistryStored', { value: chemistryNote })}</Typography>}
+          </Tooltip>
         </Box>
         {numField(tx('configure.cellsSeries'), batteryFieldText(bat, 'cells'), setF('cells'), 1, 66,
           issues.has('cells') ? tx('configure.invalidCellCount') : undefined, tx('configure.cellsSeriesTip'), disabled)}

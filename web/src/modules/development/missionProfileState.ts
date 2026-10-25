@@ -1,4 +1,4 @@
-export type LoadType = 'air_propeller' | 'marine_propeller' | 'water_jet' | 'wheel' | 'pump' | 'engine_driven_generator' | 'turbine' | 'robot_joint' | 'unknown';
+export type LoadType = 'air_propeller' | 'marine_propeller' | 'water_jet' | 'wheel' | 'pump' | 'engine_driven_generator' | 'turbine' | 'robot_joint' | 'shaft' | 'unknown';
 export type MissionSource = 'manual' | 'catalog';
 export interface MissionRow {
   row_id: string; phase: string; speed_rpm: number | null; torque_Nm: number | null;

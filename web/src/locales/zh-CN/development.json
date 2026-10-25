@@ -61,10 +61,12 @@
     "torque": "转矩",
     "speed": "转速",
     "duration": "持续时间",
-    "period": "重复周期",
-    "frequency": "峰值频次／重复方式（文字）",
+    "period": "重复间隔",
+    "frequency": "峰值重复（文字）",
     "derived": "T·ω = {value} W",
-    "noPeak": "没有峰值工况时，峰值一行留空即可。"
+    "statedBasis": "按 {basis} 填写；不是轴功率",
+    "noPeak": "没有峰值工况时，峰值一行留空即可。",
+    "periodTip": "峰值多久重复一次（秒）。只出现一次时留空。"
   },
   "migration": {
     "action": "审核旧版 S1 迁移",
@@ -371,6 +373,7 @@
       "engine_driven_generator": "发动机驱动发电机",
       "turbine": "涡轮（风力／水力）",
       "robot_joint": "机器人关节",
+      "shaft": "轴输出（联轴器/齿轮箱）",
       "unknown": "未知"
     },
     "source": "负载数据来源",
@@ -506,5 +509,9 @@
     "selectMarker": "选择图表上的点",
     "refreshUnavailable": "此来源无法更新。",
     "refreshRow": "{phase}：{before} → {after} N·m"
-  }
+  },
+  "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最大值；输入一个数值即替换该范围。",
+  "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。",
+  "addLoadComponent": "添加载荷分量",
+  "coolingMisfit": "{medium}与负载“{load}”不匹配"
 }

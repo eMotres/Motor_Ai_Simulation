@@ -7,62 +7,54 @@ import { sectionCompleteness, fieldAnswerComplete } from '../wizardState.ts';
 const load = (name) => JSON.parse(readFileSync(new URL(`../../../../../src/motor_ai_sim/development/${name}`, import.meta.url), 'utf8'));
 const schema = load('schema.json');
 
-test('specification cards preserve required fields once and keep production storage namespace', () => {
+test('specification cards keep every required field exactly once; production and optional extras are not on the page', () => {
   const cards = buildSpecificationCards(schema);
   const ids = cards.flatMap((card) => card.fields.map((field) => `${field.storage_namespace}:${field.id}`));
   assert.equal(new Set(ids).size, ids.length);
   const originalRequired = schema.sections.flatMap((section) => section.fields ?? []).filter((field) => field.required || field.required_flag === 'E');
   const groupedRequired = cards.flatMap((card) => card.fields).filter((field) => field.required || field.required_flag === 'E');
   assert.equal(groupedRequired.length, originalRequired.length);
-  const more = cards.find((card) => card.id === 'more');
-  assert.ok(more.fields.some((field) => field.storage_namespace === 'production'));
-  assert.equal(sectionCompleteness(more, { production: {}, fields: {} }).required, more.fields.filter((f) => f.required || f.required_flag === 'E').length);
+  assert.ok(cards.flatMap((card) => card.fields).every((field) => field.storage_namespace !== 'production'));
 });
 
-test('compact layout: key data, requirements, mission, more details (collapsed), review', () => {
+test('minimal layout (owner 2026-10-25): key data (with the load type), requirements, mission, review - no More details', () => {
   const cards = buildSpecificationCards(schema);
   const card = (id) => cards.find((c) => c.id === id);
-  assert.deepEqual(cards.map((c) => c.id), ['key', 'requirements', 'mission', 'more', 'review']);
-  assert.deepEqual(card('key').fields.map((f) => f.id), KEY_FIELDS);
+  assert.deepEqual(cards.map((c) => c.id), ['key', 'requirements', 'mission', 'review']);
+  assert.deepEqual(card('key').fields.map((f) => f.id), [...KEY_FIELDS, 'load_type']);
   assert.deepEqual(card('requirements').fields.map((f) => f.id), [...REQUIREMENT_FIELDS, ...SECOND_TIER_FIELDS]);
   assert.deepEqual(card('mission').fields.map((f) => f.id), ['mission_profile']);
-  // the free-text field leads "More details", then the notes and the efficiency / drive details
-  assert.deepEqual(card('more').fields.slice(0, MORE_FIRST_FIELDS.length).map((f) => f.id), MORE_FIRST_FIELDS);
-  // nothing is dropped: every schema field (both namespaces) is in exactly one card
-  const all = schema.sections.flatMap((s) => (s.fields ?? []).map((f) => `${s.id === 'production' ? 'production' : 'fields'}:${f.id}`)).sort();
-  assert.deepEqual(cards.flatMap((c) => c.fields.map((f) => `${f.storage_namespace}:${f.id}`)).sort(), all);
-  // production fields come last in "More details" and keep their storage namespace
-  const more = card('more').fields;
-  const firstProduction = more.findIndex((f) => f.storage_namespace === 'production');
-  assert.ok(firstProduction > 0 && more.slice(firstProduction).every((f) => f.storage_namespace === 'production'));
-  // fields marked required live outside the collapsed card, except the conditional load curve
-  assert.deepEqual(more.filter((f) => f.required).map((f) => f.id), []);
-  assert.equal(cardIndexForField(cards, '1_3'), cards.indexOf(card('more')));
-  assert.equal(cardIndexForField(cards, 'load_characteristic'), cards.indexOf(card('more')));
+  // the former extras are not on the page (their stored values are kept in the draft)
+  for (const id of [...MORE_FIRST_FIELDS, 'load_characteristic']) assert.equal(cardIndexForField(cards, id), -1, id);
 });
 
 test('the required set is exactly the one the compact specification asks for', () => {
   const required = schema.sections.flatMap((s) => s.fields ?? []).filter((f) => f.required).map((f) => f.id).sort();
-  assert.deepEqual(required, ['1_1', '1_2', '1_4', '1_6', '2_1', '2_4', '3_1', '3_2', '3_3', '4_1', '4_2', '6_1', '6_2', 'mission_profile'].sort());
+  assert.deepEqual(required, ['1_1', '1_2', '1_4', '1_6', '2_1', '2_4', '3_1', '3_2', '3_3', '4_1', '4_2', '4_6', '6_1', '6_2', 'mission_profile'].sort());
+  // the axial load is required (owner 2026-10-25: «обязательно аксиальную нагрузку надо учесть»)
+  const loads = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === '4_6');
+  assert.equal(loads.properties.find((p) => p.id === 'axial_thrust_N').required, true);
   const loadCurve = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === 'load_characteristic');
-  assert.deepEqual(loadCurve.required_when, { field: 'load_source', in: ['catalog', 'manual'] });
+  // the minimal page has no load-curve editor (owner 2026-10-25): the curve is report data, never a submit requirement
+  assert.equal(loadCurve.required_when, undefined);
   const extra = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === 'additional_requirements');
   assert.equal(extra.type, 'string'); assert.equal(extra.multiline, true); assert.equal(extra.required, false);
   assert.ok(extra.label.en && extra.label['zh-CN']);
 });
 
-test('the v1 schema still lays out every field once', () => {
+test('the v1 schema lays out its page fields once', () => {
   const v1 = load('schema_v1.json');
   const cards = buildSpecificationCards(v1);
   const ids = cards.flatMap((c) => c.fields.map((f) => `${f.storage_namespace}:${f.id}`));
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(ids.length, v1.sections.flatMap((s) => s.fields ?? []).length);
+  // v1 is legacy (every live project is migrated to v2): its fields that the minimal page does not ask stay stored, unshown
+  assert.ok(ids.length > 0 && ids.length <= v1.sections.flatMap((s) => s.fields ?? []).length);
 });
 
 test('section comments written against the previous card ids stay on the card that holds those fields', () => {
   const cards = buildSpecificationCards(schema);
   const refs = Object.fromEntries(cards.map((c) => [c.id, sectionCommentRefs(c)]));
-  for (const [legacy, now] of [['application', 'key'], ['continuous', 'key'], ['electrical', 'key'], ['cooling', 'key'], ['mechanical', 'requirements'], ['load', 'more'], ['delivery', 'more'], ['mission', 'mission'], ['review', 'review']]) {
+  for (const [legacy, now] of [['application', 'key'], ['continuous', 'key'], ['electrical', 'key'], ['cooling', 'key'], ['mechanical', 'requirements'], ['load', 'key'], ['delivery', 'requirements'], ['mission', 'mission'], ['review', 'review']]) {
     assert.ok(refs[now].includes(`section:${legacy}`), legacy);
   }
 });

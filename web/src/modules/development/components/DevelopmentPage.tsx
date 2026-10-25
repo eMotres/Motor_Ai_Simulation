@@ -1,31 +1,30 @@
 import { deliveryConflicts, matchesFieldReference, productionFallback } from '../reviewPresentation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
-  Alert, Box, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
-  Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
+  Divider, FormControlLabel, IconButton, Menu, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
   Tooltip, Typography, Checkbox,
 } from '@mui/material';
   import AddIcon from '@mui/icons-material/Add';
   import ArrowBackIcon from '@mui/icons-material/ArrowBack';
   import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-  import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
   import HourglassFullIcon from '@mui/icons-material/HourglassFull';
   import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
   import { BatteryInputs, type Battery } from '../../../components/compare/BatteryPanel';
-  import { specBatteryChemistry, specBatteryFieldEdit, specBatteryView } from '../specBattery';
+  import { SPEC_PACK_PROP, specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView } from '../specBattery';
   import HelpTip from '../../../components/common/HelpTip';
   import { useAuth } from '../../../contexts/AuthContext';
   import { useTranslation } from 'react-i18next';
   import { developmentApi, DevelopmentApiError } from '../api';
-  import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SpecSnapshot, SpecState } from '../types';
-  import LoadSection from './LoadSection';
+  import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SchemaSuggestion, SpecSnapshot, SpecState } from '../types';
   import MissionProfileEditor from './MissionProfileEditor';
-  import type { MissionRow } from '../missionProfileState';
+  import type { LoadType, MissionRow } from '../missionProfileState';
+  import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
-  import { buildSpecificationCards, cardIndexForField, LOAD_FIELDS, MORE_FIRST_FIELDS, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
+  import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, usesRangeEditor, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, keyNumber, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
@@ -62,7 +61,6 @@ const readableRange = (value: unknown): string => {
   const hi = range.maximum ?? range.max ?? range.to;
   return lo == null && hi == null ? '' : `${lo ?? '—'}–${hi ?? '—'}`;
 };
-const finiteScalar = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const blankValue = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && !value.trim());
 /** A stored answer holds something worth showing (a value, or an explicit "not known yet"). */
 const hasStoredAnswer = (raw: unknown) => {
@@ -107,8 +105,9 @@ export default function DevelopmentPage() {
   const [migrationOpen, setMigrationOpen] = useState(false);
   const [migrationAck, setMigrationAck] = useState(false);
   const [migrationBusy, setMigrationBusy] = useState(false);
+  const [extraLoadProps, setExtraLoadProps] = useState<string[]>([]);
+  const [addLoadAnchor, setAddLoadAnchor] = useState<HTMLElement | null>(null);
   const [step, setStep] = useState(0);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [submitError, setSubmitError] = useState<string[]>([]);
@@ -187,7 +186,7 @@ export default function DevelopmentPage() {
     }
     if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
-    setSelected(p); setView('specification'); setStep(0); setMoreOpen(false); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
+    setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
     setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
@@ -354,17 +353,14 @@ export default function DevelopmentPage() {
     const card = sections[index];
     if (!card) return;
     setStep(index);
-    const opening = card.id === 'more' && !moreOpen;
-    if (card.id === 'more') setMoreOpen(true);
-    setTimeout(() => document.getElementById(`spec-card-${card.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), opening ? 320 : 0);
+    setTimeout(() => document.getElementById(`spec-card-${card.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
-  /** Scroll to a field (opening "More details" first when it holds it) and focus its first input. */
+  /** Scroll to a field and focus its first input (a field that is not on the page is not revealed). */
   const revealField = (fieldId: string) => {
     const index = cardIndexForField(sections, fieldId);
     if (index < 0) return;
-    const opening = sections[index].id === 'more' && !moreOpen;
     showCard(index);
-    setTimeout(() => document.getElementById(`spec-field-${fieldId}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus(), opening ? 360 : 0);
+    setTimeout(() => document.getElementById(`spec-field-${fieldId}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus(), 0);
   };
   const onSubmitSpec = async () => {
     if (!selected || !spec) return;
@@ -490,18 +486,20 @@ export default function DevelopmentPage() {
   /** A stored choice the options no longer list stays visible (and selected) instead of rendering blank. */
   const storedOutsideOptions = (value: unknown, options: Array<string | { value: string }>) => value != null && value !== '' && !options.some((o) => (typeof o === 'string' ? o : o.value) === String(value)) ? <MenuItem value={String(value)}>{String(value)}</MenuItem> : null;
   const sectionTitle = (v: unknown) => { const value = label(v); return value.startsWith('wizard.') ? tr(value) : value; };
-  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; multiline?: boolean; placeholder?: string; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false, compact = false): React.ReactNode => {
+  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; multiline?: boolean; placeholder?: string; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; suggestions?: SchemaSuggestion[]; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false, _compact = false): React.ReactNode => {
     const kind = shape.type ?? 'string';
     const options = shape.options ?? [];
     const text = (v: unknown) => v == null ? '' : String(v);
     const unitAdornment = (unit: string) => <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>{unit}</InputAdornment>;
     const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <TextField size="small" fullWidth type={type === 'number' ? 'number' : type === 'date' || unit === 'date' ? 'date' : 'text'} multiline={!!shape.multiline && type !== 'number'} minRows={shape.multiline && type !== 'number' ? 2 : undefined} placeholder={shape.placeholder} value={text(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`, min: type === 'number' ? shape.min : undefined, max: type === 'number' ? shape.max : undefined, step: type === 'number' ? 'any' : undefined }} InputProps={unit && unit !== 'date' ? { endAdornment: unitAdornment(unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onChange={(e) => update(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} />;
+    // a standard choice is a menu (schema `suggestions`): the localized label shows, the EN value is stored, any other text is kept
+    const suggest = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <SuggestField key={`${keyPrefix}-${lang}`} suggestions={shape.suggestions!} value={v} onChange={update} lang={lang} numeric={type === 'number'} disabled={!canEditSpec || busy || migrationBusy || locked} ariaLabel={`${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`} placeholder={shape.placeholder} multiline={!!shape.multiline && type !== 'number'} endAdornment={unit && unit !== 'date' ? unitAdornment(unit) : undefined} />;
     if (shape.allow_range) {
-      // a compact table cell starts with one number; a stored range keeps its two bounds
-      if (!usesRangeEditor(shape, value) || (compact && blankValue(value))) return input(value, onChange, 'number', shape.unit);
-      const bounds = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-      if (compact) return <Stack spacing={0.5}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" placeholder={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Stack>;
-      return <Box sx={{ display: 'flex', gap: 0.5 }}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" label={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Box>;
+      // ONE value, the maximum allowed / worst case for modelling (owner 2026-10-25: «всё должно быть однозначно»). A range
+      // stored before shows its maximum; typing replaces it with one number. The stored range itself is never rewritten here.
+      const stored = rangeWorst(shape, value);
+      if (!stored) return shape.suggestions?.length ? suggest(value, onChange, 'number', shape.unit) : input(value, onChange, 'number', shape.unit);
+      return <Tooltip title={tr('rangeWorst', { min: text(stored.min), max: text(stored.max) })}><Box>{input(stored.worst, onChange, 'number', shape.unit)}</Box></Tooltip>;
     }
     if (kind === 'array') {
       const rows = Array.isArray(value) ? value : [];
@@ -521,15 +519,19 @@ export default function DevelopmentPage() {
     }
     if (options.length) return <Select size="small" fullWidth displayEmpty inputProps={{ 'aria-label': label(shape.short_label ?? shape.label) }} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(value)} onChange={(e) => onChange(e.target.value)}><MenuItem value="">?</MenuItem>{storedOutsideOptions(value, options)}{options.map((option) => { const v = typeof option === 'string' ? option : option.value; return <MenuItem key={v} value={v}>{typeof option === 'string' ? option : label(option.label) || v}</MenuItem>; })}</Select>;
     if (kind === 'boolean') return <Select size="small" displayEmpty disabled={!canEditSpec || busy || migrationBusy || locked} value={value == null || value === '' ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? '' : e.target.value === 'true')}><MenuItem value="">?</MenuItem><MenuItem value="true">{tr('yes')}</MenuItem><MenuItem value="false">{tr('no')}</MenuItem></Select>;
+    if (shape.suggestions?.length && (kind === 'string' || kind === 'number')) return suggest(value, onChange, kind, shape.unit);
     return input(value, onChange, kind, shape.unit);
   };
   const openCount = (ref: string) => messages.filter((m) => !m.resolved && matchesFieldReference(m.field_ref, ref)).length;
   /** The field comment icon only appears while that field has open comments (the card's icon starts new ones). */
   const commentIcon = (ref: string) => { const open = openCount(ref); return open > 0 ? <Tooltip title={`${tr('fieldReview')} (${open})`}><IconButton size="small" aria-label={tr('fieldReview')} onClick={() => openFieldReview(ref)} sx={{ p: 0.3, color: 'primary.main' }}><ChatBubbleOutlineIcon sx={{ fontSize: 14 }} /><Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{open}</Box></IconButton></Tooltip> : null; };
-  const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
+  // The "not known yet" hourglass sits only on an EMPTY field (to mark it) or a marked one (to unmark it); a filled field shows none.
+  const fieldFilled = (f: SchemaField, prod: boolean) => f.id === 'mission_profile' ? (draftRef.current.mission_profile?.length ?? 0) > 0
+    : hasStoredAnswer(((prod ? (draftRef.current.production as Record<string, unknown>) : draftRef.current.fields) ?? {})[f.id]);
+  const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false || (!unknown && fieldFilled(f, prod)) ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
   const fieldRefFor = (f: SpecificationField, prod: boolean) => `${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`;
   /** Label (help text as its tooltip), required mark, the "not known yet" toggle and open comments. */
-  const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'wrap' }}><Tooltip title={label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{unknown && <Typography component="span" sx={{ fontSize: 10.5, color: 'warning.main' }}>{tr('wizard.notKnownYet')}</Typography>}{commentIcon(fieldRefFor(f, prod))}</Stack>;
+  const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string, extra: string[] = []) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'wrap' }}><Tooltip title={extra.length ? <>{label(f.help ?? f.label)}{extra.map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{commentIcon(fieldRefFor(f, prod))}</Stack>;
   const propLabel = (prop: { label: unknown; short_label?: unknown; help?: unknown; required?: boolean }, strong = false) => <Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ mb: 0.4, fontSize: strong ? 12 : 11, fontWeight: strong ? 800 : 600, color: strong ? 'var(--text-0)' : 'var(--text-2)' }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>;
   const storedAnswer = (f: SpecificationField, prod: boolean) => {
     const store = prod ? (draftRef.current.production as Record<string, unknown>) ?? {} : draftRef.current.fields ?? {};
@@ -560,16 +562,17 @@ export default function DevelopmentPage() {
     const options = f.options ?? f.choices;
     const objectValue = objectOf(answer.value);
     // the ambient block states the maximum first: every calculation uses it
-    const properties = f.id === '3_2' && f.properties ? [...f.properties].sort((a, b) => Number(b.id === 'temperature_max_C') - Number(a.id === 'temperature_max_C')) : f.properties;
+    // ambient: ONE value, the maximum (owner 2026-10-25: no min/max pairs); a stored minimum stays in the data, not on screen
+    const properties = f.id === '3_2' && f.properties ? f.properties.filter((p) => p.id !== 'temperature_min_C') : f.properties;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
     return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ minWidth: 0, gridColumn: wide ? '1 / -1' : undefined }}>
-      {labelRow(f, prod, required, unknown)}
+      {labelRow(f, prod, required, unknown, undefined, [...(f.id === '3_2' ? [tr('wizard.ambientMaxNote')] : []), ...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
       <Stack spacing={0.5}>
         {properties?.length ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
-            {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: usesRangeEditor(prop, objectValue[prop.id]) || prop.type === 'object' || prop.type === 'array' ? 'span 2' : undefined }}>
+            {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? 'span 2' : undefined }}>
               {propLabel(prop, f.id === '3_2' && prop.id === 'temperature_max_C')}
               {renderTypedValue(prop, objectValue[prop.id], (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
@@ -581,14 +584,13 @@ export default function DevelopmentPage() {
         ) : (
           renderTypedValue(f, answer.value, (next) => setAnswer(f, next, prod), f.id, unknown)
         )}
-        {f.id === '3_2' && <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('wizard.ambientMaxNote')}</Typography>}
-        {fallback.length > 0 && <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })}</Typography>}
         {fieldMessages(f, answer, required)}
       </Stack>
     </Box>;
   };
   /** Continuous S1 and peak in one small table: Power / Torque / Speed / Duration / Repeat period. */
   const KEY_COLUMNS: Array<{ id: string; title: string }> = [{ id: 'power', title: tr('keyPoints.power') }, { id: 'torque_Nm', title: tr('keyPoints.torque') }, { id: 'speed_rpm', title: tr('keyPoints.speed') }, { id: 'duration_s', title: tr('keyPoints.duration') }, { id: 'period_s', title: tr('keyPoints.period') }];
+  // power_basis is never shown: every key-point power is shaft power, T·ω (owner 2026-10-25); a stored basis stays readable in the data
   const KEY_HANDLED = new Set(['power_W', 'shaft_power_W', 'output_power_W', 'torque_Nm', 'speed_rpm', 'duration_s', 'period_s', 'power_basis', 'frequency']);
   const keyPointsTable = (rows: SpecificationField[]) => {
     const v2 = (spec?.schema_version ?? 1) >= 2;
@@ -600,34 +602,35 @@ export default function DevelopmentPage() {
       const prop = (id: string) => f.properties?.find((item) => item.id === id);
       const edit = (id: string) => (value: unknown) => setProperty(f, false, obj, id, value);
       if (column === 'power') {
-        if (f.id === '1_4') {
-          const derived = v2 ? finiteScalar(withS1DerivedPower(obj).shaft_power_W) : null;
-          const stated = prop('power_W') ?? prop('output_power_W');
-          if (derived != null && (!stated || blankValue(obj[stated.id]))) return <TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${tr('keyPoints.s1')} ${tr('keyPoints.power')} (W)` }} helperText={tr('wizard.s1Formula')} FormHelperTextProps={{ sx: { mx: 0, fontSize: 10 } }} />;
-          if (!stated) return dash;
-          return <>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}{derived != null && <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{tr('keyPoints.derived', { value: watts(derived) })}</Typography>}</>;
-        }
-        const stated = prop('output_power_W');
+        // S1 and peak read the same way (owner 2026-10-25): with torque and speed given the power IS T·ω, shown
+        // read-only; a stated power is editable only when there is no torque/speed pair to derive it from.
+        const stated = prop('power_W') ?? prop('output_power_W');
+        const torque = keyNumber(obj.torque_Nm), speed = keyNumber(obj.speed_rpm);
+        const derived = v2 && torque != null && speed != null ? torque * 2 * Math.PI * speed / 60 : null;
+        // with torque and speed the power IS T*omega at the shaft, whatever power was stated before (Astra review 2026-10-25)
+        if (derived != null) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
         if (!stated) return dash;
-        const torque = finiteScalar(obj.torque_Nm), speed = finiteScalar(obj.speed_rpm);
-        return renderTypedValue({ ...stated, placeholder: torque != null && speed != null ? tr('keyPoints.derived', { value: watts(torque * 2 * Math.PI * speed / 60) }) : undefined }, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true);
+        // a power stated without torque/speed: editable; a stored non-shaft basis is named in the tooltip, never relabelled
+        const basisProp = prop('power_basis'), basis = typeof obj.power_basis === 'string' && obj.power_basis && obj.power_basis !== 'shaft' ? obj.power_basis : '';
+        const basisLabel = basis ? label(basisProp?.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === basis)?.label) || basis : '';
+        // typing a power states it as SHAFT power (owner: key-point power is always shaft power); the old basis is only named
+        const editPower = (value: unknown) => setAnswer(f, { ...obj, [stated.id]: value, ...(basis ? { power_basis: 'shaft' } : {}) });
+        return <Tooltip title={basis ? tr('keyPoints.statedBasis', { basis: basisLabel }) : tr('wizard.s1Formula')}><Box>{renderTypedValue(stated, obj[stated.id], editPower, `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
       }
       const p = prop(column);
       return p ? renderTypedValue(p, obj[column], edit(column), `${f.id}-${column}`, unknown, true) : dash;
     };
     return <Box sx={{ minWidth: 0 }}>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(110px,0.9fr) repeat(5,minmax(0,1fr))', gap: '6px 8px', alignItems: 'start', [NARROW]: { gridTemplateColumns: 'repeat(2,minmax(0,1fr))' } }}>
-        <Box sx={{ display: 'contents', [NARROW]: { display: 'none' } }}><span />{KEY_COLUMNS.map((c) => <Typography key={c.id} sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>{c.title}</Typography>)}</Box>
+        <Box sx={{ display: 'contents', [NARROW]: { display: 'none' } }}><span />{KEY_COLUMNS.map((c) => <Tooltip key={c.id} title={c.id === 'period_s' ? tr('keyPoints.periodTip') : c.id === 'power' ? tr('wizard.s1Formula') : ''}><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>{c.title}</Typography></Tooltip>)}</Box>
         {rows.map((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', required = fieldRequired(f, draftRef.current); return <Box key={f.id} id={`spec-field-${f.id}`} sx={{ display: 'contents' }}>
-          <Box sx={{ minWidth: 0, pt: '4px', [NARROW]: { gridColumn: '1 / -1' } }}>{labelRow(f, false, required, unknown, f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak'))}{fieldMessages(f, answer, required)}</Box>
+          <Box sx={{ minWidth: 0, pt: '4px', [NARROW]: { gridColumn: '1 / -1' } }}>{labelRow(f, false, required, unknown, f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak'), f.id === '1_5' ? [tr('keyPoints.noPeak')] : retained ? [`${tr('migration.retainedRange')}: ${tr('field.torque')} ${readableRange(retained.torque_Nm)} N·m · ${tr('field.speed')} ${readableRange(retained.speed_rpm)} rpm`, ...(readableRange(retained.input_power_W) || readableRange(retained.output_power_W) ? [`${tr('migration.legacyInputPower')}: ${readableRange(retained.input_power_W) || '—'} W · ${tr('migration.legacyOutputPower')}: ${readableRange(retained.output_power_W) || '—'} W`] : [])] : [])}{fieldMessages(f, answer, required)}</Box>
           {KEY_COLUMNS.map((c) => <Box key={c.id} sx={{ minWidth: 0 }}><Typography sx={{ display: 'none', fontSize: 10.5, color: 'var(--text-3)', [NARROW]: { display: f.properties?.some((p) => p.id === c.id) || c.id === 'power' ? 'block' : 'none' } }}>{c.title}</Typography>{cell(f, c.id)}</Box>)}
         </Box>; })}
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 1, alignItems: 'flex-end' }}>
-        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => p.id === 'power_basis' || p.id === 'frequency' || !KEY_HANDLED.has(p.id)).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
+        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
       </Box>
-      <Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-3)' }}>{tr('keyPoints.noPeak')}</Typography>
-      {retained && <><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.retainedRange')}: {tr('field.torque')} {readableRange(retained.torque_Nm)} N&#183;m &#183; {tr('field.speed')} {readableRange(retained.speed_rpm)} rpm</Typography><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.legacyInputPower')}: {readableRange(retained.input_power_W)} W &#183; {tr('migration.legacyOutputPower')}: {readableRange(retained.output_power_W)} W</Typography></>}
     </Box>;
   };
   /** 2_1 through the app's one battery block; the stated pack voltages stay editable beside it. */
@@ -639,12 +642,91 @@ export default function DevelopmentPage() {
     const pack = ['voltage_min_V', 'voltage_nominal_V', 'voltage_max_V'].map((id) => f.properties!.find((p) => p.id === id)!).filter(Boolean);
     const handled = new Set(['chemistry', 'series_cells', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V', ...pack.map((p) => p.id)]);
     return <Box id={`spec-field-${f.id}`} sx={{ minWidth: 0, p: '10px 12px', border: '1px solid var(--line-soft)', borderRadius: '8px', bgcolor: 'var(--panel-2)' }}>
-      <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown)} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
+      <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown, undefined, [tr('wizard.packStated')])} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
-        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
+        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => { const volt = (Object.keys(SPEC_PACK_PROP) as Array<'min' | 'nom' | 'max'>).find((k) => SPEC_PACK_PROP[k] === p.id); return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => volt ? setAnswer(f, specBatteryPackEdit(obj, volt, value, allowed)) : setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}
       </Box>
-      <Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-3)' }}>{tr('wizard.packStated')}</Typography>
       {fieldMessages(f, answer, required)}
+    </Box>;
+  };
+  const propertyGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;
+  const switchButton = { textTransform: 'none', px: 1.5, py: 0.4, fontSize: 12 } as const;
+  /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`) under the chosen load: a medium the load cannot run in
+   *  is disabled (an air propeller never runs under water), each medium shows its own conditions (+ the airflow the load
+   *  still blows over a liquid-cooled housing) and the airflow menu offers only what the load makes. The other media's
+   *  values stay stored. Unset, the medium the stored values imply is shown, written only on a click. */
+  const renderCooling = (f: SpecificationField, loadType?: string) => {
+    const prop = (id: string) => f.properties?.find((p) => p.id === id);
+    const mediumProp = prop('cooling_medium');
+    if (!mediumProp) return renderField(f, false, false);
+    const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current), airflow = objectOf(obj.airflow);
+    const { medium, inferred } = coolingMedium(obj);
+    const fits = coolingChoices(loadType), misfit = medium != null && !fits.includes(medium);
+    const mediumLabel = (m: CoolingMedium) => label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m;
+    const pick = (next: CoolingMedium | null) => {
+      const target = next ?? (inferred ? medium : null);
+      if (!target || target === obj.cooling_medium) return;
+      const mode = naturalAirflow(target, loadType);
+      setAnswer(f, { ...obj, cooling_medium: target, ...(mode && blankValue(airflow.mode) ? { airflow: { ...airflow, mode } } : {}) });
+    };
+    // what the switch cannot show stays readable in its tooltip: the customer's own cooling description and a stored
+    // coolant text the shown form hides (Astra review 2026-10-25: a circuit description, a sea-water coolant)
+    const hiddenText = [obj.cooling_type, medium && !coolingPropertyIds(medium, loadType).includes('coolant') ? obj.coolant : null]
+      .filter((t): t is string => typeof t === 'string' && !!t.trim());
+    const switchTip = [...(inferred ? [tr('coolingInferred')] : []), ...hiddenText];
+    const cell = (p: NonNullable<SpecificationField['properties']>[number], value: unknown, update: (next: unknown) => void) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, value, update, `${f.id}-${p.id}`, unknown)}</Box>;
+    const shown = medium ? coolingPropertyIds(medium, loadType).map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
+    const loadName = loadType && loadType !== 'unknown' ? tr(`load.types.${loadType}`) : '';
+    return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
+      {labelRow(f, false, required, unknown)}
+      <Stack spacing={0.8}>
+        <Tooltip title={switchTip.length ? <>{switchTip.map((t, i) => <Fragment key={i}>{i > 0 && <br />}{t}</Fragment>)}</> : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr('coolingMisfit', { medium: mediumLabel(m), load: loadName }) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
+        {misfit && <Alert severity="error" sx={{ py: 0 }}>{tr('coolingMisfit', { medium: mediumLabel(medium!), load: loadName })}</Alert>}
+        {(shown.length > 0 || (!medium && !blankValue(obj.cooling_type))) && <Box sx={propertyGrid}>
+          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub.id === 'mode' ? { ...sub, suggestions: airflowSuggestions(sub.suggestions, loadType) } : sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
+          {/* the old free-text type only while the switch cannot tell the medium; otherwise it repeats the switch (owner 2026-10-25) */}
+          {!medium && !blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
+        </Box>}
+        {fieldMessages(f, answer, required)}
+      </Stack>
+    </Box>;
+  };
+  /** 4_6 for the chosen load: the axial load first and required, the propeller or shaft loads, any other load only while it holds a value. */
+  const renderLoads = (f: SpecificationField, loadType: string) => {
+    const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
+    const ids = loadPropertyIds(loadType, (f.properties ?? []).map((p) => p.id), obj);
+    const shownIds = [...ids, ...extraLoadProps.filter((id) => !ids.includes(id))];
+    const shown = shownIds.map((id) => f.properties!.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+    const addable = (f.properties ?? []).filter((p) => !shownIds.includes(p.id));
+    return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
+      {labelRow(f, false, required, unknown)}
+      <Box sx={propertyGrid}>{shown.map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p, p.id === 'axial_thrust_N')}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
+        {addable.length > 0 && canEditSpec && !unknown && <Box sx={{ alignSelf: 'end' }}><Tooltip title={tr('addLoadComponent')}><IconButton size="small" aria-label={tr('addLoadComponent')} onClick={(e) => setAddLoadAnchor(e.currentTarget)}><AddIcon sx={{ fontSize: 18 }} /></IconButton></Tooltip>
+          <Menu anchorEl={addLoadAnchor} open={!!addLoadAnchor} onClose={() => setAddLoadAnchor(null)}>{addable.map((p) => <MenuItem key={p.id} onClick={() => { setExtraLoadProps((list) => [...list, p.id]); setAddLoadAnchor(null); }}>{label(p.label)}</MenuItem>)}</Menu></Box>}
+      </Box>
+      {fieldMessages(f, answer, required)}
+    </Box>;
+  };
+  /** The load as a switch Air propeller / Water propeller / Wheel / Turbine / Shaft (a finer stored type — water-jet, pump,
+   *  engine-driven generator, robot joint — sits under its button and is kept; it is named in the tooltip), changed
+   *  through the load adapter with LoadSection's reset. A load also settles the cooling it cannot run with
+   *  (`coolingForLoad`): an air propeller brings air + propeller wash, a water propeller underwater, a wheel ram air. */
+  const renderLoadType = (cooling: SpecificationField | undefined) => {
+    const typeField = sections.flatMap((section) => section.fields).find((f) => f.id === 'load_type');
+    if (!typeField) return null;
+    const load = readLoadDraft(draftRef.current), typeUnknown = load.answer_status?.load_type === 'not_known_yet';
+    const group = loadGroup(load.load_type), finer = group && group !== load.load_type ? tr(`load.types.${load.load_type}`) : '';
+    const choose = (next: LoadType | null) => {
+      if (!next) return;
+      updateDraft((d) => writeLoadDraft(d, withLoadType(readLoadDraft(d), next)));
+      if (cooling && storedAnswer(cooling, false).status !== 'not_known_yet') {
+        const nextCooling = coolingForLoad(storedAnswer(cooling, false).value, next);
+        if (nextCooling) setAnswer(cooling, nextCooling);
+      }
+    };
+    return <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
+      {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
+      <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={type === group && finer ? finer : undefined} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
     </Box>;
   };
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
@@ -673,27 +755,27 @@ export default function DevelopmentPage() {
           </Paper>
           <Box sx={{ minWidth: 0 }}>
             <Box sx={{ display: { xs: 'flex', md: 'none' }, overflowX: 'auto', gap: 0.4, mb: 1, borderBottom: '1px solid var(--line-soft)' }}>{sections.map((s, i) => <Button key={s.id} size="small" onClick={() => showCard(i)} sx={{ flex: '0 0 auto', color: step === i ? 'primary.main' : 'var(--text-2)', borderBottom: step === i ? '2px solid var(--brand)' : '2px solid transparent', borderRadius: 0, textTransform: 'none', fontSize: 11, whiteSpace: 'nowrap' }}>{i + 1} {sectionTitle(s.title)}</Button>)}</Box>
-            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const byId = (id: string) => section.fields.find((f) => f.id === id);                const sectionComments = messages.filter((message) => !message.resolved && sectionCommentRefs(section).includes(message.field_ref ?? ''));                const v2 = (spec.schema_version ?? 1) >= 2;                const grid = { display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: '12px', [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;                const more = section.id === 'more';                const storedInMore = more ? section.fields.filter((f) => hasStoredAnswer((f.storage_namespace === 'production' ? (draftRef.current.production as Record<string, unknown> | undefined) : draftRef.current.fields)?.[f.id])).length : 0;                const header = <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: more && !moreOpen ? 0 : '11px' }}>{more ? <Button onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen} aria-controls="spec-more-details" endIcon={<ExpandMoreIcon sx={{ transform: moreOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />} sx={{ flex: 1, justifyContent: 'flex-start', p: 0, minWidth: 0, textTransform: 'none', color: 'var(--text-0)', fontWeight: 700, fontSize: 14 }}>{sectionTitle(section.title)}<Typography component="span" sx={{ ml: 1, fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>{tr('wizard.moreFilled', { count: storedInMore })}</Typography></Button> : <Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography>}<Tooltip title={tr('sectionReview')}><IconButton size="small" aria-label={`${tr('sectionReview')}: ${sectionTitle(section.title)}`} onClick={() => openFieldReview(`section:${section.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', p: 0.5 }}><ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{sectionComments.length}</Box>}</IconButton></Tooltip></Box>;                return <Paper elevation={0} id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: '12px', md: '14px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>
+            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const byId = (id: string) => section.fields.find((f) => f.id === id);                const sectionComments = messages.filter((message) => !message.resolved && sectionCommentRefs(section).includes(message.field_ref ?? ''));                const v2 = (spec.schema_version ?? 1) >= 2;                const grid = { display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: '12px', [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;                                                const header = <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: '11px' }}><Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography><Tooltip title={tr('sectionReview')}><IconButton size="small" aria-label={`${tr('sectionReview')}: ${sectionTitle(section.title)}`} onClick={() => openFieldReview(`section:${section.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', p: 0.5 }}><ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{sectionComments.length}</Box>}</IconButton></Tooltip></Box>;                return <Paper elevation={0} id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: '12px', md: '14px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>
                   {header}
                   {section.id === 'key' && <Stack spacing={1.5} sx={{ minWidth: 0 }}>
                     {byId('1_1') && renderField(byId('1_1')!)}
                     {keyPointsTable(['1_4', '1_5'].map(byId).filter((f): f is SpecificationField => !!f))}
                     {byId('2_1') && renderBattery(byId('2_1')!)}
-                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>{['3_1', '3_2'].map(byId).filter((f): f is SpecificationField => !!f).map((f) => renderField(f, false, false))}</Box>
-                    {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2'].includes(f.id)).map((f) => renderField(f))}
+                    {/* load and cooling as ONE block (owner 2026-10-25): what the motor drives decides which cooling can occur */}
+                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>
+                      {byId('3_1') && <Stack spacing={1.2} sx={{ minWidth: 0 }}>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</Stack>}
+                      {byId('3_2') && renderField(byId('3_2')!, false, false)}
+                    </Box>
+                    {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2', 'load_type'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>
-                    <Box sx={grid}>{section.fields.filter((f) => !SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
+                    {byId('4_6') && <Box sx={{ mb: 1.5 }}>{renderLoads(byId('4_6')!, readLoadDraft(draftRef.current).load_type)}</Box>}
+                    <Box sx={grid}>{section.fields.filter((f) => !SECOND_TIER_FIELDS.includes(f.id) && f.id !== '4_6').map((f) => renderField(f))}</Box>
                     {deliveryConflicts(draftRef.current).length > 0 && <Alert severity="warning" sx={{ mt: 1 }}>{tr('deliveryConflict')}</Alert>}
                     {section.fields.some((f) => SECOND_TIER_FIELDS.includes(f.id)) && <><Divider sx={{ my: 1.5 }} /><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.secondTier')}</Typography><Box sx={grid}>{section.fields.filter((f) => SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box></>}
                   </>}
                   {section.id === 'mission' && (!v2 ? <MissionProfile draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' }))} label={tr('wizard.mission')} columns={section.fields.find((field) => field.id === 'mission_profile')?.columns ?? []} /> : <MissionProfileEditor rows={(draftRef.current.mission_profile ?? []) as unknown as MissionRow[]} load={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} onReview={openFieldReview} unknown={draftRef.current.mission_profile_status === 'not_known_yet'} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' }))} t={tr} />)}
-                  {more && <Collapse in={moreOpen} id="spec-more-details"><Stack spacing={1.5} sx={{ minWidth: 0 }}>
-                    <Box sx={grid}>{section.fields.filter((f) => MORE_FIRST_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {(section.fields.some((f) => LOAD_FIELDS.includes(f.id)) || !v2) && <Box><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.load')}</Typography>{!v2 ? <Alert severity="info">{tr('newLoadNotice')}</Alert> : <LoadSection value={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} engineerView={canEditProject} onReview={openFieldReview} getOpenReviewCount={openCount} onChange={(v) => updateDraft((d) => writeLoadDraft(d, v))} t={tr} locale={lang} />}</Box>}
-                    <Box sx={grid}>{section.fields.filter((f) => f.storage_namespace !== 'production' && !MORE_FIRST_FIELDS.includes(f.id) && !LOAD_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {section.fields.some((f) => f.storage_namespace === 'production') && <Box><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.productionPlan')}</Typography><Box sx={grid}>{section.fields.filter((f) => f.storage_namespace === 'production').map((f) => renderField(f, true))}</Box><Typography sx={{ fontSize: 11, color: 'var(--text-3)', mt: 1 }}>{tr('productionTip')}</Typography></Box>}
-                  </Stack></Collapse>}
+                  
                   {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tr('wizard.reviewHint')}</Typography>{submitError.map((x, i) => <Alert key={i} severity="error">{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} /><Button variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></Stack>}
                 </Paper>;              })}            </Stack>
           </Box>
@@ -742,6 +824,19 @@ export default function DevelopmentPage() {
       <DialogActions><Button disabled={migrationBusy} onClick={() => setMigrationOpen(false)}>{tr('migration.cancel')}</Button><Button variant="contained" disabled={migrationBusy || !migrationPreview || !canApplyMigrationPreview(migrationPreview as MigrationPreviewView, revisionRef.current, migrationAck)} onClick={() => void applyMigration()}>{migrationBusy ? <CircularProgress size={16} /> : tr('migration.apply')}</Button></DialogActions>
     </Dialog>
   </Box>;
+}
+/** A free text / number value with a menu of standard choices (schema `suggestions`, Autocomplete freeSolo): the menu shows
+ *  the localized label, the stored value is the EN value (or the number); any other text is kept as typed. */
+function SuggestField({ suggestions, value, onChange, lang, numeric, disabled, ariaLabel, placeholder, multiline = false, endAdornment }: { suggestions: SchemaSuggestion[]; value: unknown; onChange: (next: unknown) => void; lang: string; numeric: boolean; disabled: boolean; ariaLabel: string; placeholder?: string; multiline?: boolean; endAdornment?: React.ReactNode }) {
+  const options = useMemo(() => suggestionOptions(suggestions, lang), [suggestions, lang]);
+  const shown = suggestionDisplay(suggestions, value, lang);
+  const [text, setText] = useState(shown);
+  // a value changed elsewhere (a reload, a discarded edit) replaces the text unless the text already means that value
+  useEffect(() => { setText((current) => String(suggestionValue(suggestions, current, numeric) ?? '') === String(value ?? '') ? current : shown); }, [shown, value, suggestions, numeric]);
+  const commit = (next: string) => { setText(next); const stored = suggestionValue(suggestions, next, numeric); if (stored !== undefined) onChange(stored); };
+  return <Autocomplete freeSolo forcePopupIcon size="small" fullWidth disabled={disabled} options={options} value={null} inputValue={text} filterOptions={(list) => list} getOptionLabel={(o) => typeof o === 'string' ? o : o.label} onInputChange={(_, next, reason) => { if (reason !== 'reset') commit(next); }} onChange={(_, picked) => { if (picked != null) commit(typeof picked === 'string' ? picked : picked.label); }}
+    sx={endAdornment ? { '& .MuiAutocomplete-inputRoot': { pr: '14px !important', flexWrap: 'nowrap' }, '& .MuiAutocomplete-endAdornment': { position: 'static', transform: 'none', display: 'flex' } } : undefined}
+    renderInput={(params) => <TextField {...params} placeholder={placeholder} multiline={multiline} minRows={multiline ? 2 : undefined} inputProps={{ ...params.inputProps, 'aria-label': ariaLabel, inputMode: numeric ? 'decimal' : undefined }} InputProps={{ ...params.InputProps, endAdornment: <>{params.InputProps.endAdornment}{endAdornment}</> }} />} />;
 }
 function MissionProfile({ draft, disabled, onChange, onUnknown, label, columns, lang, t, error }: { draft: SpecDraft; disabled: boolean; onChange: (rows: Array<Record<string, unknown>>) => void; onUnknown: (unknown: boolean) => void; label: string; columns: Array<{ id: string; label: unknown; unit?: string }>; lang: string; t: (key: string) => string; error?: string }) {
   const rows = draft.mission_profile ?? [];

@@ -101,9 +101,10 @@ def test_partial_and_unknown_old_drafts_never_become_invalid():
 
 def test_required_set_and_counts():
     required = sorted(f["id"] for s in models.schema(2)["sections"] for f in s["fields"] if f.get("required"))
-    assert required == sorted(["1_1", "1_2", "1_4", "1_6", "2_1", "2_4", "3_1", "3_2", "3_3", "4_1", "4_2", "6_1", "6_2", "mission_profile"])
+    # 4_6 joined the set on 2026-10-25: the axial load must be stated (owner)
+    assert required == sorted(["1_1", "1_2", "1_4", "1_6", "2_1", "2_4", "3_1", "3_2", "3_3", "4_1", "4_2", "4_6", "6_1", "6_2", "mission_profile"])
     empty = models.normalize_draft({"schema_version": 2})
-    assert models.completeness(empty)["total_required"] == 14
+    assert models.completeness(empty)["total_required"] == 15
 
 
 def test_s1_torque_or_power():
@@ -166,3 +167,132 @@ def test_quantities_and_timeline_need_one_value():
         "6_2": {"status": "filled", "value": {"series_date": "2032-01-01"}}}})
     errors = {e["field"] for e in models.validation_errors(draft)}
     assert "6_1" in errors and "6_2" not in errors
+
+
+# ---- one-value spec, cooling switch, shaft load, menus (owner 2026-10-25) ------------------------------------
+
+def _legacy_draft():
+    """A draft stored before the switches: free-text cooling, ranges, no cooling_medium and no 4_6."""
+    return {"schema_version": 2, "fields": {
+        "1_1": {"status": "filled", "value": "Example survey drone"},
+        "1_2": {"status": "filled", "value": "Motor, one direction"},
+        "1_4": {"status": "filled", "value": {"torque_Nm": 3, "speed_rpm": 6000}},
+        "1_5": {"status": "filled", "value": {"torque_Nm": {"minimum": 5, "maximum": 6}, "duration_s": {"minimum": 10, "maximum": 30}}},
+        "1_6": {"status": "filled", "value": {"maximum_rpm": {"minimum": 7000, "maximum": 8000}}},
+        "1_8": {"status": "filled", "value": {"torque_ripple_pct_pkpk": {"minimum": 2, "maximum": 5}}},
+        "2_1": {"status": "filled", "value": {"voltage_nominal_V": 22.2}},
+        "3_1": {"status": "filled", "value": {"cooling_type": "propeller wash", "airflow": {"speed_mps": 8}}},
+        "3_2": {"status": "filled", "value": {"temperature_max_C": 40}},
+        "3_3": {"status": "filled", "value": "open"},
+        "4_1": {"status": "filled", "value": {"outer_diameter_mm": 40}},
+        "load_type": {"status": "filled", "value": "air_propeller"},
+    }, "mission_profile": [], "mission_profile_status": "not_known_yet", "production": {}}
+
+
+def _schema_without_required_loads(current):
+    previous = copy.deepcopy(current)
+    for section in previous["sections"]:
+        for field in section["fields"]:
+            if field["id"] == "4_6":
+                field["required"] = False
+    return previous
+
+
+def test_schema_loads_with_ui_only_suggestions():
+    fields = models._field_map(2)
+    assert fields["3_1"][1]["required_any"] == [["cooling_medium", "cooling_type"]]
+    with_menus = [fid for fid, (_, f) in fields.items() if f.get("suggestions") or any(p.get("suggestions") for p in f.get("properties", []))]
+    assert {"1_1", "1_2", "2_8", "3_1", "3_3", "3_4", "4_3", "4_4", "4_5", "2_4", "2_5", "2_7", "2_9"} <= set(with_menus)
+
+
+def test_old_drafts_normalize_and_count_as_before_except_the_axial_load(monkeypatch):
+    draft = models.normalize_draft(_legacy_draft())
+    assert draft["fields"]["3_1"]["value"]["cooling_type"] == "propeller wash"
+    assert draft["fields"]["1_8"]["value"]["torque_ripple_pct_pkpk"] == {"minimum": 2, "maximum": 5}
+    assert "cooling_medium" not in draft["fields"]["3_1"]["value"] and "4_6" not in draft["fields"]
+    now = models.completeness(draft)
+    assert models._answer_complete(draft["fields"]["3_1"], models._field_map(2)["3_1"][1])  # the old text still answers 3_1
+    previous = _schema_without_required_loads(models.schema(2))
+    current_schema = models.schema
+    monkeypatch.setattr(models, "schema", lambda version=None: copy.deepcopy(previous) if version != 1 else current_schema(1))
+    before = models.completeness(draft)
+    monkeypatch.undo()
+    assert now["total_required"] == before["total_required"] + 1
+    assert now["answered"] == before["answered"] and now["unknown"] == before["unknown"] and now["invalid"] == before["invalid"] == 0
+    assert now["missing"] == before["missing"] + 1
+    assert "4_6" in {e["field"].split(".")[0] for e in models.validation_errors(draft)}
+    # stating the axial load answers it; another load alone does not
+    draft["fields"]["4_6"] = {"status": "filled", "value": {"axial_thrust_N": 25}}
+    assert models.completeness(models.normalize_draft(draft))["missing"] == before["missing"]
+    draft["fields"]["4_6"] = {"status": "filled", "value": {"radial_load_N": 10}}
+    assert not models._answer_complete(models.normalize_draft(draft)["fields"]["4_6"], models._field_map(2)["4_6"][1])
+    draft["fields"]["4_6"] = {"status": "not_known_yet", "value": None}
+    assert models.completeness(models.normalize_draft(draft))["unknown"] == before["unknown"] + 1
+
+
+def test_cooling_medium_shaft_and_free_text_beside_the_menus_validate():
+    value = {
+        "3_1": {"status": "filled", "value": {"cooling_medium": "submerged", "water_temperature_C": 28, "water_speed_mps": 1.5, "depth_m": 50,
+                                                "airflow": {"mode": "Fan", "speed_mps": 3}, "coolant": "Our own blend"}},
+        "load_type": {"status": "filled", "value": "shaft"},
+        "2_8": {"status": "filled", "value": "Custom optical encoder"},
+        "2_5": {"status": "filled", "value": {"device_type": "Si IGBT", "voltage_class_V": 750}},
+        "4_6": {"status": "filled", "value": {"axial_thrust_N": 120, "bending_moment_Nm": 4, "tilt_rate": 1.2, "acceleration": 6}},
+    }
+    normalized = models.normalize_draft({"schema_version": 2, "fields": copy.deepcopy(value)})
+    for fid, answer in value.items():
+        assert normalized["fields"][fid]["value"] == answer["value"], fid
+    fields = models._field_map(2)
+    assert models._answer_complete(normalized["fields"]["3_1"], fields["3_1"][1])
+    assert models._answer_complete(normalized["fields"]["4_6"], fields["4_6"][1])
+    assert models._answer_complete({"status": "filled", "value": {"cooling_medium": "air"}}, fields["3_1"][1])
+    assert not models._answer_complete({"status": "filled", "value": {"airflow": {"speed_mps": 4}}}, fields["3_1"][1])
+    for bad in ({"3_1": {"status": "filled", "value": {"cooling_medium": "oil bath"}}},
+                {"3_1": {"status": "filled", "value": {"depth_m": -1}}}):
+        with pytest.raises(ValueError):
+            models.normalize_draft({"schema_version": 2, "fields": bad})
+
+
+def _load_cooling_draft(load, cooling):
+    return {"schema_version": 2, "fields": {"load_type": {"status": "filled", "value": load},
+                                            "3_1": {"status": "filled", "value": cooling}}}
+
+
+def test_load_cooling_refuses_what_cannot_occur():
+    # owner 2026-10-25: an air propeller never runs under water; propeller wash needs an air propeller
+    errs = models.cooling_load_errors(_load_cooling_draft("air_propeller", {"cooling_medium": "submerged"}))
+    assert [e["field"] for e in errs] == ["3_1.cooling_medium"]
+    errs = models.cooling_load_errors(_load_cooling_draft("wheel", {"cooling_medium": "air", "airflow": {"mode": "Propeller wash"}}))
+    assert [e["field"] for e in errs] == ["3_1.airflow.mode"]
+    # what does occur passes: submerged wheel, liquid behind an air propeller with its wash, an engine generator on a jacket
+    for load, cooling in (("wheel", {"cooling_medium": "submerged"}),
+                          ("air_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}}),
+                          ("engine_driven_generator", {"cooling_medium": "liquid", "coolant": "Glycol"}),
+                          ("water_jet", {"cooling_medium": "submerged"}),
+                          ("shaft", {"cooling_medium": "air", "airflow": {"mode": "duct from the radiator fan"}})):
+        assert models.cooling_load_errors(_load_cooling_draft(load, cooling)) == [], (load, cooling)
+    # nothing is judged before a load is chosen
+    assert models.cooling_load_errors(_load_cooling_draft(None, {"cooling_medium": "submerged"})) == []
+
+
+def test_load_cooling_misfit_blocks_submit_and_completeness():
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    assert any(e["field"] == "3_1.cooling_medium" for e in models.validation_errors(draft))
+    ok = _load_cooling_draft("air_propeller", {"cooling_medium": "air", "airflow": {"mode": "Propeller wash"}})
+    assert not any(e["field"].startswith("3_1") for e in models.validation_errors(ok))
+
+
+def test_load_cooling_judges_only_active_answers():
+    # Astra re-review 2026-10-25: a retained (not_known_yet) cooling or load is not judged
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    draft["fields"]["3_1"]["status"] = "not_known_yet"
+    assert models.cooling_load_errors(draft) == []
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    draft["fields"]["load_type"]["status"] = "not_known_yet"
+    assert models.cooling_load_errors(draft) == []
+    # a hidden airflow from the air-propeller days does not block a water propeller with a liquid jacket
+    draft = _load_cooling_draft("marine_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}})
+    assert models.cooling_load_errors(draft) == []
+    # nor under water
+    draft = _load_cooling_draft("wheel", {"cooling_medium": "submerged", "airflow": {"mode": "Propeller wash"}})
+    assert models.cooling_load_errors(draft) == []

@@ -99,7 +99,24 @@ export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): bo
   return field.properties?.length ? true : answerComplete(answer);
 }
 
+/** A range stored before the one-value rule (owner 2026-10-25: every field holds one number, the maximum allowed /
+ *  worst case for modelling) reads as its maximum. Without a maximum there is no worst value: '' (the minimum is
+ *  never shown as if it were the maximum). Null for a plain value. */
+export function rangeWorst(shape: { allow_range?: boolean }, value: unknown): { worst: number | ''; min: unknown; max: unknown } | null {
+  if (!shape.allow_range || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const r = value as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null);
+  return { worst: num(r.maximum) ?? '', min: r.minimum, max: r.maximum };
+}
+
 /** A range-capable value keeps the range editor unless it is a single number (stored ranges are never flattened). */
+/** A key-point number: a plain value, or the maximum of a range stored before the one-value rule; else null. */
+export function keyNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const r = rangeWorst({ allow_range: true }, value);
+  return r && typeof r.worst === 'number' ? r.worst : null;
+}
+
 export function usesRangeEditor(shape: { allow_range?: boolean }, value: unknown): boolean {
   return !!shape.allow_range && !(typeof value === 'number' || (typeof value === 'string' && !!value.trim()));
 }

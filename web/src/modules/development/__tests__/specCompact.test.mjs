@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as W from '../wizardState.ts';
 import { productionFallback } from '../reviewPresentation.ts';
-import { specBatteryChemistry, specBatteryFieldEdit, specBatteryView, specChemistryType } from '../specBattery.ts';
+import { specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView, specChemistryType } from '../specBattery.ts';
 
 const schema = JSON.parse(readFileSync(new URL('../../../../../src/motor_ai_sim/development/schema.json', import.meta.url), 'utf8'));
 const field = (id) => schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === id);
@@ -101,23 +101,61 @@ test('battery: stored pack voltages are never recomputed on load', () => {
   const view = specBatteryView(stored);
   assert.deepEqual(view.pack, { min: 317, nom: 356, max: 403 });
   assert.equal(view.bat.cells, 96);
-  assert.equal(view.bat.draft.min, ''); assert.equal(view.bat.draft.nom, ''); assert.equal(view.bat.draft.max, '');
+  // blank cell voltages are SHOWN as pack ÷ cells (owner 2026-10-25), the stored answer stays as it was
+  assert.deepEqual([view.bat.min, view.bat.nom, view.bat.max], [3.302, 3.708, 4.198]); assert.equal(view.bat.draft, undefined);
   assert.deepEqual(stored, { chemistry: 'NMC', series_cells: 96, voltage_min_V: 317, voltage_nominal_V: 356, voltage_max_V: 403 });
 });
 
-test('battery: pack-only data displays, and only cell edits derive the pack values they determine', () => {
+test('battery: cells x cell voltage = pack voltage either way; a stored cell voltage leads its pack, else the stated pack leads', () => {
+  const A = allowed('2_1');
+  const pack = { chemistry: 'LiPo', series_cells: 100, voltage_min_V: 330, voltage_nominal_V: 371, voltage_max_V: 420 };
+  const packEdit = specBatteryPackEdit(pack, 'nom', 375, A);
+  assert.equal(packEdit.voltage_nominal_V, 375); assert.equal(packEdit.cell_voltage_nominal_V, undefined);
+  assert.equal(specBatteryView(packEdit).bat.nom, 3.75);
+  // re-entering the same count never rewrites a stated pack (371 stays 371)
+  assert.equal(specBatteryFieldEdit(pack, 'cells', '100', A).voltage_nominal_V, 371);
+  // a pack typed over a stored cell voltage takes over
+  assert.equal(specBatteryPackEdit({ series_cells: 100, cell_voltage_nominal_V: 3.7, voltage_nominal_V: 370 }, 'nom', 380, A).cell_voltage_nominal_V, undefined);
+  const cells = specBatteryFieldEdit({ voltage_min_V: 330, voltage_nominal_V: 370, voltage_max_V: 420 }, 'cells', '100', A);
+  assert.deepEqual([cells.voltage_min_V, cells.voltage_nominal_V, cells.voltage_max_V], [330, 370, 420]);
+  const v = specBatteryView(cells).bat;
+  assert.deepEqual([v.min, v.nom, v.max], [3.3, 3.7, 4.2]);
+});
+
+test('battery: the result never depends on typing history (Astra review 2026-10-25, both entry orders)', () => {
+  const A = allowed('2_1');
+  const typeCount = (start) => ['1', '10', '100'].reduce((v, typed) => specBatteryFieldEdit(v, 'cells', typed, A), start);
+  // pack first: 370 V stays 370 V, cells 3.7 V
+  let value = typeCount({ voltage_nominal_V: 370 });
+  assert.equal(value.voltage_nominal_V, 370); assert.equal(specBatteryView(value).bat.nom, 3.7);
+  // chemistry first: the preset cell voltage leads, the pack follows to 370 V (not 3.7 V)
+  value = typeCount(specBatteryChemistry({}, 'NMC', A));
+  assert.equal(value.cell_voltage_nominal_V, 3.7); assert.equal(value.voltage_nominal_V, 370);
+  assert.deepEqual(value, specBatteryFieldEdit(specBatteryChemistry({}, 'NMC', A), 'cells', '100', A));   // same as pasting 100
+  // a stored cell voltage with a stated pack: the pack follows the count, whatever was typed before
+  value = typeCount({ voltage_nominal_V: 370, cell_voltage_nominal_V: 3.7 });
+  assert.equal(value.voltage_nominal_V, 370);
+});
+
+test('battery: chemistry presets fill only where neither the cell nor the pack voltage is stated', () => {
+  const picked = specBatteryChemistry({ series_cells: 100, voltage_nominal_V: 371 }, 'NMC', allowed('2_1'));
+  assert.equal(picked.cell_voltage_nominal_V, undefined); assert.equal(picked.voltage_nominal_V, 371);
+  assert.equal(specBatteryView(picked).bat.nom, 3.71);
+  assert.equal(picked.cell_voltage_max_V, 4.2); assert.equal(picked.voltage_max_V, 420);
+});
+
+test('battery: pack-only data displays, and a typed cell voltage moves its pack', () => {
   const packOnly = specBatteryView({ voltage_nominal_V: 400 });
   assert.equal(packOnly.pack.nom, 400); assert.equal(packOnly.bat.draft.cells, '');
   const stored = { series_cells: 96, voltage_min_V: 317, voltage_nominal_V: 356, voltage_max_V: 403 };
   const minEdit = specBatteryFieldEdit(stored, 'min', '3.3', allowed('2_1'));
   assert.equal(minEdit.cell_voltage_min_V, 3.3); assert.equal(minEdit.voltage_min_V, 316.8);
   assert.equal(minEdit.voltage_nominal_V, 356); assert.equal(minEdit.voltage_max_V, 403);
-  const cellsEdit = specBatteryFieldEdit({ ...minEdit, cell_voltage_nominal_V: 3.7, cell_voltage_max_V: 4.2 }, 'cells', '10', allowed('2_1'));
-  assert.equal(cellsEdit.series_cells, 10);
-  assert.deepEqual([cellsEdit.voltage_min_V, cellsEdit.voltage_nominal_V, cellsEdit.voltage_max_V], [33, 37, 42]);
+  // a new count: the pack with a stored cell voltage follows, the stated packs stay
+  const cellsEdit = specBatteryFieldEdit(minEdit, 'cells', '10', allowed('2_1'));
+  assert.deepEqual([cellsEdit.voltage_min_V, cellsEdit.voltage_nominal_V, cellsEdit.voltage_max_V], [33, 356, 403]);
   const cleared = specBatteryFieldEdit(stored, 'cells', '', allowed('2_1'));
   assert.equal(cleared.series_cells, ''); assert.equal(cleared.voltage_nominal_V, 356);
-  // a schema without per-cell voltages (v1) never receives keys it would reject
   const v1 = new Set(['chemistry', 'series_cells', 'voltage_min_V', 'voltage_nominal_V', 'voltage_max_V']);
   assert.deepEqual(specBatteryFieldEdit({ series_cells: 4 }, 'nom', '3.7', v1), { series_cells: 4 });
   assert.ok(Object.keys(specBatteryChemistry({}, 'LFP', v1)).every((k) => v1.has(k)));

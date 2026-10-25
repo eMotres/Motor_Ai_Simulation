@@ -398,6 +398,7 @@
           "properties": [
             {
               "id": "torque_ripple_pct_pkpk",
+              "worst": "min",
               "label": {
                 "en": "Torque ripple",
                 "zh-CN": "转矩脉动"
@@ -419,6 +420,7 @@
             },
             {
               "id": "cogging_torque_Nm",
+              "worst": "min",
               "label": {
                 "en": "Cogging / starting drag torque",
                 "zh-CN": "齿槽／启动阻力转矩"

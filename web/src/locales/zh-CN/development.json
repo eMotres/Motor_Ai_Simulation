@@ -507,5 +507,6 @@
     "selectMarker": "选择图表上的点",
     "refreshUnavailable": "此来源无法更新。",
     "refreshRow": "{phase}：{before} → {after} N·m"
-  }
+  },
+  "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最不利值；输入一个数值即替换该范围。"
 }

@@ -507,5 +507,6 @@
     "selectMarker": "Select a point on the chart",
     "refreshUnavailable": "Refresh is unavailable for this source.",
     "refreshRow": "{phase}: {before} → {after} N·m"
-  }
+  },
+  "rangeWorst": "Stored as a range {min}–{max}. Modelling uses the worst value shown; type one value to replace the range."
 }

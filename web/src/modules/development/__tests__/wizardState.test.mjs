@@ -203,3 +203,11 @@ t('editing an S1 point recalculates its derived power and removes stale power fo
   assert.equal(W.withS1DerivedPower({ ...changed, speed_rpm: '' }).shaft_power_W, undefined);
 });
 
+
+test('a stored range reads as its worst bound: the larger for loads, the smaller for a limit', async () => {
+  const { rangeWorst } = await import('../wizardState.ts');
+  assert.deepEqual(rangeWorst({ allow_range: true }, { minimum: 5, maximum: 10 }), { worst: 10, min: 5, max: 10 });
+  assert.equal(rangeWorst({ allow_range: true, worst: 'min' }, { minimum: 1, maximum: 2 }).worst, 1);
+  assert.equal(rangeWorst({ allow_range: true }, 7), null);
+  assert.equal(rangeWorst({}, { minimum: 1, maximum: 2 }), null);
+});

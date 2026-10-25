@@ -721,19 +721,31 @@ def _cover(doc, D: Dict[str, Any]) -> None:
        size=10, color=NOTE, space_after=2.0)
     # NO GENERATION TIMESTAMP (user 2026-09-10; reviewer 2026-09-14, D4 — the
     # PDF carried two of them a minute apart).
-    _p(doc, "Duty <b>%s</b> · every number below was read "
-            "from a stored solver result; nothing was solved to produce this "
-            "document." % (D["d_duty"].get("name") or "—"),
+    _p(doc, "Duty <b>%s</b> · every number is read from a stored solver "
+            "result." % (D["d_duty"].get("name") or "—"),
        size=9.5, color=NOTE, space_after=10.0)
 
     # WHO OWNS THIS, first thing on the page (user 2026-09-10).
     _p(doc, R.CONFIDENTIAL_NOTICE, size=9.5, bold=True, color=WARN,
        space_after=10.0)
 
-    _table(doc, R.headline_rows(D["role"], D["d_duty"], D["em"], D["brg"],
-                                D.get("cols"), D.get("ctxs"),
-                                D.get("supply")),
-           size=10.5, widths_cm=[5.0, 3.4, 18.0])
+    if D.get("cols"):
+        # THE KEY POINT OF EVERY DUTY AT ONCE (owner 2026-10-25).
+        _kh, _kr = R.key_point_rows(D["role"], D["cols"], D.get("batt"),
+                                    D.get("ctxs"))
+        _n = len(_kh) - 1
+        _lw = 5.0
+        _table(doc, [_kh] + _kr, size=10.5,
+               widths_cm=[_lw] + [(26.4 - _lw) / max(_n, 1)] * _n)
+        _mc = R.mass_consistency(D["cols"])
+        if _mc:
+            _p(doc, "%s %s." % (R.FLAG, _mc["text"]), size=9, bold=True,
+               color=WARN)
+    else:
+        _table(doc, R.headline_rows(D["role"], D["d_duty"], D["em"], D["brg"],
+                                    D.get("cols"), D.get("ctxs"),
+                                    D.get("supply")),
+               size=10.5, widths_cm=[5.0, 3.4, 18.0])
     _p(doc, "Operating point taken from %s."
             % (D["em_src"] or "— nothing solved yet"),
        size=9.5, italic=True, color=NOTE, space_after=10.0)
@@ -831,6 +843,9 @@ def _machine(doc, D: Dict[str, Any]) -> None:
     # THE AS-ASSEMBLED sleeve rows, appended — never blended into the design
     # "Air gap"/"Rotor outer radius" rows above (L155/L180 audits,
     # 2026-09-20) — see report._machine_page.
+    _six = R.six_phase_block(D["em"], D["wind"])
+    if _six:
+        _p(doc, "Winding: %s." % R.six_phase_words(_six), size=10)
     _table(doc, R.geometry_rows(_geo, D["wind"], D["slot"], D["em"])
            + R.mechanical_assembly_rows(D.get("mech_geo")),
            header=False, size=10.5,
@@ -893,8 +908,8 @@ def _duties(doc, D: Dict[str, Any]) -> None:
     if not cols:
         _p(doc, R.DUTY_OVERVIEW_EMPTY, size=9, bold=True, color=WARN)
         return
-    what, when = R.duty_overview_rows(cols, D["active_duty"])
-    _table(doc, [list(R.DUTY_OVERVIEW_HEAD)] + what, size=10.5)
+    head, what = R.duty_overview_slim(cols, D["active_duty"])
+    _table(doc, [head] + what, size=10.5)
     _pe = R.point_error_text(cols)
     if _pe:
         _p(doc, _pe, size=9, italic=True, color=NOTE)
@@ -997,7 +1012,8 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     if not em:
         _p(doc, R.EM_PAGE_UNSOLVED, size=9, bold=True, color=WARN)
         return
-    _p(doc, "Source: %s." % D["em_src"], size=9.5, italic=True, color=NOTE)
+    _p(doc, "Source: %s. %s" % (D["em_src"], R.TEMP_BASIS_NOTE), size=9.5,
+       italic=True, color=NOTE)
     if D.get("duty_fp_mismatch"):
         # F2 (L13 server audit 2026-09-19) — see report._em_page.
         _p(doc, "%s %s" % (R.FLAG, D.get("duty_fp_note") or (
@@ -1158,13 +1174,13 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
 
 def _pwm_influence(doc, D: Dict[str, Any]) -> None:
     _h(doc, R.section_heading(D.get("sec"), "pwm"), 1)
-    _p(doc, R.pwm_intro(D["cols"],
-                       str((D.get("d_duty") or {}).get("name") or "") or None),
-       size=9.5)
     blocks = R.pwm_blocks(D["cols"], D.get("brg"))
     if not any(b["measured"] for b in blocks):
         _p(doc, R.PWM_NO_RECORD_AT_ALL, size=9.5, italic=True, color=NOTE)
         return
+    _p(doc, R.pwm_intro(D["cols"],
+                       str((D.get("d_duty") or {}).get("name") or "") or None),
+       size=9.5)
     for b in blocks:
         _h(doc, "Duty '%s'" % b["duty"], 2)
         # EACH DUTY'S CONCLUSIONS UNDER ITS OWN HEADING (A2-2) — see
@@ -1242,6 +1258,7 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
         _p(doc, _line, size=9.5, italic=True, color=NOTE)
 
     _h(doc, "Boundary conditions", 2)
+    _p(doc, "Cooling basis: %s." % R.cooling_basis_words(res, inner), size=10)
     for line in R._cooling_words(res.get("cooling") or inner.get("cooling") or {}):
         _bullet(doc, line)
 

@@ -234,6 +234,7 @@
     "actions": "Open",
     "yes": "Yes",
     "no": "No",
+    "corrected3d": "3-D end effect included",
     "targetValue": "Target from the duty - not computed yet",
     "linePeakUnavailable": "Physical line peak unavailable for this result.",
     "partialMass": "Active or unstamped mass; not a full assembled mass.",

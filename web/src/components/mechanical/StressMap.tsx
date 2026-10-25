@@ -135,7 +135,7 @@ const StressMap: React.FC<Props> = ({
           sx={{ ml: 0, mr: 0 }} />
       </Tooltip>
       {view === 'sf' && (
-        <Tooltip title="Safety-factor bands, the way Fusion draws them: below the first value red ('below target'), between the two green ('in range'), above the second blue ('above target'). LEAVE THEM EMPTY and the map picks them itself — the fixed 2 / 4 acceptance bands while any element is within reach of the limit, and bands read off this rotor's own distribution (5th percentile and median) once nothing is anywhere near it, because a fixed 2 / 4 would paint such a rotor one flat blue. The colour bar's own caption says which of the two is in force.">
+        <Tooltip title="Safety-factor bands, the way Fusion draws them: below the first value red ('below target'), between the two green ('in range'), above the second blue ('above target'). LEAVE THEM EMPTY and the map picks them itself — the fixed 3 / 6 acceptance bands while any element is within reach of the limit, and bands read off this rotor's own distribution (5th percentile and median) once nothing is anywhere near it, because a fixed 3 / 6 would paint such a rotor one flat blue. The colour bar's own caption says which of the two is in force.">
           <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center' }}>
             <Typography sx={lbl}>SF bands</Typography>
             <TextField label="low" size="small" value={sfLow} placeholder="auto"

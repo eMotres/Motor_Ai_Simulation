@@ -1212,9 +1212,9 @@ class TestWarningRules:
 
     def test_a_minimum_rule_has_three_bands(self):
         """A safety factor is the other way round: BELOW the limit is red."""
-        from motor_ai_sim.report import NEAR_PCT
+        from motor_ai_sim.report import NEAR_PCT, SF_ACCEPT
 
-        L = 2.0
+        L = SF_ACCEPT          # the acceptance level (3 since 2026-10-25)
         assert _fires({"sf_min": L * 0.99}, "safety_factor")["level"] == "red"
         assert _fires({"sf_min": L * (1.0 + NEAR_PCT / 100.0 / 2.0)},
                       "safety_factor")["level"] == "amber"
@@ -2043,7 +2043,9 @@ def test_k_the_robot_joints_cooling_is_on_the_page():
     assert cmp_rows["Removed off the end faces [W]"] == "6.4"
     assert cmp_rows["  of which the end windings [W]"] == "4.4"
     assert cmp_rows["  of which radiation [W]"] == "1.8"
-    assert cmp_rows["Stator heat out into the mount [W]"] == "52"
+    # the stator split's housing / mount / end-face rows repeated the rows
+    # above (cleanup 2026-10-25) and are gone
+    assert "Stator heat out into the mount [W]" not in cmp_rows
     assert cmp_rows["Stator side (housing + mount + end faces) [W]"] == "60.4"
     assert cmp_rows["Rotor side (bore + shaft + end faces) [W]"] == "2"
     assert cmp_rows["Housing boundary"].startswith("still air 40 °C")
@@ -2144,7 +2146,6 @@ def test_k3_the_per_duty_store_carries_every_new_cooling_key():
                   "Removed off the end faces [W]",
                   "  of which the end windings [W]",
                   "  of which radiation [W]",
-                  "Stator heat out into the mount [W]",
                   "Stator side (housing + mount + end faces) [W]",
                   "Rotor side (bore + shaft + end faces) [W]",
                   "Housing boundary", "Bore boundary"):
@@ -2449,8 +2450,8 @@ class TestB4B5OneStressBehindEverySafetyFactor:
         ws = R.duty_warnings(self._ctx())
         w = next(w for w in ws if w["quantity"] == "Safety factor (magnet)")
         assert abs(w["value"] - self.MAGNET["safety_factor"]) < 1e-12
-        assert w["limit"] == 2.0
-        assert w["level"] == "amber", "SF 2.05 against an acceptance level of 2"
+        assert w["limit"] == R.SF_ACCEPT == 3.0
+        assert w["level"] == "red", "SF 2.05 against the acceptance level of 3 (owner 2026-10-25)"
 
     def test_the_part_rule_does_not_repeat_the_minimum(self):
         from motor_ai_sim import report as R
@@ -2756,21 +2757,21 @@ class TestTheRestOfThe20260914Pass:
         assert "coolest SOLID point 80" in txt
         assert "in air" in txt
 
-    def test_c4_a_split_that_exists_prints_zero_under_every_duty(self):
+    def test_c4_the_repeated_rotor_split_rows_are_gone(self):
+        """Cleanup 2026-10-25: the rotor's bore and axial-end-face shares
+        repeated 'Removed through the bore' and the end-face sub-rows."""
         from motor_ai_sim import report as R
 
         with_keys = {"cooling": {"heat_budget": {"rotor_heat_split": {
-            "rotor_W": 201.4, "axial_end_faces_W": 0.0,
+            "rotor_W": 201.4, "gap_W": 1.0, "gap_pct": 0.5, "bore_W": 2.0,
+            "bore_pct": 1.0, "axial_end_faces_W": 0.0,
             "axial_end_faces_pct": 0.0}}}}
-        without = {"cooling": {"heat_budget": {"rotor_heat_split": {
-            "rotor_W": 510.5}}}}
         rows = dict((r[0], r[1:]) for r in R.thermal_compare_rows([
             {"duty": "rated", "em": {}, "d": {},
-             "res": {"thermal": with_keys}},
-            {"duty": "peak", "em": {}, "d": {}, "res": {"thermal": without}},
-        ])[1])
-        assert rows["Rotor heat out off the rotor / magnet end faces [W]"] \
-            == ["0", "0"]
+             "res": {"thermal": with_keys}}])[1])
+        assert "Rotor heat out across the gap [W]" in rows
+        assert "Rotor heat out off the bore [W]" not in rows
+        assert "Rotor heat out off the rotor / magnet end faces [W]" not in rows
 
     def test_c3_the_bearing_card_verdict_is_printed(self):
         from motor_ai_sim import report as R
@@ -8496,7 +8497,7 @@ class TestL13ServerAuditOf20260919:
         vmin, vmax = R._map_png(verts, tris, values, label="safety factor",
                                 vmax_fixed=2.0 * R.SF_ACCEPT, reverse=True,
                                 range_only=True)
-        assert vmax == 4.0
+        assert vmax == 2.0 * R.SF_ACCEPT
         # Never the degenerate `vmin == vmax` this bug produced — the caption
         # promises "the bar stops at 4" and the bar must actually span a
         # range to say so.
@@ -8514,7 +8515,7 @@ class TestL13ServerAuditOf20260919:
         vmin, vmax = R._map_png(verts, tris, values, label="safety factor",
                                 vmax_fixed=2.0 * R.SF_ACCEPT, reverse=True,
                                 range_only=True)
-        assert vmax == 4.0
+        assert vmax == 2.0 * R.SF_ACCEPT
         assert vmin == 1.5
 
 

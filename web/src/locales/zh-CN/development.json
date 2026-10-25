@@ -234,6 +234,7 @@
     "actions": "打开",
     "yes": "是",
     "no": "否",
+    "corrected3d": "已计入三维端部效应",
     "targetValue": "工况目标值 - 尚未计算",
     "linePeakUnavailable": "此结果没有可用的实际线电压峰值。",
     "partialMass": "主动部件质量或未盖章质量；并非整机装配质量。",

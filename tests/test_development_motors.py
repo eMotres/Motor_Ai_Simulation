@@ -447,3 +447,18 @@ def test_line_peak_tooltip_locale_resolves_at_runtime_key(locale):
         value = value[part]
     assert isinstance(value, str) and value.strip()
     assert value != "comparison.linePeakUnavailable"
+
+
+def test_comparison_applies_the_3d_end_effect_like_the_report():
+    """Owner 2026-10-25: the project table shows the report's 3-D corrected torque, power and voltage peaks."""
+    from motor_ai_sim.development.motors import _comparison_projection
+    duty = {"result": {"T_em_avg_Nm": 1000.0, "P_mech_W": 90000.0, "efficiency_pct": 96.0,
+                       "V_phase_peak_V": 300.0, "V_line_peak_V": 520.0},
+            "summary": {"end3d": {"k_flux": 0.95}}}
+    c = _comparison_projection(duty, {})
+    assert c["k_3d"] == 0.95
+    assert abs(c["torque_nm"] - 950.0) < 1e-9 and c["torque_nm_2d"] == 1000.0
+    assert abs(c["power_w"] - 85500.0) < 1e-6
+    assert abs(c["v_phase_peak_v"] - 285.0) < 1e-9 and abs(c["v_line_peak_v"] - 494.0) < 1e-9
+    plain = _comparison_projection({"result": {"T_em_avg_Nm": 1000.0, "efficiency_pct": 96.0}}, {})
+    assert plain["torque_nm"] == 1000.0 and "k_3d" not in plain

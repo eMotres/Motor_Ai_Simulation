@@ -1,5 +1,5 @@
 import { deliveryConflicts, matchesFieldReference, productionFallback } from '../reviewPresentation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
   Alert, Box, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
   Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField,
@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import { buildSpecificationCards, cardIndexForField, LOAD_FIELDS, MORE_FIRST_FIELDS, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, usesRangeEditor, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
@@ -490,18 +490,18 @@ export default function DevelopmentPage() {
   /** A stored choice the options no longer list stays visible (and selected) instead of rendering blank. */
   const storedOutsideOptions = (value: unknown, options: Array<string | { value: string }>) => value != null && value !== '' && !options.some((o) => (typeof o === 'string' ? o : o.value) === String(value)) ? <MenuItem value={String(value)}>{String(value)}</MenuItem> : null;
   const sectionTitle = (v: unknown) => { const value = label(v); return value.startsWith('wizard.') ? tr(value) : value; };
-  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; multiline?: boolean; placeholder?: string; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false, compact = false): React.ReactNode => {
+  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; multiline?: boolean; placeholder?: string; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false, _compact = false): React.ReactNode => {
     const kind = shape.type ?? 'string';
     const options = shape.options ?? [];
     const text = (v: unknown) => v == null ? '' : String(v);
     const unitAdornment = (unit: string) => <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>{unit}</InputAdornment>;
     const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <TextField size="small" fullWidth type={type === 'number' ? 'number' : type === 'date' || unit === 'date' ? 'date' : 'text'} multiline={!!shape.multiline && type !== 'number'} minRows={shape.multiline && type !== 'number' ? 2 : undefined} placeholder={shape.placeholder} value={text(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`, min: type === 'number' ? shape.min : undefined, max: type === 'number' ? shape.max : undefined, step: type === 'number' ? 'any' : undefined }} InputProps={unit && unit !== 'date' ? { endAdornment: unitAdornment(unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onChange={(e) => update(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} />;
     if (shape.allow_range) {
-      // a compact table cell starts with one number; a stored range keeps its two bounds
-      if (!usesRangeEditor(shape, value) || (compact && blankValue(value))) return input(value, onChange, 'number', shape.unit);
-      const bounds = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-      if (compact) return <Stack spacing={0.5}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" placeholder={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Stack>;
-      return <Box sx={{ display: 'flex', gap: 0.5 }}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" label={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Box>;
+      // ONE value, the worst case for modelling (owner 2026-10-25: «всё должно быть однозначно»). A range stored
+      // before shows its worst bound; typing replaces it with one number. The stored range itself is never rewritten here.
+      const stored = rangeWorst(shape, value);
+      if (!stored) return input(value, onChange, 'number', shape.unit);
+      return <Tooltip title={tr('rangeWorst', { min: text(stored.min), max: text(stored.max) })}><Box>{input(stored.worst, onChange, 'number', shape.unit)}</Box></Tooltip>;
     }
     if (kind === 'array') {
       const rows = Array.isArray(value) ? value : [];
@@ -529,7 +529,7 @@ export default function DevelopmentPage() {
   const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
   const fieldRefFor = (f: SpecificationField, prod: boolean) => `${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`;
   /** Label (help text as its tooltip), required mark, the "not known yet" toggle and open comments. */
-  const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'wrap' }}><Tooltip title={label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{unknown && <Typography component="span" sx={{ fontSize: 10.5, color: 'warning.main' }}>{tr('wizard.notKnownYet')}</Typography>}{commentIcon(fieldRefFor(f, prod))}</Stack>;
+  const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string, extra: string[] = []) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'wrap' }}><Tooltip title={extra.length ? <>{label(f.help ?? f.label)}{extra.map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{commentIcon(fieldRefFor(f, prod))}</Stack>;
   const propLabel = (prop: { label: unknown; short_label?: unknown; help?: unknown; required?: boolean }, strong = false) => <Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ mb: 0.4, fontSize: strong ? 12 : 11, fontWeight: strong ? 800 : 600, color: strong ? 'var(--text-0)' : 'var(--text-2)' }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>;
   const storedAnswer = (f: SpecificationField, prod: boolean) => {
     const store = prod ? (draftRef.current.production as Record<string, unknown>) ?? {} : draftRef.current.fields ?? {};
@@ -565,11 +565,11 @@ export default function DevelopmentPage() {
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
     return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ minWidth: 0, gridColumn: wide ? '1 / -1' : undefined }}>
-      {labelRow(f, prod, required, unknown)}
+      {labelRow(f, prod, required, unknown, undefined, [...(f.id === '3_2' ? [tr('wizard.ambientMaxNote')] : []), ...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
       <Stack spacing={0.5}>
         {properties?.length ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
-            {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: usesRangeEditor(prop, objectValue[prop.id]) || prop.type === 'object' || prop.type === 'array' ? 'span 2' : undefined }}>
+            {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? 'span 2' : undefined }}>
               {propLabel(prop, f.id === '3_2' && prop.id === 'temperature_max_C')}
               {renderTypedValue(prop, objectValue[prop.id], (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
@@ -581,8 +581,6 @@ export default function DevelopmentPage() {
         ) : (
           renderTypedValue(f, answer.value, (next) => setAnswer(f, next, prod), f.id, unknown)
         )}
-        {f.id === '3_2' && <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('wizard.ambientMaxNote')}</Typography>}
-        {fallback.length > 0 && <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })}</Typography>}
         {fieldMessages(f, answer, required)}
       </Stack>
     </Box>;
@@ -600,34 +598,29 @@ export default function DevelopmentPage() {
       const prop = (id: string) => f.properties?.find((item) => item.id === id);
       const edit = (id: string) => (value: unknown) => setProperty(f, false, obj, id, value);
       if (column === 'power') {
-        if (f.id === '1_4') {
-          const derived = v2 ? finiteScalar(withS1DerivedPower(obj).shaft_power_W) : null;
-          const stated = prop('power_W') ?? prop('output_power_W');
-          if (derived != null && (!stated || blankValue(obj[stated.id]))) return <TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${tr('keyPoints.s1')} ${tr('keyPoints.power')} (W)` }} helperText={tr('wizard.s1Formula')} FormHelperTextProps={{ sx: { mx: 0, fontSize: 10 } }} />;
-          if (!stated) return dash;
-          return <>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}{derived != null && <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{tr('keyPoints.derived', { value: watts(derived) })}</Typography>}</>;
-        }
-        const stated = prop('output_power_W');
-        if (!stated) return dash;
+        // S1 and peak read the same way (owner 2026-10-25): with torque and speed given the power IS T·ω, shown
+        // read-only; a stated power is editable only when there is no torque/speed pair to derive it from.
+        const stated = prop('power_W') ?? prop('output_power_W');
         const torque = finiteScalar(obj.torque_Nm), speed = finiteScalar(obj.speed_rpm);
-        return renderTypedValue({ ...stated, placeholder: torque != null && speed != null ? tr('keyPoints.derived', { value: watts(torque * 2 * Math.PI * speed / 60) }) : undefined }, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true);
+        const derived = v2 && torque != null && speed != null ? torque * 2 * Math.PI * speed / 60 : null;
+        if (derived != null && (!stated || blankValue(obj[stated.id]))) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
+        if (!stated) return dash;
+        return <Tooltip title={derived != null ? tr('keyPoints.derived', { value: watts(derived) }) : ''}><Box>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
       }
       const p = prop(column);
       return p ? renderTypedValue(p, obj[column], edit(column), `${f.id}-${column}`, unknown, true) : dash;
     };
     return <Box sx={{ minWidth: 0 }}>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(110px,0.9fr) repeat(5,minmax(0,1fr))', gap: '6px 8px', alignItems: 'start', [NARROW]: { gridTemplateColumns: 'repeat(2,minmax(0,1fr))' } }}>
-        <Box sx={{ display: 'contents', [NARROW]: { display: 'none' } }}><span />{KEY_COLUMNS.map((c) => <Typography key={c.id} sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>{c.title}</Typography>)}</Box>
+        <Box sx={{ display: 'contents', [NARROW]: { display: 'none' } }}><span />{KEY_COLUMNS.map((c) => <Tooltip key={c.id} title={c.id === 'period_s' ? tr('keyPoints.periodTip') : c.id === 'power' ? tr('wizard.s1Formula') : ''}><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>{c.title}</Typography></Tooltip>)}</Box>
         {rows.map((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', required = fieldRequired(f, draftRef.current); return <Box key={f.id} id={`spec-field-${f.id}`} sx={{ display: 'contents' }}>
-          <Box sx={{ minWidth: 0, pt: '4px', [NARROW]: { gridColumn: '1 / -1' } }}>{labelRow(f, false, required, unknown, f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak'))}{fieldMessages(f, answer, required)}</Box>
+          <Box sx={{ minWidth: 0, pt: '4px', [NARROW]: { gridColumn: '1 / -1' } }}>{labelRow(f, false, required, unknown, f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak'), f.id === '1_5' ? [tr('keyPoints.noPeak')] : retained ? [`${tr('migration.retainedRange')}: ${tr('field.torque')} ${readableRange(retained.torque_Nm)} N·m · ${tr('field.speed')} ${readableRange(retained.speed_rpm)} rpm`, ...(readableRange(retained.input_power_W) || readableRange(retained.output_power_W) ? [`${tr('migration.legacyInputPower')}: ${readableRange(retained.input_power_W) || '—'} W · ${tr('migration.legacyOutputPower')}: ${readableRange(retained.output_power_W) || '—'} W`] : [])] : [])}{fieldMessages(f, answer, required)}</Box>
           {KEY_COLUMNS.map((c) => <Box key={c.id} sx={{ minWidth: 0 }}><Typography sx={{ display: 'none', fontSize: 10.5, color: 'var(--text-3)', [NARROW]: { display: f.properties?.some((p) => p.id === c.id) || c.id === 'power' ? 'block' : 'none' } }}>{c.title}</Typography>{cell(f, c.id)}</Box>)}
         </Box>; })}
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 1, alignItems: 'flex-end' }}>
-        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => p.id === 'power_basis' || p.id === 'frequency' || !KEY_HANDLED.has(p.id)).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
+        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'power_basis' ? (!blankValue(obj.power_basis) || (finiteScalar(obj.torque_Nm) == null && !blankValue(obj.power_W))) : p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
       </Box>
-      <Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-3)' }}>{tr('keyPoints.noPeak')}</Typography>
-      {retained && <><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.retainedRange')}: {tr('field.torque')} {readableRange(retained.torque_Nm)} N&#183;m &#183; {tr('field.speed')} {readableRange(retained.speed_rpm)} rpm</Typography><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.legacyInputPower')}: {readableRange(retained.input_power_W)} W &#183; {tr('migration.legacyOutputPower')}: {readableRange(retained.output_power_W)} W</Typography></>}
     </Box>;
   };
   /** 2_1 through the app's one battery block; the stated pack voltages stay editable beside it. */
@@ -639,11 +632,10 @@ export default function DevelopmentPage() {
     const pack = ['voltage_min_V', 'voltage_nominal_V', 'voltage_max_V'].map((id) => f.properties!.find((p) => p.id === id)!).filter(Boolean);
     const handled = new Set(['chemistry', 'series_cells', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V', ...pack.map((p) => p.id)]);
     return <Box id={`spec-field-${f.id}`} sx={{ minWidth: 0, p: '10px 12px', border: '1px solid var(--line-soft)', borderRadius: '8px', bgcolor: 'var(--panel-2)' }}>
-      <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown)} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
+      <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown, undefined, [tr('wizard.packStated')])} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
         {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
       </Box>
-      <Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-3)' }}>{tr('wizard.packStated')}</Typography>
       {fieldMessages(f, answer, required)}
     </Box>;
   };
@@ -692,7 +684,7 @@ export default function DevelopmentPage() {
                     <Box sx={grid}>{section.fields.filter((f) => MORE_FIRST_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
                     {(section.fields.some((f) => LOAD_FIELDS.includes(f.id)) || !v2) && <Box><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.load')}</Typography>{!v2 ? <Alert severity="info">{tr('newLoadNotice')}</Alert> : <LoadSection value={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} engineerView={canEditProject} onReview={openFieldReview} getOpenReviewCount={openCount} onChange={(v) => updateDraft((d) => writeLoadDraft(d, v))} t={tr} locale={lang} />}</Box>}
                     <Box sx={grid}>{section.fields.filter((f) => f.storage_namespace !== 'production' && !MORE_FIRST_FIELDS.includes(f.id) && !LOAD_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {section.fields.some((f) => f.storage_namespace === 'production') && <Box><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.productionPlan')}</Typography><Box sx={grid}>{section.fields.filter((f) => f.storage_namespace === 'production').map((f) => renderField(f, true))}</Box><Typography sx={{ fontSize: 11, color: 'var(--text-3)', mt: 1 }}>{tr('productionTip')}</Typography></Box>}
+                    {section.fields.some((f) => f.storage_namespace === 'production') && <Box><Tooltip title={tr('productionTip')}><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.productionPlan')}</Typography></Tooltip><Box sx={grid}>{section.fields.filter((f) => f.storage_namespace === 'production').map((f) => renderField(f, true))}</Box></Box>}
                   </Stack></Collapse>}
                   {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tr('wizard.reviewHint')}</Typography>{submitError.map((x, i) => <Alert key={i} severity="error">{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} /><Button variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></Stack>}
                 </Paper>;              })}            </Stack>

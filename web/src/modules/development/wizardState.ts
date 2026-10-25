@@ -99,6 +99,18 @@ export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): bo
   return field.properties?.length ? true : answerComplete(answer);
 }
 
+/** The worst bound of a range stored before the one-value rule (owner 2026-10-25): the larger one for loads,
+ *  speeds, durations and quantities, the smaller one where the schema marks the value as a limit (`worst: "min"`,
+ *  e.g. an allowed ripple). Null for a plain value. */
+export function rangeWorst(shape: { allow_range?: boolean; worst?: string }, value: unknown): { worst: number | ''; min: unknown; max: unknown } | null {
+  if (!shape.allow_range || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const r = value as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null);
+  const lo = num(r.minimum), hi = num(r.maximum);
+  const worst = shape.worst === 'min' ? (lo ?? hi) : (hi ?? lo);
+  return { worst: worst ?? '', min: r.minimum, max: r.maximum };
+}
+
 /** A range-capable value keeps the range editor unless it is a single number (stored ranges are never flattened). */
 export function usesRangeEditor(shape: { allow_range?: boolean }, value: unknown): boolean {
   return !!shape.allow_range && !(typeof value === 'number' || (typeof value === 'string' && !!value.trim()));

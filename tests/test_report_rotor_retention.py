@@ -91,4 +91,6 @@ def test_the_comparison_table_says_it_too():
     cols = [{"duty": "overspeed", "em": {}, "d": {}, "res": {"rotor_stress": rec}},
             {"duty": "rated", "em": {}, "d": {}, "res": {"rotor_stress": ok}}]
     rows = {r[0]: r[1:] for r in R.mech_compare_rows(cols)[1]}
-    assert rows["Lowest safety factor"] == [R.ROTOR_NOT_RETAINED, R._fmt(2.5, 2)]
+    # the row carries the owner's target in its label: "... (target ≥ 3)"
+    sf_row = next(v for k, v in rows.items() if k.startswith("Lowest safety factor"))
+    assert sf_row == [R.ROTOR_NOT_RETAINED, R.rotor_sf_cell(2.5)]

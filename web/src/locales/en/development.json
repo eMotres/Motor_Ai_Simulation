@@ -49,7 +49,7 @@
     "secondTier": "Also useful",
     "notKnownYet": "Not known yet",
     "productionPlan": "Production plan",
-    "ambientMaxNote": "All calculations use the maximum ambient temperature.",
+    "ambientMaxNote": "Asked for air cooling only; all calculations use the maximum ambient temperature. Liquid cooling uses the coolant inlet temperature, underwater cooling the water temperature.",
     "fromProduction": "From the production plan: {values}",
     "packStated": "Pack voltages are kept as entered. They are derived from the cells only when you change the cell count or a cell voltage."
   },
@@ -471,6 +471,13 @@
       "robot_joint": "Robot joint",
       "shaft": "Shaft (coupling / gearbox)",
       "unknown": "Not known yet"
+    },
+    "short": {
+      "air_propeller": "Air propeller",
+      "marine_propeller": "Water propeller",
+      "wheel": "Wheel",
+      "turbine": "Turbine",
+      "shaft": "Shaft"
     },
     "source": "Load data source",
     "chooseSource": "Choose a source",

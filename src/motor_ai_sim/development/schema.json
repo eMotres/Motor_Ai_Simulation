@@ -1316,12 +1316,13 @@
           "id": "3_2",
           "checklist_id": "3.2",
           "label": {
-            "en": "Ambient temperature range (min / max) and altitude",
-            "zh-CN": "环境温度范围（最低／最高）和海拔"
+            "en": "Maximum ambient temperature (air cooling)",
+            "zh-CN": "最高环境温度（空气冷却）"
           },
           "type": "object",
-          "unit": "°C, m",
+          "unit": "°C",
           "required": true,
+          "applies_when_cooling_medium": ["air"],
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -1358,8 +1359,8 @@
             }
           ],
           "short_label": {
-            "en": "Ambient conditions",
-            "zh-CN": "环境条件"
+            "en": "Max ambient temperature",
+            "zh-CN": "最高环境温度"
           },
           "presentation_group": "3"
         },

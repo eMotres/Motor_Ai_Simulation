@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -484,6 +485,80 @@ _AIRFLOW_BY_LOAD = {
 _KNOWN_AIRFLOW = {m for modes in _AIRFLOW_BY_LOAD.values() for m in modes}
 
 
+_COOLING_MEDIA = ("air", "liquid", "submerged")
+_SUBMERGED_PROPERTIES = ("water_temperature_C", "water_speed_mps", "depth_m")
+
+
+def _present(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_present(v) for v in value.values())
+    return not (value is None or (isinstance(value, str) and not value.strip()))
+
+
+def cooling_medium(value: Any) -> tuple[str | None, bool]:
+    """(medium, inferred) of a 3_1 cooling answer: the stored `cooling_medium`, else the medium its stored values
+    imply, else (None, False).  The same rule as the web's `coolingMedium` (specChoices.ts) - keep them in step."""
+    v = value if isinstance(value, dict) else {}
+    if v.get("cooling_medium") in _COOLING_MEDIA:
+        return v["cooling_medium"], False
+    ctype = v["cooling_type"].lower() if isinstance(v.get("cooling_type"), str) else ""
+    coolant = v["coolant"].lower() if isinstance(v.get("coolant"), str) else ""
+    text = re.sub(r"\b(no|without|not an?)\s+(internal\s+)?(coolant\s+|liquid\s+|cooling\s+)?(loop|circuit|jacket)s?\b", " ",
+                  f"{ctype} {coolant}", flags=re.ASCII)
+    circuit = bool(re.search(r"glycol|jacket|ppg|loop|乙二醇|冷却液|回路", text))
+    if re.search(r"submerg|immers|underwater|sea ?water|水下|浸没|海水", text) and not circuit:
+        return "submerged", True
+    if any(_present(v.get(k)) for k in ("coolant", "flow_rate", "pressure_drop_Pa")) or circuit:
+        return "liquid", True
+    if _present(v.get("airflow")) or re.search(r"\bair|风冷|空气", ctype, flags=re.ASCII):
+        return "air", True
+    if _present(v.get("inlet_temperature_C")):
+        return "liquid", True
+    if any(_present(v.get(k)) for k in _SUBMERGED_PROPERTIES) or re.search(r"water|submerg|immers|水下|浸没|水冷", ctype):
+        return ("liquid" if re.search(r"glycol|coolant|jacket|乙二醇|冷却液", ctype) else "submerged"), True
+    if re.search(r"liquid|coolant|glycol|oil|液冷|冷却液|油冷", ctype):
+        return "liquid", True
+    return None, False
+
+
+def _active_cooling(draft: dict):
+    """The cooling answer's value as the rules read it: a "not known yet" cooling is no choice (web: activeCooling)."""
+    answer = (draft.get("fields") or {}).get("3_1")
+    if isinstance(answer, dict) and "status" in answer:
+        return None if answer.get("status") == "not_known_yet" else answer.get("value")
+    return answer
+
+
+def field_applies(field: dict, draft: dict) -> bool:
+    """A field with `applies_when_cooling_medium` (the maximum ambient temperature, 3_2) is asked, required and counted
+    only for those cooling media - air - or while no medium is chosen (air is the default assumption).  Liquid cooling
+    uses the coolant inlet temperature and underwater cooling the water temperature of 3_1.  The stored value is kept.
+    The same rule as the web's `fieldApplies` (wizardState.ts)."""
+    media = field.get("applies_when_cooling_medium")
+    if not media:
+        return True
+    medium, _ = cooling_medium(_active_cooling(draft))
+    return medium is None or medium in media
+
+
+def _field_required(field: dict, draft: dict) -> bool:
+    return field_applies(field, draft) and bool(field.get("required") or _conditional_required(field, draft))
+
+
+def thermal_basis(draft: dict) -> dict:
+    """The temperature every thermal calculation starts from: the maximum ambient temperature (3_2) for air cooling,
+    the maximum coolant inlet temperature (3_1) for liquid cooling, the maximum water temperature (3_1) underwater;
+    not chosen yet reads as air.  Any reader of the thermal basis goes through this, never straight to 3_2
+    `temperature_max_C`.  `temperature_C` is None while the value is not stated."""
+    cooling = _active_cooling(draft)
+    medium = cooling_medium(cooling)[0] or "air"
+    source = {"air": "temperature_max_C", "liquid": "inlet_temperature_C", "submerged": "water_temperature_C"}[medium]
+    holder = _active_value(draft.get("fields") or {}, "3_2") if medium == "air" else cooling
+    raw = holder.get(source) if isinstance(holder, dict) else None
+    ok = isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw)
+    return {"medium": medium, "source": f"{'3_2' if medium == 'air' else '3_1'}.{source}", "temperature_C": float(raw) if ok else None}
+
+
 def _active_value(fields: dict, field_id: str):
     """The value of a FILLED answer; a value kept under missing / not_known_yet is retained, not active."""
     answer = fields.get(field_id)
@@ -764,7 +839,7 @@ def completeness(draft: dict) -> dict:
     section_fields = {}
     for section in active_schema["sections"]:
         section_fields[section["id"]] = {field["id"]: field for field in section["fields"]}
-        required_by_section[section["id"]] = [field["id"] for field in section["fields"] if field.get("required") or _conditional_required(field, draft)]
+        required_by_section[section["id"]] = [field["id"] for field in section["fields"] if _field_required(field, draft)]
     section_stats, total, filled, answered, unknown, missing, invalid = {}, 0, 0, 0, 0, 0, 0
     for section_id, ids in required_by_section.items():
         section_filled = 0
@@ -816,7 +891,7 @@ def validation_errors(draft: dict) -> list[dict]:
         for field in section["fields"]:
             fid = field["id"]
             legacy_s1 = fid == "1_4" and int(draft.get("schema_version", 1)) == 2 and not key_points_stored(draft)
-            if not (field.get("required") or _conditional_required(field, draft) or legacy_s1):
+            if not (_field_required(field, draft) or legacy_s1):
                 continue
             if fid == "key_points":
                 errors.extend(key_point_errors(draft))

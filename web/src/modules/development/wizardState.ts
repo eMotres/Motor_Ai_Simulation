@@ -1,5 +1,6 @@
 import type { Completeness, SchemaField, SchemaSection } from './types';
 import type { SpecificationField } from './specificationLayout';
+import { coolingMedium } from './specChoices.ts';
 import { KEY_POINTS_ID, keyPointsSlotState, keyPointsValid, type KeyPoint } from './keyPoints.ts';
 
 export interface FieldAnswer { value?: unknown; status?: 'filled' | 'not_known_yet' | 'missing'; not_known_yet?: boolean }
@@ -27,7 +28,22 @@ export function isConditionallyRequired(f: SchemaField, draft: SpecDraft): boole
   const answer = fieldAnswer(draft, condition.field);
   return answer.status === 'filled' && condition.in.includes(answer.value);
 }
-export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return isRequired(f) || isConditionallyRequired(f, draft); }
+/** The cooling answer (3_1) as the rules read it: its stored value, but a "not known yet" cooling is no choice. */
+export function activeCooling(draft: SpecDraft): unknown {
+  const answer = fieldAnswer(draft, '3_1');
+  return answer.status === 'not_known_yet' || answer.not_known_yet === true ? undefined : answer.value;
+}
+/** A field that applies only to some cooling media (schema `applies_when_cooling_medium`): the maximum ambient
+ *  temperature (3_2) is asked for air cooling only; liquid and underwater cooling take the coolant inlet / water
+ *  temperature of 3_1.  While no medium is chosen it applies (air is the default assumption).  A field that does not
+ *  apply is not shown, not required and not counted; its stored value is kept. */
+export function fieldApplies(f: SchemaField, draft: SpecDraft): boolean {
+  const media = f.applies_when_cooling_medium;
+  if (!media?.length) return true;
+  const { medium } = coolingMedium(activeCooling(draft));
+  return medium === null || media.includes(medium);
+}
+export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return fieldApplies(f, draft) && (isRequired(f) || isConditionallyRequired(f, draft)); }
 export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {
   return (field as SpecificationField).storage_namespace ?? (section.id === 'production' || section.production ? 'production' : 'fields');
 }

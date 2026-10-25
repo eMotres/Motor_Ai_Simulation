@@ -72,6 +72,20 @@ export function coolingMedium(value: unknown): { medium: CoolingMedium | null; i
   return { medium: null, inferred: false };
 }
 
+/** The temperature every thermal calculation starts from (owner 2026-10-26): the maximum ambient temperature (3_2) for
+ *  air cooling, the maximum coolant inlet temperature for liquid cooling, the maximum water temperature underwater.
+ *  Not chosen yet reads as air (the default assumption).  `temperature_C` is null while that value is not stated.
+ *  Any reader of the thermal basis goes through this - never straight to `temperature_max_C`. */
+export type ThermalBasisSource = 'temperature_max_C' | 'inlet_temperature_C' | 'water_temperature_C';
+export function thermalBasis(cooling: unknown, ambient: unknown): { medium: CoolingMedium; source: ThermalBasisSource; temperature_C: number | null } {
+  const medium = coolingMedium(cooling).medium ?? 'air';
+  const source: ThermalBasisSource = medium === 'liquid' ? 'inlet_temperature_C' : medium === 'submerged' ? 'water_temperature_C' : 'temperature_max_C';
+  const from = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  const raw = from(medium === 'air' ? ambient : cooling)[source];
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
+  return { medium, source, temperature_C: Number.isFinite(n) ? n : null };
+}
+
 /** The load switch (owner 2026-10-25, one block with the cooling): what the motor drives.  The finer stored
  *  types belong to a button and are kept as stored: a water-jet is a water propeller; a pump, an engine
  *  driving a generator and a robot joint are a shaft. */

@@ -26,7 +26,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { MotorNoteField } from '../MotorNoteField';
@@ -613,19 +613,17 @@ export default function DevelopmentPage() {
     const required = fieldRequired(f, draftRef.current);
     const options = f.options ?? f.choices;
     const objectValue = objectOf(answer.value);
-    // the ambient block states the maximum first: every calculation uses it
-    // ambient: ONE value, the maximum (owner 2026-10-25: no min/max pairs); a stored minimum stays in the data, not on screen
-    const properties = f.id === '3_2' && f.properties ? f.properties.filter((p) => p.id !== 'temperature_min_C') : f.properties;
+    const properties = f.properties;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
     return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ minWidth: 0, gridColumn: wide ? '1 / -1' : undefined }}>
-      {labelRow(f, prod, required, unknown, undefined, [...(f.id === '3_2' ? [tr('wizard.ambientMaxNote')] : []), ...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
+      {labelRow(f, prod, required, unknown, undefined, [...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
       <Stack spacing={0.5}>
         {properties?.length ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
             {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? 'span 2' : undefined }}>
-              {propLabel(prop, f.id === '3_2' && prop.id === 'temperature_max_C')}
+              {propLabel(prop)}
               {renderTypedValue(prop, objectValue[prop.id], (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
           </Box>
@@ -745,6 +743,22 @@ export default function DevelopmentPage() {
       </Stack>
     </Box>;
   };
+  /** 3_2 as ONE line: the maximum ambient temperature, the only thing asked (owner 2026-10-26; a stored minimum and altitude stay
+   *  in the data, not on screen).  Shown for air cooling only - liquid cooling takes the coolant inlet temperature and underwater
+   *  cooling the water temperature of 3_1 - and while no cooling is chosen (air is the default assumption). */
+  const renderAmbient = (f: SpecificationField) => {
+    if (!fieldApplies(f, draftRef.current)) return null;
+    const prop = f.properties?.find((p) => p.id === 'temperature_max_C');
+    if (!prop) return renderField(f, false, false);
+    const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
+    return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0, flexWrap: 'wrap', rowGap: 0.5 }}>
+        <Box sx={{ '& > *': { mb: '0 !important' } }}>{labelRow(f, false, required, unknown, undefined, [tr('wizard.ambientMaxNote')])}</Box>
+        <Box sx={{ width: 150, maxWidth: '100%' }}>{renderTypedValue(prop, obj[prop.id], (value) => setProperty(f, false, obj, prop.id, value), `${f.id}-${prop.id}`, unknown)}</Box>
+      </Stack>
+      {fieldMessages(f, answer, required)}
+    </Box>;
+  };
   /** 4_6 for the chosen load: the axial load first and required, the propeller or shaft loads, any other load only while it holds a value. */
   const renderLoads = (f: SpecificationField, loadType: string) => {
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
@@ -780,7 +794,10 @@ export default function DevelopmentPage() {
     };
     return <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
       {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
-      <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={type === group && finer ? finer : undefined} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
+      {/* ONE line: short visible names (the full name and a finer stored type are in the tooltip); on a narrow screen the row scrolls inside itself */}
+      <Box sx={{ overflowX: 'auto', maxWidth: '100%' }}>
+        <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'nowrap', width: 'max-content' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={[tr(`load.types.${type}`), type === group && finer ? finer : ''].filter(Boolean).join(' · ')} sx={{ ...switchButton, px: 1, flex: '0 0 auto', whiteSpace: 'nowrap' }}>{tr(`load.short.${type}`, { defaultValue: tr(`load.types.${type}`) })}</ToggleButton>)}</ToggleButtonGroup>
+      </Box>
     </Box>;
   };
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
@@ -816,10 +833,10 @@ export default function DevelopmentPage() {
                     {byId('key_points') && keyPointsEditor(byId('key_points')!)}
                     {byId('2_1') && renderBattery(byId('2_1')!)}
                     {/* load and cooling as ONE block (owner 2026-10-25): what the motor drives decides which cooling can occur */}
-                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>
-                      {byId('3_1') && <Stack spacing={1.2} sx={{ minWidth: 0 }}>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</Stack>}
-                      {byId('3_2') && renderField(byId('3_2')!, false, false)}
-                    </Box>
+                    <Stack spacing={1.2} sx={{ minWidth: 0 }}>
+                      {byId('3_1') && <>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</>}
+                      {byId('3_2') && renderAmbient(byId('3_2')!)}
+                    </Stack>
                     {section.fields.filter((f) => !['1_1', 'key_points', '2_1', '3_1', '3_2', 'load_type'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>

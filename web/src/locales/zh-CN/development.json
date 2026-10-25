@@ -49,7 +49,7 @@
     "secondTier": "补充信息",
     "notKnownYet": "暂不清楚",
     "productionPlan": "生产计划",
-    "ambientMaxNote": "所有计算均采用最高环境温度。",
+    "ambientMaxNote": "仅空气冷却时填写；所有计算均采用最高环境温度。液冷采用冷却液进口温度，水下冷却采用水温。",
     "fromProduction": "来自生产计划：{values}",
     "packStated": "电池组电压按输入值保存；只有在修改串联节数或单体电压时才由单体数据计算。"
   },
@@ -471,6 +471,13 @@
       "robot_joint": "机器人关节",
       "shaft": "轴输出（联轴器/齿轮箱）",
       "unknown": "未知"
+    },
+    "short": {
+      "air_propeller": "空气螺旋桨",
+      "marine_propeller": "船用螺旋桨",
+      "wheel": "车轮",
+      "turbine": "涡轮",
+      "shaft": "轴输出"
     },
     "source": "负载数据来源",
     "chooseSource": "选择来源",

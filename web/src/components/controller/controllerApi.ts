@@ -175,6 +175,24 @@ async function j<T>(r: Response): Promise<T> {
   return body as T;
 }
 
+/** One catalogue value with where it comes from (basis: stated / derived / figure / inferred; page of the source document). */
+export interface ProvCell { value?: number | string | boolean | null; unit?: string; basis?: string; page?: number; note?: string; dc_V?: number; type?: string; name?: string; spec_choice?: string }
+/** One row of `GET /api/controllers/catalog`: a complete commercial controller (read-only reference data). */
+export interface ControllerProduct {
+  id: string; brand: string; model: string; revision?: string | null; display_name: string; manufacturer?: string | null; aliases?: string[];
+  supply_voltage_V: Record<string, ProvCell | null>; supply_max_V: number | null;
+  dc_input_current_max_A?: ProvCell | null;
+  phase_current: { continuous: ProvCell[]; continuous_Arms_at_supply_max?: ProvCell | null; peak: ProvCell[]; peak_duration_s?: ProvCell | null };
+  switching_frequency_Hz: Record<string, ProvCell | null>;
+  power_devices: Record<string, unknown>; power_devices_known: boolean;
+  phases?: Record<string, unknown>;
+  position_sensors: Array<ProvCell & { type: string }>; communication: Array<ProvCell & { name: string }>;
+  mass_kg?: ProvCell | null; dimensions_mm?: Record<string, unknown> | null; protection?: Record<string, unknown> | null; cooling?: Record<string, unknown> | null;
+  source?: { document?: string; file?: string }; notes?: string[]; prefill?: Record<string, ProvCell>;
+}
+export const listControllerCatalog = () =>
+  fetch(`${API}/api/controllers/catalog`).then(j<{ catalog_version?: number; updated?: string; controllers: ControllerProduct[] }>);
+
 /** `topology` sizes the "suggested parallel" column for the loaded duty. */
 export const listDevices = (topology?: string) => {
   const p = new URLSearchParams();

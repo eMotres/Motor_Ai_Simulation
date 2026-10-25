@@ -1,0 +1,188 @@
+# ============================================================
+# Complete commercial motor controllers (inverters) - the catalogue the
+# Development specification picks from ("Controller" field 2_4) and the
+# Controller tab lists (read-only).  One entry per PRODUCT AND REVISION.
+#
+# RULES (owner 2026-10-26, same spirit as config/devices/*.yaml):
+#   * Nothing is invented.  A value the source document does not state is
+#     `null`; it is never estimated, never copied from a similar product.
+#   * Every value is {value, unit, basis, page}.
+#       basis: stated   = printed in the document (table or text)
+#              derived  = arithmetic on stated values (the formula is in `note`)
+#              figure   = read off a plotted curve (the reading is in `note`)
+#              inferred = a mapping or deduction, NOT a statement of the document
+#       page:  the page number printed in the document footer ("Version ... N")
+#   * Power-device data (`power_devices`) stays null until the manufacturer
+#     names the transistors.  The Development specification then shows a
+#     warning and the report says "controller losses not modelled - power
+#     devices unknown".
+#   * `spec_prefill` is the ONLY block the specification reads to pre-fill its
+#     fields; each of its values is a copy of a value above (same basis).
+#
+# Schema is validated by src/motor_ai_sim/inverter/controller_catalog.py and
+# tests/test_controller_catalog.py.
+# ============================================================
+catalog_version: 1
+updated: "2026-10-26"
+
+controllers:
+
+  # ----------------------------------------------------------
+  - id: dti-hv-550-rev4
+    brand: DTI
+    manufacturer: "Drivetrain Innovation kft. (Nagykoros, Hungary)"
+    model: HV-550
+    revision: "Rev 4"
+    display_name: "DTI HV-550 (Rev 4)"
+    aliases: ["DTI HV-550", "HV-550", "DTI HV550", "DTI HV-550 Rev 4", "DTI HV-550 (Rev. 4)"]
+    source:
+      document: "HV-550/HV-850 User manual, version 1.2, valid for Rev. 4 inverters (Drivetrain Innovation kft.)"
+      file: "DTI_HV550_850_R4_UserManual_V1.2.pdf"
+      pages_are: "the page number printed in the footer; the PDF page index is the same"
+    supply_voltage_V:
+      min: {value: 30, unit: V, basis: stated, page: 9, note: "Table 3, high voltage input range 30-800 V"}
+      nominal: null
+      max: {value: 800, unit: V, basis: stated, page: 9, note: "Table 3, high voltage input range 30-800 V"}
+      abs_max: {value: 830, unit: V, basis: stated, page: 9, note: "Table 3, high voltage absolute maximum input voltage"}
+    dc_input_current_max_A: {value: 280, unit: A, basis: stated, page: 9, note: "Table 3, high voltage maximum input current (HV-550 column)"}
+    logic_supply_V: {min: 9, max: 28, unit: V, basis: stated, page: 9, note: "Table 3, low voltage input range"}
+    dc_link_capacitance_uF: {value: 200, unit: uF, basis: stated, page: 9, note: "Table 3"}
+    phase_current:
+      continuous:
+        - {dc_V: 400, value: 550, unit: Apk, basis: stated, page: 10, note: "Table 4, continuous AC current at 400 VDC; only with the cooling the manual describes"}
+        - {dc_V: 800, value: 516, unit: Apk, basis: stated, page: 10, note: "Table 4, continuous AC current at 800 VDC; only with the cooling the manual describes"}
+      continuous_Arms_at_supply_max: {value: 364.9, unit: Arms, basis: derived, page: 10, note: "516 Apk (Table 4, at 800 VDC) / sqrt(2) = 364.9 Arms; the worst continuous value over the supply range"}
+      peak:
+        - {value: 550, unit: Apk, basis: stated, page: 10, note: "Table 4, maximum AC current for short period (peak current)"}
+        - {value: 390, unit: Arms, basis: stated, page: 10, note: "Table 4, maximum AC current for short period (RMS)"}
+      peak_duration_s: null
+      peak_duration_note: "Figure 4 (page 11) draws HV-550 as one flat line at 390 Arms from 1 s to 1000 s - no separate peak time is stated, so none is entered."
+      conditions: "Measured at 400 Hz output frequency, 8 kHz switching, 25 degC water inlet, 25 degC ambient; peak current at 700 VDC (page 10)."
+    switching_frequency_Hz:
+      min: {value: 8000, unit: Hz, basis: stated, page: 10, note: "Table 4, 8-14 kHz"}
+      max: {value: 14000, unit: Hz, basis: stated, page: 10, note: "Table 4, 8-14 kHz"}
+      rating_point: {value: 8000, unit: Hz, basis: stated, page: 10, note: "the current ratings are measured at 8 kHz"}
+      pwm: "central aligned PWM (page 8)"
+    power_devices:
+      device_type: null
+      voltage_class_V: null
+      part_number: null
+      note: "NOT STATED in the manual (page 14 only says the loss table follows the semiconductor manufacturer's recommendation). Find out which transistors the controller uses."
+    phases:
+      phase_count: {value: 3, basis: stated, page: 18, note: "'Any 3 phase PMSM motor' can be set up"}
+      independent_sets: {value: 1, basis: inferred, page: 18, note: "one three-phase output per controller"}
+      multi_controller: {basis: stated, page: 30, note: "two or more controllers can drive one motor with two or more fully isolated phase outputs (2xUVW)"}
+    position_sensors:
+      - {type: "RLS RM44SI encoder (SSI + incremental), 10B/11B/13B", spec_choice: "Absolute encoder", basis: stated, page: 17, note: "the most recommended sensor; spec_choice is an inferred mapping of SSI to 'Absolute encoder'"}
+      - {type: "Resolver, 1X-BRX type, through the DTI Resolver Interface", spec_choice: "Resolver", basis: stated, page: 17}
+      - {type: "Latching Hall-effect sensors", spec_choice: "Hall sensors", basis: stated, page: 17, note: "not recommended for large motors"}
+    communication:
+      - {name: "CAN (ISO 11898-2); CAN1 configuration and firmware, CAN2 interfacing", basis: stated, page: 25}
+      - {name: "Analog inputs, digital inputs and outputs", basis: stated, page: 19}
+    regeneration: {value: true, basis: stated, page: 8, note: "regenerative braking, generator mode"}
+    max_electrical_rpm: {value: 100000, unit: eRPM, basis: stated, page: 10}
+    typical_efficiency_pct: {value: 95, unit: "%", basis: stated, page: 10}
+    max_power_dissipation_W: {value: 4500, unit: W, basis: stated, page: 10}
+    mass_kg: {value: 6.8, unit: kg, basis: stated, page: 12, note: "Table 5 (one value for HV-550 and HV-850)"}
+    dimensions_mm: {height: 77, width: 213, length: 420, basis: stated, page: 12, note: "Table 5, h/w/l"}
+    protection: {ip: "IP65", basis: stated, page: 12}
+    operating_temperature_C: {min: -20, max: 85, basis: stated, page: 12}
+    cooling:
+      type: liquid
+      coolant: "glycol - distilled water mixture"
+      max_inlet_C: {value: 60, basis: stated, page: 12}
+      flow_L_per_min: {value: 25.3, basis: stated, page: 12, note: "required for the best continuous current"}
+      pressure_bar: {required: 1.25, max: 2, basis: stated, page: 12}
+      thermal_resistance_K_per_W: {value: 0.017, basis: stated, page: 13, note: "at 17.2 L/min"}
+    spec_prefill:
+      phase_current_continuous_Arms: {value: 364.9, basis: derived, page: 10}
+      phase_current_peak_Arms: {value: 390, basis: stated, page: 10}
+      phase_current_peak_duration_s: null
+      switching_frequency_Hz: {value: 8000, basis: stated, page: 10}
+      position_sensor: {value: "Absolute encoder", basis: inferred, page: 17}
+      phase_count: {value: 3, basis: stated, page: 18}
+      device_type: null
+      voltage_class_V: null
+    notes:
+      - "Page 8 quotes the current rating as 388/600 Arms; Table 4 says 390/600 Arms. The table is entered."
+      - "Table 4 gives the continuous current at 400 VDC as 550 Apk (= 389 Arms), equal to the RMS peak of the same table; Figure 3 draws HV-550 at 390 Arms up to about 700 VDC. Check with the manufacturer how long the 'peak' can be held."
+
+  # ----------------------------------------------------------
+  - id: dti-hv-850-rev4
+    brand: DTI
+    manufacturer: "Drivetrain Innovation kft. (Nagykoros, Hungary)"
+    model: HV-850
+    revision: "Rev 4"
+    display_name: "DTI HV-850 (Rev 4)"
+    aliases: ["DTI HV-850", "HV-850", "DTI HV850", "DTI HV-850 Rev 4", "DTI HV-850 (Rev. 4)"]
+    source:
+      document: "HV-550/HV-850 User manual, version 1.2, valid for Rev. 4 inverters (Drivetrain Innovation kft.)"
+      file: "DTI_HV550_850_R4_UserManual_V1.2.pdf"
+      pages_are: "the page number printed in the footer; the PDF page index is the same"
+    supply_voltage_V:
+      min: {value: 30, unit: V, basis: stated, page: 9, note: "Table 3, high voltage input range 30-800 V"}
+      nominal: null
+      max: {value: 800, unit: V, basis: stated, page: 9, note: "Table 3, high voltage input range 30-800 V"}
+      abs_max: {value: 830, unit: V, basis: stated, page: 9, note: "Table 3, high voltage absolute maximum input voltage"}
+    dc_input_current_max_A: {value: 400, unit: A, basis: stated, page: 9, note: "Table 3, high voltage maximum input current (HV-850 column)"}
+    logic_supply_V: {min: 9, max: 28, unit: V, basis: stated, page: 9, note: "Table 3, low voltage input range"}
+    dc_link_capacitance_uF: {value: 200, unit: uF, basis: stated, page: 9, note: "Table 3"}
+    phase_current:
+      continuous:
+        - {dc_V: 400, value: 850, unit: Apk, basis: stated, page: 10, note: "Table 4, continuous AC current at 400 VDC; only with the cooling the manual describes"}
+        - {dc_V: 800, value: 516, unit: Apk, basis: stated, page: 10, note: "Table 4, continuous AC current at 800 VDC; only with the cooling the manual describes"}
+      continuous_Arms_at_supply_max: {value: 364.9, unit: Arms, basis: derived, page: 10, note: "516 Apk (Table 4, at 800 VDC) / sqrt(2) = 364.9 Arms; the worst continuous value over the supply range"}
+      peak:
+        - {value: 850, unit: Apk, basis: stated, page: 10, note: "Table 4, maximum AC current for short period (peak current)"}
+        - {value: 600, unit: Arms, basis: stated, page: 10, note: "Table 4, maximum AC current for short period (RMS)"}
+      peak_duration_s: {value: 10, unit: s, basis: figure, page: 11, note: "Figure 4: the HV-850 curve is flat at 600 Arms up to the 10 s grid line, then falls (about 430 Arms at 100 s, 390 Arms at about 500 s); read off the plot, +- one grid step"}
+      peak_duration_note: "The peak load cycle can be repeated after a cool-down phase (page 11); the permitted time depends on the cooling system (Table 4, notes 3 and 4)."
+      conditions: "Measured at 400 Hz output frequency, 8 kHz switching, 25 degC water inlet, 25 degC ambient; peak current at 700 VDC (page 10)."
+    switching_frequency_Hz:
+      min: {value: 8000, unit: Hz, basis: stated, page: 10, note: "Table 4, 8-14 kHz"}
+      max: {value: 14000, unit: Hz, basis: stated, page: 10, note: "Table 4, 8-14 kHz"}
+      rating_point: {value: 8000, unit: Hz, basis: stated, page: 10, note: "the current ratings are measured at 8 kHz"}
+      pwm: "central aligned PWM (page 8)"
+    power_devices:
+      device_type: null
+      voltage_class_V: null
+      part_number: null
+      note: "NOT STATED in the manual (page 14 only says the loss table follows the semiconductor manufacturer's recommendation). Find out which transistors the controller uses."
+    phases:
+      phase_count: {value: 3, basis: stated, page: 18, note: "'Any 3 phase PMSM motor' can be set up"}
+      independent_sets: {value: 1, basis: inferred, page: 18, note: "one three-phase output per controller"}
+      multi_controller: {basis: stated, page: 30, note: "two or more controllers can drive one motor with two or more fully isolated phase outputs (2xUVW)"}
+    position_sensors:
+      - {type: "RLS RM44SI encoder (SSI + incremental), 10B/11B/13B", spec_choice: "Absolute encoder", basis: stated, page: 17, note: "the most recommended sensor; spec_choice is an inferred mapping of SSI to 'Absolute encoder'"}
+      - {type: "Resolver, 1X-BRX type, through the DTI Resolver Interface", spec_choice: "Resolver", basis: stated, page: 17}
+      - {type: "Latching Hall-effect sensors", spec_choice: "Hall sensors", basis: stated, page: 17, note: "not recommended for large motors"}
+    communication:
+      - {name: "CAN (ISO 11898-2); CAN1 configuration and firmware, CAN2 interfacing", basis: stated, page: 25}
+      - {name: "Analog inputs, digital inputs and outputs", basis: stated, page: 19}
+    regeneration: {value: true, basis: stated, page: 8, note: "regenerative braking, generator mode"}
+    max_electrical_rpm: {value: 100000, unit: eRPM, basis: stated, page: 10}
+    typical_efficiency_pct: {value: 95, unit: "%", basis: stated, page: 10}
+    max_power_dissipation_W: {value: 5600, unit: W, basis: stated, page: 10}
+    mass_kg: {value: 6.8, unit: kg, basis: stated, page: 12, note: "Table 5 (one value for HV-550 and HV-850)"}
+    dimensions_mm: {height: 77, width: 213, length: 420, basis: stated, page: 12, note: "Table 5, h/w/l"}
+    protection: {ip: "IP65", basis: stated, page: 12}
+    operating_temperature_C: {min: -20, max: 85, basis: stated, page: 12}
+    cooling:
+      type: liquid
+      coolant: "glycol - distilled water mixture"
+      max_inlet_C: {value: 60, basis: stated, page: 12}
+      flow_L_per_min: {value: 25.3, basis: stated, page: 12, note: "required for the best continuous current"}
+      pressure_bar: {required: 1.25, max: 2, basis: stated, page: 12}
+      thermal_resistance_K_per_W: {value: 0.017, basis: stated, page: 13, note: "at 17.2 L/min"}
+    spec_prefill:
+      phase_current_continuous_Arms: {value: 364.9, basis: derived, page: 10}
+      phase_current_peak_Arms: {value: 600, basis: stated, page: 10}
+      phase_current_peak_duration_s: {value: 10, basis: figure, page: 11}
+      switching_frequency_Hz: {value: 8000, basis: stated, page: 10}
+      position_sensor: {value: "Absolute encoder", basis: inferred, page: 17}
+      phase_count: {value: 3, basis: stated, page: 18}
+      device_type: null
+      voltage_class_V: null
+    notes:
+      - "Table 4 and Figure 3 (page 10) disagree on the HV-850 continuous current at 400 VDC (850 Apk = 601 Arms in the table, about 500 Arms on the curve); the table value is entered, check with the manufacturer."
+      - "Page 8 quotes the current rating as 388/600 Arms; Table 4 says 390/600 Arms. The table is entered."

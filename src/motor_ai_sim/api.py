@@ -102,6 +102,7 @@ from motor_ai_sim.routes.panel_settings import router as panel_settings_router
 from motor_ai_sim.routes.thermal import router as thermal_router
 from motor_ai_sim.routes.coupled import router as coupled_router
 from motor_ai_sim.routes.controller import router as controller_router
+from motor_ai_sim.routes.controller_catalog import router as controller_catalog_router
 from motor_ai_sim.routes.bearings import router as bearings_router
 from motor_ai_sim.routes.wire_stock import router as wire_stock_router
 from motor_ai_sim.routes.propellers import router as propellers_router
@@ -345,6 +346,9 @@ app.include_router(coupled_router)
 # them, and the waveform the motor will be fed with in Stage 2.  It solves no
 # field and writes nothing but the duty's own `controller` block.
 app.include_router(controller_router)
+# /api/controllers - the catalogue of COMPLETE commercial controllers (DTI HV-850, ...): read-only reference data the
+# Development specification picks its controller from; served by the API process, not the worker.
+app.include_router(controller_catalog_router)
 # /api/bearings — the catalogue, and the MECHANICAL half of the loss picture
 # (SKF frictional moment + rotor windage).  Analytics only: it never solves a
 # field and never writes; the machine's own bearing assignment is written by

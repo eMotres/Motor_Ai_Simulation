@@ -842,5 +842,53 @@
       "tWinding": "Winding temperature, °C",
       "tMagnet": "Magnet temperature, °C"
     }
+  },
+  "controllers": {
+    "title": "Controllers",
+    "tip": "Complete commercial motor controllers. Every value is the one the manufacturer's document states, with its page in the tooltip; a value the document does not state stays empty. The specification picks its controller from this list.",
+    "empty": "No controllers in the catalogue yet.",
+    "unknown": "unknown",
+    "min": "minimum",
+    "nominal": "nominal",
+    "max": "maximum",
+    "absMax": "absolute maximum",
+    "page": "page {page}",
+    "basis": {
+      "stated": "stated",
+      "derived": "derived",
+      "figure": "read off a figure",
+      "inferred": "inferred"
+    },
+    "col": {
+      "brand": "Brand",
+      "model": "Model",
+      "revision": "Revision",
+      "supplyMax": "Supply max",
+      "continuous": "Continuous",
+      "peak": "Peak",
+      "peakTime": "Peak time",
+      "switching": "Switching",
+      "devices": "Power devices",
+      "sensors": "Position sensors",
+      "mass": "Mass"
+    },
+    "detail": {
+      "manufacturer": "Manufacturer",
+      "supply": "Supply voltage",
+      "dcCurrent": "DC input current",
+      "continuous": "Continuous phase current",
+      "peak": "Peak phase current",
+      "peakTime": "Peak duration",
+      "switching": "Switching frequency",
+      "devices": "Power devices",
+      "sensors": "Position sensors",
+      "communication": "Communication",
+      "cooling": "Cooling",
+      "dimensions": "Dimensions",
+      "mass": "Mass",
+      "protection": "Protection",
+      "source": "Source document",
+      "notes": "Notes"
+    }
   }
 }

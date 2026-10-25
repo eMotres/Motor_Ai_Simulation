@@ -1,6 +1,6 @@
 import type { DevelopmentSchema, SchemaField } from './types';
 
-export type SpecificationCardId = 'key' | 'requirements' | 'mission' | 'more' | 'review';
+export type SpecificationCardId = 'key' | 'requirements' | 'mission' | 'review';
 export interface SpecificationField extends SchemaField { storage_namespace?: 'fields' | 'production'; source_section_id?: string }
 export interface SpecificationCard { id: SpecificationCardId; title: string; fields: SpecificationField[]; kind?: string; legacy_ids: string[] }
 
@@ -15,8 +15,8 @@ export const MORE_FIRST_FIELDS = ['additional_requirements', '1_3', '1_7', '2_7'
 export const LOAD_FIELDS = ['load_type', 'load_source', 'load_inertia_kg_m2', 'startup_mode', 'load_characteristic'];
 
 const CARDS: Array<{ id: SpecificationCardId; title: string; legacy_ids: string[] }> = [
-  { id: 'key', title: 'wizard.keyData', legacy_ids: ['application', 'continuous', 'electrical', 'cooling'] },
-  { id: 'requirements', title: 'wizard.requirements', legacy_ids: ['mechanical'] },
+  { id: 'key', title: 'wizard.keyData', legacy_ids: ['application', 'continuous', 'electrical', 'cooling', 'load', 'more'] },
+  { id: 'requirements', title: 'wizard.requirements', legacy_ids: ['mechanical', 'delivery'] },
   { id: 'mission', title: 'wizard.mission', legacy_ids: [] },
   { id: 'review', title: 'wizard.review', legacy_ids: [] },
 ];

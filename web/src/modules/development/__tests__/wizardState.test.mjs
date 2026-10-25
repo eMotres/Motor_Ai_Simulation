@@ -131,15 +131,14 @@ t('stored result kinds and temperature categories render through localized label
   }
 });
 
-t('schema card layout shows every field once and keeps production storage namespace', () => {
+t('schema card layout shows every page field once, production fields stay off the page', () => {
   const schema = JSON.parse(readFileSync('../src/motor_ai_sim/development/schema.json', 'utf8'));
   const cards = buildSpecificationCards(schema);
-  assert.deepEqual(cards.map((card) => card.id), ['key', 'requirements', 'mission', 'more', 'review']);
+  assert.deepEqual(cards.map((card) => card.id), ['key', 'requirements', 'mission', 'review']);
   const laidOut = cards.flatMap((card) => card.fields);
   const ids = laidOut.map((field) => field.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual([...ids].sort(), schema.sections.flatMap((s) => s.fields ?? []).map((f) => f.id).sort());
-  assert.ok(laidOut.filter((f) => f.storage_namespace === 'production').every((f) => cards.find((c) => c.fields.includes(f))?.id === 'more'));
+  assert.ok(laidOut.every((f) => f.storage_namespace !== 'production'));
 });
 
 t('local validation rejects nonfinite values, bad ranges and enum values while honoring conditional requirements', () => {

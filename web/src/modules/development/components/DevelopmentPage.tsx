@@ -1,14 +1,13 @@
 import { deliveryConflicts, matchesFieldReference, productionFallback } from '../reviewPresentation';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
-  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
   Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
   Tooltip, Typography, Checkbox,
 } from '@mui/material';
   import AddIcon from '@mui/icons-material/Add';
   import ArrowBackIcon from '@mui/icons-material/ArrowBack';
   import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-  import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
   import HourglassFullIcon from '@mui/icons-material/HourglassFull';
   import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
   import { BatteryInputs, type Battery } from '../../../components/compare/BatteryPanel';
@@ -18,12 +17,11 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import { useTranslation } from 'react-i18next';
   import { developmentApi, DevelopmentApiError } from '../api';
   import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SchemaSuggestion, SpecSnapshot, SpecState } from '../types';
-  import LoadSection from './LoadSection';
   import MissionProfileEditor from './MissionProfileEditor';
   import type { LoadType, MissionRow } from '../missionProfileState';
   import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
-  import { buildSpecificationCards, cardIndexForField, LOAD_FIELDS, MORE_FIRST_FIELDS, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
+  import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
   import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
@@ -109,7 +107,6 @@ export default function DevelopmentPage() {
   const [migrationAck, setMigrationAck] = useState(false);
   const [migrationBusy, setMigrationBusy] = useState(false);
   const [step, setStep] = useState(0);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [submitError, setSubmitError] = useState<string[]>([]);
@@ -188,7 +185,7 @@ export default function DevelopmentPage() {
     }
     if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
-    setSelected(p); setView('specification'); setStep(0); setMoreOpen(false); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
+    setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
     setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
@@ -355,17 +352,14 @@ export default function DevelopmentPage() {
     const card = sections[index];
     if (!card) return;
     setStep(index);
-    const opening = card.id === 'more' && !moreOpen;
-    if (card.id === 'more') setMoreOpen(true);
-    setTimeout(() => document.getElementById(`spec-card-${card.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), opening ? 320 : 0);
+    setTimeout(() => document.getElementById(`spec-card-${card.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
-  /** Scroll to a field (opening "More details" first when it holds it) and focus its first input. */
+  /** Scroll to a field and focus its first input (a field that is not on the page is not revealed). */
   const revealField = (fieldId: string) => {
     const index = cardIndexForField(sections, fieldId);
     if (index < 0) return;
-    const opening = sections[index].id === 'more' && !moreOpen;
     showCard(index);
-    setTimeout(() => document.getElementById(`spec-field-${fieldId}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus(), opening ? 360 : 0);
+    setTimeout(() => document.getElementById(`spec-field-${fieldId}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus(), 0);
   };
   const onSubmitSpec = async () => {
     if (!selected || !spec) return;
@@ -738,7 +732,7 @@ export default function DevelopmentPage() {
           </Paper>
           <Box sx={{ minWidth: 0 }}>
             <Box sx={{ display: { xs: 'flex', md: 'none' }, overflowX: 'auto', gap: 0.4, mb: 1, borderBottom: '1px solid var(--line-soft)' }}>{sections.map((s, i) => <Button key={s.id} size="small" onClick={() => showCard(i)} sx={{ flex: '0 0 auto', color: step === i ? 'primary.main' : 'var(--text-2)', borderBottom: step === i ? '2px solid var(--brand)' : '2px solid transparent', borderRadius: 0, textTransform: 'none', fontSize: 11, whiteSpace: 'nowrap' }}>{i + 1} {sectionTitle(s.title)}</Button>)}</Box>
-            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const byId = (id: string) => section.fields.find((f) => f.id === id);                const sectionComments = messages.filter((message) => !message.resolved && sectionCommentRefs(section).includes(message.field_ref ?? ''));                const v2 = (spec.schema_version ?? 1) >= 2;                const grid = { display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: '12px', [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;                const more = section.id === 'more';                const storedInMore = more ? section.fields.filter((f) => hasStoredAnswer((f.storage_namespace === 'production' ? (draftRef.current.production as Record<string, unknown> | undefined) : draftRef.current.fields)?.[f.id])).length : 0;                const header = <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: more && !moreOpen ? 0 : '11px' }}>{more ? <Button onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen} aria-controls="spec-more-details" endIcon={<ExpandMoreIcon sx={{ transform: moreOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />} sx={{ flex: 1, justifyContent: 'flex-start', p: 0, minWidth: 0, textTransform: 'none', color: 'var(--text-0)', fontWeight: 700, fontSize: 14 }}>{sectionTitle(section.title)}<Typography component="span" sx={{ ml: 1, fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>{tr('wizard.moreFilled', { count: storedInMore })}</Typography></Button> : <Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography>}<Tooltip title={tr('sectionReview')}><IconButton size="small" aria-label={`${tr('sectionReview')}: ${sectionTitle(section.title)}`} onClick={() => openFieldReview(`section:${section.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', p: 0.5 }}><ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{sectionComments.length}</Box>}</IconButton></Tooltip></Box>;                return <Paper elevation={0} id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: '12px', md: '14px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>
+            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const byId = (id: string) => section.fields.find((f) => f.id === id);                const sectionComments = messages.filter((message) => !message.resolved && sectionCommentRefs(section).includes(message.field_ref ?? ''));                const v2 = (spec.schema_version ?? 1) >= 2;                const grid = { display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: '12px', [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;                                                const header = <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: '11px' }}><Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography><Tooltip title={tr('sectionReview')}><IconButton size="small" aria-label={`${tr('sectionReview')}: ${sectionTitle(section.title)}`} onClick={() => openFieldReview(`section:${section.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', p: 0.5 }}><ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{sectionComments.length}</Box>}</IconButton></Tooltip></Box>;                return <Paper elevation={0} id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: '12px', md: '14px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>
                   {header}
                   {section.id === 'key' && <Stack spacing={1.5} sx={{ minWidth: 0 }}>
                     {byId('1_1') && renderField(byId('1_1')!)}
@@ -758,12 +752,7 @@ export default function DevelopmentPage() {
                     {section.fields.some((f) => SECOND_TIER_FIELDS.includes(f.id)) && <><Divider sx={{ my: 1.5 }} /><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.secondTier')}</Typography><Box sx={grid}>{section.fields.filter((f) => SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box></>}
                   </>}
                   {section.id === 'mission' && (!v2 ? <MissionProfile draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' }))} label={tr('wizard.mission')} columns={section.fields.find((field) => field.id === 'mission_profile')?.columns ?? []} /> : <MissionProfileEditor rows={(draftRef.current.mission_profile ?? []) as unknown as MissionRow[]} load={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} onReview={openFieldReview} unknown={draftRef.current.mission_profile_status === 'not_known_yet'} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' }))} t={tr} />)}
-                  {more && <Collapse in={moreOpen} id="spec-more-details"><Stack spacing={1.5} sx={{ minWidth: 0 }}>
-                    <Box sx={grid}>{section.fields.filter((f) => MORE_FIRST_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {(section.fields.some((f) => LOAD_FIELDS.includes(f.id)) || !v2) && <Box><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.load')}</Typography>{!v2 ? <Alert severity="info">{tr('newLoadNotice')}</Alert> : <LoadSection value={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} engineerView={canEditProject} hideType onReview={openFieldReview} getOpenReviewCount={openCount} onChange={(v) => updateDraft((d) => writeLoadDraft(d, v))} t={tr} locale={lang} />}</Box>}
-                    <Box sx={grid}>{section.fields.filter((f) => f.storage_namespace !== 'production' && !MORE_FIRST_FIELDS.includes(f.id) && !LOAD_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {section.fields.some((f) => f.storage_namespace === 'production') && <Box><Tooltip title={tr('productionTip')}><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.productionPlan')}</Typography></Tooltip><Box sx={grid}>{section.fields.filter((f) => f.storage_namespace === 'production').map((f) => renderField(f, true))}</Box></Box>}
-                  </Stack></Collapse>}
+                  
                   {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tr('wizard.reviewHint')}</Typography>{submitError.map((x, i) => <Alert key={i} severity="error">{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} /><Button variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></Stack>}
                 </Paper>;              })}            </Stack>
           </Box>

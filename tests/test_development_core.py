@@ -234,7 +234,12 @@ def test_access_matrix(project_root, monkeypatch):
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": False})
     assert not access.can_edit_spec(customer, p)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
-    assert access.can_edit_spec(customer, p)
+    # owner rule 2026-10-26: only the project owner and global admins edit the specification (being verified is not enough)
+    assert not access.can_edit_spec(customer, p)
+    p["members"].append({"email": "pe@example.test", "role": "engineer"})
+    assert access.can_view({"email": "pe@example.test", "role": "user"}, p)
+    assert not access.can_edit_spec({"email": "pe@example.test", "role": "user"}, p)  # a project engineer only views
+    assert not access.can_edit_spec({"email": "gl@example.test", "role": "engineer"}, p)  # a global engineer only views
     assert access.can_edit_spec(engineer, p)
     assert access.can_edit_spec(admin, p)
 
@@ -387,7 +392,10 @@ def test_customer_routes_private_project_and_versioned_submit(project_root, monk
     view = client.get("/api/projects/alpha", headers={"Authorization": "Bearer dev"})
     assert view.status_code == 200
     assert "notes" not in view.json()
-    assert "pending_invites" not in view.json()
+    draft = _all_unknown_draft()
+    denied = client.put("/api/projects/alpha/spec", headers={"Authorization": "Bearer dev"}, json={"draft": draft, "revision": 0})
+    assert denied.status_code == 403  # owner rule 2026-10-26: a customer only views the specification
+    current.update(email="eng@example.test", role="engineer")  # the project owner (creator) edits
     draft = _all_unknown_draft()
     saved = client.put("/api/projects/alpha/spec", headers={"Authorization": "Bearer dev"}, json={"draft": draft, "revision": 0})
     assert saved.status_code == 200
@@ -423,7 +431,7 @@ def test_membership_gate_uses_index_without_project_documents(project_root, monk
 
 
 def test_draft_autosave_conflict_returns_409(project_root, monkeypatch):
-    current = {"email": "customer@example.test", "role": "user"}
+    current = {"email": "eng@example.test", "role": "user"}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
     store.create_project(make_project())
@@ -438,7 +446,7 @@ def test_draft_autosave_conflict_returns_409(project_root, monkeypatch):
 
 
 def test_partial_structured_row_autosaves_but_submit_requires_nested_cells(project_root, monkeypatch):
-    current = {"email": "customer@example.test", "role": "user"}
+    current = {"email": "eng@example.test", "role": "user"}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
     store.create_project(make_project())
@@ -451,6 +459,7 @@ def test_partial_structured_row_autosaves_but_submit_requires_nested_cells(proje
     draft["fields"]["2_2"] = {"status": "filled", "value": {
         "operating_point_voltages": [{"operating_point": "", "voltage_V": None}]}}
     # A required S1 point with a speed but neither torque nor power must block the submit.
+    draft["fields"].pop("key_points")  # nothing stored: the legacy S1 rules apply
     draft["fields"]["1_4"] = {"status": "filled", "value": {"speed_rpm": 3000}}
 
     saved = client.put("/api/projects/alpha/spec", headers=headers,
@@ -515,7 +524,7 @@ def test_pending_invite_requires_explicit_reinvite_after_account_creation(projec
 
 
 def test_concurrent_submit_endpoint_has_one_winner(project_root, monkeypatch):
-    current = {"email": "customer@example.test", "role": "user"}
+    current = {"email": "eng@example.test", "role": "user"}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})
     store.create_project(make_project())

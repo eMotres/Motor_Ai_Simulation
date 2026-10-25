@@ -102,7 +102,7 @@ def test_partial_and_unknown_old_drafts_never_become_invalid():
 def test_required_set_and_counts():
     required = sorted(f["id"] for s in models.schema(2)["sections"] for f in s["fields"] if f.get("required"))
     # 4_6 joined the set on 2026-10-25: the axial load must be stated (owner)
-    assert required == sorted(["1_1", "1_2", "1_4", "1_6", "2_1", "2_4", "3_1", "3_2", "3_3", "4_1", "4_2", "4_6", "6_1", "6_2", "mission_profile"])
+    assert required == sorted(["1_1", "1_2", "1_6", "key_points", "2_1", "2_4", "3_1", "3_2", "3_3", "4_1", "4_2", "4_6", "6_1", "6_2", "mission_profile"])
     empty = models.normalize_draft({"schema_version": 2})
     assert models.completeness(empty)["total_required"] == 15
 

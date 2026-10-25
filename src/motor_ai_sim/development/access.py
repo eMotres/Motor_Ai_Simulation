@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
-from motor_ai_sim import auth, users
+from motor_ai_sim import auth
 from motor_ai_sim.development import store
 
 
@@ -22,13 +22,12 @@ def can_view(user: dict, project: dict) -> bool:
 
 
 def can_edit_spec(user: dict, project: dict) -> bool:
-    if is_engineer(user):
+    """Owner rule 2026-10-26: the specification is changed ONLY by the project owner (project role "owner") and by
+    global admins.  Project engineers, customers and global engineers who are not admins only view it: they test in
+    Configure and give recommendations in the project thread."""
+    if str(user.get("role") or "").lower() == "admin":
         return True
-    role = membership(str(user.get("email") or ""), project)
-    rec = users.get_user(str(user.get("email") or ""))
-    if role in ("owner", "engineer"):
-        return True
-    return role == "customer" and users.is_verified(rec)
+    return membership(str(user.get("email") or ""), project) == "owner"
 
 
 def require_signed_in(request: Request) -> dict:
@@ -50,5 +49,5 @@ def require_project(request: Request, project_id: str, *, edit: bool = False) ->
 def require_spec_editor(request: Request, project_id: str) -> tuple[dict, dict, str | None]:
     user, project, role = require_project(request, project_id)
     if not can_edit_spec(user, project):
-        raise HTTPException(status_code=403, detail="Verified project member access required to edit specification")
+        raise HTTPException(status_code=403, detail="Only the project owner or an admin can edit the specification")
     return user, project, role

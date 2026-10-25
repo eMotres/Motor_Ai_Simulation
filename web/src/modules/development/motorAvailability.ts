@@ -11,8 +11,16 @@ export function motorLinkAvailability(motor: ProjectMotor, duty?: string, allowM
     ? result?.can_open_configure === true && typeof result.duty === 'string' ? result.duty : null
     : allowMotorDefault && motor.can_open_configure === true && typeof motor.configure_duty === 'string' && motor.configure_duty.trim()
       ? motor.configure_duty : null;
+  // Points-only Configure (owner 2026-10-26): any stored duty result opens the card, no passport needed.
+  // Offered only where the full Configure is not (the full path stays untouched).
+  const hasPoint = (item: { has_result?: boolean; duty?: string } | undefined) => item?.has_result === true && typeof item.duty === 'string' && item.duty.trim() !== '';
+  const pointsDuty = configureDuty || motor.available === false ? null
+    : duty
+      ? (hasPoint(result) ? result!.duty! : null)
+      : allowMotorDefault && motor.can_open_points === true ? (motor.results?.find(hasPoint)?.duty ?? null) : null;
   return {
     configureDuty,
+    pointsDuty,
     simulationDuty: duty
       ? result?.can_open_simulation === true && typeof result.duty === 'string' ? result.duty : null
       : allowMotorDefault && motor.can_open_simulation === true && typeof motor.simulation_duty === 'string' && motor.simulation_duty.trim()

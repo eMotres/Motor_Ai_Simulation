@@ -56,6 +56,24 @@ class MotorStatusUpdate(BaseModel):
     status: Literal["current", "trial"]
 
 
+#: longest design-step note kept on a linked motor (one short line for the customer)
+MAX_STEP_NOTE = 160
+
+
+class MotorNoteUpdate(BaseModel):
+    die: str
+    config: str
+    note: str = ""
+
+
+def _clean_note(value: str) -> str:
+    """One line, single spaces, bounded length; loud error when too long."""
+    text = " ".join(str(value or "").split())
+    if len(text) > MAX_STEP_NOTE:
+        raise HTTPException(422, detail=f"Design-step note is too long (max {MAX_STEP_NOTE} characters)")
+    return text
+
+
 @router.get("/picker")
 def motor_picker(project_id: str, request: Request):
     user, project, _ = access.require_project(request, project_id, edit=True)
@@ -1198,6 +1216,23 @@ def _stored_results_index(die: str, cache: dict[str, dict]) -> dict:
     return cache[die]
 
 
+def _open_die_name(die: str, ident: dict, family, entries_cache: list) -> str:
+    """The ordinary resolver name of a linked die (a published label maps to the bare name only for its publisher)."""
+    from motor_ai_sim.workspace import split_published_label
+    raw_die, owner_label = split_published_label(die)
+    if not owner_label:
+        return die
+    if not entries_cache:
+        entries_cache.append(list(family._iter_die_entries()))
+    # Publisher's normal resolver uses the bare name; reject any workspace shadow.
+    caller = str(ident.get("id") or ident.get("email") or "").lower()
+    candidate = next((e for e in entries_cache[0] if e.get("layer") == "published" and e.get("die") == raw_die
+                      and str(e.get("owner") or "").lower() == caller), None)
+    if candidate and Path(str(family._die_dir(raw_die))).resolve() == Path(str(candidate.get("dir"))).resolve():
+        return raw_die
+    return die
+
+
 def _linked_motor_for_status(project: dict, die: str, config: str) -> dict | None:
     """Find a linked entry by its stable identity or an exact ordinary alias."""
     links = [row for row in project.get("linked_motors", []) if isinstance(row, dict)]
@@ -1288,7 +1323,7 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
     configure_context_cache = {}
     configure_resolver_cache = {}
     ident = _identity(request)
-    die_entries = None
+    entries_cache: list = []
     for link in project.get("linked_motors", []):
         if not isinstance(link, dict): continue
         die, config = str(link.get("die") or ""), str(link.get("config") or "")
@@ -1299,16 +1334,7 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
             continue
         row = project_motor_index.get(_key(die, config))
         if not isinstance(row, dict) or row.get("project_id") != project_id: continue
-        open_die = die
-        from motor_ai_sim.workspace import split_published_label
-        raw_die, owner_label = split_published_label(die)
-        if owner_label:
-            if die_entries is None:
-                die_entries = list(family._iter_die_entries())
-            # Publisher's normal resolver uses the bare name; reject any workspace shadow.
-            candidate = next((e for e in die_entries if e.get("layer") == "published" and e.get("die") == raw_die and str(e.get("owner") or "").lower() == str(ident.get("id") or ident.get("email") or "").lower()), None)
-            if candidate and Path(str(family._die_dir(raw_die))).resolve() == Path(str(candidate.get("dir"))).resolve():
-                open_die = raw_die
+        open_die = _open_die_name(die, ident, family, entries_cache)
         try:
             family._require_die_access(open_die, request.headers.get("authorization"), config)
             cfg_path = Path(str(family._cfg_file(open_die, config))).resolve(strict=True)
@@ -1346,11 +1372,117 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
                 "configure_duty": configure_duty,
                 "can_open_simulation": any(row.get("can_open_simulation") for row in result_rows),
                 "simulation_duty": simulation_duty,
+                # Points-only Configure: any stored duty result is enough (no passport maps needed).
+                "can_open_points": available and any(row.get("has_result") for row in result_rows),
+                "note": str(link.get("note") or ""),
                 "results": result_rows}
         results.append(item)
         if is_customer:
             store.append_audit(project_id, str(user.get("email") or ""), "motor.results.read", "motor", f"{die}/{config}")
     return {"motors": results}
+
+
+_POINT_KEYS = ("duty", "operating_point", "electromagnetic", "comparison", "stored_results")
+
+
+def _point_rows(rows: list[dict]) -> list[dict]:
+    """The stored points of one variant: only duties that have a stored result, only stored numbers."""
+    return [{**{key: row.get(key) for key in _POINT_KEYS}, "has_result": True}
+            for row in rows if row.get("has_result")]
+
+
+@router.get("/points")
+def project_motor_points(project_id: str, request: Request, die: str | None = None,
+                         config: str | None = None, show_all: bool = False):
+    """Every design variant of the project with its computed duty points (read-only).
+
+    Feeds the points-only Configure card: it needs no catalog passport, so it works while the
+    full operating maps are still being computed. Same gates as the project motor list: the
+    caller must see the project and pass the ordinary motor access check; trial variants are
+    hidden unless ``show_all``. Only allow-listed stored numbers leave the server.
+    """
+    user, project, role = access.require_project(request, project_id)
+    from motor_ai_sim.routes import family
+    ident = _identity(request)
+    authorization = request.headers.get("authorization")
+    project_motor_index = (_index().get("motors") or {})
+    result_index: dict = {}
+    entries_cache: list = []
+    variants = []
+    for link in project.get("linked_motors", []):
+        if not isinstance(link, dict):
+            continue
+        canonical, cfg_name = str(link.get("die") or ""), str(link.get("config") or "")
+        status = str(link.get("status") or "current")
+        if status not in {"current", "trial"}:
+            status = "current"
+        if status == "trial" and not show_all:
+            continue
+        row = project_motor_index.get(_key(canonical, cfg_name))
+        if not isinstance(row, dict) or row.get("project_id") != project_id:
+            continue
+        open_die = _open_die_name(canonical, ident, family, entries_cache)
+        try:
+            family._require_die_access(open_die, authorization, cfg_name)
+            cfg_path = Path(str(family._cfg_file(open_die, cfg_name))).resolve(strict=True)
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue   # no grant / vanished: the variant is simply not offered
+        try:
+            stored = (_stored_results_index(open_die, result_index) or {}).get(cfg_name, {})
+        except Exception:
+            stored = {}
+        points = _point_rows(_results(open_die, cfg_name, cfg, stored, set()))
+        variants.append({"step": len(variants) + 1, "die": open_die, "canonical_die": canonical,
+                         "config": cfg_name, "status": status, "note": str(link.get("note") or ""),
+                         "points": points})
+    selected = None
+    if die is not None or config is not None:
+        wanted = _key(str(die or ""), str(config or ""))
+        selected = next((v for v in variants if wanted in {_key(v["die"], v["config"]),
+                                                             _key(v["canonical_die"], v["config"])}), None)
+        if selected is None:
+            raise HTTPException(404, detail="Motor variant not found in this project")
+    if role == "customer" and not access.is_engineer(user):
+        store.append_audit(project_id, str(user.get("email") or ""), "motor.points.read", "project", project_id)
+    return {"project_id": project_id, "variants": variants,
+            "selected": {"die": selected["die"], "config": selected["config"]} if selected else None}
+
+
+@router.patch("/note")
+def update_project_motor_note(project_id: str, req: MotorNoteUpdate, request: Request):
+    """Set the short design-step note shown to the customer next to a variant (engineer/owner/admin only)."""
+    user, _project, _role = access.require_project(request, project_id, edit=True)
+    if not req.die.strip() or not req.config.strip():
+        raise HTTPException(422, detail="Invalid motor identity")
+    note = _clean_note(req.note)
+    actor = str(user.get("email") or "")
+    with transaction():
+        project = store.get_project(project_id)
+        if project is None:
+            raise HTTPException(404, detail="Project not found")
+        linked = _linked_motor_for_status(project, req.die.strip(), req.config.strip())
+        if linked is None:
+            raise HTTPException(404, detail="Linked motor not found")
+        old = str(linked.get("note") or "")
+        key_die, key_config = str(linked.get("die") or ""), str(linked.get("config") or "")
+        if old != note:
+            def mutate(doc):
+                row = next((item for item in doc.get("linked_motors", [])
+                            if isinstance(item, dict)
+                            and _key(str(item.get("die") or ""), str(item.get("config") or "")) == _key(key_die, key_config)), None)
+                if row is None:
+                    raise HTTPException(404, detail="Linked motor not found")
+                if note:
+                    row["note"] = note
+                else:
+                    row.pop("note", None)
+                from motor_ai_sim.development.models import now
+                doc["updated_at"] = now()
+            store.mutate_project(project_id, mutate)
+            store.append_audit(project_id, actor, "motor.note", "motor", f"{key_die}/{key_config}",
+                               {"old": old, "new": note})
+    return {"die": key_die, "config": key_config, "note": note}
 
 
 @router.post("")

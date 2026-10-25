@@ -5,8 +5,24 @@ import { motorLinkAvailability } from '../motorAvailability.ts';
 
 test('missing server availability flags fail closed for configure and simulation', () => {
   assert.deepEqual(motorLinkAvailability({ die: 'D', config: 'C', duties: ['rated'] }, 'rated'), {
-    configureDuty: null, simulationDuty: null, loadDuty: null,
+    configureDuty: null, pointsDuty: null, simulationDuty: null, loadDuty: null,
   });
+});
+
+test('points-only Configure opens for any stored result, never replaces the full Configure', () => {
+  const motor = { die: 'D', config: 'C', available: true, can_open_points: true, results: [
+    { duty: 'takeoff', has_result: false },
+    { duty: 'cruise', has_result: true, can_open_configure: false },
+    { duty: 'peak', has_result: true, can_open_configure: true },
+  ] };
+  assert.equal(motorLinkAvailability(motor, 'cruise').pointsDuty, 'cruise');
+  assert.equal(motorLinkAvailability(motor, 'takeoff').pointsDuty, null);          // nothing stored for that duty
+  assert.equal(motorLinkAvailability(motor, 'peak').pointsDuty, null);             // the full passport path wins
+  assert.equal(motorLinkAvailability(motor, 'peak').configureDuty, 'peak');
+  assert.equal(motorLinkAvailability({ ...motor, available: false }, 'cruise').pointsDuty, null);
+  assert.equal(motorLinkAvailability(motor, undefined, true).pointsDuty, 'cruise');  // motor-level default: first stored point
+  assert.equal(motorLinkAvailability(motor).pointsDuty, null);                       // only where the caller allows the default
+  assert.equal(motorLinkAvailability({ ...motor, can_open_points: false }, undefined, true).pointsDuty, null);
 });
 
 test('an unsolved duty of an available motor can still be loaded into Simulation', () => {

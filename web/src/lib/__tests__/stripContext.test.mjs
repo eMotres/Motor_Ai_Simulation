@@ -20,40 +20,12 @@ test('an unknown tab id falls back to the live machine, never to another motor',
   assert.equal(stripKindForTab('something-new'), 'live');
 });
 
-test('Development: the latest current motor is selected, trials are skipped', () => {
-  const ctx = at('development', { project });
-  assert.equal(ctx.kind, 'project');
-  assert.equal(ctx.title, 'Drone arm');
-  assert.deepEqual(ctx.selected, { die: 'DIE', config: 'opt2' });
-});
-
-test('Development: the variant opened in the points-only card is the selected one', () => {
-  const ctx = at('development', { project, points: { projectId: 'p1', die: 'DIE', config: 'opt1' } });
-  assert.deepEqual(ctx.selected, { die: 'DIE', config: 'opt1' });
-  // a card of ANOTHER project does not select anything here
-  const other = at('development', { project, points: { projectId: 'p2', die: 'DIE', config: 'opt1' } });
-  assert.deepEqual(other.selected, { die: 'DIE', config: 'opt2' });
-  // a card whose motor is no longer linked falls back to the latest current one
-  const gone = at('development', { project, points: { projectId: 'p1', die: 'DIE', config: 'gone' } });
-  assert.deepEqual(gone.selected, { die: 'DIE', config: 'opt2' });
-});
-
-test('Development without an open project shows nothing machine-specific', () => {
-  assert.deepEqual(at('development'), { kind: 'none' });
-  assert.deepEqual(at('development', { production: { die: 'D', config: 'c' } }), { kind: 'none' });
-});
-
-test('Development with a project that has no motors still names the project', () => {
-  const ctx = at('development', { project: { id: 'p3', title: 'Empty', motors: [] } });
-  assert.equal(ctx.kind, 'project');
-  assert.equal(ctx.selected, null);
-  assert.deepEqual(ctx.motors, []);
-});
-
-test('Production shows the motor of the open production, nothing when none is open', () => {
-  assert.deepEqual(at('production', { production: { die: 'CIANO28 150_35', config: 'L35' } }), { kind: 'production', die: 'CIANO28 150_35', config: 'L35' });
-  assert.deepEqual(at('production'), { kind: 'none' });
-  assert.deepEqual(at('production', { project }), { kind: 'none' });
+test('Development and Production show no strip for now (owner 2026-10-26)', () => {
+  for (const tab of ['development', 'production']) {
+    assert.equal(stripKindForTab(tab), 'none', tab);
+    assert.deepEqual(at(tab), { kind: 'none' }, tab);
+    assert.deepEqual(at(tab, { project, production: { die: 'D', config: 'c' }, points: { projectId: 'p1', die: 'DIE', config: 'opt1' } }), { kind: 'none' }, tab);
+  }
 });
 
 test('Admin and Designer have no motor context', () => {

@@ -22,7 +22,8 @@
   },
   "status": {
     "connected": "Connected",
-    "localMode": "Local Mode"
+    "localMode": "Local Mode",
+    "reconnectTip": "No connection to the server. Click to reconnect now (it also retries every 5 s)."
   },
   "theme": {
     "dark": "Dark theme",

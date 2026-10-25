@@ -716,7 +716,11 @@ function App() {
               {(connectedToApi || (!signedIn && backendUp)) ? (
                 <Chip icon={<CloudSyncIcon />} label={tr('status.connected')} color="success" size="small" />
               ) : (
-                <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small" />
+                <Tooltip title={tr('status.reconnectTip')}>
+                  {/* the chip reconnects now instead of waiting for the next 5 s tick (2026-10-25: owner stuck in Local Mode after an outage) */}
+                  <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small"
+                        onClick={() => { fetchGeometryFromApi(); fetchSchemaFromApi(); }} />
+                </Tooltip>
               )}
             </Box>
 

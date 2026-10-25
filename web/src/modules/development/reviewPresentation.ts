@@ -36,3 +36,21 @@ export function deliveryConflicts(draft: SpecDraft): string[] {
   }
   return result;
 }
+
+const PLAN_FOR: Record<string, string> = { '6_1': 'quantities', '6_2': 'timeline' };
+const presentPart = (v: unknown) => {
+  if (v === undefined || v === null || (typeof v === 'string' && !v.trim())) return false;
+  if (v && typeof v === 'object' && !Array.isArray(v)) return Object.values(v as Record<string, unknown>).some((part) => part !== undefined && part !== null && part !== '');
+  return true;
+};
+/** 6_1 / 6_2 hold nothing yet but the production plan does: the plan's values, shown read-only
+ *  under the requirement (never copied into it). */
+export function productionFallback(draft: SpecDraft, fieldId: string): Array<{ key: string; value: unknown }> {
+  const plan = PLAN_FOR[fieldId];
+  if (!plan) return [];
+  const own = draft.fields?.[fieldId]?.value;
+  if (own && typeof own === 'object' && Object.values(own as Record<string, unknown>).some(presentPart)) return [];
+  const launch = (draft.production as Record<string, { value?: unknown }> | undefined)?.[plan]?.value;
+  if (!launch || typeof launch !== 'object' || Array.isArray(launch)) return [];
+  return Object.entries(launch as Record<string, unknown>).filter(([, value]) => presentPart(value)).map(([key, value]) => ({ key, value }));
+}

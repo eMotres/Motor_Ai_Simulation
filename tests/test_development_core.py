@@ -443,8 +443,11 @@ def test_partial_structured_row_autosaves_but_submit_requires_nested_cells(proje
     client = TestClient(app)
     headers = {"Authorization": "Bearer dev"}
     draft = _all_unknown_draft()
+    # 2_2 is optional in the compact specification: a partial row autosaves and stays stored.
     draft["fields"]["2_2"] = {"status": "filled", "value": {
         "operating_point_voltages": [{"operating_point": "", "voltage_V": None}]}}
+    # A required S1 point with a speed but neither torque nor power must block the submit.
+    draft["fields"]["1_4"] = {"status": "filled", "value": {"speed_rpm": 3000}}
 
     saved = client.put("/api/projects/alpha/spec", headers=headers,
                        json={"draft": draft, "revision": 0})
@@ -452,11 +455,10 @@ def test_partial_structured_row_autosaves_but_submit_requires_nested_cells(proje
     rejected = client.post("/api/projects/alpha/spec/submit", headers=headers,
                            json={"revision": 1})
     assert rejected.status_code == 422
-    assert any(error["field"].endswith("operating_point")
-               for error in rejected.json()["detail"]["errors"])
+    assert any(error["field"].startswith("1_4.") for error in rejected.json()["detail"]["errors"])
+    assert not any(error["field"].startswith("2_2") for error in rejected.json()["detail"]["errors"])
 
-    draft["fields"]["2_2"]["value"]["operating_point_voltages"][0]["operating_point"] = "peak"
-    draft["fields"]["2_2"]["value"]["operating_point_voltages"][0]["voltage_V"] = 48
+    draft["fields"]["1_4"]["value"]["power_W"] = 1200
     completed = client.put("/api/projects/alpha/spec", headers=headers,
                            json={"draft": draft, "revision": 1})
     assert completed.status_code == 200

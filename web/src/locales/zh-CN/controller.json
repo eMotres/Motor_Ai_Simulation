@@ -454,6 +454,7 @@
     "slotMouthTip": "槽壁会重叠：线材对齿距而言过宽。",
     "batteryTitle": "电池与电压匹配",
     "packSummary": "电池组 标称 {nom} V · {min}–{max} V",
+    "chemistryStored": "已存储：{value}",
     "refuseSpeedPack": "已拒绝：{rpm} rpm 超过此电池组 {max} rpm 的转速上限。",
     "refuseSpeedPackTip": "电池组电压不足以支持此转速。",
     "invalidPack": "电池参数无效。",

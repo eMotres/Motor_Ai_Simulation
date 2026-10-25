@@ -1657,11 +1657,10 @@ def _normal_traction(sigma: np.ndarray, elems: np.ndarray,
 # ---------------------------------------------------------------------------
 # Added 2026-09-07 for the user's request: "also add torque on the rotor,
 # let all the forces act; make a menu so centrifugal, torque, and both can be
-# selected."  The design behind it is a spoke rotor whose iron bridges are there for
-# assembly only — they yield on the first spin-up — after which each pole is held
-# TANGENTIALLY by nothing but friction against the sleeve and the magnets.  So
-# the question is not "does the sleeve hold the poles down" (the centrifugal
-# answer) but "can the machine's torque get out of the poles at all".
+# selected." The original friction-only assessment assumed yielded assembly
+# bridges. This linear-elastic model does not remove or plastically yield
+# bridges: continuous iron and pocket-wall normal contact remain load paths.
+# Interface friction capacities alone therefore cannot grade the whole rotor.
 #
 # HOW IT IS APPLIED
 #   The Maxwell shear in the air gap acts on the rotor's outermost SOLID surface
@@ -2256,34 +2255,13 @@ TORQUE_PATH_RESIDUAL_FRAC = 1e-4
 def _torque_path(ifaces: Dict[str, Any], torque_nm: float, sol,
                  balance: Optional[float] = None,
                  r_out_m: float = 0.0) -> Dict[str, Any]:
-    """One line saying whether the poles are held, and by how much.
+    """Check solvability and report interface friction diagnostics.
 
-    User 2026-09-07: the spoke rotor's iron bridges are assembly features that
-    yield on the first spin-up, so the poles are held tangentially by friction
-    alone.  The verdict is therefore about SLIDING, not about opening:
-
-      * the worst separation joint's ``slip_fraction`` is the headline — half a
-        joint sliding is a joint that has stopped transmitting;
-      * the Coulomb capacity ``mu * integral(p r dA)`` summed over the joints
-        that are actually clamped is what the applied torque is compared with.
-
-    Both are reported next to the verdict so nobody has to take the word for it.
-
-    Two earlier versions of this line were wrong and are worth naming, because
-    both read as reassurance:
-
-      * "poles held: yes (slip 16 %)" on a joint that was 83 % OPEN.  An open
-        facet transmits nothing either, so a slip fraction alone says nothing.
-      * a verdict at all on a solve that had not converged and had two parts
-        floating free.  That is the model saying the rotor came apart, not a
-        result to grade — it now returns "no verdict" and says why.
-
-    What is graded instead is the CAPACITY of the weakest clamped separation
-    joint, ``mu * integral(p r dA)``, against the applied torque.  The weakest
-    one is the right one: the torque has to cross every joint between the pole
-    top and the hub, so the path is only as good as its worst cut.  Joints with
-    no contact pressure at all are excluded — a joint that is fully open is not
-    on the path, it is simply not there.
+    Interface labels are not serial cuts through the rotor. Pocket side walls
+    transmit torque through normal pressure; continuous iron bridges provide
+    parallel paths. Thus mu*integral(p*r*dA) cannot be compared with the entire
+    applied torque to certify or reject retention. A settled force balance
+    establishes equilibrium, not an ultimate torque capacity or safety factor.
     """
     uni = {lb: v for lb, v in ifaces.items()
            if v and v["type"] == "separation" and v["n_facets"]}
@@ -2371,23 +2349,15 @@ def _torque_path(ifaces: Dict[str, Any], torque_nm: float, sol,
                            "nothing is clamped"}
     worst = min(clamped, key=lambda k_: clamped[k_]["friction_capacity_nm"])
     cap = float(clamped[worst]["friction_capacity_nm"])
-    margin = (cap / abs(torque_nm)) if torque_nm else None
-    held = bool(margin is not None and margin >= 1.0)
-    verdict = (f"poles held: {'yes' if held else 'no'} — weakest joint "
-               f"{worst} passes {cap:,.0f} of {abs(torque_nm):,.0f} N·m"
-               f" ({margin:.1f}×)" if margin is not None else "")
-    verdict += f", slip {clamped[worst]['slip_fraction'] * 100:.0f} %"
-    if slip_um > 0:
-        verdict += f", max {slip_um:,.0f} µm"
-    if not sol.converged:
-        # Graded on an answer that never settled: say so, with the size of the
-        # disagreement, right in the sentence (2026-09-09).
-        verdict += f" (contact residual {resid * 1e6:,.2f} µm)"
-    return {"verdict": verdict, "worst_pair": worst,
+    verdict = (
+        f"no verdict — friction-only capacity on {worst} is {cap:,.0f} N·m "
+        f"at {abs(torque_nm):,.0f} N·m applied; this excludes pocket-wall "
+        "normal forces and parallel iron paths, so it is not a rotor torque "
+        "capacity; a load-path capacity assessment is required")
+    return {**base, "verdict": verdict, "worst_pair": worst,
             "slip_fraction": float(clamped[worst]["slip_fraction"]),
             "stick_fraction": float(clamped[worst]["stick_fraction"]),
-            "capacity_nm": cap, "applied_nm": float(torque_nm),
-            "margin": margin, "slip_max_um": slip_um, "held": held}
+            "capacity_nm": cap}
 
 
 def solve_rotor_stress(polys: dict,
@@ -3406,14 +3376,13 @@ def solve_rotor_stress(polys: dict,
                         + _normal_traction(sig, it.elem_b, it.normal))
             pr = d["pressure"]
             # ── the TANGENTIAL half of the joint (2026-09-07) ───────────────
-            # The user's question is whether the poles can pass the torque on
-            # when the bridges have yielded, so every pair reports what it is
-            # doing tangentially, not only whether it is shut:
+            # Report each joint's tangential state as a diagnostic; this is
+            # not a serial cut through all of the rotor's torque paths:
             #   slip_fraction  — length share that is closed and SLIDING
             #   stick_fraction — length share that is closed and STUCK
             #   torque_transmitted_nm — what the joint actually carried
-            #   friction_capacity_nm  — mu * integral(p r dA), the most Coulomb
-            #                           could ever pass at this clamp
+            #   friction_capacity_nm  — mu * integral(p r dA), an upper bound
+            #                           on friction torque alone at this clamp
             slipf = float((d["slip"] * ll).sum() / max(ll.sum(), 1e-30))
             stickf = float((d["stick"] * ll).sum() / max(ll.sum(), 1e-30))
             r_facet = np.hypot(it.seg[:, :, 0].mean(axis=1),

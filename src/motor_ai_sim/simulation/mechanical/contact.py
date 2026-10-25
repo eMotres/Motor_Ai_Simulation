@@ -1281,6 +1281,18 @@ def separation_tension(gap: np.ndarray, closed: np.ndarray, uni: np.ndarray,
             int(ten.sum()))
 
 
+def contact_tension_resolution(pair_dofs: np.ndarray, row_scale: np.ndarray,
+                               g0: np.ndarray, kc: float) -> float:
+    """Force cancellation budget on tensile contact rows, in N/m of stack.
+
+    The four rows bound the two normal displacement traces. Summing their
+    local budgets scales with the tension being checked, not with the size or
+    stiffness of the rest of the model. Seating offsets are local as well.
+    """
+    return CONTACT_FORCE_REL_TOL * float(
+        row_scale[pair_dofs].sum() + kc * np.abs(g0).sum())
+
+
 def tension_fraction(tension: float, compression: float) -> float:
     """Tension's share of the normal force a separation joint carries; 0 when
     the joint carries nothing at all (an unloaded joint is not inconsistent)."""
@@ -2054,17 +2066,14 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # bonded rotor was once reported as a converged separation answer.
         ten_cur = separation_tension(gap, closed, uni, kc, tol_g)
         tfrac_cur = tension_fraction(ten_cur[0], ten_cur[1])
-        # A free thermal expansion has large, cancelling element forces but
-        # zero contact traction.  A ratio of two round-off forces can still be
-        # 100% tension.  Resolve forces against the uncancelled elastic/load
-        # scale (N/m of stack), including the seating spring's preload.  1e-7
-        # allows seven digits of force cancellation in the bordered penalty
-        # solve, well above double-precision round-off, while remaining orders
-        # below a real load path.  Do not enlarge the active-set gap tolerance:
-        # physically opening contacts must still release, even at low load.
-        force_tol = CONTACT_FORCE_REL_TOL * float(
-            np.abs(f_step).sum() + np.sum(K_abs @ np.abs(u))
-            + kc * np.abs(g0[uni & closed]).sum())
+        # Resolve cancellation at the tensile pairs themselves. Unrelated
+        # interior DOFs must not buy tolerance for a tied contact. Each pair
+        # uses only its four displacement rows, and only tensile pairs enter
+        # the budget (adding compressed/open pairs cannot hide tension).
+        tensile = uni & closed & (gap > tol_g)
+        force_tol = contact_tension_resolution(
+            cs.pair_dofs[tensile], np.abs(f_step) + K_abs @ np.abs(u),
+            g0[tensile], kc)
         tbad_cur = (ten_cur[0] > force_tol
                     and tfrac_cur > TENSION_FRAC_TOL)
 

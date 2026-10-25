@@ -94,3 +94,13 @@ def test_the_comparison_table_says_it_too():
     # the row carries the owner's target in its label: "... (target ≥ 3)"
     sf_row = next(v for k, v in rows.items() if k.startswith("Lowest safety factor"))
     assert sf_row == [R.ROTOR_NOT_RETAINED, R.rotor_sf_cell(2.5)]
+
+
+def test_friction_only_torque_capacity_is_an_unresolved_assessment():
+    warnings = R.duty_warnings({
+        "torque_path_verdict": "no verdict — friction-only capacity on magnet_rotor "
+                               "is 1,093 N·m at 1,540 N·m applied"})
+    warning = next(w for w in warnings if w["rule"] == "torque_path")
+    assert warning["level"] == "amber"
+    assert "normal contact" in warning["remedy"]
+    assert "loads='both'" not in warning["remedy"]

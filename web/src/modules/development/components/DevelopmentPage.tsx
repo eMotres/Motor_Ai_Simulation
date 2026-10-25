@@ -530,7 +530,10 @@ export default function DevelopmentPage() {
   const openCount = (ref: string) => messages.filter((m) => !m.resolved && matchesFieldReference(m.field_ref, ref)).length;
   /** The field comment icon only appears while that field has open comments (the card's icon starts new ones). */
   const commentIcon = (ref: string) => { const open = openCount(ref); return open > 0 ? <Tooltip title={`${tr('fieldReview')} (${open})`}><IconButton size="small" aria-label={tr('fieldReview')} onClick={() => openFieldReview(ref)} sx={{ p: 0.3, color: 'primary.main' }}><ChatBubbleOutlineIcon sx={{ fontSize: 14 }} /><Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{open}</Box></IconButton></Tooltip> : null; };
-  const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
+  // The "not known yet" hourglass sits only on an EMPTY field (to mark it) or a marked one (to unmark it); a filled field shows none.
+  const fieldFilled = (f: SchemaField, prod: boolean) => f.id === 'mission_profile' ? (draftRef.current.mission_profile?.length ?? 0) > 0
+    : hasStoredAnswer(((prod ? (draftRef.current.production as Record<string, unknown>) : draftRef.current.fields) ?? {})[f.id]);
+  const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false || (!unknown && fieldFilled(f, prod)) ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
   const fieldRefFor = (f: SpecificationField, prod: boolean) => `${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`;
   /** Label (help text as its tooltip), required mark, the "not known yet" toggle and open comments. */
   const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string, extra: string[] = []) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'wrap' }}><Tooltip title={extra.length ? <>{label(f.help ?? f.label)}{extra.map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{commentIcon(fieldRefFor(f, prod))}</Stack>;
@@ -591,6 +594,7 @@ export default function DevelopmentPage() {
   };
   /** Continuous S1 and peak in one small table: Power / Torque / Speed / Duration / Repeat period. */
   const KEY_COLUMNS: Array<{ id: string; title: string }> = [{ id: 'power', title: tr('keyPoints.power') }, { id: 'torque_Nm', title: tr('keyPoints.torque') }, { id: 'speed_rpm', title: tr('keyPoints.speed') }, { id: 'duration_s', title: tr('keyPoints.duration') }, { id: 'period_s', title: tr('keyPoints.period') }];
+  // power_basis is never shown: every key-point power is shaft power, T·ω (owner 2026-10-25); a stored basis stays readable in the data
   const KEY_HANDLED = new Set(['power_W', 'shaft_power_W', 'output_power_W', 'torque_Nm', 'speed_rpm', 'duration_s', 'period_s', 'power_basis', 'frequency']);
   const keyPointsTable = (rows: SpecificationField[]) => {
     const v2 = (spec?.schema_version ?? 1) >= 2;
@@ -623,7 +627,7 @@ export default function DevelopmentPage() {
         </Box>; })}
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 1, alignItems: 'flex-end' }}>
-        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'power_basis' ? (!blankValue(obj.power_basis) || (finiteScalar(obj.torque_Nm) == null && !blankValue(obj.power_W))) : p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
+        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
       </Box>
     </Box>;
   };

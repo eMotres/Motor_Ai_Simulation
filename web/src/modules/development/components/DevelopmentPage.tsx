@@ -29,6 +29,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
+  import { useProjectStripContext } from '../projectStripContext';
   import { MotorNoteField } from '../MotorNoteField';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
@@ -126,6 +127,7 @@ export default function DevelopmentPage() {
   const [fieldReviewOpen, setFieldReviewOpen] = useState(false);
   const [reloadPreview, setReloadPreview] = useState<{ project: string; token: string; fresh: SpecState } | null>(null);
   const [motors, setMotors] = useState<ProjectMotor[]>([]);
+  useProjectStripContext(selected, motors);   // the strip under the tabs names this project and its motors
   const projectEpochRef = useRef(0);
   const projectOpenEpochRef = useRef(0);
   const projectOpenInFlightRef = useRef('');

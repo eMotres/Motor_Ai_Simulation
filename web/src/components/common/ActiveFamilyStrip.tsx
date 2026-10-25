@@ -9,6 +9,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import { useUIStore } from '../../stores/uiStore';
+import { usePointsConfigureStore } from '../../stores/pointsConfigureStore';
+import { useTabContextStore } from '../../stores/tabContextStore';
+import { stripContextFor } from '../../lib/stripContext';
+import TabContextStrip from './TabContextStrip';
 import { pageVisible } from '../../lib/pageVisible';
 import {
   ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
@@ -109,6 +114,13 @@ const ActiveFamilyStrip: React.FC = () => {
     return () => window.removeEventListener('model3d-view-selected', onViewed);
   }, []);
   const liveGeometry = useMotorStore(s => s.geometry) as Record<string, unknown>;
+  // Which context this tab shows (owner 2026-10-26): the live machine only on machine-bound tabs; Development and
+  // Production name THEIR motor, tabs without a motor show nothing.  The hooks and dialogs below keep running.
+  const activeTab = useUIStore(s => s.activeTab) as string;
+  const pointsMotor = usePointsConfigureStore(s => s.current);
+  const tabProject = useTabContextStore(s => s.project);
+  const tabProduction = useTabContextStore(s => s.production);
+  const stripCtx = stripContextFor({ tab: activeTab, project: tabProject, production: tabProduction, points: pointsMotor });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   // A refused save because the on-screen BUILD differs from the configuration
@@ -829,6 +841,16 @@ const ActiveFamilyStrip: React.FC = () => {
     } catch (e: any) { setMsg(`✗ reload: ${e?.message ?? e}`); }
     setBusy(false);
   };
+
+  if (stripCtx.kind !== 'live') {
+    return (
+      <>
+        <TabContextStrip ctx={stripCtx} />
+        {/* mounted once here: lib/dutyApply's applyDutyEverywhere awaits it from any tab */}
+        <DutyGeometryDialog />
+      </>
+    );
+  }
 
   if (viewedModel) {
     return (

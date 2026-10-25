@@ -99,7 +99,7 @@ def test_two_customer_rerole_keeps_both_grants_and_marks_only_departing_customer
     assert GRANT in users.get_stored_motor_grants(CUSTOMER).get("configs", [])
     assert GRANT in users.get_stored_motor_grants(SECOND).get("configs", [])
     project = store.get_project("alpha")
-    assert len(_candidates(project, CUSTOMER)) == 1
+    assert _candidates(project, CUSTOMER) == []   # an engineer member keeps the motors (owner 2026-10-26)
     assert _candidates(project, SECOND) == []
 
 
@@ -202,7 +202,8 @@ def test_failed_customer_role_change_rolls_back_membership_but_keeps_candidate_g
     project = store.get_project("alpha")
     member = next(row for row in project["members"] if row["email"] == SECOND)
     assert member["role"] == "engineer"
-    assert len(_candidates(project, SECOND)) == 1
+    # the grant came from the link (engineers get the motors too), not from the failed re-role
+    assert _candidates(project, SECOND) == []
 
 
 def test_failed_member_removal_restores_project_and_membership_index(stage1b, monkeypatch):

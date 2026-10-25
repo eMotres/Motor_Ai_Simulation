@@ -878,7 +878,7 @@ def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
     """Add or re-role `email` on a project: a member when the account exists, else a pending invite.
     Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim."""
     entry = {"email": email, "role": role}
-    from motor_ai_sim.development.motors import transaction, _sync_grants, _mark_removal_candidates, _key
+    from motor_ai_sim.development.motors import transaction, _sync_grants, _mark_removal_candidates, _key, MOTOR_GRANT_ROLES
     with transaction(), users._LOCK:
         account = users.get_user(email)
         if account and account.get("disabled"):
@@ -900,12 +900,12 @@ def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
             updated["pending_invites"].append({**entry, "created_at": models.now()})
         updated["updated_at"] = models.now()
         try:
-            if account and role == "customer":
+            if account and role in MOTOR_GRANT_ROLES:
                 for motor in updated.get("linked_motors", []):
                     if isinstance(motor, dict):
                         _sync_grants(updated, _key(motor.get("die", ""), motor.get("config", "")),
                                      f"{motor.get('die', '')}/{motor.get('config', '')}", {email})
-            elif old_role == "customer":
+            elif old_role in MOTOR_GRANT_ROLES:
                 for motor in updated.get("linked_motors", []):
                     if isinstance(motor, dict):
                         _mark_removal_candidates(updated, _key(motor.get("die", ""), motor.get("config", "")),

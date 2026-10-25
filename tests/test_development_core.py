@@ -70,9 +70,12 @@ def test_membership_endpoint_is_index_only(project_root, monkeypatch):
     assert response.json() == {"has_projects": True}
 
 
-def test_member_role_change_keeps_other_customer_grant_and_marks_candidate(project_root, monkeypatch):
+def test_member_role_change_keeps_project_motor_grants(project_root, monkeypatch):
+    # Every project role sees the linked motors (owner 2026-10-26), so a re-role inside the
+    # project neither drops a grant nor makes it a removal candidate.
     current = {"email": "eng@example.test", "role": "engineer"}
-    grants = {"a@example.test": {"all": False, "dies": [], "default": None, "configs": []},
+    grants = {"eng@example.test": {"all": False, "dies": [], "default": None, "configs": []},
+              "a@example.test": {"all": False, "dies": [], "default": None, "configs": []},
               "b@example.test": {"all": False, "dies": [], "default": None, "configs": []}}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     monkeypatch.setattr(users, "get_user", lambda email: {"email": email, "email_verified": True} if email in grants else {"email": email})
@@ -93,8 +96,8 @@ def test_member_role_change_keeps_other_customer_grant_and_marks_candidate(proje
     assert response.status_code == 200
     assert "DIE/A" in grants["a@example.test"]["configs"]
     assert "DIE/A" in grants["b@example.test"]["configs"]
-    candidates = store.get_project("alpha")["grant_removal_candidates"]
-    assert [x["email"] for x in candidates] == ["a@example.test"]
+    assert "DIE/A" in grants["eng@example.test"]["configs"]
+    assert store.get_project("alpha").get("grant_removal_candidates", []) == []
 
 
 def test_member_removal_rolls_back_if_membership_index_write_fails(project_root, monkeypatch):
@@ -292,6 +295,7 @@ def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monk
     project = make_project()
     store.create_project(project)
     grants = {
+        "eng@example.test": {"all": False, "dies": [], "default": None, "configs": []},
         "customer@example.test": {"all": False, "dies": [], "default": None, "configs": []},
         "new@example.test": {"all": False, "dies": [], "default": None, "configs": []},
     }
@@ -335,7 +339,7 @@ def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monk
     candidates = client.get(
         "/api/admin/projects/alpha/grant-removal-candidates").json()["candidates"]
     assert {row["email"] for row in candidates} == {
-        "customer@example.test", "new@example.test"}
+        "eng@example.test", "customer@example.test", "new@example.test"}
 
     events = [json.loads(line) for line in
               (project_root / "alpha" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]

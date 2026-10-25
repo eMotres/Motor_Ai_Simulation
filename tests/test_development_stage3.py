@@ -231,6 +231,10 @@ def test_picker_endpoint_role_matrix_and_workspace_shadow(tmp_path, monkeypatch)
     monkeypatch.setattr(family, "_die_dir", lambda die: publish_dir if die.startswith("SHADOW") else next(e["dir"] for e in entries if e["name"] == die))
     monkeypatch.setattr(family, "_cfg_file", lambda die, config: family._die_dir(die) / f"{config}.yaml")
     monkeypatch.setattr(motors.users, "get_user", lambda email: {"email": email, "name": "Owner"})
+    stored = {}   # the owner member now gets the linked motors too (owner 2026-10-26)
+    monkeypatch.setattr(motors.users, "get_stored_motor_grants", lambda email: dict(stored.get(email) or {"configs": []}))
+    monkeypatch.setattr(motors.users, "set_motor_grants", lambda email, *, all_motors, dies, default, configs: stored.__setitem__(
+        email, {"all": all_motors, "dies": dies, "default": default, "configs": configs}))
     identities = {
         "admin-token": {"id": "admin@example.test", "email": "admin@example.test", "is_admin": True},
         "owner-token": {"id": "owner@example.test", "email": "owner@example.test", "is_admin": False},

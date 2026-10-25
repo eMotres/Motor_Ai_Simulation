@@ -62,6 +62,29 @@ def test_customer_grants_preserve_manual_and_other_motor_grants(tmp_path, monkey
     ]
 
 
+def test_owner_and_engineer_members_get_the_project_motors_too(tmp_path, monkeypatch):
+    # The customer's owner and engineers work on the linked motors; a grant only for the
+    # "customer" role left a project owner with an empty project (owner 2026-10-26).
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
+    (tmp_path / "projects").mkdir()
+    store.create_project(_project(members=[{"email": "o@example.test", "role": "owner"},
+                                           {"email": "e@example.test", "role": "engineer"}]))
+    saved = {}
+    monkeypatch.setattr(motors.users, "get_user", lambda email: {"email": email})
+    monkeypatch.setattr(motors.users, "get_stored_motor_grants",
+                        lambda email: dict(saved.get(email) or {"all": False, "dies": [], "default": None, "configs": []}))
+    def setter(email, *, all_motors, dies, default, configs):
+        saved[email] = {"all": all_motors, "dies": dies, "default": default, "configs": configs}
+        return saved[email]
+    monkeypatch.setattr(motors.users, "set_motor_grants", setter)
+    monkeypatch.setattr(motors, "_motor", lambda *args: (Path("."), Path("."), {"is_admin": True}, {}))
+    motors.link_motor("alpha", "DIE", "A", _request())
+    assert saved["o@example.test"]["configs"] == ["DIE/A"]
+    assert saved["e@example.test"]["configs"] == ["DIE/A"]
+    assert store.get_project("alpha")["project_motor_grants"][motors._key("DIE", "A")]["emails"] == [
+        "e@example.test", "o@example.test"]
+
+
 def test_preexisting_grant_is_not_a_project_removal_candidate(tmp_path, monkeypatch):
     monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
     (tmp_path / "projects").mkdir()

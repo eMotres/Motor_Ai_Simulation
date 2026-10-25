@@ -92,6 +92,12 @@ const StressMap: React.FC<Props> = ({
       const p995 = Math.max(...Object.values(c.parts).map((p) => p.von_mises_p995_mpa));
       statText = `case max ${fmt(peak[1], 1)} MPa${statText ? ` · ${statText}` : ''}`;
       tip = `${tip}\n\nPeak von Mises is in the ${peak[0] || '—'}; p99.5 over all parts is ${fmt(p995, 1)} MPa.`;
+    } else if (view === 'sf' && c.retention?.status === 'fail') {
+      // No adhesive, so a separation answer that does not retain the magnets
+      // has no safety factor (owner rule 2026-10-25) — the map is a picture
+      // of the stresses, the header says what the verdict is.
+      statText = 'not retained — fails';
+      tip = `${tip}\n\n${c.retention.message ?? 'not retained — fails'}`;
     } else if (view === 'sf') {
       const crit = c.sf_min_p05_part ? res.materials[c.sf_min_p05_part]?.sf_criterion : '';
       statText = `min ${fmt(c.sf_min_p05, 3)}${c.sf_min_p05_part ? ` (${c.sf_min_p05_part})` : ''}`;

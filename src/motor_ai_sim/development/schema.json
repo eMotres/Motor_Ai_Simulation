@@ -2025,14 +2025,7 @@
               ]
             }
           ],
-          "presentation_group": "load",
-          "required_when": {
-            "field": "load_source",
-            "in": [
-              "catalog",
-              "manual"
-            ]
-          }
+          "presentation_group": "load"
         }
       ],
       "presentation_order": 7

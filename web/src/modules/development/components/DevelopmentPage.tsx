@@ -611,8 +611,11 @@ export default function DevelopmentPage() {
         if (derived != null) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
         if (!stated) return dash;
         // a power stated without torque/speed: editable; a stored non-shaft basis is named in the tooltip, never relabelled
-        const basis = typeof obj.power_basis === 'string' && obj.power_basis && obj.power_basis !== 'shaft' ? obj.power_basis : '';
-        return <Tooltip title={basis ? tr('keyPoints.statedBasis', { basis: label(stated.label) + ' · ' + basis }) : tr('wizard.s1Formula')}><Box>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
+        const basisProp = prop('power_basis'), basis = typeof obj.power_basis === 'string' && obj.power_basis && obj.power_basis !== 'shaft' ? obj.power_basis : '';
+        const basisLabel = basis ? label(basisProp?.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === basis)?.label) || basis : '';
+        // typing a power states it as SHAFT power (owner: key-point power is always shaft power); the old basis is only named
+        const editPower = (value: unknown) => setAnswer(f, { ...obj, [stated.id]: value, ...(basis ? { power_basis: 'shaft' } : {}) });
+        return <Tooltip title={basis ? tr('keyPoints.statedBasis', { basis: basisLabel }) : tr('wizard.s1Formula')}><Box>{renderTypedValue(stated, obj[stated.id], editPower, `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
       }
       const p = prop(column);
       return p ? renderTypedValue(p, obj[column], edit(column), `${f.id}-${column}`, unknown, true) : dash;

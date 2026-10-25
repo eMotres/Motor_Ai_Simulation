@@ -35,7 +35,8 @@ test('the required set is exactly the one the compact specification asks for', (
   const loads = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === '4_6');
   assert.equal(loads.properties.find((p) => p.id === 'axial_thrust_N').required, true);
   const loadCurve = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === 'load_characteristic');
-  assert.deepEqual(loadCurve.required_when, { field: 'load_source', in: ['catalog', 'manual'] });
+  // the minimal page has no load-curve editor (owner 2026-10-25): the curve is report data, never a submit requirement
+  assert.equal(loadCurve.required_when, undefined);
   const extra = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === 'additional_requirements');
   assert.equal(extra.type, 'string'); assert.equal(extra.multiline, true); assert.equal(extra.required, false);
   assert.ok(extra.label.en && extra.label['zh-CN']);

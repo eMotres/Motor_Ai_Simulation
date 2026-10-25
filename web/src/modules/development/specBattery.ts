@@ -57,39 +57,23 @@ function deriveCells(next: Record<string, unknown>, volts: ReadonlyArray<'min' |
   return next;
 }
 
-/** A cell count from pack ÷ cell voltage, only when it comes out whole (never rounded silently). */
-function deriveCount(next: Record<string, unknown>, k: 'min' | 'nom' | 'max', allowed: Set<string>) {
-  const pack = finite(next[PACK_PROP[k]]), cell = finite(next[CELL_PROP[k]]);
-  if (!allowed.has(CELL_PROP.cells) || finite(next[CELL_PROP.cells]) != null || pack == null || cell == null || cell <= 0) return;
-  const n = pack / cell;
-  if (Math.abs(n - Math.round(n)) < 0.02 && Math.round(n) > 0) next[CELL_PROP.cells] = Math.round(n);
-}
-
-/** The user typed into one block field (called per keystroke).  The stated PACK voltages are the authority
- *  (Astra review 2026-10-25: deriving both ways per keystroke turned 1 -> 10 -> 100 cells into a 37 kV pack):
- *    - a cell voltage typed: stored, and with a cell count its pack voltage follows (cells × cell);
- *      with no count, a whole count is derived from the stated pack;
- *    - the cell count typed: stored; a stated pack stays, its cell voltage is SHOWN as pack ÷ cells (a stored cell
- *      voltage there is dropped); a pack not stated yet follows from a stored cell voltage. */
+/** The user typed into one block field (called per keystroke).  One rule, independent of typing history (Astra
+ *  review 2026-10-25): where a cell voltage is STORED it is the authority and its pack = cells × cell; where none is
+ *  stored the stated pack is, and the cell voltage is SHOWN as pack ÷ cells.
+ *    - a cell voltage typed: stored; with a count its pack follows;
+ *    - the cell count typed: stored; every pack with a stored cell voltage follows, a stated pack alone stays. */
 export function specBatteryFieldEdit(value: Record<string, unknown>, field: BatteryField, raw: string, allowed: Set<string>): Record<string, unknown> {
   if (!allowed.has(CELL_PROP[field])) return value;
   const parsed = raw.trim() === '' ? NaN : Number(raw);
   const next: Record<string, unknown> = { ...value, [CELL_PROP[field]]: Number.isFinite(parsed) ? parsed : '' };
-  if (field !== 'cells') {
-    if (finite(next[CELL_PROP.cells]) == null) { deriveCount(next, field, allowed); return next; }
-    return derivePack(next, [field], allowed, false);
-  }
-  for (const k of VOLTS) if (finite(next[PACK_PROP[k]]) != null) delete next[CELL_PROP[k]];
-  return derivePack(next, VOLTS, allowed, true);
+  return derivePack(next, field === 'cells' ? VOLTS : [field], allowed, false);
 }
 
-/** The user typed a pack voltage: stored as typed; its cell voltage is then SHOWN as pack ÷ cells (a stored one is
- *  dropped), or, with no cell count yet, a whole count is derived from a stored cell voltage. */
+/** The user typed a pack voltage: stored as typed, and it becomes the authority (its stored cell voltage is dropped,
+ *  the cell voltage is then shown as pack ÷ cells). */
 export function specBatteryPackEdit(value: Record<string, unknown>, k: 'min' | 'nom' | 'max', pack: unknown, allowed: Set<string>): Record<string, unknown> {
   const next: Record<string, unknown> = { ...value, [PACK_PROP[k]]: pack };
-  if (finite(pack) == null) return next;
-  deriveCount(next, k, allowed);
-  if (finite(next[CELL_PROP.cells]) != null) delete next[CELL_PROP[k]];
+  if (finite(pack) != null && allowed.has(CELL_PROP[k])) delete next[CELL_PROP[k]];
   return next;
 }
 export const SPEC_PACK_PROP = PACK_PROP;

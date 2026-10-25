@@ -134,6 +134,8 @@ test('load x cooling: every combination that occurs is offered, the impossible o
   // airflow never hides a coolant circuit (Astra review 2026-10-25)
   assert.deepEqual(C.coolingMedium({ cooling_type: 'Liquid jacket with fan airflow', coolant: 'PPG', flow_rate: 8, airflow: { mode: 'Fan' } }), { medium: 'liquid', inferred: true });
   assert.deepEqual(C.coolingMedium({ cooling_type: 'PPG loop, heat exchanger to seawater' }), { medium: 'liquid', inferred: true });
+  // the exact M1 text: 'no internal coolant loop' is not a loop (Astra re-review 2026-10-25)
+  assert.deepEqual(C.coolingMedium({ cooling_type: 'Passive liquid heat rejection through submerged pod housing; no internal coolant loop.', coolant: 'External flowing seawater' }), { medium: 'submerged', inferred: true });
 });
 
 test('choosing a load settles the cooling it brings or cannot run with; a fitting choice is kept', () => {

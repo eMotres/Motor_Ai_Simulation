@@ -59,7 +59,8 @@ export function coolingMedium(value: unknown): { medium: CoolingMedium | null; i
   const inferred = (medium: CoolingMedium) => ({ medium, inferred: true });
   // sea water around a pod is underwater cooling even when written as a "coolant"; a jacket / glycol / PPG loop is
   // liquid; a coolant circuit is never hidden by an airflow that also blows over the housing (Astra review 2026-10-25)
-  const text = `${type} ${typeof v.coolant === 'string' ? v.coolant.toLowerCase() : ''}`;
+  const text = `${type} ${typeof v.coolant === 'string' ? v.coolant.toLowerCase() : ''}`
+    .replace(/\b(no|without|not an?)\s+(internal\s+)?(coolant\s+|liquid\s+|cooling\s+)?(loop|circuit|jacket)s?\b/g, ' ');
   const circuit = /glycol|jacket|ppg|loop|乙二醇|冷却液|回路/.test(text);
   if (/submerg|immers|underwater|sea ?water|水下|浸没|海水/.test(text) && !circuit) return inferred('submerged');
   // a coolant, a flow or a pressure drop is a circuit; an inlet temperature alone may be the air's

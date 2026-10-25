@@ -8440,6 +8440,18 @@ def _dc_cycle_block(trace, *, decimated: Dict[str, Any],
     return out
 
 
+def cycle_block_for_duty(blk: Dict[str, Any], duty_name: str) -> Dict[str, Any]:
+    """The cycle block a request integrates: the pull of an S1 / S2 is the duty the
+    request is FOR.  A block without its own `duty` fell back to the calibration duty
+    inside the profile builder, so an S2 of "takeoff" / "peak" calibrated on "cruise"
+    integrated the CRUISE losses for every duty (Erium opt3, 2026-10-25: three
+    different duties, one identical answer).  A block that names its duty keeps it."""
+    out = dict(blk)
+    if str(out.get("kind") or "").upper() in ("S1", "S2") and not out.get("duty"):
+        out["duty"] = duty_name
+    return out
+
+
 @router.post("/duty_cycle")
 @_JOBS.queued("thermal.duty_cycle", priority=_JOBS.Priority.DUTY,
               run_id_from=_JOBS.body_run_id("duty"))
@@ -8582,7 +8594,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
             "Save a cycle on the duty (S1 continuous, S2 one pull of t_on_s, S3 "
             "ED % of cycle_s, or an explicit segments list), or send one in "
             "duty_cycle.", ["duty_cycle"])
-    blk = dict(blk)
+    blk = cycle_block_for_duty(blk, duty_name)
 
     # ── 2. THE BOUNDARY CONDITIONS ──────────────────────────────────────────
     raw = body.get("thermal_settings")

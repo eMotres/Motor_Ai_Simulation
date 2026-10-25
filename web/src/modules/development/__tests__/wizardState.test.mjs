@@ -134,7 +134,7 @@ t('stored result kinds and temperature categories render through localized label
 t('schema card layout shows every page field once, production fields stay off the page', () => {
   const schema = JSON.parse(readFileSync('../src/motor_ai_sim/development/schema.json', 'utf8'));
   const cards = buildSpecificationCards(schema);
-  assert.deepEqual(cards.map((card) => card.id), ['key', 'requirements', 'mission', 'review']);
+  assert.deepEqual(cards.map((card) => card.id), ['key', 'requirements', 'construction', 'mission', 'review']);
   const laidOut = cards.flatMap((card) => card.fields);
   const ids = laidOut.map((field) => field.id);
   assert.equal(new Set(ids).size, ids.length);

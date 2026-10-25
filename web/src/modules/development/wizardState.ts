@@ -5,6 +5,31 @@ import { KEY_POINTS_ID, keyPointsSlotState, keyPointsValid, type KeyPoint } from
 
 export interface FieldAnswer { value?: unknown; status?: 'filled' | 'not_known_yet' | 'missing'; not_known_yet?: boolean }
 export type SpecDraft = Record<string, unknown> & { fields?: Record<string, FieldAnswer>; mission_profile?: Array<Record<string, unknown>>; mission_profile_status?: 'filled' | 'not_known_yet' | 'missing' };
+/** Pre-filled, editable defaults of a version-2 specification, counted as filled: `{ field: { property: value } }`.
+ *  Prototypes: 1 (owner 2026-10-26).  The same table as the backend's `SPEC_DEFAULTS` (development/models.py). */
+export const SPEC_DEFAULTS: Record<string, Record<string, number>> = { '6_1': { prototypes: 1 } };
+/** The draft with every empty default filled in (a copy; the same rule as the backend's `with_defaults`): the answer is
+ *  absent or holds no value for the property.  A field marked "not known yet" and a typed value are left alone. */
+export function withSpecDefaults(draft: SpecDraft): SpecDraft {
+  if (Number(draft.schema_version ?? 1) < 2) return draft;
+  let fields = draft.fields ?? {};
+  let changed = false;
+  for (const [fieldId, props] of Object.entries(SPEC_DEFAULTS)) {
+    const raw = fields[fieldId] as unknown;
+    const answer = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as FieldAnswer;
+    if (answer.status === 'not_known_yet' || answer.not_known_yet === true) continue;
+    const value = { ...((answer.value && typeof answer.value === 'object' && !Array.isArray(answer.value)) ? answer.value as Record<string, unknown> : {}) };
+    let touched = false;
+    for (const [prop, dflt] of Object.entries(props)) {
+      const current = value[prop];
+      const empty = current === undefined || current === null || (typeof current === 'string' && !current.trim())
+        || (typeof current === 'object' && current !== null && Object.values(current as Record<string, unknown>).every((x) => x === null || x === undefined || x === ''));
+      if (empty) { value[prop] = dflt; touched = true; }
+    }
+    if (touched || !raw) { fields = { ...fields, [fieldId]: { status: 'filled', value } }; changed = true; }
+  }
+  return changed ? { ...draft, fields } : draft;
+}
 export function fieldAnswer(draft: SpecDraft, id: string): FieldAnswer {
   const value = draft.fields?.[id];
   return value && typeof value === 'object' && !Array.isArray(value) ? value as FieldAnswer : { value };
@@ -160,7 +185,8 @@ export function missionProfileComplete(draft: SpecDraft): boolean {
 }
 
 export interface SectionAnswerCounts { answered: number; unknown: number; missing: number; invalid: number; required: number; filled: number }
-export function sectionAnswerCounts(section: SchemaSection, draft: SpecDraft): SectionAnswerCounts {
+export function sectionAnswerCounts(section: SchemaSection, rawDraft: SpecDraft): SectionAnswerCounts {
+  const draft = withSpecDefaults(rawDraft);
   const counts: SectionAnswerCounts = { answered: 0, unknown: 0, missing: 0, invalid: 0, required: 0, filled: 0 };
   for (const field of (section.fields ?? []).filter((f) => fieldRequired(f, draft) && !f.handled_by)) {
     counts.required++;
@@ -188,7 +214,8 @@ export function sectionCompleteness(section: SchemaSection, draft: SpecDraft): {
   const counts = sectionAnswerCounts(section, draft);
   return { required: counts.required, filled: counts.filled };
 }
-export function wizardCompleteness(sections: SchemaSection[], draft: SpecDraft): Completeness {
+export function wizardCompleteness(sections: SchemaSection[], rawDraft: SpecDraft): Completeness {
+  const draft = withSpecDefaults(rawDraft);
   const counts = Object.fromEntries(sections.map((section) => { const count = sectionCompleteness(section, draft); return [section.id, { ...count, total: count.required, complete: count.filled === count.required }]; }));
   const answerCounts = sections.map((section) => sectionAnswerCounts(section, draft));
   const unknown = answerCounts.reduce((n, c) => n + c.unknown, 0);
@@ -198,7 +225,8 @@ export function wizardCompleteness(sections: SchemaSection[], draft: SpecDraft):
   const required = Object.values(counts).reduce((n, c) => n + c.required, 0);
   return { filled, required, filled_required: filled, total_required: required, answered, unknown, missing: Math.max(0, required - answered - unknown - invalid), invalid, sections: counts };
 }
-export function requiredFieldIds(sections: SchemaSection[], draft: SpecDraft): string[] {
+export function requiredFieldIds(sections: SchemaSection[], rawDraft: SpecDraft): string[] {
+  const draft = withSpecDefaults(rawDraft);
   return sections.flatMap((s) => (s.fields ?? []).filter((f) => fieldRequired(f, draft) && !f.handled_by).filter((f) => {
     if (f.id === 'mission_profile') return draft.mission_profile_status !== 'not_known_yet' && !(draft.mission_profile_status === 'filled' && missionProfileComplete(draft));
     if (f.id === KEY_POINTS_ID) return !['answered', 'unknown'].includes(keyPointsSlotState(draft));

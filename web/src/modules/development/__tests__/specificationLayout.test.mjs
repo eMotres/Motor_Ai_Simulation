@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildSpecificationCards, cardIndexForField, sectionCommentRefs, KEY_FIELDS, REQUIREMENT_FIELDS, SECOND_TIER_FIELDS, MORE_FIRST_FIELDS } from '../specificationLayout.ts';
+import { buildSpecificationCards, cardIndexForField, sectionCommentRefs, KEY_FIELDS, REQUIREMENT_FIELDS, SECOND_TIER_FIELDS, MORE_FIRST_FIELDS, CONSTRUCTION_FIELDS, RETIRED_FIELDS } from '../specificationLayout.ts';
 import { sectionCompleteness, fieldAnswerComplete } from '../wizardState.ts';
 
 const load = (name) => JSON.parse(readFileSync(new URL(`../../../../../src/motor_ai_sim/development/${name}`, import.meta.url), 'utf8'));
@@ -17,12 +17,16 @@ test('specification cards keep every required field exactly once; production and
   assert.ok(cards.flatMap((card) => card.fields).every((field) => field.storage_namespace !== 'production'));
 });
 
-test('minimal layout (owner 2026-10-25): key data (with the load type), requirements, mission, review - no More details', () => {
+test('minimal layout (owner 2026-10-25/26): key data (with the load type), requirements, construction, mission, review - no More details', () => {
   const cards = buildSpecificationCards(schema);
   const card = (id) => cards.find((c) => c.id === id);
-  assert.deepEqual(cards.map((c) => c.id), ['key', 'requirements', 'mission', 'review']);
+  assert.deepEqual(cards.map((c) => c.id), ['key', 'requirements', 'construction', 'mission', 'review']);
   assert.deepEqual(card('key').fields.map((f) => f.id), [...KEY_FIELDS, 'load_type']);
   assert.deepEqual(card('requirements').fields.map((f) => f.id), [...REQUIREMENT_FIELDS, ...SECOND_TIER_FIELDS]);
+  assert.deepEqual(card('construction').fields.map((f) => f.id), CONSTRUCTION_FIELDS);
+  // the battery current (2_3) is computed in the report and the power devices (2_5) belong to the controller: not asked
+  for (const id of RETIRED_FIELDS) assert.equal(cardIndexForField(cards, id), -1, id);
+  assert.deepEqual(SECOND_TIER_FIELDS, []);
   assert.deepEqual(card('mission').fields.map((f) => f.id), ['mission_profile']);
   // the former extras are not on the page (their stored values are kept in the draft)
   for (const id of [...MORE_FIRST_FIELDS, 'load_characteristic']) assert.equal(cardIndexForField(cards, id), -1, id);
@@ -54,7 +58,7 @@ test('the v1 schema lays out its page fields once', () => {
 test('section comments written against the previous card ids stay on the card that holds those fields', () => {
   const cards = buildSpecificationCards(schema);
   const refs = Object.fromEntries(cards.map((c) => [c.id, sectionCommentRefs(c)]));
-  for (const [legacy, now] of [['application', 'key'], ['continuous', 'key'], ['electrical', 'key'], ['cooling', 'key'], ['mechanical', 'requirements'], ['load', 'key'], ['delivery', 'requirements'], ['mission', 'mission'], ['review', 'review']]) {
+  for (const [legacy, now] of [['application', 'key'], ['continuous', 'key'], ['electrical', 'key'], ['cooling', 'key'], ['mechanical', 'construction'], ['load', 'key'], ['delivery', 'requirements'], ['mission', 'mission'], ['review', 'review']]) {
     assert.ok(refs[now].includes(`section:${legacy}`), legacy);
   }
 });

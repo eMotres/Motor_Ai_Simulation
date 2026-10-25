@@ -160,10 +160,10 @@ test('the max immersion depth is asked only underwater, is optional, and the coo
   for (const medium of ['air', 'liquid', 'submerged']) for (const load of ['air_propeller', 'marine_propeller', 'shaft']) assert.ok(!C.coolingPropertyIds(medium, load).includes('depth_m'), `${medium} ${load}`);
   // a stored legacy depth still tells the medium apart
   assert.deepEqual(C.coolingMedium({ depth_m: 30 }), { medium: 'submerged', inferred: true });
-  // it sits in the requirements card, with the housing
-  const requirements = buildSpecificationCards(schema).find((card) => card.id === 'requirements');
-  assert.ok(requirements.fields.map((f) => f.id).includes('3_6'));
-  assert.ok(requirements.fields.map((f) => f.id).indexOf('3_6') === requirements.fields.map((f) => f.id).indexOf('3_3') + 1);
+  // it sits in the Construction card (owner 2026-10-26), right after the housing
+  const construction = buildSpecificationCards(schema).find((card) => card.id === 'construction');
+  assert.ok(construction.fields.map((f) => f.id).includes('3_6'));
+  assert.ok(construction.fields.map((f) => f.id).indexOf('3_6') === construction.fields.map((f) => f.id).indexOf('3_3') + 1);
 });
 
 test('no "Guaranteed" in the specification text, EN or zh-CN', () => {

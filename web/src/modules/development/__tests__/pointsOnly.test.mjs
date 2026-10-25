@@ -93,7 +93,7 @@ test('wiring: Configure shows the points card only for a project target, notes a
   const store = src('../../../stores/pointsConfigureStore.ts');
   assert.doesNotMatch(store, /zustand\/middleware/);                                       // transient: a reload returns to the ordinary Configure
   const page = src('../components/DevelopmentPage.tsx');
-  assert.match(page, /canEditProject && \(r\.motor\.results/);
+  assert.match(page, /canEditProject && <MotorNoteField value=\{live\.note \?\? ''\}/);       // the note editor sits in the variant's group header
   assert.match(page, /<MotorOpenActions motor=\{r\.motor\} duty=\{r\.result\.duty\} engineer=\{canManageGlobally\} t=\{tr\} projectId=\{selected\.id\}/);
   const admin = src('../../../components/admin/sections/ProjectsSection.tsx');
   assert.match(admin, /<MotorNoteField value=\{m\.note \?\? ''\}/);

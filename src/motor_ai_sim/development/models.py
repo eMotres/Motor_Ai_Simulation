@@ -176,6 +176,8 @@ def normalize_draft(value: Any, *, schema_version: int | None = None) -> dict:
     if not isinstance(provenance, dict):
         raise ValueError("provenance must be an object")
     out["provenance"] = {str(k): v for k, v in provenance.items()}
+    if version == 2:
+        out = with_defaults(out)
     return out
 
 
@@ -565,6 +567,63 @@ def lift_legacy_depth(draft: dict) -> dict:
     return out
 
 
+#: Pre-filled, editable defaults of a version-2 specification: ``{field: {property: value}}``.  They are COUNTED AS FILLED
+#: (the customer can change them any time).  Prototypes: 1 (owner 2026-10-26).
+SPEC_DEFAULTS = {"6_1": {"prototypes": 1}}
+
+
+def with_defaults(draft: dict) -> dict:
+    """A copy of a version-2 draft where every default in :data:`SPEC_DEFAULTS` is filled in if it is empty.
+
+    Empty = the answer is absent, or has no value for that property.  A field marked "not known yet" is left alone, and so is
+    a value the customer typed.  Idempotent; the stored draft is not changed.  The same rule as the web's ``withSpecDefaults``
+    (wizardState.ts).
+    """
+    import copy
+    out = copy.deepcopy(draft)
+    if int(out.get("schema_version", 1)) < 2:
+        return out
+    fields = out.setdefault("fields", {})
+    if not isinstance(fields, dict):
+        return out
+    for field_id, props in SPEC_DEFAULTS.items():
+        answer = fields.get(field_id)
+        if isinstance(answer, dict) and answer.get("status") == "not_known_yet":
+            continue
+        value = answer.get("value") if isinstance(answer, dict) else None
+        value = dict(value) if isinstance(value, dict) else {}
+        changed = False
+        for prop, default in props.items():
+            current = value.get(prop)
+            if not _value_present(current) or (isinstance(current, dict) and all(x in (None, "") for x in current.values())):
+                value[prop] = default
+                changed = True
+        if changed or not isinstance(answer, dict):
+            fields[field_id] = {"status": "filled", "value": value}
+    return out
+
+
+def proof_speed_rpm(draft: dict) -> float | None:
+    """The speed the mechanics are checked at (owner 2026-10-26): exactly the specification's maximum speed (1_6) - the single
+    highest speed the motor ever sees, no safety factor on top.
+
+    An older project may hold an explicitly stored overspeed value (1_6 ``overspeed_rpm``, it may come from an engine or
+    generator limit): when that is LARGER it wins, and the web shows it read-only in the Maximum speed tooltip.  A range is
+    read as its worst (maximum) value.  ``None`` while no maximum speed is stated or the field is marked not known yet.
+    The torque and voltage requirements are NOT read from here - they come from the key operating points.
+    """
+    answer = (draft.get("fields") or {}).get("1_6") if isinstance(draft, dict) else None
+    if not isinstance(answer, dict) or answer.get("status") == "not_known_yet":
+        return None
+    value = answer.get("value")
+    if not isinstance(value, dict):
+        return None
+    top = _worst_number(value.get("maximum_rpm"))
+    stored = _worst_number(value.get("overspeed_rpm"))
+    candidates = [v for v in (top, stored) if v is not None and v > 0]
+    return float(max(candidates)) if candidates else None
+
+
 def _property_required(prop: dict, value: Any) -> bool:
     """A structured answer's property is required outright, or - the cooling temperatures - when the answer's own
     cooling medium is the one named by `required_when_cooling_medium` (liquid: the coolant inlet temperature,
@@ -867,6 +926,7 @@ def key_point_errors(draft: dict) -> list[dict]:
 
 
 def completeness(draft: dict) -> dict:
+    draft = with_defaults(draft)
     schema_version = int(draft.get("schema_version", 1))
     active_schema = schema(schema_version)
     required_by_section = {}
@@ -919,6 +979,7 @@ def completeness(draft: dict) -> dict:
 
 
 def validation_errors(draft: dict) -> list[dict]:
+    draft = with_defaults(draft)
     errors = []
     for section in schema(int(draft.get("schema_version", 1)))["sections"]:
         sid = section["id"]
@@ -974,6 +1035,11 @@ def validation_errors(draft: dict) -> list[dict]:
                     if minimum and sum(1 for k, v in val.items() if _value_present(v, props.get(k, {}))) < minimum:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
     errors.extend(cooling_load_errors(draft))
+    if int(draft.get("schema_version", 1)) >= 2:
+        from motor_ai_sim.inverter import controller_catalog
+        battery = controller_catalog.battery_vs_controller(draft)  # a pack above the linked controller's supply maximum
+        if battery:
+            errors.append(battery)
     return errors
 
 def project_record(project_id: str, body: dict, email: str) -> dict:

@@ -510,5 +510,6 @@
     "refreshRow": "{phase}: {before} → {after} N·m"
   },
   "rangeWorst": "Stored as a range {min}–{max}. Modelling uses the maximum shown; type one value to replace the range.",
-  "coolingInferred": "Read from the stored values; click a medium to confirm it."
+  "coolingInferred": "Read from the stored values; click a medium to confirm it.",
+  "coolingMisfit": "{{medium}} does not fit the load {{load}}"
 }

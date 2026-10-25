@@ -510,5 +510,6 @@
     "refreshRow": "{phase}：{before} → {after} N·m"
   },
   "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最大值；输入一个数值即替换该范围。",
-  "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。"
+  "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。",
+  "coolingMisfit": "{{medium}}与负载“{{load}}”不匹配"
 }

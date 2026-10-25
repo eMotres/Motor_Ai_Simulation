@@ -21,7 +21,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import LoadSection from './LoadSection';
   import MissionProfileEditor from './MissionProfileEditor';
   import type { LoadType, MissionRow } from '../missionProfileState';
-  import { COOLING_MEDIA, COOLING_PROPERTIES, coolingMedium, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
+  import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
   import { buildSpecificationCards, cardIndexForField, LOAD_FIELDS, MORE_FIRST_FIELDS, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
@@ -650,23 +650,29 @@ export default function DevelopmentPage() {
   };
   const propertyGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;
   const switchButton = { textTransform: 'none', px: 1.5, py: 0.4, fontSize: 12 } as const;
-  /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`); each medium shows only its own conditions and the
-   *  other media's values stay stored. Unset, the medium the stored values imply is shown, written only on a click. */
-  const renderCooling = (f: SpecificationField) => {
+  /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`) under the chosen load: a medium the load cannot run in
+   *  is disabled (an air propeller never runs under water), each medium shows its own conditions (+ the airflow the load
+   *  still blows over a liquid-cooled housing) and the airflow menu offers only what the load makes. The other media's
+   *  values stay stored. Unset, the medium the stored values imply is shown, written only on a click. */
+  const renderCooling = (f: SpecificationField, loadType?: string) => {
     const prop = (id: string) => f.properties?.find((p) => p.id === id);
     const mediumProp = prop('cooling_medium');
     if (!mediumProp) return renderField(f, false, false);
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current), airflow = objectOf(obj.airflow);
     const { medium, inferred } = coolingMedium(obj);
+    const fits = coolingChoices(loadType), misfit = medium != null && !fits.includes(medium);
+    const mediumLabel = (m: CoolingMedium) => label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m;
     const pick = (next: CoolingMedium | null) => { const target = next ?? (inferred ? medium : null); if (target && target !== obj.cooling_medium) setProperty(f, false, obj, 'cooling_medium', target); };
     const cell = (p: NonNullable<SpecificationField['properties']>[number], value: unknown, update: (next: unknown) => void) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, value, update, `${f.id}-${p.id}`, unknown)}</Box>;
-    const shown = medium ? COOLING_PROPERTIES[medium].map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
+    const shown = medium ? coolingPropertyIds(medium, loadType).map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
+    const loadName = loadType && loadType !== 'unknown' ? tr(`load.types.${loadType}`) : '';
     return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, required, unknown)}
       <Stack spacing={0.8}>
-        <Tooltip title={inferred ? tr('coolingInferred') : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} sx={switchButton}>{label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
+        <Tooltip title={inferred ? tr('coolingInferred') : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr('coolingMisfit', { medium: mediumLabel(m), load: loadName }) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
+        {misfit && <Alert severity="error" sx={{ py: 0 }}>{tr('coolingMisfit', { medium: mediumLabel(medium!), load: loadName })}</Alert>}
         {(shown.length > 0 || (!medium && !blankValue(obj.cooling_type))) && <Box sx={propertyGrid}>
-          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
+          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub.id === 'mode' ? { ...sub, suggestions: airflowSuggestions(sub.suggestions, loadType) } : sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
           {/* the old free-text type only while the switch cannot tell the medium; otherwise it repeats the switch (owner 2026-10-25) */}
           {!medium && !blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
         </Box>}
@@ -684,19 +690,27 @@ export default function DevelopmentPage() {
       {fieldMessages(f, answer, required)}
     </Box>;
   };
-  /** The load as a switch Air propeller / Water propeller / Shaft (any other stored type stays, shown selected), changed
-   *  through the load adapter with LoadSection's reset; the loads 4_6 directly under it. */
-  const renderLoadSwitch = (loads: SpecificationField) => {
+  /** The load as a switch Air propeller / Water propeller / Wheel / Turbine / Shaft (a finer stored type — water-jet, pump,
+   *  engine-driven generator, robot joint — sits under its button and is kept; it is named in the tooltip), changed
+   *  through the load adapter with LoadSection's reset. A load also settles the cooling it cannot run with
+   *  (`coolingForLoad`): an air propeller brings air + propeller wash, a water propeller underwater, a wheel ram air. */
+  const renderLoadType = (cooling: SpecificationField | undefined) => {
     const typeField = sections.flatMap((section) => section.fields).find((f) => f.id === 'load_type');
-    if (!typeField) return renderField(loads);
+    if (!typeField) return null;
     const load = readLoadDraft(draftRef.current), typeUnknown = load.answer_status?.load_type === 'not_known_yet';
-    return <Stack spacing={1.2} sx={{ minWidth: 0, mb: 1.5 }}>
-      <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
-        {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
-        <ToggleButtonGroup size="small" exclusive value={load.load_type === 'unknown' ? null : load.load_type} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => { if (next) updateDraft((d) => writeLoadDraft(d, withLoadType(readLoadDraft(d), next))); }} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
-      </Box>
-      {renderLoads(loads, load.load_type)}
-    </Stack>;
+    const group = loadGroup(load.load_type), finer = group && group !== load.load_type ? tr(`load.types.${load.load_type}`) : '';
+    const choose = (next: LoadType | null) => {
+      if (!next) return;
+      updateDraft((d) => writeLoadDraft(d, withLoadType(readLoadDraft(d), next)));
+      if (cooling && storedAnswer(cooling, false).status !== 'not_known_yet') {
+        const nextCooling = coolingForLoad(storedAnswer(cooling, false).value, next);
+        if (nextCooling) setAnswer(cooling, nextCooling);
+      }
+    };
+    return <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
+      {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
+      <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={type === group && finer ? finer : undefined} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
+    </Box>;
   };
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
@@ -730,11 +744,15 @@ export default function DevelopmentPage() {
                     {byId('1_1') && renderField(byId('1_1')!)}
                     {keyPointsTable(['1_4', '1_5'].map(byId).filter((f): f is SpecificationField => !!f))}
                     {byId('2_1') && renderBattery(byId('2_1')!)}
-                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>{['3_1', '3_2'].map(byId).filter((f): f is SpecificationField => !!f).map((f) => f.id === '3_1' ? renderCooling(f) : renderField(f, false, false))}</Box>
+                    {/* load and cooling as ONE block (owner 2026-10-25): what the motor drives decides which cooling can occur */}
+                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>
+                      {byId('3_1') && <Stack spacing={1.2} sx={{ minWidth: 0 }}>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</Stack>}
+                      {byId('3_2') && renderField(byId('3_2')!, false, false)}
+                    </Box>
                     {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>
-                    {byId('4_6') && renderLoadSwitch(byId('4_6')!)}
+                    {byId('4_6') && <Box sx={{ mb: 1.5 }}>{renderLoads(byId('4_6')!, readLoadDraft(draftRef.current).load_type)}</Box>}
                     <Box sx={grid}>{section.fields.filter((f) => !SECOND_TIER_FIELDS.includes(f.id) && f.id !== '4_6').map((f) => renderField(f))}</Box>
                     {deliveryConflicts(draftRef.current).length > 0 && <Alert severity="warning" sx={{ mt: 1 }}>{tr('deliveryConflict')}</Alert>}
                     {section.fields.some((f) => SECOND_TIER_FIELDS.includes(f.id)) && <><Divider sx={{ my: 1.5 }} /><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.secondTier')}</Typography><Box sx={grid}>{section.fields.filter((f) => SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box></>}

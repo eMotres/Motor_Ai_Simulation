@@ -58,16 +58,93 @@ export function coolingMedium(value: unknown): { medium: CoolingMedium | null; i
   const type = typeof v.cooling_type === 'string' ? v.cooling_type.toLowerCase() : '';
   const inferred = (medium: CoolingMedium) => ({ medium, inferred: true });
   if (present(v.airflow) || /\bair|风冷|空气/.test(type)) return inferred('air');
+  // sea water around a pod is underwater cooling even when written as a "coolant"; a jacket / glycol loop is liquid
+  const text = `${type} ${typeof v.coolant === 'string' ? v.coolant.toLowerCase() : ''}`;
+  if (/submerg|immers|underwater|sea ?water|水下|浸没|海水/.test(text) && !/glycol|jacket|乙二醇|冷却液/.test(text)) return inferred('submerged');
   if (COOLING_PROPERTIES.liquid.some((id) => present(v[id]))) return inferred('liquid');
   if (COOLING_PROPERTIES.submerged.some((id) => present(v[id])) || /water|submerg|immers|水下|浸没|水冷/.test(type)) return /glycol|coolant|jacket|乙二醇|冷却液/.test(type) ? inferred('liquid') : inferred('submerged');
   if (/liquid|coolant|glycol|oil|液冷|冷却液|油冷/.test(type)) return inferred('liquid');
   return { medium: null, inferred: false };
 }
 
-/** The load switch: air propeller, water propeller, shaft, plus any other stored type (kept, shown selected). */
-export const LOAD_SWITCH: LoadType[] = ['air_propeller', 'marine_propeller', 'shaft'];
+/** The load switch (owner 2026-10-25, one block with the cooling): what the motor drives.  The finer stored
+ *  types belong to a button and are kept as stored: a water-jet is a water propeller; a pump, an engine
+ *  driving a generator and a robot joint are a shaft. */
+export const LOAD_SWITCH: LoadType[] = ['air_propeller', 'marine_propeller', 'wheel', 'turbine', 'shaft'];
+const LOAD_GROUP: Partial<Record<string, LoadType>> = { water_jet: 'marine_propeller', pump: 'shaft', engine_driven_generator: 'shaft', robot_joint: 'shaft' };
+/** The switch button a stored load type sits under (null: nothing chosen yet, or a type no button covers). */
+export function loadGroup(stored: string | undefined): LoadType | null {
+  if (!stored || stored === 'unknown') return null;
+  return LOAD_SWITCH.includes(stored as LoadType) ? stored as LoadType : LOAD_GROUP[stored] ?? null;
+}
 export function loadSwitchChoices(stored: string | undefined): LoadType[] {
-  return stored && stored !== 'unknown' && !LOAD_SWITCH.includes(stored as LoadType) ? [...LOAD_SWITCH, stored as LoadType] : LOAD_SWITCH;
+  return stored && stored !== 'unknown' && !loadGroup(stored) ? [...LOAD_SWITCH, stored as LoadType] : LOAD_SWITCH;
+}
+
+/** Which motor cooling fits which load — every combination that occurs:
+ *   air propeller   : air (propeller wash over the motor) or liquid (jacket; the wash still blows over the housing)
+ *   water propeller : underwater (pod / rim drive, sea water carries the heat), liquid (inboard jacket), air (inboard bay)
+ *   wheel           : air (ram air from the ride) or liquid
+ *   turbine         : air (wind, ram air), underwater (hydro), liquid
+ *   shaft           : air (still air / fan), liquid (engine generators), underwater (submerged pumps, ROV joints)
+ *  Under water an air propeller or a wheel cannot run, so those pairs are refused. */
+export const LOAD_COOLING: Record<string, CoolingMedium[]> = {
+  air_propeller: ['air', 'liquid'],
+  marine_propeller: ['submerged', 'liquid', 'air'],
+  wheel: ['air', 'liquid'],
+  turbine: ['air', 'submerged', 'liquid'],
+  shaft: ['air', 'liquid', 'submerged'],
+};
+export function coolingChoices(loadType: string | undefined): CoolingMedium[] {
+  const group = loadGroup(loadType);
+  return group ? LOAD_COOLING[group] : COOLING_MEDIA;
+}
+/** The air the motor sees, by load: propeller wash only behind an air propeller, ram air only when the machine moves
+ *  through the air (wheel) or the wind drives it (turbine); still air and a fan everywhere. */
+const AIRFLOW_BY_LOAD: Record<string, string[]> = {
+  air_propeller: ['Propeller wash', 'Still air', 'Fan'],
+  wheel: ['Ram air', 'Still air', 'Fan'],
+  turbine: ['Ram air', 'Still air', 'Fan'],
+  marine_propeller: ['Still air', 'Fan'],
+  shaft: ['Still air', 'Fan'],
+};
+export function airflowSuggestions(list: Suggestion[] | undefined, loadType: string | undefined): Suggestion[] | undefined {
+  const group = loadGroup(loadType), allowed = group ? AIRFLOW_BY_LOAD[group] : null;
+  const valueOf = (s: Suggestion) => typeof s === 'object' ? s.value : s;
+  return list && allowed ? allowed.map((v) => list.find((s) => valueOf(s) === v)).filter((s): s is Suggestion => s !== undefined) : list;
+}
+/** The conditions shown for a medium under a load: an air propeller (or a ride, or the wind) still blows over a
+ *  liquid-cooled housing, so its airflow stays asked next to the coolant. */
+export function coolingPropertyIds(medium: CoolingMedium, loadType: string | undefined): string[] {
+  const group = loadGroup(loadType);
+  return medium === 'liquid' && (group === 'air_propeller' || group === 'wheel' || group === 'turbine')
+    ? [...COOLING_PROPERTIES.liquid, 'airflow'] : COOLING_PROPERTIES[medium];
+}
+const DEFAULT_COOLING: Record<string, { medium: CoolingMedium; airflow?: string }> = {
+  air_propeller: { medium: 'air', airflow: 'Propeller wash' },
+  marine_propeller: { medium: 'submerged' },
+  wheel: { medium: 'air', airflow: 'Ram air' },
+};
+/** The cooling answer after a load is chosen: a cooling that does not fit the load (or none) takes the load's
+ *  natural one (air propeller -> air, propeller wash; water propeller -> underwater; wheel -> air, ram air;
+ *  otherwise the first that fits once a misfit must go); an airflow mode the load cannot make (propeller wash
+ *  without an air propeller) takes the load's own.  Null when nothing changes. */
+export function coolingForLoad(cooling: unknown, loadType: string): Record<string, unknown> | null {
+  const v = cooling && typeof cooling === 'object' && !Array.isArray(cooling) ? cooling as Record<string, unknown> : {};
+  const group = loadGroup(loadType);
+  if (!group) return null;
+  const { medium } = coolingMedium(v), allowed = LOAD_COOLING[group], natural = DEFAULT_COOLING[group];
+  const target: CoolingMedium | null = medium && allowed.includes(medium) ? medium : natural?.medium ?? (medium ? allowed[0] : null);
+  if (!target) return null;
+  const airflow = v.airflow && typeof v.airflow === 'object' && !Array.isArray(v.airflow) ? v.airflow as Record<string, unknown> : {};
+  const shown = coolingPropertyIds(target, group).includes('airflow');
+  const mode = typeof airflow.mode === 'string' ? airflow.mode : '';
+  const modes = AIRFLOW_BY_LOAD[group];
+  const nextMode = !shown ? null : blank(mode) ? (natural?.airflow && (target === 'air' || group === 'air_propeller') ? natural.airflow : null)
+    : modes.some((m) => m.toLowerCase() === mode.trim().toLowerCase()) || !Object.values(AIRFLOW_BY_LOAD).flat().some((m) => m.toLowerCase() === mode.trim().toLowerCase())
+      ? null : natural?.airflow ?? modes[0];
+  if (target === v.cooling_medium && !nextMode) return null;
+  return { ...v, cooling_medium: target, ...(nextMode ? { airflow: { ...airflow, mode: nextMode } } : {}) };
 }
 
 /** A new load type through the load adapter, with the same reset LoadSection does: the curve source and the

@@ -40,11 +40,11 @@ test('each cooling medium lists only its own schema properties, and 3_1 is compl
   assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ airflow: { speed_mps: 5 } })), false);
 });
 
-test('the load switch offers air propeller / water propeller / shaft and keeps any other stored type', () => {
-  assert.deepEqual(C.loadSwitchChoices('air_propeller'), ['air_propeller', 'marine_propeller', 'shaft']);
-  assert.deepEqual(C.loadSwitchChoices('unknown'), ['air_propeller', 'marine_propeller', 'shaft']);
-  assert.deepEqual(C.loadSwitchChoices(undefined), ['air_propeller', 'marine_propeller', 'shaft']);
-  for (const other of ['wheel', 'pump', 'engine_driven_generator', 'turbine', 'robot_joint', 'water_jet']) assert.deepEqual(C.loadSwitchChoices(other), ['air_propeller', 'marine_propeller', 'shaft', other]);
+test('the load switch: five buttons; finer stored types sit under their button and stay stored', () => {
+  const five = ['air_propeller', 'marine_propeller', 'wheel', 'turbine', 'shaft'];
+  for (const stored of ['air_propeller', 'unknown', undefined, 'wheel', 'pump', 'engine_driven_generator', 'turbine', 'robot_joint', 'water_jet']) assert.deepEqual(C.loadSwitchChoices(stored), five);
+  assert.equal(C.loadGroup('engine_driven_generator'), 'shaft'); assert.equal(C.loadGroup('pump'), 'shaft'); assert.equal(C.loadGroup('robot_joint'), 'shaft');
+  assert.equal(C.loadGroup('water_jet'), 'marine_propeller'); assert.equal(C.loadGroup('unknown'), null); assert.equal(C.loadGroup(undefined), null);
   const options = field('load_type').options.map((o) => o.value);
   for (const type of C.LOAD_SWITCH) assert.ok(options.includes(type), type);
   assert.equal(en.load.types.shaft, 'Shaft (coupling / gearbox)'); assert.equal(zh.load.types.shaft, '轴输出（联轴器/齿轮箱）');
@@ -108,4 +108,60 @@ test('every schema suggestion has an EN value and both labels, and sits on a fre
       assert.equal(s.value, s.label.en, `${path}: the stored value is the EN label`);
     }
   }
+});
+
+test('load x cooling: every combination that occurs is offered, the impossible ones are not', () => {
+  assert.deepEqual(C.coolingChoices('air_propeller'), ['air', 'liquid']);            // the one refusal: never under water
+  assert.deepEqual(C.coolingChoices('wheel'), ['air', 'liquid', 'submerged']);        // submerged crawlers exist
+  assert.deepEqual(C.coolingChoices('marine_propeller'), ['submerged', 'liquid', 'air']);
+  assert.deepEqual(C.coolingChoices('water_jet'), ['submerged', 'liquid', 'air']);
+  assert.deepEqual(C.coolingChoices('turbine'), ['air', 'submerged', 'liquid']);
+  assert.deepEqual(C.coolingChoices('engine_driven_generator'), ['air', 'liquid', 'submerged']);
+  assert.deepEqual(C.coolingChoices(undefined), C.COOLING_MEDIA);
+  const modes = prop('3_1', 'airflow').properties.find((p) => p.id === 'mode').suggestions;
+  const v = (l) => C.airflowSuggestions(l, undefined) === l && l.map((s) => s.value);
+  assert.deepEqual(v(modes), ['Still air', 'Fan', 'Propeller wash', 'Ram air']);
+  assert.deepEqual(C.airflowSuggestions(modes, 'air_propeller').map((s) => s.value), ['Propeller wash', 'Ram air', 'Still air', 'Fan']);
+  assert.deepEqual(C.airflowSuggestions(modes, 'wheel').map((s) => s.value), ['Ram air', 'Still air', 'Fan']);
+  assert.deepEqual(C.airflowSuggestions(modes, 'shaft').map((s) => s.value), ['Still air', 'Fan', 'Ram air']);
+  assert.deepEqual(C.airflowSuggestions(modes, 'marine_propeller').map((s) => s.value), ['Still air', 'Fan']);
+  // an air propeller still blows over a liquid-cooled housing
+  assert.deepEqual(C.coolingPropertyIds('liquid', 'air_propeller'), [...C.COOLING_PROPERTIES.liquid, 'airflow']);
+  assert.deepEqual(C.coolingPropertyIds('liquid', 'shaft'), [...C.COOLING_PROPERTIES.liquid, 'airflow']);   // a fan over a jacket
+  // a liquid jacket inside a submerged pod: coolant AND the water around the pod
+  assert.deepEqual(C.coolingPropertyIds('liquid', 'marine_propeller'), [...C.COOLING_PROPERTIES.liquid, ...C.COOLING_PROPERTIES.submerged]);
+  assert.equal(C.naturalAirflow('liquid', 'air_propeller'), 'Propeller wash'); assert.equal(C.naturalAirflow('air', 'shaft'), null);
+  // airflow never hides a coolant circuit (Astra review 2026-10-25)
+  assert.deepEqual(C.coolingMedium({ cooling_type: 'Liquid jacket with fan airflow', coolant: 'Glycol', flow_rate: 5, airflow: { mode: 'Fan' } }), { medium: 'liquid', inferred: true });
+  assert.deepEqual(C.coolingMedium({ cooling_type: 'PPG loop, heat exchanger to seawater' }), { medium: 'liquid', inferred: true });
+  // a negated circuit ('no internal coolant loop') is not a loop (Astra re-review 2026-10-25)
+  assert.deepEqual(C.coolingMedium({ cooling_type: 'Heat rejected through the submerged housing; no internal coolant loop.', coolant: 'Sea water outside' }), { medium: 'submerged', inferred: true });
+});
+
+test('choosing a load settles the cooling it brings or cannot run with; a fitting choice is kept', () => {
+  // an air propeller with a misclicked "underwater" -> air + propeller wash
+  assert.deepEqual(C.coolingForLoad({ cooling_type: 'Air', cooling_medium: 'submerged', airflow: {} }, 'air_propeller'), { cooling_type: 'Air', cooling_medium: 'air', airflow: { mode: 'Propeller wash' } });
+  assert.deepEqual(C.coolingForLoad({}, 'air_propeller'), { cooling_medium: 'air', airflow: { mode: 'Propeller wash' } });
+  assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Propeller wash' } }, 'air_propeller'), null);
+  // liquid behind an air propeller is kept; the wash over the housing is filled in
+  assert.deepEqual(C.coolingForLoad({ cooling_medium: 'liquid', coolant: 'Water' }, 'air_propeller'), { cooling_medium: 'liquid', coolant: 'Water', airflow: { mode: 'Propeller wash' } });
+  // a pod motor: water propeller, sea water around the pod -> underwater confirmed (not the 'coolant' -> liquid guess)
+  assert.deepEqual(C.coolingForLoad({ cooling_type: 'Heat rejected through the submerged housing', coolant: 'Sea water outside' }, 'marine_propeller'), { cooling_type: 'Heat rejected through the submerged housing', coolant: 'Sea water outside', cooling_medium: 'submerged' });
+  // an engine-driven generator on a glycol jacket -> liquid kept
+  assert.equal(C.coolingForLoad({ cooling_medium: 'liquid', coolant: 'Glycol' }, 'engine_driven_generator'), null);
+  // propeller wash cannot exist without an air propeller: a wheel takes ram air; a typed own mode stays
+  assert.deepEqual(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Propeller wash', speed_mps: 8 } }, 'wheel'), { cooling_medium: 'air', airflow: { mode: 'Ram air', speed_mps: 8 } });
+  assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'duct from the radiator fan' } }, 'shaft'), null);
+  // a shaft with nothing chosen asks; a turbine keeps underwater (hydro)
+  assert.equal(C.coolingForLoad({}, 'shaft'), null);
+  assert.equal(C.coolingForLoad({ cooling_medium: 'submerged' }, 'turbine'), null);
+  // ICU single braces (i18n/core.ts uses ICU); '{{x}}' would print literally (Astra review 2026-10-25)
+  for (const m of [en.coolingMisfit, zh.coolingMisfit]) { assert.ok(m.includes('{medium}') && m.includes('{load}')); assert.ok(!m.includes('{{')); }
+});
+
+test('Astra review 2026-10-25: a submerged wheel stays submerged; a water-jet gets the propeller loads', () => {
+  assert.equal(C.coolingForLoad({ cooling_medium: 'submerged', depth_m: 20 }, 'wheel'), null);
+  const ids = ['axial_thrust_N', 'reverse_thrust_N', 'radial_load_N', 'bending_moment_Nm', 'gyroscopic_moment_Nm', 'tilt_rate'];
+  assert.deepEqual(C.loadPropertyIds('water_jet', ids, {}), ['axial_thrust_N', 'reverse_thrust_N', 'gyroscopic_moment_Nm', 'tilt_rate']);
+  assert.deepEqual(C.loadPropertyIds('engine_driven_generator', ids, {}), ['axial_thrust_N', 'radial_load_N', 'bending_moment_Nm']);
 });

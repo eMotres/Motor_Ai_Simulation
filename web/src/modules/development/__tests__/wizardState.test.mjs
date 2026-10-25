@@ -131,15 +131,14 @@ t('stored result kinds and temperature categories render through localized label
   }
 });
 
-t('schema card layout shows every field once and keeps production storage namespace', () => {
+t('schema card layout shows every page field once, production fields stay off the page', () => {
   const schema = JSON.parse(readFileSync('../src/motor_ai_sim/development/schema.json', 'utf8'));
   const cards = buildSpecificationCards(schema);
-  assert.deepEqual(cards.map((card) => card.id), ['key', 'requirements', 'mission', 'more', 'review']);
+  assert.deepEqual(cards.map((card) => card.id), ['key', 'requirements', 'mission', 'review']);
   const laidOut = cards.flatMap((card) => card.fields);
   const ids = laidOut.map((field) => field.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual([...ids].sort(), schema.sections.flatMap((s) => s.fields ?? []).map((f) => f.id).sort());
-  assert.ok(laidOut.filter((f) => f.storage_namespace === 'production').every((f) => cards.find((c) => c.fields.includes(f))?.id === 'more'));
+  assert.ok(laidOut.every((f) => f.storage_namespace !== 'production'));
 });
 
 t('local validation rejects nonfinite values, bad ranges and enum values while honoring conditional requirements', () => {
@@ -209,7 +208,10 @@ test('a stored range always reads as its maximum (one value, the worst case)', a
   assert.deepEqual(rangeWorst({ allow_range: true }, { minimum: 5, maximum: 10 }), { worst: 10, min: 5, max: 10 });
   // a limit (an allowed ripple) reads as its maximum too: the schema no longer marks any value `worst: "min"`
   assert.equal(rangeWorst({ allow_range: true, worst: 'min' }, { minimum: 1, maximum: 2 }).worst, 2);
-  assert.equal(rangeWorst({ allow_range: true }, { minimum: 3, maximum: null }).worst, 3);
+  // no maximum given: no worst value (the minimum is never shown as the maximum, Astra review 2026-10-25)
+  assert.equal(rangeWorst({ allow_range: true }, { minimum: 3, maximum: null }).worst, '');
+  const { keyNumber } = await import('../wizardState.ts');
+  assert.equal(keyNumber(5), 5); assert.equal(keyNumber({ minimum: 900, maximum: 1000 }), 1000); assert.equal(keyNumber({ minimum: 900 }), null); assert.equal(keyNumber('x'), null);
   assert.equal(rangeWorst({ allow_range: true }, { minimum: null, maximum: null }).worst, '');
   assert.equal(rangeWorst({ allow_range: true }, 7), null);
   assert.equal(rangeWorst({}, { minimum: 1, maximum: 2 }), null);

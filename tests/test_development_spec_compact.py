@@ -251,3 +251,48 @@ def test_cooling_medium_shaft_and_free_text_beside_the_menus_validate():
                 {"3_1": {"status": "filled", "value": {"depth_m": -1}}}):
         with pytest.raises(ValueError):
             models.normalize_draft({"schema_version": 2, "fields": bad})
+
+
+def _load_cooling_draft(load, cooling):
+    return {"schema_version": 2, "fields": {"load_type": {"status": "filled", "value": load},
+                                            "3_1": {"status": "filled", "value": cooling}}}
+
+
+def test_load_cooling_refuses_what_cannot_occur():
+    # owner 2026-10-25: an air propeller never runs under water; propeller wash needs an air propeller
+    errs = models.cooling_load_errors(_load_cooling_draft("air_propeller", {"cooling_medium": "submerged"}))
+    assert [e["field"] for e in errs] == ["3_1.cooling_medium"]
+    errs = models.cooling_load_errors(_load_cooling_draft("wheel", {"cooling_medium": "air", "airflow": {"mode": "Propeller wash"}}))
+    assert [e["field"] for e in errs] == ["3_1.airflow.mode"]
+    # what does occur passes: submerged wheel, liquid behind an air propeller with its wash, an engine generator on a jacket
+    for load, cooling in (("wheel", {"cooling_medium": "submerged"}),
+                          ("air_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}}),
+                          ("engine_driven_generator", {"cooling_medium": "liquid", "coolant": "Glycol"}),
+                          ("water_jet", {"cooling_medium": "submerged"}),
+                          ("shaft", {"cooling_medium": "air", "airflow": {"mode": "duct from the radiator fan"}})):
+        assert models.cooling_load_errors(_load_cooling_draft(load, cooling)) == [], (load, cooling)
+    # nothing is judged before a load is chosen
+    assert models.cooling_load_errors(_load_cooling_draft(None, {"cooling_medium": "submerged"})) == []
+
+
+def test_load_cooling_misfit_blocks_submit_and_completeness():
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    assert any(e["field"] == "3_1.cooling_medium" for e in models.validation_errors(draft))
+    ok = _load_cooling_draft("air_propeller", {"cooling_medium": "air", "airflow": {"mode": "Propeller wash"}})
+    assert not any(e["field"].startswith("3_1") for e in models.validation_errors(ok))
+
+
+def test_load_cooling_judges_only_active_answers():
+    # Astra re-review 2026-10-25: a retained (not_known_yet) cooling or load is not judged
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    draft["fields"]["3_1"]["status"] = "not_known_yet"
+    assert models.cooling_load_errors(draft) == []
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    draft["fields"]["load_type"]["status"] = "not_known_yet"
+    assert models.cooling_load_errors(draft) == []
+    # a hidden airflow from the air-propeller days does not block a water propeller with a liquid jacket
+    draft = _load_cooling_draft("marine_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}})
+    assert models.cooling_load_errors(draft) == []
+    # nor under water
+    draft = _load_cooling_draft("wheel", {"cooling_medium": "submerged", "airflow": {"mode": "Propeller wash"}})
+    assert models.cooling_load_errors(draft) == []

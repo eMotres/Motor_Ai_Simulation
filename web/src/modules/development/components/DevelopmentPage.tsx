@@ -1,32 +1,30 @@
 import { deliveryConflicts, matchesFieldReference, productionFallback } from '../reviewPresentation';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
-  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
-  Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
+  Divider, FormControlLabel, IconButton, Menu, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
   Tooltip, Typography, Checkbox,
 } from '@mui/material';
   import AddIcon from '@mui/icons-material/Add';
   import ArrowBackIcon from '@mui/icons-material/ArrowBack';
   import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-  import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
   import HourglassFullIcon from '@mui/icons-material/HourglassFull';
   import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
   import { BatteryInputs, type Battery } from '../../../components/compare/BatteryPanel';
-  import { specBatteryChemistry, specBatteryFieldEdit, specBatteryView } from '../specBattery';
+  import { SPEC_PACK_PROP, specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView } from '../specBattery';
   import HelpTip from '../../../components/common/HelpTip';
   import { useAuth } from '../../../contexts/AuthContext';
   import { useTranslation } from 'react-i18next';
   import { developmentApi, DevelopmentApiError } from '../api';
   import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SchemaSuggestion, SpecSnapshot, SpecState } from '../types';
-  import LoadSection from './LoadSection';
   import MissionProfileEditor from './MissionProfileEditor';
   import type { LoadType, MissionRow } from '../missionProfileState';
-  import { COOLING_MEDIA, COOLING_PROPERTIES, coolingMedium, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
+  import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
-  import { buildSpecificationCards, cardIndexForField, LOAD_FIELDS, MORE_FIRST_FIELDS, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
+  import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, keyNumber, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
@@ -63,7 +61,6 @@ const readableRange = (value: unknown): string => {
   const hi = range.maximum ?? range.max ?? range.to;
   return lo == null && hi == null ? '' : `${lo ?? '—'}–${hi ?? '—'}`;
 };
-const finiteScalar = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const blankValue = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && !value.trim());
 /** A stored answer holds something worth showing (a value, or an explicit "not known yet"). */
 const hasStoredAnswer = (raw: unknown) => {
@@ -108,8 +105,9 @@ export default function DevelopmentPage() {
   const [migrationOpen, setMigrationOpen] = useState(false);
   const [migrationAck, setMigrationAck] = useState(false);
   const [migrationBusy, setMigrationBusy] = useState(false);
+  const [extraLoadProps, setExtraLoadProps] = useState<string[]>([]);
+  const [addLoadAnchor, setAddLoadAnchor] = useState<HTMLElement | null>(null);
   const [step, setStep] = useState(0);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [submitError, setSubmitError] = useState<string[]>([]);
@@ -188,7 +186,7 @@ export default function DevelopmentPage() {
     }
     if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
-    setSelected(p); setView('specification'); setStep(0); setMoreOpen(false); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
+    setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
     setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
@@ -355,17 +353,14 @@ export default function DevelopmentPage() {
     const card = sections[index];
     if (!card) return;
     setStep(index);
-    const opening = card.id === 'more' && !moreOpen;
-    if (card.id === 'more') setMoreOpen(true);
-    setTimeout(() => document.getElementById(`spec-card-${card.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), opening ? 320 : 0);
+    setTimeout(() => document.getElementById(`spec-card-${card.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
-  /** Scroll to a field (opening "More details" first when it holds it) and focus its first input. */
+  /** Scroll to a field and focus its first input (a field that is not on the page is not revealed). */
   const revealField = (fieldId: string) => {
     const index = cardIndexForField(sections, fieldId);
     if (index < 0) return;
-    const opening = sections[index].id === 'more' && !moreOpen;
     showCard(index);
-    setTimeout(() => document.getElementById(`spec-field-${fieldId}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus(), opening ? 360 : 0);
+    setTimeout(() => document.getElementById(`spec-field-${fieldId}`)?.querySelector<HTMLElement>('input,textarea,[role="combobox"]')?.focus(), 0);
   };
   const onSubmitSpec = async () => {
     if (!selected || !spec) return;
@@ -530,7 +525,10 @@ export default function DevelopmentPage() {
   const openCount = (ref: string) => messages.filter((m) => !m.resolved && matchesFieldReference(m.field_ref, ref)).length;
   /** The field comment icon only appears while that field has open comments (the card's icon starts new ones). */
   const commentIcon = (ref: string) => { const open = openCount(ref); return open > 0 ? <Tooltip title={`${tr('fieldReview')} (${open})`}><IconButton size="small" aria-label={tr('fieldReview')} onClick={() => openFieldReview(ref)} sx={{ p: 0.3, color: 'primary.main' }}><ChatBubbleOutlineIcon sx={{ fontSize: 14 }} /><Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{open}</Box></IconButton></Tooltip> : null; };
-  const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
+  // The "not known yet" hourglass sits only on an EMPTY field (to mark it) or a marked one (to unmark it); a filled field shows none.
+  const fieldFilled = (f: SchemaField, prod: boolean) => f.id === 'mission_profile' ? (draftRef.current.mission_profile?.length ?? 0) > 0
+    : hasStoredAnswer(((prod ? (draftRef.current.production as Record<string, unknown>) : draftRef.current.fields) ?? {})[f.id]);
+  const unknownToggle = (f: SchemaField, unknown: boolean, prod: boolean) => f.allow_not_known_yet === false || (!unknown && fieldFilled(f, prod)) ? null : <Tooltip title={tr('wizard.notKnownYet')}><span><IconButton size="small" aria-label={`${tr('wizard.notKnownYet')}: ${label(f.short_label ?? f.label)}`} aria-pressed={unknown} disabled={!canEditSpec || busy || migrationBusy} onClick={() => markUnknown(f, !unknown, prod)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>;
   const fieldRefFor = (f: SpecificationField, prod: boolean) => `${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`;
   /** Label (help text as its tooltip), required mark, the "not known yet" toggle and open comments. */
   const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string, extra: string[] = []) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'wrap' }}><Tooltip title={extra.length ? <>{label(f.help ?? f.label)}{extra.map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(f.help ?? f.label)}><Typography tabIndex={0} sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{commentIcon(fieldRefFor(f, prod))}</Stack>;
@@ -564,7 +562,8 @@ export default function DevelopmentPage() {
     const options = f.options ?? f.choices;
     const objectValue = objectOf(answer.value);
     // the ambient block states the maximum first: every calculation uses it
-    const properties = f.id === '3_2' && f.properties ? [...f.properties].sort((a, b) => Number(b.id === 'temperature_max_C') - Number(a.id === 'temperature_max_C')) : f.properties;
+    // ambient: ONE value, the maximum (owner 2026-10-25: no min/max pairs); a stored minimum stays in the data, not on screen
+    const properties = f.id === '3_2' && f.properties ? f.properties.filter((p) => p.id !== 'temperature_min_C') : f.properties;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
@@ -591,6 +590,7 @@ export default function DevelopmentPage() {
   };
   /** Continuous S1 and peak in one small table: Power / Torque / Speed / Duration / Repeat period. */
   const KEY_COLUMNS: Array<{ id: string; title: string }> = [{ id: 'power', title: tr('keyPoints.power') }, { id: 'torque_Nm', title: tr('keyPoints.torque') }, { id: 'speed_rpm', title: tr('keyPoints.speed') }, { id: 'duration_s', title: tr('keyPoints.duration') }, { id: 'period_s', title: tr('keyPoints.period') }];
+  // power_basis is never shown: every key-point power is shaft power, T·ω (owner 2026-10-25); a stored basis stays readable in the data
   const KEY_HANDLED = new Set(['power_W', 'shaft_power_W', 'output_power_W', 'torque_Nm', 'speed_rpm', 'duration_s', 'period_s', 'power_basis', 'frequency']);
   const keyPointsTable = (rows: SpecificationField[]) => {
     const v2 = (spec?.schema_version ?? 1) >= 2;
@@ -605,11 +605,17 @@ export default function DevelopmentPage() {
         // S1 and peak read the same way (owner 2026-10-25): with torque and speed given the power IS T·ω, shown
         // read-only; a stated power is editable only when there is no torque/speed pair to derive it from.
         const stated = prop('power_W') ?? prop('output_power_W');
-        const torque = finiteScalar(obj.torque_Nm), speed = finiteScalar(obj.speed_rpm);
+        const torque = keyNumber(obj.torque_Nm), speed = keyNumber(obj.speed_rpm);
         const derived = v2 && torque != null && speed != null ? torque * 2 * Math.PI * speed / 60 : null;
-        if (derived != null && (!stated || blankValue(obj[stated.id]))) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
+        // with torque and speed the power IS T*omega at the shaft, whatever power was stated before (Astra review 2026-10-25)
+        if (derived != null) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
         if (!stated) return dash;
-        return <Tooltip title={derived != null ? tr('keyPoints.derived', { value: watts(derived) }) : ''}><Box>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
+        // a power stated without torque/speed: editable; a stored non-shaft basis is named in the tooltip, never relabelled
+        const basisProp = prop('power_basis'), basis = typeof obj.power_basis === 'string' && obj.power_basis && obj.power_basis !== 'shaft' ? obj.power_basis : '';
+        const basisLabel = basis ? label(basisProp?.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === basis)?.label) || basis : '';
+        // typing a power states it as SHAFT power (owner: key-point power is always shaft power); the old basis is only named
+        const editPower = (value: unknown) => setAnswer(f, { ...obj, [stated.id]: value, ...(basis ? { power_basis: 'shaft' } : {}) });
+        return <Tooltip title={basis ? tr('keyPoints.statedBasis', { basis: basisLabel }) : tr('wizard.s1Formula')}><Box>{renderTypedValue(stated, obj[stated.id], editPower, `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
       }
       const p = prop(column);
       return p ? renderTypedValue(p, obj[column], edit(column), `${f.id}-${column}`, unknown, true) : dash;
@@ -623,7 +629,7 @@ export default function DevelopmentPage() {
         </Box>; })}
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 1, alignItems: 'flex-end' }}>
-        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'power_basis' ? (!blankValue(obj.power_basis) || (finiteScalar(obj.torque_Nm) == null && !blankValue(obj.power_W))) : p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
+        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
       </Box>
     </Box>;
   };
@@ -638,31 +644,48 @@ export default function DevelopmentPage() {
     return <Box id={`spec-field-${f.id}`} sx={{ minWidth: 0, p: '10px 12px', border: '1px solid var(--line-soft)', borderRadius: '8px', bgcolor: 'var(--panel-2)' }}>
       <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown, undefined, [tr('wizard.packStated')])} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
-        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
+        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => { const volt = (Object.keys(SPEC_PACK_PROP) as Array<'min' | 'nom' | 'max'>).find((k) => SPEC_PACK_PROP[k] === p.id); return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => volt ? setAnswer(f, specBatteryPackEdit(obj, volt, value, allowed)) : setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}
       </Box>
       {fieldMessages(f, answer, required)}
     </Box>;
   };
   const propertyGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;
   const switchButton = { textTransform: 'none', px: 1.5, py: 0.4, fontSize: 12 } as const;
-  /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`); each medium shows only its own conditions and the
-   *  other media's values stay stored. Unset, the medium the stored values imply is shown, written only on a click. */
-  const renderCooling = (f: SpecificationField) => {
+  /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`) under the chosen load: a medium the load cannot run in
+   *  is disabled (an air propeller never runs under water), each medium shows its own conditions (+ the airflow the load
+   *  still blows over a liquid-cooled housing) and the airflow menu offers only what the load makes. The other media's
+   *  values stay stored. Unset, the medium the stored values imply is shown, written only on a click. */
+  const renderCooling = (f: SpecificationField, loadType?: string) => {
     const prop = (id: string) => f.properties?.find((p) => p.id === id);
     const mediumProp = prop('cooling_medium');
     if (!mediumProp) return renderField(f, false, false);
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current), airflow = objectOf(obj.airflow);
     const { medium, inferred } = coolingMedium(obj);
-    const pick = (next: CoolingMedium | null) => { const target = next ?? (inferred ? medium : null); if (target && target !== obj.cooling_medium) setProperty(f, false, obj, 'cooling_medium', target); };
+    const fits = coolingChoices(loadType), misfit = medium != null && !fits.includes(medium);
+    const mediumLabel = (m: CoolingMedium) => label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m;
+    const pick = (next: CoolingMedium | null) => {
+      const target = next ?? (inferred ? medium : null);
+      if (!target || target === obj.cooling_medium) return;
+      const mode = naturalAirflow(target, loadType);
+      setAnswer(f, { ...obj, cooling_medium: target, ...(mode && blankValue(airflow.mode) ? { airflow: { ...airflow, mode } } : {}) });
+    };
+    // what the switch cannot show stays readable in its tooltip: the customer's own cooling description and a stored
+    // coolant text the shown form hides (Astra review 2026-10-25: a circuit description, a sea-water coolant)
+    const hiddenText = [obj.cooling_type, medium && !coolingPropertyIds(medium, loadType).includes('coolant') ? obj.coolant : null]
+      .filter((t): t is string => typeof t === 'string' && !!t.trim());
+    const switchTip = [...(inferred ? [tr('coolingInferred')] : []), ...hiddenText];
     const cell = (p: NonNullable<SpecificationField['properties']>[number], value: unknown, update: (next: unknown) => void) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, value, update, `${f.id}-${p.id}`, unknown)}</Box>;
-    const shown = medium ? COOLING_PROPERTIES[medium].map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
+    const shown = medium ? coolingPropertyIds(medium, loadType).map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
+    const loadName = loadType && loadType !== 'unknown' ? tr(`load.types.${loadType}`) : '';
     return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, required, unknown)}
       <Stack spacing={0.8}>
-        <Tooltip title={inferred ? tr('coolingInferred') : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} sx={switchButton}>{label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
-        {(shown.length > 0 || !blankValue(obj.cooling_type)) && <Box sx={propertyGrid}>
-          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
-          {!blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
+        <Tooltip title={switchTip.length ? <>{switchTip.map((t, i) => <Fragment key={i}>{i > 0 && <br />}{t}</Fragment>)}</> : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr('coolingMisfit', { medium: mediumLabel(m), load: loadName }) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
+        {misfit && <Alert severity="error" sx={{ py: 0 }}>{tr('coolingMisfit', { medium: mediumLabel(medium!), load: loadName })}</Alert>}
+        {(shown.length > 0 || (!medium && !blankValue(obj.cooling_type))) && <Box sx={propertyGrid}>
+          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub.id === 'mode' ? { ...sub, suggestions: airflowSuggestions(sub.suggestions, loadType) } : sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
+          {/* the old free-text type only while the switch cannot tell the medium; otherwise it repeats the switch (owner 2026-10-25) */}
+          {!medium && !blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
         </Box>}
         {fieldMessages(f, answer, required)}
       </Stack>
@@ -671,26 +694,40 @@ export default function DevelopmentPage() {
   /** 4_6 for the chosen load: the axial load first and required, the propeller or shaft loads, any other load only while it holds a value. */
   const renderLoads = (f: SpecificationField, loadType: string) => {
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
-    const shown = loadPropertyIds(loadType, (f.properties ?? []).map((p) => p.id), obj).map((id) => f.properties!.find((p) => p.id === id)!);
+    const ids = loadPropertyIds(loadType, (f.properties ?? []).map((p) => p.id), obj);
+    const shownIds = [...ids, ...extraLoadProps.filter((id) => !ids.includes(id))];
+    const shown = shownIds.map((id) => f.properties!.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+    const addable = (f.properties ?? []).filter((p) => !shownIds.includes(p.id));
     return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, required, unknown)}
-      <Box sx={propertyGrid}>{shown.map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p, p.id === 'axial_thrust_N')}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}</Box>
+      <Box sx={propertyGrid}>{shown.map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p, p.id === 'axial_thrust_N')}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
+        {addable.length > 0 && canEditSpec && !unknown && <Box sx={{ alignSelf: 'end' }}><Tooltip title={tr('addLoadComponent')}><IconButton size="small" aria-label={tr('addLoadComponent')} onClick={(e) => setAddLoadAnchor(e.currentTarget)}><AddIcon sx={{ fontSize: 18 }} /></IconButton></Tooltip>
+          <Menu anchorEl={addLoadAnchor} open={!!addLoadAnchor} onClose={() => setAddLoadAnchor(null)}>{addable.map((p) => <MenuItem key={p.id} onClick={() => { setExtraLoadProps((list) => [...list, p.id]); setAddLoadAnchor(null); }}>{label(p.label)}</MenuItem>)}</Menu></Box>}
+      </Box>
       {fieldMessages(f, answer, required)}
     </Box>;
   };
-  /** The load as a switch Air propeller / Water propeller / Shaft (any other stored type stays, shown selected), changed
-   *  through the load adapter with LoadSection's reset; the loads 4_6 directly under it. */
-  const renderLoadSwitch = (loads: SpecificationField) => {
+  /** The load as a switch Air propeller / Water propeller / Wheel / Turbine / Shaft (a finer stored type — water-jet, pump,
+   *  engine-driven generator, robot joint — sits under its button and is kept; it is named in the tooltip), changed
+   *  through the load adapter with LoadSection's reset. A load also settles the cooling it cannot run with
+   *  (`coolingForLoad`): an air propeller brings air + propeller wash, a water propeller underwater, a wheel ram air. */
+  const renderLoadType = (cooling: SpecificationField | undefined) => {
     const typeField = sections.flatMap((section) => section.fields).find((f) => f.id === 'load_type');
-    if (!typeField) return renderField(loads);
+    if (!typeField) return null;
     const load = readLoadDraft(draftRef.current), typeUnknown = load.answer_status?.load_type === 'not_known_yet';
-    return <Stack spacing={1.2} sx={{ minWidth: 0, mb: 1.5 }}>
-      <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
-        {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
-        <ToggleButtonGroup size="small" exclusive value={load.load_type === 'unknown' ? null : load.load_type} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => { if (next) updateDraft((d) => writeLoadDraft(d, withLoadType(readLoadDraft(d), next))); }} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
-      </Box>
-      {renderLoads(loads, load.load_type)}
-    </Stack>;
+    const group = loadGroup(load.load_type), finer = group && group !== load.load_type ? tr(`load.types.${load.load_type}`) : '';
+    const choose = (next: LoadType | null) => {
+      if (!next) return;
+      updateDraft((d) => writeLoadDraft(d, withLoadType(readLoadDraft(d), next)));
+      if (cooling && storedAnswer(cooling, false).status !== 'not_known_yet') {
+        const nextCooling = coolingForLoad(storedAnswer(cooling, false).value, next);
+        if (nextCooling) setAnswer(cooling, nextCooling);
+      }
+    };
+    return <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
+      {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
+      <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={type === group && finer ? finer : undefined} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
+    </Box>;
   };
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
@@ -718,28 +755,27 @@ export default function DevelopmentPage() {
           </Paper>
           <Box sx={{ minWidth: 0 }}>
             <Box sx={{ display: { xs: 'flex', md: 'none' }, overflowX: 'auto', gap: 0.4, mb: 1, borderBottom: '1px solid var(--line-soft)' }}>{sections.map((s, i) => <Button key={s.id} size="small" onClick={() => showCard(i)} sx={{ flex: '0 0 auto', color: step === i ? 'primary.main' : 'var(--text-2)', borderBottom: step === i ? '2px solid var(--brand)' : '2px solid transparent', borderRadius: 0, textTransform: 'none', fontSize: 11, whiteSpace: 'nowrap' }}>{i + 1} {sectionTitle(s.title)}</Button>)}</Box>
-            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const byId = (id: string) => section.fields.find((f) => f.id === id);                const sectionComments = messages.filter((message) => !message.resolved && sectionCommentRefs(section).includes(message.field_ref ?? ''));                const v2 = (spec.schema_version ?? 1) >= 2;                const grid = { display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: '12px', [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;                const more = section.id === 'more';                const storedInMore = more ? section.fields.filter((f) => hasStoredAnswer((f.storage_namespace === 'production' ? (draftRef.current.production as Record<string, unknown> | undefined) : draftRef.current.fields)?.[f.id])).length : 0;                const header = <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: more && !moreOpen ? 0 : '11px' }}>{more ? <Button onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen} aria-controls="spec-more-details" endIcon={<ExpandMoreIcon sx={{ transform: moreOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />} sx={{ flex: 1, justifyContent: 'flex-start', p: 0, minWidth: 0, textTransform: 'none', color: 'var(--text-0)', fontWeight: 700, fontSize: 14 }}>{sectionTitle(section.title)}<Typography component="span" sx={{ ml: 1, fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>{tr('wizard.moreFilled', { count: storedInMore })}</Typography></Button> : <Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography>}<Tooltip title={tr('sectionReview')}><IconButton size="small" aria-label={`${tr('sectionReview')}: ${sectionTitle(section.title)}`} onClick={() => openFieldReview(`section:${section.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', p: 0.5 }}><ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{sectionComments.length}</Box>}</IconButton></Tooltip></Box>;                return <Paper elevation={0} id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: '12px', md: '14px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>
+            <Stack spacing={1.5} sx={{ minWidth: 0 }}>              {sections.map((section) => {                const byId = (id: string) => section.fields.find((f) => f.id === id);                const sectionComments = messages.filter((message) => !message.resolved && sectionCommentRefs(section).includes(message.field_ref ?? ''));                const v2 = (spec.schema_version ?? 1) >= 2;                const grid = { display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: '12px', [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;                                                const header = <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: '11px' }}><Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: 'var(--text-0)' }}>{sectionTitle(section.title)}</Typography><Tooltip title={tr('sectionReview')}><IconButton size="small" aria-label={`${tr('sectionReview')}: ${sectionTitle(section.title)}`} onClick={() => openFieldReview(`section:${section.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', p: 0.5 }}><ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{sectionComments.length}</Box>}</IconButton></Tooltip></Box>;                return <Paper elevation={0} id={`spec-card-${section.id}`} key={section.id} sx={{ p: { xs: '12px', md: '14px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', boxShadow: 'none' }}>
                   {header}
                   {section.id === 'key' && <Stack spacing={1.5} sx={{ minWidth: 0 }}>
                     {byId('1_1') && renderField(byId('1_1')!)}
                     {keyPointsTable(['1_4', '1_5'].map(byId).filter((f): f is SpecificationField => !!f))}
                     {byId('2_1') && renderBattery(byId('2_1')!)}
-                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>{['3_1', '3_2'].map(byId).filter((f): f is SpecificationField => !!f).map((f) => f.id === '3_1' ? renderCooling(f) : renderField(f, false, false))}</Box>
-                    {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2'].includes(f.id)).map((f) => renderField(f))}
+                    {/* load and cooling as ONE block (owner 2026-10-25): what the motor drives decides which cooling can occur */}
+                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>
+                      {byId('3_1') && <Stack spacing={1.2} sx={{ minWidth: 0 }}>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</Stack>}
+                      {byId('3_2') && renderField(byId('3_2')!, false, false)}
+                    </Box>
+                    {section.fields.filter((f) => !['1_1', '1_4', '1_5', '2_1', '3_1', '3_2', 'load_type'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>
-                    {byId('4_6') && renderLoadSwitch(byId('4_6')!)}
+                    {byId('4_6') && <Box sx={{ mb: 1.5 }}>{renderLoads(byId('4_6')!, readLoadDraft(draftRef.current).load_type)}</Box>}
                     <Box sx={grid}>{section.fields.filter((f) => !SECOND_TIER_FIELDS.includes(f.id) && f.id !== '4_6').map((f) => renderField(f))}</Box>
                     {deliveryConflicts(draftRef.current).length > 0 && <Alert severity="warning" sx={{ mt: 1 }}>{tr('deliveryConflict')}</Alert>}
                     {section.fields.some((f) => SECOND_TIER_FIELDS.includes(f.id)) && <><Divider sx={{ my: 1.5 }} /><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.secondTier')}</Typography><Box sx={grid}>{section.fields.filter((f) => SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box></>}
                   </>}
                   {section.id === 'mission' && (!v2 ? <MissionProfile draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' }))} label={tr('wizard.mission')} columns={section.fields.find((field) => field.id === 'mission_profile')?.columns ?? []} /> : <MissionProfileEditor rows={(draftRef.current.mission_profile ?? []) as unknown as MissionRow[]} load={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} onReview={openFieldReview} unknown={draftRef.current.mission_profile_status === 'not_known_yet'} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' }))} t={tr} />)}
-                  {more && <Collapse in={moreOpen} id="spec-more-details"><Stack spacing={1.5} sx={{ minWidth: 0 }}>
-                    <Box sx={grid}>{section.fields.filter((f) => MORE_FIRST_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {(section.fields.some((f) => LOAD_FIELDS.includes(f.id)) || !v2) && <Box><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.load')}</Typography>{!v2 ? <Alert severity="info">{tr('newLoadNotice')}</Alert> : <LoadSection value={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} engineerView={canEditProject} hideType onReview={openFieldReview} getOpenReviewCount={openCount} onChange={(v) => updateDraft((d) => writeLoadDraft(d, v))} t={tr} locale={lang} />}</Box>}
-                    <Box sx={grid}>{section.fields.filter((f) => f.storage_namespace !== 'production' && !MORE_FIRST_FIELDS.includes(f.id) && !LOAD_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
-                    {section.fields.some((f) => f.storage_namespace === 'production') && <Box><Tooltip title={tr('productionTip')}><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.productionPlan')}</Typography></Tooltip><Box sx={grid}>{section.fields.filter((f) => f.storage_namespace === 'production').map((f) => renderField(f, true))}</Box></Box>}
-                  </Stack></Collapse>}
+                  
                   {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tr('wizard.reviewHint')}</Typography>{submitError.map((x, i) => <Alert key={i} severity="error">{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} /><Button variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></Stack>}
                 </Paper>;              })}            </Stack>
           </Box>

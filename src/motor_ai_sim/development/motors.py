@@ -1449,6 +1449,104 @@ def project_motor_points(project_id: str, request: Request, die: str | None = No
             "selected": {"die": selected["die"], "config": selected["config"]} if selected else None}
 
 
+def configure_duties_for_motor(die: str, config: str, cfg: dict, cfg_path: Path,
+                               authorization: str | None) -> set[str]:
+    """Duties that open through a FULL passport in Configure for this ONE motor (empty = points-limited).
+
+    The same rule the project list uses (``_configure_reference_duties``), for a single motor and with its own
+    per-call caches.  Never raises: an unreadable reference list simply means no full passport.
+    """
+    try:
+        from motor_ai_sim.routes import catalog as catalog_routes
+        from motor_ai_sim import motor_access
+        references = catalog_routes.get_references(authorization).get("motors", [])
+        catalog_access = motor_access.catalog_access(authorization)
+        return _configure_reference_duties(die, config, cfg, cfg_path, references, catalog_access, authorization, {}, {})
+    except Exception:
+        return set()
+
+
+def motor_view_for(open_die: str, config: str, cfg_path: Path, cfg: dict, authorization: str | None) -> dict:
+    """The read-only view of one motor (see ``development.motor_view``); the caller has already passed the gate."""
+    from motor_ai_sim import duty_fields, duty_results
+    from motor_ai_sim.development import motor_view
+    try:
+        stored = duty_results.get(open_die, config) or {}
+    except Exception:
+        stored = {}
+    try:
+        fields = duty_fields.have(open_die, config) or {}
+    except Exception:
+        fields = {}
+    rows = _results(open_die, config, cfg, stored, set())
+    configure = configure_duties_for_motor(open_die, config, cfg, cfg_path, authorization)
+    for row in rows:
+        row["can_open_configure"] = row["duty"] in configure
+    return motor_view.build_view(open_die, config, rows, stored, fields, configure)
+
+
+def _project_motor(project_id: str, request: Request, die: str, config: str, show_all: bool):
+    """Resolve one linked project motor through the SAME gates as the project motor list.
+
+    Returns ``(user, role, open_die, config, cfg_path, cfg, link)``; 404 when the motor is not linked to this
+    project (trial variants only with ``show_all``) or the caller has no grant on it.
+    """
+    user, project, role = access.require_project(request, project_id)
+    from motor_ai_sim.routes import family
+    ident = _identity(request)
+    authorization = request.headers.get("authorization")
+    project_motor_index = (_index().get("motors") or {})
+    entries_cache: list = []
+    wanted = _key(die, config)
+    for link in project.get("linked_motors", []):
+        if not isinstance(link, dict):
+            continue
+        canonical, cfg_name = str(link.get("die") or ""), str(link.get("config") or "")
+        status = str(link.get("status") or "current")
+        if status == "trial" and not show_all:
+            continue
+        row = project_motor_index.get(_key(canonical, cfg_name))
+        if not isinstance(row, dict) or row.get("project_id") != project_id:
+            continue
+        open_die = _open_die_name(canonical, ident, family, entries_cache)
+        if wanted not in {_key(open_die, cfg_name), _key(canonical, cfg_name)}:
+            continue
+        try:
+            family._require_die_access(open_die, authorization, cfg_name)
+            cfg_path = Path(str(family._cfg_file(open_die, cfg_name))).resolve(strict=True)
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            break
+        return user, role, open_die, cfg_name, cfg_path, cfg, link
+    raise HTTPException(404, detail="Motor variant not found in this project")
+
+
+@router.get("/view")
+def project_motor_view(project_id: str, request: Request, die: str, config: str, show_all: bool = False):
+    """Everything stored for one project motor: EM numbers, thermal, mechanical, field availability (read-only)."""
+    user, role, open_die, cfg_name, cfg_path, cfg, _link = _project_motor(project_id, request, die, config, show_all)
+    view = motor_view_for(open_die, cfg_name, cfg_path, cfg, request.headers.get("authorization"))
+    if role == "customer" and not access.is_engineer(user):
+        store.append_audit(project_id, str(user.get("email") or ""), "motor.view.read", "motor", f"{open_die}/{cfg_name}")
+    return view
+
+
+@router.get("/field")
+def project_motor_field(project_id: str, request: Request, die: str, config: str, duty: str, kind: str,
+                        show_all: bool = False):
+    """One stored field map of a project motor's duty (404 when it was never computed)."""
+    from motor_ai_sim.development import motor_view
+    user, role, open_die, cfg_name, _path, cfg, _link = _project_motor(project_id, request, die, config, show_all)
+    if kind not in motor_view.FIELD_KINDS:
+        raise HTTPException(400, detail="Unknown field kind")
+    if duty not in {str(d.get("name")) for d in cfg.get("duties", []) if isinstance(d, dict)}:
+        raise HTTPException(404, detail="Duty not found")
+    payload = motor_view.field_payload(open_die, cfg_name, duty, kind)
+    if payload is None:
+        raise HTTPException(404, detail="Not computed")
+    return payload
+
+
 @router.patch("/note")
 def update_project_motor_note(project_id: str, req: MotorNoteUpdate, request: Request):
     """Set the short design-step note shown to the customer next to a variant (engineer/owner/admin only)."""

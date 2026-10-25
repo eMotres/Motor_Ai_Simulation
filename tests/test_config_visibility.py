@@ -325,6 +325,9 @@ READ_ROUTES = {          # (method, path template) -> request builder key
     ("GET", "/api/family/die/{die}/part_materials"): "query-config",
     ("GET", "/api/family/die/{die}/part_tree"): "query-config",
     ("GET", "/api/family/config/{die}/{cfg}/cad_params"): "plain",
+    # the Motors-tab read-only view of stored results (tests/test_motor_view.py): gated by the app-wide path gate
+    ("GET", "/api/motor-view/{die}/{cfg}"): "plain",
+    ("GET", "/api/motor-view/{die}/{cfg}/{duty}/field/{kind}"): "plain",
 }
 WRITE_ROUTES = {         # layered-only (a registered account writes into its own workspace); flat = admin-only
     ("PATCH", "/api/family/config/{die}/{cfg}"): {"name": "Lx"},
@@ -377,6 +380,12 @@ NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog conf
     ("POST", "/api/family/save_as_new_die"), ("POST", "/api/optimization/saved"),
     ("POST", "/api/family/duplicate"),
     ("PUT", "/api/admin/dies/{die}/configs/{cfg}/access"),         # admin-only toggle, tested below
+    # project motor links: gated by project membership PLUS the ordinary motor gate (tests/test_development_*.py,
+    # tests/test_motor_view.py access matrices)
+    ("DELETE", "/api/admin/projects/{project_id}/motors"), ("DELETE", "/api/projects/{project_id}/motors"),
+    ("GET", "/api/projects/{project_id}/motors/points"), ("GET", "/api/projects/{project_id}/motors/view"),
+    ("GET", "/api/projects/{project_id}/motors/field"), ("PATCH", "/api/projects/{project_id}/motors/note"),
+    ("PATCH", "/api/projects/{project_id}/motors/status"), ("POST", "/api/projects/{project_id}/motors"),
 }
 
 
@@ -423,7 +432,7 @@ def _same_as_missing(resp_hidden, resp_missing, cfg_hidden, cfg_missing=NOSUCH):
 
 
 def _read_url(template: str, cfg: str) -> str:
-    return template.format(die=DIE, cfg=cfg, duty=DUTY, drive="current")
+    return template.format(die=DIE, cfg=cfg, duty=DUTY, drive="current", kind="em")
 
 
 @pytest.mark.parametrize("route", sorted(READ_ROUTES))

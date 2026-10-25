@@ -54,6 +54,17 @@ engineer is meant to be able to open.
 ``pwm`` (2026-09-14) is the one kind that is a COMPARISON rather than an answer:
 what the machine costs on a real two-level inverter against the sinusoid every
 other record here assumes.  See :func:`compact_pwm`.
+
+``em_run`` (2026-10-26, owner: «нужно сохранять все результаты моделирования,
+потом можем всё удалить») is the electromagnetic kernel run's OWN summary, filed
+the moment the run finishes, whether or not anybody presses Save.  ``em`` stays
+the pointer at the duty's saved block; ``em_run`` is the raw numbers of the last
+run at this duty, so a run that was never saved is still kept, tied to
+die/configuration/duty.  See :func:`compact_em_run`.
+
+EVERY record carries a ``solver`` stamp (:func:`solver_stamp`: the code commit and
+the app version that produced it), written by :func:`record` itself, so a stored
+number can always say which solver made it.
 """
 from __future__ import annotations
 
@@ -87,7 +98,7 @@ log = logging.getLogger(__name__)
 #: NO field maps — the waveform it stores is one electrical period, decimated.
 KINDS: Tuple[str, ...] = ("thermal", "rotor_stress", "modes",
                           "critical_speeds", "coupled", "em", "duty_cycle",
-                          "pwm", "continuous_rating", "controller")
+                          "pwm", "continuous_rating", "controller", "em_run")
 
 #: The mechanical kinds, in the order ``routes.mechanical._LAST`` names them.
 MECH_KINDS: Tuple[str, ...] = ("rotor_stress", "modes", "critical_speeds")
@@ -419,6 +430,39 @@ def _carry_excitation_blocks(kind: str, entry: Dict[str, Any],
     return entry
 
 
+def solver_stamp() -> Dict[str, Any]:
+    """WHICH SOLVER made a stored number: the code commit and the app version.
+
+    ``run_history.code_version`` is the deployed commit (the server's
+    ``.deployed_commit`` marker, else the checkout's ``HEAD``); ``VERSION`` is the
+    release label.  Stamped on every record by :func:`record` and on every field
+    file by ``duty_fields.save`` (2026-10-26), so a number shown beside its
+    provenance never has to guess.  Never raises; unknown parts are simply absent.
+    """
+    out: Dict[str, Any] = {}
+    try:
+        from motor_ai_sim import run_history as _rh
+        v = _rh.code_version()
+        if v and v != "unknown":
+            out["code_version"] = v
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        ver = (Path(__file__).resolve().parents[2] / "VERSION"
+               ).read_text(encoding="utf-8").strip()
+        if ver:
+            out["version"] = ver
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        import os as _os
+        if _os.environ.get("APP_GIT_SHA"):
+            out.setdefault("image", _os.environ["APP_GIT_SHA"][:40])
+    except Exception:                                       # noqa: BLE001
+        pass
+    return out
+
+
 def record(die: str, cfg: str, duty: str, kind: str,
            entry: Dict[str, Any]) -> bool:
     """Park one compact result under (die, configuration, duty).
@@ -446,6 +490,9 @@ def record(die: str, cfg: str, duty: str, kind: str,
             e = dict(entry or {})
             e["kind"] = kind
             e.setdefault("recorded_at", _now())
+            _stamp = solver_stamp()
+            if _stamp:
+                e.setdefault("solver", _stamp)
             e = _carry_excitation_blocks(kind, e, node.get(kind))
             node[kind] = e
             return _write_all(doc)
@@ -1709,6 +1756,56 @@ def note_controller(out: Dict[str, Any], die: Optional[str] = None,
     return record(*ctx, "controller", compact_controller(out))
 
 
+#: Strings of an EM summary worth keeping beside its numbers.
+_EM_RUN_TEXT_KEYS = ("mode", "mode_requested", "connection", "drive",
+                     "computed_at", "status")
+
+
+def compact_em_run(sbres: Dict[str, Any]) -> Dict[str, Any]:
+    """The electromagnetic kernel run's numbers as a stored row.
+
+    ONLY the flat scalars of the run's ``summary`` (and of the solver block it
+    sits in): torque, the loss classes, η, the voltages, the operating point.
+    No series, no field arrays — those are the ``em`` field file's business.
+    Every number is finite or absent; a run that produced no summary files an
+    empty row (the stamp still says a run happened).
+    """
+    res = sbres if isinstance(sbres, dict) else {}
+    summary = res.get("summary") if isinstance(res.get("summary"), dict) else {}
+    nums: Dict[str, Any] = {}
+    for src in (res, summary):
+        for k, v in src.items():
+            if isinstance(v, bool) or not isinstance(k, str):
+                continue
+            f = _f(v) if isinstance(v, (int, float)) else None
+            if f is not None:
+                nums[k] = f
+    text = {k: str(res.get(k) if res.get(k) is not None else summary.get(k))
+            for k in _EM_RUN_TEXT_KEYS
+            if (res.get(k) is not None or summary.get(k) is not None)
+            and isinstance(res.get(k) if res.get(k) is not None else summary.get(k), (str, int, float))}
+    return {
+        "computed_at": res.get("computed_at") or summary.get("computed_at"),
+        "geometry_fingerprint": res.get("geo_fingerprint"),
+        **_fp2_block(),
+        "numbers": nums,
+        **({"text": text} if text else {}),
+    }
+
+
+def note_em_run(sbres: Dict[str, Any]) -> bool:
+    """File the kernel run's summary under the duty the editor has loaded.
+
+    Same seam as every ``note_*``: no active duty -> nothing is filed, a run
+    marked ``record: false`` -> nothing is filed (``record`` checks it), and a
+    failure here never fails the run.
+    """
+    ctx = active_context()
+    if ctx is None:
+        return False
+    return record(*ctx, "em_run", compact_em_run(sbres))
+
+
 def note_em_pointer(die: str, cfg: str, duty: str,
                     saved_at: Optional[str] = None,
                     build_sig: Optional[str] = None) -> bool:
@@ -1734,7 +1831,7 @@ def kinds_present(entry: Dict[str, Any]) -> List[str]:
     it, and the one view of "what has this duty been solved for"
     (``GET /api/family/duty_results``) never mentioned it.
     """
-    return [k for k in ("em", "pwm", "thermal", "duty_cycle", "coupled",
+    return [k for k in ("em", "em_run", "pwm", "thermal", "duty_cycle", "coupled",
                         "controller", "rotor_stress", "critical_speeds",
                         "modes")
             if isinstance((entry or {}).get(k), dict)]

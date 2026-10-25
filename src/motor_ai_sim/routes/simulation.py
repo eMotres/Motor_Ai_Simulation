@@ -6131,6 +6131,17 @@ def get_fem_transient(
             # `fresh=true` lands here too — that is the "Recompute" replacing
             # the stored entry with the run the user just forced.
             _ledger_write(_sb_key, _sbres, _sb_key_fields)
+            # …and once more, PER DUTY (2026-10-26, owner: «нужно сохранять все
+            # результаты моделирования»): the run's own numbers are filed under
+            # the duty the catalog context names, saved or not.  The ``em`` row
+            # is only a pointer at the duty's SAVED block; a run nobody pressed
+            # Save on used to survive only in the physics ledger, keyed by
+            # physics and not by duty.  ``record: false`` files nothing.
+            try:
+                from motor_ai_sim import duty_results as _dr_em
+                _dr_em.note_em_run(_sbres)
+            except Exception:      # noqa: BLE001 — never fails a run
+                log.debug("transient: per-duty EM run not recorded", exc_info=True)
         return _sbres
     except HTTPException:
         raise

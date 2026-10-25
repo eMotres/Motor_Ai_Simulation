@@ -39,8 +39,8 @@ const NO_MOTOR_TABS = new Set(['admin', 'designer']);
 /** Which kind of context a tab owns by default.  Every machine-bound tab (Configure, 3-D model, Simulation, Thermal,
  *  Mechanical, Controller, Geometry, Optimization, ...) and every tab not listed here keeps the live machine. */
 export function stripKindForTab(tab: string): StripKind {
-  if (tab === 'development') return 'project';
-  if (tab === 'production') return 'production';
+  // Development and Production show no strip for now (owner 2026-10-26: «убери пока, только вводит в заблуждение»).
+  if (tab === 'development' || tab === 'production') return 'none';
   if (NO_MOTOR_TABS.has(tab)) return 'none';
   return 'live';
 }

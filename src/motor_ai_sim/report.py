@@ -5985,6 +5985,16 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         kind="min",
         note="V_line_peak scaled to 20 °C magnets, against the pack minimum"))
 
+    if _numf(ctx.get("runaway_vmax_rpm")) is not None:
+        out.append({
+            "rule": "runaway_speed_vmax", "duty": duty, "level": "info",
+            "quantity": "No-load speed at the pack maximum voltage",
+            "value": _numf(ctx.get("runaway_vmax_rpm")), "limit": None, "unit": "rpm",
+            "kind": "info", "margin_pct": None, "remedy": "",
+            "note": ("the machine's no-load KV x the pack's maximum voltage (%s V): the speed an unloaded machine would "
+                     "reach if its drive let it. Computed here - the specification does not ask for a runaway speed"
+                     % _fmt(ctx.get("runaway_vmax_v"), 1))})
+
     # ── mechanical ──────────────────────────────────────────────────────────
     # ONE STRESS BEHIND EVERY SAFETY FACTOR (reviewer 2026-09-14, B4): the
     # AVERAGED peak of each part's own criterion — the "Criterion" column of
@@ -8511,6 +8521,12 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         ctx["runaway_rpm"] = float(rpm) * float(v_min) / (float(v_peak) * cold_k)
         ctx["runaway_note"] = cold_note + " (from this duty's loaded line voltage)"
     ctx["max_speed_rpm"] = max_speed_rpm
+    # THE NO-LOAD SPEED AT THE PACK MAXIMUM (owner 2026-10-26): the specification no longer asks for a runaway speed; the
+    # report works it out - the no-load speed the machine's KV gives at the pack's maximum voltage.
+    _v_pack_max = _numf((batt or {}).get("v_max"))
+    if kv_nl and _v_pack_max and _v_pack_max > 0:
+        ctx["runaway_vmax_rpm"] = float(kv_nl) * float(_v_pack_max)
+        ctx["runaway_vmax_v"] = float(_v_pack_max)
     # THE MODULATION GATE (reviewer 2026-09-14 / PWM study §1.7).  The peak
     # above is the waveform's; the quantity a two-level inverter is limited on
     # is the FUNDAMENTAL line voltage, `V1_LL_V` of the stored summary — the
@@ -9465,6 +9481,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story.append(_para(section_heading(sec, "compare"), st["h1"]))
     story.append(_para(COMPARE_INTRO, st["body"]))
     story += _em_compare(st, cols, batt, brg)
+    story.append(CondPageBreak(PAGE_H * 0.4))
+    story += _battery_current(st, cols, batt)
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _thermal_compare(st, cols)
     story.append(CondPageBreak(PAGE_H * 0.45))
@@ -18361,6 +18379,183 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     return "Electromagnetic", _drop_empty(rows)
 
 
+# ---------------------------------------------------------------------------
+# BATTERY CURRENT PER OPERATING POINT (owner 2026-10-26)
+# ---------------------------------------------------------------------------
+# The battery is sized from the simulation, not from a number typed into the
+# specification: for every solved duty the DC current the pack must carry,
+#
+#   motoring   P_dc = P_shaft / (eta_motor x eta_inverter)      I_dc = P_dc / V_dc   (discharge)
+#   generating P_dc = P_shaft x eta_motor x eta_inverter        I_dc = P_dc / V_dc   (charge / regeneration)
+#
+# at the pack's minimum, nominal and maximum voltage where the configuration
+# states them.  eta_motor is the SHAFT efficiency the rest of the document
+# prints (`shaft_view`); eta_inverter is the Controller module's result for that
+# duty.  Where the controller was never solved - its power devices are unknown -
+# the inverter is NOT modelled: eta_inverter = 1 (the current is then a lower
+# bound for a discharge and an upper bound for a charge) and the table says so.
+BATTERY_CURRENT_UNMODELLED = "controller losses not modelled — power devices unknown"
+BATTERY_CURRENT_NOTE = (
+    "DC current = DC power / pack voltage; motoring: DC power = shaft power / (motor efficiency × inverter efficiency), "
+    "generating: DC power = shaft power × motor efficiency × inverter efficiency. The motor efficiency is the shaft efficiency "
+    "stated above. The highest current of a duty is at the pack minimum.")
+BATTERY_CURRENT_NO_PACK = "No pack voltage is stated for this configuration: the duty's own DC link is used."
+
+
+def battery_dc_power_w(p_shaft_w: Any, eta_motor: Any, eta_inverter: Any,
+                       generating: bool) -> Optional[float]:
+    """DC-bus power for one operating point (watts, positive).
+
+    ``eta_inverter`` of ``None`` means the controller is not modelled and counts as 1.  ``None`` when the shaft power or the
+    motor efficiency is missing or not a usable (positive, at most 1.5) number.
+    """
+    p, em = _numf(p_shaft_w), _numf(eta_motor)
+    ei = 1.0 if eta_inverter is None else _numf(eta_inverter)
+    if p is None or em is None or ei is None or em <= 0 or ei <= 0 or em > 1.5 or ei > 1.5:
+        return None
+    p = abs(p)
+    return p * em * ei if generating else p / (em * ei)
+
+
+def battery_dc_current_a(p_dc_w: Any, v_dc_v: Any) -> Optional[float]:
+    """``I_dc = P_dc / V_dc`` (amps, positive); ``None`` without a positive voltage."""
+    p, v = _numf(p_dc_w), _numf(v_dc_v)
+    if p is None or v is None or v <= 0:
+        return None
+    return p / v
+
+
+def battery_point(col: Dict[str, Any]) -> Dict[str, Any]:
+    """What one duty column contributes to the battery-current table.
+
+    ``{"generating", "p_shaft_w", "eta_motor", "eta_inverter", "modelled", "p_dc_w"}`` - every value ``None`` when the run
+    does not state it.  ``modelled`` is True when the Controller module solved this duty (its power devices are known).
+    """
+    em = col.get("em") or {}
+    sv = shaft_view(em, col.get("brg"), (col.get("d") or {}).get("mode"))
+    # shaft power and the efficiency that goes with it: bearings known -> the shaft pair, else the rotor pair
+    if sv.get("P_shaft_W") is not None and sv.get("eta_shaft") is not None:
+        p_shaft, eta = sv["P_shaft_W"], sv["eta_shaft"]
+    else:
+        p_shaft, eta = sv.get("P_rotor_W"), sv.get("eta_em")
+    rec = controller_record(col)
+    eta_inv = _numf(((rec or {}).get("efficiency") or {}).get("inverter")) if rec else None
+    generating = bool(sv.get("gen"))
+    return {"generating": generating, "p_shaft_w": p_shaft, "eta_motor": eta, "eta_inverter": eta_inv,
+            "modelled": eta_inv is not None,
+            "p_dc_w": battery_dc_power_w(p_shaft, eta, eta_inv, generating)}
+
+
+def battery_pack_levels(batt: Optional[Dict[str, Any]]) -> List[Tuple[str, float]]:
+    """``[(label, volts)]`` of the pack levels the configuration states: minimum, nominal, maximum."""
+    out: List[Tuple[str, float]] = []
+    for key, label in (("v_min", "minimum"), ("v_nom", "nominal"), ("v_max", "maximum")):
+        v = _numf((batt or {}).get(key))
+        if v is not None and v > 0:
+            out.append((label, float(v)))
+    return out
+
+
+def battery_current_rows(cols: List[Dict[str, Any]], batt: Optional[Dict[str, Any]]
+                         ) -> Tuple[str, List[List[Any]], List[str]]:
+    """The per-duty battery-current comparison as ``(row header, rows, notes)`` - plain data, strings in the cells."""
+    pts = {id(c): battery_point(c) for c in cols}
+    levels = battery_pack_levels(batt)
+    notes: List[str] = []
+    rows: List[List[Any]] = []
+
+    def row(label, fn):
+        rows.append([label] + _col_vals(cols, fn))
+
+    row("Direction", lambda c: "charge (regeneration)" if pts[id(c)]["generating"] else "discharge")
+    row("Shaft power [kW]", lambda c: _fmt(None if pts[id(c)]["p_shaft_w"] is None else abs(pts[id(c)]["p_shaft_w"]) / 1000.0, 2))
+    row("Motor efficiency, at the shaft [%]",
+        lambda c: _fmt(None if pts[id(c)]["eta_motor"] is None else 100.0 * pts[id(c)]["eta_motor"], 2))
+    row("Inverter efficiency [%]",
+        lambda c: (_fmt(100.0 * pts[id(c)]["eta_inverter"], 2) if pts[id(c)]["modelled"] else "not modelled"))
+    row("DC power [kW]", lambda c: _fmt(None if pts[id(c)]["p_dc_w"] is None else pts[id(c)]["p_dc_w"] / 1000.0, 2))
+    if levels:
+        for label, v in levels:
+            row("Battery current at the pack %s, %s V [A]" % (label, _fmt(v, 1)),
+                lambda c, v=v: _fmt(battery_dc_current_a(pts[id(c)]["p_dc_w"], v), 1))
+    else:
+        notes.append(BATTERY_CURRENT_NO_PACK)
+
+        def _own_link(c):
+            return _numf(duty_inverter(c).get("v_dc_V"))
+        row("Battery current at the duty's DC link [A]",
+            lambda c: _fmt(battery_dc_current_a(pts[id(c)]["p_dc_w"], _own_link(c)), 1))
+    if any(not pts[id(c)]["modelled"] for c in cols):
+        notes.insert(0, BATTERY_CURRENT_UNMODELLED[0].upper() + BATTERY_CURRENT_UNMODELLED[1:]
+                     + " (the inverter efficiency is taken as 1)")
+    return "Battery current", rows, notes
+
+
+def battery_current_summary(cols: List[Dict[str, Any]], batt: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The pack-level summary: ``{"levels": [(label, V)], "rows": [{"label", "values": [A or None...], "duty": [...]}]}``.
+
+    * continuous = the highest discharge current among the duties solved as CONTINUOUS (the continuous key point);
+    * peak = the highest discharge current of any duty;
+    * charge peak = the highest charge / regeneration current of any duty.
+    Each at every stated pack level.  A duty whose current cannot be formed is left out of the maximum.
+    """
+    levels = battery_pack_levels(batt)
+    try:
+        from motor_ai_sim import duty_class as _dcl
+    except Exception:                                       # noqa: BLE001
+        _dcl = None
+
+    def _continuous(c) -> bool:
+        if _dcl is None:
+            return False
+        k = _dcl.classify(c.get("d"), (c.get("res") or {}).get("coupled"))
+        return bool(k) and k.get("duty_class") == _dcl.CONTINUOUS
+
+    pts = [(c, battery_point(c)) for c in cols]
+    groups = (("Discharge, continuous [A]", lambda c, p: (not p["generating"]) and _continuous(c)),
+              ("Discharge, peak [A]", lambda c, p: not p["generating"]),
+              ("Charge / regeneration, peak [A]", lambda c, p: p["generating"]))
+    rows = []
+    for label, pick in groups:
+        values, names = [], []
+        for _lvl, v in levels:
+            best, who = None, None
+            for c, p in pts:
+                if not pick(c, p):
+                    continue
+                i = battery_dc_current_a(p["p_dc_w"], v)
+                if i is not None and (best is None or i > best):
+                    best, who = i, c.get("duty")
+            values.append(best)
+            names.append(who)
+        rows.append({"label": label, "values": values, "duty": names})
+    return {"levels": levels, "rows": rows}
+
+
+def _battery_current(st, cols: List[Dict[str, Any]], batt: Dict[str, Any]) -> List[Any]:
+    """The battery-current section of the comparison chapter (per duty, then the per-pack summary)."""
+    out: List[Any] = [_para("Battery current", st["h2"])]
+    if not cols:
+        return out
+    header, rows, notes = battery_current_rows(cols, batt)
+    out.append(_cmp_table(header, cols, rows, st=st))
+    summ = battery_current_summary(cols, batt)
+    if summ["levels"]:
+        head = ["Pack"] + ["%s, %s V" % (lab, _fmt(v, 1)) for lab, v in summ["levels"]]
+        data = [head] + [[r["label"]] + [("%s (%s)" % (_fmt(v, 1), d) if v is not None else "—")
+                                         for v, d in zip(r["values"], r["duty"])] for r in summ["rows"]]
+        lw = 150.0
+        cw = (CONTENT_W - lw) / max(1, len(summ["levels"]))
+        out.append(_table(data, [lw] + [cw] * len(summ["levels"]), header=True, size=7.2))
+    for n in notes:
+        if n.lower().startswith("controller losses"):
+            out.append(_para("%s %s." % (FLAG, n), st["warn"]))
+        else:
+            out.append(_para(n, st["note"]))
+    out.append(_para(BATTERY_CURRENT_NOTE, st["note"]))
+    return out
+
+
 def _em_compare(st, cols: List[Dict[str, Any]], batt: Dict[str, Any],
                 brg: Optional[Dict[str, Any]]) -> List[Any]:
     """The electromagnetic table: every duty side by side."""
@@ -19984,7 +20179,7 @@ def cross_duty_warnings(cols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 #: (17,985.2 rpm · 22,900 rpm · −21.5 %) printed under both reference generator duties,
 #: each duty-tagged.  A reader comparing the two could only conclude that the
 #: 20,900 rpm duty had been judged at its own speed, which it had not.
-CONFIG_LEVEL_RULES: Tuple[str, ...] = ("runaway_speed",)
+CONFIG_LEVEL_RULES: Tuple[str, ...] = ("runaway_speed", "runaway_speed_vmax")
 
 #: What the duty column says on a row that is about the configuration.
 CONFIG_LEVEL_DUTY = "all duties"

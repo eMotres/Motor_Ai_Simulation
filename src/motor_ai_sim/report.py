@@ -6111,6 +6111,9 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "joint, or raise the interference until the pair stays closed.")
         elif _tp.startswith("no verdict"):
             lvl, rem = "amber", (
+                "Assess torque capacity including pocket-wall normal contact "
+                "and continuous iron paths; friction alone is not a rotor "
+                "capacity." if "friction-only capacity" in _tp else
                 "The torque path could not be judged on this solve - re-run the "
                 "rotor stress with loads='both' so the reaction is computed.")
         else:

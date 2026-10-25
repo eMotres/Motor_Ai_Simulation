@@ -620,7 +620,8 @@ def test_a_part_with_no_load_path_is_bonded_or_refused_never_quoted(client):
             # retention FAIL with no SF (owner rule: no adhesive)
             or (not c["contact"]["consistent"] and "ended tied" in tp["verdict"]
                 and c["retention"]["status"] == "fail" and c["sf_min"] is None)
-            or (tp["held"] is None and "form-locked" in tp["verdict"]))
+            or (tp["held"] is None and "form-locked" in tp["verdict"])
+            or (tp["held"] is None and "friction-only capacity" in tp["verdict"]))
     assert "ran away" not in tp["verdict"]
 
 
@@ -806,3 +807,15 @@ def test_every_joint_open_is_still_a_no():
     out0 = rs._torque_path({"magnet_rotor": _iface(0.0, 1.0)},
                            61.0, _sol_settled(), balance=1.0, r_out_m=0.073)
     assert out0["held"] is False
+
+
+@pytest.mark.parametrize("capacity", [1093., 5000.])
+def test_friction_capacity_is_not_a_serial_rotor_torque_limit(capacity):
+    interface = {**_iface(.2, .8), "friction_capacity_nm": capacity,
+                 "torque_transmitted_nm": 2000.}
+    out = rs._torque_path({"magnet_rotor": interface}, 1540.,
+                         _sol_settled(), balance=1., r_out_m=.2)
+    assert out["held"] is None and out["margin"] is None
+    assert out["capacity_nm"] == capacity
+    assert out["verdict"].startswith("no verdict")
+    assert "normal forces and parallel iron paths" in out["verdict"]

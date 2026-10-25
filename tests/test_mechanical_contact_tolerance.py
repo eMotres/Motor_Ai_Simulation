@@ -18,9 +18,9 @@ def linear_solver(request):
     return solve
 
 
-def _blocks(stiffness=1.0, strain=1e-3):
+def _blocks(stiffness=1.0, strain=1e-3, ny=7):
     mesh = MeshTri.init_tensor(np.linspace(.02, .04, 7),
-                               np.linspace(-.01, .01, 7))
+                               np.linspace(-.01, .01, ny))
     part = np.where(mesh.p[:, mesh.t].mean(axis=1)[0] < .03,
                     ctc.PART_ROTOR, ctc.PART_MAGNET)
     cs = ctc.build_contact_system(
@@ -107,3 +107,40 @@ def test_a_disconnected_body_under_a_pure_couple_is_still_refused(linear_solver)
                              closed0=np.zeros(cs.n_pairs, dtype=bool),
                              solve_fn=linear_solver)
     assert "magnet" in sol.free_parts
+
+
+@pytest.mark.parametrize("n_pairs", [8, 400])
+def test_tied_pairs_cannot_borrow_resolution_from_bulk_dofs(n_pairs):
+    # A direct algebraic contact mesh: each pair pulls at 100 N/m, against
+    # 90 N/m compression. The rest of the solid can grow arbitrarily without
+    # changing either contact trace's cancellation error.
+    pair_dofs = np.arange(4 * n_pairs).reshape(-1, 4)
+    rows = np.full(4 * n_pairs, 1e6)
+    bulk = np.full(100000, 1e9)
+    tension = n_pairs * 100.
+    assert ctc.tension_fraction(tension, n_pairs * 90.) > ctc.TENSION_FRAC_TOL
+    assert ctc.CONTACT_FORCE_REL_TOL * np.r_[rows, bulk].sum() > tension
+    local = ctc.contact_tension_resolution(pair_dofs, rows, np.zeros(n_pairs), 1e12)
+    padded = ctc.contact_tension_resolution(pair_dofs, np.r_[rows, bulk],
+                                           np.zeros(n_pairs), 1e12)
+    assert padded == local
+    assert local < tension
+
+
+def test_many_tied_pairs_in_a_large_deforming_body_are_rejected():
+    cs, basis, K, _, _ = _blocks(strain=0., ny=401)
+    assert cs.n_pairs >= 400
+    x = np.zeros(basis.N)
+    # Controlled iterate: bulk motion far from the interface used to dominate
+    # the global tolerance. Its rows are not adjacent to the contact traces.
+    x[basis.doflocs[0] < .024] = 1.
+    x[cs.pair_dofs[:, 2:4]] = 1e-8 * cs.pair_n
+    def controlled_iterate(A, rhs):
+        return np.r_[x, np.zeros(A.shape[0] - basis.N)]
+
+    sol = ctc.solve_contact(K, np.zeros(basis.N), cs, basis,
+                           solve_fn=controlled_iterate, max_iter=1)
+    old_tol = ctc.CONTACT_FORCE_REL_TOL * (abs(K) @ abs(x)).sum()
+    assert old_tol > sol.tension_n_per_m > 0
+    assert sol.n_tensile_pairs >= 400
+    assert not sol.consistent and not sol.converged

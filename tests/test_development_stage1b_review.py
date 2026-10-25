@@ -227,8 +227,9 @@ def test_customer_rerole_failure_restores_membership_and_success_is_add_only(sta
                            json={"email": CUSTOMER, "role": "engineer"})
     assert response.status_code == 200, response.text
     assert users.get_stored_motor_grants(CUSTOMER).get("configs", []) == ["MixedCaseDie/CfgA"]
-    assert any(row.get("email") == CUSTOMER
-               for row in store.get_project("alpha").get("grant_removal_candidates", []))
+    # an engineer member still sees the project's motors (owner 2026-10-26): nothing to review
+    assert not any(row.get("email") == CUSTOMER
+                   for row in store.get_project("alpha").get("grant_removal_candidates", []))
 
 
 def test_customer_thread_and_version_metadata_never_exposes_other_email(stage1b):

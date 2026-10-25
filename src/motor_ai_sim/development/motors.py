@@ -341,10 +341,14 @@ def _grant(email: str, key: str) -> bool:
         return had
 
 
+#: every project role sees the project's motors: the customer's owner and engineers work on them too (owner 2026-10-26)
+MOTOR_GRANT_ROLES = ("customer", "engineer", "owner")
+
+
 def _customers(project: dict) -> set[str]:
     result = set()
     for member in project.get("members", []):
-        if not isinstance(member, dict) or member.get("role") != "customer":
+        if not isinstance(member, dict) or member.get("role") not in MOTOR_GRANT_ROLES:
             continue
         email = str(member.get("email") or "").strip().lower()
         account = users.get_user(email) if email else None

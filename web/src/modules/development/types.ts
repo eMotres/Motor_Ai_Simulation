@@ -37,9 +37,27 @@ export interface MotorPointsAnswer { project_id: string; variants: MotorPointVar
 /** Where a stored block came from (every field is optional: an old row has no solver stamp). */
 export interface StoredProvenance { computed_at?: string; recorded_at?: string; code_version?: string; app_version?: string; image?: string; geometry_fingerprint?: string; mesh_size_mm?: number; n_triangles?: number; element_order?: number }
 export type FieldKind = 'em' | 'thermal' | 'rotor_stress';
-export interface StoredThermal { housing_c?: number; components_c?: Record<string, { avg?: number; max?: number; min?: number }>; map?: Record<string, unknown> & { provenance?: StoredProvenance }; coupled?: Record<string, unknown> & { coil_temp_c?: number; magnet_temp_c?: number; magnet_temp_max_c?: number; bearing_temp_c?: number; converged?: boolean; provenance?: StoredProvenance }; s1?: { ok?: boolean; feasible?: boolean; I_cont_A_rms?: number; limiting_part?: string; limits_c?: Record<string, number> }; s2?: { within_limits?: boolean; limiting_part?: string; time_to_limit_s?: number; limits_c?: Record<string, number>; starts?: Record<string, { time_to_limit_s?: number }> }; cycle?: Record<string, unknown>; provenance?: StoredProvenance }
-export interface StoredMechanical { rotor_stress?: { case?: string; sf_min?: number; sf_min_part?: string; sf_min_p05?: number; overspeed_factor?: number; max_displacement_um?: number; rotor_od_growth_um?: number; interference_mm?: number; proof_rpm?: number; limit_speed_rpm?: number; retention?: { status?: string; verdict?: string; message?: string }; magnet_retention?: Record<string, unknown>; air_gap?: Record<string, number>; parts?: Record<string, { material?: string; safety_factor?: number; von_mises_max_mpa?: number; strength_mpa?: number }>; provenance?: StoredProvenance }; modes?: { frequencies_hz?: number[]; provenance?: StoredProvenance }; critical_speeds?: { verdict?: string; rated_rpm?: number; critical_speeds?: Array<{ rpm?: number }>; provenance?: StoredProvenance } }
-/** One duty of a motor as the read-only view shows it: the stored point plus its thermal / mechanical / field results. */
+export interface StoredThermal {
+  /** the DUTY's temperatures: the converged coupled loop at the duty's own point, else the steady temperature map; `kind` says which */
+  duty_temps?: { kind: 'coupled' | 'thermal'; winding_c?: number; magnet_c?: number; magnet_max_c?: number; bearing_c?: number; housing_c?: number; converged?: boolean; drive?: string; provenance?: StoredProvenance };
+  /** an S1 / limit-search state of the coupled loop: shown on its own line, never as the duty's temperature */
+  limit_search?: { kind: string; solve_to?: string; mode?: string; winding_c?: number; magnet_c?: number; provenance?: StoredProvenance };
+  s1?: { ok?: boolean; feasible?: boolean; I_cont_A_rms?: number; limiting_part?: string; limits_c?: Record<string, number>; provenance?: StoredProvenance };
+  s2?: { within_limits?: boolean; limiting_part?: string; time_to_limit_s?: number; limits_c?: Record<string, number>; starts?: Record<string, { time_to_limit_s?: number }>; provenance?: StoredProvenance };
+  cycle?: Record<string, unknown>;
+  provenance?: StoredProvenance;
+}
+export interface StoredRotorStress { case?: string; sf_min?: number; sf_min_part?: string; sf_min_p05?: number; overspeed_factor?: number; max_displacement_um?: number; rotor_od_growth_um?: number; interference_mm?: number; proof_rpm?: number; limit_speed_rpm?: number;
+  /** the load case of the record, from its own fields */
+  worst_case?: { rpm?: number; torque_nm?: number; loads?: string; case?: string };
+  filed_under?: string; records?: number;
+  /** superseded = made before the contact repair (#422); unknown = no date */
+  solver_status?: 'current' | 'superseded' | 'unknown';
+  /** differs = another machine print than the newest EM / thermal record of the motor */
+  geometry_status?: 'match' | 'differs' | 'unknown';
+  stale?: boolean;
+  retention?: { status?: string; verdict?: string; message?: string }; magnet_retention?: Record<string, unknown>; air_gap?: Record<string, number>; parts?: Record<string, { material?: string; safety_factor?: number; von_mises_max_mpa?: number; strength_mpa?: number }>; provenance?: StoredProvenance }
+export interface StoredMechanical { rotor_stress?: StoredRotorStress; modes?: { frequencies_hz?: number[]; provenance?: StoredProvenance }; critical_speeds?: { verdict?: string; rated_rpm?: number; critical_speeds?: Array<{ rpm?: number }>; provenance?: StoredProvenance } }
 export interface MotorViewDuty extends MotorPoint { em_run?: { numbers?: Record<string, number>; provenance?: StoredProvenance } | null; thermal?: StoredThermal | null; mechanical?: StoredMechanical | null; fields?: Partial<Record<FieldKind, { provenance?: StoredProvenance; point?: Record<string, number> }>>; kinds?: string[] }
 /** `mode`: full = a passport exists (ordinary Configure); points = stored points only (points-limited Configure); empty = nothing stored. */
 export interface MotorView { die: string; config: string; configure_available: boolean; configure_duties: string[]; mode: 'full' | 'points' | 'empty'; duties: MotorViewDuty[]; solver_now?: { code_version?: string; version?: string } }

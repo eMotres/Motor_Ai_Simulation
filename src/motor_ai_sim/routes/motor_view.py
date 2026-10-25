@@ -42,8 +42,7 @@ def motor_field(die: str, cfg: str, duty: str, kind: str, response: Response,
     from motor_ai_sim.development import motor_view
     response.headers["Cache-Control"] = "no-store"
     die, cfg, _path, doc = _motor(die, cfg, authorization)
-    if kind not in motor_view.FIELD_KINDS:
-        raise HTTPException(400, detail="Unknown field kind")
+    # an unknown kind name is "not computed" (404), never a 400: nothing is stored under it
     if duty not in {str(d.get("name")) for d in doc.get("duties", []) if isinstance(d, dict)}:
         raise HTTPException(404, detail="Duty not found")
     payload = motor_view.field_payload(die, cfg, duty, kind)

@@ -384,6 +384,13 @@
     "noProvenance": "该结果未存储来源信息。",
     "thermal": {
       "title": "热",
+      "source": {
+        "coupled": "耦合迭代",
+        "thermal": "温度图"
+      },
+      "onlyLimit": "此工况只存有极限搜索状态，没有它自己的温度。",
+      "limitLine": "S1 极限搜索（{day}）：极限时绕组 {winding} °C",
+      "limitTip": "这是极限搜索（S1）的状态，不是该工况的温度。",
       "tile": {
         "winding": "绕组",
         "magnet": "磁钢",
@@ -405,6 +412,14 @@
     },
     "mech": {
       "title": "机械",
+      "worstCase": "最不利工况：{case}",
+      "filedUnder": "存于工况 {duty}",
+      "stale": {
+        "superseded": "求解器已过时",
+        "supersededTip": "在接触修复（5249508a）之前计算；使用前请重新计算。",
+        "geometry": "几何不同",
+        "geometryTip": "机器指纹与该电机最新的电磁/热结果不同，不是当前结果。"
+      },
       "retentionTip": "磁钢无胶固定：仅靠转子铁芯保持。",
       "retention": {
         "pass": "已固定",

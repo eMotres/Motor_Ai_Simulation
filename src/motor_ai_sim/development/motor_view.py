@@ -103,8 +103,59 @@ def provenance(row: Any, field_meta: Any = None) -> Dict[str, Any]:
 # thermal / mechanical blocks (from duty_results rows)
 # ---------------------------------------------------------------------------
 
+#: The solver change after which a stored rotor-stress answer is trusted: #422 (commit 5249508a) repaired the stalled
+#: unilateral contact, so an answer computed before it was made by a superseded solver.
+CONTACT_REPAIR_COMMIT = "5249508a"
+CONTACT_REPAIR_AT = "2026-10-25T21:50:12+00:00"
+
+
+def _when(row: Any):
+    """When a stored row was computed (aware datetime; a naive stamp is read as UTC), or ``None``."""
+    from datetime import datetime, timezone
+    if not isinstance(row, dict):
+        return None
+    for key in ("computed_at", "recorded_at"):
+        raw = row.get(key)
+        if isinstance(raw, str) and raw:
+            try:
+                d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    return None
+
+
+def solver_status(row: Any) -> str:
+    """``current`` | ``superseded`` | ``unknown``: was this row made after the contact repair (#422)?
+
+    A row carrying a solver stamp was written by a build that has the repair (the stamps came later). An unstamped row
+    is judged by its date; with no date it is ``unknown`` - never presented as current.
+    """
+    from datetime import datetime
+    if isinstance(row, dict) and isinstance(row.get("solver"), dict) and row["solver"].get("code_version"):
+        return "current"
+    when = _when(row)
+    if when is None:
+        return "unknown"
+    return "superseded" if when < datetime.fromisoformat(CONTACT_REPAIR_AT) else "current"
+
+
+def _is_limit_search(cp: Dict[str, Any]) -> bool:
+    """A coupled row that answers 'where does this part reach its limit' (S1 search), not 'what does this duty settle at'."""
+    return str(cp.get("mode") or "").lower() == "limited" or str(cp.get("solve_to") or "").lower() in ("limits", "continuous")
+
+
 def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Thermal results of one duty: settled temperatures, S1 limit, S2 times - or ``None`` when nothing is stored."""
+    """Thermal results of one duty - or ``None`` when nothing is stored.
+
+    SELECTION RULES (owner review 2026-10-26):
+      * ``duty_temps`` - the duty's own temperatures - come from the converged coupled loop (``coupled``) at the duty's
+        point; only when the duty has NO coupled row does the plain temperature map (``thermal``, steady state) stand in.
+        Each says which run kind it is and when it was computed.
+      * a coupled row that is a limit search (S1 / ``solve_to`` limits or continuous, mode limited) is NEVER the duty's
+        temperature: it is returned as ``limit_search`` on its own line.
+      * S1 (continuous limit) and S2 (time to the limit, duty cycle) are their own lines.
+    """
     th = stored.get("thermal") if isinstance(stored.get("thermal"), dict) else None
     cp = stored.get("coupled") if isinstance(stored.get("coupled"), dict) else None
     dc = stored.get("duty_cycle") if isinstance(stored.get("duty_cycle"), dict) else None
@@ -112,76 +163,133 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not (th or cp or dc or cr):
         return None
     out: Dict[str, Any] = {}
-    comps = {}
-    for name, comp in ((th or {}).get("components") or {}).items():
-        if isinstance(comp, dict) and (_num(comp.get("max")) is not None or _num(comp.get("avg")) is not None):
-            comps[str(name)] = _pick(comp, ("avg", "max", "min"))
-    if comps:
-        out["components_c"] = comps
-    if th:
-        # the housing (or the structure the heat lands on) when the map states it - never guessed from another part
-        cool = th.get("cooling") if isinstance(th.get("cooling"), dict) else {}
-        for src in ((cool.get("mount") or {}).get("t_housing_mean_c"), (cool.get("heat_path") or {}).get("t_body_c")):
-            if _num(src) is not None:
-                out["housing_c"] = _num(src)
-                break
-        out["map"] = {**_pick(th, ("T_max", "T_min", "P_loss_total_W", "P_cu_W", "P_fe_W")),
-                      **({"state": th.get("state")} if th.get("state") else {}),
-                      **({"drive": th.get("drive")} if th.get("drive") else {}),
+    duty_temps: Optional[Dict[str, Any]] = None
+    if cp and not _is_limit_search(cp):
+        duty_temps = {"kind": "coupled", "winding_c": _num(cp.get("coil_temp_c")), "magnet_c": _num(cp.get("magnet_temp_c")),
+                      "magnet_max_c": _num(cp.get("magnet_temp_max_c")), "bearing_c": _num(cp.get("bearing_temp_c")),
+                      "converged": cp.get("converged") if isinstance(cp.get("converged"), bool) else None,
+                      "drive": cp.get("drive"), "provenance": provenance(cp)}
+        # the housing of the same loop's map, when that map states it
+    elif cp is None and th and str(th.get("state") or "steady").lower() == "steady":
+        comps = th.get("components") if isinstance(th.get("components"), dict) else {}
+        duty_temps = {"kind": "thermal", "winding_c": _num((comps.get("winding") or {}).get("max")),
+                      "magnet_c": _num((comps.get("magnet") or {}).get("max")), "drive": th.get("drive"),
                       "provenance": provenance(th)}
-    if cp:
-        out["coupled"] = {**_pick(cp, ("coil_temp_c", "magnet_temp_c", "magnet_temp_max_c", "bearing_temp_c",
-                                       "converged", "iterations", "runaway", "drive", "mode", "solve_to",
-                                       "efficiency_shaft", "P_loss_total_incl_mech_W")),
-                          "provenance": provenance(cp)}
-        # S1: the largest current that may run for ever at this duty's cooling (owner 2026-09-21).
-        s1 = cp.get("continuous_rating") if isinstance(cp.get("continuous_rating"), dict) else cr
-        if isinstance(s1, dict) and s1:
-            out["s1"] = _pick(s1, ("ok", "feasible", "I_cont_A_rms", "limiting_part", "limits_c", "temperatures_c",
-                                   "record_is_s1", "verified", "note"))
-        # S2: how long the point may run when it is over a limit (owner 2026-09-17).
-        ttl = cp.get("time_to_limit")
-        if isinstance(ttl, dict) and ttl:
-            out["s2"] = plain(ttl, 3)
-        if isinstance(cp.get("duty_cycle"), dict) and cp["duty_cycle"]:
-            out["regime"] = plain(cp["duty_cycle"], 2)
-    elif cr:
-        out["s1"] = _pick(cr, ("ok", "feasible", "I_cont_A_rms", "limiting_part", "limits_c", "temperatures_c"))
+    if duty_temps is not None:
+        if th and str(th.get("state") or "steady").lower() == "steady":
+            cool = th.get("cooling") if isinstance(th.get("cooling"), dict) else {}
+            for src in ((cool.get("mount") or {}).get("t_housing_mean_c"), (cool.get("heat_path") or {}).get("t_body_c")):
+                if _num(src) is not None:
+                    duty_temps["housing_c"] = _num(src)
+                    duty_temps["housing_from"] = {"kind": "thermal", "computed_at": th.get("computed_at")}
+                    break
+        out["duty_temps"] = {k: v for k, v in duty_temps.items() if v is not None}
+    if cp and _is_limit_search(cp):
+        out["limit_search"] = {"kind": "coupled", "solve_to": cp.get("solve_to"), "mode": cp.get("mode"),
+                               "winding_c": _num(cp.get("coil_temp_c")), "magnet_c": _num(cp.get("magnet_temp_c")),
+                               "provenance": provenance(cp)}
+        out["limit_search"] = {k: v for k, v in out["limit_search"].items() if v is not None}
+    # S1: the largest current that may run for ever at this duty's cooling (owner 2026-09-21).
+    s1 = (cp or {}).get("continuous_rating") if isinstance((cp or {}).get("continuous_rating"), dict) else cr
+    if isinstance(s1, dict) and s1:
+        out["s1"] = {**_pick(s1, ("ok", "feasible", "I_cont_A_rms", "limiting_part", "limits_c", "temperatures_c",
+                                  "record_is_s1", "verified", "note")),
+                     "provenance": provenance(cp or cr)}
+    # S2: how long the point may run when it is over a limit (owner 2026-09-17), and the duty-cycle spec it came with.
+    ttl = (cp or {}).get("time_to_limit")
+    if isinstance(ttl, dict) and ttl:
+        out["s2"] = {**plain(ttl, 3), "provenance": provenance(cp)}
+    if cp and isinstance(cp.get("duty_cycle"), dict) and cp["duty_cycle"]:
+        out["regime"] = plain(cp["duty_cycle"], 2)
     if dc:
         out["cycle"] = {"spec": _pick(dc.get("spec"), ("kind", "cycle_s", "ed_pct", "t_on_s", "rest_duty")),
                         "limits": plain(dc.get("limits"), 2),
                         "peak_c": plain(((dc.get("cycle") or {}).get("peak_c")), 2),
                         "provenance": provenance(dc)}
-    out["provenance"] = provenance(th or cp or dc or cr)
+    if not out:
+        return None
+    out["provenance"] = provenance(cp or th or dc or cr)
     return out
 
 
-def mechanical_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Mechanical results of one duty: SF per part, retention, displacement, proof speed - or ``None``."""
-    rs = stored.get("rotor_stress") if isinstance(stored.get("rotor_stress"), dict) else None
+def _rotor_stress_block(rs: Dict[str, Any]) -> Dict[str, Any]:
+    parts = {}
+    for name, p in (rs.get("parts") or {}).items():
+        if isinstance(p, dict):
+            parts[str(name)] = _pick(p, ("material", "safety_factor", "von_mises_max_mpa",
+                                         "governing_stress_mpa", "strength_mpa", "strength_kind"))
+    point = rs.get("point") if isinstance(rs.get("point"), dict) else {}
+    rpm = _num(rs.get("rpm")) if _num(rs.get("rpm")) is not None else _num(point.get("rpm"))
+    return {
+        **_pick(rs, ("case", "sf_min", "sf_min_part", "sf_min_p05", "overspeed_factor",
+                     "max_displacement_um", "rotor_od_growth_um", "interference_mm")),
+        # the speed the stress solve ran at: the proof speed when the case is the proof case
+        "proof_rpm": rpm,
+        # the load case, from the record's own fields: speed, torque and which loads were applied
+        "worst_case": {k: v for k, v in {"rpm": rpm, "torque_nm": _num(point.get("torque_nm")),
+                                         "loads": point.get("loads"), "case": rs.get("case")}.items() if v is not None},
+        "retention": _pick(rs.get("retention"), ("status", "verdict", "message")),
+        "magnet_retention": _pick(rs.get("magnet_retention"), ("verdict", "share", "seated")),
+        "air_gap": _pick(rs.get("air_gap"), ("clearance_um", "remaining_um", "closed_pct")),
+        "limit_speed_rpm": _num((rs.get("limit_speed") or {}).get("rpm_sf1")),
+        "parts": parts,
+        "provenance": provenance(rs),
+    }
+
+
+def worst_case_rotor_stress(stored_by_duty: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The motor's ONE mechanical answer: the newest ``rotor_stress`` record of the die/configuration.
+
+    The stress solve is a per-motor worst case (proof speed + peak torque + magnetic pull), not a per-duty result, so the
+    newest record - whichever duty it happened to be filed under - is shown on every point. It is flagged, never hidden:
+
+      * ``solver`` - ``superseded`` when it was made before the contact repair (#422), ``unknown`` with no date;
+      * ``geometry`` - ``differs`` when its mesh-independent machine print (``geometry_fingerprint_v2``) differs from the
+        newest electromagnetic / thermal record of the motor, ``match`` when equal, ``unknown`` when either has no print
+        (the v1 fingerprint is a cache key that moves with the mesh, so it is not compared);
+      * ``stale`` is true for ``superseded`` or ``differs`` - such a record is not the current answer.
+    """
+    rows = []
+    for duty, kinds in (stored_by_duty or {}).items():
+        rs = (kinds or {}).get("rotor_stress")
+        if isinstance(rs, dict) and rs:
+            rows.append((_when(rs), str(duty), rs))
+    if not rows:
+        return None
+    from datetime import datetime, timezone
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    rows.sort(key=lambda r: r[0] or floor, reverse=True)
+    when, filed_under, rs = rows[0]
+    ref = None
+    for kinds in (stored_by_duty or {}).values():
+        for kind in ("em_run", "coupled", "thermal"):
+            row = (kinds or {}).get(kind)
+            fp = row.get("geometry_fingerprint_v2") if isinstance(row, dict) else None
+            w = _when(row)
+            if fp and w and (ref is None or w > ref[0]):
+                ref = (w, fp)
+    mine = rs.get("geometry_fingerprint_v2")
+    geometry = "unknown" if not (mine and ref) else ("match" if mine == ref[1] else "differs")
+    solver = solver_status(rs)
+    block = _rotor_stress_block(rs)
+    block.update({"filed_under": filed_under, "solver_status": solver, "geometry_status": geometry,
+                  "stale": solver == "superseded" or geometry == "differs",
+                  "records": len(rows),
+                  "others": [{"duty": d, "computed_at": (r.get("computed_at") or r.get("recorded_at")),
+                              "sf_min": _num(r.get("sf_min"))} for _w, d, r in rows[1:6]]})
+    return block
+
+
+def mechanical_block(stored: Dict[str, Any], worst: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Mechanical results shown at one duty: the motor's worst case (see :func:`worst_case_rotor_stress`) plus the
+    ring modes and critical speeds filed under THIS duty - or ``None``."""
     modes = stored.get("modes") if isinstance(stored.get("modes"), dict) else None
     crit = stored.get("critical_speeds") if isinstance(stored.get("critical_speeds"), dict) else None
-    if not (rs or modes or crit):
+    if not (worst or modes or crit):
         return None
     out: Dict[str, Any] = {}
-    if rs:
-        parts = {}
-        for name, p in (rs.get("parts") or {}).items():
-            if isinstance(p, dict):
-                parts[str(name)] = _pick(p, ("material", "safety_factor", "von_mises_max_mpa",
-                                             "governing_stress_mpa", "strength_mpa", "strength_kind"))
-        out["rotor_stress"] = {
-            **_pick(rs, ("case", "sf_min", "sf_min_part", "sf_min_p05", "overspeed_factor",
-                         "max_displacement_um", "rotor_od_growth_um", "interference_mm")),
-            # the speed the stress solve ran at: the proof speed when the case is the proof case
-            "proof_rpm": _num(rs.get("rpm")) if _num(rs.get("rpm")) is not None else _num((rs.get("point") or {}).get("rpm")),
-            "retention": _pick(rs.get("retention"), ("status", "verdict", "message")),
-            "magnet_retention": _pick(rs.get("magnet_retention"), ("verdict", "share", "seated")),
-            "air_gap": _pick(rs.get("air_gap"), ("clearance_um", "remaining_um", "closed_pct")),
-            "limit_speed_rpm": _num((rs.get("limit_speed") or {}).get("rpm_sf1")),
-            "parts": parts,
-            "provenance": provenance(rs),
-        }
+    if worst:
+        out["rotor_stress"] = worst
     if modes:
         out["modes"] = {"frequencies_hz": plain(modes.get("frequencies_hz"), 2),
                         "f_switch_hz": _num(modes.get("f_switch_hz")), "provenance": provenance(modes)}
@@ -226,15 +334,18 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
     ``configure_duties`` the duties Configure can open through a full passport.
     """
     from motor_ai_sim import duty_results as dr
+    worst = worst_case_rotor_stress(stored_by_duty)
     duties = []
     for row in result_rows:
         name = str(row.get("duty") or "")
         stored = (stored_by_duty or {}).get(name) or {}
         fields = fields_block((fields_by_duty or {}).get(name))
         thermal = thermal_block(stored)
-        mechanical = mechanical_block(stored)
+        mechanical = mechanical_block(stored, worst)
         em_run = em_run_block(stored)
-        has_anything = bool(row.get("has_result") or thermal or mechanical or em_run or fields)
+        # the worst case is the motor's, shown everywhere: it alone does not make a duty a stored POINT
+        has_anything = bool(row.get("has_result") or thermal or (stored.get("rotor_stress") or stored.get("modes")
+                                                                   or stored.get("critical_speeds")) or em_run or fields)
         duties.append({
             "duty": name,
             "has_result": has_anything,
@@ -254,6 +365,7 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
         "configure_duties": sorted(configure_duties),
         # the one decision the UI needs: a motor with stored points and no full passport opens points-limited
         "mode": "full" if configure_duties else ("points" if has_points else "empty"),
+        "mechanical_worst_case": worst,
         "duties": duties,
         "solver_now": dr.solver_stamp(),
     }
@@ -439,6 +551,16 @@ def _mech_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 _PAYLOADS = {"em": _em_payload, "thermal": _thermal_payload, "rotor_stress": _mech_payload}
 
 
+_KIND_ALIASES = {"em": "em", "electromagnetic": "em", "magnetic": "em",
+                 "thermal": "thermal", "temperature": "thermal",
+                 "rotor_stress": "rotor_stress", "mech": "rotor_stress", "mechanical": "rotor_stress", "stress": "rotor_stress"}
+
+
+def field_kind(name: Any) -> Optional[str]:
+    """The stored field kind a request name means (``mech`` -> ``rotor_stress``), or ``None`` for a name nothing is stored under."""
+    return _KIND_ALIASES.get(str(name or "").strip().lower())
+
+
 def field_payload(die: str, config: str, duty: str, kind: str) -> Optional[Dict[str, Any]]:
     """The stored field of one duty, shaped like the payload its tab's adapter draws - or ``None`` (not computed).
 
@@ -446,7 +568,8 @@ def field_payload(die: str, config: str, duty: str, kind: str) -> Optional[Dict[
     a few hundred kB of JSON, not megabytes.
     """
     from motor_ai_sim import duty_fields as df
-    if kind not in FIELD_KINDS:
+    kind = field_kind(kind)
+    if kind is None:
         return None
     d = df.load(die, config, duty, kind)
     if not d:

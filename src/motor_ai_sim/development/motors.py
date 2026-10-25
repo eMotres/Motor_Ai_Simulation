@@ -1537,8 +1537,7 @@ def project_motor_field(project_id: str, request: Request, die: str, config: str
     """One stored field map of a project motor's duty (404 when it was never computed)."""
     from motor_ai_sim.development import motor_view
     user, role, open_die, cfg_name, _path, cfg, _link = _project_motor(project_id, request, die, config, show_all)
-    if kind not in motor_view.FIELD_KINDS:
-        raise HTTPException(400, detail="Unknown field kind")
+    # an unknown kind name is "not computed" (404), never a 400: nothing is stored under it
     if duty not in {str(d.get("name")) for d in cfg.get("duties", []) if isinstance(d, dict)}:
         raise HTTPException(404, detail="Duty not found")
     payload = motor_view.field_payload(open_die, cfg_name, duty, kind)

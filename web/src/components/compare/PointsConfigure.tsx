@@ -26,7 +26,7 @@ import type { FieldKind, MotorPointVariant, MotorView, MotorViewDuty, StoredFiel
 import {
   POINT_TILES, TILE_GROUPS, baseVariantPoint, busHeadroom, findVariantIndex, pointOperating, tileValue, visibleTiles, type StepBaseMode,
 } from '../../modules/development/pointsOnly';
-import { FIELD_KIND_ORDER, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
+import { FIELD_KIND_ORDER, isNotComputed, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
 import { parametersLine } from '../../modules/development/storedFieldPayload';
 import { motorColor } from '../../modules/development/motorGroups';
 import { fetchMotorField } from '../../lib/motorViewApi';
@@ -53,7 +53,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const [stepIndex, setStepIndex] = useState(-1);
   const [duty, setDuty] = useState<string | null>(() => pickPointDuty(view, loadedDuty));
   const [kind, setKind] = useState<FieldKind | null>(null);
-  const [field, setField] = useState<{ key: string; value: StoredField | null; error: string } | null>(null);
+  const [field, setField] = useState<{ key: string; value: StoredField | null; error: string; missing?: boolean } | null>(null);
   const [openError, setOpenError] = useState('');
   const [baseMode, setBaseMode] = useRememberedView<StepBaseMode>('configure.points.base', 'none', oneOf(['none', 'previous', 'first'] as const));
   const [busText, setBusText] = useState('');
@@ -96,7 +96,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
       : fetchMotorField(view.die, view.config, current.duty, activeKind);
     request
       .then((value) => { if (!cancelled) { cache.current.set(key, value); setField({ key, value, error: '' }); } })
-      .catch((e) => { if (!cancelled) setField({ key, value: null, error: e instanceof Error ? e.message : String(e) }); });
+      .catch((e) => { if (!cancelled) setField({ key, value: null, error: isNotComputed(e) ? '' : (e instanceof Error ? e.message : String(e)), missing: isNotComputed(e) }); });
     return () => { cancelled = true; };
   }, [motorKey, current?.duty, activeKind, focus?.id, stepIndex]);
 
@@ -234,7 +234,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
           {kinds.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.notComputed')}</Typography>}
           {field?.error && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.fields.loadFailed')}: {field.error}</Typography>}
-          {field && !field.value && !field.error && <Typography role="status" sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.loading')}</Typography>}
+          {field?.missing && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.notComputed')}</Typography>}
+          {field && !field.value && !field.error && !field.missing && <Typography role="status" sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.loading')}</Typography>}
           {field?.value && <StoredFieldViewer key={field.key} field={field.value} contextLabel={fieldLabel} />}
         </Box>
 

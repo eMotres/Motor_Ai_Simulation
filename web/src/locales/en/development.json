@@ -380,9 +380,73 @@
     "tip": "Latest: the latest current variant, plus the best one (highest average efficiency) when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
   },
   "points": {
+    "notComputed": "Not computed",
+    "noProvenance": "No provenance is stored for this result.",
+    "thermal": {
+      "title": "Thermal",
+      "tile": {
+        "winding": "Winding",
+        "magnet": "Magnet",
+        "housing": "Housing",
+        "bearing": "Bearing",
+        "s1": "S1 current",
+        "s2": "S2 time"
+      },
+      "tileTip": {
+        "winding": "Settled winding temperature of this point (coupled loop).",
+        "magnet": "Settled magnet temperature, hottest value.",
+        "housing": "Housing temperature, where the thermal map states it.",
+        "bearing": "Bearing temperature of the coupled loop.",
+        "s1": "Largest current the motor holds for ever at this point's cooling (S1).",
+        "s2": "Time this point may run before a part reaches its limit (S2)."
+      },
+      "s1Tip": "Largest continuous current; the limit sits in the {part}.",
+      "s2Tip": "Time to the limit of the {part}."
+    },
+    "mech": {
+      "title": "Mechanical",
+      "retentionTip": "Magnet retention without adhesive: held by the rotor iron alone.",
+      "retention": {
+        "pass": "Retained",
+        "fail": "Not retained"
+      },
+      "tile": {
+        "sfMin": "Min SF",
+        "displacement": "Max displacement",
+        "proofRpm": "Proof speed",
+        "odGrowth": "OD growth",
+        "limitRpm": "Limit speed"
+      },
+      "tileTip": {
+        "sfMin": "Smallest averaged safety factor over the parts (strength / averaged stress).",
+        "displacement": "Largest displacement under load at the proof speed.",
+        "proofRpm": "Speed the stress solve ran at.",
+        "odGrowth": "Growth of the rotor outer diameter at that speed.",
+        "limitRpm": "Speed at which the smallest safety factor reaches 1."
+      }
+    },
+    "fields": {
+      "title": "Maps",
+      "kind": {
+        "em": "Electromagnetic",
+        "thermal": "Thermal",
+        "rotor_stress": "Mechanical"
+      },
+      "tip": {
+        "em": "Flux density, loss density and demagnetisation of this point.",
+        "thermal": "Temperature map of this point.",
+        "rotor_stress": "Stress and displacement map of this point."
+      },
+      "loadFailed": "Could not load the map"
+    },
+    "drawer": {
+      "title": "Computed results · {duty}",
+      "show": "Show",
+      "hide": "Hide"
+    },
     "title": "Configure · computed points",
     "pending": "Points only",
-    "pendingTip": "Computed points only. The full operating map (any speed, current or voltage) is still being computed for this motor.",
+    "pendingTip": "Points-limited: only the stored computed points are shown, nothing in between. The full operating map (any speed, current or voltage) is not available for this motor.",
     "step": "Step",
     "noteHead": "Design step",
     "mode": "Mode",

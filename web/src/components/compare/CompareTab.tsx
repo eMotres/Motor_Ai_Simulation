@@ -11,18 +11,27 @@ import React from 'react';
 import { Box } from '@mui/material';
 import ConfiguratorPanel from './ConfiguratorPanel';
 import PointsConfigure from './PointsConfigure';
-import { usePointsConfigureStore } from '../../stores/pointsConfigureStore';
+import StoredResultsDrawer from './StoredResultsDrawer';
+import { useLoadedMotorView } from '../../lib/useLoadedMotorView';
+import { configureShow } from '../../modules/development/pointsLimited';
 
-// A project motor opened from the Development page without a full passport shows the points-only card
-// (stored duty points); every other entry keeps the ordinary Configurator untouched.
+// ONE display system for motors (owner 2026-10-26).  Whatever loaded the motor - the Motors tab or a project - Configure
+// shows the loaded one.  With a full passport it is the ordinary Configurator; a motor that has no passport but stores
+// computed duty points opens points-limited (the server says which: lib/useLoadedMotorView).  While the answer is not
+// there (loading, failed, no loaded motor) the ordinary Configurator stays exactly as it was.
 const CompareTab: React.FC = () => {
-  const pointsTarget = usePointsConfigureStore((s) => s.target);
+  const loaded = useLoadedMotorView();
+  const pointsLimited = loaded.status === 'ready' && loaded.view !== null && configureShow(loaded.view) === 'points-limited';
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column',
       bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
       <Box sx={{ flex: 1, minHeight: 0 }}>
-        {pointsTarget ? <PointsConfigure /> : <ConfiguratorPanel />}
+        {pointsLimited && loaded.view
+          ? <PointsConfigure view={loaded.view} loadedDuty={loaded.selection?.duty ?? null} />
+          : <ConfiguratorPanel />}
       </Box>
+      {loaded.status === 'ready' && loaded.view && !pointsLimited
+        && <StoredResultsDrawer view={loaded.view} duty={loaded.selection?.duty ?? null} />}
     </Box>
   );
 };

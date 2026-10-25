@@ -569,6 +569,15 @@ def save(die: str, cfg: str, duty: str, kind: str, payload: Dict[str, Any],
         })
         if computed_at:
             meta["computed_at"] = computed_at
+        # WHICH SOLVER made this map (2026-10-26): the code commit + app version,
+        # so the read-only viewer can print provenance beside every field.
+        try:
+            from motor_ai_sim import duty_results as _dr
+            _stamp = _dr.solver_stamp()
+            if _stamp:
+                meta["solver"] = _stamp
+        except Exception:                                   # noqa: BLE001
+            pass
         if geometry_fingerprint:
             meta["geometry_fingerprint"] = geometry_fingerprint
         if point:
@@ -637,6 +646,18 @@ def load(die: str, cfg: str, duty: str, kind: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _n_triangles(meta: Dict[str, Any]) -> Optional[int]:
+    """Element count off a field file's own array shapes ((m, 3) or (3, m))."""
+    try:
+        shape = ((meta.get("arrays") or {}).get("triangles") or {}).get("shape")
+        if not shape or len(shape) != 2:
+            return None
+        a, b = int(shape[0]), int(shape[1])
+        return b if (a == 3 and b != 3) else a
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 def have(die: str, cfg: str) -> Dict[str, List[Dict[str, Any]]]:
     """WHICH duties of this configuration have WHICH fields — a listing only.
 
@@ -685,6 +706,9 @@ def have(die: str, cfg: str) -> Dict[str, List[Dict[str, Any]]]:
                     "saved_at": meta.get("saved_at"),
                     "computed_at": meta.get("computed_at"),
                     "geometry_fingerprint": meta.get("geometry_fingerprint"),
+                    "solver": meta.get("solver") or None,
+                    "point": meta.get("point") or None,
+                    "n_triangles": _n_triangles(meta),
                     "arrays": sorted((meta.get("arrays") or {}).keys()),
                     "path": str(p),
                 })

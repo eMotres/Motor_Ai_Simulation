@@ -49,6 +49,8 @@ import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
+import { isConfigHighlighted, isDieHighlighted } from '../../modules/development/projectFocus';
+import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
 
@@ -312,6 +314,8 @@ const FamilyCatalog: React.FC<{
   const [ctxActive, setActive] = useState<{ die?: string; config?: string;
                                          duty?: string | null } | null>(null);
   const lastMotor = useLastMotorState();
+  // the selected project's motors are marked (owner 2026-10-26); a view aid, the list itself is unchanged
+  const projectIndex = useProjectHighlightStore((s) => s.index);
   const identity = user?.email?.trim().toLowerCase() ?? null;
   const active = loadedMotor(
     enforced && !!identity && !isAdmin,
@@ -833,8 +837,9 @@ const FamilyCatalog: React.FC<{
       )}
 
       {shown.map(die => (
-        <Box key={die.name} sx={{
+        <Box key={die.name} data-project-motor={isDieHighlighted(projectIndex, die.name) ? 'true' : undefined} sx={{
           border: `1px solid ${active?.die === die.name ? '#60a5fa88' : 'var(--line-soft)'}`,
+          ...(isDieHighlighted(projectIndex, die.name) ? { borderLeft: '3px solid #f59e0b' } : {}),
           borderRadius: 1, p: 1.2, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
             <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
@@ -863,7 +868,7 @@ const FamilyCatalog: React.FC<{
                     {btns.map((b) => {
                       const loaded = active?.die === die.name && active?.config === b.config;
                       return (
-                        <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes })}>
+                        <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes }) + (isConfigHighlighted(projectIndex, die.name, b.config) ? ` ${tx('projectFocus.configTip')}` : '')}>
                           <Button size="small" variant={b.config === sel ? 'contained' : 'outlined'}
                             onClick={() => {
                               // pick it AND load its default mode; a click that cannot load says why
@@ -881,8 +886,9 @@ const FamilyCatalog: React.FC<{
                               else if (plan.load) void applyDuty(die.name, plan.pick, plan.load);
                             }}
                             sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,
-                                  ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}) }}>
-                            {b.config}{loaded ? ' \u25cf' : ''}
+                                  ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}),
+                                  ...(isConfigHighlighted(projectIndex, die.name, b.config) && !loaded ? { borderColor: '#f59e0b', color: b.config === sel ? undefined : '#f59e0b' } : {}) }}>
+                            {b.config}{loaded ? ' \u25cf' : ''}{isConfigHighlighted(projectIndex, die.name, b.config) ? ' \u25c6' : ''}
                           </Button>
                         </Tooltip>
                       );

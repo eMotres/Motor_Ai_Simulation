@@ -261,5 +261,11 @@
   "dutyGeoConfirmNote": "The previous files are kept in the history, but every configuration of the die changes now.",
   "dutyGeoConfirmNoteConfig": "The previous file is kept in the history.",
   "dutyGeoConfirmYesDie": "Yes, rewrite the die",
-  "dutyGeoConfirmYesConfig": "Yes, change this configuration"
+  "dutyGeoConfirmYesConfig": "Yes, change this configuration",
+  "projectFocus": {
+    "label": "Project",
+    "none": "No project",
+    "tip": "Marks the motors of this project in the list (the last opened project is selected). The list itself is unchanged.",
+    "configTip": "Belongs to the selected project."
+  }
 }

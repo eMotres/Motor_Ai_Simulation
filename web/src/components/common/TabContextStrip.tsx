@@ -1,13 +1,13 @@
 /**
  * TabContextStrip — the line under the tabs on the tabs that do NOT work on the live machine (owner 2026-10-26):
  * Development shows the open project and its motors (the selected variant highlighted), Production shows the motor
- * of the production being viewed, and a points-only Configure card shows its project motor.  It never changes the
+ * of the production being viewed, and a click on a chip opens that motor in Configure like the Motors tab does.  It never changes the
  * live machine; lib/stripContext.ts decides which context applies.  One line, labels + tooltips only.
  */
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Chip, Tooltip, Typography } from '@mui/material';
-import { applyPointsOpen } from '../../lib/stripActions';
+import { openProjectMotorByRef } from '../../lib/openProjectMotor';
 import { motorLabel, visibleChips, type StripContext } from '../../lib/stripContext';
 
 type ProjectContext = Extract<StripContext, { kind: 'project' }>;
@@ -34,7 +34,7 @@ const ProjectStrip: React.FC<{ ctx: ProjectContext }> = ({ ctx }) => {
           <Chip size="small" component="span" label={motorLabel(m)}
             color={selected ? 'primary' : 'default'} variant={selected ? 'filled' : 'outlined'}
             disabled={blocked}
-            onClick={blocked ? undefined : () => applyPointsOpen(ctx.projectId, m)}
+            onClick={blocked ? undefined : () => { void openProjectMotorByRef({ id: ctx.projectId, title: ctx.title }, m).catch(() => undefined); }}
             sx={{ height: 20, fontSize: 11, fontWeight: selected ? 700 : 400 }} />
         );
         return (

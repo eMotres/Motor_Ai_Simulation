@@ -86,20 +86,28 @@ test('a project motor is found by ordinary alias or canonical die, case-insensit
   assert.equal(findVariantIndex(list, null, 'opt1'), -1);
 });
 
-test('wiring: Configure shows the points card only for a project target, notes are editable by project editors', () => {
+test('wiring: ONE display system - Configure decides points-limited from the loaded motor, project open = Motors tab load', () => {
   const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
   const tab = src('../../../components/compare/CompareTab.tsx');
-  assert.match(tab, /pointsTarget \? <PointsConfigure \/> : <ConfiguratorPanel \/>/);
-  const store = src('../../../stores/pointsConfigureStore.ts');
-  assert.doesNotMatch(store, /zustand\/middleware/);                                       // transient: a reload returns to the ordinary Configure
+  assert.match(tab, /configureShow\(loaded\.view\) === 'points-limited'/);
+  assert.match(tab, /<PointsConfigure view=\{loaded\.view\}/);
+  assert.match(tab, /: <ConfiguratorPanel \/>/);                                          // the full path is the fallback
+  // the second path is gone: no points-only store, no separate open route from a project
+  assert.throws(() => src('../../../stores/pointsConfigureStore.ts'));
+  assert.throws(() => src('../../../lib/stripActions.ts'));
+  const open = src('../../../lib/openProjectMotor.ts');
+  assert.match(open, /applyCatalogDuty\(motor\.die, motor\.config, duty/);               // the Motors tab's own load
+  assert.match(open, /setActiveTab\('compare'/);
+  const actions = src('../MotorOpenActions.tsx');
+  assert.match(actions, /openProjectMotor\(\{ id: projectId/);
+  assert.doesNotMatch(actions, /PointsConfigure|pointsConfigureStore/);
   const page = src('../components/DevelopmentPage.tsx');
   assert.match(page, /canEditProject && <MotorNoteField value=\{live\.note \?\? ''\}/);       // the note editor sits in the variant's group header
-  assert.match(page, /<MotorOpenActions motor=\{r\.motor\} duty=\{r\.result\.duty\} engineer=\{canManageGlobally\} t=\{tr\} projectId=\{selected\.id\}/);
   const admin = src('../../../components/admin/sections/ProjectsSection.tsx');
   assert.match(admin, /<MotorNoteField value=\{m\.note \?\? ''\}/);
   assert.match(admin, /\/motors\/note', 'PATCH'/);
-  const actions = src('../MotorOpenActions.tsx');
-  assert.match(actions, /projectId && availability\.pointsDuty/);
   const panel = src('../../../components/compare/PointsConfigure.tsx');
   assert.match(panel, /<Slider disabled/);                                       // continuous knobs stay disabled
+  assert.match(panel, /<StoredFieldViewer /);                                    // read-only maps, no run buttons
+  assert.doesNotMatch(panel, /Run|Solve/);
 });

@@ -12,7 +12,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import HourglassFullIcon from '@mui/icons-material/HourglassFull';
   import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
   import { BatteryInputs, type Battery } from '../../../components/compare/BatteryPanel';
-  import { specBatteryChemistry, specBatteryFieldEdit, specBatteryView } from '../specBattery';
+  import { SPEC_PACK_PROP, specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView } from '../specBattery';
   import HelpTip from '../../../components/common/HelpTip';
   import { useAuth } from '../../../contexts/AuthContext';
   import { useTranslation } from 'react-i18next';
@@ -567,7 +567,8 @@ export default function DevelopmentPage() {
     const options = f.options ?? f.choices;
     const objectValue = objectOf(answer.value);
     // the ambient block states the maximum first: every calculation uses it
-    const properties = f.id === '3_2' && f.properties ? [...f.properties].sort((a, b) => Number(b.id === 'temperature_max_C') - Number(a.id === 'temperature_max_C')) : f.properties;
+    // ambient: ONE value, the maximum (owner 2026-10-25: no min/max pairs); a stored minimum stays in the data, not on screen
+    const properties = f.id === '3_2' && f.properties ? f.properties.filter((p) => p.id !== 'temperature_min_C') : f.properties;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
@@ -642,7 +643,7 @@ export default function DevelopmentPage() {
     return <Box id={`spec-field-${f.id}`} sx={{ minWidth: 0, p: '10px 12px', border: '1px solid var(--line-soft)', borderRadius: '8px', bgcolor: 'var(--panel-2)' }}>
       <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown, undefined, [tr('wizard.packStated')])} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
-        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
+        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => { const volt = (Object.keys(SPEC_PACK_PROP) as Array<'min' | 'nom' | 'max'>).find((k) => SPEC_PACK_PROP[k] === p.id); return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => volt ? setAnswer(f, specBatteryPackEdit(obj, volt, value, allowed)) : setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}
       </Box>
       {fieldMessages(f, answer, required)}
     </Box>;
@@ -664,9 +665,10 @@ export default function DevelopmentPage() {
       {labelRow(f, false, required, unknown)}
       <Stack spacing={0.8}>
         <Tooltip title={inferred ? tr('coolingInferred') : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} sx={switchButton}>{label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
-        {(shown.length > 0 || !blankValue(obj.cooling_type)) && <Box sx={propertyGrid}>
+        {(shown.length > 0 || (!medium && !blankValue(obj.cooling_type))) && <Box sx={propertyGrid}>
           {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
-          {!blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
+          {/* the old free-text type only while the switch cannot tell the medium; otherwise it repeats the switch (owner 2026-10-25) */}
+          {!medium && !blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
         </Box>}
         {fieldMessages(f, answer, required)}
       </Stack>

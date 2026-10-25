@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as W from '../wizardState.ts';
 import { productionFallback } from '../reviewPresentation.ts';
-import { specBatteryChemistry, specBatteryFieldEdit, specBatteryView, specChemistryType } from '../specBattery.ts';
+import { specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView, specChemistryType } from '../specBattery.ts';
 
 const schema = JSON.parse(readFileSync(new URL('../../../../../src/motor_ai_sim/development/schema.json', import.meta.url), 'utf8'));
 const field = (id) => schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === id);
@@ -101,8 +101,20 @@ test('battery: stored pack voltages are never recomputed on load', () => {
   const view = specBatteryView(stored);
   assert.deepEqual(view.pack, { min: 317, nom: 356, max: 403 });
   assert.equal(view.bat.cells, 96);
-  assert.equal(view.bat.draft.min, ''); assert.equal(view.bat.draft.nom, ''); assert.equal(view.bat.draft.max, '');
+  // blank cell voltages are SHOWN as pack ÷ cells (owner 2026-10-25), the stored answer stays as it was
+  assert.deepEqual([view.bat.min, view.bat.nom, view.bat.max], [3.302, 3.708, 4.198]); assert.equal(view.bat.draft, undefined);
   assert.deepEqual(stored, { chemistry: 'NMC', series_cells: 96, voltage_min_V: 317, voltage_nominal_V: 356, voltage_max_V: 403 });
+});
+
+test('battery: cells x cell voltage = pack voltage, either way round', () => {
+  const A = allowed('2_1');
+  const erium = { chemistry: 'LiPo', series_cells: 192, voltage_min_V: 633, voltage_nominal_V: 710, voltage_max_V: 806 };
+  const packEdit = specBatteryPackEdit(erium, 'nom', 720, A);
+  assert.equal(packEdit.voltage_nominal_V, 720); assert.equal(packEdit.cell_voltage_nominal_V, 3.75);
+  assert.equal(specBatteryPackEdit({ voltage_min_V: 1 }, 'min', 600, A).cell_voltage_min_V, undefined);   // no cell count, nothing derived
+  const cells = specBatteryFieldEdit({ voltage_min_V: 330, voltage_nominal_V: 370, voltage_max_V: 420 }, 'cells', '100', A);
+  assert.deepEqual([cells.cell_voltage_min_V, cells.cell_voltage_nominal_V, cells.cell_voltage_max_V], [3.3, 3.7, 4.2]);
+  assert.deepEqual([cells.voltage_min_V, cells.voltage_nominal_V, cells.voltage_max_V], [330, 370, 420]);   // the stated pack is kept exactly
 });
 
 test('battery: pack-only data displays, and only cell edits derive the pack values they determine', () => {

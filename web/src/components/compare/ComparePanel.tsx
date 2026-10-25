@@ -883,9 +883,8 @@ const ComparePanel: React.FC = () => {
       <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0, borderBottom: '2px solid var(--line-soft)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1, flexWrap: 'wrap', rowGap: 0.5 }}>
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>
-            Saved simulations
+            Saved simulations ({sims.length})
           </Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>({sims.length}) — tick rows to compare below</Typography>
           {/* The backend keys this store per user (saved_sims._bucket): signed in →
               your own library, anonymous → the shared local one.  Without saying so,
               a sign-in/sign-out silently swaps the whole list and reads as data loss. */}
@@ -1034,10 +1033,8 @@ const ComparePanel: React.FC = () => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1 }}>
           <CompareArrowsIcon sx={{ color: '#60a5fa', fontSize: 18 }} />
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>Comparison</Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-            {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'}
-          </Typography>
-          <HelpTip title="Amber = a differing input. Green = best, red = worst across the selected columns. The Δ% row is each value's deviation from the column maximum." />
+          <HelpTip title={`${selected.length} selected, ${diffKeys.length} differing input${diffKeys.length === 1 ? '' : 's'}. Tick rows above to compare. `
+            + "Amber = a differing input. Green = best, red = worst across the selected columns. The Δ% row is each value's deviation from the column maximum."} />
         </Box>
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 2 }}>
           {selected.length < 2 ? (

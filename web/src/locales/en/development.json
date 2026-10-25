@@ -187,7 +187,6 @@
   "noDiff": "No differences found.",
   "close": "Close",
   "motorsTip": "Linked motor results are visible to project members.",
-  "comparisonCount": "{variants} variants, {results} results",
   "variant": "Variant",
   "comparison": {
     "estimate": "Estimate",
@@ -263,7 +262,6 @@
     "search": "Search dies and configurations",
     "restore": "Restore",
     "restored": "Motor restored",
-    "noRestore": "No previously linked motors to restore.",
     "linkedElsewhere": "This motor is linked to another project.",
     "unavailable": "Unavailable",
     "reason": {
@@ -385,7 +383,6 @@
       "gamma": "Angle"
     },
     "knobTip": "Disabled: scrolling needs the full operating map, which is still being computed.",
-    "knobsDisabled": "Computed points only - full operating map pending.",
     "knobsDisabledTip": "Speed, current and angle cannot be scrolled yet; only the stored points are shown. No value is interpolated.",
     "notStored": "Not stored for this point.",
     "bus": "DC bus, V",

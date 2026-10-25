@@ -187,7 +187,6 @@
   "noDiff": "未发现差异。",
   "close": "关闭",
   "motorsTip": "项目成员可以查看已关联电机的结果。",
-  "comparisonCount": "{variants} 个变体，{results} 项结果",
   "variant": "变体",
   "comparison": {
     "estimate": "估算",
@@ -263,7 +262,6 @@
     "search": "搜索定子铁芯和配置",
     "restore": "恢复",
     "restored": "电机已恢复",
-    "noRestore": "没有可恢复的历史关联电机。",
     "linkedElsewhere": "此电机已关联到其他项目。",
     "unavailable": "不可用",
     "reason": {
@@ -385,7 +383,6 @@
       "gamma": "角度"
     },
     "knobTip": "已禁用：滚动调节需要完整运行图，该图仍在计算中。",
-    "knobsDisabled": "仅已计算工况点 - 完整运行图待完成。",
     "knobsDisabledTip": "转速、电流和角度暂时无法滚动调节；仅显示已保存的工况点。不做任何插值。",
     "notStored": "此工况点未保存该值。",
     "bus": "直流母线，V",

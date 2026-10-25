@@ -93,9 +93,10 @@ export const BatteryInputs: React.FC<{
           {stockNote && <Box component="span" sx={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>{' · '}{tx('configure.packStock')}</Box>}
         </Typography>}
         <Box sx={{ flex: 1 }} />
-        {valid || statedPack ? <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
-          {tx('configure.packSummary', { nom: packText(pack.nom), min: packText(pack.min), max: packText(pack.max) })}
-        </Typography> : <Typography role="alert" sx={{ fontSize: 12, color: '#f87171', fontWeight: 700 }}>
+        {valid || statedPack ? <Tooltip title={tx('configure.packTip', { nom: packText(pack.nom), min: packText(pack.min), max: packText(pack.max) })}>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
+            {tx('configure.packVoltage', { nom: packText(pack.nom) })}
+          </Typography></Tooltip> : <Typography role="alert" sx={{ fontSize: 12, color: '#f87171', fontWeight: 700 }}>
           {tx('configure.invalidPack')}
         </Typography>}
       </Box>

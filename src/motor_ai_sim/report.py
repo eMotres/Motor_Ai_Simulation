@@ -269,6 +269,191 @@ def winding_words(geo: Dict[str, Any]) -> str:
     return out
 
 
+# ── SIX-PHASE WINDING (owner 2026-09-28; report 2026-10-25) ──────────────────
+# A `winding.phases: 6` machine is two in-phase 3-phase sets, each its own
+# winding with its own inverter (`winding_sets`).  The sets are identical halves
+# of the parallel paths, so each carries HALF the phase current at the FULL
+# phase voltage — exact by symmetry, and `winding_sets.per_set_values` says the
+# same.  Every table that prints a phase current names which one it is.
+SET_CURRENT_LABEL = "per set (one inverter)"
+
+
+def six_phase_block(em: Optional[Dict[str, Any]],
+                    wind: Optional[Dict[str, Any]] = None
+                    ) -> Optional[Dict[str, Any]]:
+    """The six-phase facts of one duty, or ``None`` for a 3-phase machine.
+
+    Read from the run's own ``six_phase`` block (``phases``, ``sets``,
+    ``neutrals``), the configuration's winding as the fallback for a run saved
+    before the block existed.  Nothing is invented: ``i_set_a`` is the stored
+    per-set current, else the machine total over two.
+    """
+    em = em if isinstance(em, dict) else {}
+    blk = em.get("six_phase") if isinstance(em.get("six_phase"), dict) else {}
+    wind = wind if isinstance(wind, dict) else {}
+    try:
+        phases = int(blk.get("phases") or wind.get("phases") or 3)
+    except (TypeError, ValueError):
+        return None
+    if phases != 6:
+        return None
+    sets = [x for x in (blk.get("sets") or []) if isinstance(x, dict)]
+    total = _numf(em.get("I_phase_rms_A"))
+    i_set = _numf(sets[0].get("I_phase_rms_A")) if sets else None
+    if i_set is None and total is not None:
+        i_set = total / 2.0
+    return {
+        "connection": str(em.get("connection") or wind.get("connection") or ""),
+        "neutrals": str(blk.get("neutrals") or wind.get("set_neutrals")
+                        or "isolated"),
+        "n_sets": 2, "n_inverters": 2,
+        "i_total_a": total, "i_set_a": i_set,
+        "inductances": (blk.get("inductances")
+                        if isinstance(blk.get("inductances"), dict) else {}),
+    }
+
+
+def six_phase_words(sp: Optional[Dict[str, Any]]) -> str:
+    """'2 × 3-phase (two independent windings), 4S-2P, isolated neutrals,
+    2 inverters' — the one sentence the document says about the winding."""
+    if not sp:
+        return ""
+    bits = ["2 × 3-phase (two independent windings)"]
+    if sp.get("connection"):
+        bits.append(str(sp["connection"]))
+    bits.append("%s neutrals" % sp.get("neutrals", "isolated"))
+    bits.append("2 inverters")
+    return ", ".join(bits)
+
+
+def six_phase_current_cells(em: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    """(machine total, per set) phase current as cell text; ``("", "")`` for a
+    3-phase run.  Both A rms."""
+    sp = six_phase_block(em)
+    if not sp:
+        return "", ""
+    return _fmt(sp["i_total_a"], 1), _fmt(sp["i_set_a"], 1)
+
+
+# ── TEMPERATURE BASIS (owner 2026-10-25) ─────────────────────────────────────
+# Every calculation is at the project's MAXIMUM ambient and the hot state; the
+# only cold case is the magnet EMF / overvoltage check with the magnets at
+# 20 °C.  Sub-zero is not considered yet (an open item for aviation).
+TEMP_BASIS_NOTE = ("Temperature basis: the hot state at the project's maximum "
+                   "ambient; the only cold case is the magnet EMF / overvoltage "
+                   "check, with the magnets at 20 °C.")
+
+
+def thermal_point(t: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The operating point a stored thermal record was solved at (``point``)."""
+    p = (t or {}).get("point") if isinstance(t, dict) else None
+    return p if isinstance(p, dict) else {}
+
+
+def ambient_c_of(t: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The ambient air temperature a thermal record was solved at, or ``None``.
+
+    The record's own ``point.ambient_temp``; failing that the housing film's
+    sink temperature when the housing is cooled by air (that sink IS the
+    ambient)."""
+    v = _numf(thermal_point(t).get("ambient_temp"))
+    if v is not None:
+        return v
+    outer = ((t or {}).get("cooling") or {}).get("outer") or {}
+    if str(outer.get("mode") or "").lower().startswith(("air", "robot", "still")):
+        return _numf(outer.get("t_sink_c"))
+    return None
+
+
+def cooling_basis_words(t: Optional[Dict[str, Any]],
+                        inner: Optional[Dict[str, Any]] = None) -> str:
+    """How the machine is cooled in this solve, in a few words.
+
+    Propeller slipstream cooling of an open construction (cooling mode
+    ``propeller_air``) is NAMED as such with the air speed used."""
+    t = t if isinstance(t, dict) else {}
+    inner = inner if isinstance(inner, dict) else {}
+    src = t.get("cooling_air_source") or inner.get("cooling_air_source")
+    pt = thermal_point(t)
+    cool = t.get("cooling") or inner.get("cooling") or {}
+    outer = cool.get("outer") or {}
+    speed = _numf(outer.get("air_speed_mps"))
+    if speed is None and isinstance(src, dict):
+        speed = _numf(src.get("air_speed_mps"))
+    if isinstance(src, dict) or str(pt.get("air_speed_source") or "") == "propeller":
+        who = str((src or {}).get("propeller_id") or pt.get("propeller_id") or "")
+        rpm = _numf((src or {}).get("rpm"))
+        return ("propeller slipstream cooling (propeller_air), open "
+                "construction, air %s%s"
+                % (_fmt(speed, 1, "m/s"),
+                   (" from %s at %s" % (who, _fmt(rpm, 0, "rpm"))) if who and rpm
+                   else (" from %s" % who if who else "")))
+    kind, _why = _cooling_kind(t if (t or inner) else None)
+    mode = str(outer.get("mode") or "").lower()
+    if not outer:
+        return "—"
+    if kind == "liquid":
+        return "liquid jacket"
+    if kind == "robotics":
+        return "still air (natural convection + radiation)"
+    if mode.startswith("air"):
+        return "forced air, %s" % _fmt(speed, 1, "m/s")
+    return "housing adiabatic" if mode.startswith("non") else "fixed film"
+
+
+def temperature_basis_cell(c: Dict[str, Any]) -> str:
+    """'winding 120 / magnets 110 °C at 45 °C ambient' for one duty column."""
+    em = c.get("em") or {}
+    th = (c.get("res") or {}).get("thermal")
+    amb = ambient_c_of(th if isinstance(th, dict) else None)
+    cw, mg = _numf(_g(em, "coil_temp_C")), _numf(_g(em, "magnet_temp_C"))
+    if cw is None and mg is None and amb is None:
+        return "—"
+    parts = []
+    if cw is not None or mg is not None:
+        parts.append("winding %s / magnets %s °C"
+                     % (_fmt(cw, 0) if cw is not None else "—",
+                        _fmt(mg, 0) if mg is not None else "—"))
+    if amb is not None:
+        parts.append("ambient %s °C" % _fmt(amb, 0))
+    return ", ".join(parts)
+
+
+def mesh_basis_cell(c: Dict[str, Any]) -> str:
+    """'2.07 mm · 1/8 sector · P2 · 1 gap layer · 120 steps/period' — the mesh
+    and time step this duty was solved on, from the duty's OWN Mesh block
+    (``mesh.*``) first and the run's summary for what the block lacks.  A
+    labelled fallback ("the machine had no saved Mesh setting") is said so."""
+    d = c.get("d") or {}
+    m = d.get("mesh") if isinstance(d.get("mesh"), dict) else {}
+    em = c.get("em") or {}
+    bits: List[str] = []
+    size = _numf(m.get("mesh.meshSize"))
+    if size is not None:
+        bits.append(_fmt(size, 2, "mm"))
+    ns = _numf(m.get("mesh.nSectors"))
+    if ns is not None and ns >= 1:
+        bits.append("full machine" if ns == 1 else "1/%d sector" % int(ns))
+    order = _numf(_g(em, "element_order"))
+    if order is None and "p2" in str(_g(em, "method") or "").lower():
+        order = 2
+    if order is not None:
+        bits.append("P%d" % int(order))
+    gl = _numf(_g(em, "gap_layers_effective")) or _numf(m.get("mesh.gapLayers"))
+    if gl is not None:
+        bits.append("%d gap layer%s" % (int(gl), "" if int(gl) == 1 else "s"))
+    steps = _numf(_g(em, "n_steps_per_period"))
+    if steps is not None:
+        bits.append("%d steps/period" % int(steps))
+    if not bits:
+        return "—"
+    out = " · ".join(bits)
+    src = str(_g(em, "mesh_settings_source") or "")
+    if src.startswith("fallback"):
+        out += " (fallback: no saved Mesh setting)"
+    return out
+
+
 def _slots_poles(geo: Dict[str, Any]) -> Tuple[int, int]:
     """(slots, poles) of the whole machine.
 
@@ -1662,8 +1847,9 @@ def _mech_map(res: Optional[Dict[str, Any]],
 
 
 #: Where a rotor is judged.  Below this the part is not accepted; the safety-
-#: factor map's bar stops at twice it, because "safer than 4" is one answer.
-SF_ACCEPT = 2.0
+#: factor map's bar stops at twice it, because "safer than 6" is one answer.
+#: Owner 2026-10-25: SF >= 3 on the AVERAGED stress (was 2).
+SF_ACCEPT = 3.0
 
 
 def _mech_extra_maps(res: Optional[Dict[str, Any]],
@@ -3515,7 +3701,7 @@ def _sf_bars_png(case: Dict[str, Any], width_cm: float = SIDE_CHART_CM,
         import numpy as np
         labels = [r[0] for r in rows][::-1]
         vals = np.array([r[1] for r in rows], float)[::-1]
-        lim = float(SF_ACCEPT) if _numf(SF_ACCEPT) else 2.0
+        lim = float(SF_ACCEPT) if _numf(SF_ACCEPT) else 3.0
         fig, ax = _fig(width_cm, px, aspect=0.72)
         # ONE COLOUR LANGUAGE FOR A SAFETY FACTOR (A2-3).  The bands used to be
         # this chart's own — orange for anything between 1.0 and the acceptance
@@ -5825,7 +6011,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         "safety_factor", duty,
         "Mechanical safety factor%s" % (
             " (%s)" % ctx["sf_min_part"] if ctx.get("sf_min_part") else ""),
-        ctx.get("sf_min"), ctx.get("sf_limit", 2.0), "",
+        ctx.get("sf_min"), ctx.get("sf_limit", SF_ACCEPT), "",
         "Thicken the sleeve or raise its interference, shorten the magnet "
         "overhang, add material at the bridge root%s.%s"
         % (overspeed_remedy_clause(ctx.get("overspeed_factor"),
@@ -5842,7 +6028,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue                      # the row above already names it
         out.append(_warn(
             "part_safety_factor", duty, "Safety factor (%s)" % _part,
-            _sf, ctx.get("sf_limit", 2.0), "",
+            _sf, ctx.get("sf_limit", SF_ACCEPT), "",
             "Same levers as the row above: more section, more interference, a "
             "stronger card, or a lower speed case."
             + rotor_bridge_remedy(_part, ctx),
@@ -9747,6 +9933,85 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
     return headline
 
 
+def battery_one_line(batt: Optional[Dict[str, Any]]) -> str:
+    """'216 cells · 756 V nominal (600 – 900 V)' — the pack in one cell."""
+    b = batt or {}
+    if not b or b.get("v_nom") is None:
+        return "—"
+    bits = []
+    if b.get("cells"):
+        bits.append("%s cells" % _fmt(b["cells"], 0))
+    nom = "%s nominal" % _fmt(b["v_nom"], 0, "V")
+    if b.get("v_min") is not None and b.get("v_max") is not None:
+        nom += " (%s – %s)" % (_fmt(b["v_min"], 0), _fmt(b["v_max"], 0, "V"))
+    bits.append(nom)
+    return " · ".join(bits)
+
+
+def key_point_rows(role: str, cols: List[Dict[str, Any]],
+                   batt: Optional[Dict[str, Any]] = None,
+                   ctxs: Optional[Dict[str, Any]] = None
+                   ) -> Tuple[List[str], List[List[str]]]:
+    """The cover's table: the key point of EVERY duty side by side (owner
+    2026-10-25: the first page shows power, torque, speed, current, phase
+    voltage peak, efficiency, battery, cooling and the maximum ambient at once).
+
+    Plain data: ``(head, rows)``, the head being ``["Key points", duty, …]``.
+    Every figure is the one the duty's own column carries elsewhere in the
+    document (``headline_rows`` for the mechanical side, the run's own summary
+    for current and voltage) — nothing is recomputed here.
+    """
+    per = []
+    for c in cols:
+        hl = {r[0]: r[1] for r in headline_rows(
+            role, c["d"], c.get("em") or {}, c.get("brg"), None, ctxs, None)[1:]}
+        per.append(hl)
+
+    def pick(c_hl, prefix):
+        for k, v in c_hl.items():
+            if k.startswith(prefix):
+                return v
+        return "—"
+
+    head = ["Key points"] + [c["duty"] for c in cols]
+    rows: List[List[str]] = []
+    if any(six_phase_block(c.get("em")) for c in cols):
+        rows.append(["Winding"] + [
+            (six_phase_words(six_phase_block(c.get("em")))
+             if six_phase_block(c.get("em")) else "3-phase") for c in cols])
+    rows.append(["Speed"] + [pick(h, "Speed") for h in per])
+    rows.append(["Torque at the rotor"] + [pick(h, "Torque") for h in per])
+    rows.append(["Shaft power"] + [pick(h, "Shaft power") for h in per])
+    _dl = all(str(_g(c.get("em") or {}, "star_delta") or "").lower().startswith("d")
+              for c in cols)
+    rows.append([("Line" if _dl else "Phase") + " current, rms"
+                 + (": total (per set)" if any(six_phase_block(c.get("em"))
+                                               for c in cols) else "")]
+                + [overview_current(c.get("em") or {}, c["d"]) for c in cols])
+    rows.append(["Phase voltage, peak"] + [
+        _fmt(_g(c.get("em") or {}, "V_phase_peak_V"), 1, "V") for c in cols])
+    _eff_lbl = [("Shaft efficiency" if k.startswith("Shaft") else
+                 "Electromagnetic efficiency")
+                for h in per for k in h if "efficiency" in k]
+    rows.append(["Efficiency (shaft)" if all(l.startswith("Shaft")
+                                             for l in _eff_lbl) and _eff_lbl
+                 else "Efficiency"]
+                + [pick(h, "Shaft efficiency")
+                   if any(k.startswith("Shaft efficiency") for k in h)
+                   else pick(h, "Electromagnetic efficiency") for h in per])
+    rows.append(["Mass"] + [pick(h, "Mass") for h in per])
+    if any_pwm(cols):
+        rows.append(["Supply"] + [supply_short(c) for c in cols])
+    rows.append(["Battery"] + [battery_one_line(batt)] * len(cols))
+    ths = [(c.get("res") or {}).get("thermal") for c in cols]
+    rows.append(["Cooling"] + [cooling_basis_words(t) if isinstance(t, dict)
+                               else NOT_SOLVED for t in ths])
+    rows.append(["Maximum ambient"] + [
+        (_fmt(ambient_c_of(t), 0, "°C") if isinstance(t, dict)
+         and ambient_c_of(t) is not None else "—") for t in ths])
+    return head, rows
+
+
 def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
            sources, delta, batt: Optional[Dict[str, Any]] = None,
            used_live: bool = False, supply: Optional[str] = None,
@@ -9759,9 +10024,8 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
         _para(f"{die} · {cfg}", st["title"]),
         _para(machine_subtitle(role, geo, mats), st["sub"]),
         _para(
-            f"Duty <b>{d_duty.get('name') or '—'}</b> · every number below was "
-            f"read from a stored solver result; nothing was solved to produce "
-            f"this document.",
+            f"Duty <b>{d_duty.get('name') or '—'}</b> · every number is read "
+            f"from a stored solver result.",
             st["sub"]),
         Spacer(1, 6),
         # WHO OWNS THIS, before anything else on the page (2026-09-10).
@@ -9769,10 +10033,24 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
               st["body"]),
         Spacer(1, 12),
     ]
-    out.append(_table(
-        [[r[0], r[1], _para(str(r[2]), st["cell"])]
-         for r in headline_rows(role, d_duty, em, brg, cols, ctxs, supply)],
-        [140, 95, CONTENT_W - 235], header=True, size=9.4))
+    if cols:
+        # THE KEY POINT OF EVERY DUTY AT ONCE (owner 2026-10-25).
+        _kh, _kr = key_point_rows(role, cols, batt, ctxs)
+        _n = len(_kh) - 1
+        _lw = 130.0
+        _cw = (CONTENT_W - _lw) / max(_n, 1)
+        out.append(_table(
+            [[_para(c, st["hcell"]) if i else c for i, c in enumerate(_kh)]]
+            + [[r[0]] + [_para(str(v), st["cell"]) for v in r[1:]] for r in _kr],
+            [_lw] + [_cw] * _n, header=True, size=9.0))
+        _mc = mass_consistency(cols)
+        if _mc:
+            out.append(_para("%s %s." % (FLAG, _mc["text"]), st["warn"]))
+    else:
+        out.append(_table(
+            [[r[0], r[1], _para(str(r[2]), st["cell"])]
+             for r in headline_rows(role, d_duty, em, brg, cols, ctxs, supply)],
+            [140, 95, CONTENT_W - 235], header=True, size=9.4))
     out.append(_para(f"Operating point taken from {em_src or '— nothing solved yet'}.",
                          st["note"]))
     out.append(Spacer(1, 12))
@@ -9902,6 +10180,9 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
     # 2026-09-20): never blended into "Air gap"/"Rotor outer radius" above,
     # which stay the magnetic (design) dimensions.
     rows = geometry_rows(geo, wind, slot, em) + mechanical_assembly_rows(mech)
+    _six = six_phase_block(em, wind)
+    if _six:
+        out.append(_para("Winding: %s." % six_phase_words(_six), st["body"]))
     w = CONTENT_W / 2.0
     out.append(_table(rows, [w * 0.52, w * 0.30, w * 0.18,
                              w * 0.52, w * 0.30, w * 0.18], size=8.8))
@@ -10014,7 +10295,7 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
     def _f(k, d=2):
         return _fmt(geo.get(k), d)
 
-    return [
+    rows = [
         ["Stator outer diameter", _f("stator_diameter"), "mm",
          "Slots / poles", "%d / %d" % _slots_poles(geo), ""],
         # HOW THE SLOT IS ACTUALLY WOUND (user 2026-09-10: "couldn't find
@@ -10058,6 +10339,18 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
                        if slot and slot.get("fill") else
                        _fmt(_g(em, "slot_fill_pct"), 1, "%")), ""],
     ]
+    # THE TWO ROTOR DIMENSIONS the mechanics hang on (owner 2026-10-25): the
+    # housing under the magnets and the iron left between pocket and hub.
+    if geo.get("rotor_house_height") is not None or geo.get("magnet_fill_down") is not None:
+        rows.append(["Rotor housing thickness", _f("rotor_house_height", 2), "mm",
+                     "Magnet fill, hub side (bridge)", _f("magnet_fill_down", 3), ""])
+    # SIX PHASES: said once, in the words the owner uses (2026-10-25).
+    _sp = six_phase_block(em, wind)
+    if _sp:
+        rows.append(["Phases", "2 × 3-phase", "",
+                     "Neutrals / inverters",
+                     "%s / %d" % (_sp["neutrals"], _sp["n_inverters"]), ""])
+    return rows
 
 
 def _magnet_lamination_words(em: Optional[Dict[str, Any]]) -> str:
@@ -10658,10 +10951,8 @@ def insulation_text(mats: Dict[str, Any], ctxs: Dict[str, Any]) -> str:
             out += ("; the winding reaches %s against %s — %s left"
                     % (_fmt(w[0], 1, "°C"), _fmt(w[4], 0, "°C"),
                        _fmt((w[4] - w[0]) / w[4] * 100.0, 1, "%")))
-        out += ". "
-    out += ("Class R (220 °C) or S (240 °C) enamel and slot insulation buy "
-            "margin without touching the electromagnetics.")
-    return out
+        out += "."
+    return out.rstrip()
 
 
 
@@ -10968,8 +11259,10 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
         t_mag = _magnet_card_temp(mats.get("magnet"))
         t_mag_src = " (card as quoted)" if t_mag is not None else ""
     _dl_op = str(_g(em, "star_delta") or "star").lower().startswith("d")
-    return [
-        ["Line current" if _dl_op else "Phase current",
+    _six = six_phase_block(em)
+    rows = [
+        [("Line current" if _dl_op else "Phase current")
+         + (", total of both sets" if _six else ""),
          f"{_fmt(I, 1, 'A rms')} / "
                           f"{_fmt(float(I) * math.sqrt(2) if I else None, 1, 'A peak')}",
          "Load angle gamma", _fmt(_g(em, "gamma_deg") or _g(d_duty, "gamma_deg"), 1, "°")],
@@ -10987,6 +11280,17 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
         ["Terminal connection", _sd_words(None, em, d_duty),
          "Winding current", _fmt(_g(em, "I_winding_rms_A") or I, 1, "A rms")],
     ]
+    if _six:
+        # PER SET beside the machine total (owner 2026-10-25): one inverter
+        # carries half the current at the full phase voltage.
+        _isa = _numf(_six["i_set_a"])
+        rows.insert(1, [
+            ("Line current " if _dl_op else "Phase current ") + SET_CURRENT_LABEL,
+            f"{_fmt(_isa, 1, 'A rms')} / "
+            f"{_fmt(_isa * math.sqrt(2) if _isa else None, 1, 'A peak')}",
+            "Phase voltage peak (each set = machine)",
+            _fmt(_g(em, "V_phase_peak_V"), 1, "V")])
+    return rows
 
 
 #: The sub-row under the fundamental: what V1 is, in the words the reviewer
@@ -11137,9 +11441,19 @@ def em_torque_rows(em: Dict[str, Any],
                    "the winding voltage carries the 3rd-harmonic EMF that "
                    "circulates inside the closed delta and never reaches the "
                    "terminals"])
-    tp.append(["Line current [A rms]" if _dl0 else "Phase current [A rms]",
+    _six = six_phase_block(em)
+    tp.append([("Line current" if _dl0 else "Phase current")
+               + (", total of both sets" if _six else "") + " [A rms]",
                _fmt(_g(em, "I_phase_rms_A"), 1),
                "the drive's input — no end-effect correction applies"])
+    if _six:
+        # PER SET = per inverter: half the current, the full phase voltage
+        # (in-phase sets of identical halves of the paths).
+        tp.append([("Line current " if _dl0 else "Phase current ")
+                   + SET_CURRENT_LABEL + " [A rms]",
+                   _fmt(_six["i_set_a"], 1),
+                   "each of the 2 inverters; phase voltage per set = the "
+                   "machine's phase voltage above"])
     if _dl0 and _g(em, "I_winding_rms_A") is not None:
         tp.append(["Winding current [A rms]", _fmt(_g(em, "I_winding_rms_A"), 1),
                    "line ÷ √3 — the current in the copper"])
@@ -11230,6 +11544,13 @@ def em_torque_rows(em: Dict[str, Any],
                _fmt(_kt, 4),
                (_fmt(_numf(_kt) * _ktq, 4) if (_ktq and _numf(_kt) is not None)
                 else "—") if k3d else "—"])
+    if _six and _numf(_kt) is not None:
+        # Torque per ampere of ONE set's current, both sets driven alike.
+        tp.append(["Torque constant Kt " + SET_CURRENT_LABEL
+                   + " [N·m/A rms]" + _sine_tail,
+                   _fmt(2.0 * _numf(_kt), 4),
+                   (_fmt(2.0 * _numf(_kt) * _ktq, 4) if _ktq else "—")
+                   if k3d else "—"])
     return tp
 
 
@@ -11622,6 +11943,27 @@ def em_constant_rows(em: Dict[str, Any],
                        "; the reference is %s against a solved %s"
                        % (_fmt(_t_lin, 3, "N·m"), _fmt(_t_avg, 3, "N·m"))))
     R("Air-gap flux density, mean |B|", _g(em, "B_gap_mean_T"), 3, "T", "")
+    _six = six_phase_block(em)
+    if _six:
+        # PER SET, beside the machine's (owner 2026-10-25).  A set is half the
+        # parallel paths: twice the machine's resistance, half its current, the
+        # same voltage; the inductances are the probe's own per-set values.
+        _kt_line = _g(em, "Kt_Nm_per_A_line") if _delta else _g(em, "Kt_Nm_per_Arms")
+        if _numf(_kt_line) is not None:
+            R("Torque constant Kt " + SET_CURRENT_LABEL, 2.0 * _km(_kt_line), 4,
+              "N·m/A rms", "both sets driven alike: twice the machine's Kt per "
+              "ampere of the machine total")
+        if _numf(_g(em, "R_phase_ohm")) is not None:
+            R("Phase resistance " + SET_CURRENT_LABEL,
+              2.0 * _numf(_g(em, "R_phase_ohm")) * 1000.0, 3, "mOhm",
+              "half the parallel paths: twice the machine's")
+        _ind = _six["inductances"]
+        R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
+          "from the six-phase inductance probe")
+        R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
+        R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
+          "mH", ("%s of the per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
+          if _ind.get("Lxy_pct_of_Ld") is not None else "")
     return rows
 
 
@@ -11640,6 +11982,10 @@ def em_loss_rows(em: Dict[str, Any],
 
     _lr("Copper (I²R + proximity)", P_cu,
         "at the winding temperature above; the AC share is solved")
+    if six_phase_block(em):
+        # Not stored per set yet — an em dash, never a half of the total.
+        lrows.append(["Copper, " + SET_CURRENT_LABEL, "—",
+                      "the solve does not store the loss by set"])
     # The per-half iron split and the per-part solid split only exist on runs
     # solved after they were added.  An older summary carries the SUMS, and the
     # report prints the sums under their honest label rather than four em dashes
@@ -12009,7 +12355,7 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
     if not em:
         out.append(_para(EM_PAGE_UNSOLVED, st["warn"]))
         return out
-    out.append(_para(f"Source: {em_src}.", st["note"]))
+    out.append(_para(f"Source: {em_src}. {TEMP_BASIS_NOTE}", st["note"]))
     if fp_mismatch:
         # F2 (L13 server audit 2026-09-19): this section's own electromagnetic
         # data was solved on a DIFFERENT geometry than the thermal, coupled
@@ -14384,11 +14730,12 @@ def _pwm_page(st, cols: List[Dict[str, Any]],
     from reportlab.platypus import Spacer
 
     out: List[Any] = [_para(PWM_HEADING, st["h1"])]
-    out.append(_para(pwm_intro(cols, duty), st["body"]))
     blocks = pwm_blocks(cols, brg)
     if not any(b["measured"] for b in blocks):
+        # nothing to introduce: the one line says so (owner 2026-10-25)
         out.append(_para(PWM_NO_RECORD_AT_ALL, st["body"]))
         return out
+    out.append(_para(pwm_intro(cols, duty), st["body"]))
     for b in blocks:
         out.append(_para("Duty '%s'" % b["duty"], st["h2"]))
         # EACH DUTY'S CONCLUSIONS UNDER ITS OWN HEADING (A2-2): they used to be
@@ -14486,6 +14833,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
         out.append(_para(_line, st["note"]))
 
     out.append(_para("Boundary conditions", st["h2"]))
+    out.append(_para("Cooling basis: %s." % cooling_basis_words(res, inner),
+                     st["body"]))
     for line in _cooling_words(res.get("cooling") or inner.get("cooling") or {}):
         out.append(_para("• " + line, st["body"]))
 
@@ -15690,9 +16039,8 @@ def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
     r("Total inverter loss", L.get("total_W"), "", 0, "W")
     _gen = str(rec.get("power_direction") or P.get("power_direction")
                or "motor") == "generator"
-    r("Power direction",
-      "generator (active rectifier)" if _gen else "motor",
-      "machine -> DC link" if _gen else "DC link -> machine")
+    if _gen:        # a pure motor needs no direction row
+        r("Power direction", "generator (active rectifier)", "machine -> DC link")
     r("Inverter efficiency",
       None if E.get("inverter") is None else float(E["inverter"]) * 100.0,
       "(AC input - losses) / AC input" if _gen
@@ -15733,9 +16081,26 @@ def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
           2, "%")
     elif RP.get("reason"):
         r("Phase-current PWM ripple", "not computed", str(RP.get("reason")))
+    _topo = rec.get("topology") or {}
+    _two_sets = str(_topo.get("preset") or "") == "two_3ph_sets"
+    if _two_sets:
+        # SIX-PHASE: one 3-phase inverter per set, each at half the machine's
+        # phase current (owner 2026-10-25).
+        r("Inverters", "%d × 3-phase" % int(_topo.get("n_bridges") or 2),
+          "one per set of the six-phase winding; each carries half the phase "
+          "current at the full phase voltage")
+    _i_ph = _numf(P.get("i_phase_rms_A"))
+    # The inverter's own leg current when the record has the bridges, else half.
+    _legs = [_numf(((b.get("legs") or [{}])[0]).get("i_leg_rms_A"))
+             for b in (rec.get("bridges") or []) if isinstance(b, dict)]
+    _per_inv = (_legs[0] if _legs and _legs[0] is not None
+                else (_i_ph / 2.0 if _i_ph is not None else None))
     r("Operating point",
-      f"{_fmt(P.get('i_phase_rms_A'), 0)} A phase / "
-      f"{_fmt(P.get('i_leg_rms_3ph_A'), 0)} A per leg",
+      (f"{_fmt(_i_ph, 0)} A phase, machine total / "
+       f"{_fmt(_per_inv, 0)} A per inverter (per leg)"
+       if (_two_sets and _i_ph is not None) else
+       f"{_fmt(P.get('i_phase_rms_A'), 0)} A phase / "
+       f"{_fmt(P.get('i_leg_rms_3ph_A'), 0)} A per leg"),
       f"{P.get('star_delta')}, m {_fmt(P.get('modulation_index'), 3)}, "
       f"power factor {_fmt(P.get('power_factor'), 3)}, "
       f"{_fmt(P.get('f_carrier_hz'), 0)} Hz carrier on "
@@ -17015,10 +17380,8 @@ def assumption_bullets(sec: Optional[Dict[str, int]] = None) -> List[str]:
         # the rotor power first, so the gap is the size of k_3d.  Said plainly.
         "<b>Efficiency</b> — one balance everywhere: rotor power × k_3d "
         "against the 2-D losses, bearings and windage where they sit. The "
-        "solver's own solve-time figure, which the catalog quotes, is the "
-        "same losses against the UNCORRECTED 2-D rotor power, so it reads "
-        "higher by about as much as k_3d takes off — a point or two, not a "
-        "rounding difference.",
+        "solver's solve-time figure, which the catalog quotes, divides by the "
+        "uncorrected rotor power and reads higher by about k_3d.",
         "<b>Bearings and windage</b> — the SKF frictional-moment model plus an "
         "analytic windage term, not FEM. The radial load is the rotor's own "
         "weight only: magnetic pull, coupling, belt and gear side loads are "
@@ -17130,111 +17493,79 @@ def _notes_page(st, sources, brg, em, th, me, cp,
 # not the other is a report that says two things about one machine.
 
 DUTY_OVERVIEW_EMPTY = (
-    "This configuration has no saved duty. Run the point on the Simulation tab "
-    "and save it to a duty; the comparison tables below are one column per duty "
-    "and there is nothing yet to compare.")
-
-DUTY_STAMPS_LOADED = (
-    "When each stored answer was computed. The duty marked * is the one loaded "
-    "on this server right now, so the machine's own last thermal / mechanical / "
-    "coupled result counts as ITS result and is used in the columns below.")
-
-DUTY_STAMPS_UNLOADED = (
-    "When each stored answer was computed. No duty of this configuration is "
-    "loaded on this server, so the machine-level last results (the ones the "
-    "detail sections further down draw the maps from) are not attributed to any "
-    "column — they belong to whatever was loaded when they were solved.")
-
-NOT_SOLVED_RULE = (
-    "A cell reading \"" + NOT_SOLVED + "\" means exactly that: nothing has been "
-    "solved for that duty and that simulation. It is never filled in from a "
-    "neighbouring column — an operating point's temperature, stress and losses "
-    "are properties of that point, and the whole reason this report keeps a "
-    "per-duty store is so that they cannot be swapped.")
+    "This configuration has no saved duty: run a point on the Simulation tab "
+    "and save it as a duty.")
 
 COMPARE_INTRO = (
-    "One column per operating point, one table per simulation. A duty with no "
-    "stored answer for a simulation reads \"" + NOT_SOLVED + "\" in that table "
-    "— never a number from another column.")
+    "One column per operating point, one table per simulation; \"" + NOT_SOLVED
+    + "\" means nothing is stored for that duty — never a number from another "
+    "column. " + TEMP_BASIS_NOTE)
 
 EM_COMPARE_NOTE = (
-    "Each column is that duty's own saved 2-D transient, same mesh and solver. "
-    "Torque is the energy/flux-linkage average over one electrical period; the "
-    "3-D column applies the end-effect factor to torque and voltage. A blank "
-    "cell is a quantity that run did not record; \"" + NOT_SOLVED + "\" is a "
-    "duty with no electromagnetic answer.")
+    "Each column is that duty's own saved 2-D transient; torque is the "
+    "energy/flux-linkage average over one electrical period, and the 3-D column "
+    "applies the end-effect factor.")
 
 EM_BEARING_NOTE = (
     "Bearing and windage watts are at each duty's own speed and temperature.")
 
 THERMAL_COMPARE_NOTE = (
-    "Steady-state conduction on the cross-section, driven by that duty's "
-    "cycle-averaged loss density. Air-gap conductance follows from clearance, "
-    "speed and gap temperature (Taylor-Couette); the budget residual is what "
-    "went in minus what left, and a large one means a missing heat path.")
+    "Steady-state conduction driven by each duty's cycle-averaged loss density; "
+    "a large budget residual means a missing heat path.")
 
 THERMAL_COMPARE_EMPTY = (
-    "No duty of this configuration has a stored temperature map. Open the "
-    "Thermal tab with a duty loaded, set the cooling and press Solve; the answer "
-    "is then filed under that duty and appears in this column from the next "
-    "report on.")
+    "No duty of this configuration has a stored temperature map: solve it on "
+    "the Thermal tab with a duty loaded.")
 
 MECH_COMPARE_NOTE = (
-    "Plane-stress 2-D with contact, at the speed in the first row. Safety "
-    "factors are on the AVERAGED PEAK of each part's own criterion, p99.5 "
-    "beside it as the singularity gauge. Temperature enters only as the band's "
-    "fit change: strengths are NOT de-rated, so a hot machine's real margin is "
-    "smaller than shown.")
+    "Plane-stress 2-D with contact. Safety factors are on the AVERAGED PEAK of "
+    "each part's own criterion, p99.5 beside it as the singularity gauge; "
+    "strengths are not de-rated for temperature. The target is the worst case "
+    "(overspeed + peak torque + magnetic pull); the stored result has no "
+    "magnetic pull yet.")
 
 CRIT_COMPARE_NOTE = (
     "A critical speed is where a forward whirl branch crosses the 1× unbalance "
     "line. The shaft line is an ASSUMPTION, so these locate the problem and do "
     "not certify the rotor; each column's sweep range is that duty's own, and "
-    # CS-9 (audit v7): 27,413 rpm in one column against 27,414 in the other for
-    # one shaft line.  Two sweeps bracket the same crossing on different grids;
-    # the last digit is the bisection's, not the rotor's, and saying so is
-    # honest where chasing it would not be.
-    "two sweeps bracket one crossing on different grids — the last digit is "
-    "the bisection's, not the rotor's.")
+    "two sweeps bracket one crossing on different grids, so the last digit is "
+    "the bisection's.")
 
 COUPLED_COMPARE_NOTE = (
-    "The loop alternates the electromagnetic transient and the thermal map "
-    "until the temperature it solved at and the one it solved for agree within "
-    "the tolerance shown; the residual rows are the gap left when it stopped. "
-    "Shaft efficiency includes bearings and windage, the electromagnetic one "
-    "above does not.")
+    "The loop alternates the electromagnetic and thermal solves until the "
+    "temperatures agree within the tolerance shown; shaft efficiency includes "
+    "bearings and windage.")
 
 COUPLED_COMPARE_EMPTY = (
-    "No duty has a stored coupled run. The temperatures elsewhere in this report "
-    "are then the ones each solve was TOLD to use, not ones the machine settled "
-    "at.")
+    "No duty has a stored coupled run, so the temperatures in this report are "
+    "the ones each solve was told to use, not ones the machine settled at.")
 
 WARNINGS_NONE = (
     "No quantity this report can check is at or within 10 % of its limit on any "
-    "duty. That is not a clean bill of health: it is a statement about the rules "
-    "listed at the end of this section and about the results that were actually "
-    "stored — a limit with nothing solved against it raises nothing.")
+    "duty; a limit with nothing solved against it raises nothing.")
 
 WARNINGS_RULES_NOTE = (
-    "A rule fires only when a stored result carries the quantity it checks; a "
-    "limit with nothing solved against it does not appear.")
-
-SOURCES_PER_DUTY_NOTE = (
-    "\"ANOTHER machine\" means the geometry fingerprint stored with that answer "
-    "is not this configuration's. The number is still printed — it "
-    "was a real solve of a real machine — but it is not a number about THIS "
-    "configuration, and it is flagged rather than quietly mixed in. "
-    "\"Unverified\" means one of the two fingerprints is missing, which is "
-    "unknown, not fine.")
-
-SOURCES_PER_DUTY_EMPTY = (
-    "No duty of this configuration has a stored solver result yet.")
+    "A rule fires only when a stored result carries the quantity it checks.")
 
 #: Column headings of the two duty-overview tables.
 DUTY_OVERVIEW_HEAD = ["Duty", "Mode", "Speed", "Torque × k_3d", "Shaft power",
-                      "Current", "gamma", "Supply", "Solved for"]
+                      "Current", "Phase V peak", "gamma", "Supply", "Solved for"]
+#: What the overview section KEEPS once the cover's key-point table carries
+#: speed, torque, power, current and voltage (owner 2026-10-25: one place for
+#: each number).
+DUTY_OVERVIEW_KEEP = ("Duty", "Mode", "gamma", "Supply", "Solved for")
 DUTY_STAMPS_HEAD = ["Duty", "Electromagnetic", "Thermal", "Coupled",
                     "Rotor stress", "Critical speeds"]
+
+
+def overview_current(em: Dict[str, Any], d: Optional[Dict[str, Any]] = None) -> str:
+    """'600.0 A' — and for a six-phase run '600.0 A (2 × 300.0 A)': the machine
+    total first, the per-set (per-inverter) current in brackets."""
+    tot = _g(em, "I_phase_rms_A") or (d or {}).get("current_arms")
+    sp = six_phase_block(em)
+    if sp and sp.get("i_set_a") is not None:
+        return "%s (2 × %s)" % (_fmt(tot, 1, "A"), _fmt(sp["i_set_a"], 1, "A"))
+    return _fmt(tot, 1, "A")
 
 
 def duty_overview_rows(cols: List[Dict[str, Any]],
@@ -17287,7 +17618,8 @@ def duty_overview_rows(cols: List[Dict[str, Any]],
             _fmt(_g(_em_c, "rpm") or d.get("rpm"), 0, "rpm"),
             _fmt(_t_c, 2, "N·m"),
             _fmt(_p_c / 1000.0 if _p_c else _numf(d.get("power_kw")), 2, "kW"),
-            _fmt(_g(_em_c, "I_phase_rms_A") or d.get("current_arms"), 1, "A"),
+            overview_current(_em_c, d),
+            _fmt(_g(_em_c, "V_phase_peak_V"), 1, "V"),
             _fmt(d.get("gamma_deg"), 1, "°"),
             supply_words(c),
             ", ".join(have) or "nothing yet",
@@ -17304,6 +17636,16 @@ def duty_overview_rows(cols: List[Dict[str, Any]],
     return what, when
 
 
+def duty_overview_slim(cols: List[Dict[str, Any]], active: Optional[str] = None
+                       ) -> Tuple[List[str], List[List[str]]]:
+    """The overview section's table: only the columns the cover's key points
+    do not already carry (see :data:`DUTY_OVERVIEW_KEEP`)."""
+    what, _when = duty_overview_rows(cols, active)
+    idx = [DUTY_OVERVIEW_HEAD.index(h) for h in DUTY_OVERVIEW_KEEP]
+    return ([DUTY_OVERVIEW_HEAD[i] for i in idx],
+            [[r[i] for i in idx] for r in what])
+
+
 def _duty_overview(st, cols: List[Dict[str, Any]],
                    active: Optional[str]) -> List[Any]:
     """Which operating points this configuration has, and what has been solved
@@ -17315,12 +17657,11 @@ def _duty_overview(st, cols: List[Dict[str, Any]],
         out.append(_para(DUTY_OVERVIEW_EMPTY, st["warn"]))
         return out
 
-    what, when = duty_overview_rows(cols, active)
+    head, what = duty_overview_slim(cols, active)
     # a duty name may be Cyrillic — see the 'hcell'/'dcell' styles
-    rows = [list(DUTY_OVERVIEW_HEAD)] + [
-        [_para(r[0], st["dcell"])] + list(r[1:]) for r in what]
-    out.append(_table(rows, [70, 62, 48, 52, 46, 46, 32, 96,
-                             CONTENT_W - 452], header=True, size=8.4))
+    rows = [head] + [[_para(r[0], st["dcell"])] + list(r[1:]) for r in what]
+    out.append(_table(rows, [90, 70, 40, 130, CONTENT_W - 330], header=True,
+                      size=8.4))
     # …and where a voltage-fed duty landed against the current it was aimed at
     # (BL-2): the cells above are the SOLVED point, and the miss is a fact about
     # this document's operating point.
@@ -17482,11 +17823,10 @@ def glossary_rows(em: Dict[str, Any],
          "and the rotor's q-axis. An input, not a result: the report solves at "
          "the angle the duty was saved with."],
         ["k_3d" + (" (this machine: %s)" % _fmt(k3d, 4) if k3d else ""),
-         "The 3-D end-effect factor: what the 2-D slice is multiplied by to "
-         "match a full 3-D solve of the same machine. EMF, KV and the voltages "
-         "carry the flux factor k_flux; torque, power, Kt and Km carry the "
-         "measured torque factor k_T where one exists, else k_flux; the "
-         "losses carry neither."],
+         "The 3-D end-effect factor the 2-D slice is multiplied by. EMF, KV "
+         "and the voltages carry the flux factor k_flux; torque, power, Kt "
+         "and Km carry the measured torque factor k_T where one exists, else "
+         "k_flux; the losses carry neither."],
         ["p99.5 / p05",
          "A percentile of a field instead of its extreme, printed beside the "
          "peak as a GAUGE of how singular that peak is. Not the number a part "
@@ -17505,10 +17845,6 @@ def glossary_rows(em: Dict[str, Any],
          "in the line-to-line waveform that is not the fundamental, per cent of "
          "the fundamental. In delta the circulating 3rd-harmonic EMF never "
          "reaches the terminals and is not in this figure."],
-        ["Duty",
-         "One operating point this configuration is designed for — current, "
-         "speed, angle and cooling, saved together. One column per duty in "
-         "every comparison table."],
     ]
 
 
@@ -17754,6 +18090,14 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # and in Δ (user 2026-09-13: "need to add the connection to the report").
     rows.append(["Terminal connection"] + _col_vals(
         cols, lambda c: _sd_words(None, c["em"] or {}, c["d"])))
+    # THE BASIS each column was solved on (owner 2026-10-25): temperatures at
+    # the project's maximum ambient, and the duty's own mesh.
+    rows.append(["Solved at (hot state)"] + _col_vals(cols, temperature_basis_cell))
+    rows.append(["Mesh and time step"] + _col_vals(cols, mesh_basis_cell))
+    if any(six_phase_block(c["em"]) for c in cols):
+        rows.append(["Winding"] + _col_vals(cols, lambda c: (
+            six_phase_words(six_phase_block(c["em"]))
+            if six_phase_block(c["em"]) else "3-phase")))
     R("Torque, 2-D [N·m]",
       lambda c: _e(c, "T_em_avg_Nm") or c["d"].get("torque_nm"), 3)
     R("Torque × k_3d [N·m]", lambda c: _e(c, "end3d.T_corrected_Nm"), 3)
@@ -17772,10 +18116,17 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # and the copper carries line ÷ √3 — the row says which one it holds.
     _dl_cols = [str(_e(c, "star_delta") or c["d"].get("star_delta") or "")
                 .lower().startswith("d") for c in cols]
-    R("Line current [A rms]" if all(_dl_cols)
-      else ("Phase current [A rms]" if not any(_dl_cols)
-            else "Phase (Y) / line (Δ) current [A rms]"),
+    _six_cols = [bool(six_phase_block(c["em"])) for c in cols]
+    R(("Line current [A rms]" if all(_dl_cols)
+       else ("Phase current [A rms]" if not any(_dl_cols)
+             else "Phase (Y) / line (Δ) current [A rms]"))
+      .replace(" [A rms]", ", total of both sets [A rms]" if any(_six_cols)
+               else " [A rms]"),
       lambda c: _e(c, "I_phase_rms_A") or c["d"].get("current_arms"), 1)
+    if any(_six_cols):
+        rows.append(["Current " + SET_CURRENT_LABEL + " [A rms]"] + _col_vals(
+            cols, lambda c: (_fmt(six_phase_block(c["em"])["i_set_a"], 1)
+                             if six_phase_block(c["em"]) else "—")))
     # …AND HOW CLOSE THAT CURRENT IS TO THE ONE THE DUTY ASKED FOR (BL-2).  A
     # voltage-fed run solves for a current; the rated duty of the reference motor settled
     # 3.16 % under its setpoint and no page of the document said so.
@@ -17784,7 +18135,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
                     + _col_vals(cols, lambda c: point_error_cell(c) or "on point"))
     R("Load angle gamma [°]",
       lambda c: _e(c, "gamma_deg", default=c["d"].get("gamma_deg")), 1)
-    R("Current density [A/mm²]",
+    R("Current density [A/mm²]" + (" (same in each set)" if any(_six_cols)
+                                   else ""),
       lambda c: _e(c, "J_coil_A_per_mm2")
       or (c.get("result") or {}).get("j_coil_a_mm2"), 2)
     # THREE VOLTAGES, each named for what it is (reviewer 2026-09-14): the
@@ -17832,6 +18184,12 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
                         PWM_VPK_VS_VDC_NOTE if duty_drive(c) == "pwm"
                         else "—")))
     R("Line voltage, rms [V]", lambda c: _e(c, "V_line_rms_V"), 1)
+    # THE PHASE VOLTAGE PEAK on every duty (owner 2026-10-25: the same number
+    # the Development comparison table shows); on a six-phase machine each set
+    # sees this voltage.
+    R("Phase voltage, waveform peak [V]" + (" (each set the same)"
+                                            if any(_six_cols) else ""),
+      lambda c: _e(c, "V_phase_peak_V"), 1)
 
     def _v1k(c) -> Optional[float]:
         """The FUNDAMENTAL line-to-line amplitude with k_3d on it — the only
@@ -17843,13 +18201,13 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
 
     R("Line voltage, fundamental amplitude V1 × k_3d [V]", _v1k, 1)
     if batt.get("v_min"):
-        rows.append(["Pack minimum voltage [V]"]
-                    + [_fmt(batt["v_min"], 1)] * len(cols))
+        # The pack minimum is one number for every column (it is on the cover),
+        # so it rides in this label instead of a row of identical cells.
         # The gate itself, printed rather than left to be derived in someone's
         # head: m at the pack's worst moment, against the 1.15 a two-level
         # bridge with zero-sequence injection holds.
-        R("Modulation index m at the pack minimum (limit %s)"
-          % _fmt(MOD_INDEX_LIMIT, 2),
+        R("Modulation index m at the pack minimum %s V (limit %s)"
+          % (_fmt(batt["v_min"], 1), _fmt(MOD_INDEX_LIMIT, 2)),
           lambda c: (None if duty_drive(c) == "pwm"
                      else modulation_index(_v1k(c), batt.get("v_min"))), 3)
     if _pwm_v:
@@ -17935,6 +18293,11 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     _kt_lbl = ", 3-D" if _any_k else ", 2-D"
     R("Kt, line current [N·m/A rms%s]" % _kt_lbl + _sine_tail,
       lambda c: _ktmul(c, _kt(c)), 4)
+    if any(_six_cols):
+        R("Kt " + SET_CURRENT_LABEL + " [N·m/A rms%s]" % _kt_lbl + _sine_tail,
+          lambda c: (_ktmul(c, 2.0 * _kt(c))
+                     if (six_phase_block(c["em"]) and _kt(c) is not None)
+                     else None), 4)
     R("Km [N·m/sqrt(W)%s]" % _kt_lbl + _sine_tail,
       lambda c: _ktmul(c, _numf(_e(c, "Km_Nm_sqrtW"))), 3)
     R("Copper loss [W]",
@@ -18070,6 +18433,11 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
         # the header says which is which.
         S(f"{label}, max / avg [°C]",
           lambda c, k=key: _pair(_comp(c, k, "max"), _comp(c, k, "avg")))
+    # THE BASIS (owner 2026-10-25): maximum ambient, and how the heat leaves.
+    S("Ambient, the project's maximum [°C]",
+      lambda c: _fmt(ambient_c_of(_t(c)), 0) if ambient_c_of(_t(c)) is not None
+      else "—")
+    S("Cooling", lambda c: cooling_basis_words(_t(c)))
     R("Hot spot in the machine [°C]", lambda c: (_t(c) or {}).get("T_max"))
     R("Coolest point [°C]", lambda c: (_t(c) or {}).get("T_min"))
     # WHAT THE MAP CARRIES is `losses_W`, the integral of the loss density over
@@ -18156,28 +18524,11 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
       lambda c: _g(_t(c) or {}, "cooling.heat_budget.rotor_heat_split.gap_W"), 1)
     R("…as a share of the rotor's loss [%]",
       lambda c: _g(_t(c) or {}, "cooling.heat_budget.rotor_heat_split.gap_pct"), 0)
-    R("Rotor heat out off the bore [W]",
-      lambda c: _g(_t(c) or {},
-                   "cooling.heat_budget.rotor_heat_split.bore_W"), 1)
-    R("…as a share of the rotor's loss [%]",
-      lambda c: _g(_t(c) or {},
-                   "cooling.heat_budget.rotor_heat_split.bore_pct"), 0)
     # ZERO, NOT A BLANK, wherever the split itself exists (reviewer 2026-09-14,
     # C4).  A record written before the axial keys existed and one that solved
     # a model with no end faces are the same physics — a 2-D cross-section has
     # no end faces — and printing "0" under one duty and "—" under the next
     # made the peak run look as though it had lost data it never had.
-    def _rsplit(c, key):
-        sp = _g(_t(c) or {}, "cooling.heat_budget.rotor_heat_split")
-        if not isinstance(sp, dict):
-            return None
-        v = _numf(sp.get(key))
-        return v if v is not None else 0.0
-
-    R("Rotor heat out off the rotor / magnet end faces [W]",
-      lambda c: _rsplit(c, "axial_end_faces_W"), 1)
-    R("…as a share of the rotor's loss [%]",
-      lambda c: _rsplit(c, "axial_end_faces_pct"), 0)
     # ── THE STATOR's own balance, and then the headline split (2026-09-14) ──
     # The same rows as the per-duty page, because the question the user asks of
     # one duty ("how much goes out through the mount?") is the question he asks
@@ -18185,13 +18536,7 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
     for _k, _lbl, _d in (
             ("stator_W", "Made in the stator side [W]", 1),
             ("gap_in_W", "  in across the air gap [W]", 1),
-            ("total_in_W", "  = into the stator side, in total [W]", 1),
-            ("housing_W", "Stator heat out through the housing [W]", 1),
-            ("housing_pct", "…as a share of what enters the stator side [%]", 0),
-            ("mount_W", "Stator heat out into the mount [W]", 1),
-            ("mount_pct", "…as a share of what enters the stator side [%]", 0),
-            ("end_faces_W", "Stator heat out off the end faces [W]", 1),
-            ("end_faces_pct", "…as a share of what enters the stator side [%]", 0)):
+            ("total_in_W", "  = into the stator side, in total [W]", 1)):
         R(_lbl, lambda c, k=_k: _g(
             _t(c) or {}, "cooling.heat_budget.stator_heat_split." + k), _d)
 
@@ -18369,6 +18714,42 @@ def _criterion_words(cols: List[Dict[str, Any]], part: str) -> str:
     return "the part's own criterion"
 
 
+#: The owner's acceptance target for the rotor mechanics (2026-10-25): safety
+#: factor >= 3 on the AVERAGED stress, in the worst case (overspeed + peak
+#: torque + magnetic pull).
+ROTOR_SF_TARGET = SF_ACCEPT
+
+
+def rotor_sf_cell(sf: Any) -> str:
+    """'3.40 — meets 3' / '2.05 — BELOW 3': the worst-case SF with its target."""
+    v = _numf(sf)
+    if v is None:
+        return "—"
+    return "%s — %s %s" % (_fmt(v, 2), "meets" if v >= ROTOR_SF_TARGET else "BELOW",
+                           _fmt(ROTOR_SF_TARGET, 0))
+
+
+def rotor_worst_case_words(m: Optional[Dict[str, Any]]) -> Optional[str]:
+    """What the stored rotor-stress case contains: overspeed and torque.  The
+    magnetic pull is not in the stored result; ``MECH_COMPARE_NOTE`` says so
+    once, it is never read as covered."""
+    if not isinstance(m, dict):
+        return None
+    f = _numf(m.get("overspeed_factor"))
+    t = _numf((m.get("point") or {}).get("torque_nm"))
+    bits = ["overspeed ×%s" % _fmt(f, 2) if (f and f > 1.0) else "rated speed",
+            ("torque %s" % _fmt(t, 1, "N·m")) if t else "no torque"]
+    return ", ".join(bits)
+
+
+def _first_num(m: Optional[Dict[str, Any]], *keys: str) -> Optional[float]:
+    for k in keys:
+        v = _numf((m or {}).get(k))
+        if v is not None:
+            return v
+    return None
+
+
 def mech_compare_rows(cols: List[Dict[str, Any]]
                       ) -> Tuple[str, List[List[Any]]]:
     """Rotor stress and contacts, duty by duty — plain rows, no renderer."""
@@ -18400,11 +18781,20 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
     R("Speed solved [rpm]", lambda c: (_m(c) or {}).get("rpm"), 0)
     R("Overspeed factor", lambda c: (_m(c) or {}).get("overspeed_factor"), 2)
     S("Case", lambda c: (_m(c) or {}).get("case"))
-    rows.append(["Lowest safety factor"] + _col_vals(
-        cols, lambda c: (NOT_SOLVED if _m(c) is None
-                         else (ROTOR_NOT_RETAINED if case_not_retained(_m(c))
-                               else _fmt((_m(c) or {}).get("sf_min"), 2)))))
+    # THE OWNER'S ACCEPTANCE TARGET sits in the same row as the result (owner
+    # 2026-10-25: rotor SF >= 3, averaged, worst case); a rotor that does not
+    # hold its magnets without adhesive reads as a FAIL, never as an SF.
+    S("Lowest safety factor (target ≥ %s)" % _fmt(ROTOR_SF_TARGET, 0),
+      lambda c: (ROTOR_NOT_RETAINED if case_not_retained(_m(c))
+                 else rotor_sf_cell((_m(c) or {}).get("sf_min"))))
     S("…on part", lambda c: (_m(c) or {}).get("sf_min_part"))
+    S("Worst case solved", lambda c: rotor_worst_case_words(_m(c)))
+    # Dimensions the rotor's margin hangs on, when the result carries them.
+    R("Rotor iron bridge thickness [mm]",
+      lambda c: _first_num(_m(c), "bridge_thickness_mm", "bridge_mm"), 2)
+    R("Rotor housing thickness [mm]",
+      lambda c: _first_num(_m(c), "rotor_housing_thickness_mm",
+                           "housing_thickness_mm", "rotor_house_height_mm"), 2)
     # THE ROTOR'S OWN ROW NEEDS ITS SENTENCE (user 2026-09-15).  The bridges
     # between the poles are assembly features; the factor on them stays, and so
     # does the flag, but a client must not read "SF 0.22" without being told
@@ -18486,10 +18876,13 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
       lambda c: ((_m(c) or {}).get("od_growth") or {}).get("mean_um"), 1)
     R("Maximum displacement [µm]",
       lambda c: (_m(c) or {}).get("max_displacement_um"), 1)
-    R("Sleeve interference, geometric [mm]",
-      lambda c: (_m(c) or {}).get("interference_mm"), 4)
-    R("…effective at temperature [mm]",
-      lambda c: (_m(c) or {}).get("interference_effective_mm"), 4)
+    # SLEEVE ROWS only for a rotor that has a sleeve (owner 2026-10-25).
+    if any(isinstance(((_m(c) or {}).get("parts") or {}).get("sleeve"), dict)
+           for c in cols):
+        R("Sleeve interference, geometric [mm]",
+          lambda c: (_m(c) or {}).get("interference_mm"), 4)
+        R("…effective at temperature [mm]",
+          lambda c: (_m(c) or {}).get("interference_effective_mm"), 4)
     S("Temperatures the solve ran at",
       lambda c: ", ".join(f"{k} {float(v):g}" for k, v in
                           sorted(((_m(c) or {}).get("part_temps_c") or {}).items())

@@ -74,7 +74,7 @@ export interface PackLike {
 }
 
 // the same numbers as BatteryPanel's PRESETS
-const PRESET: Record<CellType, { nom: number; max: number; min: number }> = {
+export const PRESET: Record<CellType, { nom: number; max: number; min: number }> = {
   NMC: { nom: 3.7, max: 4.2, min: 3.0 },
   LFP: { nom: 3.2, max: 3.65, min: 2.5 },
 };

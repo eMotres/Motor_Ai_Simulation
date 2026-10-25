@@ -10,7 +10,8 @@ export function fieldAnswer(draft: SpecDraft, id: string): FieldAnswer {
 export function setFieldAnswer(draft: SpecDraft, id: string, answer: FieldAnswer): SpecDraft {
   return { ...draft, fields: { ...(draft.fields ?? {}), [id]: answer } };
 }
-/** Recalculate the display-only S1 power or remove a stale derived value when either input is blank. */
+/** Recalculate the display-only S1 power or remove a stale derived value when either input is blank.
+ *  Every other property (the stated `power_W`, `power_basis`) is kept as entered. */
 export function withS1DerivedPower(value: Record<string, unknown>): Record<string, unknown> {
   const torque = value.torque_Nm, speed = value.speed_rpm;
   if (typeof torque === 'number' && Number.isFinite(torque) && typeof speed === 'number' && Number.isFinite(speed)) {
@@ -52,7 +53,13 @@ export function answerComplete(a: FieldAnswer): boolean {
   return a.value !== undefined && a.value !== null && String(a.value).trim() !== '';
 }
 
-export function schemaValueComplete(schema: { type?: string; min?: number; max?: number; required?: boolean; allow_range?: boolean; properties?: Array<{ id: string; required?: boolean; required_flag?: string; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {
+/** Groups of `required_any` with no complete property: e.g. S1 needs torque OR power. */
+export function missingAnyGroups(field: { required_any?: string[][]; properties?: Array<{ id: string; type?: string; min?: number; max?: number; allow_range?: boolean }> }, value: unknown): string[][] {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return (field.required_any ?? []).filter((group) => !group.some((id) => { const property = field.properties?.find((p) => p.id === id); return !!property && schemaValueComplete(property, record[id]); }));
+}
+
+export function schemaValueComplete(schema: { type?: string; min?: number; max?: number; required?: boolean; allow_range?: boolean; required_any?: string[][]; properties?: Array<{ id: string; required?: boolean; required_flag?: string; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {
   if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return false;
   if (schema.allow_range && typeof value === 'object') {
     const bounds = value as Record<string, unknown>;
@@ -71,7 +78,7 @@ export function schemaValueComplete(schema: { type?: string; min?: number; max?:
     if (typeof value !== 'object' || Array.isArray(value)) return false;
     const record = value as Record<string, unknown>;
     const required = schema.properties.filter((p) => p.required === true || p.required_flag === 'E');
-    return required.every((p) => schemaValueComplete(p, record[p.id]));
+    return required.every((p) => schemaValueComplete(p, record[p.id])) && missingAnyGroups(schema, record).length === 0;
   }
   if (schema.type === 'number') return typeof value !== 'boolean' && (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isFinite(Number(value)) && (schema.min === undefined || Number(value) >= schema.min) && (schema.max === undefined || Number(value) <= schema.max);
   return true;
@@ -83,12 +90,23 @@ export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): bo
   const value = answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : {};
   const required = field.properties?.filter((property) => property.required === true || property.required_flag === 'E') ?? [];
   if (field.properties?.length && !required.every((property) => schemaValueComplete(property, value[property.id]))) return false;
+  if (field.properties?.length && missingAnyGroups(field, value).length) return false;
   const minimum = field.min_filled_properties ?? 0;
   const filled = Object.values(value).filter((part) => part !== undefined && part !== null && (typeof part !== 'string' || !!part.trim()) && (!Array.isArray(part) || part.length > 0)).length;
   if (minimum && filled < minimum) return false;
   if (field.type === 'array' && !schemaValueComplete({ type: 'array', required: field.required, items: field.items }, answer.value)) return false;
   if (field.type === 'object' && !schemaValueComplete(field, answer.value)) return false;
   return field.properties?.length ? true : answerComplete(answer);
+}
+
+/** A range-capable value keeps the range editor unless it is a single number (stored ranges are never flattened). */
+export function usesRangeEditor(shape: { allow_range?: boolean }, value: unknown): boolean {
+  return !!shape.allow_range && !(typeof value === 'number' || (typeof value === 'string' && !!value.trim()));
+}
+
+/** The "not known yet" toggle: the stored value is always kept, only the status changes. */
+export function answerWithUnknown(field: SchemaField, old: FieldAnswer, unknown: boolean): FieldAnswer {
+  return { ...old, status: unknown ? 'not_known_yet' : fieldAnswerComplete(field, { value: old.value, status: 'filled' }) ? 'filled' : 'missing' };
 }
 
 export function missionProfileComplete(draft: SpecDraft): boolean {

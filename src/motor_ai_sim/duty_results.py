@@ -926,7 +926,19 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
                                 # not at which ε, against which structure, or
                                 # with how many ends open
                                 "emissivity", "mount_g_w_per_k", "mount_temp_c",
-                                "heat_path", "end_faces", "end_face_sides")),
+                                "heat_path", "end_faces", "end_face_sides",
+                                # where the housing air speed came from
+                                "air_speed_source", "propeller_id",
+                                "propeller_position")),
+        # PROPELLER SLIPSTREAM COOLING (`propeller_air`, owner 2026-10-25): the
+        # propeller and the air speed it gave, so the report can name the
+        # cooling instead of printing a bare m/s.  Absent on every other mode.
+        **({"cooling_air_source": _pick(
+                res.get("cooling_air_source") or inner.get("cooling_air_source"),
+                ("propeller_id", "rpm", "air_speed_mps", "slipstream_position",
+                 "slipstream_factor", "ambient_c", "thrust_N"))}
+           if isinstance(res.get("cooling_air_source")
+                         or inner.get("cooling_air_source"), dict) else {}),
     }
     return out
 

@@ -62,6 +62,15 @@ the pointer at the duty's saved block; ``em_run`` is the raw numbers of the last
 run at this duty, so a run that was never saved is still kept, tied to
 die/configuration/duty.  See :func:`compact_em_run`.
 
+``coupled_limit`` (2026-10-26) is the coupled loop run as a LIMIT SEARCH (``solve_to`` limits / continuous, mode limited:
+the S1 search).  It used to be filed under ``coupled`` and so overwrote the duty's own converged point result (the 128.5 C
+cruise answer was replaced by the 179.6 C state at the limit).  Now the two are different kinds and neither replaces the
+other; see :func:`is_limit_search` and :func:`note_coupled`.
+
+KEEP EVERYTHING (owner: «нужно сохранять все результаты моделирования»): a row replaced by a newer one of the SAME kind is not
+dropped - it moves to a short per-kind history (``doc["history"]``, newest first, :data:`HISTORY_MAX` rows, read with
+:func:`history`).
+
 EVERY record carries a ``solver`` stamp (:func:`solver_stamp`: the code commit and
 the app version that produced it), written by :func:`record` itself, so a stored
 number can always say which solver made it.
@@ -98,7 +107,8 @@ log = logging.getLogger(__name__)
 #: NO field maps — the waveform it stores is one electrical period, decimated.
 KINDS: Tuple[str, ...] = ("thermal", "rotor_stress", "modes",
                           "critical_speeds", "coupled", "em", "duty_cycle",
-                          "pwm", "continuous_rating", "controller", "em_run")
+                          "pwm", "continuous_rating", "controller", "em_run",
+                          "coupled_limit")
 
 #: The mechanical kinds, in the order ``routes.mechanical._LAST`` names them.
 MECH_KINDS: Tuple[str, ...] = ("rotor_stress", "modes", "critical_speeds")
@@ -463,6 +473,55 @@ def solver_stamp() -> Dict[str, Any]:
     return out
 
 
+#: How many replaced rows of one kind a duty keeps (newest first).
+HISTORY_MAX = 4
+
+#: Kinds that are pointers or comparisons rebuilt on every save: replacing them loses no simulation result.
+_NO_HISTORY = ("em",)
+
+#: Heavy or nested parts left out of a history copy (the live row keeps them).
+_HISTORY_DROP = ("schematic_svg", "reference_sine", "alt_carriers", "campbell")
+
+
+def _stamp_of(row: Any) -> Any:
+    return (row.get("computed_at") or row.get("recorded_at")) if isinstance(row, dict) else None
+
+
+def _keep_previous(doc: Dict[str, Any], die: str, cfg: str, duty: str, kind: str,
+                   prev: Any, new: Dict[str, Any]) -> None:
+    """Move the row a new one is about to replace into the per-kind history (never drop a result)."""
+    if kind in _NO_HISTORY or not isinstance(prev, dict) or not prev:
+        return
+    if _stamp_of(prev) is not None and _stamp_of(prev) == new.get("computed_at"):
+        return                                        # the same run filed again (a cache hit), nothing to keep
+    hist = (doc.setdefault("history", {}).setdefault(die, {}).setdefault(cfg, {})
+               .setdefault(duty, {}).setdefault(kind, []))
+    if hist and _stamp_of(hist[0]) == _stamp_of(prev):
+        return
+    hist.insert(0, {k: v for k, v in prev.items() if k not in _HISTORY_DROP})
+    del hist[HISTORY_MAX:]
+
+
+def history(die: str, cfg: str, duty: str, kind: Optional[str] = None) -> Any:
+    """The rows a duty's newer records replaced: ``[row, ...]`` newest first for one ``kind``, or ``{kind: [...]}``."""
+    try:
+        h = (((read_all().get("history") or {}).get(str(die)) or {}).get(str(cfg)) or {}).get(str(duty)) or {}
+        if kind is not None:
+            return list(h.get(kind) or [])
+        return {k: list(v) for k, v in h.items()}
+    except Exception:                                       # noqa: BLE001
+        return [] if kind is not None else {}
+
+
+def is_limit_search(entry: Any) -> bool:
+    """A coupled record that answers 'where does a part reach its limit' (the S1 search) rather than 'what does this duty
+    settle at': mode ``limited`` or ``solve_to`` limits / continuous.  Works on old rows too (they carried both keys)."""
+    if not isinstance(entry, dict):
+        return False
+    return (str(entry.get("mode") or "").lower() == "limited"
+            or str(entry.get("solve_to") or "").lower() in ("limits", "continuous"))
+
+
 def record(die: str, cfg: str, duty: str, kind: str,
            entry: Dict[str, Any]) -> bool:
     """Park one compact result under (die, configuration, duty).
@@ -494,6 +553,7 @@ def record(die: str, cfg: str, duty: str, kind: str,
             if _stamp:
                 e.setdefault("solver", _stamp)
             e = _carry_excitation_blocks(kind, e, node.get(kind))
+            _keep_previous(doc, str(die), str(cfg), str(duty), kind, node.get(kind), e)
             node[kind] = e
             return _write_all(doc)
     except Exception as exc:                                # noqa: BLE001
@@ -704,6 +764,9 @@ def rename(die: str, cfg: str, old: str, new: str) -> bool:
                 node = (results.get(key) or {}).get(str(cfg))
                 if isinstance(node, dict) and str(old) in node:
                     node[str(new)] = node.pop(str(old))
+                    hnode = (((doc.get("history") or {}).get(key) or {}).get(str(cfg)))
+                    if isinstance(hnode, dict) and str(old) in hnode:
+                        hnode[str(new)] = hnode.pop(str(old))
                     return _write_all(doc)
             return False
     except Exception:                                       # noqa: BLE001
@@ -721,10 +784,13 @@ def forget(die: str, cfg: str, duty: Optional[str] = None) -> bool:
             node = cfgs.get(str(cfg))
             if not isinstance(node, dict):
                 return False
+            hcfgs = ((doc.get("history") or {}).get(str(die)) or {})
             if duty is None:
                 cfgs.pop(str(cfg), None)
+                hcfgs.pop(str(cfg), None)
             elif str(duty) in node:
                 node.pop(str(duty), None)
+                (hcfgs.get(str(cfg)) or {}).pop(str(duty), None)
             else:
                 return False
             return _write_all(doc)
@@ -1661,7 +1727,41 @@ def note_coupled(out: Dict[str, Any], *, alt_carrier: bool = False) -> bool:
     e = compact_coupled(out)
     if alt_carrier:
         return record_alt_carrier(*ctx, "coupled", e)
-    return record(*ctx, "coupled", e)
+    if not is_limit_search(e):
+        return record(*ctx, "coupled", e)
+    # A LIMIT SEARCH has its own kind and never replaces the duty's point result.  Readers that only know `coupled`
+    # (report, datasheet, catalogue chip) keep working: with no point result yet - or when the stored one is itself a
+    # limit state - the search is mirrored there as before; with a point result in place only the S1 / S2 blocks (a
+    # rating, a time) are grafted onto it, never the temperatures.
+    ok = record(*ctx, "coupled_limit", e)
+    cur = (get(ctx[0], ctx[1]).get(ctx[2]) or {}).get("coupled")
+    if cur is None or is_limit_search(cur):
+        return record(*ctx, "coupled", e) and ok
+    return _graft_limit_blocks(ctx, e) and ok
+
+
+def _graft_limit_blocks(ctx: Tuple[str, str, str], limit_entry: Dict[str, Any]) -> bool:
+    """Copy the S1 rating / time-to-limit of a limit search onto the duty's point record (temperatures untouched)."""
+    try:
+        from motor_ai_sim import run_recording as _rr
+        if _rr.suppressed():
+            return False
+        blocks = {k: limit_entry[k] for k in ("continuous_rating", "time_to_limit")
+                  if isinstance(limit_entry.get(k), dict) and limit_entry[k]}
+        if not blocks:
+            return True
+        with _store_write_lock():
+            doc = read_all()
+            node = ((doc.get("results") or {}).get(ctx[0]) or {}).get(ctx[1], {}).get(ctx[2], {})
+            row = node.get("coupled") if isinstance(node, dict) else None
+            if not isinstance(row, dict):
+                return False
+            row.update(blocks)
+            row["limit_blocks_from"] = {"kind": "coupled_limit", "computed_at": limit_entry.get("computed_at")}
+            return _write_all(doc)
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("duty_results: could not graft the limit blocks (%s)", exc)
+        return False
 
 
 def note_pwm(record_: Dict[str, Any], computed_at: Optional[str] = None,
@@ -1831,7 +1931,7 @@ def kinds_present(entry: Dict[str, Any]) -> List[str]:
     it, and the one view of "what has this duty been solved for"
     (``GET /api/family/duty_results``) never mentioned it.
     """
-    return [k for k in ("em", "em_run", "pwm", "thermal", "duty_cycle", "coupled",
+    return [k for k in ("em", "em_run", "pwm", "thermal", "duty_cycle", "coupled", "coupled_limit",
                         "controller", "rotor_stress", "critical_speeds",
                         "modes")
             if isinstance((entry or {}).get(k), dict)]

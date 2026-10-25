@@ -142,7 +142,19 @@ def solver_status(row: Any) -> str:
 
 def _is_limit_search(cp: Dict[str, Any]) -> bool:
     """A coupled row that answers 'where does this part reach its limit' (S1 search), not 'what does this duty settle at'."""
-    return str(cp.get("mode") or "").lower() == "limited" or str(cp.get("solve_to") or "").lower() in ("limits", "continuous")
+    from motor_ai_sim.duty_results import is_limit_search
+    return is_limit_search(cp)
+
+
+def _newest(*rows: Any) -> Optional[Dict[str, Any]]:
+    """The newest of the given rows (None entries skipped); an undated row loses to a dated one."""
+    from datetime import datetime, timezone
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    best = None
+    for r in rows:
+        if isinstance(r, dict) and r and (best is None or (_when(r) or floor) > (_when(best) or floor)):
+            best = r
+    return best
 
 
 def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -158,10 +170,13 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     th = stored.get("thermal") if isinstance(stored.get("thermal"), dict) else None
     cp = stored.get("coupled") if isinstance(stored.get("coupled"), dict) else None
+    cl = stored.get("coupled_limit") if isinstance(stored.get("coupled_limit"), dict) else None
     dc = stored.get("duty_cycle") if isinstance(stored.get("duty_cycle"), dict) else None
     cr = stored.get("continuous_rating") if isinstance(stored.get("continuous_rating"), dict) else None
-    if not (th or cp or dc or cr):
+    if not (th or cp or cl or dc or cr):
         return None
+    # the limit search: its own kind (since 2026-10-26) or, in an old store, a `coupled` row that IS a limit search
+    limit_row = _newest(cl, cp if (cp and _is_limit_search(cp)) else None)
     out: Dict[str, Any] = {}
     duty_temps: Optional[Dict[str, Any]] = None
     if cp and not _is_limit_search(cp):
@@ -184,21 +199,25 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     duty_temps["housing_from"] = {"kind": "thermal", "computed_at": th.get("computed_at")}
                     break
         out["duty_temps"] = {k: v for k, v in duty_temps.items() if v is not None}
-    if cp and _is_limit_search(cp):
-        out["limit_search"] = {"kind": "coupled", "solve_to": cp.get("solve_to"), "mode": cp.get("mode"),
-                               "winding_c": _num(cp.get("coil_temp_c")), "magnet_c": _num(cp.get("magnet_temp_c")),
-                               "provenance": provenance(cp)}
+    if limit_row:
+        out["limit_search"] = {"kind": "coupled_limit" if limit_row is cl else "coupled", "solve_to": limit_row.get("solve_to"),
+                               "mode": limit_row.get("mode"),
+                               "winding_c": _num(limit_row.get("coil_temp_c")), "magnet_c": _num(limit_row.get("magnet_temp_c")),
+                               "provenance": provenance(limit_row)}
         out["limit_search"] = {k: v for k, v in out["limit_search"].items() if v is not None}
     # S1: the largest current that may run for ever at this duty's cooling (owner 2026-09-21).
-    s1 = (cp or {}).get("continuous_rating") if isinstance((cp or {}).get("continuous_rating"), dict) else cr
+    with_s1 = [r for r in (limit_row, cp) if isinstance(r, dict) and isinstance(r.get("continuous_rating"), dict) and r["continuous_rating"]]
+    src1 = _newest(*with_s1)
+    s1 = src1["continuous_rating"] if src1 else cr
     if isinstance(s1, dict) and s1:
         out["s1"] = {**_pick(s1, ("ok", "feasible", "I_cont_A_rms", "limiting_part", "limits_c", "temperatures_c",
                                   "record_is_s1", "verified", "note")),
-                     "provenance": provenance(cp or cr)}
+                     "provenance": provenance(src1 or cr)}
     # S2: how long the point may run when it is over a limit (owner 2026-09-17), and the duty-cycle spec it came with.
-    ttl = (cp or {}).get("time_to_limit")
-    if isinstance(ttl, dict) and ttl:
-        out["s2"] = {**plain(ttl, 3), "provenance": provenance(cp)}
+    with_s2 = [r for r in (limit_row, cp) if isinstance(r, dict) and isinstance(r.get("time_to_limit"), dict) and r["time_to_limit"]]
+    src2 = _newest(*with_s2)
+    if src2:
+        out["s2"] = {**plain(src2["time_to_limit"], 3), "provenance": provenance(src2)}
     if cp and isinstance(cp.get("duty_cycle"), dict) and cp["duty_cycle"]:
         out["regime"] = plain(cp["duty_cycle"], 2)
     if dc:
@@ -208,7 +227,7 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                         "provenance": provenance(dc)}
     if not out:
         return None
-    out["provenance"] = provenance(cp or th or dc or cr)
+    out["provenance"] = provenance(cp or th or limit_row or dc or cr)
     return out
 
 

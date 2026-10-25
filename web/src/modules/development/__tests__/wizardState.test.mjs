@@ -208,7 +208,10 @@ test('a stored range always reads as its maximum (one value, the worst case)', a
   assert.deepEqual(rangeWorst({ allow_range: true }, { minimum: 5, maximum: 10 }), { worst: 10, min: 5, max: 10 });
   // a limit (an allowed ripple) reads as its maximum too: the schema no longer marks any value `worst: "min"`
   assert.equal(rangeWorst({ allow_range: true, worst: 'min' }, { minimum: 1, maximum: 2 }).worst, 2);
-  assert.equal(rangeWorst({ allow_range: true }, { minimum: 3, maximum: null }).worst, 3);
+  // no maximum given: no worst value (the minimum is never shown as the maximum, Astra review 2026-10-25)
+  assert.equal(rangeWorst({ allow_range: true }, { minimum: 3, maximum: null }).worst, '');
+  const { keyNumber } = await import('../wizardState.ts');
+  assert.equal(keyNumber(5), 5); assert.equal(keyNumber({ minimum: 900, maximum: 1000 }), 1000); assert.equal(keyNumber({ minimum: 900 }), null); assert.equal(keyNumber('x'), null);
   assert.equal(rangeWorst({ allow_range: true }, { minimum: null, maximum: null }).worst, '');
   assert.equal(rangeWorst({ allow_range: true }, 7), null);
   assert.equal(rangeWorst({}, { minimum: 1, maximum: 2 }), null);

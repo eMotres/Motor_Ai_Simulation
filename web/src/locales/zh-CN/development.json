@@ -64,6 +64,7 @@
     "period": "重复间隔",
     "frequency": "峰值重复（文字）",
     "derived": "T·ω = {value} W",
+    "statedBasis": "按 {basis} 填写；不是轴功率",
     "noPeak": "没有峰值工况时，峰值一行留空即可。",
     "periodTip": "峰值多久重复一次（秒）。只出现一次时留空。"
   },
@@ -511,5 +512,6 @@
   },
   "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最大值；输入一个数值即替换该范围。",
   "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。",
-  "coolingMisfit": "{{medium}}与负载“{{load}}”不匹配"
+  "addLoadComponent": "添加载荷分量",
+  "coolingMisfit": "{medium}与负载“{load}”不匹配"
 }

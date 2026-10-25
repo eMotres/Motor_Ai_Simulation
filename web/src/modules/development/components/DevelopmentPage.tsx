@@ -2,7 +2,7 @@ import { deliveryConflicts, matchesFieldReference, productionFallback } from '..
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
-  Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
+  Divider, FormControlLabel, IconButton, Menu, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
   Tooltip, Typography, Checkbox,
 } from '@mui/material';
   import AddIcon from '@mui/icons-material/Add';
@@ -19,12 +19,12 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SchemaSuggestion, SpecSnapshot, SpecState } from '../types';
   import MissionProfileEditor from './MissionProfileEditor';
   import type { LoadType, MissionRow } from '../missionProfileState';
-  import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
+  import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
   import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, keyNumber, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
@@ -61,7 +61,6 @@ const readableRange = (value: unknown): string => {
   const hi = range.maximum ?? range.max ?? range.to;
   return lo == null && hi == null ? '' : `${lo ?? '—'}–${hi ?? '—'}`;
 };
-const finiteScalar = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const blankValue = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && !value.trim());
 /** A stored answer holds something worth showing (a value, or an explicit "not known yet"). */
 const hasStoredAnswer = (raw: unknown) => {
@@ -106,6 +105,8 @@ export default function DevelopmentPage() {
   const [migrationOpen, setMigrationOpen] = useState(false);
   const [migrationAck, setMigrationAck] = useState(false);
   const [migrationBusy, setMigrationBusy] = useState(false);
+  const [extraLoadProps, setExtraLoadProps] = useState<string[]>([]);
+  const [addLoadAnchor, setAddLoadAnchor] = useState<HTMLElement | null>(null);
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -604,11 +605,14 @@ export default function DevelopmentPage() {
         // S1 and peak read the same way (owner 2026-10-25): with torque and speed given the power IS T·ω, shown
         // read-only; a stated power is editable only when there is no torque/speed pair to derive it from.
         const stated = prop('power_W') ?? prop('output_power_W');
-        const torque = finiteScalar(obj.torque_Nm), speed = finiteScalar(obj.speed_rpm);
+        const torque = keyNumber(obj.torque_Nm), speed = keyNumber(obj.speed_rpm);
         const derived = v2 && torque != null && speed != null ? torque * 2 * Math.PI * speed / 60 : null;
-        if (derived != null && (!stated || blankValue(obj[stated.id]))) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
+        // with torque and speed the power IS T*omega at the shaft, whatever power was stated before (Astra review 2026-10-25)
+        if (derived != null) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
         if (!stated) return dash;
-        return <Tooltip title={derived != null ? tr('keyPoints.derived', { value: watts(derived) }) : ''}><Box>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
+        // a power stated without torque/speed: editable; a stored non-shaft basis is named in the tooltip, never relabelled
+        const basis = typeof obj.power_basis === 'string' && obj.power_basis && obj.power_basis !== 'shaft' ? obj.power_basis : '';
+        return <Tooltip title={basis ? tr('keyPoints.statedBasis', { basis: label(stated.label) + ' · ' + basis }) : tr('wizard.s1Formula')}><Box>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}</Box></Tooltip>;
       }
       const p = prop(column);
       return p ? renderTypedValue(p, obj[column], edit(column), `${f.id}-${column}`, unknown, true) : dash;
@@ -656,14 +660,24 @@ export default function DevelopmentPage() {
     const { medium, inferred } = coolingMedium(obj);
     const fits = coolingChoices(loadType), misfit = medium != null && !fits.includes(medium);
     const mediumLabel = (m: CoolingMedium) => label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m;
-    const pick = (next: CoolingMedium | null) => { const target = next ?? (inferred ? medium : null); if (target && target !== obj.cooling_medium) setProperty(f, false, obj, 'cooling_medium', target); };
+    const pick = (next: CoolingMedium | null) => {
+      const target = next ?? (inferred ? medium : null);
+      if (!target || target === obj.cooling_medium) return;
+      const mode = naturalAirflow(target, loadType);
+      setAnswer(f, { ...obj, cooling_medium: target, ...(mode && blankValue(airflow.mode) ? { airflow: { ...airflow, mode } } : {}) });
+    };
+    // what the switch cannot show stays readable in its tooltip: the customer's own cooling description and a stored
+    // coolant text the shown form hides (Astra review 2026-10-25: G1/G2 "separate from seawater", M1 "seawater")
+    const hiddenText = [obj.cooling_type, medium && !coolingPropertyIds(medium, loadType).includes('coolant') ? obj.coolant : null]
+      .filter((t): t is string => typeof t === 'string' && !!t.trim());
+    const switchTip = [...(inferred ? [tr('coolingInferred')] : []), ...hiddenText];
     const cell = (p: NonNullable<SpecificationField['properties']>[number], value: unknown, update: (next: unknown) => void) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, value, update, `${f.id}-${p.id}`, unknown)}</Box>;
     const shown = medium ? coolingPropertyIds(medium, loadType).map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
     const loadName = loadType && loadType !== 'unknown' ? tr(`load.types.${loadType}`) : '';
     return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, required, unknown)}
       <Stack spacing={0.8}>
-        <Tooltip title={inferred ? tr('coolingInferred') : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr('coolingMisfit', { medium: mediumLabel(m), load: loadName }) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
+        <Tooltip title={switchTip.length ? <>{switchTip.map((t, i) => <Fragment key={i}>{i > 0 && <br />}{t}</Fragment>)}</> : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr('coolingMisfit', { medium: mediumLabel(m), load: loadName }) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
         {misfit && <Alert severity="error" sx={{ py: 0 }}>{tr('coolingMisfit', { medium: mediumLabel(medium!), load: loadName })}</Alert>}
         {(shown.length > 0 || (!medium && !blankValue(obj.cooling_type))) && <Box sx={propertyGrid}>
           {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub.id === 'mode' ? { ...sub, suggestions: airflowSuggestions(sub.suggestions, loadType) } : sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
@@ -677,10 +691,16 @@ export default function DevelopmentPage() {
   /** 4_6 for the chosen load: the axial load first and required, the propeller or shaft loads, any other load only while it holds a value. */
   const renderLoads = (f: SpecificationField, loadType: string) => {
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
-    const shown = loadPropertyIds(loadType, (f.properties ?? []).map((p) => p.id), obj).map((id) => f.properties!.find((p) => p.id === id)!);
+    const ids = loadPropertyIds(loadType, (f.properties ?? []).map((p) => p.id), obj);
+    const shownIds = [...ids, ...extraLoadProps.filter((id) => !ids.includes(id))];
+    const shown = shownIds.map((id) => f.properties!.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+    const addable = (f.properties ?? []).filter((p) => !shownIds.includes(p.id));
     return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, required, unknown)}
-      <Box sx={propertyGrid}>{shown.map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p, p.id === 'axial_thrust_N')}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}</Box>
+      <Box sx={propertyGrid}>{shown.map((p) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p, p.id === 'axial_thrust_N')}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>)}
+        {addable.length > 0 && canEditSpec && !unknown && <Box sx={{ alignSelf: 'end' }}><Tooltip title={tr('addLoadComponent')}><IconButton size="small" aria-label={tr('addLoadComponent')} onClick={(e) => setAddLoadAnchor(e.currentTarget)}><AddIcon sx={{ fontSize: 18 }} /></IconButton></Tooltip>
+          <Menu anchorEl={addLoadAnchor} open={!!addLoadAnchor} onClose={() => setAddLoadAnchor(null)}>{addable.map((p) => <MenuItem key={p.id} onClick={() => { setExtraLoadProps((list) => [...list, p.id]); setAddLoadAnchor(null); }}>{label(p.label)}</MenuItem>)}</Menu></Box>}
+      </Box>
       {fieldMessages(f, answer, required)}
     </Box>;
   };

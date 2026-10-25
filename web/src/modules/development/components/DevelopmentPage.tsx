@@ -21,12 +21,12 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SchemaField, SchemaSuggestion, SpecSnapshot, SpecState } from '../types';
   import MissionProfileEditor from './MissionProfileEditor';
   import type { LoadType, MissionRow } from '../missionProfileState';
-  import { COOLING_MEDIA, airflowSuggestions, coolingChoices, coolingForLoad, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
+  import { COOLING_MEDIA, airflowExcluded, airflowSuggestions, coolingChoices, coolingForLoad, coolingLoadProblems, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
   import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, fieldRequired, propertyRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { MotorNoteField } from '../MotorNoteField';
@@ -537,14 +537,14 @@ export default function DevelopmentPage() {
   /** A stored choice the options no longer list stays visible (and selected) instead of rendering blank. */
   const storedOutsideOptions = (value: unknown, options: Array<string | { value: string }>) => value != null && value !== '' && !options.some((o) => (typeof o === 'string' ? o : o.value) === String(value)) ? <MenuItem value={String(value)}>{String(value)}</MenuItem> : null;
   const sectionTitle = (v: unknown) => { const value = label(v); return value.startsWith('wizard.') ? tr(value) : value; };
-  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; multiline?: boolean; placeholder?: string; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; suggestions?: SchemaSuggestion[]; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false, _compact = false): React.ReactNode => {
+  const renderTypedValue = (shape: { id: string; label: unknown; short_label?: unknown; help?: unknown; unit?: string; type?: string; required?: boolean; required_flag?: string; allow_range?: boolean; multiline?: boolean; placeholder?: string; min?: number; max?: number; options?: Array<string | { value: string; label?: unknown }>; suggestions?: SchemaSuggestion[]; excluded?: Record<string, string>; properties?: Array<any>; items?: { type?: string; properties?: Array<any> } }, value: unknown, onChange: (next: unknown) => void, keyPrefix: string, locked = false, _compact = false): React.ReactNode => {
     const kind = shape.type ?? 'string';
     const options = shape.options ?? [];
     const text = (v: unknown) => v == null ? '' : String(v);
     const unitAdornment = (unit: string) => <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>{unit}</InputAdornment>;
     const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <TextField size="small" fullWidth type={type === 'number' ? 'number' : type === 'date' || unit === 'date' ? 'date' : 'text'} multiline={!!shape.multiline && type !== 'number'} minRows={shape.multiline && type !== 'number' ? 2 : undefined} placeholder={shape.placeholder} value={text(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`, min: type === 'number' ? shape.min : undefined, max: type === 'number' ? shape.max : undefined, step: type === 'number' ? 'any' : undefined }} InputProps={unit && unit !== 'date' ? { endAdornment: unitAdornment(unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onChange={(e) => update(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} />;
     // a standard choice is a menu (schema `suggestions`): the localized label shows, the EN value is stored, any other text is kept
-    const suggest = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <SuggestField key={`${keyPrefix}-${lang}`} suggestions={shape.suggestions!} value={v} onChange={update} lang={lang} numeric={type === 'number'} disabled={!canEditSpec || busy || migrationBusy || locked} ariaLabel={`${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`} placeholder={shape.placeholder} multiline={!!shape.multiline && type !== 'number'} endAdornment={unit && unit !== 'date' ? unitAdornment(unit) : undefined} />;
+    const suggest = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <SuggestField key={`${keyPrefix}-${lang}`} excluded={shape.excluded} suggestions={shape.suggestions!} value={v} onChange={update} lang={lang} numeric={type === 'number'} disabled={!canEditSpec || busy || migrationBusy || locked} ariaLabel={`${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`} placeholder={shape.placeholder} multiline={!!shape.multiline && type !== 'number'} endAdornment={unit && unit !== 'date' ? unitAdornment(unit) : undefined} />;
     if (shape.allow_range) {
       // ONE value, the maximum allowed / worst case for modelling (owner 2026-10-25: «всё должно быть однозначно»). A range
       // stored before shows its maximum; typing replaces it with one number. The stored range itself is never rewritten here.
@@ -603,6 +603,7 @@ export default function DevelopmentPage() {
     {required && !fieldAnswerComplete(f, { ...answer, not_known_yet: answer.status === 'not_known_yet' } as FieldAnswer) && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('requiredMissing')}</Typography>}
   </>;
   const renderField = (f: SpecificationField, prod = f.storage_namespace === 'production', span = true) => {
+    if (!fieldApplies(f, draftRef.current)) return null;
     if (f.handled_by && f.handled_by !== 'mission_profile') return null;
     if (f.id === 'mission_profile') return <MissionProfile key={f.id} draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => markUnknown(f, unknown, prod)} onChange={(rows) => updateDraft((d) => {
       return { ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' };
@@ -613,19 +614,17 @@ export default function DevelopmentPage() {
     const required = fieldRequired(f, draftRef.current);
     const options = f.options ?? f.choices;
     const objectValue = objectOf(answer.value);
-    // the ambient block states the maximum first: every calculation uses it
-    // ambient: ONE value, the maximum (owner 2026-10-25: no min/max pairs); a stored minimum stays in the data, not on screen
-    const properties = f.id === '3_2' && f.properties ? f.properties.filter((p) => p.id !== 'temperature_min_C') : f.properties;
+    const properties = f.properties;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
     return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ minWidth: 0, gridColumn: wide ? '1 / -1' : undefined }}>
-      {labelRow(f, prod, required, unknown, undefined, [...(f.id === '3_2' ? [tr('wizard.ambientMaxNote')] : []), ...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
+      {labelRow(f, prod, required, unknown, undefined, [...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
       <Stack spacing={0.5}>
         {properties?.length ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 1, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
             {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? 'span 2' : undefined }}>
-              {propLabel(prop, f.id === '3_2' && prop.id === 'temperature_max_C')}
+              {propLabel(prop)}
               {renderTypedValue(prop, objectValue[prop.id], (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
           </Box>
@@ -715,7 +714,7 @@ export default function DevelopmentPage() {
     if (!mediumProp) return renderField(f, false, false);
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current), airflow = objectOf(obj.airflow);
     const { medium, inferred } = coolingMedium(obj);
-    const fits = coolingChoices(loadType), misfit = medium != null && !fits.includes(medium);
+    const fits = coolingChoices(loadType), misfit = medium != null && !fits.includes(medium), problems = coolingLoadProblems(obj, loadType), loadGroupId = loadGroup(loadType);
     const mediumLabel = (m: CoolingMedium) => label(mediumProp.options?.map((o) => typeof o === 'string' ? { value: o, label: o } : o).find((o) => o.value === m)?.label) || m;
     const pick = (next: CoolingMedium | null) => {
       const target = next ?? (inferred ? medium : null);
@@ -728,21 +727,36 @@ export default function DevelopmentPage() {
     const hiddenText = [obj.cooling_type, medium && !coolingPropertyIds(medium, loadType).includes('coolant') ? obj.coolant : null]
       .filter((t): t is string => typeof t === 'string' && !!t.trim());
     const switchTip = [...(inferred ? [tr('coolingInferred')] : []), ...hiddenText];
-    const cell = (p: NonNullable<SpecificationField['properties']>[number], value: unknown, update: (next: unknown) => void) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, value, update, `${f.id}-${p.id}`, unknown)}</Box>;
+    const cell = (p: NonNullable<SpecificationField['properties']>[number] & { excluded?: Record<string, string> }, value: unknown, update: (next: unknown) => void) => <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel({ ...p, required: propertyRequired(p, obj) })}{renderTypedValue(p, value, update, `${f.id}-${p.id}`, unknown)}</Box>;
     const shown = medium ? coolingPropertyIds(medium, loadType).map(prop).filter((p): p is NonNullable<typeof p> => !!p) : [];
-    const loadName = loadType && loadType !== 'unknown' ? tr(`load.types.${loadType}`) : '';
     return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, required, unknown)}
       <Stack spacing={0.8}>
-        <Tooltip title={switchTip.length ? <>{switchTip.map((t, i) => <Fragment key={i}>{i > 0 && <br />}{t}</Fragment>)}</> : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr('coolingMisfit', { medium: mediumLabel(m), load: loadName }) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
-        {misfit && <Alert severity="error" sx={{ py: 0 }}>{tr('coolingMisfit', { medium: mediumLabel(medium!), load: loadName })}</Alert>}
+        <Tooltip title={switchTip.length ? <>{switchTip.map((t, i) => <Fragment key={i}>{i > 0 && <br />}{t}</Fragment>)}</> : ''} placement="top"><ToggleButtonGroup size="small" exclusive value={medium} disabled={!canEditSpec || busy || migrationBusy || unknown} onChange={(_, next: CoolingMedium | null) => pick(next)} aria-label={label(mediumProp.label)} sx={{ alignSelf: 'flex-start', flexWrap: 'wrap', '& .Mui-selected': inferred ? { borderStyle: 'dashed' } : {} }}>{COOLING_MEDIA.map((m) => <ToggleButton key={m} value={m} disabled={!fits.includes(m) && m !== medium} title={!fits.includes(m) ? tr(`coolingReason.${loadGroupId}.${m}`) : undefined} sx={{ ...switchButton, ...(misfit && m === medium ? { borderColor: 'error.main', color: 'error.main' } : {}) }}>{mediumLabel(m)}</ToggleButton>)}</ToggleButtonGroup></Tooltip>
+        {problems.map((problem) => <Alert key={problem.field} severity="error" sx={{ py: 0 }}>{tr(problem.reason)}</Alert>)}
         {(shown.length > 0 || (!medium && !blankValue(obj.cooling_type))) && <Box sx={propertyGrid}>
-          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub.id === 'mode' ? { ...sub, suggestions: airflowSuggestions(sub.suggestions, loadType) } : sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
+          {shown.flatMap((p) => p.id === 'airflow' && p.properties?.length ? p.properties.map((sub) => cell(sub.id === 'mode' ? { ...sub, suggestions: [...(airflowSuggestions(sub.suggestions, loadType) ?? []), ...(sub.suggestions ?? []).filter((s) => airflowExcluded(loadType)[typeof s === 'object' ? String(s.value) : String(s)])], excluded: Object.fromEntries(Object.entries(airflowExcluded(loadType)).map(([mode, key]) => [mode, tr(key)])) } : sub, airflow[sub.id], (value) => setProperty(f, false, obj, 'airflow', { ...airflow, [sub.id]: value }))) : [cell(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value))])}
           {/* the old free-text type only while the switch cannot tell the medium; otherwise it repeats the switch (owner 2026-10-25) */}
           {!medium && !blankValue(obj.cooling_type) && prop('cooling_type') && cell(prop('cooling_type')!, obj.cooling_type, (value) => setProperty(f, false, obj, 'cooling_type', value))}
         </Box>}
         {fieldMessages(f, answer, required)}
       </Stack>
+    </Box>;
+  };
+  /** 3_2 as ONE line: the maximum ambient temperature, the only thing asked (owner 2026-10-26; a stored minimum and altitude stay
+   *  in the data, not on screen).  Shown for air cooling only - liquid cooling takes the coolant inlet temperature and underwater
+   *  cooling the water temperature of 3_1 - and while no cooling is chosen (air is the default assumption). */
+  const renderAmbient = (f: SpecificationField) => {
+    if (!fieldApplies(f, draftRef.current)) return null;
+    const prop = f.properties?.find((p) => p.id === 'temperature_max_C');
+    if (!prop) return renderField(f, false, false);
+    const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
+    return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0, flexWrap: 'wrap', rowGap: 0.5 }}>
+        <Box sx={{ '& > *': { mb: '0 !important' } }}>{labelRow(f, false, required, unknown, undefined, [tr('wizard.ambientMaxNote')])}</Box>
+        <Box sx={{ width: 150, maxWidth: '100%' }}>{renderTypedValue(prop, obj[prop.id], (value) => setProperty(f, false, obj, prop.id, value), `${f.id}-${prop.id}`, unknown)}</Box>
+      </Stack>
+      {fieldMessages(f, answer, required)}
     </Box>;
   };
   /** 4_6 for the chosen load: the axial load first and required, the propeller or shaft loads, any other load only while it holds a value. */
@@ -774,13 +788,16 @@ export default function DevelopmentPage() {
       if (!next) return;
       updateDraft((d) => writeLoadDraft(d, withLoadType(readLoadDraft(d), next)));
       if (cooling && storedAnswer(cooling, false).status !== 'not_known_yet') {
-        const nextCooling = coolingForLoad(storedAnswer(cooling, false).value, next);
+        const nextCooling = coolingForLoad(storedAnswer(cooling, false).value, next, load.load_type);
         if (nextCooling) setAnswer(cooling, nextCooling);
       }
     };
     return <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
       {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
-      <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'wrap' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={type === group && finer ? finer : undefined} sx={switchButton}>{tr(`load.types.${type}`)}</ToggleButton>)}</ToggleButtonGroup>
+      {/* ONE line: short visible names (the full name and a finer stored type are in the tooltip); on a narrow screen the row scrolls inside itself */}
+      <Box sx={{ overflowX: 'auto', maxWidth: '100%' }}>
+        <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'nowrap', width: 'max-content' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={[tr(`load.types.${type}`), type === group && finer ? finer : ''].filter(Boolean).join(' · ')} sx={{ ...switchButton, px: 1, flex: '0 0 auto', whiteSpace: 'nowrap' }}>{tr(`load.short.${type}`, { defaultValue: tr(`load.types.${type}`) })}</ToggleButton>)}</ToggleButtonGroup>
+      </Box>
     </Box>;
   };
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
@@ -816,10 +833,10 @@ export default function DevelopmentPage() {
                     {byId('key_points') && keyPointsEditor(byId('key_points')!)}
                     {byId('2_1') && renderBattery(byId('2_1')!)}
                     {/* load and cooling as ONE block (owner 2026-10-25): what the motor drives decides which cooling can occur */}
-                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(0,3fr) minmax(0,2fr)' }, gap: '12px' }}>
-                      {byId('3_1') && <Stack spacing={1.2} sx={{ minWidth: 0 }}>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</Stack>}
-                      {byId('3_2') && renderField(byId('3_2')!, false, false)}
-                    </Box>
+                    <Stack spacing={1.2} sx={{ minWidth: 0 }}>
+                      {byId('3_1') && <>{renderLoadType(byId('3_1'))}{renderCooling(byId('3_1')!, readLoadDraft(draftRef.current).load_type)}</>}
+                      {byId('3_2') && renderAmbient(byId('3_2')!)}
+                    </Stack>
                     {section.fields.filter((f) => !['1_1', 'key_points', '2_1', '3_1', '3_2', 'load_type'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>
@@ -881,14 +898,14 @@ export default function DevelopmentPage() {
 }
 /** A free text / number value with a menu of standard choices (schema `suggestions`, Autocomplete freeSolo): the menu shows
  *  the localized label, the stored value is the EN value (or the number); any other text is kept as typed. */
-function SuggestField({ suggestions, value, onChange, lang, numeric, disabled, ariaLabel, placeholder, multiline = false, endAdornment }: { suggestions: SchemaSuggestion[]; value: unknown; onChange: (next: unknown) => void; lang: string; numeric: boolean; disabled: boolean; ariaLabel: string; placeholder?: string; multiline?: boolean; endAdornment?: React.ReactNode }) {
+function SuggestField({ suggestions, excluded, value, onChange, lang, numeric, disabled, ariaLabel, placeholder, multiline = false, endAdornment }: { suggestions: SchemaSuggestion[]; /** options the load cannot make, with the reason shown as their tooltip */ excluded?: Record<string, string>; value: unknown; onChange: (next: unknown) => void; lang: string; numeric: boolean; disabled: boolean; ariaLabel: string; placeholder?: string; multiline?: boolean; endAdornment?: React.ReactNode }) {
   const options = useMemo(() => suggestionOptions(suggestions, lang), [suggestions, lang]);
   const shown = suggestionDisplay(suggestions, value, lang);
   const [text, setText] = useState(shown);
   // a value changed elsewhere (a reload, a discarded edit) replaces the text unless the text already means that value
   useEffect(() => { setText((current) => String(suggestionValue(suggestions, current, numeric) ?? '') === String(value ?? '') ? current : shown); }, [shown, value, suggestions, numeric]);
   const commit = (next: string) => { setText(next); const stored = suggestionValue(suggestions, next, numeric); if (stored !== undefined) onChange(stored); };
-  return <Autocomplete freeSolo forcePopupIcon size="small" fullWidth disabled={disabled} options={options} value={null} inputValue={text} filterOptions={(list) => list} getOptionLabel={(o) => typeof o === 'string' ? o : o.label} onInputChange={(_, next, reason) => { if (reason !== 'reset') commit(next); }} onChange={(_, picked) => { if (picked != null) commit(typeof picked === 'string' ? picked : picked.label); }}
+  return <Autocomplete freeSolo forcePopupIcon size="small" fullWidth disabled={disabled} options={options} value={null} inputValue={text} filterOptions={(list) => list} getOptionDisabled={(o) => typeof o !== 'string' && !!excluded?.[String(o.value)]} renderOption={(props, o) => { const { key, ...rest } = props as typeof props & { key?: string }; const reason = typeof o !== 'string' ? excluded?.[String(o.value)] : undefined; return <li key={key} {...rest} title={reason}>{typeof o === 'string' ? o : o.label}</li>; }} getOptionLabel={(o) => typeof o === 'string' ? o : o.label} onInputChange={(_, next, reason) => { if (reason !== 'reset') commit(next); }} onChange={(_, picked) => { if (picked != null) commit(typeof picked === 'string' ? picked : picked.label); }}
     sx={endAdornment ? { '& .MuiAutocomplete-inputRoot': { pr: '14px !important', flexWrap: 'nowrap' }, '& .MuiAutocomplete-endAdornment': { position: 'static', transform: 'none', display: 'flex' } } : undefined}
     renderInput={(params) => <TextField {...params} placeholder={placeholder} multiline={multiline} minRows={multiline ? 2 : undefined} inputProps={{ ...params.inputProps, 'aria-label': ariaLabel, inputMode: numeric ? 'decimal' : undefined }} InputProps={{ ...params.InputProps, endAdornment: <>{params.InputProps.endAdornment}{endAdornment}</> }} />} />;
 }

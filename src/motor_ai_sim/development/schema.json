@@ -1228,7 +1228,7 @@
                 },
                 {
                   "id": "speed_mps",
-                  "label": {"en": "Guaranteed air speed", "zh-CN": "保证风速"},
+                  "label": {"en": "Air speed", "zh-CN": "风速"},
                   "type": "number",
                   "unit": "m/s",
                   "required": false,
@@ -1252,11 +1252,12 @@
               "label": {"en": "Max coolant inlet temperature", "zh-CN": "最高冷却液进口温度"},
               "type": "number",
               "unit": "°C",
-              "required": false
+              "required": false,
+              "required_when_cooling_medium": "liquid"
             },
             {
               "id": "flow_rate",
-              "label": {"en": "Guaranteed coolant flow", "zh-CN": "保证冷却液流量"},
+              "label": {"en": "Coolant flow", "zh-CN": "冷却液流量"},
               "type": "number",
               "unit": "L/min",
               "required": false,
@@ -1281,13 +1282,14 @@
               },
               "type": "number",
               "unit": "°C",
-              "required": false
+              "required": false,
+              "required_when_cooling_medium": "submerged"
             },
             {
               "id": "water_speed_mps",
               "label": {
-                "en": "Guaranteed water flow speed",
-                "zh-CN": "保证水流速度"
+                "en": "Water flow speed",
+                "zh-CN": "水流速度"
               },
               "type": "number",
               "unit": "m/s",
@@ -1303,7 +1305,8 @@
               "type": "number",
               "unit": "m",
               "min": 0,
-              "required": false
+              "required": false,
+              "moved_to": "3_6"
             }
           ],
           "short_label": {
@@ -1316,12 +1319,13 @@
           "id": "3_2",
           "checklist_id": "3.2",
           "label": {
-            "en": "Ambient temperature range (min / max) and altitude",
-            "zh-CN": "环境温度范围（最低／最高）和海拔"
+            "en": "Maximum ambient temperature (air cooling)",
+            "zh-CN": "最高环境温度（空气冷却）"
           },
           "type": "object",
-          "unit": "°C, m",
+          "unit": "°C",
           "required": true,
+          "applies_when_cooling_medium": ["air"],
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -1358,8 +1362,8 @@
             }
           ],
           "short_label": {
-            "en": "Ambient conditions",
-            "zh-CN": "环境条件"
+            "en": "Max ambient temperature",
+            "zh-CN": "最高环境温度"
           },
           "presentation_group": "3"
         },
@@ -1414,6 +1418,29 @@
           "short_label": {
             "en": "Surface temperature",
             "zh-CN": "表面温度"
+          },
+          "presentation_group": "3"
+        },
+        {
+          "id": "3_6",
+          "checklist_id": "3.6",
+          "label": {
+            "en": "Max immersion depth (sealing)",
+            "zh-CN": "最大浸没深度（密封）"
+          },
+          "help": {
+            "en": "Underwater only. The depth sets the hydrostatic pressure on the housing seals; it does not change the cooling.",
+            "zh-CN": "仅水下适用。深度决定壳体密封处的静水压力，不影响冷却。"
+          },
+          "type": "number",
+          "unit": "m",
+          "min": 0,
+          "required": false,
+          "only_when_cooling_medium": ["submerged"],
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Max immersion depth (sealing)",
+            "zh-CN": "最大浸没深度（密封）"
           },
           "presentation_group": "3"
         }

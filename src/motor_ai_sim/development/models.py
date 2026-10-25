@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -361,7 +362,7 @@ def _answer_complete(answer: dict, field: dict) -> bool:
     if field.get("properties"):
         if not isinstance(value, dict):
             return False
-        required_props = [p for p in field["properties"] if p.get("required")]
+        required_props = [p for p in field["properties"] if _property_required(p, value)]
         if not all(_property_complete(value.get(prop["id"]), prop) for prop in required_props):
             return False
         if _missing_any_groups(field, value):
@@ -470,18 +471,126 @@ _LOAD_GROUP = {"water_jet": "marine_propeller", "pump": "shaft", "engine_driven_
 _LOAD_COOLING = {
     "air_propeller": ("air", "liquid"),
     "marine_propeller": ("submerged", "liquid", "air"),
-    "wheel": ("air", "liquid", "submerged"),
+    "wheel": ("air", "liquid"),  # a wheel drive runs on the ground, never under water (owner 2026-10-26)
     "turbine": ("air", "submerged", "liquid"),
     "shaft": ("air", "liquid", "submerged"),
 }
 _AIRFLOW_BY_LOAD = {
     "air_propeller": ("propeller wash", "ram air", "still air", "fan"),
-    "wheel": ("ram air", "still air", "fan"),
+    "wheel": ("still air", "ram air", "fan"),
     "turbine": ("ram air", "still air", "fan"),
     "marine_propeller": ("still air", "fan"),
     "shaft": ("still air", "fan", "ram air"),
 }
+# The mode a load brings when none is stored (the web pre-selects it; the user can change it).  Ram air stays allowed
+# behind an air propeller (forward flight) but is never its default.  The backend does not write it - the mirror exists
+# so one case table (ambient_cases.json) pins the web's DEFAULT_AIRFLOW to it.
+_DEFAULT_AIRFLOW = {"air_propeller": "propeller wash", "turbine": "ram air", "wheel": "still air", "shaft": "still air",
+                    "marine_propeller": "still air"}
 _KNOWN_AIRFLOW = {m for modes in _AIRFLOW_BY_LOAD.values() for m in modes}
+
+
+_COOLING_MEDIA = ("air", "liquid", "submerged")
+_SUBMERGED_PROPERTIES = ("water_temperature_C", "water_speed_mps", "depth_m")  # depth_m: the legacy 3_1 depth still tells the medium
+
+
+def _present(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_present(v) for v in value.values())
+    return not (value is None or (isinstance(value, str) and not value.strip()))
+
+
+def cooling_medium(value: Any) -> tuple[str | None, bool]:
+    """(medium, inferred) of a 3_1 cooling answer: the stored `cooling_medium`, else the medium its stored values
+    imply, else (None, False).  The same rule as the web's `coolingMedium` (specChoices.ts) - keep them in step."""
+    v = value if isinstance(value, dict) else {}
+    if v.get("cooling_medium") in _COOLING_MEDIA:
+        return v["cooling_medium"], False
+    ctype = v["cooling_type"].lower() if isinstance(v.get("cooling_type"), str) else ""
+    coolant = v["coolant"].lower() if isinstance(v.get("coolant"), str) else ""
+    text = re.sub(r"\b(no|without|not an?)\s+(internal\s+)?(coolant\s+|liquid\s+|cooling\s+)?(loop|circuit|jacket)s?\b", " ",
+                  f"{ctype} {coolant}", flags=re.ASCII)
+    circuit = bool(re.search(r"glycol|jacket|ppg|loop|乙二醇|冷却液|回路", text))
+    if re.search(r"submerg|immers|underwater|sea ?water|水下|浸没|海水", text) and not circuit:
+        return "submerged", True
+    if any(_present(v.get(k)) for k in ("coolant", "flow_rate", "pressure_drop_Pa")) or circuit:
+        return "liquid", True
+    if _present(v.get("airflow")) or re.search(r"\bair|风冷|空气", ctype, flags=re.ASCII):
+        return "air", True
+    if _present(v.get("inlet_temperature_C")):
+        return "liquid", True
+    if any(_present(v.get(k)) for k in _SUBMERGED_PROPERTIES) or re.search(r"water|submerg|immers|水下|浸没|水冷", ctype):
+        return ("liquid" if re.search(r"glycol|coolant|jacket|乙二醇|冷却液", ctype) else "submerged"), True
+    if re.search(r"liquid|coolant|glycol|oil|液冷|冷却液|油冷", ctype):
+        return "liquid", True
+    return None, False
+
+
+def _active_cooling(draft: dict):
+    """The cooling answer's value as the rules read it: a "not known yet" cooling is no choice (web: activeCooling)."""
+    answer = (draft.get("fields") or {}).get("3_1")
+    if isinstance(answer, dict) and "status" in answer:
+        return None if answer.get("status") == "not_known_yet" else answer.get("value")
+    return answer
+
+
+def field_applies(field: dict, draft: dict) -> bool:
+    """A field with `applies_when_cooling_medium` (the maximum ambient temperature, 3_2) is asked, required and counted
+    only for those cooling media - air - or while no medium is chosen (air is the default assumption).  Liquid cooling
+    uses the coolant inlet temperature and underwater cooling the water temperature of 3_1.  The stored value is kept.
+    The same rule as the web's `fieldApplies` (wizardState.ts)."""
+    media, only = field.get("applies_when_cooling_medium"), field.get("only_when_cooling_medium")
+    if not media and not only:
+        return True
+    medium, _ = cooling_medium(_active_cooling(draft))
+    if only:  # `only_when_cooling_medium` (the immersion depth, 3_6): meaningless unless that medium is chosen
+        return medium is not None and medium in only
+    return medium is None or medium in media
+
+
+def lift_legacy_depth(draft: dict) -> dict:
+    """Read-time move of the underwater depth: a stored 3_1 `depth_m` shows in its new place, 3_6 (max immersion depth,
+    owner 2026-10-26).  Nothing is lost - the 3_1 value stays stored; the lifted copy is added only while 3_6 holds no
+    answer at all (a cleared 3_6 stays cleared).  Returns a copy; the stored draft is not changed."""
+    import copy
+    out = copy.deepcopy(draft)
+    fields = out.get("fields")
+    if not isinstance(fields, dict) or "3_6" in fields:
+        return out
+    cooling = fields.get("3_1")
+    value = cooling.get("value") if isinstance(cooling, dict) else None
+    depth = value.get("depth_m") if isinstance(value, dict) else None
+    if isinstance(depth, (int, float)) and not isinstance(depth, bool) and math.isfinite(depth) and depth >= 0:
+        fields["3_6"] = {"status": "filled", "value": depth}
+    return out
+
+
+def _property_required(prop: dict, value: Any) -> bool:
+    """A structured answer's property is required outright, or - the cooling temperatures - when the answer's own
+    cooling medium is the one named by `required_when_cooling_medium` (liquid: the coolant inlet temperature,
+    underwater: the water temperature).  The same rule as the web's `propertyRequired` (wizardState.ts)."""
+    if prop.get("required"):
+        return True
+    medium = prop.get("required_when_cooling_medium")
+    return bool(medium) and cooling_medium(value)[0] == medium
+
+
+def _field_required(field: dict, draft: dict) -> bool:
+    return field_applies(field, draft) and bool(field.get("required") or _conditional_required(field, draft))
+
+
+def thermal_basis(draft: dict) -> dict:
+    """The temperature every thermal calculation starts from: the maximum ambient temperature (3_2) for air cooling,
+    the maximum coolant inlet temperature (3_1) for liquid cooling, the maximum water temperature (3_1) underwater;
+    not chosen yet reads as air.  Any reader of the thermal basis goes through this, never straight to 3_2
+    `temperature_max_C`.  `temperature_C` is None while the value is not stated."""
+    cooling = _active_cooling(draft)
+    medium = cooling_medium(cooling)[0] or "air"
+    source = {"air": "temperature_max_C", "liquid": "inlet_temperature_C", "submerged": "water_temperature_C"}[medium]
+    holder = _active_value(draft.get("fields") or {}, "3_2") if medium == "air" else cooling
+    raw = holder.get(source) if isinstance(holder, dict) else None
+    ok = isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw)
+    return {"medium": medium, "source": f"{'3_2' if medium == 'air' else '3_1'}.{source}", "temperature_C": float(raw) if ok else None}
 
 
 def _active_value(fields: dict, field_id: str):
@@ -502,8 +611,8 @@ def cooling_load_errors(draft: dict) -> list[dict]:
     if not group or not isinstance(cooling, dict):
         return []
     errors = []
-    medium = cooling.get("cooling_medium")
-    if medium in ("air", "liquid", "submerged") and medium not in _LOAD_COOLING[group]:
+    medium = cooling_medium(cooling)[0]  # the medium the form shows: stored, else the one the stored values imply
+    if medium in _COOLING_MEDIA and medium not in _LOAD_COOLING[group]:
         errors.append({"field": "3_1.cooling_medium", "section": "3",
                        "message": f"{medium} cooling does not fit the load {load}"})
     airflow = cooling.get("airflow") if isinstance(cooling.get("airflow"), dict) else {}
@@ -764,7 +873,7 @@ def completeness(draft: dict) -> dict:
     section_fields = {}
     for section in active_schema["sections"]:
         section_fields[section["id"]] = {field["id"]: field for field in section["fields"]}
-        required_by_section[section["id"]] = [field["id"] for field in section["fields"] if field.get("required") or _conditional_required(field, draft)]
+        required_by_section[section["id"]] = [field["id"] for field in section["fields"] if _field_required(field, draft)]
     section_stats, total, filled, answered, unknown, missing, invalid = {}, 0, 0, 0, 0, 0, 0
     for section_id, ids in required_by_section.items():
         section_filled = 0
@@ -816,7 +925,7 @@ def validation_errors(draft: dict) -> list[dict]:
         for field in section["fields"]:
             fid = field["id"]
             legacy_s1 = fid == "1_4" and int(draft.get("schema_version", 1)) == 2 and not key_points_stored(draft)
-            if not (field.get("required") or _conditional_required(field, draft) or legacy_s1):
+            if not (_field_required(field, draft) or legacy_s1):
                 continue
             if fid == "key_points":
                 errors.extend(key_point_errors(draft))
@@ -841,7 +950,7 @@ def validation_errors(draft: dict) -> list[dict]:
                 if answer.get("status") == "filled" and field.get("properties"):
                     val = answer.get("value", {})
                     for prop in field["properties"]:
-                        if prop.get("required"):
+                        if _property_required(prop, val):
                             item = val.get(prop["id"])
                             missing = not _value_present(item, prop)
                             if prop.get("allow_range") and isinstance(item, dict):

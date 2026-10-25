@@ -1,5 +1,6 @@
 import type { Completeness, SchemaField, SchemaSection } from './types';
 import type { SpecificationField } from './specificationLayout';
+import { coolingMedium } from './specChoices.ts';
 import { KEY_POINTS_ID, keyPointsSlotState, keyPointsValid, type KeyPoint } from './keyPoints.ts';
 
 export interface FieldAnswer { value?: unknown; status?: 'filled' | 'not_known_yet' | 'missing'; not_known_yet?: boolean }
@@ -27,7 +28,31 @@ export function isConditionallyRequired(f: SchemaField, draft: SpecDraft): boole
   const answer = fieldAnswer(draft, condition.field);
   return answer.status === 'filled' && condition.in.includes(answer.value);
 }
-export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return isRequired(f) || isConditionallyRequired(f, draft); }
+/** The cooling answer (3_1) as the rules read it: its stored value, but a "not known yet" cooling is no choice. */
+export function activeCooling(draft: SpecDraft): unknown {
+  const answer = fieldAnswer(draft, '3_1');
+  return answer.status === 'not_known_yet' || answer.not_known_yet === true ? undefined : answer.value;
+}
+/** A field that applies only to some cooling media (schema `applies_when_cooling_medium`): the maximum ambient
+ *  temperature (3_2) is asked for air cooling only; liquid and underwater cooling take the coolant inlet / water
+ *  temperature of 3_1.  While no medium is chosen it applies (air is the default assumption).  A field that does not
+ *  apply is not shown, not required and not counted; its stored value is kept. */
+export function fieldApplies(f: SchemaField, draft: SpecDraft): boolean {
+  const media = f.applies_when_cooling_medium, only = f.only_when_cooling_medium;
+  if (!media?.length && !only?.length) return true;
+  const { medium } = coolingMedium(activeCooling(draft));
+  // `only_when_cooling_medium` (the immersion depth): meaningless unless that medium is chosen
+  if (only?.length) return medium !== null && only.includes(medium);
+  return medium === null || media!.includes(medium);
+}
+/** A property of a structured answer is required outright, or - the cooling temperatures - when the answer's own cooling
+ *  medium is the one in `required_when_cooling_medium` (liquid: the coolant inlet temperature, underwater: the water
+ *  temperature).  The same rule as the backend's `_property_required`. */
+export function propertyRequired(prop: { required?: boolean; required_flag?: string; required_when_cooling_medium?: string }, value: unknown): boolean {
+  if (prop.required === true || prop.required_flag === 'E') return true;
+  return !!prop.required_when_cooling_medium && coolingMedium(value).medium === prop.required_when_cooling_medium;
+}
+export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return fieldApplies(f, draft) && (isRequired(f) || isConditionallyRequired(f, draft)); }
 export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {
   return (field as SpecificationField).storage_namespace ?? (section.id === 'production' || section.production ? 'production' : 'fields');
 }
@@ -91,7 +116,7 @@ export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): bo
   if (field.id === KEY_POINTS_ID) return answer.status === 'filled' && Array.isArray(answer.value) && keyPointsValid(answer.value as KeyPoint[]);
   if (answer.status !== 'filled' || !fieldValueValid(field, answer.value)) return false;
   const value = answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : {};
-  const required = field.properties?.filter((property) => property.required === true || property.required_flag === 'E') ?? [];
+  const required = field.properties?.filter((property) => propertyRequired(property, value)) ?? [];
   if (field.properties?.length && !required.every((property) => schemaValueComplete(property, value[property.id]))) return false;
   if (field.properties?.length && missingAnyGroups(field, value).length) return false;
   const minimum = field.min_filled_properties ?? 0;

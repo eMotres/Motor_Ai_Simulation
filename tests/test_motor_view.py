@@ -220,8 +220,10 @@ def test_b_view_shows_thermal_and_mechanical_with_provenance(sandbox):
     view = motor_view.build_view(DIE, CFG, _rows([DUTY, DUTY2]), stored, fields, set())
     d = {x["duty"]: x for x in view["duties"]}
     th = d[DUTY]["thermal"]
-    assert th["components_c"]["winding"]["max"] == 120.0 and th["housing_c"] == 64.0
-    assert th["coupled"]["coil_temp_c"] == 118.0
+    # the duty's temperatures come from the coupled loop (which says so), the map only supplies the housing
+    assert th["duty_temps"]["kind"] == "coupled" and th["duty_temps"]["winding_c"] == 118.0
+    assert th["duty_temps"]["magnet_c"] == 72.0 and th["duty_temps"]["housing_c"] == 64.0
+    assert th["duty_temps"]["provenance"]["computed_at"]
     assert th["s1"]["I_cont_A_rms"] == 41.5 and th["s1"]["limiting_part"] == "winding"
     assert th["s2"]["time_to_limit_s"] == 160.0
     assert th["provenance"]["computed_at"] or th["provenance"]["recorded_at"]
@@ -233,8 +235,11 @@ def test_b_view_shows_thermal_and_mechanical_with_provenance(sandbox):
     assert mech["provenance"]["mesh_size_mm"] == 1.5 and mech["provenance"]["n_triangles"] == 2
     assert set(d[DUTY]["fields"]) == {"em", "thermal", "rotor_stress"}
     assert d[DUTY]["em_run"]["numbers"]["efficiency_pct"] == 91.5
-    # a duty with nothing stored says so (None), never zeros
-    assert d[DUTY2]["thermal"] is None and d[DUTY2]["mechanical"] is None and d[DUTY2]["fields"] == {}
+    # a duty with nothing stored says so (None), never zeros; the motor's mechanical worst case shows on every point
+    assert d[DUTY2]["thermal"] is None and d[DUTY2]["fields"] == {}
+    assert d[DUTY2]["mechanical"]["rotor_stress"]["sf_min"] == 3.4
+    assert d[DUTY2]["mechanical"]["rotor_stress"]["filed_under"] == DUTY
+    assert d[DUTY2]["mechanical"]["rotor_stress"]["worst_case"]["rpm"] == 23000.0
 
 
 def test_b_the_mode_decision(sandbox):
@@ -280,6 +285,8 @@ def test_c_field_payloads_match_the_tab_payload_shapes(sandbox):
 def test_c_missing_kinds_are_none_not_empty(sandbox):
     assert motor_view.field_payload(DIE, CFG, DUTY, "em") is None
     assert motor_view.field_payload(DIE, CFG, DUTY, "bogus") is None
+    assert motor_view.field_kind("mech") == "rotor_stress" and motor_view.field_kind("Electromagnetic") == "em"
+    assert motor_view.field_kind("nope") is None
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +379,7 @@ def test_d_project_field_access_matrix(client, who, expected):
 def test_d_project_field_missing_unknown_and_bad_kind(client):
     assert pget(client, "customer", "field", die=DIE, config=CFG, duty=DUTY2, kind="thermal").status_code == 404
     assert pget(client, "customer", "field", die=DIE, config=CFG, duty="nope", kind="thermal").status_code == 404
-    assert pget(client, "customer", "field", die=DIE, config=CFG, duty=DUTY, kind="bogus").status_code == 400
+    assert pget(client, "customer", "field", die=DIE, config=CFG, duty=DUTY, kind="bogus").status_code == 404
     ok = pget(client, "customer", "field", die=DIE, config=CFG, duty=DUTY, kind="rotor_stress").json()
     assert ok["kind"] == "rotor_stress" and ok["payload"]["views"][0] == "disp"
 
@@ -397,4 +404,95 @@ def test_d_motors_tab_route_gives_the_same_view_as_the_project_route(client):
 def test_d_motors_tab_route_gates_like_the_ordinary_motor_gate(client):
     assert client.get(f"/api/motor-view/{DIE}/nogrant").status_code == 404
     assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY2}/field/em").status_code == 404      # not computed
-    assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY}/field/bogus").status_code == 400
+    # an unknown kind is "not computed" (404), never a 400; the tab-style names are understood
+    assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY}/field/bogus").status_code == 404
+    assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY}/field/mech").json()["kind"] == "rotor_stress"
+
+
+# ---------------------------------------------------------------------------
+# (e) selection rules (owner review 2026-10-26)
+# ---------------------------------------------------------------------------
+
+def _cp(coil, magnet, at, **extra):
+    return {"computed_at": at, "coil_temp_c": coil, "magnet_temp_c": magnet, "converged": True, "drive": "sine", **extra}
+
+
+def test_e_coupled_wins_over_the_plain_map_and_is_labelled():
+    stored = {"thermal": {"computed_at": "2026-10-24T10:00:00", "components": {"winding": {"max": 185.9}}},
+              "coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00")}
+    t = motor_view.thermal_block(stored)
+    assert t["duty_temps"]["kind"] == "coupled"
+    assert (t["duty_temps"]["winding_c"], t["duty_temps"]["magnet_c"]) == (128.5, 70.0)
+    assert t["duty_temps"]["provenance"]["computed_at"] == "2026-10-25T10:00:00"
+    assert "185.9" not in str(t)                         # the map of another run is not offered as the duty's temperature
+
+
+def test_e_a_limit_search_state_is_never_the_duty_temperature():
+    for extra in ({"mode": "limited"}, {"solve_to": "continuous"}, {"solve_to": "limits"}):
+        stored = {"thermal": {"computed_at": "2026-10-25T09:00:00", "state": "limited",
+                              "components": {"winding": {"max": 179.6}}},
+                  "coupled": _cp(179.6, 90.0, "2026-10-25T10:00:00", **extra)}
+        t = motor_view.thermal_block(stored)
+        assert "duty_temps" not in t, extra
+        assert t["limit_search"]["winding_c"] == 179.6 and t["limit_search"]["kind"] == "coupled"
+
+
+def test_e_without_a_coupled_row_the_steady_map_stands_in_a_limited_map_does_not():
+    steady = motor_view.thermal_block({"thermal": {"computed_at": "2026-10-25T09:00:00",
+                                                   "components": {"winding": {"max": 120.0}, "magnet": {"max": 75.0}}}})
+    assert steady["duty_temps"]["kind"] == "thermal" and steady["duty_temps"]["winding_c"] == 120.0
+    limited = motor_view.thermal_block({"thermal": {"state": "limited", "components": {"winding": {"max": 200.0}}}})
+    assert limited is None or "duty_temps" not in limited
+
+
+def test_e_s1_and_s2_are_their_own_lines_with_provenance():
+    stored = {"coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00",
+                             continuous_rating={"ok": True, "I_cont_A_rms": 30.0, "limiting_part": "winding"},
+                             time_to_limit={"time_to_limit_s": 90.0, "limiting_part": "winding"})}
+    t = motor_view.thermal_block(stored)
+    assert t["s1"]["I_cont_A_rms"] == 30.0 and t["s1"]["provenance"]["computed_at"]
+    assert t["s2"]["time_to_limit_s"] == 90.0 and t["duty_temps"]["winding_c"] == 128.5
+
+
+def _rs(at, sf, fp2=None, rpm=23000.0, torque=7.5, solver=None):
+    row = {"computed_at": at, "sf_min": sf, "rpm": rpm, "point": {"rpm": rpm, "torque_nm": torque, "loads": "both"}}
+    if fp2:
+        row["geometry_fingerprint_v2"] = fp2
+    if solver:
+        row["solver"] = solver
+    return row
+
+
+def test_e_the_newest_rotor_stress_is_the_motors_worst_case_on_every_point():
+    stored = {"cruise": {"rotor_stress": _rs("2026-10-25T08:00:00", 2.20)},
+              "peak": {"rotor_stress": _rs("2026-10-24T08:00:00", 4.31)}}
+    w = motor_view.worst_case_rotor_stress(stored)
+    assert w["sf_min"] == 2.20 and w["filed_under"] == "cruise" and w["records"] == 2
+    assert w["worst_case"] == {"rpm": 23000.0, "torque_nm": 7.5, "loads": "both"}
+    assert w["others"][0]["duty"] == "peak"
+    view = motor_view.build_view(DIE, CFG, _rows(["cruise", "peak", "idle"]), stored, {}, set())
+    assert [d["mechanical"]["rotor_stress"]["sf_min"] for d in view["duties"]] == [2.20, 2.20, 2.20]
+    assert view["mechanical_worst_case"]["sf_min"] == 2.20
+
+
+def test_e_records_before_the_contact_repair_are_flagged_superseded():
+    old = motor_view.worst_case_rotor_stress({"cruise": {"rotor_stress": _rs("2026-10-24T08:00:00", 4.31)}})
+    assert old["solver_status"] == "superseded" and old["stale"] is True
+    after = motor_view.worst_case_rotor_stress({"cruise": {"rotor_stress": _rs("2026-10-26T08:00:00", 3.1)}})
+    assert after["solver_status"] == "current" and after["stale"] is False
+    stamped = motor_view.worst_case_rotor_stress({"c": {"rotor_stress": _rs("2026-10-20T08:00:00", 3.1, solver={"code_version": "abc"})}})
+    assert stamped["solver_status"] == "current"                      # a solver stamp exists only on builds with the repair
+    undated = motor_view.worst_case_rotor_stress({"c": {"rotor_stress": {"sf_min": 3.0}}})
+    assert undated["solver_status"] == "unknown" and undated["stale"] is False
+
+
+def test_e_a_record_of_another_geometry_is_stale():
+    stored = {"peak": {"rotor_stress": _rs("2026-10-26T08:00:00", 4.31, fp2="aaaa"),
+                       "coupled": {**_cp(128.5, 70.0, "2026-10-26T09:00:00"), "geometry_fingerprint_v2": "bbbb"}}}
+    w = motor_view.worst_case_rotor_stress(stored)
+    assert w["geometry_status"] == "differs" and w["stale"] is True
+    stored["peak"]["coupled"]["geometry_fingerprint_v2"] = "aaaa"
+    w = motor_view.worst_case_rotor_stress(stored)
+    assert w["geometry_status"] == "match" and w["stale"] is False
+    del stored["peak"]["coupled"]["geometry_fingerprint_v2"]
+    assert motor_view.worst_case_rotor_stress(stored)["geometry_status"] == "unknown"

@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  configureShow, dutyToOpen, mechTiles, partSafetyFactors, pickPointDuty, pointDuties, provenanceLine, retentionVerdict,
+  configureShow, dutyToOpen, fieldKindFromName, isNotComputed, mechStaleReasons, mechTiles, thermalSource, worstCaseLabel, partSafetyFactors, pickPointDuty, pointDuties, provenanceLine, retentionVerdict,
   storedFieldKinds, thermalTiles,
 } from '../pointsLimited.ts';
 import { highlightIndex, isConfigHighlighted, isDieHighlighted, motorKey, pickFocusProject } from '../projectFocus.ts';
@@ -50,19 +50,24 @@ test('a project motor click loads a duty exactly like the Motors tab would: aske
 
 // ── thermal / mechanical tiles + provenance ──────────────────────────────────
 
-test('thermal tiles: the coupled settled values first, the map components otherwise, S1 / S2 only when stored', () => {
+test('thermal tiles: only the duty\'s own temperatures (coupled loop / steady map); S1 / S2 are tiles of their own', () => {
   const t = {
-    housing_c: 64,
-    components_c: { winding: { max: 120 }, magnet: { max: 75 } },
-    coupled: { coil_temp_c: 118, magnet_temp_c: 72, bearing_temp_c: 55 },
+    duty_temps: { kind: 'coupled', winding_c: 128.5, magnet_c: 70, housing_c: 64, bearing_c: 55, provenance: { computed_at: '2026-10-25T10:00:00' } },
     s1: { I_cont_A_rms: 41.5, limiting_part: 'winding' },
     s2: { time_to_limit_s: 160, limiting_part: 'winding' },
   };
   const byId = Object.fromEntries(thermalTiles(t).map((x) => [x.id, x.value]));
-  assert.deepEqual(byId, { winding: 118, magnet: 72, housing: 64, bearing: 55, s1: 41.5, s2: 160 });
-  const noLoop = Object.fromEntries(thermalTiles({ components_c: { winding: { max: 120 } } }).map((x) => [x.id, x.value]));
-  assert.deepEqual(noLoop, { winding: 120, magnet: null, housing: null });         // missing stays null, never 0
+  assert.deepEqual(byId, { winding: 128.5, magnet: 70, housing: 64, bearing: 55, s1: 41.5, s2: 160 });
+  assert.deepEqual(thermalSource(t), { kind: 'coupled', day: '2026-10-25 10:00' });
+  const noHousing = Object.fromEntries(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: 120 } }).map((x) => [x.id, x.value]));
+  assert.deepEqual(noHousing, { winding: 120, magnet: null, housing: null });         // missing stays null, never 0
   assert.deepEqual(thermalTiles(null), []);
+});
+
+test('a limit-search state yields no temperature tile - it is its own line', () => {
+  const t = { limit_search: { kind: 'coupled', winding_c: 179.6 }, s1: { I_cont_A_rms: 30 } };
+  assert.deepEqual(thermalTiles(t).map((x) => x.id), ['s1']);
+  assert.equal(thermalSource(t), null);
 });
 
 test('mechanical tiles, retention verdict and the safety factors per part (smallest first)', () => {
@@ -160,4 +165,36 @@ test('wiring: a click on a Development motor row opens it like the Motors tab; t
   assert.match(page, /renderRowEnd=\{\(r\) => <Box component="td" onClick=\{\(e\) => e\.stopPropagation\(\)\}/);   // buttons do not also trigger the row
   const table = src('../../../components/compare/SharedComparisonTable.tsx');
   assert.match(table, /onClick=\{onRowClick \? \(\) => onRowClick\(row\) : undefined\}/);
+});
+
+test('mechanical worst case: label from the record, stale reasons (superseded solver / other geometry)', () => {
+  const m = { rotor_stress: { worst_case: { rpm: 23000, torque_nm: 7.5, loads: 'both' }, solver_status: 'superseded', geometry_status: 'differs', stale: true } };
+  assert.equal(worstCaseLabel(m), '23,000 rpm, 7.50 N·m');
+  assert.deepEqual(mechStaleReasons(m), ['superseded', 'geometry']);
+  assert.deepEqual(mechStaleReasons({ rotor_stress: { solver_status: 'current', geometry_status: 'unknown' } }), []);
+  assert.deepEqual(mechStaleReasons({ rotor_stress: { solver_status: 'unknown' } }), []);       // undated: not flagged stale, not claimed current either
+  assert.equal(worstCaseLabel({ rotor_stress: { worst_case: { rpm: 1000 } } }), '1,000 rpm');
+  assert.equal(worstCaseLabel(null), '');
+});
+
+test('field kinds: the tab-style names map to the stored kinds; an unknown kind or a 404 is "not computed", not an error', () => {
+  assert.equal(fieldKindFromName('mech'), 'rotor_stress');
+  assert.equal(fieldKindFromName('Mechanical'), 'rotor_stress');
+  assert.equal(fieldKindFromName('em'), 'em');
+  assert.equal(fieldKindFromName('bogus'), null);
+  assert.equal(fieldKindFromName(undefined), null);
+  assert.equal(isNotComputed({ status: 404, message: 'x' }), true);
+  assert.equal(isNotComputed(new Error('Not computed')), true);
+  assert.equal(isNotComputed({ status: 400, message: 'Unknown field kind' }), false);
+  assert.equal(isNotComputed(null), false);
+});
+
+test('wiring: the UI asks only for the stored kind names and shows a 404 as "not computed"', () => {
+  const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+  const panel = src('../../../components/compare/PointsConfigure.tsx');
+  assert.match(panel, /isNotComputed\(e\)/);
+  assert.match(panel, /FIELD_KIND_ORDER\.map/);                                   // the toggles are the stored kind names
+  assert.deepEqual(['em', 'thermal', 'rotor_stress'], [...src('../pointsLimited.ts').matchAll(/FIELD_KIND_ORDER: readonly FieldKind\[\] = \[([^\]]*)\]/g)][0][1].split(',').map((x) => x.trim().replace(/'/g, '')));
+  const results = src('../../../components/compare/StoredPointResults.tsx');
+  assert.match(results, /mech-stale-/);                                           // stale answers carry a visible flag
 });

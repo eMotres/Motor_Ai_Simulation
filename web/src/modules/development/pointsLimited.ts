@@ -54,24 +54,32 @@ export interface ResultTile { id: string; value: number | null; unit: string; d:
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** The thermal tiles of a duty (coupled loop result first, the temperature map where the loop did not run).
- *  Every tile is shown even when missing (value null -> "-" with the "not stored" tooltip): nothing is invented. */
+/** The thermal tiles of a duty.  Temperatures are the DUTY's own (`duty_temps`: the converged coupled loop, else the
+ *  steady map); a limit-search state is never turned into a tile.  S1 and S2 are tiles of their own.  Every tile is shown
+ *  even when missing (value null -> "-" with the "not stored" tooltip): nothing is invented. */
 export function thermalTiles(t: MotorViewDuty['thermal']): ResultTile[] {
   if (!t) return [];
-  const comp = (name: string) => num(t.components_c?.[name]?.max);
-  const out: ResultTile[] = [
-    { id: 'winding', value: num(t.coupled?.coil_temp_c) ?? comp('winding'), unit: '°C', d: 0 },
-    { id: 'magnet', value: num(t.coupled?.magnet_temp_max_c) ?? num(t.coupled?.magnet_temp_c) ?? comp('magnet'), unit: '°C', d: 0 },
-    { id: 'housing', value: num(t.housing_c), unit: '°C', d: 0 },
-  ];
-  const bearing = num(t.coupled?.bearing_temp_c);
+  const d = t.duty_temps;
+  const out: ResultTile[] = d ? [
+    { id: 'winding', value: num(d.winding_c), unit: '°C', d: 0 },
+    { id: 'magnet', value: num(d.magnet_max_c) ?? num(d.magnet_c), unit: '°C', d: 0 },
+    { id: 'housing', value: num(d.housing_c), unit: '°C', d: 0 },
+  ] : [];
+  const bearing = num(d?.bearing_c);
   if (bearing !== null) out.push({ id: 'bearing', value: bearing, unit: '°C', d: 0 });
   if (t.s1) out.push({ id: 's1', value: num(t.s1.I_cont_A_rms), unit: 'A', d: 1 });
   if (t.s2) out.push({ id: 's2', value: num(t.s2.time_to_limit_s), unit: 's', d: 0 });
   return out;
 }
 
-/** The mechanical tiles of a duty: smallest averaged SF, retention, largest displacement, proof speed. */
+/** Which run the duty's temperatures are (and when), for the block title: `coupled | thermal`, date.  null without temperatures. */
+export function thermalSource(t: MotorViewDuty['thermal']): { kind: 'coupled' | 'thermal'; day: string } | null {
+  const d = t?.duty_temps;
+  if (!d) return null;
+  return { kind: d.kind, day: (d.provenance?.computed_at ?? d.provenance?.recorded_at ?? '').replace('T', ' ').slice(0, 16) };
+}
+
+/** The mechanical tiles of the motor's worst case: smallest averaged SF, largest displacement, proof speed. */
 export function mechTiles(m: MotorViewDuty['mechanical']): ResultTile[] {
   const r = m?.rotor_stress;
   if (!r) return [];
@@ -85,6 +93,38 @@ export function mechTiles(m: MotorViewDuty['mechanical']): ResultTile[] {
   const limit = num(r.limit_speed_rpm);
   if (limit !== null) out.push({ id: 'limitRpm', value: limit, unit: 'rpm', d: 0 });
   return out;
+}
+
+/** "worst case: <rpm>, <torque>" of the stored record - the parts that are known. */
+export function worstCaseLabel(m: MotorViewDuty['mechanical']): string {
+  const w = m?.rotor_stress?.worst_case;
+  if (!w) return '';
+  const bits: string[] = [];
+  if (num(w.rpm) !== null) bits.push(`${Math.round(w.rpm as number).toLocaleString('en-US')} rpm`);
+  if (num(w.torque_nm) !== null) bits.push(`${(w.torque_nm as number).toFixed(2)} N·m`);
+  return bits.join(', ');
+}
+
+/** Why a stored mechanical answer is not the current one: `superseded` solver, changed `geometry`, or both; null = current. */
+export function mechStaleReasons(m: MotorViewDuty['mechanical']): Array<'superseded' | 'geometry'> {
+  const r = m?.rotor_stress;
+  const out: Array<'superseded' | 'geometry'> = [];
+  if (r?.solver_status === 'superseded') out.push('superseded');
+  if (r?.geometry_status === 'differs') out.push('geometry');
+  return out;
+}
+
+/** The stored field kind a name means (the server's `mech` / `electromagnetic` spellings included); null = not a stored kind. */
+export function fieldKindFromName(name: unknown): FieldKind | null {
+  const n = String(name ?? '').trim().toLowerCase();
+  const map: Record<string, FieldKind> = { em: 'em', electromagnetic: 'em', thermal: 'thermal', rotor_stress: 'rotor_stress', mech: 'rotor_stress', mechanical: 'rotor_stress', stress: 'rotor_stress' };
+  return map[n] ?? null;
+}
+
+/** A failed map request that only means "never computed" (404 / "Not computed"), not an error to show. */
+export function isNotComputed(error: unknown): boolean {
+  const e = error as { status?: number; message?: string } | null;
+  return e?.status === 404 || /not computed/i.test(String(e?.message ?? ''));
 }
 
 /** Retention verdict word of a stored rotor-stress result: pass | fail | unknown. */

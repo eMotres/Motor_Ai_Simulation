@@ -384,6 +384,13 @@
     "noProvenance": "No provenance is stored for this result.",
     "thermal": {
       "title": "Thermal",
+      "source": {
+        "coupled": "coupled loop",
+        "thermal": "temperature map"
+      },
+      "onlyLimit": "Only a limit-search state is stored for this duty, not its own temperatures.",
+      "limitLine": "S1 limit search ({day}): winding {winding} °C at the limit",
+      "limitTip": "State of the limit search (S1), not the temperature of this duty.",
       "tile": {
         "winding": "Winding",
         "magnet": "Magnet",
@@ -405,6 +412,14 @@
     },
     "mech": {
       "title": "Mechanical",
+      "worstCase": "worst case: {case}",
+      "filedUnder": "filed under {duty}",
+      "stale": {
+        "superseded": "Superseded solver",
+        "supersededTip": "Computed before the contact repair (5249508a); recompute before relying on it.",
+        "geometry": "Other geometry",
+        "geometryTip": "The machine print differs from the newest electromagnetic / thermal result of this motor; not the current answer."
+      },
       "retentionTip": "Magnet retention without adhesive: held by the rotor iron alone.",
       "retention": {
         "pass": "Retained",

@@ -6,12 +6,17 @@ import type { FieldKind, MotorView, StoredField } from '../modules/development/t
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const enc = encodeURIComponent;
 
+export class MotorViewError extends Error {
+  status: number;
+  constructor(status: number, message: string) { super(message); this.status = status; }
+}
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`${API}${path}`, { cache: 'no-store' });
   const data = await r.json().catch(() => null);
   if (!r.ok) {
     const detail = (data as { detail?: unknown } | null)?.detail;
-    throw new Error(typeof detail === 'string' ? detail : `HTTP ${r.status}`);
+    throw new MotorViewError(r.status, typeof detail === 'string' ? detail : `HTTP ${r.status}`);
   }
   return data as T;
 }

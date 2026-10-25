@@ -454,6 +454,7 @@
     "slotMouthTip": "Slot walls would overlap: the wire is too wide for the tooth pitch.",
     "batteryTitle": "Battery & voltage match",
     "packSummary": "Pack {nom} V nom · {min}–{max} V",
+    "chemistryStored": "Stored: {value}",
     "refuseSpeedPack": "Refused: {rpm} rpm exceeds this pack's {max} rpm speed limit.",
     "refuseSpeedPackTip": "Pack voltage cannot support this speed.",
     "invalidPack": "Invalid battery values.",

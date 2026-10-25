@@ -173,7 +173,7 @@ export function formatDiffValue(value: DiffAtom, entry: SpecificationDiffEntry, 
   if (choice && typeof choice !== 'string') return localized(choice.label, locale) ?? value;
   const key = entry.property?.split('.').at(-1);
   if (key === 'source' && ['manual', 'catalog'].includes(value)) return t(`mission.source.${value}`);
-  if (key === 'catalog_type' && ['air_propeller', 'marine_propeller', 'water_jet', 'wheel', 'pump', 'engine_driven_generator'].includes(value)) return t(`load.types.${value}`);
+  if (key === 'catalog_type' && ['air_propeller', 'marine_propeller', 'water_jet', 'wheel', 'pump', 'engine_driven_generator', 'turbine', 'robot_joint'].includes(value)) return t(`load.types.${value}`);
   if (key === 'shaft_side' && ['motor', 'load'].includes(value)) return t(`load.${value === 'motor' ? 'motorSide' : 'loadSide'}`);
   if (['quality', 'data_quality', 'power_data'].includes(key ?? '') && ['manual', 'measured', 'estimated', 'reference', 'unknown', 'torque_measured', 'measured_torque', 'estimated_power', 'none'].includes(value)) return t(`catalog.quality.${value}`);
   return value;

@@ -310,7 +310,8 @@ def _validate_typed_item(value: Any, spec: dict, path: str, *, require_complete:
         if isinstance(item_spec, dict):
             for index, item in enumerate(value):
                 _validate_typed_item(item, item_spec, f"{path}[{index}]", require_complete=require_complete)
-    if spec.get("options") and not any(value == option for option in spec["options"]):
+    if spec.get("options") and not any(value == (option.get("value") if isinstance(option, dict) else option)
+                                       for option in spec["options"]):
         raise ValueError(f"{path}: unsupported choice")
 
 
@@ -322,6 +323,28 @@ def _value_present(value: Any, spec: dict | None = None) -> bool:
     if isinstance(value, dict) and (spec or {}).get("allow_range"):
         return value.get("minimum") is not None and value.get("maximum") is not None
     return True
+
+
+def _property_complete(item: Any, prop: dict) -> bool:
+    """A structured answer's property holds a usable value (a range needs both ordered bounds)."""
+    if prop.get("allow_range") and isinstance(item, dict):
+        low, high = item.get("minimum"), item.get("maximum")
+        numeric = all(isinstance(b, (int, float)) and not isinstance(b, bool) for b in (low, high))
+        return numeric and low <= high
+    if not _value_present(item, prop):
+        return False
+    try:
+        _validate_typed_item(item, prop, prop["id"], require_complete=True)
+    except ValueError:
+        return False
+    return True
+
+
+def _missing_any_groups(field: dict, value: dict) -> list[list[str]]:
+    """`required_any` groups of which no property is filled (e.g. torque OR power)."""
+    props = {p["id"]: p for p in field.get("properties", [])}
+    return [group for group in field.get("required_any", [])
+            if not any(_property_complete(value.get(pid), props[pid]) for pid in group if pid in props)]
 
 
 def _answer_complete(answer: dict, field: dict) -> bool:
@@ -337,17 +360,10 @@ def _answer_complete(answer: dict, field: dict) -> bool:
         if not isinstance(value, dict):
             return False
         required_props = [p for p in field["properties"] if p.get("required")]
-        for prop in required_props:
-            item = value.get(prop["id"])
-            if prop.get("allow_range") and isinstance(item, dict):
-                if item.get("minimum") is None or item.get("maximum") is None:
-                    return False
-            elif not _value_present(item, prop):
-                return False
-            try:
-                _validate_typed_item(item, prop, prop["id"], require_complete=True)
-            except ValueError:
-                return False
+        if not all(_property_complete(value.get(prop["id"]), prop) for prop in required_props):
+            return False
+        if _missing_any_groups(field, value):
+            return False
         minimum = int(field.get("min_filled_properties", 0))
         if sum(1 for key, v in value.items() if _value_present(v, next((p for p in field["properties"] if p["id"] == key), {}))) < minimum:
             return False
@@ -536,8 +552,12 @@ def validation_errors(draft: dict) -> list[dict]:
                                 except ValueError as exc:
                                     errors.append({"field": str(exc).split(":", 1)[0], "section": sid,
                                                    "message": str(exc).split(":", 1)[-1].strip()})
+                    for group in _missing_any_groups(field, val):
+                        errors.append({"field": f"{fid}.{group[0]}", "section": sid,
+                                       "message": "Enter at least one of: " + ", ".join(group)})
                     minimum = int(field.get("min_filled_properties", 0))
-                    if minimum and sum(1 for v in val.values() if v is not None and (not isinstance(v, str) or v.strip())) < minimum:
+                    props = {p["id"]: p for p in field["properties"]}
+                    if minimum and sum(1 for k, v in val.items() if _value_present(v, props.get(k, {}))) < minimum:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
     return errors
 

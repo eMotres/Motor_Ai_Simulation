@@ -58,11 +58,12 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "handled_by": "mission_profile",
           "short_label": {
-            "en": "Mission profile",
-            "zh-CN": "任务剖面"
+            "en": "Mission notes",
+            "zh-CN": "任务说明"
           },
           "presentation_group": "1"
         },
@@ -76,6 +77,12 @@
           "type": "object",
           "unit": "",
           "required": true,
+          "required_any": [
+            [
+              "torque_Nm",
+              "power_W"
+            ]
+          ],
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -86,7 +93,7 @@
               },
               "type": "number",
               "unit": "N·m",
-              "required": true,
+              "required": false,
               "short_label": {
                 "en": "Torque",
                 "zh-CN": "转矩"
@@ -120,6 +127,66 @@
               "unit": "W",
               "required": false,
               "read_only": true
+            },
+            {
+              "id": "power_W",
+              "label": {
+                "en": "Power (when the torque is not given)",
+                "zh-CN": "功率（未给出转矩时）"
+              },
+              "type": "number",
+              "unit": "W",
+              "required": false,
+              "min": 0,
+              "short_label": {
+                "en": "Power",
+                "zh-CN": "功率"
+              },
+              "help": {
+                "en": "Enter the S1 power when the torque is not known. When torque and speed are given, the power is derived from them.",
+                "zh-CN": "不知道转矩时填写 S1 功率。给出转矩和转速时，功率由二者计算。"
+              }
+            },
+            {
+              "id": "power_basis",
+              "label": {
+                "en": "Power basis",
+                "zh-CN": "功率基准"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "options": [
+                {
+                  "value": "shaft",
+                  "label": {
+                    "en": "Shaft",
+                    "zh-CN": "轴功率"
+                  }
+                },
+                {
+                  "value": "electrical_input",
+                  "label": {
+                    "en": "Electrical input",
+                    "zh-CN": "电气输入"
+                  }
+                },
+                {
+                  "value": "dc_output",
+                  "label": {
+                    "en": "DC bus",
+                    "zh-CN": "直流母线"
+                  }
+                }
+              ],
+              "short_label": {
+                "en": "Power basis",
+                "zh-CN": "功率基准"
+              },
+              "help": {
+                "en": "Where the stated power is measured: at the shaft, at the motor's electrical input, or at the DC bus (generator output).",
+                "zh-CN": "所给功率的计量位置：轴端、电机电气输入端，或直流母线（发电机输出）。"
+              }
             }
           ],
           "short_label": {
@@ -127,8 +194,8 @@
             "zh-CN": "S1 连续工作点"
           },
           "help": {
-            "en": "Enter one torque and speed point. Shaft power is derived from torque and speed.",
-            "zh-CN": "输入一个转矩和转速工作点。轴功率由转矩和转速计算。"
+            "en": "Enter the speed and the torque, or the power when the torque is not known. With torque and speed the shaft power is derived.",
+            "zh-CN": "输入转速和转矩；不知道转矩时输入功率。给出转矩和转速时，轴功率由二者计算。"
           },
           "presentation_group": "continuous"
         },
@@ -142,6 +209,12 @@
           "type": "object",
           "unit": "",
           "required": false,
+          "required_any": [
+            [
+              "torque_Nm",
+              "output_power_W"
+            ]
+          ],
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -152,7 +225,7 @@
               },
               "type": "number",
               "unit": "N·m",
-              "required": true,
+              "required": false,
               "allow_range": true
             },
             {
@@ -163,7 +236,7 @@
               },
               "type": "number",
               "unit": "rpm",
-              "required": true,
+              "required": false,
               "allow_range": true
             },
             {
@@ -174,7 +247,7 @@
               },
               "type": "number",
               "unit": "s",
-              "required": true,
+              "required": false,
               "min": 0,
               "allow_range": true
             },
@@ -199,6 +272,21 @@
               "required": false,
               "min": 0,
               "allow_range": true
+            },
+            {
+              "id": "period_s",
+              "label": {
+                "en": "Repeat period (start of one peak to the start of the next)",
+                "zh-CN": "重复周期（一次峰值开始到下一次开始）"
+              },
+              "type": "number",
+              "unit": "s",
+              "required": false,
+              "min": 0,
+              "short_label": {
+                "en": "Repeat period",
+                "zh-CN": "重复周期"
+              }
             }
           ],
           "short_label": {
@@ -252,6 +340,22 @@
               "type": "string",
               "unit": "",
               "required": false
+            },
+            {
+              "id": "runaway_rpm",
+              "label": {
+                "en": "Runaway speed (load or control lost)",
+                "zh-CN": "飞逸转速（失去负载或控制时）"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": false,
+              "min": 0,
+              "allow_range": true,
+              "short_label": {
+                "en": "Runaway",
+                "zh-CN": "飞逸转速"
+              }
             }
           ],
           "short_label": {
@@ -408,6 +512,27 @@
             "zh-CN": "使用寿命"
           },
           "presentation_group": "1"
+        },
+        {
+          "id": "additional_requirements",
+          "label": {
+            "en": "Additional requirements (one line per requirement, e.g. cut-in speed, controller input-voltage window, field weakening)",
+            "zh-CN": "其他要求（每行一项，如切入转速、控制器输入电压范围、弱磁）"
+          },
+          "type": "string",
+          "unit": "",
+          "required": false,
+          "allow_not_known_yet": false,
+          "multiline": true,
+          "short_label": {
+            "en": "Additional requirements",
+            "zh-CN": "其他要求"
+          },
+          "help": {
+            "en": "Anything this form does not ask for. Write one requirement per line.",
+            "zh-CN": "本表未涉及的任何要求，每行写一项。"
+          },
+          "presentation_group": "1"
         }
       ],
       "presentation_order": 1
@@ -439,7 +564,7 @@
               },
               "type": "string",
               "unit": "",
-              "required": true
+              "required": false
             },
             {
               "id": "series_cells",
@@ -449,7 +574,7 @@
               },
               "type": "number",
               "unit": "cells",
-              "required": true,
+              "required": false,
               "min": 1
             },
             {
@@ -460,7 +585,7 @@
               },
               "type": "number",
               "unit": "V",
-              "required": true,
+              "required": false,
               "min": 0
             },
             {
@@ -482,8 +607,53 @@
               },
               "type": "number",
               "unit": "V",
-              "required": true,
+              "required": false,
               "min": 0
+            },
+            {
+              "id": "cell_voltage_min_V",
+              "label": {
+                "en": "Cell voltage, minimum (empty)",
+                "zh-CN": "单体电压（最低，放空）"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "min": 0,
+              "short_label": {
+                "en": "Cell V min",
+                "zh-CN": "单体最低电压"
+              }
+            },
+            {
+              "id": "cell_voltage_nominal_V",
+              "label": {
+                "en": "Cell voltage, nominal",
+                "zh-CN": "单体电压（标称）"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "min": 0,
+              "short_label": {
+                "en": "Cell V nominal",
+                "zh-CN": "单体标称电压"
+              }
+            },
+            {
+              "id": "cell_voltage_max_V",
+              "label": {
+                "en": "Cell voltage, maximum (full)",
+                "zh-CN": "单体电压（最高，满电）"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "min": 0,
+              "short_label": {
+                "en": "Cell V max",
+                "zh-CN": "单体最高电压"
+              }
             }
           ],
           "short_label": {
@@ -501,7 +671,7 @@
           },
           "type": "object",
           "unit": "V",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -571,6 +741,21 @@
               "unit": "A",
               "required": false,
               "min": 0
+            },
+            {
+              "id": "charge_A",
+              "label": {
+                "en": "Charge / regeneration current limit",
+                "zh-CN": "充电／回馈电流限值"
+              },
+              "type": "number",
+              "unit": "A",
+              "required": false,
+              "min": 0,
+              "short_label": {
+                "en": "Charge",
+                "zh-CN": "充电电流"
+              }
             }
           ],
           "short_label": {
@@ -610,6 +795,21 @@
               "type": "string",
               "unit": "",
               "required": true
+            },
+            {
+              "id": "count",
+              "label": {
+                "en": "Number of controllers",
+                "zh-CN": "控制器数量"
+              },
+              "type": "number",
+              "unit": "",
+              "required": false,
+              "min": 1,
+              "short_label": {
+                "en": "Controllers",
+                "zh-CN": "控制器数量"
+              }
             }
           ],
           "short_label": {
@@ -627,7 +827,7 @@
           },
           "type": "object",
           "unit": "V",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -667,7 +867,7 @@
           },
           "type": "object",
           "unit": "A rms",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -808,6 +1008,21 @@
               "type": "string",
               "unit": "",
               "required": false
+            },
+            {
+              "id": "independent_sets",
+              "label": {
+                "en": "Independent winding sets (e.g. 2 for two 3-phase windings)",
+                "zh-CN": "独立绕组组数（如两套三相绕组为 2）"
+              },
+              "type": "number",
+              "unit": "",
+              "required": false,
+              "min": 1,
+              "short_label": {
+                "en": "Independent sets",
+                "zh-CN": "独立绕组组数"
+              }
             }
           ],
           "short_label": {
@@ -843,6 +1058,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Insulation",
@@ -959,7 +1175,7 @@
                 "zh-CN": "流量"
               },
               "type": "number",
-              "unit": "",
+              "unit": "L/min",
               "required": false,
               "min": 0
             },
@@ -1001,8 +1217,7 @@
               },
               "type": "number",
               "unit": "°C",
-              "required": true,
-              "min": 0
+              "required": false
             },
             {
               "id": "temperature_max_C",
@@ -1023,7 +1238,7 @@
               },
               "type": "number",
               "unit": "m",
-              "required": true,
+              "required": false,
               "min": 0
             }
           ],
@@ -1037,8 +1252,8 @@
           "id": "3_3",
           "checklist_id": "3.3",
           "label": {
-            "en": "Housing: open (air through the motor) or closed; IP rating",
-            "zh-CN": "机壳：开放式（空气流经电机）或封闭式；IP等级"
+            "en": "Housing: open (air through the motor), closed or submerged; IP rating",
+            "zh-CN": "机壳：开放式（空气流经电机）、封闭式或浸没式；IP等级"
           },
           "type": "string",
           "unit": "",
@@ -1060,6 +1275,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Exposure",
@@ -1104,6 +1320,12 @@
           "type": "object",
           "unit": "mm",
           "required": true,
+          "required_any": [
+            [
+              "outer_diameter_mm",
+              "length_mm"
+            ]
+          ],
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -1114,7 +1336,7 @@
               },
               "type": "number",
               "unit": "mm",
-              "required": true,
+              "required": false,
               "min": 0
             },
             {
@@ -1125,7 +1347,7 @@
               },
               "type": "number",
               "unit": "mm",
-              "required": true,
+              "required": false,
               "min": 0
             }
           ],
@@ -1186,6 +1408,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Mounting",
@@ -1202,7 +1425,7 @@
           },
           "type": "string",
           "unit": "",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Output interface",
@@ -1236,7 +1459,7 @@
           },
           "type": "object",
           "unit": "N, N·m",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -1330,6 +1553,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Vibration and shock",
@@ -1387,7 +1611,7 @@
           },
           "type": "string",
           "unit": "",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "options": [
             {
@@ -1431,6 +1655,20 @@
                 "en": "Engine-driven generator",
                 "zh-CN": "发动机驱动发电机"
               }
+            },
+            {
+              "value": "turbine",
+              "label": {
+                "en": "Turbine (wind / water)",
+                "zh-CN": "涡轮（风力／水力）"
+              }
+            },
+            {
+              "value": "robot_joint",
+              "label": {
+                "en": "Robot joint",
+                "zh-CN": "机器人关节"
+              }
             }
           ],
           "presentation_group": "load"
@@ -1447,7 +1685,7 @@
           },
           "type": "string",
           "unit": "",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "options": [
             {
@@ -1802,6 +2040,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Standards",
@@ -1819,6 +2058,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Failure cases",
@@ -1836,6 +2076,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Reliability",
@@ -1853,6 +2094,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Test requirements",
@@ -1880,6 +2122,7 @@
           "type": "object",
           "unit": "units",
           "required": true,
+          "min_filled_properties": 1,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -1890,7 +2133,7 @@
               },
               "type": "number",
               "unit": "units",
-              "required": true,
+              "required": false,
               "min": 0,
               "allow_range": true
             },
@@ -1902,7 +2145,7 @@
               },
               "type": "number",
               "unit": "units",
-              "required": true,
+              "required": false,
               "min": 0,
               "allow_range": true
             },
@@ -1914,7 +2157,7 @@
               },
               "type": "number",
               "unit": "units",
-              "required": true,
+              "required": false,
               "min": 0,
               "allow_range": true
             }
@@ -1935,6 +2178,7 @@
           "type": "object",
           "unit": "date",
           "required": true,
+          "min_filled_properties": 1,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -1945,7 +2189,7 @@
               },
               "type": "string",
               "unit": "date",
-              "required": true
+              "required": false
             },
             {
               "id": "prototype_date",
@@ -1955,7 +2199,7 @@
               },
               "type": "string",
               "unit": "date",
-              "required": true
+              "required": false
             },
             {
               "id": "series_date",
@@ -1965,7 +2209,7 @@
               },
               "type": "string",
               "unit": "date",
-              "required": true
+              "required": false
             }
           ],
           "short_label": {
@@ -2024,6 +2268,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Deliverables",
@@ -2041,6 +2286,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "NDA and ownership",
@@ -2139,7 +2385,7 @@
           },
           "type": "object",
           "unit": "",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -2193,7 +2439,7 @@
           },
           "type": "object",
           "unit": "",
-          "required": true,
+          "required": false,
           "allow_not_known_yet": true,
           "properties": [
             {
@@ -2297,6 +2543,7 @@
           "type": "string",
           "unit": "",
           "required": false,
+          "multiline": true,
           "allow_not_known_yet": true,
           "short_label": {
             "en": "Packaging and delivery",

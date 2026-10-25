@@ -353,16 +353,16 @@ def test_friction_sticks_below_the_cone():
     assert trans == pytest.approx(tau, rel=0.05), f"{trans:.3e} vs {tau:.3e}"
 
 
-def test_friction_slides_above_the_cone_and_caps_at_mu_p():
-    """tau = 2 mu p: everything slides and the traction saturates at mu*p.
+def test_friction_overload_under_force_control_is_not_an_equilibrium():
+    """A prescribed shear of 2 mu p cannot equilibrate at a mu p interface.
 
-    The cap is the regularisation's whole promise — the secant stiffness is
-    ``mu*Fn/|s|`` exactly so that ``k_t*s`` lands on the cone — so it is checked
-    tightly, while the slip FRACTION is the state flag the panel reads.
+    The pair forces must obey the cone, but clipping them does not balance the
+    excess external load. The two blocks have no other tangential restraint:
+    calling this force-controlled sliding state converged invents a load path.
     """
     tau = 2.0 * MU * PRESS
     sol, cs, ln = _shear_two_blocks(tau)
-    assert sol.converged
+    assert not sol.converged
     rep = ctc.facet_report(cs, sol)["magnet_rotor"]
     ll = rep["length"]
     slip = float((rep["slip"] * ll).sum() / ll.sum())
@@ -372,7 +372,7 @@ def test_friction_slides_above_the_cone_and_caps_at_mu_p():
     trans = abs(float(sol.force_t[m].sum())) / ln
     assert trans == pytest.approx(MU * PRESS, rel=0.05), \
         f"{trans:.3e} vs mu*p {MU * PRESS:.3e}"
-    # and it is BELOW what was asked of it — that is what "slipping" means
+    # The uncancelled applied resultant is why there is no static equilibrium.
     assert trans < 0.75 * tau
 
 

@@ -171,9 +171,11 @@ export function formatDiffValue(value: DiffAtom, entry: SpecificationDiffEntry, 
   for (const part of entry.property?.split('.') ?? []) shape = shape?.properties?.find(property => property.id === part);
   const choice = shape?.options?.find(option => typeof option === 'string' ? option === value : option.value === value);
   if (choice && typeof choice !== 'string') return localized(choice.label, locale) ?? value;
+  const suggestion = shape?.suggestions?.find((item) => typeof item === 'object' && item.value === value);
+  if (suggestion && typeof suggestion === 'object') return localized(suggestion.label, locale) ?? value;
   const key = entry.property?.split('.').at(-1);
   if (key === 'source' && ['manual', 'catalog'].includes(value)) return t(`mission.source.${value}`);
-  if (key === 'catalog_type' && ['air_propeller', 'marine_propeller', 'water_jet', 'wheel', 'pump', 'engine_driven_generator', 'turbine', 'robot_joint'].includes(value)) return t(`load.types.${value}`);
+  if (key === 'catalog_type' && ['air_propeller', 'marine_propeller', 'water_jet', 'wheel', 'pump', 'engine_driven_generator', 'turbine', 'robot_joint', 'shaft'].includes(value)) return t(`load.types.${value}`);
   if (key === 'shaft_side' && ['motor', 'load'].includes(value)) return t(`load.${value === 'motor' ? 'motorSide' : 'loadSide'}`);
   if (['quality', 'data_quality', 'power_data'].includes(key ?? '') && ['manual', 'measured', 'estimated', 'reference', 'unknown', 'torque_measured', 'measured_torque', 'estimated_power', 'none'].includes(value)) return t(`catalog.quality.${value}`);
   return value;

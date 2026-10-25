@@ -365,13 +365,14 @@
     "type": "Load type",
     "types": {
       "air_propeller": "Air propeller",
-      "marine_propeller": "Marine propeller",
+      "marine_propeller": "Water propeller",
       "water_jet": "Water-jet",
       "wheel": "Wheel",
       "pump": "Pump",
       "engine_driven_generator": "Engine-driven generator",
       "turbine": "Turbine (wind / water)",
       "robot_joint": "Robot joint",
+      "shaft": "Shaft (coupling / gearbox)",
       "unknown": "Not known yet"
     },
     "source": "Load data source",
@@ -508,5 +509,6 @@
     "refreshUnavailable": "Refresh is unavailable for this source.",
     "refreshRow": "{phase}: {before} → {after} N·m"
   },
-  "rangeWorst": "Stored as a range {min}–{max}. Modelling uses the worst value shown; type one value to replace the range."
+  "rangeWorst": "Stored as a range {min}–{max}. Modelling uses the maximum shown; type one value to replace the range.",
+  "coolingInferred": "Read from the stored values; click a medium to confirm it."
 }

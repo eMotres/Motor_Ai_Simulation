@@ -92,6 +92,7 @@ def thermal_result() -> dict:
         "vertices": [[x / 1000.0, y / 1000.0] for x, y in VERTS_MM], "triangles": TRIS,
         "domain_per_tri": [1, 2], "temperature_per_node": [60.0, 80.0, 120.0, 90.0],
         "heat_flux_per_tri": [[1000.0, 0.0], [0.0, 2000.0]], "part_names": {"1": "stator", "2": "winding"},
+        "cooling": {"mount": {"t_housing_mean_c": 64.0}},
         "components": {"winding": {"avg": 110.0, "max": 120.0, "min": 80.0},
                        "magnet": {"avg": 70.0, "max": 75.0, "min": 65.0}},
         "T_max": 120.0, "T_min": 60.0, "P_loss_total_W": 321.0, "P_cu_W": 200.0, "P_fe_W": 100.0,
@@ -219,7 +220,7 @@ def test_b_view_shows_thermal_and_mechanical_with_provenance(sandbox):
     view = motor_view.build_view(DIE, CFG, _rows([DUTY, DUTY2]), stored, fields, set())
     d = {x["duty"]: x for x in view["duties"]}
     th = d[DUTY]["thermal"]
-    assert th["components_c"]["winding"]["max"] == 120.0
+    assert th["components_c"]["winding"]["max"] == 120.0 and th["housing_c"] == 64.0
     assert th["coupled"]["coil_temp_c"] == 118.0
     assert th["s1"]["I_cont_A_rms"] == 41.5 and th["s1"]["limiting_part"] == "winding"
     assert th["s2"]["time_to_limit_s"] == 160.0

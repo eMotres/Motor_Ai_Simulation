@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Button, Tooltip } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
+import ProjectHighlightSelect from './ProjectHighlightSelect';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
@@ -145,6 +146,7 @@ const MotorsCatalog: React.FC = () => {
         </Typography>
         <HelpTip title={tx('everythingGroupedByStatorDiameterA')} />
         <Box sx={{ flex: 1 }} />
+        <ProjectHighlightSelect />
         <Tooltip title={tx('applications.filterTip')}>
           <select value={appFilter} onChange={(e) => pickFilter(e.target.value)} aria-label={tx('applications.label')}
             style={{ fontSize: 11, padding: '1px 4px', background: 'transparent', color: 'var(--text-2)',

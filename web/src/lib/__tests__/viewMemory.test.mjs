@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as V from '../viewMemory.ts';
 import { DEVELOPMENT_VIEWS, developmentViewScope, parseDevelopmentView, restorableView } from '../../modules/development/viewState.ts';
-import { readPointsTarget, POINTS_VIEW_SCOPE } from '../../stores/pointsConfigureStore.ts';
+import { readFocus, writeFocus } from '../../modules/development/projectFocus.ts';
 
 const memory = () => { const map = new Map(); return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => { map.set(k, String(v)); }, removeItem: (k) => { map.delete(k); } }; };
 const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }, removeItem() { throw new Error('blocked'); } };
@@ -70,19 +70,21 @@ test('Development remembers project, tab and card per account; a stale card or t
   assert.ok(DEVELOPMENT_VIEWS.includes('motors'));
 });
 
-test('the points-only Configure target is remembered and validated', () => {
+test('the project the Motors tab highlights is remembered per account and validated', () => {
   const s = memory();
-  assert.equal(readPointsTarget(s), null);
-  const target = { projectId: 'alpha', die: 'D1', config: 'A', duty: 'cruise', showAll: false };
-  V.writeView(POINTS_VIEW_SCOPE, target, s);
-  assert.deepEqual(readPointsTarget(s), target);
-  V.writeView(POINTS_VIEW_SCOPE, { projectId: 'alpha' }, s);
-  assert.equal(readPointsTarget(s), null);
+  assert.equal(readFocus('a@example.test', s), null);
+  writeFocus('a@example.test', { id: 'alpha', title: 'Drone arm' }, s);
+  assert.deepEqual(readFocus('A@example.test', s), { id: 'alpha', title: 'Drone arm' });
+  assert.equal(readFocus('b@example.test', s), null);                         // another account does not inherit it
+  writeFocus('a@example.test', { id: 'alpha', title: null }, s);
+  assert.deepEqual(readFocus('a@example.test', s), { id: 'alpha', title: null });
+  V.writeView('projects.focus.a@example.test', { title: 'no id' }, s);
+  assert.equal(readFocus('a@example.test', s), null);
 });
 
 test('pages use the one mechanism: no page keeps its own tab memory next to it', () => {
   const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
-  assert.match(read('../../stores/pointsConfigureStore.ts'), /writeView\(POINTS_VIEW_SCOPE/);
+  assert.match(read('../../modules/development/projectFocus.ts'), /writeView\(focusScope/);
   assert.match(read('../../modules/development/components/DevelopmentPage.tsx'), /readView\(developmentViewScope/);
   assert.match(read('../../components/admin/AdminNav.tsx'), /useRememberedView|readView/);
 });

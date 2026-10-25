@@ -22,7 +22,11 @@ test('catalog and Development enter the same catalog duty handoff', async () => 
   assert.match(actions, /motorLinkAvailability\(motor, duty, allowMotorDefault\)/);
   const { motorLinkAvailability } = await import('../motorAvailability.ts');
   assert.equal(motorLinkAvailability({ die: 'D', config: 'C', can_open_configure: true, configure_duty: 'server-selected' }, 'different-row').configureDuty, null);
-  assert.match(actions, /mode === 'simulation' \? 'simulation' : 'compare'/);
+  assert.match(actions, /setActiveTab\('simulation' as never\)/);
+  assert.match(actions, /setActiveTab\('compare' as never\)/);
+  // a project motor opened for Configure takes the very same handoff (no second path)
+  assert.match(actions, /openProjectMotor\(\{ id: projectId/);
+  assert.match(source('../../../lib/openProjectMotor.ts'), /applyCatalogDuty\(motor\.die, motor\.config, duty, canWriteServer\(\),/);
   assert.doesNotMatch(source('../../../App.tsx'), /motres:open-project-motor|applyDutyLocal\(/);
 });
 

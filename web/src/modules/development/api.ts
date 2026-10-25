@@ -1,5 +1,5 @@
 import type { CatalogController } from './controllerCatalog';
-import type { DevelopmentSchema, MotorPointsAnswer, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
+import type { DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const enc = encodeURIComponent;
@@ -58,6 +58,11 @@ export const developmentApi = {
     const qs = q.toString();
     return call<MotorPointsAnswer>('GET', `${p(id)}/motors/points${qs ? `?${qs}` : ''}`);
   },
+  /** Everything stored for one project motor (same gates as the motor list); the Motors-tab twin is lib/motorViewApi. */
+  motorView: (id: string, die: string, config: string, showAll = false) =>
+    call<MotorView>('GET', `${p(id)}/motors/view?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
+  motorField: (id: string, die: string, config: string, duty: string, kind: FieldKind, showAll = false) =>
+    call<StoredField>('GET', `${p(id)}/motors/field?die=${enc(die)}&config=${enc(config)}&duty=${enc(duty)}&kind=${kind}${showAll ? '&show_all=true' : ''}`),
   setMotorNote: (id: string, die: string, config: string, note: string) => call<{ die: string; config: string; note: string }>('PATCH', `${p(id)}/motors/note`, { die, config, note }),
   setMotorStatus: (id: string, die: string, config: string, status: 'current' | 'trial') => call<unknown>('PATCH', `${p(id)}/motors/status`, { die, config, status }),
   motorPicker: (id: string) => call<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>('GET', `${p(id)}/motors/picker`),

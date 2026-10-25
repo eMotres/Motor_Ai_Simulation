@@ -261,5 +261,11 @@
   "dutyGeoConfirmNote": "原文件会保留在历史记录中，但该冲片的所有配置现在都会改变。",
   "dutyGeoConfirmNoteConfig": "原文件会保留在历史记录中。",
   "dutyGeoConfirmYesDie": "是，改写冲片",
-  "dutyGeoConfirmYesConfig": "是，修改此配置"
+  "dutyGeoConfirmYesConfig": "是，修改此配置",
+  "projectFocus": {
+    "label": "项目",
+    "none": "无项目",
+    "tip": "在列表中标出该项目的电机（默认选中最近打开的项目）。列表本身不变。",
+    "configTip": "属于所选项目。"
+  }
 }

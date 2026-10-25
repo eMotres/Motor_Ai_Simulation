@@ -119,6 +119,12 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if comps:
         out["components_c"] = comps
     if th:
+        # the housing (or the structure the heat lands on) when the map states it - never guessed from another part
+        cool = th.get("cooling") if isinstance(th.get("cooling"), dict) else {}
+        for src in ((cool.get("mount") or {}).get("t_housing_mean_c"), (cool.get("heat_path") or {}).get("t_body_c")):
+            if _num(src) is not None:
+                out["housing_c"] = _num(src)
+                break
         out["map"] = {**_pick(th, ("T_max", "T_min", "P_loss_total_W", "P_cu_W", "P_fe_W")),
                       **({"state": th.get("state")} if th.get("state") else {}),
                       **({"drive": th.get("drive")} if th.get("drive") else {}),

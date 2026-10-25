@@ -10,7 +10,6 @@ import { useTranslation } from 'react-i18next';
 import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
 import { useUIStore } from '../../stores/uiStore';
-import { usePointsConfigureStore } from '../../stores/pointsConfigureStore';
 import { useTabContextStore } from '../../stores/tabContextStore';
 import { stripContextFor } from '../../lib/stripContext';
 import TabContextStrip from './TabContextStrip';
@@ -117,10 +116,9 @@ const ActiveFamilyStrip: React.FC = () => {
   // Which context this tab shows (owner 2026-10-26): the live machine only on machine-bound tabs; Development and
   // Production name THEIR motor, tabs without a motor show nothing.  The hooks and dialogs below keep running.
   const activeTab = useUIStore(s => s.activeTab) as string;
-  const pointsMotor = usePointsConfigureStore(s => s.current);
   const tabProject = useTabContextStore(s => s.project);
   const tabProduction = useTabContextStore(s => s.production);
-  const stripCtx = stripContextFor({ tab: activeTab, project: tabProject, production: tabProduction, points: pointsMotor });
+  const stripCtx = stripContextFor({ tab: activeTab, project: tabProject, production: tabProduction });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   // A refused save because the on-screen BUILD differs from the configuration

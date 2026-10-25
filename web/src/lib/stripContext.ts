@@ -24,9 +24,6 @@ export interface StripProject { id: string; title: string; motors: StripMotor[] 
 /** The production open on the Production tab, published by the Production tab. */
 export interface StripProduction { die: string; config: string }
 
-/** The motor shown by the points-only Configure card (stores/pointsConfigureStore `current`). */
-export interface StripPointsMotor { projectId: string; die: string; config: string }
-
 export type StripContext =
   | { kind: 'live' }
   | { kind: 'none' }
@@ -58,26 +55,19 @@ export interface StripInput {
   tab: string;
   project: StripProject | null;
   production: StripProduction | null;
-  points: StripPointsMotor | null;
 }
 
 /** The context the strip shows for `tab`. */
-export function stripContextFor({ tab, project, production, points }: StripInput): StripContext {
+export function stripContextFor({ tab, project, production }: StripInput): StripContext {
   const kind = stripKindForTab(tab);
   if (kind === 'none') return { kind: 'none' };
   if (kind === 'production') return production ? { kind: 'production', die: production.die, config: production.config } : { kind: 'none' };
   if (kind === 'project') {
     if (!project) return { kind: 'none' };
-    const opened = points && points.projectId === project.id ? project.motors.find((m) => sameMotor(m, points)) : undefined;
-    const chosen = opened ?? latestCurrentMotor(project.motors);
+    const chosen = latestCurrentMotor(project.motors);
     return { kind: 'project', projectId: project.id, title: project.title, motors: project.motors, selected: chosen ? { die: chosen.die, config: chosen.config } : null };
   }
-  // Configure showing a project motor's stored points is NOT the live machine.
-  if (tab === 'compare' && points) {
-    const known = project && project.id === points.projectId ? project : null;
-    const motors = known && known.motors.some((m) => sameMotor(m, points)) ? known.motors : [{ die: points.die, config: points.config }];
-    return { kind: 'project', projectId: points.projectId, title: known?.title ?? null, motors, selected: { die: points.die, config: points.config } };
-  }
+  // A project motor opened in Configure IS the live machine now (one load path, owner 2026-10-26).
   return { kind: 'live' };
 }
 

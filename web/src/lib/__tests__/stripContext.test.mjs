@@ -6,7 +6,7 @@ import { projectStripContext } from '../../modules/development/projectStrip.ts';
 
 const M = (config, status, extra = {}) => ({ die: 'DIE', config, status, ...extra });
 const project = { id: 'p1', title: 'Drone arm', motors: [M('opt1', 'current'), M('opt2', 'current'), M('opt3', 'trial')] };
-const at = (tab, extra = {}) => stripContextFor({ tab, project: null, production: null, points: null, ...extra });
+const at = (tab, extra = {}) => stripContextFor({ tab, project: null, production: null, ...extra });
 
 test('machine-bound tabs keep the live machine', () => {
   for (const tab of ['compare', 'model3d', 'simulation', 'thermal', 'mechanical', 'controller', 'geometry', 'sweep', 'motors', 'materials', 'mesh', 'static3d', 'cost', 'comparePoints', 'schemas']) {
@@ -24,7 +24,7 @@ test('Development and Production show no strip for now (owner 2026-10-26)', () =
   for (const tab of ['development', 'production']) {
     assert.equal(stripKindForTab(tab), 'none', tab);
     assert.deepEqual(at(tab), { kind: 'none' }, tab);
-    assert.deepEqual(at(tab, { project, production: { die: 'D', config: 'c' }, points: { projectId: 'p1', die: 'DIE', config: 'opt1' } }), { kind: 'none' }, tab);
+    assert.deepEqual(at(tab, { project, production: { die: 'D', config: 'c' } }), { kind: 'none' }, tab);
   }
 });
 
@@ -33,19 +33,10 @@ test('Admin and Designer have no motor context', () => {
   assert.deepEqual(at('designer', { production: { die: 'D', config: 'c' } }), { kind: 'none' });
 });
 
-test('Configure showing a project motor from stored points is not the live machine', () => {
-  const points = { projectId: 'p1', die: 'DIE', config: 'opt1' };
-  const withProject = at('compare', { project, points });
-  assert.equal(withProject.kind, 'project');
-  assert.equal(withProject.title, 'Drone arm');
-  assert.deepEqual(withProject.selected, { die: 'DIE', config: 'opt1' });
-  // project not loaded yet (page reload straight onto Configure): the opened motor alone, no invented title
-  const bare = at('compare', { points });
-  assert.equal(bare.title, null);
-  assert.deepEqual(bare.motors, [{ die: 'DIE', config: 'opt1' }]);
-  // other tabs next to it still show the live machine even while the card is remembered
-  assert.deepEqual(at('simulation', { points }), { kind: 'live' });
+test('Configure is the live machine even for a project motor: one load path (owner 2026-10-26)', () => {
+  assert.deepEqual(at('compare', { project }), { kind: 'live' });
   assert.deepEqual(at('compare'), { kind: 'live' });
+  assert.deepEqual(at('simulation', { project }), { kind: 'live' });
 });
 
 test('latestCurrentMotor: last non-trial, else last, else null', () => {
@@ -82,7 +73,7 @@ test('projectStripContext: linked motors stand in until the motors list is loade
 });
 
 test('the strip never writes the remembered views (viewMemory keeps working) and the live line is only drawn for kind live', () => {
-  for (const f of ['../stripContext.ts', '../stripActions.ts', '../../stores/tabContextStore.ts']) {
+  for (const f of ['../stripContext.ts', '../openProjectMotor.ts', '../../stores/tabContextStore.ts']) {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8');
     assert.ok(!/writeView|clearView|localStorage/.test(src), f);
   }

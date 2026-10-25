@@ -461,6 +461,54 @@ def _load_characteristic_complete(answer: dict, fields: dict) -> bool:
     return bool(value.get("units")) and bool(value.get("shaft_side")) and domain_ok and samples_ok
 
 
+# Load x cooling (owner 2026-10-25): the specification refuses what cannot occur.  The same table as the web's
+# specChoices.ts (LOAD_COOLING / AIRFLOW_BY_LOAD): an air propeller never runs under water, and propeller wash only
+# exists behind an air propeller.  Finer stored load types sit under their group.
+_LOAD_GROUP = {"water_jet": "marine_propeller", "pump": "shaft", "engine_driven_generator": "shaft", "robot_joint": "shaft"}
+_LOAD_COOLING = {
+    "air_propeller": ("air", "liquid"),
+    "marine_propeller": ("submerged", "liquid", "air"),
+    "wheel": ("air", "liquid", "submerged"),
+    "turbine": ("air", "submerged", "liquid"),
+    "shaft": ("air", "liquid", "submerged"),
+}
+_AIRFLOW_BY_LOAD = {
+    "air_propeller": ("propeller wash", "ram air", "still air", "fan"),
+    "wheel": ("ram air", "still air", "fan"),
+    "turbine": ("ram air", "still air", "fan"),
+    "marine_propeller": ("still air", "fan"),
+    "shaft": ("still air", "fan", "ram air"),
+}
+_KNOWN_AIRFLOW = {m for modes in _AIRFLOW_BY_LOAD.values() for m in modes}
+
+
+def _stored_value(fields: dict, field_id: str):
+    answer = fields.get(field_id)
+    return answer.get("value") if isinstance(answer, dict) and "status" in answer else answer
+
+
+def cooling_load_errors(draft: dict) -> list[dict]:
+    """The cooling answer (3_1) against the chosen load: a medium the load cannot run in, or a standard airflow mode
+    the load cannot make.  A typed own airflow description is not judged; nothing is checked before a load is chosen."""
+    fields = draft.get("fields") or {}
+    load = _stored_value(fields, "load_type")
+    group = load if load in _LOAD_COOLING else _LOAD_GROUP.get(load)
+    cooling = _stored_value(fields, "3_1")
+    if not group or not isinstance(cooling, dict):
+        return []
+    errors = []
+    medium = cooling.get("cooling_medium")
+    if medium in ("air", "liquid", "submerged") and medium not in _LOAD_COOLING[group]:
+        errors.append({"field": "3_1.cooling_medium", "section": "3",
+                       "message": f"{medium} cooling does not fit the load {load}"})
+    airflow = cooling.get("airflow") if isinstance(cooling.get("airflow"), dict) else {}
+    mode = str(airflow.get("mode") or "").strip().lower()
+    if medium in (None, "", "air", "liquid") and mode in _KNOWN_AIRFLOW and mode not in _AIRFLOW_BY_LOAD[group]:
+        errors.append({"field": "3_1.airflow.mode", "section": "3",
+                       "message": f"airflow '{airflow.get('mode')}' cannot occur with the load {load}"})
+    return errors
+
+
 def completeness(draft: dict) -> dict:
     schema_version = int(draft.get("schema_version", 1))
     active_schema = schema(schema_version)
@@ -485,6 +533,8 @@ def completeness(draft: dict) -> dict:
                     valid = _load_characteristic_complete(answer, draft.get("fields", {}))
                 else:
                     valid = _answer_complete(answer, section_fields[section_id][field_id])
+                if field_id == "3_1" and valid and cooling_load_errors(draft):
+                    valid = False
             status = (draft.get("mission_profile_status", "missing") if section_id == "mission_profile"
                       else (draft.get("production", {}) if section_id == "production" else draft.get("fields", {})).get(field_id, {}).get("status", "missing"))
             if valid and status != "not_known_yet":
@@ -559,6 +609,7 @@ def validation_errors(draft: dict) -> list[dict]:
                     props = {p["id"]: p for p in field["properties"]}
                     if minimum and sum(1 for k, v in val.items() if _value_present(v, props.get(k, {}))) < minimum:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
+    errors.extend(cooling_load_errors(draft))
     return errors
 
 def project_record(project_id: str, body: dict, email: str) -> dict:

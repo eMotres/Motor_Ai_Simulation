@@ -45,8 +45,11 @@ export const COOLING_MEDIA: CoolingMedium[] = ['air', 'liquid', 'submerged'];
 export const COOLING_PROPERTIES: Record<CoolingMedium, string[]> = {
   air: ['airflow'],
   liquid: ['coolant', 'inlet_temperature_C', 'flow_rate', 'pressure_drop_Pa'],
-  submerged: ['water_temperature_C', 'water_speed_mps', 'depth_m'],
+  // the depth only sets the hydrostatic pressure on the seals (it moved to the housing requirements, 3_6); a stored
+  // 3_1 depth still tells the medium apart, see LEGACY_SUBMERGED
+  submerged: ['water_temperature_C', 'water_speed_mps'],
 };
+const LEGACY_SUBMERGED = ['depth_m'];
 
 const present = (v: unknown): boolean => v && typeof v === 'object' && !Array.isArray(v) ? Object.values(v as Record<string, unknown>).some(present) : !blank(v);
 
@@ -67,7 +70,7 @@ export function coolingMedium(value: unknown): { medium: CoolingMedium | null; i
   if (['coolant', 'flow_rate', 'pressure_drop_Pa'].some((id) => present(v[id])) || circuit) return inferred('liquid');
   if (present(v.airflow) || /\bair|风冷|空气/.test(type)) return inferred('air');
   if (present(v.inlet_temperature_C)) return inferred('liquid');
-  if (COOLING_PROPERTIES.submerged.some((id) => present(v[id])) || /water|submerg|immers|水下|浸没|水冷/.test(type)) return /glycol|coolant|jacket|乙二醇|冷却液/.test(type) ? inferred('liquid') : inferred('submerged');
+  if ([...COOLING_PROPERTIES.submerged, ...LEGACY_SUBMERGED].some((id) => present(v[id])) || /water|submerg|immers|水下|浸没|水冷/.test(type)) return /glycol|coolant|jacket|乙二醇|冷却液/.test(type) ? inferred('liquid') : inferred('submerged');
   if (/liquid|coolant|glycol|oil|液冷|冷却液|油冷/.test(type)) return inferred('liquid');
   return { medium: null, inferred: false };
 }
@@ -107,7 +110,7 @@ export function loadSwitchChoices(stored: string | undefined): LoadType[] {
 export const LOAD_COOLING: Record<string, CoolingMedium[]> = {
   air_propeller: ['air', 'liquid'],
   marine_propeller: ['submerged', 'liquid', 'air'],
-  wheel: ['air', 'liquid', 'submerged'],
+  wheel: ['air', 'liquid'],          // a wheel drive runs on the ground, never under water (owner 2026-10-26)
   turbine: ['air', 'submerged', 'liquid'],
   shaft: ['air', 'liquid', 'submerged'],
 };
@@ -118,13 +121,49 @@ export function coolingChoices(loadType: string | undefined): CoolingMedium[] {
 /** The air the motor sees, by load: propeller wash only behind an air propeller; ram air wherever the machine can move
  *  through the air (an aircraft, a vehicle, a wind turbine, a shaft drive on a vehicle); an inboard boat motor sees
  *  still air or a fan. */
-const AIRFLOW_BY_LOAD: Record<string, string[]> = {
+export const AIRFLOW_BY_LOAD: Record<string, string[]> = {
   air_propeller: ['Propeller wash', 'Ram air', 'Still air', 'Fan'],
-  wheel: ['Ram air', 'Still air', 'Fan'],
+  wheel: ['Still air', 'Ram air', 'Fan'],
   turbine: ['Ram air', 'Still air', 'Fan'],
   marine_propeller: ['Still air', 'Fan'],
   shaft: ['Still air', 'Fan', 'Ram air'],
 };
+/** The airflow mode a load brings when none is stored (owner 2026-10-26); the user can still change it.  Ram air stays
+ *  allowed behind an air propeller (forward flight) but is never its default. */
+export const DEFAULT_AIRFLOW: Record<string, string> = {
+  air_propeller: 'Propeller wash', turbine: 'Ram air', wheel: 'Still air', shaft: 'Still air', marine_propeller: 'Still air',
+};
+const AIRFLOW_KNOWN = [...new Set(Object.values(AIRFLOW_BY_LOAD).flat())];
+const sameMode = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+/** Is the airflow of a cooling answer asked (and judged) under this medium and load: air cooling, or liquid where air
+ *  reaches the housing (everything but a water propeller, whose pod sits in the water); never underwater. */
+export function airflowAsked(medium: CoolingMedium | null, loadType: string | undefined): boolean {
+  const group = loadGroup(loadType);
+  return medium === 'air' || (medium === 'liquid' && group !== 'marine_propeller');
+}
+/** The standard airflow modes the load cannot make, each with the reason's locale key. */
+export function airflowExcluded(loadType: string | undefined): Record<string, string> {
+  const group = loadGroup(loadType);
+  if (!group) return {};
+  return Object.fromEntries(AIRFLOW_KNOWN.filter((m) => !AIRFLOW_BY_LOAD[group].includes(m)).map((m) => [m, m === 'Propeller wash' ? 'airflowReason.propellerWash' : 'airflowReason.ramAir']));
+}
+/** The cooling answer (3_1) against the chosen load: a medium the load cannot run in and a standard airflow mode it cannot
+ *  make are errors, shown loudly and never changed silently.  The backend's `cooling_load_errors` is the same rule; both
+ *  are tested against one matrix (ambient_cases.json).  A typed own airflow description is not judged. */
+export function coolingLoadProblems(cooling: unknown, loadType: string | undefined): Array<{ field: '3_1.cooling_medium' | '3_1.airflow.mode'; reason: string }> {
+  const group = loadGroup(loadType);
+  if (!group) return [];
+  const v = cooling && typeof cooling === 'object' && !Array.isArray(cooling) ? cooling as Record<string, unknown> : {};
+  const { medium } = coolingMedium(v), out: Array<{ field: '3_1.cooling_medium' | '3_1.airflow.mode'; reason: string }> = [];
+  if (medium && !LOAD_COOLING[group].includes(medium)) out.push({ field: '3_1.cooling_medium', reason: `coolingReason.${group}.${medium}` });
+  const airflow = v.airflow && typeof v.airflow === 'object' && !Array.isArray(v.airflow) ? v.airflow as Record<string, unknown> : {};
+  const mode = typeof airflow.mode === 'string' ? airflow.mode : '';
+  if (airflowAsked(medium, group) && mode.trim()) {
+    const known = AIRFLOW_KNOWN.find((m) => sameMode(m, mode));
+    if (known && !AIRFLOW_BY_LOAD[group].includes(known)) out.push({ field: '3_1.airflow.mode', reason: airflowExcluded(group)[known] });
+  }
+  return out;
+}
 export function airflowSuggestions(list: Suggestion[] | undefined, loadType: string | undefined): Suggestion[] | undefined {
   const group = loadGroup(loadType), allowed = group ? AIRFLOW_BY_LOAD[group] : null;
   const valueOf = (s: Suggestion) => typeof s === 'object' ? s.value : s;
@@ -137,34 +176,35 @@ export function coolingPropertyIds(medium: CoolingMedium, loadType: string | und
   if (medium !== 'liquid') return COOLING_PROPERTIES[medium];
   return loadGroup(loadType) === 'marine_propeller' ? [...COOLING_PROPERTIES.liquid, ...COOLING_PROPERTIES.submerged] : [...COOLING_PROPERTIES.liquid, 'airflow'];
 }
-/** The airflow mode a medium switch brings under a load when none is stored (air propeller: propeller wash). */
+/** The airflow mode a medium switch brings under a load when none is stored (see DEFAULT_AIRFLOW); null where no airflow is
+ *  asked (underwater, or a liquid jacket on a water propeller). */
 export function naturalAirflow(medium: CoolingMedium, loadType: string | undefined): string | null {
-  const group = loadGroup(loadType), natural = group ? DEFAULT_COOLING[group] : undefined;
-  return natural?.airflow && coolingPropertyIds(medium, group ?? undefined).includes('airflow') ? natural.airflow : null;
+  const group = loadGroup(loadType);
+  return group && coolingPropertyIds(medium, group).includes('airflow') ? DEFAULT_AIRFLOW[group] : null;
 }
-const DEFAULT_COOLING: Record<string, { medium: CoolingMedium; airflow?: string }> = {
-  air_propeller: { medium: 'air', airflow: 'Propeller wash' },
-  marine_propeller: { medium: 'submerged' },
-  wheel: { medium: 'air', airflow: 'Ram air' },
-};
+/** The medium a load brings when none fits (a water propeller is underwater, the others air). */
+const DEFAULT_MEDIUM: Record<string, CoolingMedium> = { air_propeller: 'air', marine_propeller: 'submerged', wheel: 'air' };
 /** The cooling answer after a load is chosen: a cooling that does not fit the load (or none) takes the load's
- *  natural one (air propeller -> air, propeller wash; water propeller -> underwater; wheel -> air, ram air;
- *  otherwise the first that fits once a misfit must go); an airflow mode the load cannot make (propeller wash
- *  without an air propeller) takes the load's own.  Null when nothing changes. */
-export function coolingForLoad(cooling: unknown, loadType: string): Record<string, unknown> | null {
+ *  natural one (air propeller -> air; water propeller -> underwater; wheel -> air; otherwise the first that fits once a
+ *  misfit must go).  Where the airflow is asked (air, or a liquid jacket with air over the housing) a blank mode is
+ *  filled with the load's default (DEFAULT_AIRFLOW).  A mode the user chose is never overwritten, except the previous
+ *  load's own default that the new load cannot make (propeller wash left behind by an air propeller); with no previous
+ *  load given, any standard mode the load cannot make is replaced.  Null when nothing changes. */
+export function coolingForLoad(cooling: unknown, loadType: string, previousLoad?: string | null): Record<string, unknown> | null {
   const v = cooling && typeof cooling === 'object' && !Array.isArray(cooling) ? cooling as Record<string, unknown> : {};
   const group = loadGroup(loadType);
   if (!group) return null;
-  const { medium } = coolingMedium(v), allowed = LOAD_COOLING[group], natural = DEFAULT_COOLING[group];
-  const target: CoolingMedium | null = medium && allowed.includes(medium) ? medium : natural?.medium ?? (medium ? allowed[0] : null);
+  const { medium } = coolingMedium(v), allowed = LOAD_COOLING[group], natural = DEFAULT_MEDIUM[group];
+  const target: CoolingMedium | null = medium && allowed.includes(medium) ? medium : natural ?? (medium ? allowed[0] : null);
   if (!target) return null;
   const airflow = v.airflow && typeof v.airflow === 'object' && !Array.isArray(v.airflow) ? v.airflow as Record<string, unknown> : {};
   const shown = coolingPropertyIds(target, group).includes('airflow');
   const mode = typeof airflow.mode === 'string' ? airflow.mode : '';
-  const modes = AIRFLOW_BY_LOAD[group];
-  const nextMode = !shown ? null : blank(mode) ? (natural?.airflow && (target === 'air' || group === 'air_propeller') ? natural.airflow : null)
-    : modes.some((m) => m.toLowerCase() === mode.trim().toLowerCase()) || !Object.values(AIRFLOW_BY_LOAD).flat().some((m) => m.toLowerCase() === mode.trim().toLowerCase())
-      ? null : natural?.airflow ?? modes[0];
+  const known = AIRFLOW_KNOWN.some((m) => sameMode(m, mode));
+  const cannotMake = known && !AIRFLOW_BY_LOAD[group].some((m) => sameMode(m, mode));
+  const previousDefault = previousLoad === undefined ? undefined : DEFAULT_AIRFLOW[loadGroup(previousLoad ?? undefined) ?? ''];
+  const leftBehind = cannotMake && (previousLoad === undefined || (previousDefault !== undefined && sameMode(previousDefault, mode)));
+  const nextMode = !shown ? null : blank(mode) ? DEFAULT_AIRFLOW[group] : leftBehind ? DEFAULT_AIRFLOW[group] : null;
   if (target === v.cooling_medium && !nextMode) return null;
   return { ...v, cooling_medium: target, ...(nextMode ? { airflow: { ...airflow, mode: nextMode } } : {}) };
 }

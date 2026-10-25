@@ -140,6 +140,22 @@
       "applies": true
     }
   ],
+  "load_matrix": {
+    "air_propeller": {"media": ["air", "liquid"], "airflow": ["propeller wash", "ram air", "still air", "fan"], "default_airflow": "propeller wash"},
+    "marine_propeller": {"media": ["submerged", "liquid", "air"], "airflow": ["still air", "fan"], "default_airflow": "still air"},
+    "wheel": {"media": ["air", "liquid"], "airflow": ["still air", "ram air", "fan"], "default_airflow": "still air"},
+    "turbine": {"media": ["air", "submerged", "liquid"], "airflow": ["ram air", "still air", "fan"], "default_airflow": "ram air"},
+    "shaft": {"media": ["air", "liquid", "submerged"], "airflow": ["still air", "fan", "ram air"], "default_airflow": "still air"}
+  },
+  "depth_applies": [
+    {"cooling": null, "status": "filled", "applies": false},
+    {"cooling": {}, "status": "filled", "applies": false},
+    {"cooling": {"cooling_medium": "air"}, "status": "filled", "applies": false},
+    {"cooling": {"cooling_medium": "liquid"}, "status": "filled", "applies": false},
+    {"cooling": {"cooling_medium": "submerged"}, "status": "filled", "applies": true},
+    {"cooling": {"cooling_type": "submerged in sea water"}, "status": "filled", "applies": true},
+    {"cooling": {"cooling_medium": "submerged"}, "status": "not_known_yet", "applies": false}
+  ],
   "thermal_basis": [
     {
       "cooling": {

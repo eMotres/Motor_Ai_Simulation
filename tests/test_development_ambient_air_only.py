@@ -126,3 +126,90 @@ def test_air_cooled_project_stays_complete_and_liquid_one_needs_the_inlet():
     assert _section3_answered(liquid) == 0     # 3_1 incomplete without the inlet; 3_2 is not required
     liquid["fields"]["3_1"]["value"]["inlet_temperature_C"] = 55
     assert _section3_answered(liquid) == 1
+
+
+# --- load x cooling medium x airflow mode (owner 2026-10-26) ----------------------------------------------------
+MATRIX = CASES["load_matrix"]
+MODE_LABEL = {"propeller wash": "Propeller wash", "ram air": "Ram air", "still air": "Still air", "fan": "Fan"}
+
+
+def test_the_backend_tables_equal_the_shared_matrix():
+    assert {g: tuple(m["media"]) for g, m in MATRIX.items()} == models._LOAD_COOLING
+    assert {g: tuple(m["airflow"]) for g, m in MATRIX.items()} == models._AIRFLOW_BY_LOAD
+    assert {g: m["default_airflow"] for g, m in MATRIX.items()} == models._DEFAULT_AIRFLOW
+    for g, m in MATRIX.items():
+        assert m["default_airflow"] in m["airflow"], g          # a default is always allowed
+    assert "ram air" in MATRIX["air_propeller"]["airflow"] and MATRIX["air_propeller"]["default_airflow"] != "ram air"
+
+
+@pytest.mark.parametrize("load,stored", [(g, g) for g in MATRIX] + [("marine_propeller", "water_jet"), ("shaft", "pump"),
+                                                                   ("shaft", "engine_driven_generator"), ("shaft", "robot_joint")])
+def test_every_load_x_medium_x_airflow_combination(load, stored):
+    """Each cell of the matrix: an excluded medium or a standard airflow mode the load cannot make is a loud error (never
+    changed silently); underwater cooling never judges an airflow; a liquid jacket on a water propeller has no airflow."""
+    cell = MATRIX[load]
+    for medium in ("air", "liquid", "submerged"):
+        for mode in [None, *MODE_LABEL.values()]:
+            cooling = {"cooling_medium": medium, **({"airflow": {"mode": mode}} if mode else {})}
+            if medium == "liquid":
+                cooling["inlet_temperature_C"] = 50
+            expected = []
+            if medium not in cell["media"]:
+                expected.append("3_1.cooling_medium")
+            asked = medium == "air" or (medium == "liquid" and load != "marine_propeller")
+            if mode and asked and mode.lower() not in cell["airflow"]:
+                expected.append("3_1.airflow.mode")
+            got = [e["field"] for e in models.cooling_load_errors(_load_cooling_draft(stored, cooling))]
+            assert got == expected, (load, medium, mode)
+
+
+def _load_cooling_draft(load, cooling):
+    return {"schema_version": 2, "fields": {"load_type": {"status": "filled", "value": load}, "3_1": {"status": "filled", "value": cooling}}}
+
+
+def test_a_typed_own_airflow_and_a_stored_excluded_combination():
+    # a typed own description is not judged; a stored excluded combination is an error, the data are not changed
+    assert models.cooling_load_errors(_load_cooling_draft("shaft", {"cooling_medium": "air", "airflow": {"mode": "duct from the radiator fan"}})) == []
+    stored = _load_cooling_draft("wheel", {"cooling_medium": "submerged"})
+    before = json.dumps(stored, sort_keys=True)
+    assert [e["field"] for e in models.validation_errors(stored)].count("3_1.cooling_medium") == 1
+    assert json.dumps(stored, sort_keys=True) == before
+    # the medium the form shows (inferred from the stored values) is judged the same way
+    assert [e["field"] for e in models.cooling_load_errors(_load_cooling_draft("air_propeller", {"cooling_type": "submerged in sea water"}))] == ["3_1.cooling_medium"]
+
+
+# --- max immersion depth: underwater only, moved out of the cooling block ---------------------------------------
+@pytest.mark.parametrize("case", CASES["depth_applies"], ids=lambda c: json.dumps(c["cooling"]) + "/" + c["status"])
+def test_immersion_depth_applies_only_underwater(case):
+    f = _field("3_6")
+    d = _draft(case["cooling"], cooling_status=case["status"])
+    assert models.field_applies(f, d) is case["applies"]
+    assert "3_6" not in _required_ids(d)                      # never required
+
+
+def test_immersion_depth_field_and_the_legacy_cooling_depth():
+    f = _field("3_6")
+    assert f["only_when_cooling_medium"] == ["submerged"] and not f.get("required") and f["unit"] == "m" and f["min"] == 0
+    assert f["short_label"]["en"] == "Max immersion depth (sealing)"
+    depth = next(p for p in _field("3_1")["properties"] if p["id"] == "depth_m")
+    assert depth["moved_to"] == "3_6" and not depth.get("required")        # still valid stored data
+    # a stored 3_1 depth shows in the new place; nothing is lost and a cleared 3_6 stays cleared
+    stored = _draft({"cooling_medium": "submerged", "water_temperature_C": 20, "depth_m": 35})
+    before = json.dumps(stored, sort_keys=True)
+    lifted = models.lift_legacy_depth(stored)
+    assert lifted["fields"]["3_6"] == {"status": "filled", "value": 35}
+    assert lifted["fields"]["3_1"]["value"]["depth_m"] == 35
+    assert json.dumps(stored, sort_keys=True) == before                       # the stored draft is untouched
+    assert models.normalize_draft(lifted)["fields"]["3_6"]["value"] == 35     # and the lifted draft saves
+    cleared = _draft({"cooling_medium": "submerged", "depth_m": 35})
+    cleared["fields"]["3_6"] = {"status": "missing", "value": ""}
+    assert models.lift_legacy_depth(cleared)["fields"]["3_6"] == {"status": "missing", "value": ""}
+    assert "3_6" not in models.lift_legacy_depth(_draft({"cooling_medium": "air"}))["fields"]
+
+
+def test_no_guaranteed_in_the_customer_text():
+    text = json.dumps(models.schema(2), ensure_ascii=False)
+    assert "uaranteed" not in text and "保证" not in text
+    labels = {p["id"]: p["label"] for p in _field("3_1")["properties"] + _field("3_1")["properties"][2]["properties"]}
+    assert labels["speed_mps"]["en"] == "Air speed" and labels["flow_rate"]["en"] == "Coolant flow"
+    assert labels["water_speed_mps"]["en"] == "Water flow speed"

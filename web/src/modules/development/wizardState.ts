@@ -38,10 +38,12 @@ export function activeCooling(draft: SpecDraft): unknown {
  *  temperature of 3_1.  While no medium is chosen it applies (air is the default assumption).  A field that does not
  *  apply is not shown, not required and not counted; its stored value is kept. */
 export function fieldApplies(f: SchemaField, draft: SpecDraft): boolean {
-  const media = f.applies_when_cooling_medium;
-  if (!media?.length) return true;
+  const media = f.applies_when_cooling_medium, only = f.only_when_cooling_medium;
+  if (!media?.length && !only?.length) return true;
   const { medium } = coolingMedium(activeCooling(draft));
-  return medium === null || media.includes(medium);
+  // `only_when_cooling_medium` (the immersion depth): meaningless unless that medium is chosen
+  if (only?.length) return medium !== null && only.includes(medium);
+  return medium === null || media!.includes(medium);
 }
 /** A property of a structured answer is required outright, or - the cooling temperatures - when the answer's own cooling
  *  medium is the one in `required_when_cooling_medium` (liquid: the coolant inlet temperature, underwater: the water

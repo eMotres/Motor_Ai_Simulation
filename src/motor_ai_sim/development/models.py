@@ -471,22 +471,27 @@ _LOAD_GROUP = {"water_jet": "marine_propeller", "pump": "shaft", "engine_driven_
 _LOAD_COOLING = {
     "air_propeller": ("air", "liquid"),
     "marine_propeller": ("submerged", "liquid", "air"),
-    "wheel": ("air", "liquid", "submerged"),
+    "wheel": ("air", "liquid"),  # a wheel drive runs on the ground, never under water (owner 2026-10-26)
     "turbine": ("air", "submerged", "liquid"),
     "shaft": ("air", "liquid", "submerged"),
 }
 _AIRFLOW_BY_LOAD = {
     "air_propeller": ("propeller wash", "ram air", "still air", "fan"),
-    "wheel": ("ram air", "still air", "fan"),
+    "wheel": ("still air", "ram air", "fan"),
     "turbine": ("ram air", "still air", "fan"),
     "marine_propeller": ("still air", "fan"),
     "shaft": ("still air", "fan", "ram air"),
 }
+# The mode a load brings when none is stored (the web pre-selects it; the user can change it).  Ram air stays allowed
+# behind an air propeller (forward flight) but is never its default.  The backend does not write it - the mirror exists
+# so one case table (ambient_cases.json) pins the web's DEFAULT_AIRFLOW to it.
+_DEFAULT_AIRFLOW = {"air_propeller": "propeller wash", "turbine": "ram air", "wheel": "still air", "shaft": "still air",
+                    "marine_propeller": "still air"}
 _KNOWN_AIRFLOW = {m for modes in _AIRFLOW_BY_LOAD.values() for m in modes}
 
 
 _COOLING_MEDIA = ("air", "liquid", "submerged")
-_SUBMERGED_PROPERTIES = ("water_temperature_C", "water_speed_mps", "depth_m")
+_SUBMERGED_PROPERTIES = ("water_temperature_C", "water_speed_mps", "depth_m")  # depth_m: the legacy 3_1 depth still tells the medium
 
 
 def _present(value: Any) -> bool:
@@ -534,11 +539,30 @@ def field_applies(field: dict, draft: dict) -> bool:
     only for those cooling media - air - or while no medium is chosen (air is the default assumption).  Liquid cooling
     uses the coolant inlet temperature and underwater cooling the water temperature of 3_1.  The stored value is kept.
     The same rule as the web's `fieldApplies` (wizardState.ts)."""
-    media = field.get("applies_when_cooling_medium")
-    if not media:
+    media, only = field.get("applies_when_cooling_medium"), field.get("only_when_cooling_medium")
+    if not media and not only:
         return True
     medium, _ = cooling_medium(_active_cooling(draft))
+    if only:  # `only_when_cooling_medium` (the immersion depth, 3_6): meaningless unless that medium is chosen
+        return medium is not None and medium in only
     return medium is None or medium in media
+
+
+def lift_legacy_depth(draft: dict) -> dict:
+    """Read-time move of the underwater depth: a stored 3_1 `depth_m` shows in its new place, 3_6 (max immersion depth,
+    owner 2026-10-26).  Nothing is lost - the 3_1 value stays stored; the lifted copy is added only while 3_6 holds no
+    answer at all (a cleared 3_6 stays cleared).  Returns a copy; the stored draft is not changed."""
+    import copy
+    out = copy.deepcopy(draft)
+    fields = out.get("fields")
+    if not isinstance(fields, dict) or "3_6" in fields:
+        return out
+    cooling = fields.get("3_1")
+    value = cooling.get("value") if isinstance(cooling, dict) else None
+    depth = value.get("depth_m") if isinstance(value, dict) else None
+    if isinstance(depth, (int, float)) and not isinstance(depth, bool) and math.isfinite(depth) and depth >= 0:
+        fields["3_6"] = {"status": "filled", "value": depth}
+    return out
 
 
 def _property_required(prop: dict, value: Any) -> bool:
@@ -587,8 +611,8 @@ def cooling_load_errors(draft: dict) -> list[dict]:
     if not group or not isinstance(cooling, dict):
         return []
     errors = []
-    medium = cooling.get("cooling_medium")
-    if medium in ("air", "liquid", "submerged") and medium not in _LOAD_COOLING[group]:
+    medium = cooling_medium(cooling)[0]  # the medium the form shows: stored, else the one the stored values imply
+    if medium in _COOLING_MEDIA and medium not in _LOAD_COOLING[group]:
         errors.append({"field": "3_1.cooling_medium", "section": "3",
                        "message": f"{medium} cooling does not fit the load {load}"})
     airflow = cooling.get("airflow") if isinstance(cooling.get("airflow"), dict) else {}

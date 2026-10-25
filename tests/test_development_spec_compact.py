@@ -264,8 +264,11 @@ def test_load_cooling_refuses_what_cannot_occur():
     assert [e["field"] for e in errs] == ["3_1.cooling_medium"]
     errs = models.cooling_load_errors(_load_cooling_draft("wheel", {"cooling_medium": "air", "airflow": {"mode": "Propeller wash"}}))
     assert [e["field"] for e in errs] == ["3_1.airflow.mode"]
-    # what does occur passes: submerged wheel, liquid behind an air propeller with its wash, an engine generator on a jacket
-    for load, cooling in (("wheel", {"cooling_medium": "submerged"}),
+    # owner 2026-10-26: a wheel drive never runs under water either
+    errs = models.cooling_load_errors(_load_cooling_draft("wheel", {"cooling_medium": "submerged"}))
+    assert [e["field"] for e in errs] == ["3_1.cooling_medium"]
+    # what does occur passes: hydro turbine, liquid behind an air propeller with its wash, an engine generator on a jacket
+    for load, cooling in (("turbine", {"cooling_medium": "submerged"}),
                           ("air_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}}),
                           ("engine_driven_generator", {"cooling_medium": "liquid", "coolant": "Glycol"}),
                           ("water_jet", {"cooling_medium": "submerged"}),
@@ -294,5 +297,5 @@ def test_load_cooling_judges_only_active_answers():
     draft = _load_cooling_draft("marine_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}})
     assert models.cooling_load_errors(draft) == []
     # nor under water
-    draft = _load_cooling_draft("wheel", {"cooling_medium": "submerged", "airflow": {"mode": "Propeller wash"}})
+    draft = _load_cooling_draft("turbine", {"cooling_medium": "submerged", "airflow": {"mode": "Propeller wash"}})
     assert models.cooling_load_errors(draft) == []

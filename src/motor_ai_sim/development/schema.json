@@ -1228,7 +1228,7 @@
                 },
                 {
                   "id": "speed_mps",
-                  "label": {"en": "Guaranteed air speed", "zh-CN": "保证风速"},
+                  "label": {"en": "Air speed", "zh-CN": "风速"},
                   "type": "number",
                   "unit": "m/s",
                   "required": false,
@@ -1257,7 +1257,7 @@
             },
             {
               "id": "flow_rate",
-              "label": {"en": "Guaranteed coolant flow", "zh-CN": "保证冷却液流量"},
+              "label": {"en": "Coolant flow", "zh-CN": "冷却液流量"},
               "type": "number",
               "unit": "L/min",
               "required": false,
@@ -1288,8 +1288,8 @@
             {
               "id": "water_speed_mps",
               "label": {
-                "en": "Guaranteed water flow speed",
-                "zh-CN": "保证水流速度"
+                "en": "Water flow speed",
+                "zh-CN": "水流速度"
               },
               "type": "number",
               "unit": "m/s",
@@ -1305,7 +1305,8 @@
               "type": "number",
               "unit": "m",
               "min": 0,
-              "required": false
+              "required": false,
+              "moved_to": "3_6"
             }
           ],
           "short_label": {
@@ -1417,6 +1418,29 @@
           "short_label": {
             "en": "Surface temperature",
             "zh-CN": "表面温度"
+          },
+          "presentation_group": "3"
+        },
+        {
+          "id": "3_6",
+          "checklist_id": "3.6",
+          "label": {
+            "en": "Max immersion depth (sealing)",
+            "zh-CN": "最大浸没深度（密封）"
+          },
+          "help": {
+            "en": "Underwater only. The depth sets the hydrostatic pressure on the housing seals; it does not change the cooling.",
+            "zh-CN": "仅水下适用。深度决定壳体密封处的静水压力，不影响冷却。"
+          },
+          "type": "number",
+          "unit": "m",
+          "min": 0,
+          "required": false,
+          "only_when_cooling_medium": ["submerged"],
+          "allow_not_known_yet": true,
+          "short_label": {
+            "en": "Max immersion depth (sealing)",
+            "zh-CN": "最大浸没深度（密封）"
           },
           "presentation_group": "3"
         }

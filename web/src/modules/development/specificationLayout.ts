@@ -7,7 +7,7 @@ export interface SpecificationCard { id: SpecificationCardId; title: string; fie
 /** The compact one-page specification (owner 2026-10-24): what closes a motor project first,
  *  everything else in one collapsed "More details" card.  Field ids are never renamed. */
 export const KEY_FIELDS = ['1_1', 'key_points', '2_1', '3_1', '3_2'];
-export const REQUIREMENT_FIELDS = ['1_2', '1_6', '2_4', '2_6', '2_9', '2_3', '3_3', '4_1', '4_2', '4_6', '1_8', '6_1', '6_2'];
+export const REQUIREMENT_FIELDS = ['1_2', '1_6', '2_4', '2_6', '2_9', '2_3', '3_3', '3_6', '4_1', '4_2', '4_6', '1_8', '6_1', '6_2'];
 /** Shown in the Requirements card under a divider. */
 export const SECOND_TIER_FIELDS = ['4_4', '2_5'];
 export const MORE_FIRST_FIELDS = ['additional_requirements', '1_3', '1_7', '2_7'];

@@ -616,7 +616,14 @@
   "rangeWorst": "Stored as a range {min}–{max}. Modelling uses the maximum shown; type one value to replace the range.",
   "coolingInferred": "Read from the stored values; click a medium to confirm it.",
   "addLoadComponent": "Add a load component",
-  "coolingMisfit": "{medium} does not fit the load {load}",
+  "coolingReason": {
+    "air_propeller": { "submerged": "An air propeller turns in air; the motor never runs under water." },
+    "wheel": { "submerged": "A wheel drive runs on the ground, not under water." }
+  },
+  "airflowReason": {
+    "propellerWash": "Propeller wash exists only behind an air propeller.",
+    "ramAir": "A water-propeller motor sits in the hull or pod; no airstream reaches it."
+  },
   "specReadOnly": "View only",
   "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages."
 }

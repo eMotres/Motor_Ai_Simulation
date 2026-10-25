@@ -96,6 +96,82 @@ test('the ambient line renders only the maximum, hidden for liquid and underwate
   assert.ok(en.wizard.ambientMaxNote && zh.wizard.ambientMaxNote);
 });
 
+const MODES = ['Propeller wash', 'Ram air', 'Still air', 'Fan'];
+
+test('the web tables equal the shared load x medium x airflow matrix', () => {
+  const m = cases.load_matrix;
+  for (const group of Object.keys(m)) {
+    assert.deepEqual(C.coolingChoices(group), m[group].media, group);
+    assert.deepEqual(C.AIRFLOW_BY_LOAD[group].map((x) => x.toLowerCase()), m[group].airflow, group);
+    assert.equal(C.DEFAULT_AIRFLOW[group].toLowerCase(), m[group].default_airflow, group);
+    assert.ok(m[group].airflow.includes(m[group].default_airflow), `${group}: a default is allowed`);
+  }
+  assert.ok(m.air_propeller.airflow.includes('ram air') && m.air_propeller.default_airflow !== 'ram air');
+});
+
+test('every load x medium x airflow mode: excluded ones are loud problems, the rest pass', () => {
+  const m = cases.load_matrix;
+  const stored = [...Object.keys(m).map((g) => [g, g]), ['marine_propeller', 'water_jet'], ['shaft', 'pump'], ['shaft', 'engine_driven_generator'], ['shaft', 'robot_joint']];
+  for (const [group, load] of stored) for (const medium of ['air', 'liquid', 'submerged']) for (const mode of [null, ...MODES]) {
+    const cooling = { cooling_medium: medium, ...(mode ? { airflow: { mode } } : {}) };
+    const expected = [];
+    if (!m[group].media.includes(medium)) expected.push('3_1.cooling_medium');
+    const asked = medium === 'air' || (medium === 'liquid' && group !== 'marine_propeller');
+    if (mode && asked && !m[group].airflow.includes(mode.toLowerCase())) expected.push('3_1.airflow.mode');
+    const got = C.coolingLoadProblems(cooling, load);
+    assert.deepEqual(got.map((p) => p.field), expected, `${load} ${medium} ${mode}`);
+    for (const p of got) assert.ok(p.reason.split('.').reduce((o, k) => o?.[k], en), `reason ${p.reason}`), assert.ok(p.reason.split('.').reduce((o, k) => o?.[k], zh), `zh reason ${p.reason}`);
+    // underwater never asks the airflow; a water propeller's liquid jacket has none either
+    assert.equal(C.coolingPropertyIds(medium, load).includes('airflow'), asked, `${load} ${medium}`);
+  }
+  // a typed own airflow is not judged
+  assert.deepEqual(C.coolingLoadProblems({ cooling_medium: 'air', airflow: { mode: 'duct from the radiator fan' } }, 'shaft'), []);
+});
+
+test('the default airflow is pre-selected for a chosen load or an air switch and never overwrites a chosen mode', () => {
+  const m = cases.load_matrix;
+  for (const group of Object.keys(m)) {
+    const def = C.DEFAULT_AIRFLOW[group];
+    assert.equal(C.naturalAirflow('air', group), def);
+    // a load chosen while the cooling is already air: blank mode takes the default; a chosen allowed mode stays
+    const blank = C.coolingForLoad({ cooling_medium: 'air' }, group, 'unknown');
+    assert.equal(blank?.airflow?.mode ?? null, def === undefined ? null : def, group);
+    for (const chosen of C.AIRFLOW_BY_LOAD[group]) assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: chosen } }, group, 'unknown'), null, `${group} keeps ${chosen}`);
+  }
+  // only the previous load's own default that the new load cannot make is replaced
+  assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Propeller wash' } }, 'wheel', 'air_propeller').airflow.mode, 'Still air');
+  assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Ram air' } }, 'marine_propeller', 'air_propeller'), null);   // the user's own pick stays (and shows the error)
+  assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Ram air' } }, 'marine_propeller', 'turbine').airflow.mode, 'Still air');
+  // a liquid jacket with air over the housing takes the default too; a water propeller's jacket and underwater have none
+  assert.equal(C.coolingForLoad({ cooling_medium: 'liquid', inlet_temperature_C: 50 }, 'turbine', 'unknown').airflow.mode, 'Ram air');
+  assert.equal(C.coolingForLoad({ cooling_medium: 'liquid' }, 'marine_propeller', 'unknown'), null);
+  assert.equal(C.coolingForLoad({ cooling_medium: 'submerged' }, 'turbine', 'unknown'), null);
+  // excluded options are offered disabled with their reason
+  assert.deepEqual(Object.keys(C.airflowExcluded('wheel')), ['Propeller wash']);
+  assert.deepEqual(Object.keys(C.airflowExcluded('marine_propeller')).sort(), ['Propeller wash', 'Ram air']);
+  assert.deepEqual(C.airflowExcluded('air_propeller'), {});
+});
+
+test('the max immersion depth is asked only underwater, is optional, and the cooling block no longer lists it', () => {
+  for (const c of cases.depth_applies) assert.equal(W.fieldApplies(field('3_6'), draftFor(c.cooling, c.status)), c.applies, JSON.stringify(c));
+  assert.equal(W.fieldRequired(field('3_6'), draftFor({ cooling_medium: 'submerged' }, 'filled')), false);
+  assert.equal(field('3_6').short_label.en, 'Max immersion depth (sealing)');
+  assert.equal(field('3_1').properties.find((p) => p.id === 'depth_m').moved_to, '3_6');
+  for (const medium of ['air', 'liquid', 'submerged']) for (const load of ['air_propeller', 'marine_propeller', 'shaft']) assert.ok(!C.coolingPropertyIds(medium, load).includes('depth_m'), `${medium} ${load}`);
+  // a stored legacy depth still tells the medium apart
+  assert.deepEqual(C.coolingMedium({ depth_m: 30 }), { medium: 'submerged', inferred: true });
+  // it sits in the requirements card, with the housing
+  const requirements = buildSpecificationCards(schema).find((card) => card.id === 'requirements');
+  assert.ok(requirements.fields.map((f) => f.id).includes('3_6'));
+  assert.ok(requirements.fields.map((f) => f.id).indexOf('3_6') === requirements.fields.map((f) => f.id).indexOf('3_3') + 1);
+});
+
+test('no "Guaranteed" in the specification text, EN or zh-CN', () => {
+  assert.doesNotMatch(JSON.stringify(schema), /uaranteed|保证/);
+  assert.doesNotMatch(JSON.stringify(en), /uaranteed/);
+  assert.doesNotMatch(JSON.stringify(zh), /保证/);
+});
+
 test('liquid needs the coolant inlet temperature, underwater the water temperature, air neither (shared case table)', () => {
   for (const c of cases.cooling_required) {
     const required = field('3_1').properties.filter((p) => W.propertyRequired(p, c.cooling)).map((p) => p.id);

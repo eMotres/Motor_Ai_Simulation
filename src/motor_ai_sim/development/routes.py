@@ -532,6 +532,8 @@ def get_spec(request: Request, project_id: str):
     store.append_audit(project_id, _email(user), "read", "spec_draft", "draft", {})
     stored_draft = wrapper.get("draft", {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}})
     schema_version = wrapper.get("schema_version", stored_draft.get("schema_version", 1))
+    if int(schema_version) >= 2:
+        stored_draft = models.lift_legacy_depth(stored_draft)  # a 3_1 depth shows as the 3_6 immersion depth; nothing is lost
     return {"draft": _customer_spec({"draft": stored_draft})["draft"] if not access.is_engineer(user) else stored_draft,
             "revision": wrapper.get("revision", 0), "version": wrapper.get("version"), "schema_version": schema_version,
             "schema": models.schema(int(schema_version)), "completeness": models.completeness(wrapper.get("draft", {})), "versions": [_customer_spec(v) for v in versions]}

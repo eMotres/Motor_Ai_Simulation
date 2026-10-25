@@ -280,3 +280,19 @@ def test_load_cooling_misfit_blocks_submit_and_completeness():
     assert any(e["field"] == "3_1.cooling_medium" for e in models.validation_errors(draft))
     ok = _load_cooling_draft("air_propeller", {"cooling_medium": "air", "airflow": {"mode": "Propeller wash"}})
     assert not any(e["field"].startswith("3_1") for e in models.validation_errors(ok))
+
+
+def test_load_cooling_judges_only_active_answers():
+    # Astra re-review 2026-10-25: a retained (not_known_yet) cooling or load is not judged
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    draft["fields"]["3_1"]["status"] = "not_known_yet"
+    assert models.cooling_load_errors(draft) == []
+    draft = _load_cooling_draft("air_propeller", {"cooling_medium": "submerged"})
+    draft["fields"]["load_type"]["status"] = "not_known_yet"
+    assert models.cooling_load_errors(draft) == []
+    # a hidden airflow from the air-propeller days does not block a water propeller with a liquid jacket
+    draft = _load_cooling_draft("marine_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}})
+    assert models.cooling_load_errors(draft) == []
+    # nor under water
+    draft = _load_cooling_draft("wheel", {"cooling_medium": "submerged", "airflow": {"mode": "Propeller wash"}})
+    assert models.cooling_load_errors(draft) == []

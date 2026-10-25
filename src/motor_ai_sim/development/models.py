@@ -482,18 +482,21 @@ _AIRFLOW_BY_LOAD = {
 _KNOWN_AIRFLOW = {m for modes in _AIRFLOW_BY_LOAD.values() for m in modes}
 
 
-def _stored_value(fields: dict, field_id: str):
+def _active_value(fields: dict, field_id: str):
+    """The value of a FILLED answer; a value kept under missing / not_known_yet is retained, not active."""
     answer = fields.get(field_id)
-    return answer.get("value") if isinstance(answer, dict) and "status" in answer else answer
+    if isinstance(answer, dict) and "status" in answer:
+        return answer.get("value") if answer.get("status") == "filled" else None
+    return answer
 
 
 def cooling_load_errors(draft: dict) -> list[dict]:
     """The cooling answer (3_1) against the chosen load: a medium the load cannot run in, or a standard airflow mode
     the load cannot make.  A typed own airflow description is not judged; nothing is checked before a load is chosen."""
     fields = draft.get("fields") or {}
-    load = _stored_value(fields, "load_type")
+    load = _active_value(fields, "load_type")
     group = load if load in _LOAD_COOLING else _LOAD_GROUP.get(load)
-    cooling = _stored_value(fields, "3_1")
+    cooling = _active_value(fields, "3_1")
     if not group or not isinstance(cooling, dict):
         return []
     errors = []
@@ -503,7 +506,10 @@ def cooling_load_errors(draft: dict) -> list[dict]:
                        "message": f"{medium} cooling does not fit the load {load}"})
     airflow = cooling.get("airflow") if isinstance(cooling.get("airflow"), dict) else {}
     mode = str(airflow.get("mode") or "").strip().lower()
-    if medium in (None, "", "air", "liquid") and mode in _KNOWN_AIRFLOW and mode not in _AIRFLOW_BY_LOAD[group]:
+    # the airflow is judged only where the form asks it: air cooling, or liquid outside a water propeller's pod
+    # (a hidden, retained airflow from an earlier load never blocks the current answer)
+    airflow_active = medium == "air" or (medium == "liquid" and group != "marine_propeller")
+    if airflow_active and mode in _KNOWN_AIRFLOW and mode not in _AIRFLOW_BY_LOAD[group]:
         errors.append({"field": "3_1.airflow.mode", "section": "3",
                        "message": f"airflow '{airflow.get('mode')}' cannot occur with the load {load}"})
     return errors

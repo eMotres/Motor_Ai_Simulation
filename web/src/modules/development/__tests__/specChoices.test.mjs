@@ -132,23 +132,23 @@ test('load x cooling: every combination that occurs is offered, the impossible o
   assert.deepEqual(C.coolingPropertyIds('liquid', 'marine_propeller'), [...C.COOLING_PROPERTIES.liquid, ...C.COOLING_PROPERTIES.submerged]);
   assert.equal(C.naturalAirflow('liquid', 'air_propeller'), 'Propeller wash'); assert.equal(C.naturalAirflow('air', 'shaft'), null);
   // airflow never hides a coolant circuit (Astra review 2026-10-25)
-  assert.deepEqual(C.coolingMedium({ cooling_type: 'Liquid jacket with fan airflow', coolant: 'PPG', flow_rate: 8, airflow: { mode: 'Fan' } }), { medium: 'liquid', inferred: true });
+  assert.deepEqual(C.coolingMedium({ cooling_type: 'Liquid jacket with fan airflow', coolant: 'Glycol', flow_rate: 5, airflow: { mode: 'Fan' } }), { medium: 'liquid', inferred: true });
   assert.deepEqual(C.coolingMedium({ cooling_type: 'PPG loop, heat exchanger to seawater' }), { medium: 'liquid', inferred: true });
-  // the exact M1 text: 'no internal coolant loop' is not a loop (Astra re-review 2026-10-25)
-  assert.deepEqual(C.coolingMedium({ cooling_type: 'Passive liquid heat rejection through submerged pod housing; no internal coolant loop.', coolant: 'External flowing seawater' }), { medium: 'submerged', inferred: true });
+  // a negated circuit ('no internal coolant loop') is not a loop (Astra re-review 2026-10-25)
+  assert.deepEqual(C.coolingMedium({ cooling_type: 'Heat rejected through the submerged housing; no internal coolant loop.', coolant: 'Sea water outside' }), { medium: 'submerged', inferred: true });
 });
 
 test('choosing a load settles the cooling it brings or cannot run with; a fitting choice is kept', () => {
-  // Erium: air propeller with a misclicked "underwater" -> air + propeller wash
-  assert.deepEqual(C.coolingForLoad({ cooling_type: 'Air cooled', cooling_medium: 'submerged', airflow: {} }, 'air_propeller'), { cooling_type: 'Air cooled', cooling_medium: 'air', airflow: { mode: 'Propeller wash' } });
+  // an air propeller with a misclicked "underwater" -> air + propeller wash
+  assert.deepEqual(C.coolingForLoad({ cooling_type: 'Air', cooling_medium: 'submerged', airflow: {} }, 'air_propeller'), { cooling_type: 'Air', cooling_medium: 'air', airflow: { mode: 'Propeller wash' } });
   assert.deepEqual(C.coolingForLoad({}, 'air_propeller'), { cooling_medium: 'air', airflow: { mode: 'Propeller wash' } });
   assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Propeller wash' } }, 'air_propeller'), null);
   // liquid behind an air propeller is kept; the wash over the housing is filled in
   assert.deepEqual(C.coolingForLoad({ cooling_medium: 'liquid', coolant: 'Water' }, 'air_propeller'), { cooling_medium: 'liquid', coolant: 'Water', airflow: { mode: 'Propeller wash' } });
-  // M1 pod: water propeller, sea water around the pod -> underwater confirmed (not the 'coolant' -> liquid guess)
-  assert.deepEqual(C.coolingForLoad({ cooling_type: 'Passive liquid heat rejection through submerged pod housing', coolant: 'External flowing seawater' }, 'marine_propeller'), { cooling_type: 'Passive liquid heat rejection through submerged pod housing', coolant: 'External flowing seawater', cooling_medium: 'submerged' });
-  // G1/G2: engine-driven generator on a PPG jacket -> liquid kept (confirmed from the stored values)
-  assert.equal(C.coolingForLoad({ cooling_medium: 'liquid', coolant: 'PPG' }, 'engine_driven_generator'), null);
+  // a pod motor: water propeller, sea water around the pod -> underwater confirmed (not the 'coolant' -> liquid guess)
+  assert.deepEqual(C.coolingForLoad({ cooling_type: 'Heat rejected through the submerged housing', coolant: 'Sea water outside' }, 'marine_propeller'), { cooling_type: 'Heat rejected through the submerged housing', coolant: 'Sea water outside', cooling_medium: 'submerged' });
+  // an engine-driven generator on a glycol jacket -> liquid kept
+  assert.equal(C.coolingForLoad({ cooling_medium: 'liquid', coolant: 'Glycol' }, 'engine_driven_generator'), null);
   // propeller wash cannot exist without an air propeller: a wheel takes ram air; a typed own mode stays
   assert.deepEqual(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'Propeller wash', speed_mps: 8 } }, 'wheel'), { cooling_medium: 'air', airflow: { mode: 'Ram air', speed_mps: 8 } });
   assert.equal(C.coolingForLoad({ cooling_medium: 'air', airflow: { mode: 'duct from the radiator fan' } }, 'shaft'), null);

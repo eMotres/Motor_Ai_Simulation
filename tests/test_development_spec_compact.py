@@ -267,7 +267,7 @@ def test_load_cooling_refuses_what_cannot_occur():
     # what does occur passes: submerged wheel, liquid behind an air propeller with its wash, an engine generator on a jacket
     for load, cooling in (("wheel", {"cooling_medium": "submerged"}),
                           ("air_propeller", {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}}),
-                          ("engine_driven_generator", {"cooling_medium": "liquid", "coolant": "PPG"}),
+                          ("engine_driven_generator", {"cooling_medium": "liquid", "coolant": "Glycol"}),
                           ("water_jet", {"cooling_medium": "submerged"}),
                           ("shaft", {"cooling_medium": "air", "airflow": {"mode": "duct from the radiator fan"}})):
         assert models.cooling_load_errors(_load_cooling_draft(load, cooling)) == [], (load, cooling)

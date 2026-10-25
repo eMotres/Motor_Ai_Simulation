@@ -670,7 +670,7 @@ export default function DevelopmentPage() {
       setAnswer(f, { ...obj, cooling_medium: target, ...(mode && blankValue(airflow.mode) ? { airflow: { ...airflow, mode } } : {}) });
     };
     // what the switch cannot show stays readable in its tooltip: the customer's own cooling description and a stored
-    // coolant text the shown form hides (Astra review 2026-10-25: G1/G2 "separate from seawater", M1 "seawater")
+    // coolant text the shown form hides (Astra review 2026-10-25: a circuit description, a sea-water coolant)
     const hiddenText = [obj.cooling_type, medium && !coolingPropertyIds(medium, loadType).includes('coolant') ? obj.coolant : null]
       .filter((t): t is string => typeof t === 'string' && !!t.trim());
     const switchTip = [...(inferred ? [tr('coolingInferred')] : []), ...hiddenText];

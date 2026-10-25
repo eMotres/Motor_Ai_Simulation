@@ -108,12 +108,12 @@ test('battery: stored pack voltages are never recomputed on load', () => {
 
 test('battery: cells x cell voltage = pack voltage either way; a stored cell voltage leads its pack, else the stated pack leads', () => {
   const A = allowed('2_1');
-  const erium = { chemistry: 'LiPo', series_cells: 192, voltage_min_V: 633, voltage_nominal_V: 710, voltage_max_V: 806 };
-  const packEdit = specBatteryPackEdit(erium, 'nom', 720, A);
-  assert.equal(packEdit.voltage_nominal_V, 720); assert.equal(packEdit.cell_voltage_nominal_V, undefined);
+  const pack = { chemistry: 'LiPo', series_cells: 100, voltage_min_V: 330, voltage_nominal_V: 371, voltage_max_V: 420 };
+  const packEdit = specBatteryPackEdit(pack, 'nom', 375, A);
+  assert.equal(packEdit.voltage_nominal_V, 375); assert.equal(packEdit.cell_voltage_nominal_V, undefined);
   assert.equal(specBatteryView(packEdit).bat.nom, 3.75);
-  // re-entering the same count never rewrites a stated pack (710 stays 710)
-  assert.equal(specBatteryFieldEdit(erium, 'cells', '192', A).voltage_nominal_V, 710);
+  // re-entering the same count never rewrites a stated pack (371 stays 371)
+  assert.equal(specBatteryFieldEdit(pack, 'cells', '100', A).voltage_nominal_V, 371);
   // a pack typed over a stored cell voltage takes over
   assert.equal(specBatteryPackEdit({ series_cells: 100, cell_voltage_nominal_V: 3.7, voltage_nominal_V: 370 }, 'nom', 380, A).cell_voltage_nominal_V, undefined);
   const cells = specBatteryFieldEdit({ voltage_min_V: 330, voltage_nominal_V: 370, voltage_max_V: 420 }, 'cells', '100', A);
@@ -138,10 +138,10 @@ test('battery: the result never depends on typing history (Astra review 2026-10-
 });
 
 test('battery: chemistry presets fill only where neither the cell nor the pack voltage is stated', () => {
-  const picked = specBatteryChemistry({ series_cells: 192, voltage_nominal_V: 710 }, 'NMC', allowed('2_1'));
-  assert.equal(picked.cell_voltage_nominal_V, undefined); assert.equal(picked.voltage_nominal_V, 710);
-  assert.equal(specBatteryView(picked).bat.nom, 3.698);
-  assert.equal(picked.cell_voltage_max_V, 4.2); assert.equal(picked.voltage_max_V, 806.4);
+  const picked = specBatteryChemistry({ series_cells: 100, voltage_nominal_V: 371 }, 'NMC', allowed('2_1'));
+  assert.equal(picked.cell_voltage_nominal_V, undefined); assert.equal(picked.voltage_nominal_V, 371);
+  assert.equal(specBatteryView(picked).bat.nom, 3.71);
+  assert.equal(picked.cell_voltage_max_V, 4.2); assert.equal(picked.voltage_max_V, 420);
 });
 
 test('battery: pack-only data displays, and a typed cell voltage moves its pack', () => {

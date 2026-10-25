@@ -61,10 +61,11 @@
     "torque": "Torque",
     "speed": "Speed",
     "duration": "Duration",
-    "period": "Repeat period",
-    "frequency": "Peak frequency / repetition (text)",
+    "period": "Repeats every",
+    "frequency": "Peak repetition (text)",
     "derived": "T·ω = {value} W",
-    "noPeak": "Leave the peak row empty when there is no peak."
+    "noPeak": "Leave the peak row empty when there is no peak.",
+    "periodTip": "How often the peak comes back, in seconds. Leave empty for a single peak."
   },
   "migration": {
     "action": "Review legacy S1 migration",

@@ -1,5 +1,5 @@
 import { deliveryConflicts, matchesFieldReference, productionFallback } from '../reviewPresentation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
   Alert, Box, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment,
   Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Tab, Tabs, TextField,
@@ -500,7 +500,7 @@ export default function DevelopmentPage() {
       // a compact table cell starts with one number; a stored range keeps its two bounds
       if (!usesRangeEditor(shape, value) || (compact && blankValue(value))) return input(value, onChange, 'number', shape.unit);
       const bounds = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-      if (compact) return <Stack spacing={0.5}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" placeholder={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Stack>;
+      if (compact) return <Tooltip title={`${tr('minimum')} – ${tr('maximum')}`}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{(['minimum', 'maximum'] as const).map((part) => <Fragment key={part}>{part === 'maximum' && <Typography sx={{ color: 'var(--text-3)' }}>–</Typography>}<TextField size="small" type="number" placeholder={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit && part === 'maximum' ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} /></Fragment>)}</Box></Tooltip>;
       return <Box sx={{ display: 'flex', gap: 0.5 }}>{(['minimum', 'maximum'] as const).map((part) => <TextField key={part} size="small" type="number" label={tr(part)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)} ${tr(part)}${shape.unit ? ` (${shape.unit})` : ''}`, min: shape.min, max: shape.max, step: 'any' }} InputProps={shape.unit ? { endAdornment: unitAdornment(shape.unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(bounds[part])} onChange={(e) => onChange({ ...bounds, [part]: e.target.value === '' ? '' : Number(e.target.value) })} />)}</Box>;
     }
     if (kind === 'array') {
@@ -600,31 +600,28 @@ export default function DevelopmentPage() {
       const prop = (id: string) => f.properties?.find((item) => item.id === id);
       const edit = (id: string) => (value: unknown) => setProperty(f, false, obj, id, value);
       if (column === 'power') {
-        if (f.id === '1_4') {
-          const derived = v2 ? finiteScalar(withS1DerivedPower(obj).shaft_power_W) : null;
-          const stated = prop('power_W') ?? prop('output_power_W');
-          if (derived != null && (!stated || blankValue(obj[stated.id]))) return <TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${tr('keyPoints.s1')} ${tr('keyPoints.power')} (W)` }} helperText={tr('wizard.s1Formula')} FormHelperTextProps={{ sx: { mx: 0, fontSize: 10 } }} />;
-          if (!stated) return dash;
-          return <>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}{derived != null && <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{tr('keyPoints.derived', { value: watts(derived) })}</Typography>}</>;
-        }
-        const stated = prop('output_power_W');
-        if (!stated) return dash;
+        // S1 and peak read the same way (owner 2026-10-25): with torque and speed given the power IS T·ω, shown
+        // read-only; a stated power is editable only when there is no torque/speed pair to derive it from.
+        const stated = prop('power_W') ?? prop('output_power_W');
         const torque = finiteScalar(obj.torque_Nm), speed = finiteScalar(obj.speed_rpm);
-        return renderTypedValue({ ...stated, placeholder: torque != null && speed != null ? tr('keyPoints.derived', { value: watts(torque * 2 * Math.PI * speed / 60) }) : undefined }, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true);
+        const derived = v2 && torque != null && speed != null ? torque * 2 * Math.PI * speed / 60 : null;
+        if (derived != null && (!stated || blankValue(obj[stated.id]))) return <Tooltip title={tr('wizard.s1Formula')}><TextField size="small" fullWidth value={unknown ? '—' : watts(derived)} InputProps={{ readOnly: true, endAdornment: <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>W</InputAdornment> }} inputProps={{ 'aria-label': `${f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak')} ${tr('keyPoints.power')} (W)` }} /></Tooltip>;
+        if (!stated) return dash;
+        return <>{renderTypedValue(stated, obj[stated.id], edit(stated.id), `${f.id}-${stated.id}`, unknown, true)}{derived != null && <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{tr('keyPoints.derived', { value: watts(derived) })}</Typography>}</>;
       }
       const p = prop(column);
       return p ? renderTypedValue(p, obj[column], edit(column), `${f.id}-${column}`, unknown, true) : dash;
     };
     return <Box sx={{ minWidth: 0 }}>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(110px,0.9fr) repeat(5,minmax(0,1fr))', gap: '6px 8px', alignItems: 'start', [NARROW]: { gridTemplateColumns: 'repeat(2,minmax(0,1fr))' } }}>
-        <Box sx={{ display: 'contents', [NARROW]: { display: 'none' } }}><span />{KEY_COLUMNS.map((c) => <Typography key={c.id} sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>{c.title}</Typography>)}</Box>
+        <Box sx={{ display: 'contents', [NARROW]: { display: 'none' } }}><span />{KEY_COLUMNS.map((c) => <Tooltip key={c.id} title={c.id === 'period_s' ? tr('keyPoints.periodTip') : c.id === 'power' ? tr('wizard.s1Formula') : ''}><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>{c.title}</Typography></Tooltip>)}</Box>
         {rows.map((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', required = fieldRequired(f, draftRef.current); return <Box key={f.id} id={`spec-field-${f.id}`} sx={{ display: 'contents' }}>
           <Box sx={{ minWidth: 0, pt: '4px', [NARROW]: { gridColumn: '1 / -1' } }}>{labelRow(f, false, required, unknown, f.id === '1_4' ? tr('keyPoints.s1') : tr('keyPoints.peak'))}{fieldMessages(f, answer, required)}</Box>
           {KEY_COLUMNS.map((c) => <Box key={c.id} sx={{ minWidth: 0 }}><Typography sx={{ display: 'none', fontSize: 10.5, color: 'var(--text-3)', [NARROW]: { display: f.properties?.some((p) => p.id === c.id) || c.id === 'power' ? 'block' : 'none' } }}>{c.title}</Typography>{cell(f, c.id)}</Box>)}
         </Box>; })}
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 1, alignItems: 'flex-end' }}>
-        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => p.id === 'power_basis' || p.id === 'frequency' || !KEY_HANDLED.has(p.id)).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
+        {rows.flatMap((f) => { const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value); return (f.properties ?? []).filter((p) => (p.id === 'power_basis' ? (!blankValue(obj.power_basis) || (finiteScalar(obj.torque_Nm) == null && !blankValue(obj.power_W))) : p.id === 'frequency' ? !blankValue(obj.frequency) : !KEY_HANDLED.has(p.id))).map((p) => <Box key={`${f.id}-${p.id}`} sx={{ minWidth: 0, width: p.id === 'frequency' ? 260 : 200, [NARROW]: { width: '100%' } }}>{propLabel({ ...p, short_label: p.id === 'frequency' ? tr('keyPoints.frequency') : p.short_label })}{renderTypedValue(p, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>); })}
       </Box>
       <Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-3)' }}>{tr('keyPoints.noPeak')}</Typography>
       {retained && <><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.retainedRange')}: {tr('field.torque')} {readableRange(retained.torque_Nm)} N&#183;m &#183; {tr('field.speed')} {readableRange(retained.speed_rpm)} rpm</Typography><Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>{tr('migration.legacyInputPower')}: {readableRange(retained.input_power_W)} W &#183; {tr('migration.legacyOutputPower')}: {readableRange(retained.output_power_W)} W</Typography></>}

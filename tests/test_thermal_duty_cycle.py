@@ -860,3 +860,16 @@ def test_the_still_air_films_name_their_source(net_robot):
         if "provisional" in src:
             pytest.fail("%s is still on the provisional constant: %s"
                         % (key, src))
+
+
+def test_the_route_pulls_the_requested_duty_not_the_calibration_one():
+    """2026-10-25: an S2 of 'takeoff' / 'peak' calibrated on 'cruise' integrated the cruise losses for every duty."""
+    from motor_ai_sim.routes.thermal import cycle_block_for_duty
+    for kind in ("S2", "s2", "S1"):
+        assert cycle_block_for_duty({"kind": kind, "t_on_s": 60, "calibration_duty": "cruise"}, "takeoff")["duty"] == "takeoff"
+    # a block that names its own duty keeps it; S3 / segments are not touched
+    assert cycle_block_for_duty({"kind": "S2", "duty": "peak", "t_on_s": 10}, "takeoff")["duty"] == "peak"
+    assert "duty" not in cycle_block_for_duty({"kind": "S3", "ed_pct": 40, "cycle_s": 60}, "takeoff")
+    src = {"kind": "S2", "t_on_s": 60}
+    cycle_block_for_duty(src, "takeoff")
+    assert "duty" not in src            # the caller's block is not mutated

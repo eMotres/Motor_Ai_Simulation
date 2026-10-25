@@ -21,7 +21,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const p = (id: string) => `/api/projects/${enc(id)}`;
 
 export const developmentApi = {
-  list: async () => (await call<{ projects: ProjectSummary[] }>('GET', '/api/projects')).projects,
+  // a 200 that is not the project list (no server answer reached the page, e.g. the app fell back to Local Mode)
+  // is an error to show and retry, not a null that crashes the page (2026-10-25: "Cannot read properties of null")
+  list: async () => {
+    const data = await call<{ projects?: ProjectSummary[] } | null>('GET', '/api/projects');
+    if (!data || !Array.isArray(data.projects)) throw new DevelopmentApiError(0, 'No answer from the AeroStator server - reconnecting', data);
+    return data.projects;
+  },
   schema: (version?: number) => call<DevelopmentSchema>('GET', `/api/projects/schema${version ? `?version=${version}` : ''}`),
   create: (v: { id: string; title: string; customer_org: string; owner_engineer?: string }) => call<ProjectSummary>('POST', '/api/projects', v),
   get: (id: string) => call<ProjectSummary>('GET', p(id)),

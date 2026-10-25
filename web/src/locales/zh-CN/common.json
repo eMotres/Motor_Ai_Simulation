@@ -22,7 +22,8 @@
   },
   "status": {
     "connected": "已连接",
-    "localMode": "本地模式"
+    "localMode": "本地模式",
+    "reconnectTip": "未连接到服务器。点击立即重新连接（每 5 秒也会自动重试）。"
   },
   "theme": {
     "dark": "深色主题",

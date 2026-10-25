@@ -10,14 +10,21 @@
 import React from 'react';
 import { Box } from '@mui/material';
 import ConfiguratorPanel from './ConfiguratorPanel';
+import PointsConfigure from './PointsConfigure';
+import { usePointsConfigureStore } from '../../stores/pointsConfigureStore';
 
-const CompareTab: React.FC = () => (
-  <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column',
-    bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
-    <Box sx={{ flex: 1, minHeight: 0 }}>
-      <ConfiguratorPanel />
+// A project motor opened from the Development page without a full passport shows the points-only card
+// (stored duty points); every other entry keeps the ordinary Configurator untouched.
+const CompareTab: React.FC = () => {
+  const pointsTarget = usePointsConfigureStore((s) => s.target);
+  return (
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column',
+      bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        {pointsTarget ? <PointsConfigure /> : <ConfiguratorPanel />}
+      </Box>
     </Box>
-  </Box>
-);
+  );
+};
 
 export default CompareTab;

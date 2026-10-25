@@ -23,6 +23,7 @@ import {
   POINT_TILES, TILE_GROUPS, baseVariantPoint, busHeadroom, dutyAfterVariantSwitch, findVariantIndex,
   pointOperating, tileValue, visibleTiles, type StepBaseMode,
 } from '../../modules/development/pointsOnly';
+import { motorColor } from '../../modules/development/motorGroups';
 import { usePointsConfigureStore } from '../../stores/pointsConfigureStore';
 import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
@@ -116,7 +117,8 @@ const PointsConfigure: React.FC = () => {
             <ToggleButtonGroup exclusive size="small" value={vIndex} aria-label={t('points.step')}
               onChange={(_, value) => { if (typeof value === 'number') pickVariant(value); }}>
               {variants.map((v, index) => (
-                <ToggleButton key={`${v.die}/${v.config}`} value={index} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12 }}>
+                <ToggleButton key={`${v.die}/${v.config}`} value={index} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12, boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>
+                  <Box component="span" aria-hidden data-testid="step-accent" sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: motorColor(v), mr: 0.75, flex: '0 0 8px' }} />
                   <Tooltip title={`${v.canonical_die} / ${v.config}`}><span>{v.step} · {v.config}</span></Tooltip>
                   {v.status === 'trial' && <Chip size="small" label={t('motorStatus.trial')} sx={{ ml: 0.75, height: 16, fontSize: 9 }} />}
                 </ToggleButton>
@@ -213,7 +215,7 @@ const PointsConfigure: React.FC = () => {
                 return (
                   <Box component="tr" key={`${v.die}/${v.config}`} onClick={() => pickVariant(index)}
                     sx={{ cursor: 'pointer', bgcolor: index === vIndex ? 'var(--panel-3, rgba(255,255,255,0.06))' : 'transparent', '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-                    <Box component="td" sx={{ ...TD, textAlign: 'left' }}>{v.step} · {v.config}</Box>
+                    <Box component="td" sx={{ ...TD, textAlign: 'left', boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>{v.step} · {v.config}</Box>
                     <Box component="td" sx={{ ...TD, textAlign: 'left', fontFamily: 'inherit', whiteSpace: 'normal', maxWidth: 260 }}>{v.note || '—'}</Box>
                     {POINT_TILES.filter((spec) => spec.core || peers.some((peer) => tileValue(peer, spec) !== null)).map((spec) => {
                       const value = tileValue(p, spec);

@@ -138,8 +138,11 @@ export function developmentComparisonColumns(t: (key: string, args?: Record<stri
     cellColor: () => 'var(--text-1)',
   });
   const neutral = (column: SharedComparisonColumn<DevelopmentComparisonRow>) => ({ ...column, cellColor: () => 'var(--text-1)' });
+  // a variant without any stored result is ONE sub-row that says so (owner 2026-10-26)
+  const dutyColumn = neutral(input('duty', 'duty'));
+  dutyColumn.format = (v, r) => (v !== undefined && v !== null && v !== '' ? String(v) : r.hasResult ? '-' : t('notComputed'));
   return [
-    neutral(input('duty', 'duty')),
+    dutyColumn,
     keyPoint('keyPowerKw', 'power', 'kW', 'keyPowerTarget', 1), keyPoint('keyTorque', 'torque', 'N·m', 'keyTorqueTarget', 1),
     neutral(input('rpm', 'speed', 'rpm')), neutral(input('current', 'current', 'A')),
     keyPoint('vPhase', 'phasePeak', 'V', undefined, 1), neutral(input('gamma', 'gamma', '°')),

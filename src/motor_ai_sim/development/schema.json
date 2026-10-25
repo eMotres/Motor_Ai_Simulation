@@ -377,8 +377,12 @@
           "id": "1_6",
           "checklist_id": "1.6",
           "label": {
-            "en": "Maximum speed and overspeed (proof / runaway)",
-            "zh-CN": "最高转速及超速要求（验证／失控）"
+            "en": "Maximum speed",
+            "zh-CN": "最高转速"
+          },
+          "help": {
+            "en": "The single highest speed the motor ever sees. The mechanics are checked at exactly this speed (proof speed = maximum speed). Torque and voltage requirements come from the key operating points.",
+            "zh-CN": "电机可能遇到的唯一最高转速。机械强度恰好按此转速校核（验证转速 = 最高转速）。转矩和电压要求取自关键工作点。"
           },
           "type": "object",
           "unit": "rpm",
@@ -403,6 +407,7 @@
               "type": "number",
               "unit": "rpm",
               "required": false,
+              "ui_hidden": true,
               "min": 0,
               "allow_range": true
             },
@@ -414,7 +419,8 @@
               },
               "type": "string",
               "unit": "",
-              "required": false
+              "required": false,
+              "ui_hidden": true
             },
             {
               "id": "runaway_rpm",
@@ -425,6 +431,7 @@
               "type": "number",
               "unit": "rpm",
               "required": false,
+              "ui_hidden": true,
               "min": 0,
               "allow_range": true,
               "short_label": {
@@ -434,8 +441,8 @@
             }
           ],
           "short_label": {
-            "en": "Speed limits",
-            "zh-CN": "转速限制"
+            "en": "Maximum speed",
+            "zh-CN": "最高转速"
           },
           "presentation_group": "1"
         },
@@ -463,8 +470,12 @@
           "id": "1_8",
           "checklist_id": "1.8",
           "label": {
-            "en": "Allowed torque ripple and cogging (% pk-pk), frequencies to avoid (resonances)",
-            "zh-CN": "允许的转矩脉动和齿槽转矩（峰峰值百分比）、需避开的频率（共振）"
+            "en": "Max torque ripple at continuous operation",
+            "zh-CN": "连续运行时的最大转矩脉动"
+          },
+          "help": {
+            "en": "% pk-pk, applies to the continuous key point. A lower ripple costs torque and efficiency.",
+            "zh-CN": "峰峰值百分比，适用于连续工作点。更低的转矩脉动会牺牲转矩和效率。"
           },
           "type": "object",
           "unit": "",
@@ -473,7 +484,11 @@
           "properties": [
             {
               "id": "torque_ripple_pct_pkpk",
-              "label": {"en": "Max torque ripple", "zh-CN": "最大转矩脉动"},
+              "label": {"en": "Max torque ripple at continuous operation", "zh-CN": "连续运行时的最大转矩脉动"},
+              "help": {
+                "en": "% pk-pk, applies to the continuous key point. A lower ripple costs torque and efficiency.",
+                "zh-CN": "峰峰值百分比，适用于连续工作点。更低的转矩脉动会牺牲转矩和效率。"
+              },
               "type": "number",
               "unit": "% pk-pk",
               "required": false,
@@ -484,7 +499,8 @@
               "label": {"en": "Max cogging torque", "zh-CN": "最大齿槽转矩"},
               "type": "number",
               "unit": "% pk-pk",
-              "required": false
+              "required": false,
+              "ui_hidden": true
             },
             {
               "id": "cogging_torque_Nm",
@@ -492,6 +508,7 @@
               "type": "number",
               "unit": "N·m",
               "required": false,
+              "ui_hidden": true,
               "min": 0,
               "allow_range": true
             },
@@ -503,12 +520,13 @@
               },
               "type": "array",
               "unit": "Hz",
-              "required": false
+              "required": false,
+              "ui_hidden": true
             }
           ],
           "short_label": {
-            "en": "Ripple and cogging",
-            "zh-CN": "转矩脉动与齿槽转矩"
+            "en": "Max torque ripple at continuous operation",
+            "zh-CN": "连续运行时最大转矩脉动"
           },
           "presentation_group": "1"
         },
@@ -842,14 +860,33 @@
             },
             {
               "id": "supplier",
-              "suggestions": [{"value": "Customer", "label": {"en": "Customer", "zh-CN": "客户"}}, {"value": "MOTRES", "label": {"en": "MOTRES", "zh-CN": "MOTRES"}}, {"value": "Third party", "label": {"en": "Third party", "zh-CN": "第三方"}}],
               "label": {
-                "en": "Supplier",
-                "zh-CN": "供应方"
+                "en": "Supplier (company)",
+                "zh-CN": "供应商（公司名称）"
+              },
+              "help": {
+                "en": "The company that makes or sells the controller, e.g. DTI. Filled from the chosen catalogue controller; you can change it.",
+                "zh-CN": "制造或销售该控制器的公司，例如 DTI。选择目录控制器后自动填写，可修改。"
               },
               "type": "string",
               "unit": "",
-              "required": true
+              "required": false
+            },
+            {
+              "id": "supplier_legacy",
+              "label": {"en": "Supplier (earlier answer)", "zh-CN": "供应方（原回答）"},
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "ui_hidden": true
+            },
+            {
+              "id": "catalog_id",
+              "label": {"en": "Catalogue controller", "zh-CN": "目录控制器"},
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "ui_hidden": true
             },
             {
               "id": "count",
@@ -2229,8 +2266,8 @@
           "id": "6_1",
           "checklist_id": "6.1",
           "label": {
-            "en": "Quantities: prototypes, pre-series, series per year",
-            "zh-CN": "数量：原型机、预生产、年产量"
+            "en": "Prototypes",
+            "zh-CN": "原型机数量"
           },
           "type": "object",
           "unit": "units",
@@ -2246,7 +2283,8 @@
               },
               "type": "number",
               "unit": "units",
-              "required": false,
+              "required": true,
+              "default": 1,
               "min": 0,
               "allow_range": true
             },
@@ -2259,6 +2297,7 @@
               "type": "number",
               "unit": "units",
               "required": false,
+              "ui_hidden": true,
               "min": 0,
               "allow_range": true
             },
@@ -2271,13 +2310,14 @@
               "type": "number",
               "unit": "units",
               "required": false,
+              "ui_hidden": true,
               "min": 0,
               "allow_range": true
             }
           ],
           "short_label": {
-            "en": "Required quantities",
-            "zh-CN": "需求数量"
+            "en": "Prototypes",
+            "zh-CN": "原型机"
           },
           "presentation_group": "6"
         },

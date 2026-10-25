@@ -46,7 +46,11 @@
     "requirements": "Requirements",
     "moreDetails": "More details",
     "moreFilled": "{count, plural, =0 {nothing filled yet} one {# field filled} other {# fields filled}}",
-    "secondTier": "Also useful",
+    "construction": "Construction",
+    "saveConflict": "The specification was changed elsewhere - reload to see the latest version.",
+    "submitForbidden": "Only the project owner can submit the specification.",
+    "submitTip": "Submitting freezes the current draft as a numbered version and sends it to engineering review.",
+    "storedOverspeed": "An earlier answer states an overspeed of {value} rpm; the mechanics are checked at that speed.",
     "notKnownYet": "Not known yet",
     "productionPlan": "Production plan",
     "ambientMaxNote": "Asked for air cooling only; all calculations use the maximum ambient temperature. Liquid cooling uses the coolant inlet temperature, underwater cooling the water temperature.",
@@ -107,6 +111,21 @@
   "saving": "Saving draft…",
   "saveFailed": "Draft save failed: {reason}",
   "saveFailedShort": "The draft could not be saved. Try again before switching projects.",
+  "controller": {
+    "ownDesign": "Own design / other",
+    "fromCatalog": "From catalogue {id}, page {page} ({basis}); you can change it.",
+    "basis": {
+      "stated": "stated",
+      "derived": "derived",
+      "figure": "read off a figure",
+      "inferred": "inferred"
+    },
+    "linked": "Catalogue controller: {name}",
+    "statedDevices": "Power devices stated by the customer earlier: {devices}",
+    "devicesUnknown": "Controller losses cannot be estimated yet: its power devices are unknown.",
+    "devicesUnknownTip": "We cannot yet estimate the controller's effect on the motor efficiency. Please find out which transistors (MOSFET or IGBT, part number, voltage class) the controller uses.",
+    "batteryTooHigh": "The battery maximum {max} V is above the maximum supply voltage {limit} V of {controller}."
+  },
   "saveBeforeSubmit": "Save the draft successfully before submitting.",
   "submitBlocked": "Submission needs attention",
   "submitFailed": "Submission failed. Please review the required fields.",
@@ -272,6 +291,7 @@
     }
   },
   "snapshots": {
+    "details": "Snapshot details",
     "history": "History",
     "showHistory": "Show history",
     "source": "Source",
@@ -353,7 +373,12 @@
     "duty": "Duty"
   },
   "projectStatusTip": "Stages: Specification > Design > Simulation > Quote > Prototype > Production > Closed.",
-  "showAllVersions": "Show all versions",
+  "versionView": {
+    "label": "Versions",
+    "latest": "Latest",
+    "all": "All versions",
+    "tip": "Latest: the latest current variant, plus the best one (highest average efficiency) when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
+  },
   "points": {
     "title": "Configure · computed points",
     "pending": "Points only",

@@ -166,7 +166,10 @@ def test_quantities_and_timeline_need_one_value():
         "6_1": {"status": "filled", "value": {"prototypes": None, "pre_series": {"minimum": None, "maximum": None}}},
         "6_2": {"status": "filled", "value": {"series_date": "2032-01-01"}}}})
     errors = {e["field"] for e in models.validation_errors(draft)}
-    assert "6_1" in errors and "6_2" not in errors
+    # an empty prototypes value is the pre-filled default 1 (owner 2026-10-26), counted as filled; the stored extras stay
+    assert "6_1" not in errors and "6_2" not in errors
+    assert draft["fields"]["6_1"]["value"]["prototypes"] == 1
+    assert draft["fields"]["6_1"]["value"]["pre_series"] == {"minimum": None, "maximum": None}
 
 
 # ---- one-value spec, cooling switch, shaft load, menus (owner 2026-10-25) ------------------------------------

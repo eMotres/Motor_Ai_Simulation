@@ -46,7 +46,11 @@
     "requirements": "要求",
     "moreDetails": "更多细节",
     "moreFilled": "{count, plural, =0 {尚未填写} other {已填写 # 项}}",
-    "secondTier": "补充信息",
+    "construction": "结构",
+    "saveConflict": "规格已在别处被修改，请重新加载以查看最新版本。",
+    "submitForbidden": "只有项目负责人可以提交规格。",
+    "submitTip": "提交会将当前草稿冻结为带编号的版本，并送交工程评审。",
+    "storedOverspeed": "之前的回答给出了 {value} rpm 的超速；机械强度按此转速校核。",
     "notKnownYet": "暂不清楚",
     "productionPlan": "生产计划",
     "ambientMaxNote": "仅空气冷却时填写；所有计算均采用最高环境温度。液冷采用冷却液进口温度，水下冷却采用水温。",
@@ -107,6 +111,21 @@
   "saving": "正在保存草稿…",
   "saveFailed": "草稿保存失败：{reason}",
   "saveFailedShort": "无法保存草稿。切换项目之前请重试。",
+  "controller": {
+    "ownDesign": "自研／其他",
+    "fromCatalog": "来自目录 {id}，第 {page} 页（{basis}）；可修改。",
+    "basis": {
+      "stated": "原文给出",
+      "derived": "推算",
+      "figure": "由图读取",
+      "inferred": "推断"
+    },
+    "linked": "目录控制器：{name}",
+    "statedDevices": "客户此前给出的功率器件：{devices}",
+    "devicesUnknown": "暂时无法估算控制器损耗：功率器件未知。",
+    "devicesUnknownTip": "我们暂时无法估算控制器对电机效率的影响。请查明该控制器使用的晶体管（MOSFET 或 IGBT、型号、电压等级）。",
+    "batteryTooHigh": "电池最高电压 {max} V 高于 {controller} 的最高供电电压 {limit} V。"
+  },
   "saveBeforeSubmit": "请先成功保存草稿，再提交。",
   "submitBlocked": "提交需要处理",
   "submitFailed": "提交失败，请检查必填项。",
@@ -272,6 +291,7 @@
     }
   },
   "snapshots": {
+    "details": "快照详情",
     "history": "历史记录",
     "showHistory": "显示历史记录",
     "source": "来源",
@@ -353,7 +373,12 @@
     "duty": "工况"
   },
   "projectStatusTip": "阶段：规格 > 设计 > 仿真 > 报价 > 原型 > 生产 > 已关闭。",
-  "showAllVersions": "显示所有版本",
+  "versionView": {
+    "label": "版本",
+    "latest": "最新",
+    "all": "全部版本",
+    "tip": "最新：最新的当前方案；若最优方案（平均效率最高）是另一个方案，则一并显示。全部版本：所有方案，包括试验方案、旧方案及其历史快照，按方案分组。"
+  },
   "points": {
     "title": "配置 · 已计算工况点",
     "pending": "仅工况点",

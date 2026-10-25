@@ -24,12 +24,18 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import { COOLING_MEDIA, airflowExcluded, airflowSuggestions, coolingChoices, coolingForLoad, coolingLoadProblems, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, suggestionDisplay, suggestionOptions, suggestionValue, withLoadType, type CoolingMedium } from '../specChoices';
   import { readLoadDraft, writeLoadDraft } from '../loadDraftAdapter';
   import { buildSpecificationCards, cardIndexForField, SECOND_TIER_FIELDS, sectionCommentRefs, type SpecificationField } from '../specificationLayout';
-import { cardColumnMin, optionsMinWidth, specFieldLabelSx, specGridSx, specGroupHeaderSx } from '../specGrid';
+import { cardColumnMin, optionsMinWidth, specFieldLabelSx, specGridSx, specGroupHeaderSx, visibleProperties } from '../specGrid';
+import { OWN_DESIGN, applyControllerChoice, batteryVsController, catalogBrands, linkedController, powerDevicesUnknown, prefillProvenance, statedPowerDevices, type CatalogController } from '../controllerCatalog';
+import { storedOverspeedRpm } from '../speedLimits';
+import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFailure';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, fieldRequired, propertyRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, type SpecDraft } from '../wizardState';
+  import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, fieldRequired, propertyRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, withSpecDefaults, type SpecDraft } from '../wizardState';
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
+  import { headerFlags, latestAndBest, motorColor, orderByGroup, variantKey } from '../motorGroups';
+  import HistoryIcon from '@mui/icons-material/History';
+  import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
   import { useProjectStripContext } from '../projectStripContext';
   import { MotorNoteField } from '../MotorNoteField';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
@@ -81,7 +87,7 @@ const hasStoredAnswer = (raw: unknown) => {
 const normaliseDraft = (value: unknown): SpecDraft => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ...DEFAULT_DRAFT, fields: {}, production: {} };
   const d = value as SpecDraft;
-  return { ...DEFAULT_DRAFT, ...d, fields: { ...(d.fields ?? {}) }, production: { ...((d.production && typeof d.production === 'object') ? d.production as object : {}) }, mission_profile: Array.isArray(d.mission_profile) ? d.mission_profile : [] };
+  return withSpecDefaults({ ...DEFAULT_DRAFT, ...d, fields: { ...(d.fields ?? {}) }, production: { ...((d.production && typeof d.production === 'object') ? d.production as object : {}) }, mission_profile: Array.isArray(d.mission_profile) ? d.mission_profile : [] });
 };
 /** Project list, specification wizard and collaboration views for the Development tab. */
 export default function DevelopmentPage() {
@@ -119,6 +125,8 @@ export default function DevelopmentPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [submitError, setSubmitError] = useState<string[]>([]);
+  const [submitConflict, setSubmitConflict] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogController[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<ProjectThreadMessage[]>([]);
   const [message, setMessage] = useState('');
@@ -144,6 +152,13 @@ export default function DevelopmentPage() {
   const canEditProject = !!selected && (canManageGlobally || selected.can_edit === true);
   const canManageProjectMotors = canManageGlobally && canEditProject;
   const sections = useMemo(() => schema ? buildSpecificationCards(schema) : [], [schema]);
+  // the catalogue of complete controllers (read-only reference data); the picker degrades to free text without it
+  useEffect(() => {
+    if (!user?.email) return;
+    let live = true;
+    void developmentApi.controllerCatalog().then((rows) => { if (live) setCatalog(rows); }).catch(() => { if (live) setCatalog([]); });
+    return () => { live = false; };
+  }, [user?.email]);
   const completeness = spec ? wizardCompleteness(sections, spec.draft as SpecDraft) : undefined;
   const completeCounts = completenessNumbers(completeness);
   const draftRef = useRef<SpecDraft>(DEFAULT_DRAFT);
@@ -410,7 +425,7 @@ export default function DevelopmentPage() {
     if (!selected || !spec) return;
     const missing = requiredFieldIds(sections, draftRef.current);    if (missing.length) {      setSubmitError(missing.map((id) => `${label(sections.flatMap((s) => s.fields).find((f) => f.id === id)?.short_label ?? id)}: ${tr('validationError')}`));      setFieldErrors(Object.fromEntries(missing.map((id) => [id, tr('validationError')])));      revealField(missing[0]);      return;    }
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-    setBusy(true); setSubmitError([]); setFieldErrors({});
+    setBusy(true); setSubmitError([]); setSubmitConflict(false); setFieldErrors({});
     const token = projectToken.current;
     const project = selected.id;
     let requestSubmitted = false;
@@ -434,7 +449,8 @@ export default function DevelopmentPage() {
       setFieldErrors(byField);
       const firstInvalid = Object.keys(byField)[0];
       if (firstInvalid) revealField(firstInvalid);
-      setSubmitError(!requestSubmitted ? [tr('saveBeforeSubmit')] : errors.length ? errors.map((x) => x.field ? `${fieldLabel(x.field)}: ${tr('validationError')}` : tr('validationError')) : [tr('submitFailed')]);
+      if (!requestSubmitted) setSubmitConflict(submitFailureKind(e) === 'conflict');
+      setSubmitError(!requestSubmitted ? [tr(submitFailureKey(e))] : errors.length ? errors.map((x) => x.field ? `${fieldLabel(x.field)}: ${tr('validationError')}` : tr('validationError')) : [tr('submitFailed')]);
     } finally { setBusy(false); }
   };
   const loadSpecHistory = async (id: string, token = projectToken.current) => {
@@ -587,7 +603,7 @@ export default function DevelopmentPage() {
   const fieldRefFor = (f: SpecificationField, prod: boolean) => `${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`;
   /** Label (help text as its tooltip), required mark, the "not known yet" toggle and open comments. */
   const labelRow = (f: SpecificationField, prod: boolean, required: boolean, unknown: boolean, text?: string, extra: string[] = []) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'nowrap', height: 22 }}><Tooltip title={extra.length ? <>{label(f.help ?? f.label)}{extra.map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(f.help ?? f.label)}><Typography tabIndex={0} sx={specGroupHeaderSx}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{unknownToggle(f, unknown, prod)}{commentIcon(fieldRefFor(f, prod))}</Stack>;
-  const propLabel = (prop: { label: unknown; short_label?: unknown; help?: unknown; required?: boolean }, strong = false) => <Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ ...specFieldLabelSx, mb: 0.4, ...(strong ? { fontWeight: 800, color: 'var(--text-0)' } : {}) }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>;
+  const propLabel = (prop: { label: unknown; short_label?: unknown; help?: unknown; required?: boolean }, strong = false, extraTip?: string) => <Tooltip title={extraTip ? <>{label(prop.help ?? prop.label)}<br />{extraTip}</> : label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ ...specFieldLabelSx, mb: 0.4, ...(strong ? { fontWeight: 800, color: 'var(--text-0)' } : {}) }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>;
   const storedAnswer = (f: SpecificationField, prod: boolean) => {
     const store = prod ? (draftRef.current.production as Record<string, unknown>) ?? {} : draftRef.current.fields ?? {};
     const raw = store[f.id];
@@ -605,6 +621,24 @@ export default function DevelopmentPage() {
     {fieldErrors[f.id] && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('validationError')}</Typography>}
     {required && !fieldAnswerComplete(f, { ...answer, not_known_yet: answer.status === 'not_known_yet' } as FieldAnswer) && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('requiredMissing')}</Typography>}
   </>;
+  /** "from catalogue <id>, page N (stated)" for a value that still holds the catalogue controller's value. */
+  const catalogTip = (path: string): string | undefined => {
+    const hit = prefillProvenance(draftRef.current, catalog)[path];
+    return hit ? tr('controller.fromCatalog', { id: hit.id, page: hit.page ?? '-', basis: hit.basis ? tr(`controller.basis.${hit.basis}`) : '' }) : undefined;
+  };
+  const pickController = (text: string) => updateDraft((d) => applyControllerChoice(d, text === OWN_DESIGN ? { kind: 'own' } : { kind: 'text', text }, catalog));
+  /** The controller's menu (catalogue entries + own design / other) and the supplier's (the catalogue brands); both take any typed text. */
+  const controllerShape = <P extends { id: string }>(prop: P): P & { suggestions?: SchemaSuggestion[] } => {
+    if (prop.id === 'manufacturer_model') return { ...prop, suggestions: [...catalog.map((entry) => ({ value: entry.display_name, label: entry.display_name })), { value: OWN_DESIGN, label: tr('controller.ownDesign') }] };
+    if (prop.id === 'supplier') return { ...prop, suggestions: catalogBrands(catalog).map((brand) => ({ value: brand, label: brand })) };
+    return prop;
+  };
+  /** The battery maximum above the linked controller's supply maximum: a loud error, next to the battery and the controller. */
+  const batteryError = () => { const hit = batteryVsController(draftRef.current, catalog); return hit ? <Typography role="alert" data-testid="battery-controller-error" sx={{ color: 'error.main', fontSize: 11, fontWeight: 600 }}>{tr('controller.batteryTooHigh', { max: hit.max, limit: hit.limit, controller: hit.controller })}</Typography> : null; };
+  const controllerNotes = () => <>
+    {powerDevicesUnknown(draftRef.current, catalog) && <Tooltip title={tr('controller.devicesUnknownTip')}><Alert severity="warning" data-testid="controller-devices-warning" sx={{ py: 0, '& .MuiAlert-message': { py: 0.4 } }}>{tr('controller.devicesUnknown')}</Alert></Tooltip>}
+    {batteryError()}
+  </>;
   const renderField = (f: SpecificationField, prod = f.storage_namespace === 'production', span = true) => {
     if (!fieldApplies(f, draftRef.current)) return null;
     if (f.handled_by && f.handled_by !== 'mission_profile') return null;
@@ -617,18 +651,20 @@ export default function DevelopmentPage() {
     const required = fieldRequired(f, draftRef.current);
     const options = f.options ?? f.choices;
     const objectValue = objectOf(answer.value);
-    const properties = f.properties;
+    // properties the schema keeps in the data but does not ask (`ui_hidden`) are not drawn; a field with ONE visible property
+    // shows only its header (the header says what the single input is)
+    const properties = f.properties?.length ? visibleProperties(f.properties) : undefined;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
     return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ minWidth: 0, gridColumn: wide ? '1 / -1' : undefined }}>
-      {labelRow(f, prod, required, unknown, undefined, [...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
+      {labelRow(f, prod, required, unknown, undefined, [...(f.id === '2_4' && statedPowerDevices(draftRef.current) ? [tr('controller.statedDevices', { devices: statedPowerDevices(draftRef.current) })] : []), ...(f.id === '2_4' && linkedController(draftRef.current, catalog) ? [tr('controller.linked', { name: linkedController(draftRef.current, catalog)!.display_name })] : []), ...(f.id === '1_6' && storedOverspeedRpm(draftRef.current) ? [tr('wizard.storedOverspeed', { value: storedOverspeedRpm(draftRef.current) })] : []), ...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
       <Stack spacing={0.5}>
         {properties?.length ? (
           <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
             {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? '1 / -1' : undefined }}>
-              {propLabel(prop)}
-              {renderTypedValue(prop, objectValue[prop.id], (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
+              {properties.length > 1 && propLabel(prop, false, catalogTip(`${f.id}.${prop.id}`))}
+              {renderTypedValue(f.id === '2_4' ? controllerShape(prop) : prop, objectValue[prop.id], f.id === '2_4' && prop.id === 'manufacturer_model' ? (value) => pickController(String(value ?? '')) : (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
           </Box>
         ) : options?.length ? (
@@ -638,6 +674,7 @@ export default function DevelopmentPage() {
         ) : (
           renderTypedValue(f, answer.value, (next) => setAnswer(f, next, prod), f.id, unknown)
         )}
+        {f.id === '2_4' && controllerNotes()}
         {fieldMessages(f, answer, required)}
       </Stack>
     </Box>;
@@ -702,6 +739,7 @@ export default function DevelopmentPage() {
       <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
         {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => { const volt = (Object.keys(SPEC_PACK_PROP) as Array<'min' | 'nom' | 'max'>).find((k) => SPEC_PACK_PROP[k] === p.id); return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => volt ? setAnswer(f, specBatteryPackEdit(obj, volt, value, allowed)) : setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}
       </Box>
+      {batteryError()}
       {fieldMessages(f, answer, required)}
     </Box>;
   };
@@ -841,14 +879,17 @@ export default function DevelopmentPage() {
                     {section.fields.filter((f) => !['1_1', 'key_points', '2_1', '3_1', '3_2', 'load_type'].includes(f.id)).map((f) => renderField(f))}
                   </Stack>}
                   {section.id === 'requirements' && <>
-                    {byId('4_6') && <Box sx={{ mb: 1.5 }}>{renderLoads(byId('4_6')!, readLoadDraft(draftRef.current).load_type)}</Box>}
-                    <Box sx={grid}>{section.fields.filter((f) => !SECOND_TIER_FIELDS.includes(f.id) && f.id !== '4_6').map((f) => renderField(f))}</Box>
+                    <Box sx={grid}>{section.fields.filter((f) => !SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box>
                     {deliveryConflicts(draftRef.current).length > 0 && <Alert severity="warning" sx={{ mt: 1 }}>{tr('deliveryConflict')}</Alert>}
-                    {section.fields.some((f) => SECOND_TIER_FIELDS.includes(f.id)) && <><Divider sx={{ my: 1.5 }} /><Typography sx={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.03em', mb: 1 }}>{tr('wizard.secondTier')}</Typography><Box sx={grid}>{section.fields.filter((f) => SECOND_TIER_FIELDS.includes(f.id)).map((f) => renderField(f))}</Box></>}
                   </>}
+                  {/* every geometric and mass requirement in one card (owner 2026-10-26): same grid, every group on its own row */}
+                  {section.id === 'construction' && <Box sx={grid}>
+                    {section.fields.filter((f) => f.id !== '4_6').map((f) => renderField(f))}
+                    {byId('4_6') && renderLoads(byId('4_6')!, readLoadDraft(draftRef.current).load_type)}
+                  </Box>}
                   {section.id === 'mission' && (!v2 ? <MissionProfile draft={draftRef.current} disabled={!canEditSpec || busy} t={tr} lang={lang} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' }))} label={tr('wizard.mission')} columns={section.fields.find((field) => field.id === 'mission_profile')?.columns ?? []} /> : <MissionProfileEditor rows={(draftRef.current.mission_profile ?? []) as unknown as MissionRow[]} load={readLoadDraft(draftRef.current)} canEdit={canEditSpec && !busy && !migrationBusy} onReview={openFieldReview} unknown={draftRef.current.mission_profile_status === 'not_known_yet'} onUnknown={(unknown) => updateDraft((d) => ({ ...d, mission_profile_status: unknown ? 'not_known_yet' : (d.mission_profile?.length ? 'filled' : 'missing') }))} onChange={(rows) => updateDraft((d) => ({ ...d, mission_profile: rows as unknown as Array<Record<string, unknown>>, mission_profile_status: rows.length ? 'filled' : 'missing' }))} t={tr} />)}
                   
-                  {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography><Box><HelpTip title={tr('wizard.reviewHint')} /></Box>{submitError.map((x, i) => <Alert key={i} severity="error">{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} /><Button variant="contained" disabled={!canEditSpec || busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></Stack>}
+                  {section.id === 'review' && <Stack spacing={0.8} sx={{ mt: 1 }}><Typography>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography>{submitError.map((x, i) => <Alert key={i} severity="error" action={i === 0 && submitConflict ? <Button color="inherit" size="small" onClick={() => void reloadDraft()}>{tr('reloadDraft')}</Button> : undefined}>{x}</Alert>)}{messages.filter(message => !message.resolved && !!message.field_ref).map(message => <Button key={message.id ?? message.created_at} size="small" sx={{ alignSelf: 'flex-start', fontSize: 11 }} onClick={() => openFieldReview(message.field_ref!)}>{tr('openComment')}: {message.field_ref}</Button>)}<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} />{canSubmitSpec(canEditSpec) && <Tooltip title={<>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={busy || saving} onClick={() => void onSubmitSpec()}>{tr(((completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0)) > 0 ? 'wizard.reviewOpen' : 'wizard.reviewReady', { count: (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0) })}</Button></span></Tooltip>}</Stack>}
                 </Paper>;              })}            </Stack>
           </Box>
         </Box>
@@ -862,9 +903,47 @@ export default function DevelopmentPage() {
     {view === 'motors' && <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Box sx={{ flex: 1 }}><HelpTip title={tr('motorsTip')} /></Box>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>
       {canEditProject && !!selected.grant_removal_candidates?.length && <Tooltip title={<Stack spacing={0.4}><Typography sx={{ fontSize: 11 }}>{tr('grantReviewTip')}</Typography>{selected.grant_removal_candidates.map((candidate) => <Typography key={`${candidate.email}/${candidate.die}/${candidate.config}`} sx={{ fontSize: 11 }}>{candidate.email} · {candidate.die}/{candidate.config} · {tr(`grantReason.${candidate.reason}`)}</Typography>)}</Stack>}><Alert severity="info" sx={{ mb: 1, py: 0 }}>{tr('grantReviewCount', { count: selected.grant_removal_candidates.length })}</Alert></Tooltip>}
-      {(() => { const visibleMotors = visibleProjectVersions(motors, snapshots, showAllVersions); const rows = developmentComparisonRows(visibleMotors); return <>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><Box sx={{ flex: 1 }} /><FormControlLabel control={<Checkbox size="small" checked={showAllVersions} onChange={(e) => changeShowAllVersions(e.target.checked)} />} label={tr('showAllVersions')} sx={{ '& .MuiFormControlLabel-label': { fontSize: 11 } }} /></Stack>
-        {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={(r) => r.history ? <Stack spacing={0.1}><Stack direction="row" spacing={0.5} alignItems="center"><Tooltip title={[r.motor.author_display_name, r.motor.created_at ? new Date(r.motor.created_at).toLocaleString() : '', r.motor.source ? snapshotSourceLabel(r.motor.source, tr) : ''].filter(Boolean).join(' · ')}><Button size="small" onClick={() => setHistoryDetail(r.motor)}>{tr('snapshots.history')} · {r.variant}</Button></Tooltip>{r.estimate && <Chip size="small" label={tr('comparison.estimate')} />}</Stack></Stack> : <Stack spacing={0.1}><Stack direction="row" spacing={0.5} alignItems="center"><span>{r.variant}</span>{r.estimate && <Chip size="small" label={tr('comparison.estimate')} />}</Stack>{r.motor.note && <Typography data-testid="step-note" sx={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'normal', maxWidth: 240 }}>{r.motor.note}</Typography>}</Stack>} labelHeader={tr('variant')} showAllInputs inputHeaderColor="var(--text-2)" resultHeaderColor="var(--text-2)" enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap' }}>{r.history ? null : <Stack direction="row" spacing={0.5} alignItems="center">{canEditProject && (r.motor.results?.[0]?.duty ?? '') === (r.result.duty ?? '') && <MotorNoteField value={r.motor.note ?? ''} disabled={busy} t={tr} onSave={(note) => changeMotorNote(r.motor, note)} />}<MotorOpenActions motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} projectId={selected.id} showAll={showAllVersions} /><span>{canManageProjectMotors ? <Select size="small" value={r.motor.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(r.motor, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${r.motor.status === 'trial' ? 'trial' : 'current'}`)} />}</span><HelpTip title={tr('motorStatus.tip')} />{canManageProjectMotors && <Button size="small" color="error" disabled={busy} onClick={() => setUnlinkTarget(r.motor)}>{tr('unlink')}</Button>}</Stack>}</Box>} />}
+      {(() => {
+        // ONE group per geometry variant (name + step note once in its header, a colour accent per die), its duties as compact sub-rows;
+        // history snapshots sit under their variant and show only in "All versions" (owner 2026-10-26)
+        const versions = visibleProjectVersions(motors, snapshots, showAllVersions);
+        const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndBest(versions);
+        const rows = developmentComparisonRows(visibleMotors);
+        const rowMotors = rows.map((r) => r.motor);
+        const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 10.5, color: 'var(--text-3)', whiteSpace: 'normal', maxWidth: 520 }}>{m.note}</Typography> : null;
+        const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode) => <Box component="tr"><Box component="td" colSpan={colSpan} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}>{content}</Box></Box>;
+        const groupHeader = (r: (typeof rows)[number], colSpan: number) => {
+          const live = motors.find((m) => variantKey(m) === variantKey(r.motor)) ?? null;
+          const note = live ?? r.motor;
+          return headerRow(colSpan, motorColor(r.motor), false, <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
+            <Box component="span" aria-hidden sx={{ width: 9, height: 9, borderRadius: '50%', flex: '0 0 9px', bgcolor: motorColor(r.motor) }} />
+            <Stack spacing={0.1} sx={{ minWidth: 0, flex: '1 1 260px' }}>
+              <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}</Typography>
+              {stepNote(note)}
+            </Stack>
+            {live && <Stack direction="row" spacing={0.5} alignItems="center">
+              {canEditProject && <MotorNoteField value={live.note ?? ''} disabled={busy} t={tr} onSave={(text) => changeMotorNote(live, text)} />}
+              <span>{canManageProjectMotors ? <Select size="small" value={live.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(live, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${live.status === 'trial' ? 'trial' : 'current'}`)} />}</span>
+              <HelpTip title={tr('motorStatus.tip')} />
+              {canManageProjectMotors && <Tooltip title={tr('unlink')}><span><IconButton size="small" aria-label={tr('unlink')} disabled={busy} onClick={() => setUnlinkTarget(live)} sx={{ color: 'var(--text-3)' }}><DeleteOutlineIcon sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>}
+            </Stack>}
+          </Stack>);
+        };
+        const historyHeader = (r: (typeof rows)[number], colSpan: number) => headerRow(colSpan, motorColor(r.motor), true, <Stack direction="row" alignItems="center" spacing={0.8} flexWrap="wrap" useFlexGap data-testid="history-header">
+          <Chip size="small" variant="outlined" icon={<HistoryIcon sx={{ fontSize: 14 }} />} label={tr('snapshots.history')} sx={{ height: 20, fontSize: 10.5 }} />
+          <Typography sx={{ fontSize: 12, color: 'var(--text-1)' }}>{[r.motor.created_at ? new Date(r.motor.created_at).toLocaleString() : '', r.motor.author_display_name, r.motor.source ? snapshotSourceLabel(r.motor.source, tr) : ''].filter(Boolean).join(' · ')}</Typography>
+          {r.estimate && <Chip size="small" label={tr('comparison.estimate')} />}
+          <Tooltip title={tr('snapshots.details')}><IconButton size="small" aria-label={tr('snapshots.details')} onClick={() => setHistoryDetail(r.motor)} sx={{ color: 'var(--text-3)' }}><InfoOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
+          {stepNote(r.motor)}
+        </Stack>);
+        return <>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><Box sx={{ flex: 1 }} />
+          <Tooltip title={tr('versionView.tip')}><ToggleButtonGroup exclusive size="small" value={showAllVersions ? 'all' : 'latest'} onChange={(_, next: 'latest' | 'all' | null) => { if (next) changeShowAllVersions(next === 'all'); }} aria-label={tr('versionView.label')}>
+            <ToggleButton value="latest" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.latest')}</ToggleButton>
+            <ToggleButton value="all" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.all')}</ToggleButton>
+          </ToggleButtonGroup></Tooltip>
+        </Stack>
+        {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={() => <span />} labelHeader="" rowAccent={(r) => motorColor(r.motor)} renderGroupHeader={(r, index, _all, colSpan) => { const flags = headerFlags(rowMotors, index); return flags.group || flags.history ? <>{flags.group && groupHeader(r, colSpan)}{flags.history && historyHeader(r, colSpan)}</> : null; }} showAllInputs inputHeaderColor="var(--text-2)" resultHeaderColor="var(--text-2)" enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap' }}>{r.history ? null : <MotorOpenActions motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} projectId={selected.id} showAll={showAllVersions} />}</Box>} />}
       </>; })()}
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Paper key={`${m.created_at}-${i}`} sx={{ p: 1, bgcolor: 'var(--panel-2)' }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}

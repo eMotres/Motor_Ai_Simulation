@@ -1,22 +1,31 @@
 import type { DevelopmentSchema, SchemaField } from './types';
 
-export type SpecificationCardId = 'key' | 'requirements' | 'mission' | 'review';
+export type SpecificationCardId = 'key' | 'requirements' | 'construction' | 'mission' | 'review';
 export interface SpecificationField extends SchemaField { storage_namespace?: 'fields' | 'production'; source_section_id?: string }
 export interface SpecificationCard { id: SpecificationCardId; title: string; fields: SpecificationField[]; kind?: string; legacy_ids: string[] }
 
 /** The compact one-page specification (owner 2026-10-24): what closes a motor project first,
  *  everything else in one collapsed "More details" card.  Field ids are never renamed. */
 export const KEY_FIELDS = ['1_1', 'key_points', '2_1', '3_1', '3_2'];
-export const REQUIREMENT_FIELDS = ['1_2', '1_6', '2_4', '2_6', '2_9', '2_3', '3_3', '3_6', '4_1', '4_2', '4_6', '1_8', '6_1', '6_2'];
-/** Shown in the Requirements card under a divider. */
-export const SECOND_TIER_FIELDS = ['4_4', '2_5'];
+export const REQUIREMENT_FIELDS = ['1_2', '1_6', '2_4', '2_6', '2_9', '1_8', '6_1', '6_2'];
+/** The Construction card (owner 2026-10-26): every geometric and mass requirement in one place - size envelope, mass target,
+ *  housing protection, immersion depth (underwater only), mounting, shaft interface, balance / runout and the loads on the
+ *  shaft.  Moved by layout only: the stored values and their field ids are unchanged. */
+export const CONSTRUCTION_FIELDS = ['4_1', '4_2', '3_3', '3_6', '4_3', '4_4', '4_8', '4_6'];
+/** No second tier any more: the power devices (2_5) are a property of the controller (catalogue or controller definition),
+ *  no longer asked in the specification, and the shaft interface (4_4) moved to the Construction card. */
+export const SECOND_TIER_FIELDS: string[] = [];
+/** Asked no more (owner 2026-10-26; the stored values stay readable): the battery current (2_3) is computed from the
+ *  simulation and shown in the report; the power devices (2_5) belong to the controller. */
+export const RETIRED_FIELDS = ['2_3', '2_5'];
 export const MORE_FIRST_FIELDS = ['additional_requirements', '1_3', '1_7', '2_7'];
 /** Rendered together by LoadSection inside "More details". */
 export const LOAD_FIELDS = ['load_type', 'load_source', 'load_inertia_kg_m2', 'startup_mode', 'load_characteristic'];
 
 const CARDS: Array<{ id: SpecificationCardId; title: string; legacy_ids: string[] }> = [
   { id: 'key', title: 'wizard.keyData', legacy_ids: ['application', 'continuous', 'electrical', 'cooling', 'load', 'more'] },
-  { id: 'requirements', title: 'wizard.requirements', legacy_ids: ['mechanical', 'delivery'] },
+  { id: 'requirements', title: 'wizard.requirements', legacy_ids: ['delivery'] },
+  { id: 'construction', title: 'wizard.construction', legacy_ids: ['mechanical'] },
   { id: 'mission', title: 'wizard.mission', legacy_ids: [] },
   { id: 'review', title: 'wizard.review', legacy_ids: [] },
 ];
@@ -28,11 +37,12 @@ function cardFor(field: SchemaField, namespace: 'fields' | 'production'): Specif
   if (namespace === 'production') return null;
   if (field.id === 'mission_profile') return 'mission';
   if (KEY_FIELDS.includes(field.id) || field.id === 'load_type') return 'key';
+  if (CONSTRUCTION_FIELDS.includes(field.id)) return 'construction';
   if (REQUIREMENT_FIELDS.includes(field.id) || SECOND_TIER_FIELDS.includes(field.id)) return 'requirements';
   return null;
 }
 
-const ORDER = [...KEY_FIELDS, ...REQUIREMENT_FIELDS, ...SECOND_TIER_FIELDS, 'mission_profile', ...MORE_FIRST_FIELDS, ...LOAD_FIELDS];
+const ORDER = [...KEY_FIELDS, ...REQUIREMENT_FIELDS, ...SECOND_TIER_FIELDS, ...CONSTRUCTION_FIELDS, 'mission_profile', ...MORE_FIRST_FIELDS, ...LOAD_FIELDS];
 const rank = (field: SpecificationField, schemaIndex: number) => {
   if (field.storage_namespace === 'production') return 10_000 + schemaIndex;
   const listed = ORDER.indexOf(field.id);

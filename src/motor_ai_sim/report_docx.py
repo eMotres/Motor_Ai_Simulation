@@ -943,6 +943,21 @@ def _comparisons(doc, D: Dict[str, Any]) -> None:
     if D["brg"] and D["brg"].get("has_bearings"):
         _p(doc, R.EM_BEARING_NOTE, size=9.5, italic=True, color=NOTE)
 
+    # BATTERY CURRENT per duty, from the simulation (owner 2026-10-26): the pack is sized from it, not from the specification
+    _h(doc, "Battery current", 2)
+    header, rows, _bnotes = R.battery_current_rows(cols, D["batt"])
+    _cmp_table(doc, header, cols, rows)
+    _bsum = R.battery_current_summary(cols, D["batt"])
+    if _bsum["levels"]:
+        _p(doc, "; ".join("%s: %s" % (r["label"], ", ".join("%s V %s" % (R._fmt(v, 1), R._fmt(i, 1)) for (_l, v), i in zip(_bsum["levels"], r["values"])))
+                          for r in _bsum["rows"]), size=9)
+    for _n in _bnotes:
+        if _n.lower().startswith("controller losses"):
+            _p(doc, "%s %s." % (R.FLAG, _n), size=9, bold=True, color=WARN)
+        else:
+            _p(doc, _n, size=9.5, italic=True, color=NOTE)
+    _p(doc, R.BATTERY_CURRENT_NOTE, size=9.5, italic=True, color=NOTE)
+
     _h(doc, "Thermal", 2)
     header, rows = R.thermal_compare_rows(cols)
     _cmp_table(doc, header, cols, rows)

@@ -22,6 +22,7 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import DeviceCatalog from './DeviceCatalog';
+import ControllerProducts from './ControllerProducts';
 import LocalCompareTable from '../common/LocalCompareTable';
 import { MAX_LOCAL_ROWS, normalizeLocalRows } from '../compare/resultRows';
 import type { LocalRow } from '../compare/resultRows';
@@ -1085,6 +1086,11 @@ const ControllerPanel: React.FC = () => {
         <DeviceCatalog devices={devices} selected={device} onSelect={setDevice}
           onChanged={setDevices} parallel={nPar} onParallel={setNPar}
           switchCurrent={switchCurrent} />
+      </Box>
+
+      {/* ── complete commercial controllers (read-only) ── */}
+      <Box sx={{ mt: 2 }}>
+        <ControllerProducts />
       </Box>
 
     </Box>

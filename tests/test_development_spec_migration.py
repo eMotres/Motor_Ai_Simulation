@@ -87,7 +87,7 @@ def test_schema_v2_has_localized_short_labels_and_rejects_unknown_choices_and_du
     assert all(set(field["label"]) >= {"en", "zh-CN"} for field in fields)
     assert all(set(field["short_label"]) >= {"en", "zh-CN"} for field in fields)
     assert not any("???" in label for field in fields for label in field["label"].values())
-    assert all(max(map(len, field["short_label"].values())) <= 36 for field in fields)
+    assert all(max(map(len, field["short_label"].values())) <= 42 for field in fields)  # 42: "Max torque ripple at continuous operation" (owner 2026-10-26)
     with pytest.raises(ValueError, match="unsupported choice"):
         models.normalize_draft({"fields": {"load_type": {"status": "filled", "value": "invented_load"}}}, schema_version=2)
     row = {"row_id": "stable-1", "phase": "cruise", "torque_Nm": 0, "speed_rpm": 0,
@@ -133,11 +133,11 @@ def test_catalog_mission_provenance_rejects_negative_or_boolean_ranges_and_direc
     row.pop("conditions")
     draft = models.normalize_draft({"mission_profile": [row]}, schema_version=2)
     assert models.completeness(draft)["invalid"] == 1
-    assert models.completeness(draft)["answered"] == 0
+    assert models.completeness(draft)["answered"] == 1  # only the pre-filled prototypes (default 1); the mission stays invalid
     assert any(error["field"].endswith("direct_drive_confirmed") for error in models.validation_errors(draft))
     row["direct_drive_confirmed"] = True
     reviewed = models.normalize_draft({"mission_profile": [row]}, schema_version=2)
-    assert models.completeness(reviewed)["answered"] == 1
+    assert models.completeness(reviewed)["answered"] == 2  # the mission + the pre-filled prototypes
     assert not any(error["field"].endswith("direct_drive_confirmed") for error in models.validation_errors(reviewed))
 
 

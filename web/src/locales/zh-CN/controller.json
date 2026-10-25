@@ -842,5 +842,53 @@
       "tWinding": "绕组温度，°C",
       "tMagnet": "磁钢温度，°C"
     }
+  },
+  "controllers": {
+    "title": "控制器",
+    "tip": "完整的商用电机控制器。每个数值均为制造商文件所给出的值，页码见提示；文件未给出的值保持为空。规格从此列表中选择控制器。",
+    "empty": "目录中暂无控制器。",
+    "unknown": "未知",
+    "min": "最低",
+    "nominal": "标称",
+    "max": "最高",
+    "absMax": "绝对最高",
+    "page": "第 {page} 页",
+    "basis": {
+      "stated": "原文给出",
+      "derived": "推算",
+      "figure": "由图读取",
+      "inferred": "推断"
+    },
+    "col": {
+      "brand": "品牌",
+      "model": "型号",
+      "revision": "版本",
+      "supplyMax": "最高供电",
+      "continuous": "持续",
+      "peak": "峰值",
+      "peakTime": "峰值时间",
+      "switching": "开关频率",
+      "devices": "功率器件",
+      "sensors": "位置传感器",
+      "mass": "质量"
+    },
+    "detail": {
+      "manufacturer": "制造商",
+      "supply": "供电电压",
+      "dcCurrent": "直流输入电流",
+      "continuous": "持续相电流",
+      "peak": "峰值相电流",
+      "peakTime": "峰值持续时间",
+      "switching": "开关频率",
+      "devices": "功率器件",
+      "sensors": "位置传感器",
+      "communication": "通信",
+      "cooling": "冷却",
+      "dimensions": "尺寸",
+      "mass": "质量",
+      "protection": "防护等级",
+      "source": "来源文件",
+      "notes": "备注"
+    }
   }
 }

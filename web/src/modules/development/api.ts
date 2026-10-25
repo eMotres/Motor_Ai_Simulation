@@ -1,3 +1,4 @@
+import type { CatalogController } from './controllerCatalog';
 import type { DevelopmentSchema, MotorPointsAnswer, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -27,6 +28,11 @@ export const developmentApi = {
     const data = await call<{ projects?: ProjectSummary[] } | null>('GET', '/api/projects');
     if (!data || !Array.isArray(data.projects)) throw new DevelopmentApiError(0, 'No answer from the AeroStator server - reconnecting', data);
     return data.projects;
+  },
+  /** The catalogue of complete commercial controllers (read-only reference data). */
+  controllerCatalog: async () => {
+    const data = await call<{ controllers?: CatalogController[] } | null>('GET', '/api/controllers/catalog');
+    return Array.isArray(data?.controllers) ? data!.controllers! : [];
   },
   schema: (version?: number) => call<DevelopmentSchema>('GET', `/api/projects/schema${version ? `?version=${version}` : ''}`),
   create: (v: { id: string; title: string; customer_org: string; owner_engineer?: string }) => call<ProjectSummary>('POST', '/api/projects', v),

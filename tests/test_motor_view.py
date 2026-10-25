@@ -496,3 +496,86 @@ def test_e_a_record_of_another_geometry_is_stale():
     assert w["geometry_status"] == "match" and w["stale"] is False
     del stored["peak"]["coupled"]["geometry_fingerprint_v2"]
     assert motor_view.worst_case_rotor_stress(stored)["geometry_status"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# (f) the S1 limit search has its own kind; nothing is silently replaced
+# ---------------------------------------------------------------------------
+
+def _coupled_out(coil, at, solve_to=None, mode=None, **blocks):
+    c = {"drive": "sine", "iterations": 3, "converged": True, "coil_temp_c": coil, "magnet_temp_c": coil / 2, **blocks}
+    if solve_to:
+        c["solve_to"] = solve_to
+    if mode:
+        c["mode"] = mode
+    return {"computed_at": at, "geometry_fingerprint": "fp1", "coupling": c}
+
+
+S1 = {"ok": True, "I_cont_A_rms": 30.0, "limiting_part": "winding"}
+TTL = {"time_to_limit_s": 90.0, "limiting_part": "winding"}
+
+
+def test_f_a_limit_search_never_overwrites_the_point_result(sandbox):
+    dr.note_coupled(_coupled_out(128.5, "2026-10-24T10:00:00"))                                    # the cruise point
+    dr.note_coupled(_coupled_out(179.6, "2026-10-25T10:00:00", solve_to="continuous", mode="limited",
+                                 continuous_rating=S1, time_to_limit=TTL))                         # the S1 search
+    rows = dr.get(DIE, CFG)[DUTY]
+    assert rows["coupled"]["coil_temp_c"] == 128.5 and rows["coupled_limit"]["coil_temp_c"] == 179.6
+    assert rows["coupled_limit"]["solve_to"] == "continuous"
+    # the rating and the time ride on the point record for the readers that only know `coupled` - temperatures untouched
+    assert rows["coupled"]["continuous_rating"]["I_cont_A_rms"] == 30.0 and rows["coupled"]["time_to_limit"]["time_to_limit_s"] == 90.0
+    assert rows["coupled"]["limit_blocks_from"]["kind"] == "coupled_limit"
+    assert "coupled_limit" in dr.kinds_present(rows)
+    view = motor_view.thermal_block(rows)
+    assert view["duty_temps"]["winding_c"] == 128.5 and view["duty_temps"]["kind"] == "coupled"
+    assert view["limit_search"]["winding_c"] == 179.6 and view["limit_search"]["kind"] == "coupled_limit"
+    assert view["s1"]["I_cont_A_rms"] == 30.0 and view["s2"]["time_to_limit_s"] == 90.0
+
+
+def test_f_a_limit_search_alone_is_mirrored_for_old_readers_and_a_point_run_then_replaces_only_the_mirror(sandbox):
+    dr.note_coupled(_coupled_out(179.6, "2026-10-25T10:00:00", solve_to="limits", mode="limited"))
+    rows = dr.get(DIE, CFG)[DUTY]
+    assert rows["coupled"]["coil_temp_c"] == 179.6 and rows["coupled_limit"]["coil_temp_c"] == 179.6
+    dr.note_coupled(_coupled_out(128.5, "2026-10-26T10:00:00"))
+    rows = dr.get(DIE, CFG)[DUTY]
+    assert rows["coupled"]["coil_temp_c"] == 128.5 and rows["coupled_limit"]["coil_temp_c"] == 179.6
+    assert [h["coil_temp_c"] for h in dr.history(DIE, CFG, DUTY, "coupled")] == [179.6]       # the replaced row is kept
+
+
+def test_f_old_stores_read_compatibly(sandbox):
+    """An old `coupled` row that IS a limit search (no coupled_limit kind yet) reads as the limit search, not as a temperature."""
+    rows = {"coupled": {"computed_at": "2026-10-25T10:00:00", "coil_temp_c": 179.6, "solve_to": "continuous", "mode": "limited"}}
+    t = motor_view.thermal_block(rows)
+    assert "duty_temps" not in t and t["limit_search"]["kind"] == "coupled" and t["limit_search"]["winding_c"] == 179.6
+
+
+def test_f_record_keeps_a_short_history_of_every_replaced_result(sandbox):
+    for n in range(7):
+        dr.record(DIE, CFG, DUTY, "thermal", {"computed_at": f"2026-10-2{n}T10:00:00", "T_max": 100.0 + n})
+    dr.record(DIE, CFG, DUTY, "thermal", {"computed_at": "2026-10-26T10:00:00", "T_max": 106.0})   # the same run filed again
+    assert dr.get(DIE, CFG)[DUTY]["thermal"]["T_max"] == 106.0
+    h = dr.history(DIE, CFG, DUTY, "thermal")
+    assert [x["T_max"] for x in h] == [105.0, 104.0, 103.0, 102.0] and len(h) == dr.HISTORY_MAX
+    # a pointer kind rebuilt on every save keeps none
+    dr.record(DIE, CFG, DUTY, "em", {"saved_at": "a"})
+    dr.record(DIE, CFG, DUTY, "em", {"saved_at": "b"})
+    assert dr.history(DIE, CFG, DUTY, "em") == []
+
+
+def test_f_history_follows_a_renamed_duty_and_goes_with_a_forgotten_one(sandbox):
+    dr.record(DIE, CFG, DUTY, "thermal", {"computed_at": "2026-10-24T10:00:00", "T_max": 1.0})
+    dr.record(DIE, CFG, DUTY, "thermal", {"computed_at": "2026-10-25T10:00:00", "T_max": 2.0})
+    assert dr.rename(DIE, CFG, DUTY, "renamed")
+    assert dr.history(DIE, CFG, "renamed", "thermal")[0]["T_max"] == 1.0 and dr.history(DIE, CFG, DUTY, "thermal") == []
+    assert dr.forget(DIE, CFG, "renamed")
+    assert dr.history(DIE, CFG, "renamed", "thermal") == []
+
+
+def test_f_a_suppressed_limit_search_files_nothing(sandbox):
+    from motor_ai_sim import run_recording as rr
+    token = rr.suppress()
+    try:
+        dr.note_coupled(_coupled_out(179.6, "2026-10-25T10:00:00", solve_to="continuous", mode="limited"))
+    finally:
+        rr.restore(token)
+    assert dr.get(DIE, CFG) == {}

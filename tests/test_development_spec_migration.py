@@ -296,7 +296,7 @@ def test_legacy_draft_flush_keeps_v1_ranges_and_rejects_schema_bypass(tmp_path, 
 
 def test_customer_roundtrip_preserves_private_migration_provenance(tmp_path, monkeypatch):
     monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
-    current = {"email": "customer@example.test", "role": "user"}
+    current = {"email": "eng@example.test", "role": "user"}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)
     import motor_ai_sim.users as users
     monkeypatch.setattr(users, "get_user", lambda email: {"email_verified": True})

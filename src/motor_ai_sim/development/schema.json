@@ -70,6 +70,85 @@
           "presentation_group": "1"
         },
         {
+          "id": "key_points",
+          "checklist_id": "1.4",
+          "label": {
+            "en": "Key operating points",
+            "zh-CN": "关键工作点"
+          },
+          "type": "array",
+          "unit": "",
+          "required": true,
+          "allow_not_known_yet": true,
+          "items": {
+            "type": "object",
+            "properties": [
+              {
+                "id": "name",
+                "type": "string",
+                "required": true,
+                "label": {
+                  "en": "Point",
+                  "zh-CN": "工作点"
+                }
+              },
+              {
+                "id": "torque_Nm",
+                "type": "number",
+                "unit": "N·m",
+                "required": true,
+                "label": {
+                  "en": "Torque",
+                  "zh-CN": "转矩"
+                }
+              },
+              {
+                "id": "speed_rpm",
+                "type": "number",
+                "unit": "rpm",
+                "min": 0,
+                "required": true,
+                "label": {
+                  "en": "Speed",
+                  "zh-CN": "转速"
+                }
+              },
+              {
+                "id": "duration_s",
+                "type": "number",
+                "unit": "s",
+                "min": 0,
+                "required": true,
+                "continuous_value": "continuous",
+                "label": {
+                  "en": "Duration",
+                  "zh-CN": "持续时间"
+                }
+              },
+              {
+                "id": "voltage_V",
+                "type": "number",
+                "unit": "V",
+                "min": 0,
+                "required": false,
+                "label": {
+                  "en": "DC voltage",
+                  "zh-CN": "直流电压"
+                }
+              }
+            ]
+          },
+          "short_label": {
+            "en": "Key operating points",
+            "zh-CN": "关键工作点"
+          },
+          "help": {
+            "en": "Any number of named points (takeoff, cruise, landing, peak ...), each with torque, speed and duration: continuous or seconds. The DC voltage is optional. The longest-running point is the continuous (S1) point and the highest-torque point is the peak point.",
+            "zh-CN": "可添加任意数量的命名工作点（起飞、巡航、着陆、峰值等），每个点包含转矩、转速和持续时间（连续或秒数），直流电压可选。持续时间最长的点为连续（S1）工作点，转矩最高的点为峰值工作点。"
+          },
+          "presentation_group": "continuous"
+        },
+        {
           "id": "1_4",
           "checklist_id": "1.4",
           "label": {
@@ -78,7 +157,7 @@
           },
           "type": "object",
           "unit": "",
-          "required": true,
+          "required": false,
           "required_any": [
             [
               "torque_Nm",
@@ -2627,6 +2706,7 @@
       "id": "continuous",
       "order": 2,
       "fields": [
+        "key_points",
         "1_4",
         "1_5",
         "1_6"

@@ -18,6 +18,8 @@ import {
   LinearProgress, MenuItem, Select, Slider, Switch, ToggleButton,
   ToggleButtonGroup, Typography,
 } from '@mui/material';
+import { oneOf } from '../../lib/viewMemory';
+import { useRememberedView } from '../../lib/useRememberedView';
 import HelpTip from '../common/HelpTip';
 import { N_BANDS, bandColor } from '../simulation/fieldView';
 import Viewcube from '../viewer3d/Viewcube';
@@ -70,7 +72,7 @@ const ColorBar: React.FC<{ vmin: number; vmax: number; unit: string; note: strin
 };
 
 const Static3DPanel: React.FC = () => {
-  const [panel, setPanel] = useState<Panel>('geometry');
+  const [panel, setPanel] = useRememberedView<Panel>('static3d.panel', 'geometry', oneOf(['geometry', 'mesh', 'fields'] as const));
   const [fidelity, setFidelity] = useState<string>('coarse');
   const [nonlinear, setNonlinear] = useState(true);
   const [quantity, setQuantity] = useState<'Bmag' | 'demag'>('Bmag');

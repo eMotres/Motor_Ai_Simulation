@@ -93,6 +93,8 @@ export function semanticSpecificationDiff(before: unknown, after: unknown, schem
       const ids = new Set([...rightFields.keys(), ...leftFields.keys(), ...Object.keys(left), ...Object.keys(right)]);
     for (const fieldId of ids) {
       if (INTERNAL.has(fieldId)) continue;
+      // the S1 (1_4) and peak (1_5) points are derived from the key points once those exist: only the key points are listed
+      if (namespace === 'fields' && (fieldId === '1_4' || fieldId === '1_5') && ('key_points' in left || 'key_points' in right)) continue;
       const field = rightFields.get(fieldId) ?? leftFields.get(fieldId);
       const metadata = fieldId === 'load_characteristic' || field?.id === 'load_characteristic';
       const x = flattenField(left[fieldId], fieldId, metadata);

@@ -61,12 +61,11 @@ const phText = (key: string, raw: string, chem: string | null): string => {
 const Tile: React.FC<{ label: string; value: string; unit?: string;
                        color?: string; title?: string; sub?: string }> =
 ({ label, value, unit, color, title, sub }) => (
-  <Box sx={{ ...PANEL, p: 0.9, flex: '0 1 auto', minWidth: 108, maxWidth: 178 }} title={title}>
+  <Box sx={{ ...PANEL, p: 0.9, flex: '0 1 auto', minWidth: 108, maxWidth: 178 }} title={[title, sub].filter(Boolean).join('\n') || undefined}>
     <Typography sx={{ ...LABEL, fontSize: 9.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
     <Typography sx={{ fontSize: 16, fontWeight: 800, color: color ?? 'var(--text-0)', fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
       {value}<Box component="span" sx={{ fontSize: 10.5, color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>
     </Typography>
-    {sub ? <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', whiteSpace: 'nowrap' }}>{sub}</Typography> : null}
   </Box>
 );
 
@@ -90,11 +89,8 @@ const ChargePanel: React.FC<{
   return (
     <Box sx={{ ...PANEL, p: 1.5 }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.boostCharging')}</Typography>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}
-          title={tx('configure.shaftToPackTip', { cells: pack.cells, rint: pack.r_int_mohm, np: pack.n_parallel, rpack: (pack.R_pack_ohm * 1000).toFixed(2) })}>
-          {tx('configure.shaftToPack')}
-        </Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}
+          title={`${tx('configure.shaftToPack')}. ${tx('configure.shaftToPackTip', { cells: pack.cells, rint: pack.r_int_mohm, np: pack.n_parallel, rpack: (pack.R_pack_ohm * 1000).toFixed(2) })}`}>{tx('configure.boostCharging')}</Typography>
         <Box sx={{ flex: 1 }} />
         {best.charge && best.I_A != null && (
           <Chip size="small" clickable={!!onPickCurrent}
@@ -141,11 +137,7 @@ const ChargePanel: React.FC<{
       {SHOW_CONFIGURE_CHARTS && chartData.length > 1 && (
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-            <Typography sx={{ ...LABEL }}>{tx('configure.chargeMapTitle')}</Typography>
-            <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}
-              title={tx('configure.chargeMapTip')}>
-              {tx('configure.chargeMapSub')}
-            </Typography>
+            <Typography sx={{ ...LABEL }} title={`${tx('configure.chargeMapSub')}. ${tx('configure.chargeMapTip')}`}>{tx('configure.chargeMapTitle')}</Typography>
           </Box>
           <ResponsiveContainer width="100%" height={190}>
             <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>

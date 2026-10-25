@@ -49,7 +49,8 @@ def normalize_draft(value: Any, *, schema_version: int | None = None) -> dict:
             raise ValueError(f"unknown field: {field_id}")
         if known[field_id][0]["id"] == "production":
             raise ValueError(f"production field must be placed under production: {field_id}")
-        normalized_answer = _normalize_answer(answer, known[field_id][1], field_id)
+        normalized_answer = (_normalize_key_points(answer) if field_id == "key_points" and version == 2
+                             else _normalize_answer(answer, known[field_id][1], field_id))
         if version == 2 and field_id == "1_4" and normalized_answer.get("status") == "filled":
             point = normalized_answer.get("value") or {}
             torque, speed = point.get("torque_Nm"), point.get("speed_rpm")
@@ -68,6 +69,7 @@ def normalize_draft(value: Any, *, schema_version: int | None = None) -> dict:
                 raise ValueError(f"{field_id}: unsupported choice")
         out["fields"][field_id] = normalized_answer
     if version == 2:
+        _apply_key_point_derivation(out["fields"])
         load_answer = out["fields"].get("load_characteristic", {})
         if load_answer.get("status") == "filled":
             _validate_load_characteristic(load_answer.get("value") or {}, out["fields"])
@@ -515,6 +517,246 @@ def cooling_load_errors(draft: dict) -> list[dict]:
     return errors
 
 
+# --- Key operating points (owner 2026-10-26) ----------------------------------------------------------------
+# A motor has several key points, not just continuous + peak: takeoff, cruise, landing, peak ... (free names).  Each
+# row: name, torque, speed, duration ("continuous" or seconds > 0) and an optional DC voltage.  The stored list is the
+# source of truth; the S1 point (1_4) and the peak point (1_5) that the rest of the system reads are DERIVED from it on
+# every save (continuous = the longest-running point, peak = the highest-torque point), so nothing downstream breaks.
+# A project that holds only 1_4 / 1_5 stays valid untouched and reads as two points until a key point is edited.
+KEY_POINTS_FIELD = "key_points"
+CONTINUOUS = "continuous"
+MAX_KEY_POINTS = 50
+_KEY_POINT_KEYS = ("row_id", "name", "torque_Nm", "speed_rpm", "duration_s", "voltage_V")
+
+
+def _key_point_number(value: Any, path: str, minimum: float | None = None) -> Any:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{path}: finite number required")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{path}: value outside allowed range")
+    return value
+
+
+def _normalize_key_points(answer: Any) -> dict:
+    if not isinstance(answer, dict) or "status" not in answer:
+        answer = {"value": answer, "status": "filled"}
+    if set(answer) - {"value", "status"}:
+        raise ValueError("key_points: unsupported answer keys")
+    status = answer.get("status")
+    if status not in ("filled", "not_known_yet", "missing"):
+        raise ValueError("key_points: invalid status")
+    rows = answer.get("value")
+    if rows is None:
+        if status == "filled":
+            raise ValueError("key_points: value required")
+        return {"value": None, "status": status}
+    if not isinstance(rows, list):
+        raise ValueError("key_points: array required")
+    if len(rows) > MAX_KEY_POINTS:
+        raise ValueError(f"key_points: at most {MAX_KEY_POINTS} points")
+    out, seen = [], set()
+    for i, row in enumerate(rows):
+        path = f"key_points[{i}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}: object required")
+        extra = set(row) - set(_KEY_POINT_KEYS)
+        if extra:
+            raise ValueError(f"{path}: unknown properties: {', '.join(sorted(extra))}")
+        name = row.get("name")
+        if name is not None and not isinstance(name, str):
+            raise ValueError(f"{path}.name: text required")
+        name = (name or "").strip() or None
+        if name is not None and len(name) > 80:
+            raise ValueError(f"{path}.name: at most 80 characters")
+        duration = row.get("duration_s")
+        if isinstance(duration, str):
+            if duration.strip().lower() == CONTINUOUS:
+                duration = CONTINUOUS
+            elif not duration.strip():
+                duration = None
+            else:
+                raise ValueError(f"{path}.duration_s: continuous or a number of seconds")
+        else:
+            duration = _key_point_number(duration, f"{path}.duration_s", 0)
+        item = {"name": name, "torque_Nm": _key_point_number(row.get("torque_Nm"), f"{path}.torque_Nm"),
+                "speed_rpm": _key_point_number(row.get("speed_rpm"), f"{path}.speed_rpm", 0),
+                "duration_s": duration, "voltage_V": _key_point_number(row.get("voltage_V"), f"{path}.voltage_V", 0)}
+        row_id = row.get("row_id")
+        if row_id is not None and (not isinstance(row_id, str) or not row_id.strip() or len(row_id) > 128):
+            raise ValueError(f"{path}.row_id must contain 1 to 128 characters")
+        if not row_id:
+            import uuid
+            row_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"dev-key-point:{i}:{json.dumps(item, sort_keys=True, separators=(',', ':'))}"))
+        if row_id in seen:
+            raise ValueError(f"{path}.row_id must be unique")
+        seen.add(row_id)
+        out.append({"row_id": row_id, **item})
+    if not out:
+        return {"value": [], "status": "missing" if status == "filled" else status}
+    return {"value": out, "status": status}
+
+
+def key_point_row_errors(row: dict, index: int) -> list[dict]:
+    """Loud validation of one key point: a name, torque and speed, and a duration that is continuous or seconds > 0."""
+    base = f"key_points[{index}]"
+    errors = []
+
+    def missing(prop: str, message: str = "Required value is missing"):
+        errors.append({"field": f"{base}.{prop}", "section": "1", "message": message})
+    if not isinstance(row.get("name"), str) or not row["name"].strip():
+        missing("name")
+    for prop in ("torque_Nm", "speed_rpm"):
+        value = row.get(prop)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            missing(prop)
+    duration = row.get("duration_s")
+    if duration is None or duration == "":
+        missing("duration_s")
+    elif duration != CONTINUOUS and (isinstance(duration, bool) or not isinstance(duration, (int, float))
+                                     or not math.isfinite(duration) or duration <= 0):
+        missing("duration_s", "Duration must be continuous or more than 0 s")
+    return errors
+
+
+def key_points_stored(draft: dict) -> bool:
+    """A key points list (or an explicit "not known yet") is stored: it is then the source of truth, even when the list
+    is empty.  A bare placeholder without a list (nothing typed yet) leaves the legacy S1 / peak in charge."""
+    answer = (draft.get("fields") or {}).get(KEY_POINTS_FIELD)
+    return isinstance(answer, dict) and (answer.get("status") == "not_known_yet" or isinstance(answer.get("value"), list))
+
+
+def _worst_number(value: Any) -> float | None:
+    """A plain number, or the maximum of a range stored before the one-value rule."""
+    if isinstance(value, dict):
+        value = value.get("maximum")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return value
+
+
+def legacy_key_points(fields: dict) -> list[dict]:
+    """A project that holds only the S1 point (1_4) and the peak point (1_5) reads as those two key points."""
+    rows = []
+    for fid, name, row_id in (("1_4", "Continuous", "legacy-s1"), ("1_5", "Peak", "legacy-peak")):
+        answer = fields.get(fid)
+        value = answer.get("value") if isinstance(answer, dict) else None
+        if not isinstance(value, dict) or (isinstance(answer, dict) and answer.get("status") == "not_known_yet"):
+            continue
+        torque, speed = _worst_number(value.get("torque_Nm")), _worst_number(value.get("speed_rpm"))
+        if torque is None and speed is None:
+            continue
+        duration = CONTINUOUS if fid == "1_4" else _worst_number(value.get("duration_s"))
+        rows.append({"row_id": row_id, "name": name, "torque_Nm": torque, "speed_rpm": speed,
+                     "duration_s": duration, "voltage_V": None})
+    return rows
+
+
+def key_points_effective(draft: dict) -> list[dict]:
+    """The key points of a draft: the stored list, or the two legacy points while nothing is stored."""
+    fields = draft.get("fields") or {}
+    answer = fields.get(KEY_POINTS_FIELD)
+    if isinstance(answer, dict):
+        rows = answer.get("value")
+        return [dict(row) for row in rows] if isinstance(rows, list) else []
+    return legacy_key_points(fields)
+
+
+def _usable_point(row: dict) -> bool:
+    return not key_point_row_errors(row, 0)
+
+
+def derive_continuous_peak(rows: list[dict]) -> tuple[dict | None, dict | None]:
+    """Deterministic S1 / peak choice (the design wizard reads these two).
+    Continuous = a point with duration "continuous" (the highest torque among several), else the longest-duration
+    point.  Peak = the highest-torque point other than the continuous one, only if it exceeds the continuous torque.
+    Ties: higher torque, then higher speed, then the earlier row."""
+    usable = [(i, row) for i, row in enumerate(rows) if _usable_point(row)]
+    if not usable:
+        return None, None
+    continuous = [(i, row) for i, row in usable if row["duration_s"] == CONTINUOUS]
+    if continuous:
+        pick = max(continuous, key=lambda ir: (abs(ir[1]["torque_Nm"]), ir[1]["speed_rpm"], -ir[0]))
+    else:
+        pick = max(usable, key=lambda ir: (ir[1]["duration_s"], abs(ir[1]["torque_Nm"]), ir[1]["speed_rpm"], -ir[0]))
+    others = [(i, row) for i, row in usable if i != pick[0]]
+    peak = max(others, key=lambda ir: (abs(ir[1]["torque_Nm"]), ir[1]["speed_rpm"], -ir[0]), default=None)
+    if peak is not None and abs(peak[1]["torque_Nm"]) <= abs(pick[1]["torque_Nm"]):
+        peak = None
+    return pick[1], (peak[1] if peak else None)
+
+
+def _shaft_power(torque: float, rpm: float) -> float:
+    return torque * 2 * math.pi * rpm / 60
+
+
+def _apply_key_point_derivation(fields: dict) -> None:
+    """Keep 1_4 (S1) and 1_5 (peak) in step with the stored key points.  Nothing is cleared while no usable point
+    exists (a half-typed list never wipes the old values); frequency / repeat period of the peak are kept."""
+    answer = fields.get(KEY_POINTS_FIELD)
+    if not isinstance(answer, dict):
+        return
+    if answer.get("status") == "not_known_yet":
+        old = fields.get("1_4") if isinstance(fields.get("1_4"), dict) else {}
+        fields["1_4"] = {"value": old.get("value"), "status": "not_known_yet"}
+        return
+    continuous, peak = derive_continuous_peak(answer.get("value") or [])
+    if continuous is None:
+        return
+    fields["1_4"] = {"value": {"torque_Nm": continuous["torque_Nm"], "speed_rpm": continuous["speed_rpm"],
+                               "shaft_power_W": _shaft_power(continuous["torque_Nm"], continuous["speed_rpm"])},
+                     "status": "filled"}
+    old_peak = fields.get("1_5").get("value") if isinstance(fields.get("1_5"), dict) else None
+    kept = {k: v for k, v in (old_peak or {}).items() if k in ("frequency", "period_s") and v not in (None, "")}
+    if peak is None:
+        fields["1_5"] = {"value": kept or None, "status": "missing"}
+        return
+    point = {"torque_Nm": peak["torque_Nm"], "speed_rpm": peak["speed_rpm"],
+             "output_power_W": abs(_shaft_power(peak["torque_Nm"], peak["speed_rpm"]))}
+    if peak["duration_s"] != CONTINUOUS:
+        point["duration_s"] = peak["duration_s"]
+    fields["1_5"] = {"value": {**point, **kept}, "status": "filled"}
+
+
+def key_points_slot_status(draft: dict) -> str:
+    fields = draft.get("fields") or {}
+    answer = fields.get(KEY_POINTS_FIELD if key_points_stored(draft) else "1_4")
+    return answer.get("status", "missing") if isinstance(answer, dict) else "missing"
+
+
+def key_points_slot_complete(draft: dict) -> bool:
+    """The required "key operating points" slot: valid stored points, or "not known yet", or (while nothing is stored)
+    a complete legacy S1 point."""
+    fields = draft.get("fields") or {}
+    if not key_points_stored(draft):
+        field = _field_map(2)["1_4"][1]
+        return _answer_complete(fields.get("1_4", {}), field)
+    answer = fields[KEY_POINTS_FIELD]
+    if answer.get("status") == "not_known_yet":
+        return True
+    rows = answer.get("value")
+    if answer.get("status") != "filled" or not isinstance(rows, list) or not rows:
+        return False
+    return not any(key_point_row_errors(row, i) for i, row in enumerate(rows))
+
+
+def key_point_errors(draft: dict) -> list[dict]:
+    """Submit errors of the key points slot (rows judged loudly; nothing stored = the legacy S1 rules apply)."""
+    if not key_points_stored(draft):
+        return []
+    answer = draft["fields"][KEY_POINTS_FIELD]
+    if answer.get("status") == "not_known_yet":
+        return []
+    rows = answer.get("value")
+    if not isinstance(rows, list) or not rows:
+        return [{"field": KEY_POINTS_FIELD, "section": "1", "message": "Add at least one key operating point or mark not known yet"}]
+    errors = []
+    for i, row in enumerate(rows):
+        errors.extend(key_point_row_errors(row, i))
+    return errors
+
+
 def completeness(draft: dict) -> dict:
     schema_version = int(draft.get("schema_version", 1))
     active_schema = schema(schema_version)
@@ -541,7 +783,10 @@ def completeness(draft: dict) -> dict:
                     valid = _answer_complete(answer, section_fields[section_id][field_id])
                 if field_id == "3_1" and valid and cooling_load_errors(draft):
                     valid = False
+                if field_id == "key_points" and schema_version == 2:
+                    valid = key_points_slot_complete(draft)
             status = (draft.get("mission_profile_status", "missing") if section_id == "mission_profile"
+                      else key_points_slot_status(draft) if field_id == "key_points"
                       else (draft.get("production", {}) if section_id == "production" else draft.get("fields", {})).get(field_id, {}).get("status", "missing"))
             if valid and status != "not_known_yet":
                 section_filled += 1
@@ -569,9 +814,13 @@ def validation_errors(draft: dict) -> list[dict]:
     for section in schema(int(draft.get("schema_version", 1)))["sections"]:
         sid = section["id"]
         for field in section["fields"]:
-            if not (field.get("required") or _conditional_required(field, draft)):
-                continue
             fid = field["id"]
+            legacy_s1 = fid == "1_4" and int(draft.get("schema_version", 1)) == 2 and not key_points_stored(draft)
+            if not (field.get("required") or _conditional_required(field, draft) or legacy_s1):
+                continue
+            if fid == "key_points":
+                errors.extend(key_point_errors(draft))
+                continue
             if sid == "mission_profile":
                 status = draft.get("mission_profile_status", "missing")
                 if status == "filled":

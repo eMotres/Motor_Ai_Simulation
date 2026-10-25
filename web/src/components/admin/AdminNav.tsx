@@ -1,9 +1,11 @@
 // Admin · left sub-navigation — compact top tabs on narrow screens. Remembers
 // the last section the owner looked at (localStorage; a private browser or a
 // blocked store just falls back to Overview, never a broken panel).
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
+import { oneOf } from '../../lib/viewMemory';
+import { useRememberedView } from '../../lib/useRememberedView';
 
 export type AdminSectionId =
   | 'overview' | 'users' | 'directory' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'productionAccess' | 'projects' | 'mailing' | 'logs' | 'downloads3d' | 'verification' | 'analytics' | 'activity';
@@ -31,25 +33,9 @@ export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
   { id: 'activity', label: 'Activity' },
 ];
 
-const LS_KEY = 'admin.section';
-
-export const useAdminSection = (): [AdminSectionId, (s: AdminSectionId) => void] => {
-  const [section, setSectionState] = useState<AdminSectionId>('overview');
-
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(LS_KEY);
-      if (saved && ADMIN_SECTIONS.some((s) => s.id === saved)) setSectionState(saved as AdminSectionId);
-    } catch { /* private mode / blocked storage — stay on Overview */ }
-  }, []);
-
-  const setSection = (s: AdminSectionId) => {
-    setSectionState(s);
-    try { window.localStorage.setItem(LS_KEY, s); } catch { /* not persisted this time */ }
-  };
-
-  return [section, setSection];
-};
+/** The section the admin looked at last is remembered across reloads (lib/viewMemory.ts, scope `admin.section`). */
+export const useAdminSection = (): [AdminSectionId, (s: AdminSectionId) => void] =>
+  useRememberedView<AdminSectionId>('admin.section', 'overview', oneOf(ADMIN_SECTIONS.map((s) => s.id)));
 
 /** Left rail ≥900 px, horizontal scroll-tabs below that — one component, CSS
  *  decides the layout so there is nothing to keep in sync. */

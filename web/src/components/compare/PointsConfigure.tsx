@@ -24,6 +24,8 @@ import {
   pointOperating, tileValue, visibleTiles, type StepBaseMode,
 } from '../../modules/development/pointsOnly';
 import { usePointsConfigureStore } from '../../stores/pointsConfigureStore';
+import { oneOf } from '../../lib/viewMemory';
+import { useRememberedView } from '../../lib/useRememberedView';
 import { useUIStore } from '../../stores/uiStore';
 
 const TH = { px: 1, py: 0.5, fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' } as const;
@@ -33,13 +35,14 @@ const PointsConfigure: React.FC = () => {
   const { t } = useTranslation('development');
   const target = usePointsConfigureStore((s) => s.target);
   const close = usePointsConfigureStore((s) => s.close);
+  const remember = usePointsConfigureStore((s) => s.remember);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [answer, setAnswer] = useState<MotorPointsAnswer | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [vIndex, setVIndex] = useState(0);
   const [duty, setDuty] = useState<string | null>(null);
-  const [baseMode, setBaseMode] = useState<StepBaseMode>('none');
+  const [baseMode, setBaseMode] = useRememberedView<StepBaseMode>('configure.points.base', 'none', oneOf(['none', 'previous', 'first'] as const));
   const [busText, setBusText] = useState('');
 
   useEffect(() => {
@@ -54,7 +57,12 @@ const PointsConfigure: React.FC = () => {
         setAnswer(value); setVIndex(index);
         setDuty(dutyAfterVariantSwitch(value.variants[index], target.duty));
       })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
+      .catch((e) => {
+        if (cancelled) return;
+        // a card restored after a reload whose project, motor or access is gone just returns to the ordinary Configure
+        if (usePointsConfigureStore.getState().restored) { close(); return; }
+        setError(e instanceof Error ? e.message : String(e));
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [target]);
@@ -72,8 +80,10 @@ const PointsConfigure: React.FC = () => {
   const headroom = busValid ? busHeadroom(point, busV) : null;
 
   const pickVariant = (index: number) => {
+    const next = dutyAfterVariantSwitch(variants[index], duty);
     setVIndex(index);
-    setDuty(dutyAfterVariantSwitch(variants[index], duty));
+    setDuty(next);
+    if (variants[index]) remember({ die: variants[index].die, config: variants[index].config, duty: next });
   };
   const leave = () => { close(); setActiveTab('development' as never); };
 
@@ -119,7 +129,7 @@ const PointsConfigure: React.FC = () => {
             <Typography sx={LABEL}>{t('points.mode')}</Typography>
             {variant && variant.points.length > 0
               ? <ToggleButtonGroup exclusive size="small" value={duty} aria-label={t('points.mode')}
-                  onChange={(_, value) => { if (typeof value === 'string') setDuty(value); }}>
+                  onChange={(_, value) => { if (typeof value === 'string') { setDuty(value); remember({ duty: value }); } }}>
                   {variant.points.map((p) => (
                     <ToggleButton key={p.duty} value={p.duty} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12 }}>{p.duty}</ToggleButton>
                   ))}
@@ -138,13 +148,12 @@ const PointsConfigure: React.FC = () => {
                 <MenuItem value="previous" disabled={vIndex === 0}>{t('points.base.previous')}</MenuItem>
                 <MenuItem value="first" disabled={vIndex === 0}>{t('points.base.first')}</MenuItem>
               </Select>
-              <HelpTip title={t('points.compareTip')} />
-              {baseMode !== 'none' && !basePoint && <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('points.noBasePoint')}</Typography>}
+              <HelpTip title={baseMode !== 'none' && !basePoint ? `${t('points.compareTip')} ${t('points.noBasePoint')}` : t('points.compareTip')} />
             </Box>
 
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {knobs.map((k) => (
-                <Tooltip key={k.id} title={t('points.knobTip')}>
+                <Tooltip key={k.id} title={`${t('points.knobTip')} ${t('points.knobsDisabledTip')}`}>
                   <Box sx={{ ...PANEL, px: 1, py: 0.5, width: 190, boxSizing: 'border-box', opacity: 0.75 }}>
                     <Typography sx={{ ...LABEL, fontSize: 10.5 }}>{t(`points.knob.${k.id}`)}
                       <Box component="span" sx={{ ml: 0.75, fontFamily: 'monospace', color: 'var(--text-0)' }}>{k.value === null ? '—' : `${fmt(k.value, k.id === 'gamma' ? 1 : 0)} ${k.unit}`}</Box>
@@ -154,7 +163,6 @@ const PointsConfigure: React.FC = () => {
                 </Tooltip>
               ))}
             </Box>
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('points.knobsDisabled')} <HelpTip title={t('points.knobsDisabledTip')} /></Typography>
           </Box>
 
           {TILE_GROUPS.map((group) => {
@@ -181,9 +189,8 @@ const PointsConfigure: React.FC = () => {
             <TextField size="small" value={busText} onChange={(e) => setBusText(e.target.value)} placeholder="V"
               inputProps={{ inputMode: 'decimal', 'aria-label': t('points.bus') }} sx={{ width: 96, '& input': { py: 0.45, fontSize: 12 } }}
               error={busText.trim() !== '' && !busValid} />
-            <HelpTip title={t('points.busTip')} />
+            <HelpTip title={busValid && headroom === null ? `${t('points.busTip')} ${t('points.busNoRequirement')}` : t('points.busTip')} />
             {busText.trim() !== '' && !busValid && <Typography role="alert" sx={{ fontSize: 11, color: 'error.main' }}>{t('points.busInvalid')}</Typography>}
-            {busValid && headroom === null && <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{t('points.busNoRequirement')}</Typography>}
             {headroom && <Typography role="status" sx={{ fontSize: 12, fontWeight: 700, color: headroom.ok ? '#4ade80' : '#f87171' }}>
               {headroom.ok ? t('points.busOk', { required: fmt(headroom.requiredV, 1), margin: fmt(headroom.headroomPct, 1) }) : t('points.busShort', { required: fmt(headroom.requiredV, 1), margin: fmt(-headroom.headroomPct, 1) })}
             </Typography>}

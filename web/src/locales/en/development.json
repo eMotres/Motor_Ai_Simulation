@@ -42,7 +42,6 @@
     "reviewReady": "Review specification",
     "reviewHint": "Unknown answers stay visible as open questions in review.",
     "complete": "Completeness",
-    "s1Formula": "P = T × 2πn / 60",
     "keyData": "Key data",
     "requirements": "Requirements",
     "moreDetails": "More details",
@@ -57,16 +56,23 @@
   "keyPoints": {
     "s1": "Continuous S1",
     "peak": "Peak",
-    "power": "Power",
     "torque": "Torque",
     "speed": "Speed",
     "duration": "Duration",
-    "period": "Repeats every",
-    "frequency": "Peak repetition (text)",
-    "derived": "T·ω = {value} W",
-    "statedBasis": "Stated as {basis}; not shaft power",
-    "noPeak": "Leave the peak row empty when there is no peak.",
-    "periodTip": "How often the peak comes back, in seconds. Leave empty for a single peak."
+    "name": "Point",
+    "voltage": "DC voltage",
+    "voltageTip": "Optional: the DC voltage this point must be reached at.",
+    "durationTip": "Continuous, or the time in seconds the point is held.",
+    "continuous": "continuous",
+    "continuousTip": "Continuous duty",
+    "add": "Add point",
+    "remove": "Remove point",
+    "default": {
+      "takeoff": "Takeoff",
+      "cruise": "Cruise",
+      "landing": "Landing",
+      "peak": "Peak"
+    }
   },
   "migration": {
     "action": "Review legacy S1 migration",
@@ -181,7 +187,6 @@
   "noDiff": "No differences found.",
   "close": "Close",
   "motorsTip": "Linked motor results are visible to project members.",
-  "comparisonCount": "{variants} variants, {results} results",
   "variant": "Variant",
   "comparison": {
     "estimate": "Estimate",
@@ -257,7 +262,6 @@
     "search": "Search dies and configurations",
     "restore": "Restore",
     "restored": "Motor restored",
-    "noRestore": "No previously linked motors to restore.",
     "linkedElsewhere": "This motor is linked to another project.",
     "unavailable": "Unavailable",
     "reason": {
@@ -379,7 +383,6 @@
       "gamma": "Angle"
     },
     "knobTip": "Disabled: scrolling needs the full operating map, which is still being computed.",
-    "knobsDisabled": "Computed points only - full operating map pending.",
     "knobsDisabledTip": "Speed, current and angle cannot be scrolled yet; only the stored points are shown. No value is interpolated.",
     "notStored": "Not stored for this point.",
     "bus": "DC bus, V",
@@ -606,5 +609,7 @@
   "rangeWorst": "Stored as a range {min}–{max}. Modelling uses the maximum shown; type one value to replace the range.",
   "coolingInferred": "Read from the stored values; click a medium to confirm it.",
   "addLoadComponent": "Add a load component",
-  "coolingMisfit": "{medium} does not fit the load {load}"
+  "coolingMisfit": "{medium} does not fit the load {load}",
+  "specReadOnly": "View only",
+  "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages."
 }

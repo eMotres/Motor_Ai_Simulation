@@ -62,22 +62,19 @@ const PerformanceCharts: React.FC<{ p: Passport; knobs: Knobs; packMin: number; 
 
       {/* summary */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
-        <Box sx={CARD}>
+        <Box sx={CARD} title={tx('configure.rpmAtV', { v: packMax.toFixed(0) })}>
           <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>{tx('configure.maxSpeedBattery')}</Typography>
           <Typography sx={{ fontSize: 16, fontWeight: 800, color: maxSpeed === null ? '#4ade80' : '#fbbf24' }}>
             {maxSpeed === null ? '> 8000' : maxSpeed.toFixed(0)}
           </Typography>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{tx('configure.rpmAtV', { v: packMax.toFixed(0) })}</Typography>
         </Box>
-        <Box sx={CARD}>
+        <Box sx={CARD} title={tx('configure.ampsFromV', { min: packMin.toFixed(0), max: packMax.toFixed(0) })}>
           <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>{tx('configure.battCurrentNow')}</Typography>
           <Typography sx={{ fontSize: 16, fontWeight: 800, color: battOk ? '#60a5fa' : '#f87171' }}>{iBatOp.toFixed(0)}</Typography>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{tx('configure.ampsFromV', { min: packMin.toFixed(0), max: packMax.toFixed(0) })}</Typography>
         </Box>
-        <Box sx={CARD}>
+        <Box sx={CARD} title={tx('configure.atRpm', { rpm: peakEffRpm })}>
           <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>{tx('configure.peakEfficiency')}</Typography>
           <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#4ade80' }}>{peakEff.toFixed(1)}%</Typography>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{tx('configure.atRpm', { rpm: peakEffRpm })}</Typography>
         </Box>
       </Box>
 

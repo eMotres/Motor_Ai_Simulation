@@ -77,7 +77,6 @@ test('new Projects UI messages have complete EN and zh-CN keys and matching ICU 
   walk(en.nav.projects, zh.nav.projects, 'admin.nav.projects');
   const enDevelopment = JSON.parse(readFileSync(new URL('../../../locales/en/development.json', import.meta.url), 'utf8'));
   const zhDevelopment = JSON.parse(readFileSync(new URL('../../../locales/zh-CN/development.json', import.meta.url), 'utf8'));
-  walk(enDevelopment.comparisonCount, zhDevelopment.comparisonCount, 'development.comparisonCount');
   walk(enDevelopment.variant, zhDevelopment.variant, 'development.variant');
   walk(enDevelopment.comparison, zhDevelopment.comparison, 'development.comparison');
   walk(enDevelopment.grantReviewCount, zhDevelopment.grantReviewCount, 'development.grantReviewCount');
@@ -88,6 +87,4 @@ test('grant review count formats a plural count in English and Chinese', () => {
   const zh = JSON.parse(readFileSync(new URL('../../../locales/zh-CN/development.json', import.meta.url), 'utf8'));
   assert.match(String(new IntlMessageFormat(en.grantReviewCount, 'en').format({ count: 2 })), /2/);
   assert.match(String(new IntlMessageFormat(zh.grantReviewCount, 'zh-CN').format({ count: 2 })), /2/);
-  assert.match(String(new IntlMessageFormat(en.comparisonCount, 'en').format({ variants: 3, results: 7 })), /3.*7/);
-  assert.match(String(new IntlMessageFormat(zh.comparisonCount, 'zh-CN').format({ variants: 3, results: 7 })), /3.*7/);
 });

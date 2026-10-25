@@ -42,7 +42,6 @@
     "reviewReady": "审核规格",
     "reviewHint": "未知答案会作为待确认问题保留在审核中。",
     "complete": "完整度",
-    "s1Formula": "P = T × 2πn / 60",
     "keyData": "关键数据",
     "requirements": "要求",
     "moreDetails": "更多细节",
@@ -57,16 +56,23 @@
   "keyPoints": {
     "s1": "连续 S1",
     "peak": "峰值",
-    "power": "功率",
     "torque": "转矩",
     "speed": "转速",
     "duration": "持续时间",
-    "period": "重复间隔",
-    "frequency": "峰值重复（文字）",
-    "derived": "T·ω = {value} W",
-    "statedBasis": "按 {basis} 填写；不是轴功率",
-    "noPeak": "没有峰值工况时，峰值一行留空即可。",
-    "periodTip": "峰值多久重复一次（秒）。只出现一次时留空。"
+    "name": "工作点",
+    "voltage": "直流电压",
+    "voltageTip": "可选：该工作点必须达到的直流电压。",
+    "durationTip": "连续，或该工作点保持的秒数。",
+    "continuous": "连续",
+    "continuousTip": "连续工作",
+    "add": "添加工作点",
+    "remove": "删除工作点",
+    "default": {
+      "takeoff": "起飞",
+      "cruise": "巡航",
+      "landing": "着陆",
+      "peak": "峰值"
+    }
   },
   "migration": {
     "action": "审核旧版 S1 迁移",
@@ -181,7 +187,6 @@
   "noDiff": "未发现差异。",
   "close": "关闭",
   "motorsTip": "项目成员可以查看已关联电机的结果。",
-  "comparisonCount": "{variants} 个变体，{results} 项结果",
   "variant": "变体",
   "comparison": {
     "estimate": "估算",
@@ -257,7 +262,6 @@
     "search": "搜索定子铁芯和配置",
     "restore": "恢复",
     "restored": "电机已恢复",
-    "noRestore": "没有可恢复的历史关联电机。",
     "linkedElsewhere": "此电机已关联到其他项目。",
     "unavailable": "不可用",
     "reason": {
@@ -379,7 +383,6 @@
       "gamma": "角度"
     },
     "knobTip": "已禁用：滚动调节需要完整运行图，该图仍在计算中。",
-    "knobsDisabled": "仅已计算工况点 - 完整运行图待完成。",
     "knobsDisabledTip": "转速、电流和角度暂时无法滚动调节；仅显示已保存的工况点。不做任何插值。",
     "notStored": "此工况点未保存该值。",
     "bus": "直流母线，V",
@@ -606,5 +609,7 @@
   "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最大值；输入一个数值即替换该范围。",
   "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。",
   "addLoadComponent": "添加载荷分量",
-  "coolingMisfit": "{medium}与负载“{load}”不匹配"
+  "coolingMisfit": "{medium}与负载“{load}”不匹配",
+  "specReadOnly": "仅查看",
+  "specReadOnlyTip": "只有项目所有者可以修改规格。您可以在配置中测试，并在消息中写建议。"
 }

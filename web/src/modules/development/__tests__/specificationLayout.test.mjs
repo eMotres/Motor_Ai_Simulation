@@ -30,7 +30,7 @@ test('minimal layout (owner 2026-10-25): key data (with the load type), requirem
 
 test('the required set is exactly the one the compact specification asks for', () => {
   const required = schema.sections.flatMap((s) => s.fields ?? []).filter((f) => f.required).map((f) => f.id).sort();
-  assert.deepEqual(required, ['1_1', '1_2', '1_4', '1_6', '2_1', '2_4', '3_1', '3_2', '3_3', '4_1', '4_2', '4_6', '6_1', '6_2', 'mission_profile'].sort());
+  assert.deepEqual(required, ['1_1', '1_2', '1_6', '2_1', '2_4', '3_1', '3_2', '3_3', '4_1', '4_2', '4_6', '6_1', '6_2', 'key_points', 'mission_profile'].sort());
   // the axial load is required (owner 2026-10-25: «обязательно аксиальную нагрузку надо учесть»)
   const loads = schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === '4_6');
   assert.equal(loads.properties.find((p) => p.id === 'axial_thrust_N').required, true);

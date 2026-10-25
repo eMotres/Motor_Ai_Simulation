@@ -111,10 +111,9 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
   return (
     <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'var(--panel-2)' }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.75, flexWrap: 'wrap' }}>
-        <Tooltip title={tx('propLoad.tip')}>
+        <Tooltip title={`${tx('propLoad.tip')} ${tx('propLoad.subtitle', { ambient: ambient.toFixed(0) })} ${tx('propLoad.note')} ${tx('propLoad.linesNote2')}`}>
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{tx('propLoad.title')}</Typography>
         </Tooltip>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tx('propLoad.subtitle', { ambient: ambient.toFixed(0) })}</Typography>
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
         {LOAD_METRICS.map((m) => (
@@ -193,7 +192,6 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
           })}
         </Box>
       )}
-      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 0.5 }}>{tx('propLoad.note')} {tx('propLoad.linesNote2')}</Typography>
     </Paper>
   );
 };

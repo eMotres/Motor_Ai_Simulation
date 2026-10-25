@@ -24,6 +24,8 @@ import SyncIcon from '@mui/icons-material/Sync';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
 import { getStoredToken } from '../../../lib/localAuth';
+import { oneOf } from '../../../lib/viewMemory';
+import { useRememberedView } from '../../../lib/useRememberedView';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -159,7 +161,7 @@ const authHeaders = (): HeadersInit => {
 
 const DirectorySection: React.FC = () => {
   const { t } = useTranslation('admin');
-  const [tab, setTab] = useState<'companies' | 'people' | 'proposed'>('companies');
+  const [tab, setTab] = useRememberedView<'companies' | 'people' | 'proposed'>('admin.directory.tab', 'companies', oneOf(['companies', 'people', 'proposed'] as const));
   const [companies, setCompanies] = useState<Company[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [proposed, setProposed] = useState<ProposedAffiliation[]>([]);

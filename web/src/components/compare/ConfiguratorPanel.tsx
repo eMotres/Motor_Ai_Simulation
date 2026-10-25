@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Slider, ToggleButton, ToggleButtonGroup, Button,
-  IconButton, Alert, CircularProgress, useMediaQuery,
+  IconButton, Alert, CircularProgress, useMediaQuery, Tooltip,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
@@ -247,7 +247,7 @@ const KnobSlider: React.FC<{
       </Box>
       {!hideRange && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} name={tx('configureLimits.rangeMin', { label })} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
-        <Slider value={value} min={min} max={max} step={step} aria-label={label}
+        <Slider value={value} min={min} max={max} step={step} aria-label={label} title={marker?.over ? undefined : marker?.text}
           onChange={(_, v) => onChange(v as number)} size="small" disabled={disabled}
           marks={marker && marker.at > min && marker.at < max ? [{ value: marker.at }] : undefined}
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 },
@@ -255,7 +255,7 @@ const KnobSlider: React.FC<{
                 ...(zone ? { '& .MuiSlider-rail': { background: zone, opacity: 0.9, height: 4 } } : {}) }} />
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} name={tx('configureLimits.rangeMax', { label })} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>}
-      {marker && (
+      {marker && marker.over && (
         <Tip title={marker.tip}>
         <Typography component="div"
           sx={{ fontSize: 11, color: marker.over ? '#f59e0b' : 'var(--text-3)', fontWeight: marker.over ? 700 : 400, textAlign: 'right', mt: -0.25 }}>
@@ -2290,13 +2290,10 @@ ${s1Text.text}` : '';
         <Box sx={{ ...PANEL, p: 2 }}>
           {/* the name and its one-line summary on ONE line (owner 2026-10-20: compact page) */}
           <Box sx={{ display: 'flex', alignItems: 'baseline', columnGap: 1.5, flexWrap: 'wrap', mb: 1 }}>
-            <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)' }}>{ref.name}</Typography>
-            {!ref.referenceOnly && (
-              <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-                {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
-                  torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}
-              </Typography>
-            )}
+            <Tooltip title={ref.referenceOnly ? '' : tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
+              torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}>
+              <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)' }}>{ref.name}</Typography>
+            </Tooltip>
           </Box>
           {ref.referenceOnly && (
             <Alert severity="warning" sx={{ mb: 1.5, py: 0, fontSize: 12 }}>
@@ -2354,7 +2351,7 @@ ${s1Text.text}` : '';
             onChange={set('L_mm')} onRangeChange={isAdmin ? setLRange : undefined} warn={above(knobs.L_mm, ranges.L_mm)}
             limitNote={limitNote('L_mm')} onClearHand={isAdmin ? clearLMax : undefined} />
           {limitMsg && <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 0.75 }}>{limitMsg}</Typography>}
-          <KnobSlider label={rowsLabel} tip={tx('configureLimits.turnsPerSlotTip')} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns}
+          <KnobSlider label={rowsLabel} tip={atLimit ? `${tx('configureLimits.turnsPerSlotTip')} ${tx('configureLimits.atLimit')}. ${tx('configureLimits.atLimitTip', { n: knobs.N, wire: fmt(knobs.wireH_mm, 2), gap: fmt(ref.fit.wireSpacingY_mm, 2), stack: fmt(stackHeight_mm, 1), avail: fmt(availStack_mm, 1) })}` : tx('configureLimits.turnsPerSlotTip')} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns}
             limitNote={limitNote('N')} />
           <KnobSlider label={tx('configureLimits.wireThickness')} tip={tx('configureLimits.wireThicknessTip')} unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={WIRE_STEP_MM} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit}
             limitNote={limitNote('wireH_mm')} />
@@ -2374,11 +2371,6 @@ ${s1Text.text}` : '';
             <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }}
               title={tx('configureLimits.badTurnsTip', { k: kPar, n: knobs.N, turns: (knobs.N / kPar).toFixed(2), lo: kPar * Math.floor(knobs.N / kPar), hi: kPar * (Math.floor(knobs.N / kPar) + 1) })}>
               ⚠ {tx('configureLimits.badTurns', { n: knobs.N, k: kPar })}
-            </Typography>
-          ) : atLimit ? (
-            <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.5, mb: 1 }}
-              title={tx('configureLimits.atLimitTip', { n: knobs.N, wire: fmt(knobs.wireH_mm, 2), gap: fmt(ref.fit.wireSpacingY_mm, 2), stack: fmt(stackHeight_mm, 1), avail: fmt(availStack_mm, 1) })}>
-              {tx('configureLimits.atLimit')}
             </Typography>
           ) : wireStockNote ? (
             <Typography sx={{ fontSize: 11, color: '#f59e0b', mt: -0.5, mb: 1 }}

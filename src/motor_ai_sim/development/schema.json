@@ -16,6 +16,7 @@
       "fields": [
         {
           "id": "1_1",
+          "suggestions": [{"value": "eVTOL / aircraft propulsion", "label": {"en": "eVTOL / aircraft propulsion", "zh-CN": "电动垂直起降/飞机推进"}}, {"value": "Drone propulsion", "label": {"en": "Drone propulsion", "zh-CN": "无人机推进"}}, {"value": "Marine propulsion", "label": {"en": "Marine propulsion", "zh-CN": "船舶推进"}}, {"value": "Robot joint", "label": {"en": "Robot joint", "zh-CN": "机器人关节"}}, {"value": "Vehicle traction", "label": {"en": "Vehicle traction", "zh-CN": "车辆牵引"}}, {"value": "Engine-driven generator", "label": {"en": "Engine-driven generator", "zh-CN": "发动机驱动发电机"}}, {"value": "Wind / water turbine generator", "label": {"en": "Wind / water turbine generator", "zh-CN": "风力/水力发电机"}}, {"value": "Industrial drive", "label": {"en": "Industrial drive", "zh-CN": "工业驱动"}}],
           "checklist_id": "1.1",
           "label": {
             "en": "Application and machine type (aircraft, drone, robot joint, vehicle, marine, generator)",
@@ -33,6 +34,7 @@
         },
         {
           "id": "1_2",
+          "suggestions": [{"value": "Motor, one direction", "label": {"en": "Motor, one direction", "zh-CN": "电动机，单向"}}, {"value": "Motor, both directions", "label": {"en": "Motor, both directions", "zh-CN": "电动机，双向"}}, {"value": "Motor with regeneration", "label": {"en": "Motor with regeneration", "zh-CN": "电动机，带能量回馈"}}, {"value": "Generator", "label": {"en": "Generator", "zh-CN": "发电机"}}, {"value": "Generator, rotation set by the engine", "label": {"en": "Generator, rotation set by the engine", "zh-CN": "发电机，转向由发动机决定"}}],
           "checklist_id": "1.2",
           "label": {
             "en": "Motor or generator mode (or both, regeneration) and direction of rotation (one / both)",
@@ -241,10 +243,7 @@
             },
             {
               "id": "duration_s",
-              "label": {
-                "en": "Duration",
-                "zh-CN": "持续时间"
-              },
+              "label": {"en": "Max duration", "zh-CN": "最长持续时间"},
               "type": "number",
               "unit": "s",
               "required": false,
@@ -321,10 +320,7 @@
             },
             {
               "id": "overspeed_rpm",
-              "label": {
-                "en": "Overspeed",
-                "zh-CN": "超速"
-              },
+              "label": {"en": "Overspeed (proof) speed", "zh-CN": "超速（验证）转速"},
               "type": "number",
               "unit": "rpm",
               "required": false,
@@ -398,11 +394,7 @@
           "properties": [
             {
               "id": "torque_ripple_pct_pkpk",
-              "worst": "min",
-              "label": {
-                "en": "Torque ripple",
-                "zh-CN": "转矩脉动"
-              },
+              "label": {"en": "Max torque ripple", "zh-CN": "最大转矩脉动"},
               "type": "number",
               "unit": "% pk-pk",
               "required": false,
@@ -410,21 +402,14 @@
             },
             {
               "id": "cogging_pct_pkpk",
-              "label": {
-                "en": "Cogging torque",
-                "zh-CN": "齿槽转矩"
-              },
+              "label": {"en": "Max cogging torque", "zh-CN": "最大齿槽转矩"},
               "type": "number",
               "unit": "% pk-pk",
               "required": false
             },
             {
               "id": "cogging_torque_Nm",
-              "worst": "min",
-              "label": {
-                "en": "Cogging / starting drag torque",
-                "zh-CN": "齿槽／启动阻力转矩"
-              },
+              "label": {"en": "Max cogging / starting drag torque", "zh-CN": "最大齿槽/启动阻力转矩"},
               "type": "number",
               "unit": "N·m",
               "required": false,
@@ -724,10 +709,7 @@
           "properties": [
             {
               "id": "continuous_A",
-              "label": {
-                "en": "Continuous current",
-                "zh-CN": "连续电流"
-              },
+              "label": {"en": "Max continuous current", "zh-CN": "最大持续电流"},
               "type": "number",
               "unit": "A",
               "required": false,
@@ -735,10 +717,7 @@
             },
             {
               "id": "peak_A",
-              "label": {
-                "en": "Peak current",
-                "zh-CN": "峰值电流"
-              },
+              "label": {"en": "Max peak current", "zh-CN": "最大峰值电流"},
               "type": "number",
               "unit": "A",
               "required": false,
@@ -746,18 +725,12 @@
             },
             {
               "id": "charge_A",
-              "label": {
-                "en": "Charge / regeneration current limit",
-                "zh-CN": "充电／回馈电流限值"
-              },
+              "label": {"en": "Max charge / regeneration current", "zh-CN": "最大充电/回馈电流"},
               "type": "number",
               "unit": "A",
               "required": false,
               "min": 0,
-              "short_label": {
-                "en": "Charge",
-                "zh-CN": "充电电流"
-              }
+              "short_label": {"en": "Max charge / regeneration current", "zh-CN": "最大充电/回馈电流"}
             }
           ],
           "short_label": {
@@ -790,6 +763,7 @@
             },
             {
               "id": "supplier",
+              "suggestions": [{"value": "Customer", "label": {"en": "Customer", "zh-CN": "客户"}}, {"value": "MOTRES", "label": {"en": "MOTRES", "zh-CN": "MOTRES"}}, {"value": "Third party", "label": {"en": "Third party", "zh-CN": "第三方"}}],
               "label": {
                 "en": "Supplier",
                 "zh-CN": "供应方"
@@ -800,6 +774,7 @@
             },
             {
               "id": "count",
+              "suggestions": [1, 2],
               "label": {
                 "en": "Number of controllers",
                 "zh-CN": "控制器数量"
@@ -834,6 +809,7 @@
           "properties": [
             {
               "id": "device_type",
+              "suggestions": [{"value": "SiC MOSFET", "label": {"en": "SiC MOSFET", "zh-CN": "SiC MOSFET"}}, {"value": "Si IGBT", "label": {"en": "Si IGBT", "zh-CN": "Si IGBT"}}, {"value": "GaN", "label": {"en": "GaN", "zh-CN": "GaN"}}, {"value": "Si MOSFET", "label": {"en": "Si MOSFET", "zh-CN": "Si MOSFET"}}],
               "label": {
                 "en": "Device type",
                 "zh-CN": "器件类型"
@@ -844,6 +820,7 @@
             },
             {
               "id": "voltage_class_V",
+              "suggestions": [100, 200, 650, 900, 1200, 1700],
               "label": {
                 "en": "Voltage class",
                 "zh-CN": "电压等级"
@@ -874,10 +851,7 @@
           "properties": [
             {
               "id": "continuous_Arms",
-              "label": {
-                "en": "Continuous phase current",
-                "zh-CN": "连续相电流"
-              },
+              "label": {"en": "Max continuous phase current", "zh-CN": "最大持续相电流"},
               "type": "number",
               "unit": "A rms",
               "required": true,
@@ -885,10 +859,7 @@
             },
             {
               "id": "peak_Arms",
-              "label": {
-                "en": "Peak phase current",
-                "zh-CN": "峰值相电流"
-              },
+              "label": {"en": "Max peak phase current", "zh-CN": "最大峰值相电流"},
               "type": "number",
               "unit": "A rms",
               "required": true,
@@ -896,10 +867,7 @@
             },
             {
               "id": "peak_duration_s",
-              "label": {
-                "en": "Peak duration",
-                "zh-CN": "峰值持续时间"
-              },
+              "label": {"en": "Max peak duration", "zh-CN": "最长峰值持续时间"},
               "type": "number",
               "unit": "s",
               "required": true,
@@ -937,6 +905,7 @@
             },
             {
               "id": "modulation",
+              "suggestions": [{"value": "SVPWM", "label": {"en": "SVPWM", "zh-CN": "SVPWM"}}, {"value": "DPWM", "label": {"en": "DPWM", "zh-CN": "DPWM"}}, {"value": "Sine PWM", "label": {"en": "Sine PWM", "zh-CN": "正弦 PWM"}}],
               "label": {
                 "en": "Modulation",
                 "zh-CN": "调制方式"
@@ -964,6 +933,7 @@
         },
         {
           "id": "2_8",
+          "suggestions": [{"value": "Resolver", "label": {"en": "Resolver", "zh-CN": "旋转变压器"}}, {"value": "Absolute encoder", "label": {"en": "Absolute encoder", "zh-CN": "绝对值编码器"}}, {"value": "Incremental encoder", "label": {"en": "Incremental encoder", "zh-CN": "增量编码器"}}, {"value": "Hall sensors", "label": {"en": "Hall sensors", "zh-CN": "霍尔传感器"}}, {"value": "Sensorless", "label": {"en": "Sensorless", "zh-CN": "无传感器"}}],
           "checklist_id": "2.8",
           "label": {
             "en": "Position sensor: resolver / encoder / Hall / sensorless",
@@ -993,6 +963,7 @@
           "properties": [
             {
               "id": "phase_count",
+              "suggestions": [3, 6, 9],
               "label": {
                 "en": "Number of phases",
                 "zh-CN": "相数"
@@ -1013,6 +984,7 @@
             },
             {
               "id": "independent_sets",
+              "suggestions": [1, 2, 3],
               "label": {
                 "en": "Independent winding sets (e.g. 2 for two 3-phase windings)",
                 "zh-CN": "独立绕组组数（如两套三相绕组为 2）"
@@ -1097,6 +1069,7 @@
       "fields": [
         {
           "id": "3_1",
+          "required_any": [["cooling_medium", "cooling_type"]],
           "checklist_id": "3.1",
           "label": {
             "en": "Cooling: air (still / forced / propeller wash / ram air, speed through the motor) or liquid (coolant, inlet temperature, flow, pressure drop)",
@@ -1108,6 +1081,42 @@
           "allow_not_known_yet": true,
           "properties": [
             {
+              "id": "cooling_medium",
+              "label": {
+                "en": "Cooling",
+                "zh-CN": "冷却方式"
+              },
+              "help": {
+                "en": "Air, liquid or underwater; each shows its own conditions.",
+                "zh-CN": "空气、液体或水下；各自显示对应条件。"
+              },
+              "type": "string",
+              "required": false,
+              "options": [
+                {
+                  "value": "air",
+                  "label": {
+                    "en": "Air",
+                    "zh-CN": "空气"
+                  }
+                },
+                {
+                  "value": "liquid",
+                  "label": {
+                    "en": "Liquid",
+                    "zh-CN": "液体"
+                  }
+                },
+                {
+                  "value": "submerged",
+                  "label": {
+                    "en": "Underwater",
+                    "zh-CN": "水下"
+                  }
+                }
+              ]
+            },
+            {
               "id": "cooling_type",
               "label": {
                 "en": "Cooling type",
@@ -1115,7 +1124,7 @@
               },
               "type": "string",
               "unit": "",
-              "required": true
+              "required": false
             },
             {
               "id": "airflow",
@@ -1129,6 +1138,7 @@
               "properties": [
                 {
                   "id": "mode",
+                  "suggestions": [{"value": "Still air", "label": {"en": "Still air", "zh-CN": "静止空气"}}, {"value": "Fan", "label": {"en": "Fan", "zh-CN": "风扇"}}, {"value": "Propeller wash", "label": {"en": "Propeller wash", "zh-CN": "螺旋桨滑流"}}, {"value": "Ram air", "label": {"en": "Ram air", "zh-CN": "迎面气流"}}],
                   "label": {
                     "en": "Airflow mode",
                     "zh-CN": "气流方式"
@@ -1139,10 +1149,7 @@
                 },
                 {
                   "id": "speed_mps",
-                  "label": {
-                    "en": "Air speed",
-                    "zh-CN": "空气速度"
-                  },
+                  "label": {"en": "Guaranteed air speed", "zh-CN": "保证风速"},
                   "type": "number",
                   "unit": "m/s",
                   "required": false,
@@ -1152,6 +1159,7 @@
             },
             {
               "id": "coolant",
+              "suggestions": [{"value": "Water-glycol 50/50", "label": {"en": "Water-glycol 50/50", "zh-CN": "水-乙二醇 50/50"}}, {"value": "Water", "label": {"en": "Water", "zh-CN": "水"}}, {"value": "Propylene glycol (PPG)", "label": {"en": "Propylene glycol (PPG)", "zh-CN": "丙二醇 (PPG)"}}, {"value": "Oil", "label": {"en": "Oil", "zh-CN": "油"}}, {"value": "Dielectric fluid", "label": {"en": "Dielectric fluid", "zh-CN": "绝缘冷却液"}}],
               "label": {
                 "en": "Coolant",
                 "zh-CN": "冷却液"
@@ -1162,20 +1170,14 @@
             },
             {
               "id": "inlet_temperature_C",
-              "label": {
-                "en": "Coolant inlet temperature",
-                "zh-CN": "冷却液入口温度"
-              },
+              "label": {"en": "Max coolant inlet temperature", "zh-CN": "最高冷却液进口温度"},
               "type": "number",
               "unit": "°C",
               "required": false
             },
             {
               "id": "flow_rate",
-              "label": {
-                "en": "Flow",
-                "zh-CN": "流量"
-              },
+              "label": {"en": "Guaranteed coolant flow", "zh-CN": "保证冷却液流量"},
               "type": "number",
               "unit": "L/min",
               "required": false,
@@ -1191,6 +1193,38 @@
               "unit": "Pa",
               "required": false,
               "min": 0
+            },
+            {
+              "id": "water_temperature_C",
+              "label": {
+                "en": "Max water temperature",
+                "zh-CN": "最高水温"
+              },
+              "type": "number",
+              "unit": "°C",
+              "required": false
+            },
+            {
+              "id": "water_speed_mps",
+              "label": {
+                "en": "Guaranteed water flow speed",
+                "zh-CN": "保证水流速度"
+              },
+              "type": "number",
+              "unit": "m/s",
+              "min": 0,
+              "required": false
+            },
+            {
+              "id": "depth_m",
+              "label": {
+                "en": "Max depth",
+                "zh-CN": "最大深度"
+              },
+              "type": "number",
+              "unit": "m",
+              "min": 0,
+              "required": false
             }
           ],
           "short_label": {
@@ -1252,6 +1286,7 @@
         },
         {
           "id": "3_3",
+          "suggestions": [{"value": "Open (air flows through the motor)", "label": {"en": "Open (air flows through the motor)", "zh-CN": "开放式（空气流过电机）"}}, {"value": "Closed, IP54", "label": {"en": "Closed, IP54", "zh-CN": "封闭式，IP54"}}, {"value": "Closed, IP65", "label": {"en": "Closed, IP65", "zh-CN": "封闭式，IP65"}}, {"value": "Sealed, IP67", "label": {"en": "Sealed, IP67", "zh-CN": "密封，IP67"}}, {"value": "Submersible, IP68", "label": {"en": "Submersible, IP68", "zh-CN": "可潜水，IP68"}}],
           "checklist_id": "3.3",
           "label": {
             "en": "Housing: open (air through the motor), closed or submerged; IP rating",
@@ -1269,6 +1304,7 @@
         },
         {
           "id": "3_4",
+          "suggestions": [{"value": "Dry indoor", "label": {"en": "Dry indoor", "zh-CN": "室内干燥"}}, {"value": "Outdoor, rain", "label": {"en": "Outdoor, rain", "zh-CN": "户外，雨水"}}, {"value": "Salt spray / marine", "label": {"en": "Salt spray / marine", "zh-CN": "盐雾/海洋"}}, {"value": "Submerged in water", "label": {"en": "Submerged in water", "zh-CN": "浸没水中"}}, {"value": "Fuel / oil exposure", "label": {"en": "Fuel / oil exposure", "zh-CN": "接触燃油/机油"}}, {"value": "Dust", "label": {"en": "Dust", "zh-CN": "粉尘"}}],
           "checklist_id": "3.4",
           "label": {
             "en": "Dust, water, salt, fuel / oil exposure",
@@ -1373,10 +1409,7 @@
           "properties": [
             {
               "id": "active_mass_kg",
-              "label": {
-                "en": "Active mass target",
-                "zh-CN": "有源部分质量目标"
-              },
+              "label": {"en": "Max active mass", "zh-CN": "最大有效质量"},
               "type": "number",
               "unit": "kg",
               "required": false,
@@ -1384,10 +1417,7 @@
             },
             {
               "id": "complete_mass_kg",
-              "label": {
-                "en": "Complete motor mass target",
-                "zh-CN": "整机质量目标"
-              },
+              "label": {"en": "Max complete motor mass", "zh-CN": "最大整机质量"},
               "type": "number",
               "unit": "kg",
               "required": false,
@@ -1402,6 +1432,7 @@
         },
         {
           "id": "4_3",
+          "suggestions": [{"value": "Front flange", "label": {"en": "Front flange", "zh-CN": "前法兰"}}, {"value": "Rear flange", "label": {"en": "Rear flange", "zh-CN": "后法兰"}}, {"value": "Foot mount", "label": {"en": "Foot mount", "zh-CN": "底脚安装"}}, {"value": "Axle mount (hub motor)", "label": {"en": "Axle mount (hub motor)", "zh-CN": "轴安装（轮毂电机）"}}, {"value": "Engine SAE flange", "label": {"en": "Engine SAE flange", "zh-CN": "发动机SAE法兰"}}],
           "checklist_id": "4.3",
           "label": {
             "en": "Mounting: flange / frame, bolt pattern, inner or outer rotor preference",
@@ -1420,6 +1451,7 @@
         },
         {
           "id": "4_4",
+          "suggestions": [{"value": "Propeller hub", "label": {"en": "Propeller hub", "zh-CN": "螺旋桨毂"}}, {"value": "Keyed shaft", "label": {"en": "Keyed shaft", "zh-CN": "键轴"}}, {"value": "Splined shaft", "label": {"en": "Splined shaft", "zh-CN": "花键轴"}}, {"value": "Gearbox input", "label": {"en": "Gearbox input", "zh-CN": "齿轮箱输入"}}, {"value": "Wheel hub", "label": {"en": "Wheel hub", "zh-CN": "轮毂"}}],
           "checklist_id": "4.4",
           "label": {
             "en": "Output: shaft or hub interface to the load (propeller hub, gearbox, wheel)",
@@ -1437,6 +1469,7 @@
         },
         {
           "id": "4_5",
+          "suggestions": [{"value": "Bearings in the motor", "label": {"en": "Bearings in the motor", "zh-CN": "轴承在电机内"}}, {"value": "Bearings in the customer's structure", "label": {"en": "Bearings in the customer's structure", "zh-CN": "轴承在客户结构中"}}, {"value": "Engine / gearbox bearings", "label": {"en": "Engine / gearbox bearings", "zh-CN": "发动机/齿轮箱轴承"}}],
           "checklist_id": "4.5",
           "label": {
             "en": "Bearings in the motor or in the customer's structure",
@@ -1461,26 +1494,20 @@
           },
           "type": "object",
           "unit": "N, N·m",
-          "required": false,
+          "required": true,
           "allow_not_known_yet": true,
           "properties": [
             {
               "id": "axial_thrust_N",
-              "label": {
-                "en": "Axial thrust",
-                "zh-CN": "轴向推力"
-              },
+              "label": {"en": "Max axial load (thrust)", "zh-CN": "最大轴向载荷（推力）"},
               "type": "number",
               "unit": "N",
-              "required": false,
+              "required": true,
               "min": 0
             },
             {
               "id": "reverse_thrust_N",
-              "label": {
-                "en": "Reverse thrust",
-                "zh-CN": "反向推力"
-              },
+              "label": {"en": "Max reverse thrust", "zh-CN": "最大反向推力"},
               "type": "number",
               "unit": "N",
               "required": false,
@@ -1488,10 +1515,7 @@
             },
             {
               "id": "radial_load_N",
-              "label": {
-                "en": "Radial load",
-                "zh-CN": "径向载荷"
-              },
+              "label": {"en": "Max radial load", "zh-CN": "最大径向载荷"},
               "type": "number",
               "unit": "N",
               "required": false,
@@ -1499,42 +1523,30 @@
             },
             {
               "id": "bending_moment_Nm",
-              "label": {
-                "en": "Bending moment",
-                "zh-CN": "弯矩"
-              },
+              "label": {"en": "Max bending moment", "zh-CN": "最大弯矩"},
               "type": "number",
               "unit": "N·m",
               "required": false
             },
             {
               "id": "gyroscopic_moment_Nm",
-              "label": {
-                "en": "Gyroscopic moment",
-                "zh-CN": "陀螺力矩"
-              },
+              "label": {"en": "Max gyroscopic moment", "zh-CN": "最大陀螺力矩"},
               "type": "number",
               "unit": "N·m",
               "required": false
             },
             {
               "id": "tilt_rate",
-              "label": {
-                "en": "Tilt rate",
-                "zh-CN": "倾斜角速度"
-              },
+              "label": {"en": "Max tilt rate", "zh-CN": "最大倾转角速度"},
               "type": "number",
-              "unit": "",
+              "unit": "rad/s",
               "required": false
             },
             {
               "id": "acceleration",
-              "label": {
-                "en": "Acceleration",
-                "zh-CN": "加速度"
-              },
+              "label": {"en": "Max acceleration", "zh-CN": "最大加速度"},
               "type": "number",
-              "unit": "",
+              "unit": "g",
               "required": false
             }
           ],
@@ -1626,7 +1638,7 @@
             {
               "value": "marine_propeller",
               "label": {
-                "en": "Marine propeller",
+                "en": "Water propeller",
                 "zh-CN": "船用螺旋桨"
               }
             },
@@ -1671,7 +1683,7 @@
                 "en": "Robot joint",
                 "zh-CN": "机器人关节"
               }
-            }
+            }, {"value": "shaft", "label": {"en": "Shaft (coupling / gearbox)", "zh-CN": "轴输出（联轴器/齿轮箱）"}}
           ],
           "presentation_group": "load"
         },

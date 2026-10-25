@@ -372,6 +372,7 @@
       "engine_driven_generator": "发动机驱动发电机",
       "turbine": "涡轮（风力／水力）",
       "robot_joint": "机器人关节",
+      "shaft": "轴输出（联轴器/齿轮箱）",
       "unknown": "未知"
     },
     "source": "负载数据来源",
@@ -508,5 +509,6 @@
     "refreshUnavailable": "此来源无法更新。",
     "refreshRow": "{phase}：{before} → {after} N·m"
   },
-  "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最不利值；输入一个数值即替换该范围。"
+  "rangeWorst": "原存为范围 {min}–{max}。计算采用显示的最大值；输入一个数值即替换该范围。",
+  "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。"
 }

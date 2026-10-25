@@ -204,10 +204,13 @@ t('editing an S1 point recalculates its derived power and removes stale power fo
 });
 
 
-test('a stored range reads as its worst bound: the larger for loads, the smaller for a limit', async () => {
+test('a stored range always reads as its maximum (one value, the worst case)', async () => {
   const { rangeWorst } = await import('../wizardState.ts');
   assert.deepEqual(rangeWorst({ allow_range: true }, { minimum: 5, maximum: 10 }), { worst: 10, min: 5, max: 10 });
-  assert.equal(rangeWorst({ allow_range: true, worst: 'min' }, { minimum: 1, maximum: 2 }).worst, 1);
+  // a limit (an allowed ripple) reads as its maximum too: the schema no longer marks any value `worst: "min"`
+  assert.equal(rangeWorst({ allow_range: true, worst: 'min' }, { minimum: 1, maximum: 2 }).worst, 2);
+  assert.equal(rangeWorst({ allow_range: true }, { minimum: 3, maximum: null }).worst, 3);
+  assert.equal(rangeWorst({ allow_range: true }, { minimum: null, maximum: null }).worst, '');
   assert.equal(rangeWorst({ allow_range: true }, 7), null);
   assert.equal(rangeWorst({}, { minimum: 1, maximum: 2 }), null);
 });

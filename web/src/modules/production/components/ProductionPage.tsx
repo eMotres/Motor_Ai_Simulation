@@ -14,6 +14,7 @@ import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import { ProductionApiError, productionApi } from '../api';
 import { callerRole, canEditRole, unackedRevisions } from '../helpers';
+import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
 import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
@@ -261,6 +262,11 @@ export const ProductionTab: React.FC = () => {
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
   const setSel = (v: { die: string; config: string } | null) => { setSelState(v); writeStore(LAST_KEY, v); };
+  // the strip under the tabs names THIS production's motor, not the live machine (lib/stripContext.ts)
+  useEffect(() => {
+    useTabContextStore.getState().setProduction(sel ? { die: sel.die, config: sel.config } : null);
+    return () => { useTabContextStore.getState().setProduction(null); };
+  }, [sel?.die, sel?.config]);
   return (
     // No top padding on the scroller itself: a sticky child sticks below the scroller's padding, and rows showed
     // through that gap above the fixed tab menu (owner 2026-10-18).  The padding lives on the inner box.

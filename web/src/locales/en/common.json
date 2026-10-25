@@ -459,6 +459,15 @@
     "settings": "Cookie settings"
   },
   "model3dViewed": "Viewing 3D model: {name}",
+  "strip": {
+    "project": "Project",
+    "projectTip": "The project you are viewing and its motors; the selected variant is highlighted. This line does not change the live machine.",
+    "chipTip": "Open this variant's stored points in Configure (the live machine is not changed)",
+    "noPointsTip": "No stored points for this variant yet - open it from the project's Motors & results tab",
+    "moreTip": "Other variants",
+    "production": "Production",
+    "productionTip": "The motor of the production you are viewing. This line does not change the live machine."
+  },
   "update": {
     "newVersion": "A new version of AeroStator is available.",
     "reload": "Reload"

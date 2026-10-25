@@ -20,6 +20,8 @@ export const readPointsTarget = (storage?: Parameters<typeof readView>[2]): Poin
 
 interface PointsConfigureState {
   target: PointsTarget | null;
+  /** the motor the card shows NOW (the opened one, then whichever step the user switched to) - the strip under the tabs names it */
+  current: { projectId: string; die: string; config: string } | null;
   /** the target came from browser storage, not from a click of this session */
   restored: boolean;
   open: (target: PointsTarget) => void;
@@ -29,14 +31,18 @@ interface PointsConfigureState {
 }
 
 const initial = readPointsTarget();
+const motorOf = (t: PointsTarget | null) => (t ? { projectId: t.projectId, die: t.die, config: t.config } : null);
 
 export const usePointsConfigureStore = create<PointsConfigureState>()((set, get) => ({
   target: initial,
+  current: motorOf(initial),
   restored: initial !== null,
-  open: (target) => { writeView(POINTS_VIEW_SCOPE, target); set({ target, restored: false }); },
+  open: (target) => { writeView(POINTS_VIEW_SCOPE, target); set({ target, current: motorOf(target), restored: false }); },
   remember: (change) => {
     const target = get().target;
-    if (target) writeView(POINTS_VIEW_SCOPE, { ...target, ...change });   // storage only: the open request itself is unchanged
+    if (!target) return;
+    writeView(POINTS_VIEW_SCOPE, { ...target, ...change });   // storage only: the open request itself is unchanged
+    set({ current: motorOf({ ...target, ...change }) });
   },
-  close: () => { writeView(POINTS_VIEW_SCOPE, null); set({ target: null, restored: false }); },
+  close: () => { writeView(POINTS_VIEW_SCOPE, null); set({ target: null, current: null, restored: false }); },
 }));

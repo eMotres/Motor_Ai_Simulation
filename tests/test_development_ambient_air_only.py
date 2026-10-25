@@ -91,3 +91,38 @@ def test_thermal_basis_follows_the_cooling_medium(case):
     ambient = {"status": "filled", "value": case["ambient"]} if case["ambient"] else None
     basis = models.thermal_basis(_draft(case["cooling"], ambient))
     assert (basis["medium"], basis["source"], basis["temperature_C"]) == (case["medium"], case["source"], case["temperature_C"])
+
+
+@pytest.mark.parametrize("case", CASES["cooling_required"], ids=lambda c: json.dumps(c["cooling"]))
+def test_cooling_temperature_required_for_liquid_and_underwater_only(case):
+    """Liquid needs the coolant inlet temperature, underwater the water temperature, air neither (3_2 is its basis)."""
+    props = _field("3_1")["properties"]
+    required = [p["id"] for p in props if models._property_required(p, case["cooling"])]
+    assert required == case["required"]
+
+
+@pytest.mark.parametrize("case", CASES["cooling_complete"], ids=lambda c: json.dumps(c["cooling"]))
+def test_cooling_answer_completeness_and_validation(case):
+    answer = {"status": "filled", "value": case["cooling"]}
+    assert models._answer_complete(answer, _field("3_1")) is case["complete"]
+    errors = [e["field"] for e in models.validation_errors(_draft(case["cooling"])) if e["field"].startswith("3_1.")]
+    assert (errors == []) is case["complete"], errors
+
+
+def test_not_known_yet_cooling_needs_no_temperature():
+    d = _draft({"cooling_medium": "liquid"}, cooling_status="not_known_yet")
+    assert models._answer_complete(d["fields"]["3_1"], _field("3_1")) is True
+    assert not any(e["field"].startswith("3_1.") for e in models.validation_errors(d))
+
+
+def _section3_answered(draft):
+    return models.completeness(draft)["sections"]["3"]["answered"]
+
+
+def test_air_cooled_project_stays_complete_and_liquid_one_needs_the_inlet():
+    air = _draft({"cooling_type": "forced air", "airflow": {"mode": "Fan"}}, {"status": "filled", "value": {"temperature_max_C": 45}})
+    liquid = _draft({"cooling_medium": "liquid", "coolant": "Water"})
+    assert _section3_answered(air) == 2        # 3_1 and 3_2 (3_3 is not filled in these drafts)
+    assert _section3_answered(liquid) == 0     # 3_1 incomplete without the inlet; 3_2 is not required
+    liquid["fields"]["3_1"]["value"]["inlet_temperature_C"] = 55
+    assert _section3_answered(liquid) == 1

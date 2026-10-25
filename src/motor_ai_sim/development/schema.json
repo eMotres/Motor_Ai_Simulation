@@ -1252,7 +1252,8 @@
               "label": {"en": "Max coolant inlet temperature", "zh-CN": "最高冷却液进口温度"},
               "type": "number",
               "unit": "°C",
-              "required": false
+              "required": false,
+              "required_when_cooling_medium": "liquid"
             },
             {
               "id": "flow_rate",
@@ -1281,7 +1282,8 @@
               },
               "type": "number",
               "unit": "°C",
-              "required": false
+              "required": false,
+              "required_when_cooling_medium": "submerged"
             },
             {
               "id": "water_speed_mps",

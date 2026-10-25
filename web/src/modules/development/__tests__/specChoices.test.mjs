@@ -34,7 +34,11 @@ test('each cooling medium lists only its own schema properties, and 3_1 is compl
   for (const list of Object.values(C.COOLING_PROPERTIES)) for (const id of list) assert.ok(ids.has(id), id);
   assert.deepEqual(prop('3_1', 'cooling_medium').options.map((o) => o.value), C.COOLING_MEDIA);
   const filled = (value) => ({ status: 'filled', value });
-  assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ cooling_medium: 'liquid' })), true);
+  // liquid also needs the coolant inlet temperature (the thermal basis), underwater the water temperature (owner 2026-10-26)
+  assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ cooling_medium: 'liquid' })), false);
+  assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ cooling_medium: 'liquid', inlet_temperature_C: 50 })), true);
+  assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ cooling_medium: 'submerged', water_temperature_C: 20 })), true);
+  assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ cooling_medium: 'air' })), true);
   assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ cooling_type: 'still air' })), true);
   // an inferred medium is never written, so a draft with only conditions stays incomplete until the click
   assert.equal(W.fieldAnswerComplete(field('3_1'), filled({ airflow: { speed_mps: 5 } })), false);

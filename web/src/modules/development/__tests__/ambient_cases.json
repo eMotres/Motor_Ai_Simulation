@@ -1,32 +1,341 @@
 {
   "note": "Shared by tests/test_development_ambient_air_only.py and ambientAirOnly.test.mjs: the backend and the web must agree. Values are made up.",
   "applies": [
-    {"cooling": null, "status": "filled", "applies": true},
-    {"cooling": {}, "status": "filled", "applies": true},
-    {"cooling": {"cooling_type": "to be decided"}, "status": "filled", "applies": true},
-    {"cooling": {"cooling_medium": "air"}, "status": "filled", "applies": true},
-    {"cooling": {"cooling_medium": "air", "airflow": {"mode": "Fan"}}, "status": "filled", "applies": true},
-    {"cooling": {"airflow": {"mode": "Ram air"}}, "status": "filled", "applies": true},
-    {"cooling": {"cooling_type": "forced air from the propeller", "inlet_temperature_C": 40}, "status": "filled", "applies": true},
-    {"cooling": {"cooling_medium": "liquid"}, "status": "filled", "applies": false},
-    {"cooling": {"cooling_medium": "liquid", "airflow": {"mode": "Propeller wash"}}, "status": "filled", "applies": false},
-    {"cooling": {"coolant": "Water-glycol 50/50"}, "status": "filled", "applies": false},
-    {"cooling": {"flow_rate": 4}, "status": "missing", "applies": false},
-    {"cooling": {"cooling_type": "water-glycol jacket"}, "status": "filled", "applies": false},
-    {"cooling": {"inlet_temperature_C": 40}, "status": "filled", "applies": false},
-    {"cooling": {"cooling_medium": "submerged"}, "status": "filled", "applies": false},
-    {"cooling": {"cooling_type": "submerged in sea water"}, "status": "filled", "applies": false},
-    {"cooling": {"cooling_type": "underwater thruster"}, "status": "filled", "applies": false},
-    {"cooling": {"depth_m": 30}, "status": "filled", "applies": false},
-    {"cooling": {"cooling_medium": "liquid"}, "status": "not_known_yet", "applies": true},
-    {"cooling": {"cooling_medium": "submerged"}, "status": "not_known_yet", "applies": true}
+    {
+      "cooling": null,
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {},
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "cooling_type": "to be decided"
+      },
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "air"
+      },
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "air",
+        "airflow": {
+          "mode": "Fan"
+        }
+      },
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "airflow": {
+          "mode": "Ram air"
+        }
+      },
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "cooling_type": "forced air from the propeller",
+        "inlet_temperature_C": 40
+      },
+      "status": "filled",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid"
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid",
+        "airflow": {
+          "mode": "Propeller wash"
+        }
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "coolant": "Water-glycol 50/50"
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "flow_rate": 4
+      },
+      "status": "missing",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "cooling_type": "water-glycol jacket"
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "inlet_temperature_C": 40
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged"
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "cooling_type": "submerged in sea water"
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "cooling_type": "underwater thruster"
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "depth_m": 30
+      },
+      "status": "filled",
+      "applies": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid"
+      },
+      "status": "not_known_yet",
+      "applies": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged"
+      },
+      "status": "not_known_yet",
+      "applies": true
+    }
   ],
   "thermal_basis": [
-    {"cooling": {"cooling_medium": "air"}, "ambient": {"temperature_max_C": 45}, "medium": "air", "source": "3_2.temperature_max_C", "temperature_C": 45},
-    {"cooling": null, "ambient": {"temperature_max_C": 40}, "medium": "air", "source": "3_2.temperature_max_C", "temperature_C": 40},
-    {"cooling": {"cooling_medium": "air"}, "ambient": null, "medium": "air", "source": "3_2.temperature_max_C", "temperature_C": null},
-    {"cooling": {"cooling_medium": "liquid", "inlet_temperature_C": 60}, "ambient": {"temperature_max_C": 45}, "medium": "liquid", "source": "3_1.inlet_temperature_C", "temperature_C": 60},
-    {"cooling": {"cooling_medium": "liquid"}, "ambient": {"temperature_max_C": 45}, "medium": "liquid", "source": "3_1.inlet_temperature_C", "temperature_C": null},
-    {"cooling": {"cooling_medium": "submerged", "water_temperature_C": 28}, "ambient": null, "medium": "submerged", "source": "3_1.water_temperature_C", "temperature_C": 28}
+    {
+      "cooling": {
+        "cooling_medium": "air"
+      },
+      "ambient": {
+        "temperature_max_C": 45
+      },
+      "medium": "air",
+      "source": "3_2.temperature_max_C",
+      "temperature_C": 45
+    },
+    {
+      "cooling": null,
+      "ambient": {
+        "temperature_max_C": 40
+      },
+      "medium": "air",
+      "source": "3_2.temperature_max_C",
+      "temperature_C": 40
+    },
+    {
+      "cooling": {
+        "cooling_medium": "air"
+      },
+      "ambient": null,
+      "medium": "air",
+      "source": "3_2.temperature_max_C",
+      "temperature_C": null
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid",
+        "inlet_temperature_C": 60
+      },
+      "ambient": {
+        "temperature_max_C": 45
+      },
+      "medium": "liquid",
+      "source": "3_1.inlet_temperature_C",
+      "temperature_C": 60
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid"
+      },
+      "ambient": {
+        "temperature_max_C": 45
+      },
+      "medium": "liquid",
+      "source": "3_1.inlet_temperature_C",
+      "temperature_C": null
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged",
+        "water_temperature_C": 28
+      },
+      "ambient": null,
+      "medium": "submerged",
+      "source": "3_1.water_temperature_C",
+      "temperature_C": 28
+    }
+  ],
+  "cooling_required": [
+    {
+      "cooling": {
+        "cooling_medium": "liquid"
+      },
+      "required": [
+        "inlet_temperature_C"
+      ]
+    },
+    {
+      "cooling": {
+        "coolant": "Water-glycol 50/50"
+      },
+      "required": [
+        "inlet_temperature_C"
+      ]
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged"
+      },
+      "required": [
+        "water_temperature_C"
+      ]
+    },
+    {
+      "cooling": {
+        "cooling_type": "submerged in sea water"
+      },
+      "required": [
+        "water_temperature_C"
+      ]
+    },
+    {
+      "cooling": {
+        "cooling_medium": "air"
+      },
+      "required": []
+    },
+    {
+      "cooling": {
+        "cooling_medium": "air",
+        "airflow": {
+          "mode": "Fan"
+        }
+      },
+      "required": []
+    },
+    {
+      "cooling": {
+        "cooling_type": "forced air from the propeller",
+        "inlet_temperature_C": 40
+      },
+      "required": []
+    },
+    {
+      "cooling": {},
+      "required": []
+    }
+  ],
+  "cooling_complete": [
+    {
+      "cooling": {
+        "cooling_medium": "air"
+      },
+      "complete": true
+    },
+    {
+      "cooling": {
+        "cooling_type": "forced air from the propeller",
+        "airflow": {
+          "mode": "propeller",
+          "speed_mps": 12
+        }
+      },
+      "complete": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid"
+      },
+      "complete": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid",
+        "coolant": "Water",
+        "inlet_temperature_C": ""
+      },
+      "complete": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid",
+        "coolant": "Water",
+        "inlet_temperature_C": 55
+      },
+      "complete": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid",
+        "inlet_temperature_C": 0
+      },
+      "complete": true
+    },
+    {
+      "cooling": {
+        "cooling_medium": "liquid",
+        "water_temperature_C": 20
+      },
+      "complete": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged"
+      },
+      "complete": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged",
+        "inlet_temperature_C": 50
+      },
+      "complete": false
+    },
+    {
+      "cooling": {
+        "cooling_medium": "submerged",
+        "water_temperature_C": 22
+      },
+      "complete": true
+    }
   ]
 }

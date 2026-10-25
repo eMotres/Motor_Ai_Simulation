@@ -362,7 +362,7 @@ def _answer_complete(answer: dict, field: dict) -> bool:
     if field.get("properties"):
         if not isinstance(value, dict):
             return False
-        required_props = [p for p in field["properties"] if p.get("required")]
+        required_props = [p for p in field["properties"] if _property_required(p, value)]
         if not all(_property_complete(value.get(prop["id"]), prop) for prop in required_props):
             return False
         if _missing_any_groups(field, value):
@@ -539,6 +539,16 @@ def field_applies(field: dict, draft: dict) -> bool:
         return True
     medium, _ = cooling_medium(_active_cooling(draft))
     return medium is None or medium in media
+
+
+def _property_required(prop: dict, value: Any) -> bool:
+    """A structured answer's property is required outright, or - the cooling temperatures - when the answer's own
+    cooling medium is the one named by `required_when_cooling_medium` (liquid: the coolant inlet temperature,
+    underwater: the water temperature).  The same rule as the web's `propertyRequired` (wizardState.ts)."""
+    if prop.get("required"):
+        return True
+    medium = prop.get("required_when_cooling_medium")
+    return bool(medium) and cooling_medium(value)[0] == medium
 
 
 def _field_required(field: dict, draft: dict) -> bool:
@@ -916,7 +926,7 @@ def validation_errors(draft: dict) -> list[dict]:
                 if answer.get("status") == "filled" and field.get("properties"):
                     val = answer.get("value", {})
                     for prop in field["properties"]:
-                        if prop.get("required"):
+                        if _property_required(prop, val):
                             item = val.get(prop["id"])
                             missing = not _value_present(item, prop)
                             if prop.get("allow_range") and isinstance(item, dict):

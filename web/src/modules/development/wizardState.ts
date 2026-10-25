@@ -43,6 +43,13 @@ export function fieldApplies(f: SchemaField, draft: SpecDraft): boolean {
   const { medium } = coolingMedium(activeCooling(draft));
   return medium === null || media.includes(medium);
 }
+/** A property of a structured answer is required outright, or - the cooling temperatures - when the answer's own cooling
+ *  medium is the one in `required_when_cooling_medium` (liquid: the coolant inlet temperature, underwater: the water
+ *  temperature).  The same rule as the backend's `_property_required`. */
+export function propertyRequired(prop: { required?: boolean; required_flag?: string; required_when_cooling_medium?: string }, value: unknown): boolean {
+  if (prop.required === true || prop.required_flag === 'E') return true;
+  return !!prop.required_when_cooling_medium && coolingMedium(value).medium === prop.required_when_cooling_medium;
+}
 export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return fieldApplies(f, draft) && (isRequired(f) || isConditionallyRequired(f, draft)); }
 export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {
   return (field as SpecificationField).storage_namespace ?? (section.id === 'production' || section.production ? 'production' : 'fields');
@@ -107,7 +114,7 @@ export function fieldAnswerComplete(field: SchemaField, answer: FieldAnswer): bo
   if (field.id === KEY_POINTS_ID) return answer.status === 'filled' && Array.isArray(answer.value) && keyPointsValid(answer.value as KeyPoint[]);
   if (answer.status !== 'filled' || !fieldValueValid(field, answer.value)) return false;
   const value = answer.value && typeof answer.value === 'object' ? answer.value as Record<string, unknown> : {};
-  const required = field.properties?.filter((property) => property.required === true || property.required_flag === 'E') ?? [];
+  const required = field.properties?.filter((property) => propertyRequired(property, value)) ?? [];
   if (field.properties?.length && !required.every((property) => schemaValueComplete(property, value[property.id]))) return false;
   if (field.properties?.length && missingAnyGroups(field, value).length) return false;
   const minimum = field.min_filled_properties ?? 0;

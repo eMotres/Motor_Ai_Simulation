@@ -40,7 +40,7 @@ test('other fields do not depend on the cooling', () => {
 test('a hidden ambient is not counted, not listed as missing and keeps its stored value', () => {
   const section = { id: '3', fields: [field('3_1'), field('3_2')] };
   const air = draftFor({ cooling_medium: 'air' }, 'filled');
-  const liquid = { fields: { '3_1': { status: 'filled', value: { cooling_medium: 'liquid' } }, '3_2': { status: 'filled', value: { temperature_max_C: 45, altitude_m: 800 } } } };
+  const liquid = { fields: { '3_1': { status: 'filled', value: { cooling_medium: 'liquid', inlet_temperature_C: 55 } }, '3_2': { status: 'filled', value: { temperature_max_C: 45, altitude_m: 800 } } } };
   assert.equal(W.sectionAnswerCounts(section, air).required, 2);
   assert.equal(W.sectionAnswerCounts(section, liquid).required, 1);
   assert.deepEqual(W.requiredFieldIds([section], air), ['3_2']);
@@ -94,4 +94,24 @@ test('the ambient line renders only the maximum, hidden for liquid and underwate
   assert.doesNotMatch(body, /altitude|temperature_min/);
   assert.match(source, /renderAmbient\(byId\('3_2'\)!\)/);
   assert.ok(en.wizard.ambientMaxNote && zh.wizard.ambientMaxNote);
+});
+
+test('liquid needs the coolant inlet temperature, underwater the water temperature, air neither (shared case table)', () => {
+  for (const c of cases.cooling_required) {
+    const required = field('3_1').properties.filter((p) => W.propertyRequired(p, c.cooling)).map((p) => p.id);
+    assert.deepEqual(required, c.required, JSON.stringify(c.cooling));
+  }
+  for (const c of cases.cooling_complete) {
+    assert.equal(W.fieldAnswerComplete(field('3_1'), { status: 'filled', value: c.cooling }), c.complete, JSON.stringify(c.cooling));
+  }
+  // an unknown cooling needs nothing; the counts follow
+  assert.equal(W.fieldAnswerComplete(field('3_1'), { status: 'not_known_yet', value: { cooling_medium: 'liquid' } }), true);
+  const section = { id: '3', fields: [field('3_1'), field('3_2')] };
+  const air = { fields: { '3_1': { status: 'filled', value: { cooling_type: 'forced air', airflow: { mode: 'Fan' } } }, '3_2': { status: 'filled', value: { temperature_max_C: 45 } } } };
+  assert.equal(W.sectionAnswerCounts(section, air).answered, 2);
+  const liquid = { fields: { '3_1': { status: 'filled', value: { cooling_medium: 'liquid', coolant: 'Water' } } } };
+  assert.equal(W.sectionAnswerCounts(section, liquid).answered, 0);
+  assert.deepEqual(W.requiredFieldIds([section], liquid), ['3_1']);
+  liquid.fields['3_1'].value.inlet_temperature_C = 55;
+  assert.equal(W.sectionAnswerCounts(section, liquid).answered, 1);
 });

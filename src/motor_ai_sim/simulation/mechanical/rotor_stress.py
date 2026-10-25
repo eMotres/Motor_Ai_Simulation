@@ -2915,6 +2915,7 @@ def solve_rotor_stress(polys: dict,
         cyclic_ties = sym.build_cyclic_ties(basis, smesh, part_tri, sector_plan)
         cs.cyclic = cyclic_ties
         cs.pair_no_row = sym.cut_face_pairs(cs, sector_plan) & ~cs.pair_unilateral
+        cs.pair_weight = sym.cut_face_pair_weights(cs, sector_plan)
     _solver_name, solve_fn = ctc._solver()  # noqa: SLF001 - module-internal by design
     led.at(2, "assembly (contact system, stiffness, loads)")
 
@@ -3553,6 +3554,8 @@ def solve_rotor_stress(polys: dict,
                 # pairs pull with, as a share of their normal force.  False is
                 # the TIED rotor — the bonded answer — and the case is a FAIL.
                 "consistent": bool(getattr(sol, "consistent", True)),
+                "globalized_steps": int(getattr(sol, "globalized_steps", 0)),
+                "equilibrium_residual_rel": getattr(sol, "equilibrium_residual_rel", None),
                 "tension_frac": float(getattr(sol, "tension_frac", 0.0)),
                 "n_tensile_pairs": int(getattr(sol, "n_tensile_pairs", 0)),
                 "cycled": bool(getattr(sol, "cycled", False)),

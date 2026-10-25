@@ -36,7 +36,8 @@ Three consequences the code has to respect, and does:
     twin plus the two ties (the normal rotates with the point, so
     ``(u_sB - u_rB).n_B == (u_sA - u_rA).n_A``).  Those rows are dropped —
     ``ContactSystem.pair_no_row`` — and nothing is released by dropping them.
-    Unilateral pairs are penalty springs and not rows, so they are left alone.
+    Unilateral pairs retain both traces, each with half of the nodal spring
+    weight. Two full springs would count the physical seam node twice.
 
 WHY THE GEOMETRY HAS TO BE SNAPPED FIRST
 ----------------------------------------
@@ -724,6 +725,23 @@ def cut_face_pairs(cs, plan: SectorPlan) -> np.ndarray:
     r = np.hypot(pos[:, 0], pos[:, 1])
     return ((np.abs(pos[:, 0] * sb - pos[:, 1] * cb) < RAY_TOL_M)
             & ((pos[:, 0] * cb + pos[:, 1] * sb) > 0) & (r > RAY_TOL_M))
+
+
+def cut_face_pair_weights(cs, plan: SectorPlan) -> np.ndarray:
+    """Half-weight both periodic seam copies of a nodal penalty spring.
+
+    After cyclic identification A and B represent one physical pair, whereas
+    an interior pair has only one copy per sector. Keep both for facet force
+    distribution, but do not double its stiffness, preload or friction force.
+    """
+    weights = np.ones(cs.n_pairs)
+    pos = np.asarray(cs.pair_pos)
+    for angle in (plan.cut_angle_rad, plan.cut_angle_b_rad):
+        c, s = math.cos(angle), math.sin(angle)
+        on_face = ((np.abs(pos[:, 0] * s - pos[:, 1] * c) < RAY_TOL_M)
+                   & (pos[:, 0] * c + pos[:, 1] * s > RAY_TOL_M))
+        weights[on_face & cs.pair_unilateral] = .5
+    return weights
 
 
 def drop_cut_face_hold(hold, plan: SectorPlan):

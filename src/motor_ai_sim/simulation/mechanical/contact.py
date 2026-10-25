@@ -499,6 +499,8 @@ class ContactSystem:
     pair_va: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
     pair_vb: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
     pair_pos: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    #: Periodic seam copies each own half of a physical nodal spring.
+    pair_weight: np.ndarray = field(default_factory=lambda: np.zeros(0))
     #: force -> facet distribution (n_facets_total, n_pairs), sums to 1 per pair
     W_force: Any = None
     #: gap/open averaging (n_facets_total, n_pairs); each facet's row sums to 1
@@ -937,6 +939,16 @@ class ContactSolution:
     #: True when the active set CYCLED (repeated a configuration it had already
     #: left) — reported beside ``converged`` instead of only in the log.
     cycled: bool = False
+    #: Number of load steps repaired by the globalized unilateral solve.
+    globalized_steps: int = 0
+    #: Original force/constraint residual at the final corrected step, if used.
+    equilibrium_residual_rel: Optional[float] = None
+
+
+def pair_weights(cs: ContactSystem) -> np.ndarray:
+    """Full-model pairs have weight one; each cyclic seam copy has one half."""
+    w = getattr(cs, "pair_weight", np.zeros(0))
+    return w if np.size(w) == cs.n_pairs else np.ones(cs.n_pairs)
 
 
 def _pair_rows(cs: ContactSystem, sel: np.ndarray, tangential: bool):
@@ -1265,7 +1277,7 @@ SEAT_LOOSE_FRAC = 1e-3
 
 
 def separation_tension(gap: np.ndarray, closed: np.ndarray, uni: np.ndarray,
-                       kc: float, tol_g: float) -> Tuple[float, float, int]:
+                       kc: float | np.ndarray, tol_g: float) -> Tuple[float, float, int]:
     """``(tension, compression, n_tensile)`` carried by the closed SEPARATION
     pairs, N per metre of stack (see ``TENSION_FRAC_TOL``).
 
@@ -1277,12 +1289,14 @@ def separation_tension(gap: np.ndarray, closed: np.ndarray, uni: np.ndarray,
     act = np.asarray(uni, dtype=bool) & np.asarray(closed, dtype=bool)
     ten = act & (gap > tol_g)
     comp = act & (gap < 0.0)
-    return (float(kc * gap[ten].sum()), float(kc * (-gap[comp]).sum()),
+    stiffness = np.broadcast_to(kc, gap.shape)
+    return (float((stiffness[ten] * gap[ten]).sum()),
+            float((stiffness[comp] * (-gap[comp])).sum()),
             int(ten.sum()))
 
 
 def contact_tension_resolution(pair_dofs: np.ndarray, row_scale: np.ndarray,
-                               g0: np.ndarray, kc: float) -> float:
+                               g0: np.ndarray, kc: float | np.ndarray) -> float:
     """Force cancellation budget on tensile contact rows, in N/m of stack.
 
     The four rows bound the two normal displacement traces. Summing their
@@ -1290,7 +1304,7 @@ def contact_tension_resolution(pair_dofs: np.ndarray, row_scale: np.ndarray,
     stiffness of the rest of the model. Seating offsets are local as well.
     """
     return CONTACT_FORCE_REL_TOL * float(
-        row_scale[pair_dofs].sum() + kc * np.abs(g0).sum())
+        row_scale[pair_dofs].sum() + np.sum(kc * np.abs(g0)))
 
 
 def tension_fraction(tension: float, compression: float) -> float:
@@ -1438,7 +1452,7 @@ def _loose_pairs(cs: ContactSystem, body: np.ndarray, body_dof: np.ndarray,
             arm = float(np.abs(cs.pair_pos[act] - cen).max())
             G = _body_rows(cs, act, in_a[act], cen, arm)
             T = _body_rows(cs, act, in_a[act], cen, arm, tangential=True)
-            H = G.T @ G + T.T @ (kt_ratio[act][:, None] * T)
+            H = G.T @ (pair_weights(cs)[act, None] * G) + T.T @ (kt_ratio[act][:, None] * T)
         else:
             arm = max(r_out, 1e-12)
             H = np.zeros((3, 3))
@@ -1763,7 +1777,9 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     s = math.sqrt(max(kscale, 1e-30))
     kc = CONTACT_STIFFNESS * kscale
     K_abs = abs(K)
-    kt = TANGENT_REG * kc
+    weights = pair_weights(cs)
+    kp = kc * weights
+    kt = TANGENT_REG * kp
     nv = cs.mesh.p.shape[1]
     solve_fn = solve_fn or _solver()[1]
 
@@ -1778,7 +1794,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     #: iteration from the Coulomb cone: min(kc, mu*Fn/|s|).  Starts at kc, i.e.
     #: every pair starts STUCK, which is the same warm start the normal
     #: direction uses (every pair starts closed).
-    kt_sec = np.full(npair, kc)
+    kt_sec = kp.copy()
 
     # ── the held-boundary rows, assembled once (they do not depend on the set) ─
     n_hold = 0
@@ -1890,6 +1906,8 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     tfrac_cur = 0.0
     tbad_cur = False
     cycled = False
+    globalized_steps = 0
+    equilibrium_residual_rel = None
     from motor_ai_sim import jobs as _jobs
     for it in range(1, max_iter * n_steps + 1):
         # STOP REACHES THE CONTACT ITERATION (2026-09-25): inside a job whose
@@ -1981,13 +1999,13 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
             ri, ci, vi, ip1 = _pair_rows(cs, act, False)
             B = sp.coo_matrix((vi, (ri, np.asarray(ci))),
                               shape=(int(act.sum()), ndof)).tocsr()
-            Kx = Kx + kc * (B.T @ B)
+            Kx = Kx + B.T @ sp.diags(kp[ip1]) @ B
             # The penalty is 0.5*kc*(B u + g0)^2, so an offset pair contributes
             # -kc B^T g0 to the load (2026-09-09, seating).  ``g0`` is all zeros
             # until something is seated, and this term is then exactly zero —
             # the same right-hand side this loop has always assembled.
             if np.any(g0[ip1]):
-                f_eff = f_step - kc * (B.T @ g0[ip1])
+                f_eff = f_step - B.T @ (kp[ip1] * g0[ip1])
             rt2, ct2, vt2, ip2 = _pair_rows(cs, act, True)
             Bt = sp.coo_matrix((vt2 * np.repeat(np.sqrt(kt_pair[ip2]), 4),
                                 (rt2, np.asarray(ct2))),
@@ -2039,7 +2057,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # active in the assembly but came back with an OPEN gap must report
         # nothing, or a non-converged step would show a separation contact
         # holding tension, which is the one thing it cannot do.
-        lam_n[uni] = kc * np.minimum(gap[uni], 0.0) * closed[uni]
+        lam_n[uni] = kp[uni] * np.minimum(gap[uni], 0.0) * closed[uni]
         lam_t[act] = kt_pair[act] * slip[act]
 
         tol_g = max(1e-13, 1e-9 * float(np.abs(u).max()))
@@ -2064,7 +2082,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         # above cannot tell a nearly-settled set from the all-tied one — a
         # penalty spring in tension opens by nanometres — and that is how the
         # bonded rotor was once reported as a converged separation answer.
-        ten_cur = separation_tension(gap, closed, uni, kc, tol_g)
+        ten_cur = separation_tension(gap, closed, uni, kp, tol_g)
         tfrac_cur = tension_fraction(ten_cur[0], ten_cur[1])
         # Resolve cancellation at the tensile pairs themselves. Unrelated
         # interior DOFs must not buy tolerance for a tied contact. Each pair
@@ -2073,7 +2091,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         tensile = uni & closed & (gap > tol_g)
         force_tol = contact_tension_resolution(
             cs.pair_dofs[tensile], np.abs(f_step) + K_abs @ np.abs(u),
-            g0[tensile], kc)
+            g0[tensile], kp[tensile])
         tbad_cur = (ten_cur[0] > force_tol
                     and tfrac_cur > TENSION_FRAC_TOL)
 
@@ -2214,7 +2232,8 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
                 Q = (np.array([fx, fy, mz / arm]) if loaded else np.zeros(3))
                 u_ = uni[sel]
                 a_seat, hit_cap = _seat_placement(
-                    gap[sel][u_], G[u_], Q, kc,
+                    gap[sel][u_] * np.sqrt(weights[sel][u_]),
+                    G[u_] * np.sqrt(weights[sel][u_])[:, None], Q, kc,
                     travel_cap - seat_travel.get(key, 0.0))
                 t = float(np.hypot(a_seat[0], a_seat[1]))
                 if hit_cap:
@@ -2355,11 +2374,11 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         if fr.any():
             fn = np.maximum(-lam_n, 0.0)
             cone = muc * fn                       # the largest force allowed
-            kt_new = np.full(npair, kc)
+            kt_new = kp.copy()
             s_abs = np.abs(slip)
-            on_cone = fr & (kc * s_abs > cone)
+            on_cone = fr & (kp * s_abs > cone)
             kt_new[on_cone] = cone[on_cone] / np.maximum(s_abs[on_cone], 1e-18)
-            kt_sec = np.where(fr, np.minimum(kt_new, kc), kc)
+            kt_sec = np.where(fr, np.minimum(kt_new, kp), kp)
             new_stick = ~on_cone
 
         # ── has anything that MATTERS changed? (2026-09-09) ──────────────────
@@ -2458,7 +2477,53 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
             kt_sec = best["kt_sec"]
             viol = best["viol"]
             ten_cur, tfrac_cur, tbad_cur = best["ten"], best["tfrac"], best["tbad"]
-        if not converged and viol <= freeze_margin and not tbad_cur:
+        # Repeating closed/stick FLAGS does not settle a continuous secant
+        # stiffness. Clipping its out-of-cone force after the solve destroys
+        # equilibrium. Require the force law itself before accepting the step.
+        friction_law_error = 0.
+        friction = uni & (muc > 0)
+        if friction.any():
+            cap = muc * np.maximum(-lam_n, 0.)
+            expected = np.clip(kp * slip, -cap, cap) * closed
+            rr, cc, vv, pp = _pair_rows(cs, friction, True)
+            Bt_check = sp.coo_matrix((vv, (rr, cc)),
+                                    shape=(len(pp), ndof)).tocsr()
+            friction_law_error = float(np.linalg.norm(
+                Bt_check.T @ (lam_t[pp] - expected[pp]))
+                / max(np.linalg.norm(f_step), 1e-30))
+            if friction_law_error > 1e-8:
+                converged = False
+        # A failed full-step active-set trial is not a physical equilibrium.
+        # Globalize the SAME load step and seating reference, allowing every
+        # plane to engage. Success requires original force balance, not a
+        # relaxed gap/tension threshold or a repeated Boolean set.
+        if (not converged or tbad_cur) and max_iter > 1 and uni.any():
+            from .contact_equilibrium import equilibrate
+            corrected = equilibrate(K, f_step, cs, basis, g0, u_seat,
+                                    hold, solve_fn)
+            if corrected is not None:
+                u = corrected["u"]
+                gap, slip = corrected["gap"], corrected["slip"]
+                lam_n, lam_t = corrected["lam_n"], corrected["lam_t"]
+                hold_mult = corrected["hold_mult"]
+                cyc_mult = corrected["cyclic_mult"]
+                closed = ~uni | (gap <= 0.)
+                cone = muc * np.maximum(-lam_n, 0.)
+                stick = ~uni | (np.abs(kp * slip) <= cone)
+                kt_sec = np.minimum(kp, cone / np.maximum(np.abs(slip), 1e-18))
+                frozen[:] = False
+                ten_cur = separation_tension(gap, closed, uni, kp, tol_g)
+                tfrac_cur = tension_fraction(ten_cur[0], ten_cur[1])
+                tbad_cur = False  # exact unilateral law: no tensile spring
+                viol = 0.
+                converged = True
+                globalized_steps += 1
+                equilibrium_residual_rel = corrected["equilibrium_residual_rel"]
+                log.info("contact step %d equilibrated by globalized correction "
+                         "(%d iterations, force residual %.3g)", step,
+                         corrected["iterations"], equilibrium_residual_rel)
+        if (not converged and viol <= freeze_margin and not tbad_cur
+                and friction_law_error <= 1e-8):
             # The active set never repeated — but the iterate being RETURNED
             # satisfies the complementarity conditions to within the penalty
             # method's own penetration (``FREEZE_MARGIN_FRAC``, 73 nm on the G2,
@@ -2496,6 +2561,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         it_step = 0
         f_step = f + lambdas[step - 1] * f_ramp
         converged = False
+        equilibrium_residual_rel = None
         viol = 0.0
         seen.clear()
         best = {"viol": math.inf, "it": 0, "tbad": True}
@@ -2507,9 +2573,9 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     # ── what each pair ended up transmitting TANGENTIALLY ────────────────────
     # Written 2026-09-07 with the torque load: "is this joint holding" needs a
     # per-pair state, not just open/closed.  `lam_t` already comes out of the
-    # secant spring, so it is on or inside the cone by construction — clamped
-    # anyway, because a loop that stopped at its iteration cap must never report
-    # a friction force Coulomb would not allow.
+    # secant spring. The step-end force-law check/globalized correction above
+    # must settle the actual cone before convergence is reported. Clamp failed
+    # iterates too, but never interpret that clamp as an equilibrium repair.
     fn_final = np.maximum(-lam_n, 0.0)
     slipping = uni & closed & (muc > 0) & ~stick
     cone_final = muc * fn_final
@@ -2627,7 +2693,9 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         hold_torque_n_m_per_m=hold_torque,
         tension_n_per_m=float(ten_cur[0]), compression_n_per_m=float(ten_cur[1]),
         tension_frac=float(tfrac_cur), n_tensile_pairs=int(ten_cur[2]),
-        consistent=bool(consistent), cycled=bool(cycled))
+        consistent=bool(consistent), cycled=bool(cycled),
+        globalized_steps=globalized_steps,
+        equilibrium_residual_rel=equilibrium_residual_rel)
 
 
 # ---------------------------------------------------------------------------

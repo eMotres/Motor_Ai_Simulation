@@ -22,7 +22,7 @@ export const STEP_DEFS: StepDef[] = [
   { id: 'cooling', core: ['3_1', '3_2', '3_3', '3_6'], optional: ['3_4', '3_5'], legacy: ['cooling'] },
   { id: 'mechanical', core: ['4_1', '4_2', '4_3', '4_4', '4_8', '4_6'], optional: ['4_5', '4_7', '4_9'], legacy: ['mechanical', 'construction', 'load'] },
   { id: 'safety', core: ['5_1', '5_4', '5_2', '5_3', '1_10', '1_9'], optional: ['tests', 'certification'], legacy: [] },
-  { id: 'project', core: ['6_1', '6_2', 'additional_requirements'], optional: ['6_4', 'packaging_delivery', 'controller_supplier', 'magnets_supplier', 'housing_supplier'], legacy: ['delivery', 'requirements'] },
+  { id: 'project', core: ['6_1', '6_2', 'additional_requirements'], optional: ['6_4', 'packaging_delivery', 'controller_supplier', 'magnets_supplier', 'housing_supplier'], legacy: ['delivery', 'requirements', 'more'] },
 ];
 
 /** How a step's core fields group into cards (a card with one field has no title of its own: the field's label is its
@@ -31,12 +31,16 @@ export interface CardDef { id: string; ids: string[]; /** no title even with sev
 export const STEP_CARDS: Record<WizardStepId, CardDef[]> = {
   application: [{ id: 'application', ids: ['1_1', 'load_type', '1_2'] }],
   operating: [{ id: 'points', ids: ['key_points'] }, { id: 'maxSpeed', ids: ['1_6'] }, { id: 'ripple', ids: ['1_8'] }, { id: 'mission', ids: ['mission_profile'] }],
-  supply: [{ id: 'dcBus', ids: ['2_1'] }, { id: 'controller', ids: ['2_4'] }, { id: 'phases', ids: ['2_6', '2_9'] }],
+  supply: [{ id: 'dcBus', ids: ['2_1'] }, { id: 'genOutput', ids: ['2_13'] }, { id: 'controller', ids: ['2_4'] }, { id: 'phases', ids: ['2_6', '2_9'] }],
   cooling: [{ id: 'cooling', ids: ['3_1', '3_2'] }, { id: 'housing', ids: ['3_3', '3_6'], untitled: true }],
   mechanical: [{ id: 'envelope', ids: ['4_1', '4_2'] }, { id: 'interface', ids: ['4_3', '4_4', '4_8'] }, { id: 'loads', ids: ['4_6'] }],
   safety: [{ id: 'standards', ids: ['5_1', '5_4', '5_2', '5_3'] }, { id: 'life', ids: ['1_10', '1_9'] }],
   project: [{ id: 'delivery', ids: ['6_1', '6_2'] }, { id: 'notes', ids: ['additional_requirements'] }],
 };
+
+/** Fields a step asks only for one project profile: the generator's AC output window (2_13) sits in the supply step of a
+ *  generator project and nowhere else; no existing answer is touched. */
+export const PROFILE_FIELDS: Record<string, Partial<Record<WizardStepId, string[]>>> = { generator: { supply: ['2_13'] } };
 
 /** Fields the schema has that the wizard never asks (see the header). */
 export const NOT_ASKED = ['1_3', '2_2', '2_3', '2_5', '2_10', '6_3', '6_5', 'target_price', 'load_source', 'load_characteristic', 'quantities', 'timeline'];
@@ -68,7 +72,7 @@ export function buildWizardSteps(schema: DevelopmentSchema, profile?: string): W
   }
   const pick = (ids: string[]) => ids.map((id) => byId.get(id)).filter((f): f is SpecificationField => !!f);
   const steps: WizardStep[] = STEP_DEFS.map((def) => {
-    const core = pick(def.core), optional = pick(def.optional);
+    const core = pick([...def.core, ...(PROFILE_FIELDS[profile ?? '']?.[def.id] ?? [])]), optional = pick(def.optional);
     return {
       id: def.id, title: stepTitleKey(def.id, profile), summary: stepSummaryKey(def.id, profile),
       fields: [...core, ...optional], coreIds: core.map((f) => f.id), optionalIds: optional.map((f) => f.id), legacy_ids: def.legacy,

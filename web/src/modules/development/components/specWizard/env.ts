@@ -19,4 +19,7 @@ export interface StepEnv {
   goToStep: (index: number) => void;
   /** a field the page asked to reveal: its optional group opens */
   revealField: string | null;
+  /** the steps whose optional group is open (remembered per viewer and project) */
+  groupOpen: string[];
+  onGroupOpen: (stepId: string, open: boolean) => void;
 }

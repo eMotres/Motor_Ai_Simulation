@@ -39,7 +39,9 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 /** Shaft power in watts of a torque (N·m) at a speed (rpm); null until both are numbers.  The magnitude: a generator
  *  point (negative torque) shows the power it takes at the shaft. */
 export function shaftPowerOf(torque: unknown, rpm: unknown): number | null {
-  return isNum(torque) && isNum(rpm) ? Math.abs(torque * 2 * Math.PI * rpm / 60) : null;
+  if (!isNum(torque) || !isNum(rpm)) return null;
+  const power = Math.abs(torque * 2 * Math.PI * rpm / 60);
+  return Number.isFinite(power) ? power : null;          // two finite inputs can still overflow: no power, never "Infinity MW"
 }
 /** A number to three significant digits without trailing zeros: 89.1, 1250, 0.512. */
 export function formatNumber(n: number): string {
@@ -57,27 +59,34 @@ export function formatPower(watts: number): string {
 }
 
 export interface ChartPoint { id: string; name: string; torque: number; speed: number; duration: KeyPointDuration; role: PointRole }
-/** The points the chart draws: rows with a torque and a speed (a half-filled row is not drawn). */
+/** Values beyond this magnitude (no motor reaches them) are not plotted, so no scale calculation can overflow or underflow. */
+export const PLOT_LIMIT = 1e12;
+const plottable = (v: unknown): v is number => isNum(v) && Math.abs(v) <= PLOT_LIMIT;
+/** The points the chart draws: rows with a torque and a speed (a half-filled row, a negative speed - a typing error that the
+ *  validation still reports - and an absurd magnitude are not drawn). */
 export function chartPoints(rows: KeyPoint[]): ChartPoint[] {
   const roles = pointRoles(rows);
-  return rows.filter((r) => isNum(r.torque_Nm) && isNum(r.speed_rpm)).map((r) => ({
+  return rows.filter((r) => plottable(r.torque_Nm) && plottable(r.speed_rpm) && (r.speed_rpm as number) >= 0).map((r) => ({
     id: r.row_id, name: r.name, torque: r.torque_Nm as number, speed: r.speed_rpm as number, duration: r.duration_s, role: roles.get(r.row_id) ?? null,
   }));
 }
 /** The maximum speed of the specification (rpm) for the chart's reference line; null while not set. */
-export function chartMaxSpeed(draft: SpecDraft): number | null { return maximumSpeedRpm(draft); }
+export function chartMaxSpeed(draft: SpecDraft): number | null { const v = maximumSpeedRpm(draft); return v !== null && plottable(v) ? v : null; }
 /** Mission-profile points (grey markers) - only rows with both numbers. */
 export function missionChartPoints(draft: SpecDraft): Array<{ id: string; speed: number; torque: number }> {
   if (draft.mission_profile_status === 'not_known_yet') return [];
-  return (draft.mission_profile ?? []).flatMap((row, i) => isNum(row.speed_rpm) && isNum(row.torque_Nm) ? [{ id: String(row.row_id ?? `m${i}`), speed: row.speed_rpm as number, torque: row.torque_Nm as number }] : []);
+  return (draft.mission_profile ?? []).flatMap((row, i) => plottable(row.speed_rpm) && (row.speed_rpm as number) >= 0 && plottable(row.torque_Nm) ? [{ id: String(row.row_id ?? `m${i}`), speed: row.speed_rpm as number, torque: row.torque_Nm as number }] : []);
 }
 
 /** Round tick values covering [min, max] with about `target` steps (1, 2, 2.5, 5 x 10^n). */
 export function niceTicks(min: number, max: number, target = 5): number[] {
-  if (!(max > min)) return min === 0 ? [0, 1] : [min, min + 1];
+  const fallback = [0, 1];
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return fallback;
+  if (!(max > min)) return min === 0 ? fallback : [min, min + 1];
   const raw = (max - min) / Math.max(1, target);
   const pow = 10 ** Math.floor(Math.log10(raw)), f = raw / pow;
   const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * pow;
+  if (!Number.isFinite(step) || !(step > 0) || !Number.isFinite(Math.floor(min / step) * step)) return fallback;      // subnormal or overflowing range
   const out: number[] = [];
   for (let v = Math.floor(min / step) * step; out.length < 50; v += step) { out.push(Number(v.toPrecision(12))); if (v >= max - step * 1e-9) break; }
   return out;
@@ -92,6 +101,10 @@ export interface ChartModel {
 /** Scales and ticks of the torque-speed chart: the axes start at zero (or the lowest negative torque) and end at a round
  *  value above the largest point, the maximum speed included. */
 export function buildChartModel(points: ChartPoint[], maxSpeed: number | null, mission: Array<{ id: string; speed: number; torque: number }> = [], size = { width: 640, height: 300 }): ChartModel {
+  // whatever the caller passes, only plottable values reach the scales
+  points = points.filter((p) => plottable(p.speed) && plottable(p.torque) && p.speed >= 0);
+  mission = mission.filter((m) => plottable(m.speed) && plottable(m.torque) && m.speed >= 0);
+  maxSpeed = maxSpeed !== null && plottable(maxSpeed) && maxSpeed > 0 ? maxSpeed : null;
   const plot = { left: 64, top: 16, right: size.width - 16, bottom: size.height - 44 };
   const speeds = [...points.map((p) => p.speed), ...mission.map((m) => m.speed), ...(maxSpeed ? [maxSpeed] : [])];
   const torques = [...points.map((p) => p.torque), ...mission.map((m) => m.torque)];
@@ -128,4 +141,17 @@ export function readableRange(value: unknown): string {
   if ('value' in range) return readableRange(range.value);
   const lo = range.minimum ?? range.min ?? range.from, hi = range.maximum ?? range.max ?? range.to;
   return lo == null && hi == null ? '' : `${lo ?? '—'}–${hi ?? '—'}`;
+}
+
+/** Where the maximum speed (1_6) is drawn: as the card beside the key points when the schema has them (version 2), else - a
+ *  version-1 draft has no key points - as its own schema-driven field, so the required field is never unreachable (review F02). */
+export function maxSpeedPlacement(fieldIds: string[]): 'card' | 'field' | null {
+  if (!fieldIds.includes('1_6')) return null;
+  return fieldIds.includes('key_points') ? 'card' : 'field';
+}
+/** What a mission-profile editor locks: marking the mission "not known yet" locks its inputs but never the control that takes
+ *  the mark back (review F03); a busy page or a read-only viewer locks everything. */
+export function missionLocks(o: { canEdit: boolean; busy: boolean; migrationBusy: boolean; unknown: boolean }): { inputs: boolean; toggle: boolean } {
+  const all = !o.canEdit || o.busy || o.migrationBusy;
+  return { inputs: all || o.unknown, toggle: all };
 }

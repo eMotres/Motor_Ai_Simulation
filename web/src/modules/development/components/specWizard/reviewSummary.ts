@@ -1,11 +1,12 @@
 /** The review screen's summary cards: for each step, the answered fields as a label and a short value.  Pure functions
  *  (no React), tested in node.  Values are formatted from the stored answer and the schema field (unit, menu labels). */
 import { CONTINUOUS } from '../../keyPoints.ts';
-import { suggestionDisplay } from '../../specChoices.ts';
+import { coolingMedium, coolingPropertyIds, suggestionDisplay } from '../../specChoices.ts';
 import type { SchemaProperty, Localized } from '../../types';
 import type { SpecificationField } from '../../specificationLayout';
 import { visibleProperties } from '../../specGrid.ts';
-import type { FieldAnswer, SpecDraft } from '../../wizardState.ts';
+import { fieldApplies, type FieldAnswer, type SpecDraft } from '../../wizardState.ts';
+import { deliveryConflicts } from '../../reviewPresentation.ts';
 import { formatNumber, operatingRows, pointRoles, shaftPowerOf, formatPower } from './operatingPoints.ts';
 import { answerPresent, type WizardStep } from './steps.ts';
 import type { WizardProfile } from './profile.ts';
@@ -67,7 +68,8 @@ export function reviewItems(step: WizardStep, draft: SpecDraft, o: { lang: strin
   const nameOf = (key: string) => t(`wizard.op.default.${key}`);
   const out: ReviewItem[] = [];
   for (const field of step.fields) {
-    const label = profile === 'generator' && field.id === '2_1' ? t('wizard.gen.inputWindow') : localized(field.short_label ?? field.label, lang);
+    if (!fieldApplies(field, draft)) continue;            // a field the editor hides (ambient under liquid cooling, depth above water) is not an active requirement
+    const label = localized(field.short_label ?? field.label, lang);
     const answer = answerOf(draft, field);
     const unknown = answer.status === 'not_known_yet' || answer.not_known_yet === true;
     if (unknown) { out.push({ id: field.id, label, value: t('wizard.review.later'), unknown: true }); continue; }
@@ -90,10 +92,9 @@ export function reviewItems(step: WizardStep, draft: SpecDraft, o: { lang: strin
       continue;
     }
     if (!answerPresent(answer)) continue;
-    if (profile === 'generator' && field.id === '2_1') {
-      const v = (answer.value ?? {}) as Record<string, unknown>;
-      const parts = [['voltage_min_V', 'wizard.gen.min'], ['voltage_nominal_V', 'wizard.gen.nom'], ['voltage_max_V', 'wizard.gen.max']].filter(([k]) => isNum(v[k])).map(([k, key]) => `${t(key)} ${formatNumber(v[k] as number)} V`);
-      if (parts.length) out.push({ id: field.id, label, value: parts.join(' · '), wide: true });
+    if (field.id === '3_1') {
+      const text = formatValue(activeCoolingShape(field, answer.value, draft), answer.value, lang, t);
+      if (text) out.push({ id: field.id, label, value: text, wide: text.length > 26 });
       continue;
     }
     const text = formatValue(field as Shape, answer.value, lang, t);
@@ -102,3 +103,33 @@ export function reviewItems(step: WizardStep, draft: SpecDraft, o: { lang: strin
   return out;
 }
 
+
+/** The cooling field as the editor shows it: only the medium and the conditions of the ACTIVE medium (liquid: coolant, inlet
+ *  temperature ...; air: airflow; underwater: water temperature and speed); the other media's values stay stored, unshown. */
+function activeCoolingShape(field: SpecificationField, value: unknown, draft: SpecDraft): Shape {
+  const { medium } = coolingMedium(value);
+  const loadAnswer = draft.fields?.load_type as { value?: unknown } | undefined;
+  const loadType = typeof loadAnswer?.value === 'string' ? loadAnswer.value : undefined;
+  const ids = medium ? ['cooling_medium', ...coolingPropertyIds(medium, loadType)] : ['cooling_medium', 'cooling_type'];
+  return { ...(field as Shape), properties: (field.properties ?? []).filter((p) => ids.includes(p.id)) } as Shape;
+}
+
+/** Commercial requirements (6_1 / 6_2) and the production plan (quantities / timeline) that disagree: one line per differing
+ *  value naming both sources.  Neither is chosen and neither namespace is changed (review F06). */
+export function deliveryConflictLines(steps: WizardStep[], draft: SpecDraft, lang: string, t: Translate): string[] {
+  const out: string[] = [];
+  const production = (draft.production ?? {}) as Record<string, { value?: unknown }>;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  for (const plan of deliveryConflicts(draft)) {
+    const fieldId = plan === 'quantities' ? '6_1' : '6_2';
+    const field = steps.flatMap((x) => x.fields).find((f) => f.id === fieldId);
+    const requirement = (draft.fields?.[fieldId] as { value?: Record<string, unknown> } | undefined)?.value ?? {};
+    const launch = (production[plan]?.value ?? {}) as Record<string, unknown>;
+    for (const prop of field?.properties ?? []) {
+      const a = requirement[prop.id], b = launch[prop.id];
+      if (a == null || b == null || same(a, b)) continue;
+      out.push(t('wizard.conflict.line', { label: localized(prop.short_label ?? prop.label, lang), requirement: formatValue(prop as Shape, a, lang, t), plan: formatValue(prop as Shape, b, lang, t) }));
+    }
+  }
+  return out;
+}

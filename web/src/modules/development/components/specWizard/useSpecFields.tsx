@@ -23,7 +23,7 @@ import MissionProfileEditor from '../MissionProfileEditor';
 import { MissionProfile, SuggestField } from './SpecInputs';
 import { hiddenAirflowModes, wizardNaturalAirflow, type WizardProfile } from './profile';
 import { answerPresent } from './steps';
-import { readableRange } from './operatingPoints';
+import { missionLocks, readableRange } from './operatingPoints';
 import type { ProjectThreadMessage, SpecState } from '../../types';
 import type { WizardStep } from './steps';
 
@@ -46,7 +46,7 @@ export interface SpecFieldsContext {
  *  value inputs, the battery, cooling, ambient, load and mission blocks, the label row with its comment icon and the
  *  "answer later" action.  The wizard steps arrange them; none of them knows which step it sits in. */
 export function useSpecFields(c: SpecFieldsContext) {
-  const { tr, lang, draftRef, updateDraft, spec, steps: sections, profile, canEditSpec, busy, migrationBusy, fieldErrors, messages, catalog, openFieldReview } = c;
+  const { tr, lang, draftRef, updateDraft, spec, steps: sections, canEditSpec, busy, migrationBusy, fieldErrors, messages, catalog, openFieldReview } = c;
   const [extraLoadProps, setExtraLoadProps] = useState<string[]>([]);
   const [addLoadAnchor, setAddLoadAnchor] = useState<HTMLElement | null>(null);
   const label = (v: unknown) => localeValue(v, lang);
@@ -100,7 +100,7 @@ export function useSpecFields(c: SpecFieldsContext) {
       return <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>{shape.properties.map((prop: any) => <Box key={prop.id} sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 0.3, alignItems: 'start', minWidth: 0 }}><Tooltip title={label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={specFieldLabelSx}>{label(prop.short_label ?? prop.label)}{(prop.required || prop.required_flag === 'E') && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}{prop.unit ? ` (${prop.unit})` : ''}</Typography></Tooltip>{renderTypedValue(prop, object[prop.id], (next) => onChange({ ...object, [prop.id]: next }), `${keyPrefix}-${prop.id}`, locked)}</Box>)}</Box>;
     }
     if (options.length) return <Select size="small" fullWidth displayEmpty sx={{ minWidth: optionsMinWidth(options), maxWidth: '100%' }} inputProps={{ 'aria-label': label(shape.short_label ?? shape.label) }} disabled={!canEditSpec || busy || migrationBusy || locked} value={text(value)} onChange={(e) => onChange(e.target.value)}><MenuItem value="">?</MenuItem>{storedOutsideOptions(value, options)}{options.map((option) => { const v = typeof option === 'string' ? option : option.value; return <MenuItem key={v} value={v}>{typeof option === 'string' ? option : label(option.label) || v}</MenuItem>; })}</Select>;
-    if (kind === 'boolean') return <Select size="small" fullWidth displayEmpty sx={{ minWidth: optionsMinWidth([tr('yes'), tr('no')]), maxWidth: '100%' }} disabled={!canEditSpec || busy || migrationBusy || locked} value={value == null || value === '' ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? '' : e.target.value === 'true')}><MenuItem value="">?</MenuItem><MenuItem value="true">{tr('yes')}</MenuItem><MenuItem value="false">{tr('no')}</MenuItem></Select>;
+    if (kind === 'boolean') return <Select size="small" fullWidth displayEmpty sx={{ minWidth: optionsMinWidth([tr('yes'), tr('no')]), maxWidth: '100%' }} inputProps={{ 'aria-label': label(shape.short_label ?? shape.label) }} disabled={!canEditSpec || busy || migrationBusy || locked} value={value == null || value === '' ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? '' : e.target.value === 'true')}><MenuItem value="">?</MenuItem><MenuItem value="true">{tr('yes')}</MenuItem><MenuItem value="false">{tr('no')}</MenuItem></Select>;
     if (shape.suggestions?.length && (kind === 'string' || kind === 'number')) return suggest(value, onChange, kind, shape.unit);
     return input(value, onChange, kind, shape.unit);
   };
@@ -166,7 +166,8 @@ export function useSpecFields(c: SpecFieldsContext) {
     const v2 = (spec?.schema_version ?? 1) >= 2, d = draftRef.current;
     const unknown = d.mission_profile_status === 'not_known_yet';
     const setRows = (rows: Array<Record<string, unknown>>) => updateDraft((old) => ({ ...old, mission_profile: rows, mission_profile_status: rows.length ? 'filled' : 'missing' }));
-    if (!v2) return <Box key={f.id} id={`spec-field-${f.id}`}><MissionProfile draft={d} disabled={!canEditSpec || busy || unknown} t={tr} lang={lang} onUnknown={(u) => markUnknown(f, u, false)} onChange={setRows} label={label(f.label)} columns={f.columns ?? []} error={fieldErrors[f.id]} /></Box>;
+    const locks = missionLocks({ canEdit: canEditSpec, busy, migrationBusy, unknown });
+    if (!v2) return <Box key={f.id} id={`spec-field-${f.id}`}><MissionProfile draft={d} disabled={locks.toggle} t={tr} lang={lang} onUnknown={(u) => markUnknown(f, u, false)} onChange={setRows} label={label(f.label)} columns={f.columns ?? []} error={fieldErrors[f.id]} /></Box>;
     return <Box key={f.id} id={`spec-field-${f.id}`} sx={{ minWidth: 0 }}>
       {labelRow(f, false, fieldRequired(f, d), unknown)}
       <MissionProfileEditor rows={(d.mission_profile ?? []) as unknown as MissionRow[]} load={readLoadDraft(d)} canEdit={canEditSpec && !busy && !migrationBusy} onReview={openFieldReview} unknown={unknown} onChange={(rows) => setRows(rows as unknown as Array<Record<string, unknown>>)} t={tr} />
@@ -201,7 +202,7 @@ export function useSpecFields(c: SpecFieldsContext) {
             </Box>)}
           </Box>
         ) : options?.length ? (
-          <Select size="small" fullWidth displayEmpty sx={{ minWidth: optionsMinWidth(options), maxWidth: '100%' }} disabled={!canEditSpec || busy || migrationBusy || unknown} value={val} onChange={(ev) => setAnswer(f, ev.target.value, prod)}>
+          <Select size="small" fullWidth displayEmpty sx={{ minWidth: optionsMinWidth(options), maxWidth: '100%' }} inputProps={{ 'aria-label': label(f.short_label ?? f.label) }} disabled={!canEditSpec || busy || migrationBusy || unknown} value={val} onChange={(ev) => setAnswer(f, ev.target.value, prod)}>
             <MenuItem value=""><em>?</em></MenuItem>{storedOutsideOptions(val, options)}{options.map((o) => { const value = typeof o === 'string' ? o : o.value; return <MenuItem key={value} value={value}>{typeof o === 'string' ? o : label(o.label) || value}</MenuItem>; })}
           </Select>
         ) : (
@@ -215,7 +216,6 @@ export function useSpecFields(c: SpecFieldsContext) {
   };
   /** 2_1 through the app's one battery block; the stated pack voltages stay editable beside it. */
   const renderBattery = (f: SpecificationField) => {
-    if (profile === 'generator') return renderInputWindow(f);
     const allowed = new Set((f.properties ?? []).map((p) => p.id));
     if (!allowed.has('cell_voltage_nominal_V')) return renderField(f);
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
@@ -234,19 +234,6 @@ export function useSpecFields(c: SpecFieldsContext) {
   };
   const propertyGrid = { ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;
   const switchButton = { textTransform: 'none', px: 1.5, py: 0.4, fontSize: 12 } as const;
-  /** 2_1 for a GENERATOR (owner 2026-10-27): the controller / load input window - the minimum, nominal and maximum AC input
-   *  voltage - instead of a battery for driving.  The same schema field and properties; the cell data stays stored. */
-  const renderInputWindow = (f: SpecificationField) => {
-    const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
-    const words: Record<string, string> = { voltage_min_V: 'wizard.gen.min', voltage_nominal_V: 'wizard.gen.nom', voltage_max_V: 'wizard.gen.max' };
-    const props = Object.keys(words).map((id) => f.properties?.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
-    return <Box id={`spec-field-${f.id}`} key={`f-${f.id}`} sx={{ minWidth: 0 }}>
-      {labelRow(f, false, required, unknown, tr('wizard.gen.inputWindow'), [tr('wizard.gen.inputWindowTip')])}
-      <Box sx={propertyGrid}>{props.map((p) => { const text = tr(words[p.id]); const shaped = { ...p, label: text, short_label: text, help: undefined }; return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel({ ...shaped, required: p.required })}{renderTypedValue(shaped, obj[p.id], (value) => setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}</Box>
-      {fieldMessages(f, answer, required)}
-      {answerLater(f, unknown, false)}
-    </Box>;
-  };
   /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`) under the chosen load: a medium the load cannot run in
    *  is disabled (an air propeller never runs under water), each medium shows its own conditions (+ the airflow the load
    *  still blows over a liquid-cooled housing) and the airflow menu offers only what the load makes. The other media's

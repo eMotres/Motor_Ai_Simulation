@@ -22,13 +22,12 @@ export function StepCard({ id, title, tip, action, accent, children, cardColumn 
   </Paper>;
 }
 
-/** The collapsed "Optional details" group of a step. */
-export function OptionalGroup({ label, count, defaultOpen = false, forceOpen = false, children }: { label: string; count: number; defaultOpen?: boolean; forceOpen?: boolean; children: React.ReactNode }) {
-  const [open, setOpen] = useState(defaultOpen);
-  useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
+/** The collapsed "Optional details" group of a step.  Controlled: the wizard remembers which groups are open (view memory). */
+export function OptionalGroup({ label, count, open, onOpenChange, forceOpen = false, children }: { label: string; count: number; open: boolean; onOpenChange: (open: boolean) => void; forceOpen?: boolean; children: React.ReactNode }) {
+  useEffect(() => { if (forceOpen && !open) onOpenChange(true); }, [forceOpen]);
   const shown = open || forceOpen;
   return <Paper component="section" elevation={0} sx={{ bgcolor: 'var(--panel)', border: '1px dashed var(--line)', borderRadius: '14px', boxShadow: 'none', minWidth: 0 }}>
-    <ButtonBase aria-expanded={shown} onClick={() => setOpen(!shown)} sx={{ width: '100%', minHeight: TOUCH, px: { xs: '14px', md: '20px' }, justifyContent: 'flex-start', gap: 1, textAlign: 'left', borderRadius: '14px', fontSize: 14, fontWeight: 600, color: 'var(--text-1)' }}>
+    <ButtonBase aria-expanded={shown} onClick={() => onOpenChange(!shown)} sx={{ width: '100%', minHeight: TOUCH, px: { xs: '14px', md: '20px' }, justifyContent: 'flex-start', gap: 1, textAlign: 'left', borderRadius: '14px', fontSize: 14, fontWeight: 600, color: 'var(--text-1)' }}>
       <span style={{ flex: 1 }}>{label} · {count}</span>
       <ExpandMoreIcon sx={{ transition: 'transform .15s', transform: shown ? 'rotate(180deg)' : 'none', color: 'var(--text-3)' }} />
     </ButtonBase>

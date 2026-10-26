@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, IconButton, LinearProgress, Stack, Tooltip, Typography, useMediaQuery } from '@mui/material';
+import { readView, writeView } from '../../../../lib/viewMemory';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import CheckIcon from '@mui/icons-material/Check';
 import type { Completeness, ProjectSummary, ProjectThreadMessage } from '../../types';
@@ -12,7 +13,7 @@ import { TOUCH } from './ui';
 
 export interface SpecWizardProps {
   project: ProjectSummary;
-  env: Omit<StepEnv, 'goToStep' | 'revealField'>;
+  env: Omit<StepEnv, 'goToStep' | 'revealField' | 'groupOpen' | 'onGroupOpen'>;
   step: number;
   onStep: (index: number) => void;
   completeness?: Completeness;
@@ -26,7 +27,8 @@ export interface SpecWizardProps {
   banner?: React.ReactNode;
   /** the assistant panel; `docked` = it is the right column (wide screens), otherwise it floats at the edge */
   assistant: (docked: boolean) => React.ReactNode;
-  readOnlyLabel?: string;
+  /** view-memory scope of this viewer and project (the open optional groups are remembered under it); null = not remembered */
+  memoryScope?: string | null;
 }
 
 /** The specification wizard (owner 2026-10-27): header with the project and the completeness bar, a vertical stepper on the
@@ -40,17 +42,29 @@ export default function SpecWizard(p: SpecWizardProps) {
   const fieldSteps = steps.filter((s) => s.kind !== 'review');
   const isReview = current.kind === 'review';
   const root = useRef<HTMLDivElement | null>(null);
+  const pending = useRef<string | null>(null);
   const [revealField, setRevealField] = useState<string | null>(null);
+  // the steps whose optional group is open: remembered per viewer and project; a step without core fields starts open
+  const [groupOpen, setGroupOpen] = useState<string[]>(() => {
+    const stored = p.memoryScope ? readView(p.memoryScope, (raw) => Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string').slice(0, 20) : null) : null;
+    return stored ?? steps.filter((s) => s.kind !== 'review' && s.coreIds.length === 0 && s.optionalIds.length > 0).map((s) => s.id);
+  });
+  const onGroupOpen = (stepId: string, open: boolean) => setGroupOpen((old) => {
+    const next = open ? [...old.filter((x) => x !== stepId), stepId] : old.filter((x) => x !== stepId);
+    if (p.memoryScope) writeView(p.memoryScope, next);
+    return next;
+  });
 
   // a new step starts at its top (not on the first render: the page may have restored it)
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
     root.current?.scrollIntoView?.({ block: 'start' });
+    // keyboard focus follows the step (review F10): the new step's heading, unless a field reveal takes the focus
+    if (!pending.current) document.getElementById(`spec-card-${steps[Math.min(step, steps.length - 1)].id}`)?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
   }, [step]);
 
   // reveal a field: go to its step, open its optional group, scroll to it and focus its first input
-  const pending = useRef<string | null>(null);
   const reveal = (fieldId: string) => {
     const index = stepIndexForField(steps, fieldId);
     if (index < 0) return;
@@ -71,7 +85,7 @@ export default function SpecWizard(p: SpecWizardProps) {
 
   const progress = overallProgress(completeness);
   const sectionComments = p.messages.filter((m) => !m.resolved && stepCommentRefs(current).includes(m.field_ref ?? ''));
-  const stepEnv: StepEnv = { ...env, goToStep: onStep, revealField };
+  const stepEnv: StepEnv = { ...env, goToStep: onStep, revealField, groupOpen, onGroupOpen };
   const openComments = p.messages.filter((m) => !m.resolved && !!m.field_ref);
   const next = steps[step + 1];
   const back = step > 0;
@@ -109,8 +123,9 @@ export default function SpecWizard(p: SpecWizardProps) {
         <Box id={`spec-card-${current.id}`} sx={{ scrollMarginTop: 12 }}>
           {!isReview && <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ mb: 2 }}>
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography component="h1" sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 700, color: 'var(--text-0)', lineHeight: 1.25 }}>{tr(current.title)}</Typography>
-              <Typography sx={{ fontSize: 14.5, color: 'var(--text-2)', mt: 0.5 }}>{tr(current.summary)}</Typography>
+              <Tooltip title={tr(current.summary)} placement="bottom-start" describeChild enterTouchDelay={0}>
+                <Typography component="h1" tabIndex={-1} sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 700, color: 'var(--text-0)', lineHeight: 1.25, outline: 'none', display: 'inline-block' }}>{tr(current.title)}</Typography>
+              </Tooltip>
             </Box>
             <Tooltip title={tr('sectionReview')}><IconButton aria-label={`${tr('sectionReview')}: ${tr(current.title)}`} onClick={() => p.onOpenFieldReview(`section:${current.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', minWidth: TOUCH, minHeight: TOUCH }}><ChatBubbleOutlineIcon sx={{ fontSize: 18 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 11, ml: 0.3 }}>{sectionComments.length}</Box>}</IconButton></Tooltip>
           </Stack>}
@@ -128,8 +143,7 @@ export default function SpecWizard(p: SpecWizardProps) {
           {!isReview && next && <Button variant="contained" onClick={() => onStep(step + 1)} sx={{ minHeight: 48, px: 3, textTransform: 'none', borderRadius: '12px', fontWeight: 600 }}>{tr(next.kind === 'review' ? 'wizard.toReview' : 'wizard.nextTo', { title: tr(next.title) })}</Button>}
         </Stack>
       </Box>
-      {docked && p.assistant(true)}
+      {p.assistant(docked)}
     </Box>
-    {!docked && p.assistant(false)}
   </Box>;
 }

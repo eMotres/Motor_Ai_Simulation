@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { buildWizardSteps, STEP_DEFS, STEP_CARDS, NOT_ASKED, stepIndexForField, stepCommentRefs, stepProgress, stillOpen, fieldState, overallProgress, answerPresent, isOptionalField } from '../components/specWizard/steps.ts';
+import { buildWizardSteps, PROFILE_FIELDS, STEP_DEFS, STEP_CARDS, NOT_ASKED, stepIndexForField, stepCommentRefs, stepProgress, stillOpen, fieldState, overallProgress, answerPresent, isOptionalField } from '../components/specWizard/steps.ts';
 import { buildChartModel, chartPoints, DURATION_PRESETS, durationMode, formatNumber, formatPower, missionChartPoints, niceTicks, operatingRows, pointRoles, shaftPowerOf } from '../components/specWizard/operatingPoints.ts';
 import { hiddenAirflowModes, isUntouchedDefaults, profileDefaultRows, PROFILE_DEFAULTS, wizardNaturalAirflow, wizardProfile } from '../components/specWizard/profile.ts';
 import { formatValue, reviewItems } from '../components/specWizard/reviewSummary.ts';
@@ -45,8 +45,13 @@ test('a field sits in at most one step; every required field is asked exactly on
   for (const def of STEP_DEFS) for (const id of [...def.core, ...def.optional]) assert.ok(field(id), id);
 });
 
-test('the cards of a step group exactly its core fields, in order', () => {
-  for (const def of STEP_DEFS) assert.deepEqual(STEP_CARDS[def.id].flatMap((c) => c.ids), def.core, def.id);
+test('the cards of a step group exactly its core fields, in order (a profile field has its own card)', () => {
+  for (const def of STEP_DEFS) {
+    const ids = STEP_CARDS[def.id].flatMap((c) => c.ids);
+    const extras = Object.values(PROFILE_FIELDS).flatMap((p) => p[def.id] ?? []);
+    assert.deepEqual(ids.filter((id) => !extras.includes(id)), def.core, def.id);
+    assert.deepEqual(extras.filter((id) => !ids.includes(id)), [], def.id);
+  }
   for (const def of STEP_DEFS) for (const card of STEP_CARDS[def.id]) if (card.ids.length > 1 && !card.untitled) assert.ok(en.wizard.card[card.id] && zh.wizard.card[card.id], card.id);
 });
 
@@ -226,17 +231,6 @@ test('airflow presets: a turbine or a water propeller hides propeller wash and r
   assert.equal(wizardNaturalAirflow('turbine', null), null);
 });
 
-test('the supply step of a generator speaks of the controller input window; the schema field is the same', () => {
-  const g = buildWizardSteps(schema, 'generator'), m = buildWizardSteps(schema, 'aviation');
-  assert.equal(g.find((s) => s.id === 'supply').title, 'wizard.steps.supply.titleGenerator');
-  assert.equal(m.find((s) => s.id === 'supply').title, 'wizard.steps.supply.title');
-  assert.deepEqual(g.find((s) => s.id === 'supply').fields.map((f) => f.id), m.find((s) => s.id === 'supply').fields.map((f) => f.id));
-  for (const k of ['wizard.steps.supply.titleGenerator', 'wizard.steps.supply.summaryGenerator', 'wizard.gen.inputWindow', 'wizard.gen.min', 'wizard.gen.nom', 'wizard.gen.max', 'wizard.op.voltageGenerator', 'wizard.op.derivedGenerator', 'wizard.op.torqueGenerator']) {
-    assert.ok(get(en, k) && get(zh, k), k);
-  }
-  assert.match(en.wizard.op.derivedGenerator, /T·ω/); assert.match(en.wizard.op.voltageGenerator, /AC/);
-});
-
 // ── review summary ──────────────────────────────────────────────────────────────────────────────────────────────────
 test('review items: one line per usable point with torque, speed, duration and power; max speed; answer-later fields', () => {
   const rows = [{ ...blankKeyPoint('Rated'), row_id: 'r', torque_Nm: 1000, speed_rpm: 850, duration_s: CONTINUOUS }, { ...blankKeyPoint('Peak'), row_id: 'p', torque_Nm: 1500, speed_rpm: 1000, duration_s: 60 }, blankKeyPoint('Empty')];
@@ -263,15 +257,6 @@ test('review values: units, menu labels, objects, booleans, ranges as their maxi
   assert.equal(formatValue(field('1_2'), '', 'en', t), '');
   assert.equal(formatValue(field('6_1'), { prototypes: 1 }, 'en', t), '1');                  // no "1 units"
   assert.equal(formatValue(field('3_1'), { cooling_medium: 'air', airflow: { mode: 'Propeller wash' } }, 'en', t), 'Air · Propeller wash');
-});
-
-test('a generator project reads its supply as an input window in the review', () => {
-  const d = draft({ '2_1': filled({ voltage_min_V: 400, voltage_nominal_V: 480, voltage_max_V: 520, chemistry: 'NMC' }) });
-  const items = reviewItems(step('supply'), d, { lang: 'en', t: tr, profile: 'generator' });
-  const item = items.find((i) => i.id === '2_1');
-  assert.equal(item.label, 'Controller input window');
-  assert.equal(item.value, 'Minimum AC input voltage 400 V · Nominal AC input voltage 480 V · Maximum AC input voltage 520 V');
-  assert.ok(!/NMC/.test(item.value));
 });
 
 // ── wording ─────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -94,8 +94,10 @@
     "answerNow": "Answer now",
     "markedLater": "Marked for later",
     "change": "Change",
+    "conflict": {
+      "line": "{label}: {requirement} (requirement) vs {plan} (production plan)"
+    },
     "loadNote": "Load: {load}",
-    "loadNone": "The load is set in step 1 and decides the cooling options.",
     "state": {
       "done": "Complete",
       "partial": "In progress",
@@ -115,7 +117,7 @@
         "title": "Supply & drive",
         "summary": "DC bus, inverter, phase limits",
         "titleGenerator": "Output & controller",
-        "summaryGenerator": "AC input window, controller"
+        "summaryGenerator": "DC bus, AC output window, controller"
       },
       "cooling": {
         "title": "Cooling & environment",
@@ -168,9 +170,8 @@
       "seconds": "Duration",
       "torqueGenerator": "Shaft torque (input)",
       "voltage": "DC voltage (optional)",
-      "voltageGenerator": "AC voltage (optional)",
       "derived": "= {power} at the shaft",
-      "derivedGenerator": "P = T·ω = {power}",
+      "derivedGenerator": "Shaft input |T·ω| = {power}",
       "role": {
         "continuous": "Continuous (S1)",
         "peak": "Peak (S2)"
@@ -185,13 +186,6 @@
         "cutIn": "Cut-in",
         "rated": "Rated (continuous)"
       }
-    },
-    "gen": {
-      "inputWindow": "Controller input window",
-      "inputWindowTip": "AC voltage the controller or load accepts from the generator: minimum, nominal and maximum.",
-      "min": "Minimum AC input voltage",
-      "nom": "Nominal AC input voltage",
-      "max": "Maximum AC input voltage"
     },
     "review": {
       "headingReady": "Everything looks ready",

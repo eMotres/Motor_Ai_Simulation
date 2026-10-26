@@ -4,6 +4,7 @@ import { canSubmitSpec } from '../../submitFailure';
 import type { StepEnv } from './env';
 import { reviewItems, localized } from './reviewSummary';
 import { stillOpen } from './steps';
+import DeliveryConflict from './DeliveryConflict';
 import { TOUCH } from './ui';
 
 /** The review before submit: a summary card per step with large values and an Edit link, a soft "Still open" card for what
@@ -21,11 +22,12 @@ export default function ReviewStep({ env, completeness, submitErrors, submitConf
   return <Stack spacing={2.5} sx={{ minWidth: 0 }}>
     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-end' }}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography component="h1" sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 700, color: 'var(--text-0)' }}>{tr(openCount ? 'wizard.review.headingOpen' : 'wizard.review.headingReady')}</Typography>
+        <Typography component="h1" tabIndex={-1} sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 700, color: 'var(--text-0)', outline: 'none' }}>{tr(openCount ? 'wizard.review.headingOpen' : 'wizard.review.headingReady')}</Typography>
         <Typography role="status" sx={{ fontSize: 14, color: 'var(--text-2)', mt: 0.5 }}>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography>
       </Box>
       {canSubmitSpec(canEditSpec) && <Tooltip title={<>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={submitBusy} onClick={onSubmit} sx={{ minHeight: 52, px: 3.5, fontSize: 16, fontWeight: 600, textTransform: 'none', borderRadius: '12px' }}>{tr(openCount ? 'wizard.review.submitOpen' : 'wizard.review.submit', { count: openCount })}</Button></span></Tooltip>}
     </Stack>
+    <DeliveryConflict env={env} />
     {submitErrors.map((x, i) => <Alert key={i} severity="error" action={i === 0 && submitConflict ? <Button color="inherit" size="small" onClick={onReload}>{tr('reloadDraft')}</Button> : undefined}>{x}</Alert>)}
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 2, alignItems: 'start' }}>
       {cards.map(({ step, index, items }) => <Paper key={step.id} component="section" elevation={0} aria-label={tr(step.title)} sx={{ p: '20px', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', boxShadow: 'none', minWidth: 0 }}>

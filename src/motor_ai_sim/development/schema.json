@@ -1172,6 +1172,106 @@
             "zh-CN": "温度检测"
           },
           "presentation_group": "2"
+        },
+        {
+          "id": "2_13",
+          "checklist_id": "2.13",
+          "label": {
+            "en": "Generator output window (AC voltage the generator delivers, with its definition)",
+            "zh-CN": "发电机输出范围（发电机输出的交流电压及其定义）"
+          },
+          "type": "object",
+          "unit": "V",
+          "required": false,
+          "allow_not_known_yet": true,
+          "help": {
+            "en": "Generators only. The AC voltage window at the generator terminals, separate from the DC bus fields: say whether it is line-to-line or phase, RMS or peak, and the speeds it applies at.",
+            "zh-CN": "仅用于发电机。发电机端子处的交流电压范围，与直流母线字段分开：说明是线电压还是相电压、有效值还是峰值，以及适用的转速。"
+          },
+          "properties": [
+            {
+              "id": "ac_min_V",
+              "label": {
+                "en": "Minimum AC voltage",
+                "zh-CN": "最小交流电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "ac_max_V",
+              "label": {
+                "en": "Maximum AC voltage",
+                "zh-CN": "最大交流电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "basis",
+              "label": {
+                "en": "Voltage definition",
+                "zh-CN": "电压定义"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "options": [
+                {
+                  "value": "line_line_rms",
+                  "label": {
+                    "en": "Line-to-line, RMS",
+                    "zh-CN": "线电压，有效值"
+                  }
+                },
+                {
+                  "value": "line_line_peak",
+                  "label": {
+                    "en": "Line-to-line, peak",
+                    "zh-CN": "线电压，峰值"
+                  }
+                },
+                {
+                  "value": "phase_rms",
+                  "label": {
+                    "en": "Phase, RMS",
+                    "zh-CN": "相电压，有效值"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "at_rpm_min",
+              "label": {
+                "en": "At speed, minimum",
+                "zh-CN": "对应转速，最低"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "at_rpm_max",
+              "label": {
+                "en": "At speed, maximum",
+                "zh-CN": "对应转速，最高"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": false,
+              "min": 0
+            }
+          ],
+          "short_label": {
+            "en": "Generator output window",
+            "zh-CN": "发电机输出范围"
+          },
+          "presentation_group": "2"
         }
       ],
       "presentation_order": 5

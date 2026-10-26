@@ -230,7 +230,7 @@ export default function DevelopmentPage() {
   }, [user?.email, loading, projects, selected, loadProject]);
   useEffect(() => {
     if (!pendingView || !selected || !spec || selected.id !== pendingView.project) return;
-    const next = restorableView(pendingView, sections.length, canEditProject);
+    const next = restorableView(pendingView, sections.map((item) => item.id), canEditProject);
     setPendingView(null);
     setStep(next.step);
     if (next.view === 'specification') { setView('specification'); if (next.step > 0) showCard(next.step); } else void openTab(next.view);
@@ -239,7 +239,7 @@ export default function DevelopmentPage() {
   useEffect(() => {
     const identity = user?.email;
     if (!identity || viewRestoredFor.current !== identity || restoringView.current || pendingView) return;
-    if (selected) writeView(developmentViewScope(identity), { project: selected.id, view, step });
+    if (selected) writeView(developmentViewScope(identity), { project: selected.id, view, step, stepId: sections[step]?.id });
     else clearView(developmentViewScope(identity));
   }, [user?.email, selected?.id, view, step, pendingView]);
   // A link to a project (/projects/<id>[/<view>][?die=&config=], e.g. from an activity e-mail): open that project once, on the view
@@ -542,7 +542,7 @@ export default function DevelopmentPage() {
       <Tab value="specification" label={tr('tabs.specification')} /><Tab value="motors" label={tr('tabs.motors')} /><Tab value="messages" label={tr('tabs.messages')} />{canEditProject && <Tab value="notes" label={tr('tabs.notes')} />}
     </Tabs>
     {view === 'specification' && <Box sx={{ minWidth: 0 }}>
-      {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecWizard
+      {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecWizard key={selected.id} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}
         project={selected} step={step} onStep={showCard} completeness={completeness} saving={saving} saveError={saveError}
         onRetrySave={() => void enqueueSave(selected.id, draftRef.current, projectToken.current).catch(() => {})} onReloadDraft={() => void reloadDraft()}
         submitError={submitError} submitConflict={submitConflict} submitBusy={busy || saving} onSubmit={() => void onSubmitSpec()}

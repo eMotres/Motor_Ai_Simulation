@@ -9,7 +9,7 @@ import type { StepEnv } from './env';
 import type { WizardStep } from './steps';
 import { OptionalGroup, StepCard, BigNumber, DurationChips, TOUCH } from './ui';
 import OperatingChart from './OperatingChart';
-import { buildChartModel, chartMaxSpeed, chartPoints, formatPower, missionChartPoints, operatingRows, pointRoles, readableRange, retainedS1Range, shaftPowerOf } from './operatingPoints';
+import { buildChartModel, chartMaxSpeed, maxSpeedPlacement, chartPoints, formatPower, missionChartPoints, operatingRows, pointRoles, readableRange, retainedS1Range, shaftPowerOf } from './operatingPoints';
 import { cardColumnMin } from '../../specGrid';
 
 /** Step 2 - Operating points: one card per named point (torque, speed, duration chips, derived power), the maximum speed,
@@ -38,6 +38,7 @@ export default function OperatingStep({ env, step }: { env: StepEnv; step: Wizar
   const legacyTip = retained ? `${tr('migration.retainedRange')}: ${tr('field.torque')} ${readableRange(retained.torque_Nm)} N·m · ${tr('field.speed')} ${readableRange(retained.speed_rpm)} rpm` : '';
   const dotColor = (row: KeyPoint) => row.duration_s === CONTINUOUS ? theme.palette.primary.main : typeof row.duration_s === 'number' ? theme.palette.warning.main : 'var(--text-4)';
 
+  const placement = maxSpeedPlacement(step.fields.map((f) => f.id));
   const optional = step.optionalIds.map((id) => field(id)).filter((f): f is NonNullable<typeof f> => !!f);
   return <Stack spacing={2} sx={{ minWidth: 0 }}>
     {kp && <Box id={`spec-field-${kp.id}`}>
@@ -64,10 +65,10 @@ export default function OperatingStep({ env, step }: { env: StepEnv; step: Wizar
             </Box>
             <Typography aria-live="polite" sx={{ fontSize: 13.5, color: 'var(--text-2)', minHeight: 20, fontVariantNumeric: 'tabular-nums' }}>{power === null ? '' : tr(generator ? 'wizard.op.derivedGenerator' : 'wizard.op.derived', { power: formatPower(power) })}</Typography>
             <DurationChips duration={row.duration_s} onChange={(next) => patch(row.row_id, { duration_s: next })} disabled={locked} error={bad('duration_s')} label={tr('keyPoints.duration')} t={tr} ariaPrefix={aria} />
-            <BigNumber size="normal" label={tr(generator ? 'wizard.op.voltageGenerator' : 'wizard.op.voltage')} unit="V" min={0} ariaLabel={`${aria}: ${tr(generator ? 'wizard.op.voltageGenerator' : 'wizard.op.voltage')}`} value={row.voltage_V} disabled={locked} onChange={(n) => patch(row.row_id, { voltage_V: n })} />
+            <BigNumber size="normal" label={tr('wizard.op.voltage')} unit="V" min={0} ariaLabel={`${aria}: ${tr('wizard.op.voltage')}`} value={row.voltage_V} disabled={locked} onChange={(n) => patch(row.row_id, { voltage_V: n })} />
           </StepCard>;
         })}
-        {maxField && renderMaxSpeed()}
+        {maxField && placement === 'card' && renderMaxSpeed()}
       </Box>
       <Stack spacing={0.5} sx={{ mt: 1 }}>
         {canEditSpec && <Button startIcon={<AddIcon />} disabled={locked || rows.length >= 50} onClick={() => setRows([...rows, blankKeyPoint()])} sx={{ alignSelf: 'flex-start', minHeight: TOUCH, textTransform: 'none' }}>{tr('keyPoints.add')}</Button>}
@@ -76,10 +77,11 @@ export default function OperatingStep({ env, step }: { env: StepEnv; step: Wizar
         {fields.answerLater(kp, unknown, false)}
       </Stack>
     </Box>}
+    {maxField && placement === 'field' && <StepCard cardColumn={cardColumnMin([maxField])}>{fields.renderField(maxField)}</StepCard>}
     <StepCard><OperatingChart model={model} t={tr} generator={generator} /></StepCard>
     {field('1_8') && <StepCard cardColumn={cardColumnMin([field('1_8')!])}>{fields.renderField(field('1_8')!)}</StepCard>}
     {field('mission_profile') && <StepCard>{fields.renderField(field('mission_profile')!)}</StepCard>}
-    {optional.length > 0 && <OptionalGroup label={tr('wizard.optional')} count={optional.length} forceOpen={!!env.revealField && step.optionalIds.includes(env.revealField)}>
+    {optional.length > 0 && <OptionalGroup label={tr('wizard.optional')} count={optional.length} open={env.groupOpen.includes(step.id)} onOpenChange={(o) => env.onGroupOpen(step.id, o)} forceOpen={!!env.revealField && step.optionalIds.includes(env.revealField)}>
       {optional.map((f) => fields.renderField(f))}
     </OptionalGroup>}
   </Stack>;

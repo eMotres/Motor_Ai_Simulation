@@ -94,8 +94,10 @@
     "answerNow": "现在回答",
     "markedLater": "已标记为稍后回答",
     "change": "更改",
+    "conflict": {
+      "line": "{label}：{requirement}（需求）与 {plan}（生产计划）"
+    },
     "loadNote": "负载：{load}",
-    "loadNone": "负载在第 1 步选择，并决定可选的冷却方式。",
     "state": {
       "done": "已完成",
       "partial": "进行中",
@@ -115,7 +117,7 @@
         "title": "供电与驱动",
         "summary": "直流母线、逆变器、相电流限值",
         "titleGenerator": "输出与控制器",
-        "summaryGenerator": "交流输入范围、控制器"
+        "summaryGenerator": "直流母线、交流输出范围、控制器"
       },
       "cooling": {
         "title": "冷却与环境",
@@ -168,9 +170,8 @@
       "seconds": "持续时间",
       "torqueGenerator": "轴转矩（输入）",
       "voltage": "直流电压（可选）",
-      "voltageGenerator": "交流电压（可选）",
       "derived": "= 轴端 {power}",
-      "derivedGenerator": "P = T·ω = {power}",
+      "derivedGenerator": "轴输入功率 |T·ω| = {power}",
       "role": {
         "continuous": "连续 (S1)",
         "peak": "峰值 (S2)"
@@ -185,13 +186,6 @@
         "cutIn": "切入",
         "rated": "额定（连续）"
       }
-    },
-    "gen": {
-      "inputWindow": "控制器输入范围",
-      "inputWindowTip": "控制器或负载可接受的发电机交流电压：最小、额定和最大。",
-      "min": "最小交流输入电压",
-      "nom": "额定交流输入电压",
-      "max": "最大交流输入电压"
     },
     "review": {
       "headingReady": "一切就绪",

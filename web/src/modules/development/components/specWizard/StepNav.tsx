@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, ButtonBase, Menu, MenuItem, Typography } from '@mui/material';
+import { Box, ButtonBase, Menu, MenuItem, Tooltip, Typography } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { SpecDraft } from '../../wizardState';
@@ -24,15 +24,14 @@ export function StepList({ steps, draft, current, onSelect, tr }: { steps: Wizar
       const p = step.kind === 'review' ? null : stepProgress(step, draft);
       const state: StepState = p?.state ?? 'empty';
       const active = i === current;
-      return <ButtonBase key={step.id} onClick={() => onSelect(i)} aria-current={active ? 'step' : undefined} aria-label={`${tr(step.title)}${p ? `, ${tr(`wizard.state.${state}`)}` : ''}`}
-        sx={{ display: 'flex', alignItems: 'center', gap: 1.5, textAlign: 'left', justifyContent: 'flex-start', minHeight: 56, px: 1.5, py: 1, borderRadius: '10px', bgcolor: active ? 'var(--panel)' : 'transparent', boxShadow: active ? '0 1px 2px rgba(0,0,0,.12)' : 'none', color: 'var(--text-0)', '&:hover': { bgcolor: 'var(--panel)' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main' } }}>
+      return <Tooltip key={step.id} title={tr(step.summary)} placement="right" describeChild enterDelay={400}><ButtonBase onClick={() => onSelect(i)} aria-current={active ? 'step' : undefined} aria-label={`${tr(step.title)}${p ? `, ${tr(`wizard.state.${state}`)}` : ''}`}
+        sx={{ display: 'flex', alignItems: 'center', gap: 1.5, textAlign: 'left', justifyContent: 'flex-start', minHeight: 48, px: 1.5, py: 1, borderRadius: '10px', bgcolor: active ? 'var(--panel)' : 'transparent', boxShadow: active ? '0 1px 2px rgba(0,0,0,.12)' : 'none', color: 'var(--text-0)', '&:hover': { bgcolor: 'var(--panel)' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main' } }}>
         <Marker index={i} state={state} current={active} />
         <Box component="span" sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
           <Typography component="span" sx={{ fontSize: 14, fontWeight: active ? 600 : 500, lineHeight: 1.3 }}>{tr(step.title)}</Typography>
-          <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.3, overflowWrap: 'anywhere' }}>{tr(step.summary)}</Typography>
         </Box>
         {p && p.required > 0 && <Typography component="span" sx={{ fontSize: 11.5, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{p.answered}/{p.required}</Typography>}
-      </ButtonBase>;
+      </ButtonBase></Tooltip>;
     })}
   </Box>;
 }

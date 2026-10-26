@@ -126,11 +126,15 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
             magnet = mag
         temps = _temps(stored)
         eff = num(s.get("efficiency_shaft")) or num(s.get("efficiency"))
+        # DC link in, shaft out: the controller record's wall-to-shaft efficiency (inverter x motor), when stored
+        ctrl = (stored or {}).get("controller")
+        eff_sys = num(((ctrl or {}).get("efficiency") or {}).get("wall_to_shaft")) if isinstance(ctrl, dict) else None
         p_shaft = num(s.get("P_shaft_net_W"))
         torque = (p_shaft / (rpm * 3.141592653589793 / 30.0)) if (p_shaft is not None and rpm) else num(s.get("T_em_avg_Nm"))
         row = {"name": name, "mode": str(d.get("mode") or "motor"), "rpm": rpm, "current": cur, "source": src,
                "connection": conn, "torque_nm": torque, "torque_kind": "shaft" if p_shaft is not None else "em",
-               "eff_pct": None if eff is None else 100.0 * eff, "winding_c": temps["winding_c"],
+               "eff_pct": None if eff is None else 100.0 * eff,
+               "eff_system_pct": None if eff_sys is None else 100.0 * eff_sys, "winding_c": temps["winding_c"],
                "magnet_c": temps["magnet_c"], "temps_source": temps["source"], "magnet_temp_c": mag_t}
         duties.append(row)
         if not s:

@@ -33,6 +33,8 @@ TIPS = {
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
     "load": "the duty within 2 % speed and 3 % current; model efficiency is the motor's at the shaft (no inverter)",
+    "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the stored system "
+                   "(wall-to-shaft) efficiency of the controller record, never with the motor's"),
     "weight": "model mass of the configuration's parts; the bench weighs what the record names",
 }
 

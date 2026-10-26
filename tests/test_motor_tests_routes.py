@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from motor_ai_sim.motor_tests import model_source
@@ -153,24 +153,36 @@ def project(tmp_path, monkeypatch):
     (tmp_path / "projects").mkdir()
     store.create_project({"id": "alpha", "members": [{"email": "customer@example.test", "role": "customer"},
                                                      {"email": "owner@example.test", "role": "owner"}],
-                          "linked_motors": [{"die": "die", "config": "opt1"}, {"die": "die", "config": "opt2"}]})
-    store.save_index({"motors": {motors._key("die", c): {"project_id": "alpha"} for c in ("opt1", "opt2")}})
+                          "linked_motors": [{"die": "die", "config": "opt1"}, {"die": "die", "config": "opt2"},
+                                            {"die": "die", "config": "opt3", "status": "trial"},
+                                            {"die": "die", "config": "nogrant"}]})
+    store.save_index({"motors": {motors._key("die", c): {"project_id": "alpha"}
+                                 for c in ("opt1", "opt2", "opt3", "nogrant")}})
     monkeypatch.setattr(access, "require_signed_in", lambda request: IDENTITIES[request.headers.get("x-user")])
     die_dir = tmp_path / "catalog"
     die_dir.mkdir()
     (die_dir / "opt1.yaml").write_text(
         "winding: {star_delta: star}\nduties:\n  - name: rated\n    rpm: 3000\n    current_arms: 100\n"
         "    summary: {rpm: 3000, I_phase_rms_A: 100, R_phase_ohm: 0.008, coil_temp_C: 20.0}\n", encoding="utf-8")
-    (die_dir / "opt2.yaml").write_text("duties: []\n", encoding="utf-8")
+    for c in ("opt2", "opt3", "nogrant"):
+        (die_dir / f"{c}.yaml").write_text("duties: []\n", encoding="utf-8")
     monkeypatch.setattr(family, "_iter_die_entries", lambda: [{"name": "die", "dir": die_dir, "layer": "shared"}])
     monkeypatch.setattr(family, "_die_dir", lambda die: die_dir)
     monkeypatch.setattr(family, "_cfg_file", lambda die, config: die_dir / f"{config}.yaml")
-    monkeypatch.setattr(family, "_require_die_access", lambda *a, **k: None)
+    def require(die, authorization, cfg=None, *args, **kwargs):
+        if cfg == "nogrant":
+            raise HTTPException(404, detail="not found")
+    monkeypatch.setattr(family, "_require_die_access", require)
     monkeypatch.setattr(motors, "_identity", lambda request: IDENTITIES[request.headers.get("x-user")])
     monkeypatch.setattr(duty_results, "get", lambda die, cfg: {})
     MTS.mutate("die", "opt1", lambda d: d["tests"].append(
         {"id": "test_a", "kind": "parameters", "date": "2026-10-26", "conditions": {},
          "resistance": {"temp_c": 20.0, "pairs": [{"pair": "1-2", "value_mohm": 17.0}]}}))
+    # a trial variant and a motor without a grant, both with tests visible to customers: never listed by the
+    # index unless the detail gate would let the caller open them
+    for c in ("opt3", "nogrant"):
+        MTS.mutate("die", c, lambda d: (d["settings"].update(tests_visible_to_customer=True), d["tests"].append(
+            {"id": "test_x", "kind": "load", "date": "2026-01-15", "conditions": {}, "rows": [{"rpm": 1000.0}]})))
     app = FastAPI()
     app.include_router(MTR.project_router)
     app.include_router(motors.router)
@@ -199,3 +211,26 @@ def test_project_view_engineers_and_owner_always_customer_only_behind_the_flag(p
         {"die": "die", "config": "opt1", "count": 1, "visible_to_customer": True}]
     audit = store._file("alpha", "audit.jsonl").read_text(encoding="utf-8")
     assert audit.count("motor.tests.read") == 1                      # the customer's read, not the engineers'
+
+
+def test_project_index_applies_the_detail_gate_to_every_motor(project):
+    """The list names only motors the caller could open: linked to the project, trial only with show_all, granted."""
+    client, _store = project
+    names = lambda r: sorted(m["config"] for m in r.json()["motors"])           # noqa: E731
+    assert names(_get(client, "engineer", "")) == ["opt1"]                      # opt3 trial, nogrant not granted
+    assert names(_get(client, "engineer", "?show_all=true")) == ["opt1", "opt3"]
+    assert names(_get(client, "customer", "?show_all=true")) == ["opt3"]        # flag on opt3 only; opt1 flag off
+    assert _get(client, "engineer", "?die=die&config=nogrant").status_code == 404
+    assert _get(client, "engineer", "?die=die&config=opt3").status_code == 404   # trial without show_all
+
+
+def test_audit_line_is_written_with_its_change_and_never_for_a_refused_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOTRES_MOTOR_TESTS_ROOT", str(tmp_path / "mt"))
+    MTS.mutate("D", "C", lambda d: d["tests"].append({"id": "t1"}), audit=lambda r: {"action": "create"})
+
+    def refuse(d):
+        raise ValueError("refused")
+    with pytest.raises(ValueError):
+        MTS.mutate("D", "C", refuse, audit=lambda r: {"action": "never"})
+    assert [a["action"] for a in MTS.read_audit("D", "C")] == ["create"]
+    assert [t["id"] for t in MTS.load("D", "C")["tests"]] == ["t1"]

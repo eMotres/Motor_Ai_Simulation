@@ -53,9 +53,9 @@ def _check_documents(rec: Dict[str, Any], allowed: List[Dict[str, Any]]) -> None
         raise HTTPException(422, detail=f"documents: not a document of this production: {', '.join(bad)}")
 
 
-def _audit(die: str, config: str, who: str, action: str, test_id: str, snapshot: Optional[Dict[str, Any]] = None):
-    store.append_audit(die, config, {"time": models.now(), "who": who, "action": action, "entity": "test",
-                                     "entity_id": test_id, "snapshot": snapshot or {}})
+def _entry(who: str, action: str, test_id: str, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {"time": models.now(), "who": who, "action": action, "entity": "test", "entity_id": test_id,
+            "snapshot": snapshot or {}}
 
 
 def _payload(die: str, config: str, *, can: Dict[str, bool], documents: Optional[List[Dict[str, Any]]] = None,
@@ -99,8 +99,8 @@ async def add_test(request: Request, die: str, config: str):
     except models.TestInputError as e:
         raise HTTPException(422, detail=str(e))
     _check_documents(rec, _documents(die, config, ctx))
-    store.mutate(die, config, lambda d: d["tests"].append(rec))
-    _audit(die, config, who, "create", rec["id"], {"after": rec})
+    store.mutate(die, config, lambda d: d["tests"].append(rec),
+                 audit=lambda _r: _entry(who, "create", rec["id"], {"after": rec}))
     return rec
 
 
@@ -129,8 +129,8 @@ async def edit_test(request: Request, die: str, config: str, test_id: str):
         _check_documents(new, allowed)
         d["tests"] = [new if (isinstance(t, dict) and t.get("id") == test_id) else t for t in d["tests"]]
         return old, new
-    old, new = store.mutate(die, config, mut)
-    _audit(die, config, who, "update", test_id, {"before": old, "after": new})
+    old, new = store.mutate(die, config, mut,
+                            audit=lambda r: _entry(who, "update", test_id, {"before": r[0], "after": r[1]}))
     return new
 
 
@@ -145,8 +145,7 @@ def delete_test(request: Request, die: str, config: str, test_id: str):
         old = _find(d, test_id)
         d["tests"] = [t for t in d["tests"] if not (isinstance(t, dict) and t.get("id") == test_id)]
         return old
-    old = store.mutate(die, config, mut)
-    _audit(die, config, who, "delete", test_id, {"before": old})
+    store.mutate(die, config, mut, audit=lambda r: _entry(who, "delete", test_id, {"before": r}))
     return {"ok": True}
 
 
@@ -164,8 +163,9 @@ async def patch_settings(request: Request, die: str, config: str):
         old = bool((d.get("settings") or {}).get("tests_visible_to_customer"))
         d.setdefault("settings", {})["tests_visible_to_customer"] = flag
         return old
-    old = store.mutate(die, config, mut)
-    _audit(die, config, A.email(ctx["user"]), "settings", "tests_visible_to_customer", {"before": old, "after": flag})
+    who = A.email(ctx["user"])
+    store.mutate(die, config, mut, audit=lambda r: _entry(who, "settings", "tests_visible_to_customer",
+                                                          {"before": r, "after": flag}))
     return {"tests_visible_to_customer": flag}
 
 
@@ -192,6 +192,7 @@ def project_tests(project_id: str, request: Request, response: Response, die: Op
     response.headers["Cache-Control"] = "no-store"
     from motor_ai_sim.development import access as DA
     from motor_ai_sim.development import store as DS
+    from motor_ai_sim.development.motors import _project_motor
     if not die or not config:
         user, project, role = DA.require_project(request, project_id)
         staff = _project_staff(user, role)
@@ -207,10 +208,16 @@ def project_tests(project_id: str, request: Request, response: Response, die: Op
             except ValueError:
                 continue
             visible = bool((doc.get("settings") or {}).get("tests_visible_to_customer"))
-            if (staff or visible) and doc.get("tests"):
-                out.append({"die": d, "config": c, "count": len(doc["tests"]), "visible_to_customer": visible})
+            if not ((staff or visible) and doc.get("tests")):
+                continue
+            # the SAME gate as one motor's detail: linked to THIS project, a trial variant only with show_all, and the
+            # caller's grant on the motor - a motor that fails it is not named at all
+            try:
+                _project_motor(project_id, request, d, c, show_all)
+            except HTTPException:
+                continue
+            out.append({"die": d, "config": c, "count": len(doc["tests"]), "visible_to_customer": visible})
         return {"motors": out}
-    from motor_ai_sim.development.motors import _project_motor
     user, role, open_die, cfg_name, _path, _cfg, link = _project_motor(project_id, request, die, config, show_all)
     key_die = str(link.get("die") or open_die)
     doc = store.load(key_die, cfg_name)

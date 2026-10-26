@@ -278,6 +278,28 @@ def test_load_rows_match_a_duty_or_offer_to_create_it():
     assert miss["rows"][0]["action"]["body"]["duty"]["rpm"] == 1000.0
 
 
+
+def test_a_dc_side_efficiency_is_the_system_efficiency_never_compared_with_the_motor():
+    # 30 N*m at 3000 rpm = 9424.8 W shaft; 48 V x 220 A = 10560 W DC in -> 89.25 % system efficiency
+    row = {"rpm": 3000, "i_phase_a": 100, "torque_nm": 30.0, "v_dc_v": 48.0, "i_dc_a": 220.0}
+    sys_pct = 30.0 * 3000 * math.pi / 30.0 / (48.0 * 220.0) * 100
+    rec = _record("load", rows=[row])
+    rows = {r["key"]: r for r in comparison.compare_record(rec, _model(), "D", "C")["groups"][0]["rows"]}
+    assert "eff" not in rows                                     # no motor efficiency was measured
+    s = rows["eff_system"]
+    assert s["measured"] == pytest.approx(sys_pct) and s["measured"] == pytest.approx(89.25, abs=0.01)
+    assert s["model"] is None and s["delta_pct"] is None and s["status"] == "info"
+    # with the duty's controller record stored, it is compared with ITS wall-to-shaft efficiency
+    stored = {"rated": {"controller": {"efficiency": {"wall_to_shaft": 0.91}}}}
+    m = model_source.from_docs({}, _cfg_doc(), stored, LIB)
+    s = {r["key"]: r for r in comparison.compare_record(rec, m, "D", "C")["groups"][0]["rows"]}["eff_system"]
+    assert s["model"] == pytest.approx(91.0) and s["delta_pct"] == pytest.approx((91.0 - sys_pct) / sys_pct * 100)
+    # a measured motor efficiency is still compared with the motor's
+    both = _record("load", rows=[{**row, "eff_pct": 94.0}])
+    r2 = {r["key"]: r for r in comparison.compare_record(both, _model(), "D", "C")["groups"][0]["rows"]}
+    assert r2["eff"]["model"] == pytest.approx(95.0) and r2["eff_system"]["status"] == "info"
+
+
 # ── validation is loud ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("body, msg", [

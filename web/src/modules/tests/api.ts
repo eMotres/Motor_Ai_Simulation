@@ -38,9 +38,9 @@ export const testsApi = {
   /** Read-only project view (Development); 404 = nothing the caller may see. */
   project: (projectId: string, die: string, config: string, showAll = false) =>
     call<TestsPayload>('GET', `/api/projects/${enc(projectId)}/motors/tests?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
-  projectIndex: async (projectId: string) =>
+  projectIndex: async (projectId: string, showAll = false) =>
     (await call<{ motors: Array<{ die: string; config: string; count: number; visible_to_customer: boolean }> }>(
-      'GET', `/api/projects/${enc(projectId)}/motors/tests`)).motors,
+      'GET', `/api/projects/${enc(projectId)}/motors/tests${showAll ? '?show_all=true' : ''}`)).motors,
   /** "Compute it": add the missing operating point as a duty of the configuration (no solve; run it in Simulation). */
   createDuty: (action: CreateDutyAction) => call<unknown>('POST', '/api/family/duty', action.body),
 };

@@ -11,11 +11,12 @@ const INDEX_TTL_MS = 30_000;
 const indexCache = new Map<string, { at: number; keys: Promise<Set<string>> }>();
 const key = (die: string, config: string) => `${die.toLowerCase()}/${config.toLowerCase()}`;
 
-function testsIndex(projectId: string): Promise<Set<string>> {
-  const hit = indexCache.get(projectId);
+function testsIndex(projectId: string, showAll: boolean): Promise<Set<string>> {
+  const ck = `${projectId}|${showAll ? 'all' : 'latest'}`;
+  const hit = indexCache.get(ck);
   if (hit && Date.now() - hit.at < INDEX_TTL_MS) return hit.keys;
-  const keys = testsApi.projectIndex(projectId).then((rows) => new Set(rows.map((r) => key(r.die, r.config)))).catch(() => new Set<string>());
-  indexCache.set(projectId, { at: Date.now(), keys });
+  const keys = testsApi.projectIndex(projectId, showAll).then((rows) => new Set(rows.map((r) => key(r.die, r.config)))).catch(() => new Set<string>());
+  indexCache.set(ck, { at: Date.now(), keys });
   return keys;
 }
 
@@ -29,9 +30,9 @@ export function ProjectMotorTests({ projectId, motor, showAll, t }: {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     let live = true;
-    void testsIndex(projectId).then((s) => { if (live) setHas(s.has(key(die, motor.config))); });
+    void testsIndex(projectId, !!showAll).then((s) => { if (live) setHas(s.has(key(die, motor.config))); });
     return () => { live = false; };
-  }, [projectId, die, motor.config]);
+  }, [projectId, die, motor.config, showAll]);
   if (!has) return null;
   return <>
     <Tooltip title={t('motorTests.tip')}><Button size="small" onClick={() => setOpen(true)}>{t('motorTests.button')}</Button></Tooltip>

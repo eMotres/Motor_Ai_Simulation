@@ -273,6 +273,15 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
 # loads
 # ---------------------------------------------------------------------------
 
+def _eff_system_row(measured: float, model: Optional[float], det: str) -> Dict[str, Any]:
+    """DC link in, shaft out (inverter x motor): against the stored system efficiency, else information, no delta."""
+    if num(model) is None:
+        return _row("eff_system", "System efficiency (DC in, shaft out)", "%", measured, None, tip="eff_system",
+                    status="info", detail=(det + ", " if det else "") + "no stored system efficiency")
+    return _row("eff_system", "System efficiency (DC in, shaft out)", "%", measured, model, tip="eff_system",
+                detail=det + ", controller wall-to-shaft")
+
+
 def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     groups = []
     duties = model.get("duties") or []
@@ -281,21 +290,33 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         params = {"rpm": None if n is None else round(n), "current": i}
         label = "%s rpm" % ("?" if n is None else f"{n:.0f}") + ("" if i is None else f" · {i:g} A")
         d = C.match_duty(n, i, duties)
+        # eff_pct = the motor's efficiency as the bench gives it: compared with the model's motor efficiency at the
+        # shaft.  An efficiency formed from the DC link (torque * omega / (V_dc * I_dc)) includes the inverter: it is
+        # the SYSTEM efficiency, compared only with the model's stored system (wall-to-shaft) efficiency, else shown
+        # as information without a delta - never against the motor's.
         eff_meas = num(r.get("eff_pct"))
-        if eff_meas is None and num(r.get("torque_nm")) is not None and n and num(r.get("v_dc_v")) and num(r.get("i_dc_a")):
+        eff_sys = None
+        if num(r.get("torque_nm")) is not None and n and num(r.get("v_dc_v")) and num(r.get("i_dc_a")):
             p_in = float(r["v_dc_v"]) * float(r["i_dc_a"])
             if p_in > 0:
-                eff_meas = 100.0 * float(r["torque_nm"]) * n * 3.141592653589793 / 30.0 / p_in
+                eff_sys = 100.0 * float(r["torque_nm"]) * n * 3.141592653589793 / 30.0 / p_in
         if d is None:
             act = (_create_duty(die, config, rpm=n, current=i) if (n and i) else None)
-            rows = [_row("torque", "Torque", "N·m", r.get("torque_nm"), None, tip="load", status="no_model", action=act),
-                    _row("eff", "Efficiency", "%", eff_meas, None, tip="load", status="no_model")]
+            rows = [_row("torque", "Torque", "N·m", r.get("torque_nm"), None, tip="load", status="no_model", action=act)]
+            if eff_meas is not None:
+                rows.append(_row("eff", "Efficiency", "%", eff_meas, None, tip="load", status="no_model"))
+            if eff_sys is not None:
+                rows.append(_eff_system_row(eff_sys, None, ""))
             groups.append(_group("load_point", label, rows, params=params, tip="load"))
             continue
         det = f"duty '{d['name']}' ({d['rpm']:g} rpm, {d['current']:g} A)"
         rows = [_row("torque", "Torque" + (" (shaft)" if d.get("torque_kind") == "shaft" else " (EM)"), "N·m",
                      r.get("torque_nm"), d.get("torque_nm"), tip="load", detail=det),
-                _row("eff", "Efficiency", "%", eff_meas, d.get("eff_pct"), tip="load", detail=det)]
+                ]
+        if eff_meas is not None:
+            rows.append(_row("eff", "Efficiency", "%", eff_meas, d.get("eff_pct"), tip="load", detail=det))
+        if eff_sys is not None:
+            rows.append(_eff_system_row(eff_sys, d.get("eff_system_pct"), det))
         if num(r.get("temp_winding_c")) is not None:
             rows.append(_row("t_winding", "Winding temperature", "C", r.get("temp_winding_c"), d.get("winding_c"),
                              tip="load", detail=det + (f", {d['temps_source']} steady state" if d.get("temps_source") else ""),

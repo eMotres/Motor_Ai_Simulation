@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from motor_ai_sim import json_store
 from motor_ai_sim.production.store import _safe_slug
@@ -63,8 +63,13 @@ def exists(die: str, config: str) -> bool:
     return (path_for(die, config) / TESTS_FILE).is_file()
 
 
-def mutate(die: str, config: str, fn: Callable[[Dict[str, Any]], Any]) -> Any:
-    """Apply ``fn`` to the latest document under the file lock and write it; returns what ``fn`` returned."""
+def mutate(die: str, config: str, fn: Callable[[Dict[str, Any]], Any],
+           audit: Optional[Callable[[Any], Optional[Dict[str, Any]]]] = None) -> Any:
+    """Apply ``fn`` to the latest document under the file lock and write it; returns what ``fn`` returned.
+
+    ``audit(result)`` -> the audit entry, appended while the SAME lock is still held, right after the document was
+    written: no other change can land between a change and its audit line, and a refused change (``fn`` raised) or a
+    failed write leaves no audit line."""
     p = path_for(die, config) / TESTS_FILE
     p.parent.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
@@ -80,7 +85,12 @@ def mutate(die: str, config: str, fn: Callable[[Dict[str, Any]], Any]) -> Any:
         doc["die"], doc["config"] = die, config
         result["value"] = fn(doc)
         return doc
-    json_store.mutate_json(p, _m, default=_default())
+    with json_store.lock_for(p):                 # re-entrant: mutate_json takes the same lock again
+        json_store.mutate_json(p, _m, default=_default())
+        if audit is not None:
+            entry = audit(result.get("value"))
+            if entry:
+                append_audit(die, config, entry)
     return result.get("value")
 
 

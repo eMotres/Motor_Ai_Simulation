@@ -450,6 +450,7 @@
       "no_noload": "no no-load duty in this configuration",
       "torque": "Torque",
       "eff": "Efficiency",
+      "eff_system": "System efficiency (DC in, shaft out)",
       "t_winding": "Winding temperature",
       "t_magnet": "Magnet temperature"
     },
@@ -464,6 +465,7 @@
       "loss": "Model = core (hysteresis ~n, eddy ~n², excess ~n^1.5) + solid eddy (~n²) of the no-load duty, x (Br ratio)², + bearings (SKF) + windage. The rest of the measured power is unexplained.",
       "fit": "Least squares P = a·n + b·n² through the origin, n in krpm.",
       "load": "The duty within 2 % speed and 3 % current. Model efficiency is the motor’s at the shaft (no inverter).",
+      "eff_system": "Torque·ω / (V_dc·I_dc) includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
       "weight": "Model mass of the configuration’s parts; the bench weighs what the record names."
     },
     "editor": {

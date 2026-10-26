@@ -8,7 +8,7 @@ faces too.  Pinned here against a synthetic SPOKE rotor (iron ring, magnet slabs
   * as ONE welded mesh of the whole rotor (the ground truth: its domain boundaries are the rotor's edges), and
   * as ONE SECTOR replicated n times with duplicated seam nodes (what the solver hands out),
 
-and `domain_boundary_loops` must give the same segment set for both - no seam, no cut face, every part edge once.  A PNG of
+and `domain_boundary_loops` (what the viewer draws for a record that stored no outlines) must give the same segment set for both - no seam, no cut face, every part edge once.  A PNG of
 both is written (``MOTRES_TEST_ARTIFACTS`` or the test's tmp folder) for a look.
 """
 from __future__ import annotations
@@ -20,7 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from motor_ai_sim.simulation.mechanical.rotor_stress import _replicate_field, domain_boundary_loops
+from motor_ai_sim.development.motor_view import domain_boundary_loops
+from motor_ai_sim.simulation.mechanical import symmetry as sym
 
 N_SECTORS = 8
 NTH = 12                                   # angular cells per sector
@@ -75,10 +76,13 @@ def rotors():
     truth = domain_boundary_loops(fv, ft, fd)
     # what the solver hands out: one sector, replicated with its own nodes per copy
     sv, st, sd = _grid(NTH, THETA0, False, _domain)
-    sector = {"vertices": sv.tolist(), "triangles": st.tolist(), "domain_per_tri": sd.tolist(),
-              # the polygon outlines of the clipped sector: the part rings INCLUDING the two radial cut faces
-              "outlines": [[[sv[0][0], sv[0][1]], [sv[-1][0], sv[-1][1]]]], "cases": {}, "contact_segments_per_pair": {}}
-    rep = _replicate_field(sector, N_SECTORS)
+    # the replicated sector exactly as `_replicate_field` builds it: its own nodes per copy, the seam nodes duplicated
+    sv, st, sd = _grid(NTH, THETA0, False, _domain)
+    rv = sym.replicate_vertices(sv, N_SECTORS)
+    rt = sym.replicate_triangles(st, sv.shape[0], N_SECTORS)
+    rd = np.tile(sd, N_SECTORS)
+    rep = {"vertices": rv.tolist(), "triangles": rt.tolist(), "domain_per_tri": rd.tolist(),
+           "outlines": domain_boundary_loops(rv, rt, rd)}
     return {"truth": truth, "replicated": rep, "full": (fv, ft, fd)}
 
 

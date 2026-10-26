@@ -538,6 +538,49 @@ def _thermal_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return out
 
 
+def domain_boundary_loops(vertices_mm: Any, triangles: Any, domain: Any, *,
+                          rel: float = 2e-4, ndigits: int = 4) -> List[List[List[float]]]:
+    """The part outlines of a mesh as its DOMAIN-BOUNDARY EDGES: ``[[[x0, y0], [x1, y1]], ...]`` (mm), one two-point loop
+    per edge (the viewers close every loop onto itself, so an unchained edge draws exactly that edge).
+
+    Used for a stored map whose record carries no outlines of its own (records written before 2026-10-26); new records
+    store the outlines the live Mechanical tab drew and the viewer uses those.  An edge is an outline when the triangles on
+    its two sides belong to different parts, or when it is the outer border.  The vertices are WELDED by coordinate first
+    (bucket = ``rel`` x the largest coordinate): the mechanical mesh is SPLIT (interface nodes duplicated, one set per
+    part) and a replicated sector answer is the sector copied with its own nodes, so by index a seam between two copies
+    would read as a border - the zigzag of radial lines from the rim to the hub (owner screen 2026-10-26).
+    """
+    import numpy as np
+    v = np.asarray(vertices_mm, dtype=float)
+    t = np.asarray(triangles, dtype=np.int64)
+    d = np.asarray(domain, dtype=np.int64)
+    if v.size == 0 or t.size == 0:
+        return []
+    q = float(np.abs(v).max()) * rel or 1.0
+    keys = np.round(v / q).astype(np.int64)
+    _, first, ids = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    ids = np.asarray(ids).reshape(-1)
+    xy = v[first]
+    w = ids[t]
+    e = np.concatenate([w[:, [0, 1]], w[:, [1, 2]], w[:, [2, 0]]])
+    dom = np.concatenate([d, d, d])
+    keep = e[:, 0] != e[:, 1]
+    e, dom = e[keep], dom[keep]
+    lo, hi = np.minimum(e[:, 0], e[:, 1]), np.maximum(e[:, 0], e[:, 1])
+    key = lo * (int(ids.max()) + 1) + hi
+    order = np.argsort(key, kind="stable")
+    key, lo, hi, dom = key[order], lo[order], hi[order], dom[order]
+    first_of = np.concatenate([[True], key[1:] != key[:-1]])
+    starts = np.nonzero(first_of)[0]
+    counts = np.diff(np.concatenate([starts, [key.size]]))
+    d0 = dom[starts]
+    d1 = np.where(counts > 1, dom[np.minimum(starts + 1, key.size - 1)], d0)
+    draw = (counts == 1) | ((counts == 2) & (d0 != d1)) | (counts > 2)
+    a, b = lo[starts][draw], hi[starts][draw]
+    return [[[round(float(xy[i, 0]), ndigits), round(float(xy[i, 1]), ndigits)],
+             [round(float(xy[j, 0]), ndigits), round(float(xy[j, 1]), ndigits)]] for i, j in zip(a, b)]
+
+
 def _mech_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     import numpy as np
     verts = _xy_mm(d.get("vertices"))
@@ -569,7 +612,8 @@ def _mech_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         case_field["u_per_node"] = [[0.0, 0.0]] * int(verts.shape[0])
     ext = float(np.abs(verts).max())
     from motor_ai_sim.duty_fields import unpack_rings
-    rings = unpack_rings(d)            # the outlines the live Mechanical tab drew (new records); [] on an old one
+    # the outlines the live Mechanical tab drew (records since 2026-10-26); an older record gets the welded domain boundaries
+    rings = unpack_rings(d) or domain_boundary_loops(verts, tris, dom)
     segs = {}
     for name in list(d.keys()):
         if isinstance(name, str) and name.startswith("contact_seg::"):

@@ -593,7 +593,8 @@ def test_g_the_mechanical_field_stores_the_live_outlines_and_serves_them_back(sa
     res2 = mech_result()
     res2["field"].pop("outlines", None)
     df.save(DIE, CFG, "peak", "rotor_stress", res2)
-    assert motor_view.field_payload(DIE, CFG, "peak", "rotor_stress")["payload"]["outlines"] == []
+    derived = motor_view.field_payload(DIE, CFG, "peak", "rotor_stress")["payload"]["outlines"]
+    assert len(derived) == 5 and all(len(lp) == 2 for lp in derived)       # 4 border edges + the interface of the two parts
 
 
 def test_g_thermal_outlines_keep_their_domain_grouping(sandbox):

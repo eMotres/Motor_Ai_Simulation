@@ -543,6 +543,47 @@ def test_e_an_impossible_temperature_record_is_never_shown():
     assert set(d["fields"]) == {"em"}                       # the 850 rpm stress map belongs to another point too
 
 
+def test_e_a_high_temperature_never_hides_a_record_and_a_cold_value_drops_only_itself():
+    """Review of #437: an overloaded steady state may legitimately exceed 1500 degC (the over-limit verdict is what S1 / S2
+    show); only a ``limited`` map is held to the window, and a single value below -80 degC goes alone."""
+    rows = [{"duty": "peak", "operating_point": {"rpm": 1000, "current_arms": 336}}]
+    hot = {"computed_at": "2026-10-26T08:00:00", "components": {"winding": {"max": 1800.0, "avg": 1700.0}},
+           "T_max": 1800.0, "P_loss_total_W": 5000.0, "point": {"rpm": 1000.0, "I_phase_rms": 336.0}}
+    assert motor_view.impossible_temperature(hot) is None
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"thermal": hot}}, {}, set())["duties"][0]
+    assert d["thermal"]["duty_temps"]["winding_c"] == 1800.0 and d["hidden_records"] == []
+    # a coupled loop with a cold artefact value keeps its losses and the other temperatures
+    cp = _cp(1600.0, -150.0, "2026-10-26T09:00:00", point={"rpm": 1000.0, "I_phase_rms": 336.0},
+             em={"t_em_avg_nm": 800.0, "p_loss_total_w": 5000.0})
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"coupled": cp}}, {}, set())["duties"][0]
+    assert d["thermal"]["duty_temps"]["winding_c"] == 1600.0 and "magnet_c" not in d["thermal"]["duty_temps"]
+    assert d["thermal"]["duty_temps"]["em"]["torque_nm"] == 800.0
+    # a hot map is offered; a cold one is not
+    fields = {"peak": [{"kind": "thermal", "point": {"rpm": 1000.0, "T_min": 25.0, "T_max": 2000.0}}]}
+    assert set(motor_view.build_view(DIE, CFG, rows, {}, fields, set())["duties"][0]["fields"]) == {"thermal"}
+    # the limited map is the only row held to the whole window, high side included
+    assert motor_view.impossible_temperature({"state": "limited", "T_max": 1800.0}) == "1800.0"
+    assert motor_view.impossible_temperature({"state": "steady", "T_min": -147.4}) is None
+    assert motor_view.drop_impossible_values({"T_min": -147.4, "T_max": 90.0})["T_max"] == 90.0
+    assert "T_min" not in motor_view.drop_impossible_values({"T_min": -147.4, "T_max": 90.0})
+
+
+def test_e_a_missing_current_stamp_is_unknown_not_zero():
+    op = {"rpm": 1000.0, "current": 336.0}
+    zero = _cp(150.0, 80.0, "2026-10-26T09:00:00", point={"rpm": 1000.0, "I_phase_rms": 0.0})
+    assert motor_view.record_stamp("coupled", zero)["current"] == []
+    assert motor_view.belongs_to_point("coupled", zero, op)                       # tied by the speed alone
+    assert not motor_view.belongs_to_point("coupled", {**zero, "point": {"rpm": 850.0, "I_phase_rms": 0.0}}, op)
+    # nothing but a zero current: no usable stamp at all -> not guessed
+    assert not motor_view.belongs_to_point("coupled", _cp(150.0, 80.0, "2026-10-26T09:00:00", point={"I_phase_rms": 0.0}), op)
+    # the loop stamps only what its request stated
+    import inspect
+    from motor_ai_sim.routes import coupled as coupled_route
+    src = inspect.getsource(coupled_route._run)
+    assert 'if _f(body, "I_phase_rms", 0.0) > 0.0 else {}' in src
+    assert 'if body.get("gamma_deg") not in (None, "") else {}' in src
+
+
 def test_e_records_before_the_contact_repair_are_hidden():
     rows = [{"duty": "cruise", "operating_point": {"rpm": 23000}}]
     old = motor_view.build_view(DIE, CFG, rows, {"cruise": {"rotor_stress": _rs("2026-10-24T08:00:00", 4.31)}}, {}, set())["duties"][0]

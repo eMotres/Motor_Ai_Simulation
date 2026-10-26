@@ -194,8 +194,11 @@ _POINT_KINDS = ("thermal", "coupled", "coupled_limit", "rotor_stress", "duty_cyc
 #: A limit search solves its own current (the S1 current IS its answer), so only its speed is compared.
 _SPEED_ONLY_KINDS = ("coupled_limit", "rotor_stress", "continuous_rating", "critical_speeds")
 
-#: The temperatures a real result can show; a stored value outside it is a broken record, never shown.
+#: The window a translated ``limited`` thermal map must stay in, and the floor of any single stored temperature.  A heavily
+#: overloaded steady state may legitimately exceed the ceiling (that over-limit verdict is what S1 / S2 exist to show), so a
+#: HIGH value never hides a record; only the ``limited`` map (an artefact of a level shift) is held to the ceiling.
 T_FLOOR_C, T_CEIL_C = -80.0, 1500.0
+_TEMP_SCALARS = ("T_min", "T_max", "coil_temp_c", "magnet_temp_c", "magnet_temp_max_c", "bearing_temp_c")
 
 
 def _nums(*values: Any) -> List[float]:
@@ -212,8 +215,9 @@ def record_stamp(kind: str, row: Any) -> Dict[str, List[float]]:
     rpm = _nums(pt.get("rpm"), row.get("rpm"), nums.get("rpm"), row.get("rated_rpm"))
     if kind in ("coupled", "coupled_limit"):
         rpm += _nums(cr.get("rpm"))
-    cur = _nums(pt.get("I_phase_rms"), pt.get("current_arms"), nums.get("I_phase_rms_A"), nums.get("I1_phase_rms_A"),
-                em.get("I1_phase_rms_A"))
+    # a current stamp of 0 (or less) is "no current stated", not a zero-ampere point: unknown, never compared
+    cur = [c for c in _nums(pt.get("I_phase_rms"), pt.get("current_arms"), nums.get("I_phase_rms_A"),
+                            nums.get("I1_phase_rms_A"), em.get("I1_phase_rms_A")) if c > 0.0]
     return {"rpm": rpm, "current": cur}
 
 
@@ -247,22 +251,41 @@ def belongs_to_point(kind: str, row: Any, op: Dict[str, Optional[float]], *, lim
 
 
 def impossible_temperature(row: Any) -> Optional[str]:
-    """The offending value when a stored thermal row carries a temperature outside any physical window, else ``None``.
+    """The offending value when a stored thermal row is a broken ``limited`` map, else ``None``.
+
+    Only the ``limited`` thermal map is held to the whole window (-80 .. 1500 degC).  Any other row is never judged here:
+    a high temperature is a real over-limit answer, and a single value below the floor is dropped by
+    :func:`drop_impossible_values`, not the record.
 
     Seen 2026-10-26: a ``limited`` map (the last solved map TRANSLATED part by part onto the node temperatures of the
     limit instant, ``routes.thermal.rescale_map_to_nodes``) stored ``T_min = -147.4 degC``: a level shift cannot keep a
     cold part above ambient when the shift is as large as the runaway steady state is hot.
     """
-    if not isinstance(row, dict):
+    if not isinstance(row, dict) or str(row.get("state") or "").lower() != "limited":
         return None
-    values = _nums(row.get("T_min"), row.get("T_max"), row.get("coil_temp_c"), row.get("magnet_temp_c"),
-                   row.get("magnet_temp_max_c"), row.get("bearing_temp_c"))
+    values = _nums(*[row.get(k) for k in _TEMP_SCALARS])
     comps = row.get("components") if isinstance(row.get("components"), dict) else {}
     for c in comps.values():
         if isinstance(c, dict):
             values += _nums(c.get("min"), c.get("avg"), c.get("max"))
     bad = [v for v in values if v < T_FLOOR_C or v > T_CEIL_C]
     return f"{(min(bad) if min(bad) < T_FLOOR_C else max(bad)):.1f}" if bad else None
+
+
+def drop_impossible_values(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of a stored row without its individual temperatures below the floor (a part colder than -80 degC is no
+    result); every other number of the record - losses, torque, an over-limit temperature - stays."""
+    out = dict(row)
+    for k in _TEMP_SCALARS:
+        v = _num(out.get(k))
+        if v is not None and v < T_FLOOR_C:
+            del out[k]
+    comps = out.get("components")
+    if isinstance(comps, dict):
+        out["components"] = {n: c for n, c in comps.items()
+                             if not (isinstance(c, dict) and any(v is not None and v < T_FLOOR_C
+                                                                 for v in (_num(c.get("min")), _num(c.get("avg")), _num(c.get("max")))))}
+    return out
 
 
 def _geometry_status(rs: Dict[str, Any], duty_rows: Dict[str, Any]) -> str:
@@ -300,6 +323,7 @@ def own_records(stored_duty: Any, op: Dict[str, Optional[float]]) -> Tuple[Dict[
             if bad is not None:
                 hidden.append({"kind": str(kind), "reason": "impossible_temperature", "value": bad})
                 continue
+            row = drop_impossible_values(row)
         kept[kind] = row
     rs = kept.get("rotor_stress")
     if isinstance(rs, dict) and rs:
@@ -330,9 +354,9 @@ def own_fields(rows: Any, op: Dict[str, Optional[float]], kept: Dict[str, Any]) 
             hidden.append({"kind": f"field:{kind}", "reason": "other_point"})
             continue
         if kind == "thermal":
-            bad = impossible_temperature({"T_min": pt.get("T_min"), "T_max": pt.get("T_max")})
-            if bad is not None:
-                hidden.append({"kind": "field:thermal", "reason": "impossible_temperature", "value": bad})
+            low = _num(pt.get("T_min"))
+            if low is not None and low < T_FLOOR_C:
+                hidden.append({"kind": "field:thermal", "reason": "impossible_temperature", "value": f"{low:.1f}"})
                 continue
         out.append(r)
     return out, hidden

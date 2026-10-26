@@ -42,8 +42,9 @@ export const FIELD_KIND_ORDER: readonly FieldKind[] = ['em', 'thermal', 'rotor_s
 
 /** Two speeds are the same point: within 1 % (at least 1 rpm). */
 export const sameRpm = (a: number, b: number): boolean => Math.abs(a - b) <= Math.max(1, 0.01 * Math.max(Math.abs(a), Math.abs(b)));
-/** A temperature a real result can show (the same window the server uses). */
-export const plausibleC = (v: number | null): boolean => v === null || (v >= -80 && v <= 1500);
+/** A temperature a real result can show: not colder than -80 C (a part below that is a translated-map artefact).  A HIGH value is
+ *  a real over-limit answer and is shown as it is. */
+export const plausibleC = (v: number | null): boolean => v === null || v >= -80;
 
 /** The mechanical answer of this point: its OWN, current stress record - or null.  A record solved at another speed than the
  *  point's, a superseded one and one of another machine print are not the point's result. */

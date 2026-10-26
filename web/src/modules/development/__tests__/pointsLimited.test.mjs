@@ -301,6 +301,7 @@ test('thermal block: drawn only with a real temperature, S1 / S2 value or a labe
   // t_min -147.4 degC on the peak record (a translated 'limited' map): nothing impossible reaches a tile or a line
   assert.equal(plausibleC(-147.4), false);
   assert.equal(plausibleC(200), true);
+  assert.equal(plausibleC(1800), true);                                                 // an over-limit temperature is shown as it is
   assert.deepEqual(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: -147.4, magnet_c: 90, bearing_c: -300 } }).map((x) => x.id), ['magnet']);
   assert.equal(pointThermal(peak({ thermal: { duty_temps: { kind: 'thermal', winding_c: -147.4 } } })), null);
   assert.equal(pointThermal(peak({ thermal: { limit_search: { kind: 'coupled_limit', solve_to: 'continuous', winding_c: -147.4 } } })), null);

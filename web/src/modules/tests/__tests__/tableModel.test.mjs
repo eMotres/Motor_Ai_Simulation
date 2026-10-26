@@ -56,6 +56,28 @@ t('one table per test: group headers, rows, the empty info rows dropped, notes a
   assert.deepEqual(M.tableLines(null), []);
 });
 
+t('a group with a speed per row is a series for the chart; resistance, inductance and one load point are table-only', () => {
+  const emf = { key: 'emf_peak', label: 'EMF', params: {}, basis: 'magnets at 60 C, 3-D x0.950 (Stage A)', basis_key: 'emf_3d',
+    basis_params: { mag: '60', k: '0.950', src: 'Stage A' }, rows: [
+      row({ key: 'emf_peak', unit: 'V', params: { rpm: 3000 }, measured: 120, model: 128.2, delta_pct: 6.8, status: 'ok' }),
+      row({ key: 'emf_peak', unit: 'V', params: { rpm: 1000 }, measured: 40, model: 42.7, delta_pct: 6.8, status: 'ok' }),
+      row({ key: 'emf_peak', unit: 'V', params: { rpm: 2000 }, measured: 80, model: null, status: 'no_model' }),
+    ] };
+  const s = M.seriesOf(emf);
+  assert.equal(s.unit, 'V');
+  assert.deepEqual(s.points.map((p) => p.rpm), [1000, 2000, 3000]);                  // sorted by rpm
+  assert.deepEqual(s.points[1], { rpm: 2000, measured: 80, model: null, delta: null });
+  assert.equal(M.seriesOf({ key: 'one', label: 'x', params: {}, rows: [row({ params: { rpm: 3000 }, measured: 1 })] }), null);   // one speed only
+  assert.equal(M.seriesOf({ key: 'resistance', label: 'R', params: {}, rows: [row({ params: { n: 3 }, measured: 20, model: 19 }),
+    row({ params: { pair: '1-2' }, measured: 20 })] }), null);
+  const load = { key: 'load_point', label: '3000 rpm', params: { rpm: 3000, current: 100 }, rows: [
+    row({ key: 'torque', measured: 29, model: 30, status: 'ok' }), row({ key: 'eff', measured: 94, model: 95, status: 'ok' })] };
+  const blocks = M.tableBlocks({ test_id: 'a', kind: 'free_run', model_available: true, groups: [emf, load] });
+  assert.deepEqual(blocks.map((b) => [b.key, b.series !== null, b.lines.length]), [['emf_peak', true, 3], ['load_point', false, 2]]);
+  assert.equal(blocks[0].basisKey, 'emf_3d'); assert.deepEqual(blocks[0].basisParams, { mag: '60', k: '0.950', src: 'Stage A' });
+  assert.equal(blocks[1].basis, null);
+});
+
 t('row notes: unexplained loss, no model point (with the compute action), frequency flag', () => {
   assert.deepEqual(M.rowNote(row({ key: 'loss', extra: { unexplained_w: 412.4 } })), { key: 'unexplained', params: { w: '412.4' } });
   assert.equal(M.rowNote(row({ status: 'no_model', action: { kind: 'create_duty', body: {} } })).key, 'noModelCompute');

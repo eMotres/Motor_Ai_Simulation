@@ -42,7 +42,11 @@ export interface CompareRow {
   tip?: string | null; detail?: string; status: 'ok' | 'no_model' | 'info';
   extra: Record<string, unknown>; action?: CreateDutyAction | null;
 }
-export interface CompareGroup { key: string; label: string; params: Record<string, unknown>; tip?: string | null; rows: CompareRow[] }
+export interface CompareGroup {
+  key: string; label: string; params: Record<string, unknown>; tip?: string | null; rows: CompareRow[];
+  /** one line saying what the model values are (EN) + the key / params the web translates (tests.basis.<key>) */
+  basis?: string | null; basis_key?: string | null; basis_params?: Record<string, unknown>;
+}
 export interface TestCompare { test_id: string; kind: TestKind; model_available: boolean; groups: CompareGroup[] }
 
 export interface TestsPayload {
@@ -51,7 +55,8 @@ export interface TestsPayload {
   can: { add: boolean; edit: boolean; settings: boolean };
   tests: TestRecord[];
   compare: Record<string, TestCompare>;
-  model: { available: boolean; duties: number; noload: string[]; magnet?: string | null; has_bearings: boolean };
+  model: { available: boolean; duties: number; noload: string[]; magnet?: string | null; has_bearings: boolean;
+    end3d?: { k_flux: number | null; k_torque: number | null; source: string | null } | null };
   tips: Record<string, string>;
   documents?: Array<{ id: string; file_id: string; name: string }>;
 }

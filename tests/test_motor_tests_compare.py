@@ -300,6 +300,91 @@ def test_a_dc_side_efficiency_is_the_system_efficiency_never_compared_with_the_m
     assert r2["eff"]["model"] == pytest.approx(95.0) and r2["eff_system"]["status"] == "info"
 
 
+# ── 3-D end effect on the model ──────────────────────────────────────────────────────────────
+
+def _free_run_rec():
+    rows = [{"rpm": n, "shaft_power_w": p, "v_ll_pp_v": 2 * 0.04 * n, "v_ll_rms_v": 0.04 * n / math.sqrt(2)}
+            for n, p in FREE_RUN]
+    return _record("free_run", conditions={"ambient_c": 25.0, "magnet_temp_c": 60.0}, rows=rows)
+
+
+def test_free_run_emf_carries_the_stage_a_flux_factor_and_says_so():
+    m = model_source.from_docs({}, _cfg_doc(), {}, LIB, end3d={"k_flux": 0.95})
+    assert m["end3d"]["k_flux"] == 0.95 and m["end3d"]["source"] == "Stage A"
+    out = comparison.compare_record(_free_run_rec(), m, "D", "C")
+    g = {x["key"]: x for x in out["groups"]}
+    pk = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
+    rms = [r for r in g["emf_rms"]["rows"] if r["params"]["rpm"] == 3000][0]
+    assert pk["model"] == pytest.approx(120.0 * 1.125 * 0.95)
+    assert pk["extra"]["model_2d"] == pytest.approx(120.0 * 1.125) and pk["extra"]["k_3d"] == 0.95
+    assert rms["model"] == pytest.approx(84.0 * 1.125 * 0.95)
+    assert "Br ratio 1.125" in pk["detail"] and "3-D ×0.950 (Stage A)" in pk["detail"]
+    assert g["emf_peak"]["basis"] == "magnets at 60 C, 3-D ×0.950 (Stage A)"
+    # losses stay 2-D (the flux factor is not applied) and the group says so
+    loss = [r for r in g["loss"]["rows"] if r["params"]["rpm"] == 3000][0]
+    assert loss["extra"]["em_w"] == pytest.approx((210 + 105 + 52 + 40) * 1.125 ** 2)
+    assert "losses 2-D" in g["loss"]["basis"]
+
+
+def test_without_a_passport_the_2d_value_stays_and_says_so():
+    out = comparison.compare_record(_free_run_rec(), _model(), "D", "C")
+    g = {x["key"]: x for x in out["groups"]}
+    pk = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
+    assert pk["model"] == pytest.approx(120.0 * 1.125) and pk["extra"]["k_3d"] is None
+    assert pk["detail"].endswith("2-D, no 3-D passport")
+    assert g["emf_peak"]["basis"].endswith("2-D, no 3-D passport")
+
+
+def test_the_passport_stored_with_a_duty_is_used_when_none_is_resolved():
+    doc = _cfg_doc()
+    doc["duties"][0]["summary"]["end3d"] = {"k_flux": 0.9}
+    m = model_source.from_docs({}, doc, {}, LIB)
+    assert m["end3d"]["k_flux"] == 0.9 and "stored with the duty" in m["end3d"]["source"]
+    # an absurd factor is not a passport
+    assert model_source.factors_from_end3d({"k_flux": 1.4})["k_flux"] is None
+
+
+def test_torque_carries_the_torque_factor_k_t_else_the_flux_factor():
+    rec = _record("load", rows=[{"rpm": 3000, "i_phase_a": 100, "torque_nm": 29.0}])
+    flux = model_source.from_docs({}, _cfg_doc(), {}, LIB, end3d={"k_flux": 0.95})
+    t = comparison.compare_record(rec, flux, "D", "C")["groups"][0]["rows"][0]
+    assert t["model"] == pytest.approx(30.0 * 0.95) and "flux factor" in t["detail"] and t["extra"]["model_2d"] == 30.0
+    meas = model_source.from_docs({}, _cfg_doc(), {}, LIB, end3d={"k_flux": 0.95, "k_T": 0.98})
+    t = comparison.compare_record(rec, meas, "D", "C")["groups"][0]["rows"][0]
+    assert t["model"] == pytest.approx(30.0 * 0.98) and "measured k_T" in t["detail"]
+    grp = comparison.compare_record(rec, meas, "D", "C")["groups"][0]
+    assert grp["basis"].startswith("torque 3-D ×0.980")
+    # the efficiency is not scaled
+    rec2 = _record("load", rows=[{"rpm": 3000, "i_phase_a": 100, "torque_nm": 29.0, "eff_pct": 94.0}])
+    eff = comparison.compare_record(rec2, meas, "D", "C")["groups"][0]["rows"][1]
+    assert eff["model"] == pytest.approx(95.0)
+
+
+def test_inductance_and_resistance_take_no_flux_factor():
+    m = model_source.from_docs({}, _cfg_doc(), {}, LIB, end3d={"k_flux": 0.9})
+    rec = _record("parameters", conditions={"rotor": "in"}, leads=LEADS_10MM2,
+                  resistance={"temp_c": R_TEMP_C, "pairs": [{"pair": p, "value_mohm": v}
+                                                            for p, v in zip(("1-2", "2-3", "1-3"), R_PAIRS_MOHM)]},
+                  inductance={"freq_hz": 100, "pairs": [{"pair": p, "value_uh": v}
+                                                        for p, v in zip(("1-2", "3-2", "1-3"), L_PAIRS_UH)]})
+    g = {x["key"]: x for x in comparison.compare_record(rec, m, "D", "C")["groups"]}
+    assert g["resistance"]["rows"][0]["model"] == pytest.approx(19.424, abs=0.001)
+    ls = {r["key"]: r for r in g["inductance"]["rows"]}
+    assert ls["l_sum"]["model"] == pytest.approx(105.0) and ls["l_sum"]["detail"].endswith("2-D")
+    assert g["inductance"]["basis"].startswith("2-D")
+
+
+def test_resolve_end3d_looks_the_passport_up_by_the_configuration_geometry(monkeypatch):
+    from motor_ai_sim.routes import simulation as sim
+    seen = {}
+    monkeypatch.setattr(sim, "_geometry_fingerprint", lambda geo=None: seen.setdefault("geo", geo) and "fp1")
+    monkeypatch.setattr(sim, "_end3d_lookup", lambda fp, geo=None, exact=False: {"k_flux": 0.93} if fp == "fp1" else None)
+    die = {"geometry": {"motor_length": 20.0, "wire_height": 1.0}}
+    got = model_source.resolve_end3d(die, {"geometry_overrides": {"motor_length": 25.0, "wire_height": None}})
+    assert got == {"k_flux": 0.93}
+    assert seen["geo"]["motor_length"] == 25.0 and seen["geo"]["wire_height"] == 1.0
+
+
 # ── validation is loud ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("body, msg", [

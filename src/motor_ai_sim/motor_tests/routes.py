@@ -67,7 +67,7 @@ def _payload(die: str, config: str, *, can: Dict[str, bool], documents: Optional
             "model": {"available": bool(model.get("available")), "duties": len(model.get("duties") or []),
                       "noload": [r.get("duty") for r in model.get("noload") or []],
                       "magnet": (model.get("magnet") or {}).get("card"),
-                      "has_bearings": bool(model.get("has_bearings"))},
+                      "has_bearings": bool(model.get("has_bearings")), "end3d": model.get("end3d")},
             "tips": TIPS, **({"documents": documents} if documents is not None else {})}
 
 

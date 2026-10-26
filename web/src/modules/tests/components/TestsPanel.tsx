@@ -1,9 +1,10 @@
 /** The Tests section (owner 2026-10-26): three sub-menus (Parameters, Free-run, Loads); one compact table per test,
- *  measured | model | delta %, one short note per row and the explanation in tooltips.
+ *  measured | model | delta %, one short note per row and the explanation in tooltips; a group whose rows are a series over
+ *  speed gets a measured-vs-model chart to its right (stacked below ~900 px).
  *
  *  Production: the factory adds tests, engineers / admins edit and delete them (every change audited on the server).
  *  Development (project motor view): read-only, behind the configuration's "visible to customer" flag for customers. */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, FormControlLabel, IconButton, Paper,
   Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, Tooltip, Typography,
@@ -15,8 +16,9 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
-import { columnsFor, summary, tableLines, testsOfKind, unitLabel, type TableLine } from '../tableModel';
+import { columnsFor, summary, tableBlocks, testsOfKind, unitLabel, type TableBlock } from '../tableModel';
 import { TEST_KINDS, type CompareRow, type TestCompare, type TestKind, type TestRecord, type TestsPayload } from '../types';
+import SeriesChart from './SeriesChart';
 import TestEditor from './TestEditor';
 
 export type TestsSource = { kind: 'production' } | { kind: 'project'; projectId: string; showAll?: boolean };
@@ -33,65 +35,113 @@ function writeSub(die: string, config: string, v: TestKind) {
 }
 
 const LEVEL_COLOR: Record<string, string> = { ok: '#22c55e', warn: '#f59e0b', bad: '#f87171' };
-const cell = { fontSize: 12, py: 0.35, px: 0.8, borderBottom: '1px solid var(--line-soft)' } as const;
-const head = { ...cell, fontSize: 11, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
+// compact table (owner 2026-10-27): ~24 px rows, small font, numbers right-aligned in tabular figures
+const cell = { fontSize: 11.5, py: 0, px: 0.7, height: 24, lineHeight: '24px', borderBottom: '1px solid var(--line-soft)' } as const;
+const num = { ...cell, fontVariantNumeric: 'tabular-nums' } as const;
+const head = { ...cell, fontSize: 10.5, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
+
+/** Wide = the box is at least this many px: table and chart side by side; below it they stack. */
+export const SIDE_BY_SIDE_MIN_PX = 900;
+
+function useWide(): [React.RefObject<HTMLDivElement | null>, boolean] {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const measure = () => setWide(el.getBoundingClientRect().width >= SIDE_BY_SIDE_MIN_PX);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, wide];
+}
 
 function CompareTable({ cmp, tips, canCompute, onComputed }: {
   cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; onComputed: (msg: string) => void;
 }) {
   const { t } = useTranslation('production');
-  const lines = tableLines(cmp);
-  if (!lines.length) return null;
+  const [boxRef, wide] = useWide();
+  const blocks = tableBlocks(cmp);
+  if (!blocks.length) return null;
   const tipText = (key?: string | null) => (key ? t(`tests.tip.${key}`, { defaultValue: tips[key] ?? '' }) : '');
   const label = (l: { key: string; label: string; params: Record<string, unknown> }, ns: 'group' | 'row') =>
     t(`tests.${ns}.${l.key}`, { ...l.params, defaultValue: l.label });
+  const basisText = (b: TableBlock) => {
+    if (!b.basisKey) return b.basis ?? '';
+    const params = Object.fromEntries(Object.entries(b.basisParams).filter(([, v]) => v !== null && v !== undefined));
+    return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
+  };
   const compute = async (row: CompareRow) => {
     if (!row.action) return;
     try { await testsApi.createDuty(row.action); onComputed(t('tests.computeDone')); }
     catch (e) { onComputed(t('tests.errors.save', { reason: e instanceof Error ? e.message : String(e) })); }
   };
   return (
-    <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
-      <TableHead>
-        <TableRow>
-          <TableCell sx={head}>{t('tests.col.quantity')}</TableCell>
-          <TableCell sx={head} align="right">{t('tests.col.measured')}</TableCell>
-          <TableCell sx={head} align="right">{t('tests.col.model')}</TableCell>
-          <TableCell sx={head} align="right">{t('tests.col.delta')}</TableCell>
-          <TableCell sx={head} />
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {lines.map((l: TableLine, i) => l.type === 'group' ? (
-          <TableRow key={`g${i}`}>
-            <TableCell colSpan={5} sx={{ ...cell, fontWeight: 700, color: 'var(--text-1)', bgcolor: 'var(--panel)' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                {label(l, 'group')}{l.tip && <HelpTip title={tipText(l.tip)} />}
-              </Box>
-            </TableCell>
-          </TableRow>
-        ) : (
-          <TableRow key={`r${i}`}>
-            <TableCell sx={{ ...cell, pl: 2 }}>
-              <Tooltip arrow placement="top-start" enterTouchDelay={0}
-                title={[tipText(l.row.tip), l.row.detail].filter(Boolean).join(' · ')}>
-                <span>{label(l.row, 'row')}{l.row.unit ? <span style={{ color: 'var(--text-3)' }}>, {unitLabel(l.row.unit)}</span> : null}</span>
-              </Tooltip>
-            </TableCell>
-            <TableCell sx={cell} align="right">{l.measured}</TableCell>
-            <TableCell sx={cell} align="right">{l.model}</TableCell>
-            <TableCell sx={{ ...cell, fontWeight: 700, color: l.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l.delta}</TableCell>
-            <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
-              {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
-              {canCompute && l.row.action && (
-                <Tooltip title={t('tests.computeTip')}><Button size="small" sx={{ ml: 0.5, py: 0, fontSize: 11 }}
-                  onClick={() => void compute(l.row)}>{t('tests.compute')}</Button></Tooltip>
+    <Box ref={boxRef}>
+      {blocks.map((b) => {
+        const basis = basisText(b);
+        return (
+          <Box key={b.key} sx={{ mb: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0, height: 24, bgcolor: 'var(--panel-2)', px: 0.7 }}>
+              <Typography noWrap sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0, maxWidth: '70%' }}>
+                {label(b, 'group')}
+              </Typography>
+              {b.tip && <HelpTip title={tipText(b.tip)} />}
+              {basis && (
+                <Tooltip arrow placement="top-start" enterTouchDelay={0} title={basis}>
+                  <Typography noWrap sx={{ fontSize: 11, color: 'var(--text-3)', minWidth: 0 }}>{basis}</Typography>
+                </Tooltip>
               )}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: wide ? 'flex-start' : 'stretch' }}>
+              <Box sx={{ flex: b.series && wide ? '0 0 45%' : '1 1 auto', maxWidth: b.series ? undefined : 640, minWidth: 0, overflowX: 'auto' }}>
+                <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={head}>{t('tests.col.quantity')}</TableCell>
+                      <TableCell sx={head} align="right">{t('tests.col.measured')}</TableCell>
+                      <TableCell sx={head} align="right">{t('tests.col.model')}</TableCell>
+                      <TableCell sx={{ ...head, width: 48 }} align="right">{t('tests.col.delta')}</TableCell>
+                      <TableCell sx={head} />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {b.lines.map((l, i) => (
+                      <TableRow key={i}>
+                        <TableCell sx={cell}>
+                          <Tooltip arrow placement="top-start" enterTouchDelay={0}
+                            title={[tipText(l.row.tip), l.row.detail].filter(Boolean).join(' · ')}>
+                            <span>{label(l.row, 'row')}{l.row.unit ? <span style={{ color: 'var(--text-3)' }}>, {unitLabel(l.row.unit)}</span> : null}</span>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell sx={num} align="right">{l.measured}</TableCell>
+                        <TableCell sx={num} align="right">{l.model}</TableCell>
+                        <TableCell sx={{ ...num, width: 48, fontWeight: 700, color: l.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l.delta}</TableCell>
+                        <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
+                          {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
+                          {canCompute && l.row.action && (
+                            <Tooltip title={t('tests.computeTip')}><Button size="small" sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: '20px', fontSize: 11 }}
+                              onClick={() => void compute(l.row)}>{t('tests.compute')}</Button></Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+              {b.series && (
+                <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0 }}>
+                  <SeriesChart series={b.series} />
+                </Box>
+              )}
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
   );
 }
 

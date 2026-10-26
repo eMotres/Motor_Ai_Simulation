@@ -30,8 +30,37 @@ def _row(key: str, label: str, unit: str, measured: Any = None, model: Any = Non
 
 
 def _group(key: str, label: str, rows: List[Dict[str, Any]], *, params: Optional[Dict[str, Any]] = None,
-           tip: Optional[str] = None) -> Dict[str, Any]:
-    return {"key": key, "label": label, "params": params or {}, "tip": tip, "rows": rows}
+           tip: Optional[str] = None, basis: Optional[str] = None, basis_key: Optional[str] = None,
+           basis_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``basis`` = the one line (EN) saying what the model values of the group are (temperature, 2-D / 3-D);
+    ``basis_key`` / ``basis_params`` are what the web translates (``tests.basis.<key>``)."""
+    return {"key": key, "label": label, "params": params or {}, "tip": tip, "basis": basis, "basis_key": basis_key,
+            "basis_params": basis_params or {}, "rows": rows}
+
+
+def _k3(model: Dict[str, Any], what: str = "flux") -> tuple:
+    """``(k, clause, source)``: the 3-D end-effect factor a model value carries and the words for the row detail.
+
+    ``flux`` = voltages / EMF (Stage A k_flux); ``torque`` = torque, Kt (the measured k_T, else k_flux).  No passport:
+    ``(None, "2-D, no 3-D passport")`` - the 2-D value stays and says so."""
+    f = model.get("end3d") or {}
+    k = f.get("k_flux") if what == "flux" else f.get("k_torque")
+    if k is None:
+        return None, "2-D, no 3-D passport", None
+    if what == "flux":
+        src = f.get("source") or "Stage A"
+    elif f.get("torque_basis") == "3-D":
+        src = "measured k_T"
+    else:
+        src = "Stage A flux factor"
+    if f.get("inherited"):
+        src += ", earlier geometry"
+    return float(k), "3-D \u00d7%.3f (%s)" % (float(k), src), src
+
+
+def _scaled(value: Any, k: Optional[float]) -> Optional[float]:
+    v = num(value)
+    return None if v is None else (v if k is None else v * k)
 
 
 def _create_duty(die: str, config: str, *, rpm: float, current: float, mode: str = "motor",
@@ -86,7 +115,11 @@ def _resistance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
         rows.append(_row("r_pair", "R %s" % p.get("pair", "?"), "mOhm", p["value_mohm"], None,
                          params={"pair": p.get("pair", "?")}, status="info"))
     return _group("resistance", "Resistance at %s C" % ("?" if t is None else f"{t:g}"), rows,
-                  params={"temp_c": t}, tip="resistance")
+                  params={"temp_c": t}, tip="resistance",
+                  basis=("R_phase at %g C scaled to %s C" % (ref["coil_temp_c"], f"{t:g}") if (ref and t is not None)
+                         else None),
+                  basis_key="resistance" if (ref and t is not None) else None,
+                  basis_params=({"from": f"{ref['coil_temp_c']:g}", "to": f"{t:g}"} if (ref and t is not None) else None))
 
 
 def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -106,7 +139,7 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
         if ref:
             ld, lq = C.model_ldq_line(ref["ld_mh"], ref["lq_mh"], ref.get("connection") or "star")
             rows.append(_row("l_mean_rotor_out", "L line-line, mean (no rotor)", "uH", meas, (ld + lq) * 1000,
-                             tip="l_rotor_out", detail=f"duty '{ref['duty']}'", extra=freq_flag))
+                             tip="l_rotor_out", detail=f"duty '{ref['duty']}', 2-D", extra=freq_flag))
         else:
             rows.append(_row("l_mean_rotor_out", "L line-line, mean (no rotor)", "uH", meas, None,
                              tip="l_rotor_out", detail="no stator-only run stored", extra=freq_flag))
@@ -118,7 +151,7 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
                 ld, lq = C.model_ldq_line(ref["ld_mh"], ref["lq_mh"], ref.get("connection") or "star")
                 lo, hi = sorted((ld * 1000.0, lq * 1000.0))
                 det = (f"duty '{ref['duty']}'" + (f" at {ref['current']:g} A" if ref.get("current") is not None else "")
-                       + f", {ref.get('method') or 'stored'} Ld/Lq")
+                       + f", {ref.get('method') or 'stored'} Ld/Lq, 2-D")
             else:
                 lo = hi = None
                 det = "no stored Ld/Lq"
@@ -136,7 +169,8 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
                          params={"pair": p.get("pair", "?")}, status="info"))
     return _group("inductance", "Inductance" + (f" at {freq:g} Hz" if freq else "") + (", no rotor" if rotor_out else ""),
                   rows, params={"freq_hz": freq, "rotor": "out" if rotor_out else "in"},
-                  tip="l_freq" if freq_flag["high_freq"] else "ldq_sum")
+                  tip="l_freq" if freq_flag["high_freq"] else "ldq_sum",
+                  basis="2-D, no end-winding inductance, no 3-D flux factor on L", basis_key="inductance")
 
 
 def _info_groups(rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -209,6 +243,8 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     pts = mag.get("points") or []
     emf_rows, rms_rows, loss_rows = [], [], []
     fit_meas, fit_model = [], []
+    k_flux, k_clause, k_src = _k3(model, "flux")
+    temps_used: List[float] = []
     for r in rows_in:
         n = float(r["rpm"])
         ref = C.noload_reference(n, refs)
@@ -224,14 +260,20 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
             continue
         ratio = C.br_ratio(pts, t_mag, ref.get("magnet_temp_c"))
         emf = C.emf_model_at(n, ref, ratio)
+        if t_mag is not None:
+            temps_used.append(float(t_mag))
         det = (f"no-load duty '{ref['duty']}' at {ref['rpm']:g} rpm, magnet {ref.get('magnet_temp_c') if ref.get('magnet_temp_c') is not None else '?'} C"
                f" -> {('?' if t_mag is None else f'{t_mag:.0f}')} C ({t_src}), Br ratio {ratio:.3f}")
         extra = {"magnet_temp_c": t_mag, "magnet_temp_source": t_src, "br_ratio": ratio, "ref_duty": ref["duty"],
                  "ref_rpm": ref["rpm"]}
-        emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, emf["peak"], tip="emf_peak", params=params, detail=det,
-                             extra=extra))
-        rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), emf["rms"], tip="emf_rms", params=params,
-                             detail=det, extra=extra))
+        # the EMF carries the 3-D end-effect flux factor; the 2-D value stays beside it in ``extra``
+        emf_det = det + ", " + k_clause
+        emf_x = {**extra, "k_3d": k_flux, "model_2d": emf["peak"]}
+        rms_x = {**extra, "k_3d": k_flux, "model_2d": emf["rms"]}
+        emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, _scaled(emf["peak"], k_flux), tip="emf_peak", params=params,
+                             detail=emf_det, extra=emf_x))
+        rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), _scaled(emf["rms"], k_flux), tip="emf_rms",
+                             params=params, detail=emf_det, extra=rms_x))
         em = C.noload_em_loss_at(n, ref, ratio)
         mech = C.mech_loss_at(model.get("mech"), n, num(r.get("temp_c")) if num(r.get("temp_c")) is not None
                               else num((rec.get("conditions") or {}).get("ambient_c")))
@@ -250,16 +292,30 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
             fit_meas.append((n, meas_w))
             if total is not None:
                 fit_model.append((n, total))
-    groups = [_group("emf_peak", "EMF line-line peak (Vpp / 2)", emf_rows, tip="emf_peak"),
-              _group("emf_rms", "EMF line-line rms", rms_rows, tip="emf_rms")]
+    if temps_used:
+        lo, hi = min(temps_used), max(temps_used)
+        mag = "%.0f" % lo if round(lo) == round(hi) else "%.0f-%.0f" % (lo, hi)
+        mag_txt, mag_p = "magnets at %s C" % mag, mag
+    else:
+        mag_txt, mag_p = "magnets at the model temperature", None
+    basis_emf = mag_txt + ", " + k_clause
+    emf_key = "emf_3d" if k_flux is not None else "emf_2d"
+    emf_bp = {"mag": mag_p or "?", "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or ""}
+    groups = [_group("emf_peak", "EMF line-line peak (Vpp / 2)", emf_rows, tip="emf_peak", basis=basis_emf,
+                     basis_key=emf_key, basis_params=emf_bp),
+              _group("emf_rms", "EMF line-line rms", rms_rows, tip="emf_rms", basis=basis_emf,
+                     basis_key=emf_key, basis_params=emf_bp)]
     if loss_rows:
-        groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss"))
+        groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss",
+                             basis=mag_txt + ", losses 2-D (no flux factor)", basis_key="loss",
+                             basis_params={"mag": mag_p or "?"}))
     fm, fd = C.fit_an_bn2(fit_meas), C.fit_an_bn2(fit_model)
     if fm or fd:
         groups.append(_group("fit", "Loss fit P = a*n + b*n^2 (n in krpm)", [
             _row("fit_a", "a", "W/krpm", None if fm is None else fm["a"], None if fd is None else fd["a"], tip="fit"),
             _row("fit_b", "b", "W/krpm^2", None if fm is None else fm["b"], None if fd is None else fd["b"], tip="fit"),
-        ], tip="fit"))
+        ], tip="fit", basis="least squares through the origin, n in krpm",
+        basis_key="fit"))
     action = None
     if not refs and rows_in:
         top = max(float(r["rpm"]) for r in rows_in)
@@ -310,8 +366,10 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             groups.append(_group("load_point", label, rows, params=params, tip="load"))
             continue
         det = f"duty '{d['name']}' ({d['rpm']:g} rpm, {d['current']:g} A)"
+        kt, kt_clause, kt_src = _k3(model, "torque")
         rows = [_row("torque", "Torque" + (" (shaft)" if d.get("torque_kind") == "shaft" else " (EM)"), "N·m",
-                     r.get("torque_nm"), d.get("torque_nm"), tip="load", detail=det),
+                     r.get("torque_nm"), _scaled(d.get("torque_nm"), kt), tip="load", detail=det + ", " + kt_clause,
+                     extra={"k_3d": kt, "model_2d": d.get("torque_nm")}),
                 ]
         if eff_meas is not None:
             rows.append(_row("eff", "Efficiency", "%", eff_meas, d.get("eff_pct"), tip="load", detail=det))
@@ -324,7 +382,10 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         if num(r.get("temp_magnet_c")) is not None:
             rows.append(_row("t_magnet", "Magnet temperature", "C", r.get("temp_magnet_c"), d.get("magnet_c"),
                              tip="load", detail=det, extra={"duration_s": r.get("duration_s")}))
-        groups.append(_group("load_point", label, rows, params={**params, "duty": d["name"]}, tip="load"))
+        groups.append(_group("load_point", label, rows, params={**params, "duty": d["name"]}, tip="load",
+                             basis="torque " + kt_clause + ", efficiency and temperatures 2-D",
+                             basis_key="load_3d" if kt is not None else "load_2d",
+                             basis_params={"k": None if kt is None else "%.3f" % kt, "src": kt_src or ""}))
     return {"groups": groups, "fit": None}
 
 

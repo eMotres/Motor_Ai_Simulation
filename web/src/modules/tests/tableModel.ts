@@ -1,6 +1,6 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
-import type { CompareRow, TestCompare, TestKind, TestRecord } from './types';
+import type { CompareGroup, CompareRow, TestCompare, TestKind, TestRecord } from './types';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
 export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c'] as const;
@@ -53,21 +53,66 @@ export function rowNote(row: CompareRow): RowNote | null {
   return null;
 }
 
+export type RowLine = { type: 'row'; row: CompareRow; measured: string; model: string; delta: string; level: 'ok' | 'warn' | 'bad' | null; note: RowNote | null };
 export type TableLine =
   | { type: 'group'; key: string; label: string; params: Record<string, unknown>; tip?: string | null }
-  | { type: 'row'; row: CompareRow; measured: string; model: string; delta: string; level: 'ok' | 'warn' | 'bad' | null; note: RowNote | null };
+  | RowLine;
+
+function rowLine(r: CompareRow): RowLine {
+  return { type: 'row', row: r, measured: fmtValue(r.measured), model: fmtValue(r.model), delta: fmtDelta(r.delta_pct),
+    level: deltaLevel(r.delta_pct), note: rowNote(r) };
+}
+function visibleRows(g: CompareGroup): CompareRow[] {
+  return g.rows.filter((r) => !(r.status === 'info' && r.measured === null && r.model === null && !r.params?.result));
+}
 
 /** One table per test: group headers and their rows; info rows with no number at all are dropped. */
 export function tableLines(cmp: TestCompare | undefined | null): TableLine[] {
   const out: TableLine[] = [];
   for (const g of cmp?.groups ?? []) {
-    const rows = g.rows.filter((r) => !(r.status === 'info' && r.measured === null && r.model === null && !r.params?.result));
+    const rows = visibleRows(g);
     if (!rows.length) continue;
     out.push({ type: 'group', key: g.key, label: g.label, params: g.params ?? {}, tip: g.tip });
-    for (const r of rows) {
-      out.push({ type: 'row', row: r, measured: fmtValue(r.measured), model: fmtValue(r.model), delta: fmtDelta(r.delta_pct),
-        level: deltaLevel(r.delta_pct), note: rowNote(r) });
-    }
+    for (const r of rows) out.push(rowLine(r));
+  }
+  return out;
+}
+
+export interface SeriesPoint { rpm: number; measured: number | null; model: number | null; delta: number | null }
+export interface GroupSeries { unit: string; points: SeriesPoint[] }
+
+/** The rows of a group that form a series over speed (>= 2 distinct rpm, each with a measured or a model value), as the
+ *  chart's points sorted by rpm; null for a group with no speed per row (resistance, inductance, one load point ...).
+ *  The backend gives each row its speed as the number ``params.rpm``, so no label is parsed. */
+export function seriesOf(g: CompareGroup): GroupSeries | null {
+  const pts: SeriesPoint[] = [];
+  for (const r of g.rows) {
+    const rpm = r.params?.rpm;
+    if (typeof rpm !== 'number' || !Number.isFinite(rpm)) continue;
+    const measured = typeof r.measured === 'number' && Number.isFinite(r.measured) ? r.measured : null;
+    const model = typeof r.model === 'number' && Number.isFinite(r.model) ? r.model : null;
+    if (measured === null && model === null) continue;
+    pts.push({ rpm, measured, model, delta: typeof r.delta_pct === 'number' && Number.isFinite(r.delta_pct) ? r.delta_pct : null });
+  }
+  pts.sort((a, b) => a.rpm - b.rpm);
+  if (new Set(pts.map((p) => p.rpm)).size < 2) return null;
+  return { unit: g.rows.find((r) => r.unit)?.unit ?? '', points: pts };
+}
+
+export interface TableBlock {
+  key: string; label: string; params: Record<string, unknown>; tip?: string | null;
+  basis?: string | null; basisKey?: string | null; basisParams: Record<string, unknown>;
+  lines: RowLine[]; series: GroupSeries | null;
+}
+
+/** One block per group: its rows and, when they form a series over speed, the two curves (measured | model). */
+export function tableBlocks(cmp: TestCompare | undefined | null): TableBlock[] {
+  const out: TableBlock[] = [];
+  for (const g of cmp?.groups ?? []) {
+    const rows = visibleRows(g);
+    if (!rows.length) continue;
+    out.push({ key: g.key, label: g.label, params: g.params ?? {}, tip: g.tip, basis: g.basis ?? null,
+      basisKey: g.basis_key ?? null, basisParams: g.basis_params ?? {}, lines: rows.map(rowLine), series: seriesOf(g) });
   }
   return out;
 }

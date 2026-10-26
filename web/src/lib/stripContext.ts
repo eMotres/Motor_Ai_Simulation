@@ -22,12 +22,12 @@ export interface StripMotor {
 export interface StripProject { id: string; title: string; motors: StripMotor[] }
 
 /** The production open on the Production tab, published by the Production tab. */
-export interface StripProduction { die: string; config: string; /** the production's title, only when it is short (see shortTitle) */ title?: string }
+export interface StripProduction { die: string; config: string; /** the production's title, only when it is short (see shortTitle) */ title?: string; /** the motor's product revision letter ("A"), when it has one */ rev?: string }
 
 export type StripContext =
   | { kind: 'live' }
   | { kind: 'none' }
-  | { kind: 'production'; die: string; config: string; title?: string }
+  | { kind: 'production'; die: string; config: string; title?: string; rev?: string }
   | { kind: 'project'; projectId: string; title: string | null; motors: StripMotor[]; selected: { die: string; config: string } | null };
 
 /** Tabs that show NO machine at all. */
@@ -66,7 +66,7 @@ export function stripContextFor({ tab, project, production }: StripInput): Strip
   if (kind === 'none') return { kind: 'none' };
   if (kind === 'production') {
     return production
-      ? { kind: 'production', die: production.die, config: production.config, ...(production.title ? { title: production.title } : {}) }
+      ? { kind: 'production', die: production.die, config: production.config, ...(production.title ? { title: production.title } : {}), ...(production.rev ? { rev: production.rev } : {}) }
       : { kind: 'none' };
   }
   if (kind === 'project') {

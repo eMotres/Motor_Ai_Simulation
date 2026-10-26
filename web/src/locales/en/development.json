@@ -795,5 +795,20 @@
   "motorTests": {
     "button": "Tests",
     "tip": "Bench measurements of this motor against the simulation of the same point (read-only)."
+  },
+  "revisions": {
+    "assign": "Assign Rev A",
+    "assignTip": "The design is agreed with the client: record this variant as product revision Rev A. Later changes go into a new revision; Rev A then stays read-only.",
+    "new": "New revision",
+    "newTip": "Make the next product revision from this one. This variant becomes read-only and stays in the project and the catalogue.",
+    "dialogTitle": "New revision Rev {to}",
+    "dialogLine": "Rev {to} is made from Rev {from}; Rev {from} becomes read-only and is never deleted.",
+    "reason": "What changed and why",
+    "reasonTip": "Required. This is the revision record that engineers read later.",
+    "newDie": "New lamination (new die)",
+    "newDieTip": "Tick when the lamination changes. Otherwise only the configuration (winding, stack) is copied.",
+    "create": "Create Rev {to}",
+    "cancel": "Cancel",
+    "failed": "Could not create the revision"
   }
 }

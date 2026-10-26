@@ -18,6 +18,7 @@ import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
 import MotorThumbnail from './MotorThumbnail';
+import MotorRevisionText from '../common/MotorRevisionText';
 import {
   TextPromptDialog, ConfirmDialog,
   type TextPromptState, type ConfirmState,
@@ -1065,6 +1066,7 @@ const FamilyCatalog: React.FC<{
                   color: (active?.die === die.name && active?.config === c.name)
                     ? '#60a5fa' : 'var(--text-2)' }}>
                   {c.name}
+                  <MotorRevisionText die={die.name} config={c.name} />
                   {(active?.die === die.name && active?.config === c.name)
                     ? ' ●' : ''}
                 </Typography>

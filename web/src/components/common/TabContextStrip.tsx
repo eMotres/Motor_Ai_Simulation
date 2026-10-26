@@ -7,6 +7,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Chip, Tooltip, Typography } from '@mui/material';
+import { RevisionLabel } from './MotorRevisionText';
 import { openProjectMotorByRef } from '../../lib/openProjectMotor';
 import { motorLabel, visibleChips, type StripContext } from '../../lib/stripContext';
 
@@ -56,13 +57,13 @@ const ProjectStrip: React.FC<{ ctx: ProjectContext }> = ({ ctx }) => {
 // "<b>die</b> / <b>configuration</b>" line, tabular figures.  The bar sits in the app column ABOVE the page scroller, so it
 // stays in view while a long tab (BOM, Assembly process) scrolls under the sticky production sub-menu, never covers content
 // and has the panel background in both themes.
-const ProductionStrip: React.FC<{ die: string; config: string; title?: string }> = ({ die, config, title }) => {
+const ProductionStrip: React.FC<{ die: string; config: string; title?: string; rev?: string }> = ({ die, config, title, rev }) => {
   const { t } = useTranslation('common');
   return (
     <Box sx={BAR_SX} data-testid="strip-production">
       <Tooltip title={t('strip.productionTip')}>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help', fontVariantNumeric: 'tabular-nums', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          <b style={{ color: 'var(--text-1)' }}>{die}</b>{' / '}<b style={{ color: 'var(--text-1)' }}>{config}</b>
+          <b style={{ color: 'var(--text-1)' }}>{die}</b>{' / '}<b style={{ color: 'var(--text-1)' }}>{config}</b><RevisionLabel rev={rev} />
           {title ? <>{' · '}<span>{title}</span></> : null}
         </Typography>
       </Tooltip>
@@ -73,7 +74,7 @@ const ProductionStrip: React.FC<{ die: string; config: string; title?: string }>
 /** Renders nothing for kind 'none' (and for 'live', which the machine strip draws itself). */
 const TabContextStrip: React.FC<{ ctx: StripContext }> = ({ ctx }) => {
   if (ctx.kind === 'project') return <ProjectStrip ctx={ctx} />;
-  if (ctx.kind === 'production') return <ProductionStrip die={ctx.die} config={ctx.config} title={ctx.title} />;
+  if (ctx.kind === 'production') return <ProductionStrip die={ctx.die} config={ctx.config} title={ctx.title} rev={ctx.rev} />;
   return null;
 };
 

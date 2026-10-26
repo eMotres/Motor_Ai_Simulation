@@ -114,6 +114,7 @@ from motor_ai_sim.routes.saved_sims import router as saved_sims_router
 from motor_ai_sim.routes.freecad import router as freecad_router
 from motor_ai_sim.routes.fusion import router as fusion_router
 from motor_ai_sim.routes.family import router as family_router
+from motor_ai_sim.routes.motor_revisions import router as motor_revisions_router
 from motor_ai_sim.routes.cogging import router as cogging_router
 from motor_ai_sim.routes.motor_view import router as motor_view_router
 # The PDF report export — same /api/family prefix and the same die gate as the
@@ -379,6 +380,7 @@ app.include_router(catalog_router)
 app.include_router(saved_sims_router)
 app.include_router(freecad_router)
 app.include_router(family_router)
+app.include_router(motor_revisions_router)   # /api/motor-revisions: product revisions Rev A, Rev B ... of a motor (owner 2026-10-27)
 app.include_router(motor_view_router)
 app.include_router(report_router)
 app.include_router(my_motors_router)

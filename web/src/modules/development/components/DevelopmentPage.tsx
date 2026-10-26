@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
   import { BatteryInputs, type Battery } from '../../../components/compare/BatteryPanel';
   import { SPEC_PACK_PROP, specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView } from '../specBattery';
   import HelpTip from '../../../components/common/HelpTip';
+  import MotorRevisionText from '../../../components/common/MotorRevisionText';
   import { useAuth } from '../../../contexts/AuthContext';
   import { useTranslation } from 'react-i18next';
   import { developmentApi, DevelopmentApiError } from '../api';
@@ -956,7 +957,7 @@ export default function DevelopmentPage() {
           return headerRow(colSpan, motorColor(r.motor), false, <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
             <Box component="span" aria-hidden sx={{ width: 9, height: 9, borderRadius: '50%', flex: '0 0 9px', bgcolor: motorColor(r.motor) }} />
             <Stack spacing={0.1} sx={{ minWidth: 0, flex: '1 1 260px' }}>
-              <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}</Typography>
+              <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}<MotorRevisionText die={r.motor.die} config={r.motor.config} canonicalDie={r.motor.canonical_die} /></Typography>
               {stepNote(note)}
             </Stack>
             {live && selected && <VariantControls projectId={selected.id} motor={live} staff={canManageGlobally} busy={busy} t={tr} showAll={showAllVersions}

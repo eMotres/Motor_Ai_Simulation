@@ -459,6 +459,9 @@
     "settings": "Cookie 设置"
   },
   "model3dViewed": "当前查看的 3D 模型：{name}",
+  "revisions": {
+    "label": "版本 {rev}"
+  },
   "strip": {
     "project": "项目",
     "projectTip": "当前查看的项目及其电机；高亮的是所选变体。此行不会更改当前实时电机。",

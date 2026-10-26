@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
 import type { ProjectMember, ProjectMotor, ProjectMotorPickerItem, ProjectStatus } from '../../../modules/development/types';
 import { useUIStore } from '../../../stores/uiStore';
-import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, projectMotorKey, projectOpenEvent, projectOpenIntent, projectRoleBody, validProjectId } from '../adminProjectsModel';
+import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, projectOwnerLabel, projectMotorKey, projectOpenEvent, projectOpenIntent, projectRoleBody, validProjectId } from '../adminProjectsModel';
 import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey } from '../../../modules/development/pickerModel';
 import { MotorOpenActions } from '../../../modules/development/MotorOpenActions';
 import { MotorNoteField } from '../../../modules/development/MotorNoteField';
@@ -101,15 +101,16 @@ const ProjectsSection: React.FC = () => {
     {loading && <Box sx={{ display: 'flex', gap: 1, py: 3, color: 'var(--text-3)' }}><CircularProgress size={18} />{t('projects.loading')}</Box>}
     {error && <Typography sx={{ color: '#f87171', fontSize: 12, mb: 1 }}>{error}</Typography>}
     {!loading && !error && <Paper sx={{ ...PANEL, overflowX: 'auto' }}><Table size="small" sx={{ '& td, & th': { borderColor: 'var(--panel)', fontSize: 12 }, '& th': { color: 'var(--text-3)', fontSize: 10, textTransform: 'uppercase' } }}>
-      <TableHead><TableRow><TableCell>{t('projects.project')}</TableCell><TableCell>{t('projects.status')}</TableCell><TableCell>{t('projects.completeness')}</TableCell><TableCell>{t('projects.members')}</TableCell><TableCell>{t('projects.motors')}</TableCell><TableCell>{t('projects.activity')}</TableCell></TableRow></TableHead>
+      <TableHead><TableRow><TableCell>{t('projects.project')}</TableCell><TableCell>{t('projects.owner')}</TableCell><TableCell>{t('projects.status')}</TableCell><TableCell>{t('projects.completeness')}</TableCell><TableCell>{t('projects.members')}</TableCell><TableCell>{t('projects.motors')}</TableCell><TableCell>{t('projects.activity')}</TableCell></TableRow></TableHead>
       <TableBody>{filtered.map((p) => {
         return <TableRow key={p.id} hover onClick={() => setSelectedId(p.id)} sx={{ cursor: 'pointer' }}>
           <TableCell><Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}</Typography><Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{p.id}{p.customer_org ? ` · ${p.customer_org}` : ''}</Typography></TableCell>
+          <TableCell sx={{ overflowWrap: 'anywhere' }}>{projectOwnerLabel(p.members ?? [], p.pending_invites ?? [])}</TableCell>
           <TableCell><Chip size="small" label={td(`status.${p.status}`, { defaultValue: p.status })} sx={{ ...CHIP, color: '#60a5fa', bgcolor: '#2563eb1f' }} /></TableCell>
           <TableCell>{projectCompletenessLabel(p.completeness)}</TableCell>
           <TableCell>{projectAdminMembers(p.members ?? [], p.pending_invites ?? []).length}</TableCell><TableCell>{p.linked_motors?.length ?? 0}</TableCell><TableCell>{dateLabel(p.last_activity)}</TableCell>
         </TableRow>;
-      })}{filtered.length === 0 && <TableRow><TableCell colSpan={6} sx={{ textAlign: 'center', color: 'var(--text-4)', py: 3 }}>{t('projects.empty')}</TableCell></TableRow>}</TableBody>
+      })}{filtered.length === 0 && <TableRow><TableCell colSpan={7} sx={{ textAlign: 'center', color: 'var(--text-4)', py: 3 }}>{t('projects.empty')}</TableCell></TableRow>}</TableBody>
     </Table></Paper>}
     <Drawer anchor="right" open={!!current} onClose={() => setSelectedId(null)} PaperProps={{ sx: { width: { xs: '100%', sm: 430 }, bgcolor: 'var(--panel)', p: 2.5, overflowY: 'auto' } }}>
       {current && <ProjectDrawer project={current} users={users} onClose={() => setSelectedId(null)} onChanged={changed} onManageGrants={setCandidateUser} onOpenProject={() => { const intent = projectOpenIntent(current.id); try { sessionStorage.setItem(intent.storageKey, intent.projectId); } catch { /* Event path still opens while the page is mounted. */ } setSelectedId(null); setActiveTab('development' as never); window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: intent.projectId } })); }} />}

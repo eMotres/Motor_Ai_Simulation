@@ -233,6 +233,7 @@
     "status": "Status",
     "completeness": "Completeness",
     "members": "Members",
+    "owner": "Owner",
     "motors": "Linked motors",
     "activity": "Last activity",
     "empty": "No projects found",

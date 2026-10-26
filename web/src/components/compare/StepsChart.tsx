@@ -44,6 +44,11 @@ const StepsChart: React.FC<Props> = ({ variants, duty, current, onPick, recommen
   };
   if (!spec || data.length < 2) return null;
 
+  // the axis ticks need enough decimals to tell neighbouring ticks apart: a ripple of 1.22-1.31 % printed with the tile's one
+  // decimal gave "1.3, 1.3, 1.3, 1.2" (owner 2026-10-26); the tooltip keeps the tile's own precision
+  const vals = data.map((d) => d.value).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  const span = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+  const tickD = span > 0 ? Math.max(spec.d, Math.min(4, Math.ceil(-Math.log10(span / 5)))) : spec.d;
   const colorOf = (index: number) => motorColor(variants[index]);
   const Dot = (props: { cx?: number; cy?: number; index?: number; value?: unknown }) => {
     const { cx, cy, index = 0, value } = props;
@@ -76,7 +81,7 @@ const StepsChart: React.FC<Props> = ({ variants, duty, current, onPick, recommen
             <XAxis dataKey="step" type="number" domain={[1, variants.length]} allowDecimals={false} ticks={data.map((d) => d.step)}
               tickFormatter={(s) => String(data.find((d) => d.step === s)?.label ?? s)} interval={0} angle={-20} textAnchor="end" height={54}
               tick={{ fontSize: 10, fill: 'var(--text-3)' }} />
-            <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={52} domain={['auto', 'auto']} tickFormatter={(v) => fmt(Number(v), spec.d)} />
+            <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={52} domain={['auto', 'auto']} tickFormatter={(v) => fmt(Number(v), tickD)} />
             <RcTooltip
               formatter={(v) => [`${fmt(Number(v), spec.d)} ${spec.unit}`.trim(), nameOf(spec.id)]}
               labelFormatter={(s) => String(data.find((d) => d.step === s)?.label ?? s)}

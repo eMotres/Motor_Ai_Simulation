@@ -6743,6 +6743,14 @@ def _run(body: Dict[str, Any],
                        % (regime.get("note") or ""))
             log.warning("coupled: %s", refusal)
     block: Dict[str, Any] = {
+        # THE OPERATING POINT this loop was asked about (owner 2026-10-26): the points view shows a stored record only under
+        # the point whose speed and current it was solved at, and a record with no stamp cannot be tied to any point.
+        # a component the body did not state is left OUT (unknown), never stamped as 0
+        "point": {"rpm": float(rpm_eff),
+                  **({"I_phase_rms": _f(body, "I_phase_rms", 0.0)}
+                     if _f(body, "I_phase_rms", 0.0) > 0.0 else {}),
+                  **({"gamma_deg": _f(body, "gamma_deg", 0.0)}
+                     if body.get("gamma_deg") not in (None, "") else {})},
         # WHICH EXCITATION these temperatures belong to.  Always written — a
         # report that finds no `drive` is reading a record from before the
         # inverter existed, and that is a sinusoid; a record that says "pwm"

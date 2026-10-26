@@ -20,7 +20,7 @@ Pure functions over the stores; no FastAPI imports, so the tests drive them dire
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 #: Field kinds the viewer can draw (``duty_fields.KINDS`` minus ``modes``, which has its own gallery elsewhere).
 FIELD_KINDS = ("em", "thermal", "rotor_stress")
@@ -173,6 +173,195 @@ def _coupled_em(cp: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# which stored records belong to a point (owner 2026-10-26)
+# ---------------------------------------------------------------------------
+#
+# "I chose a concrete configuration; if it has no calculation, show nothing - only real results that belong to each point."
+# A record filed under a duty is shown for that duty only when (1) it is the duty's OWN record (same die / configuration /
+# duty - never a configuration-level "worst case" over other duties), (2) the operating point it was solved AT is the duty's
+# (speed and phase current within a small tolerance), (3) it is not superseded by a solver repair or made for another machine
+# print, and (4) its numbers are physically possible.  Anything else is left out of the view - not dimmed, not flagged - and
+# only named in the duty's ``hidden_records`` list (for diagnostics, never drawn).
+
+#: Speed and current tolerances of "the record was solved at the point's operating point".
+RPM_REL_TOL, RPM_ABS_TOL = 0.01, 1.0
+CURRENT_REL_TOL, CURRENT_ABS_TOL = 0.03, 0.5
+
+#: Kinds whose operating point is checked.  The others (``em`` pointer, ``modes``, ``pwm``, ``controller``) are kept as filed.
+_POINT_KINDS = ("thermal", "coupled", "coupled_limit", "rotor_stress", "duty_cycle", "em_run", "continuous_rating",
+                "critical_speeds")
+#: A limit search solves its own current (the S1 current IS its answer), so only its speed is compared.
+_SPEED_ONLY_KINDS = ("coupled_limit", "rotor_stress", "continuous_rating", "critical_speeds")
+
+#: The window a translated ``limited`` thermal map must stay in, and the floor of any single stored temperature.  A heavily
+#: overloaded steady state may legitimately exceed the ceiling (that over-limit verdict is what S1 / S2 exist to show), so a
+#: HIGH value never hides a record; only the ``limited`` map (an artefact of a level shift) is held to the ceiling.
+T_FLOOR_C, T_CEIL_C = -80.0, 1500.0
+_TEMP_SCALARS = ("T_min", "T_max", "coil_temp_c", "magnet_temp_c", "magnet_temp_max_c", "bearing_temp_c")
+
+
+def _nums(*values: Any) -> List[float]:
+    return [float(n) for n in (_num(x) for x in values) if n is not None]
+
+
+def record_stamp(kind: str, row: Any) -> Dict[str, List[float]]:
+    """The speeds and phase currents a stored row says it was solved at (``{"rpm": [...], "current": [...]}``)."""
+    row = row if isinstance(row, dict) else {}
+    pt = row.get("point") if isinstance(row.get("point"), dict) else {}
+    nums = row.get("numbers") if isinstance(row.get("numbers"), dict) else {}
+    em = row.get("em") if isinstance(row.get("em"), dict) else {}
+    cr = row.get("continuous_rating") if isinstance(row.get("continuous_rating"), dict) else {}
+    rpm = _nums(pt.get("rpm"), row.get("rpm"), nums.get("rpm"), row.get("rated_rpm"))
+    if kind in ("coupled", "coupled_limit"):
+        rpm += _nums(cr.get("rpm"))
+    # a current stamp of 0 (or less) is "no current stated", not a zero-ampere point: unknown, never compared
+    cur = [c for c in _nums(pt.get("I_phase_rms"), pt.get("current_arms"), nums.get("I_phase_rms_A"),
+                            nums.get("I1_phase_rms_A"), em.get("I1_phase_rms_A")) if c > 0.0]
+    return {"rpm": rpm, "current": cur}
+
+
+def _close(a: float, b: float, rel: float, floor: float) -> bool:
+    return abs(a - b) <= max(floor, rel * max(abs(a), abs(b)))
+
+
+def operating_of(row: Any) -> Dict[str, Optional[float]]:
+    """The operating point of a duty row (``motors._results``): speed and phase current as the duty states them."""
+    op = row.get("operating_point") if isinstance(row, dict) and isinstance(row.get("operating_point"), dict) else {}
+    return {"rpm": _num(op.get("rpm")), "current": _num(op.get("current_arms"))}
+
+
+def belongs_to_point(kind: str, row: Any, op: Dict[str, Optional[float]], *, limit_search: bool = False) -> bool:
+    """Was this stored row solved at the duty's operating point?
+
+    Every identifying stamp the row carries must agree with the point; a row with no stamp at all cannot be tied to the
+    point and does NOT belong (it is not guessed).  A point that states neither speed nor current has nothing to compare:
+    everything filed under it stays.
+    """
+    rpm, cur = (op or {}).get("rpm"), (op or {}).get("current")
+    if rpm is None and cur is None:
+        return True
+    stamp = record_stamp(kind, row)
+    checks: List[bool] = []
+    if rpm is not None and stamp["rpm"]:
+        checks.append(any(_close(rpm, x, RPM_REL_TOL, RPM_ABS_TOL) for x in stamp["rpm"]))
+    if cur is not None and stamp["current"] and kind not in _SPEED_ONLY_KINDS and not limit_search:
+        checks.append(any(_close(cur, x, CURRENT_REL_TOL, CURRENT_ABS_TOL) for x in stamp["current"]))
+    return bool(checks) and all(checks)
+
+
+def impossible_temperature(row: Any) -> Optional[str]:
+    """The offending value when a stored thermal row is a broken ``limited`` map, else ``None``.
+
+    Only the ``limited`` thermal map is held to the whole window (-80 .. 1500 degC).  Any other row is never judged here:
+    a high temperature is a real over-limit answer, and a single value below the floor is dropped by
+    :func:`drop_impossible_values`, not the record.
+
+    Seen 2026-10-26: a ``limited`` map (the last solved map TRANSLATED part by part onto the node temperatures of the
+    limit instant, ``routes.thermal.rescale_map_to_nodes``) stored ``T_min = -147.4 degC``: a level shift cannot keep a
+    cold part above ambient when the shift is as large as the runaway steady state is hot.
+    """
+    if not isinstance(row, dict) or str(row.get("state") or "").lower() != "limited":
+        return None
+    values = _nums(*[row.get(k) for k in _TEMP_SCALARS])
+    comps = row.get("components") if isinstance(row.get("components"), dict) else {}
+    for c in comps.values():
+        if isinstance(c, dict):
+            values += _nums(c.get("min"), c.get("avg"), c.get("max"))
+    bad = [v for v in values if v < T_FLOOR_C or v > T_CEIL_C]
+    return f"{(min(bad) if min(bad) < T_FLOOR_C else max(bad)):.1f}" if bad else None
+
+
+def drop_impossible_values(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of a stored row without its individual temperatures below the floor (a part colder than -80 degC is no
+    result); every other number of the record - losses, torque, an over-limit temperature - stays."""
+    out = dict(row)
+    for k in _TEMP_SCALARS:
+        v = _num(out.get(k))
+        if v is not None and v < T_FLOOR_C:
+            del out[k]
+    comps = out.get("components")
+    if isinstance(comps, dict):
+        out["components"] = {n: c for n, c in comps.items()
+                             if not (isinstance(c, dict) and any(v is not None and v < T_FLOOR_C
+                                                                 for v in (_num(c.get("min")), _num(c.get("avg")), _num(c.get("max")))))}
+    return out
+
+
+def _geometry_status(rs: Dict[str, Any], duty_rows: Dict[str, Any]) -> str:
+    """``match`` | ``differs`` | ``unknown``: the stress record's mesh-independent machine print against the newest
+    electromagnetic / coupled / thermal record of the SAME duty (the v1 fingerprint moves with the mesh, so it is not compared)."""
+    ref = None
+    for kind in ("em_run", "coupled", "thermal"):
+        row = duty_rows.get(kind)
+        fp = row.get("geometry_fingerprint_v2") if isinstance(row, dict) else None
+        w = _when(row)
+        if fp and w and (ref is None or w > ref[0]):
+            ref = (w, fp)
+    mine = rs.get("geometry_fingerprint_v2")
+    return "unknown" if not (mine and ref) else ("match" if mine == ref[1] else "differs")
+
+
+def own_records(stored_duty: Any, op: Dict[str, Optional[float]]) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+    """The records of ONE duty that really belong to it: ``(kept, hidden)``.
+
+    ``kept`` is the duty's stored dict without the rows left out; ``hidden`` names each row left out and why
+    (``other_point`` | ``superseded`` | ``other_geometry`` | ``impossible_temperature``).
+    """
+    stored_duty = stored_duty if isinstance(stored_duty, dict) else {}
+    kept: Dict[str, Any] = {}
+    hidden: List[Dict[str, str]] = []
+    for kind, row in stored_duty.items():
+        if not isinstance(row, dict):
+            kept[kind] = row
+            continue
+        if kind in _POINT_KINDS and not belongs_to_point(kind, row, op, limit_search=_is_limit_search(row)):
+            hidden.append({"kind": str(kind), "reason": "other_point"})
+            continue
+        if kind in ("thermal", "coupled", "coupled_limit"):
+            bad = impossible_temperature(row)
+            if bad is not None:
+                hidden.append({"kind": str(kind), "reason": "impossible_temperature", "value": bad})
+                continue
+            row = drop_impossible_values(row)
+        kept[kind] = row
+    rs = kept.get("rotor_stress")
+    if isinstance(rs, dict) and rs:
+        if solver_status(rs) == "superseded":
+            hidden.append({"kind": "rotor_stress", "reason": "superseded"})
+            del kept["rotor_stress"]
+        elif _geometry_status(rs, kept) == "differs":
+            hidden.append({"kind": "rotor_stress", "reason": "other_geometry"})
+            del kept["rotor_stress"]
+    return kept, hidden
+
+
+def own_fields(rows: Any, op: Dict[str, Optional[float]], kept: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """The stored field maps of one duty that belong to it.
+
+    A map belongs when its own stamped speed is the point's (a map with no stamp cannot be tied to the point and is left out),
+    except the stress map, which also belongs when the duty's own stress RECORD was kept (the record and the map are one run).
+    A temperature map with a physically impossible range is never offered.
+    """
+    out: List[Dict[str, Any]] = []
+    hidden: List[Dict[str, str]] = []
+    for r in rows or []:
+        kind = r.get("kind")
+        pt = r.get("point") if isinstance(r.get("point"), dict) else {}
+        ok = belongs_to_point("em_run" if kind == "em" else kind, {"point": pt}, op) or (
+            kind == "rotor_stress" and isinstance(kept.get("rotor_stress"), dict) and bool(kept.get("rotor_stress")))
+        if not ok:
+            hidden.append({"kind": f"field:{kind}", "reason": "other_point"})
+            continue
+        if kind == "thermal":
+            low = _num(pt.get("T_min"))
+            if low is not None and low < T_FLOOR_C:
+                hidden.append({"kind": "field:thermal", "reason": "impossible_temperature", "value": f"{low:.1f}"})
+                continue
+        out.append(r)
+    return out, hidden
+
+
 def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Thermal results of one duty - or ``None`` when nothing is stored.
 
@@ -263,6 +452,8 @@ def _rotor_stress_block(rs: Dict[str, Any]) -> Dict[str, Any]:
                      "max_displacement_um", "rotor_od_growth_um", "interference_mm")),
         # the speed the stress solve ran at: the proof speed when the case is the proof case
         "proof_rpm": rpm,
+        # the speed the solve was ASKED at (the proof case may run above it by the overspeed factor)
+        "request_rpm": _num(point.get("rpm")),
         # the load case, from the record's own fields: speed, torque and which loads were applied
         "worst_case": {k: v for k, v in {"rpm": rpm, "torque_nm": _num(point.get("torque_nm")),
                                          "loads": point.get("loads"), "case": rs.get("case")}.items() if v is not None},
@@ -318,16 +509,27 @@ def worst_case_rotor_stress(stored_by_duty: Dict[str, Any]) -> Optional[Dict[str
     return block
 
 
-def mechanical_block(stored: Dict[str, Any], worst: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Mechanical results shown at one duty: the motor's worst case (see :func:`worst_case_rotor_stress`) plus the
-    ring modes and critical speeds filed under THIS duty - or ``None``."""
+def duty_rotor_stress(kept: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The rotor-stress block of ONE duty's own (already selected, see :func:`own_records`) record, with the record's own load
+    case (``worst_case``: its speed and torque), or ``None``.  Never another duty's record."""
+    rs = kept.get("rotor_stress")
+    if not (isinstance(rs, dict) and rs):
+        return None
+    block = _rotor_stress_block(rs)
+    block.update({"solver_status": solver_status(rs), "geometry_status": _geometry_status(rs, kept), "stale": False})
+    return block
+
+
+def mechanical_block(stored: Dict[str, Any], rotor_stress: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Mechanical results of one duty: its OWN stress record (see :func:`duty_rotor_stress`) plus the ring modes and critical
+    speeds filed under it - or ``None`` when it has none."""
     modes = stored.get("modes") if isinstance(stored.get("modes"), dict) else None
     crit = stored.get("critical_speeds") if isinstance(stored.get("critical_speeds"), dict) else None
-    if not (worst or modes or crit):
+    if not (rotor_stress or modes or crit):
         return None
     out: Dict[str, Any] = {}
-    if worst:
-        out["rotor_stress"] = worst
+    if rotor_stress:
+        out["rotor_stress"] = rotor_stress
     if modes:
         out["modes"] = {"frequencies_hz": plain(modes.get("frequencies_hz"), 2),
                         "f_switch_hz": _num(modes.get("f_switch_hz")), "provenance": provenance(modes)}
@@ -372,18 +574,19 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
     ``configure_duties`` the duties Configure can open through a full passport.
     """
     from motor_ai_sim import duty_results as dr
-    worst = worst_case_rotor_stress(stored_by_duty)
     duties = []
     for row in result_rows:
         name = str(row.get("duty") or "")
-        stored = (stored_by_duty or {}).get(name) or {}
-        fields = fields_block((fields_by_duty or {}).get(name))
-        thermal = thermal_block(stored)
-        mechanical = mechanical_block(stored, worst)
-        em_run = em_run_block(stored)
-        # the worst case is the motor's, shown everywhere: it alone does not make a duty a stored POINT
-        has_anything = bool(row.get("has_result") or thermal or (stored.get("rotor_stress") or stored.get("modes")
-                                                                   or stored.get("critical_speeds")) or em_run or fields)
+        # ONLY the records that belong to THIS point (same duty, solved at its speed and current, current solver and
+        # machine, physical numbers): the rest is not shown at all (owner 2026-10-26)
+        kept, hidden = own_records((stored_by_duty or {}).get(name) or {}, operating_of(row))
+        field_rows, hidden_fields = own_fields((fields_by_duty or {}).get(name), operating_of(row), kept)
+        fields = fields_block(field_rows)
+        thermal = thermal_block(kept)
+        mechanical = mechanical_block(kept, duty_rotor_stress(kept))
+        em_run = em_run_block(kept)
+        # the duty's own saved electromagnetic result (yaml) or any of its own records makes it a stored point
+        has_anything = bool(row.get("electromagnetic") or row.get("comparison") or thermal or mechanical or em_run or fields)
         em_nums = row.get("electromagnetic") if isinstance(row.get("electromagnetic"), dict) else {}
         has_em_torque = any(_num(em_nums.get(k)) is not None for k in ("t_em_avg_nm", "t_em_nm", "t_avg_nm", "torque_avg_nm", "torque_nm"))
         duties.append({
@@ -400,7 +603,9 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
             "thermal": thermal,
             "mechanical": mechanical,
             "fields": fields,
-            "kinds": dr.kinds_present(stored),
+            "kinds": dr.kinds_present(kept),
+            # records filed under this duty that were left out, and why (diagnostics; the UI never draws them)
+            "hidden_records": hidden + hidden_fields,
         })
     has_points = any(d["has_result"] for d in duties)
     return {
@@ -409,7 +614,6 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
         "configure_duties": sorted(configure_duties),
         # the one decision the UI needs: a motor with stored points and no full passport opens points-limited
         "mode": "full" if configure_duties else ("points" if has_points else "empty"),
-        "mechanical_worst_case": worst,
         "duties": duties,
         "solver_now": dr.solver_stamp(),
     }

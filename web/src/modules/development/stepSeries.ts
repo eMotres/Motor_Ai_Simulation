@@ -42,7 +42,8 @@ export const SERIES: SeriesSpec[] = [
   fromTile('efficiency'),
   fromTile('losses'),
   fromTile('ripple'),
-  { id: 'current', unit: 'A', d: 1, value: (p) => pointOperating(p).currentA },
+  // the current is the duty's INPUT: a step enters this series only when the same duty also holds a real result (a computed torque)
+  { id: 'current', unit: 'A', d: 1, value: (p) => (tileValue(p, POINT_TILES.find((t) => t.id === 'torque') as PointTileSpec) === null ? null : pointOperating(p).currentA) },
   fromTile('j'),
   fromTile('vPhase'),
   fromTile('vLine'),

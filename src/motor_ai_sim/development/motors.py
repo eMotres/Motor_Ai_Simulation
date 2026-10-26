@@ -972,7 +972,13 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
 
 
 def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = None,
-             configure_duties: set[str] | None = None) -> list[dict]:
+             configure_duties: set[str] | None = None, *, own_only: bool = False) -> list[dict]:
+    """One row per duty of the configuration.
+
+    ``own_only`` (the points-limited Configure and the steps feed, owner 2026-10-26): the stored records that feed a row
+    (coupled / thermal temperatures, losses, ...) are only the duty's OWN records solved at its operating point
+    (``motor_view.own_records``); a record of another point, a superseded or impossible one never reaches the row.
+    """
     from motor_ai_sim import duty_results
     if stored_by_duty is None:
         try: doc = duty_results.get(die, config)
@@ -1000,6 +1006,9 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
         for key, value in _metric_projection(duty.get("summary") or {}).items():
             em.setdefault(key, value)
         stored_duty = by_duty.get(name) or {}
+        if own_only:
+            from motor_ai_sim.development import motor_view
+            stored_duty = motor_view.own_records(stored_duty, motor_view.operating_of({"operating_point": duty}))[0]
         has_result = bool(duty.get("result") or duty.get("summary") or stored_duty)
         try:
             from motor_ai_sim.routes import family as family_module
@@ -1575,7 +1584,7 @@ def project_motor_points(project_id: str, request: Request, die: str | None = No
             stored = (_stored_results_index(open_die, result_index) or {}).get(cfg_name, {})
         except Exception:
             stored = {}
-        points = _point_rows(_results(open_die, cfg_name, cfg, stored, set()))
+        points = _point_rows(_results(open_die, cfg_name, cfg, stored, set(), own_only=True))
         variants.append({"step": len(variants) + 1, "die": open_die, "canonical_die": canonical,
                          "config": cfg_name, "status": status, "note": str(link.get("note") or ""),
                          # the staff marks ride on the light steps feed: the points-limited view needs no project motor list
@@ -1624,7 +1633,7 @@ def motor_view_for(open_die: str, config: str, cfg_path: Path, cfg: dict, author
         fields = duty_fields.have(open_die, config) or {}
     except Exception:
         fields = {}
-    rows = _results(open_die, config, cfg, stored, set())
+    rows = _results(open_die, config, cfg, stored, set(), own_only=True)
     configure = configure_duties_for_motor(open_die, config, cfg, cfg_path, authorization)
     for row in rows:
         row["can_open_configure"] = row["duty"] in configure

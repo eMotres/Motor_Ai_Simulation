@@ -5,7 +5,8 @@
  *  stores computed duty points, it opens POINTS-LIMITED: only the stored points, a discrete mode switch, no
  *  interpolation, the continuous knobs disabled.  The server decides (`MotorView.mode`); these helpers turn that into
  *  what the page does.  No React, no window: `node --test` imports this file. */
-import type { FieldKind, MotorView, MotorViewDuty, ProjectMotor, StoredProvenance } from './types';
+import { pointOperating } from './pointsOnly.ts';
+import type { FieldKind, MotorView, MotorViewDuty, ProjectMotor, StoredMechanical, StoredProvenance, StoredRotorStress, StoredThermal } from './types';
 
 export type ConfigureShow = 'full' | 'points-limited';
 
@@ -32,8 +33,77 @@ export function pickPointDuty(view: MotorView | null | undefined, loaded: string
 
 /** Field kinds a duty has stored, in the viewer's order. */
 export const FIELD_KIND_ORDER: readonly FieldKind[] = ['em', 'thermal', 'rotor_stress'];
+
+// ── what belongs to the selected point (owner 2026-10-26) ────────────────────────────────────────────────────────────
+// "I chose a concrete configuration; if it has no calculation, show nothing - only real results that belong to each point."
+// The server already sends only the records that belong to the duty (same duty, solved at its speed and current, current
+// solver, physical numbers).  These helpers are the second belt: whatever still reaches the page is checked once more, and a
+// block with nothing real in it is not drawn at all (no header, no empty tiles, no placeholder text).
+
+/** Two speeds are the same point: within 1 % (at least 1 rpm). */
+export const sameRpm = (a: number, b: number): boolean => Math.abs(a - b) <= Math.max(1, 0.01 * Math.max(Math.abs(a), Math.abs(b)));
+/** A temperature a real result can show: not colder than -80 C (a part below that is a translated-map artefact).  A HIGH value is
+ *  a real over-limit answer and is shown as it is. */
+export const plausibleC = (v: number | null): boolean => v === null || v >= -80;
+
+/** The mechanical answer of this point: its OWN, current stress record - or null.  A record solved at another speed than the
+ *  point's, a superseded one and one of another machine print are not the point's result. */
+export function ownRotorStress(duty: MotorViewDuty | null | undefined): StoredRotorStress | null {
+  const r = duty?.mechanical?.rotor_stress;
+  if (!r) return null;
+  if (r.stale === true || r.solver_status === 'superseded' || r.geometry_status === 'differs') return null;
+  const rpm = duty ? pointOperating(duty).rpm : null;
+  if (rpm !== null) {
+    const own = [r.request_rpm, r.worst_case?.rpm, r.proof_rpm].map(num).filter((x): x is number => x !== null);
+    if (own.length > 0 && !own.some((x) => sameRpm(x, rpm))) return null;
+  }
+  return r;
+}
+
+/** The mechanical block of this point (own stress record + ring modes / critical speeds filed under it), or null. */
+export function pointMechanical(duty: MotorViewDuty | null | undefined): StoredMechanical | null {
+  const m = duty?.mechanical;
+  if (!m) return null;
+  const rs = ownRotorStress(duty);
+  const out: StoredMechanical = { ...(rs ? { rotor_stress: rs } : {}), ...(m.modes ? { modes: m.modes } : {}), ...(m.critical_speeds ? { critical_speeds: m.critical_speeds } : {}) };
+  return out.rotor_stress || out.modes || out.critical_speeds ? out : null;
+}
+
+/** The thermal block of this point, or null when it holds nothing real: tiles with a physical value, or a labelled limit search. */
+export function pointThermal(duty: MotorViewDuty | null | undefined): StoredThermal | null {
+  const t = duty?.thermal;
+  if (!t) return null;
+  return thermalTiles(t).length > 0 || (t.limit_search && plausibleC(num(t.limit_search.winding_c))) ? t : null;
+}
+
+/** Which blocks the points view draws for a point.  A block that is not listed is not drawn at all. */
+export function pointBlocks(duty: MotorViewDuty | null | undefined): { thermal: boolean; mechanical: boolean; fields: boolean } {
+  return {
+    thermal: pointThermal(duty) !== null,
+    mechanical: mechTiles(pointMechanical(duty)).length > 0,
+    fields: storedFieldKinds(duty).length > 0,
+  };
+}
+
+/** Field kinds this point has a stored map for: the map's own stamped speed must be the point's, and a temperature map with an
+ *  impossible range is never offered.  The stress map also belongs when the point's own stress record does. */
 export function storedFieldKinds(duty: MotorViewDuty | null | undefined): FieldKind[] {
-  return FIELD_KIND_ORDER.filter((k) => duty?.fields?.[k] !== undefined);
+  const rpm = duty ? pointOperating(duty).rpm : null;
+  return FIELD_KIND_ORDER.filter((k) => {
+    const f = duty?.fields?.[k];
+    if (f === undefined) return false;
+    if (k === 'rotor_stress' && duty && ownRotorStress(duty)) return true;
+    const own = num(f?.point?.rpm);
+    if (rpm !== null && own !== null && !sameRpm(own, rpm)) return false;
+    if (k === 'thermal' && (!plausibleC(num(f?.point?.T_min)) || !plausibleC(num(f?.point?.T_max)))) return false;
+    return true;
+  });
+}
+
+/** What a limit-search line is: the S1 continuous limit, the run to the first limit (time to the limit), or a plain search. */
+export function limitKind(limit: StoredThermal['limit_search'] | null | undefined): 'continuous' | 'time' | 'search' {
+  const to = String(limit?.solve_to ?? '').toLowerCase();
+  return to === 'continuous' ? 'continuous' : to === 'limits' ? 'time' : 'search';
 }
 
 /** One compact provenance line: date, solver, mesh.  Missing parts are left out, never guessed. */
@@ -55,23 +125,24 @@ export interface ResultTile { id: string; value: number | null; unit: string; d:
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** The thermal tiles of a duty.  Temperatures are the DUTY's own (`duty_temps`: the converged coupled loop, else the
- *  steady map); a limit-search state is never turned into a tile.  S1 and S2 are tiles of their own.  Every tile is shown
- *  even when missing (value null -> "-" with the "not stored" tooltip): nothing is invented. */
+ *  steady map); a limit-search state is never turned into a tile.  S1 and S2 are tiles of their own.  Only tiles that hold
+ *  a real, physical value are returned (owner 2026-10-26): a missing or impossible number is not drawn as "-". */
 export function thermalTiles(t: MotorViewDuty['thermal']): ResultTile[] {
   if (!t) return [];
   const d = t.duty_temps;
+  const c = (v: unknown): number | null => { const n = num(v); return plausibleC(n) ? n : null; };      // an impossible temperature is never a tile
   const out: ResultTile[] = d ? [
-    { id: 'winding', value: num(d.winding_c), unit: '°C', d: 0 },
-    { id: 'magnet', value: num(d.magnet_max_c) ?? num(d.magnet_c), unit: '°C', d: 0 },
-    { id: 'housing', value: num(d.housing_c), unit: '°C', d: 0 },
+    { id: 'winding', value: c(d.winding_c), unit: '°C', d: 0 },
+    { id: 'magnet', value: c(d.magnet_max_c) ?? c(d.magnet_c), unit: '°C', d: 0 },
+    { id: 'housing', value: c(d.housing_c), unit: '°C', d: 0 },
   ] : [];
   const emTorque = num(d?.em?.torque_nm);
   if (emTorque !== null) out.push({ id: 'emTorque', value: emTorque, unit: 'N·m', d: 2 });
   const bearing = num(d?.bearing_c);
-  if (bearing !== null) out.push({ id: 'bearing', value: bearing, unit: '°C', d: 0 });
-  if (t.s1) out.push({ id: 's1', value: num(t.s1.I_cont_A_rms), unit: 'A', d: 1 });
-  if (t.s2) out.push({ id: 's2', value: num(t.s2.time_to_limit_s), unit: 's', d: 0 });
-  return out;
+  if (bearing !== null && plausibleC(bearing)) out.push({ id: 'bearing', value: bearing, unit: '°C', d: 0 });
+  if (t.s1 && num(t.s1.I_cont_A_rms) !== null) out.push({ id: 's1', value: num(t.s1.I_cont_A_rms), unit: 'A', d: 1 });
+  if (t.s2 && num(t.s2.time_to_limit_s) !== null) out.push({ id: 's2', value: num(t.s2.time_to_limit_s), unit: 's', d: 0 });
+  return out.filter((tile) => tile.value !== null);      // only real values: a tile without one is not drawn
 }
 
 /** Which run the duty's temperatures are (and when), for the block title: `coupled | thermal`, date.  null without temperatures. */
@@ -81,7 +152,7 @@ export function thermalSource(t: MotorViewDuty['thermal']): { kind: 'coupled' | 
   return { kind: d.kind, day: (d.provenance?.computed_at ?? d.provenance?.recorded_at ?? '').replace('T', ' ').slice(0, 16) };
 }
 
-/** The mechanical tiles of the motor's worst case: smallest averaged SF, largest displacement, proof speed. */
+/** The mechanical tiles of ONE stress record: smallest averaged SF, largest displacement, proof speed (only the stored ones). */
 export function mechTiles(m: MotorViewDuty['mechanical']): ResultTile[] {
   const r = m?.rotor_stress;
   if (!r) return [];
@@ -94,10 +165,10 @@ export function mechTiles(m: MotorViewDuty['mechanical']): ResultTile[] {
   if (growth !== null) out.push({ id: 'odGrowth', value: growth, unit: 'µm', d: 1 });
   const limit = num(r.limit_speed_rpm);
   if (limit !== null) out.push({ id: 'limitRpm', value: limit, unit: 'rpm', d: 0 });
-  return out;
+  return out.filter((tile) => tile.value !== null);
 }
 
-/** "worst case: <rpm>, <torque>" of the stored record - the parts that are known. */
+/** "<rpm>, <torque>" - the load case the stored record was solved at (its own speed and torque), the parts that are known. */
 export function worstCaseLabel(m: MotorViewDuty['mechanical']): string {
   const w = m?.rotor_stress?.worst_case;
   if (!w) return '';

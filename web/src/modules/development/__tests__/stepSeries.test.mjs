@@ -67,7 +67,7 @@ test('the coupled loop torque is its own thermal tile, never merged with the EM 
 
 test('wiring: chart right of the tiles on wide screens, stacked on narrow ones; no compare control, no step note, one source chip', () => {
   const src = readFileSync(new URL('../../../components/compare/PointsConfigure.tsx', import.meta.url), 'utf8');
-  assert.match(src, /gridTemplateColumns: \{ xs: 'minmax\(0,1fr\)', lg: showChart \?/);
+  assert.match(src, /gridTemplateColumns: \{ xs: 'minmax\(0,1fr\)', lg: showChart && showTiles \?/);
   assert.match(src, /<StepsChart /);
   assert.match(src, /data-testid="em-source-chip"/);
   assert.doesNotMatch(src, /compareWith|baseVariantPoint|points-note|steps\[stepIndex\]\?\.note/);
@@ -75,4 +75,14 @@ test('wiring: chart right of the tiles on wide screens, stacked on narrow ones; 
   const chart = readFileSync(new URL('../../../components/compare/StepsChart.tsx', import.meta.url), 'utf8');
   assert.match(chart, /from 'recharts'/);
   assert.match(chart, /connectNulls=\{false\}/);
+});
+
+test('the current series needs a real result at that step: a duty that only has its input current is a gap, not a value', () => {
+  const variants = [
+    { step: 1, die: 'D1', canonical_die: 'D1', config: 'a', points: [{ duty: 'peak', operating_point: { rpm: 1000, current_arms: 336 }, comparison: { torque_nm: 800 } }] },
+    { step: 2, die: 'D2', canonical_die: 'D2', config: 'a', points: [{ duty: 'peak', operating_point: { rpm: 1000, current_arms: 300 }, comparison: {} }] },
+    { step: 3, die: 'D3', canonical_die: 'D3', config: 'a', points: [{ duty: 'peak', operating_point: { rpm: 1000, current_arms: 280 }, comparison: { torque_nm: 760 } }] },
+  ];
+  const current = SERIES.find((s) => s.id === 'current');
+  assert.deepEqual(stepSeries(variants, 'peak', current).map((p) => p.value), [336, null, 280]);
 });

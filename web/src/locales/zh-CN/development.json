@@ -407,8 +407,9 @@
         "coupled": "耦合迭代",
         "thermal": "温度图"
       },
-      "onlyLimit": "此工况只存有极限搜索状态，没有它自己的温度。",
-      "limitLine": "S1 极限搜索（{day}）：极限时绕组 {winding} °C",
+      "limitLine": "S1 持续极限（{day}）：极限时绕组 {winding} °C",
+      "timeLine": "到限时间运行（{day}）：达到首个极限时绕组 {winding} °C",
+      "searchLine": "极限搜索（{day}）：绕组 {winding} °C",
       "limitTip": "这是极限搜索（S1）的状态，不是该工况的温度。",
       "tile": {
         "emTorque": "转矩（耦合迭代）",
@@ -417,7 +418,7 @@
         "housing": "外壳",
         "bearing": "轴承",
         "s1": "S1 电流",
-        "s2": "S2 时间"
+        "s2": "S2：到限时间"
       },
       "tileTip": {
       "torqueActiveMass": "转矩 / 有效质量（电磁部件），不含整机。",
@@ -434,7 +435,7 @@
     },
     "mech": {
       "title": "机械",
-      "worstCase": "最不利工况：{case}",
+      "atCase": "求解工况：{case}",
       "filedUnder": "存于工况 {duty}",
       "stale": {
         "superseded": "求解器已过时",

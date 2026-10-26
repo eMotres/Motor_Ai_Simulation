@@ -147,6 +147,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const emChipTip = emSource?.kind === 'coupled' ? t('points.source.coupledTip')
     : t(emSource?.coil_temp_c !== undefined ? 'points.source.emTip' : 'points.source.emTipPlain', { winding: emSource?.coil_temp_c !== undefined ? Math.round(emSource.coil_temp_c) : '', magnet: emSource?.magnet_temp_c !== undefined ? Math.round(emSource.magnet_temp_c) : '—' });
   const showChart = steps.length > 1 && stepIndex >= 0;
+  // a block is drawn only when this point has real results for it (owner 2026-10-26): no header, no empty tiles, no placeholder
+  const showTiles = grid.length > 0;
   const operating = pointOperating(current);
 
   const openStep = (index: number) => {
@@ -229,8 +231,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
         </Box>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart ? 'minmax(0,1.5fr) minmax(320px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart && showTiles ? 'minmax(0,1.5fr) minmax(320px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
+          {showTiles && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
             <Tooltip title={emChipTip}>
               <Chip size="small" label={emChip} data-testid="em-source-chip" sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />
             </Tooltip>
@@ -244,18 +246,21 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               </TileRow>
             ))}
             {dcBus !== null && (
-              <Box sx={{ mt: 0.5 }} data-testid="battery-panel">
+              // the same size as in the ordinary Configure (owner 2026-10-26): there the panel shares a row with the cross-section
+              // and the side view (flex 1 1 300px, about a third of the page); here it sat alone in the wide column and its bar and
+              // labels scaled up ~3x
+              <Box sx={{ mt: 0.5, maxWidth: 520 }} data-testid="battery-panel">
                 <BatteryPanel vDc={dcBus} bat={battery} onChange={setBattery} machinePack={specBattery} onReset={() => { if (specBattery) setBattery(specBattery); }}
                   stockNote={!specBattery} vDcTip={t('points.batteryMarkerTip', { duty: duty ?? '' })} />
               </Box>
             )}
-          </Box>
+          </Box>}
           {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} recommended={steps.map((v) => isRecommended(v))} />}
         </Box>
 
         <StoredPointResults duty={current} />
 
-        <Box sx={{ ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }} data-testid="stored-fields">
+        {kinds.length > 0 && <Box sx={{ ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }} data-testid="stored-fields">
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <Typography sx={LABEL}>{t('points.fields.title')}</Typography>
             <ToggleButtonGroup exclusive size="small" value={activeKind} aria-label={t('points.fields.title')}
@@ -267,12 +272,10 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               ))}
             </ToggleButtonGroup>
           </Box>
-          {kinds.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.notComputed')}</Typography>}
           {field?.error && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.fields.loadFailed')}: {field.error}</Typography>}
-          {field?.missing && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.notComputed')}</Typography>}
           {field && !field.value && !field.error && !field.missing && <Typography role="status" sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.loading')}</Typography>}
           {field?.value && <StoredFieldViewer key={field.key} field={field.value} contextLabel={fieldLabel} />}
-        </Box>
+        </Box>}
 
       </>}
 

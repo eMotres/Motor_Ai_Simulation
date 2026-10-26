@@ -407,8 +407,9 @@
         "coupled": "coupled loop",
         "thermal": "temperature map"
       },
-      "onlyLimit": "Only a limit-search state is stored for this duty, not its own temperatures.",
-      "limitLine": "S1 limit search ({day}): winding {winding} °C at the limit",
+      "limitLine": "S1 continuous limit ({day}): winding {winding} °C at the limit",
+      "timeLine": "Time-to-limit run ({day}): winding {winding} °C when the first limit is reached",
+      "searchLine": "Limit search ({day}): winding {winding} °C",
       "limitTip": "State of the limit search (S1), not the temperature of this duty.",
       "tile": {
         "emTorque": "Torque (coupled loop)",
@@ -417,7 +418,7 @@
         "housing": "Housing",
         "bearing": "Bearing",
         "s1": "S1 current",
-        "s2": "S2 time"
+        "s2": "S2: time to the limit"
       },
       "tileTip": {
       "torqueActiveMass": "Torque per active mass (EM parts), not the whole motor.",
@@ -434,7 +435,7 @@
     },
     "mech": {
       "title": "Mechanical",
-      "worstCase": "worst case: {case}",
+      "atCase": "solved at {case}",
       "filedUnder": "filed under {duty}",
       "stale": {
         "superseded": "Superseded solver",

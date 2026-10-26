@@ -69,10 +69,10 @@ TRIS = [[0, 1, 2], [0, 2, 3]]
 
 def mech_result() -> dict:
     return {
-        "primary_case": "proof", "rpm": 23000.0, "overspeed_factor": 1.2, "interference_mm": 0.05,
+        "primary_case": "proof", "rpm": 3000.0, "overspeed_factor": 1.2, "interference_mm": 0.05,
         "mesh": {"n_triangles": 2, "element_order": 2, "mesh_size_mm": 1.5},
         "cases": {"proof": {
-            "rpm": 23000.0, "sf_min": 3.4, "sf_min_part": "sleeve", "sf_min_p05": 3.6,
+            "rpm": 3000.0, "sf_min": 3.4, "sf_min_part": "sleeve", "sf_min_p05": 3.6,
             "max_displacement_um": 12.5, "rotor_od_growth_um": 9.1,
             "retention": {"status": "pass", "message": "retained by the iron"},
             "parts": {"sleeve": {"material": "GFRP", "safety_factor": 3.4, "von_mises_max_mpa": 700.0,
@@ -95,13 +95,14 @@ def thermal_result() -> dict:
         "cooling": {"mount": {"t_housing_mean_c": 64.0}},
         "components": {"winding": {"avg": 110.0, "max": 120.0, "min": 80.0},
                        "magnet": {"avg": 70.0, "max": 75.0, "min": 65.0}},
-        "T_max": 120.0, "T_min": 60.0, "P_loss_total_W": 321.0, "P_cu_W": 200.0, "P_fe_W": 100.0,
+        "rpm": 3000.0, "T_max": 120.0, "T_min": 60.0, "P_loss_total_W": 321.0, "P_cu_W": 200.0, "P_fe_W": 100.0,
     }
 
 
 def coupled_out() -> dict:
     return {"computed_at": "2026-10-26T10:00:00", "geometry_fingerprint": "fp1",
-            "coupling": {"drive": "sine", "iterations": 3, "converged": True, "coil_temp_c": 118.0,
+            "coupling": {"point": {"rpm": 3000.0, "I_phase_rms": 40.0, "gamma_deg": 0.0},
+                         "drive": "sine", "iterations": 3, "converged": True, "coil_temp_c": 118.0,
                          "magnet_temp_c": 72.0,
                          "continuous_rating": {"ok": True, "feasible": True, "I_cont_A_rms": 41.5,
                                                "limiting_part": "winding", "limits_c": {"winding": 180.0}},
@@ -132,7 +133,7 @@ def file_everything() -> None:
     df.save_active("em", em_snap(), computed_at="2026-10-26T09:00:00")
     th._remember_last("field", thermal_result(), {"rpm": 3000.0, "mesh_size_mm": 2.0}, "fp1")
     dr.note_coupled(coupled_out())
-    me._remember_last("rotor_stress", mech_result(), {"rpm": 23000.0, "mesh_size_mm": 1.5, "order": 2}, "fp1")
+    me._remember_last("rotor_stress", mech_result(), {"rpm": 3000.0, "mesh_size_mm": 1.5, "order": 2}, "fp1")
 
 
 # ---------------------------------------------------------------------------
@@ -231,15 +232,14 @@ def test_b_view_shows_thermal_and_mechanical_with_provenance(sandbox):
     mech = d[DUTY]["mechanical"]["rotor_stress"]
     assert mech["sf_min"] == 3.4 and mech["parts"]["sleeve"]["safety_factor"] == 3.4
     assert mech["retention"]["status"] == "pass" and mech["max_displacement_um"] == 12.5
-    assert mech["proof_rpm"] == 23000.0
+    assert mech["proof_rpm"] == 3000.0 and mech["worst_case"]["rpm"] == 3000.0
     assert mech["provenance"]["mesh_size_mm"] == 1.5 and mech["provenance"]["n_triangles"] == 2
     assert set(d[DUTY]["fields"]) == {"em", "thermal", "rotor_stress"}
     assert d[DUTY]["em_run"]["numbers"]["efficiency_pct"] == 91.5
-    # a duty with nothing stored says so (None), never zeros; the motor's mechanical worst case shows on every point
+    # a duty with nothing stored says so (None), never zeros - and never borrows another duty's record (no "worst case" over
+    # the motor): the stress record filed under DUTY is not shown under DUTY2
     assert d[DUTY2]["thermal"] is None and d[DUTY2]["fields"] == {}
-    assert d[DUTY2]["mechanical"]["rotor_stress"]["sf_min"] == 3.4
-    assert d[DUTY2]["mechanical"]["rotor_stress"]["filed_under"] == DUTY
-    assert d[DUTY2]["mechanical"]["rotor_stress"]["worst_case"]["rpm"] == 23000.0
+    assert d[DUTY2]["mechanical"] is None
 
 
 def test_b_the_mode_decision(sandbox):
@@ -463,39 +463,161 @@ def _rs(at, sf, fp2=None, rpm=23000.0, torque=7.5, solver=None):
     return row
 
 
-def test_e_the_newest_rotor_stress_is_the_motors_worst_case_on_every_point():
-    stored = {"cruise": {"rotor_stress": _rs("2026-10-25T08:00:00", 2.20)},
-              "peak": {"rotor_stress": _rs("2026-10-24T08:00:00", 4.31)}}
-    w = motor_view.worst_case_rotor_stress(stored)
-    assert w["sf_min"] == 2.20 and w["filed_under"] == "cruise" and w["records"] == 2
-    assert w["worst_case"] == {"rpm": 23000.0, "torque_nm": 7.5, "loads": "both"}
-    assert w["others"][0]["duty"] == "peak"
-    view = motor_view.build_view(DIE, CFG, _rows(["cruise", "peak", "idle"]), stored, {}, set())
-    assert [d["mechanical"]["rotor_stress"]["sf_min"] for d in view["duties"]] == [2.20, 2.20, 2.20]
-    assert view["mechanical_worst_case"]["sf_min"] == 2.20
+def test_e_a_duty_shows_only_its_own_rotor_stress_never_a_worst_case_of_other_duties():
+    # owner screenshot 2026-10-26: "peak" (1000 rpm) showed the 850 rpm / 721.65 N.m record filed under "cruise"
+    stored = {"cruise": {"rotor_stress": _rs("2026-10-26T08:00:00", 2.20, rpm=850.0, torque=721.65)},
+              "peak": {"rotor_stress": _rs("2026-10-26T07:00:00", 4.31, rpm=1000.0, torque=900.0)}}
+    rows = [{"duty": "cruise", "operating_point": {"rpm": 850, "current_arms": 192}},
+            {"duty": "peak", "operating_point": {"rpm": 1000, "current_arms": 336}},
+            {"duty": "idle", "operating_point": {"rpm": 300, "current_arms": 10}}]
+    view = motor_view.build_view(DIE, CFG, rows, stored, {}, set())
+    got = {d["duty"]: d["mechanical"] for d in view["duties"]}
+    assert got["cruise"]["rotor_stress"]["sf_min"] == 2.20 and got["cruise"]["rotor_stress"]["worst_case"]["rpm"] == 850.0
+    assert got["peak"]["rotor_stress"]["sf_min"] == 4.31 and got["peak"]["rotor_stress"]["worst_case"]["rpm"] == 1000.0
+    assert got["idle"] is None                                       # no record of its own: no block at all
+    assert "mechanical_worst_case" not in view
 
 
-def test_e_records_before_the_contact_repair_are_flagged_superseded():
-    old = motor_view.worst_case_rotor_stress({"cruise": {"rotor_stress": _rs("2026-10-24T08:00:00", 4.31)}})
-    assert old["solver_status"] == "superseded" and old["stale"] is True
-    after = motor_view.worst_case_rotor_stress({"cruise": {"rotor_stress": _rs("2026-10-26T08:00:00", 3.1)}})
-    assert after["solver_status"] == "current" and after["stale"] is False
-    stamped = motor_view.worst_case_rotor_stress({"c": {"rotor_stress": _rs("2026-10-20T08:00:00", 3.1, solver={"code_version": "abc"})}})
-    assert stamped["solver_status"] == "current"                      # a solver stamp exists only on builds with the repair
-    undated = motor_view.worst_case_rotor_stress({"c": {"rotor_stress": {"sf_min": 3.0}}})
-    assert undated["solver_status"] == "unknown" and undated["stale"] is False
+def test_e_a_record_filed_under_a_duty_but_solved_at_another_point_is_not_shown():
+    stored = {"peak": {"rotor_stress": _rs("2026-10-26T08:00:00", 2.20, rpm=850.0, torque=721.65)}}
+    rows = [{"duty": "peak", "operating_point": {"rpm": 1000, "current_arms": 336}}]
+    d = motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]
+    assert d["mechanical"] is None
+    assert d["hidden_records"] == [{"kind": "rotor_stress", "reason": "other_point"}]
+    # the proof-speed solve of a point carries the point's own speed in its request: it belongs
+    row = _rs("2026-10-26T08:00:00", 3.0, rpm=1200.0)
+    row["point"]["rpm"] = 1000.0
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"rotor_stress": row}}, {}, set())["duties"][0]
+    assert d["mechanical"]["rotor_stress"]["sf_min"] == 3.0
 
 
-def test_e_a_record_of_another_geometry_is_stale():
+def test_e_thermal_records_are_tied_to_the_point_by_speed_and_current():
+    op = {"rpm": 1000.0, "current": 336.0}
+    ok = _cp(150.0, 80.0, "2026-10-26T09:00:00", point={"rpm": 1000.0, "I_phase_rms": 336.0})
+    assert motor_view.belongs_to_point("coupled", ok, op)
+    assert not motor_view.belongs_to_point("coupled", {**ok, "point": {"rpm": 850.0, "I_phase_rms": 336.0}}, op)
+    assert not motor_view.belongs_to_point("coupled", {**ok, "point": {"rpm": 1000.0, "I_phase_rms": 192.0}}, op)
+    assert not motor_view.belongs_to_point("coupled", _cp(150.0, 80.0, "2026-10-26T09:00:00"), op)    # no stamp: not guessed
+    # an old record without a point stamp is still tied by the current the loop's own EM run solved
+    old = _cp(150.0, 80.0, "2026-10-26T09:00:00", em={"I1_phase_rms_A": 192.0})
+    assert not motor_view.belongs_to_point("coupled", old, op)
+    assert motor_view.belongs_to_point("coupled", old, {"rpm": 850.0, "current": 192.0})
+    # a limit search solves its own current: only the speed is compared
+    lim = _cp(200.0, 90.0, "2026-10-26T09:00:00", mode="limited", point={"rpm": 1000.0, "I_phase_rms": 192.0})
+    assert motor_view.belongs_to_point("coupled_limit", lim, op, limit_search=True)
+    assert not motor_view.belongs_to_point("coupled_limit", {**lim, "point": {"rpm": 850.0}}, op, limit_search=True)
+    # a point that states neither speed nor current has nothing to compare
+    assert motor_view.belongs_to_point("coupled", _cp(1.0, 1.0, "2026-10-26T09:00:00"), {"rpm": None, "current": None})
+
+
+def test_e_the_view_hides_thermal_records_of_other_points_and_keeps_the_rest():
+    stored = {"peak": {
+        "coupled": _cp(150.0, 80.0, "2026-10-26T09:00:00", point={"rpm": 850.0, "I_phase_rms": 192.0}),
+        "coupled_limit": _cp(200.0, 90.0, "2026-10-26T10:00:00", mode="limited", point={"rpm": 850.0, "I_phase_rms": 192.0}),
+        "thermal": {"computed_at": "2026-10-26T08:00:00", "components": {"winding": {"max": 120.0}},
+                    "point": {"rpm": 1000.0, "I_phase_rms": 336.0}}}}
+    rows = [{"duty": "peak", "operating_point": {"rpm": 1000, "current_arms": 336}}]
+    d = motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]
+    assert d["thermal"]["duty_temps"]["kind"] == "thermal" and d["thermal"]["duty_temps"]["winding_c"] == 120.0
+    assert "limit_search" not in d["thermal"]
+    assert {h["kind"] for h in d["hidden_records"]} == {"coupled", "coupled_limit"}
+    # nothing of its own at all: no thermal block
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"coupled": stored["peak"]["coupled"]}}, {}, set())["duties"][0]
+    assert d["thermal"] is None
+
+
+def test_e_an_impossible_temperature_record_is_never_shown():
+    # owner data 2026-10-26: peak's thermal record had t_min -147.4 degC (a translated 'limited' map)
+    snap = {"computed_at": "2026-10-26T08:00:00", "state": "limited", "T_min": -147.4, "T_max": 200.0,
+            "components": {"winding": {"max": 200.0, "avg": 190.0, "min": 180.0}}, "point": {"rpm": 1000.0}}
+    assert motor_view.impossible_temperature(snap) == "-147.4"
+    assert motor_view.impossible_temperature({**snap, "T_min": 20.0}) is None
+    rows = [{"duty": "peak", "operating_point": {"rpm": 1000, "current_arms": 336}}]
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"thermal": snap}}, {}, set())["duties"][0]
+    assert d["thermal"] is None
+    assert d["hidden_records"][0]["reason"] == "impossible_temperature"
+    # ... and so is the map of such a record
+    fields = {"peak": [{"kind": "thermal", "point": {"rpm": 1000.0, "T_min": -147.4, "T_max": 200.0}},
+                       {"kind": "em", "point": {"rpm": 1000.0}}, {"kind": "rotor_stress", "point": {"rpm": 850.0}}]}
+    d = motor_view.build_view(DIE, CFG, rows, {}, fields, set())["duties"][0]
+    assert set(d["fields"]) == {"em"}                       # the 850 rpm stress map belongs to another point too
+
+
+def test_e_a_high_temperature_never_hides_a_record_and_a_cold_value_drops_only_itself():
+    """Review of #437: an overloaded steady state may legitimately exceed 1500 degC (the over-limit verdict is what S1 / S2
+    show); only a ``limited`` map is held to the window, and a single value below -80 degC goes alone."""
+    rows = [{"duty": "peak", "operating_point": {"rpm": 1000, "current_arms": 336}}]
+    hot = {"computed_at": "2026-10-26T08:00:00", "components": {"winding": {"max": 1800.0, "avg": 1700.0}},
+           "T_max": 1800.0, "P_loss_total_W": 5000.0, "point": {"rpm": 1000.0, "I_phase_rms": 336.0}}
+    assert motor_view.impossible_temperature(hot) is None
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"thermal": hot}}, {}, set())["duties"][0]
+    assert d["thermal"]["duty_temps"]["winding_c"] == 1800.0 and d["hidden_records"] == []
+    # a coupled loop with a cold artefact value keeps its losses and the other temperatures
+    cp = _cp(1600.0, -150.0, "2026-10-26T09:00:00", point={"rpm": 1000.0, "I_phase_rms": 336.0},
+             em={"t_em_avg_nm": 800.0, "p_loss_total_w": 5000.0})
+    d = motor_view.build_view(DIE, CFG, rows, {"peak": {"coupled": cp}}, {}, set())["duties"][0]
+    assert d["thermal"]["duty_temps"]["winding_c"] == 1600.0 and "magnet_c" not in d["thermal"]["duty_temps"]
+    assert d["thermal"]["duty_temps"]["em"]["torque_nm"] == 800.0
+    # a hot map is offered; a cold one is not
+    fields = {"peak": [{"kind": "thermal", "point": {"rpm": 1000.0, "T_min": 25.0, "T_max": 2000.0}}]}
+    assert set(motor_view.build_view(DIE, CFG, rows, {}, fields, set())["duties"][0]["fields"]) == {"thermal"}
+    # the limited map is the only row held to the whole window, high side included
+    assert motor_view.impossible_temperature({"state": "limited", "T_max": 1800.0}) == "1800.0"
+    assert motor_view.impossible_temperature({"state": "steady", "T_min": -147.4}) is None
+    assert motor_view.drop_impossible_values({"T_min": -147.4, "T_max": 90.0})["T_max"] == 90.0
+    assert "T_min" not in motor_view.drop_impossible_values({"T_min": -147.4, "T_max": 90.0})
+
+
+def test_e_a_missing_current_stamp_is_unknown_not_zero():
+    op = {"rpm": 1000.0, "current": 336.0}
+    zero = _cp(150.0, 80.0, "2026-10-26T09:00:00", point={"rpm": 1000.0, "I_phase_rms": 0.0})
+    assert motor_view.record_stamp("coupled", zero)["current"] == []
+    assert motor_view.belongs_to_point("coupled", zero, op)                       # tied by the speed alone
+    assert not motor_view.belongs_to_point("coupled", {**zero, "point": {"rpm": 850.0, "I_phase_rms": 0.0}}, op)
+    # nothing but a zero current: no usable stamp at all -> not guessed
+    assert not motor_view.belongs_to_point("coupled", _cp(150.0, 80.0, "2026-10-26T09:00:00", point={"I_phase_rms": 0.0}), op)
+    # the loop stamps only what its request stated
+    import inspect
+    from motor_ai_sim.routes import coupled as coupled_route
+    src = inspect.getsource(coupled_route._run)
+    assert 'if _f(body, "I_phase_rms", 0.0) > 0.0 else {}' in src
+    assert 'if body.get("gamma_deg") not in (None, "") else {}' in src
+
+
+def test_e_records_before_the_contact_repair_are_hidden():
+    rows = [{"duty": "cruise", "operating_point": {"rpm": 23000}}]
+    old = motor_view.build_view(DIE, CFG, rows, {"cruise": {"rotor_stress": _rs("2026-10-24T08:00:00", 4.31)}}, {}, set())["duties"][0]
+    assert old["mechanical"] is None and old["hidden_records"] == [{"kind": "rotor_stress", "reason": "superseded"}]
+    after = motor_view.build_view(DIE, CFG, rows, {"cruise": {"rotor_stress": _rs("2026-10-26T08:00:00", 3.1)}}, {}, set())["duties"][0]
+    assert after["mechanical"]["rotor_stress"]["solver_status"] == "current"
+    stamped = motor_view.build_view(DIE, CFG, rows, {"cruise": {"rotor_stress": _rs("2026-10-20T08:00:00", 3.1, solver={"code_version": "abc"})}}, {}, set())["duties"][0]
+    assert stamped["mechanical"]["rotor_stress"]["solver_status"] == "current"   # a solver stamp exists only on builds with the repair
+    undated = motor_view.build_view(DIE, CFG, rows, {"cruise": {"rotor_stress": {"sf_min": 3.0, "rpm": 23000.0}}}, {}, set())["duties"][0]
+    assert undated["mechanical"]["rotor_stress"]["solver_status"] == "unknown"   # undated: not hidden, not claimed current either
+
+
+def test_e_a_record_of_another_geometry_is_hidden():
+    rows = [{"duty": "peak", "operating_point": {"rpm": 23000}}]
     stored = {"peak": {"rotor_stress": _rs("2026-10-26T08:00:00", 4.31, fp2="aaaa"),
-                       "coupled": {**_cp(128.5, 70.0, "2026-10-26T09:00:00"), "geometry_fingerprint_v2": "bbbb"}}}
-    w = motor_view.worst_case_rotor_stress(stored)
-    assert w["geometry_status"] == "differs" and w["stale"] is True
+                       "coupled": {**_cp(128.5, 70.0, "2026-10-26T09:00:00", point={"rpm": 23000.0}), "geometry_fingerprint_v2": "bbbb"}}}
+    d = motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]
+    assert d["mechanical"] is None and {"kind": "rotor_stress", "reason": "other_geometry"} in d["hidden_records"]
     stored["peak"]["coupled"]["geometry_fingerprint_v2"] = "aaaa"
-    w = motor_view.worst_case_rotor_stress(stored)
-    assert w["geometry_status"] == "match" and w["stale"] is False
+    d = motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]
+    assert d["mechanical"]["rotor_stress"]["geometry_status"] == "match"
     del stored["peak"]["coupled"]["geometry_fingerprint_v2"]
-    assert motor_view.worst_case_rotor_stress(stored)["geometry_status"] == "unknown"
+    assert motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]["mechanical"]["rotor_stress"]["geometry_status"] == "unknown"
+
+
+def test_e_the_points_rows_only_carry_numbers_of_records_that_belong_to_the_point():
+    """The steps feed (``motors._results`` with ``own_only``): a coupled record of another point does not feed the row."""
+    cfg = {"duties": [{"name": "peak", "rpm": 1000, "current_arms": 336}]}
+    stored = {"peak": {"coupled": {"computed_at": "2026-10-26T09:00:00", "coil_temp_c": 150.0,
+                                   "point": {"rpm": 850.0, "I_phase_rms": 192.0}, "em": {"t_em_avg_nm": 700.0, "p_loss_total_w": 5000.0}}}}
+    assert motors._results(DIE, CFG, cfg, stored, set())[0]["comparison"].get("torque_nm") == 700.0      # the old, unfiltered feed
+    own = motors._results(DIE, CFG, cfg, stored, set(), own_only=True)[0]
+    assert "torque_nm" not in own["comparison"] and "coil_temp_c" not in own["comparison"]
+    assert own["stored_results"] == {} and own["has_result"] is False
 
 
 # ---------------------------------------------------------------------------

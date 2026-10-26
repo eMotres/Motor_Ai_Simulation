@@ -579,3 +579,29 @@ def test_f_a_suppressed_limit_search_files_nothing(sandbox):
     finally:
         rr.restore(token)
     assert dr.get(DIE, CFG) == {}
+
+
+def test_g_the_mechanical_field_stores_the_live_outlines_and_serves_them_back(sandbox):
+    from motor_ai_sim.routes import mechanical as me
+    res = mech_result()
+    live = [[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]], [[5.0, 5.0], [6.0, 5.0], [6.0, 6.0]]]
+    res["field"]["outlines"] = live
+    me._remember_last("rotor_stress", res, {"rpm": 23000.0}, "fp1")
+    got = motor_view.field_payload(DIE, CFG, DUTY, "rotor_stress")["payload"]["outlines"]
+    assert [[[round(x, 4), round(y, 4)] for x, y in ring] for ring in got] == live          # the tab's own rings, byte for byte
+    # an older record has none: the payload says [] and the client derives them from the welded mesh
+    res2 = mech_result()
+    res2["field"].pop("outlines", None)
+    df.save(DIE, CFG, "peak", "rotor_stress", res2)
+    derived = motor_view.field_payload(DIE, CFG, "peak", "rotor_stress")["payload"]["outlines"]
+    assert len(derived) == 5 and all(len(lp) == 2 for lp in derived)       # 4 border edges + the interface of the two parts
+
+
+def test_g_thermal_outlines_keep_their_domain_grouping(sandbox):
+    from motor_ai_sim.routes import thermal as th
+    res = thermal_result()
+    res["outlines"] = [{"domain": 1, "loops": [[[0.0, 0.0], [0.02, 0.0], [0.02, 0.02]]]},
+                       {"domain": 2, "loops": [[[0.0, 0.0], [0.0, 0.02], [0.02, 0.02]]]}]
+    th._remember_last("field", res, {"rpm": 3000.0}, "fp1")
+    got = motor_view.field_payload(DIE, CFG, DUTY, "thermal")["payload"]["outlines"]
+    assert sorted(e["domain"] for e in got) == [1, 2] and all(len(e["loops"]) == 1 for e in got)

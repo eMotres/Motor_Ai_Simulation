@@ -8,7 +8,7 @@ import {
   storedFieldKinds, thermalTiles,
 } from '../pointsLimited.ts';
 import { highlightIndex, isConfigHighlighted, isDieHighlighted, motorKey, pickFocusProject } from '../projectFocus.ts';
-import { outlineLoops, parametersLine, partBoundaryEdges } from '../storedFieldPayload.ts';
+import { outlineLoops, parametersLine, partBoundaryEdges, segmentSet, weldVertices } from '../storedFieldPayload.ts';
 
 const duty = (name, extra = {}) => ({ duty: name, has_result: true, operating_point: {}, comparison: {}, ...extra });
 const view = (mode, duties, extra = {}) => ({ die: 'D', config: 'c1', configure_available: mode === 'full', configure_duties: [], mode, duties, ...extra });
@@ -197,4 +197,62 @@ test('wiring: the UI asks only for the stored kind names and shows a 404 as "not
   assert.deepEqual(['em', 'thermal', 'rotor_stress'], [...src('../pointsLimited.ts').matchAll(/FIELD_KIND_ORDER: readonly FieldKind\[\] = \[([^\]]*)\]/g)][0][1].split(',').map((x) => x.trim().replace(/'/g, '')));
   const results = src('../../../components/compare/StoredPointResults.tsx');
   assert.match(results, /mech-stale-/);                                           // stale answers carry a visible flag
+});
+
+// ── the part outlines are the domain boundaries of the mesh (owner screen 2026-10-26) ────────────────────────────────
+// A spoke rotor (hub, iron ring with magnet slabs, sleeve) built twice: as ONE welded mesh and as ONE SECTOR copied n times
+// with its own nodes per copy - what the solver hands out.  The client derivation must give the same segment set for both.
+const RADII = [10, 20, 24, 28, 32, 34, 36];
+const SECTORS = 8, NTH = 12, THETA0 = 0.3;
+const domainOf = (rMid, jj) => (rMid < 20 ? 3 : rMid >= 34 ? 2 : (rMid >= 24 && rMid < 32 && jj >= 4 && jj < 8) ? 1 : 0);
+function polarGrid(cells, theta0, wrap, copies) {
+  const dTh = 2 * Math.PI / SECTORS / NTH, cols = wrap ? cells : cells + 1;
+  const verts = [], tris = [], dom = [];
+  for (let k = 0; k < copies; k++) {
+    const base = verts.length;
+    const th0 = theta0 + k * cells * dTh;
+    for (let i = 0; i < RADII.length; i++) for (let j = 0; j < cols; j++) verts.push([RADII[i] * Math.cos(th0 + j * dTh), RADII[i] * Math.sin(th0 + j * dTh)]);
+    const node = (i, j) => base + i * cols + (wrap ? j % cols : j);
+    for (let i = 0; i < RADII.length - 1; i++) for (let j = 0; j < cells; j++) {
+      const d = domainOf(0.5 * (RADII[i] + RADII[i + 1]), j % NTH);
+      tris.push([node(i, j), node(i, j + 1), node(i + 1, j + 1)], [node(i, j), node(i + 1, j + 1), node(i + 1, j)]);
+      dom.push(d, d);
+    }
+  }
+  return { verts, tris, dom };
+}
+
+test('the stored viewer draws the domain boundaries: a replicated sector gives the same outline as the whole rotor, no seam, no cut face', () => {
+  const full = polarGrid(SECTORS * NTH, THETA0, true, 1);
+  const sector = polarGrid(NTH, THETA0, false, SECTORS);       // sector copies: own nodes, the seam nodes duplicated
+  // the copies were laid at the sector angles by construction (th0 = theta0 + k * cells * dTh)
+  const truth = segmentSet(outlineLoops(full.verts, full.tris, full.dom));
+  const got = segmentSet(outlineLoops(sector.verts, sector.tris, sector.dom));
+  assert.ok(truth.size > 100);
+  assert.deepEqual([...got].sort(), [...truth].sort());
+  // the old index-based reading of the same replicated mesh draws the seams (the zigzag): extra, single-sided radial edges
+  const naive = partBoundaryEdges(sector.tris, sector.dom, sector.verts.length);
+  const radial = naive.filter(([a, b]) => Math.abs(Math.hypot(...sector.verts[a]) - Math.hypot(...sector.verts[b])) > 1);
+  const seamEdges = radial.length;
+  const welded = outlineLoops(sector.verts, sector.tris, sector.dom).filter(([p, q]) => Math.abs(Math.hypot(...p) - Math.hypot(...q)) > 1).length;
+  assert.ok(seamEdges > welded + 2 * SECTORS * 4 - 1, `${seamEdges} index-based radial edges vs ${welded} welded`);
+});
+
+test('a split mesh (interface nodes duplicated per part) draws each interface once; welding does not merge distinct points', () => {
+  const v = [[0, 0], [1, 0], [1, 1], [0, 1], [1, 0], [2, 0], [2, 1], [1, 1]];
+  const t = [[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]];
+  const seg = segmentSet(outlineLoops(v, t, [0, 0, 1, 1]), 1e-3);
+  assert.equal(seg.size, 7);                                  // 6 border edges + the interface once
+  const { xy } = weldVertices(v);
+  assert.equal(xy.length, 6);
+});
+
+test('EM rule: the air side does not make an outline of its own, classes decide (groupOf / draw)', () => {
+  const v = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const t = [[0, 1, 2], [0, 2, 3]];
+  const cls = (d) => (d >= 10 ? 1 : 0);                       // 0 = air, >0 = a material class
+  const opts = { groupOf: cls, draw: (a, b) => a > 0 || (b !== undefined && b > 0) };
+  assert.equal(outlineLoops(v, t, [0, 0], 1, opts).length, 0);          // air only: nothing
+  assert.equal(outlineLoops(v, t, [10, 11], 1, opts).length, 4);        // two tags of ONE class: border only, no line between them
+  assert.equal(outlineLoops(v, t, [0, 10], 1, opts).length, 3);         // air | material: the contact line + the material's own 2 border edges (air borders are not outlines)
 });

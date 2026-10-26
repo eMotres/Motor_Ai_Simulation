@@ -12,7 +12,7 @@ import { Box } from '@mui/material';
 import FieldViewer from '../common/FieldViewer';
 import { outputStub } from '../common/fieldOutput';
 import type { FieldOutput } from '../common/fieldOutput';
-import { EM_MENU, emOutputs, outlinesFromMesh } from '../simulation/fieldView';
+import { EM_MENU, classOf, emOutputs } from '../simulation/fieldView';
 import { THERMAL_MENU, thermalOutputs } from '../thermal/fieldAdapters';
 import { MECH_MENU, mechOutputs } from '../mechanical/fieldAdapters';
 import type { MechView } from '../mechanical/fieldAdapters';
@@ -37,18 +37,22 @@ const StoredFieldViewer: React.FC<Props> = ({ field, contextLabel, height = 420 
   const outputs = useMemo<FieldOutput[]>(() => {
     const p = field.payload as Anyish;
     if (field.kind === 'em') {
-      const payload = { ...p, outlines: outlinesFromMesh(p.vertices, p.triangles, p.domain_per_tri, 1) };
+      // air / gap / band borders are not outlines (same rule as fieldView.outlinesFromMesh), welded so a seam is not a border
+      const outlines = p.outlines?.length ? p.outlines : outlineEntries(p.vertices, p.triangles, p.domain_per_tri,
+        { groupOf: classOf, draw: (a, b) => a > 0 || (b !== undefined && b > 0) });
+      const payload = { ...p, outlines };
       return EM_MENU.filter((m) => views.includes(m.id)).map((m) => (m.id === selected
         ? emOutputs(payload as never, m.id, {})
         : outputStub(m.id, m.menuLabel, m.label, 'Electromagnetic', { unit: m.unit, tip: m.tip })));
     }
     if (field.kind === 'thermal') {
-      const payload = { ...p, outlines: outlineEntries(p.vertices, p.triangles, p.domain_per_tri) };
+      // the outlines stored with the field (the live tab's own) when the record has them, else the welded domain boundaries
+      const payload = { ...p, outlines: p.outlines?.length ? p.outlines : outlineEntries(p.vertices, p.triangles, p.domain_per_tri) };
       return THERMAL_MENU.filter((m) => views.includes(m.id)).map((m) => (m.id === selected
         ? thermalOutputs(payload as never, m.id, { eqTemp: true, showFlux: false })
         : outputStub(m.id, m.menuLabel, m.label, 'Thermal', { unit: m.unit, tip: m.tip })));
     }
-    const payload = { ...p, outlines: outlineLoops(p.vertices, p.triangles, p.domain_per_tri, 1) };
+    const payload = { ...p, outlines: p.outlines?.length ? p.outlines : outlineLoops(p.vertices, p.triangles, p.domain_per_tri, 1) };
     return MECH_MENU.filter((m) => views.includes(m.id)).map((m) => (m.id === selected
       ? mechOutputs(payload as never, p.case as never, m.id as MechView, { contacts: false })
       : outputStub(m.id, m.menuLabel, m.label, 'Mechanical', { unit: m.unit, tip: m.tip })));

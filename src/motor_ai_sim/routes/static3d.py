@@ -38,10 +38,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim.auth import require_admin
 from motor_ai_sim import progress as _PROG
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.simulation.static3d import viewer as V
@@ -1073,3 +1074,80 @@ def solve_cancel(run_id: str = ""):
         if st is not None:
             st["cancel"] = True
     return {"cancelled": True, "run_id": rid}
+
+
+# --------------------------------------------------------------------------
+# adopt a standalone Stage A result as a machine's end-effect passport
+# --------------------------------------------------------------------------
+
+class AdoptPassport(BaseModel):
+    """The JSON a standalone Stage A run (``end_effect.run_stage_a``) writes, as it came out of the run."""
+    stage_a: Dict[str, Any]
+    note: str = ""
+
+
+def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]]:
+    """``(geometry fingerprint, passport-store entry)`` from a Stage A result, in the shape the catalog passport
+    builder writes (``routes/catalog``), or ``ValueError`` naming what is missing or implausible."""
+    if not isinstance(sa, dict):
+        raise ValueError("stage_a must be the Stage A result object")
+    fp = str(sa.get("geometry_fingerprint") or "").strip()
+    if not fp:
+        raise ValueError("the Stage A result carries no geometry_fingerprint")
+    try:
+        k = float(sa.get("k_flux"))
+    except (TypeError, ValueError):
+        raise ValueError("the Stage A result carries no k_flux")
+    if not (0.5 < k <= 1.0):
+        raise ValueError("k_flux %.4f is outside (0.5, 1.0]" % k)
+    m = sa.get("machine") if isinstance(sa.get("machine"), dict) else {}
+    try:
+        slots, poles, od = int(m["num_slots"]), int(m["num_poles"]), float(m["stator_od_mm"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("the Stage A result's machine block needs num_slots, num_poles and stator_od_mm")
+    curve = {str(e["stack_mm"]): round(float(e["k_flux"]), 5)
+             for e in (sa.get("l_stack_curve") or [])
+             if isinstance(e, dict) and e.get("stack_mm") is not None and e.get("k_flux") is not None}
+    md = sa.get("model") if isinstance(sa.get("model"), dict) else {}
+    entry = {
+        "k_flux": k,
+        "k_flux_self": sa.get("k_flux_self"),
+        "fidelity": "standalone Stage A (adopted)",
+        "generated_utc": sa.get("generated_utc"),
+        "adopted_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # the machine in the words _end3d_lookup matches an inherited passport by ("24s/20p OD 200")
+        "machine": "%ds/%dp OD %g" % (slots, poles, od),
+        "stack_mm": m.get("stack_mm"),
+        "k_flux_vs_L": curve or None,
+        "materials": m.get("materials"),
+        "mesh": {kk: md.get(kk) for kk in ("h_gap_mm", 'h_solid_mm', "mesh_rule", "box_z_mm", "iron_stack_kf")
+                 if kk in md} or None,
+        "note": " ".join(str(note or "").split())[:300] or None,
+    }
+    return fp, entry
+
+
+@router.post("/passport/adopt")
+def adopt_passport(body: AdoptPassport, _admin: dict = Depends(require_admin)):
+    """Install a standalone Stage A result as the end-effect passport of the geometry it was solved for (admin).
+
+    Long 3-D runs go through the server's compute queue outside the API; this is how their result reaches the
+    app the same way a catalog passport does: one entry in this workspace's ``end_effect_passports.json`` keyed by
+    the run's geometry fingerprint, so every later run, report, Configure tile and test comparison of that machine
+    carries the factor (``routes.simulation._end3d_lookup``; another geometry of the same machine inherits it,
+    flagged)."""
+    try:
+        fp, entry = adopt_entry(body.stage_a, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    from motor_ai_sim.workspace import root as _ws_root
+    path = _ws_root() / "end_effect_passports.json"
+    store = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    replaced = fp in store
+    store[fp] = entry
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(store, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+    log.info("static3d: adopted Stage A passport %s (%s, k_flux %.4f, replaced=%s)",
+             fp[:12], entry["machine"], entry["k_flux"], replaced)
+    return {"ok": True, "fingerprint": fp, "replaced": replaced, "entry": entry}

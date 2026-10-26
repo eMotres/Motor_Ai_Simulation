@@ -945,7 +945,7 @@ export default function DevelopmentPage() {
         const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndRecommended(versions);
         const rows = developmentComparisonRows(visibleMotors);
         const rowMotors = rows.map((r) => r.motor);
-        const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 10.5, color: 'var(--text-3)', whiteSpace: 'normal', maxWidth: 520 }}>{m.note}</Typography> : null;
+        const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'normal', maxWidth: 640 }}>{m.note}</Typography> : null;
         const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode, strong = false) => <Box component="tr"><Box component="td" colSpan={colSpan} data-recommended={strong ? 'true' : undefined} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: strong ? 'rgba(245,158,11,0.10)' : 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: strong ? `inset 9px 0 0 ${accent}` : `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}>{content}</Box></Box>;
         const groupHeader = (r: (typeof rows)[number], colSpan: number) => {
           const live = motors.find((m) => variantKey(m) === variantKey(r.motor)) ?? null;

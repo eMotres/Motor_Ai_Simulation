@@ -88,3 +88,9 @@ test('grant review count formats a plural count in English and Chinese', () => {
   assert.match(String(new IntlMessageFormat(en.grantReviewCount, 'en').format({ count: 2 })), /2/);
   assert.match(String(new IntlMessageFormat(zh.grantReviewCount, 'zh-CN').format({ count: 2 })), /2/);
 });
+
+test('owner column: owner members, then pending owner invites marked; dash when none', async () => {
+  const { projectOwnerLabel } = await import('../adminProjectsModel.ts');
+  assert.equal(projectOwnerLabel([{ email: 'a@x.test', role: 'owner' }, { email: 'c@x.test', role: 'customer' }], [{ email: 'b@x.test', role: 'owner' }]), 'a@x.test, b@x.test (pending)');
+  assert.equal(projectOwnerLabel([{ email: 'c@x.test', role: 'engineer' }], []), '—');
+});

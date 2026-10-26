@@ -233,6 +233,7 @@
     "status": "状态",
     "completeness": "完整度",
     "members": "成员",
+    "owner": "所有者",
     "motors": "已关联电机",
     "activity": "最近活动",
     "empty": "没有找到项目",

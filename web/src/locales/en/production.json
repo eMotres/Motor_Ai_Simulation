@@ -410,6 +410,21 @@
     "computeTip": "Adds this operating point as a duty of the configuration; run it in Simulation.",
     "computeDone": "Duty added: run it in Simulation",
     "reload": "Refresh",
+    "chart": {
+      "measured": "Measured",
+      "model": "Model",
+      "rpm": "rpm"
+    },
+    "basis": {
+      "emf_3d": "magnets at {mag} °C, 3-D ×{k} ({src})",
+      "emf_2d": "magnets at {mag} °C, 2-D (no 3-D passport)",
+      "loss": "magnets at {mag} °C, losses 2-D",
+      "load_3d": "torque 3-D ×{k} ({src}); efficiency and temperatures 2-D",
+      "load_2d": "torque 2-D (no 3-D passport)",
+      "resistance": "R_phase at {from} °C scaled to {to} °C",
+      "inductance": "2-D: no end-winding inductance, no 3-D factor on L",
+      "fit": "least squares through the origin, n in krpm"
+    },
     "note": {
       "unexplained": "unexplained {w} W",
       "noModel": "no model point",
@@ -460,11 +475,11 @@
       "ldq_amp": "3-pair amplitude √(2/3·Σdev²) = |Lq − Ld|. The pair order on the rotor is not known, so the smaller fitted value is compared with the smaller model value.",
       "l_rotor_out": "Stator without rotor: compared with a stored stator-only run when one exists.",
       "l_freq": "The model is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading.",
-      "emf_peak": "Model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T). Measured = Vpp / 2.",
-      "emf_rms": "Model V_LL rms of the no-load duty, same speed and Br scaling.",
+      "emf_peak": "Model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T), x the 3-D end-effect flux factor of the configuration (Stage A; 2-D when it has no passport). Measured = Vpp / 2.",
+      "emf_rms": "Model V_LL rms of the no-load duty, same speed, Br and 3-D scaling.",
       "loss": "Model = core (hysteresis ~n, eddy ~n², excess ~n^1.5) + solid eddy (~n²) of the no-load duty, x (Br ratio)², + bearings (SKF) + windage. The rest of the measured power is unexplained.",
       "fit": "Least squares P = a·n + b·n² through the origin, n in krpm.",
-      "load": "The duty within 2 % speed and 3 % current. Model efficiency is the motor’s at the shaft (no inverter).",
+      "load": "The duty within 2 % speed and 3 % current. Model torque x the 3-D torque factor (measured k_T, else the flux factor). Model efficiency is the motor’s at the shaft (no inverter).",
       "eff_system": "Torque·ω / (V_dc·I_dc) includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
       "weight": "Model mass of the configuration’s parts; the bench weighs what the record names."
     },

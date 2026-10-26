@@ -27,12 +27,13 @@ TIPS = {
     "ldq_amp": "3-pair amplitude sqrt(2/3 * sum dev^2) = |Lq - Ld|; the pair order is not known, so the smaller fitted value is compared with the smaller model value",
     "l_rotor_out": "stator without rotor: compared with a stored stator-only run when one exists",
     "l_freq": "the model is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading",
-    "emf_peak": "model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T); measured = Vpp / 2",
-    "emf_rms": "model V_LL rms of the no-load duty, same speed and Br scaling",
+    "emf_peak": "model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T), x the 3-D end-effect flux factor k_flux of the configuration (Stage A; 2-D when it has no passport); measured = Vpp / 2",
+    "emf_rms": "model V_LL rms of the no-load duty, same speed, Br and 3-D scaling",
     "loss": ("model = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
-    "load": "the duty within 2 % speed and 3 % current; model efficiency is the motor's at the shaft (no inverter)",
+    "load": ("the duty within 2 % speed and 3 % current; model torque x the 3-D torque factor (measured k_T, else k_flux); "
+             "model efficiency is the motor's at the shaft (no inverter)"),
     "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the stored system "
                    "(wall-to-shaft) efficiency of the controller record, never with the motor's"),
     "weight": "model mass of the configuration's parts; the bench weighs what the record names",

@@ -97,10 +97,59 @@ def grade_points(card: Optional[str], library: Dict[str, Any]) -> Dict[str, Any]
     return {"card": card, "grade": grade, "temp_c": num(raw.get("temperature_c")), "points": sorted(set(pts))}
 
 
+def factors_from_end3d(end3d: Optional[Dict[str, Any]], source: str = "Stage A") -> Dict[str, Any]:
+    """The 3-D end-effect factors a comparison applies, from a passport block (``end3d``).
+
+    ``k_flux`` (voltages / EMF) is the Stage A flux factor, accepted in (0.5, 1.0] exactly as the report does;
+    ``k_torque`` (torque, Kt) is ``end3d_factors.torque_factor`` (the measured k_T, else k_flux).  Both None = 2-D."""
+    from motor_ai_sim import end3d_factors as E
+    e = end3d if isinstance(end3d, dict) else {}
+    k = num(e.get("k_flux"))
+    if k is None or not (0.5 < k <= 1.0):
+        return {"k_flux": None, "k_torque": None, "torque_basis": E.BASIS_2D, "source": None, "inherited": False}
+    kt, basis = E.torque_factor(e)
+    return {"k_flux": k, "k_torque": kt if kt is not None else k, "torque_basis": basis, "source": source,
+            "inherited": bool(e.get("inherited"))}
+
+
+def end3d_from_summaries(cfg_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The ``end3d`` block a duty's saved summary carries (the passport that existed when it was solved)."""
+    for d in (cfg_doc or {}).get("duties") or []:
+        s = d.get("summary") if isinstance(d, dict) else None
+        if isinstance(s, dict) and isinstance(s.get("end3d"), dict) and num(s["end3d"].get("k_flux")) is not None:
+            return s["end3d"]
+    return None
+
+
+def resolve_end3d(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The Stage A passport of THIS configuration's geometry - the resolver every stored duty already uses when it is
+    served (``routes.family`` apply: the die geometry + the configuration's overrides -> ``_geometry_fingerprint`` ->
+    ``routes.simulation._end3d_lookup``, which also adds the measured k_T).  None when there is no passport."""
+    from motor_ai_sim.routes import family
+    from motor_ai_sim.routes.simulation import _end3d_lookup, _geometry_fingerprint
+    geo = dict((die_doc or {}).get("geometry") or {})
+    geo.update({k: v for k, v in ((cfg_doc or {}).get("geometry_overrides") or {}).items() if v is not None})
+    for k, v in family._ABSENT_MEANS.items():
+        if geo.get(k) is None:
+            geo[k] = v
+    from motor_ai_sim.geometry.motor_geometry import fresh_derived_on_write, refresh_derived_geometry
+    if fresh_derived_on_write():
+        geo = refresh_derived_geometry(geo)
+    return _end3d_lookup(_geometry_fingerprint(geo), geo)
+
+
 def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: Dict[str, Any],
-              library: Dict[str, Any], *, mech: Optional[Callable] = None) -> Dict[str, Any]:
-    """The model answer from the documents (pure apart from the injected ``mech`` function)."""
+              library: Dict[str, Any], *, mech: Optional[Callable] = None,
+              end3d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The model answer from the documents (pure apart from the injected ``mech`` function).
+
+    ``end3d`` = the configuration's current Stage A passport (``resolve_end3d``); without it the passport a duty's saved
+    summary carries is used; without either the model is 2-D (``factors.k_flux`` None)."""
     cfg_doc = cfg_doc if isinstance(cfg_doc, dict) else {}
+    if isinstance(end3d, dict):
+        factors = factors_from_end3d(end3d, "Stage A")
+    else:
+        factors = factors_from_end3d(end3d_from_summaries(cfg_doc), "Stage A, stored with the duty")
     winding = cfg_doc.get("winding") if isinstance(cfg_doc.get("winding"), dict) else {}
     connection = str(winding.get("star_delta") or "star").lower()
     duties: List[Dict[str, Any]] = []
@@ -170,7 +219,7 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
                            "p_solid": p_solid, "magnet_temp_c": mag_t})
     return {"connection": connection, "duties": duties, "noload": noload, "r_ref": r_ref, "l_ref": l_ref,
             "l_stator_only": l_stator, "magnet": magnet or {"card": None, "grade": None, "temp_c": None, "points": []},
-            "mass_kg": mass, "mech": mech, "has_bearings": bool(mech and getattr(mech, "has_bearings", False)),
+            "mass_kg": mass, "mech": mech, "end3d": factors, "has_bearings": bool(mech and getattr(mech, "has_bearings", False)),
             "available": bool(duties)}
 
 
@@ -216,7 +265,8 @@ def collect(die: str, config: str) -> Dict[str, Any]:
     except Exception as e:                                  # noqa: BLE001
         log.info("motor tests: no model for %s/%s (%s)", die, config, e)
         return {"available": False, "duties": [], "noload": [], "r_ref": None, "l_ref": None, "l_stator_only": None,
-                "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False}
+                "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
+                "end3d": factors_from_end3d(None)}
     geometry: Dict[str, Any] = {}
     try:
         from motor_ai_sim.passport_v1.snapshot import resolve_geometry
@@ -238,4 +288,9 @@ def collect(die: str, config: str) -> Dict[str, Any]:
         mech = mech_function(cfg_doc, geometry, rotor_mass)
     except Exception:                                       # noqa: BLE001
         mech = None
-    return from_docs(die_doc, cfg_doc, stored, library, mech=mech)
+    e3 = None
+    try:
+        e3 = resolve_end3d(die_doc, cfg_doc)
+    except Exception:                                       # noqa: BLE001 - no passport is the normal state
+        log.debug("motor tests: no 3-D passport for %s/%s", die, config, exc_info=True)
+    return from_docs(die_doc, cfg_doc, stored, library, mech=mech, end3d=e3)

@@ -43,7 +43,6 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import HistoryIcon from '@mui/icons-material/History';
   import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
   import { useProjectStripContext } from '../projectStripContext';
-  import { MotorNoteField } from '../MotorNoteField';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
   import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
@@ -119,6 +118,10 @@ export default function DevelopmentPage() {
   const [picker, setPicker] = useState<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>({ this_project: [], catalog: [] });
   const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
   const [showAllVersions, setShowAllVersions] = useState(false);
+  // the variant header rows span the whole (wide) comparison table; their content is pinned to the visible width of the
+  // Motors view so the controls stay on the page while the table itself scrolls sideways (owner 2026-10-27)
+  const motorsViewRef = useRef<HTMLDivElement | null>(null);
+  const [motorsViewW, setMotorsViewW] = useState(0);
   const [unlinkTarget, setUnlinkTarget] = useState<ProjectMotor | null>(null);
   const [pendingProjectStatus, setPendingProjectStatus] = useState<import('../motorStatus').PendingProjectStatus | null>(null);
   const [historyDetail, setHistoryDetail] = useState<ProjectMotor | null>(null);
@@ -146,6 +149,14 @@ export default function DevelopmentPage() {
   const [motors, setMotors] = useState<ProjectMotor[]>([]);
   useProjectStripContext(selected, motors);   // the strip under the tabs names this project and its motors
   const activityRows = useProjectActivity(view === 'motors' ? selected?.id : null);   // live runs on the project's motors: one poll per project, 30 s, only while the page is visible
+  useEffect(() => {
+    const el = motorsViewRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => setMotorsViewW(el.clientWidth));
+    ro.observe(el);
+    setMotorsViewW(el.clientWidth);
+    return () => ro.disconnect();
+  }, [view, selected?.id]);
   const projectEpochRef = useRef(0);
   const projectOpenEpochRef = useRef(0);
   const projectOpenInFlightRef = useRef('');
@@ -549,16 +560,6 @@ export default function DevelopmentPage() {
     } catch (err) { if (isCurrentProject(id, token)) setError(err instanceof Error ? err.message : String(err)); }
     finally { if (isCurrentProject(id, token)) setBusy(false); }
   };
-  const changeMotorNote = async (motor: ProjectMotor, note: string): Promise<boolean> => {
-    if (!selected) return false;
-    const id = selected.id; const token = projectToken.current;
-    setError('');
-    try {
-      await developmentApi.setMotorNote(id, motor.canonical_die ?? motor.die, motor.config, note);
-      if (isCurrentProject(id, token)) await loadProjectMotors(id, token);
-      return true;
-    } catch (err) { if (isCurrentProject(id, token)) setError(err instanceof Error ? err.message : String(err)); return false; }
-  };
   const submitCreate = async () => {
     setBusy(true); setError('');
     try { const p = await developmentApi.create({ id: projectId.trim(), title: title.trim(), customer_org: org.trim() }); setCreateOpen(false); setTitle(''); setOrg(''); setProjectId(''); await refreshProjects(); await loadProject(p); }
@@ -946,7 +947,7 @@ export default function DevelopmentPage() {
         const rows = developmentComparisonRows(visibleMotors);
         const rowMotors = rows.map((r) => r.motor);
         const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'normal', maxWidth: 640 }}>{m.note}</Typography> : null;
-        const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode, strong = false) => <Box component="tr"><Box component="td" colSpan={colSpan} data-recommended={strong ? 'true' : undefined} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: strong ? 'rgba(245,158,11,0.10)' : 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: strong ? `inset 9px 0 0 ${accent}` : `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}>{content}</Box></Box>;
+        const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode, strong = false) => <Box component="tr"><Box component="td" colSpan={colSpan} data-recommended={strong ? 'true' : undefined} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: strong ? 'rgba(245,158,11,0.10)' : 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: strong ? `inset 9px 0 0 ${accent}` : `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}><Box sx={{ position: 'sticky', left: 0, width: motorsViewW ? Math.max(motorsViewW - 48, 280) : '100%', maxWidth: motorsViewW ? Math.max(motorsViewW - 48, 280) : undefined, boxSizing: 'border-box' }}>{content}</Box></Box></Box>;
         const groupHeader = (r: (typeof rows)[number], colSpan: number) => {
           const live = motors.find((m) => variantKey(m) === variantKey(r.motor)) ?? null;
           const note = live ?? r.motor;
@@ -961,7 +962,6 @@ export default function DevelopmentPage() {
             {live && selected && <ProjectMotorTests projectId={selected.id} motor={live} showAll={showAllVersions} t={tr} />}
             {live && <ActivityChip rows={activityRows} motor={live} t={tr} />}
             {live && <Stack direction="row" spacing={0.5} alignItems="center">
-              {canEditProject && <MotorNoteField value={live.note ?? ''} disabled={busy} t={tr} onSave={(text) => changeMotorNote(live, text)} />}
               <span>{canManageProjectMotors ? <Select size="small" value={live.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(live, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${live.status === 'trial' ? 'trial' : 'current'}`)} />}</span>
               <HelpTip title={tr('motorStatus.tip')} />
               {canManageProjectMotors && <Tooltip title={tr('unlink')}><span><IconButton size="small" aria-label={tr('unlink')} disabled={busy} onClick={() => setUnlinkTarget(live)} sx={{ color: 'var(--text-3)' }}><DeleteOutlineIcon sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>}
@@ -975,7 +975,7 @@ export default function DevelopmentPage() {
           <Tooltip title={tr('snapshots.details')}><IconButton size="small" aria-label={tr('snapshots.details')} onClick={() => setHistoryDetail(r.motor)} sx={{ color: 'var(--text-3)' }}><InfoOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
           {stepNote(r.motor)}
         </Stack>);
-        return <>
+        return <Box ref={motorsViewRef} sx={{ minWidth: 0 }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><ActivityChip rows={activityRows} t={tr} /><Box sx={{ flex: 1 }} />
           <Tooltip title={tr('versionView.tip')}><ToggleButtonGroup exclusive size="small" value={showAllVersions ? 'all' : 'latest'} onChange={(_, next: 'latest' | 'all' | null) => { if (next) changeShowAllVersions(next === 'all'); }} aria-label={tr('versionView.label')}>
             <ToggleButton value="latest" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.latest')}</ToggleButton>
@@ -983,7 +983,7 @@ export default function DevelopmentPage() {
           </ToggleButtonGroup></Tooltip>
         </Stack>
         {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={() => <span />} labelHeader="" rowAccent={(r) => motorColor(r.motor)} onRowClick={(r) => { if (!r.history) void openProjectMotor({ id: selected.id, title: selected.title }, r.motor, r.result.duty).catch((e) => setError(e instanceof Error ? e.message : String(e))); }} renderGroupHeader={(r, index, _all, colSpan) => { const flags = headerFlags(rowMotors, index); return flags.group || flags.history ? <>{flags.group && groupHeader(r, colSpan)}{flags.history && historyHeader(r, colSpan)}</> : null; }} showAllInputs inputHeaderColor="var(--text-2)" resultHeaderColor="var(--text-2)" enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" onClick={(e) => e.stopPropagation()} sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap', cursor: 'default' }}>{r.history ? null : <MotorOpenActions motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} projectId={selected.id} projectTitle={selected.title} showAll={showAllVersions} />}</Box>} />}
-      </>; })()}
+      </Box>; })()}
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Paper key={`${m.created_at}-${i}`} sx={{ p: 1, bgcolor: 'var(--panel-2)' }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
     {view === 'notes' && canEditProject && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}

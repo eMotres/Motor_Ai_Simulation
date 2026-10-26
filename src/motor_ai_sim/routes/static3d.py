@@ -1132,7 +1132,7 @@ def adopt_passport(body: AdoptPassport, _admin: dict = Depends(require_admin)):
     """Install a standalone Stage A result as the end-effect passport of the geometry it was solved for (admin).
 
     Long 3-D runs go through the server's compute queue outside the API; this is how their result reaches the
-    app the same way a catalog passport does: one entry in this workspace's ``end_effect_passports.json`` keyed by
+    app the same way a catalog passport does: one entry in the SHARED ``end_effect_passports.json`` (``end3d_store``) keyed by
     the run's geometry fingerprint, so every later run, report, Configure tile and test comparison of that machine
     carries the factor (``routes.simulation._end3d_lookup``; another geometry of the same machine inherits it,
     flagged)."""
@@ -1140,14 +1140,8 @@ def adopt_passport(body: AdoptPassport, _admin: dict = Depends(require_admin)):
         fp, entry = adopt_entry(body.stage_a, body.note)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    from motor_ai_sim.workspace import root as _ws_root
-    path = _ws_root() / "end_effect_passports.json"
-    store = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    replaced = fp in store
-    store[fp] = entry
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(store, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    from motor_ai_sim import end3d_store as _e3_store
+    replaced = _e3_store.put_shared(fp, entry)     # shared: the passport is the machine's, every account reads it
     log.info("static3d: adopted Stage A passport %s (%s, k_flux %.4f, replaced=%s)",
              fp[:12], entry["machine"], entry["k_flux"], replaced)
     return {"ok": True, "fingerprint": fp, "replaced": replaced, "entry": entry}

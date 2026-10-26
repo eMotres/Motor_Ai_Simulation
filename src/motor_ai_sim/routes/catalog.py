@@ -951,14 +951,9 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "materials": _sa.get("materials"),
                 "mesh": _sa.get("mesh"),
             }
-            import json as _j
-            from pathlib import Path as _P
-            from motor_ai_sim.workspace import root as _ws_root
-            _pp = _ws_root() / "end_effect_passports.json"
-            _all = _j.loads(_pp.read_text(encoding="utf-8")) if _pp.exists() else {}
-            _all[_fp] = _e3
-            _pp.write_text(_j.dumps(_all, ensure_ascii=False, indent=1),
-                           encoding="utf-8")
+            # the machine's passport goes to the SHARED store: every account sees it (owner 2026-10-27)
+            from motor_ai_sim import end3d_store as _e3_store
+            _e3_store.put_shared(_fp, _e3)
         result["passport"]["end3d"] = (
             None if _e3 is None else
             {"k_flux": _e3["k_flux"],

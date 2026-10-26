@@ -37,9 +37,9 @@ def test_refuses_an_incomplete_result(bad, why):
         S.adopt_entry(_sa(**bad))
 
 
-def test_route_writes_the_workspace_store(tmp_path, monkeypatch):
-    from motor_ai_sim import workspace
-    monkeypatch.setattr(workspace, "root", lambda: tmp_path)
+def test_route_writes_the_shared_store(tmp_path, monkeypatch):
+    from motor_ai_sim import end3d_store
+    monkeypatch.setattr(end3d_store, "shared_path", lambda: tmp_path / "end_effect_passports.json")
     (tmp_path / "end_effect_passports.json").write_text(json.dumps({"other": {"k_flux": 0.95}}), encoding="utf-8")
     out = S.adopt_passport(S.AdoptPassport(stage_a=_sa()), _admin={"email": "a@b"})
     assert out["ok"] and not out["replaced"]
@@ -53,3 +53,17 @@ def test_route_answers_422_on_a_bad_result():
     with pytest.raises(HTTPException) as e:
         S.adopt_passport(S.AdoptPassport(stage_a={"k_flux": 0.9}), _admin={})
     assert e.value.status_code == 422
+
+
+def test_every_account_reads_the_shared_passport_and_its_own_wins(tmp_path, monkeypatch):
+    """Owner 2026-10-27: a 3-D factor is the machine's - an account that did not compute it still sees it."""
+    from motor_ai_sim import end3d_store
+    shared, ws = tmp_path / "shared.json", tmp_path / "ws.json"
+    shared.write_text(json.dumps({"fp1": {"k_flux": 0.95}, "fp2": {"k_flux": 0.96}}), encoding="utf-8")
+    ws.write_text(json.dumps({"fp2": {"k_flux": 0.97}}), encoding="utf-8")
+    monkeypatch.setattr(end3d_store, "shared_path", lambda: shared)
+    monkeypatch.setattr(end3d_store, "workspace_path", lambda: ws)
+    got = end3d_store.load()
+    assert got["fp1"]["k_flux"] == 0.95 and got["fp2"]["k_flux"] == 0.97
+    monkeypatch.setattr(end3d_store, "workspace_path", lambda: tmp_path / "missing.json")
+    assert end3d_store.load()["fp2"]["k_flux"] == 0.96

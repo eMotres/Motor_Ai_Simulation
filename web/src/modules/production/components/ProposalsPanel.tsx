@@ -56,7 +56,7 @@ const ProposalsPanel: React.FC<{ proposals: Proposal[]; parts: Part[]; ctx: Prod
       {proposals.map((p) => {
         const part = p.part_id ? byId.get(p.part_id) : undefined;
         return (
-          <Paper key={p.id} sx={{ ...PANEL, p: 1.5 }}>
+          <Paper key={p.id} data-item-id={p.id} sx={{ ...PANEL, p: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
               <Chip size="small" label={t(`proposals.status.${p.status}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, color: COLOR[p.status], bgcolor: `${COLOR[p.status]}1f` }} />
               {part ? <BilingualText value={part.name} size={12} bold /> : <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('proposals.general')}</Typography>}

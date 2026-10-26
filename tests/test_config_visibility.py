@@ -391,6 +391,9 @@ NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog conf
     ("PATCH", "/api/projects/{project_id}/motors/status"), ("POST", "/api/projects/{project_id}/motors"),
     ("PATCH", "/api/projects/{project_id}/motors/report_reviewed"), ("PATCH", "/api/projects/{project_id}/motors/recommended"),
     ("GET", "/api/projects/{project_id}/motors/report"),
+    # activity digest settings of a PRODUCTION (die + config name a production, not a catalog configuration): admin only
+    # (tests/test_digest.py::test_production_settings_are_admin_only)
+    ("GET", "/api/digest/settings/production/{die}/{config}"), ("PUT", "/api/digest/settings/production/{die}/{config}"),
 }
 
 

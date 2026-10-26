@@ -14,7 +14,7 @@ import LoginDialog from '../components/auth/LoginDialog';
 import IdleSignedOutNotice from '../components/auth/IdleSignedOutNotice';
 import { pendingEmailLink, requestedAuthMode } from '../lib/localAuth';
 import { meFailureAction, meResponseUsable, meRetryDelayMs } from '../lib/authFallback';
-import { isProductionLinkPath } from '../lib/productionLink';
+import { addressAfterSignIn, isAppLinkPath, rememberReturnTo, takeReturnTo } from '../lib/appLink';
 import { applyLandingMotor } from '../lib/landingMotorApply';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -132,13 +132,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => pendingEmailLink() !== null || (requestedAuthMode() !== null && !getStoredUser()));
   const [loginOpts, setLoginOpts] = useState<SignInOptions>(
     () => ({ mode: requestedAuthMode() ?? 'signin' }));
-  // A shared link to a production page (/production/<die>/<config>/documents?...) opened while signed out: the sign-in dialog
-  // opens at once ON that URL (the address bar is never touched), so signing in - or registering and confirming the mail -
-  // ends on the page.  Once per page load; a visitor who closes the dialog is not asked again.
+  // A link to a page of the app (a production or one of its tabs, a development project, a motor step - the links in the activity
+  // e-mails) opened while signed out: the sign-in dialog opens at once ON that URL (the address bar is never touched), so signing in -
+  // by Google or by e-mail and password - or registering and confirming the mail ends on the page.  The canonical target is also
+  // remembered for this tab (appLink.ts) in case the address bar loses it on the way.  Once per page load; a visitor who closes
+  // the dialog is not asked again.
   const shareDialogShown = React.useRef(false);
   useEffect(() => {
     if (shareDialogShown.current || !resolved || user || !enforced) return;
-    if (!isProductionLinkPath(window.location.pathname)) return;
+    if (!isAppLinkPath(window.location.pathname)) return;
+    try { rememberReturnTo(window.sessionStorage, window.location.pathname, window.location.search); } catch { /* storage blocked */ }
     shareDialogShown.current = true;
     setLoginOpts({ mode: 'signin' });
     setLoginOpen(true);
@@ -260,6 +263,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const onSignedIn = useCallback((token: string, u: SessionUser) => {
     storeSession(token, u);
+    // Put the remembered page back in the address bar BEFORE the workspace mounts (it reads the link at boot) when the bar no
+    // longer holds one; same-origin app paths only (appLink.safeReturnTarget).
+    try {
+      const restore = addressAfterSignIn(window.location.pathname, window.location.search, takeReturnTo(window.sessionStorage));
+      if (restore) window.history.replaceState(null, '', restore);
+    } catch { /* storage or history blocked: the address bar carries the link */ }
     // "Open in Configure" on a landing motor card: pass the choice on before the workspace boots
     applyLandingMotor(u.email);
     setUser(toAuthUser(u));

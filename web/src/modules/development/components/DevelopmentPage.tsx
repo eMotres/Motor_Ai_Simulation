@@ -49,6 +49,8 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import { NARROW } from '../../../lib/narrowLayout';
   import { clearView, readView, writeView } from '../../../lib/viewMemory';
   import { developmentViewScope, parseDevelopmentView, restorableView, type DevelopmentView } from '../viewState';
+  import { appLinkPath, parseAppLink, type AppLink } from '../../../lib/appLink';
+  import DigestSettings from '../../../components/digest/DigestSettings';
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes';
 const STATUSES = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'] as const;
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
@@ -268,6 +270,22 @@ export default function DevelopmentPage() {
     if (selected) writeView(developmentViewScope(identity), { project: selected.id, view, step });
     else clearView(developmentViewScope(identity));
   }, [user?.email, selected?.id, view, step, pendingView]);
+  // A link to a project (/projects/<id>[/<view>][?die=&config=], e.g. from an activity e-mail): open that project once, on the view
+  // the link names.  Read from the address bar once at mount; the link then leaves the bar (a reload goes back to the remembered view).
+  const linkTarget = useRef<Extract<AppLink, { kind: 'project' }> | null>(null);
+  const linkRead = useRef(false);
+  useEffect(() => {
+    if (linkRead.current) return;
+    linkRead.current = true;
+    let link: AppLink | null = null;
+    try { link = parseAppLink(window.location.pathname, window.location.search); } catch { /* no window */ }
+    if (!link || link.kind !== 'project') return;
+    linkTarget.current = link;
+    if (user?.email) viewRestoredFor.current = user.email;       // the link wins over the remembered project
+    try { sessionStorage.setItem('development.openProject', link.id); } catch { /* the event below still carries the id */ }
+    window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: link.id } }));
+    try { if (appLinkPath(link) === window.location.pathname + window.location.search) window.history.replaceState(null, '', '/'); } catch { /* no history */ }
+  }, []);
   useEffect(() => {
     const openProject = async (projectId: string | null | undefined): Promise<boolean> => {
       if (!projectId) return true;
@@ -489,6 +507,15 @@ export default function DevelopmentPage() {
       if (tab === 'motors') await loadProjectMotors(id, token);
     } catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); }
   };
+  // ...and once that project is loaded, show the view the link named (a motor step opens the Motors view)
+  useEffect(() => {
+    const link = linkTarget.current;
+    if (!link || !selected || !spec || selected.id !== link.id) return;
+    linkTarget.current = null;
+    const wanted: ViewTab = link.view ?? (link.die ? 'motors' : 'specification');
+    const next: ViewTab = wanted === 'notes' && !canEditProject ? 'specification' : wanted;
+    if (next === 'specification') setView('specification'); else void openTab(next);
+  }, [selected, spec, canEditProject]);
   const changeShowAllVersions = (value: boolean) => {
     setShowAllVersions(value);
     showAllVersionsRef.current = value;
@@ -853,6 +880,7 @@ export default function DevelopmentPage() {
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)', [NARROW]: { flex: '1 1 100%' } }}>{selected.title}</Typography></Tooltip><Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />{!canEditSpec && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr('projectStatusTip')} />{canEditProject ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{STATUSES.map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {tr(`status.${selected.status}`)}</Typography>}</Box>
+    {canEditSpec && <DigestSettings target={{ kind: 'project', id: selected.id }} />}
     
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     <Tabs value={view} onChange={(_, v) => void openTab(v)} sx={{ borderBottom: '1px solid var(--line-soft)', mb: 1.5 }}>

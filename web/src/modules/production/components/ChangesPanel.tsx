@@ -61,7 +61,7 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
       <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('changes.current', { rev: currentRevision })}</Typography>
       {sorted.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('changes.none')}</Typography>}
       {sorted.map((r) => (
-        <Paper key={r.number} sx={{ ...PANEL, p: 1.5 }}>
+        <Paper key={r.number} data-item-id={r.number} sx={{ ...PANEL, p: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
             <Chip size="small" label={r.number} sx={{ height: 18, fontSize: 11, fontWeight: 800, bgcolor: 'var(--panel)', color: 'var(--text-0)' }} />
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{r.date.slice(0, 10)} · {t('changes.by', { email: r.author_email })}</Typography>

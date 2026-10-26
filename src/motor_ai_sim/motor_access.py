@@ -139,6 +139,11 @@ def catalog_access(authorization: Optional[str] = None) -> dict:
     if not ident or ident == ANON_OWNER:
         return {"mode": MODE_ANONYMOUS, "dies": frozenset(), "email": None,
                 "is_admin": False, "configs": frozenset()}
+    return _granted_access(ident)
+
+
+def _granted_access(ident: str) -> dict:
+    """The access answer of a signed-in, non-admin account (shared by :func:`catalog_access` and :func:`access_for_email`)."""
     # Configuration grants ride with EVERY signed-in answer below: an ``all`` or
     # a grant-everyone account still sees a PRIVATE configuration only when it
     # was granted that configuration by name.
@@ -153,6 +158,20 @@ def catalog_access(authorization: Optional[str] = None) -> dict:
                 "is_admin": False, "configs": cfgs}
     return {"mode": MODE_GRANTED, "dies": frozenset(grants.get("dies") or []),
             "email": ident, "is_admin": False, "configs": cfgs}
+
+
+def access_for_email(email: str) -> dict:
+    """:func:`catalog_access` for a NAMED account, with no request in hand (background jobs: the activity digest asks, per
+    recipient, whether that person may open a motor).  An unknown or disabled account gets NO grants (never the public-exhibit
+    answer of an anonymous visitor)."""
+    from motor_ai_sim import users as _users
+    ident = str(email or "").strip().lower()
+    rec = _users.get_user(ident) if ident else None
+    if not rec or rec.get("disabled"):
+        return {"mode": MODE_GRANTED, "dies": frozenset(), "email": ident or None, "is_admin": False, "configs": frozenset()}
+    if str(rec.get("role") or "").lower() == "admin":
+        return {"mode": MODE_ALL, "dies": frozenset(), "email": None, "is_admin": True, "configs": frozenset()}
+    return _granted_access(ident)
 
 
 def die_open(access: dict, die: str) -> bool:

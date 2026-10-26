@@ -45,6 +45,12 @@ def _plain(html: str) -> str:
     (PATH + "?ids=doc_a1,doc-b2", PATH + "?ids=doc_a1,doc-b2"),
     (PATH + "?since=2026-10-19&signin=1&verify=abc&x=//evil.com", PATH + "?since=2026-10-19"),   # unknown keys dropped
     (PATH + "?since=2026-10-19#frag", PATH + "?since=2026-10-19"),                                 # fragment dropped
+    ("/production/CIANO14%2040%20new/L12", "/production/CIANO14%2040%20new/L12"),                  # the production itself
+    ("/production/CIANO14 40 new/L12/changes?item=1.2&signin=1", "/production/CIANO14%2040%20new/L12/changes?item=1.2"),
+    ("/production/a/b/discussion?item=th_Abc-1", "/production/a/b/discussion?item=th_Abc-1"),
+    ("/projects/erium-x1", "/projects/erium-x1"),
+    ("/projects/erium-x1/messages?item=Ab-1_x", "/projects/erium-x1/messages?item=Ab-1_x"),
+    ("/projects/erium-x1/motors?config=L12&die=CIANO28 85&verify=zz", "/projects/erium-x1/motors?die=CIANO28%2085&config=L12"),
     ("/production/SiC%20Controller%20800V/Rev%20A/documents", "/production/SiC%20Controller%20800V/Rev%20A/documents"),
 ])
 def test_valid_paths_are_canonical(raw, expected):
@@ -56,7 +62,7 @@ def test_valid_paths_are_canonical(raw, expected):
     "//evil.com/production/a/b/documents", "///evil.com", "/\\evil.com", "\\\\evil.com",
     "https://evil.com/production/a/b/documents", "http://localhost:5173/production/a/b/documents",
     "javascript:alert(1)", "data:text/html,x",
-    "/", "/?verify=abc", "/agent-consent?request=1", "/admin", "/api/auth/logout", "/production", "/production/a/b",
+    "/", "/?verify=abc", "/agent-consent?request=1", "/admin", "/api/auth/logout", "/production", "/projects", "/projects/", "/projects/Bad_Id",
     "/production/a/b/documents/extra", "/production/../admin/x/documents", "/production/a/..%2fb/documents",
     "/production/a%2Fb/c/documents", "/production/a%5Cb/c/documents", "/production/%2e%2e/b/documents",
     "/production//b/documents", "/production/a/b/documents?since=yesterday", "/production/a/b/documents?since=2026-13-45",
@@ -64,6 +70,11 @@ def test_valid_paths_are_canonical(raw, expected):
     "/production/a/b/documents?ids=<script>", "/production/a/b/documents?ids=a//b",
     "/production/a/b/documents\r\nLocation: http://evil.com", "/production/a/b/documents\x00",
     "/production/" + "a" * 90 + "/b/documents", "/production/a/b/documents?" + "since=2026-10-19&" * 30,
+    # the wider allow-list (production tabs, development projects) stays strict
+    "/production/a/b/secrets", "/production/a/b/bom?since=2026-10-19", "/production/a/b/bom?ids=x", "/production/a/b/bom?item=<x>",
+    "/projects/p1/admin", "/projects/p1/../p2", "/projects/p1//motors", "/projects/p1/motors?die=a", "/projects/p1/motors?config=a",
+    "/projects/p1/motors?die=../x&config=y", "/projects/p1/motors?die=a&config=b&item=" + "x" * 90,
+    "/projects/" + "a" * 70, "//evil.com/projects/p1", "https://evil.com/projects/p1", "/projects/p1\evil",
 ])
 def test_hostile_or_foreign_paths_are_refused(raw):
     assert RP.safe_app_path(raw) is None
@@ -76,6 +87,12 @@ def test_builder_round_trips_and_refuses_bad_parts():
     assert RP.production_documents_path(DIE, CONFIG, ids=["doc_1", "doc_2"]) == PATH + "?ids=doc_1,doc_2"
     assert RP.production_documents_path(DIE, "../x") is None
     assert RP.production_documents_path(DIE, CONFIG, since="soon") is None
+    assert RP.production_path(DIE, CONFIG, "changes", item="2.0") == "/production/CIANO14%2040%20new/L12/changes?item=2.0"
+    assert RP.production_path(DIE, CONFIG) == "/production/CIANO14%2040%20new/L12"
+    assert RP.production_path(DIE, CONFIG, "nope") is None
+    assert RP.project_path("erium-x1", "motors", die="CIANO28 85", config="L12") == "/projects/erium-x1/motors?die=CIANO28%2085&config=L12"
+    assert RP.project_path("erium-x1", "motors", die="only") is None
+    assert RP.project_path("Bad Id") is None
 
 
 # -- registration -> confirmation page -----------------------------------------------------------------------------------
@@ -101,6 +118,23 @@ def test_the_return_path_survives_register_and_confirmation(env):
     # a mail scanner clicked first / the person clicks again: still lands on the page
     again = client.get(f"{LINK}/v/{sid}")
     assert "Already confirmed" in again.text and f'href="{APP}{nxt}"' in _plain(again.text)
+
+
+@pytest.mark.parametrize("nxt", [
+    "/projects/erium-x1/motors?die=CIANO28%2085&config=L12",
+    "/projects/erium-x1/messages?item=Ab-1_x",
+    "/production/CIANO14%2040%20new/L12/changes?item=2.0",
+    "/production/CIANO14%2040%20new/L12/discussion",
+])
+def test_digest_deep_links_survive_register_and_confirmation(env, nxt):
+    """Owner 2026-10-26: a link from an activity digest opens the exact page after sign-up + confirmation + sign-in."""
+    _smtp_on(env)
+    assert _register_next(nxt).status_code == 202
+    sid = _token_from(env["outbox"][-1], "verify")
+    page = client.get(f"{LINK}/v/{sid}")
+    assert page.status_code == 200 and "E-mail confirmed" in page.text
+    assert f'href="{APP}{nxt}"' in _plain(page.text)
+    assert f"{APP}{nxt}{'&' if '?' in nxt else '?'}signin=1" in _plain(page.text)
 
 
 def test_zh_cn_page_has_the_label(env):

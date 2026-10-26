@@ -2206,6 +2206,17 @@ def _stamp_cards(dies: list, with_mass: bool = True,
     return out
 
 
+def _die_source_of(die_dir) -> str:
+    """``"open"`` when the die folder sits in the public repository's data set
+    (``data/open/dies``), ``"private"`` for everything else.  Never raises: a
+    folder we cannot place is private (fail closed)."""
+    try:
+        from motor_ai_sim import data_sources as _ds
+        return _ds.SOURCE_OPEN if _ds.source_of_dir(Path(str(die_dir))) == _ds.SOURCE_OPEN else _ds.SOURCE_PRIVATE
+    except Exception:                                      # noqa: BLE001 - a marker never breaks the catalog
+        return "private"
+
+
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
     from motor_ai_sim.construction_privacy import may_see_full_construction
@@ -2480,6 +2491,11 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 "read_only": _layer != _WS.LAYER_WORKSPACE}
                if _ws_layering() else {}),
             "locked": bool(die.get("locked", True)),
+            # OPEN (the die sits in the public repository's data set) or PRIVATE (every other
+            # place: private data set, shared catalog, a workspace copy) - the one quiet
+            # marker the Motors list shows on every row (owner 2026-10-27).  Same rule as the
+            # admin Motors-access table: ``open`` only for a die that lives in the open set.
+            "source": _die_source_of(dd),
             "created": die.get("created"),
             "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
             "stator_diameter": geo.get("stator_diameter"),

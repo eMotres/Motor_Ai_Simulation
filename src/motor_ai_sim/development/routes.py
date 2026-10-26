@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from motor_ai_sim import users
+from motor_ai_sim import platform_agreement, users
 from motor_ai_sim.development import access, models, store
 from motor_ai_sim.development.motors import _metric_projection
 
@@ -457,6 +457,7 @@ async def create_project(request: Request):
     user = access.require_signed_in(request)
     if not access.is_engineer(user):
         raise HTTPException(status_code=403, detail="Engineer access required")
+    platform_agreement.require_accepted(user)       # starting a development (428 until the company accepted; staff exempt)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
@@ -678,6 +679,7 @@ async def put_spec(request: Request, project_id: str):
 @router.post("/{project_id}/spec/submit")
 async def submit_spec(request: Request, project_id: str):
     user, _, _ = access.require_spec_editor(request, project_id)
+    platform_agreement.require_accepted(user)       # submitting the specification starts the development (428 until accepted)
     body = await request.json()
     raw_revision = body.get("revision") if isinstance(body, dict) else None
     if isinstance(raw_revision, bool) or not isinstance(raw_revision, int) or raw_revision < 0:

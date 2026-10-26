@@ -335,7 +335,9 @@
     "commercialDocs": "Commercial Documents",
     "linkedProductions": "Linked Productions (Information Only)",
     "auditTrail": "Audit Trail",
-    "bankNotice": "Never store bank account numbers or SWIFT details. These are internal and kept separate."
+    "bankNotice": "Never store bank account numbers or SWIFT details. These are internal and kept separate.",
+    "colAgreement": "Agreement",
+    "agreementNotInstalled": "Agreement: text not installed (users are not asked to accept it yet)."
   },
   "live": {
     "title": "Now on the site",

@@ -7,6 +7,9 @@ import SessionsDialog from './SessionsDialog';
 import AgentKeysDialog from './AgentKeysDialog';
 import AccountDataDialog from './AccountDataDialog';
 import DataSharingDialog from './DataSharingDialog';
+import AgreementDialog from '../agreement/AgreementDialog';
+import GavelIcon from '@mui/icons-material/Gavel';
+import { showsAgreement, type AgreementStatus } from '../../lib/platformAgreement';
 import DatasetIcon from '@mui/icons-material/Dataset';
 import FolderZipIcon from '@mui/icons-material/FolderZip';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -38,6 +41,21 @@ const AuthMenu: React.FC = () => {
   const [dataOpen, setDataOpen] = React.useState(false);
   const [shareOpen, setShareOpen] = React.useState(false);
   const [nodesOpen, setNodesOpen] = React.useState(false);
+  const [agreementOpen, setAgreementOpen] = React.useState(false);
+  const [agreement, setAgreement] = React.useState<AgreementStatus | null>(null);
+  // The Platform Agreement entry shows only when it applies (enforced for this account) or to an admin; otherwise the menu says nothing.
+  React.useEffect(() => {
+    if (!user) return undefined;
+    let live = true;
+    const load = () => {
+      const base = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
+      fetch(`${base}/api/agreement/status`).then((r) => (r.ok ? r.json() : null))
+        .then((j: AgreementStatus | null) => { if (live) setAgreement(j); }).catch(() => { /* the entry just stays hidden */ });
+    };
+    load();
+    window.addEventListener('platform-agreement-changed', load);
+    return () => { live = false; window.removeEventListener('platform-agreement-changed', load); };
+  }, [user]);
   const [noticeKey, setNoticeKey] = React.useState(0);
   // The "connect your own server" hint on the simulation tabs opens this dialog.
   React.useEffect(() => {
@@ -101,6 +119,13 @@ const AuthMenu: React.FC = () => {
           <ListItemIcon><DatasetIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           {t('dataSharing.menu')}
         </MenuItem>
+        {showsAgreement(agreement) && (
+          <MenuItem sx={{ fontSize: 12.5 }}
+            onClick={() => { setAnchor(null); setAgreementOpen(true); }}>
+            <ListItemIcon><GavelIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            {t('agreement.menu')}
+          </MenuItem>
+        )}
         <MenuItem component="a" href="/preferences" sx={{ fontSize: 12.5 }} onClick={() => setAnchor(null)}>
           <ListItemIcon><MailOutlineIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           {t('commPrefs.menu')}
@@ -127,6 +152,7 @@ const AuthMenu: React.FC = () => {
       <AccountDataDialog open={dataOpen} onClose={() => setDataOpen(false)} />
       <DataSharingDialog open={shareOpen} onClose={() => setShareOpen(false)} />
       <ComputeNodesDialog open={nodesOpen} onClose={() => setNodesOpen(false)} />
+      {agreementOpen && <AgreementDialog open onClose={() => setAgreementOpen(false)} />}
     </Box>
   );
 };

@@ -554,5 +554,44 @@
       "partialNote": "已发送 {sent} 位，{failed} 位失败。再次发送只会重试失败的收件人，或选择丢弃。"
     },
     "recipientsCount": "{count} 位收件人"
+  },
+  "agreement": {
+    "menu": "平台协议",
+    "title": "平台服务与数据协议",
+    "version": "版本 {version}",
+    "line": "协议：{mode} · {version} · 接受于 {date}",
+    "privatePending": "PRIVATE — 我们的团队将就费用与您联系。",
+    "coversCompany": "一次接受涵盖 {company} 的所有用户。",
+    "coversAccount": "您的账户没有登记公司；此次接受仅涵盖您的账户。",
+    "newVersion": "新版本 {version} 需要重新接受",
+    "notInstalled": "协议文本尚未安装。目前不会要求用户接受任何协议。",
+    "exempt": "此账户无需接受该协议。",
+    "needed": "开始开发前，请先接受本协议。",
+    "companyLine": "公司：{company}",
+    "company": "公司",
+    "regNo": "注册号",
+    "country": "国家/地区",
+    "address": "地址",
+    "modeHeading": "模式",
+    "modeFree": "封闭项目。MOTRES 可使用您的工程数据训练其内部 AI。",
+    "modePrivate": "付费。不使用您的数据训练 AI。我们的团队将就费用与您联系。",
+    "business": "我们仅将本平台用于商业目的。",
+    "authority": "我有权代表本公司接受本协议。",
+    "signer": "签署人全名",
+    "titleField": "职务",
+    "showChinese": "显示中文文本",
+    "showEnglish": "显示英文文本",
+    "download": "下载已接受的副本（PDF）",
+    "accept": "接受",
+    "cancel": "取消",
+    "close": "关闭",
+    "loadError": "无法加载协议：{message}",
+    "errors": {
+      "required": "必填",
+      "country": "请从列表中选择国家/地区",
+      "business": "请确认仅用于商业目的",
+      "authority": "请确认您的授权",
+      "mode": "请选择 FREE 或 PRIVATE"
+    }
   }
 }

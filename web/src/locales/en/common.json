@@ -554,5 +554,44 @@
       "partialNote": "Sent to {sent}, failed for {failed}. Send again to retry only the failed ones, or discard."
     },
     "recipientsCount": "{count, plural, one {# recipient} other {# recipients}}"
+  },
+  "agreement": {
+    "menu": "Platform agreement",
+    "title": "Platform Services and Data Agreement",
+    "version": "Version {version}",
+    "line": "Agreement: {mode} · {version} · accepted {date}",
+    "privatePending": "PRIVATE — our team will contact you about the fee.",
+    "coversCompany": "One acceptance covers all users of {company}.",
+    "coversAccount": "Your account has no company on record; this covers your account.",
+    "newVersion": "a newer version {version} needs a new acceptance",
+    "notInstalled": "Agreement text not installed. Users are not asked to accept anything yet.",
+    "exempt": "This account does not need to accept the agreement.",
+    "needed": "Accept the agreement to start a development.",
+    "companyLine": "Company: {company}",
+    "company": "Company",
+    "regNo": "Registration no.",
+    "country": "Country",
+    "address": "Address",
+    "modeHeading": "Mode",
+    "modeFree": "Closed projects. MOTRES may train its internal AI on your engineering data.",
+    "modePrivate": "Paid. No AI training on your data. Our team will contact you about the fee.",
+    "business": "We use the platform for business purposes only.",
+    "authority": "I am authorised to accept this agreement on behalf of the company.",
+    "signer": "Signer full name",
+    "titleField": "Title",
+    "showChinese": "Show the Chinese text",
+    "showEnglish": "Show the English text",
+    "download": "Download the accepted copy (PDF)",
+    "accept": "Accept",
+    "cancel": "Cancel",
+    "close": "Close",
+    "loadError": "Could not load the agreement: {message}",
+    "errors": {
+      "required": "Required",
+      "country": "Choose a country from the list",
+      "business": "Confirm business use",
+      "authority": "Confirm your authority",
+      "mode": "Choose FREE or PRIVATE"
+    }
   }
 }

@@ -603,6 +603,12 @@ def start_design(p: Principal, requirements: Dict[str, Any],
                  base: Optional[Dict[str, str]] = None,
                  name: Optional[str] = None) -> Dict[str, Any]:
     from motor_ai_sim import mcp_tools as _t
+    from motor_ai_sim import platform_agreement as _pa
+    needed = _pa.required_detail(p.email)
+    if needed:      # starting a development needs the company's accepted Platform Agreement (staff / MOTRES exempt; off until installed)
+        raise DesignError("agreement_required: the account's company has not accepted the AeroStator Platform Services and Data "
+                          "Agreement (version %s). Ask the user to open aerostator.com, account menu -> Platform agreement, "
+                          "read and accept it, then call start_design again." % needed["version"])
     req, ask, assumptions = normalize_requirements(requirements or {})
     if base is not None:
         if not isinstance(base, dict) or not base.get("die") or not base.get("config"):

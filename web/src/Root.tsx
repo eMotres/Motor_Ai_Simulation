@@ -22,6 +22,7 @@ import { showsLandingShell } from './lib/rootGate';
 import { watchChunkImport } from './lib/chunkReload';
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import { parseAppLink } from './lib/appLink';
+import AgreementHost from './components/agreement/AgreementHost';
 
 const App = lazy(watchChunkImport(() => import('./App')));
 const OAuthConsent = lazy(watchChunkImport(() => import('./components/auth/OAuthConsent')));
@@ -62,10 +63,11 @@ const Root: React.FC = () => {
     return (
       <Suspense fallback={<Loading />}>
         <ShareLinkEntry link={shareLink}><Suspense fallback={<Loading />}><App /></Suspense></ShareLinkEntry>
+        <AgreementHost />
       </Suspense>
     );
   }
-  return <Suspense fallback={<Loading />}><App /></Suspense>;
+  return <><Suspense fallback={<Loading />}><App /></Suspense><AgreementHost /></>;
 };
 
 export default Root;

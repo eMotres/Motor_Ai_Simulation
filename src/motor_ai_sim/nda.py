@@ -201,8 +201,12 @@ def _inline(s: str) -> str:
     return re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", t, flags=re.S)
 
 
-def build_pdf(rendered: str | dict[str, str], rec: dict, *, compress: bool = True, specimen: bool = False) -> bytes:
-    """Render one legacy text or both language sections followed by the acceptance block/specimen details."""
+def build_pdf(rendered: str | dict[str, str], rec: dict, *, compress: bool = True, specimen: bool = False,
+              label: str = "NDA", extra_rows: tuple = (), note: str | None = None) -> bytes:
+    """Render one legacy text or both language sections followed by the acceptance block/specimen details.
+
+    ``label`` / ``extra_rows`` / ``note`` let another click-through agreement (platform_agreement.py) reuse the same PDF: the
+    document title, rows inserted before the record id, and the closing sentence."""
     from xml.sax.saxutils import escape
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -229,6 +233,8 @@ def build_pdf(rendered: str | dict[str, str], rec: dict, *, compress: bool = Tru
                 block.insert(-1, ("%s text SHA-256" % label, rec["text_sha256s"][code]))
             if rec.get("template_sha256s", {}).get(code):
                 block.insert(-1, ("%s template SHA-256" % label, rec["template_sha256s"][code]))
+    if extra_rows and not specimen:
+        block[-1:-1] = [(str(k), str(v)) for k, v in extra_rows]
     if isinstance(rendered, dict):
         if set(rendered) != set(LANGS):
             raise ValueError("Both English and zh-CN agreement texts are required.")
@@ -265,11 +271,11 @@ def build_pdf(rendered: str | dict[str, str], rec: dict, *, compress: bool = Tru
                 story.append(Paragraph(_inline(line), body))
     if not specimen:
         story += [Spacer(1, 8), Paragraph("Acceptance record", head), tbl, Spacer(1, 6),
-                  Paragraph(escape("Accepted online by typing the signatory name. The selected-language SHA-256 above is the hash "
+                  Paragraph(escape(note or "Accepted online by typing the signatory name. The selected-language SHA-256 above is the hash "
                                    "of that exact rendered text; both language hashes are recorded."), meta)]
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
-                            title=("NDA %s SPECIMEN" % rec["version"]) if specimen else ("NDA %s" % rec["id"]),
+                            title=("%s %s SPECIMEN" % (label, rec["version"])) if specimen else ("%s %s" % (label, rec["id"])),
                             author="MOTRES d.o.o.", pageCompression=1 if compress else 0)
     if specimen:
         def _specimen_page(canvas, _doc):

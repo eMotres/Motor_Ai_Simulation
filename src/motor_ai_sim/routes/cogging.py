@@ -41,10 +41,19 @@ _RECENT_MAX = 16
 _RECENT_LOCK = threading.Lock()
 
 
-def _remember(run: Dict[str, Any]) -> str:
+def _owner(authorization: Any) -> str:
+    """Who asked, in the dialect the stores spell (``auth.caller_identity``): a pending run belongs to its solver."""
+    try:
+        from motor_ai_sim.auth import caller_identity
+        return str(caller_identity(authorization if isinstance(authorization, str) else None).get("id") or "")
+    except Exception:                                           # noqa: BLE001
+        return ""
+
+
+def _remember(run: Dict[str, Any], owner: str) -> str:
     rid = C.cogging_id_of(run)
     with _RECENT_LOCK:
-        _RECENT[rid] = run
+        _RECENT[rid] = {"run": run, "owner": owner}
         _RECENT.move_to_end(rid)
         while len(_RECENT) > _RECENT_MAX:
             _RECENT.popitem(last=False)
@@ -57,7 +66,7 @@ class CoggingRun(BaseModel):
     magnet_temp_c: Optional[float] = None  # None = the magnet card as the library quotes it
     frozen_nu: bool = False               # frozen permeability: kept for comparison, see cogging.py for why it is off
     samples_per_cycle: int = Field(default=C.SAMPLES_PER_CYCLE, ge=6, le=48)
-    mesh_size_mm: Optional[float] = Field(default=None, gt=0)   # a deliberately different mesh (else the machine's)
+    mesh_size_mm: Optional[float] = Field(default=None, ge=C.MIN_MESH_MM, le=C.MAX_MESH_MM)   # a different mesh (else the machine's)
     save: bool = False                    # file the result on the configuration (die + config only)
     geo: Optional[str] = None             # live machine only: the per-request geometry override (JSON)
 
@@ -79,6 +88,16 @@ def _stored(die: str, cfg: str) -> Dict[str, Any]:
 def _save(die: str, cfg: str, run: Dict[str, Any], who: dict) -> Dict[str, Any]:
     """Write ``run`` as the configuration's ``cogging:`` block (the caller has passed the write gate)."""
     die_doc, cfg_doc, die, cfg = _docs(die, cfg)
+    # A LIVE-machine run (no die / config / build signature) is never filed on a configuration: nothing proves the
+    # live machine is that configuration, and it would be stamped as if it had been computed on its current build.
+    if not (run.get("die") and run.get("config") and run.get("build_sig")):
+        raise HTTPException(422, detail=("a run of the live machine cannot be saved on a configuration - run it with "
+                                         "`die` and `config` instead; nothing saved"))
+    # Only a standard run is saved by anyone; an override (frozen permeability, another mesh, a magnet temperature, a
+    # different sample count) is an administrator's decision, and is named wherever the number is shown.
+    if run.get("overrides") and not who.get("is_admin"):
+        raise HTTPException(403, detail=("this run used non-standard settings (%s); only an administrator may save "
+                                         "it - nothing saved" % "; ".join(run["overrides"])))
     machine = C.machine_from_config(die_doc, cfg_doc)
     if run.get("geo_hash") and C.geo_hash(machine["geo_override"]) != run["geo_hash"]:
         raise HTTPException(409, detail=("this run was solved on a different machine than '%s / %s' (geometry "
@@ -109,9 +128,9 @@ def run_cogging(req: CoggingRun, authorization: str = Header(default=None)):
             who = _F.require_catalog_write(authorization)
             _F._require_die_write(req.die, who, req.config)
         die_doc, cfg_doc, die, cfg = _docs(req.die, req.config)
-        overrides = {"mesh_size_mm": req.mesh_size_mm}
-        machine = C.machine_from_config(die_doc, cfg_doc, overrides)
-        ct, _src = C.continuous_torque(cfg_doc, _stored(die, cfg))
+        machine = C.machine_from_config(die_doc, cfg_doc, {"mesh_size_mm": req.mesh_size_mm})
+        ct, _src, basis = C.continuous_torque(cfg_doc, _stored(die, cfg))
+        ct = ct if basis == "continuous" else None
         build_sig = C.current_build_sig(die_doc, cfg_doc)
     else:
         if req.save:
@@ -120,6 +139,12 @@ def run_cogging(req: CoggingRun, authorization: str = Header(default=None)):
         if req.mesh_size_mm:
             machine["mesh"] = dict(machine["mesh"], mesh_size_mm=float(req.mesh_size_mm))
         ct, build_sig = None, None
+    overrides = C.overrides_of(frozen_nu=req.frozen_nu, mesh_size_mm=req.mesh_size_mm,
+                               magnet_temp_c=req.magnet_temp_c, samples_per_cycle=req.samples_per_cycle)
+    if req.save and overrides and not (who or {}).get("is_admin"):
+        # refused BEFORE the solve: a non-admin cannot save it, so it must not cost the CPU either
+        raise HTTPException(403, detail=("`save` with non-standard settings (%s) is for an administrator; drop them "
+                                         "to save the standard run" % "; ".join(overrides)))
     try:
         out = C.run(machine, magnet_temp_c=req.magnet_temp_c, frozen_nu=req.frozen_nu,
                     samples_per_cycle=req.samples_per_cycle, continuous_torque_nm=ct)
@@ -127,8 +152,9 @@ def run_cogging(req: CoggingRun, authorization: str = Header(default=None)):
         raise HTTPException(422, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(500, detail=str(exc))
+    out["overrides"] = overrides
     out["build_sig"] = build_sig
-    out["cogging_id"] = _remember(out)
+    out["cogging_id"] = _remember(out, _owner(authorization))
     out["saved"] = False
     if req.save and who is not None:
         out["view"] = _save(req.die, req.config, out, who)
@@ -152,10 +178,12 @@ def save_cogging(die: str, cfg: str, req: CoggingSave, _w: dict = Depends(_F.req
     _F._require_die_write(die, _w, cfg)
     _docs(die, cfg)                      # a configuration that is not there answers first (same 404 as a hidden one)
     with _RECENT_LOCK:
-        run = _RECENT.get(req.cogging_id)
-    if run is None:
-        raise HTTPException(404, detail="no such cogging run (it was not solved on this server, or it is older "
+        entry = _RECENT.get(req.cogging_id)
+    # a pending run is its solver's: another account's id answers like an unknown one
+    if entry is None or entry["owner"] != _owner(_w.get("authorization")):
+        raise HTTPException(404, detail="no such cogging run (it was not solved by you on this server, or it is older "
                                         "than the 16 newest) - run it again")
+    run = entry["run"]
     return {"ok": True, "saved": True, "view": _save(die, cfg, run, _w)}
 
 

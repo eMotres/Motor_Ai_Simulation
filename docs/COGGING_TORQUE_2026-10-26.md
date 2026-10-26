@@ -50,6 +50,24 @@ before quoting it to anyone.
 Open question, not settled here: the re-converged run's largest line is harmonic 6 (order 42 = LCM/2), not 12 (order
 84). Check with a full-ring run (`n_sectors=-1`) whether the 2-sector wedge adds it.
 
+## What a stored number is guaranteed to be (review fixes, 2026-10-26)
+
+* The solver must say `torque_method == "coulomb_virtual_work"`; if the Coulomb set-up failed and it returned the
+  Maxwell/hybrid series, the run raises and nothing is stored.
+* The label carries the DELIVERED samples per cycle (the solver snaps the frame count to a slip-ring divisor);
+  fewer than asked for (12) is refused, `mesh.steps_per_period` is the delivered count (`steps_requested` beside it).
+  A run whose saturation solve did not converge (`picard_converged` false) is refused; `converged` is stored.
+* Only a run with `die`, `config` and `build_sig` can be saved; a live-machine run never is. A pending run (16 newest, in
+  memory) belongs to the account that solved it.
+* `save` with any override (frozen permeability, `mesh_size_mm`, `magnet_temp_c`, `samples_per_cycle`) is an
+  administrator's decision (403 for others, before the solve); an admin's saved override is stored in `overrides` and
+  named in the tooltip, the datasheet note and the report note.
+* Bounds: `mesh_size_mm` 0.1..20 and not below the machine's smallest element, `samples_per_cycle` 6..48, at most 720 frames.
+* The percentage is against the VERIFIED S1 torque (the datasheet's checks: feasible and `verified is True`) and says
+  "of the continuous torque"; without one it is against the rated duty's solved torque and says "of the rated duty
+  torque (<source>)".
+* The ordinary Configure shows the tile only while the loaded machine is the reference configuration, unscaled.
+
 ## Stored block, staleness
 
 `cogging: {pkpk_Nm, half_amp_Nm, mean_Nm, fundamental_order, fundamental_amp_Nm, dominant_order, method, frozen_nu,

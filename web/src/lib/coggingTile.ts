@@ -11,6 +11,11 @@ export interface CoggingView {
   pkpk_Nm: number;
   half_amp_Nm?: number | null;
   pct_of_continuous?: number | null;
+  /** share of the RATED DUTY's solved torque - used (and labelled so) when no verified S1 rating exists */
+  pct_of_rated_duty?: number | null;
+  continuous_torque_source?: string | null;
+  /** what a non-standard (administrator's) run changed - named in the tooltip */
+  overrides?: string[] | null;
   magnet_temp_c?: number | null;
   fundamental_order?: number | null;
   method?: string | null;
@@ -37,11 +42,14 @@ export function coggingTipParts(view: CoggingView | null | undefined): TipPart[]
   if (pk === null || !view) return [];
   const half = finite(view.half_amp_Nm) ?? pk / 2;
   const pct = finite(view.pct_of_continuous);
+  const pctRated = finite(view.pct_of_rated_duty);
   const temp = finite(view.magnet_temp_c);
   const parts: TipPart[] = [{ key: 'configure.coggingTipHalf', args: { half: half.toFixed(coggingDigits(half)) } }];
   if (pct !== null) parts.push({ key: 'configure.coggingTipPct', args: { pct: pct.toFixed(2) } });
+  else if (pctRated !== null) parts.push({ key: 'configure.coggingTipPctRated', args: { pct: pctRated.toFixed(2), source: view.continuous_torque_source || '' } });
   if (temp !== null) parts.push({ key: 'configure.coggingTipTemp', args: { temp: temp.toFixed(0) } });
   parts.push({ key: 'configure.coggingTipMethod' });
+  if (view.overrides && view.overrides.length) parts.push({ key: 'configure.coggingTipOverride', args: { what: view.overrides.join(', ') } });
   if (view.stale === true) parts.push({ key: 'configure.coggingTipStale' });
   return parts;
 }
@@ -51,6 +59,9 @@ export function coggingFromFlat(c: Record<string, unknown>): CoggingView | null 
   const pk = finite(c.cogging_pkpk_nm);
   if (pk === null) return null;
   return { pkpk_Nm: pk, half_amp_Nm: finite(c.cogging_half_nm), pct_of_continuous: finite(c.cogging_pct_of_continuous),
+    pct_of_rated_duty: finite(c.cogging_pct_of_rated_duty),
+    continuous_torque_source: typeof c.cogging_torque_source === 'string' ? c.cogging_torque_source : null,
+    overrides: typeof c.cogging_overrides === 'string' && c.cogging_overrides ? c.cogging_overrides.split('; ') : null,
     magnet_temp_c: finite(c.cogging_magnet_temp_c), fundamental_order: finite(c.cogging_order), stale: c.cogging_stale === true };
 }
 

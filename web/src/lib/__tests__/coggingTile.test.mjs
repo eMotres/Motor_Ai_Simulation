@@ -52,3 +52,16 @@ test('the Configure grid draws one cogging cell after ripple, only when a value 
   assert.equal(cell.d, 4);
   assert.deepEqual(cell.tipParts.map((p) => p.key), ['configure.coggingTipHalf', 'configure.coggingTipPct', 'configure.coggingTipTemp', 'configure.coggingTipMethod']);
 });
+
+test('the percentage names its base: the continuous rating, or the rated duty (with its source); overrides are named', () => {
+  const keys = (v) => coggingTipParts(v).map((p) => p.key);
+  assert.ok(keys({ pkpk_Nm: 0.1, pct_of_continuous: 1 }).includes('configure.coggingTipPct'));
+  const rated = coggingTipParts({ pkpk_Nm: 0.1, pct_of_rated_duty: 2.5, continuous_torque_source: "solved torque of duty 'rated'" });
+  const p = rated.find((x) => x.key === 'configure.coggingTipPctRated');
+  assert.deepEqual(p.args, { pct: '2.50', source: "solved torque of duty 'rated'" });
+  assert.ok(!rated.some((x) => x.key === 'configure.coggingTipPct'));
+  const over = coggingTipParts({ pkpk_Nm: 0.1, overrides: ['frozen permeability', 'mesh 2 mm'] }).find((x) => x.key === 'configure.coggingTipOverride');
+  assert.equal(over.args.what, 'frozen permeability, mesh 2 mm');
+  const flat = coggingFromFlat({ cogging_pkpk_nm: 0.1, cogging_pct_of_rated_duty: 3, cogging_torque_source: 'x', cogging_overrides: 'a; b' });
+  assert.deepEqual([flat.pct_of_rated_duty, flat.continuous_torque_source, flat.overrides], [3, 'x', ['a', 'b']]);
+});

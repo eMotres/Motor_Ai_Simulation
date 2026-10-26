@@ -1333,8 +1333,13 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         _bits = ["no current; half-amplitude %.4g N·m" % _cv["half_amp_Nm"]]
         if _cv.get("pct_of_continuous") is not None:
             _bits.append("%.2f %% of the continuous torque" % _cv["pct_of_continuous"])
+        elif _cv.get("pct_of_rated_duty") is not None:
+            _bits.append("%.2f %% of the rated duty torque (%s)"
+                         % (_cv["pct_of_rated_duty"], _cv.get("continuous_torque_source") or "rated duty"))
         if _cv.get("magnet_temp_c") is not None:
             _bits.append("magnets %.0f °C" % _cv["magnet_temp_c"])
+        if _cv.get("overrides"):
+            _bits.append("non-standard run: " + ", ".join(_cv["overrides"]))
         if _cv.get("stale"):
             _bits.append("computed on an older build of this machine")
         one("Cogging torque, peak-to-peak (N·m)", _cv["pkpk_Nm"], "; ".join(_bits), 4)

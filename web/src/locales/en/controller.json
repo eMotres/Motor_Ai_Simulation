@@ -300,6 +300,8 @@
     "coggingTip": "Torque the magnets make on the slotted stator with no current, peak to peak.",
     "coggingTipHalf": "Half-amplitude {{half}} N·m.",
     "coggingTipPct": "{{pct}} % of the continuous torque.",
+    "coggingTipPctRated": "{{pct}} % of the rated duty torque ({{source}}).",
+    "coggingTipOverride": "Non-standard run: {{what}}.",
     "coggingTipTemp": "Magnets at {{temp}} °C.",
     "coggingTipMethod": "Energy torque (virtual work), iron re-converged at every rotor position.",
     "coggingTipStale": "Computed on an older build of this machine.",

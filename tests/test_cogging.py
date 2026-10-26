@@ -76,15 +76,20 @@ def test_summary_refuses_a_series_it_cannot_judge():
 
 # ── the run asks the solver for the right thing ──────────────────────────────
 
-def _fake_solver(seen):
+def _fake_solver(seen, *, torque_method="coulomb_virtual_work", frames=None, converged=True):
+    """A stand-in for the FEM solve.  ``frames`` forces the DELIVERED frame count (the solver snaps), ``torque_method``
+    is what the solver says it returned, ``converged`` its saturation verdict."""
     def fake(**kw):
         seen.append(kw)
-        n = kw["n_steps_per_period"]
+        n = int(frames) if frames else kw["n_steps_per_period"]
         per = 360.0 / 7
-        return {"T_em_Nm": _wave(n, 0.03, n // 12),
-                "rotor_angle_deg": [per * i / n for i in range(n)],
-                "torque_method": "coulomb_virtual_work", "frozen_nu": kw.get("frozen_nu"),
-                "gap_layers_effective": 3.0}
+        out = {"T_em_Nm": _wave(n, 0.03, 12),
+               "rotor_angle_deg": [per * i / n for i in range(n)],
+               "torque_method": torque_method, "frozen_nu": kw.get("frozen_nu"),
+               "gap_layers_effective": 3.0, "picard_converged": converged}
+        if converged is False:
+            out["picard_unconverged_frames"] = [3, 4]
+        return out
     return fake
 
 
@@ -151,7 +156,8 @@ def test_view_is_flat_small_and_hides_nothing_it_should_not():
     blk = C.build_block(run, build_sig=C.current_build_sig(dd, cd))
     v = C.view(blk, current_sig=C.current_build_sig(dd, cd), cfg_doc=cd)
     assert v["pkpk_Nm"] == pytest.approx(0.06, rel=1e-3) and v["half_amp_Nm"] == pytest.approx(0.03, rel=1e-3)
-    assert v["stale"] is False and v["pct_of_continuous"] == pytest.approx(1.5, rel=1e-3)
+    assert v["stale"] is False and v["pct_of_rated_duty"] == pytest.approx(1.5, rel=1e-3)   # no verified S1: the rated duty's torque
+    assert "pct_of_continuous" not in v                                                    # ...and it is not called "continuous"
     assert v["continuous_torque_Nm"] == 4.0 and "solved torque of duty 'rated'" in v["continuous_torque_source"]
     assert "waveform" not in v
     flat = C.flat_keys(v)
@@ -164,12 +170,35 @@ def test_view_is_flat_small_and_hides_nothing_it_should_not():
     assert C.view(dict(blk), current_sig=None)["stale"] is True
 
 
-def test_continuous_torque_prefers_the_s1_search_then_the_rated_duty():
+def _s1(**over):
+    blk = {"ok": True, "feasible": True, "trustworthy": True, "verified": True, "power": {"T_em_Nm": 3.2}}
+    blk.update(over)
+    return {"rated": {"coupled": {"continuous_rating": blk}}}
+
+
+def test_continuous_torque_takes_only_a_verified_s1_search_else_the_rated_duty_by_name():
     cd = _cfg_doc()
-    stored = {"rated": {"coupled": {"continuous_rating": {"ok": True, "feasible": True, "power": {"T_em_Nm": 3.2}}}}}
-    assert C.continuous_torque(cd, stored) == (3.2, "continuous rating (S1 search) of duty 'rated'")
-    assert C.continuous_torque(cd, {})[0] == 4.0
-    assert C.continuous_torque({"duties": []}, {}) == (None, None)
+    assert C.continuous_torque(cd, _s1()) == (3.2, "verified continuous rating (S1 search) of duty 'rated'", "continuous")
+    # the datasheet's own checks: an unverified estimate, an infeasible search, an unverified-by-silence record are NOT used
+    for bad in ({"verified": False}, {"feasible": False}, {"ok": False}, {"trustworthy": False}, {"verified": None}):
+        t, src, basis = C.continuous_torque(cd, _s1(**bad))
+        assert (t, basis) == (4.0, "rated duty") and "duty 'rated'" in src, bad
+    assert C.continuous_torque(cd, {}) == (4.0, "solved torque of duty 'rated'", "rated duty")
+    assert C.continuous_torque({"duties": []}, {}) == (None, None, None)
+
+
+def test_the_percentage_is_labelled_by_what_it_is_taken_against():
+    dd, cd = _die_doc(), _cfg_doc()
+    blk = C.build_block(_run_for(dd, cd), build_sig=C.current_build_sig(dd, cd))
+    sig = C.current_build_sig(dd, cd)
+    v1 = C.view(blk, current_sig=sig, cfg_doc=cd, stored_by_duty=_s1())
+    assert v1["pct_of_continuous"] == pytest.approx(100 * 0.06 / 3.2, rel=1e-3) and "pct_of_rated_duty" not in v1
+    f1 = C.flat_keys(v1)
+    assert "cogging_pct_of_continuous" in f1 and "cogging_pct_of_rated_duty" not in f1
+    v2 = C.view(blk, current_sig=sig, cfg_doc=cd, stored_by_duty=_s1(verified=False))
+    f2 = C.flat_keys(v2)
+    assert f2["cogging_pct_of_rated_duty"] == pytest.approx(1.5, rel=1e-3) and "cogging_pct_of_continuous" not in f2
+    assert "duty 'rated'" in f2["cogging_torque_source"]
 
 
 def test_build_signature_moves_with_the_build_and_marks_the_block_stale():
@@ -252,7 +281,7 @@ def test_run_with_save_files_the_block_and_reads_back(dies, granted, fake_solver
     assert blk["pkpk_Nm"] == pytest.approx(0.06, abs=1e-4) and blk["fundamental_order"] == 84
     assert blk["build_sig"] and blk["magnet_card"] == "F52SH_120C" and len(blk["waveform"]["torque_Nm"]) == 144
     got = client.get(f"/api/simulation/cogging/{DIE}/{CFG}?waveform=true", headers=granted).json()
-    assert got["cogging"]["stale"] is False and got["cogging"]["pct_of_continuous"] == pytest.approx(1.5, rel=1e-2)
+    assert got["cogging"]["stale"] is False and got["cogging"]["pct_of_rated_duty"] == pytest.approx(1.5, rel=1e-2)
     assert len(got["waveform"]["torque_Nm"]) == 144
     # the family tree carries the view (the Motors row)
     tree = client.get("/api/family/tree", headers=granted).json()
@@ -308,7 +337,7 @@ def test_the_project_motor_rows_carry_the_flat_cogging_keys(dies, granted, fake_
     assert cmp_["cogging_pkpk_nm"] == pytest.approx(0.06, abs=1e-4)
     assert cmp_["cogging_half_nm"] == pytest.approx(0.03, abs=1e-4)
     assert cmp_["cogging_stale"] is False and cmp_["cogging_order"] == 84
-    assert cmp_["cogging_pct_of_continuous"] == pytest.approx(1.5, rel=1e-2)
+    assert cmp_["cogging_pct_of_rated_duty"] == pytest.approx(1.5, rel=1e-2)
     # no value saved -> no keys at all (never a 0)
     bare = motors._results(DIE, CFG, _cfg_doc(), {})
     assert not any(k.startswith("cogging_") for k in bare[0]["comparison"])
@@ -356,7 +385,7 @@ def test_datasheet_row_sits_beside_the_ripple_and_is_absent_without_a_value():
     row = dict(rows(_cfg_doc(cogging=blk)))["Cogging torque, peak-to-peak (N·m)"]
     assert row[0] == pytest.approx(0.06, abs=1e-4)
     note = next(v for v in row if isinstance(v, str))
-    assert "half-amplitude 0.03" in note and "% of the continuous torque" in note and "older build" not in note
+    assert "half-amplitude 0.03" in note and "% of the rated duty torque (solved torque of duty 'rated')" in note and "older build" not in note
     # a build that moved since says so in the note
     blk_old = dict(blk, build_sig="not-the-current-build")
     note2 = next(v for v in dict(rows(_cfg_doc(cogging=blk_old)))["Cogging torque, peak-to-peak (N·m)"] if isinstance(v, str))
@@ -401,3 +430,160 @@ def test_the_headless_script_runs_in_process_and_saves(dies, fake_solver, capsys
     before = (dies / DIE / f"{CFG}.yaml").read_bytes()
     a.save = False
     assert mod._local(a)["saved"] is False and (dies / DIE / f"{CFG}.yaml").read_bytes() == before
+
+
+# ── the number is only ever what its label says ──────────────────────────────
+
+def test_a_maxwell_fallback_is_refused_and_never_stored():
+    machine = C.machine_from_config(_die_doc(), _cfg_doc())
+    for tm in ("hybrid_maxwell_ac", "maxwell", None):
+        with pytest.raises(RuntimeError, match="not 'coulomb_virtual_work'"):
+            C.run(machine, em_transient_eval=_fake_solver([], torque_method=tm))
+
+
+def test_the_delivered_sample_count_is_gated_and_labelled():
+    machine = C.machine_from_config(_die_doc(), _cfg_doc())
+    # the solver snapped 144 frames to 120 = 10 samples per cycle: below the 12 asked for -> refused
+    with pytest.raises(RuntimeError, match="120 frames = 10.00 samples per cogging cycle"):
+        C.run(machine, em_transient_eval=_fake_solver([], frames=120))
+    # a count that is at least what was asked for is accepted and the label carries the DELIVERED number
+    run = C.run(machine, em_transient_eval=_fake_solver([], frames=168))
+    assert run["summary"]["samples_per_cycle"] == 14.0 and "14 samples per cogging cycle" in run["method"]
+    assert run["mesh"]["steps_per_period"] == 168 and run["mesh"]["steps_requested"] == 144
+    assert "12 samples per cogging cycle" in C.run(machine, em_transient_eval=_fake_solver([]))["method"]
+
+
+def test_an_unconverged_run_is_refused_and_convergence_is_stored():
+    machine = C.machine_from_config(_die_doc(), _cfg_doc())
+    with pytest.raises(RuntimeError, match="did not converge"):
+        C.run(machine, em_transient_eval=_fake_solver([], converged=False))
+    run = C.run(machine, em_transient_eval=_fake_solver([]))
+    assert run["converged"] is True
+    assert C.build_block(run, build_sig="s")["converged"] is True
+
+
+def test_request_bounds_on_mesh_and_frame_count():
+    machine = C.machine_from_config(_die_doc(), _cfg_doc())
+    big = dict(machine, num_slots=36, num_poles=34)            # 36 cycles per electrical period
+    with pytest.raises(ValueError, match="above the 720-frame limit"):
+        C.run(big, samples_per_cycle=48, em_transient_eval=_fake_solver([]))
+    for bad in (0.01, 25.0, 0.2):                              # below the floor, above the ceiling, below min_size_mm 0.3
+        m = dict(machine, mesh=dict(machine["mesh"], mesh_size_mm=bad, min_size_mm=0.3))
+        with pytest.raises(ValueError, match="mesh_size_mm"):
+            C.run(m, em_transient_eval=_fake_solver([]))
+
+
+def test_overrides_are_named():
+    assert C.overrides_of() == []
+    assert C.overrides_of(frozen_nu=True, mesh_size_mm=1.5, magnet_temp_c=150, samples_per_cycle=8) == [
+        "frozen permeability", "mesh 1.5 mm", "magnets at 150 °C", "8 samples per cycle"]
+
+
+# ── the routes: who may do what ──────────────────────────────────────────────
+
+def test_the_route_returns_500_and_stores_nothing_for_a_maxwell_fallback(dies, granted, monkeypatch):
+    from motor_ai_sim import solve_pool
+    monkeypatch.setattr(solve_pool, "em_transient_eval", _fake_solver([], torque_method="hybrid_maxwell_ac"))
+    r = client.post("/api/simulation/cogging/run", headers=granted, json={"die": DIE, "config": CFG, "save": True})
+    assert r.status_code == 500 and "coulomb_virtual_work" in r.text
+    assert "cogging" not in _cfg_on_disk(dies)
+
+
+def test_the_route_refuses_a_snapped_frame_count(dies, granted, monkeypatch):
+    from motor_ai_sim import solve_pool
+    monkeypatch.setattr(solve_pool, "em_transient_eval", _fake_solver([], frames=120))
+    r = client.post("/api/simulation/cogging/run", headers=granted, json={"die": DIE, "config": CFG, "save": True})
+    assert r.status_code == 500 and "samples per cogging cycle" in r.text
+    assert "cogging" not in _cfg_on_disk(dies)
+
+
+def test_request_bounds_are_422(dies, granted, fake_solver):
+    for body in ({"mesh_size_mm": 0.01}, {"mesh_size_mm": 99}, {"samples_per_cycle": 5}, {"samples_per_cycle": 49}):
+        r = client.post("/api/simulation/cogging/run", headers=granted, json={"die": DIE, "config": CFG, **body})
+        assert r.status_code == 422, body
+    assert not fake_solver
+
+
+def test_a_live_machine_run_can_never_be_saved_on_a_configuration(dies, granted, fake_solver):
+    from fastapi import HTTPException
+    from motor_ai_sim.routes import cogging as RC
+    r = client.post("/api/simulation/cogging/run", headers=granted, json={})
+    assert r.status_code == 200, r.text
+    live = r.json()
+    assert live["saved"] is False and live["build_sig"] is None and live["die"] is None
+    r = client.put(f"/api/simulation/cogging/{DIE}/{CFG}", headers=granted, json={"cogging_id": live["cogging_id"]})
+    assert r.status_code == 422 and "live machine" in r.text
+    assert "cogging" not in _cfg_on_disk(dies)
+    with pytest.raises(HTTPException) as ei:
+        RC._save(DIE, CFG, live, {"is_admin": True})
+    assert ei.value.status_code == 422
+
+
+def test_a_pending_run_belongs_to_its_solver(dies, granted, fake_solver):
+    from motor_ai_sim.routes import cogging as RC
+    out = client.post("/api/simulation/cogging/run", headers=granted, json={"die": DIE, "config": CFG}).json()
+    RC._RECENT[out["cogging_id"]]["owner"] = "somebody-else@example.com"
+    r = client.put(f"/api/simulation/cogging/{DIE}/{CFG}", headers=granted, json={"cogging_id": out["cogging_id"]})
+    assert r.status_code == 404
+    assert "cogging" not in _cfg_on_disk(dies)
+
+
+def test_saving_needs_write_access(dies, granted, fake_solver):
+    from motor_ai_sim import users as U
+    out = client.post("/api/simulation/cogging/run", headers=granted, json={"die": DIE, "config": CFG}).json()
+    # anonymous, and a signed-in account that is not an administrator (this catalog is flat: writing is the admin's)
+    assert client.put(f"/api/simulation/cogging/{DIE}/{CFG}", json={"cogging_id": out["cogging_id"]}).status_code in (401, 403)
+    assert client.post("/api/simulation/cogging/run", json={"die": DIE, "config": CFG, "save": True}).status_code in (401, 403)
+    U.create_user("plain@example.com", "password-plain", role="user", name="Plain")
+    plain = {"Authorization": f"Bearer {U.issue_token('plain@example.com')}"}
+    # (404 = the account is not even granted the die: a hidden motor answers like a missing one)
+    assert client.put(f"/api/simulation/cogging/{DIE}/{CFG}", headers=plain,
+                      json={"cogging_id": out["cogging_id"]}).status_code in (401, 403, 404)
+    assert client.post("/api/simulation/cogging/run", headers=plain,
+                       json={"die": DIE, "config": CFG, "save": True}).status_code in (401, 403, 404)
+    assert "cogging" not in _cfg_on_disk(dies)
+
+
+def test_a_non_standard_run_is_saved_only_by_an_administrator(dies, granted, fake_solver, monkeypatch):
+    from fastapi import HTTPException
+    from motor_ai_sim.routes import cogging as RC
+    from motor_ai_sim.routes import family as fam
+    # a caller who may write but is not an administrator (a layered catalog): refused BEFORE the solve, and by _save
+    monkeypatch.setattr(fam, "require_catalog_write",
+                        lambda authorization=None: {"user": {}, "is_admin": False, "authorization": authorization})
+    monkeypatch.setattr(fam, "_require_die_write", lambda *a, **k: None)
+    for body in ({"mesh_size_mm": 2.0}, {"frozen_nu": True}, {"magnet_temp_c": 150.0}, {"samples_per_cycle": 8}):
+        r = client.post("/api/simulation/cogging/run", headers=granted,
+                        json={"die": DIE, "config": CFG, "save": True, **body})
+        assert r.status_code == 403, body
+    assert not fake_solver and "cogging" not in _cfg_on_disk(dies)
+    # the standard run is fine for the same caller
+    assert client.post("/api/simulation/cogging/run", headers=granted,
+                       json={"die": DIE, "config": CFG, "save": True}).status_code == 200
+    run = _run_for(_die_doc(), _cfg_doc())
+    run["die"], run["config"] = DIE, CFG
+    run["overrides"] = ["mesh 2 mm"]
+    with pytest.raises(HTTPException) as ei:
+        RC._save(DIE, CFG, run, {"is_admin": False})
+    assert ei.value.status_code == 403
+
+
+def test_an_administrators_override_is_saved_and_named_everywhere(dies, granted, fake_solver):
+    from openpyxl import load_workbook
+    from motor_ai_sim import report as R
+    from motor_ai_sim.datasheet import build_datasheet
+    r = client.post("/api/simulation/cogging/run", headers=granted,
+                    json={"die": DIE, "config": CFG, "save": True, "mesh_size_mm": 2.0, "frozen_nu": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["overrides"] == ["frozen permeability", "mesh 2 mm"]
+    blk = _cfg_on_disk(dies)["cogging"]
+    assert blk["overrides"] == ["frozen permeability", "mesh 2 mm"] and blk["frozen_nu"] is True
+    v = client.get(f"/api/simulation/cogging/{DIE}/{CFG}", headers=granted).json()["cogging"]
+    assert v["overrides"] == ["frozen permeability", "mesh 2 mm"]
+    assert C.flat_keys(v)["cogging_overrides"] == "frozen permeability; mesh 2 mm"
+    assert "non-standard run: frozen permeability, mesh 2 mm" in R.cogging_words(v)
+    dd = {"geometry": {"stator_diameter": 40, "motor_length": 40, "num_slots": 12, "num_poles": 14}}
+    ws = load_workbook(io.BytesIO(build_datasheet(die="D", cfg="C", die_doc=dd, cfg_doc=_cfg_on_disk(dies))))["Motor card"]
+    notes = [c.value for row in ws.iter_rows() if row[0].value == "Cogging torque, peak-to-peak (N·m)" for c in row
+             if isinstance(c.value, str) and "non-standard run" in c.value]
+    assert notes, "the datasheet note names the override"

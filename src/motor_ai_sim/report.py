@@ -6985,8 +6985,13 @@ def cogging_words(v: Optional[Dict[str, Any]]) -> str:
     bits = ["no current; half-amplitude %s N·m" % _fmt(v.get("half_amp_Nm"), 4)]
     if v.get("pct_of_continuous") is not None:
         bits.append("%s %% of the continuous torque" % _fmt(v["pct_of_continuous"], 2))
+    elif v.get("pct_of_rated_duty") is not None:
+        bits.append("%s %% of the rated duty torque (%s)"
+                    % (_fmt(v["pct_of_rated_duty"], 2), v.get("continuous_torque_source") or "rated duty"))
     if v.get("magnet_temp_c") is not None:
         bits.append("magnets %s °C" % _fmt(v["magnet_temp_c"], 0))
+    if v.get("overrides"):
+        bits.append("non-standard run: " + ", ".join(v["overrides"]))
     if v.get("stale"):
         bits.append("computed on an older build of this machine")
     return "; ".join(bits)

@@ -55,11 +55,35 @@ SCHEMA = 1
 #: Raw samples per cogging cycle this module asks for (the solver's quality gate is 6; the passport uses 12).
 SAMPLES_PER_CYCLE = 12
 #: What the label of the stored number says (one place; the datasheet / report / tooltip read it).
-def method_label(frozen_nu: bool = False) -> str:
-    """The one-line method statement stored with the number (tooltip / datasheet / report read it)."""
+def method_label(frozen_nu: bool = False, samples_per_cycle: float = SAMPLES_PER_CYCLE) -> str:
+    """The one-line method statement stored with the number (tooltip / datasheet / report read it).  The sample count
+    is the DELIVERED one (the solver may snap the frame count), never the requested one."""
     return ("energy torque at no load: Coulomb virtual work, I = 0, "
             + ("frozen permeability" if frozen_nu else "iron re-converged at every rotor position")
-            + ", eddy off, >= 12 samples per cogging cycle over one electrical period")
+            + ", eddy off, %g samples per cogging cycle over one electrical period" % round(float(samples_per_cycle), 2))
+
+
+#: Most frames a cogging run may ask for (a 36-slot / 34-pole machine at 12 samples per cycle is 432).
+MAX_FRAMES = 720
+#: Lowest mesh size [mm] a request may ask for (the solver's own floor ``min_size_mm`` is checked per machine).
+MIN_MESH_MM = 0.1
+MAX_MESH_MM = 20.0
+
+
+def overrides_of(*, frozen_nu: bool = False, mesh_size_mm: Optional[float] = None,
+                 magnet_temp_c: Optional[float] = None, samples_per_cycle: int = SAMPLES_PER_CYCLE) -> List[str]:
+    """What a request changed from the standard recipe (empty = the standard run).  A standard run is the only kind a
+    non-admin may SAVE; an admin's saved override is named in the tooltip, the datasheet and the report."""
+    out: List[str] = []
+    if frozen_nu:
+        out.append("frozen permeability")
+    if mesh_size_mm is not None:
+        out.append("mesh %g mm" % float(mesh_size_mm))
+    if magnet_temp_c is not None:
+        out.append("magnets at %g °C" % float(magnet_temp_c))
+    if int(samples_per_cycle) != SAMPLES_PER_CYCLE:
+        out.append("%d samples per cycle" % int(samples_per_cycle))
+    return out
 
 
 METHOD = method_label(False)
@@ -191,6 +215,8 @@ def build_block(run: Mapping[str, Any], *, build_sig: Optional[str]) -> Dict[str
         "method": run.get("method") or METHOD,
         "torque_method": run.get("torque_method"),
         "frozen_nu": bool(run.get("frozen_nu", False)),
+        "converged": run.get("converged"),
+        "overrides": list(run.get("overrides") or []) or None,
         "magnet_card": run.get("magnet_card"),
         "magnet_temp_c": run.get("magnet_temp_c"),
         "magnet_temp_source": run.get("magnet_temp_source"),
@@ -219,13 +245,28 @@ def is_stale(block: Mapping[str, Any], current_sig: Optional[str]) -> bool:
     return not sig or not current_sig or str(sig) != str(current_sig)
 
 
-def continuous_torque(cfg_doc: Mapping[str, Any], stored_by_duty: Optional[Mapping[str, Any]] = None
-                      ) -> Tuple[Optional[float], Optional[str]]:
-    """``(N·m, source)`` of the configuration's CONTINUOUS torque, the base of the "% of rated" in the tooltip.
+def _s1_ok(cr: Any) -> bool:
+    """The datasheet's own S1 rule: feasible and VERIFIED by an electromagnetic pass (an unverified estimate is never a
+    base for a percentage)."""
+    if not isinstance(cr, Mapping) or not cr:
+        return False
+    try:
+        from motor_ai_sim.report import continuous_rating_feasible
+        feasible = continuous_rating_feasible(dict(cr))
+    except Exception:                                           # noqa: BLE001 - same rule, written out
+        feasible = bool(cr.get("verified") is not False and cr.get("ok", True) and cr.get("feasible", True)
+                        and cr.get("trustworthy", True))
+    return feasible and cr.get("verified") is True
 
-    Order: the S1 search's own answer (a stored ``coupled.continuous_rating`` torque - the machine's real
-    continuous rating); else the rated duty's solved torque (the duty the datasheet shows, a continuous one when the
-    configuration has one); else None (no percentage is then claimed)."""
+
+def continuous_torque(cfg_doc: Mapping[str, Any], stored_by_duty: Optional[Mapping[str, Any]] = None
+                      ) -> Tuple[Optional[float], Optional[str], Optional[str]]:
+    """``(N·m, source, basis)`` of the torque the cogging percentage is taken against.
+
+    ``basis`` is ``"continuous"`` for the S1 search's own VERIFIED answer (a stored ``coupled.continuous_rating``
+    torque - the machine's real continuous rating, the datasheet's checks), else ``"rated duty"`` for the rated duty's
+    solved torque (labelled as such wherever it is shown - it is not a continuous rating), else ``(None, None, None)``:
+    no percentage is then claimed."""
     duties = [d for d in (cfg_doc.get("duties") or []) if isinstance(d, dict) and d.get("name")]
     names = [str(d["name"]) for d in duties]
     order = list(names)
@@ -238,12 +279,12 @@ def continuous_torque(cfg_doc: Mapping[str, Any], stored_by_duty: Optional[Mappi
         pass
     stored = stored_by_duty or {}
     for n in order:
-        cr = (((stored.get(n) or {}).get("coupled") or {}).get("continuous_rating")
-              if isinstance((stored.get(n) or {}).get("coupled"), Mapping) else None)
-        if isinstance(cr, Mapping) and cr.get("ok", True) and cr.get("feasible", True):
+        cp = (stored.get(n) or {}).get("coupled")
+        cr = cp.get("continuous_rating") if isinstance(cp, Mapping) else None
+        if _s1_ok(cr):
             t = _pos((cr.get("power") or {}).get("T_em_Nm")) if isinstance(cr.get("power"), Mapping) else None
             if t is not None:
-                return t, "continuous rating (S1 search) of duty '%s'" % n
+                return t, "verified continuous rating (S1 search) of duty '%s'" % n, "continuous"
     for n in order:
         d = next((x for x in duties if str(x.get("name")) == n), {})
         for holder in (d.get("summary"), d.get("result")):
@@ -251,8 +292,8 @@ def continuous_torque(cfg_doc: Mapping[str, Any], stored_by_duty: Optional[Mappi
                 for key in ("T_em_avg_Nm", "t_em_avg_nm", "T_avg_Nm", "torque_nm"):
                     t = _pos(holder.get(key))
                     if t is not None:
-                        return t, "solved torque of duty '%s'" % n
-    return None, None
+                        return t, "solved torque of duty '%s'" % n, "rated duty"
+    return None, None, None
 
 
 def view(block: Optional[Mapping[str, Any]], *, current_sig: Optional[str] = None,
@@ -283,12 +324,19 @@ def view(block: Optional[Mapping[str, Any]], *, current_sig: Optional[str] = Non
         "computed_at": block.get("computed_at"),
         "stale": is_stale(block, current_sig),
     }
+    if block.get("overrides"):
+        out["overrides"] = [str(o) for o in block["overrides"]]
+    if block.get("converged") is False:
+        out["converged"] = False
     if cfg_doc is not None:
-        ct, src = continuous_torque(cfg_doc, stored_by_duty)
+        ct, src, basis = continuous_torque(cfg_doc, stored_by_duty)
         if ct is not None:
             out["continuous_torque_Nm"] = ct
             out["continuous_torque_source"] = src
-            out["pct_of_continuous"] = 100.0 * pk / ct
+            if basis == "continuous":
+                out["pct_of_continuous"] = 100.0 * pk / ct
+            else:
+                out["pct_of_rated_duty"] = 100.0 * pk / ct
     return out
 
 
@@ -298,10 +346,15 @@ def flat_keys(v: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         return {}
     out: Dict[str, Any] = {"cogging_pkpk_nm": v["pkpk_Nm"], "cogging_half_nm": v["half_amp_Nm"],
                            "cogging_stale": bool(v.get("stale"))}
-    for src, dst in (("pct_of_continuous", "cogging_pct_of_continuous"), ("magnet_temp_c", "cogging_magnet_temp_c"),
+    for src, dst in (("pct_of_continuous", "cogging_pct_of_continuous"),
+                     ("pct_of_rated_duty", "cogging_pct_of_rated_duty"), ("magnet_temp_c", "cogging_magnet_temp_c"),
                      ("fundamental_order", "cogging_order"), ("method", "cogging_method")):
         if v.get(src) is not None:
             out[dst] = v[src]
+    if v.get("overrides"):
+        out["cogging_overrides"] = "; ".join(v["overrides"])
+    if v.get("pct_of_rated_duty") is not None and v.get("continuous_torque_source"):
+        out["cogging_torque_source"] = v["continuous_torque_source"]
     return out
 
 
@@ -473,7 +526,15 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
         raise ValueError("samples_per_cycle must be 6..48 (the solver's quality gate is 6)")
     slots, poles = int(machine["num_slots"]), int(machine["num_poles"])
     steps = steps_for(slots, poles, per)
+    if steps > MAX_FRAMES:
+        raise ValueError("cogging: %d samples per cycle x %d cycles = %d frames, above the %d-frame limit - lower "
+                         "samples_per_cycle" % (per, cogging_cycles(slots, poles)["cycles_per_electrical_period"],
+                                                steps, MAX_FRAMES))
     mesh = dict(machine["mesh"])
+    msz, mmin = float(mesh["mesh_size_mm"]), float(mesh["min_size_mm"])
+    if not (math.isfinite(msz) and MIN_MESH_MM <= msz <= MAX_MESH_MM) or msz < mmin:
+        raise ValueError("cogging: mesh_size_mm %g is outside %g..%g mm or below the machine's smallest element %g mm"
+                         % (msz, MIN_MESH_MM, MAX_MESH_MM, mmin))
     sectors = _clamp_sectors(int(mesh.get("n_sectors", -1)), slots, poles)
     kw: Dict[str, Any] = dict(
         n_steps_per_period=steps, sampling_purpose="cogging_quality", n_periods=1.0,
@@ -513,6 +574,24 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
     angle = [float(a) for a in (res.get("rotor_angle_deg") or [])]
     if not series:
         raise RuntimeError("cogging: the solver returned no torque series")
+    # THE TORQUE IS THE ONE THE LABEL SAYS.  If the Coulomb set-up fails the solver only warns and hands back the
+    # Maxwell / hybrid series (fem_solver_2d, virtual_work_torque): never store that as "virtual work".
+    if res.get("torque_method") != "coulomb_virtual_work":
+        raise RuntimeError("cogging: the solver reported torque method %r, not 'coulomb_virtual_work' (the Coulomb "
+                           "set-up failed and a different torque was returned) - nothing is stored"
+                           % (res.get("torque_method"),))
+    # A run that did not converge is not a measurement.
+    conv = res.get("picard_converged")
+    if conv is False:
+        raise RuntimeError("cogging: the saturation solve did not converge on frame(s) %s - nothing is stored"
+                           % (list(res.get("picard_unconverged_frames") or [])[:10],))
+    # THE SAMPLES THE SOLVER DELIVERED, not the ones asked for: it snaps the frame count to a slip-ring divisor.
+    cyc = cogging_cycles(slots, poles)["cycles_per_electrical_period"]
+    delivered_spc = len(series) / cyc
+    if delivered_spc < per - 1e-9:
+        raise RuntimeError("cogging: the solver delivered %d frames = %.2f samples per cogging cycle, below the %d "
+                           "asked for (it snapped the frame count) - nothing is stored"
+                           % (len(series), delivered_spc, per))
     summ = summarize(series, num_slots=slots, num_poles=poles, continuous_torque_nm=continuous_torque_nm)
     card = machine.get("magnet_card") or _card_from_result(res)
     mtemp, msrc = _magnet_reference(card, magnet_temp_c)
@@ -521,18 +600,19 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
         "summary": summ,
         "waveform": {"angle_deg": angle if len(angle) == len(series) else list(range(len(series))),
                      "torque_Nm": series},
-        "method": method_label(bool(res.get("frozen_nu", frozen_nu))), "torque_method": res.get("torque_method"),
+        "method": method_label(bool(res.get("frozen_nu", frozen_nu)), delivered_spc),
+        "torque_method": res.get("torque_method"),
         "frozen_nu": bool(res.get("frozen_nu", frozen_nu)),
         "magnet_card": card, "magnet_temp_c": mtemp, "magnet_temp_source": msrc,
         "mesh": {"mesh_size_mm": kw["mesh_size_mm"], "min_size_mm": kw["min_size_mm"],
                  "outer_air_factor": kw["outer_air_factor"], "gap_layers": kw["gap_layers"],
                  "gap_layers_effective": res.get("gap_layers_effective"), "n_sectors": sectors,
-                 "steps_per_period": steps, "source": machine.get("mesh_source")},
+                 "steps_per_period": len(series), "steps_requested": steps, "source": machine.get("mesh_source")},
         "geo_hash": geo_hash(geo) if geo else None,
         "die": machine.get("die"), "config": machine.get("config"),
         "computed_at": datetime.now().replace(microsecond=0).isoformat(),
         "runtime_s": runtime, "solver": _solver_stamp(),
-        "converged": res.get("converged"), "sampling": {
+        "converged": (None if conv is None else bool(conv)), "sampling": {
             k: res.get(k) for k in ("cogging_sampling_purpose", "cogging_raw_samples_per_cycle",
                                     "cogging_sampling_sufficient")},
     }

@@ -50,10 +50,13 @@ def _local(a) -> dict:
     die_doc = F._load_yaml(F._die_file(a.die), "die")
     cfg_doc = F._load_yaml(F._cfg_file(a.die, a.config), "configuration")
     machine = C.machine_from_config(die_doc, cfg_doc, {"mesh_size_mm": a.mesh_size})
-    ct, _ = C.continuous_torque(cfg_doc, RC._stored(a.die, a.config))
+    ct, _src, basis = C.continuous_torque(cfg_doc, RC._stored(a.die, a.config))
+    ct = ct if basis == "continuous" else None
     run = C.run(machine, magnet_temp_c=a.magnet_temp, frozen_nu=a.frozen_nu, samples_per_cycle=a.samples_per_cycle,
                 continuous_torque_nm=ct)
     run["build_sig"] = C.current_build_sig(die_doc, cfg_doc)
+    run["overrides"] = C.overrides_of(frozen_nu=a.frozen_nu, mesh_size_mm=a.mesh_size, magnet_temp_c=a.magnet_temp,
+                                      samples_per_cycle=a.samples_per_cycle)
     run["saved"] = False
     if a.save:
         RC._save(a.die, a.config, run, {"is_admin": True})

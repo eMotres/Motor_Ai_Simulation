@@ -134,7 +134,8 @@ function CompareTable({ cmp, tips, canCompute, onComputed }: {
               </Box>
               {b.series && (
                 <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0 }}>
-                  <SeriesChart series={b.series} />
+                  {/* the chart runs the full height of its table (owner 2026-10-27): one 24 px row per line + the header */}
+                  <SeriesChart series={b.series} height={wide ? Math.max(190, (b.lines.length + 1) * 24) : 190} />
                 </Box>
               )}
             </Box>

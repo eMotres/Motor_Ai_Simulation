@@ -701,6 +701,7 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
     _mech_detail(doc, D)
     _warnings(doc, D)
     _still_to_compute(doc, die, cfg, cfg_doc)
+    _tests_vs_simulation(doc, die, cfg)
     _notes(doc, D)
     # Every section is on the page: what is left is python-docx zipping it.
     _RP.stage("tables")
@@ -1748,6 +1749,19 @@ def _still_to_compute(doc, die: str, cfg: str, cfg_doc: Dict[str, Any]) -> None:
     _p(doc, RM.INTRO, size=9)
     for line in RM.as_lines(rows):
         _p(doc, "\u2022 " + line, size=9)
+
+
+def _tests_vs_simulation(doc, die: str, cfg: str) -> None:
+    """"Tests vs simulation" (owner 2026-10-26): one table per bench test, measured | model | delta; absent without tests."""
+    from motor_ai_sim.motor_tests import report as MTR
+    tabs = MTR.tables(die, cfg)
+    if not tabs:
+        return
+    _h(doc, MTR.HEADING, 1)
+    _p(doc, MTR.INTRO, size=9)
+    for t in tabs:
+        _p(doc, t["title"], size=9.5, bold=True)
+        _table(doc, t["rows"], header=True, size=8.5, widths_cm=[9.0, 2.2, 3.0, 3.0, 2.2])
 
 
 def _warnings(doc, D: Dict[str, Any]) -> None:

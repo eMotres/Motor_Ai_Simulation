@@ -43,6 +43,7 @@ is HTTP 500 "rolled back". `?dry_run=1` changes nothing and lists every place th
 | `die_access.json` | the public / selected-clients entry |
 | development projects | `linked_motors`, `motor_history`, `project_motor_grants` (key and `grant_key`), `grant_removal_candidates`, the motor index (`index.json`), the access scope of the motor snapshots; a `motor.rename` audit line; the audit fallback of the Restore list follows it |
 | production | the `production/<die>/` folder, the `die` field of every record, an audit line per production |
+| motor_tests | the `motor_tests/<die>/` folder (Tests section, same folder naming), the `die` field of `tests.json`, an audit line per configuration |
 | CAD | `<cad root>/<die>/` and its manifests, the rebuild requests |
 | admin audit | one `die.rename` entry |
 

@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  DIE_PALETTE, averageEfficiency, dieColor, groupMotorVersions, headerFlags, latestAndBest, motorColor, orderByGroup, variantKey, versionsForView,
+  DIE_PALETTE, averageEfficiency, dieColor, groupMotorVersions, headerFlags, latestAndRecommended, motorColor, orderByGroup, variantKey, versionsForView,
 } from '../motorGroups.ts';
 import { developmentComparisonRows, developmentComparisonColumns } from '../comparisonRows.ts';
 import { visibleProjectVersions } from '../motorStatus.ts';
@@ -59,18 +59,20 @@ test('header flags: a variant header above its first row, a history header above
   assert.deepEqual(headerFlags([], 0), { group: false, history: false });
 });
 
-test('Latest shows the latest current variant plus the best one if it is another; trials, older variants and history are hidden', () => {
+test('Latest shows the latest current variant plus the RECOMMENDED one (a staff choice, not a metric); trials, older variants and history are hidden', () => {
   assert.equal(averageEfficiency(A1), 89);
   assert.equal(averageEfficiency(C1), null);
-  // A2 is both the best and (as the last linked current one) ... A3 is the latest, A2 the best
-  const shown = latestAndBest([A1, A2, A3, B1]);
-  assert.deepEqual(shown.map((m) => m.config), ['opt2', 'opt3']);                 // B1 is a trial (99 %) and hidden; A1 is older
-  assert.deepEqual(latestAndBest([A1, A2]).map((m) => m.config), ['opt2']);       // the latest IS the best: one variant
-  assert.deepEqual(latestAndBest([A2, A1]).map((m) => m.config), ['opt2', 'opt1']);   // the best first-linked, the latest second (table order kept)
-  assert.deepEqual(latestAndBest([A1, C1]).map((m) => m.config), ['opt1', 'new']);    // the latest has no result: it is still shown
-  assert.deepEqual(latestAndBest([B1]), []);                                          // only a trial: nothing current
-  assert.deepEqual(latestAndBest([]), []);
-  assert.deepEqual(latestAndBest([A1, H(A1, 'h1')]).map((m) => m.kind ?? 'live'), ['live']);
+  const rec = (m) => ({ ...m, recommended: { by: 'staff@example.test', at: '2026-10-26T10:00:00' } });
+  // no variant marked: only the latest, however good another variant's efficiency is
+  assert.deepEqual(latestAndRecommended([A1, A2, A3, B1]).map((m) => m.config), ['opt3']);
+  // A2 recommended, A3 the latest: both, in table order; the trial B1 and the older A1 stay hidden
+  assert.deepEqual(latestAndRecommended([A1, rec(A2), A3, B1]).map((m) => m.config), ['opt2', 'opt3']);
+  assert.deepEqual(latestAndRecommended([rec(A2), A1]).map((m) => m.config), ['opt2', 'opt1']);       // table order kept
+  assert.deepEqual(latestAndRecommended([A1, rec(A2)]).map((m) => m.config), ['opt2']);               // the latest IS the recommended one
+  assert.deepEqual(latestAndRecommended([rec(A1), C1]).map((m) => m.config), ['opt1', 'new']);         // the latest has no result: still shown
+  assert.deepEqual(latestAndRecommended([rec(B1)]), []);                                              // a trial is never current
+  assert.deepEqual(latestAndRecommended([]), []);
+  assert.deepEqual(latestAndRecommended([A1, H(A1, 'h1')]).map((m) => m.kind ?? 'live'), ['live']);
 });
 
 test('All versions shows everything grouped; the view helper picks the filter', () => {
@@ -98,7 +100,7 @@ test('the page: one group header per variant, left column in one style, no blue 
   assert.match(page, /renderGroupHeader=\{\(r, index, _all, colSpan\) =>/);
   assert.match(page, /rowAccent=\{\(r\) => motorColor\(r\.motor\)\}/);
   assert.match(page, /data-testid="variant-name"/);
-  assert.match(page, /showAllVersions \? orderByGroup\(versions\) : latestAndBest\(versions\)/);
+  assert.match(page, /showAllVersions \? orderByGroup\(versions\) : latestAndRecommended\(versions\)/);
   // the old per-row left column (name + note on EVERY row, uppercase blue "history" link button) is gone
   assert.doesNotMatch(page, /\{tr\('snapshots\.history'\)\} · \{r\.variant\}/);
   assert.doesNotMatch(page, /rowLabel=\{\(r\) => r\.history/);

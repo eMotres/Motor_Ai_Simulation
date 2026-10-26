@@ -9455,6 +9455,9 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                     brg, sources, delta, batt,
                     used_live=bool(D.get("em_from_run")), cols=cols, ctxs=ctxs,
                     supply=D.get("supply"), sec=sec)
+    _rec = _recommended_line(die, cfg)
+    if _rec:
+        story.append(_para("\u2605 " + _rec, st["body"]))
     story.append(PageBreak())
     # The stamp every chart drawn from the REPORT duty's own summary carries —
     # the same one `report_docx._report_tag` builds (B9 / MJ-5).
@@ -20406,6 +20409,14 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
            % str(ex.get("ed_limiting_part") or "hottest part")
            + _ed_limit_clause(ex)]]
           if _numf(ex.get("ed_allowable_pct")) is not None else [])
+
+
+def _recommended_line(die: str, cfg: str) -> str:
+    try:
+        from motor_ai_sim import report_missing as RM
+        return RM.recommended_banner(die, cfg)
+    except Exception:                                       # noqa: BLE001
+        return ""
 
 
 def _still_to_compute_rows(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[str, str]]:

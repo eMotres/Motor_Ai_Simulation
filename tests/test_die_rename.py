@@ -537,3 +537,57 @@ def test_an_admin_renames_a_shared_die_and_the_grants_follow(layered):
     assert (layered["shared"] / "dies" / "SHAREDA 40 admin" / "die.yaml").is_file()
     g = U.get_stored_motor_grants(ALICE)
     assert g["dies"] == ["SHAREDA 40 admin"] and g["configs"] == [f"SHAREDA 40 admin/{CFG}"]
+
+
+# ── the dry run names the duty_results store it would touch (path + rows) ───────────────────────
+
+def _shared_ledger(layered):
+    _write_json(layered["shared"] / ".duty_results.json", {"version": 1, "results": {
+        LAYER_SHARED_DIE: {CFG: {DUTY: {"thermal": {"t_max": 90.0}, "coupled": {"t_max": 99.0}}}}},
+        "history": {LAYER_SHARED_DIE: {CFG: {DUTY: {"thermal": [{"t_max": 80.0}]}}}}})
+
+
+def test_dry_run_reports_the_shared_ledger_with_its_rows(layered):
+    _shared_ledger(layered)
+    r = layered["client"].patch(f"/api/family/die/{LAYER_SHARED_DIE}?dry_run=1",
+                                json={"name": "SHAREDA 40 admin"}, headers=layered["admin"])
+    assert r.status_code == 200, r.text
+    rows = [c for c in r.json()["changes"] if c["store"] == "duty_results"]
+    assert len(rows) == 1
+    assert Path(rows[0]["where"]) == layered["shared"] / ".duty_results.json"
+    assert rows[0]["exists"] is True and rows[0]["rows"] == {"results": 2, "history": 1}
+    # nothing moved
+    ledger = json.loads((layered["shared"] / ".duty_results.json").read_text(encoding="utf-8"))
+    assert list(ledger["results"]) == [LAYER_SHARED_DIE]
+
+
+def test_dry_run_makes_a_missing_ledger_visible(layered):
+    r = layered["client"].patch(f"/api/family/die/{LAYER_SHARED_DIE}?dry_run=1",
+                                json={"name": "SHAREDA 40 admin"}, headers=layered["admin"])
+    assert r.status_code == 200, r.text
+    rows = [c for c in r.json()["changes"] if c["store"] == "duty_results"]
+    assert len(rows) == 1 and rows[0]["exists"] is False and rows[0]["rows"] == {"results": 0, "history": 0}
+    assert Path(rows[0]["where"]) == layered["shared"] / ".duty_results.json"
+    assert "does not exist" in rows[0]["change"]
+
+
+def test_the_shared_ledger_is_found_without_the_admin_request_context(layered):
+    """An in-process call (no verified-admin request bound) used to read the WORKSPACE ledger and miss the shared one."""
+    from motor_ai_sim import duty_results as DR
+    _shared_ledger(layered)
+    src = layered["shared"] / "dies" / LAYER_SHARED_DIE
+    ctx = DRN.Ctx(fam=fam, old=LAYER_SHARED_DIE, new="SHAREDA 40 admin", src_dir=src,
+                  dst_dir=src.parent / "SHAREDA 40 admin", dry_run=True, glob_scope=True)
+    assert not DR.has_die(LAYER_SHARED_DIE)                              # the identity-based store: not the shared one
+    DRN.step_duty_results(ctx)
+    entry = [c for c in ctx.changes if c["store"] == "duty_results"][0]
+    assert Path(entry["where"]) == layered["shared"] / ".duty_results.json" and entry["rows"]["results"] == 2
+    ctx.dry_run = False
+    ctx.dst_dir = ctx.src_dir                                             # only this step runs; the folder stays
+    DRN.step_duty_results(ctx)
+    ledger = json.loads((layered["shared"] / ".duty_results.json").read_text(encoding="utf-8"))
+    assert list(ledger["results"]) == ["SHAREDA 40 admin"] and list(ledger["history"]) == ["SHAREDA 40 admin"]
+    for undo in reversed(ctx.undo):                                       # and it rolls back into the same store
+        undo()
+    ledger = json.loads((layered["shared"] / ".duty_results.json").read_text(encoding="utf-8"))
+    assert list(ledger["results"]) == [LAYER_SHARED_DIE]

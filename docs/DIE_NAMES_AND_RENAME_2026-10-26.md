@@ -59,4 +59,12 @@ shared `cooling_options.yaml`, the passport folders, the propeller S1 model fold
 Refused (HTTP 409): a rename onto an existing die, of the shared baseline motor every account is granted
 (`users._BASELINE_DIE`), of a die in an unfinished open/private data move, or onto an existing production / CAD folder.
 
+Where it runs: `PATCH` and `DELETE /api/family/die/{die}` (and the `?dry_run=1` form) are WORKER routes
+(`roles.WORKER_PATTERNS`, `deploy/nginx.conf`): `/srv/motres/shared` is read-only in the API containers and the worker
+mounts it read-write. nginx forwards the `Authorization` header, so the worker resolves the same verified admin. The
+sub-routes (`/die/{die}/duplicate`, `/lock`, `/audience` ...) stay on the API. The shared catalog's `duty_results`
+ledger is chosen by WHAT is renamed (`<shared>/.duty_results.json` for a shared die), not by the request identity; the
+dry run lists it in `changes` as `{store: "duty_results", where: <path>, exists, rows: {results, history}}` even when
+the file is missing or holds nothing for the die.
+
 Tests: `tests/test_die_rename.py`, `tests/test_die_names.py`, `web/src/lib/__tests__/dieNameRule.test.mjs`.

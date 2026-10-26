@@ -102,6 +102,11 @@ export function worstCaseLabel(m: MotorViewDuty['mechanical']): string {
   const bits: string[] = [];
   if (num(w.rpm) !== null) bits.push(`${Math.round(w.rpm as number).toLocaleString('en-US')} rpm`);
   if (num(w.torque_nm) !== null) bits.push(`${(w.torque_nm as number).toFixed(2)} N·m`);
+  // the magnetic pull the case carried (2026-10-26): its size and whether it
+  // was the duty's own field or a stated estimate
+  if (num(w.pull_mpa) !== null) {
+    bits.push(`pull ${(w.pull_mpa as number).toFixed(2)} MPa (${w.pull_source === 'em' ? 'EM field' : 'estimate'})`);
+  }
   return bits.join(', ');
 }
 

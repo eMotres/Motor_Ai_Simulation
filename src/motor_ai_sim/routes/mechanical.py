@@ -467,6 +467,131 @@ _MESH_CACHE = _WSP.ws_map("mechanical.mesh_cache", _MESH_CACHE_MAX,
                           lru_on_read=True)
 
 
+def _pull_422(field: str, value: Any, message: str, kind: str = "bad_value"):
+    return HTTPException(
+        status_code=422,
+        detail={"error": message,
+                "invalid_parameters": [{"field": field, "value": value,
+                                        "kind": kind, "message": message}]})
+
+
+def _resolve_pull(pull: Optional[str], pull_duty: Optional[str],
+                  pull_mpa: Optional[float], pull_b_gap_t: Optional[float],
+                  geo_ov) -> tuple:
+    """(PullSpec | None, params to persist, cache-key tail) for a request.
+
+    The MAGNETIC PULL of the air-gap field (2026-10-26, owner: "make the pull
+    a real load of the mechanical module, so honest results can be saved").
+
+      * ``none``    — nothing; the key tail is empty, so every answer already
+                      cached or stored is keyed exactly as before;
+      * ``uniform`` — the explicit ESTIMATE: ``pull_mpa`` or ``pull_b_gap_t``;
+      * ``em``      — the stored EM field of ``pull_duty`` (default: the duty
+                      the editor has loaded) in the loaded die/configuration.
+
+    Every way the EM source can be unusable is a 422 that names it: no
+    catalogued duty loaded, no field stored, a field of another geometry.
+    """
+    from motor_ai_sim.simulation.mechanical import magnetic_pull as mpl
+    mode = str(pull or "none").strip().lower()
+    if mode not in mpl.PULL_MODES:
+        raise _pull_422("pull", pull, "pull must be 'none', 'em' (the duty's "
+                        "stored electromagnetic field) or 'uniform' (an "
+                        "explicit estimate)")
+    if mode == "none":
+        if pull_mpa is not None or pull_b_gap_t is not None or pull_duty:
+            raise _pull_422("pull", pull, "pull_mpa / pull_b_gap_t / pull_duty "
+                            "were given but pull = none — say which pull: "
+                            "pull=uniform or pull=em")
+        return None, {}, ()
+    if mode == "uniform":
+        if pull_duty:
+            raise _pull_422("pull_duty", pull_duty, "pull_duty names an EM "
+                            "field; a uniform pull takes pull_mpa or "
+                            "pull_b_gap_t")
+        try:
+            spec = mpl.uniform_spec(pull_mpa=pull_mpa, b_gap_t=pull_b_gap_t)
+        except ValueError as exc:
+            raise _pull_422("pull_mpa" if pull_b_gap_t is None
+                            else "pull_b_gap_t",
+                            pull_mpa if pull_b_gap_t is None else pull_b_gap_t,
+                            str(exc))
+        params = {"pull": "uniform"}
+        if pull_b_gap_t is not None:
+            params["pull_b_gap_t"] = float(pull_b_gap_t)
+        else:
+            params["pull_mpa"] = float(pull_mpa)
+        return spec, params, (("pull", "uniform",
+                               round(float(spec.pressure_pa), 3)),)
+    # ── em ──────────────────────────────────────────────────────────────────
+    if pull_mpa is not None or pull_b_gap_t is not None:
+        raise _pull_422("pull_mpa", pull_mpa, "pull=em reads the duty's own "
+                        "field; pull_mpa / pull_b_gap_t belong to pull=uniform")
+    if geo_ov:
+        raise _pull_422("geo", "(override)", "pull=em reads the field the "
+                        "loaded duty was solved with, which is not the machine "
+                        "of a ?geo= override — solve the override with "
+                        "pull=uniform, or load it as a duty and run it")
+    from motor_ai_sim import duty_fields as _df
+    ctx = _df.active_context()
+    if ctx is None:
+        raise _pull_422("pull", "em", "pull=em needs a catalogued duty loaded "
+                        "in the editor (its stored EM field is the source); "
+                        "none is — load the motor's duty, or use pull=uniform",
+                        kind="missing")
+    die, cfg, active_duty = ctx
+    duty = str(pull_duty or active_duty)
+    rec = _df.load(die, cfg, duty, "em")
+    if rec is None:
+        raise _pull_422("pull_duty", duty,
+                        f"no electromagnetic field is stored for duty "
+                        f"'{duty}' of {die} / {cfg} — run it on the "
+                        "Electromagnetic tab first", kind="missing")
+    meta = dict(rec.get("meta") or {})
+    # SAME MACHINE?  v1 (the cache print) equal is proof; otherwise the v2
+    # same-machine print of the duty's own EM run row decides, and a v2 that
+    # DIFFERS is a refusal.  With neither, the solve's own geometric check
+    # (the field must be readable just outside every gap facet, at the EM
+    # rotor's radius) is the guard, and the answer says it was unverified.
+    live1 = _live_fingerprint(geo_ov)
+    rec1 = meta.get("geometry_fingerprint")
+    geometry = "unverified"
+    if rec1 and live1 and rec1 == live1:
+        geometry = "match"
+    else:
+        try:
+            from motor_ai_sim import duty_results as _dr
+            row = ((_dr.get(die, cfg).get(duty) or {}).get("em_run") or {})
+            rec2, live2 = row.get("geometry_fingerprint_v2"), \
+                _dr.live_fingerprint_v2()
+        except Exception:                                   # noqa: BLE001
+            rec2, live2 = None, None
+        if rec2 and live2:
+            if rec2 != live2:
+                raise _pull_422(
+                    "pull_duty", duty,
+                    f"the EM field stored for duty '{duty}' was solved on "
+                    "another geometry than the machine loaded now — re-run "
+                    "the duty on the Electromagnetic tab", kind="stale")
+            geometry = "match"
+    try:
+        fld = mpl.em_field_from_record(rec)
+    except mpl.PullFieldError as exc:
+        raise _pull_422("pull_duty", duty, str(exc), kind="unusable")
+    origin = {"die": die, "config": cfg, "duty": duty,
+              "computed_at": meta.get("computed_at"),
+              "saved_at": meta.get("saved_at"),
+              "geometry": geometry,
+              "point": meta.get("point"),
+              "solver": meta.get("solver")}
+    spec = mpl.PullSpec("em", field=fld, origin=origin,
+                        label=f"EM field of duty '{duty}' ({die} / {cfg})")
+    params = {"pull": "em", "pull_duty": duty}
+    return spec, params, (("pull", "em", str(die), str(cfg), duty,
+                           str(meta.get("computed_at") or ""),
+                           str(meta.get("saved_at") or "")),)
+
+
 def _num_poles(motor) -> Optional[int]:
     """The machine's pole count, or None — the FALLBACK for a sector's ``n``.
 
@@ -604,6 +729,10 @@ def _rotor_stress_summary(params: Dict[str, Any], out: Dict[str, Any]) -> str:
             bits.append("sector")
         if params.get("loads") and params.get("loads") != "both":
             bits.append(str(params["loads"]))
+        _pl = out.get("pull_load") if isinstance(out, dict) else None
+        if isinstance(_pl, dict):
+            bits.append(f"pull {float(_pl.get('pressure_peak_mpa') or 0):.2f} MPa"
+                        f" ({_pl.get('source')})")
         if (out.get("retention") or {}).get("status") == "fail":
             # A FAIL carries no SF to summarise (2026-10-25, owner rule).
             bits.append("NOT RETAINED — FAIL")
@@ -681,6 +810,23 @@ def rotor_stress(
                     "periodic sector with cyclic-symmetry ties on its two cut "
                     "faces, so every pole carries an identical load by "
                     "construction and the solve is ~n times cheaper"),
+    pull: str = Query(
+        default="none",
+        description="the radial MAGNETIC PULL of the air-gap field: none (the "
+                    "default, every existing answer unchanged) | em (the "
+                    "Maxwell stress of the duty's own stored EM field, radial "
+                    "component, worst pole applied to every pole) | uniform "
+                    "(an estimate: pull_mpa, or pull_b_gap_t with p = B²/2μ0)"),
+    pull_duty: Optional[str] = Query(
+        default=None,
+        description="pull=em: the duty whose stored EM field is read; default "
+                    "= the duty loaded in the editor"),
+    pull_mpa: Optional[float] = Query(
+        default=None, gt=0.0, le=5.0,
+        description="pull=uniform: the outward pressure, MPa"),
+    pull_b_gap_t: Optional[float] = Query(
+        default=None, gt=0.0, le=3.5,
+        description="pull=uniform: the air-gap flux density, T (p = B²/2μ0)"),
     geo: Optional[str] = Query(default=None),
     fresh: bool = Query(
         default=False,
@@ -721,6 +867,12 @@ def rotor_stress(
     the cache key only when it was passed, so a request that names none is keyed
     and solved exactly as it was before they existed, and
     ``thermal.part_temps_c`` in the response says what every part ended up at.
+
+    ``pull`` (2026-10-26) adds the radial MAGNETIC PULL of the air-gap field
+    as a surface traction on the rotor's gap faces (``magnetic_pull``):
+    ``em`` reads the duty's stored EM field, ``uniform`` is a stated estimate.
+    In the cache key and the persisted params only when it is asked for, so
+    ``pull=none`` is keyed, solved and answered exactly as before.
     """
     from motor_ai_sim.simulation.mechanical import contact as ctc
     from motor_ai_sim.simulation.mechanical import rotor_stress as rsm
@@ -863,10 +1015,14 @@ def rotor_stress(
                                 detail=f"geometry build failed: {type(exc).__name__}: {exc}")
 
         assign = _assignments()
+        # ── the magnetic pull (2026-10-26) — resolved before the key, because
+        # the field it reads (and that field's run) is part of the answer
+        pull_spec, pull_params, pull_key = _resolve_pull(
+            pull, pull_duty, pull_mpa, pull_b_gap_t, geo_ov)
         key = _cache_key(geo_ov, assign, speed, overspeed_factor, interference_mm,
                          mesh_size_mm, order, cspec, case_mode, load_mode,
                          torque or 0.0, rotor_temp_c, sleeve_temp_c,
-                         part_temps or None, sym_mode)
+                         part_temps or None, sym_mode) + pull_key
         # `cases` rides in the persisted params so re-entering the tab restores the
         # mode as well as the numbers — a single-speed answer under a three-case
         # toggle would read as two missing columns.  `loads` and `torque_nm` ride
@@ -892,6 +1048,7 @@ def rotor_stress(
         # a per-part override it never set (2026-09-08).
         for _field, _v in part_temps.items():
             _params[f"{_field}_temp_c"] = _v
+        _params.update(pull_params)
         requested_history_key = _rotor_stress_history_key(key)
         if not fresh:
             hit = rsm.cache_get(key)
@@ -938,7 +1095,7 @@ def rotor_stress(
                 rotor_temp_c=float(rotor_temp_c), sleeve_temp_c=float(sleeve_temp_c),
                 part_temps_c=(dict(part_temps) or None),
                 symmetry=sym_mode, num_poles=_num_poles(motor),
-                progress=_progress.callback())
+                progress=_progress.callback(), pull=pull_spec)
 
         try:
             # A SEPARATION joint that does not retain its part (2026-09-09 —
@@ -1117,13 +1274,16 @@ _RH.register_kind("mechanical.limit_speed")
 def _limit_speed_history_key(geo_ov, assign, rpm0, interference_mm,
                              mesh_size_mm, order, cspec, load_mode, torque,
                              rotor_temp_c, sleeve_temp_c, part_temps, sym_mode,
-                             target_sf, max_factor, max_solves) -> str:
+                             target_sf, max_factor, max_solves,
+                             pull_key: tuple = ()) -> str:
     base = _cache_key(geo_ov, assign, rpm0, 1.0, interference_mm, mesh_size_mm,
                       order, cspec, "single", load_mode, torque or 0.0,
                       rotor_temp_c, sleeve_temp_c, part_temps or None, sym_mode)
     extra = (round(float(target_sf), 4), round(float(max_factor), 4),
             int(max_solves))
-    return _RH.make_key("mechanical.limit_speed", base + extra)
+    # the magnetic pull (2026-10-26) only when asked for — an empty tail keeps
+    # every search already filed under the key it has
+    return _RH.make_key("mechanical.limit_speed", base + extra + tuple(pull_key))
 
 
 def _tip_speed_cap(motor) -> tuple:
@@ -1216,6 +1376,14 @@ def limit_speed(
     max_solves: int = Query(
         default=12, ge=2, le=30,
         description="the whole search's solve budget, bracket + bisection"),
+    pull: str = Query(
+        default="none",
+        description="magnetic pull, HELD CONSTANT across the search (it is the "
+                    "field's, not the speed's): none | em | uniform — same "
+                    "contract as /rotor_stress"),
+    pull_duty: Optional[str] = Query(default=None),
+    pull_mpa: Optional[float] = Query(default=None, gt=0.0, le=5.0),
+    pull_b_gap_t: Optional[float] = Query(default=None, gt=0.0, le=3.5),
     geo: Optional[str] = Query(default=None),
     fresh: bool = Query(
         default=False,
@@ -1353,11 +1521,13 @@ def limit_speed(
         n_poles = _num_poles(motor)
         override_props = _override_props()
         fp = _live_fingerprint(geo_ov)
+        pull_spec, pull_params, pull_key = _resolve_pull(
+            pull, pull_duty, pull_mpa, pull_b_gap_t, geo_ov)
 
         history_key = _limit_speed_history_key(
             geo_ov, assign, rpm0, interference_mm, mesh_size_mm, order, cspec,
             load_mode, torque, rotor_temp_c, sleeve_temp_c, part_temps, sym_mode,
-            target_sf, max_factor, max_solves)
+            target_sf, max_factor, max_solves, pull_key)
         if not fresh:
             _hist_hit = _LIMIT_SPEED_HISTORY.get(history_key)
             if _hist_hit is not None:
@@ -1385,7 +1555,7 @@ def limit_speed(
                     rotor_temp_c=float(rotor_temp_c),
                     sleeve_temp_c=float(sleeve_temp_c),
                     part_temps_c=(dict(part_temps) or None),
-                    symmetry=sym_mode, num_poles=n_poles)
+                    symmetry=sym_mode, num_poles=n_poles, pull=pull_spec)
             except rsm.RotorRanAway as exc:
                 # A part held by nothing at this candidate speed IS below the
                 # target factor, more so than any number the solve could have
@@ -1491,6 +1661,9 @@ def limit_speed(
                    "target_sf": float(target_sf)}
         for _field, _v in part_temps.items():
             _params[f"{_field}_temp_c"] = _v
+        _params.update(pull_params)
+        if pull_spec is not None:
+            block["pull"] = dict(pull_params)
         _remember_last("rotor_stress", out0, _params, fp)
         try:
             _LIMIT_SPEED_HISTORY.put(

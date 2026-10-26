@@ -36,7 +36,8 @@ value array per picture; anything else in those payloads (per-step series, the
 mode shapes, the contact histories, the eddy J field) belongs to the tab that
 computed it and stays in its own pickle.
 
-  ``em``           vertices, triangles, tags, |B| per element, cycle-averaged
+  ``em``           vertices, triangles, tags, |B| and (since 2026-10-26) Bx, By
+                   per element, cycle-averaged
                    loss density per element, demag coefficient per element (when
                    the run carried one), A_z per node (when present);
   ``thermal``      vertices, triangles, domain_per_tri, temperature_per_node,
@@ -299,9 +300,10 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """One ``_transient_field_snap`` entry → the arrays the |B| / loss / demag
     maps are drawn from.
 
-    ``Bx``/``By`` collapse to |B| here rather than being stored as a pair: the
-    report draws the magnitude, and half the bytes of a vector nothing reads is
-    half the bytes.  ``P_mm`` is (2, n) in millimetres and ``T`` is (3, m) —
+    ``Bx``/``By`` are stored as |B| (what the report draws) AND, since
+    2026-10-26, as the two components ``bx_per_tri``/``by_per_tri``: the rotor
+    mechanics now reads the air-gap Maxwell stress off this record (the
+    magnetic pull), and that needs the direction.  ``P_mm`` is (2, n) in millimetres and ``T`` is (3, m) —
     kept in the solver's own orientation, which ``report._as_xy`` already
     detects, so nothing is transposed twice.
     """
@@ -327,6 +329,13 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if bx is not None and by is not None:
             arrays["b_mag_per_tri"] = _f32(np.hypot(np.asarray(bx, float),
                                                     np.asarray(by, float)))
+            # …and the COMPONENTS (2026-10-26): the rotor mechanics reads the
+            # Maxwell stress of the air-gap field off this record (the
+            # magnetic pull, ``simulation.mechanical.magnetic_pull``), and
+            # |B| has no direction.  Records written before this line carry
+            # only |B| and A_z; the reader rebuilds B = curl A from those.
+            arrays["bx_per_tri"] = _f32(bx)
+            arrays["by_per_tri"] = _f32(by)
         elif fld.get("Bmag_per_tri") is not None:
             arrays["b_mag_per_tri"] = _f32(fld.get("Bmag_per_tri"))
         ld = _f32(fld.get("loss_dens"))
@@ -351,7 +360,12 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "point": _point(scal, ("rpm", "T_avg_Nm", "f_elec_Hz", "V_peak",
                                    "P_elec_in_W", "P_cu_W", "P_fe_W",
                                    "P_mag_eddy_W")),
+            # which instant the arrays are: the transient's LAST time step,
+            # in the rotor frame (the sliding-band rotor mesh stays at its
+            # drawn angle) — the magnetic pull quotes it
+            "instant": "last time step of the transient (rotor frame)",
             "units": {"vertices": "mm", "b_mag_per_tri": "T",
+                      "bx_per_tri": "T", "by_per_tri": "T",
                       "loss_dens_per_tri": "W/m^3",
                       "demag_coef_per_tri": "fraction of Br remaining",
                       "a_z_per_node": "Wb/m"},

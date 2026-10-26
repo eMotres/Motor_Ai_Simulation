@@ -1275,7 +1275,11 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
     base = {"computed_at": computed_at, "geometry_fingerprint": fp,
             **_fp2_block(),
             "point": _pick(params, ("rpm", "torque_nm", "loads", "cases",
-                                    "overspeed", "mesh_size_mm", "order"))}
+                                    "overspeed", "mesh_size_mm", "order",
+                                    # the magnetic pull the case carried
+                                    # (2026-10-26) — absent when none was
+                                    "pull", "pull_duty", "pull_mpa",
+                                    "pull_b_gap_t"))}
     if kind == "rotor_stress":
         case_name = res.get("primary_case") or next(iter(res.get("cases") or {}), None)
         case = (res.get("cases") or {}).get(case_name) or {}
@@ -1314,6 +1318,9 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             # compaction or the report reads the missing SF as "not solved".
             "retention": _pick(case.get("retention") or res.get("retention"),
                                ("status", "verdict", "reasons", "message")),
+            # …and the load case the verdict was reached under, when the
+            # magnetic pull was part of it (2026-10-26)
+            "load_case": (res.get("retention") or {}).get("load_case"),
             "parts": parts,
             "interfaces": ifaces,
             "rotor_od_growth_um": _f(case.get("rotor_od_growth_um")),
@@ -1332,7 +1339,8 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             "lift_off_rpm": {str(k): _f(v) for k, v in
                              dict(res.get("lift_off_rpm") or {}).items()},
             "magnet_retention": _pick(case.get("magnet_retention"),
-                                      ("verdict", "share", "seated")),
+                                      ("verdict", "share", "seated",
+                                       "magnet_pull_kn_per_m")),
             "torque_path": _pick(case.get("torque_path"),
                                  ("verdict", "worst_pair", "held")),
             "torque_balance": _f(case.get("torque_balance")),
@@ -1360,6 +1368,33 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             "mesh": _pick(res.get("mesh"), ("n_triangles", "element_order",
                                             "mesh_size_mm")),
         })
+        # THE MAGNETIC PULL (2026-10-26): which source, how big, how checked,
+        # and — for the EM source — which run's field it was, so the motor
+        # view can say "worst case: rpm, torque, pull" with provenance.
+        _pl = res.get("pull_load")
+        if isinstance(_pl, dict):
+            _env = _pl.get("envelope") if isinstance(_pl.get("envelope"), dict) else {}
+            _chk = _pl.get("check") if isinstance(_pl.get("check"), dict) else {}
+            base["pull"] = {
+                **_pick(_pl, ("source", "label", "estimate", "gap_side",
+                              "b_source", "instant", "b_gap_t",
+                              "b_equivalent_t", "n_poles")),
+                **{k: _f(_pl.get(k)) for k in (
+                    "pressure_peak_mpa", "pressure_mean_mpa",
+                    "pressure_nominal_mpa", "radial_force_per_pole_n",
+                    "radial_force_total_n", "maxwell_torque_nm",
+                    "matched_fraction") if _f(_pl.get(k)) is not None},
+                "envelope": ({"worst_pole": _env.get("worst_pole"),
+                              "pole_spread": _env.get("pole_spread")}
+                             if _env else None),
+                "check": ({"ratio": _f(_chk.get("ratio")),
+                           "within_tol": _chk.get("within_tol"),
+                           "field_per_pole_n": _f(_chk.get("field_per_pole_n"))}
+                          if _chk else None),
+                "origin": _pick(_pl.get("origin"),
+                                ("die", "config", "duty", "computed_at",
+                                 "saved_at", "geometry")),
+            }
         # THE LIMIT SPEED (owner 2026-09-21: "we also need to find the
         # maximum rotation speed ... it's where SF reaches 1"), riding on
         # the same rotor-stress record — present only when the **Limit speed**
@@ -1385,6 +1420,8 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
                 "sf_at_searched_to": _f(_ls.get("sf_at_searched_to")),
                 "cap_reason": _ls.get("cap_reason"),
                 "stopped_by": _ls.get("stopped_by"),
+                # the pull held across the search (2026-10-26), when one was
+                "pull": _ls.get("pull"),
             }
     elif kind == "critical_speeds":
         base.update({

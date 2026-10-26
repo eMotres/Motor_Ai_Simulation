@@ -829,8 +829,13 @@ def solve_plane_stress(mesh,
                        omega: float,
                        eps0_elem: Optional[np.ndarray] = None,
                        order: int = 2,
-                       cyclic=None) -> ElasticSolution:
+                       cyclic=None,
+                       f_extra: Optional[np.ndarray] = None) -> ElasticSolution:
     """Solve rho*omega^2*r body force + eigenstrain on a free (unsupported) body.
+
+    ``f_extra`` (2026-10-26) is an optional extra load vector on the same
+    basis — a surface traction such as ``magnetic_pull.pull_load`` — added to
+    the right-hand side; ``None`` is the solve exactly as before.
 
     Parameters
     ----------
@@ -863,6 +868,8 @@ def solve_plane_stress(mesh,
     basis, K, f_rot, f_eig = assemble_plane_stress(
         mesh, C_elem, rho_elem, eps0_elem, order=order)
     f = f_rot * (omega ** 2) + f_eig
+    if f_extra is not None:
+        f = f + np.asarray(f_extra, dtype=float)
     if cyclic is not None and cyclic.n_rows:
         return _solve_plane_stress_cyclic(mesh, basis, K, f, C_elem, eps0_elem,
                                           order, cyclic)
@@ -2022,8 +2029,8 @@ _SEAT_SURFACE = {"magnet_rotor": "the pocket tab",
 
 def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
                area: np.ndarray, rho_elem: np.ndarray, cen: np.ndarray,
-               omega: float, seated: Optional[List[Dict[str, Any]]] = None
-               ) -> Dict[str, Any]:
+               omega: float, seated: Optional[List[Dict[str, Any]]] = None,
+               pull_n_per_m: float = 0.0) -> Dict[str, Any]:
     """WHICH surface is holding the magnets down, and with how much of the load.
 
     Answers the question the user asked the module to answer: with the pockets
@@ -2073,6 +2080,14 @@ def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
                 f"seated on {where}")
     fc = float((area[mm] * rho_elem[mm] * (omega ** 2)
                 * np.hypot(cen[mm, 0], cen[mm, 1])).sum())
+    # The MAGNETIC PULL on the magnets' own gap faces (2026-10-26) is an
+    # outward load on them exactly like their spin, and the same surfaces have
+    # to carry it — so it joins the load the shares are taken of.  Zero (and
+    # every number below bit-identical) when no pull was asked for.
+    fpull = float(pull_n_per_m or 0.0)
+    pull_keys: Dict[str, Any] = ({"magnet_pull_kn_per_m": fpull / 1e3,
+                                  "magnet_outward_kn_per_m": (fc + fpull) / 1e3}
+                                 if fpull else {})
     mr = forces.get("magnet_rotor", {})
     sm = forces.get("sleeve_magnet", {})
     carried = {
@@ -2086,18 +2101,19 @@ def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
     }
     # At standstill there is no centrifugal load to carry, so there is no
     # retention question and a "share of zero" is a division by nothing.
-    if fc <= 1.0:
+    load = fc + fpull
+    if load <= 1.0:
         return {"magnet_centrifugal_kn_per_m": 0.0,
                 "carried_kn_per_m": {k: v / 1e3 for k, v in carried.items()},
                 "share": {k: None for k in carried},
                 "verdict": _with_seating("not loaded (standstill)"),
-                "seated": list(seat_mag)}
-    share = {k: v / fc for k, v in carried.items()}
+                "seated": list(seat_mag), **pull_keys}
+    share = {k: v / load for k, v in carried.items()}
     best = max(carried, key=lambda kk: carried[kk])
     label = {"pocket_radial_faces": "pocket bottom / shoulder (iron)",
              "pocket_side_walls": "pocket side walls (wedge)",
              "sleeve": "the sleeve"}[best]
-    if carried[best] <= 0.05 * fc:
+    if carried[best] <= 0.05 * load:
         label = "nothing — the magnets are not retained"
     return {
         "magnet_centrifugal_kn_per_m": fc / 1e3,
@@ -2105,6 +2121,7 @@ def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
         "share": share,
         "verdict": _with_seating(label),
         "seated": list(seat_mag),
+        **pull_keys,
     }
 
 
@@ -2219,6 +2236,9 @@ def _scale_retention(rep: Dict[str, Any], n_sym: int) -> Dict[str, Any]:
         float(rep.get("magnet_centrifugal_kn_per_m", 0.0)) * n_sym
     out["carried_kn_per_m"] = {k: float(v) * n_sym
                                for k, v in (rep.get("carried_kn_per_m") or {}).items()}
+    for _k in ("magnet_pull_kn_per_m", "magnet_outward_kn_per_m"):
+        if _k in rep:
+            out[_k] = float(rep[_k]) * n_sym
     out["n_sectors"] = int(n_sym)
     return out
 
@@ -2382,7 +2402,8 @@ def solve_rotor_stress(polys: dict,
                        thermal_model: str = "band_fit",
                        symmetry: str = "full",
                        num_poles: Optional[int] = None,
-                       progress=None) -> Dict[str, Any]:
+                       progress=None,
+                       pull=None) -> Dict[str, Any]:
     """Full rotor structural report at standstill / rated / overspeed.
 
     v2 (2026-09-05): the parts are joined by CONTACT, not by shared nodes —
@@ -2503,6 +2524,17 @@ def solve_rotor_stress(polys: dict,
     ``num_poles`` is only a FALLBACK for the periodicity, used when the polygons
     carry no magnets to read it from; whenever there are magnets they decide,
     because they are the features that are actually drawn.
+
+    ``pull`` (2026-10-26) is the radial MAGNETIC PULL of the air-gap field, a
+    ``magnetic_pull.PullSpec`` — the duty's stored EM field (``em``) or an
+    explicit uniform estimate (``uniform``).  ``None`` (the default) applies
+    nothing and every number is what it was.  It acts as a surface traction
+    on the rotor solids' air-gap facets (never as a body force), in EVERY case
+    including standstill — like the torque it is the machine's, not the
+    speed's — and only its RADIAL component is applied, so the torque load
+    stays the one authority for the net torque (see ``magnetic_pull``).  The
+    answer carries ``pull_load``: the source, peak / mean pressure, the radial
+    force per pole and its check against the field.
 
     ``progress`` (2026-09-07) is the shared live-progress callback (see
     ``motor_ai_sim.progress``): ``progress(done, total, phase, composition)``.
@@ -2965,6 +2997,45 @@ def solve_rotor_stress(polys: dict,
             torque_report["n_facets_sector"] = int(torque_report["n_facets"])
             torque_report["n_sectors"] = n_sym
 
+    # ── the MAGNETIC PULL of the air-gap field (2026-10-26) ─────────────────
+    # A surface traction on the iron / magnet faces the air gap SEES (pole
+    # tops, notch floors, exposed magnets — never a pocket wall or the
+    # sleeve), radial component only (``magnetic_pull``).  The EM source is an envelope over
+    # the poles, so it needs the rotor's periodicity: on a sector that is the
+    # sector itself; on the full model it is read the same way the sector
+    # would read it, so the two models apply the same load to every pole.
+    f_pull = np.zeros_like(f_rot)
+    pull_report: Optional[Dict[str, Any]] = None
+    pull_active = bool(pull is not None and getattr(pull, "active", False))
+    pull_magnet_npm = 0.0
+    if pull_active:
+        from motor_ai_sim.simulation.mechanical import magnetic_pull as mpl
+        if not np.isfinite(L_stack) or L_stack <= 0:
+            raise ValueError(
+                "a magnetic pull needs the stack length to report its force — "
+                "set geometry.motor_length (the route passes it automatically)")
+        if sector_plan is not None:
+            per_n, per_cut = n_sym, float(sector_plan.cut_angle_rad)
+        else:
+            from motor_ai_sim.simulation.mechanical import symmetry as sym
+            try:
+                _pl = sym.plan_sector(polys_all, num_poles=num_poles)
+                per_n, per_cut = int(_pl.n_sectors), float(_pl.cut_angle_rad)
+            except sym.NotPeriodic:
+                per_n, per_cut = 1, 0.0
+        # Which side of the rotor faces the gap — read off the drawn stator:
+        # an OUTER rotor is pulled inward, from its bore (2026-10-26).
+        _rv = np.unique(smesh.t[:, np.isin(part_tri, (PART_ROTOR, PART_MAGNET))])
+        _rr = np.hypot(smesh.p[0, _rv], smesh.p[1, _rv])
+        _side = mpl.gap_side(polys_all, float(_rr.min()), float(_rr.max()))
+        f_pull, _raw_pull = mpl.pull_load(
+            smesh, part_tri, pull, order=order,
+            period_n=(per_n if pull.source == "em" else 1),
+            period_cut_rad=per_cut, side=_side)
+        pull_magnet_npm = float(
+            (_raw_pull.get("_by_part_n_per_m") or {}).get("magnet", 0.0))
+        pull_report = mpl.finish_report(_raw_pull, pull, L_stack, n_sym, per_n)
+
     # The load cases, as multipliers on omega^2.  In single-speed mode there is
     # exactly one, and it is NAMED BY ITS SPEED ("23,000 rpm") rather than
     # "rated": the whole point of the mode is that this speed is the only one
@@ -3012,6 +3083,11 @@ def solve_rotor_stress(polys: dict,
         # section of ``contact``).  With loads='centrifugal' there is no ramp and
         # the solve is one step, exactly the arithmetic it always ran.
         f = f_rot * (omega ** 2 * k * float(use_centrifugal)) + f_eig
+        if pull_active:
+            # the pull is part of the state the rotor is in before the drive
+            # torque is walked on — magnets and poles are pulled outward by the
+            # field whatever the speed (2026-10-26)
+            f = f + f_pull
         # The contact loop counts its OWN iterations from 1; this shifts them
         # onto the global bar and hands back whatever the budget did not need.
         base = led.done
@@ -3057,6 +3133,8 @@ def solve_rotor_stress(polys: dict,
         if not sol.converged and float(use_centrifugal) and omega > 0.0:
             f_spin = f_rot * (omega ** 2 * k * float(use_centrifugal))
             ramp = f_spin + (f_torque if use_torque else 0.0)
+            if pull_active:
+                ramp = ramp + f_pull
             _log.info("contact: the active set did not settle with the spin "
                       "applied at once — retrying with it walked on in %d steps",
                       SPIN_LOAD_STEPS)
@@ -3527,7 +3605,7 @@ def solve_rotor_stress(polys: dict,
             "magnet_retention": _scale_retention(_retention(
                 cs, sol, forces, present, area, rho_elem, cen,
                 omega * math.sqrt(k) * float(use_centrifugal),
-                seated=sol.seated), n_sym),
+                seated=sol.seated, pull_n_per_m=pull_magnet_npm), n_sym),
             "contact": {
                 "converged": bool(sol.converged),
                 "iterations": int(sol.iterations),
@@ -3627,7 +3705,7 @@ def solve_rotor_stress(polys: dict,
         # See ``retention_fail_reasons``: a separation answer that did not
         # converge, ended tied, or says "not retained" carries no SF.
         _loaded = (omega * math.sqrt(k) * float(use_centrifugal) > 0.0
-                   or bool(use_torque and torque_nm))
+                   or bool(use_torque and torque_nm) or pull_active)
         _why = retention_fail_reasons(sol, ifaces,
                                       results[case]["magnet_retention"],
                                       torque_path, _loaded)
@@ -3814,6 +3892,9 @@ def solve_rotor_stress(polys: dict,
         "loads": loads,
         "torque_nm": (float(torque_nm) if use_torque else 0.0),
         "torque_load": torque_report,
+        # The magnetic pull of the air-gap field (2026-10-26); None = not
+        # applied, which is every request that does not ask for it.
+        "pull_load": pull_report,
         # ── which cross-section this answer is about (2026-09-09) ───────────
         # Always present, so a reader never has to infer it: `mode: "full"` is
         # the whole rotor and every number is the machine's directly.
@@ -3839,7 +3920,13 @@ def solve_rotor_stress(polys: dict,
                                  "magnet_retention.magnet_centrifugal_kn_per_m",
                                  "magnet_retention.carried_kn_per_m.*",
                                  "torque_load.surface_mm",
-                                 "torque_load.coverage"],
+                                 "torque_load.coverage"]
+                                + (["pull_load.radial_force_total_n",
+                                    "pull_load.radial_force_by_part_n.*",
+                                    "pull_load.maxwell_torque_nm",
+                                    "pull_load.surface_mm",
+                                    "magnet_retention.magnet_pull_kn_per_m"]
+                                   if pull_active else []),
                       "torque_sector_nm": (torque_sector_nm if use_torque
                                            else 0.0),
                       "notes": symmetry_notes}),
@@ -3910,6 +3997,18 @@ def solve_rotor_stress(polys: dict,
             "message": f"{NOT_RETAINED} — " + " | ".join(_msgs)}
     else:
         out["retention"] = {"status": "pass", "failed_cases": [], "reasons": []}
+    if pull_active:
+        # The verdict names its load case once the pull is in it, so a pass or
+        # a fail read later is never mistaken for a spin-only answer.
+        from motor_ai_sim.simulation.mechanical import magnetic_pull as mpl
+        _bits = [f"{max(case_rpm.values()):,.0f} rpm"
+                 if use_centrifugal else "no spin"]
+        if use_torque:
+            _bits.append(f"torque {float(torque_nm):,.2f} N·m")
+        _bits.append(mpl.summary_text(pull_report))
+        out["retention"]["load_case"] = ", ".join(_bits)
+        if out["retention"].get("message"):
+            out["retention"]["message"] += f" (load case: {out['retention']['load_case']})"
     if with_field:
         ext = np.abs(ps * 1e3).max()
         out["field"] = {

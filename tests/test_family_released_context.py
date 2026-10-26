@@ -98,6 +98,12 @@ def dies(tmp_path, monkeypatch):
     return root
 
 
+@pytest.fixture(autouse=True)
+def _acting_account(monkeypatch):
+    """New dies are named '<family base> <user suffix> <n>' (owner 2026-10-26): pin the account."""
+    monkeypatch.setattr(fam, "_acting_account", lambda *_a, **_k: ("Vadim", "vadim@example.com"))
+
+
 @pytest.fixture
 def live(monkeypatch):
     """``live(poles_per_segment)`` installs that machine as the live config."""
@@ -212,9 +218,9 @@ def test_identity_guard_auto_transitions_to_a_new_die(dies, live):
     _write_active()
     saved = dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)
     result = fam.sync_active_die_geometry(saved, prev_geo=dict(DIE_GEO))
-    assert result == "CIANO14 50 edited 12s16p"
+    assert result == "CIANO14 50 vadim"
     ctx = json.loads(_ctx_file().read_text(encoding="utf-8"))
-    assert ctx["die"] == "CIANO14 50 edited 12s16p"
+    assert ctx["die"] == "CIANO14 50 vadim"
     assert ctx["config"] == CFG and ctx["duty"] == DUTY
     assert ctx["transitioned_from"]["die"] == DIE
     assert ctx["transitioned_from"]["diffs"] == [
@@ -236,7 +242,7 @@ def test_identity_guard_auto_transitions_to_a_new_die(dies, live):
     src_c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
     assert src_c["duties"][0]["current_arms"] == 55.0
     assert _context()["active"] is True
-    assert _context()["die"] == "CIANO14 50 edited 12s16p"
+    assert _context()["die"] == "CIANO14 50 vadim"
 
 
 def test_identity_guard_reuses_an_existing_matching_die(dies, live):
@@ -257,7 +263,7 @@ def test_identity_guard_reuses_an_existing_matching_die(dies, live):
     assert ctx["die"] == "Other 16p" and ctx["config"] == CFG and ctx["duty"] == DUTY
     nc = yaml.safe_load((dies / "Other 16p" / f"{CFG}.yaml").read_text(encoding="utf-8"))
     assert nc["duties"][0]["current_arms"] == 55.0
-    assert not (dies / "CIANO14 50 edited 12s16p").exists()
+    assert not (dies / "CIANO14 50 vadim").exists()
 
 
 def test_reverting_the_edit_reattaches_to_the_original_die_automatically(dies, live):
@@ -280,9 +286,9 @@ def test_reverting_the_edit_reattaches_to_the_original_die_automatically(dies, l
 
 
 def test_transition_name_collision_gets_a_numeric_suffix(dies, live):
-    (dies / "CIANO14 50 edited 12s16p").mkdir()
-    (dies / "CIANO14 50 edited 12s16p" / "die.yaml").write_text(yaml.safe_dump({
-        "name": "CIANO14 50 edited 12s16p", "locked": False,
+    (dies / "CIANO14 50 vadim").mkdir()
+    (dies / "CIANO14 50 vadim" / "die.yaml").write_text(yaml.safe_dump({
+        "name": "CIANO14 50 vadim", "locked": False,
         # a DIFFERENT topology under the same name — not a reuse match
         "geometry": dict(DIE_GEO, num_poles_per_segment=5, num_poles=10)},
         sort_keys=False), encoding="utf-8")
@@ -290,15 +296,16 @@ def test_transition_name_collision_gets_a_numeric_suffix(dies, live):
     _write_active()
     result = fam.sync_active_die_geometry(
         dict(DIE_GEO, num_poles_per_segment=8, num_poles=16), prev_geo=dict(DIE_GEO))
-    assert result == "CIANO14 50 edited 12s16p 2"
+    assert result == "CIANO14 50 vadim 2"
 
 
-def test_diameter_change_names_the_new_die_with_the_new_diameter(dies, live):
+def test_diameter_change_names_the_new_die_like_any_other_variant(dies, live):
     live(7, stator_diameter=60)
     _write_active()
     result = fam.sync_active_die_geometry(
         dict(DIE_GEO, stator_diameter=60), prev_geo=dict(DIE_GEO))
-    assert result == "CIANO14 edited Ø60 12s14p"
+    # owner 2026-10-26: no diameter / topology token in new names
+    assert result == "CIANO14 50 vadim"
 
 
 def test_auto_transition_never_writes_the_locked_source_die(dies, live):
@@ -514,3 +521,39 @@ def test_variables_route_flags_the_die_defining_ones():
     for n in ("tooth_width", "magnet_height", "gamma_deg"):
         if n in by:
             assert by[n].get("die_defining", False) is False
+
+
+# ── names of new dies: "<family base> <user suffix> <n>" (owner 2026-10-26) ──
+
+def test_save_as_new_die_without_a_name_uses_the_naming_rule(dies, live):
+    live(8)
+    _ctx_file().write_text(json.dumps(OWNER_RECORD), encoding="utf-8")
+    out = fam.save_as_new_die(fam.SaveAsNewDie(), _w={})
+    assert out["die"] == "CIANO14 50 vadim"
+
+
+def test_create_die_without_a_name_numbers_the_variants(dies, live):
+    live(7)
+    _write_active()
+    first = fam.create_die(fam.DieCreate(), _w={})
+    second = fam.create_die(fam.DieCreate(), _w={})
+    third = fam.create_die(fam.DieCreate(), _w={})
+    assert [first["die"], second["die"], third["die"]] == [
+        "CIANO14 50 vadim", "CIANO14 50 vadim 2", "CIANO14 50 vadim 3"]
+    # an explicit name is still the user's
+    assert fam.create_die(fam.DieCreate(name="My own name"), _w={})["die"] == "My own name"
+
+
+def test_duplicate_die_without_a_name_uses_the_rule(dies):
+    out = fam.duplicate_die(DIE, fam.DieDuplicate(), _w={})
+    assert out["die"] == "CIANO14 50 vadim"
+    assert fam.duplicate_die(DIE, fam.DieDuplicate(), _w={})["die"] == "CIANO14 50 vadim 2"
+
+
+def test_die_name_route_proposes_the_same_name(dies, live):
+    live(7)
+    _write_active()
+    got = fam.suggest_die_name(source="CIANO56 400_80 \u00d8400 48s56p opt3", authorization=None)
+    assert got == {"name": "CIANO56 400_80 vadim", "base": "CIANO56 400_80", "suffix": "vadim"}
+    # no source: the active die
+    assert fam.suggest_die_name(source=None, authorization=None)["name"] == "CIANO14 50 vadim"

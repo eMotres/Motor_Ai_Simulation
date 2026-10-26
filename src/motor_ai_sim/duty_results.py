@@ -773,6 +773,47 @@ def rename(die: str, cfg: str, old: str, new: str) -> bool:
         return False
 
 
+def has_die(die: str) -> bool:
+    """Does this request's store hold any result or history row filed under ``die``?"""
+    try:
+        doc = read_all()
+        return any(bool((doc.get(block) or {}).get(str(die)))
+                   for block in ("results", "history"))
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
+def rename_die(old: str, new: str) -> bool:
+    """Carry every row of a RENAMED die to its new name - the results and the per-kind history.
+
+    Everything here is keyed by the die NAME, so a die rename that left the rows
+    behind hid every thermal, mechanical, coupled and duty-cycle answer of the
+    machine (and the history that keeps replaced runs).  Returns True when a
+    row moved.  Refuses (``ValueError``) to merge into a name that already has
+    rows - the caller has checked that the target die does not exist.  A write
+    failure raises ``OSError``: unlike the solve routes, a rename must know.
+    """
+    old, new = str(old), str(new)
+    if old == new:
+        return False
+    with _store_write_lock():
+        doc = read_all()
+        moved = False
+        for block in ("results", "history"):
+            node = doc.get(block)
+            if not isinstance(node, dict) or old not in node:
+                continue
+            if node.get(new):
+                raise ValueError(f"{block} already has rows for '{new}'")
+            node[new] = node.pop(old)
+            moved = True
+        if not moved:
+            return False
+        if not _write_all(doc):
+            raise OSError("could not persist the renamed duty results")
+        return True
+
+
 def forget(die: str, cfg: str, duty: Optional[str] = None) -> bool:
     """Drop a duty's results (or a whole configuration's) — used when the
     catalogue DELETES the duty they describe.  A rename carries them instead

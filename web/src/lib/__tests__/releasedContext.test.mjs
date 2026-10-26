@@ -14,8 +14,8 @@
 //   • the reload offer needs a configuration and a duty (the backend fills
 //     them in for a single-config/single-duty die — the owner's file);
 //   • an ordinary user (can_write false) and an active context draw nothing;
-//   • the suggested die name never repeats the released name (409 on the
-//     backend) and carries the live topology;
+//   • the offline fallback of the suggested die name is the released die's
+//     family base (no topology; the real proposal is the server's);
 //   • die-defining selection is the intersection with the served key list.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,12 +35,12 @@ function diffText(diffs) {
     .join('; ');
 }
 
+// the offline fallback of the prompt's name: the released die's family base (owner 2026-10-26:
+// the real proposal is the server's "<family base> <your suffix> <n>", lib/dieNames.ts)
+let familyBase = (name) => String(name ?? '').trim().split(/\s+/)[0] ?? '';
+try { familyBase = (await import('../dieNameRule.ts')).familyBase; } catch { /* old Node: approximation */ }
 function suggestedDieName(ctx) {
-  const rel = String(ctx.released_from ?? '').trim() || 'new die';
-  const t = ctx.live_topology ?? null;
-  const topo = t && t.slots && t.poles ? `${t.slots}s${t.poles}p` : '';
-  const base = rel.replace(/\s+\d+s\d+p$/, '');
-  return topo ? `${base} ${topo}` : `${rel} new`;
+  return familyBase(String(ctx.released_from ?? '')) || 'new die';
 }
 
 function releasedOffers(ctx) {
@@ -120,7 +120,7 @@ test('the 12:47 state offers "save as NEW die" and "discard & reload", never a d
   assert.ok(o.saveNewDie);
   assert.equal(o.saveNewDie.label,
     '＋ Save as NEW die (copy of CIANO14 50 edited with the new lamination: poles/segment 7 → 8)');
-  assert.equal(o.saveNewDie.initialName, 'CIANO14 50 edited 12s16p');
+  assert.equal(o.saveNewDie.initialName, 'CIANO14 50');
   // a different lamination is NOT a configuration of the released die, and
   // cannot be re-attached to it either
   assert.equal(o.saveNewConfig, null);
@@ -185,11 +185,11 @@ test('an ordinary user, an active context and a context with no released die dra
   assert.equal(releasedOffers(undefined), null);
 });
 
-test('the suggested die name carries the live topology and never repeats a topology suffix', () => {
-  assert.equal(suggestedDieName(OWNER), 'CIANO14 50 edited 12s16p');
-  assert.equal(suggestedDieName({ ...OWNER, released_from: 'CIANO14 50 12s14p' }), 'CIANO14 50 12s16p');
-  assert.equal(suggestedDieName({ ...OWNER, live_topology: null }), 'CIANO14 50 edited new');
-  assert.equal(suggestedDieName({ released_from: '' }), 'new die new');
+test('the suggested die name is the family base - no topology, no free words', () => {
+  assert.equal(suggestedDieName(OWNER), 'CIANO14 50');
+  assert.equal(suggestedDieName({ ...OWNER, released_from: 'CIANO14 50 12s14p' }), 'CIANO14 50');
+  assert.equal(suggestedDieName({ ...OWNER, live_topology: null }), 'CIANO14 50');
+  assert.equal(suggestedDieName({ released_from: '' }), 'new die');
 });
 
 test('diffText names every identity key that moved, in order', () => {

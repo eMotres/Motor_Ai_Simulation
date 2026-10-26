@@ -1,0 +1,73 @@
+# Owner's daily report (owner 2026-10-27)
+
+«Каждое утро в 6 часов присылать мне письмо обо всех изменениях по всем проектам, производствам и моторам за день, а также полную
+информацию о новых пользователях и об активности пользователей.»  Code: `src/motor_ai_sim/owner_report/`.
+
+An INTERNAL e-mail to the owner only. It is NOT a customer digest: the customer digest rules (`docs/DIGEST.md`: drafts, manual
+approval) are untouched and `src/motor_ai_sim/digest/` gained no sending path; the report only READS the digest drafts.
+
+## Content (the 24 h before 06:00 Europe/Ljubljana; text + HTML, no images; links open the exact page after sign-in)
+
+Fixed order (also the order of the top summary line; pinned by `tests/test_owner_report.py`):
+
+| # | Section | Sources |
+|---|---|---|
+| 1 | **New users** (full record) | `users.json` (created in the window); applicant verification case (status, reasons, application: company, country); NDA record (online / pre-approved `nda_preapproval` / set by admin); platform agreement acceptances; data-sharing consent; project membership index; first sign-in (`auth_events.jsonl`), first modules (`activity.sqlite`), first runs (job usage) |
+| 2 | **User activity** | `auth_events.jsonl` (sign-ins, refused tokens), `activity.sqlite` (active time, sessions, modules), job usage (runs, failures), `usage_stats` counters (reports, datasheets, Fusion), 3-D download log, design-assistant ledger |
+| 3 | **Projects** | each project's `audit.jsonl` (spec versions, variants linked/unlinked/status/notes, recommended and report-reviewed flags, members invited/claimed/removed, proposals), `thread.jsonl` (messages), stored results of its motors (digest collector), agreement acceptances |
+| 4 | **Productions** | each production's `audit.jsonl` (revisions with reason, documents, parts/BOM/costs, members, assembly process, schedule, procurement; the digest collector's lines plus every other audit action), motor-test records |
+| 5 | **Motors** | admin audit (`die.*`, `config.*`, `cad.*`, `user.motors`), product revisions (`motor_revisions`), finished and failed runs (job usage), new results with headline numbers (shared `.duty_results.json`) |
+| 6 | **Digests to approve** | the open digest drafts (`digest.store`): group, recipients, the full text exactly as the recipients get it (EN, and the Chinese part), a link to Admin -> Digests for that draft |
+
+A section with nothing says "no changes" (digests: "no digests today"); the whole e-mail is still sent every day (heartbeat). A source
+that cannot be read is shown as "source unavailable" with the error, never as "no changes". Staff / customer / factory are marked
+on every line that has an actor.
+
+Known limits (said in the e-mail where it matters):
+* Raw IP addresses are not stored by design (`sessions.py`, audit 2026-09-29 #16): the report shows the keyed hash of the client
+  address ("same client as before?") and the country from the profile / NDA / verification case.
+* Active time, sessions and the report / datasheet counters are kept per UTC day: they cover the UTC days that overlap the window.
+* There is no event log for "die / configuration created, duplicated, deleted" yet; the Motors section shows what exists (audit
+  actions, revisions, runs, results).
+
+## Sending and the schedule
+
+* `owner_report/send.py` is the ONLY module that reaches SMTP (`auth_email.deliver`, the transport the digest uses: the notify helper
+  is text-only to `NOTIFY_TO`). **Recipients are locked to the owner:** `OWNER_REPORT_TO` (default: `NDA_NOTIFY_EMAIL` / first
+  `ADMIN_EMAILS`, else the notice address) is filtered to administrator addresses (`ADMIN_EMAILS`, enabled admin accounts, the
+  notice / NDA admin address). `send_report` has no recipient argument; the routes accept none from the body.
+* The mechanism the server already uses for periodic work is a **host systemd timer** that runs a command in the api container
+  (`motres-retention`, `motres-usage`; there is no in-process scheduler). So:
+  `deploy/systemd/motres-owner-report.{service,timer}` -> `bluegreen.sh exec api python -m motor_ai_sim.owner_report --send` at
+  **06:00 Europe/Ljubljana** (retries 07:00 and 08:00, `Persistent=true`).
+* **Exactly once per date:** `<shared>/owner_report/state.json` holds `last_sent_date`; the run holds `run.lock` (exclusive file,
+  stale after 30 min) while it works. A restart, the retry triggers, a second process or `Persistent` catch-up find the date sent and
+  do nothing; a failed send leaves the date unmarked so the next trigger retries. `history.jsonl` keeps one line per sent report.
+* **The digest drafts are made first.** At the run, before the report is built, `digest.build.run` (the digest package's own
+  scheduler function) writes the due DRAFTS for every project and production. It never sends. Because of this the separate
+  `motres-digest` timer of `docs/DIGEST.md` is no longer needed: install the owner-report timer INSTEAD of it (running both is
+  harmless, the draft run is idempotent). Admin -> Digests still decides what is sent.
+
+### Install (orchestrator, on the server; the PR installs nothing)
+
+```bash
+sudo cp /opt/motres/app/deploy/systemd/motres-owner-report.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now motres-owner-report.timer
+systemctl list-timers motres-owner-report.timer
+# dry run: prints the text, sends nothing, makes no drafts
+bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.owner_report --dry-run
+```
+
+SMTP must be configured in `/etc/motres/api.env` (`SMTP_USER`, `SMTP_PASSWORD`; the same as every other mail). Optional:
+`OWNER_REPORT_TO=<owner address>`. Check the first morning with `journalctl -u motres-owner-report`.
+
+## CLI and routes
+
+* `python -m motor_ai_sim.owner_report [--date YYYY-MM-DD] [--dry-run] [--html]` prints the report (default); `--send [--force]`
+  is the daily run (drafts, report, mail once per date).
+* `GET /api/admin/owner-report/preview?date=` (admin): text + HTML + counts, nothing sent, no drafts made, drafts not marked opened.
+* `POST /api/admin/owner-report/send` `{"date": "YYYY-MM-DD"?}` (admin): the daily run NOW (drafts, report, mail to the owner address
+  only; it marks the date as sent, so the 06:00 timer will not send that date again).
+* Deep links: `/?tab=admin&section=digests&draft=<id>` opens Admin -> Digests with that draft expanded
+  (`web/src/lib/adminLink.ts`); project / production lines use the digest deep-link paths (`return_path.py`).

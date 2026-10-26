@@ -43,6 +43,10 @@ At send time the recipients are re-checked against today's state (left the group
 
 ## Scheduler
 
+> Since 2026-10-27 the drafts are also made by the owner's daily report run at 06:00 Europe/Ljubljana (`docs/OWNER_REPORT.md`,
+> `deploy/systemd/motres-owner-report.*`), which then lists the waiting drafts in the e-mail to the owner. If that timer is installed
+> the `motres-digest` timer below is not needed. The digest package itself is unchanged: it still never sends.
+
 `python -m motor_ai_sim.digest run [--dry-run] [--scope project:<id>]` makes the due drafts and prints what it did; it never
 sends. Install on the server (NOT installed by the PR) as a systemd timer:
 

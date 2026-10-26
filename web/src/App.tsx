@@ -79,6 +79,7 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
+import { parseAdminLink } from './lib/adminLink';
 import { parseAppLink } from './lib/appLink';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
@@ -310,6 +311,14 @@ function App() {
     deepLink.current = null;
     setActiveTab((link.kind === 'production' ? 'production' : 'development') as never);
   }, [authResolved, signedIn, producer, developmentAllowed, setActiveTab]);
+  // The owner's daily report links to Admin sections (/?tab=admin&section=digests&draft=...): open the Admin tab once the account is
+  // known to be an admin; AdminPanel reads the section and DigestsSection the draft from the address bar.
+  const adminLink = useRef(parseAdminLink(window.location.search));
+  useEffect(() => {
+    if (!adminLink.current || !authResolved || !signedIn || !isAdmin) return;
+    adminLink.current = null;
+    setActiveTab('admin' as never);
+  }, [authResolved, signedIn, isAdmin, setActiveTab]);
   const newRequests = useNewRequestCount(isAdmin);
   const designerAllowed = useDesignerAllowed(signedIn);
   const [panelWidth, setPanelWidth] = React.useState(300);

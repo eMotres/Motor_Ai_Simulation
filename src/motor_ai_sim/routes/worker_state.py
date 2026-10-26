@@ -41,6 +41,13 @@ def _require(request: Request) -> None:
         raise HTTPException(403, detail="internal only")
 
 
+def _live_activity():
+    try:
+        return _JOBS.live_targets()
+    except Exception:                       # noqa: BLE001 - the state answer must not depend on it
+        return []
+
+
 def state_payload() -> Dict[str, Any]:
     """What ``GET /api/worker/state`` answers (a function so the tests and the CLI can use it without HTTP)."""
     out: Dict[str, Any] = {
@@ -49,6 +56,8 @@ def state_payload() -> Dict[str, Any]:
         "draining": _JOBS.is_draining(),
         "live": L.local_snapshot(include_users=False),
         "jobs": L.job_rows(),
+        # which machine each running / queued run is for (no run ids, owners or bodies): the project pages' live activity
+        "activity": _live_activity(),
     }
     try:                                    # Admin -> Servers shows the queue of the process that runs it
         from motor_ai_sim import cluster_monitor as CM

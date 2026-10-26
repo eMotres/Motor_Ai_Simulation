@@ -1,4 +1,5 @@
 import type { CatalogController } from './controllerCatalog';
+import type { ActivityRow } from './projectActivity';
 import type { DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -50,6 +51,8 @@ export const developmentApi = {
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
   invite: (id: string, email: string, role: string) => call<unknown>('POST', `${p(id)}/members`, { email, role }),
   motors: async (id: string, showAll = false) => (await call<{ motors: ProjectMotor[] }>('GET', `${p(id)}/motors${showAll ? '?show_all=true' : ''}`)).motors,
+  /** Live runs on the project's motors (one request per project; polled every 30 s while the page is visible). */
+  activity: async (id: string) => { const data = await call<{ activity?: ActivityRow[] } | null>('GET', `${p(id)}/activity`); return Array.isArray(data?.activity) ? data!.activity! : []; },
   motorPoints: (id: string, o: { die?: string; config?: string; showAll?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (o.die) q.set('die', o.die);

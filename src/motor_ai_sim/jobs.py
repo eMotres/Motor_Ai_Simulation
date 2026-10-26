@@ -106,7 +106,7 @@ __all__ = [
     "queue", "reset_queue", "run_job", "admit", "queued",
     "cancel_run", "is_cancelled", "clear_cancelled", "current_run_id",
     "check_cancelled", "ComputeNotHere", "WorkerDraining", "set_draining", "is_draining",
-    "recover_stale_records",
+    "recover_stale_records", "live_targets",
     "current_owner", "current_role", "priority_for",
     "new_run_id", "async_mode", "store_path",
     "HANDLERS", "register_handler", "register_cancel_hook",
@@ -235,6 +235,9 @@ class JobRecord:
     #: Where it ran: ``""`` = this platform, else a user-owned compute node id
     #: (``compute_nodes``, docs/BYO_COMPUTE.md).
     node: str = ""
+    #: The machine this run is FOR - ``{"die", "config"[, "duty"]}`` or ``{}`` (``run_target``: what the request named, else
+    #: the workspace's loaded context).  Written once at registration; the project "live activity" reads it.
+    target: Dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -908,6 +911,13 @@ class InProcessQueue(JobQueue):
         live.sort(key=lambda r: (r.queued_at, r.seq), reverse=True)
         return live[:max(1, int(limit))]
 
+    def live_records(self) -> "List[JobRecord]":
+        """Copies of every RUNNING and QUEUED record of this process (all workspaces), running first."""
+        with self._cv:
+            running = sorted(self._running.values(), key=lambda r: r.started_at)
+            waiting = [w.record for w in sorted(self._waiting, key=self._order_key)]
+            return [JobRecord(**{k: v for k, v in asdict(r).items() if k != "seq"}) for r in running + waiting]
+
     def snapshot(self) -> Dict[str, Any]:
         """``{running, queued, workers, field_limit, per_user, items}`` — the
         shape ``field_jobs.snapshot()`` established, for the same panel."""
@@ -1092,7 +1102,7 @@ def _job_context(rec: JobRecord) -> Iterator[JobRecord]:
 
 def make_record(kind: str, *, priority: Priority = Priority.DUTY,
                 run_id: str = "", body: Optional[Dict[str, Any]] = None,
-                owner: str = "") -> JobRecord:
+                owner: str = "", target: Optional[Dict[str, Any]] = None) -> JobRecord:
     """A record for THIS call: workspace, owner, tier and run id resolved here.
 
     The ONE funnel every submission goes through — ``run_job``, ``admit`` and
@@ -1102,16 +1112,19 @@ def make_record(kind: str, *, priority: Priority = Priority.DUTY,
     """
     ws = _WSP.workspace()
     prio = priority_for(str(kind), current_role(), Priority(int(priority)))
+    from motor_ai_sim import run_target as _RT
     return JobRecord(run_id=str(run_id) or new_run_id(str(kind).split(".")[0]),
                      ws_id=ws.id, owner=str(owner) or current_owner(),
                      kind=str(kind), priority=int(prio),
-                     body=dict(body or {}), queued_at=time.time())
+                     body=dict(body or {}), queued_at=time.time(),
+                     target=_RT.resolve(target))
 
 
 def run_job(kind: str, work: Callable[[], Any], *,
             priority: Priority = Priority.DUTY, run_id: str = "",
             body: Optional[Dict[str, Any]] = None,
-            block: Optional[bool] = None) -> Any:
+            block: Optional[bool] = None,
+            target: Optional[Dict[str, Any]] = None) -> Any:
     """Submit ``work`` and, in blocking mode, return its result.
 
     THE call site for a route whose whole body is a closure; :func:`queued` is
@@ -1120,7 +1133,7 @@ def run_job(kind: str, work: Callable[[], Any], *,
     """
     if current_run_id() is not None:
         return work()
-    rec = make_record(kind, priority=priority, run_id=run_id, body=body)
+    rec = make_record(kind, priority=priority, run_id=run_id, body=body, target=target)
     # BYO compute: a kind with a registered handler may go to the owner's own
     # node instead (their routing preference decides).  Always 202 then: the
     # answer comes back from another machine.
@@ -1131,7 +1144,8 @@ def run_job(kind: str, work: Callable[[], Any], *,
 
 @contextmanager
 def admit(kind: str, *, priority: Priority = Priority.DUTY, run_id: str = "",
-          body: Optional[Dict[str, Any]] = None) -> Iterator[Optional[JobRecord]]:
+          body: Optional[Dict[str, Any]] = None,
+          target: Optional[Dict[str, Any]] = None) -> Iterator[Optional[JobRecord]]:
     """``with admit(...)``: block until the queue admits this work, then solve.
 
     For the places a closure is the wrong shape — a background thread that
@@ -1142,7 +1156,7 @@ def admit(kind: str, *, priority: Priority = Priority.DUTY, run_id: str = "",
     if current_run_id() is not None:
         yield None
         return
-    rec = make_record(kind, priority=priority, run_id=run_id, body=body)
+    rec = make_record(kind, priority=priority, run_id=run_id, body=body, target=target)
     q = queue()
     q.submit(rec, None, block=True)          # returns once admitted
     try:
@@ -1270,13 +1284,15 @@ def queued(kind: str, *, priority: Priority = Priority.DUTY,
             rid = (str(run_id_from(kw) or "") if run_id_from is not None
                    else str(kw.get("run_id") or ""))
             body = {k: kw.get(k) for k in body_keys if k in kw}
+            from motor_ai_sim import run_target as _RT
+            tgt = _RT.from_call(kw)          # the machine the request names (else the loaded context, at registration)
             if not rid:
                 rid = new_run_id(str(kind).split(".")[0])
                 if "run_id" in kw or _accepts(fn, "run_id"):
                     kw["run_id"] = rid
             try:
                 out = run_job(kind, lambda: fn(*a, **kw), priority=priority,
-                              run_id=rid, body=body)
+                              run_id=rid, body=body, target=tgt)
             except JobAccepted as acc:
                 # THE 202 MODE.  The body is already parked with a worker; the
                 # answer is where to poll.  A real ``Response`` and not a dict,
@@ -1382,3 +1398,38 @@ def clear_cancelled(run_id: str = "") -> None:
     fn = getattr(q, "clear_cancelled", None)
     if fn is not None:
         fn(run_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  What is running RIGHT NOW, per machine (the project "live activity")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def live_targets() -> List[Dict[str, Any]]:
+    """The running and queued runs of THIS process (every workspace) that belong to a catalogued machine.
+
+    Safe to hand to a project page: no run id, no owner, no workspace, no request body - only what the run is (``kind``),
+    which machine it is for, whether it runs or waits, since when and how far it is (``progress`` 0..1, or ``None``).
+    """
+    getter = getattr(queue(), "live_records", None)
+    if getter is None:
+        return []
+    out: List[Dict[str, Any]] = []
+    for rec in getter():
+        tgt = rec.target if isinstance(rec.target, dict) else {}
+        if not (tgt.get("die") and tgt.get("config")):
+            continue
+        if rec.state not in (JobState.RUNNING, JobState.QUEUED):
+            continue
+        progress: Optional[float] = None
+        if rec.state == JobState.RUNNING:
+            try:
+                from motor_ai_sim import progress as _prog
+                entry = _prog.registry().entry(rec.run_id)
+                frac = float(entry.snapshot().get("frac") or 0.0) if entry is not None else 0.0
+                progress = round(min(1.0, max(0.0, frac)), 3) if frac > 0 else None
+            except Exception:                           # noqa: BLE001 - a bar is optional
+                progress = None
+        out.append({"kind": rec.kind, "state": rec.state, "die": tgt["die"], "config": tgt["config"],
+                    "duty": tgt.get("duty", ""),
+                    "queued_at": rec.queued_at, "started_at": rec.started_at or None, "progress": progress})
+    return out

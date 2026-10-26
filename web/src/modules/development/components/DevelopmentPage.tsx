@@ -35,6 +35,8 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import { MotorOpenActions } from '../MotorOpenActions';
   import { VariantControls } from './VariantControls';
   import { ProjectMotorTests } from '../ProjectMotorTests';
+  import { ActivityChip } from '../ActivityChip';
+  import { useProjectActivity } from '../useProjectActivity';
   import { isRecommended } from '../projectFlags';
   import { openProjectMotor } from '../../../lib/openProjectMotor';
   import { headerFlags, latestAndRecommended, motorColor, orderByGroup, variantKey } from '../motorGroups';
@@ -143,6 +145,7 @@ export default function DevelopmentPage() {
   const [reloadPreview, setReloadPreview] = useState<{ project: string; token: string; fresh: SpecState } | null>(null);
   const [motors, setMotors] = useState<ProjectMotor[]>([]);
   useProjectStripContext(selected, motors);   // the strip under the tabs names this project and its motors
+  const activityRows = useProjectActivity(view === 'motors' ? selected?.id : null);   // live runs on the project's motors: one poll per project, 30 s, only while the page is visible
   const projectEpochRef = useRef(0);
   const projectOpenEpochRef = useRef(0);
   const projectOpenInFlightRef = useRef('');
@@ -956,6 +959,7 @@ export default function DevelopmentPage() {
             {live && selected && <VariantControls projectId={selected.id} motor={live} staff={canManageGlobally} busy={busy} t={tr} showAll={showAllVersions}
               onChanged={async () => { await loadProjectMotors(selected.id, projectToken.current); }} />}
             {live && selected && <ProjectMotorTests projectId={selected.id} motor={live} showAll={showAllVersions} t={tr} />}
+            {live && <ActivityChip rows={activityRows} motor={live} t={tr} />}
             {live && <Stack direction="row" spacing={0.5} alignItems="center">
               {canEditProject && <MotorNoteField value={live.note ?? ''} disabled={busy} t={tr} onSave={(text) => changeMotorNote(live, text)} />}
               <span>{canManageProjectMotors ? <Select size="small" value={live.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(live, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${live.status === 'trial' ? 'trial' : 'current'}`)} />}</span>
@@ -972,7 +976,7 @@ export default function DevelopmentPage() {
           {stepNote(r.motor)}
         </Stack>);
         return <>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><Box sx={{ flex: 1 }} />
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><ActivityChip rows={activityRows} t={tr} /><Box sx={{ flex: 1 }} />
           <Tooltip title={tr('versionView.tip')}><ToggleButtonGroup exclusive size="small" value={showAllVersions ? 'all' : 'latest'} onChange={(_, next: 'latest' | 'all' | null) => { if (next) changeShowAllVersions(next === 'all'); }} aria-label={tr('versionView.label')}>
             <ToggleButton value="latest" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.latest')}</ToggleButton>
             <ToggleButton value="all" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.all')}</ToggleButton>

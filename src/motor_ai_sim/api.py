@@ -429,9 +429,11 @@ app.include_router(production_admin_router)
 from motor_ai_sim.development.routes import router as development_router
 from motor_ai_sim.development.admin_routes import router as development_admin_router
 from motor_ai_sim.development.motors import router as development_motors_router
+from motor_ai_sim.development.activity import router as development_activity_router
 app.include_router(development_router)
 app.include_router(development_admin_router)
 app.include_router(development_motors_router)
+app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
 # Activity digests (owner 2026-10-26): settings, unsubscribe link, Admin -> Digests (the only place a digest is sent)
 from motor_ai_sim.digest.routes import router as digest_router, admin_router as digest_admin_router
 app.include_router(digest_router)

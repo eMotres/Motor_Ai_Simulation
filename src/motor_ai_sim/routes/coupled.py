@@ -1170,6 +1170,7 @@ def _cycle_inputs(body: Dict[str, Any],
         "part_states": None,          # = the states the run's summary carries
         "magnet_limit_c": lim, "magnet_limit_source": lim_src,
         "winding_limit_c": _winding_limit_for(body),
+        "winding_peak_limit_c": _winding_peak_limit_for(body),
         "rated_state_c": rated, "rated_duty": rated_duty,
         "rated_state_source": rated_why,
         "cooling": dict(cooling or {}),
@@ -1222,6 +1223,7 @@ def _cycle_step(inputs: Dict[str, Any], em_summary: Dict[str, Any],
         magnet_limit_c=inputs["magnet_limit_c"],
         magnet_limit_source=inputs["magnet_limit_source"],
         winding_limit_c=inputs.get("winding_limit_c"),
+        winding_peak_limit_c=inputs.get("winding_peak_limit_c"),
         side_areas=side, d_housing_m=inputs["d_housing_m"],
         rated_state_c=inputs["rated_state_c"])
     regime = _cdc.solve_regime(
@@ -1329,7 +1331,10 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
         thermal_result=field, em_summary=em_summary,
         magnet_grade=mats.get("magnet"),
         bearing_temp_c=bearing_temp_c,
-        winding_limit_c=_winding_limit_for(body),
+        # THE TIME TO THE LIMIT IS A SHORT, TRANSIENT PULL: the winding is judged against the configuration's PEAK limit
+        # (owner 2026-10-27; it falls back to the continuous one when none is stated).  The S1 / rated paths below
+        # keep `_winding_limit_for`.
+        winding_limit_c=_winding_peak_limit_for(body), peak_winding=True,
         magnet_limit_c=(float(body["magnet_limit_c"])
                         if body.get("magnet_limit_c") not in (None, "") else None))
     if not limits:
@@ -4570,7 +4575,8 @@ _CYCLE_BLOCK_KEYS = (
     "magnet_limit_source", "hot_spot_offset_K", "winding_hot_peak_c",
     "magnet_peak_c", "coil_temp_c", "magnet_temp_c", "s2_time_to_limit_s",
     "s2_limiting_part", "s2_note", "s2_from_rated_s", "s2_from_rated_part",
-    "s2_from_rated_duty", "at_allowable", "at_requested", "ed_note", "note")
+    "s2_from_rated_duty", "at_allowable", "at_requested", "ed_note", "note",
+    "winding_peak_limit_c")
 
 
 def _cycle_block_of(regime: Optional[Dict[str, Any]],
@@ -7449,6 +7455,16 @@ def _winding_limit_for(body: Optional[Dict[str, Any]]) -> Optional[float]:
     try:
         from motor_ai_sim import winding_limit as _wl
         return _wl.for_solve(body)
+    except Exception:  # noqa: BLE001 — a limit read never fails a solve
+        return None
+
+
+def _winding_peak_limit_for(body: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The PEAK winding limit of the configuration THIS solve is for (``winding_limit.peak_for_solve``; it falls back
+    to the continuous limit), for the transient judgements: the time to the limit and the short pull of a duty cycle."""
+    try:
+        from motor_ai_sim import winding_limit as _wl
+        return _wl.peak_for_solve(body)
     except Exception:  # noqa: BLE001 — a limit read never fails a solve
         return None
 

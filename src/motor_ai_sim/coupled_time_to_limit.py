@@ -255,6 +255,22 @@ def winding_limit(cfg_doc: Optional[Mapping[str, Any]] = None,
                         % float(lim))
 
 
+def winding_peak_limit(cfg_doc: Optional[Mapping[str, Any]] = None,
+                       limit_c: Optional[float] = None) -> Tuple[float, str]:
+    """The winding limit of a short PEAK (owner 2026-10-27): what the S2 time-to-limit is judged against.  The
+    configuration's ``limits.winding_peak_c`` when it states one - passed in (``limit_c``) or read off the handed-in
+    document - else its ``winding_c`` (:func:`winding_limit`'s own answer, so a configuration with one limit behaves
+    as before).  The CONTINUOUS verdicts (S1, rated) never call this."""
+    from motor_ai_sim import winding_limit as _wl
+    v = _num(limit_c)
+    if v is None:
+        v = _wl.config_winding_peak_limit_c(cfg_doc)
+    own_c = _wl.config_winding_limit_c(cfg_doc) if isinstance(cfg_doc, Mapping) else None
+    if v is not None:
+        return float(v), _wl.basis_words(v, peak=(own_c is None or abs(float(v) - float(own_c)) > 1e-9))
+    return winding_limit(cfg_doc)
+
+
 def magnet_card_limit(grade: Any) -> Tuple[Optional[float], str]:
     """The assigned magnet's maximum working temperature, and where it is from.
 
@@ -321,21 +337,29 @@ def part_limits(*, thermal_result: Mapping[str, Any],
                 magnet_limit_c: Optional[float] = None,
                 bearing_limit_c: Optional[float] = None,
                 rated_winding: bool = False,
+                peak_winding: bool = False,
                 ) -> List[PartLimit]:
     """Every part that HAS a limit on this machine, with the offset it rides.
 
     A part with no limit is simply absent — "nothing on this machine states a
     maximum working temperature for the magnets" is an answer, and a magnet
     judged against an invented 180 °C would be worse than one not judged.
+
+    ``peak_winding`` (owner 2026-10-27): the winding is judged against the PEAK limit of the configuration - the S2
+    time-to-limit of a short pull.  ``winding_limit_c`` is then the configuration's peak limit (it falls back to its
+    continuous one), and with none given the project default applies, exactly as for the continuous limit.
     """
     out: List[PartLimit] = []
 
+    from motor_ai_sim import winding_limit as _wl
     w_lim, w_src = ((float(winding_limit_c),
                      ("the configuration's RATED winding temperature (%g °C)"
                       % float(winding_limit_c)) if rated_winding
+                     else _wl.basis_words(winding_limit_c, peak=True) if peak_winding
                      else "given by the caller")
                     if winding_limit_c is not None
                     else rated_winding_limit() if rated_winding
+                    else winding_peak_limit() if peak_winding
                     else winding_limit())
     w_mean = _comp(thermal_result, "winding", "avg")
     if w_mean is not None and rated_winding:

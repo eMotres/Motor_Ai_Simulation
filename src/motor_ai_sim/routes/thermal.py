@@ -8774,7 +8774,12 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
         samples = max(8, min(int(_dc_num(body, "samples_per_segment", 60)), 400))
         # …the solved configuration's own winding limit when it states one (owner 2026-10-26)
         from motor_ai_sim import winding_limit as _wl
-        limits_c = default_limits(body.get("magnet_limit_c"), _wl.for_solve(body))
+        # …and a SHORT PULL (the S2 time-to-limit, a single S2 cycle) is judged at its PEAK limit (owner 2026-10-27, falls
+        # back to the continuous one); an S3 is a periodic cycle the machine lives in, so its allowable-ED search keeps
+        # the continuous limit
+        pull_limits_c = default_limits(body.get("magnet_limit_c"), _wl.peak_for_solve(body))
+        limits_c = (pull_limits_c if profile.kind == "S2"
+                    else default_limits(body.get("magnet_limit_c"), _wl.for_solve(body)))
         ed_search = bool(body.get("ed_search", True))
         # An explicit EMPTY list is an answer ("no curve, just the one period"),
         # so it is honoured rather than falling back to the default span.
@@ -8900,8 +8905,11 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                     "so the magnets are NOT judged here; pass magnet_limit_c to "
                     "judge them."),
                 "limits_c": {k: float(v) for k, v in limits_c.items()},
+                # the limit the S2 pulls below are judged at (equal to the line above unless the configuration states a
+                # separate peak limit and this is an S3)
+                "winding_peak_limit_c": pull_limits_c["winding"],
             }
-            s2 = time_to_limit(profile, net, caps, limits=limits_c)
+            s2 = time_to_limit(profile, net, caps, limits=pull_limits_c)
             limits.update({
                 "s2_time_to_limit_s": s2["s2_time_to_limit_s"],
                 "s2_limiting_part": s2["s2_limiting_part"],
@@ -8922,7 +8930,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
             #     pull out of the regime the machine already lives in.
             cal_state = map_state_c(steady)
             if cal_state:
-                s2r = time_to_limit(profile, net, caps, limits=limits_c,
+                s2r = time_to_limit(profile, net, caps, limits=pull_limits_c,
                                     T0=cal_state)
                 limits.update({
                     "s2_from_rated_s": s2r["s2_time_to_limit_s"],
@@ -8948,7 +8956,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                 mean_state = {n: float(v) for n, v
                               in (cycle.get("mean_c") or {}).items()
                               if v is not None}
-                s2m = time_to_limit(profile, net, caps, limits=limits_c,
+                s2m = time_to_limit(profile, net, caps, limits=pull_limits_c,
                                     T0=mean_state)
                 limits.update({
                     "s2_from_cycle_mean_s": s2m["s2_time_to_limit_s"],

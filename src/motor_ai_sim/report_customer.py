@@ -308,7 +308,9 @@ def _s2_time(col: Mapping[str, Any]) -> Tuple[Optional[float], Optional[float], 
         lim = dc.get("limits") if isinstance(dc.get("limits"), Mapping) else {}
         t = _num(lim.get("s2_time_to_limit_s"))
         if t is not None:
-            return t, _num(lim.get("winding_limit_c")), "S2 time-to-limit, from cold"
+            # the limit the S2 pull was judged at: the peak limit when the record states it (owner 2026-10-27)
+            return (t, _num(lim.get("winding_peak_limit_c")) or _num(lim.get("winding_limit_c")),
+                    "S2 time-to-limit, from cold")
     for k in ("coupled", "coupled_limit"):
         rec = res.get(k)
         blk = rec.get("time_to_limit") if isinstance(rec, Mapping) else None
@@ -355,13 +357,19 @@ REQUIREMENTS_HEAD = ["Requirement", "Achieved", "Source", "Status"]
 
 def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]], *,
                       winding_limit_c: Optional[float] = None,
-                      batt: Optional[Mapping[str, Any]] = None) -> List[List[str]]:
+                      batt: Optional[Mapping[str, Any]] = None,
+                      winding_peak_limit_c: Optional[float] = None) -> List[List[str]]:
     """The "Requirements check" table, header included: one row per customer requirement.  Empty when the project
-    states no requirement."""
+    states no requirement.  The continuous rows judge the winding at ``winding_limit_c``; the "peak held" row (an S2
+    time-to-limit) at ``winding_peak_limit_c`` (owner 2026-10-27; omitted = the continuous limit)."""
     req = dict(req or {})
     rows: List[List[str]] = []
     wl = _num(winding_limit_c)
     wl_txt = _fmt(wl, 0, "°C") if wl is not None else "the winding limit"
+    wp = _num(winding_peak_limit_c)
+    if wp is None:
+        wp = wl
+    wp_txt = _fmt(wp, 0, "°C") if wp is not None else "the winding limit"
 
     # ── continuous torque at its speed ──────────────────────────────────
     cont = req.get("continuous") if isinstance(req.get("continuous"), Mapping) else None
@@ -418,7 +426,7 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
                                                     _fmt(_num(_em(c).get("coil_temp_C")), 0, "°C")),
                          MET if ok else "%s (%s)" % (NOT_MET, _pct_short(t or 0.0, T))])
         if dur is not None:
-            d_label = "Peak held %s, winding ≤ %s" % (_secs(dur), wl_txt)
+            d_label = "Peak held %s, winding ≤ %s" % (_secs(dur), wp_txt)
             if c is None:
                 rows.append([d_label, "—", "S2 time-to-limit", NOT_COMPUTED])
             else:
@@ -429,8 +437,8 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
                     rows.append([d_label, ach, "S2 time-to-limit", NOT_COMPUTED])
                 else:
                     ach = "%s to %s" % (_secs(t_s), _fmt(lim, 0, "°C"))
-                    if wl is not None and not _same_limit(lim, wl):
-                        st = "%s at %s" % (NOT_COMPUTED, wl_txt)
+                    if wp is not None and not _same_limit(lim, wp):
+                        st = "%s at %s" % (NOT_COMPUTED, wp_txt)
                     else:
                         st = MET if t_s >= dur else NOT_MET
                     rows.append([d_label, ach, src, st])

@@ -13,7 +13,8 @@ import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import { ProductionApiError, productionApi } from '../api';
-import { callerRole, canEditRole, unackedRevisions } from '../helpers';
+import { callerRole, canEditRole, displayText, unackedRevisions } from '../helpers';
+import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
 import type {
@@ -101,6 +102,14 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
 
   const role = prod ? callerRole(prod.members, email, isAdmin) : null;
+  // the strip above the page names this production's motor with its title when that is short (lib/stripContext.shortTitle)
+  const stripTitle = shortTitle(displayText(prod?.title, ui).text);
+  useEffect(() => {
+    const cur = useTabContextStore.getState().production;
+    if (cur && cur.die === die && cur.config === config && (cur.title ?? '') !== stripTitle) {
+      useTabContextStore.getState().setProduction({ die, config, ...(stripTitle ? { title: stripTitle } : {}) });
+    }
+  }, [die, config, stripTitle]);
   const ctx = useMemo(() => ({
     die, config, role, email, uiLang: ui, canEdit: canEditRole(role), productType: prod?.product_type ?? 'motor',
     reload: () => { void reload(); },

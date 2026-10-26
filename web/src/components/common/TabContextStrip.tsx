@@ -52,13 +52,18 @@ const ProjectStrip: React.FC<{ ctx: ProjectContext }> = ({ ctx }) => {
   );
 };
 
-const ProductionStrip: React.FC<{ die: string; config: string }> = ({ die, config }) => {
+// The production's motor, drawn exactly like the Configure strip (ActiveFamilyStrip): the same bar, the same
+// "<b>die</b> / <b>configuration</b>" line, tabular figures.  The bar sits in the app column ABOVE the page scroller, so it
+// stays in view while a long tab (BOM, Assembly process) scrolls under the sticky production sub-menu, never covers content
+// and has the panel background in both themes.
+const ProductionStrip: React.FC<{ die: string; config: string; title?: string }> = ({ die, config, title }) => {
   const { t } = useTranslation('common');
   return (
     <Box sx={BAR_SX} data-testid="strip-production">
       <Tooltip title={t('strip.productionTip')}>
-        <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help', fontVariantNumeric: 'tabular-nums' }}>
-          {t('strip.production')}: <b style={{ color: 'var(--text-1)' }}>{die}</b>{' / '}<b style={{ color: 'var(--text-1)' }}>{config}</b>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help', fontVariantNumeric: 'tabular-nums', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <b style={{ color: 'var(--text-1)' }}>{die}</b>{' / '}<b style={{ color: 'var(--text-1)' }}>{config}</b>
+          {title ? <>{' · '}<span>{title}</span></> : null}
         </Typography>
       </Tooltip>
     </Box>
@@ -68,7 +73,7 @@ const ProductionStrip: React.FC<{ die: string; config: string }> = ({ die, confi
 /** Renders nothing for kind 'none' (and for 'live', which the machine strip draws itself). */
 const TabContextStrip: React.FC<{ ctx: StripContext }> = ({ ctx }) => {
   if (ctx.kind === 'project') return <ProjectStrip ctx={ctx} />;
-  if (ctx.kind === 'production') return <ProductionStrip die={ctx.die} config={ctx.config} />;
+  if (ctx.kind === 'production') return <ProductionStrip die={ctx.die} config={ctx.config} title={ctx.title} />;
   return null;
 };
 

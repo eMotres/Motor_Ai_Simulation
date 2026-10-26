@@ -465,7 +465,6 @@
     "chipTip": "Open this variant's stored points in Configure (the live machine is not changed)",
     "noPointsTip": "No stored points for this variant yet - open it from the project's Motors & results tab",
     "moreTip": "Other variants",
-    "production": "Production",
     "productionTip": "The motor of the production you are viewing. This line does not change the live machine."
   },
   "update": {

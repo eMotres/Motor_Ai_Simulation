@@ -175,6 +175,11 @@ test('mechanical worst case: label from the record, stale reasons (superseded so
   assert.deepEqual(mechStaleReasons({ rotor_stress: { solver_status: 'unknown' } }), []);       // undated: not flagged stale, not claimed current either
   assert.equal(worstCaseLabel({ rotor_stress: { worst_case: { rpm: 1000 } } }), '1,000 rpm');
   assert.equal(worstCaseLabel(null), '');
+  // the magnetic pull (2026-10-26): its peak and its source ride on the label
+  assert.equal(worstCaseLabel({ rotor_stress: { worst_case: { rpm: 23000, torque_nm: 7.5, pull_source: 'em', pull_mpa: 0.734 } } }),
+    '23,000 rpm, 7.50 N·m, pull 0.73 MPa (EM field)');
+  assert.equal(worstCaseLabel({ rotor_stress: { worst_case: { rpm: 1000, pull_source: 'uniform', pull_mpa: 0.7 } } }),
+    '1,000 rpm, pull 0.70 MPa (estimate)');
 });
 
 test('field kinds: the tab-style names map to the stored kinds; an unknown kind or a 404 is "not computed", not an error', () => {

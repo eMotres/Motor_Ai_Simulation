@@ -441,6 +441,9 @@ export interface RotorStress {
     reaction_at: string;
     reaction_rows: number;
   } | null;
+  /** the radial MAGNETIC PULL of the air-gap field (2026-10-26) — null when
+   *  none was applied.  Pressures are magnitudes toward the stator. */
+  pull_load?: PullLoad | null;
   mesh: {
     n_nodes: number; n_triangles: number; element_order: number;
     mesh_size_mm: number; rigid_residual: number;
@@ -583,6 +586,29 @@ async function get<T>(path: string,
  *  ~40× faster on the G2, the field replicated for the map. */
 export type SymmetryMode = 'full' | 'sector';
 
+/** The magnetic pull of the air-gap field (2026-10-26): `none` (the default),
+ *  `em` = the Maxwell stress of the duty's own stored EM field, `uniform` = an
+ *  explicit estimate p (MPa). */
+export type PullMode = 'none' | 'em' | 'uniform';
+
+export interface PullLoad {
+  source: 'em' | 'uniform';
+  label: string;
+  estimate: boolean;
+  gap_side: 'outer' | 'inner';
+  pressure_peak_mpa: number;
+  pressure_mean_mpa: number;
+  pressure_nominal_mpa: number;
+  radial_force_total_n: number;
+  radial_force_per_pole_n: number;
+  n_poles: number;
+  b_equivalent_t?: number | null;
+  maxwell_torque_nm?: number | null;
+  check?: { ratio?: number | null; within_tol?: boolean | null; what?: string } | null;
+  envelope?: { n_poles: number; worst_pole: number; pole_spread?: number[] | null; rule?: string } | null;
+  origin?: { die?: string; config?: string; duty?: string; computed_at?: string; geometry?: string };
+}
+
 export const fetchRotorStress = (p: {
   rpm: number; overspeed_factor: number; interference_mm: number;
   mesh_size_mm: number; order: number;
@@ -612,6 +638,11 @@ export const fetchRotorStress = (p: {
   rotor_core_temp_c?: number;
   shaft_temp_c?: number;
   contacts?: Record<string, ContactSpec>;
+  /** the magnetic pull (2026-10-26); OMITTED = none, the request this app
+   *  has always sent */
+  pull?: PullMode;
+  /** pull = uniform: the pressure, MPa */
+  pull_mpa?: number;
   /** the Recompute button: ignore a stored history answer and solve again */
   fresh?: boolean;
 }) => {
@@ -668,6 +699,9 @@ export const fetchLimitSpeed = (p: {
   contacts?: Record<string, ContactSpec>;
   /** 1.0 = the rotor's structural limit; omitted = the API's own 1.0 */
   target_sf?: number;
+  /** the magnetic pull, held across the search; omitted = none */
+  pull?: PullMode;
+  pull_mpa?: number;
   /** the Recompute button: ignore a stored history answer and search again */
   fresh?: boolean;
 }) => {

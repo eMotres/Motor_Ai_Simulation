@@ -51,7 +51,11 @@ export interface StoredThermal {
 }
 export interface StoredRotorStress { case?: string; sf_min?: number; sf_min_part?: string; sf_min_p05?: number; overspeed_factor?: number; max_displacement_um?: number; rotor_od_growth_um?: number; interference_mm?: number; proof_rpm?: number; limit_speed_rpm?: number;
   /** the load case of the record, from its own fields */
-  worst_case?: { rpm?: number; torque_nm?: number; loads?: string; case?: string };
+  worst_case?: { rpm?: number; torque_nm?: number; loads?: string; case?: string;
+    /** the magnetic pull of the case (2026-10-26): `em` (the duty's field) or `uniform` (an estimate), its peak pressure */
+    pull_source?: 'em' | 'uniform'; pull_mpa?: number; pull_per_pole_n?: number; pull_label?: string; pull_estimate?: boolean };
+  /** the load case the retention verdict was reached under, when it carried a pull */
+  load_case?: string;
   /** the speed the solve was asked at (the proof case may run above it) */
   request_rpm?: number;
   filed_under?: string; records?: number;

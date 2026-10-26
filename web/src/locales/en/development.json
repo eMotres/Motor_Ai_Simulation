@@ -729,5 +729,17 @@
     "ramAir": "A water-propeller motor sits in the hull or pod; no airstream reaches it."
   },
   "specReadOnly": "View only",
-  "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages."
+  "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages.",
+  "recommended": {
+    "label": "Recommended",
+    "tip": "Recommended variant of this project, marked by our engineers.",
+    "setTip": "Mark this variant as the recommended one of the project (one at a time). Without a mark the latest current variant is shown instead."
+  },
+  "report": {
+    "word": "Report (Word)",
+    "pdf": "Report (PDF)",
+    "reviewed": "Report reviewed",
+    "reviewedTip": "The report was checked by our engineers: project members can download it. Staff can always build it.",
+    "notReviewedTip": "The report is being checked by our engineers."
+  }
 }

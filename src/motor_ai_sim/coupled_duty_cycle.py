@@ -164,6 +164,10 @@ class CycleModel:
     rated_state_c: Dict[str, float] = _field(default_factory=dict)
     side_area_basis: Optional[Dict[str, Any]] = None
     calibration_note: str = ""
+    #: The limits the SHORT pulls (the S2 time-to-limit) are judged against - the configuration's PEAK winding limit
+    #: (owner 2026-10-27).  ``None`` = the same as ``limits``.  ``limits`` itself is what the cycle is judged on: the
+    #: peak limit for a single S2 pull, the CONTINUOUS limit for an S3 (a periodic cycle the machine lives in for ever).
+    pull_limits: Optional[Dict[str, float]] = None
 
     @property
     def hot_spot_offset_k(self) -> float:
@@ -223,6 +227,7 @@ def build_model(*, block: Mapping[str, Any],
                 magnet_k_w_per_mk: Optional[float] = None,
                 rated_state_c: Optional[Mapping[str, float]] = None,
                 winding_limit_c: Optional[float] = None,
+                winding_peak_limit_c: Optional[float] = None,
                 ) -> CycleModel:
     """Fit this pass's cycle model to the map this pass just solved.
 
@@ -317,9 +322,15 @@ def build_model(*, block: Mapping[str, Any],
         magnet_k_w_per_mk=magnet_k_w_per_mk,
         calibration_duty=str(duty_name))
 
+    # TWO WINDING LIMITS (owner 2026-10-27).  A single S2 pull IS a peak, so the cycle and its pull share the peak limit;
+    # an S3 is a periodic cycle the machine runs in for ever, so the cycle keeps the continuous limit while the one
+    # pull out of it (the S2 times) is judged at the peak limit.  A configuration with one limit has them equal.
+    w_peak = winding_peak_limit_c if winding_peak_limit_c is not None else winding_limit_c
+    pull_limits = tdc.default_limits(magnet_limit_c, w_peak)
+    cycle_limits = pull_limits if kind == "S2" else tdc.default_limits(magnet_limit_c, winding_limit_c)
     return CycleModel(
         kind=kind, duty=str(duty_name), network=net, caps=caps, profile=profile,
-        limits=tdc.default_limits(magnet_limit_c, winding_limit_c),
+        limits=cycle_limits, pull_limits=pull_limits,
         cycle_s=float(profile.cycle_s),
         requested_ed_pct=(float(profile.ed_pct)
                           if (kind == "S3" and profile.ed_given
@@ -401,12 +412,13 @@ def _time_to_limit(model: CycleModel,
     """:func:`thermal_duty_cycle.time_to_limit`, asked twice at most."""
     short = max(_S2_FIRST_HORIZON_FLOOR_S,
                 _S2_FIRST_HORIZON_FACTOR * float(model.profile.segments[0].t_s))
+    lims = model.pull_limits or model.limits
     rec = tdc.time_to_limit(model.profile, model.network, model.caps,
-                            limits=model.limits, T0=T0, t_max_s=short)
+                            limits=lims, T0=T0, t_max_s=short)
     if rec.get("s2_time_to_limit_s") is not None:
         return rec
     return tdc.time_to_limit(model.profile, model.network, model.caps,
-                             limits=model.limits, T0=T0)
+                             limits=lims, T0=T0)
 
 
 def _s2_times(model: CycleModel) -> Dict[str, Any]:
@@ -459,11 +471,15 @@ def solve_regime(model: CycleModel, *, samples_per_segment: int = LOOP_SAMPLES,
     module (see the note at the call site).
     """
     if model.kind == "S3":
-        return _regime_s3(model, samples_per_segment=samples_per_segment,
-                          with_curve=with_curve, cycle_lengths=cycle_lengths,
-                          iters=iters)
-    return _regime_s2(model, samples_per_segment=samples_per_segment,
-                      with_curve=with_curve)
+        out = _regime_s3(model, samples_per_segment=samples_per_segment,
+                         with_curve=with_curve, cycle_lengths=cycle_lengths,
+                         iters=iters)
+    else:
+        out = _regime_s2(model, samples_per_segment=samples_per_segment,
+                         with_curve=with_curve)
+    # the winding limit the S2 pulls of this regime were judged at (owner 2026-10-27)
+    out["winding_peak_limit_c"] = (model.pull_limits or model.limits).get("winding")
+    return out
 
 
 def _regime_s3(model: CycleModel, *, samples_per_segment: int,
@@ -628,7 +644,7 @@ def _regime_s2(model: CycleModel, *, samples_per_segment: int,
             "one pull from %s lasts %.1f s before the %s reaches %s%s."
             % (_start_words(model), float(t_allow),
                times.get("s2_limiting_part") or "winding",
-               _limit_words(model, times.get("s2_limiting_part")),
+               _limit_words(model, times.get("s2_limiting_part"), pull=True),
                ("" if asked is None else
                 "; the %g s asked for %s under it"
                 % (float(asked),
@@ -636,9 +652,9 @@ def _regime_s2(model: CycleModel, *, samples_per_segment: int,
     return out
 
 
-def _limit_words(model: CycleModel, part: Optional[str]) -> str:
+def _limit_words(model: CycleModel, part: Optional[str], pull: bool = False) -> str:
     try:
-        return "%.0f °C" % float(model.limits[str(part)])
+        return "%.0f °C" % float(((model.pull_limits or model.limits) if pull else model.limits)[str(part)])
     except (KeyError, TypeError, ValueError):
         return "its limit"
 
@@ -886,6 +902,8 @@ def _limits_block(model: CycleModel,
     lims = {k: float(v) for k, v in model.limits.items()}
     out: Dict[str, Any] = {
         "winding_limit_c": lims.get("winding"),
+        # the limit the S2 pull is judged at (the peak limit; equal to the line above for a single S2 pull)
+        "winding_peak_limit_c": (model.pull_limits or model.limits).get("winding"),
         "winding_limit_note": (
             "the project's insulation class, judged on the HOT SPOT — the "
             "winding mean plus the calibration map's own max − mean offset of "

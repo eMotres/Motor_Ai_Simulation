@@ -102,6 +102,7 @@ def _requirement_rows(die: str, cfg: str, cfg_doc: Dict[str, Any], stored: Dict[
         from motor_ai_sim import winding_limit as wl
         req = rc.project_requirements(die, cfg, cfg_doc)
         lim = wl.config_winding_limit_c(cfg_doc)
+        lim_pk = wl.config_winding_peak_limit_c(cfg_doc)      # the S2 (peak duration) answer is judged at this one
     except Exception:                                       # noqa: BLE001
         return rows
     ov = _num(req.get("overspeed_rpm"))
@@ -111,9 +112,9 @@ def _requirement_rows(die: str, cfg: str, cfg_doc: Dict[str, Any], stored: Dict[
         if not done:
             rows.append({"duty": MOTOR_LEVEL, "item": ITEM_OVERSPEED.format(rpm=f"{ov:,.0f}"),
                          "reason": REASON_MISSING})
-    if lim is None:
+    if lim is None and lim_pk is None:
         return rows
-    for name, kinds in stored.items():
+    for name, kinds in (stored.items() if lim is not None else ()):
         for k in ("coupled_limit", "coupled"):
             blk = ((kinds or {}).get(k) or {}).get("continuous_rating") if isinstance((kinds or {}).get(k), dict) else None
             got = _num(((blk or {}).get("limits_c") or {}).get("winding")) if isinstance(blk, dict) else None
@@ -123,14 +124,14 @@ def _requirement_rows(die: str, cfg: str, cfg_doc: Dict[str, Any], stored: Dict[
                 break
     pk = req.get("peak") if isinstance(req.get("peak"), dict) else {}
     dur = _num(pk.get("duration_s"))
-    if dur is not None:
+    if dur is not None and lim_pk is not None:
         cols = [{"duty": n, "d": d, "em": (d.get("summary") or {}), "res": stored.get(str(d.get("name"))) or {}}
                 for n, d in ((str(x.get("name")), x) for x in (cfg_doc.get("duties") or []) if isinstance(x, dict))]
         c = rc.match_duty(cols, _num(pk.get("speed_rpm")), _num(pk.get("torque_Nm")))
         if c is not None:
             t, got, _src = rc._s2_time(c)
-            if t is None or got is None or abs(got - lim) > 0.5:
-                rows.append({"duty": str(c["duty"]), "item": ITEM_S2_LIMIT.format(dur=f"{dur:g}", lim=f"{lim:g}"),
+            if t is None or got is None or abs(got - lim_pk) > 0.5:
+                rows.append({"duty": str(c["duty"]), "item": ITEM_S2_LIMIT.format(dur=f"{dur:g}", lim=f"{lim_pk:g}"),
                              "reason": (REASON_OTHER_LIMIT.format(got=f"{got:g}") if got is not None
                                         else REASON_MISSING)})
     return rows

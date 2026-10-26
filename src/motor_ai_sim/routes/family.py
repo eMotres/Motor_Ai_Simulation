@@ -5309,6 +5309,7 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
 
 class LimitsPatch(BaseModel):
     winding_c: Optional[float] = None    # the project's winding limit [°C]; null clears it (owner 2026-10-26)
+    winding_peak_c: Optional[float] = None   # the winding limit for a short PEAK (S2) [°C]; null clears it (owner 2026-10-27)
 
 
 @router.patch("/config/{die}/{cfg}/limits")
@@ -5316,19 +5317,36 @@ def set_limits(die: str, cfg: str, req: LimitsPatch,
                _w: dict = Depends(require_catalog_write)):
     """The configuration's own WINDING LIMIT (owner 2026-10-26, 180 °C for every verdict of a project).  Read by every
     limit check, the S1 search, the S2 time-to-limit, the duty cycle and the report (``winding_limit``); a
-    configuration without it keeps the project defaults.  ``winding_c: null`` clears it."""
+    configuration without it keeps the project defaults.  ``winding_c: null`` clears it.
+
+    ``winding_peak_c`` (owner 2026-10-27) is the SEPARATE limit of a short peak - the S2 time-to-limit and the "peak
+    duration" requirement; every continuous verdict keeps ``winding_c``.  A configuration that states none has its peak
+    limit equal to ``winding_c``.  A field that is NOT SENT is left unchanged, an explicit ``null`` clears it; the
+    full ``limits`` block is returned."""
     from motor_ai_sim import winding_limit as _wl
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     _require_die_write(die, _w, cfg)
-    v, why = _wl.validate(req.winding_c)
+    sent = set(getattr(req, "model_fields_set", None) or getattr(req, "__fields_set__", None) or ())
+    v, why = _wl.validate(req.winding_c) if "winding_c" in sent else (None, None)
+    if why:
+        raise HTTPException(422, detail=why)
+    vp, why = (_wl.validate(req.winding_peak_c, "peak winding limit")
+               if "winding_peak_c" in sent else (None, None))
     if why:
         raise HTTPException(422, detail=why)
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     lim = dict(c.get(_wl.LIMITS_KEY) or {})
-    if v is None:
-        lim.pop(_wl.WINDING_KEY, None)
-    else:
-        lim[_wl.WINDING_KEY] = round(float(v), 1)
+    for key, name, val in ((_wl.WINDING_KEY, "winding_c", v), (_wl.WINDING_PEAK_KEY, "winding_peak_c", vp)):
+        if name not in sent:
+            continue
+        if val is None:
+            lim.pop(key, None)
+        else:
+            lim[key] = round(float(val), 1)
+    cont, pk = _wl._num(lim.get(_wl.WINDING_KEY)), _wl._num(lim.get(_wl.WINDING_PEAK_KEY))
+    if cont is not None and pk is not None and pk < cont:
+        raise HTTPException(422, detail="the peak winding limit (%g °C) must not be below the winding limit (%g °C)"
+                                        % (pk, cont))
     if lim:
         c[_wl.LIMITS_KEY] = lim
     else:

@@ -2725,9 +2725,9 @@ def temp_chart_limits(mats: Dict[str, Any],
     insulation class and the magnet grade's.  Both come from the same places the
     warnings engine reads, so a bar past a line and a red row are one fact."""
     out: Dict[str, float] = {}
-    lim = next((_numf((c or {}).get("winding_limit_c"))
+    lim = next((_numf((c or {}).get("winding_cont_limit_c", (c or {}).get("winding_limit_c")))
                 for c in (ctxs or {}).values()
-                if (c or {}).get("winding_limit_c") is not None), None)
+                if (c or {}).get("winding_cont_limit_c", (c or {}).get("winding_limit_c")) is not None), None)
     if lim is None:
         lim, _n = _insulation_limit(mats)
     if lim:
@@ -6344,7 +6344,8 @@ def _magnet_limit(grade: Any) -> Tuple[Optional[float], str]:
 
 def _insulation_limit(mats: Dict[str, Any],
                       cfg_doc: Optional[Dict[str, Any]] = None,
-                      limit_c: Optional[float] = None) -> Tuple[float, str]:
+                      limit_c: Optional[float] = None,
+                      peak: bool = False) -> Tuple[float, str]:
     """The winding's temperature limit.  Always an ASSUMPTION, always said so.
 
     The materials library's enamel and liner entries are thermal-property cards
@@ -6353,12 +6354,19 @@ def _insulation_limit(mats: Dict[str, Any],
     (polyimide enamel, Nomex liner) is qualified to 200 °C, which on the IEC
     60085 ladder is class N — not class H, which is 180 °C (reviewer
     2026-09-14).
+
+    ``peak`` (owner 2026-10-27): the limit of a short PEAK (the S2 time-to-limit) - the configuration's
+    ``limits.winding_peak_c``, which falls back to its ``winding_c``.
     """
     # THE CONFIGURATION'S OWN LIMIT FIRST (owner 2026-10-26, 180 °C for every verdict of a project) - one number, stated once
     from motor_ai_sim import winding_limit as _wl
-    own = _numf(limit_c) if limit_c is not None else _wl.config_winding_limit_c(cfg_doc)
+    own = (_numf(limit_c) if limit_c is not None
+           else _wl.config_winding_peak_limit_c(cfg_doc) if peak
+           else _wl.config_winding_limit_c(cfg_doc))
     if own is not None:
-        return float(own), "the project's winding limit (%g °C)" % float(own)
+        # named as a PEAK limit only where it really differs from the continuous one
+        cont = _wl.config_winding_limit_c(cfg_doc)
+        return float(own), _wl.basis_words(own, peak=bool(peak and (cont is None or abs(float(own) - cont) > 1e-9)))
     lim = PROJECT_INSULATION_C
     en = str((mats or {}).get("wire_insulation") or "polyimide")
     li = str((mats or {}).get("slot_insulation") or "Nomex")
@@ -8442,8 +8450,14 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                      ins_lim: float, ins_note: str,
                      cold_k: float, cold_note: str,
                      slots: Optional[int] = None,
-                     carrier_hz: Optional[float] = None) -> Dict[str, Any]:
+                     carrier_hz: Optional[float] = None,
+                     ins_peak_lim: Optional[float] = None,
+                     ins_peak_note: str = "") -> Dict[str, Any]:
     """The flat per-duty view :func:`duty_warnings` judges.
+
+    ``ins_peak_lim`` / ``ins_peak_note`` (owner 2026-10-27) - the winding limit of a short PEAK; omitted = the
+    continuous ``ins_lim`` (a configuration with one limit).  They judge the TRANSIENT records - a record the loop
+    stopped at its limit and an S2 duty cycle; every steady-state and S3 judgement keeps ``ins_lim``.
 
     ``carrier_hz`` — the CONTROLLER's carrier for this duty
     (:func:`duty_carrier_hz`, 2026-09-24); omitted = the duty's own saved
@@ -8483,6 +8497,11 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                              or _numf((cp or {}).get("coil_temp_c"))
                              or _numf(em.get("coil_temp_C")))
     ctx["winding_limit_c"], ctx["winding_limit_note"] = ins_lim, ins_note
+    # the continuous limit stays on the context under its own name (the limits table prints it), and the peak limit
+    # beside it; a TRANSIENT record below judges against `ins_pk` / `ins_pk_note`
+    ctx["winding_cont_limit_c"], ctx["winding_cont_limit_note"] = ins_lim, ins_note
+    ins_pk, ins_pk_note = ((ins_peak_lim, ins_peak_note) if ins_peak_lim is not None else (ins_lim, ins_note))
+    ctx["winding_peak_limit_c"], ctx["winding_peak_limit_note"] = ins_pk, ins_pk_note
     ctx["hot_spot_c"] = _numf((t or {}).get("T_max"))
     # …AND HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).  Only when the
     # coupled loop found something over a limit; the rows above then carry the
@@ -8508,7 +8527,9 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                   % (str(_limited.get("line") or "").rstrip(".") or
                      "stopped at the first limit"))
         ctx["temp_basis"] = _basis
-        if _wl is not None and ins_lim is not None and abs(float(_wl) - float(ins_lim)) > 0.5:
+        # A LIMITED RECORD is the loop's time-to-limit: a short pull, stopped at the PEAK limit (owner 2026-10-27)
+        ctx["winding_limit_c"] = ins_pk
+        if _wl is not None and ins_pk is not None and abs(float(_wl) - float(ins_pk)) > 0.5:
             # STOPPED AT ANOTHER WINDING LIMIT (owner 2026-10-26, B04): the instant it describes is that limit,
             # not this project's - not judged here; "Still to compute" names the run at the project limit
             ctx["winding_temp_c"] = None
@@ -8516,7 +8537,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         elif _wl is not None:
             ctx["winding_temp_c"] = _wl
             ctx["hot_spot_c"] = _wl
-            ctx["winding_limit_note"] = ((ins_note + "; " if ins_note else "")
+            ctx["winding_limit_note"] = ((ins_pk_note + "; " if ins_pk_note else "")
                                          + _basis)
         if _ml_ is not None:
             ctx["magnet_temp_c"] = _ml_
@@ -8538,10 +8559,14 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         _m = _numf(peak.get("magnet"))
         ctx["duty_cycle_kind"] = duty_cycle_kind(dc)
         ctx["temp_basis"] = DUTY_CYCLE_TEMP_BASIS % duty_cycle_kind(dc)
+        # A SINGLE S2 PULL IS A PEAK and is judged at the peak limit; an S3 is a periodic cycle the machine lives in
+        # and keeps the continuous limit (owner 2026-10-27)
+        _dc_lim, _dc_note = ((ins_pk, ins_pk_note) if duty_cycle_kind(dc) == "S2" else (ins_lim, ins_note))
+        ctx["winding_limit_c"] = _dc_lim
         if _w is not None:
             ctx["winding_temp_c"] = _w
             ctx["hot_spot_c"] = _w
-            ctx["winding_limit_note"] = ((ins_note + "; " if ins_note else "")
+            ctx["winding_limit_note"] = ((_dc_note + "; " if _dc_note else "")
                                          + ctx["temp_basis"])
         if _m is not None:
             ctx["magnet_temp_c"] = _m
@@ -9294,6 +9319,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     batt = _rc.customer_battery(cfg_doc.get("battery") or {}, requirements)
     mag_lim, mag_note = _magnet_limit(mats.get("magnet"))
     ins_lim, ins_note = _insulation_limit(mats, cfg_doc)
+    # …AND THE LIMIT OF A SHORT PEAK (owner 2026-10-27): the S2 time-to-limit and the S2 duty cycle are judged at it
+    ins_peak_lim, ins_peak_note = _insulation_limit(mats, cfg_doc, peak=True)
     cold_k, cold_note = _cold_br_factor(mats.get("magnet"))
     # The speed a runaway must stay above is the fastest point this
     # configuration is designed for — its own duties, not a number typed here.
@@ -9317,7 +9344,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         max_speed_rpm=max_speed, mag_lim=mag_lim, mag_note=mag_note,
         ins_lim=ins_lim, ins_note=ins_note, cold_k=cold_k,
         cold_note=cold_note, slots=_slots_poles(geo)[0],
-        carrier_hz=duty_carrier_hz(cfg_doc, c["duty"])) for c in cols}
+        carrier_hz=duty_carrier_hz(cfg_doc, c["duty"]),
+        ins_peak_lim=ins_peak_lim, ins_peak_note=ins_peak_note) for c in cols}
     # WHETHER THE MACHINE HAS A SLEEVE, once, from the geometry: every sleeve line below asks this (owner 2026-10-26)
     for _c in cols:
         _c["has_sleeve"] = has_sleeve(geo)
@@ -9567,7 +9595,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # ── THE REQUIREMENTS CHECK AND THE BEARING LOADS (owner 2026-10-26) ─────
     from motor_ai_sim import winding_limit as _wl
     winding_limit_cfg = _wl.config_winding_limit_c(cfg_doc)
-    req_rows = _rc.requirements_rows(requirements, cols, winding_limit_c=ins_lim, batt=batt)
+    req_rows = _rc.requirements_rows(requirements, cols, winding_limit_c=ins_lim, batt=batt,
+                                     winding_peak_limit_c=ins_peak_lim)
     brg_load_rows, brg_load_notes = _rc.bearing_load_rows(requirements, cols, geo=geo,
                                                           brg_assign=brg_assign, cfg_doc=cfg_doc)
     _card_t = _magnet_card_temp(mats.get("magnet"))
@@ -9580,6 +9609,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "req_source": _rc.requirements_source_line(requirements),
         "bearing_load_rows": brg_load_rows, "bearing_load_notes": brg_load_notes,
         "winding_limit_c": winding_limit_cfg, "ins_lim": ins_lim,
+        "winding_peak_limit_c": _wl.config_winding_peak_limit_c(cfg_doc), "ins_peak_lim": ins_peak_lim,
         # One running figure number per document; both renderers count in the
         # same order, so "Fig. 7" is the same picture in the .docx and the PDF.
         "fig_n": [0],
@@ -15621,6 +15651,11 @@ def duty_cycle_rows(col: Dict[str, Any],
           _pair(peak.get(part), mean.get(part), 1) + " °C", what)
     R("Winding limit", _fmt(lim.get("winding_limit_c"), 0, "°C"),
       str(lim.get("winding_limit_note") or "the insulation class"))
+    _wpk = _numf(lim.get("winding_peak_limit_c"))
+    if _wpk is not None and _numf(lim.get("winding_limit_c")) is not None \
+            and abs(_wpk - _numf(lim.get("winding_limit_c"))) > 0.5:
+        # an S3 cycle keeps the continuous limit; its S2 pulls are judged at the configuration's peak limit
+        R("Winding limit, short peak", _fmt(_wpk, 0, "°C"), "the S2 times below are judged at this one")
     R("S2 time to the limit", _fmt(lim.get("s2_time_to_limit_s"), 1, "s"),
       str(lim.get("s2_note") or
           ("from %s: how long this point may be held ONCE before %s reaches "
@@ -20761,10 +20796,16 @@ def _limit_rules_rows_full(ex: Dict[str, Any]) -> List[List[str]]:
         ["Magnet temperature", _fmt(ex.get("magnet_limit_c"), 0, "°C"),
          str(ex.get("magnet_limit_note")
              or "the magnet grade's coercivity class")],
-        ["Winding temperature", _fmt(ex.get("winding_limit_c"), 0, "°C"),
-         str(ex.get("winding_limit_note") or "")],
-        ["Hot spot in the machine", _fmt(ex.get("winding_limit_c"), 0, "°C"),
+        ["Winding temperature", _fmt(ex.get("winding_cont_limit_c", ex.get("winding_limit_c")), 0, "°C"),
+         str(ex.get("winding_cont_limit_note", ex.get("winding_limit_note")) or "")],
+        ["Hot spot in the machine", _fmt(ex.get("winding_cont_limit_c", ex.get("winding_limit_c")), 0, "°C"),
          "the same insulation limit, applied to the hottest point anywhere"],
+        *([["Winding temperature, short peak (S2)", _fmt(ex.get("winding_peak_limit_c"), 0, "°C"),
+            str(ex.get("winding_peak_limit_note") or "")]]
+          if (_numf(ex.get("winding_peak_limit_c")) is not None
+              and _numf(ex.get("winding_cont_limit_c")) is not None
+              and abs(_numf(ex.get("winding_peak_limit_c")) - _numf(ex.get("winding_cont_limit_c"))) > 0.5)
+          else []),
         ["Irreversible demagnetisation",
          _fmt(DEMAG_LOSS_LIMIT_PCT, 1, "% of Br"),
          "the project's criterion, volume-averaged over the magnets"],

@@ -516,3 +516,76 @@ def test_the_bearing_is_judged_on_the_maps_own_seat_not_the_em_input(monkeypatch
     cp._ttl_step({}, {}, {"x": 1}, {"components": {}}, bearing_temp_c=70.0,
                  runaway=False)
     assert seen["bearing"] == pytest.approx(70.0)
+
+
+# ---------------------------------------------------------------------------
+# a separate PEAK winding limit (owner 2026-10-27): the time-to-limit uses it, the S1 / rated paths keep the
+# continuous one
+# ---------------------------------------------------------------------------
+
+TWO_LIMITS = {"limits": {"winding_c": 180, "winding_peak_c": 200}}
+
+
+def test_the_peak_limit_is_read_with_a_fallback_to_the_continuous_one():
+    assert ttl.winding_limit(TWO_LIMITS)[0] == 180.0
+    assert ttl.winding_peak_limit(TWO_LIMITS)[0] == 200.0
+    assert "peak winding limit (200" in ttl.winding_peak_limit(TWO_LIMITS)[1]
+    # the continuous rated limit never moves
+    assert ttl.rated_winding_limit("propeller", TWO_LIMITS)[0] == 180.0
+    # no peak stated: the peak limit IS the continuous one, said in the continuous words
+    one = {"limits": {"winding_c": 180}}
+    lim, why = ttl.winding_peak_limit(one)
+    assert lim == 180.0 and "peak" not in why
+    # nothing stated: the project default, exactly as for the continuous limit
+    assert ttl.winding_peak_limit()[0] == ttl.winding_limit()[0]
+    # an explicitly passed limit wins
+    assert ttl.winding_peak_limit(one, limit_c=195.0)[0] == 195.0
+
+
+def test_the_part_limits_of_a_short_pull_use_the_peak_limit_and_rated_keeps_the_continuous_one():
+    kw = dict(thermal_result=PEAK_MAP, em_summary=PEAK_SUMMARY, magnet_limit_c=180.0)
+    pull = {p.part: p for p in ttl.part_limits(winding_limit_c=200.0, peak_winding=True, **kw)}
+    assert pull["winding"].limit_c == 200.0 and "peak winding limit (200" in pull["winding"].source
+    rated = {p.part: p for p in ttl.part_limits(winding_limit_c=180.0, rated_winding=True, **kw)}
+    assert rated["winding"].limit_c == 180.0
+    # no limit handed in: the peak path falls back to the project default like the continuous one
+    default = {p.part: p for p in ttl.part_limits(peak_winding=True, **kw)}
+    assert default["winding"].limit_c == ttl.winding_limit()[0]
+
+
+def test_a_higher_peak_limit_lengthens_the_time_to_the_limit(caps, areas):
+    def run(limit):
+        return ttl.solve(
+            thermal_result=PEAK_MAP, em_summary=PEAK_SUMMARY,
+            limits=_limits(("winding", "winding", limit, 27.5, 777.0)),
+            caps=caps, geometry=L13_GEO, side_areas=areas, d_housing_m=D_HOUSING_M,
+            cooling={"mount_g_w_per_k": 2.0, "mount_temp_c": 40.0}, duty="peak")
+
+    t180, t200 = run(180.0)["time_to_limit_s"], run(200.0)["time_to_limit_s"]
+    assert 0.0 < t180 < t200
+    assert "then winding reaches 200 °C" in ttl.panel_line(run(200.0))
+
+
+def test_the_coupled_loop_judges_its_time_to_the_limit_at_the_peak_limit(monkeypatch):
+    """`_ttl_step` hands the PEAK limit to the winding; the S1 / rated call sites keep `_winding_limit_for`."""
+    from motor_ai_sim import winding_limit as wl
+    from motor_ai_sim.routes import coupled as cp
+    from motor_ai_sim.routes import thermal as th
+    import motor_ai_sim.thermal_capacities as tc
+
+    monkeypatch.setattr(wl, "limits_for_config", lambda die, cfg: (180.0, 200.0))
+    body = {"die": "D", "config": "C"}
+    assert cp._winding_limit_for(body) == 180.0
+    assert cp._winding_peak_limit_for(body) == 200.0
+    seen = {}
+    monkeypatch.setattr(th, "_dc_geometry", lambda geo: ({}, {}))
+    monkeypatch.setattr(th, "_assignments", lambda: {})
+    monkeypatch.setattr(tc, "part_capacities", lambda *a, **k: {})
+    monkeypatch.setattr(cp, "_cycle_catalogue", lambda body, d: ({}, ""))
+
+    def _limits(**kw):
+        seen.update(kw)
+        return []
+    monkeypatch.setattr(cp._ttl, "part_limits", _limits)
+    assert cp._ttl_step(body, {}, {"x": 1}, {"components": {}}, bearing_temp_c=70.0, runaway=False) is None
+    assert seen["winding_limit_c"] == 200.0 and seen["peak_winding"] is True

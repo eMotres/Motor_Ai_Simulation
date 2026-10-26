@@ -14,16 +14,16 @@ from typing import Any, Dict, List
 
 #: Row texts (English source; the report is an English document).
 HEADING = "Still to compute"
-INTRO = "Computed results that are not in this report yet, by duty. Stale results are not printed as current."
-NONE_LINE = "Every result this report is made of is computed."
+INTRO = "Results this report does not contain yet, by duty; a superseded result is never printed as current."
+NONE_LINE = "Nothing is pending for this variant."
 
 ITEM_EM = "Electromagnetic run"
-ITEM_COUPLED = "Coupled thermal loop at the duty's own point"
+ITEM_COUPLED = "Coupled EM-thermal steady state at the duty's own point"
 ITEM_S1 = "Continuous (S1) rating"
 ITEM_MECH = "Mechanics with magnetic pull"
-REASON_MISSING = "to be computed"
-REASON_SUPERSEDED = "the stored result was made by a superseded solver (before the contact repair); to be computed again"
-REASON_GEOMETRY = "the stored result is of another geometry; to be computed again"
+REASON_MISSING = "not computed yet"
+REASON_SUPERSEDED = "the stored result predates the contact-solver repair; to be recomputed"
+REASON_GEOMETRY = "the stored result is of another geometry; to be recomputed"
 MOTOR_LEVEL = "all duties (the rotor stress is one answer for the motor)"
 
 
@@ -52,6 +52,7 @@ def still_to_compute(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[s
             or bool(kinds.get("continuous_rating"))
         if not has_s1:
             rows.append({"duty": name, "item": ITEM_S1, "reason": REASON_MISSING})
+    rows += _requirement_rows(die, cfg, cfg_doc, stored)
     worst = motor_view.worst_case_rotor_stress(stored)
     if worst is None:
         rows.append({"duty": MOTOR_LEVEL, "item": ITEM_MECH, "reason": REASON_MISSING})
@@ -63,12 +64,69 @@ def still_to_compute(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[s
     return rows
 
 
+ITEM_OVERSPEED = "Rotor stress at the {rpm} rpm overspeed"
+ITEM_S1_LIMIT = "Continuous (S1) rating at the {lim} °C winding limit"
+ITEM_S2_LIMIT = "Peak held {dur} s at the {lim} °C winding limit (S2)"
+REASON_OTHER_LIMIT = "the stored result is at {got} °C"
+
+
+def _num(v: Any):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f else None
+
+
+def _requirement_rows(die: str, cfg: str, cfg_doc: Dict[str, Any], stored: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What the CUSTOMER's requirements still need (owner 2026-10-26): the overspeed case, and the S1 / S2 answers
+    at the project's own winding limit when the stored ones were judged at another one."""
+    rows: List[Dict[str, str]] = []
+    try:
+        from motor_ai_sim import report_customer as rc
+        from motor_ai_sim import winding_limit as wl
+        req = rc.project_requirements(die, cfg, cfg_doc)
+        lim = wl.config_winding_limit_c(cfg_doc)
+    except Exception:                                       # noqa: BLE001
+        return rows
+    ov = _num(req.get("overspeed_rpm"))
+    if ov is not None:
+        done = any(isinstance((k or {}).get("rotor_stress"), dict)
+                   and (_num(k["rotor_stress"].get("rpm")) or 0.0) >= ov - 0.5 for k in stored.values())
+        if not done:
+            rows.append({"duty": MOTOR_LEVEL, "item": ITEM_OVERSPEED.format(rpm=f"{ov:,.0f}"),
+                         "reason": REASON_MISSING})
+    if lim is None:
+        return rows
+    for name, kinds in stored.items():
+        for k in ("coupled_limit", "coupled"):
+            blk = ((kinds or {}).get(k) or {}).get("continuous_rating") if isinstance((kinds or {}).get(k), dict) else None
+            got = _num(((blk or {}).get("limits_c") or {}).get("winding")) if isinstance(blk, dict) else None
+            if got is not None and abs(got - lim) > 0.5:
+                rows.append({"duty": str(name), "item": ITEM_S1_LIMIT.format(lim=f"{lim:g}"),
+                             "reason": REASON_OTHER_LIMIT.format(got=f"{got:g}")})
+                break
+    pk = req.get("peak") if isinstance(req.get("peak"), dict) else {}
+    dur = _num(pk.get("duration_s"))
+    if dur is not None:
+        cols = [{"duty": n, "d": d, "em": (d.get("summary") or {}), "res": stored.get(str(d.get("name"))) or {}}
+                for n, d in ((str(x.get("name")), x) for x in (cfg_doc.get("duties") or []) if isinstance(x, dict))]
+        c = rc.match_duty(cols, _num(pk.get("speed_rpm")), _num(pk.get("torque_Nm")))
+        if c is not None:
+            t, got, _src = rc._s2_time(c)
+            if t is None or got is None or abs(got - lim) > 0.5:
+                rows.append({"duty": str(c["duty"]), "item": ITEM_S2_LIMIT.format(dur=f"{dur:g}", lim=f"{lim:g}"),
+                             "reason": (REASON_OTHER_LIMIT.format(got=f"{got:g}") if got is not None
+                                        else REASON_MISSING)})
+    return rows
+
+
 def as_lines(rows: List[Dict[str, str]]) -> List[str]:
     """One printable line per row: ``<duty>: <item> - <reason>``."""
     return [f"{r['duty']}: {r['item']} - {r['reason']}" for r in rows]
 
 
-RECOMMENDED_LINE = "Recommended variant of project {project} (marked by our engineers)"
+RECOMMENDED_LINE = "Recommended variant of project {project}"
 
 
 def recommended_banner(die: str, cfg: str) -> str:

@@ -335,7 +335,8 @@ def test_a_report_without_any_solver_result(dies):
     assert "Machine" in txt and "Assumptions" in txt
     # A configuration with no bearings says the mechanical loss is UNKNOWN —
     # never a zero that would flatter the efficiency.
-    assert "No bearings assigned" in txt
+    # (owner 2026-10-26: an engineering statement, no app instruction)
+    assert "Bearings not selected yet" in txt
     assert "UNKNOWN, deliberately not zero" in txt
     # The duty's saved summary is the fallback the cover quotes when no run of
     # this machine is stored, so the headline numbers are real, not blank.
@@ -347,12 +348,12 @@ def test_a2_a_partly_computed_variant_builds_and_lists_what_is_still_to_compute(
     still to compute (PDF and Word alike)."""
     txt = _text(_build(dies))
     assert "Still to compute" in txt
-    assert "Coupled thermal loop at the duty" in txt and "Mechanics with magnetic pull" in txt
-    assert "to be computed" in txt
+    assert "Coupled EM-thermal steady state at the duty" in txt and "Mechanics with magnetic pull" in txt
+    assert "not computed yet" in txt
     dx = _dx(_build_docx(dies))
     assert "Still to compute" in _dx_headings(dx)
     body = _dx_text(dx)
-    assert "Mechanics with magnetic pull" in body and "Coupled thermal loop at the duty" in body
+    assert "Mechanics with magnetic pull" in body and "Coupled EM-thermal steady state at the duty" in body
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +868,8 @@ def test_e4_retention_is_judged_on_the_joint_that_retains():
     # the underscore key
     verdicts = {r[0]: r[-1] for r in rows[1:]}
     assert set(verdicts) >= {"sleeve/magnet", "sleeve/rotor", "magnet/rotor"}
-    assert "RETENTION JOINT" in verdicts["sleeve/magnet"]
+    # one line, the fact (owner 2026-10-26, H01): "pressed, 13.2 MPa at its weakest facet"
+    assert verdicts["sleeve/magnet"].startswith("pressed")
     assert "13.2" in verdicts["sleeve/magnet"], "say what is holding it"
     assert "LIFT-OFF" not in verdicts["sleeve/rotor"],         "a bridging pair has nothing to let go of"
     assert "not the retention joint" in verdicts["sleeve/rotor"]
@@ -1129,7 +1131,7 @@ def test_g_a_duty_without_results_reads_not_solved(two_duties, store):
     assert "not solved" in txt
     # The rule is stated in the document itself, so a reader knows a blank
     # column is a blank column.
-    assert "never filled in" in txt or "never a number from another column" in txt
+    assert "means no record of that point is stored" in txt
 
 
 def test_g2_the_loaded_duty_owns_the_machine_level_results(two_duties, store,
@@ -1380,9 +1382,8 @@ class TestWarningRules:
         row = rows["Current density"]
         assert "25" in row[1]
         assert "Al2O3" in row[2] and "CERAMIC" in row[2]
-        # the band sentence still names both jacket numbers, in the units the
-        # Limit column beside it prints (reviewer 2026-09-14, CS-6)
-        assert "20 A/mm² with an organic insulation system" in row[2]
+        # ONE LINE since 2026-10-26 (owner): this machine's own reason, in the units the Limit column prints
+        assert "25 A/mm²" in row[2]
         assert "A/mm2" not in row[2]
 
         organic = {r[0]: r for r in limit_rules_rows(
@@ -1483,7 +1484,8 @@ class TestWarningRules:
         assert w["level"] == "red" and "magnet|sleeve" in w["quantity"]
         assert _fires({"open_fraction_pct": 5.0}, "contact_open") is None
 
-        assert _fires({"lift_off": True}, "lift_off")["level"] == "red"
+        # an opening alone is not an escaped magnet (owner 2026-10-26, H01): amber, "unresolved"
+        assert _fires({"lift_off": True}, "lift_off")["level"] == "amber"
         assert _fires({"lift_off": False}, "lift_off") is None
 
         assert _fires({"torque_path_verdict": "poles held: no — every joint open"},
@@ -1624,7 +1626,7 @@ def test_h3_the_review_fixes_of_2026_09_14():
     # ITEM 7 (owner review 2026-09-19): the TOTAL row names what it is —
     # the mass every N·m/kg divides by — so it cannot be read as the "full
     # mass with shaft" row the review asked for beside it.
-    assert rows[-1][0] == "TOTAL — mass used for N·m/kg"
+    assert rows[-1][0] == "Modelled total (the N·m/kg divisor)"
     assert "27.457" in rows[-1][3]
     assert R.mass_total_note(em) == "", "a gram apart is not worth a sentence"
     heavy = dict(em, mass_total_kg=26.0)
@@ -1849,7 +1851,7 @@ def test_i2_an_unsolved_duty_reads_not_solved_in_word_too(two_duties, store):
     assert "not solved" in txt
     # the "never filled in" paragraph was dropped at the user's request
     # (2026-09-11); the rule itself lives on in the comparison intro
-    assert "never a number from another column" in txt
+    assert "means no record of that point is stored" in txt
 
 
 # ---------------------------------------------------------------------------
@@ -2412,7 +2414,7 @@ class TestB3TheHeatBudgetMakesOneComparison:
                "res": {"thermal": {"cooling": {"heat_budget": self.BUDGET},
                                    "P_cu_W": 2259.1, "P_fe_W": 1390.7}}}
         rows = dict((r[0], r[1]) for r in R.thermal_compare_rows([col])[1])
-        row = rows["  loss-map integration vs the summed terms [W]"]
+        row = rows["  map input minus the summed EM terms [W]"]
         txt = R.thermal_budget_reconcile_text(
             {"cooling": {"heat_budget": self.BUDGET}}, {}, self.EM, "d")
         assert "3,881.6" in txt and "3,881.7" in txt
@@ -2477,11 +2479,11 @@ class TestB4B5OneStressBehindEverySafetyFactor:
         from motor_ai_sim import report as R
 
         gloss = dict((r[0], r[1]) for r in R.glossary_rows({}))
-        assert "AVERAGED PEAK" in gloss["Safety factor (SF)"]
-        assert "GAUGE" in gloss["p99.5 / p05"]
-        assert "AVERAGED PEAK" in R.MECH_COMPARE_NOTE
+        assert "averaged peak" in gloss["Safety factor (SF)"]
+        assert "gauge" in gloss["p99.5 / p05"]
+        assert "averaged peak" in R.MECH_COMPARE_NOTE
         rules = dict((r[0], r[2]) for r in R.limit_rules_rows({}))
-        assert "AVERAGED PEAK" in rules["Mechanical safety factor"]
+        assert "averaged peak" in rules["Mechanical safety factor"]
         # …and the singularity gauge is named where the numbers are, under the
         # mechanical table (the rules row is one short clause since the
         # compaction pass of 2026-09-14).
@@ -2664,8 +2666,9 @@ class TestB8TheCoverCarriesTheVerdict:
         # (the efficiency row renames itself when the machine names no
         # bearings — an efficiency that excludes friction may not wear the
         # same label as one that includes it)
+        # without bearings the power is the 2-D rotor power and says so (owner 2026-10-26, H03)
         assert [r[0] for r in rows[1:6]] == [
-            "Torque at the rotor", "Speed", "Shaft power",
+            "Torque at the rotor", "Speed", "Rotor power, 2-D",
             "Electromagnetic efficiency", "Mass"]
         for r in rows[6:]:
             assert str(r[0]) == "Supply" or "Mass across the duties" in str(r[0])
@@ -2693,7 +2696,7 @@ class TestTheHeadlineCarriesTheSpeed:
                                {}, None)
         names = [str(r[0]) for r in rows]
         assert names.index("Speed") == names.index("Torque at the rotor") + 1
-        assert names.index("Speed") + 1 == names.index("Shaft power")
+        assert names.index("Speed") + 1 == names.index("Rotor power, 2-D")
 
     def test_the_value_is_the_dutys_rpm_and_the_note_names_the_duty(self):
         from motor_ai_sim import report as R
@@ -2835,7 +2838,7 @@ class TestTheRestOfThe20260914Pass:
         # that might be the stale chord under the "Ld" label.
         flat = {r[0]: r for r in R.em_constant_rows(
             {"Ld_mH": 0.0694, "gamma_deg": 0.0})}
-        assert flat["Ld"][1] == "not solved — re-run the electromagnetic solve"
+        assert flat["Ld"][1] == "not computed"
 
     def test_d1_and_d2_the_sleeve_eddy_is_one_decimal(self):
         from motor_ai_sim import report as R
@@ -3752,7 +3755,7 @@ class TestAuditV3:
         for txt in (th, me):
             assert "2026-09-13" not in txt
             assert not _re.search(r"\d{1,2}:\d{2}", txt), txt
-        assert th.startswith("Source: the Thermal tab's last map")
+        assert th.startswith("Source: the last stored thermal map")
         assert "Case '20000 rpm hot' at 20,000 rpm" in me
 
     # ── MJ-5 · the PDF draws the same figures the .docx does ────────────────
@@ -4890,13 +4893,15 @@ class TestPwmIsTheDutysOperatingCondition:
         """
         from motor_ai_sim import report as R
 
+        # CHANGED AGAIN 2026-10-26 (owner, customer review B01): every EM number, the cover and the figures of a
+        # sinusoidal duty are its EM RUN (the run the waveforms are drawn from); the coupled loop is its own
+        # labelled table.
         c = self._col(pwm=False)
         assert c["drive"] == "sine"
-        assert c["em_source"] == "coupled"
-        # the coupled run's own electromagnetic block, not the saved summary
-        assert c["em"]["P_loss_total_W"] == 7400.0      # they agree here…
-        assert c["em"]["coil_temp_C"] == 120.0          # …and this is the
-        assert c["em"]["magnet_temp_C"] == 110.0        # loop's own answer
+        assert c["em_source"] == "standalone"
+        assert c["em"]["P_loss_total_W"] == 7400.0
+        assert c["em"]["coil_temp_C"] == 120.0          # the EM run's own winding temperature
+        assert "magnet_temp_C" not in c["em"]           # the loop's 110 °C is not this run's
         assert R.supply_words(c) == R.SUPPLY_SINE
 
     def test_a_duty_with_no_coupled_record_keeps_its_standalone_solve(self):
@@ -4910,7 +4915,7 @@ class TestPwmIsTheDutysOperatingCondition:
         assert c["em"] == self.EM and "em_sine" not in c
         # …and section 1 says so, because those numbers were NOT solved at the
         # temperatures the rest of the document gives
-        assert "standalone" in R.em_source_note("standalone")
+        assert "EM run" in R.em_source_note("standalone")
         assert R.em_source_note("coupled") == ""
 
     def test_the_sidecar_run_wins_over_the_coupled_block(self):
@@ -5374,11 +5379,11 @@ class TestDutyCycleSection:
         assert ctx["winding_temp_c"] == 217.1
         assert ctx["hot_spot_c"] == 217.1
         assert ctx["magnet_temp_c"] == 143.8
-        assert ctx["temp_basis"] == "peak of the settled S3 cycle"
+        assert ctx["temp_basis"] == "peak of the S3 run"
         ws = {w["rule"]: w for w in R.duty_warnings(ctx)}
-        assert "peak of the settled S3 cycle" in ws["winding_temperature"]["note"]
+        assert "peak of the S3 run" in ws["winding_temperature"]["note"]
         assert ws["winding_temperature"]["level"] == "red"   # 217.1 over 200
-        assert "peak of the settled S3 cycle" in ws["magnet_temperature"]["note"]
+        assert "peak of the S3 run" in ws["magnet_temperature"]["note"]
 
     def test_the_ed_rule_is_requested_against_allowable(self):
         from motor_ai_sim import report as R
@@ -6816,7 +6821,8 @@ class TestAuditV7:
         assert row["level"] == "amber" and abs(row["margin_pct"]) < 0.05
         # …and the limits table names the clamp, not the bare linear limit
         src = {r[0]: r[2] for r in R.limit_rules_rows(ctx)}
-        assert "sampled-reference gain" in src[
+        # one line since 2026-10-26: the clamp's own words, not the bare linear limit
+        assert "largest fundamental the bridge can build" in src[
             "Line voltage, fundamental vs linear modulation"]
         # a star run's row is the LINE value, √3 above the branch
         col2 = self._col()
@@ -7281,7 +7287,8 @@ class TestButtonAuditOf20260916:
                "res": {"rotor_stress": dict(self.ROTOR_STRESS)}}
         labels = [r[0] for r in R.mech_compare_rows([col])[1]]
         assert "Rotor core von Mises p99.5 [MPa]" in labels
-        assert "…Rotor core von Mises peak, unaveraged [MPa]" in labels
+        # the unaveraged gauge stays in the section-7 detail table only (owner 2026-10-26: short tables)
+        assert "…Rotor core von Mises peak, unaveraged [MPa]" not in labels
         assert "Rotor core strength [MPa]" in labels
         assert "Rotor core safety factor" in labels
         # …beside the sleeve's, which were there all along
@@ -7391,7 +7398,7 @@ class TestHotLdLqGuardAgainstPreIncrementalRecords:
                       "Ld, star-equivalent", "Lq, star-equivalent",
                       "Saliency Lq/Ld"):
             assert rows[label][1] == \
-                "not solved — re-run the electromagnetic solve", rows[label]
+                "not computed", rows[label]
             # the value column must never carry the old chord-derived numbers
             assert "0.71" not in rows[label][1]
             assert "0.0976" not in rows[label][1]
@@ -7412,9 +7419,9 @@ class TestHotLdLqGuardAgainstPreIncrementalRecords:
         the row must not mix an incremental Ld with a chord Lq."""
         rows = self._rows({**self.OLD_RECORD, "Ld_inc_mH": 0.0798})
         assert rows["Ld (winding)"][1] == \
-            "not solved — re-run the electromagnetic solve"
+            "not computed"
         assert rows["Lq (winding)"][1] == \
-            "not solved — re-run the electromagnetic solve"
+            "not computed"
 
 
 # ---------------------------------------------------------------------------
@@ -8127,9 +8134,9 @@ class TestL13Review20260919:
              "state": "reference"}]}
         rows = R.mass_rows(em)
         labels = [r[0] for r in rows]
-        assert "TOTAL — mass used for N·m/kg" in labels
+        assert "Modelled total (the N·m/kg divisor)" in labels
         total_row = next(r for r in rows
-                         if r[0] == "TOTAL — mass used for N·m/kg")
+                         if r[0] == "Modelled total (the N·m/kg divisor)")
         assert "0.367" in total_row[3]
         full_row = next(r for r in rows
                         if r[0] == "Full mass, incl. reference/excluded parts")
@@ -8166,8 +8173,8 @@ class TestL13Review20260919:
                                                "open_fraction": 0.689,
                                                "lift_off": True}}}
         words = R.retention_words_case(case)
-        assert "does not confirm magnet retention and the torque path" in words
-        assert "contact opening 69 %" in words
+        # one line (owner 2026-10-26, edit 1)
+        assert words == "assembly only; retention not confirmed (69 % open)"
         assert "retained by the sleeve" not in words
 
     def test_item9_a_real_sleeve_still_carries_the_original_policy(self):
@@ -8328,7 +8335,7 @@ class TestL13ServerAuditOf20260919:
         assert fp == "aaa111"
         assert agree is True
         note = R.duty_fingerprint_note(fp, agree, per)
-        assert note == "All records of this duty share geometry aaa111."
+        assert note == "All records of this duty were solved on one geometry."
 
     def test_f2_a_stale_em_record_is_flagged_loudly_never_blended(self):
         # Exactly the audited bug: the EM data is the 2026-09-03 legacy run
@@ -8349,8 +8356,8 @@ class TestL13ServerAuditOf20260919:
         note = R.duty_fingerprint_note(fp, agree, per)
         assert "DIFFERENT geometries" in note
         assert "Electromagnetic" in note
-        assert "34aa9ba5d105aae1" in note
-        assert fp[:12] in note
+        # no hash in the customer text (owner 2026-10-26, H07/L01)
+        assert "34aa9ba5d105aae1" not in note and fp[:12] not in note
 
     def test_f2_an_unfingerprinted_em_record_is_not_a_clean_bill(self):
         # Found verifying this fix against the SERVER's own L13 records: the
@@ -8368,7 +8375,7 @@ class TestL13ServerAuditOf20260919:
         assert agree is False
         note = R.duty_fingerprint_note(fp, agree, per)
         assert "Electromagnetic" in note
-        assert "no stored fingerprint" in note
+        assert "no stored geometry print" in note
 
     def test_f2_no_em_data_at_all_is_not_flagged(self):
         # An empty `em` means the duty has no electromagnetic answer to show
@@ -8634,7 +8641,7 @@ class TestDutyEmSource:
         s = self._src(coupled=False)
         assert s["kind"] == "standalone"
         assert s["em"]["T_em_avg_Nm"] == 8.18
-        assert "standalone" in R.em_source_note(s["kind"])
+        assert "EM run" in R.em_source_note(s["kind"])
 
     # -- what follows from the switch ---------------------------------------
     def test_the_constants_are_rebuilt_from_the_run_they_describe(self):
@@ -8736,8 +8743,10 @@ class TestDutyEmSource:
                                  max_speed_rpm=None, mag_lim=None,
                                  mag_note="", ins_lim=200.0, ins_note="",
                                  cold_k=1.0, cold_note="")
-        assert ctx["ripple_pct"] == 6.4
-        assert ctx["thd_pct"] == 5.28
+        # the rule reads what the document prints - since 2026-10-26 the duty's EM run (owner, B01)
+        assert col["em_source"] == "standalone"
+        assert ctx["ripple_pct"] == col["em"]["T_ripple_pct"] == 5.0
+        assert ctx["thd_pct"] == col["em"]["THD_LL_pct"] == 2.49
 
 
 class TestMassFollowsTheAssignedMaterial:
@@ -8985,7 +8994,8 @@ class TestGeometryFingerprintIsOfTheMachineNotTheMesh:
             "f3b4728f381c5b31", False,
             [("Electromagnetic", None), ("Thermal", "f3b4728f381c5b31")])
         assert note.endswith(".")
-        assert "f3b4728f381c5b31" in note
+        # no hash in the customer text (owner 2026-10-26, H07/L01): the ids are in the appendix
+        assert "f3b4728f381c5b31" not in note and "record ids in the appendix" in note
         assert ": the rest" not in note
 
 

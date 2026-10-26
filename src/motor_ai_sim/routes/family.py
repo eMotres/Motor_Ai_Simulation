@@ -5307,6 +5307,37 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
     return {"ok": True, "battery": c["battery"]}
 
 
+class LimitsPatch(BaseModel):
+    winding_c: Optional[float] = None    # the project's winding limit [°C]; null clears it (owner 2026-10-26)
+
+
+@router.patch("/config/{die}/{cfg}/limits")
+def set_limits(die: str, cfg: str, req: LimitsPatch,
+               _w: dict = Depends(require_catalog_write)):
+    """The configuration's own WINDING LIMIT (owner 2026-10-26, 180 °C for every verdict of a project).  Read by every
+    limit check, the S1 search, the S2 time-to-limit, the duty cycle and the report (``winding_limit``); a
+    configuration without it keeps the project defaults.  ``winding_c: null`` clears it."""
+    from motor_ai_sim import winding_limit as _wl
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    v, why = _wl.validate(req.winding_c)
+    if why:
+        raise HTTPException(422, detail=why)
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    lim = dict(c.get(_wl.LIMITS_KEY) or {})
+    if v is None:
+        lim.pop(_wl.WINDING_KEY, None)
+    else:
+        lim[_wl.WINDING_KEY] = round(float(v), 1)
+    if lim:
+        c[_wl.LIMITS_KEY] = lim
+    else:
+        c.pop(_wl.LIMITS_KEY, None)
+    _save_yaml(_cfg_file(die, cfg), c)
+    log.info("family: limits on '%s/%s': %s", die, cfg, lim)
+    return {"ok": True, "limits": lim}
+
+
 class ControllerCoolingSpec(BaseModel):
     """The Controller tab's MOSFET cooling row.
 

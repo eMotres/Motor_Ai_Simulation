@@ -8,7 +8,7 @@ import math
 import re
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
@@ -1425,7 +1425,7 @@ def require_report_reviewed(die: str, config: str, authorization: str | None) ->
 
 @router.get("/report")
 def project_motor_report(project_id: str, request: Request, die: str, config: str, format: str = "docx",
-                         show_all: bool = False):
+                         show_all: bool = False, run_id: Optional[str] = None):
     """The motor report of one project variant (every computed duty), for project members.
 
     Same ``_require_die_access`` gate and CAD-cooling NDA gate as ``GET /api/family/report`` (both go through
@@ -1440,7 +1440,8 @@ def project_motor_report(project_id: str, request: Request, die: str, config: st
     if not staff and not isinstance(link.get("report_reviewed"), dict):
         raise HTTPException(403, detail={"code": "report_not_reviewed",
                                          "message": "The report is being checked by our engineers."})
-    blob, fname, rid = report_routes.build_for(open_die, cfg_name, format, authorization)
+    # run_id: the id the page polls GET /api/family/report/progress with - the same progress ring as the catalogue (owner 2026-10-27)
+    blob, fname, rid = report_routes.build_for(open_die, cfg_name, format, authorization, run_id=run_id)
     fmt = str(format or "").strip().lower()
     if not staff:
         store.append_audit(project_id, str(user.get("email") or ""), "motor.report.download", "motor",

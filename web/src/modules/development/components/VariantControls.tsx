@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { Button, Checkbox, Chip, FormControlLabel, IconButton, Stack, Tooltip } from '@mui/material';
+import { useEffect, useRef, useState } from 'react';
+import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Stack, Tooltip } from '@mui/material';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { downloadExport } from '../../../lib/exportDownload';
+import { IDLE as RING_IDLE, newRunId, ringDone, ringFail, ringPoll, ringStart, ringTip, type ReportProgressInfo, type ReportRing } from '../../../components/catalog/reportProgress';
 import { developmentApi } from '../api';
 import { flagWho, isRecommended, reportAccess } from '../projectFlags';
 import type { ProjectMotor } from '../types';
@@ -25,10 +26,31 @@ export function VariantControls({ projectId, motor, staff, busy = false, t, onCh
     setWorking(true); setError('');
     try { await action(); await onChanged(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setWorking(false); }
   };
+  // the same progress ring as the catalogue's report buttons (owner 2026-10-27): the click mints a run id, the build publishes
+  // its stages under it, a 1 s poll of GET /api/family/report/progress turns the spin into a percentage
+  const [ring, setRing] = useState<ReportRing>(RING_IDLE);
+  const pollRef = useRef(0);
+  useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
   const download = async (format: 'docx' | 'pdf') => {
     setWorking(true); setError('');
-    const q = `die=${encodeURIComponent(motor.die)}&config=${encodeURIComponent(motor.config)}&format=${format}${showAll ? '&show_all=true' : ''}`;
+    const key = `report:${format}:${motor.die}/${motor.config}`;
+    const runId = newRunId();
+    const q = `die=${encodeURIComponent(motor.die)}&config=${encodeURIComponent(motor.config)}&format=${format}${showAll ? '&show_all=true' : ''}&run_id=${encodeURIComponent(runId)}`;
+    const t0 = Date.now();
+    setRing(ringStart(key, runId));
+    const poll = pollRef.current = window.setInterval(() => {
+      void (async () => {
+        let info: ReportProgressInfo | null = null;
+        try {
+          const r = await fetch(`${API}/api/family/report/progress?run_id=${encodeURIComponent(runId)}`);
+          if (r.ok) info = await r.json();
+        } catch { /* a lost poll is not a failed build */ }
+        setRing((prev) => (prev.runId === runId ? ringPoll(prev, info, (Date.now() - t0) / 1000) : prev));
+      })();
+    }, 1000);
     const problem = await downloadExport(`${API}/api/projects/${encodeURIComponent(projectId)}/motors/report?${q}`, `${motor.die} ${motor.config} report.${format}`);
+    window.clearInterval(poll); if (pollRef.current === poll) pollRef.current = 0;
+    setRing((prev) => (prev.runId === runId ? (problem ? ringFail(prev, problem) : ringDone(prev)) : prev));
     if (problem) setError(problem);
     setWorking(false);
   };
@@ -51,6 +73,14 @@ export function VariantControls({ projectId, motor, staff, busy = false, t, onCh
           <Button size="small" disabled={!access.enabled || busy || working} onClick={() => void download('pdf')}>{t('report.pdf')}</Button>
         </span>
       </Tooltip>
+      {ring.runId && !ring.notice && (
+        <Tooltip title={ringTip(ring)}>
+          <Box component="span" data-testid="report-ring" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.45, fontSize: 11, color: 'var(--text-2)' }}>
+            <CircularProgress variant={ring.pct == null ? 'indeterminate' : 'determinate'} value={ring.pct ?? 0} size={15} thickness={6} sx={{ color: 'inherit' }} />
+            {ring.pct != null && <span>{ring.pct} %</span>}
+          </Box>
+        </Tooltip>
+      )}
       {staff && (
         <Tooltip title={motor.report_reviewed ? `${t('report.reviewedTip')} ${flagWho(motor.report_reviewed)}` : t('report.reviewedTip')}>
           <FormControlLabel sx={{ m: 0 }} control={<Checkbox size="small" checked={!!motor.report_reviewed} disabled={busy || working}

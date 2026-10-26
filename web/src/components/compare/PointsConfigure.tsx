@@ -15,26 +15,30 @@
  * Nothing is interpolated or invented; a missing value stays "-", a missing kind says "not computed".
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Chip, MenuItem, Select, Slider, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Slider, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { MetricTile, PANEL, LABEL, TileRow, fmt } from '../common/ResultTiles';
 import StoredFieldViewer from './StoredFieldViewer';
 import StoredPointResults from './StoredPointResults';
+import StepsChart from './StepsChart';
 import { developmentApi } from '../../modules/development/api';
 import type { FieldKind, MotorPointVariant, MotorView, MotorViewDuty, StoredField } from '../../modules/development/types';
 import {
-  POINT_TILES, TILE_GROUPS, baseVariantPoint, busHeadroom, findVariantIndex, pointOperating, tileValue, visibleTiles, type StepBaseMode,
+  POINT_TILES, TILE_GROUPS, busHeadroom, findVariantIndex, pointOperating, tileValue, visibleTiles,
 } from '../../modules/development/pointsOnly';
-import { FIELD_KIND_ORDER, isNotComputed, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
+import { FIELD_KIND_ORDER, configureTileKey, isNotComputed, massKind, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
 import { parametersLine } from '../../modules/development/storedFieldPayload';
 import { motorColor } from '../../modules/development/motorGroups';
 import { fetchMotorField } from '../../lib/motorViewApi';
 import { openProjectMotor } from '../../lib/openProjectMotor';
-import { oneOf } from '../../lib/viewMemory';
-import { useRememberedView } from '../../lib/useRememberedView';
+import { nsT } from '../../i18n/nsT';
+import { stepLabels } from '../../modules/development/stepSeries';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
+
+// the tile names are the ordinary Configure's (controller namespace), so a point reads the same in both (owner 2026-10-26)
+const tc = nsT('controller');
 
 const TH = { px: 1, py: 0.5, fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' } as const;
 const TD = { px: 1, py: 0.4, fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--app-bg)', fontFamily: 'monospace', color: 'var(--text-1)' } as const;
@@ -47,6 +51,7 @@ interface Props {
 
 const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const { t } = useTranslation('development');
+  useTranslation('controller');                       // lazy-loads the Configure labels the tiles borrow
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const focus = useProjectFocusStore((s) => s.focus);
   const [steps, setSteps] = useState<MotorPointVariant[]>([]);
@@ -55,7 +60,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const [kind, setKind] = useState<FieldKind | null>(null);
   const [field, setField] = useState<{ key: string; value: StoredField | null; error: string; missing?: boolean } | null>(null);
   const [openError, setOpenError] = useState('');
-  const [baseMode, setBaseMode] = useRememberedView<StepBaseMode>('configure.points.base', 'none', oneOf(['none', 'previous', 'first'] as const));
   const [busText, setBusText] = useState('');
   const cache = useRef(new Map<string, StoredField>());
 
@@ -101,9 +105,21 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   }, [motorKey, current?.duty, activeKind, focus?.id, stepIndex]);
 
   const peers = useMemo(() => steps.map((v) => v.points.find((p) => p.duty === duty) ?? null), [steps, duty]);
-  const basePoint = stepIndex >= 0 ? baseVariantPoint(steps, stepIndex, duty ?? '', baseMode) : null;
-  const baseStep = baseMode === 'first' ? 1 : stepIndex;
-  const tiles = visibleTiles(current, peers);
+  const labels = useMemo(() => stepLabels(steps), [steps]);
+  // temperatures are NOT in this group of tiles: they belong to the coupled loop and sit in the thermal block with their own source
+  const tiles = visibleTiles(current, peers).filter((spec) => spec.group !== 'thermal');
+  const tileName = (id: string) => { const key = configureTileKey(id, current); return key ? tc(key) : t(`points.tile.${id}`); };
+  const tileTip = (id: string) => {
+    if (id === 'mass') return massKind(current) === 'active' ? tc('configure.massPartialTip') : tc('configure.massFullTip');
+    if (id === 'torqueMass') return massKind(current) === 'active' ? t('points.tileTip.torqueActiveMass') : t('points.tileTip.torqueMass');
+    return t(`points.tileTip.${id}`);
+  };
+  const emSource = current?.sources?.em;
+  const emChip = emSource?.kind === 'coupled' ? t('points.source.coupledChip')
+    : emSource?.coil_temp_c !== undefined ? t('points.source.emChip', { winding: Math.round(emSource.coil_temp_c) }) : t('points.source.emChipPlain');
+  const emChipTip = emSource?.kind === 'coupled' ? t('points.source.coupledTip')
+    : t(emSource?.coil_temp_c !== undefined ? 'points.source.emTip' : 'points.source.emTipPlain', { winding: emSource?.coil_temp_c !== undefined ? Math.round(emSource.coil_temp_c) : '', magnet: emSource?.magnet_temp_c !== undefined ? Math.round(emSource.magnet_temp_c) : '—' });
+  const showChart = steps.length > 1 && stepIndex >= 0;
   const operating = pointOperating(current);
   const busV = busText.trim() === '' ? null : Number(busText.replace(',', '.'));
   const busValid = busV !== null && Number.isFinite(busV) && busV > 0;
@@ -149,14 +165,13 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               {steps.map((v, index) => (
                 <ToggleButton key={`${v.die}/${v.config}`} value={index} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12, boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>
                   <Box component="span" aria-hidden data-testid="step-accent" sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: motorColor(v), mr: 0.75, flex: '0 0 8px' }} />
-                  <Tooltip title={`${v.canonical_die} / ${v.config}`}><span>{v.step} · {v.config}</span></Tooltip>
+                  <Tooltip title={`${v.canonical_die} / ${v.config}`}><span>{labels[index]}</span></Tooltip>
                   {v.status === 'trial' && <Chip size="small" label={t('motorStatus.trial')} sx={{ ml: 0.75, height: 16, fontSize: 9 }} />}
                 </ToggleButton>
               ))}
             </ToggleButtonGroup>
           </Box>
         )}
-        {stepIndex >= 0 && steps[stepIndex]?.note && <Typography sx={{ fontSize: 12, color: 'var(--text-1)' }} data-testid="points-note">{steps[stepIndex].note}</Typography>}
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <Typography sx={LABEL}>{t('points.mode')}</Typography>
@@ -174,17 +189,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
       {current && <>
         <Box sx={{ ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-          {stepIndex >= 0 && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              <Typography sx={LABEL}>{t('points.compareWith')}</Typography>
-              <Select size="small" value={baseMode} onChange={(e) => setBaseMode(e.target.value as StepBaseMode)} sx={{ minWidth: 150, '& .MuiSelect-select': { py: 0.35, fontSize: 12 } }} aria-label={t('points.compareWith')}>
-                <MenuItem value="none">{t('points.base.none')}</MenuItem>
-                <MenuItem value="previous" disabled={stepIndex === 0}>{t('points.base.previous')}</MenuItem>
-                <MenuItem value="first" disabled={stepIndex === 0}>{t('points.base.first')}</MenuItem>
-              </Select>
-              <HelpTip title={baseMode !== 'none' && !basePoint ? `${t('points.compareTip')} ${t('points.noBasePoint')}` : t('points.compareTip')} />
-            </Box>
-          )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             {knobs.map((k) => (
               <Tooltip key={k.id} title={`${t('points.knobTip')} ${t('points.knobsDisabledTip')}`}>
@@ -199,24 +203,29 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
         </Box>
 
-        {TILE_GROUPS.map((group) => {
-          const groupTiles = tiles.filter((spec) => spec.group === group);
-          if (groupTiles.length === 0) return null;
-          return (
-            <Box key={group}>
-              <TileRow>
-                {groupTiles.map((spec) => {
-                  const value = tileValue(current, spec);
-                  const base = tileValue(basePoint, spec);
-                  return <MetricTile key={spec.id} label={t(`points.tile.${spec.id}`)} value={value} unit={spec.unit} d={spec.d}
-                    base={base ?? value ?? 0} goodHi={base === null ? undefined : spec.goodHi}
-                    plain={base === null} blankTip={t('points.notStored')}
-                    tip={base !== null && value !== null ? t('points.vsStep', { step: baseStep, value: fmt(base, spec.d), unit: spec.unit }) : t(`points.tileTip.${spec.id}`)} />;
-                })}
-              </TileRow>
-            </Box>
-          );
-        })}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart ? 'minmax(0,1.5fr) minmax(320px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
+            <Tooltip title={emChipTip}>
+              <Chip size="small" label={emChip} data-testid="em-source-chip" sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />
+            </Tooltip>
+            {TILE_GROUPS.filter((g) => g !== 'thermal').map((group) => {
+              const groupTiles = tiles.filter((spec) => spec.group === group);
+              if (groupTiles.length === 0) return null;
+              return (
+                <Box key={group}>
+                  <TileRow>
+                    {groupTiles.map((spec) => {
+                      const value = tileValue(current, spec);
+                      return <MetricTile key={spec.id} label={tileName(spec.id)} value={value} unit={spec.unit} d={spec.d}
+                        base={value ?? 0} plain blankTip={t('points.notStored')} tip={tileTip(spec.id)} />;
+                    })}
+                  </TileRow>
+                </Box>
+              );
+            })}
+          </Box>
+          {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} />}
+        </Box>
 
         <StoredPointResults duty={current} />
 
@@ -259,9 +268,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
         <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
           <thead><tr>
             <Box component="th" sx={{ ...TH, textAlign: 'left' }}>{t('points.step')}</Box>
-            <Box component="th" sx={{ ...TH, textAlign: 'left' }}>{t('points.noteHead')}</Box>
-            {POINT_TILES.filter((spec) => spec.core || peers.some((peer) => tileValue(peer, spec) !== null)).map((spec) => (
-              <Box component="th" key={spec.id} sx={TH}>{t(`points.tile.${spec.id}`)} <span style={{ fontWeight: 400 }}>{spec.unit}</span></Box>
+            {POINT_TILES.filter((spec) => spec.group !== 'thermal' && (spec.core || peers.some((peer) => tileValue(peer, spec) !== null))).map((spec) => (
+              <Box component="th" key={spec.id} sx={TH}>{tileName(spec.id)} <span style={{ fontWeight: 400 }}>{spec.unit}</span></Box>
             ))}
           </tr></thead>
           <tbody>
@@ -270,9 +278,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               return (
                 <Box component="tr" key={`${v.die}/${v.config}`} onClick={() => openStep(index)}
                   sx={{ cursor: 'pointer', bgcolor: index === stepIndex ? 'var(--panel-3, rgba(255,255,255,0.06))' : 'transparent', '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-                  <Box component="td" sx={{ ...TD, textAlign: 'left', boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>{v.step} · {v.config}</Box>
-                  <Box component="td" sx={{ ...TD, textAlign: 'left', fontFamily: 'inherit', whiteSpace: 'normal', maxWidth: 260 }}>{v.note || '—'}</Box>
-                  {POINT_TILES.filter((spec) => spec.core || peers.some((peer) => tileValue(peer, spec) !== null)).map((spec) => {
+                  <Box component="td" sx={{ ...TD, textAlign: 'left', boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>{labels[index]}</Box>
+                  {POINT_TILES.filter((spec) => spec.group !== 'thermal' && (spec.core || peers.some((peer) => tileValue(peer, spec) !== null))).map((spec) => {
                     const value = tileValue(p, spec);
                     return <Box component="td" key={spec.id} sx={TD}>{value === null ? '—' : fmt(value, spec.d)}</Box>;
                   })}

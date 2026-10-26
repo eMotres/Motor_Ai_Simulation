@@ -246,16 +246,40 @@ class EmField:
         """Stored frames of the settled window; 0 = one snapshot only."""
         return 0 if self.frames_bx is None else int(self.frames_bx.shape[0])
 
-    @property
-    def n_window(self) -> int:
-        """Frames SOLVED in the settled window (>= ``n_frames``)."""
-        return max(int((self.frames_info or {}).get("n_window")
-                       or self.n_frames), self.n_frames)
+    def coverage(self) -> Dict[str, Any]:
+        """THE coverage predicate — import, assembly and report all read this
+        one (third review R1, 2026-10-26).
+
+        ``solved`` is the producer's own count of the window's solved frames
+        (``n_window``) and ``None`` when the record does not carry it — it is
+        NEVER derived from the kept count.  ``decimated``: frames were (or may
+        have been) skipped — a stride above 1, or fewer kept than solved; a
+        record of the 8cea80eb producer (``n``, ``n_elements``, ``stride``, no
+        ``n_window``, no bound) with stride 2 is decimated.  ``bound_ok``:
+        the per-element max |B|^2 over every solved frame is stored AND the
+        solved count it covers is known — the only way a decimated record is
+        accepted.  ``complete``: every solved frame is stored (stride 1 and
+        no shortfall).
+        """
+        info = dict(self.frames_info or {})
+        kept = self.n_frames
+        stride = int(info.get("stride") or 1)
+        solved = info.get("n_window")
+        solved = int(solved) if solved is not None else None
+        decimated = kept > 0 and (stride > 1 or (solved is not None
+                                                 and solved > kept))
+        bound_ok = bool(decimated and self.frames_b2max is not None
+                        and solved is not None and solved >= kept)
+        last = info.get("last_kept")
+        return {"kept": kept, "solved": solved, "stride": stride,
+                "last_kept": (bool(last) if last is not None else None),
+                "decimated": bool(decimated), "bound_ok": bound_ok,
+                "complete": bool(kept > 0 and not decimated)}
 
     @property
     def decimated(self) -> bool:
-        """Not every solved frame of the window is stored."""
-        return self.n_frames > 0 and self.n_window > self.n_frames
+        """Not every solved frame of the window is (known to be) stored."""
+        return self.coverage()["decimated"]
 
     def rotor_solid(self) -> np.ndarray:
         """(ne,) bool: the EM rotor's own solids — iron, magnets, shaft."""
@@ -675,16 +699,13 @@ def em_field_from_record(rec: Dict[str, Any]) -> EmField:
         b2m = rec.get("pull_frames_b2max")
         if b2m is not None:
             b2m = np.asarray(b2m, dtype=float).reshape(-1)
-            if b2m.size != fe.size or not np.isfinite(b2m).all()                     or (b2m < 0).any():
+            if (b2m.size != fe.size or not np.isfinite(b2m).all()
+                    or (b2m < 0).any()):
                 raise _bad("the per-element max |B|^2 does not match the frames")
         info = dict(meta.get("pull_frames") or {})
         frames = {"frames_elem": fe, "frames_bx": fbx, "frames_by": fby,
                   "frames_angle_deg": ang, "frames_b2max": b2m,
                   "frames_info": info}
-        nwin = int(info.get("n_window") or fbx.shape[0])
-        if nwin > fbx.shape[0] and b2m is None:
-            raise _bad(f"{fbx.shape[0]} of {nwin} solved frames kept and no "
-                       "per-element max |B|^2 to bound the rest")
     # ── did the sleeve carry current in the field solve? (F4) ───────────────
     if not bool((tags == SLEEVE_TAG).any()):
         sleeve_current: Optional[bool] = False
@@ -694,9 +715,21 @@ def em_field_from_record(rec: Dict[str, Any]) -> EmField:
         sleeve_current = False        # no eddy solve: nothing was induced
     else:
         sleeve_current = None
-    return EmField(p=p, t=t, tags=tags, bx=bx, by=by, b_source=src,
-                   sector_rad=sector, theta0=theta0, meta=meta,
-                   sleeve_current=sleeve_current, **frames)
+    fld = EmField(p=p, t=t, tags=tags, bx=bx, by=by, b_source=src,
+                  sector_rad=sector, theta0=theta0, meta=meta,
+                  sleeve_current=sleeve_current, **frames)
+    cov = fld.coverage()
+    if cov["decimated"] and not cov["bound_ok"]:
+        raise PullFieldError(
+            f"the stored EM record keeps {cov['kept']} frames at stride "
+            f"{cov['stride']} of "
+            + (f"{cov['solved']} solved" if cov["solved"] is not None
+               else "an unrecorded number of solved")
+            + " frames and carries no verified bound (max |B|^2 per element "
+            "over every solved frame) for the frames it skipped, so a peak "
+            "between kept frames could be missed — re-run the duty on the "
+            "Electromagnetic tab so the record is stored with its bound")
+    return fld
 
 
 # ---------------------------------------------------------------------------
@@ -753,6 +786,12 @@ def locate_samples(fld: EmField, x: np.ndarray, n: np.ndarray,
     return el, ang, ~todo
 
 
+#: A probe this close to its face (mm) that lands in solid does not decide:
+#: the two meshes draw the same arc with different chords (sag ~ s^2 / 8 r:
+#: 21 µm for a 2.6 mm chord at r = 40 mm), so the first offset can fall just
+#: inside the EM record's own solid; a "wall" thinner than this is none.
+PROBE_SOLID_MIN_MM = 0.025
+
 #: ``probe_surface`` outcomes for a point on a rotor face
 EXPOSED = 0      # its outside is gap-connected air with a readable field
 UNREAD = 1       # gap-connected air, but no readable field there (error)
@@ -769,7 +808,9 @@ def probe_surface(fld: EmField, x: np.ndarray, n: np.ndarray,
     with outward normals ``n`` — what is just OUTSIDE each face, by the EM
     mesh's own domains (re-review R3, 2026-10-26).
 
-    The FIRST offset that lands in any element of the record decides:
+    The FIRST offset that lands in any element of the record decides
+    (a solid hit closer than ``PROBE_SOLID_MIN_MM`` is chord sag and does
+    not):
     gap-connected air (``EmField.gap_air``) is ``EXPOSED`` when its B can be
     read, ``UNREAD`` when not; air that is not connected to the gap is a
     ``CAVITY``; a rotor solid ``COVERED``; anything else ``OTHER``.  A point
@@ -803,7 +844,10 @@ def probe_surface(fld: EmField, x: np.ndarray, n: np.ndarray,
         status[ih] = st
         el[ih] = eh
         ang[ih] = a[hit]
-        todo[ih] = False
+        # a solid hit inside the chord-sag distance stays tentative: a later
+        # offset may still find the air the face really looks onto
+        decided = air[eh] | (float(off) >= PROBE_SOLID_MIN_MM)
+        todo[ih[decided]] = False
     return status, el, ang
 
 
@@ -1149,11 +1193,12 @@ def radial_visibility(mesh, part_tri: np.ndarray, xq: np.ndarray,
     of every rotor/magnet boundary facet, binned by angle at
     ``SKYLINE_DTHETA``, the ray's exact crossing of each facet.
 
-    This radial test decides the uniform estimate's surface, and the EM
-    pull's only when the stored record carries no rotor solids; otherwise the
-    EM pull decides exposure by the record's own air topology
-    (``probe_surface``), which sees an open notch of any width and never sees
-    a closed cavity (re-review R3).
+    This radial test decides the uniform estimate's surface.  The EM pull
+    decides exposure by the record's own air topology (``probe_surface``),
+    which sees an open notch of any width and never a closed cavity
+    (re-review R3), and uses this test only to catch a record of another
+    rotor; a record without rotor solids is refused, never loaded by this
+    test (third review R3: it drops every real flank).
     """
     xq = np.asarray(xq, dtype=float).reshape(-1, 2)
     if xq.shape[0] == 0:
@@ -1333,28 +1378,35 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
         body_q = body[owner_q]
         # ── WHICH faces are loaded: the record's own air topology (R3) ──────
         topo = fld.gap_topology
+        if not topo:
+            # third review R3: without the rotor's solids in the record the
+            # gap air cannot be told from a closed cavity, and the radial
+            # skyline that could stand in drops every real flank (the broad
+            # flank fixture: 7,630 instead of 23,666 N/m).  Refused.
+            raise PullFieldError(
+                "the stored EM record carries no rotor solids (iron / magnet "
+                "domain tags) next to an air-gap clearance, so which rotor "
+                "faces the gap air touches — notch flanks included — cannot "
+                "be established, and a top-only load would drop real flanks "
+                "— re-run the duty on the Electromagnetic tab so the record "
+                "is stored with its domain topology")
         st0, el0, ang0 = probe_surface(fld, x0, n0)
-        if topo:
-            seen = np.isin(st0, (EXPOSED, UNREAD))
-            # a face the gap sees RADIALLY that the record calls rotor solid,
-            # stator or nothing: the record is of another rotor
-            mism = sky_vis & ~side_q & np.isin(st0, (COVERED, OTHER,
-                                                     OFF_RECORD))
-            if mism.any():
-                bad_b = int(np.bincount(np.maximum(body_q[mism], 0),
-                                        weights=w1[mism]).argmax())
-                raise PullFieldError(
-                    f"{float(w1[mism].sum()) * 1e3:.2f} mm of "
-                    f"{body_names[bad_b] if bad_b < len(body_names) else 'the rotor'}"
-                    "'s air-gap face lies, in the stored EM record, inside "
-                    "rotor solid, stator or outside the record — the field "
-                    "is not of this rotor (another geometry, or a rotor "
-                    "turned against the one meshed here); re-run the duty on "
-                    "the Electromagnetic tab for the machine loaded now")
-        else:
-            # the record carries no rotor solids to seed the gap air from:
-            # the radial skyline decides, and the report says so
-            seen = sky_vis
+        seen = np.isin(st0, (EXPOSED, UNREAD))
+        # a face the gap sees RADIALLY that the record calls rotor solid,
+        # stator or nothing: the record is of another rotor
+        mism = sky_vis & ~side_q & np.isin(st0, (COVERED, OTHER,
+                                                 OFF_RECORD))
+        if mism.any():
+            bad_b = int(np.bincount(np.maximum(body_q[mism], 0),
+                                    weights=w1[mism]).argmax())
+            raise PullFieldError(
+                f"{float(w1[mism].sum()) * 1e3:.2f} mm of "
+                f"{body_names[bad_b] if bad_b < len(body_names) else 'the rotor'}"
+                "'s air-gap face lies, in the stored EM record, inside "
+                "rotor solid, stator or outside the record — the field "
+                "is not of this rotor (another geometry, or a rotor "
+                "turned against the one meshed here); re-run the duty on "
+                "the Electromagnetic tab for the machine loaded now")
         wq = w1 * seen
 
         def _refuse_unread(unread: np.ndarray, col: int) -> None:
@@ -1384,6 +1436,7 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
         ws = wq[sidx]
         r_s = r[sidx]
         nfr = max(fld.n_frames, 1)
+        cov = fld.coverage()
         env = np.full(sidx.size, -np.inf)                # pull-direction max
         bound = np.zeros(sidx.size)                      # max|B|^2/2mu0 bound
         tot = np.zeros((nfr, ncol))                      # pull-direction totals
@@ -1407,10 +1460,10 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
             env = np.maximum(env, pj.max(axis=0))
             tot[:, j] = pj @ ws
             mom[:, j] = (r_s[None, :] * ttj) @ ws
-            if fld.decimated:
+            if cov["decimated"]:
                 bound = np.maximum(bound, fld.b2max_at(el) / (2.0 * MU0))
         sampled_total = float(env @ ws)
-        bound_applied = bool(fld.decimated)
+        bound_applied = bool(cov["decimated"])
         if bound_applied:
             # frames solved but not kept: |T . n| = |B|^2 / 2 mu0, so the
             # per-element max |B|^2 over EVERY solved frame bounds the radial
@@ -1437,9 +1490,8 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
         env_total = float(env @ ws)                      # pull direction
         em_r = fld.rotor_radius_m()
         framed = fld.n_frames > 0
-        info = dict(fld.frames_info or {})
-        stride = int(info.get("stride") or 1)
-        last_kept = info.get("last_kept")
+        stride = cov["stride"]
+        last_kept = cov["last_kept"]
         ang_star = (float(fld.frames_angle_deg[f_star])
                     if framed and fld.frames_angle_deg is not None
                     and fld.frames_angle_deg.size == fld.n_frames else None)
@@ -1452,7 +1504,9 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
         if framed:
             instant = (
                 f"sampled directional screening over {fld.n_frames} of "
-                f"{fld.n_window} solved frames of the settled window (stride "
+                + (f"{cov['solved']}" if cov["solved"] is not None
+                   else "an unrecorded number of")
+                + f" solved frames of the settled window (stride "
                 f"{stride}, last frame "
                 + ("kept" if last_kept else "not recorded as kept"
                    if last_kept is None else "NOT kept")
@@ -1476,9 +1530,7 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
             "matched_fraction": 1.0,
             "matched_by_part": {body_names[b]: 1.0 for b in bodies_loaded},
             "exposure": ("the stored record's air connected to the gap "
-                         "(flood fill from the clearance)" if topo else
-                         "radial skyline — the stored record carries no rotor "
-                         "solids to tell gap air from a closed cavity"),
+                         "(flood fill from the clearance)"),
             "sleeve": ("carried no current in the field solve — read as air"
                        if fld.has_sleeve else None),
             "applied_as": ("radial component of the Maxwell traction "
@@ -1493,11 +1545,12 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
             "instant": instant,
             "sampling": {
                 "frames_kept": int(fld.n_frames),
-                "frames_solved": int(fld.n_window) if framed else None,
+                "frames_solved": cov["solved"] if framed else None,
                 "stride": stride if framed else None,
                 "last_frame_kept": (bool(last_kept) if last_kept is not None
                                     else None) if framed else None,
-                "decimated": bool(fld.decimated),
+                "decimated": bool(cov["decimated"]),
+                "complete": bool(cov["complete"]) if framed else None,
                 "bound_applied": bound_applied,
                 "bound_over_sampled": (env_total / sampled_total
                                        if bound_applied and sampled_total > 0

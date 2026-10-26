@@ -87,10 +87,14 @@ def _ring_mesh(ri_mm, ro_mm, nr, nt, th0=0.0, th1=2.0 * math.pi):
 
 
 def _synthetic_em(r_lo_mm, r_hi_mm, bfun, nr=6, nt=720, th0=0.0,
-                  th1=2.0 * math.pi, with_stator=True, as_az=None):
+                  th1=2.0 * math.pi, with_stator=True, as_az=None,
+                  rotor_solid=True):
     """A stored-EM-record lookalike: an air annulus [r_lo, r_hi] (tag 0) with
-    B = bfun(x, y) at each element centroid, and a stator ring outside it
-    (tag 1) so the annulus check has its bound.  ``as_az`` = A_z(x, y) in
+    B = bfun(x, y) at each element centroid, a stator ring outside it (tag 1)
+    so the annulus check has its bound, and — like every real record — the
+    rotor's own iron INSIDE it (tag 5, a 2 mm ring under r_lo), which is what
+    tells the gap air from a closed cavity (``rotor_solid=False``: a record
+    without that topology, which the pull refuses).  ``as_az`` = A_z(x, y) in
     Wb/m stores the field the OLD way (A per node, no Bx/By)."""
     p, t = _polar(r_lo_mm, r_hi_mm, nr, nt, th0, th1)
     tags = np.zeros(t.shape[1], dtype=np.int64)
@@ -99,6 +103,11 @@ def _synthetic_em(r_lo_mm, r_hi_mm, bfun, nr=6, nt=720, th0=0.0,
         t = np.concatenate([t, ts + p.shape[1]], axis=1)
         p = np.concatenate([p, ps], axis=1)
         tags = np.concatenate([tags, np.ones(ts.shape[1], dtype=np.int64)])
+    if rotor_solid:
+        pr, tr_ = _polar(r_lo_mm - 2.0, r_lo_mm, 2, nt, th0, th1)
+        t = np.concatenate([t, tr_ + p.shape[1]], axis=1)
+        p = np.concatenate([p, pr], axis=1)
+        tags = np.concatenate([tags, np.full(tr_.shape[1], 5, dtype=np.int64)])
     cen = p[:, t].mean(axis=1) * 1e-3                       # m
     rec = {"vertices": p.astype(np.float32), "triangles": t.astype(np.int32),
            "tags": tags.astype(np.int32), "meta": {"synthetic": True}}
@@ -822,46 +831,95 @@ def test_g_the_stored_row_carries_the_pull_with_its_provenance(route_uniform):
     assert block["load_case"] == row["load_case"]
 
 
-def test_g_route_pull_em_reads_the_duty_field(client, monkeypatch, quiet_last,
-                                              route_uniform):
-    """End to end with a stored-record lookalike over the sandbox rotor's gap
-    (radial 1/r field, B = 1 T at the rotor face): the route reads it as the
+def _notched_ring(r_o_mm, n_poles=28, cells_per_pole=24, depth_mm=1.0,
+                  bore_mm=50.0):
+    """A ring rotor with one radial notch per pole (2 grid cells wide,
+    ``depth_mm`` deep), drawn ON a polar grid of ``n_poles * cells_per_pole``
+    angles so a record gridded on the same angles conforms to it exactly."""
+    from shapely.geometry import Point, Polygon
+    nt = n_poles * cells_per_pole
+    th = 2 * math.pi * np.arange(nt) / nt
+    notch = np.zeros(nt, dtype=bool)                # cell k: [th_k, th_k+1]
+    for j in range(n_poles):
+        notch[(cells_per_pole * j - 1) % nt] = True
+        notch[(cells_per_pole * j) % nt] = True
+    pts = []
+    for k in range(nt):
+        rc = r_o_mm - depth_mm if notch[k] else r_o_mm
+        for a in (th[k], th[k] + 2 * math.pi / nt):
+            q = (rc * math.cos(a), rc * math.sin(a))
+            if not pts or math.hypot(pts[-1][0] - q[0], pts[-1][1] - q[1]) > 1e-9:
+                pts.append(q)
+    if math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]) <= 1e-9:
+        pts.pop()
+    rotor = Polygon(pts).difference(
+        Point(0, 0).buffer(bore_mm, resolution=256))
+    return rotor, th, notch
+
+
+def test_g_route_pull_em_reads_the_duty_field(client, monkeypatch, quiet_last):
+    """End to end with a stored-record lookalike: the route reads it as the
     active duty's, names it, and the pull it applies is B^2/2mu0 checked
-    against the annulus integral."""
+    against the annulus integral.  The rotor is a 28-pole notched ring and
+    the record CONFORMS to it (same angles, notch air, rotor solid, gap,
+    stator) — a real record carries its rotor's own topology, and the pull
+    reads exposure from it (third review R3); radial field 1/r, B = 1 T at
+    the rotor face."""
     from motor_ai_sim import duty_fields as df
-    r_o = route_uniform["pull_load"]["r_gap_mm"]
-    # the air reaches 3 mm inside the rotor face too, so notch floors the gap
-    # sees are inside the record (the record's air overlapping iron is never
-    # read: the field is sampled OUTSIDE the solid)
-    fld = _synthetic_em(r_o - 3.0, r_o + 1.0, _radial_b(1.0, r_o * 1e-3),
-                        nr=16, nt=1440)
-    rec = {"vertices": fld.p * 1e3, "triangles": fld.t, "tags": fld.tags,
-           "bx_per_tri": fld.bx, "by_per_tri": fld.by,
-           "meta": {"computed_at": "2026-10-26T12:00:00", "saved_at": "s1"}}
+    from motor_ai_sim.routes import mechanical as mech
+    r_o, depth = 60.0, 1.0
+    rotor, th, notch = _notched_ring(r_o, depth_mm=depth)
+    real = mech._live_polys                                # noqa: SLF001
+
+    def fake_polys(geo):
+        _p, motor, ov = real(geo)
+        # a shaft in the bore, so the contact model has a joint to hold
+        from shapely.geometry import Point
+        return ({"rotor": rotor, "magnets": [], "sleeve": None,
+                 "shaft": Point(0, 0).buffer(50.0, resolution=256),
+                 "sleeve_r_mm": (0.0, 0.0)}, motor, ov)
+    monkeypatch.setattr(mech, "_live_polys", fake_polys)
+    th_nodes = th
+    r_nodes = np.linspace((r_o - 3.0) * 1e-3, (r_o + 3.0) * 1e-3, 25)
+    p, t, rc, thc = _grid_mesh(r_nodes, th_nodes)
+    cell = np.floor(np.mod(thc, 2 * math.pi) / (2 * math.pi) * th.size
+                    ).astype(int) % th.size
+    in_notch = notch[cell] & (rc > (r_o - depth) * 1e-3)
+    tags = np.where(rc < r_o * 1e-3, 5, np.where(rc < (r_o + 1.0) * 1e-3, 0, 1))
+    tags[in_notch & (rc < r_o * 1e-3)] = 0
+    cen = p[:, t].mean(axis=1)
+    bx, by = _radial_b(1.0, r_o * 1e-3)(cen[0], cen[1])
+    air = tags == 0
+    rec = {"vertices": p * 1e3, "triangles": t, "tags": tags,
+           "bx_per_tri": np.where(air, bx, 0.0),
+           "by_per_tri": np.where(air, by, 0.0),
+           "meta": {"computed_at": "2026-10-26T12:00:00",
+                    "saved_at": "notched-ring-fixture", "eddy": False}}
     monkeypatch.setattr(df, "active_context", lambda: ("D", "C", "rated"))
     monkeypatch.setattr(df, "load", lambda die, cfg, duty, kind: rec
                         if (die, cfg, duty, kind) == ("D", "C", "rated", "em")
                         else None)
     r = client.get("/api/mechanical/rotor_stress",
-                   params={**ROUTE_BASE, "pull": "em"})
+                   params={**ROUTE_BASE, "pull": "em", "fresh": True})
     assert r.status_code == 200, r.text[:600]
     pl = r.json()["pull_load"]
     assert pl["source"] == "em" and pl["origin"]["duty"] == "rated"
     assert pl["origin"]["geometry"] in ("match", "unverified")
-    assert pl["matched_fraction"] > 0.95
-    # B = 1 T at the outermost faces (r_o), more on the floors between them
-    # the gap sees (B ∝ 1/r below r_o), less per unit length on a slanted
-    # flank (only its radial projection is pulled): the peak lies between
-    # B^2/2mu0 and the deepest floor's (r_o/r)^2 times it, and the TOTAL —
-    # spread over the full circle at r_o — is B^2/2mu0 to the check's own
-    # tolerance, because the field is source-free (K / r_o).
+    assert pl["matched_fraction"] == 1.0
+    assert pl["load_basis"] == "single_snapshot" and pl["worst_case"] is False
+    # B = 1 T at the outer face, more on the notch floors (B ∝ 1/r below
+    # r_o): the peak lies between B^2/2mu0 and the floor's (r_o/r)^2 times
+    # it; the radial field puts nothing on a flank (B_θ = 0) but the flanks
+    # are loaded surface all the same; the TOTAL, spread over the circle at
+    # r_o, is B^2/2mu0 to the check's own tolerance (source-free: K / r_o)
     p_o = 1.0 / (2 * MU0) * 1e-6
-    print(f"\nsandbox EM pull: peak {pl['pressure_peak_mpa']:.4f}, mean "
-          f"{pl['pressure_mean_mpa']:.4f}, nominal {pl['pressure_nominal_mpa']:.4f}"
-          f" MPa against {p_o:.4f}; check {pl['check']['ratio']:.4f}")
-    assert p_o * 0.99 < pl["pressure_peak_mpa"] < p_o * (r_o / (r_o - 3.0)) ** 2
-    assert pl["pressure_nominal_mpa"] == pytest.approx(p_o, rel=0.1)
-    assert pl["check"]["ratio"] == pytest.approx(1.0, abs=0.1)
+    print(f"\nnotched ring EM pull: peak {pl['pressure_peak_mpa']:.4f}, "
+          f"nominal {pl['pressure_nominal_mpa']:.4f} MPa against {p_o:.4f}; "
+          f"flanks {pl['flanks_mm']:.2f} mm; check {pl['check']['ratio']:.4f}")
+    assert p_o * 0.99 < pl["pressure_peak_mpa"] < p_o * (r_o / (r_o - depth)) ** 2
+    assert pl["pressure_nominal_mpa"] == pytest.approx(p_o, rel=0.02)
+    assert pl["flanks_mm"] == pytest.approx(28 * 2 * depth, rel=1e-3)
+    assert pl["check"]["ratio"] == pytest.approx(1.0, abs=0.02)
 
 
 def test_g_pack_em_now_stores_the_field_components():
@@ -930,8 +988,9 @@ def _frames_records(phis):
                  pull_frames_bx=np.stack([b[0] for b in bb]),
                  pull_frames_by=np.stack([b[1] for b in bb]),
                  pull_frames_rotor_angle_deg=np.arange(len(phis), dtype=float),
-                 meta={"eddy": False, "pull_frames": {"n": len(phis),
-                                                      "stride": 1}})
+                 meta={"eddy": False, "pull_frames": {
+                     "n": len(phis), "n_window": len(phis), "stride": 1,
+                     "last_kept": True}})
     return rec, rec_f
 
 
@@ -976,8 +1035,9 @@ def test_h_f1_one_instant_misses_the_slot_phase_the_frames_catch(ring):
     assert "not a contact/stress envelope" in mpl.summary_text(rf)
     assert rf["envelope"]["n_frames"] == F
     assert rf["sampling"] == {"frames_kept": F, "frames_solved": F,
-                              "stride": 1, "last_frame_kept": None,
-                              "decimated": False, "bound_applied": False,
+                              "stride": 1, "last_frame_kept": True,
+                              "decimated": False, "complete": True,
+                              "bound_applied": False,
                               "bound_over_sampled": None, "pole_images": 4}
     # the counterexample itself
     miss = 1.0 - _phase_total(math.pi) / max(_phase_total(p) for p in phis)
@@ -1032,7 +1092,7 @@ def test_h_f1_frames_round_trip_through_the_duty_record():
     assert packed["meta"]["pull_frames"]["last_kept"] is True
     fld = mpl.em_field_from_record(dict(arr, meta=packed["meta"]))
     assert fld.n_frames == 3 and fld.frames_info["stride"] == 2
-    assert fld.n_window == 5 and fld.decimated
+    assert fld.coverage()["solved"] == 5 and fld.decimated
     np.testing.assert_allclose(fld.frames_b2max, 1.3 * (bx * bx + by * by),
                                rtol=1e-6)
     np.testing.assert_allclose(fld.frames_bx[1], 1.1 * bx, rtol=1e-6, atol=1e-7)
@@ -1428,7 +1488,7 @@ def test_i_r1_decimation_keeps_the_peak_through_max_b2(ring):
     meta = {"n": 3, "n_window": 2048, "stride": 2, "last_kept": False}
     rec = _framed_record(base, [b1, b1, b1], meta, b2max=b2max)
     fld = mpl.em_field_from_record(rec)
-    assert fld.decimated and fld.n_window == 2048
+    assert fld.decimated and fld.coverage()["solved"] == 2048
     spec = mpl.PullSpec("em", field=fld)
     _f, raw = mpl.pull_load(mesh, part, spec, order=2)
     rep = mpl.finish_report(raw, spec, 0.05, 1, 8)
@@ -1655,3 +1715,69 @@ def test_i_r4_route_answers_422_for_a_nan_frame(client, monkeypatch,
     bad = r.json()["detail"]["invalid_parameters"][0]
     assert bad["field"] == "pull_duty" and bad["kind"] == "unusable"
     assert "non-finite" in bad["message"]
+
+
+# ---------------------------------------------------------------------------
+# (j) the third review of 5e6f00e8 (Codex Astra, 2026-10-26): R1 coverage of
+#     a previous-schema record, R3 no silent skyline fallback.
+# ---------------------------------------------------------------------------
+
+def test_j_r1_a_previous_schema_decimated_record_is_refused(ring):
+    """Third review R1: the 8cea80eb producer stored ``n``, ``n_elements``
+    and ``stride`` — no ``n_window``, no bound.  With stride 2 it kept only
+    the even frames; read as complete it lost ~75 % of an alternating
+    1 T / 2 T peak, passed the check and said "1024 of 1024 frames".  The
+    one coverage predicate calls it decimated with an unknown solved count,
+    and import refuses it (re-run the duty).  The same record at stride 1 is
+    complete, and its solved count is reported as unknown, never as the
+    kept count."""
+    base = _synthetic_em(R_O, R_O + GAP, _radial_b(B0, R_O * 1e-3), nr=4)
+    b1 = (base.bx, base.by)
+    old = {"n": 3, "n_elements": int((base.tags == 0).sum()), "stride": 2}
+    rec = _framed_record(base, [b1, b1, b1], old)
+    with pytest.raises(mpl.PullFieldError,
+                       match=r"stride 2 of an unrecorded number of solved "
+                             r"frames.*re-run the duty"):
+        mpl.em_field_from_record(rec)
+    # a bound without the solved count it covers is not a verified bound
+    rec_b = dict(rec, pull_frames_b2max=4.0 * (base.bx ** 2
+                                               + base.by ** 2)[base.tags == 0])
+    with pytest.raises(mpl.PullFieldError, match="verified bound"):
+        mpl.em_field_from_record(rec_b)
+    # stride 1 of the old schema: every solved frame kept -> complete
+    rec1 = _framed_record(base, [b1, b1, b1], dict(old, stride=1))
+    fld = mpl.em_field_from_record(rec1)
+    cov = fld.coverage()
+    assert cov == {"kept": 3, "solved": None, "stride": 1, "last_kept": None,
+                   "decimated": False, "bound_ok": False, "complete": True}
+    mesh, part = ring
+    spec = mpl.PullSpec("em", field=fld)
+    _f, raw = mpl.pull_load(mesh, part, spec, order=2)
+    rep = mpl.finish_report(raw, spec, 0.05, 1, 8)
+    assert rep["sampling"]["frames_solved"] is None
+    assert rep["sampling"]["complete"] is True
+    assert "an unrecorded number of solved frames" in rep["instant"]
+
+
+def test_j_r3_a_record_without_rotor_solids_is_refused():
+    """Third review R3: with no rotor-solid tags the record cannot tell gap
+    air from a closed cavity, and the radial skyline that used to stand in
+    drops every real flank (the broad-flank pole: 7,630 instead of
+    23,666 N/m).  Refused, with the way out — never loaded top-only."""
+    from skfem import MeshTri
+    a = math.radians(15.0)
+    p, t = _polar(20e-3, 40e-3, 10, 30, th0=-a, th1=a)
+    mesh = MeshTri(np.ascontiguousarray(p), np.ascontiguousarray(t))
+    part = np.full(mesh.t.shape[1], ctc.PART_ROTOR, dtype=np.int8)
+
+    def f(x, y):
+        th = np.arctan2(y, x)
+        br, bt = np.ones_like(th), 0.5 * np.sin(th) / math.sin(a)
+        c, s = np.cos(th), np.sin(th)
+        return br * c - bt * s, br * s + bt * c
+    fld = _synthetic_em(15.0, 45.0, f, nr=60, nt=1440, rotor_solid=False)
+    assert not fld.gap_topology
+    with pytest.raises(mpl.PullFieldError,
+                       match=r"no rotor solids.*re-run the duty"):
+        mpl.pull_load(mesh, part, mpl.PullSpec("em", field=fld), order=2,
+                      cut_angles=())

@@ -747,6 +747,8 @@ def get_spec_version(request: Request, project_id: str, number: int):
             projected = item if access.is_engineer(user) else _customer_spec(item)
             projected["schema_version"] = int(item.get("schema_version", item.get("draft", {}).get("schema_version", 1)))
             projected["schema"] = models.schema(projected["schema_version"])
+            if isinstance(projected.get("draft"), dict):
+                projected["draft"] = models.upgrade_legacy_values(projected["draft"])  # display only; the stored version is untouched
             return projected
     raise HTTPException(status_code=404, detail="Specification version not found")
 

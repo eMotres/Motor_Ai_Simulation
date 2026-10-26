@@ -1722,16 +1722,44 @@
           "id": "4_8",
           "checklist_id": "4.8",
           "label": {
-            "en": "Balance grade, runout",
-            "zh-CN": "平衡等级、跳动"
+            "en": "Balance grade and runout",
+            "zh-CN": "平衡等级和跳动"
           },
-          "type": "string",
-          "unit": "mm",
+          "type": "object",
+          "unit": "",
           "required": false,
           "allow_not_known_yet": true,
+          "properties": [
+            {
+              "id": "balance_grade",
+              "label": {"en": "Balance grade (ISO 21940)", "zh-CN": "平衡等级（ISO 21940）"},
+              "type": "string",
+              "required": false,
+              "suggestions": [{"value": "G6.3", "label": {"en": "G6.3", "zh-CN": "G6.3"}}, {"value": "G2.5", "label": {"en": "G2.5", "zh-CN": "G2.5"}}, {"value": "G1", "label": {"en": "G1", "zh-CN": "G1"}}, {"value": "G0.4", "label": {"en": "G0.4", "zh-CN": "G0.4"}}]
+            },
+            {
+              "id": "runout_mm",
+              "label": {"en": "Runout", "zh-CN": "跳动"},
+              "type": "number",
+              "unit": "mm",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "note",
+              "label": {"en": "Earlier text entry", "zh-CN": "此前的文字记录"},
+              "type": "string",
+              "required": false,
+              "ui_hidden": true
+            }
+          ],
           "short_label": {
-            "en": "Balance and runout",
-            "zh-CN": "平衡与跳动"
+            "en": "Balance grade and runout",
+            "zh-CN": "平衡等级与跳动"
+          },
+          "help": {
+            "en": "Balance quality grade to ISO 21940 (for example G2.5) and the permitted runout in mm.",
+            "zh-CN": "按 ISO 21940 的平衡品质等级（例如 G2.5）和允许的跳动（毫米）。"
           },
           "presentation_group": "4"
         },

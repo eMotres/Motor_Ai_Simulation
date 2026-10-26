@@ -27,6 +27,61 @@ def _field_map(version: int | None = None) -> dict[str, tuple[dict, dict]]:
     return result
 
 
+_BALANCE_GRADE = re.compile(r"(?<![A-Za-z])G\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+_RUNOUT_NUMBER = re.compile(r"(?<![\w.,])(\d+(?:[.,]\d+)?)\s*(mm)?(?![\w.,])", re.IGNORECASE)
+_FILLER = re.compile(r"run-?out|tir|balance|grade|iso\s*21940|max(?:imum)?|up to|mm|[\s;,:/()\-≤<>=≈~]+", re.IGNORECASE)
+
+
+def legacy_balance_runout(text: str) -> dict:
+    """The structured 4_8 value (``balance_grade``, ``runout_mm``, ``note``) of a legacy single-string answer.
+
+    Before 2026-10-27 field 4_8 held one string such as ``"G2.5; runout <= 0.05 mm"`` or ``"G6.3, 0.02 mm"``.  A grade
+    ``G<number>`` becomes ``balance_grade`` (written ``G2.5``); the first number AFTER the grade (with no grade: the first
+    number followed by ``mm`` or named as runout / TIR) becomes ``runout_mm``.  When anything else is left over, or nothing could be read, the whole raw
+    text is kept in ``note`` so nothing is lost.  Pure function; a stored value is never rewritten by it.
+    """
+    raw = text.strip()
+    result: dict = {}
+    rest = raw
+    grade = _BALANCE_GRADE.search(raw)
+    if grade:
+        result["balance_grade"] = "G" + grade.group(1).replace(",", ".")
+        rest = raw[:grade.start()] + " " + raw[grade.end():]
+        tail = raw[grade.end():]
+    else:
+        tail = raw
+    runout = _RUNOUT_NUMBER.search(tail)
+    # a bare number is a runout only after a grade, with "mm", or when the text says runout / TIR
+    if runout and (grade or runout.group(2) or re.search(r"run-?out|\btir\b|跳动", raw, re.IGNORECASE)):
+        number = float(runout.group(1).replace(",", "."))
+        if math.isfinite(number):
+            result["runout_mm"] = number
+            rest = rest.replace(runout.group(0), " ", 1)
+    if not result or _FILLER.sub("", rest).strip():
+        result["note"] = raw
+    return result
+
+
+def upgrade_legacy_values(draft: dict) -> dict:
+    """A copy of a version-2 draft where a legacy STRING in 4_8 (balance grade + runout in one text) is the structured value.
+
+    Read-time only: stored drafts and the immutable submitted versions are never rewritten.  Idempotent.
+    """
+    import copy
+    out = copy.deepcopy(draft)
+    if int(out.get("schema_version", 1)) < 2:
+        return out
+    fields = out.get("fields")
+    answer = fields.get("4_8") if isinstance(fields, dict) else None
+    if isinstance(answer, str):
+        answer = {"status": "filled", "value": answer}
+    if isinstance(answer, dict) and isinstance(answer.get("value"), str):
+        text = answer["value"]
+        fields["4_8"] = ({**answer, "value": legacy_balance_runout(text)} if text.strip()
+                         else {**answer, "value": None, "status": "missing" if answer.get("status") == "filled" else answer.get("status", "missing")})
+    return out
+
+
 def normalize_draft(value: Any, *, schema_version: int | None = None) -> dict:
     if not isinstance(value, dict):
         raise ValueError("draft must be an object")
@@ -198,6 +253,8 @@ def _normalize_answer(answer: Any, field: dict, field_id: str) -> dict:
         return {"value": None, "status": status}
     if isinstance(value, str) and not value.strip():
         return {"value": None, "status": "missing" if status == "filled" else status}
+    if field_id == "4_8" and field.get("properties") and isinstance(value, str):
+        value = legacy_balance_runout(value)  # a pre-2026-10-27 single text -> grade / runout / note
     if field.get("properties"):
         if not isinstance(value, dict):
             raise ValueError(f"{field_id}: structured object required")
@@ -580,7 +637,7 @@ def with_defaults(draft: dict) -> dict:
     (wizardState.ts).
     """
     import copy
-    out = copy.deepcopy(draft)
+    out = upgrade_legacy_values(draft)  # includes the deep copy; 4_8 text -> structured, read-time only
     if int(out.get("schema_version", 1)) < 2:
         return out
     fields = out.setdefault("fields", {})

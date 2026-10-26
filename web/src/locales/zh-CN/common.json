@@ -471,5 +471,85 @@
   "update": {
     "newVersion": "AeroStator 有新版本。",
     "reload": "刷新"
+  },
+  "digest": {
+    "title": "邮件更新",
+    "tip": "一封简短的邮件，说明发生了哪些变化。这里只生成草稿；在“管理—摘要”中由所有者批准文本之前不会发送任何内容。没有动态的周期不会发送。",
+    "change": "设置",
+    "hide": "收起",
+    "loadFailed": "邮件更新：{reason}",
+    "mode": {
+      "approve": "先征求我的同意",
+      "off": "关闭"
+    },
+    "modeLabel": "邮件更新模式",
+    "frequency": {
+      "daily": "每天",
+      "weekly": "每周"
+    },
+    "frequencyLabel": "频率",
+    "recipients": {
+      "all": "所有成员",
+      "chosen": "选定成员"
+    },
+    "recipientsLabel": "发给谁",
+    "approvalNote": "每次更新都作为草稿等待在“管理—摘要”中。未经您批准最终文本，不会发送。",
+    "pendingChip": "草稿待处理",
+    "leftByMember": "已退出此摘要",
+    "changedBy": "由 {who} 修改，{when}",
+    "role": {
+      "owner": "所有者",
+      "engineer": "工程师",
+      "customer": "客户",
+      "oem": "工厂"
+    },
+    "skip": {
+      "left_this_digest": "已退出此摘要",
+      "not_chosen": "未选中",
+      "no_account": "无账户",
+      "disabled": "已停用",
+      "unverified": "邮箱未确认",
+      "unsubscribed_all": "已退订所有邮件",
+      "nda_missing": "缺少保密协议",
+      "no_longer_a_recipient": "不再是收件人",
+      "access_changed": "权限已变更"
+    },
+    "kind": {
+      "project": "项目",
+      "production": "生产"
+    },
+    "status": {
+      "pending": "待处理",
+      "sent": "已发送",
+      "discarded": "已丢弃"
+    },
+    "admin": {
+      "title": "摘要",
+      "tip": "每个项目或生产、每个周期一份草稿。每份草稿对组内所有人是同一份文本（只含每位成员都有权查看的内容；工厂在组内时为英文加中文）。先预览，再发送或丢弃。这是唯一发送摘要的地方。",
+      "refresh": "立即生成草稿",
+      "refreshed": "草稿已更新：{count}。未发送任何内容。",
+      "nonePending": "没有待处理的摘要。没有动态的周期不会生成。",
+      "period": "{from} 至 {to}",
+      "subject": "主题",
+      "previewAs": "预览收件人",
+      "oneTextTip": "所有人的文本相同；只有底部的退订和偏好设置链接是个人专属的。",
+      "recipients": "收件人",
+      "notReceiving": "不接收",
+      "noSmtp": "此服务器未配置邮件（SMTP）。",
+      "send": "发送...",
+      "discard": "丢弃",
+      "confirmTitle": "发送此摘要？",
+      "confirmBody": "您预览的文本将发送给“{title}”的 {count} 位收件人。此操作无法撤销。",
+      "confirmSend": "立即发送",
+      "cancel": "取消",
+      "sentDone": "已发送：{sent}，失败：{failed}，跳过：{skipped}。",
+      "discardedDone": "摘要已丢弃。未发送任何内容。",
+      "lastError": "上次发送有 {failed} 位收件人失败；草稿仍在等待。",
+      "history": "历史",
+      "sentLine": "已发送 {sent}，失败 {failed}，由 {by} 批准，{at}",
+      "discardedLine": "由 {by} 丢弃，{at}",
+      "itemsCount": "{count} 条"
+    },
+    "recipientsCount": "{count} 位收件人"
   }
 }

@@ -1,0 +1,21 @@
+Subject: Erium X1 - what changed 2026-09-21
+To: bob@example.com
+
+Erium X1
+What changed since 2026-09-20:
+
+- New results, CIANO28 85 / L12, duty cruise: T 12.3 N·m, P 4.1 kW, η 95.1 %, winding 128 °C
+  https://aerostator.com/projects/erium-x1/motors?die=CIANO28%2085&config=L12
+- New message from Bob: When do we get the next numbers?
+  https://aerostator.com/projects/erium-x1/messages?item=m1
+- Design step note, CIANO28 85 / L12: Gap 0.8 mm, check the winding
+  https://aerostator.com/projects/erium-x1/motors?die=CIANO28%2085&config=L12
+- Specification version 2 submitted
+  https://aerostator.com/projects/erium-x1/specification
+
+--
+You get this because you are a member of the project "Erium X1".
+Stop updates for this project: https://aerostator.com/api/digest/unsubscribe/cHJvamVjdDplcml1bS14MQ/<signed-token>
+All e-mail preferences: https://aerostator.com/preferences?t=<signed-token>
+
+MOTRES d.o.o., Kotnikova 34, 1000 Ljubljana, Slovenia

@@ -79,7 +79,7 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
-import { parseProductionLink } from './lib/productionLink';
+import { parseAppLink } from './lib/appLink';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import { resolveSchemasRoute } from './lib/schemasRoute';
@@ -299,14 +299,17 @@ function App() {
   const producer = authResolved && (productionVisible(enforced, isAdmin, role) || productionMember);
   const developmentMember = useDevelopmentMember(authResolved && signedIn && !isAdmin && role !== 'engineer', user?.email);
   const developmentAllowed = authResolved && (isAdmin || role === 'engineer' || developmentMember || !enforced);
-  // A shared documents link (/production/<die>/<config>/documents?...): once the account is known to reach the Production tab, open it
-  // there - the page itself reads the link from the address bar.  Root has already checked on the server that the caller is a member.
-  const shareLinkPending = useRef(parseProductionLink(window.location.pathname, window.location.search) !== null);
+  // A link to a page of the app (activity e-mails, shared documents links): once the account is known to reach the tab it names -
+  // Production for /production/..., Development for /projects/... - open that tab; the page itself reads the link from the address
+  // bar (ProductionTab, DevelopmentPage).  Root has already checked on the server that the caller is a production member.
+  const deepLink = useRef(parseAppLink(window.location.pathname, window.location.search));
   useEffect(() => {
-    if (!shareLinkPending.current || !authResolved || !signedIn || !producer) return;
-    shareLinkPending.current = false;
-    setActiveTab('production' as never);
-  }, [authResolved, signedIn, producer, setActiveTab]);
+    const link = deepLink.current;
+    if (!link || !authResolved || !signedIn) return;
+    if (link.kind === 'production' ? !producer : !developmentAllowed) return;
+    deepLink.current = null;
+    setActiveTab((link.kind === 'production' ? 'production' : 'development') as never);
+  }, [authResolved, signedIn, producer, developmentAllowed, setActiveTab]);
   const newRequests = useNewRequestCount(isAdmin);
   const designerAllowed = useDesignerAllowed(signedIn);
   const [panelWidth, setPanelWidth] = React.useState(300);

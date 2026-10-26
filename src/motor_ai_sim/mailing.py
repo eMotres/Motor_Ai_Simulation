@@ -394,9 +394,11 @@ class SendAborted(RuntimeError):
 
 
 def send(p: Plan, *, deliver: Callable[[EmailMessage], None], log_file: Path, base_url: str, api_base: Optional[str], sender: str,
-         delay_s: float = 3.0, sleep: Callable[[float], None] = time.sleep, now: Callable[[], float] = time.time) -> dict:
+         delay_s: float = 3.0, sleep: Callable[[float], None] = time.sleep, now: Callable[[], float] = time.time,
+         build: Optional[Callable[[Recipient], EmailMessage]] = None) -> dict:
     """REAL SENDING.  One message at a time, ``delay_s`` apart; an ``attempt`` line is flushed to disk BEFORE the SMTP call and
-    a ``sent`` / ``failed`` line after it.  Returns {sent, failed, aborted}.  The caller has checked --confirm."""
+    a ``sent`` / ``failed`` line after it.  Returns {sent, failed, aborted}.  The caller has checked --confirm.
+    ``build`` (digest approval, 2026-10-26) makes the message of one recipient instead of the template campaign."""
     lock = Path(str(log_file) + ".lock")
     from motor_ai_sim.private_files import ensure_private_dir
     ensure_private_dir(log_file.parent)
@@ -411,7 +413,8 @@ def send(p: Plan, *, deliver: Callable[[EmailMessage], None], log_file: Path, ba
         for i, r in enumerate(p.to_send):
             if i:
                 sleep(delay_s)
-            msg = build_message(p.campaign, r.lang, email=r.email, name=r.name, base_url=base_url, api_base=api_base, sender=sender)
+            msg = build(r) if build is not None else build_message(p.campaign, r.lang, email=r.email, name=r.name, base_url=base_url,
+                                                                    api_base=api_base, sender=sender)
             row = {"campaign": p.campaign, "user": r.email, "message_id": msg["Message-ID"], "lang": r.lang}
             _append_log(log_file, dict(row, status="attempt", ts=now()))
             try:

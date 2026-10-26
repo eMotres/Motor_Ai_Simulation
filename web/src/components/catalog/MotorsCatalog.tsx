@@ -16,6 +16,9 @@ import { Box, Typography, Button, Tooltip } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
 import ProjectHighlightSelect from './ProjectHighlightSelect';
+import { isListableForClient } from '../../lib/catalogRows';
+import { isConfigHighlighted } from '../../modules/development/projectFocus';
+import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
@@ -56,13 +59,14 @@ const MotorsCatalog: React.FC = () => {
   const [appFilter, setAppFilter] = useState<ApplicationFilter>(() => {
     try { return parseApplicationFilter(localStorage.getItem('motors.application')); } catch { return 'all'; }
   });
-  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown; card_date?: unknown }[] }[]>([]);
+  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown; card_date?: unknown; duties?: unknown[] }[] }[]>([]);
   const pickFilter = (v: string) => {
     const f = parseApplicationFilter(v);
     setAppFilter(f);
     try { localStorage.setItem('motors.application', f); } catch { /* storage blocked */ }
   };
   const [canWrite, setCanWrite] = useState(false);
+  const projectIndex = useProjectHighlightStore((s) => s.index);
   // `loaded` = the tree has ANSWERED once; `failed` = the last attempt did not.  Until then the page must not claim "no motors".
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -98,10 +102,10 @@ const MotorsCatalog: React.FC = () => {
   // configuration (FamilyCatalog hides the rest), so no Ø header stands over nothing (owner 2026-10-18: the empty Ø 100)
   const diams = useMemo(() => {
     const visible = canWrite ? allDies : allDies
-      .map((d) => ({ ...d, configs: d.configs.filter((c) => !!c.card_date) }))
+      .map((d) => ({ ...d, configs: d.configs.filter((c) => isListableForClient(c as never, isConfigHighlighted(projectIndex, d.name, c.name))) }))
       .filter((d) => d.configs.length > 0);
     return catalogDiameters(visible, appFilter);
-  }, [allDies, appFilter, canWrite]);
+  }, [allDies, appFilter, canWrite, projectIndex]);
   // The page can mount BEFORE /api/me has answered, or outlive a sign-in / sign-out: the tree is per account, so a change of
   // identity re-reads it (and tells the Ø sections, which hold their own copy, through the same event as every mutation).
   const { user, role, isAdmin, enforced, resolved } = useAuth();

@@ -7632,6 +7632,10 @@ def _fem_transient_sliding_band_once(
     _pull_fr_ang: list = []
     _pull_fr_t: list = []
     _pull_fr_stride = 1
+    _pull_fr_b2max = None           # max |B|^2 per element over EVERY frame
+    _pull_fr_nwin = 0               # frames of the reported window solved
+    _pull_fr_last_k = -1            # last window frame solved / kept
+    _pull_fr_last_kept = -1
     if return_field:
         try:
             _pf_rt = np.asarray(tr).astype(int)
@@ -11847,16 +11851,28 @@ def _fem_transient_sliding_band_once(
         if _pull_fr_idx.size:
             # the air around the rotor on this frame (see the set above) —
             # every frame of the reported window, evenly decimated past
-            # _PULL_FRAMES_MAX so a long fine schedule stays a bounded store
+            # _PULL_FRAMES_MAX so a long fine schedule stays a bounded store;
+            # the LAST frame is always kept, and the per-element max |B|^2 is
+            # taken over EVERY solved frame, kept or not, so the pull can
+            # bound what the decimation skipped (re-review R1)
             _pf_k0 = int(_vskip) + int(_dmskip)
             if k >= _pf_k0:
+                _pf_bx = _bx_el[_pull_fr_idx]
+                _pf_by = _by_el[_pull_fr_idx]
+                _pf_b2 = _pf_bx * _pf_bx + _pf_by * _pf_by
+                _pull_fr_b2max = (_pf_b2.copy() if _pull_fr_b2max is None
+                                  else np.maximum(_pull_fr_b2max, _pf_b2))
+                _pull_fr_nwin += 1
+                _pull_fr_last_k = k
                 _pf_nw = max(int(n_total) - _pf_k0, 1)
                 _pull_fr_stride = max(1, -(-_pf_nw // _PULL_FRAMES_MAX))
-                if (k - _pf_k0) % _pull_fr_stride == 0:
-                    _pull_fr_bx.append(_bx_el[_pull_fr_idx].astype(np.float32))
-                    _pull_fr_by.append(_by_el[_pull_fr_idx].astype(np.float32))
+                if ((k - _pf_k0) % _pull_fr_stride == 0
+                        or k == int(n_total) - 1):
+                    _pull_fr_bx.append(_pf_bx.astype(np.float32))
+                    _pull_fr_by.append(_pf_by.astype(np.float32))
                     _pull_fr_ang.append(float(theta_eff))
                     _pull_fr_t.append(float((k - _pf_k0) * dt))
+                    _pull_fr_last_kept = k
         if _anim_idx and k in _anim_idx:
             # Animation keyframe.  The band encodes rotation in the slip
             # PAIRING, not in coordinates, so the rotor half sits at angle 0 in
@@ -11943,7 +11959,11 @@ def _fem_transient_sliding_band_once(
                 "bx": np.stack(_pull_fr_bx), "by": np.stack(_pull_fr_by),
                 "rotor_angle_deg": np.asarray(_pull_fr_ang, dtype=np.float32),
                 "time_s": np.asarray(_pull_fr_t, dtype=np.float64),
-                "stride": int(_pull_fr_stride)}
+                "stride": int(_pull_fr_stride),
+                "b2max": (_pull_fr_b2max.astype(np.float32)
+                          if _pull_fr_b2max is not None else None),
+                "n_window": int(_pull_fr_nwin),
+                "last_kept": bool(_pull_fr_last_kept == _pull_fr_last_k)}
     # ── What the run COST, captured before the settling frames are stripped ──
     # `n_total` is about to be decremented back to the REPORTED window, and both
     # the log line and the result dict below read it — so both understated the

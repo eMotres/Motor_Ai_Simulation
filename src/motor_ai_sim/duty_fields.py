@@ -364,14 +364,22 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             arrays["pull_frames_rotor_angle_deg"] = _f32(
                 pf.get("rotor_angle_deg"))
             arrays["pull_frames_time_s"] = _f32(pf.get("time_s"))
+            if pf.get("b2max") is not None:
+                arrays["pull_frames_b2max"] = _f32(pf.get("b2max"))
             pull_frames_meta = {
                 "n": int(np.asarray(pf["bx"]).shape[0]),
+                "n_window": int(pf.get("n_window")
+                                or np.asarray(pf["bx"]).shape[0]),
+                "last_kept": (bool(pf["last_kept"])
+                              if pf.get("last_kept") is not None else None),
                 "n_elements": int(np.asarray(pf["elem"]).size),
                 "stride": int(pf.get("stride") or 1),
                 "what": ("element-mean Bx, By of the air touching the rotor, "
                          "the sleeve and the rotor side of the gap, rotor "
-                         "frame, every frame of the reported (settled) "
-                         "window")}
+                         "frame, on the kept frames of the reported (settled) "
+                         "window (every stride-th and always the last); "
+                         "pull_frames_b2max = max |B|^2 per element over "
+                         "EVERY solved frame of it")}
         arrays = {k: v for k, v in arrays.items() if v is not None}
         meta = {
             "computed_at": meta_in.get("computed_at"),
@@ -397,6 +405,7 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                       "pull_frames_bx": "T", "pull_frames_by": "T",
                       "pull_frames_rotor_angle_deg": "deg",
                       "pull_frames_time_s": "s",
+                      "pull_frames_b2max": "T^2",
                       "loss_dens_per_tri": "W/m^3",
                       "demag_coef_per_tri": "fraction of Br remaining",
                       "a_z_per_node": "Wb/m"},

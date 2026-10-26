@@ -1381,7 +1381,8 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
                               "b_equivalent_t", "n_poles",
                               # single snapshot (not a worst case) or the
                               # frames' envelope — review F1, 2026-10-26
-                              "load_basis", "worst_case")),
+                              "load_basis", "worst_case",
+                              "screening_note", "sampling", "note")),
                 **{k: _f(_pl.get(k)) for k in (
                     "pressure_peak_mpa", "pressure_mean_mpa",
                     "pressure_nominal_mpa", "radial_force_per_pole_n",

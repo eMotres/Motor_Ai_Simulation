@@ -71,27 +71,35 @@ SOURCES
             ``p = B_gap^2 / (2 mu0)`` from a stated gap flux density
             (``pull_b_gap_t``), applied as the radial component of ``p n``.
 
-WHICH INSTANT (review F1, 2026-10-26)
--------------------------------------
+WHICH INSTANT (review F1, re-review R1, 2026-10-26)
+---------------------------------------------------
 The field over every pole is read on the SAME pole geometry (pole images), so
 a full and a sector model apply the same load to every pole (the cyclic ties
-need every pole loaded alike).  What is applied is a POINTWISE ENVELOPE: each
-surface point carries the largest traction toward the stator that it sees over
-every stored field sample — every pole image of every stored frame.  The
-sample with the largest TOTAL pull (frame, pole) is found and reported beside
-it, with the envelope's total over it, because the largest integrated pull is
-not the largest local traction (all poles can share one slot phase at an
-instant, and then no instant's pole spread reveals the ripple).
+need every pole loaded alike).  What is applied is a SAMPLED DIRECTIONAL
+SCREENING (``load_basis``): each surface point carries the largest radial
+traction toward the stator that it sees over the stored samples — every pole
+image of every stored frame.  It is NOT a contact / stress envelope: no single
+instant need apply all those maxima at once, and the stress or contact
+response to a load distribution is not bounded by the pointwise maxima of
+others; ``worst_case`` is therefore always false.  The sample with the largest
+TOTAL pull (frame, pole) is reported beside it, because the largest integrated
+pull is not the largest local traction (all poles can share one slot phase at
+an instant, and then no instant's pole spread reveals the ripple).
 
   * Runs stored since 2026-10-26 by the P2 sliding-band solver carry the air
-    field next to the rotor on EVERY frame of the settled (reported) window
-    (``pull_frames_*``): the envelope is then over frames x poles — a
-    SCREENING envelope: at no stored instant does any point carry more.
+    field next to the rotor on the frames of the settled (reported) window
+    (``pull_frames_*``): every frame up to 1024, beyond that every
+    stride-th and ALWAYS the last, plus the per-element max |B|^2 over EVERY
+    solved frame.  When frames were skipped, ``|T . n| = |B|^2 / 2 mu0``
+    bounds the traction at any of them, and that bound is what is applied
+    (``sampling.bound_applied``).
   * Older records, and solver paths that do not store frames, hold ONE
-    instant (the transient's last step, rotor frame): the envelope is then
-    over the poles of that instant only and the result is labelled
-    ``single-snapshot load (not a worst case)`` — it is never called
-    conservative.
+    instant (the transient's last step, rotor frame): the screening is then
+    over the poles of that instant only and is labelled ``single-snapshot
+    load (not a worst case)``.
+  * OUTER rotors are refused for the EM source: their pull is inward and the
+    spin outward, and the largest sampled pull does not bound the outward
+    (spin-dominated) checks, which need the smallest pull.
 
 SLEEVE CURRENT (review F4)
 --------------------------
@@ -113,7 +121,10 @@ gap elements (``2 pi sum(sigma_rr r A) / (sum(A/r) r_o)``) — a different
 surface, different elements and no point location — and the surface sampling's
 own pole-mean total is compared with it.  The sum of RADIAL COMPONENTS is not
 a conserved force (it falls as 1/r across the gap), which is why the check is
-taken at the rotor radius and not quoted as "the force in the gap".
+taken at the rotor radius and not quoted as "the force in the gap".  It is
+taken on every sampled frame and it REJECTS (re-review R2): a pull whose
+surface total misses the annulus by more than ``CHECK_TOL`` on any frame, or
+that cannot be checked, is not applied.
 
 Units: the mechanical mesh is in metres, the EM record in millimetres; every
 pressure is Pa internally and MPa in the report.
@@ -143,6 +154,7 @@ NONMAGNETIC_TAGS: Tuple[int, ...] = CURRENT_FREE_TAGS + (SLEEVE_TAG,)
 EM_ROTOR_TAG = 5
 EM_MAGNET_TAG_RANGE = (100, 200)
 EM_STATOR_TAG = 1
+EM_SHAFT_TAG = 6
 
 #: Where the field is read: this far OUTSIDE the surface point, along its
 #: outward normal, mm.  The first offset whose point lands in a non-magnetic EM
@@ -151,13 +163,14 @@ EM_STATOR_TAG = 1
 #: is a few times that, and the largest stays well inside any practical gap.
 SAMPLE_OFFSETS_MM: Tuple[float, ...] = (0.01, 0.03, 0.08, 0.2)
 
-#: Share of ONE load-bearing part's loaded surface (by length: the rotor iron,
-#: or one magnet) whose field could not be read before the EM field is
-#: refused (review F5, 2026-10-26: it used to be 5 % of the WHOLE surface,
-#: which could hide every point of one magnet).  Judged per part, per pole
-#: image; an unread point carries no pull, so this is also the most of any
-#: part's pull that can go missing silently.
-MAX_UNMATCHED_FRAC = 0.05
+#: Unread length allowed on ONE load-bearing part's loaded surface (the rotor
+#: iron, or one magnet), m — zero in all but name (re-review R2,
+#: 2026-10-26).  An unread face carries no pull, and a 2.5 % sliver of a
+#: magnet face at 1 T against 0.01 T elsewhere is 99.6 % of that magnet's
+#: pull, so any per-cent tolerance can erase a load.  1 µm is left only for
+#: a genuinely degenerate facet (a quadrature point sitting in a concave
+#: corner); anything more is refused by name.
+UNREAD_LEN_TOL_M = 1e-6
 
 #: How far the surface-sampled pull may sit from the annulus integral before
 #: the check is reported as failed.  The two are different surfaces read from
@@ -212,6 +225,9 @@ class EmField:
     frames_bx: Optional[np.ndarray] = None        # (F, m) T
     frames_by: Optional[np.ndarray] = None        # (F, m) T
     frames_angle_deg: Optional[np.ndarray] = None  # (F,) rotor angle
+    # (m,) T^2: max |B|^2 per element over EVERY solved frame of the window,
+    # kept frames or not (re-review R1: a decimated sample can miss a peak)
+    frames_b2max: Optional[np.ndarray] = None
     frames_info: Dict[str, Any] = dc_field(default_factory=dict)
     # ── did the sleeve carry induced current in the solve? (review F4) ───────
     # False: no (or no sleeve); True: yes; None: the record cannot say.
@@ -221,12 +237,87 @@ class EmField:
     _jinv: Optional[np.ndarray] = None
     _cen: Optional[np.ndarray] = None
     _fpos: Optional[np.ndarray] = None
+    _gap: Optional[np.ndarray] = None
+    _gap_ok: bool = False
 
     # -- what may be read ----------------------------------------------------
     @property
     def n_frames(self) -> int:
         """Stored frames of the settled window; 0 = one snapshot only."""
         return 0 if self.frames_bx is None else int(self.frames_bx.shape[0])
+
+    @property
+    def n_window(self) -> int:
+        """Frames SOLVED in the settled window (>= ``n_frames``)."""
+        return max(int((self.frames_info or {}).get("n_window")
+                       or self.n_frames), self.n_frames)
+
+    @property
+    def decimated(self) -> bool:
+        """Not every solved frame of the window is stored."""
+        return self.n_frames > 0 and self.n_window > self.n_frames
+
+    def rotor_solid(self) -> np.ndarray:
+        """(ne,) bool: the EM rotor's own solids — iron, magnets, shaft."""
+        return ((self.tags == EM_ROTOR_TAG) | (self.tags == EM_SHAFT_TAG)
+                | ((self.tags >= EM_MAGNET_TAG_RANGE[0])
+                   & (self.tags < EM_MAGNET_TAG_RANGE[1])))
+
+    @property
+    def gap_topology(self) -> bool:
+        """True when ``gap_air`` is a real flood fill (the record carries the
+        rotor's solids and a clearance to seed from); False = fallback."""
+        self.gap_air()
+        return bool(self._gap_ok)
+
+    def gap_air(self) -> np.ndarray:
+        """(ne,) bool: the magnetically-air elements CONNECTED TO THE AIR GAP
+        (re-review R3) — flood fill over air elements sharing an edge, seeded
+        by the air of the clearance annulus between the rotor's own solids
+        and the stator.  A closed cavity inside the rotor (a pocket, a flux
+        barrier) is air too, but not this air.  A record with no rotor solids
+        has nothing to seed from: every air element is returned (the caller
+        then falls back to the radial skyline and says so)."""
+        if self._gap is not None:
+            return self._gap
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        air = np.isin(self.tags, np.asarray(NONMAGNETIC_TAGS, dtype=np.int64))
+        r_s = self._rotor_solid_radii()
+        if r_s is None or not air.any():
+            self._gap = air
+            return air
+        ids = np.nonzero(air)[0]
+        ta = self.t[:, ids]
+        nv = int(self.p.shape[1])
+        a = np.concatenate([ta[0], ta[1], ta[2]])
+        b = np.concatenate([ta[1], ta[2], ta[0]])
+        key = np.minimum(a, b).astype(np.int64) * nv + np.maximum(a, b)
+        own = np.tile(np.arange(ids.size), 3)
+        order = np.argsort(key, kind="stable")
+        ks, os_ = key[order], own[order]
+        same = ks[1:] == ks[:-1]
+        g = coo_matrix((np.ones(int(same.sum())), (os_[:-1][same], os_[1:][same])),
+                       shape=(ids.size, ids.size))
+        _nc, lab = connected_components(g, directed=False)
+        cen = self.centroids[ids]
+        rc = np.hypot(cen[:, 0], cen[:, 1])
+        bore, od = self.stator_bore_m(), self.stator_od_m()
+        if bore is None or float(r_s.max()) <= bore + 1e-9:     # inner rotor
+            seed = rc > float(r_s.max())
+            if bore is not None:
+                seed &= rc < bore
+        else:                                                  # outer rotor
+            seed = rc < float(r_s.min())
+            if od is not None:
+                seed &= rc > od
+        if not seed.any():
+            self._gap = air
+            return air
+        gap = np.zeros(self.tags.size, dtype=bool)
+        gap[ids[np.isin(lab, np.unique(lab[seed]))]] = True
+        self._gap, self._gap_ok = gap, True
+        return gap
 
     @property
     def has_sleeve(self) -> bool:
@@ -283,6 +374,16 @@ class EmField:
         """(1, m, 2): the stored instant's B at elements ``el``, turned back
         by ``-ang`` (the points' own frame)."""
         return _turn_back(self.bx[el][None, :], self.by[el][None, :], ang)
+
+    def b2max_at(self, el: np.ndarray) -> np.ndarray:
+        """(m,) max |B|^2 over every solved frame at elements ``el`` (frame
+        set), or the stored frames' own max when the record has none."""
+        pos = self._frame_pos()[el]
+        if (pos < 0).any():
+            raise PullFieldError("internal: a sampled element has no frame data")
+        if self.frames_b2max is not None:
+            return np.asarray(self.frames_b2max, float)[pos]
+        return (self.frames_bx[:, pos] ** 2 + self.frames_by[:, pos] ** 2).max(axis=0)
 
     def b_frames(self, el: np.ndarray, ang: np.ndarray) -> np.ndarray:
         """(F, m, 2): every stored frame's B at elements ``el`` (all of which
@@ -531,23 +632,59 @@ def em_field_from_record(rec: Dict[str, Any]) -> EmField:
             meta_raw = {}
     meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
     # ── the settled window's frames, when the run stored them (F1) ──────────
+    # Validated on import (re-review R4): a NaN frame, a repeated element or
+    # an angle list of another length is a PullFieldError (-> 422), never an
+    # IndexError deep in the sampling (-> 500).
     fe, fbx, fby = (rec.get("pull_frames_elem"), rec.get("pull_frames_bx"),
                     rec.get("pull_frames_by"))
     frames: Dict[str, Any] = {}
-    if fe is not None and fbx is not None and fby is not None:
-        fe = np.asarray(fe, dtype=np.int64).reshape(-1)
-        fbx = np.atleast_2d(np.asarray(fbx, dtype=float))
-        fby = np.atleast_2d(np.asarray(fby, dtype=float))
-        if (fbx.shape != fby.shape or fbx.shape[1] != fe.size or fe.size == 0
-                or fe.min() < 0 or fe.max() >= ne or fbx.shape[0] == 0):
-            raise PullFieldError(
-                "the stored EM record's per-frame air field does not match its "
-                "mesh — re-run the duty on the Electromagnetic tab")
+    if fe is not None or fbx is not None or fby is not None:
+        def _bad(why: str) -> PullFieldError:
+            return PullFieldError(
+                f"the stored EM record's per-frame air field is unusable "
+                f"({why}) — re-run the duty on the Electromagnetic tab")
+        if fe is None or fbx is None or fby is None:
+            raise _bad("element ids or one of Bx / By is missing")
+        try:
+            fe_a = np.asarray(fe)
+            fe = fe_a.astype(np.int64).reshape(-1)
+            fbx = np.atleast_2d(np.asarray(fbx, dtype=float))
+            fby = np.atleast_2d(np.asarray(fby, dtype=float))
+        except (TypeError, ValueError) as exc:
+            raise _bad(f"not numeric: {exc}")
+        if fe_a.size and not np.array_equal(fe_a.astype(np.int64).reshape(-1),
+                                            np.asarray(fe_a, float).reshape(-1)):
+            raise _bad("element ids are not integers")
+        if fbx.ndim != 2 or fbx.shape != fby.shape:
+            raise _bad("Bx and By have different shapes")
+        if fe.size == 0 or fbx.shape[0] == 0 or fbx.shape[1] != fe.size:
+            raise _bad("the frames do not match their element list")
+        if fe.min() < 0 or fe.max() >= ne:
+            raise _bad("element ids outside the mesh")
+        if np.unique(fe).size != fe.size:
+            raise _bad("repeated element ids")
+        if not (np.isfinite(fbx).all() and np.isfinite(fby).all()):
+            raise _bad("non-finite B in "
+                       f"{int((~np.isfinite(fbx) | ~np.isfinite(fby)).any(axis=1).sum())}"
+                       " frame(s)")
         ang = rec.get("pull_frames_rotor_angle_deg")
+        if ang is not None:
+            ang = np.asarray(ang, dtype=float).reshape(-1)
+            if ang.size != fbx.shape[0] or not np.isfinite(ang).all():
+                raise _bad(f"{ang.size} rotor angles for {fbx.shape[0]} frames")
+        b2m = rec.get("pull_frames_b2max")
+        if b2m is not None:
+            b2m = np.asarray(b2m, dtype=float).reshape(-1)
+            if b2m.size != fe.size or not np.isfinite(b2m).all()                     or (b2m < 0).any():
+                raise _bad("the per-element max |B|^2 does not match the frames")
+        info = dict(meta.get("pull_frames") or {})
         frames = {"frames_elem": fe, "frames_bx": fbx, "frames_by": fby,
-                  "frames_angle_deg": (None if ang is None
-                                       else np.asarray(ang, float).reshape(-1)),
-                  "frames_info": dict(meta.get("pull_frames") or {})}
+                  "frames_angle_deg": ang, "frames_b2max": b2m,
+                  "frames_info": info}
+        nwin = int(info.get("n_window") or fbx.shape[0])
+        if nwin > fbx.shape[0] and b2m is None:
+            raise _bad(f"{fbx.shape[0]} of {nwin} solved frames kept and no "
+                       "per-element max |B|^2 to bound the rest")
     # ── did the sleeve carry current in the field solve? (F4) ───────────────
     if not bool((tags == SLEEVE_TAG).any()):
         sleeve_current: Optional[bool] = False
@@ -614,6 +751,60 @@ def locate_samples(fld: EmField, x: np.ndarray, n: np.ndarray,
         ang[idx[good]] = a[good]
         todo[idx[good]] = False
     return el, ang, ~todo
+
+
+#: ``probe_surface`` outcomes for a point on a rotor face
+EXPOSED = 0      # its outside is gap-connected air with a readable field
+UNREAD = 1       # gap-connected air, but no readable field there (error)
+CAVITY = 2       # air NOT connected to the gap: a closed pocket / barrier
+COVERED = 3      # another rotor solid (an interface, a bridge above it)
+OTHER = 4        # stator iron / a coil: not a rotor face the gap sees
+OFF_RECORD = 5   # outside the stored EM mesh at every offset
+
+
+def probe_surface(fld: EmField, x: np.ndarray, n: np.ndarray,
+                  offsets_mm: Sequence[float] = SAMPLE_OFFSETS_MM
+                  ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(status (m,), element (m,), turn angle (m,)) for surface points ``x``
+    with outward normals ``n`` — what is just OUTSIDE each face, by the EM
+    mesh's own domains (re-review R3, 2026-10-26).
+
+    The FIRST offset that lands in any element of the record decides:
+    gap-connected air (``EmField.gap_air``) is ``EXPOSED`` when its B can be
+    read, ``UNREAD`` when not; air that is not connected to the gap is a
+    ``CAVITY``; a rotor solid ``COVERED``; anything else ``OTHER``.  A point
+    no offset puts inside the record is ``OFF_RECORD``.  First hit decides
+    so that a probe can never jump through a thin wall into other air.
+    """
+    x = np.asarray(x, dtype=float).reshape(-1, 2)
+    n = np.asarray(n, dtype=float).reshape(-1, 2)
+    m = x.shape[0]
+    status = np.full(m, OFF_RECORD, dtype=np.int64)
+    el = np.full(m, -1, dtype=np.int64)
+    ang = np.zeros(m)
+    todo = np.ones(m, dtype=bool)
+    usable = fld.usable()
+    gap = fld.gap_air()
+    air = np.isin(fld.tags, np.asarray(NONMAGNETIC_TAGS, dtype=np.int64))
+    solid = fld.rotor_solid()
+    for off in offsets_mm:
+        if not todo.any():
+            break
+        idx = np.nonzero(todo)[0]
+        e, a = fld.locate_turned(x[idx] + float(off) * 1e-3 * n[idx])
+        hit = e >= 0
+        if not hit.any():
+            continue
+        ih, eh = idx[hit], e[hit]
+        st = np.where(air[eh],
+                      np.where(gap[eh], np.where(usable[eh], EXPOSED, UNREAD),
+                               CAVITY),
+                      np.where(solid[eh], COVERED, OTHER))
+        status[ih] = st
+        el[ih] = eh
+        ang[ih] = a[hit]
+        todo[ih] = False
+    return status, el, ang
 
 
 def sample_surface_traction(fld: EmField, x: np.ndarray, n: np.ndarray,
@@ -783,14 +974,6 @@ SKYLINE_DTHETA = math.radians(0.01)
 #: seen from the gap: the chord sag of the coarsest boundary facet, with room.
 SKYLINE_TOL_M = 2e-5
 
-#: Where a point on a SIDE facet (a flank, a bore, a pocket wall) is tested for
-#: being seen from the gap: this far out along its own outward normal, m, and
-#: it must be clear of the rotor at BOTH.  A flank is always "under" its own
-#: top along its own radius, so the point itself cannot be tested; the first
-#: offset clears its own facet's skyline bins, the second makes a slit
-#: narrower than 0.3 mm (a magnet's clearance in its pocket) count as closed.
-FLANK_VIS_OFFSETS_M: Tuple[float, ...] = (5e-5, 3e-4)
-
 #: A facet whose two ends lie this close (m) to one of a sector model's cut
 #: rays is an ARTIFICIAL cut face, not a surface of the machine: the symmetry
 #: module puts cut-face vertices within 1e-9 m of the ray and keeps every
@@ -951,8 +1134,7 @@ def _clear_of(sky: np.ndarray, xq: np.ndarray, side: str) -> np.ndarray:
 
 
 def radial_visibility(mesh, part_tri: np.ndarray, xq: np.ndarray,
-                      side: str = "outer",
-                      normals: Optional[np.ndarray] = None) -> np.ndarray:
+                      side: str = "outer") -> np.ndarray:
     """True where a point ``xq`` (m, (n, 2)) on the rotor solids' boundary is
     SEEN from the air gap.
 
@@ -967,12 +1149,11 @@ def radial_visibility(mesh, part_tri: np.ndarray, xq: np.ndarray,
     of every rotor/magnet boundary facet, binned by angle at
     ``SKYLINE_DTHETA``, the ray's exact crossing of each facet.
 
-    With ``normals`` (outward of the solid), a point on a SIDE facet — one
-    that does not face the gap (``SIDE_WALL_COS``): a notch flank, a bore, a
-    pocket wall — is tested at ``FLANK_VIS_OFFSETS_M`` out along its normal
-    instead of where it is (review F3): a notch flank is then seen (the notch
-    air is gap air), a pocket wall or a bore is not (there is rotor further
-    out), and a slit narrower than the larger offset counts as closed.
+    This radial test decides the uniform estimate's surface, and the EM
+    pull's only when the stored record carries no rotor solids; otherwise the
+    EM pull decides exposure by the record's own air topology
+    (``probe_surface``), which sees an open notch of any width and never sees
+    a closed cavity (re-review R3).
     """
     xq = np.asarray(xq, dtype=float).reshape(-1, 2)
     if xq.shape[0] == 0:
@@ -980,20 +1161,7 @@ def radial_visibility(mesh, part_tri: np.ndarray, xq: np.ndarray,
     sky = _skyline(mesh, part_tri, side)
     if sky is None:
         return np.ones(xq.shape[0], dtype=bool)
-    seen = _clear_of(sky, xq, side)
-    if normals is None:
-        return seen
-    nq = np.asarray(normals, dtype=float).reshape(-1, 2)
-    rq = np.maximum(np.hypot(xq[:, 0], xq[:, 1]), 1e-30)
-    sgn = 1.0 if side == "outer" else -1.0
-    side_pt = (sgn * (nq[:, 0] * xq[:, 0] + nq[:, 1] * xq[:, 1]) / rq
-               <= SIDE_WALL_COS)
-    if side_pt.any():
-        ok = np.ones(int(side_pt.sum()), dtype=bool)
-        for d in FLANK_VIS_OFFSETS_M:
-            ok &= _clear_of(sky, xq[side_pt] + d * nq[side_pt], side)
-        seen[side_pt] = ok
-    return seen
+    return _clear_of(sky, xq, side)
 
 
 def load_bodies(mesh, part_tri: np.ndarray) -> Tuple[np.ndarray, List[str]]:
@@ -1045,18 +1213,22 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
 
     ``period_n`` / ``period_cut_rad`` are the rotor's rotational periodicity
     (``symmetry.SectorPlan``: the same cut the sector model uses): the EM
-    pull is a pointwise envelope over the ``period_n`` pole images of every
-    stored frame (see the module docstring).  ``period_n = 1`` reads the
-    field where it is.  ``side`` is where the air gap is (``gap_side``):
-    ``outer`` for an inner rotor, ``inner`` for an outer rotor, whose pull
-    points INWARD.  ``cut_angles`` are the rays of a sector model's
+    pull is a SAMPLED DIRECTIONAL SCREENING over the ``period_n`` pole images
+    of every stored frame (see the module docstring) — not a contact / stress
+    envelope.  ``period_n = 1`` reads the field where it is.  ``side`` is
+    where the air gap is (``gap_side``): ``outer`` for an inner rotor,
+    ``inner`` for an outer rotor, whose pull points INWARD (uniform estimate
+    only — see below).  ``cut_angles`` are the rays of a sector model's
     artificial cut faces (``None``: read off the mesh, ``mesh_sector_rays``).
 
-    The loaded surface is what the gap SEES (``radial_visibility``): for the
-    EM field, every rotor iron / magnet face — tops, chamfers, notch floors
-    and flanks, exposed magnet faces — but no cut face; a uniform estimate
-    keeps the gap-FACING faces within the torque's ``GAP_BAND``, because a
-    uniform pressure on a deep notch would be invented.
+    The loaded surface: for the EM field, every rotor iron / magnet face whose
+    outside is air CONNECTED TO THE GAP in the stored record (``probe_surface``,
+    re-review R3) — tops, notch floors and flanks of any width, exposed
+    magnets; never a closed cavity, an interface or a cut face.  EVERY such
+    face must be read (re-review R2): a loaded part with unread surface
+    beyond ``UNREAD_LEN_TOL_M`` is refused by name.  A uniform estimate keeps
+    the gap-FACING faces within the torque's ``GAP_BAND``, because a uniform
+    pressure on a deep notch would be invented.
     The report's numbers are those of the mesh solved; the caller scales the
     extensive ones to the machine.
     """
@@ -1067,6 +1239,18 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
     if side not in ("outer", "inner"):
         raise ValueError(f"gap side must be 'outer' or 'inner', got {side!r}")
     is_em = spec.source == "em"
+    if is_em and side == "inner":
+        # re-review R1: on an OUTER rotor the pull is inward and the
+        # centrifugal load outward, so the largest sampled pull bounds only
+        # the inward direction; the outward-dominated checks need the
+        # SMALLEST pull, which is not solved.  Refused, not half-answered.
+        raise PullFieldError(
+            "the EM-field pull is not supported on an OUTER rotor: its field "
+            "pulls the rotor inward while the spin pushes it outward, and the "
+            "largest sampled pull does not bound the outward (spin-dominated) "
+            "checks — those need the smallest pull, which is not solved here. "
+            "Judge the outward direction with pull=none and the inward one "
+            "with pull=uniform at the gap pressure")
     if cut_angles is None:
         cut_angles = mesh_sector_rays(mesh)
     facets, r_o, finfo = _gap_facets_full(
@@ -1095,13 +1279,12 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
     cen_q = np.repeat(cen_o, nq, axis=0)
     flip = np.einsum("ij,ij->i", n, x - cen_q) < 0
     n[flip] *= -1.0
-    seen = radial_visibility(mesh, part_tri, x, side=side, normals=n)
-    # a hidden point carries no pull: its weight goes to zero
-    wq = w.reshape(-1) * seen
+    w1 = w.reshape(-1)
     owner_q = np.repeat(owner, nq)
     part_q = part_tri[owner_q]
     sgn = 1.0 if side == "outer" else -1.0               # the pull direction
     side_q = sgn * np.einsum("ij,ij->i", n, er) <= SIDE_WALL_COS
+    sky_vis = radial_visibility(mesh, part_tri, x, side=side)
 
     rep: Dict[str, Any] = {"source": spec.source, "label": spec.label,
                            "gap_side": side,
@@ -1110,22 +1293,11 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
                                          "inward, toward the stator inside "
                                          "the (outer) rotor"),
                            "r_gap_mm": r_o * 1e3,
-                           "surface_mm": float(wq.sum()) * 1e3,
-                           "n_facets": int(facets.size),
-                           # what the loaded surface leaves out, and the side
-                           # faces (flanks) it carries — review F3
-                           "omitted": {
-                               "cut_faces_mm": float(finfo["cut_faces_mm"]),
-                               "hidden_mm": float((w.reshape(-1)
-                                                   * ~seen).sum()) * 1e3,
-                               "what": ("cut faces: a sector model's "
-                                        "artificial faces on its cut rays; "
-                                        "hidden: candidate faces the gap "
-                                        "does not see (pocket walls and "
-                                        "floors, the bore)")},
-                           "flanks_mm": float((wq * side_q).sum()) * 1e3}
+                           "n_facets": int(facets.size)}
     mt_npm = 0.0                                         # tangential (diag.)
     if spec.source == "uniform":
+        seen = sky_vis
+        wq = w1 * seen
         tr = spec.pressure_pa * np.einsum("ij,ij->i", n, er)
         rep.update({"estimate": True, "b_gap_t": spec.b_gap_t,
                     "pressure_input_mpa": spec.pressure_pa * 1e-6,
@@ -1133,8 +1305,17 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
                                    "(toward the stator) on the rotor solids' "
                                    "air-gap facets (iron pole tops and magnet "
                                    "tops)"),
-                    "load_basis": "uniform_estimate", "worst_case": None,
-                    "instant": None, "envelope": None})
+                    "load_basis": "uniform_estimate", "worst_case": False,
+                    "instant": None, "envelope": None,
+                    "omitted": {"cut_faces_mm": 0.0,
+                                "hidden_mm": float((w1 * ~seen).sum()) * 1e3},
+                    "flanks_mm": 0.0})
+        if side == "inner":
+            rep["note"] = (
+                "outer rotor: this pull is inward, against the spin — it is "
+                "the case for the INWARD direction only; checks dominated by "
+                "the outward (centrifugal) load are bounded by the solve "
+                "WITHOUT pull, not by this one")
     elif spec.source == "em":
         fld = spec.field
         if fld is None:
@@ -1148,55 +1329,93 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
             x0, n0 = _rot(x, -k * P), _rot(n, -k * P)
         else:
             x0, n0 = x, n
+        body, body_names = load_bodies(mesh, part_tri)
+        body_q = body[owner_q]
+        # ── WHICH faces are loaded: the record's own air topology (R3) ──────
+        topo = fld.gap_topology
+        st0, el0, ang0 = probe_surface(fld, x0, n0)
+        if topo:
+            seen = np.isin(st0, (EXPOSED, UNREAD))
+            # a face the gap sees RADIALLY that the record calls rotor solid,
+            # stator or nothing: the record is of another rotor
+            mism = sky_vis & ~side_q & np.isin(st0, (COVERED, OTHER,
+                                                     OFF_RECORD))
+            if mism.any():
+                bad_b = int(np.bincount(np.maximum(body_q[mism], 0),
+                                        weights=w1[mism]).argmax())
+                raise PullFieldError(
+                    f"{float(w1[mism].sum()) * 1e3:.2f} mm of "
+                    f"{body_names[bad_b] if bad_b < len(body_names) else 'the rotor'}"
+                    "'s air-gap face lies, in the stored EM record, inside "
+                    "rotor solid, stator or outside the record — the field "
+                    "is not of this rotor (another geometry, or a rotor "
+                    "turned against the one meshed here); re-run the duty on "
+                    "the Electromagnetic tab for the machine loaded now")
+        else:
+            # the record carries no rotor solids to seed the gap air from:
+            # the radial skyline decides, and the report says so
+            seen = sky_vis
+        wq = w1 * seen
+
+        def _refuse_unread(unread: np.ndarray, col: int) -> None:
+            """Every loaded part must be read completely (R2)."""
+            if not unread.any():
+                return
+            for b in np.unique(body_q[unread]):
+                mb = unread & (body_q == b)
+                ln = float(w1[mb].sum())
+                if ln > UNREAD_LEN_TOL_M:
+                    tot_b = float(wq[body_q == b].sum())
+                    name = (body_names[int(b)] if 0 <= int(b) < len(body_names)
+                            else "a rotor part")
+                    raise PullFieldError(
+                        f"the stored EM field could not be read on "
+                        f"{ln * 1e3:.3f} mm ({100.0 * ln / max(tot_b, 1e-30):.1f} %)"
+                        f" of {name}'s air-gap surface"
+                        + (f" (pole image {col})" if ncol > 1 else "")
+                        + " — every loaded face has to be read (an unread "
+                        "face would carry no pull); the field is not of this "
+                        "rotor, or the record does not carry it there; re-run "
+                        "the duty on the Electromagnetic tab for the machine "
+                        "loaded now")
+
+        _refuse_unread(seen & (st0 != EXPOSED), 0)
         sidx = np.nonzero(wq > 0)[0]                     # the loaded points
         ws = wq[sidx]
-        body, body_names = load_bodies(mesh, part_tri)
-        body_s = body[owner_q[sidx]]
-        bids = [int(b) for b in np.unique(body_s) if b >= 0]
-        body_len = {b: float(ws[body_s == b].sum()) for b in bids}
+        r_s = r[sidx]
         nfr = max(fld.n_frames, 1)
         env = np.full(sidx.size, -np.inf)                # pull-direction max
+        bound = np.zeros(sidx.size)                      # max|B|^2/2mu0 bound
         tot = np.zeros((nfr, ncol))                      # pull-direction totals
         mom = np.zeros((nfr, ncol))                      # tangential moment
-        unread_all = np.zeros(ncol)
-        unread_body: Dict[int, float] = {b: 0.0 for b in bids}
-        r_s = r[sidx]
         for j in range(ncol):
             xj = _rot(x0[sidx], j * P) if j else x0[sidx]
             nj = _rot(n0[sidx], j * P) if j else n0[sidx]
-            el, ang, ok = locate_samples(fld, xj, nj)
-            B = fld.b_frames(el[ok], ang[ok])            # (F, mo, 2)
-            tx, ty = maxwell_traction(B[..., 0], B[..., 1],
-                                      nj[ok, 0], nj[ok, 1])
-            erx, ery = xj[ok, 0] / r_s[ok], xj[ok, 1] / r_s[ok]
-            trj = np.zeros((nfr, sidx.size))
-            ttj = np.zeros((nfr, sidx.size))
-            trj[:, ok] = tx * erx + ty * ery
-            ttj[:, ok] = -tx * ery + ty * erx
-            miss = ~ok
-            unread_all[j] = float(ws[miss].sum()) / max(float(ws.sum()), 1e-30)
-            for b in bids:
-                mb = body_s == b
-                unread_body[b] = max(unread_body[b], float(
-                    ws[mb & miss].sum()) / max(body_len[b], 1e-30))
+            if j:
+                stj, el, ang = probe_surface(fld, xj, nj)
+                miss = np.zeros(x.shape[0], dtype=bool)
+                miss[sidx] = stj != EXPOSED
+                _refuse_unread(miss, j)
+            else:
+                el, ang = el0[sidx], ang0[sidx]
+            B = fld.b_frames(el, ang)                    # (F, m, 2)
+            tx, ty = maxwell_traction(B[..., 0], B[..., 1], nj[:, 0], nj[:, 1])
+            erx, ery = xj[:, 0] / r_s, xj[:, 1] / r_s
+            trj = tx * erx + ty * ery
+            ttj = -tx * ery + ty * erx
             pj = sgn * trj
             env = np.maximum(env, pj.max(axis=0))
             tot[:, j] = pj @ ws
             mom[:, j] = (r_s[None, :] * ttj) @ ws
-        # COMPLETENESS, per load-bearing part (review F5): a magnet whose
-        # surface the field does not cover would otherwise lose its whole pull
-        # inside a tolerance meant for round-off on the whole rotor
-        bad = [(unread_body[b], b) for b in bids
-               if unread_body[b] > MAX_UNMATCHED_FRAC]
-        if bad:
-            frac, b = max(bad)
-            raise PullFieldError(
-                f"the stored EM field could not be read outside "
-                f"{100.0 * frac:.0f} % of {body_names[b]}'s air-gap surface "
-                f"(limit {100.0 * MAX_UNMATCHED_FRAC:.0f} % per part) — the "
-                "field is not of this rotor (another geometry, or a rotor "
-                "turned against the one meshed here); re-run the duty on the "
-                "Electromagnetic tab for the machine loaded now")
+            if fld.decimated:
+                bound = np.maximum(bound, fld.b2max_at(el) / (2.0 * MU0))
+        sampled_total = float(env @ ws)
+        bound_applied = bool(fld.decimated)
+        if bound_applied:
+            # frames solved but not kept: |T . n| = |B|^2 / 2 mu0, so the
+            # per-element max |B|^2 over EVERY solved frame bounds the radial
+            # traction toward the stator at any of them (re-review R1)
+            env = np.maximum(env, bound)
         # the (frame, pole) of the largest TOTAL pull — the FIRST within
         # round-off, so identical poles are not told apart by floating noise
         # and a full and a sector model name the same one
@@ -1204,9 +1423,8 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
         fmax = float(flat.max())
         i_best = int(np.nonzero(flat >= fmax - 1e-7 * abs(fmax))[0][0])
         f_star, j_star = divmod(i_best, ncol)
-        tr_s = sgn * env                                 # signed radial
         tr = np.zeros(x.shape[0])
-        tr[sidx] = tr_s
+        tr[sidx] = sgn * env                             # signed radial
         # the field's own tangential moment at the max-total frame (each pole
         # its own field — the mean over the pole columns), a diagnostic beside
         # the applied energy-method torque; never applied
@@ -1219,46 +1437,79 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
         env_total = float(env @ ws)                      # pull direction
         em_r = fld.rotor_radius_m()
         framed = fld.n_frames > 0
+        info = dict(fld.frames_info or {})
+        stride = int(info.get("stride") or 1)
+        last_kept = info.get("last_kept")
         ang_star = (float(fld.frames_angle_deg[f_star])
                     if framed and fld.frames_angle_deg is not None
                     and fld.frames_angle_deg.size == fld.n_frames else None)
-        stride = int((fld.frames_info or {}).get("stride") or 1)
+        bodies_loaded = sorted({int(b) for b in body[owner_q[sidx]] if b >= 0})
+        not_env = ("NOT a contact / stress envelope: each point carries the "
+                   "largest radial traction toward the stator among the "
+                   "stored samples, which no single instant need apply at "
+                   "once, and the stress or contact response to a load is not "
+                   "bounded by the pointwise maxima of the sampled ones")
+        if framed:
+            instant = (
+                f"sampled directional screening over {fld.n_frames} of "
+                f"{fld.n_window} solved frames of the settled window (stride "
+                f"{stride}, last frame "
+                + ("kept" if last_kept else "not recorded as kept"
+                   if last_kept is None else "NOT kept")
+                + f") x {ncol} pole image(s), rotor frame — " + not_env
+                + ("; the frames not kept are bounded by max |B|^2 / 2 mu0 per "
+                   "element over ALL solved frames, which is what is applied"
+                   if bound_applied else ""))
+        else:
+            instant = (
+                "single-snapshot load (not a worst case): the EM record "
+                "holds one instant — the transient's last time step, rotor "
+                f"frame — sampled over {ncol} pole image(s); the slot ripple "
+                "the rotor sweeps through in time is not covered; re-run the "
+                "duty to store its frames — " + not_env)
         rep.update({
             "estimate": False,
             "b_source": fld.b_source,
             "em_sector_deg": math.degrees(fld.sector_rad),
             "em_rotor_r_mm": (em_r * 1e3 if em_r else None),
-            "matched_fraction": 1.0 - float(unread_all.max()),
-            "matched_by_part": {body_names[b]: 1.0 - unread_body[b]
-                                for b in bids},
+            # every loaded face is read or the call is refused (R2)
+            "matched_fraction": 1.0,
+            "matched_by_part": {body_names[b]: 1.0 for b in bodies_loaded},
+            "exposure": ("the stored record's air connected to the gap "
+                         "(flood fill from the clearance)" if topo else
+                         "radial skyline — the stored record carries no rotor "
+                         "solids to tell gap air from a closed cavity"),
             "sleeve": ("carried no current in the field solve — read as air"
                        if fld.has_sleeve else None),
             "applied_as": ("radial component of the Maxwell traction "
                            "t = (B B − ½|B|² I)/μ0 · n, read in the "
                            "current-free air just outside every rotor iron / "
-                           "magnet face the gap sees (tops, notch floors and "
-                           "flanks, exposed magnets); the tangential part is "
-                           "not applied"),
-            "load_basis": ("frames_envelope" if framed else "single_snapshot"),
-            "worst_case": bool(framed),
-            "instant": (
-                (f"screening envelope over the {fld.n_frames} stored frames of "
-                 "the settled window (rotor frame)"
-                 + (f", every {stride}th solved frame" if stride > 1 else ""))
-                if framed else
-                ("single-snapshot load (not a worst case): the EM record "
-                 "holds one instant — the transient's last time step, rotor "
-                 "frame — so the slot ripple the rotor sweeps through in time "
-                 "is not covered; re-run the duty to store its frames")),
+                           "magnet face that air connected to the gap "
+                           "touches; the tangential part is not applied"),
+            "load_basis": ("sampled_directional_screening" if framed
+                           else "single_snapshot"),
+            "worst_case": False,
+            "screening_note": not_env,
+            "instant": instant,
+            "sampling": {
+                "frames_kept": int(fld.n_frames),
+                "frames_solved": int(fld.n_window) if framed else None,
+                "stride": stride if framed else None,
+                "last_frame_kept": (bool(last_kept) if last_kept is not None
+                                    else None) if framed else None,
+                "decimated": bool(fld.decimated),
+                "bound_applied": bound_applied,
+                "bound_over_sampled": (env_total / sampled_total
+                                       if bound_applied and sampled_total > 0
+                                       else None),
+                "pole_images": int(ncol),
+            },
             "envelope": {
                 "n_poles": int(ncol),
                 "n_frames": int(fld.n_frames),
-                "rule": ("every point carries the largest traction toward the "
-                         "stator it sees over "
-                         + (f"{fld.n_frames} frames x " if framed else
-                            "the one stored instant x ")
-                         + f"{ncol} pole image(s); every pole gets the same "
-                         "distribution"),
+                "rule": ("pointwise maximum of the radial traction toward the "
+                         "stator over the samples; every pole gets the same "
+                         "distribution — " + not_env),
                 "max_total": {
                     "frame": int(f_star) if framed else None,
                     "rotor_angle_deg": ang_star,
@@ -1273,12 +1524,24 @@ def pull_load(mesh, part_tri: np.ndarray, spec: PullSpec, order: int = 2,
                      float(pole_mean_f.max() / pole_mean_f.mean() - 1.0)]
                     if framed and pole_mean_f.mean() > 0 else None),
             },
+            "omitted": {
+                "cut_faces_mm": float(finfo["cut_faces_mm"]),
+                "closed_cavity_mm": float((w1 * (st0 == CAVITY)).sum()) * 1e3
+                if topo else None,
+                "covered_mm": float((w1 * (st0 == COVERED)).sum()) * 1e3,
+                "hidden_mm": float((w1 * ~seen).sum()) * 1e3,
+                "what": ("cut faces: a sector model's artificial faces on its "
+                         "cut rays; closed cavity: faces whose air is not "
+                         "connected to the gap; covered: faces against "
+                         "another rotor solid; hidden: every unloaded face")},
+            "flanks_mm": float((wq * side_q).sum()) * 1e3,
             "_pole_mean_total_n_per_m": sgn * float(pole_mean_f[f_star]),
             "_frame_pole_mean_n_per_m": sgn * pole_mean_f,
             "_max_total_frame": int(f_star),
         })
     else:
         raise ValueError(f"unknown pull source {spec.source!r}")
+    rep["surface_mm"] = float(wq.sum()) * 1e3
 
     @LinearForm
     def _radial(v, w_):
@@ -1428,6 +1691,22 @@ def finish_report(rep: Dict[str, Any], spec: PullSpec, stack_length_m: float,
             out["check"] = {"what": "no gap elements on the EM mesh to "
                                     "integrate over", "ratio": None,
                             "within_tol": None}
+        # The check REJECTS (re-review R2): a surface pull that does not add
+        # up to the field's own annulus integral on every sampled frame —
+        # or cannot be checked — is not applied.
+        chk_o = out["check"]
+        if chk_o.get("within_tol") is not True:
+            rr = chk_o.get("ratio_range")
+            raise PullFieldError(
+                "the pull read on the rotor's faces does not add up to the "
+                "annulus integral of the same field"
+                + (f" (surface / annulus {rr[0]:.4f}–{rr[1]:.4f} over the "
+                   f"sampled frames, tolerance ±{100 * CHECK_TOL:.0f} %)"
+                   if rr else " (the record has no gap air to integrate "
+                   "over, so it cannot be checked)")
+                + " — the loaded surface misses or double-counts part of the "
+                "rotor; re-run the duty on the Electromagnetic tab for the "
+                "machine loaded now")
         mean_p = float(out["pressure_mean_mpa"]) * 1e6
         out["b_equivalent_t"] = (math.sqrt(2.0 * MU0 * mean_p)
                                  if mean_p > 0 else None)
@@ -1445,11 +1724,16 @@ def summary_text(rep: Optional[Dict[str, Any]]) -> str:
              if isinstance(per, (int, float)) and math.isfinite(per) else "")
     src = ("estimate" if rep.get("source") == "uniform" else "EM field")
     basis = rep.get("load_basis")
-    env = rep.get("envelope") or {}
+    smp = rep.get("sampling") or {}
     how = ("; single-snapshot load, not a worst case"
            if basis == "single_snapshot" else
-           f"; envelope over {env.get('n_frames')} frames"
-           if basis == "frames_envelope" else "")
+           (f"; sampled directional screening over {smp.get('frames_kept')}"
+            f" of {smp.get('frames_solved')} frames"
+            + (" + max |B|² bound" if smp.get("bound_applied") else "")
+            + ", not a contact/stress envelope")
+           if basis == "sampled_directional_screening" else
+           ("; inward only — outward checks: solve without pull"
+            if rep.get("note") else ""))
     return (f"magnetic pull {float(rep.get('pressure_peak_mpa') or 0.0):.3f} MPa "
             f"peak{per_s} ({src}: {rep.get('label') or rep.get('source')}"
             f"{how})")

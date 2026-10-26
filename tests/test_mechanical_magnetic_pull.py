@@ -25,7 +25,12 @@ WHAT IS CLAIMED, in the order of trust:
   (h) the independent review's findings (2026-10-26): the stored frames'
       envelope against a single instant (F1), per-magnet signed retention
       (F2), radial flanks and sector cut faces (F3), a current-carrying
-      sleeve (F4), per-part completeness (F5).
+      sleeve (F4), per-part completeness (F5);
+  (i) the re-review (R1-R4): "sampled directional screening", never a worst
+      case, with the decimation bounded by max |B|^2 over every frame and the
+      EM pull refused on an outer rotor; every loaded face read and a check
+      that rejects; exposure by the record's air topology; frame import
+      validated (422, not 500).
 
 Direct structured polar meshes wherever the claim allows; gmsh only for the
 spoke rotor that the existing symmetry suite already meshes.
@@ -964,8 +969,16 @@ def test_h_f1_one_instant_misses_the_slot_phase_the_frames_catch(ring):
     assert "not a worst case" in rs_["instant"]
     assert "not a worst case" in mpl.summary_text(rs_)
     assert abs(rs_["envelope"]["pole_spread"][1]) < 1e-9     # nothing to see
-    assert rf["load_basis"] == "frames_envelope" and rf["worst_case"] is True
+    # frames: a SAMPLED DIRECTIONAL SCREENING, never a worst case (R1)
+    assert rf["load_basis"] == "sampled_directional_screening"
+    assert rf["worst_case"] is False
+    assert "NOT a contact / stress envelope" in rf["instant"]
+    assert "not a contact/stress envelope" in mpl.summary_text(rf)
     assert rf["envelope"]["n_frames"] == F
+    assert rf["sampling"] == {"frames_kept": F, "frames_solved": F,
+                              "stride": 1, "last_frame_kept": None,
+                              "decimated": False, "bound_applied": False,
+                              "bound_over_sampled": None, "pole_images": 4}
     # the counterexample itself
     miss = 1.0 - _phase_total(math.pi) / max(_phase_total(p) for p in phis)
     snap_tot = rs_["radial_force_total_n"]
@@ -1002,7 +1015,9 @@ def test_h_f1_frames_round_trip_through_the_duty_record():
     fr = {"elem": elem, "bx": np.stack([bx, 1.1 * bx, 0.9 * bx]),
           "by": np.stack([by, 1.1 * by, 0.9 * by]),
           "rotor_angle_deg": np.array([0.0, 1.0, 2.0]),
-          "time_s": np.array([0.0, 1e-4, 2e-4]), "stride": 2}
+          "time_s": np.array([0.0, 1e-4, 2e-4]), "stride": 2,
+          "b2max": 1.3 * (bx * bx + by * by), "n_window": 5,
+          "last_kept": True}
     entry = {"field": {"P_mm": p, "T": t, "tags": np.zeros(t.shape[1], int),
                        "Bx": bx, "By": by, "pull_frames": fr,
                        "sleeve_eddy_in_field": False},
@@ -1013,19 +1028,28 @@ def test_h_f1_frames_round_trip_through_the_duty_record():
     assert packed["meta"]["pull_frames"]["n"] == 3
     assert packed["meta"]["pull_frames"]["stride"] == 2
     assert packed["meta"]["sleeve_eddy_in_field"] is False
+    assert packed["meta"]["pull_frames"]["n_window"] == 5
+    assert packed["meta"]["pull_frames"]["last_kept"] is True
     fld = mpl.em_field_from_record(dict(arr, meta=packed["meta"]))
     assert fld.n_frames == 3 and fld.frames_info["stride"] == 2
+    assert fld.n_window == 5 and fld.decimated
+    np.testing.assert_allclose(fld.frames_b2max, 1.3 * (bx * bx + by * by),
+                               rtol=1e-6)
     np.testing.assert_allclose(fld.frames_bx[1], 1.1 * bx, rtol=1e-6, atol=1e-7)
 
 
-def test_h_f1_the_solver_stores_the_settled_frames():
+def test_h_f1_the_solver_stores_the_settled_frames(monkeypatch):
     """A real (small) P2 sliding-band transient: the snapshot carries the air
     around the rotor on every frame of the reported window, in the rotor
     frame — its last frame IS the stored instant — and says whether the
     sleeve carried induced current.
 
-    Measured 2026-10-26 (30 mm fixture, 4 steps): 4 frames x 784 air
-    elements (168 air + 616 gap), last frame = snapshot to 6e-8 T, 13 s."""
+    The store cap is set to 3 here so the decimation path runs: of the 4
+    solved frames every 2nd is kept AND the last one (re-review R1: a plain
+    stride dropped it), and max |B|^2 per element covers all 4.
+
+    Measured 2026-10-26 (30 mm fixture, 4 steps): frames 0, 2, 3 kept x 784
+    air elements (168 air + 616 gap), last frame = snapshot to 6e-8 T, 13 s."""
     from motor_ai_sim.material_context import set_request_materials
     from motor_ai_sim.simulation.fem_solver_2d import (
         DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_SLEEVE, fem_transient_sliding_band)
@@ -1043,6 +1067,8 @@ def test_h_f1_the_solver_stores_the_settled_frames():
                coil_temp_c=120.0, element_order=2, demag=False, eddy=False,
                rotor_eddy=False, I_phase_rms=60.0, gamma_deg=0.0, rpm=RPM,
                connection=CONNECTION, return_field=True)
+    from motor_ai_sim.simulation import fem_solver_2d as fs
+    monkeypatch.setattr(fs, "_PULL_FRAMES_MAX", 3)
     set_request_materials(OVERRIDE)
     try:
         d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), **run)
@@ -1055,7 +1081,13 @@ def test_h_f1_the_solver_stores_the_settled_frames():
     nfr = pf["bx"].shape[0]
     print(f"\nsolver: {nfr} frames x {pf['elem'].size} air elements, "
           f"angles {np.round(pf['rotor_angle_deg'], 3).tolist()}")
-    assert nfr == len(d["T_em_Nm"]) == 4
+    assert len(d["T_em_Nm"]) == 4 == pf["n_window"]
+    assert nfr == 3 and pf["stride"] == 2 and pf["last_kept"] is True
+    step = 360.0 / 28                          # this run's frame step
+    np.testing.assert_allclose(pf["rotor_angle_deg"], [0.0, 2 * step, 3 * step],
+                               atol=1e-3)
+    b2 = pf["bx"].astype(float) ** 2 + pf["by"].astype(float) ** 2
+    assert np.all(pf["b2max"] >= b2.max(axis=0) * (1 - 1e-6))
     tags = np.asarray(fld["tags"])[pf["elem"]]
     assert np.isin(tags, (DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_SLEEVE)).all()
     # the last frame is the snapshot's own instant, element for element
@@ -1173,11 +1205,22 @@ def test_h_f3_radial_flanks_carry_br_bt_and_cut_faces_carry_nothing():
         br, bt = b1 * np.ones_like(th), b2 * np.sin(th) / math.sin(a)
         c, s = np.cos(th), np.sin(th)
         return br * c - bt * s, br * s + bt * c
-    fld = _synthetic_em(15.0, 45.0, f, nr=60, nt=1440)
+    base = _synthetic_em(15.0, 45.0, f, nr=60, nt=1440)
+    rec = _rec_of(base)
+    cen = base.centroids
+    rc, thc = np.hypot(cen[:, 0], cen[:, 1]), np.arctan2(cen[:, 1], cen[:, 0])
+    tags = np.asarray(rec["tags"]).copy()
+    tags[(tags == 0) & (((rc < 40e-3) & (np.abs(thc) < a)) | (rc < 20e-3))] = 5
+    rec["tags"] = tags
+    fld = mpl.em_field_from_record(rec)
+    assert fld.gap_topology
     spec = mpl.PullSpec("em", field=fld)
     _f, raw = mpl.pull_load(mesh, part, spec, order=2, cut_angles=())
     got = raw["_total_n_per_m"]
-    rep = mpl.finish_report(raw, spec, 0.05, 1, 1)
+    # the raw report: this toy field is not source-free and covers one pole,
+    # so the annulus check (finish_report) rightly refuses it — the claim
+    # here is the surface integration alone
+    rep = raw
     thq = np.linspace(-a, a, 20001)
     top = 40e-3 * np.trapezoid((b1 ** 2 - (b2 * np.sin(thq) / math.sin(a)) ** 2)
                            / (2 * MU0), thq)
@@ -1187,13 +1230,14 @@ def test_h_f3_radial_flanks_carry_br_bt_and_cut_faces_carry_nothing():
     assert got == pytest.approx(top + flanks, rel=0.02)
     assert rep["flanks_mm"] == pytest.approx(40.0, rel=1e-3)
     assert rep["omitted"]["cut_faces_mm"] == 0.0
-    # the bore (inward-facing, rotor further out) is hidden, not loaded
-    assert rep["omitted"]["hidden_mm"] == pytest.approx(
+    # the bore (against the record's hub) is covered, not loaded
+    assert rep["omitted"]["covered_mm"] == pytest.approx(
         30 * 2 * 20.0 * math.sin(a / 30), rel=1e-3)
+    assert rep["omitted"]["closed_cavity_mm"] == 0.0
     # the same two faces as a sector model's cut rays: not surfaces
     _f, raw_c = mpl.pull_load(mesh, part, spec, order=2, cut_angles=(-a, a))
     got_c = raw_c["_total_n_per_m"]
-    rep_c = mpl.finish_report(raw_c, spec, 0.05, 1, 1)
+    rep_c = raw_c
     assert got_c == pytest.approx(top, rel=0.02)
     assert rep_c["omitted"]["cut_faces_mm"] == pytest.approx(40.0, rel=1e-6)
     # and a sector mesh names its own cut rays when nobody does
@@ -1275,8 +1319,8 @@ def test_h_f5_a_magnet_the_field_misses_is_refused_by_name():
     mag_len = 42e-3 * 2 * h + 2 * 2e-3
     iron_unread = 40e-3 * 2 * math.radians(1.0)
     total = 40e-3 * (2 * math.pi - 2 * h) + mag_len
-    assert (mag_len + iron_unread) / total < mpl.MAX_UNMATCHED_FRAC
-    with pytest.raises(mpl.PullFieldError, match=r"100 % of magnet 1"):
+    assert (mag_len + iron_unread) / total < 0.05     # the old tolerance
+    with pytest.raises(mpl.PullFieldError, match=r"of magnet 1 \(at"):
         mpl.pull_load(mesh, part, mpl.PullSpec("em", field=fld), order=2)
     # the same rotor with the field readable everywhere loads the magnet
     _f, raw = mpl.pull_load(mesh, part, mpl.PullSpec("em", field=base), order=2)
@@ -1346,3 +1390,268 @@ def test_h_retention_unit_signed_balance():
     assert held["verdict"] == "pocket bottom / shoulder (iron)"
     assert held["by_magnet"][0]["balance_residual_n_per_m"] == pytest.approx(
         0.0, abs=1e-6 * load)
+
+
+# ---------------------------------------------------------------------------
+# (i) the re-review of 8cea80eb (Codex Astra, 2026-10-26): R1 the screening
+#     label and the decimation bound, R2 complete sampling and a rejecting
+#     check, R3 exposure by the record's air topology, R4 import validation.
+# ---------------------------------------------------------------------------
+
+def _framed_record(fld, frames_b, meta_frames, b2max=None, angles=None):
+    """A stored-record lookalike with per-frame air B on every air element."""
+    rec = _rec_of(fld)
+    air = np.nonzero(np.asarray(rec["tags"]) == 0)[0]
+    rec.update(pull_frames_elem=air,
+               pull_frames_bx=np.stack([b[0][air] for b in frames_b]),
+               pull_frames_by=np.stack([b[1][air] for b in frames_b]),
+               pull_frames_rotor_angle_deg=(np.arange(len(frames_b), dtype=float)
+                                            if angles is None else angles),
+               meta={"eddy": False, "pull_frames": meta_frames})
+    if b2max is not None:
+        rec["pull_frames_b2max"] = b2max[air]
+    return rec
+
+
+def test_i_r1_decimation_keeps_the_peak_through_max_b2(ring):
+    """R1: 2,048 solved frames alternating 1 T / 2 T, kept every 2nd — the
+    plain stride kept only the 1 T frames (and dropped the last), so the
+    samples saw a quarter of the peak pressure.  The solver now keeps max
+    |B|^2 per element over EVERY solved frame and the pull applies
+    |B|^2_max / 2 mu0 where frames were skipped (|T . n| = |B|^2 / 2 mu0
+    bounds the traction at any of them).  A decimated record without that
+    bound is refused."""
+    mesh, part = ring
+    base = _synthetic_em(R_O, R_O + GAP, _radial_b(B0, R_O * 1e-3), nr=4)
+    b1 = (base.bx, base.by)
+    b2max = 4.0 * (base.bx ** 2 + base.by ** 2)        # the 2 T frames
+    meta = {"n": 3, "n_window": 2048, "stride": 2, "last_kept": False}
+    rec = _framed_record(base, [b1, b1, b1], meta, b2max=b2max)
+    fld = mpl.em_field_from_record(rec)
+    assert fld.decimated and fld.n_window == 2048
+    spec = mpl.PullSpec("em", field=fld)
+    _f, raw = mpl.pull_load(mesh, part, spec, order=2)
+    rep = mpl.finish_report(raw, spec, 0.05, 1, 8)
+    p1 = B0 ** 2 / (2 * MU0) * 1e-6
+    print(f"\nR1 decimated: peak {rep['pressure_peak_mpa']:.4f} MPa against "
+          f"1 T {p1:.4f} / 2 T {4 * p1:.4f}; {rep['sampling']}")
+    assert rep["pressure_peak_mpa"] == pytest.approx(4 * p1, rel=1e-2)
+    assert rep["sampling"]["decimated"] and rep["sampling"]["bound_applied"]
+    assert rep["sampling"]["frames_solved"] == 2048
+    assert rep["sampling"]["last_frame_kept"] is False
+    assert rep["sampling"]["bound_over_sampled"] == pytest.approx(4.0, rel=1e-2)
+    assert "NOT kept" in rep["instant"] and "max |B|^2" in rep["instant"]
+    assert rep["worst_case"] is False
+    rec.pop("pull_frames_b2max")
+    with pytest.raises(mpl.PullFieldError, match="bound"):
+        mpl.em_field_from_record(rec)
+
+
+def test_i_r1_the_em_pull_is_refused_on_an_outer_rotor(ring):
+    """R1: an outer rotor's largest sampled (inward) pull does not bound its
+    outward, spin-dominated checks — unsupported, said so (422)."""
+    mesh, part = ring
+    fld = _synthetic_em(R_I - 1.0, R_I, _radial_b(B0, R_I * 1e-3), nr=4)
+    with pytest.raises(mpl.PullFieldError, match="OUTER rotor"):
+        mpl.pull_load(mesh, part, mpl.PullSpec("em", field=fld), order=2,
+                      side="inner")
+
+
+def test_i_r1_the_stored_row_says_screening_not_envelope(route_uniform):
+    """R1: the compact stored row and the motor view carry the label."""
+    import copy
+
+    from motor_ai_sim import duty_results as dr
+    from motor_ai_sim.development import motor_view as mv
+    out = copy.deepcopy(route_uniform)
+    pl = out["pull_load"]
+    pl.update({"source": "em", "estimate": False,
+               "label": "EM field of duty 'rated'",
+               "load_basis": "sampled_directional_screening",
+               "worst_case": False,
+               "screening_note": "NOT a contact / stress envelope: ...",
+               "sampling": {"frames_kept": 24, "frames_solved": 24}})
+    out["retention"]["load_case"] = "6,000 rpm, " + mpl.summary_text(pl)
+    row = dr.compact_mechanical("rotor_stress", out,
+                                {"rpm": 6000, "pull": "em"}, "fp")
+    assert row["pull"]["load_basis"] == "sampled_directional_screening"
+    assert row["pull"]["worst_case"] is False
+    assert "NOT a contact" in row["pull"]["screening_note"]
+    assert "not a contact/stress envelope" in row["load_case"]
+    block = mv._rotor_stress_block(row)                    # noqa: SLF001
+    assert block["worst_case"]["pull_load_basis"] ==         "sampled_directional_screening"
+    assert "not a contact/stress envelope" in block["load_case"]
+
+
+def test_i_r2_an_unread_sliver_of_a_magnet_face_is_refused():
+    """R2 (the reviewer's probe): 2.5 % of one magnet's face unread at 1 T,
+    0.01 T everywhere else — zero-filled, 99.6 % of that magnet's pull
+    vanished and the call succeeded under a 5 % per-part tolerance.  Every
+    loaded face must now be read."""
+    from skfem import MeshTri
+    h = math.radians(5.0)
+    p1, t1 = _polar(20e-3, 40e-3, 4, 288)
+    p2, t2 = _polar(40e-3, 42e-3, 4, 40, th0=-h, th1=h)
+    p = np.concatenate([p1, p2], axis=1)
+    t = np.concatenate([t1, t2 + p1.shape[1]], axis=1)
+    mesh = MeshTri(np.ascontiguousarray(p), np.ascontiguousarray(t))
+    part = np.concatenate([np.full(t1.shape[1], ctc.PART_ROTOR),
+                           np.full(t2.shape[1], ctc.PART_MAGNET)]).astype(np.int8)
+    base = _synthetic_em(40.0, 44.0, _radial_b(0.01, 0.04), nr=16, nt=1440)
+    rec = _rec_of(base)
+    cen = base.centroids
+    th = np.arctan2(cen[:, 1], cen[:, 0])
+    rc = np.hypot(cen[:, 0], cen[:, 1])
+    over = (np.abs(th) < h) & (rc > 42e-3) & (rc < 42.5e-3)
+    bx, by = np.asarray(rec["bx_per_tri"], float), np.asarray(rec["by_per_tri"], float)
+    bx[over], by[over] = 100 * bx[over], 100 * by[over]   # 1 T on the magnet
+    sliver = over & (th > h - math.radians(0.25)) & (th < h)   # 2.5 % of it
+    bx[sliver], by[sliver] = np.nan, np.nan
+    rec["bx_per_tri"], rec["by_per_tri"] = bx, by
+    fld = mpl.em_field_from_record(rec)
+    with pytest.raises(mpl.PullFieldError,
+                       match=r"of magnet 1 \(at .*every loaded face"):
+        mpl.pull_load(mesh, part, mpl.PullSpec("em", field=fld), order=2)
+
+
+def test_i_r2_a_pull_that_misses_the_annulus_is_rejected(ring):
+    """R2: the surface pull must add up to the field's own annulus integral
+    on every sampled frame — a mismatch is a refusal, not a footnote."""
+    mesh, part = ring
+    base = _synthetic_em(R_O, R_O + GAP, _radial_b(B0, R_O * 1e-3), nr=4)
+    rec = _rec_of(base)
+    cen = base.centroids
+    rc = np.hypot(cen[:, 0], cen[:, 1])
+    far = rc > (R_O + 0.5 * GAP) * 1e-3
+    bx, by = np.asarray(rec["bx_per_tri"], float), np.asarray(rec["by_per_tri"], float)
+    bx[far], by[far] = 1.5 * bx[far], 1.5 * by[far]
+    rec["bx_per_tri"], rec["by_per_tri"] = bx, by
+    spec = mpl.PullSpec("em", field=mpl.em_field_from_record(rec))
+    _f, raw = mpl.pull_load(mesh, part, spec, order=2)
+    with pytest.raises(mpl.PullFieldError, match="annulus"):
+        mpl.finish_report(raw, spec, 0.05, 1, 8)
+
+
+def _grid_mesh(r_nodes, th_nodes):
+    """(p (2, nv), t (3, ne), centroid r, centroid θ) of a full ring gridded
+    on the given radii (m) and angles (rad, wrapping)."""
+    R, T = np.meshgrid(r_nodes, th_nodes, indexing="ij")
+    p = np.stack([(R * np.cos(T)).ravel(), (R * np.sin(T)).ravel()])
+    nr, nt = len(r_nodes), len(th_nodes)
+    nid = np.arange(p.shape[1]).reshape(nr, nt)
+    tri = []
+    for i in range(nr - 1):
+        for j in range(nt):
+            j1 = (j + 1) % nt
+            a, b, c, d = nid[i, j], nid[i + 1, j], nid[i + 1, j1], nid[i, j1]
+            tri += [[a, b, c], [a, c, d]]
+    t = np.asarray(tri, dtype=np.int64).T
+    cen = p[:, t].mean(axis=1)
+    # cell-centre angle (the quad's), robust at the wrap
+    rc = np.hypot(cen[0], cen[1])
+    thc = np.arctan2(cen[1], cen[0])
+    return p, t, rc, thc
+
+
+def test_i_r3_exposure_is_the_record_air_topology():
+    """R3: a rotor (20–40 mm) with an OPEN notch 0.2 mm wide, 2 mm deep, and
+    beside it — behind a 0.1 mm wall — a CLOSED cavity 0.2 x 1 mm.  The two
+    0.05 / 0.3 mm offset probes called the open notch's walls hidden (the
+    0.3 mm probe lands in the opposite wall); the record's air topology
+    loads both notch flanks and never a cavity wall.  Field: B_r = B0 r_o/r,
+    B_θ = 0.3 B0 r_o/r (curl- and divergence-free, so the check closes)."""
+    from skfem import MeshTri
+    r_o = R_O * 1e-3
+    h = 0.1e-3 / 39e-3                      # notch half-width at r = 39 mm
+    c0 = h + 0.1e-3 / 39e-3                 # 0.1 mm wall
+    c1 = c0 + 0.2e-3 / 39e-3                # 0.2 mm cavity
+    fine_l = np.linspace(-math.radians(1.0), -h, 13)
+    fine_r = np.linspace(c1, math.radians(1.0), 13)
+    coarse = np.radians(np.arange(-179.0, 180.0, 1.0))
+    coarse = coarse[(coarse < -math.radians(1.0) - 1e-9)
+                    | (coarse > math.radians(1.0) + 1e-9)]
+    th = np.sort(np.concatenate([coarse, fine_l, [h, c0], fine_r]))
+
+    def notch(rc, thc):
+        return (rc > 38e-3) & (np.abs(thc) < h)
+
+    def cavity(rc, thc):
+        return (rc > 38.5e-3) & (rc < 39.5e-3) & (thc > c0) & (thc < c1)
+
+    pm, tm, rcm, thm = _grid_mesh(np.linspace(20e-3, 40e-3, 41), th)
+    keep = ~(notch(rcm, thm) | cavity(rcm, thm))
+    tm = tm[:, keep]
+    mesh = MeshTri(np.ascontiguousarray(pm), np.ascontiguousarray(tm))
+    part = np.full(mesh.t.shape[1], ctc.PART_ROTOR, dtype=np.int8)
+    # the record: the same angles, 15–45 mm, rotor / notch / cavity / gap /
+    # a stator ring from 44 mm
+    pe, te, rce, the = _grid_mesh(np.linspace(15e-3, 45e-3, 61), th)
+    tags = np.where(rce < 40e-3, 5, np.where(rce < 44e-3, 0, 1))
+    tags[notch(rce, the) & (rce < 40e-3)] = 0
+    tags[cavity(rce, the)] = 0
+    cen = pe[:, te].mean(axis=1)
+    rr = np.hypot(cen[0], cen[1])
+    c, s = cen[0] / rr, cen[1] / rr
+    br, bt = B0 * r_o / rr, 0.3 * B0 * r_o / rr
+    air = tags == 0
+    rec = {"vertices": (pe * 1e3).astype(np.float32), "triangles": te,
+           "tags": tags, "bx_per_tri": np.where(air, br * c - bt * s, 0.0),
+           "by_per_tri": np.where(air, br * s + bt * c, 0.0),
+           "meta": {"eddy": False}}
+    fld = mpl.em_field_from_record(rec)
+    assert fld.gap_topology
+    gap = fld.gap_air()
+    assert gap[notch(rce, the) & air].all()            # open: gap air
+    assert not gap[cavity(rce, the)].any()             # closed: not
+    spec = mpl.PullSpec("em", field=fld)
+    _f, raw = mpl.pull_load(mesh, part, spec, order=2)
+    rep = mpl.finish_report(raw, spec, 0.05, 1, 1)
+    print(f"\nR3: flanks {rep['flanks_mm']:.3f} mm, closed cavity "
+          f"{rep['omitted']['closed_cavity_mm']:.3f} mm, check "
+          f"{rep['check']['ratio']:.4f}")
+    assert rep["flanks_mm"] == pytest.approx(4.0, rel=1e-3)   # both flanks
+    assert rep["omitted"]["closed_cavity_mm"] == pytest.approx(2.4, rel=1e-2)
+    assert rep["check"]["within_tol"] is True
+    # the notch floor is loaded too: 2π·40 − the opening + the floor
+    assert rep["surface_mm"] == pytest.approx(
+        2 * math.pi * 40.0 * (1 - 0.0) + 4.0, rel=2e-3)
+
+
+@pytest.mark.parametrize("what,mut", [
+    ("non-finite", lambda r: r["pull_frames_bx"].__setitem__((1, 3), np.nan)),
+    ("repeated", lambda r: r["pull_frames_elem"].__setitem__(1, r["pull_frames_elem"][0])),
+    ("rotor angles", lambda r: r.__setitem__("pull_frames_rotor_angle_deg",
+                                             np.zeros(5))),
+    ("outside the mesh", lambda r: r["pull_frames_elem"].__setitem__(0, 10 ** 7)),
+])
+def test_i_r4_frames_are_validated_on_import(what, mut):
+    """R4: a NaN frame, a repeated element id, an angle list of another
+    length, an id outside the mesh — a PullFieldError naming it, never an
+    IndexError later."""
+    base = _synthetic_em(R_O, R_O + GAP, _radial_b(B0, R_O * 1e-3), nr=4)
+    rec = _framed_record(base, [(base.bx, base.by)] * 3, {"n": 3})
+    rec["pull_frames_bx"] = np.array(rec["pull_frames_bx"], dtype=float)
+    rec["pull_frames_elem"] = np.array(rec["pull_frames_elem"])
+    mut(rec)
+    with pytest.raises(mpl.PullFieldError, match=what):
+        mpl.em_field_from_record(rec)
+
+
+def test_i_r4_route_answers_422_for_a_nan_frame(client, monkeypatch,
+                                                quiet_last):
+    """R4 at the route: the same NaN frame is a 422 on pull_duty, not a 500."""
+    from motor_ai_sim import duty_fields as df
+    base = _synthetic_em(R_O, R_O + GAP, _radial_b(B0, R_O * 1e-3), nr=4)
+    rec = _framed_record(base, [(base.bx, base.by)] * 3, {"n": 3})
+    rec["pull_frames_bx"] = np.array(rec["pull_frames_bx"], dtype=float)
+    rec["pull_frames_bx"][2, 0] = np.nan
+    monkeypatch.setattr(df, "active_context", lambda: ("D", "C", "rated"))
+    monkeypatch.setattr(df, "load", lambda die, cfg, duty, kind: rec
+                        if (die, cfg, duty, kind) == ("D", "C", "rated", "em")
+                        else None)
+    r = client.get("/api/mechanical/rotor_stress",
+                   params={**ROUTE_BASE, "pull": "em"})
+    assert r.status_code == 422, r.text[:400]
+    bad = r.json()["detail"]["invalid_parameters"][0]
+    assert bad["field"] == "pull_duty" and bad["kind"] == "unusable"
+    assert "non-finite" in bad["message"]

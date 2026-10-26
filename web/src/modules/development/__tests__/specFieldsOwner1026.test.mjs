@@ -149,3 +149,18 @@ test('the controller block: catalogue picker, supplier as a company, one amber w
   assert.equal(props.supplier.label.en, 'Supplier (company)');
   assert.equal(props.supplier_legacy.ui_hidden, true); assert.equal(props.catalog_id.ui_hidden, true);
 });
+
+test('4_8 is one object field: a grade (text menu) and a runout (mm number); the old text is kept hidden (owner 2026-10-27)', () => {
+  const f = field('4_8');
+  assert.equal(f.type, 'object');
+  assert.equal(f.label.en, 'Balance grade and runout');
+  const props = Object.fromEntries(f.properties.map((p) => [p.id, p]));
+  assert.deepEqual(f.properties.filter((p) => !p.ui_hidden).map((p) => p.id), ['balance_grade', 'runout_mm']);
+  assert.equal(props.balance_grade.type, 'string'); assert.equal(props.balance_grade.unit, undefined);
+  assert.equal(props.balance_grade.label.en, 'Balance grade (ISO 21940)');
+  assert.deepEqual(props.balance_grade.suggestions.map((s) => s.value), ['G6.3', 'G2.5', 'G1', 'G0.4']);
+  assert.equal(props.runout_mm.type, 'number'); assert.equal(props.runout_mm.unit, 'mm'); assert.equal(props.runout_mm.min, 0);
+  assert.equal(props.note.ui_hidden, true);
+  for (const item of [f, f.short_label ? { label: f.short_label } : f, ...f.properties]) assert.ok(item.label['zh-CN']);
+  assert.ok(f.help.en && f.help['zh-CN']);
+});

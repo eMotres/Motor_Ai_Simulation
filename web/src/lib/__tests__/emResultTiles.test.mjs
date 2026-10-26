@@ -125,6 +125,10 @@ t('every value is a field of the summary (or an arithmetic of fields on the same
   assert.equal(one(rows, 'totalLoss').value, 22);                           // 18 W electromagnetic + 4 W bearings + windage
   assert.equal(one(rows, 'shaftLoss').value, 0.4);
   assert.equal(one(rows, 'sleeveLoss').value, 0.0012);
+  // a machine with no sleeve has no sleeve-loss tile at all (owner 2026-10-26)
+  const bare = E.emTileRows({ ...RUN, P_sleeve_W: 0, mass_components: [{ name: 'Magnets', mass_kg: 0.1 }] }, VIEW);
+  assert.equal(one(bare, 'sleeveLoss'), undefined);
+  assert.ok(one(bare, 'shaftLoss'));
   assert.equal(one(rows, 'bearings').value, 3);
   assert.equal(one(rows, 'windage').value, 1);
   near(one(rows, 'wallToShaft').value, 85, 'wall to shaft');

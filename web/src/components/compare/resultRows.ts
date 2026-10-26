@@ -28,6 +28,7 @@
  */
 import type { CoupledResult, ThermalField } from '../thermal/api';
 import { outerCooling } from '../thermal/types';
+import { hasSleeve } from '../../lib/hasSleeve.ts';
 import type {
   ModalResult, RotorStress, RotordynamicsResult,
 } from '../mechanical/api';
@@ -585,8 +586,12 @@ export function mechanicalInputsFromResult(
     ?? num(st.rotorTempC));
   put(out, 'shaft_c', num(pt?.shaft) ?? num(stress?.thermal?.rotor_temp_c)
     ?? num(st.rotorTempC));
-  put(out, 'sleeve_c', num(pt?.sleeve) ?? num(stress?.thermal?.sleeve_temp_c)
-    ?? num(st.sleeveTempC));
+  // a machine with no sleeve has no sleeve temperature or material to compare (owner 2026-10-26)
+  const withSleeve = !stress || hasSleeve(stress);      // no solved answer yet: the panel's own boxes, as before
+  if (withSleeve) {
+    put(out, 'sleeve_c', num(pt?.sleeve) ?? num(stress?.thermal?.sleeve_temp_c)
+      ?? num(st.sleeveTempC));
+  }
   put(out, 'mesh_mm', num(stress?.mesh?.mesh_size_mm) ?? num(st.meshMm));
 
   /* ONE string, because the four joints are one model: two rows whose contacts
@@ -603,7 +608,7 @@ export function mechanicalInputsFromResult(
   }
   // The band is the part the whole tab is about; which one it is belongs
   // beside its hoop stress.
-  put(out, 'sleeve_mat', str(stress?.materials?.sleeve?.material));
+  if (withSleeve) put(out, 'sleeve_mat', str(stress?.materials?.sleeve?.material));
 
   return out;
 }

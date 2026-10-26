@@ -5,6 +5,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import AddCircleOutlineIcon  from '@mui/icons-material/AddCircleOutline';
 import type { MaterialsLibrary, SelectedMaterial, MaterialCategory } from './useMaterialsLibrary';
 import type { MotorAssignments } from './useMotorAssignments';
+import { withSleevePart } from '../../lib/hasSleeve.ts';
 
 // ─── Motor part definitions ───────────────────────────────────────────────────
 
@@ -323,16 +324,11 @@ const MotorAssignmentPanel: React.FC<Props> = ({
   library, selected, assignments, loadingAssignments, saving, onAssign,
 }) => {
   const [hovered, setHovered] = React.useState<string | null>(null);
-  // One short line, one condition: the ring is listed when the geometry has one.
+  // One short line, one condition: the ring is listed when the geometry has one (owner 2026-10-26: a machine with
+  // sleeve_thickness 0 says nothing about a sleeve, even when its material assignment still carries a sleeve card -
+  // `sleeve: M40X_UD_60` is not a part of that machine).
   const sleeveT = Number(useMotorStore(st => st.geometry?.sleeve_thickness) ?? 0);
-  // …or when the backend already lists the part: GET /api/materials adds
-  // `sleeve` only for a machine whose geometry has one, so its presence is the
-  // same fact from the other side and does not depend on this tab's copy of
-  // the geometry being fresh (user 2026-09-04: "I don't see the sleeve in
-  // the materials tree, but it appeared on the geometry").
-  const sleeveAssigned = !!(assignments as any)?.sleeve;
-  const parts = useMemo(
-    () => ((sleeveT > 0 || sleeveAssigned) ? [...PARTS, SLEEVE_PART] : PARTS), [sleeveT, sleeveAssigned]);
+  const parts = useMemo(() => withSleevePart(PARTS, SLEEVE_PART, sleeveT), [sleeveT]);
 
   if (loadingAssignments || !assignments) {
     return (

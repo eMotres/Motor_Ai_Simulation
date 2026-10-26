@@ -71,12 +71,13 @@ const r0 = (v: number) => Math.round(v);
  *  the band-fit rule (2026-09-09) a sleeveless rotor's map is `active: false`
  *  and still worth showing: the user wants the coupling's real numbers in
  *  view, with the sentence saying they were not a load. */
-const tempsGiven = (t: RotorStress['thermal']): boolean => {
+const tempsGiven = (t: RotorStress['thermal'], sleeved = true): boolean => {
   if (!t) return false;
   if (t.active) return true;
   const p = t.part_temps_c;
-  const vals = p ? [p.magnet, p.rotor_core, p.shaft, p.sleeve]
-                 : [t.rotor_temp_c, t.sleeve_temp_c];
+  // a machine with no sleeve has no sleeve temperature to speak of (owner 2026-10-26)
+  const vals = p ? [p.magnet, p.rotor_core, p.shaft, ...(sleeved ? [p.sleeve] : [])]
+                 : [t.rotor_temp_c, ...(sleeved ? [t.sleeve_temp_c] : [])];
   return vals.some((v) => Number.isFinite(v) && Math.abs(v - t.ref_temp_c) > 0.5);
 };
 
@@ -84,12 +85,15 @@ const tempsGiven = (t: RotorStress['thermal']): boolean => {
  *  covers the rotor side, `163/161/158/162 °C` (magnet / core / shaft / sleeve)
  *  once they differ — which is what a run coupled to the Thermal tab produces
  *  (2026-09-08).  The tooltip beside it names the order. */
-const tempBadge = (t: RotorStress['thermal']): string => {
-  if (!tempsGiven(t) || !t) return '';
+const tempBadge = (t: RotorStress['thermal'], sleeved = true): string => {
+  if (!tempsGiven(t, sleeved) || !t) return '';
   const p = t.part_temps_c;
-  if (!p) return `${r0(t.rotor_temp_c)}/${r0(t.sleeve_temp_c)} °C`;
+  if (!p) return sleeved ? `${r0(t.rotor_temp_c)}/${r0(t.sleeve_temp_c)} °C` : `${r0(t.rotor_temp_c)} °C`;
   const oneRotorNumber = [p.magnet, p.shaft]
     .every((v) => Math.abs(v - p.rotor_core) < 0.5);
+  if (!sleeved) {
+    return oneRotorNumber ? `${r0(p.rotor_core)} °C` : `${r0(p.magnet)}/${r0(p.rotor_core)}/${r0(p.shaft)} °C`;
+  }
   return oneRotorNumber
     ? `${r0(p.rotor_core)}/${r0(p.sleeve)} °C`
     : `${r0(p.magnet)}/${r0(p.rotor_core)}/${r0(p.shaft)}/${r0(p.sleeve)} °C`;
@@ -100,12 +104,13 @@ const tempBadge = (t: RotorStress['thermal']): string => {
  *  pressure on the sleeve, if there is one": a temperature is a load on the band's fit and
  *  nowhere else, so the sentence says either how the fit moved or that nothing
  *  was loaded. */
-const tempSentence = (t: RotorStress['thermal']): string => {
-  if (!tempsGiven(t) || !t) return '';
+const tempSentence = (t: RotorStress['thermal'], sleeved = true): string => {
+  if (!tempsGiven(t, sleeved) || !t) return '';
   const p = t.part_temps_c;
   const which = p
-    ? `Magnets ${r0(p.magnet)}, core ${r0(p.rotor_core)}, shaft ${r0(p.shaft)} and sleeve ${r0(p.sleeve)} °C`
-    : `Rotor ${r0(t.rotor_temp_c)} °C and sleeve ${r0(t.sleeve_temp_c)} °C`;
+    ? (sleeved ? `Magnets ${r0(p.magnet)}, core ${r0(p.rotor_core)}, shaft ${r0(p.shaft)} and sleeve ${r0(p.sleeve)} °C`
+      : `Magnets ${r0(p.magnet)}, core ${r0(p.rotor_core)} and shaft ${r0(p.shaft)} °C`)
+    : (sleeved ? `Rotor ${r0(t.rotor_temp_c)} °C and sleeve ${r0(t.sleeve_temp_c)} °C` : `Rotor ${r0(t.rotor_temp_c)} °C`);
   const named = Object.keys(t.part_temps_given ?? {});
   const did = t.active
     ? ` Applied as the band's fit change only (${t.applied_as ?? 'band fit'}); every part is solved as drawn.`
@@ -956,7 +961,7 @@ const MechanicalPanel: React.FC = () => {
                 perPole: fmt(Math.abs(res.pull_load.radial_force_per_pole_n) / 1000, 2),
                 ratio: res.pull_load.check?.ratio != null ? fmt(res.pull_load.check.ratio, 3) : '—',
               })}` : ''}${
-              res.thermal?.active ? `${tempSentence(res.thermal)}${res.thermal.fit ? ` Under the band the parts would grow ${fmt(res.thermal.fit.free_growth_under_sleeve_um, 1)} µm on their own and the band's own bore ${fmt(res.thermal.fit.free_growth_sleeve_bore_um, 1)} µm, so the ${fmt(res.interference_mm, 3)} mm fit is effectively ${fmt(res.interference_effective_mm, 3)} mm at temperature.` : ''}` : ''}`}>
+              res.thermal?.active ? `${tempSentence(res.thermal, res.has_sleeve ?? hasSleeveGeo)}${res.thermal.fit ? ` Under the band the parts would grow ${fmt(res.thermal.fit.free_growth_under_sleeve_um, 1)} µm on their own and the band's own bore ${fmt(res.thermal.fit.free_growth_sleeve_bore_um, 1)} µm, so the ${fmt(res.interference_mm, 3)} mm fit is effectively ${fmt(res.interference_effective_mm, 3)} mm at temperature.` : ''}` : ''}`}>
               <Typography sx={{ ...lbl, ml: 'auto', cursor: 'help' }}>
                 {/* What was solved, before how big it was: a one-case answer
                     must never be mistaken for three (user 2026-09-06), and a
@@ -970,7 +975,7 @@ const MechanicalPanel: React.FC = () => {
                     the machine as drawn and saying so every time would be noise
                     (2026-09-07).  Four numbers only when the parts differ
                     (2026-09-08) — see `tempBadge`. */}
-                {res.thermal?.active ? `${tempBadge(res.thermal)} · ` : ''}
+                {res.thermal?.active ? `${tempBadge(res.thermal, res.has_sleeve ?? hasSleeveGeo)} · ` : ''}
                 {res.mesh.n_triangles.toLocaleString()} tri · P{res.mesh.element_order}
                 {/* a sector answer says so: the map is the sector replicated
                     (2026-09-09), and the triangle count is the sector's */}

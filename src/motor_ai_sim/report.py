@@ -46,6 +46,29 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from motor_ai_sim.sleeve import has_sleeve
+
+
+def _col_sleeved(col: Any) -> bool:
+    """Does the duty column's machine have a retaining sleeve?  The build stamps ``has_sleeve`` (from the geometry) on every
+    column; a column made without it (a direct call) is read off its own run summary and stress record."""
+    if not isinstance(col, dict):
+        return False
+    flag = col.get("has_sleeve")
+    if isinstance(flag, bool):
+        return flag
+    return has_sleeve(col.get("em") or {}) or has_sleeve((col.get("res") or {}))
+
+
+def _shaft_only(text: str, sleeved: bool) -> str:
+    """Words about "the sleeve and shaft" for a machine that has no sleeve say "the shaft" alone (owner 2026-10-26)."""
+    if sleeved:
+        return text
+    for old, new in (("sleeve + shaft", "shaft"), ("Sleeve + shaft", "Shaft"),
+                     ("the sleeve and shaft", "the shaft"), ("sleeve and shaft", "shaft")):
+        text = text.replace(old, new)
+    return text
+
 log = logging.getLogger(__name__)
 
 # ── palette (the datasheet's, so the two documents look like one family) ─────
@@ -2395,7 +2418,8 @@ def loss_breakdown(em: Dict[str, Any],
     if _g(em, "P_mag_W") is not None or _g(em, "P_shaft_W") is not None:
         add("Magnets", _g(em, "P_mag_W"))
         add("Shaft", _g(em, "P_shaft_W"))
-        add("Sleeve", _g(em, "P_sleeve_W"))
+        if has_sleeve(em):
+            add("Sleeve", _g(em, "P_sleeve_W"))
     else:
         add("Magnets", _g(em, "P_solid_W"))
     if brg and brg.get("has_bearings"):
@@ -9137,6 +9161,11 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         ins_lim=ins_lim, ins_note=ins_note, cold_k=cold_k,
         cold_note=cold_note, slots=_slots_poles(geo)[0],
         carrier_hz=duty_carrier_hz(cfg_doc, c["duty"])) for c in cols}
+    # WHETHER THE MACHINE HAS A SLEEVE, once, from the geometry: every sleeve line below asks this (owner 2026-10-26)
+    for _c in cols:
+        _c["has_sleeve"] = has_sleeve(geo)
+    for _c in ctxs.values():
+        _c["has_sleeve"] = has_sleeve(geo)
     # …and HOW MUCH of the magnet is under the band, read from each duty's own
     # stored demagnetisation field (user 2026-09-14): a worst element of 18.4 %
     # is a corner or a pole, and only the field says which.  Read-only, cached,
@@ -10376,9 +10405,11 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
          "mm"],
         ["Magnet height", _f("magnet_height", 2), "mm",
          "Parallel paths", _fmt(wind.get("n_parallel"), 0), ""],
-        ["Sleeve thickness", _f("sleeve_thickness", 2) if geo.get("sleeve_thickness")
-         else "none", "mm" if geo.get("sleeve_thickness") else "",
-         "Series coils", _fmt(wind.get("n_series"), 0), ""],
+        # a machine without a sleeve says nothing about one (owner 2026-10-26): the cell pair is left empty
+        ["Sleeve thickness", _f("sleeve_thickness", 2), "mm",
+         "Series coils", _fmt(wind.get("n_series"), 0), ""]
+        if has_sleeve(geo) else
+        ["", "", "", "Series coils", _fmt(wind.get("n_series"), 0), ""],
         ["Rotor outer radius", _f("rotor_outer_radius", 2), "mm",
          # coil grouping AND the terminal connection (user 2026-09-13: "need
          # to add the connection to the report") — "2P · Δ delta"
@@ -10486,11 +10517,11 @@ def material_rows(mats: Dict[str, Any],
             # words ("hoop-wound carbon fibre") beside it read as one, and the
             # mechanical text then claimed retention from a part that carries
             # no mass and is not in the geometry at all.
-            ("Retaining sleeve", "sleeve",
-             ("not installed — sleeve thickness is 0 in this geometry"
-              if mats.get("sleeve") and
-              float(geo.get("sleeve_thickness", 0) or 0) <= 0
-              else "hoop-wound carbon fibre" if mats.get("sleeve") else "")),
+            # OWNER 2026-10-26: a machine with no sleeve (thickness 0) says nothing about one - not even "not
+            # installed" - however its material assignment still reads: the row is simply not there.
+            *((("Retaining sleeve", "sleeve",
+                "hoop-wound carbon fibre" if mats.get("sleeve") else ""),)
+              if has_sleeve(geo) else ()),
             ("Shaft", "shaft", ""),
     ):
         # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "couldn't
@@ -12081,7 +12112,7 @@ def em_loss_rows(em: Dict[str, Any],
         _lr("Magnets and solid parts (eddy)", _g(em, "P_solid_W"),
             "magnets, rotor housing, shaft and sleeve together; this run "
             "carries no per-part split")
-    if _g(em, "P_sleeve_W") is not None:
+    if _g(em, "P_sleeve_W") is not None and has_sleeve(em):
         _lr("Sleeve (eddy)" if _split else "  …of which the sleeve",
             _g(em, "P_sleeve_W"),
             "not in the thermal loss map (no loss model for the band)"
@@ -13948,7 +13979,7 @@ def pwm_rows(cols: List[Dict[str, Any]],
         # shaft, and on this machine it is NEGATIVE — the carrier's field is
         # screened before it reaches them — which is exactly why it may not be
         # left out.
-        _row("…of which sleeve + shaft (solid conductors) [W]", "—",
+        _row(_shaft_only("…of which sleeve + shaft (solid conductors) [W]", _col_sleeved(c)), "—",
              lambda x: _signed(_pwm_sleeve_shaft(x), 1))
         # ONE EM EFFICIENCY PER DUTY (MJ-2): this report's own sinusoidal
         # figure, with each carrier's measured drop transferred onto it — the
@@ -14135,7 +14166,7 @@ def pwm_influence_text(cols: List[Dict[str, Any]],
                    % (_fmt(_study["I_line_A"], 1, "A"),
                       _fmt(_rep["I_line_A"], 1, "A")))
         if tot:
-            out.append(
+            out.append(_shaft_only(
                 "Duty '%s', %s: %sthe carrier costs %s W on the sinusoid's %s W "
                 "(%s of the electromagnetic loss) and it lands in the STATOR — "
                 "%s W copper, %s W iron, against %s W in the magnets and %s W "
@@ -14150,7 +14181,7 @@ def pwm_influence_text(cols: List[Dict[str, Any]],
                    _fmt(b_eta_print, 3), _fmt(eta1, 3),
                    _signed((eta1 - b_eta_print)
                            if (eta1 is not None and b_eta_print is not None)
-                           else None, 3)))
+                           else None, 3)), _col_sleeved(c)))
 
         # ── doubling the carrier ────────────────────────────────────────────
         pair = _pwm_carrier_pair(cases)
@@ -14560,7 +14591,7 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
                               _cpl_sum(_em(sine), ("P_loss_total_W",)))
          if r is not sine else "—")
     for _lbl, _keys in _PWM_GROUPS:
-        _row(_lbl, lambda r, _k=_keys: (_signed(_d(r, _k), 1)
+        _row(_shaft_only(_lbl, _col_sleeved(col)), lambda r, _k=_keys: (_signed(_d(r, _k), 1)
                                         if _d(r, _k) is not None else "—"))
     # ONE BALANCE, EVERY SECTION (MJ-2) — and two decimals, the same as the
     # comparison table, so the two cannot read as different numbers.
@@ -14668,7 +14699,7 @@ def pwm_coupled_text(cols: List[Dict[str, Any]],
         tot_p = _cpl_sum(_vp, ("P_loss_total_W",))
         if tot_s is not None and tot_p is not None:
             d = tot_p - tot_s
-            out.append(
+            out.append(_shaft_only(
                 "Duty '%s', %s: the carrier costs %s W on the sinusoid's %s W "
                 "(%s of the electromagnetic loss) and it lands in the STATOR — "
                 "%s W copper, %s W iron, against %s W in the magnets and %s W "
@@ -14678,7 +14709,7 @@ def pwm_coupled_text(cols: List[Dict[str, Any]],
                    _signed(_dg(("P_stranded_W",)), 0),
                    _signed(_dg(("P_core_W",)), 0),
                    _signed(_dg(("P_mag_W",)), 1),
-                   _signed(_dg(("P_sleeve_W", "P_shaft_W")), 1)))
+                   _signed(_dg(("P_sleeve_W", "P_shaft_W")), 1)), _col_sleeved(c)))
         # …and what those watts did, which is why the loop was run at all.
         _w_s, _w_p = _numf(sine.get("coil_temp_c")), _numf(rec.get("coil_temp_c"))
         # …through `shaft_view`, like the table above and every other section
@@ -15888,7 +15919,7 @@ def controller_coupled_rows(rec: Dict[str, Any],
                                   f"{unit}".strip()])
 
     for label, keys in _CTRL_CPL_GROUPS:
-        _row(label, _cpl_sum(sine_em, keys), _cpl_sum(em, keys))
+        _row(_shaft_only(label, _col_sleeved(col)), _cpl_sum(sine_em, keys), _cpl_sum(em, keys))
     _row("Torque", _numf(sine_em.get("T_em_avg_Nm")),
          _numf(em.get("T_em_avg_Nm")), 1, "N·m")
     _row("Phase current", _numf(sine_em.get("I1_phase_rms_A")),
@@ -16956,7 +16987,7 @@ def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
         return []
     rows = [["Rotating part", "J [kg·cm²]", "Share"]]
     parts = [(k, _numf(v)) for k, v in J.items()
-             if k in ("rotor_iron", "magnet", "shaft", "sleeve")]
+             if k in ("rotor_iron", "magnet", "shaft") or (k == "sleeve" and has_sleeve(em))]
     for name, v in parts:
         if v is None:
             continue
@@ -17018,13 +17049,18 @@ def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:
              % (_fmt(ag.get("remaining_um"), 1, "µm"),
                 _fmt(ag.get("closed_pct"), 0, "%"))],
         ]
-    return rows + [
+    rows = rows + [
         ["Maximum displacement", _fmt(case.get("max_displacement_um"), 1, "µm")],
-        ["Sleeve interference, geometric",
-         _fmt(res.get("interference_mm"), 4, "mm")],
-        ["Sleeve interference, effective at temperature",
-         _fmt(res.get("interference_effective_mm"), 4, "mm")],
     ]
+    # the sleeve's interference fit exists only on a rotor that has a sleeve (owner 2026-10-26)
+    if isinstance((case.get("parts") or {}).get("sleeve"), dict) or has_sleeve(res):
+        rows += [
+            ["Sleeve interference, geometric",
+             _fmt(res.get("interference_mm"), 4, "mm")],
+            ["Sleeve interference, effective at temperature",
+             _fmt(res.get("interference_effective_mm"), 4, "mm")],
+        ]
+    return rows
 
 
 def _interface_words(label: Any) -> str:
@@ -18383,7 +18419,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # ellipsis this report already uses for a sub-row.
     R("…of which the magnets [W]", lambda c: _e(c, "P_mag_W"), 1)
     R("…of which the shaft [W]", lambda c: _e(c, "P_shaft_W"), 1)
-    R("…of which the sleeve [W]", lambda c: _e(c, "P_sleeve_W"), 1)
+    if any(has_sleeve(c.get("em") or {}) for c in cols):
+        R("…of which the sleeve [W]", lambda c: _e(c, "P_sleeve_W"), 1)
     R("Total electromagnetic loss [W]",
       lambda c: _e(c, "P_loss_total_W") or (c.get("result") or {}).get("loss_w"), 1)
     # ITEM 5 (owner review 2026-09-19): a capped eddy pass prints the losses
@@ -18722,8 +18759,9 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
     # The band's own eddy loss is NOT in the map — the thermal solve carries
     # no loss model for the sleeve — which is exactly the gap between the
     # electromagnetic total and the map's total (reviewer 2026-09-13, item 9).
-    R("  not in the map: sleeve eddy (no loss model for the band) [W]",
-      lambda c: _g(c.get("em") or {}, "P_sleeve_W"))
+    if any(has_sleeve(c.get("em") or {}) for c in cols):
+        R("  not in the map: sleeve eddy (no loss model for the band) [W]",
+          lambda c: _g(c.get("em") or {}, "P_sleeve_W"))
     # ONE comparison, the same one the reconcile paragraph under the heat
     # budget makes — see `thermal_budget_gap_w` (reviewer 2026-09-14, B3).
     R("  loss-map integration vs the summed terms [W]",
@@ -20361,8 +20399,9 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
         ["Mechanical safety factor", _fmt(2.0, 1),
          "the project's acceptance level, on the AVERAGED PEAK of each part's "
          "criterion"],
-        ["Sleeve hoop stress", "the sleeve card",
-         "the assigned sleeve material's own strength"],
+        *((["Sleeve hoop stress", "the sleeve card",
+            "the assigned sleeve material's own strength"],)
+          if ex.get("has_sleeve") is not False else ()),
         ["Magnet tensile stress", "the magnet card",
          "the assigned magnet's tensile strength (sintered NdFeB ~80 MPa)"],
         ["Separation joint open fraction",

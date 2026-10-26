@@ -19,6 +19,15 @@ import math
 import os
 import re
 
+try:                                        # the CAD scripts can run where the package is not importable
+    from motor_ai_sim.sleeve import has_sleeve
+except ImportError:                         # pragma: no cover - the same rule as motor_ai_sim.sleeve
+    def has_sleeve(thickness):
+        try:
+            return float(thickness or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
 TEMPLATE = "bom/1"
 # purchased / standard parts the model does not carry as solids (nominal data from the PCB project and the stock tables)
 M2_STOCK_LENGTHS = [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 26, 30, 35, 40, 45, 50, 55, 60]     # ISO 4762 / DIN 912, M2 (14, 18 and 26: catalogue sizes, 18 chosen by the owner 2026-10-13 for L12, 26 on 2026-10-19 for L20)
@@ -595,7 +604,9 @@ def build_bom(dump, inputs):
         ("simulation names %s as slot liner" % slot_ins) if slot_ins else "%s.yaml names no slot liner" % cfg,
         tbs_text="slot liner material and thickness" + (" (%s.yaml names %s, no thickness)" % (cfg, slot_ins) if slot_ins else ""))
     sleeve = inputs["sim_materials"].get("sleeve")
-    if sleeve:
+    # OWNER 2026-10-26: a rotor with no sleeve (thickness 0) has no sleeve line at all, however its material assignment
+    # reads - not a zero-quantity row, not a "confirm that no sleeve is wanted" question.
+    if sleeve and has_sleeve(m.params.get("sleeve_thickness", 0)):
         add("sleeve", "Rotor sleeve", "manufactured", 0, "pcs", sleeve, "sleeve_thickness = %s mm in the model" % _num(m.params.get("sleeve_thickness", 0)),
             None, "simulation config " + cfg, "%s.yaml names sleeve material %s but the thickness is 0: no sleeve in the CAD or here" % (cfg, sleeve),
             tbs_text="%s.yaml names rotor sleeve %s with zero thickness - confirm that no sleeve is wanted" % (cfg, sleeve))

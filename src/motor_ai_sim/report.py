@@ -46,6 +46,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from motor_ai_sim.sleeve import has_sleeve
+
 log = logging.getLogger(__name__)
 
 # ── palette (the datasheet's, so the two documents look like one family) ─────
@@ -2395,7 +2397,8 @@ def loss_breakdown(em: Dict[str, Any],
     if _g(em, "P_mag_W") is not None or _g(em, "P_shaft_W") is not None:
         add("Magnets", _g(em, "P_mag_W"))
         add("Shaft", _g(em, "P_shaft_W"))
-        add("Sleeve", _g(em, "P_sleeve_W"))
+        if has_sleeve(em):
+            add("Sleeve", _g(em, "P_sleeve_W"))
     else:
         add("Magnets", _g(em, "P_solid_W"))
     if brg and brg.get("has_bearings"):
@@ -10376,9 +10379,11 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
          "mm"],
         ["Magnet height", _f("magnet_height", 2), "mm",
          "Parallel paths", _fmt(wind.get("n_parallel"), 0), ""],
-        ["Sleeve thickness", _f("sleeve_thickness", 2) if geo.get("sleeve_thickness")
-         else "none", "mm" if geo.get("sleeve_thickness") else "",
-         "Series coils", _fmt(wind.get("n_series"), 0), ""],
+        # a machine without a sleeve says nothing about one (owner 2026-10-26): the cell pair is left empty
+        ["Sleeve thickness", _f("sleeve_thickness", 2), "mm",
+         "Series coils", _fmt(wind.get("n_series"), 0), ""]
+        if has_sleeve(geo) else
+        ["", "", "", "Series coils", _fmt(wind.get("n_series"), 0), ""],
         ["Rotor outer radius", _f("rotor_outer_radius", 2), "mm",
          # coil grouping AND the terminal connection (user 2026-09-13: "need
          # to add the connection to the report") — "2P · Δ delta"
@@ -10486,11 +10491,11 @@ def material_rows(mats: Dict[str, Any],
             # words ("hoop-wound carbon fibre") beside it read as one, and the
             # mechanical text then claimed retention from a part that carries
             # no mass and is not in the geometry at all.
-            ("Retaining sleeve", "sleeve",
-             ("not installed — sleeve thickness is 0 in this geometry"
-              if mats.get("sleeve") and
-              float(geo.get("sleeve_thickness", 0) or 0) <= 0
-              else "hoop-wound carbon fibre" if mats.get("sleeve") else "")),
+            # OWNER 2026-10-26: a machine with no sleeve (thickness 0) says nothing about one - not even "not
+            # installed" - however its material assignment still reads: the row is simply not there.
+            *((("Retaining sleeve", "sleeve",
+                "hoop-wound carbon fibre" if mats.get("sleeve") else ""),)
+              if has_sleeve(geo) else ()),
             ("Shaft", "shaft", ""),
     ):
         # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "couldn't
@@ -12081,7 +12086,7 @@ def em_loss_rows(em: Dict[str, Any],
         _lr("Magnets and solid parts (eddy)", _g(em, "P_solid_W"),
             "magnets, rotor housing, shaft and sleeve together; this run "
             "carries no per-part split")
-    if _g(em, "P_sleeve_W") is not None:
+    if _g(em, "P_sleeve_W") is not None and has_sleeve(em):
         _lr("Sleeve (eddy)" if _split else "  …of which the sleeve",
             _g(em, "P_sleeve_W"),
             "not in the thermal loss map (no loss model for the band)"
@@ -16956,7 +16961,7 @@ def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
         return []
     rows = [["Rotating part", "J [kg·cm²]", "Share"]]
     parts = [(k, _numf(v)) for k, v in J.items()
-             if k in ("rotor_iron", "magnet", "shaft", "sleeve")]
+             if k in ("rotor_iron", "magnet", "shaft") or (k == "sleeve" and has_sleeve(em))]
     for name, v in parts:
         if v is None:
             continue
@@ -18383,7 +18388,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # ellipsis this report already uses for a sub-row.
     R("…of which the magnets [W]", lambda c: _e(c, "P_mag_W"), 1)
     R("…of which the shaft [W]", lambda c: _e(c, "P_shaft_W"), 1)
-    R("…of which the sleeve [W]", lambda c: _e(c, "P_sleeve_W"), 1)
+    if any(has_sleeve(c.get("em") or {}) for c in cols):
+        R("…of which the sleeve [W]", lambda c: _e(c, "P_sleeve_W"), 1)
     R("Total electromagnetic loss [W]",
       lambda c: _e(c, "P_loss_total_W") or (c.get("result") or {}).get("loss_w"), 1)
     # ITEM 5 (owner review 2026-09-19): a capped eddy pass prints the losses
@@ -18722,8 +18728,9 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
     # The band's own eddy loss is NOT in the map — the thermal solve carries
     # no loss model for the sleeve — which is exactly the gap between the
     # electromagnetic total and the map's total (reviewer 2026-09-13, item 9).
-    R("  not in the map: sleeve eddy (no loss model for the band) [W]",
-      lambda c: _g(c.get("em") or {}, "P_sleeve_W"))
+    if any(has_sleeve(c.get("em") or {}) for c in cols):
+        R("  not in the map: sleeve eddy (no loss model for the band) [W]",
+          lambda c: _g(c.get("em") or {}, "P_sleeve_W"))
     # ONE comparison, the same one the reconcile paragraph under the heat
     # budget makes — see `thermal_budget_gap_w` (reviewer 2026-09-14, B3).
     R("  loss-map integration vs the summed terms [W]",

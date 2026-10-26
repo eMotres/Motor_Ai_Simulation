@@ -8139,15 +8139,15 @@ class TestL13Review20260919:
         assert full_row[4] == "100 %"
 
     # ── 8 · band not installed ───────────────────────────────────────────────
-    def test_item8_a_zero_thickness_sleeve_is_not_installed(self):
+    def test_item8_a_zero_thickness_sleeve_is_not_listed(self):
         from motor_ai_sim import report as R
 
         mats = {"sleeve": "M40X_UD_60"}
         geo = {"sleeve_thickness": 0}
         rows = R.material_rows(mats, {}, geo, {})
-        row = next(r for r in rows if r[0] == "Retaining sleeve")
-        assert row[2] == "not installed — sleeve thickness is 0 in this geometry"
-        assert "hoop-wound" not in row[2]
+        # owner 2026-10-26: no sleeve -> nothing about one, not even "not installed"
+        assert not any(r[0] == "Retaining sleeve" for r in rows)
+        assert "M40X_UD_60" not in str(rows) and "not installed" not in str(rows)
 
     def test_item8_a_real_sleeve_still_reads_installed(self):
         from motor_ai_sim import report as R

@@ -379,7 +379,16 @@
     "label": "Versions",
     "latest": "Latest",
     "all": "All versions",
-    "tip": "Latest: the latest current variant, plus the best one (highest average efficiency) when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
+    "tip": "Latest: the most recently added current variant, plus the recommended one when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
+  },
+  "activity": {
+    "running": "Computing on the server: {what}",
+    "queued": "Queued: {what}",
+    "lineRunning": "Computing: {what}",
+    "lineQueued": "Queued: {what}",
+    "minutes": "{count} min",
+    "underMinute": "<1 min",
+    "more": "+{count}"
   },
   "points": {
     "loadingMotor": "Loading {motor}...",

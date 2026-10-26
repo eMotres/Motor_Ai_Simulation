@@ -1450,6 +1450,20 @@ def project_motor_report(project_id: str, request: Request, die: str, config: st
                              "Content-Length": str(len(blob)), "X-Run-Id": rid})
 
 
+def linked_at_index(project: dict) -> dict:
+    """``{motor key: when the CURRENT link was made}``: the row's own ``linked_at``, else the last un-unlinked link event of the
+    project's motor history (a link never stored a stamp on its row; the history always has it).  Legacy rows with neither
+    are absent - the web treats them as older than any stamped one."""
+    stamps: dict = {}
+    for event in project.get("motor_history", []) or []:
+        if isinstance(event, dict) and event.get("linked_at") and not event.get("unlinked_at"):
+            stamps[_key(str(event.get("die") or ""), str(event.get("config") or ""))] = str(event["linked_at"])
+    for link in project.get("linked_motors", []) or []:
+        if isinstance(link, dict) and link.get("linked_at"):
+            stamps[_key(str(link.get("die") or ""), str(link.get("config") or ""))] = str(link["linked_at"])
+    return stamps
+
+
 @router.get("")
 def list_project_motors(project_id: str, request: Request, show_all: bool = False):
     user, project, role = access.require_project(request, project_id)
@@ -1473,6 +1487,7 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
     configure_resolver_cache = {}
     ident = _identity(request)
     entries_cache: list = []
+    link_stamps = linked_at_index(project)
     for link in project.get("linked_motors", []):
         if not isinstance(link, dict): continue
         die, config = str(link.get("die") or ""), str(link.get("config") or "")
@@ -1524,6 +1539,8 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
                 # Points-only Configure: any stored duty result is enough (no passport maps needed).
                 "can_open_points": available and any(row.get("has_result") for row in result_rows),
                 "note": str(link.get("note") or ""),
+                # when the variant joined the project (ISO); null on a legacy row: "Latest" picks the newest stamp
+                "linked_at": link_stamps.get(_key(die, config)),
                 # staff marks: the variant whose report was checked, and THE recommended variant of the project
                 "report_reviewed": link.get("report_reviewed") if isinstance(link.get("report_reviewed"), dict) else None,
                 "recommended": link.get("recommended") if isinstance(link.get("recommended"), dict) else None,

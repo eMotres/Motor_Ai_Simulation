@@ -2790,6 +2790,21 @@ def retired_dies(_w: dict = Depends(require_catalog_write)):
 
 # ── configuration ────────────────────────────────────────────────────────────
 
+def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None) -> None:
+    """A new variant of a project's motor joins the project at once (owner 2026-10-27, ``development.autolink``).  Never
+    raises: the configuration is already saved, the link is an addition."""
+    try:
+        from motor_ai_sim.development import autolink
+        actor = ""
+        if isinstance(w, dict) and isinstance(w.get("user"), dict):
+            actor = str(w["user"].get("email") or "").strip().lower()
+        joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor)
+        if joined:
+            log.info("family: new configuration '%s/%s' linked to project(s) %s", die, cfg, ", ".join(joined))
+    except Exception:                                       # noqa: BLE001
+        log.warning("family: autolink of '%s/%s' failed", die, cfg, exc_info=True)
+
+
 @router.post("/config")
 def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     die = _check_name(req.die, "die")
@@ -2812,6 +2827,7 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     _save_yaml(_cfg_file(die, name), doc)
     log.info("family: configuration '%s/%s' created from the live machine",
              die, name)
+    _autolink_new_config(die, name, _w)
     out = {"ok": True, "die": die, "config": name}
     _shaft_note = _live_shaft_note()
     if _shaft_note:
@@ -2969,6 +2985,8 @@ def duplicate_die(die: str, req: DieDuplicate,
     d["name"] = new
     d["locked"] = False
     d["created"] = datetime.now().isoformat(timespec="seconds")
+    # where the copy came from: a configuration later created in it joins the project(s) of the original (development.autolink)
+    d["derived_from"] = {"die": die, "at": d["created"]}
     _save_yaml(dst_dir / "die.yaml", d)
     cfgs = []
     _acc = catalog_access(_w.get("authorization"))
@@ -3038,6 +3056,7 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     _save_yaml(dst, c)
     log.info("family: configuration '%s/%s' duplicated as '%s' (%d duty(ies))",
              die, cfg, new, len(c.get("duties") or []))
+    _autolink_new_config(die, new, _w)
     return {"ok": True, "config": new,
             "duties": [d.get("name") for d in (c.get("duties") or [])]}
 
@@ -4293,8 +4312,10 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
         target = name
         created = True
     target_cfg = cfg
+    new_variant = created
     if cfg and not _cfg_file(target, cfg).is_file():
         target_cfg = _copy_config_into(die, target, cfg)
+        new_variant = True
     elif cfg and duty:
         c = _load_yaml(_cfg_file(target, cfg), "configuration")
         if not any(isinstance(x, dict) and x.get("name") == duty
@@ -4302,6 +4323,9 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
             # the reused die has this configuration's NAME but not this duty —
             # bring the duty across rather than silently dropping the point.
             target_cfg = _copy_config_into(die, target, cfg)
+            new_variant = True
+    if new_variant and target_cfg:
+        _autolink_new_config(target, target_cfg, None, copied_from=die)
     # The configurations now sit on the NEW lamination: a connection that
     # factored the old slot count may not factor this one (2S on 48 slots).
     _repick_die_windings(target, skip_locked=not created)
@@ -4909,6 +4933,7 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
                                                from_current=True,
                                                note=req.note or "")), _w=_w)
     cfg_name = str(out.get("config") or cfg_name)
+    _autolink_new_config(name, cfg_name, _w, copied_from=(rel.get("released_from") or None))
     import json as _json
     _ctx_file().write_text(
         _json.dumps({"die": name, "config": cfg_name, "duty": duty_name,

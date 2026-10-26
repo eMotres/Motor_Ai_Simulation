@@ -379,7 +379,16 @@
     "label": "版本",
     "latest": "最新",
     "all": "全部版本",
-    "tip": "最新：最新的当前方案；若最优方案（平均效率最高）是另一个方案，则一并显示。全部版本：所有方案，包括试验方案、旧方案及其历史快照，按方案分组。"
+    "tip": "最新：最近加入的当前方案；若推荐方案是另一个方案，则一并显示。全部版本：所有方案，包括试验方案、旧方案及其历史快照，按方案分组。"
+  },
+  "activity": {
+    "running": "服务器正在计算：{what}",
+    "queued": "排队中：{what}",
+    "lineRunning": "计算中：{what}",
+    "lineQueued": "排队中：{what}",
+    "minutes": "{count} 分钟",
+    "underMinute": "不足 1 分钟",
+    "more": "+{count}"
   },
   "points": {
     "loadingMotor": "正在加载 {motor}...",

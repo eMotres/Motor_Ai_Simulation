@@ -58,14 +58,25 @@ export function averageEfficiency(motor: ProjectMotor): number | null {
   }).filter((v): v is number => v !== null);
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 }
-/** The latest current variant (the last linked one that is not a trial) and the RECOMMENDED one when that is another variant.
+const linkedMs = (m: ProjectMotor): number | null => { const t = Date.parse(String(m.linked_at ?? '')); return Number.isFinite(t) ? t : null; };
+/** The most recently linked variant of `current`: the newest `linked_at`; a legacy row without a stamp is older than any stamped one and
+ *  legacy rows keep the table's order among themselves (the last one wins, as before stamps existed); equal stamps: the later row. */
+export function newestLinked(current: ProjectMotor[]): ProjectMotor {
+  let best = current[0], bestMs = linkedMs(best);
+  for (const m of current.slice(1)) {
+    const ms = linkedMs(m);
+    if (ms === null ? bestMs === null : bestMs === null || ms >= bestMs) { best = m; bestMs = ms; }
+  }
+  return best;
+}
+/** The latest current variant (the most recently linked one that is not a trial) and the RECOMMENDED one when that is another variant.
  *  "Recommended" is an explicit staff choice (`ProjectMotor.recommended`, one per project), never an automatic metric: a variant
  *  picked by efficiency alone can fail mechanics (owner 2026-10-26).  With none marked, only the latest.  Everything else
  *  (trials, older variants, history) is hidden. */
 export function latestAndRecommended(motors: ProjectMotor[]): ProjectMotor[] {
   const current = motors.filter(isCurrent);
   if (!current.length) return [];
-  const latest = current[current.length - 1];
+  const latest = newestLinked(current);
   const recommended = current.find((m) => m.recommended && typeof m.recommended === 'object') ?? null;
   const picked = recommended && recommended !== latest ? [recommended, latest] : [latest];
   return motors.filter((m) => picked.includes(m));                       // keep the table's own order

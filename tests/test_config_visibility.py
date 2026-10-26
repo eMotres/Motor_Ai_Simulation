@@ -341,6 +341,7 @@ WRITE_ROUTES = {         # layered-only (a registered account writes into its ow
     ("PUT", "/api/family/config/{die}/{cfg}/applications"): {"applications": ["propeller"]},
     ("PATCH", "/api/family/config/{die}/{cfg}/battery"): {"cells": 6, "v_cell_min": 3.0, "v_cell_max": 4.2},
     ("PATCH", "/api/family/config/{die}/{cfg}/controller"): {"devices_parallel": 1},
+    ("PATCH", "/api/family/config/{die}/{cfg}/limits"): {"winding_c": 180},
     ("PATCH", "/api/family/config/{die}/{cfg}/bearings"): {"A": {"card": "618/8-2Z"}, "B": {"card": "618/8-2Z"}},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/duplicate"): {"name": "copy"},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/save_continuous_point"): {"name": "continuous"},

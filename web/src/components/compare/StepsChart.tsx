@@ -26,10 +26,12 @@ interface Props {
   duty: string | null;
   current: number;
   onPick: (index: number) => void;
+  /** per step: the variant staff marked as the recommended one (a star marker on the chart) */
+  recommended?: boolean[];
   height?: number | string;
 }
 
-const StepsChart: React.FC<Props> = ({ variants, duty, current, onPick, height = '100%' }) => {
+const StepsChart: React.FC<Props> = ({ variants, duty, current, onPick, recommended = [], height = '100%' }) => {
   const { t } = useTranslation('development');
   const [wanted, setWanted] = useRememberedView<string>('configure.points.series', 'torque', oneOf(SERIES_IDS));
   const available = useMemo(() => availableSeries(variants, duty), [variants, duty]);
@@ -51,6 +53,7 @@ const StepsChart: React.FC<Props> = ({ variants, duty, current, onPick, height =
       <g onClick={() => onPick(index)} style={{ cursor: 'pointer' }} data-testid={here ? 'steps-chart-current' : 'steps-chart-point'}>
         {here && <circle cx={cx} cy={cy} r={9} fill="none" stroke={colorOf(index)} strokeWidth={2} />}
         <circle cx={cx} cy={cy} r={here ? 5 : 4} fill={colorOf(index)} />
+        {recommended[index] && <text x={cx} y={cy - 12} textAnchor="middle" fontSize={13} fill="#f59e0b" data-testid="steps-chart-star">★</text>}
       </g>
     );
   };

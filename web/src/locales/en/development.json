@@ -380,6 +380,7 @@
     "tip": "Latest: the latest current variant, plus the best one (highest average efficiency) when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
   },
   "points": {
+    "batteryMarkerTip": "Voltage this point needs (selected mode), against the pack window.",
     "source": {
       "emChip": "EM run, winding {winding} °C",
       "emChipPlain": "EM run",
@@ -507,12 +508,6 @@
     "knobTip": "Disabled: scrolling needs the full operating map, which is still being computed.",
     "knobsDisabledTip": "Speed, current and angle cannot be scrolled yet; only the stored points are shown. No value is interpolated.",
     "notStored": "Not stored for this point.",
-    "bus": "DC bus, V",
-    "busTip": "Type your supply voltage to check it against the bus this point was computed to need. Uses the stored requirement only.",
-    "busInvalid": "Enter a positive voltage.",
-    "busNoRequirement": "This point stores no required bus voltage.",
-    "busOk": "Covers the {required} V this point needs ({margin} % margin).",
-    "busShort": "Short of the {required} V this point needs by {margin} %.",
     "stepsTable": "Mode {duty} across the steps",
     "openTip": "Opens the computed points of this motor in Configure (full operating map pending).",
     "tile": {

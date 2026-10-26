@@ -302,6 +302,7 @@
     "tPerMassTip": "Torque per kg of motor mass.",
     "pPerMass": "P / mass",
     "pPerMassActive": "P / active mass",
+    "pPerMassActive": "P / active mass",
     "pPerMassTip": "Shaft power per kg of motor mass.",
     "totalLoss": "Total loss",
     "totalLossTip": "Motor + PWM extra + controller loss.",

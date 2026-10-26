@@ -2692,6 +2692,7 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
                     "(%d configuration(s) with it) -> %s",
                     die, admin_email or "?", len(cfgs), trash)
 
+    _release_project_grants(die, cfgs, "die_deleted", _w)
     out = {"ok": True, "deleted_configs": cfgs, "layer": lay}
     if note:
         out["note"] = note
@@ -2774,6 +2775,7 @@ def retire_die(die: str, req: DieRetire,
     _WS.add_tombstone(die, admin_email)
     _AA.record(admin_email or "local-dev", "die.retire", die,
                details={"users": users, "configurations": cfgs})
+    _release_project_grants(die, cfgs, "die_retired", _w)
     log.warning("family: shared die '%s' retired for all users by admin %s "
                 "(%d account(s) could see it)", die, admin_email or "?", users)
     return {"ok": True, "die": die, "layer": _WS.LAYER_SHARED,
@@ -2789,6 +2791,12 @@ def restore_die(die: str, _w: dict = Depends(require_catalog_write)):
     if not _WS.remove_tombstone(die):
         raise HTTPException(404, detail=f"'{die}' is not retired")
     _AA.record(admin_email or "local-dev", "die.restore", die)
+    try:
+        from motor_ai_sim.development import grant_cleanup
+        cfgs = [p.stem for p in _shared_die_dir(die).glob("*.yaml") if p.name != "die.yaml"]
+        grant_cleanup.regrant_for_restored_die(die, cfgs)
+    except Exception:                                       # noqa: BLE001
+        log.warning("family: project grants of restored die '%s' not re-issued", die, exc_info=True)
     log.warning("family: shared die '%s' restored by admin %s", die,
                 admin_email or "?")
     return {"ok": True, "die": die, "retired": False}
@@ -2819,6 +2827,38 @@ def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_fr
             log.info("family: new configuration '%s/%s' linked to project(s) %s", die, cfg, ", ".join(joined))
     except Exception:                                       # noqa: BLE001
         log.warning("family: autolink of '%s/%s' failed", die, cfg, exc_info=True)
+
+
+def _motor_still_exists(die: str, cfg: str) -> bool:
+    """Is ``die/cfg`` still readable by ordinary resolution or sitting behind a copy-on-write layer?"""
+    try:
+        if _cfg_file(die, cfg).is_file():
+            return True
+        if _ws_layering():
+            behind = _WS.source_die_dir(die)
+            return behind is not None and (Path(str(behind)) / f"{cfg}.yaml").is_file()
+    except Exception:                                       # noqa: BLE001 - not resolvable = not there
+        pass
+    return False
+
+
+def _release_project_grants(die: str, cfgs: list, reason: str, w: Optional[dict] = None) -> None:
+    """Configurations left the catalog (deleted, die deleted or retired): the grants development projects made for them
+    go (owner 2026-10-27, ``development.grant_cleanup``).  The projects keep the links and their history.  Never raises:
+    the catalog change is done, the cleanup is retried by the next start / admin read of the projects."""
+    gone = [c for c in cfgs if not _motor_still_exists(die, c)]
+    if not gone:
+        return
+    try:
+        from motor_ai_sim.development import grant_cleanup
+        actor = ""
+        if isinstance(w, dict) and isinstance(w.get("user"), dict):
+            actor = str(w["user"].get("email") or "").strip().lower()
+        removed = grant_cleanup.release_for_catalog_removal(die, gone, reason=reason, actor=actor)
+        if removed:
+            log.info("family: %d project grant(s) of '%s' removed with it (%s)", len(removed), die, reason)
+    except Exception:                                       # noqa: BLE001
+        log.warning("family: project grants of '%s' not released", die, exc_info=True)
 
 
 @router.post("/config")
@@ -3094,6 +3134,7 @@ def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write))
     _delete_config_runs(die, cfg)          # its duties' stored runs go with it
     log.warning("family: configuration '%s/%s' deleted (%d duty(ies) with it)",
                 die, cfg, n)
+    _release_project_grants(die, [cfg], "config_deleted", _w)
     return {"ok": True}
 
 

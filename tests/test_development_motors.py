@@ -50,16 +50,8 @@ def test_customer_grants_preserve_manual_and_other_motor_grants(tmp_path, monkey
     assert saved["dies"] == ["OTHER"]
     project = store.get_project("alpha")
     assert project["project_motor_grants"][motors._key("DIE", "A")]["emails"] == ["c@example.test"]
-    # Simulate the real admin grant editor removing and then explicitly
-    # reissuing this exact permission after the project inserted it.
-    saved["configs"] = ["MANUAL/B"]
-    saved["configs"] = ["DIE/A", "MANUAL/B"]
-    motors.unlink_motor("alpha", "die", "a")
-    assert saved["configs"] == ["DIE/A", "MANUAL/B"]
-    project = store.get_project("alpha")
-    assert project["grant_removal_candidates"] == [
-        {"email": "c@example.test", "die": "DIE", "config": "A", "reason": "motor_unlinked"}
-    ]
+    # Taking the grant back on unlink (and an admin's reissued grant staying) is covered with a real account
+    # registry in test_development_grant_autoremove.py.
 
 
 def test_owner_and_engineer_members_get_the_project_motors_too(tmp_path, monkeypatch):

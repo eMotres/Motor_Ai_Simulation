@@ -296,25 +296,22 @@ def test_admin_project_routes_require_admin_and_return_management_summary(projec
     assert events[-1]["action"] == "invite"
 
 
-def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monkeypatch):
+def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monkeypatch, tmp_path):
     project = make_project()
     store.create_project(project)
-    grants = {
-        "eng@example.test": {"all": False, "dies": [], "default": None, "configs": []},
-        "customer@example.test": {"all": False, "dies": [], "default": None, "configs": []},
-        "new@example.test": {"all": False, "dies": [], "default": None, "configs": []},
-    }
+    # a real (temp) account registry: the grants the project makes carry its origin, and leave with the motor
+    registry = tmp_path / "users.json"
+    registry.write_text(json.dumps({email: {"role": "user", "name": email}
+                                    for email in ("eng@example.test", "customer@example.test", "new@example.test")}),
+                        encoding="utf-8")
+    monkeypatch.setattr(users, "_USERS_FILE", registry)
+
+    def configs(email):
+        return list(users.get_stored_motor_grants(email).get("configs") or [])
     monkeypatch.setattr(auth, "_is_admin_caller", lambda token: (
         True, {"email": "admin@example.test", "role": "admin"}))
     monkeypatch.setattr(auth, "resolve_user", lambda token: {
         "email": "admin@example.test", "role": "admin"})
-    monkeypatch.setattr(users, "get_user", lambda email: {
-        "email": email, "disabled": False, "email_verified": True})
-    monkeypatch.setattr(users, "get_stored_motor_grants", lambda email: dict(grants[email]))
-    def set_grants(email, *, all_motors, dies, default, configs):
-        grants[email] = {"all": all_motors, "dies": dies,
-                         "default": default, "configs": configs}
-    monkeypatch.setattr(users, "set_motor_grants", set_grants)
     monkeypatch.setattr(motors, "_motor", lambda *args: (
         Path("."), Path("."), {"is_admin": True}, {"canonical_die": "SYNTHETIC-DIE"}))
     app = FastAPI(); app.include_router(admin_router)
@@ -325,31 +322,31 @@ def test_admin_project_mutations_reuse_grants_and_audit_paths(project_root, monk
     assert linked.status_code == 200
     assert store.get_project("alpha")["linked_motors"] == [
         {"die": "SYNTHETIC-DIE", "config": "A", "status": "current"}]
-    assert "SYNTHETIC-DIE/A" in grants["customer@example.test"]["configs"]
+    assert "SYNTHETIC-DIE/A" in configs("customer@example.test")
 
     added = client.post("/api/admin/projects/alpha/members",
                         json={"email": "new@example.test", "role": "customer"})
     assert added.status_code == 200
-    assert "SYNTHETIC-DIE/A" in grants["new@example.test"]["configs"]
+    assert "SYNTHETIC-DIE/A" in configs("new@example.test")
     removed = client.delete(
         "/api/admin/projects/alpha/members?email=new%40example.test")
     assert removed.status_code == 200
-    assert "SYNTHETIC-DIE/A" in grants["new@example.test"]["configs"]
+    assert configs("new@example.test") == []          # the member leaves, the project's grant leaves with them
 
     unlinked = client.delete(
         "/api/admin/projects/alpha/motors?die=SYNTHETIC-DIE&config=A")
     assert unlinked.status_code == 200
     assert store.get_project("alpha")["linked_motors"] == []
-    assert "SYNTHETIC-DIE/A" in grants["customer@example.test"]["configs"]
+    assert configs("customer@example.test") == [] and configs("eng@example.test") == []
     candidates = client.get(
         "/api/admin/projects/alpha/grant-removal-candidates").json()["candidates"]
-    assert {row["email"] for row in candidates} == {
-        "eng@example.test", "customer@example.test", "new@example.test"}
+    assert candidates == []
 
     events = [json.loads(line) for line in
               (project_root / "alpha" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [event["action"] for event in events] == [
-        "motor.link", "invite", "remove", "motor.unlink"]
+        "motor.link", "invite", "motor.grant_autoremove", "remove",
+        "motor.grant_autoremove", "motor.grant_autoremove", "motor.unlink"]
 
 
 def test_admin_member_remove_rolls_back_on_membership_index_failure(project_root, monkeypatch):

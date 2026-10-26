@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from motor_ai_sim import auth
-from motor_ai_sim.development import models, store
+from motor_ai_sim.development import grant_cleanup, models, store
 from motor_ai_sim.development import motors as development_motors
 
 router = APIRouter(prefix="/api/admin/projects", tags=["admin-development"])
@@ -12,8 +12,18 @@ def _email(user: dict) -> str:
     return str(user.get("email") or "").strip().lower()
 
 
+def _drain(admin_user: dict) -> None:
+    """The stale "grants may need review" rows go by themselves (owner 2026-10-27): an idempotent pass over the stored
+    candidates before they are shown.  Never fails the read."""
+    try:
+        grant_cleanup.drain_all(actor=_email(admin_user))
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 @router.get("")
 def admin_list(admin_user: dict = Depends(auth.require_admin)):
+    _drain(admin_user)
     projects = []
     for project in store.list_projects():
         draft = store.load_json(project["id"], "draft.json", {"draft": {}})
@@ -104,6 +114,7 @@ def admin_unlink_motor(project_id: str, die: str, config: str,
 @router.get("/{project_id}/grant-removal-candidates")
 def admin_grant_removal_candidates(project_id: str,
                                    admin_user: dict = Depends(auth.require_admin)):
+    _drain(admin_user)
     project = store.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")

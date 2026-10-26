@@ -377,17 +377,31 @@ def _customers(project: dict) -> set[str]:
 
 def _sync_grants(project: dict, motor_key: str, grant_key: str,
                  emails: set[str] | None = None) -> None:
-    """Add ordinary motor grants and retain only historical project additions.
+    """Add ordinary motor grants and record which of them the project made.
 
-    Project cleanup is advisory: this module never removes a user grant because
-    an administrator may have reissued the same grant since project creation.
+    The project's ledger lists the accounts it made a grant for, and the account's own record names the project as the
+    grant's origin (``users.add_grant_source``), so ``grant_cleanup`` can take the grant back when the motor leaves
+    the project (owner 2026-10-27).  A grant the account already held from an admin gets no origin and is never
+    removed; one another project made gets this project as a second origin.
     """
     ledger = project.setdefault("project_motor_grants", {})
     entry = ledger.get(motor_key) or {"grant_key": grant_key, "emails": []}
     historical = set(entry.get("emails", [])) if isinstance(entry, dict) else set(entry)
-    ledger[motor_key] = {"grant_key": grant_key, "emails": sorted(historical)}
+    # ``sourced``: the accounts whose grant carries this project as its origin.  A ledger e-mail outside it is a grant
+    # stored before origins were recorded (legacy) - or one whose origin an admin has since dropped (reissued).
+    sourced = set(entry.get("sourced", [])) if isinstance(entry, dict) else set()
+
+    def record():
+        row = {"grant_key": grant_key, "emails": sorted(historical)}
+        if sourced & historical:
+            row["sourced"] = sorted(sourced & historical)
+        ledger[motor_key] = row
+    record()
+    source = f"project:{project.get('id', '')}"
     for email in sorted(_customers(project) if emails is None else emails):
-        existed = grant_key in set(users.get_stored_motor_grants(email).get("configs") or [])
+        before = users.get_stored_motor_grants(email)
+        existed = grant_key in set(before.get("configs") or [])
+        vouched = existed and bool((before.get("sources") or {}).get(grant_key))
         try:
             _grant(email, grant_key)
         except Exception:
@@ -396,12 +410,14 @@ def _sync_grants(project: dict, motor_key: str, grant_key: str,
             after = grant_key in set(users.get_stored_motor_grants(email).get("configs") or [])
             if not existed and after:
                 historical.add(email)
-                ledger[motor_key] = {"grant_key": grant_key, "emails": sorted(historical)}
+                record()
             raise
-        if not existed:
+        if not existed or vouched:
             historical.add(email)
-            ledger[motor_key] = {"grant_key": grant_key, "emails": sorted(historical)}
-    ledger[motor_key] = {"grant_key": grant_key, "emails": sorted(historical)}
+            if project.get("id") and users.add_grant_source(email, grant_key, source):
+                sourced.add(email)
+            record()
+    record()
 
 
 def _mark_removal_candidates(project: dict, motor_key: str, *, reason: str,
@@ -519,7 +535,6 @@ def unlink_motor(project_id: str, die: str, config: str, *, actor: str = "") -> 
                         "unlinked_by": str(actor or "")})
         updated["updated_at"] = __import__("motor_ai_sim.development.models", fromlist=["now"]).now()
         try:
-            _mark_removal_candidates(updated, key, reason="motor_unlinked")
             store.mutate_project(project_id, lambda doc: doc.update(updated))
             from motor_ai_sim import json_store
             def remove(doc):
@@ -531,6 +546,15 @@ def unlink_motor(project_id: str, die: str, config: str, *, actor: str = "") -> 
             store.save_json(project_id, "project.json", project)
             store.save_index(old_index)
             raise
+        # The link is committed: the grants this project made for the motor leave with it (owner 2026-10-27). Done after the
+        # commit so a failed unlink never costs anyone access; a fault here leaves ledger rows that the next drain settles.
+        try:
+            from motor_ai_sim.development import grant_cleanup
+            grant_cleanup.release_motor_grants(updated, key, reason="motor_unlinked", actor=actor)
+            store.mutate_project(project_id, lambda doc: doc.update(updated))
+        except Exception:                                    # noqa: BLE001
+            log.warning("project %s unlinked %s/%s but its motor grants were not released", project_id,
+                        canonical.get("die", die), canonical.get("config", config), exc_info=True)
     try:
         _capture_project_motor_snapshot(project_id, canonical.get("die", die), canonical.get("config", config), actor, "unlinked motor")
     except Exception as exc:

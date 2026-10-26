@@ -114,7 +114,7 @@ def test_project_engineer_cannot_share_unowned_private_shared_motor(stage1b, mon
     assert users.get_stored_motor_grants(CUSTOMER).get("configs", []) == []
 
 
-def test_unlink_is_add_only_and_preserves_manual_and_project_grants(stage1b, monkeypatch):
+def test_unlink_preserves_manual_grants_and_one_another_project_still_demands(stage1b, monkeypatch):
     client, _current, shared = stage1b
     _write_motor(shared / "dies")
     _route_shared(monkeypatch, shared)
@@ -141,8 +141,8 @@ def test_unlink_is_add_only_and_preserves_manual_and_project_grants(stage1b, mon
                          headers=headers).status_code == 200
     assert set(users.get_stored_motor_grants(CUSTOMER).get("configs", [])) == {
         "ManualDie/B", "MixedCaseDie/CfgA"}
-    assert any(row.get("email") == CUSTOMER and row.get("die") == "MixedCaseDie"
-               and row.get("config") == "CfgA" for row in alpha_candidates)
+    # nothing is left for an admin to review: alpha's unlink found the grant still demanded by beta, beta never made it
+    assert alpha_candidates == []
 
 
 def test_link_failure_keeps_addition_as_candidate_without_project_link(stage1b, monkeypatch):

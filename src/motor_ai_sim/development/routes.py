@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import math
 import re
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from motor_ai_sim import users
 from motor_ai_sim.development import access, models, store
 from motor_ai_sim.development.motors import _metric_projection
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-projects"])
 
 
@@ -884,6 +886,21 @@ async def resolve_thread_message(request: Request, project_id: str, message_id: 
     return {"id": message_id, "resolved": body["resolved"], "resolved_at": event["created_at"]}
 
 
+def _release_member_grants(project: dict, project_id: str, email: str, reason: str, actor: str) -> None:
+    """Take back the motor grants the project made for ``email`` and save the project's ledger.  The membership is already
+    committed; a fault here only leaves ledger rows that the next ``grant_cleanup.drain_all`` settles."""
+    try:
+        from motor_ai_sim.development import grant_cleanup
+        from motor_ai_sim.development.motors import _key
+        for motor in project.get("linked_motors", []):
+            if isinstance(motor, dict):
+                grant_cleanup.release_motor_grants(project, _key(motor.get("die", ""), motor.get("config", "")),
+                                                   reason=reason, emails={email}, actor=actor)
+        store.mutate_project(project_id, lambda doc: doc.update(project))
+    except Exception:                                       # noqa: BLE001
+        log.warning("project %s: motor grants of %s not released", project_id, email, exc_info=True)
+
+
 def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
     """Add or re-role `email` on a project: a member when the account exists, else a pending invite.
     Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim."""
@@ -915,11 +932,6 @@ def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
                     if isinstance(motor, dict):
                         _sync_grants(updated, _key(motor.get("die", ""), motor.get("config", "")),
                                      f"{motor.get('die', '')}/{motor.get('config', '')}", {email})
-            elif old_role in MOTOR_GRANT_ROLES:
-                for motor in updated.get("linked_motors", []):
-                    if isinstance(motor, dict):
-                        _mark_removal_candidates(updated, _key(motor.get("die", ""), motor.get("config", "")),
-                                                 reason="customer_membership_changed", emails={email})
             store.mutate_project(project_id, lambda doc: doc.update(updated))
             store.sync_membership_index(project_id, project.get("members", []), updated.get("members", []))
         except Exception:
@@ -941,6 +953,10 @@ def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
             store.save_json(project_id, "project.json", restored)
             store.save_membership_index(membership_before)
             raise
+        if not (account and role in MOTOR_GRANT_ROLES) and old_role in MOTOR_GRANT_ROLES:
+            # the member no longer gets the project's motors: the grants the project made for them go too (owner
+            # 2026-10-27) - after the membership is committed, so a failed change never costs anyone access
+            _release_member_grants(updated, project_id, email, "customer_membership_changed", "member change")
     return entry, bool(account)
 
 
@@ -996,10 +1012,6 @@ async def remove_member(request: Request, project_id: str, email: str):
         updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if str(m.get("email") or "").lower() != email]
         if len(updated["members"]) == len(previous_members) and len(updated["pending_invites"]) == len(project.get("pending_invites", [])):
             raise HTTPException(status_code=404, detail="Project member not found")
-        for motor in updated.get("linked_motors", []):
-            if isinstance(motor, dict):
-                _mark_removal_candidates(updated, _key(motor.get("die", ""), motor.get("config", "")),
-                                         reason="customer_membership_removed", emails={email})
         updated["updated_at"] = models.now()
         try:
             store.mutate_project(project_id, lambda doc: doc.update(updated))
@@ -1008,6 +1020,8 @@ async def remove_member(request: Request, project_id: str, email: str):
             store.save_json(project_id, "project.json", project_before)
             store.save_membership_index(membership_before)
             raise
+        # the grants the project made for this member leave with them (owner 2026-10-27), after the commit
+        _release_member_grants(updated, project_id, email, "customer_membership_removed", _email(user))
     store.append_audit(project_id, _email(user), "remove", "member", email, {})
     return {"ok": True}
 

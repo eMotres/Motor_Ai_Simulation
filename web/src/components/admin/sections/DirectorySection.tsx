@@ -638,9 +638,9 @@ const DirectorySection: React.FC = () => {
                     <TableCell>
                       {c.verification?.status && c.verification.status !== 'none' ? (
                         <Chip
-                          label={c.verification.status}
+                          label={c.verification.status.replace(/_/g, ' ')}
                           size="small"
-                          color={c.verification.status === 'VERIFIED' ? 'success' : 'warning'}
+                          color={c.verification.status === 'VERIFIED' ? 'success' : c.verification.status === 'DENIED' ? 'error' : 'warning'}
                           sx={{ fontSize: 10, height: 20 }}
                         />
                       ) : (

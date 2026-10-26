@@ -60,6 +60,9 @@ A real queue handoff (records in Redis, workers claim) stays the documented Stag
 
 ### Which paths are the worker's
 
+Also the worker's: `PATCH|DELETE /api/family/die/{die}` (die rename - it moves the shared catalog, which the API containers mount
+read-only; `roles.WORKER_PATTERNS`). The sub-paths of a die stay on the API.
+
 `motor_ai_sim/roles.py` is the single source (`WORKER_PREFIXES`, `WORKER_EXACT`, `WORKER_PATTERNS`); `deploy/nginx.conf`
 carries `roles.nginx_regex()` and `tests/test_deploy_stage2_roles.py` fails if they disagree, if a route tagged `@queued`
 is not a worker path, or if a worker prefix names no route.

@@ -69,8 +69,8 @@ class Ctx:
         """Where the die's folder is NOW: the source while only planning, the target after the move."""
         return self.src_dir if self.dry_run else self.dst_dir
 
-    def add(self, store: str, where: Any, change: str) -> None:
-        self.changes.append({"store": store, "where": str(where), "change": change})
+    def add(self, store: str, where: Any, change: str, **extra: Any) -> None:
+        self.changes.append({"store": store, "where": str(where), "change": change, **extra})
 
 
 # ── tiny helpers ─────────────────────────────────────────────────────────────
@@ -257,17 +257,31 @@ def step_duty_results(ctx: Ctx) -> None:
                 n += int(_rename_key(doc.get(block), ctx.old, ctx.new))
             return n
         _json_file_rename(ctx, "duty_results", legacy, _m, "results/history key renamed", indent=None)
-    try:
-        store = DR.store_path()
-    except Exception:                                       # noqa: BLE001
-        return
-    if store.resolve() == legacy.resolve() or not DR.has_die(ctx.old):
-        return
-    ctx.add("duty_results", store, "results + per-kind history re-keyed")
-    if ctx.dry_run:
-        return
-    if DR.rename_die(ctx.old, ctx.new):
-        ctx.undo.append(lambda: DR.rename_die(ctx.new, ctx.old))
+    # THE SHARED CATALOG'S LEDGER is chosen by what is renamed, not by the request identity: a call without the
+    # verified-admin context (a worker that lost the headers, an in-process call) must not silently miss it.
+    from motor_ai_sim import workspace as W
+    forced = DR.shared_store_path() if (ctx.glob_scope and W.layering()) else None
+    with DR.using_store(forced):
+        try:
+            store = DR.store_path()
+        except Exception:                                   # noqa: BLE001
+            return
+        if store.resolve() == legacy.resolve():
+            return
+        rows = DR.die_rows(ctx.old)
+        found = bool(rows["results"] or rows["history"])
+        # always reported - a missing or empty store is visible in the dry run, not silently skipped
+        ctx.add("duty_results", store,
+                "results + per-kind history re-keyed" if found else
+                ("no rows for this die in this store" if rows["exists"] else "store file does not exist"),
+                exists=rows["exists"], rows={"results": rows["results"], "history": rows["history"]})
+        if ctx.dry_run or not found:
+            return
+        if DR.rename_die(ctx.old, ctx.new):
+            def _undo(forced=forced) -> None:
+                with DR.using_store(forced):
+                    DR.rename_die(ctx.new, ctx.old)
+            ctx.undo.append(_undo)
 
 
 # ── step 5: the active family context ────────────────────────────────────────

@@ -41,6 +41,7 @@ def test_role_defaults_to_all_and_only_api_refuses_compute(monkeypatch):
     "/api/winding/config", "/api/mesh/config", "/api/family/report/CIANO28/L155", "/api/family/report/progress",
     "/mcp", "/api/sims/saved", "/api/history", "/api/controller/solve", "/api/system/run", "/api/kernel/run",
     "/api/catalog/CIANO28/passport",          # minutes of FEM inside the request
+    "/api/family/die/CIANO14 50 vadim",       # die rename / delete: the shared catalog is read-only in the API containers
 ])
 def test_worker_paths(path):
     assert roles.is_worker_path(path)
@@ -54,6 +55,8 @@ def test_worker_paths(path):
     "/oauth/token", "/.well-known/oauth-authorization-server", "/mcpx", "/api/worker/state", "/api/nodes/jobs/lease",
     "/api/activity/beat", "/api/model3d/models", "/api/propellers", "/llms-full.txt",
     "/api/catalog/CIANO28/load", "/api/catalog/CIANO28/passport/x", "/api/catalog/cards",
+    "/api/family/die", "/api/family/die/CIANO14 50/duplicate", "/api/family/die/X/lock", "/api/family/die/X/audience",
+    "/api/family/die_name",
 ])
 def test_api_paths(path):
     assert not roles.is_worker_path(path)
@@ -68,8 +71,26 @@ def test_the_nginx_regex_agrees_with_the_python_predicate():
     rx = re.compile(roles.nginx_regex())
     for path in ("/api/simulation", "/api/simulation/x", "/api/simulations", "/api/sims", "/api/simulationX",
                  "/api/materials", "/api/materials/library", "/api/config", "/api/configure", "/mcp", "/mcpx",
-                 "/api/family/report/a/b", "/api/family/reports", "/api/family/tree", "/api/jobs/a", "/api/jobsx"):
+                 "/api/family/report/a/b", "/api/family/reports", "/api/family/tree", "/api/jobs/a", "/api/jobsx",
+                 "/api/family/die/X", "/api/family/die/X Y", "/api/family/die/X/duplicate", "/api/family/die",
+                 "/api/family/die/", "/api/family/die_name"):
         assert bool(rx.search(path)) == roles.is_worker_path(path), path
+
+
+def test_the_die_rename_route_is_a_worker_route(app_routes):
+    """PATCH /api/family/die/{die} writes the shared catalog (read-only in the API containers): nginx must send it - and
+    its ?dry_run=1 - to the worker, with the Authorization header (the default of proxy_pass) so the worker resolves the
+    same verified-admin identity; its sub-routes (duplicate, lock ...) stay on the API."""
+    patch = [r for r in app_routes if r.path == "/api/family/die/{die}" and "PATCH" in r.methods]
+    assert patch, "the die rename route moved"
+    assert roles.is_worker_path(patch[0].path.replace("{die}", "CIANO14 50 vadim"))
+    assert re.search(roles.nginx_regex(), "/api/family/die/CIANO14 50 vadim")
+    block = CONF.split("location ~ %s {" % roles.nginx_regex(), 1)[1].split(chr(10) + "    }", 1)[0]
+    assert "proxy_pass $motres_worker;" in block
+    assert "proxy_set_header Authorization" not in block and "proxy_pass_request_headers off" not in block
+    for r in app_routes:                       # the sub-routes of a die are not swallowed
+        if r.path.startswith("/api/family/die/{die}/"):
+            assert not roles.is_worker_path(r.path.replace("{die}", "X")), r.path
 
 
 def test_nginx_has_no_direct_api_proxy_left():

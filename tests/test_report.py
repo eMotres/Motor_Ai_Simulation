@@ -342,6 +342,19 @@ def test_a_report_without_any_solver_result(dies):
     assert "Torque at the rotor" in txt
 
 
+def test_a2_a_partly_computed_variant_builds_and_lists_what_is_still_to_compute(dies):
+    """Owner 2026-10-26: a variant with only its electromagnetic results is built, not refused, and the report says ONCE what is
+    still to compute (PDF and Word alike)."""
+    txt = _text(_build(dies))
+    assert "Still to compute" in txt
+    assert "Coupled thermal loop at the duty" in txt and "Mechanics with magnetic pull" in txt
+    assert "to be computed" in txt
+    dx = _dx(_build_docx(dies))
+    assert "Still to compute" in _dx_headings(dx)
+    body = _dx_text(dx)
+    assert "Mechanics with magnetic pull" in body and "Coupled thermal loop at the duty" in body
+
+
 # ---------------------------------------------------------------------------
 # The three real solves, once for the whole module
 # ---------------------------------------------------------------------------

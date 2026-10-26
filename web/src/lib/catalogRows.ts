@@ -20,6 +20,23 @@ export interface RowCfg {
 }
 export interface RowDie { name: string; configs: RowCfg[]; }
 
+/** Does the configuration store a computed point (any duty with a saved result)?  Such a motor can be opened in Configure
+ *  points-limited even though it has no catalogue card / passport. */
+export function hasStoredPoint(c: RowCfg): boolean {
+  return (c.duties ?? []).some((d) => d.result !== null && d.result !== undefined && typeof d.result === 'object');
+}
+
+/** Which configurations a client's Motors tab lists (owner 2026-10-26): every one it may open - a configuration with a
+ *  catalogue card, one with stored computed points (points-only, no passport yet), and the motors of the project the tab
+ *  highlights.  `highlighted` says whether the configuration belongs to that project.  The server's own gate (grants,
+ *  project membership) already decided what the tree contains; this only stops the tab hiding what is in it. */
+export function isListableForClient(c: RowCfg, highlighted: boolean): boolean {
+  return !!c.card_date || hasStoredPoint(c) || highlighted;
+}
+
+/** A configuration listed without a catalogue card: it opens points-limited. */
+export const isPointsOnly = (c: RowCfg): boolean => !c.card_date;
+
 /** Same rule as the server: the flag, else "rated", else "rated ...", else the first duty. */
 export function defaultDutyOf(c: RowCfg): RowDuty | null {
   const ds = c.duties ?? [];

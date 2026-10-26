@@ -267,5 +267,7 @@
     "none": "No project",
     "tip": "Marks the motors of this project in the list (the last opened project is selected). The list itself is unchanged.",
     "configTip": "Belongs to the selected project."
-  }
+  },
+  "pointsOnly": "Points only",
+  "pointsOnlyTip": "Computed points only: this motor has no operating map (passport) yet. It opens in Configure with its stored points, thermal and mechanical results and maps."
 }

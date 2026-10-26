@@ -44,7 +44,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
 import { staleCatalogDutyNames } from '../../lib/catalogCardStaleness';
-import { configButtons, configClickPlan, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import { configButtons, configClickPlan, isListableForClient, isPointsOnly, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
@@ -805,10 +805,14 @@ const FamilyCatalog: React.FC<{
       : 'No duties saved yet, so this is the Simulation mode that was set when the configuration was created. It follows the duties as soon as there is one.');
 
   const shownAll = diameter == null ? filterDiesByApplication(dies, application) : diesOfDiameter(dies, application, diameter);
-  // Clients see only what is computed (owner 2026-10-17): a configuration without a catalogue card is hidden, and a motor
-  // with none left is not listed.  Editors keep every row (they need the uncomputed ones to work on).
+  // Clients see what is computed (owner 2026-10-17) - a configuration with a catalogue card - AND, since 2026-10-26, every
+  // configuration they may open that stores computed points (no card yet) or that belongs to the project the tab highlights;
+  // those open points-limited in Configure.  A motor with none left is not listed.  Editors keep every row.
   const shown = canWrite ? shownAll : shownAll
-    .map((d) => ({ ...d, configs: d.configs.filter((c) => !!c.card_date), config_count: d.configs.filter((c) => !!c.card_date).length }))
+    .map((d) => {
+      const configs = d.configs.filter((c) => isListableForClient(c, isConfigHighlighted(projectIndex, d.name, c.name)));
+      return { ...d, configs, config_count: configs.length };
+    })
     .filter((d) => d.configs.length > 0);
   if (embedded && shown.length === 0 && !msg) return null;
 
@@ -896,6 +900,9 @@ const FamilyCatalog: React.FC<{
                   </Box>
                   {cur && (
                     <>
+                      {cur && isPointsOnly(die.configs.find((x) => x.name === cur.config) ?? { name: cur.config, duties: [] }) && (
+                        <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
+                      )}
                       {canWrite && <CardBadge date={cur.card_date} olderBuild={curStaleDuties.length > 0} staleDuties={curStaleDuties} />}
                       <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>

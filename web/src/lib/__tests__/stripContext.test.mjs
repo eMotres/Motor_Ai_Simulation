@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { latestCurrentMotor, motorLabel, stripContextFor, stripKindForTab, visibleChips } from '../stripContext.ts';
+import { latestCurrentMotor, motorLabel, shortTitle, stripContextFor, stripKindForTab, visibleChips } from '../stripContext.ts';
 import { projectStripContext } from '../../modules/development/projectStrip.ts';
 
 const M = (config, status, extra = {}) => ({ die: 'DIE', config, status, ...extra });
@@ -20,12 +20,42 @@ test('an unknown tab id falls back to the live machine, never to another motor',
   assert.equal(stripKindForTab('something-new'), 'live');
 });
 
-test('Development and Production show no strip for now (owner 2026-10-26)', () => {
-  for (const tab of ['development', 'production']) {
-    assert.equal(stripKindForTab(tab), 'none', tab);
-    assert.deepEqual(at(tab), { kind: 'none' }, tab);
-    assert.deepEqual(at(tab, { project, production: { die: 'D', config: 'c' } }), { kind: 'none' }, tab);
-  }
+test('Development shows no strip for now (owner 2026-10-26)', () => {
+  assert.equal(stripKindForTab('development'), 'none');
+  assert.deepEqual(at('development'), { kind: 'none' });
+  assert.deepEqual(at('development', { project, production: { die: 'D', config: 'c' } }), { kind: 'none' });
+});
+
+test('Production shows the own motor of the PRODUCTION, never the live machine or a project (owner 2026-10-26)', () => {
+  assert.equal(stripKindForTab('production'), 'production');
+  assert.deepEqual(at('production'), { kind: 'none' });                                    // nothing open: nothing shown
+  assert.deepEqual(at('production', { project, production: { die: 'D', config: 'c' } }), { kind: 'production', die: 'D', config: 'c' });
+  // switching to another production changes the strip; a short title rides along, an empty one does not
+  assert.deepEqual(at('production', { production: { die: 'E', config: 'k', title: 'Takeoff run' } }), { kind: 'production', die: 'E', config: 'k', title: 'Takeoff run' });
+  assert.deepEqual(at('production', { production: { die: 'E', config: 'k', title: '' } }), { kind: 'production', die: 'E', config: 'k' });
+});
+
+test('shortTitle: a title short enough for one line, else nothing', () => {
+  assert.equal(shortTitle('  Takeoff   run '), 'Takeoff run');
+  assert.equal(shortTitle('x'.repeat(41)), '');
+  assert.equal(shortTitle('x'.repeat(40)), 'x'.repeat(40));
+  assert.equal(shortTitle(''), '');
+  assert.equal(shortTitle(null), '');
+  assert.equal(shortTitle(undefined), '');
+});
+
+test('wiring: the production strip is in the Configure strip style, sits above the page scroller, and the page publishes its title', () => {
+  const src = (f) => readFileSync(new URL(f, import.meta.url), 'utf8');
+  const strip = src('../../components/common/TabContextStrip.tsx');
+  assert.match(strip, /<b style=\{\{ color: 'var\(--text-1\)' \}\}>\{die\}<\/b>\{' \/ '\}<b style=\{\{ color: 'var\(--text-1\)' \}\}>\{config\}<\/b>/);
+  assert.match(strip, /bgcolor: 'var\(--panel-2\)'/);                                     // an opaque theme token, light and dark
+  assert.doesNotMatch(strip, /position: ?'(sticky|fixed|absolute)'/);                      // in the flow of the app column, covers nothing
+  // the bar is rendered by the app column, a sibling BEFORE the content box that scrolls
+  const app = src('../../App.tsx');
+  assert.ok(app.indexOf('<ActiveFamilyStrip />') > 0 && app.indexOf('<ActiveFamilyStrip />') < app.indexOf("<Box sx={{ flex: 1, overflow: 'hidden' }}>"));
+  const page = src('../../modules/production/components/ProductionPage.tsx');
+  assert.match(page, /setProduction\(\{ die, config, \.\.\.\(stripTitle/);
+  assert.match(page, /position: 'sticky', top: 0, zIndex: 20/);                           // the sub-menu keeps its own sticky bar below the strip
 });
 
 test('Admin and Designer have no motor context', () => {

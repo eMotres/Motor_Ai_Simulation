@@ -465,7 +465,6 @@
     "chipTip": "在 Configure 中打开该变体已保存的工作点（不会更改当前实时电机）",
     "noPointsTip": "该变体尚无已保存的工作点 - 请在项目的“电机与结果”标签页中打开",
     "moreTip": "其他变体",
-    "production": "生产",
     "productionTip": "当前查看的生产对应的电机。此行不会更改当前实时电机。"
   },
   "update": {

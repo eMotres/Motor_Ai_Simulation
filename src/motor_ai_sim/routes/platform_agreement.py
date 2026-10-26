@@ -8,6 +8,7 @@
 * ``GET  /api/agreement/mine/pdf``            the caller's accepted copy
 * ``GET  /api/admin/agreement/acceptances``   admin: recent acceptances
 * ``GET  /api/admin/agreement/{id}/pdf``      admin: any accepted copy
+* ``GET  /api/admin/dataset/exclusions``      admin: what the engineering dataset must not record (PRIVATE clients' data)
 
 Nothing here sends e-mail (owner rule: no outside message without his OK on the text); the admin notice is the audit line
 ``agreement.accept``, which the live activity feed shows.
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agreement", tags=["agreement"])
 admin_router = APIRouter(prefix="/api/admin/agreement", tags=["agreement"])
+dataset_router = APIRouter(prefix="/api/admin/dataset", tags=["agreement"])
 
 
 def _role(who: dict, rec: dict) -> str:
@@ -115,3 +117,13 @@ def record_pdf(record_id: str, _admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="No such accepted agreement.")
     AA.record(AA.actor_of(_admin), "agreement.pdf", record_id, details={"record": record_id})
     return FileResponse(p, media_type="application/pdf", filename="Platform_Agreement_%s.pdf" % record_id, headers={"Cache-Control": "no-store"})
+
+
+@dataset_router.get("/exclusions")
+def dataset_exclusions(_admin: dict = Depends(require_admin)):
+    """Companies, e-mails, workspaces, projects, motors and productions of clients whose newest acceptance is PRIVATE."""
+    try:
+        return PA.dataset_exclusions()
+    except Exception as exc:                                           # noqa: BLE001
+        log.exception("dataset exclusions failed")
+        raise HTTPException(status_code=500, detail="The dataset exclusion list could not be built.") from exc

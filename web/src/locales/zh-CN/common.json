@@ -521,7 +521,9 @@
     "status": {
       "pending": "待处理",
       "sent": "已发送",
-      "discarded": "已丢弃"
+      "discarded": "已丢弃",
+      "partial": "部分已发送",
+      "superseded": "已被替换"
     },
     "admin": {
       "title": "摘要",
@@ -548,7 +550,9 @@
       "history": "历史",
       "sentLine": "已发送 {sent}，失败 {failed}，由 {by} 批准，{at}",
       "discardedLine": "由 {by} 丢弃，{at}",
-      "itemsCount": "{count} 条"
+      "itemsCount": "{count} 条",
+      "previewFirst": "请先预览文本，再批准。",
+      "partialNote": "已发送 {sent} 位，{failed} 位失败。再次发送只会重试失败的收件人，或选择丢弃。"
     },
     "recipientsCount": "{count} 位收件人"
   }

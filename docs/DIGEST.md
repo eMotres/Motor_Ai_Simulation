@@ -10,11 +10,19 @@ One short e-mail per working group - a development project or a production - say
    clicks **Send** (after a confirmation) or **Discard**. `approval.send_draft` is the only function that reaches SMTP, it needs the
    approving admin's address, and `POST /api/admin/digests/{id}/send` is its only caller (`{"approve": true}` in the body).
    `tests/test_digest.py` pins this: a run sends nothing, the package has one sending module, the CLI has no `--send`.
+   **The approval is for exactly the text previewed:** the preview returns a SHA-256 content hash (subject + plain text + HTML +
+   recipient list) and the send request must carry it back (`{"approve": true, "content_hash": "..."}`); any other hash is a 409.
+   A draft that was opened or previewed is never rewritten: a refresh makes a new draft (next revision) and marks the old one
+   `superseded`; a draft nobody opened is refreshed in place. A send that partly failed leaves the draft `partial` (the scheduler
+   leaves it alone) and the next approval retries only the recipients that did not get it.
 2. **One text per group per period.** The text contains only what EVERY recipient of the group may see (lowest common access): no cost
    sheet unless costs are shared with the factory, no internal documents or notes, no trial variants for customers. If the group has
    Chinese-speaking members (the factory) the single e-mail carries English first, then Chinese (the existing bilingual fields;
    machine-translated text is marked `[machine-translated]` / `[机器翻译]`). Only the footer (own unsubscribe and preferences link)
    is personal.
+   Motor lines (new results, step notes, recommended variant) are in the text only when EVERY recipient may open that die/config
+   (`motor_access`, evaluated per named account); this is re-checked at send time and a change is a 409 ("make new drafts").
+   Computed points are read from the layers all members share (the die's and the shared catalog's ledgers, not any one workspace's).
 3. **Text and HTML only** - no images, no attachments. One line per item (at most 20, then "and N more"), each with a link to the exact
    page in the app.
 4. **A period with no activity makes no digest.** One draft per (group, period start); running twice refreshes the same draft; after a

@@ -13,11 +13,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-export interface DigestPreview { to: string; subject: string; text: string; html: string; recipients: string[] }
+export interface DigestPreview { to: string; subject: string; text: string; html: string; recipients: string[]; content_hash: string }
 export interface DigestDraftDetail extends Omit<DigestSummary, 'items' | 'recipients'> {
   items: Array<{ kind: string; ts: string; en: string; zh: string; link: string | null; requires: string[] }>;
   more: number; recipients: Array<{ email: string; name: string; role: string; lang: string }>;
-  skipped: Array<{ email: string; reason: string }>; text_body: string;
+  skipped: Array<{ email: string; reason: string }>; text_body: string; content_hash: string;
 }
 
 export const digestApi = {
@@ -27,8 +27,8 @@ export const digestApi = {
   detail: (id: string) => call<DigestDraftDetail>(`/api/admin/digests/${encodeURIComponent(id)}`),
   preview: (id: string, recipient: string) => call<DigestPreview>(`/api/admin/digests/${encodeURIComponent(id)}/preview?recipient=${encodeURIComponent(recipient)}`),
   /** THE approval - the only call that sends.  Reached from one button, behind a confirmation. */
-  send: (id: string) => call<{ sent: number; failed: number; skipped: Array<{ email: string; reason: string }>; aborted: string }>(
-    `/api/admin/digests/${encodeURIComponent(id)}/send`, json('POST', approveBody())),
+  send: (id: string, contentHash: string) => call<{ sent: number; failed: number; skipped: Array<{ email: string; reason: string }>; aborted: string; outstanding?: string[] }>(
+    `/api/admin/digests/${encodeURIComponent(id)}/send`, json('POST', approveBody(contentHash))),
   discard: (id: string) => call<DigestSummary>(`/api/admin/digests/${encodeURIComponent(id)}/discard`, { method: 'POST' }),
   /** Make the due drafts now (sends nothing). */
   refresh: (dryRun = false) => call<{ dry_run: boolean; rows: Array<{ scope: string; action: string; reason?: string; items?: number; recipients?: number }> }>(

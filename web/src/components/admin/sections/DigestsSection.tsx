@@ -16,7 +16,7 @@ import { splitDrafts, type DigestSummary } from '../../digest/digestModel';
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.5 } as const;
 const when = (iso: string) => iso.slice(0, 16).replace('T', ' ');
 
-const DraftCard: React.FC<{ row: DigestSummary; smtp: boolean; onDone: (msg: string) => void }> = ({ row, smtp, onDone }) => {
+const DraftCard: React.FC<{ row: DigestSummary; smtp: boolean; onDone: (msg: string) => void; onChanged: () => void }> = ({ row, smtp, onDone, onChanged }) => {
   const { t } = useTranslation('common');
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<DigestDraftDetail | null>(null);
@@ -43,12 +43,15 @@ const DraftCard: React.FC<{ row: DigestSummary; smtp: boolean; onDone: (msg: str
     try { setPreview(await digestApi.preview(row.id, email)); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
   const send = async () => {
+    const hash = preview?.content_hash ?? detail?.content_hash;
+    if (!hash) { setErr(t('digest.admin.previewFirst')); setConfirm(false); return; }
     setBusy(true); setErr('');
     try {
-      const r = await digestApi.send(row.id);
+      // the approval carries the hash of the text that was previewed: if the draft changed meanwhile the server refuses
+      const r = await digestApi.send(row.id, hash);
       setConfirm(false);
       onDone(t('digest.admin.sentDone', { sent: r.sent, failed: r.failed, skipped: r.skipped.length }));
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setConfirm(false); } finally { setBusy(false); }
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setConfirm(false); onChanged(); } finally { setBusy(false); }
   };
   const discard = async () => {
     setBusy(true); setErr('');
@@ -71,6 +74,7 @@ const DraftCard: React.FC<{ row: DigestSummary; smtp: boolean; onDone: (msg: str
         <Box sx={{ mt: 1.25, display: 'grid', gap: 1 }}>
           {err && <Alert severity="error" sx={{ py: 0 }}>{err}</Alert>}
           {row.last_error && <Alert severity="warning" sx={{ py: 0 }}>{t('digest.admin.lastError', { failed: row.last_error.failed })}</Alert>}
+          {row.partial && <Alert severity="warning" sx={{ py: 0 }}>{t('digest.admin.partialNote', { sent: row.partial.sent, failed: row.partial.failed })}</Alert>}
           {!detail && !err && <CircularProgress size={16} />}
           {detail && (
             <>
@@ -97,7 +101,7 @@ const DraftCard: React.FC<{ row: DigestSummary; smtp: boolean; onDone: (msg: str
               )}
               {!smtp && <Alert severity="warning" sx={{ py: 0 }}>{t('digest.admin.noSmtp')}</Alert>}
               <Box sx={{ display: 'flex', gap: 1 }}>
-                <Button size="small" variant="contained" disabled={busy || !smtp || detail.recipients.length === 0} onClick={() => setConfirm(true)} sx={{ textTransform: 'none' }}>
+                <Button size="small" variant="contained" disabled={busy || !smtp || detail.recipients.length === 0 || !(preview ?? detail).content_hash} onClick={() => setConfirm(true)} sx={{ textTransform: 'none' }}>
                   {t('digest.admin.send')}
                 </Button>
                 <Button size="small" disabled={busy} onClick={() => void discard()} sx={{ textTransform: 'none' }}>{t('digest.admin.discard')}</Button>
@@ -160,7 +164,7 @@ const DigestsSection: React.FC = () => {
       {note && <Alert severity="success" sx={{ py: 0 }} onClose={() => setNote('')}>{note}</Alert>}
       {loading && <CircularProgress size={18} />}
       {!loading && rows.pending.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('digest.admin.nonePending')}</Typography>}
-      {rows.pending.map((r) => <DraftCard key={`${r.id}:${r.updated_at}`} row={r} smtp={smtp} onDone={done} />)}
+      {rows.pending.map((r) => <DraftCard key={`${r.id}:${r.updated_at}`} row={r} smtp={smtp} onDone={done} onChanged={() => void load()} />)}
       {rows.history.length > 0 && (
         <>
           <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-2)', mt: 1 }}>{t('digest.admin.history')}</Typography>

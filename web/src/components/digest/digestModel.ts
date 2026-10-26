@@ -55,17 +55,24 @@ export function isListed(view: Pick<DigestSettingsView, 'recipients' | 'chosen'>
 }
 
 export interface DigestSummary {
-  id: string; scope: string; kind: 'project' | 'production'; title: string; title_zh?: string; status: 'pending' | 'sent' | 'discarded';
+  id: string; scope: string; kind: 'project' | 'production'; title: string; title_zh?: string;
+  status: 'pending' | 'partial' | 'sent' | 'discarded' | 'superseded';
   period: { start: string; end: string }; updated_at: string; items: number; recipients: number; bilingual: boolean; subject: string;
   sent?: { at: string; by: string; sent: number; failed: number }; discarded?: { at: string; by: string };
   last_error?: { at: string; failed: number };
+  partial?: { at: string; by: string; sent: number; failed: number; outstanding: string[] };
 }
 
-/** Pending first (newest on top), then the history: what the Admin list shows. */
+/** Drafts that can still be sent (waiting, or partly sent) first, newest on top, then the history: what the Admin list shows. */
 export function splitDrafts(rows: DigestSummary[]): { pending: DigestSummary[]; history: DigestSummary[] } {
   const byNewest = (a: DigestSummary, b: DigestSummary) => b.updated_at.localeCompare(a.updated_at);
-  return { pending: rows.filter((r) => r.status === 'pending').sort(byNewest), history: rows.filter((r) => r.status !== 'pending').sort(byNewest) };
+  const open = (r: DigestSummary) => r.status === 'pending' || r.status === 'partial';
+  return { pending: rows.filter(open).sort(byNewest), history: rows.filter((r) => !open(r)).sort(byNewest) };
 }
 
-/** The ONLY request body that sends a digest: an explicit approval.  Kept as a function so a test can pin it. */
-export const approveBody = (): { approve: true } => ({ approve: true });
+/** The ONLY request body that sends a digest: an explicit approval of EXACTLY the text previewed (its content hash).  Kept as a
+ *  function so a test can pin it; without a hash there is no body. */
+export function approveBody(contentHash: string): { approve: true; content_hash: string } {
+  if (typeof contentHash !== 'string' || !/^[0-9a-f]{64}$/.test(contentHash)) throw new Error('approval needs the content hash of the previewed text');
+  return { approve: true, content_hash: contentHash };
+}

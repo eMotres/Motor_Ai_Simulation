@@ -14,7 +14,10 @@ Owner rules 2026-10-26 (they override the first brief):
 """
 from __future__ import annotations
 
+import hashlib
 import html
+import json
+import re
 import time
 from dataclasses import dataclass, field
 from email import policy
@@ -57,6 +60,20 @@ class Group:
         return frozenset({C.COSTS}) if self.record.get("share_costs_with_oem") else frozenset()
 
 
+_UNSAFE_RE = re.compile("[" + chr(0) + "-" + chr(31) + chr(127) + chr(0x2028) + chr(0x2029) + "]+")
+
+
+def safe_text(value: Any, fallback: str = "", limit: int = 120) -> str:
+    """A title that is safe in an e-mail header: control characters and line breaks (header injection) become one space."""
+    s = _UNSAFE_RE.sub(" ", str(value or "")).strip()
+    s = re.sub(r"\s+", " ", s)[:limit].strip()
+    return s or fallback
+
+
+def header_safe(value: str) -> bool:
+    return bool(value) and not _UNSAFE_RE.search(value)
+
+
 def _members(record: dict) -> list:
     out = []
     for m in record.get("members") or []:
@@ -67,7 +84,7 @@ def _members(record: dict) -> list:
 
 def project_group(project: dict) -> Group:
     pid = str(project.get("id") or "")
-    title = str(project.get("title") or pid)
+    title = safe_text(project.get("title"), pid)
     return Group(DS.project_scope(pid), "project", project, title, title, _members(project),
                  str(project.get("status") or "spec") != "closed", RP.project_path(pid))
 
@@ -75,8 +92,8 @@ def project_group(project: dict) -> Group:
 def production_group(production: dict) -> Group:
     die, config = str(production.get("die") or ""), str(production.get("config") or "")
     t_en, t_zh = C.bilingual(production.get("title"))
-    t_en = t_en or f"{die} / {config}"
-    t_zh = t_zh or t_en
+    t_en = safe_text(t_en, safe_text(f"{die} / {config}", "production"))
+    t_zh = safe_text(t_zh, t_en)
     return Group(DS.production_scope(die, config), "production", production, t_en, t_zh, _members(production),
                  str(production.get("status") or "active") == "active", RP.production_path(die, config))
 
@@ -313,36 +330,89 @@ def unsub_email(scope: str, token: str) -> Optional[str]:
     return CP.resolve(uid) if uid else None
 
 
+# -- what the approval covers --------------------------------------------------------------------------------------------------------
+
+def content_hash(draft: dict) -> str:
+    """SHA-256 of exactly what the owner approves: subject, plain text, HTML and the recipient list.
+
+    The preview shows this hash and the send request must carry it back: if the draft changed in between (a refresh, a different
+    recipient list) the hashes differ and nothing is sent."""
+    blob = json.dumps({"subject": draft.get("subject"), "text_body": draft.get("text_body"), "html_body": draft.get("html_body"),
+                       "recipients": sorted(str(r.get("email")) for r in draft.get("recipients") or [])},
+                      ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def motor_visible(email: str, die: str, config: str) -> bool:
+    """May this person open the motor ``die`` / ``config`` in the app?  The catalog rule (``motor_access``) evaluated for the named
+    account; a published die ("<die> . by <owner>") is open to every registered account except private configurations.  Any doubt
+    or error = no."""
+    try:
+        from motor_ai_sim import motor_access as MA
+        from motor_ai_sim import workspace as WS
+        acc = MA.access_for_email(email)
+        if acc.get("is_admin"):
+            return True
+        published = bool(WS.split_published_label(die)[1])
+        if not published and not MA.may_see_die(acc, die):
+            return False
+        return bool(MA.config_visible(acc, die, config, layer="published" if published else "shared"))
+    except Exception:                                        # noqa: BLE001 - fail closed
+        return False
+
+
+def motors_visible_to_all(items, emails) -> dict:
+    """``{(die, config): bool}`` for every motor the items mention: true only when EVERY listed person may open it."""
+    out: dict = {}
+    for it in items:
+        m = getattr(it, "motor", None)
+        if m and tuple(m) not in out:
+            out[tuple(m)] = all(motor_visible(e, m[0], m[1]) for e in emails)
+    return out
+
+
 # -- the run: drafts, never mail ---------------------------------------------------------------------------------------------------------
 
 def build_draft(group: Group, settings: dict, items: list, recipients: list[dict], skipped: list[dict],
-                start: float, end: float, existing: Optional[dict] = None) -> Optional[dict]:
-    """The draft for one period, or None when there is nothing every recipient may see."""
+                start: float, end: float, existing: Optional[dict] = None, *, revision: int = 0) -> Optional[dict]:
+    """The draft for one period, or None when there is nothing every recipient may see (role-wise AND motor-wise)."""
     if not recipients:
         return None
     caps = common_caps(group, recipients)
-    visible = sorted((i for i in items if i.requires <= caps), key=lambda i: i.ts, reverse=True)
+    seen_motor = motors_visible_to_all(items, [r["email"] for r in recipients])
+    visible = sorted((i for i in items if i.requires <= caps and (not i.motor or seen_motor.get(tuple(i.motor), False))),
+                     key=lambda i: i.ts, reverse=True)
     if not visible:
         return None
     shown, more = visible[:MAX_ITEMS], max(0, len(visible) - MAX_ITEMS)
     bilingual = any(r["lang"] == "zh-CN" for r in recipients)
     text, body_html = compose(group, shown, more, start, end, bilingual)
     now = DS.iso()
-    return {
-        "id": DS.draft_id_for(group.scope, DS.iso(start)), "scope": group.scope, "kind": group.kind, "title": group.title_en,
-        "title_zh": group.title_zh, "status": "pending", "period": {"start": DS.iso(start), "end": DS.iso(end)},
+    subject = _subject(group, end, bilingual)
+    if not header_safe(subject):
+        return None                      # cannot happen after safe_text; never build a header from an unsafe value
+    draft = {
+        "id": DS.draft_id_for(group.scope, DS.iso(start), revision), "revision": revision, "scope": group.scope, "kind": group.kind,
+        "title": group.title_en, "title_zh": group.title_zh, "status": "pending",
+        "period": {"start": DS.iso(start), "end": DS.iso(end)},
         "created_at": (existing or {}).get("created_at") or now, "updated_at": now,
         "bilingual": bilingual, "caps": sorted(caps), "frequency": settings.get("frequency", "daily"),
-        "subject": _subject(group, end, bilingual), "text_body": text, "html_body": body_html,
+        "subject": subject, "text_body": text, "html_body": body_html,
         "items": [{"kind": i.kind, "ts": DS.iso(i.ts), "en": i.en, "zh": i.zh, "link": i.link,
-                   "requires": sorted(i.requires)} for i in shown],
+                   "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {})} for i in shown],
         "more": more, "recipients": recipients, "skipped": skipped,
     }
+    draft["content_hash"] = content_hash(draft)
+    return draft
 
 
 def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bool = True,
         results: Callable[[str, str], dict] = C.stored_results) -> list[dict]:
     """Make the due drafts.  Returns one report row per group looked at.  NEVER sends anything.
+
+    A pending draft nobody has opened is refreshed in place.  A draft the owner already opened or previewed is NEVER rewritten
+    (what he read is what he may approve): a refresh with different content makes a new draft (next revision) and marks the old
+    one ``superseded``.  A draft whose send partly failed (``partial``) is left alone until the owner finishes or discards it.
 
     ``write=False`` (dry run) computes the same rows and touches no file."""
     now = time.time() if now is None else now
@@ -361,9 +431,11 @@ def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bo
             continue
         freq = settings["frequency"]
         state = DS.get_state(group.scope)
-        pending = DS.load_draft(state["draft_id"]) if state.get("draft_id") else None
-        if pending is not None and pending.get("status") != "pending":
-            pending = None
+        current = DS.load_draft(state["draft_id"]) if state.get("draft_id") else None
+        if current is not None and current.get("status") == "partial":
+            row["action"], row["reason"] = "skipped", "partial_send_open"
+            continue
+        pending = current if current is not None and current.get("status") == "pending" else None
         cursor = DS.parse_ts(state.get("cursor"))
         if pending is not None:
             start = DS.parse_ts(pending["period"]["start"]) or now - WINDOW_S[freq]
@@ -379,23 +451,58 @@ def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bo
         else:
             items = C.collect_production(group.record, start, now)
         recipients, skipped = resolve_recipients(group, settings)
-        draft = build_draft(group, settings, items, recipients, skipped, start, now, existing=pending)
+        revision = int((pending or {}).get("revision") or 0)
+        draft = build_draft(group, settings, items, recipients, skipped, start, now, existing=pending, revision=revision)
         if draft is None:
             row["action"], row["reason"] = "skipped", "no_activity" if not items else "nothing_for_everyone" if recipients else "no_recipients"
             if pending is None and write:
                 # a quiet period: keep a trailing window so the next digest never reports "since three months ago"
                 DS.set_state(group.scope, cursor=DS.iso(max(cursor or 0.0, now - WINDOW_S[freq])))
             continue
-        existing = DS.load_draft(draft["id"])
-        if existing is not None and existing.get("status") != "pending":
-            row["action"], row["reason"] = "skipped", "period_already_" + str(existing.get("status"))
+        if pending is None:
+            done = DS.load_draft(draft["id"])
+            if done is not None and done.get("status") != "pending":
+                row["action"], row["reason"] = "skipped", "period_already_" + str(done.get("status"))
+                continue
+        row.update(draft_id=draft["id"], items=len(draft["items"]) + draft["more"], recipients=len(recipients))
+        if pending is not None and pending.get("content_hash") == draft["content_hash"] and content_hash(pending) == draft["content_hash"]:
+            row["action"] = "unchanged"                  # nothing new since the last run: the text is left alone
+            if write:
+                DS.update_skipped(pending["id"], skipped)
             continue
-        row.update(action="refreshed" if existing is not None else "drafted", draft_id=draft["id"], items=len(draft["items"]) + draft["more"],
-                   recipients=len(recipients))
-        if write:
-            DS.save_draft(draft)
-            DS.set_state(group.scope, draft_id=draft["id"])
-            if existing is None:
+        if pending is None:
+            row["action"] = "drafted"
+            if write:
+                DS.save_draft(draft)
+                DS.set_state(group.scope, draft_id=draft["id"])
                 DS.append_log({"event": "drafted", "scope": group.scope, "draft_id": draft["id"], "items": row["items"],
                                "recipients": len(recipients)})
+        elif not pending.get("opened"):
+            row["action"] = "refreshed"
+            if write:
+                if not DS.rewrite_unopened(draft):                 # opened a moment ago: fall through to superseding
+                    row["action"] = _supersede(group, settings, items, recipients, skipped, start, now, pending, row)
+                else:
+                    DS.set_state(group.scope, draft_id=draft["id"])
+        else:
+            row["action"] = "superseded"
+            if write:
+                row["action"] = _supersede(group, settings, items, recipients, skipped, start, now, pending, row)
     return report
+
+
+def _supersede(group: Group, settings: dict, items: list, recipients: list, skipped: list, start: float, end: float,
+               old: dict, row: dict) -> str:
+    """A new draft (next revision) replaces an opened one; the old text stays on disk, status ``superseded``."""
+    nxt = int(old.get("revision") or 0) + 1
+    new = build_draft(group, settings, items, recipients, skipped, start, end, existing=old, revision=nxt)
+    if new is None:
+        return "skipped"
+    new["supersedes"] = old["id"]
+    DS.save_draft(new)
+    old = dict(old, status="superseded", superseded_by=new["id"], updated_at=DS.iso())
+    DS.save_draft(old)
+    DS.set_state(group.scope, draft_id=new["id"])
+    DS.append_log({"event": "superseded", "scope": group.scope, "draft_id": old["id"], "by_draft": new["id"]})
+    row["draft_id"] = new["id"]
+    return "superseded"

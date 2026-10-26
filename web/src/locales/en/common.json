@@ -521,7 +521,9 @@
     "status": {
       "pending": "Waiting",
       "sent": "Sent",
-      "discarded": "Discarded"
+      "discarded": "Discarded",
+      "partial": "Partly sent",
+      "superseded": "Replaced"
     },
     "admin": {
       "title": "Digests",
@@ -548,7 +550,9 @@
       "history": "History",
       "sentLine": "sent {sent}, failed {failed}, approved by {by}, {at}",
       "discardedLine": "discarded by {by}, {at}",
-      "itemsCount": "{count, plural, one {# item} other {# items}}"
+      "itemsCount": "{count, plural, one {# item} other {# items}}",
+      "previewFirst": "Preview the text first, then approve it.",
+      "partialNote": "Sent to {sent}, failed for {failed}. Send again to retry only the failed ones, or discard."
     },
     "recipientsCount": "{count, plural, one {# recipient} other {# recipients}}"
   }

@@ -109,9 +109,11 @@ def scope_from_token(token: str) -> Optional[str]:
     return raw if parse_scope(raw) else None
 
 
-def draft_id_for(scope: str, period_start: str) -> str:
-    """One id per (group, period): the same period can only ever have ONE draft."""
-    return "d-" + hashlib.sha256(f"{scope}|{period_start}".encode("utf-8")).hexdigest()[:16]
+def draft_id_for(scope: str, period_start: str, revision: int = 0) -> str:
+    """One id per (group, period, revision).  Revision 0 is the first draft of a period; a draft somebody already opened is never
+    rewritten - a refresh makes revision 1, 2, ... and supersedes the old one (see ``build.run``)."""
+    key = f"{scope}|{period_start}" + (f"|r{revision}" if revision else "")
+    return "d-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 # -- time ------------------------------------------------------------------------------------------------------------------
@@ -282,6 +284,48 @@ def save_draft(draft: dict) -> None:
     p = draft_file(draft["id"])
     p.parent.mkdir(parents=True, exist_ok=True)
     json_store.atomic_write_json(p, draft)
+
+
+#: statuses in which a draft can still be sent (``partial`` = some recipients failed; only they are retried)
+OPEN_STATUSES = ("pending", "partial")
+
+
+def mark_opened(draft_id: str, by: str) -> Optional[dict]:
+    """The owner opened or previewed this draft: from now on its text is frozen (a refresh supersedes it instead of rewriting)."""
+    if not valid_draft_id(draft_id) or not draft_file(draft_id).is_file():
+        return None
+
+    def mutate(doc):
+        if isinstance(doc, dict) and doc.get("status") in OPEN_STATUSES and not doc.get("opened"):
+            doc["opened"] = {"at": iso(), "by": str(by or "").lower()}
+
+    return json_store.mutate_json(draft_file(draft_id), mutate, default={})
+
+
+def update_skipped(draft_id: str, skipped: list) -> None:
+    """Refresh the informational "not receiving" list of a draft (not part of the approved content: the hash ignores it)."""
+    def mutate(doc):
+        if isinstance(doc, dict) and doc.get("status") in OPEN_STATUSES and doc.get("skipped") != skipped:
+            doc["skipped"] = skipped
+
+    json_store.mutate_json(draft_file(draft_id), mutate, default={})
+
+
+def rewrite_unopened(draft: dict) -> bool:
+    """Replace the content of a pending draft nobody has opened.  False (nothing written) when it was opened meanwhile - the check
+    and the write happen under one lock, so a preview and a rewrite can never cross."""
+    done: dict = {}
+
+    def mutate(doc):
+        if not isinstance(doc, dict) or doc.get("status") != "pending" or doc.get("opened"):
+            done["ok"] = False
+            return
+        doc.clear()
+        doc.update(draft)
+        done["ok"] = True
+
+    json_store.mutate_json(draft_file(draft["id"]), mutate, default={})
+    return bool(done.get("ok"))
 
 
 def list_drafts() -> list[dict]:

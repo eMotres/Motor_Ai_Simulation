@@ -40,5 +40,20 @@ t('the Admin list: pending first, newest on top; the send body is the explicit a
   const { pending, history } = M.splitDrafts(rows);
   assert.deepEqual(pending.map((r) => r.id), ['c', 'b']);
   assert.deepEqual(history.map((r) => r.id), ['d', 'a']);
-  assert.deepEqual(M.approveBody(), { approve: true });
+  const h = 'a'.repeat(64);
+  assert.deepEqual(M.approveBody(h), { approve: true, content_hash: h });
+});
+
+t('partly sent drafts stay in the waiting group; superseded ones go to the history', () => {
+  const rows = [
+    { id: 'p', status: 'partial', updated_at: '2026-10-26T09:00:00Z' }, { id: 's', status: 'superseded', updated_at: '2026-10-26T10:00:00Z' },
+    { id: 'w', status: 'pending', updated_at: '2026-10-26T08:00:00Z' },
+  ];
+  const { pending, history } = M.splitDrafts(rows);
+  assert.deepEqual(pending.map((r) => r.id), ['p', 'w']);
+  assert.deepEqual(history.map((r) => r.id), ['s']);
+});
+
+t('there is no approval without the hash of the previewed text', () => {
+  for (const bad of [undefined, null, '', 'abc', 'g'.repeat(64), 'A'.repeat(64), 'a'.repeat(63)]) assert.throws(() => M.approveBody(bad), /content hash/);
 });

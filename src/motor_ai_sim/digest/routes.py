@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse
 
 from motor_ai_sim import auth
 from motor_ai_sim import auth_email as E
+from motor_ai_sim import mailing
 from motor_ai_sim.digest import approval as AP
 from motor_ai_sim.digest import build as B
 from motor_ai_sim.digest import store as DS
@@ -52,7 +53,10 @@ def _summary(d: dict) -> dict:
                                  "bilingual", "subject")}
     out["items"] = len(d.get("items") or []) + int(d.get("more") or 0)
     out["recipients"] = len(d.get("recipients") or [])
-    for k in ("sent", "discarded", "last_error"):
+    out["revision"] = int(d.get("revision") or 0)
+    if d.get("opened"):
+        out["opened"] = d["opened"]
+    for k in ("sent", "discarded", "last_error", "partial", "superseded_by"):
         if d.get(k):
             out[k] = d[k]
     return out
@@ -73,7 +77,7 @@ def _settings_view(group: B.Group, *, can_edit: bool) -> dict:
         "members": [{"email": e, "role": r, "opted_out": e in s["optouts"]} for e, r in group.members],
         "will_receive": [{"email": r["email"], "role": r["role"], "lang": r["lang"]} for r in recipients],
         "not_receiving": skipped,
-        "pending": _summary(pending) if pending and pending.get("status") == "pending" else None,
+        "pending": _summary(pending) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
         "last_sent": sent[-1]["ts"] if sent else None,
     }
 
@@ -207,8 +211,8 @@ def unsubscribe_do(scope_tok: str, token: str):
 @admin_router.get("")
 def admin_list(_admin: dict = Depends(auth.require_admin)):
     drafts = DS.list_drafts()
-    return {"pending": [_summary(d) for d in drafts if d.get("status") == "pending"],
-            "history": [_summary(d) for d in drafts if d.get("status") != "pending"][:100],
+    return {"pending": [_summary(d) for d in drafts if d.get("status") in DS.OPEN_STATUSES],
+            "history": [_summary(d) for d in drafts if d.get("status") not in DS.OPEN_STATUSES][:100],
             "smtp_configured": E.smtp_configured()}
 
 
@@ -238,8 +242,11 @@ def _draft(draft_id: str) -> dict:
 @admin_router.get("/{draft_id}")
 def admin_get(draft_id: str, _admin: dict = Depends(auth.require_admin)):
     d = _draft(draft_id)
+    DS.mark_opened(draft_id, _email(_admin))                # from now on this text is frozen: a refresh supersedes it
+    d = _draft(draft_id)
     out = _summary(d)
     out.update({k: d.get(k) for k in ("items", "more", "recipients", "skipped", "caps", "text_body")})
+    out["content_hash"] = B.content_hash(d)
     return out
 
 
@@ -250,23 +257,33 @@ def admin_preview(draft_id: str, recipient: str = "", _admin: dict = Depends(aut
     who = (recipient or (emails[0] if emails else "")).strip().lower()
     if who not in emails:
         raise HTTPException(status_code=404, detail="That address is not on this digest's list")
+    DS.mark_opened(draft_id, _email(_admin))
+    d = _draft(draft_id)
     r = B.render_for(d, who)
-    return {"to": who, "subject": r["subject"], "text": r["text"], "html": r["html"], "recipients": emails}
+    # the hash is what the owner approves: the send request must carry it back
+    return {"to": who, "subject": r["subject"], "text": r["text"], "html": r["html"], "recipients": emails,
+            "content_hash": B.content_hash(d)}
 
 
 @admin_router.post("/{draft_id}/send")
 async def admin_send(draft_id: str, request: Request, admin: dict = Depends(auth.require_admin)):
-    """THE approval.  The body must be exactly ``{"approve": true}``; the admin's own address is recorded as the approver."""
+    """THE approval.  The body must be ``{"approve": true, "content_hash": "<hash the preview showed>"}``; the admin's own address
+    is recorded as the approver.  A hash that is not the draft's CURRENT content (it was refreshed or superseded) = 409."""
     try:
         body = await request.json()
     except ValueError:
         body = None
     if not isinstance(body, dict) or body.get("approve") is not True:
-        raise HTTPException(status_code=422, detail='Send needs an explicit approval: {"approve": true}')
+        raise HTTPException(status_code=422, detail='Send needs an explicit approval: {"approve": true, "content_hash": "..."}')
+    if not isinstance(body.get("content_hash"), str) or not body["content_hash"]:
+        raise HTTPException(status_code=422, detail="Send needs the content_hash of the text you previewed.")
     if not E.smtp_configured():
         raise HTTPException(status_code=409, detail="E-mail (SMTP) is not configured on this server.")
     try:
-        result = AP.send_draft(draft_id, approved_by=_email(admin), deliver=lambda msg: E.deliver(msg), delay_s=SEND_DELAY_S)
+        result = AP.send_draft(draft_id, approved_by=_email(admin), content_hash=body["content_hash"],
+                               deliver=lambda msg: E.deliver(msg), delay_s=SEND_DELAY_S)
+    except mailing.SendAborted as exc:                    # another send of this draft is running (or crashed): not a server error
+        raise HTTPException(status_code=409, detail=str(exc))
     except AP.ApprovalError as exc:
         status = {"not_found": 404, "approval_required": 403}.get(exc.code, 409)
         raise HTTPException(status_code=status, detail=str(exc))

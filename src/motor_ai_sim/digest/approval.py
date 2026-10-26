@@ -25,7 +25,8 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s.]+$")
 
 
 class ApprovalError(Exception):
-    """``code``: approval_required | not_found | not_pending | stale | group_gone | mode_off | no_recipients | not_configured"""
+    """``code``: approval_required | content_changed | not_found | not_pending | stale | group_gone | mode_off | no_recipients |
+    access_changed | unsafe_subject | send_in_progress"""
 
     def __init__(self, code: str, message: str = ""):
         super().__init__(message or code)
@@ -33,10 +34,13 @@ class ApprovalError(Exception):
 
 
 def _pending(draft_id: str) -> dict:
+    """A draft that can still be sent: waiting (``pending``) or partly sent (``partial``, only the failed ones are retried)."""
     draft = DS.load_draft(draft_id)
     if draft is None:
         raise ApprovalError("not_found", "No such digest.")
-    if draft.get("status") != "pending":
+    if draft.get("status") not in DS.OPEN_STATUSES:
+        if draft.get("status") == "superseded":
+            raise ApprovalError("not_pending", "A newer draft replaced this one - reload the list and review the new text.")
         raise ApprovalError("not_pending", f"This digest was already {draft.get('status')}.")
     return draft
 
@@ -58,16 +62,21 @@ def discard_draft(draft_id: str, *, by: str) -> dict:
     return draft
 
 
-def send_draft(draft_id: str, *, approved_by: str, deliver: Callable, now: Callable[[], float] = time.time,
+def send_draft(draft_id: str, *, approved_by: str, content_hash: str, deliver: Callable, now: Callable[[], float] = time.time,
                sleep: Callable[[float], None] = time.sleep, delay_s: float = 3.0, base_url: Optional[str] = None,
                sender: str = "") -> dict:
     """Send the approved draft to its recipients (one message at a time, idempotent through the send log).
 
-    ``approved_by`` is the admin's address and is required: without it nothing is sent.  -> ``{sent, failed, skipped, aborted}``."""
+    ``approved_by`` is the admin's address and ``content_hash`` the hash of the text he previewed (``build.content_hash``); without
+    either, or when the draft is no longer exactly that text, nothing is sent.  -> ``{sent, failed, skipped, aborted}``."""
     who = str(approved_by or "").strip().lower()
     if not _EMAIL_RE.match(who):
         raise ApprovalError("approval_required", "A digest is sent only on an explicit approval by a named admin.")
     draft = _pending(draft_id)
+    if not isinstance(content_hash, str) or not content_hash or content_hash != B.content_hash(draft):
+        raise ApprovalError("content_changed", "The text changed since you previewed it - review the current draft and approve that.")
+    if not B.header_safe(str(draft.get("subject") or "")):
+        raise ApprovalError("unsafe_subject", "The subject contains characters that are not allowed in a mail header.")
     age = now() - (DS.parse_ts(draft.get("updated_at")) or 0)
     if age > MAX_AGE_S:
         raise ApprovalError("stale", "This draft is too old to send as it is - refresh the drafts first.")
@@ -93,6 +102,12 @@ def send_draft(draft_id: str, *, approved_by: str, deliver: Callable, now: Calla
             to_send.append(mailing.Recipient(cur["email"], cur["name"], cur["lang"]))
     if not to_send:
         raise ApprovalError("no_recipients", "Nobody on the list can receive this digest any more.")
+    # the text names motors (results, notes, the recommended variant): every person it goes to must still be allowed to open them
+    for item in draft["items"]:
+        motor = item.get("motor")
+        if motor and not all(B.motor_visible(r.email, motor[0], motor[1]) for r in to_send):
+            raise ApprovalError("access_changed", "Somebody on the list can no longer open a motor this text mentions - "
+                                "make new drafts (Admin, Digests, Make drafts now) and review them.")
     log_file = DS.sendlog_file(draft_id)
     plan = mailing.plan(draft_id, to_send, [], mailing.read_log(log_file), retry_failed=True)
     base = base_url or E.app_url()
@@ -101,14 +116,27 @@ def send_draft(draft_id: str, *, approved_by: str, deliver: Callable, now: Calla
                           delay_s=delay_s, sleep=sleep, now=now,
                           build=lambda r: B.build_message(draft, r.email, base=base, sender=sender))
     result["skipped"] = skipped + [{"email": e, "reason": why} for e, why in plan.skipped]
-    if result["sent"] > 0 or not result["failed"]:
-        _close(draft, "sent", who, {"sent": result["sent"], "failed": result["failed"], "skipped": result["skipped"],
-                                    "aborted": result["aborted"]})
-        DS.append_log({"event": "sent", "scope": draft["scope"], "draft_id": draft_id, "by": who, "sent": result["sent"],
-                       "failed": result["failed"], "skipped": len(result["skipped"])})
+    state = mailing.log_state(mailing.read_log(log_file), draft_id)
+    delivered = [r.email for r in to_send if state.get(r.email) == "sent"]
+    outstanding = [r.email for r in to_send if state.get(r.email) != "sent"]
+    info = {"sent": len(delivered), "failed": len(outstanding), "skipped": result["skipped"], "aborted": result["aborted"]}
+    if not outstanding and not result["aborted"]:
+        _close(draft, "sent", who, info)
+        DS.append_log({"event": "sent", "scope": draft["scope"], "draft_id": draft_id, "by": who, "sent": info["sent"],
+                       "failed": 0, "skipped": len(result["skipped"])})
+    elif delivered:
+        # some went out, some did not: the draft stays open as ``partial`` and a new approval retries ONLY the others
+        # (the send log skips everyone already sent); the next scheduler run leaves it alone
+        draft["status"] = "partial"
+        draft["partial"] = dict(info, at=DS.iso(), by=who, outstanding=outstanding)
+        draft["updated_at"] = DS.iso()
+        DS.save_draft(draft)
+        DS.append_log({"event": "partial", "scope": draft["scope"], "draft_id": draft_id, "by": who, "sent": info["sent"],
+                       "failed": info["failed"]})
     else:
-        # every delivery failed: the draft stays pending so the admin can try again
+        # nothing was delivered at all: the draft stays pending so the admin can try again
         draft["last_error"] = {"at": DS.iso(), "by": who, "failed": result["failed"], "aborted": result["aborted"]}
         DS.save_draft(draft)
         DS.append_log({"event": "send_failed", "scope": draft["scope"], "draft_id": draft_id, "by": who, "failed": result["failed"]})
+    result["sent_total"], result["outstanding"] = info["sent"], outstanding
     return result

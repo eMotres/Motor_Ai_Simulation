@@ -39,6 +39,8 @@ class Item:
     link: Optional[str] = None
     requires: frozenset = field(default_factory=frozenset)
     key: str = ""
+    #: ``(die, config)`` of the motor this line is about: the line may be shown only when EVERY recipient may open that motor
+    motor: Optional[tuple] = None
 
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
@@ -119,7 +121,7 @@ def _merge(items: Iterable[Item]) -> list[Item]:
         it = out[k]
         n = counts[k]
         if n > 1 and it.key:
-            it = Item(it.kind, it.ts, f"{it.en} ({n}x)", f"{it.zh}（{n}次）", it.link, it.requires, it.key)
+            it = Item(it.kind, it.ts, f"{it.en} ({n}x)", f"{it.zh}（{n}次）", it.link, it.requires, it.key, it.motor)
         res.append(it)
     return res
 
@@ -132,14 +134,20 @@ RESULT_KINDS = ("em_run", "coupled", "coupled_limit", "thermal", "duty_cycle", "
 
 
 def stored_results(die: str, config: str) -> dict:
-    """``{duty: {kind: entry}}`` from the shared ledger and the process workspace's own (the digest runs without a request)."""
+    """``{duty: {kind: entry}}`` the way every member's project motor view reads them at its BOTTOM layers.
+
+    The project motor view (``development/motors.py`` -> ``duty_results.index``) merges, deepest first, the die's own ledger, the
+    shared catalog's ledger and the published author's ledger, then puts the caller's OWN workspace on top.  A digest is one text
+    for the whole group, so it reads only what all of them see: the layers without the caller's workspace - and it reads them with
+    the store forced to the shared catalog, so the answer does not depend on who (or which process workspace) runs the digest."""
     from motor_ai_sim import duty_results as DR
     out: dict = {}
-    seen: set = set()
     try:
-        paths = [DR.shared_store_path(), DR.store_path()]
+        with DR.using_store(DR.shared_store_path()):
+            paths = list(DR._fallback_stores(die)) + [DR.store_path()]       # deepest first, the shared ledger last
     except Exception:                                        # noqa: BLE001
         return out
+    seen: set = set()
     for p in paths:
         if str(p) in seen:
             continue
@@ -240,27 +248,27 @@ def collect_project(project: dict, start: float, end: float, *,
         die, _, config = eid.partition("/")
         if action == "motor.link":
             items.append(Item("motor_added", ts, f"Design variant added: {die} / {config}", f"新增设计方案：{die} / {config}",
-                              motor_link(die, config), frozenset({INTERNAL}), key=f"link:{eid}"))
+                              motor_link(die, config), frozenset({INTERNAL}), key=f"link:{eid}", motor=(die, config)))
         elif action == "motor.unlink":
             items.append(Item("motor_removed", ts, f"Design variant removed: {die} / {config}", f"移除设计方案：{die} / {config}",
-                              RP.project_path(pid, "motors"), frozenset({INTERNAL}), key=f"unlink:{eid}"))
+                              RP.project_path(pid, "motors"), frozenset({INTERNAL}), key=f"unlink:{eid}", motor=(die, config)))
         elif action == "motor.status":
             new = str(det.get("new") or "")
             items.append(Item("motor_status", ts, f"Variant {die} / {config} is now {new or 'updated'}",
                               f"方案 {die} / {config} 状态更新为 {new or '已更新'}", motor_link(die, config),
-                              frozenset({INTERNAL}), key=f"status:{eid}"))
+                              frozenset({INTERNAL}), key=f"status:{eid}", motor=(die, config)))
         elif action == "motor.note":
             note = excerpt(det.get("new"))
             if note:
                 items.append(Item("motor_note", ts, f"Design step note, {die} / {config}: {note}",
                                   f"设计步骤备注，{die} / {config}：{note}", motor_link(die, config), motor_req(die, config),
-                                  key=f"note:{eid}"))
+                                  key=f"note:{eid}", motor=(die, config)))
         elif action == "motor.recommended" and det.get("value"):
             items.append(Item("recommended", ts, f"Recommended variant: {die} / {config}", f"推荐方案：{die} / {config}",
-                              motor_link(die, config), motor_req(die, config), key=f"rec:{eid}"))
+                              motor_link(die, config), motor_req(die, config), key=f"rec:{eid}", motor=(die, config)))
         elif action == "motor.report_reviewed" and det.get("value"):
             items.append(Item("report_reviewed", ts, f"Report checked for {die} / {config}", f"{die} / {config} 的报告已审核",
-                              motor_link(die, config), motor_req(die, config), key=f"rep:{eid}"))
+                              motor_link(die, config), motor_req(die, config), key=f"rep:{eid}", motor=(die, config)))
         elif action == "submit" and entity == "spec_version":
             items.append(Item("spec_version", ts, f"Specification version {eid} submitted", f"技术规格第 {eid} 版已提交",
                               RP.project_path(pid, "specification"), frozenset(), key=f"spec:{eid}"))
@@ -313,7 +321,7 @@ def collect_project(project: dict, start: float, end: float, *,
             tail = f": {head}" if head else f" ({', '.join(sorted(fresh))})"
             items.append(Item("results", ts, f"New results, {die} / {config}, duty {duty}{tail}",
                               f"新计算结果，{die} / {config}，工况 {duty}{tail}", motor_link(die, config),
-                              motor_req(die, config), key=f"res:{die}/{config}/{duty}"))
+                              motor_req(die, config), key=f"res:{die}/{config}/{duty}", motor=(die, config)))
     return _merge(items)
 
 

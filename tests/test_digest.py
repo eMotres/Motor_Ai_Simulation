@@ -56,6 +56,14 @@ def d(env, tmp_path, monkeypatch):                       # noqa: F811
     for who in (ANNA, BOB, LI):
         U.set_nda(who, True, by="admin")
     U.create_user("dan@example.com", "password-dan", name="Dan")
+    for who in (ANNA, BOB):               # linking a motor to a project grants its members the configuration (development/motors.py)
+        U.set_motor_grants(who, all_motors=False, dies=[], configs=["CIANO28 85/L12", "CIANO28 85/T9"])
+    from motor_ai_sim.routes import family as _fam           # the catalog die on disk (a temp copy: the live config is never touched)
+    die_dir = tmp_path / "catalog" / "CIANO28 85"
+    die_dir.mkdir(parents=True)
+    for cfg_name in ("L12", "T9"):
+        (die_dir / f"{cfg_name}.yaml").write_text("name: x"+chr(10), encoding="utf-8")
+    monkeypatch.setattr(_fam, "_die_dir", lambda die: tmp_path / "catalog" / str(die))
 
     PS.create_project({"id": PID, "title": "Erium X1", "customer_org": "Erium", "status": "design", "created_at": at(-99999),
                        "updated_at": at(-99999), "members": [{"email": ANNA, "role": "owner"}, {"email": BOB, "role": "customer"}],
@@ -104,6 +112,16 @@ def d(env, tmp_path, monkeypatch):                       # noqa: F811
     env.update(PS=PS, PR=PR, PM=PM, DS=DS, DR=DR, results=lambda die, cfg: results if cfg in ("L12", "T9") else {})
     env["dtmp"] = tmp_path
     return env
+
+
+def go(d, draft_id, **kw):
+    """Approve and send: the admin sends the text whose hash he previewed (the draft's current hash)."""
+    from motor_ai_sim.digest import approval as AP
+    from motor_ai_sim.digest import build as B
+    kw.setdefault("approved_by", ADMIN)
+    kw.setdefault("content_hash", B.content_hash(d["DS"].load_draft(draft_id)))
+    kw.setdefault("deliver", lambda m: d["delivered"].append(m))
+    return AP.send_draft(draft_id, delay_s=0, sleep=lambda s: None, **kw)
 
 
 def run(d, now=T0, **kw):
@@ -298,13 +316,13 @@ def test_one_draft_per_period_and_send_is_idempotent(d):
     from motor_ai_sim.digest import approval as AP
     run(d, scopes=[PSCOPE])
     first = d["DS"].get_state(PSCOPE)["draft_id"]
-    rows = run(d, now=T0 + 600, scopes=[PSCOPE])                      # the timer fires again: the SAME draft is refreshed
-    assert rows[0]["action"] == "refreshed" and d["DS"].get_state(PSCOPE)["draft_id"] == first
+    rows = run(d, now=T0 + 600, scopes=[PSCOPE])                      # the timer fires again: nothing new -> the same draft, untouched
+    assert rows[0]["action"] == "unchanged" and d["DS"].get_state(PSCOPE)["draft_id"] == first
     assert len([x for x in d["DS"].list_drafts() if x["scope"] == PSCOPE]) == 1
-    res = AP.send_draft(first, approved_by=ADMIN, deliver=lambda m: d["delivered"].append(m), delay_s=0, sleep=lambda s: None)
+    res = go(d, first)
     assert res["sent"] == 2 and sorted(m["To"] for m in d["delivered"]) == sorted([ANNA, BOB])
     with pytest.raises(AP.ApprovalError) as e:                         # a second send of the same digest
-        AP.send_draft(first, approved_by=ADMIN, deliver=lambda m: d["delivered"].append(m), delay_s=0, sleep=lambda s: None)
+        go(d, first)
     assert e.value.code == "not_pending" and len(d["delivered"]) == 2
     assert run(d, now=T0 + 3600, scopes=[PSCOPE])[0]["action"] == "skipped"       # nothing new since the sent period
     assert d["DS"].get_state(PSCOPE)["cursor"] == d["DS"].load_draft(first)["period"]["end"]
@@ -331,7 +349,7 @@ def test_send_needs_a_named_approver(d):
     did = d["DS"].get_state(PSCOPE)["draft_id"]
     for who in ("", "   ", None, "not-an-address"):
         with pytest.raises(AP.ApprovalError) as e:
-            AP.send_draft(did, approved_by=who, deliver=lambda m: d["delivered"].append(m), delay_s=0)
+            go(d, did, approved_by=who)
         assert e.value.code == "approval_required"
     assert d["delivered"] == [] and d["DS"].load_draft(did)["status"] == "pending"
 
@@ -381,18 +399,22 @@ def test_send_route_needs_admin_and_the_explicit_approve_flag(d):
     run(d, scopes=[PSCOPE])
     did = d["DS"].get_state(PSCOPE)["draft_id"]
     url = f"/api/admin/digests/{did}/send"
-    assert client.post(url, json={"approve": True}).status_code in (401, 403)
+    from motor_ai_sim.digest import build as B
+    h = B.content_hash(d["DS"].load_draft(did))
+    ok = {"approve": True, "content_hash": h}
+    assert client.post(url, json=ok).status_code in (401, 403)
     owner = _login(ANNA)
-    assert client.post(url, json={"approve": True}, headers=owner).status_code == 403
+    assert client.post(url, json=ok, headers=owner).status_code == 403
     admin = _login(ADMIN)
-    for body in ({}, {"approve": "yes"}, {"approve": 1}, {"send": True}, None):
+    for body in ({}, {"approve": "yes", "content_hash": h}, {"approve": 1, "content_hash": h}, {"send": True}, {"approve": True},
+                 {"approve": True, "content_hash": ""}, {"approve": True, "content_hash": 7}, None):
         r = client.post(url, json=body, headers=admin) if body is not None else client.post(url, headers=admin)
         assert r.status_code == 422, body
     assert d["delivered"] == [] and d["DS"].load_draft(did)["status"] == "pending"
-    r = client.post(url, json={"approve": True}, headers=admin)
+    r = client.post(url, json=ok, headers=admin)
     assert r.status_code == 200 and r.json()["sent"] == 2
     assert d["DS"].load_draft(did)["sent"]["by"] == ADMIN
-    assert client.post(url, json={"approve": True}, headers=admin).status_code == 409
+    assert client.post(url, json=ok, headers=admin).status_code == 409
     assert len(d["delivered"]) == 2
 
 
@@ -402,7 +424,7 @@ def test_send_rechecks_recipients_at_send_time(d):
     did = d["DS"].get_state(XSCOPE)["draft_id"]
     d["PR"].mutate_file(DIE, CFG, "production.json",
                         lambda p: p.update({"members": [m for m in p["members"] if m["email"] != LI] + [{"email": BOB, "role": "oem"}]}))
-    res = AP.send_draft(did, approved_by=ADMIN, deliver=lambda m: d["delivered"].append(m), delay_s=0, sleep=lambda s: None)
+    res = go(d, did)
     assert [m["To"] for m in d["delivered"]] == [ANNA]                  # Li left: not mailed; Bob joined later: not on the approved list
     assert {"email": LI, "reason": "no_longer_a_recipient"} in res["skipped"]
 
@@ -444,8 +466,7 @@ def test_unsubscribe_link_get_is_harmless_post_leaves_this_digest_only(d):
     assert client.post(bad).status_code == 400 and client.get(bad).status_code == 400
     other = path.replace(DS_tok(PSCOPE), DS_tok(XSCOPE))                                                         # a token is bound to its group
     assert client.post(other).status_code == 400
-    from motor_ai_sim.digest import approval as AP
-    res = AP.send_draft(draft["id"], approved_by=ADMIN, deliver=lambda m: d["delivered"].append(m), delay_s=0, sleep=lambda s: None)
+    res = go(d, draft["id"])
     assert [m["To"] for m in d["delivered"]] == [ANNA] and {"email": BOB, "reason": "left_this_digest"} in res["skipped"]
 
 
@@ -570,3 +591,199 @@ def test_render_sample_digests(d):
         (out / name).write_text(clean(r["html"]), encoding="utf-8")
         (out / name.replace(".html", ".txt")).write_text(clean(subject_to), encoding="utf-8")
         assert "<img" not in r["html"].lower()
+
+
+# -- review fixes (PR 438): approval covers the exact text, motor access, partial sends, header safety, results layers -----------------------------------------
+
+def test_approval_carries_the_content_hash_and_a_changed_text_is_refused(d):
+    from motor_ai_sim.digest import approval as AP
+    from motor_ai_sim.digest import build as B
+    run(d, scopes=[PSCOPE])
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+    h = B.content_hash(d["DS"].load_draft(did))
+    for bad in (None, "", "0" * 64, h[:-1] + ("0" if h[-1] != "0" else "1")):
+        with pytest.raises(AP.ApprovalError) as e:
+            go(d, did, content_hash=bad)
+        assert e.value.code == "content_changed", bad
+    assert d["delivered"] == [] and d["DS"].load_draft(did)["status"] == "pending"
+    # the hash covers subject, text, html AND the recipient list
+    draft = d["DS"].load_draft(did)
+    assert B.content_hash(dict(draft, recipients=draft["recipients"][:1])) != h
+    assert B.content_hash(dict(draft, html_body=draft["html_body"] + " ")) != h
+    assert B.content_hash(dict(draft, subject=draft["subject"] + "!")) != h
+    # route: a stale hash is a 409, nothing is mailed
+    admin = _login(ADMIN)
+    r = client.post(f"/api/admin/digests/{did}/send", json={"approve": True, "content_hash": "f" * 64}, headers=admin)
+    assert r.status_code == 409 and d["delivered"] == []
+    pv = client.get(f"/api/admin/digests/{did}/preview", headers=admin).json()
+    assert pv["content_hash"] == h
+    assert client.post(f"/api/admin/digests/{did}/send", json={"approve": True, "content_hash": pv["content_hash"]}, headers=admin).status_code == 200
+
+
+def test_an_opened_draft_is_never_rewritten_a_refresh_supersedes_it(d):
+    admin = _login(ADMIN)
+    run(d, scopes=[PSCOPE])
+    a = d["DS"].get_state(PSCOPE)["draft_id"]
+    # nobody looked at it yet: new activity refreshes the SAME draft in place
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "m2", "author_email": BOB, "created_at": at(-900), "text": "second message"})
+    assert run(d, now=T0 + 60, scopes=[PSCOPE])[0]["action"] == "refreshed" and d["DS"].get_state(PSCOPE)["draft_id"] == a
+    assert "second message" in d["DS"].load_draft(a)["text_body"]
+    # the owner previews it -> frozen
+    pv = client.get(f"/api/admin/digests/{a}/preview", headers=admin).json()
+    text_a = d["DS"].load_draft(a)["text_body"]
+    assert d["DS"].load_draft(a)["opened"]["by"] == ADMIN
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "m3", "author_email": BOB, "created_at": at(-800), "text": "third message"})
+    rows = run(d, now=T0 + 120, scopes=[PSCOPE])
+    assert rows[0]["action"] == "superseded"
+    b = d["DS"].get_state(PSCOPE)["draft_id"]
+    assert b != a
+    old, new = d["DS"].load_draft(a), d["DS"].load_draft(b)
+    assert old["text_body"] == text_a and "third message" not in old["text_body"] and old["status"] == "superseded" and old["superseded_by"] == b
+    assert "third message" in new["text_body"] and new["status"] == "pending" and new["supersedes"] == a and new["revision"] == 1
+    # what he previewed can no longer be approved, and the old hash cannot send the new text
+    r = client.post(f"/api/admin/digests/{a}/send", json={"approve": True, "content_hash": pv["content_hash"]}, headers=admin)
+    assert r.status_code == 409 and "newer draft" in r.json()["detail"]
+    r = client.post(f"/api/admin/digests/{b}/send", json={"approve": True, "content_hash": pv["content_hash"]}, headers=admin)
+    assert r.status_code == 409 and d["delivered"] == []
+    assert len([x for x in d["DS"].list_drafts() if x["status"] == "pending"]) == 1
+    # a second run with nothing new leaves revision 1 alone; the list shows one waiting draft, the old one in history
+    assert run(d, now=T0 + 180, scopes=[PSCOPE])[0]["action"] == "unchanged"
+    lst = client.get("/api/admin/digests", headers=admin).json()
+    assert [x["id"] for x in lst["pending"]] == [b] and a in [x["id"] for x in lst["history"]]
+    assert go(d, b)["sent"] == 2
+
+
+def test_motor_lines_need_every_recipient_to_be_able_to_open_the_motor(d):
+    from motor_ai_sim.digest import approval as AP
+    d["U"].set_motor_grants(BOB, all_motors=False, dies=[], configs=[])               # Bob cannot open CIANO28 85 / L12 (or T9)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    text = draft["text_body"]
+    assert "New results" not in text and "Design step note" not in text and "T 12.3" not in text and "L12" not in text
+    assert "New message from Bob" in text and "Specification version 2 submitted" in text          # the rest of the project still goes out
+    assert not [i for i in draft["items"] if i.get("motor")]
+    # everybody may open it: the lines are back, and carry the motor for the send-time re-check
+    d["U"].set_motor_grants(BOB, all_motors=False, dies=[], configs=["CIANO28 85/L12"])
+    run(d, now=T0 + 60, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "New results" in draft["text_body"] and any(i.get("motor") == ["CIANO28 85", "L12"] for i in draft["items"])
+    # access is withdrawn after the draft was made: the send is refused (409) and nothing goes out
+    d["U"].set_motor_grants(BOB, all_motors=False, dies=[], configs=[])
+    with pytest.raises(AP.ApprovalError) as e:
+        go(d, draft["id"])
+    assert e.value.code == "access_changed" and d["delivered"] == []
+    admin = _login(ADMIN)
+    h = client.get(f"/api/admin/digests/{draft['id']}/preview", headers=admin).json()["content_hash"]
+    r = client.post(f"/api/admin/digests/{draft['id']}/send", json={"approve": True, "content_hash": h}, headers=admin)
+    assert r.status_code == 409 and "Make drafts now" in r.json()["detail"] and d["delivered"] == []
+    # the run supersedes the opened draft with one without the motor lines; that text can be sent
+    run(d, now=T0 + 120, scopes=[PSCOPE])
+    cur = d["DS"].get_state(PSCOPE)["draft_id"]
+    assert cur != draft["id"] and "New results" not in d["DS"].load_draft(cur)["text_body"] and go(d, cur)["sent"] == 2
+
+
+def test_an_admin_recipient_and_unknown_accounts_in_the_motor_check(d):
+    from motor_ai_sim.digest import build as B
+    assert B.motor_visible(ADMIN, "Any Die", "any-config")                                  # admins open everything
+    assert B.motor_visible(BOB, "CIANO28 85", "L12") and not B.motor_visible(BOB, "CIANO28 85", "Z99")
+    assert not B.motor_visible("nobody@example.com", "CIANO28 85", "L12")                    # unknown account: closed, not "anonymous"
+
+
+def test_a_partly_failed_send_is_partial_and_only_the_failed_are_retried(d):
+    from motor_ai_sim.digest import approval as AP
+    run(d, scopes=[PSCOPE])
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+
+    def flaky(msg):
+        if msg["To"] == BOB:
+            raise RuntimeError("mailbox full")
+        d["delivered"].append(msg)
+    res = go(d, did, deliver=flaky)
+    assert res["sent"] == 1 and res["failed"] == 1 and res["outstanding"] == [BOB]
+    cur = d["DS"].load_draft(did)
+    assert cur["status"] == "partial" and cur["partial"]["outstanding"] == [BOB] and [m["To"] for m in d["delivered"]] == [ANNA]
+    assert d["DS"].get_state(PSCOPE)["draft_id"] == did and "cursor" not in d["DS"].get_state(PSCOPE)          # the period is not closed
+    # the scheduler leaves a partial draft alone, even with new activity
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "m9", "author_email": BOB, "created_at": at(-300), "text": "late news"})
+    assert run(d, now=T0 + 60, scopes=[PSCOPE])[0]["reason"] == "partial_send_open"
+    assert "late news" not in d["DS"].load_draft(did)["text_body"]
+    # the list still shows it as waiting; one more approval retries Bob only
+    admin = _login(ADMIN)
+    assert [x["status"] for x in client.get("/api/admin/digests", headers=admin).json()["pending"]] == ["partial"]
+    res = go(d, did)
+    assert res["sent"] == 1 and [m["To"] for m in d["delivered"]] == [ANNA, BOB]                    # Anna was not mailed twice
+    done = d["DS"].load_draft(did)
+    assert done["status"] == "sent" and d["DS"].get_state(PSCOPE)["cursor"] == done["period"]["end"]
+    with pytest.raises(AP.ApprovalError):
+        go(d, did)
+
+
+def test_total_failure_stays_pending_and_a_discard_closes_a_partial_draft(d):
+    run(d, scopes=[PSCOPE])
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+
+    def down(msg):
+        raise RuntimeError("smtp down")
+
+    def only_anna(msg):
+        if msg["To"] != ANNA:
+            raise RuntimeError("x")
+        d["delivered"].append(msg)
+    res = go(d, did, deliver=down)
+    assert res["sent"] == 0 and d["DS"].load_draft(did)["status"] == "pending" and d["DS"].load_draft(did)["last_error"]
+    go(d, did, deliver=only_anna)
+    assert d["DS"].load_draft(did)["status"] == "partial"
+    admin = _login(ADMIN)
+    assert client.post(f"/api/admin/digests/{did}/discard", headers=admin).json()["status"] == "discarded"
+    assert "cursor" in d["DS"].get_state(PSCOPE) and d["DS"].get_state(PSCOPE).get("draft_id") is None
+
+
+def test_a_running_send_is_a_409_not_a_500(d):
+    from motor_ai_sim.digest import build as B
+    run(d, scopes=[PSCOPE])
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+    lock = Path(str(d["DS"].sendlog_file(did)) + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("", encoding="utf-8")                                    # another send of this draft is running (or crashed)
+    admin = _login(ADMIN)
+    r = client.post(f"/api/admin/digests/{did}/send", json={"approve": True, "content_hash": B.content_hash(d["DS"].load_draft(did))},
+                    headers=admin)
+    assert r.status_code == 409 and "another send" in r.json()["detail"] and d["delivered"] == []
+    lock.unlink()
+
+
+def test_titles_cannot_inject_header_lines(d):
+    from motor_ai_sim.digest import approval as AP
+    from motor_ai_sim.digest import build as B
+    evil = "Erium" + chr(13) + chr(10) + "Bcc: spy@evil.example" + chr(0) + chr(0x2028) + "X"
+    d["PS"].mutate_project(PID, lambda p: p.update({"title": evil}))
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert not any(ord(c) < 32 or ord(c) in (127, 0x2028, 0x2029) for c in draft["subject"] + draft["title"])
+    assert draft["title"] == "Erium Bcc: spy@evil.example X"                      # the line break became a space, no header can start
+    msg = B.build_message(draft, ANNA, base="https://aerostator.com", sender="noreply@aerostator.com")
+    assert msg["Bcc"] is None and msg["Subject"] == draft["subject"]
+    assert B.header_safe("fine") and not B.header_safe("a" + chr(10) + "b") and not B.header_safe("")
+    # defence in depth: a stored draft with an unsafe subject is refused at send time
+    bad = dict(draft, subject="Hi" + chr(10) + "Bcc: x@y.z")
+    d["DS"].save_draft(bad)
+    with pytest.raises(AP.ApprovalError) as e:
+        go(d, draft["id"], content_hash=B.content_hash(bad))
+    assert e.value.code == "unsafe_subject" and d["delivered"] == []
+
+
+def test_results_are_read_from_the_shared_layers_never_the_process_workspace(d, tmp_path):
+    from motor_ai_sim import duty_results as DR
+    from motor_ai_sim.digest import collect as C
+    shared, ws = tmp_path / "shared" / ".duty_results.json", tmp_path / "ws" / ".duty_results.json"
+    for p, duty in ((shared, "shared_duty"), (ws, "private_duty")):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"version": 1, "results": {"CIANO28 85": {"L12": {duty: {"em_run": {"computed_at": at(-60),
+                                                                                                    "numbers": {"T_avg_Nm": 5.0}}}}}}}),
+                     encoding="utf-8")
+    d["mp"].setattr(DR, "shared_store_path", lambda: shared)
+    d["mp"].setattr(DR, "_config_dir", lambda: ws.parent)
+    assert DR.store_path() == ws                                         # the process workspace's own ledger exists...
+    assert set(C.stored_results("CIANO28 85", "L12")) == {"shared_duty"}  # ...and the digest does not read it
+    with DR.using_store(shared):
+        assert set(C.stored_results("CIANO28 85", "L12")) == {"shared_duty"}           # whoever runs it, same answer

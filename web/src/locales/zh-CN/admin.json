@@ -335,7 +335,9 @@
     "commercialDocs": "商业单据",
     "linkedProductions": "关联生产项目（仅供参考）",
     "auditTrail": "审计日志",
-    "bankNotice": "严禁存储银行账号或 SWIFT 代码。此类内部财务信息在管理系统中严格隔离。"
+    "bankNotice": "严禁存储银行账号或 SWIFT 代码。此类内部财务信息在管理系统中严格隔离。",
+    "colAgreement": "协议",
+    "agreementNotInstalled": "协议：文本尚未安装（目前不会要求用户接受）。"
   },
   "live": {
     "title": "当前在线",

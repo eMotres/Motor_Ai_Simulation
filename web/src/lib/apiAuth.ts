@@ -6,6 +6,7 @@
 // are never touched. No-op when signed out (free endpoints stay anonymous).
 import { refusalReasonKey } from './accessUi';
 import { sharedGet } from './sharedGet';
+import { handleAgreementRequired } from './platformAgreement';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const DOCUMENT_URL = new URL(window.location.href);
@@ -198,6 +199,13 @@ export function installFetchAuth(): void {
         }).catch(() => { /* not JSON */ });
       }
     } catch { /* a notice must never break a request */ }
+    // A gated action (starting a development) answered 428 `agreement_required`: open the Platform Agreement dialog and, once
+    // the company accepted, repeat the very same call (lib/platformAgreement.ts).  A Request object cannot be re-sent, so it is left alone.
+    try {
+      if (res.status === 428 && !(input instanceof Request) && isApiUrl(String(res.url || url))) {
+        return await handleAgreementRequired(res, () => sharedGet(orig, API, input as RequestInfo | URL, init));
+      }
+    } catch { /* the dialog must never break a request */ }
     return res;
   };
 }

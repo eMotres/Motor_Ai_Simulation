@@ -22,6 +22,7 @@ function loadAuth(window, apiUrl) {
     require(id) {
       if (id === './sharedGet') return { sharedGet: (orig, _api, input, init) => orig(input, init) };
       if (id === './accessUi') return { refusalReasonKey: () => null };
+      if (id === './platformAgreement') return { handleAgreementRequired: async (res) => res };
       throw new Error(`Unexpected import ${id}`);
     },
   };

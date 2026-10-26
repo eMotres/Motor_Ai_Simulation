@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { getStoredToken } from '../../../lib/localAuth';
 import { oneOf } from '../../../lib/viewMemory';
 import { useRememberedView } from '../../../lib/useRememberedView';
+import { companyAgreementText } from '../../../lib/platformAgreement';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -114,6 +115,8 @@ interface Company {
   domains: string[];
   nda: { status: string; date?: string; record_id?: string; version?: string };
   verification: { status: string; case_id?: string };
+  /** Platform Agreement of the company (motor_ai_sim/platform_agreement.py): the mode and version in force, or null. */
+  agreement?: { mode: string; version: string; iso?: string } | null;
   documents: CommercialDocument[];
   source: string;
   created: string;
@@ -203,6 +206,16 @@ const DirectorySection: React.FC = () => {
     status: 'open',
     lines: [{ description: '', qty: 1, unit_price: 0 }],
   });
+
+  // The Platform Agreement text is shipped as a draft and enforced only once an approved version is installed: tell the admin which.
+  const [agreementInstalled, setAgreementInstalled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/api/agreement/status`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : null))
+      .then((j: { admin?: { installed?: boolean } } | null) => { if (live && j?.admin) setAgreementInstalled(j.admin.installed === true); })
+      .catch(() => { /* the note just stays hidden */ });
+    return () => { live = false; };
+  }, []);
 
   // Fetch all data
   const loadAll = useCallback(async () => {
@@ -574,6 +587,11 @@ const DirectorySection: React.FC = () => {
       {/* ─── TAB 1: COMPANIES ──────────────────────────────────────────────── */}
       {!loading && tab === 'companies' && (
         <Paper sx={{ ...PANEL, overflow: 'hidden' }}>
+          {agreementInstalled === false && (
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', px: 1.5, py: 0.75 }}>
+              {t('directory.agreementNotInstalled', { defaultValue: 'Agreement: text not installed (users are not asked to accept it yet).' })}
+            </Typography>
+          )}
           <Table size="small">
             <TableHead sx={{ bgcolor: 'var(--panel)' }}>
               <TableRow>
@@ -582,6 +600,7 @@ const DirectorySection: React.FC = () => {
                 <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{t('directory.colRoles', { defaultValue: 'Roles' })}</TableCell>
                 <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{t('directory.colNda', { defaultValue: 'NDA' })}</TableCell>
                 <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{t('directory.colVerification', { defaultValue: 'Verification' })}</TableCell>
+                <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{t('directory.colAgreement', { defaultValue: 'Agreement' })}</TableCell>
                 <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{t('directory.colPeople', { defaultValue: 'People' })}</TableCell>
                 <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{t('directory.colDocuments', { defaultValue: 'Documents' })}</TableCell>
               </TableRow>
@@ -648,6 +667,9 @@ const DirectorySection: React.FC = () => {
                       )}
                     </TableCell>
                     <TableCell>
+                      <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{companyAgreementText(c.agreement)}</Typography>
+                    </TableCell>
+                    <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <Typography sx={{ fontSize: 12, fontWeight: 600 }}>
                           {c.people_count || 0}
@@ -684,7 +706,7 @@ const DirectorySection: React.FC = () => {
               })}
               {filteredCompanies.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: 'var(--text-3)' }}>
+                  <TableCell colSpan={8} sx={{ textAlign: 'center', py: 4, color: 'var(--text-3)' }}>
                     {t('directory.noCompaniesFound', { defaultValue: 'No companies match the search.' })}
                   </TableCell>
                 </TableRow>

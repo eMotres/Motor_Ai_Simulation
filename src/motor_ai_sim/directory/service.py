@@ -49,6 +49,11 @@ def _live_verification(v: Any) -> Any:
 def _enrich_company(c: dict, all_affs: list[dict], all_people: list[dict]) -> dict:
     comp = dict(c)
     cid = comp["id"]
+    try:
+        from motor_ai_sim import platform_agreement
+        comp["agreement"] = platform_agreement.company_summary(cid)      # {mode, version, iso, ...} or None (quiet admin text)
+    except Exception:  # noqa: BLE001 - the directory never fails on an agreement read
+        comp["agreement"] = None
     if comp.get("verification"):
         comp["verification"] = _live_verification(comp["verification"])
     affs = [a for a in all_affs if a.get("company_id") == cid]

@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
 
+from motor_ai_sim import platform_agreement as _pa
 from motor_ai_sim.agent_keys import Principal
 from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.design_agent import runner as _run
@@ -64,6 +65,7 @@ def conversations(authorization: Optional[str] = Header(default=None)) -> Dict[s
 def new_conversation(body: Dict[str, Any] = Body(default_factory=dict),
                      authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     p = _principal(authorization)
+    _pa.require_accepted({"email": p.email, "role": caller_identity(authorization).get("role")})   # 428 until the company accepted
     return _guard(_run.start_turn, p, str(body.get("text") or ""))
 
 

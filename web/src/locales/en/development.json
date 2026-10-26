@@ -79,11 +79,140 @@
     "productionPlan": "Production plan",
     "ambientMaxNote": "Asked for air cooling only; all calculations use the maximum ambient temperature. Liquid cooling uses the coolant inlet temperature, underwater cooling the water temperature.",
     "fromProduction": "From the production plan: {values}",
-    "packStated": "Pack voltages are kept as entered. They are derived from the cells only when you change the cell count or a cell voltage."
+    "packStated": "Pack voltages are kept as entered. They are derived from the cells only when you change the cell count or a cell voltage.",
+    "title": "Motor specification",
+    "projectLabel": "Project · {title}",
+    "progress": "{answered} of {total} required answered",
+    "saved": "Saved",
+    "stepOf": "Step {step} of {total}",
+    "stepsNav": "Specification steps",
+    "nextTo": "Next: {title}",
+    "toReview": "Review and submit",
+    "optional": "Optional details",
+    "answerLater": "Answer later",
+    "answerLaterTip": "Marks this as not known yet. It stays listed as open until you answer.",
+    "answerNow": "Answer now",
+    "markedLater": "Marked for later",
+    "change": "Change",
+    "loadNote": "Load: {load}",
+    "loadNone": "The load is set in step 1 and decides the cooling options.",
+    "state": {
+      "done": "Complete",
+      "partial": "In progress",
+      "empty": "Not started",
+      "optional": "Optional"
+    },
+    "steps": {
+      "application": {
+        "title": "Application & duty",
+        "summary": "Machine type, load, mode and rotation"
+      },
+      "operating": {
+        "title": "Operating points",
+        "summary": "Torque, speed and duration, maximum speed"
+      },
+      "supply": {
+        "title": "Supply & drive",
+        "summary": "DC bus, inverter, phase limits",
+        "titleGenerator": "Output & controller",
+        "summaryGenerator": "AC input window, controller"
+      },
+      "cooling": {
+        "title": "Cooling & environment",
+        "summary": "Medium, ambient, housing protection"
+      },
+      "mechanical": {
+        "title": "Mechanical interface",
+        "summary": "Envelope, mass, mounting, shaft loads"
+      },
+      "safety": {
+        "title": "Safety & testing",
+        "summary": "Standards, reliability, test scope"
+      },
+      "project": {
+        "title": "Project & timeline",
+        "summary": "Quantities, dates, further requirements"
+      },
+      "review": {
+        "title": "Review & submit",
+        "summary": "Check the summary and send it to engineering"
+      }
+    },
+    "card": {
+      "application": "Application and load",
+      "phases": "Phases and current limits",
+      "cooling": "Cooling and ambient",
+      "housing": "Housing protection",
+      "envelope": "Envelope and mass",
+      "interface": "Mounting and interface",
+      "standards": "Standards and testing",
+      "life": "Life and noise",
+      "delivery": "Quantities and dates"
+    },
+    "chart": {
+      "title": "Operating points on the torque–speed plane",
+      "legend": "Legend",
+      "maxSpeed": "Maximum speed",
+      "notSet": "not set",
+      "aria": "Torque versus speed with the entered operating points and the maximum speed",
+      "empty": "Enter torque and speed to place a point",
+      "mission": "Mission profile point",
+      "speedAxis": "Speed, rpm",
+      "torqueAxis": "Torque, N·m",
+      "torqueAxisGenerator": "Shaft torque, N·m"
+    },
+    "op": {
+      "pointsTitle": "Operating points",
+      "continuous": "Continuous",
+      "other": "Other",
+      "seconds": "Duration",
+      "torqueGenerator": "Shaft torque (input)",
+      "voltage": "DC voltage (optional)",
+      "voltageGenerator": "AC voltage (optional)",
+      "derived": "= {power} at the shaft",
+      "derivedGenerator": "P = T·ω = {power}",
+      "role": {
+        "continuous": "Continuous (S1)",
+        "peak": "Peak (S2)"
+      },
+      "default": {
+        "takeoff": "Takeoff",
+        "cruise": "Cruise",
+        "landing": "Landing",
+        "peak": "Peak",
+        "s1": "Continuous (S1)",
+        "peak2": "Peak (S2)",
+        "cutIn": "Cut-in",
+        "rated": "Rated (continuous)"
+      }
+    },
+    "gen": {
+      "inputWindow": "Controller input window",
+      "inputWindowTip": "AC voltage the controller or load accepts from the generator: minimum, nominal and maximum.",
+      "min": "Minimum AC input voltage",
+      "nom": "Nominal AC input voltage",
+      "max": "Maximum AC input voltage"
+    },
+    "review": {
+      "headingReady": "Everything looks ready",
+      "headingOpen": "Review the summary",
+      "submit": "Submit specification",
+      "submitOpen": "Submit with {count} open",
+      "edit": "Edit",
+      "stillOpen": "Still open",
+      "later": "Answer later",
+      "at": "at",
+      "phases": "{count, plural, one {# phase} other {# phases}}",
+      "state": {
+        "unknown": "answer later",
+        "missing": "required",
+        "invalid": "check value"
+      }
+    }
   },
   "keyPoints": {
-    "s1": "Continuous S1",
-    "peak": "Peak",
+    "s1": "Continuous (S1)",
+    "peak": "Peak (S2)",
     "torque": "Torque",
     "speed": "Speed",
     "duration": "Duration",

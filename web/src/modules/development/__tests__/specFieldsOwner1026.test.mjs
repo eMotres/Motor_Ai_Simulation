@@ -7,9 +7,10 @@ import { submitFailureKind, submitFailureKey, canSubmitSpec, SUBMIT_FAILURE_KEYS
 import { maximumSpeedRpm, proofSpeedRpm, storedOverspeedRpm } from '../speedLimits.ts';
 import { buildSpecificationCards, CONSTRUCTION_FIELDS } from '../specificationLayout.ts';
 import * as W from '../wizardState.ts';
+import { specViewSource } from './specSources.mjs';
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
-const page = read('../components/DevelopmentPage.tsx');
+const page = specViewSource();
 const schema = JSON.parse(read('../../../../../src/motor_ai_sim/development/schema.json'));
 const en = JSON.parse(read('../../../locales/en/development.json'));
 const zh = JSON.parse(read('../../../locales/zh-CN/development.json'));
@@ -37,7 +38,7 @@ test('only people who can edit the specification see the submit button; its tool
   // the grey "Unknown answers stay visible..." help line is gone from the card (it lives in the button tooltip)
   assert.doesNotMatch(page, /<Box><HelpTip title=\{tr\('wizard\.reviewHint'\)\} \/><\/Box>/);
   // a 409 offers the Reload action
-  assert.match(page, /submitConflict \? <Button color="inherit" size="small" onClick=\{\(\) => void reloadDraft\(\)\}>/);
+  assert.match(page, /submitConflict \? <Button color="inherit" size="small" onClick=\{onReload\}>/);
   assert.match(page, /tr\(submitFailureKey\(e\)\)/);
   assert.match(en.wizard.submitTip, /numbered version/); assert.match(en.wizard.submitTip, /engineering review/);
 });
@@ -114,9 +115,8 @@ test('the Construction card holds every geometric and mass requirement; the reti
   // required stays the same set (nothing was silently dropped), the depth keeps its underwater-only gate
   assert.equal(field('3_6').only_when_cooling_medium[0], 'submerged');
   for (const id of ['4_1', '4_2', '3_3', '4_6']) assert.equal(field(id).required, true);
-  // the card is drawn on the same grid, each group on its own row, the loads included
-  assert.match(page, /section\.id === 'construction' && <Box sx=\{grid\}>/);
-  assert.match(page, /renderLoads\(byId\('4_6'\)!/);
+  // the loads are drawn by the Mechanical step (renderLoads) under the load type; the card stacks its groups, one per row
+  assert.match(page, /case '4_6': return <Box key=\{f\.id\}>\{fields\.renderLoads\(f, loadType\)\}<\/Box>/);
   // battery current and power devices are not in any card
   for (const id of ['2_3', '2_5']) assert.ok(!cards.some((c) => c.fields.some((f) => f.id === id)), id);
   // the stored values stay readable: the schema keeps the fields

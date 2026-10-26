@@ -79,11 +79,140 @@
     "productionPlan": "生产计划",
     "ambientMaxNote": "仅空气冷却时填写；所有计算均采用最高环境温度。液冷采用冷却液进口温度，水下冷却采用水温。",
     "fromProduction": "来自生产计划：{values}",
-    "packStated": "电池组电压按输入值保存；只有在修改串联节数或单体电压时才由单体数据计算。"
+    "packStated": "电池组电压按输入值保存；只有在修改串联节数或单体电压时才由单体数据计算。",
+    "title": "电机规格",
+    "projectLabel": "项目 · {title}",
+    "progress": "必填项已回答 {answered}/{total}",
+    "saved": "已保存",
+    "stepOf": "第 {step} 步，共 {total} 步",
+    "stepsNav": "规格步骤",
+    "nextTo": "下一步：{title}",
+    "toReview": "审核并提交",
+    "optional": "可选细节",
+    "answerLater": "稍后回答",
+    "answerLaterTip": "标记为暂不清楚，回答之前会一直列为待办。",
+    "answerNow": "现在回答",
+    "markedLater": "已标记为稍后回答",
+    "change": "更改",
+    "loadNote": "负载：{load}",
+    "loadNone": "负载在第 1 步选择，并决定可选的冷却方式。",
+    "state": {
+      "done": "已完成",
+      "partial": "进行中",
+      "empty": "未开始",
+      "optional": "可选"
+    },
+    "steps": {
+      "application": {
+        "title": "应用与工况",
+        "summary": "机器类型、负载、模式与转向"
+      },
+      "operating": {
+        "title": "工作点",
+        "summary": "转矩、转速与持续时间，最高转速"
+      },
+      "supply": {
+        "title": "供电与驱动",
+        "summary": "直流母线、逆变器、相电流限值",
+        "titleGenerator": "输出与控制器",
+        "summaryGenerator": "交流输入范围、控制器"
+      },
+      "cooling": {
+        "title": "冷却与环境",
+        "summary": "冷却介质、环境温度、外壳防护"
+      },
+      "mechanical": {
+        "title": "机械接口",
+        "summary": "外形、质量、安装、轴载荷"
+      },
+      "safety": {
+        "title": "安全与测试",
+        "summary": "标准、可靠性、测试范围"
+      },
+      "project": {
+        "title": "项目与进度",
+        "summary": "数量、日期、其他要求"
+      },
+      "review": {
+        "title": "审核与提交",
+        "summary": "核对摘要后提交工程评审"
+      }
+    },
+    "card": {
+      "application": "应用与负载",
+      "phases": "相数与电流限值",
+      "cooling": "冷却与环境温度",
+      "housing": "外壳防护",
+      "envelope": "外形与质量",
+      "interface": "安装与接口",
+      "standards": "标准与测试",
+      "life": "寿命与噪声",
+      "delivery": "数量与日期"
+    },
+    "chart": {
+      "title": "转矩—转速平面上的工作点",
+      "legend": "图例",
+      "maxSpeed": "最高转速",
+      "notSet": "未设置",
+      "aria": "转矩—转速图：已输入的工作点与最高转速",
+      "empty": "输入转矩和转速以显示工作点",
+      "mission": "任务工况点",
+      "speedAxis": "转速，rpm",
+      "torqueAxis": "转矩，N·m",
+      "torqueAxisGenerator": "轴转矩，N·m"
+    },
+    "op": {
+      "pointsTitle": "工作点",
+      "continuous": "连续",
+      "other": "其他",
+      "seconds": "持续时间",
+      "torqueGenerator": "轴转矩（输入）",
+      "voltage": "直流电压（可选）",
+      "voltageGenerator": "交流电压（可选）",
+      "derived": "= 轴端 {power}",
+      "derivedGenerator": "P = T·ω = {power}",
+      "role": {
+        "continuous": "连续 (S1)",
+        "peak": "峰值 (S2)"
+      },
+      "default": {
+        "takeoff": "起飞",
+        "cruise": "巡航",
+        "landing": "着陆",
+        "peak": "峰值",
+        "s1": "连续 (S1)",
+        "peak2": "峰值 (S2)",
+        "cutIn": "切入",
+        "rated": "额定（连续）"
+      }
+    },
+    "gen": {
+      "inputWindow": "控制器输入范围",
+      "inputWindowTip": "控制器或负载可接受的发电机交流电压：最小、额定和最大。",
+      "min": "最小交流输入电压",
+      "nom": "额定交流输入电压",
+      "max": "最大交流输入电压"
+    },
+    "review": {
+      "headingReady": "一切就绪",
+      "headingOpen": "请核对摘要",
+      "submit": "提交规格",
+      "submitOpen": "带 {count} 项待办提交",
+      "edit": "编辑",
+      "stillOpen": "待完成",
+      "later": "稍后回答",
+      "at": "于",
+      "phases": "{count} 个阶段",
+      "state": {
+        "unknown": "稍后回答",
+        "missing": "必填",
+        "invalid": "请检查数值"
+      }
+    }
   },
   "keyPoints": {
-    "s1": "连续 S1",
-    "peak": "峰值",
+    "s1": "连续 (S1)",
+    "peak": "峰值 (S2)",
     "torque": "转矩",
     "speed": "转速",
     "duration": "持续时间",

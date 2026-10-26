@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import * as C from '../specChoices.ts';
 import * as W from '../wizardState.ts';
 import { buildSpecificationCards } from '../specificationLayout.ts';
+import { rendererSource, specViewSource } from './specSources.mjs';
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const schema = JSON.parse(read('../../../../../src/motor_ai_sim/development/schema.json'));
@@ -70,8 +71,8 @@ test('3_2 stays one field in the key card; nothing else about the layout changed
 });
 
 test('the load switch is one line with short names and full names in the tooltip', () => {
-  const source = read('../components/DevelopmentPage.tsx');
-  const group = source.slice(source.indexOf('const renderLoadType'), source.indexOf('if (loading)'));
+  const source = rendererSource();
+  const group = source.slice(source.indexOf('const renderLoadType'), source.indexOf('  return { label,'));
   assert.match(group, /flexWrap: 'nowrap'/);
   assert.match(group, /whiteSpace: 'nowrap'/);
   assert.match(group, /overflowX: 'auto'/);
@@ -87,12 +88,12 @@ test('the load switch is one line with short names and full names in the tooltip
 });
 
 test('the ambient line renders only the maximum, hidden for liquid and underwater', () => {
-  const source = read('../components/DevelopmentPage.tsx');
+  const source = rendererSource();
   const body = source.slice(source.indexOf('const renderAmbient'), source.indexOf('/** 4_6 for the chosen load'));
   assert.match(body, /fieldApplies\(f, draftRef\.current\)\) return null/);
   assert.match(body, /p\.id === 'temperature_max_C'/);
   assert.doesNotMatch(body, /altitude|temperature_min/);
-  assert.match(source, /renderAmbient\(byId\('3_2'\)!\)/);
+  assert.match(specViewSource(), /case '3_2': return <Box key=\{f\.id\}>\{fields\.renderAmbient\(f\)\}<\/Box>/);
   assert.ok(en.wizard.ambientMaxNote && zh.wizard.ambientMaxNote);
 });
 

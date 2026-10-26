@@ -24,6 +24,8 @@ interface Props {
   beforeApply?: () => Promise<void>;
   /** called after a proposal was applied: reload the specification form */
   onApplied: () => void;
+  /** the right column of the wizard (wide screens): in the page flow and sticky instead of floating at the screen edge */
+  docked?: boolean;
 }
 
 const OPEN_KEY = 'specAssistant.open';
@@ -35,7 +37,7 @@ const readChat = (id: string): ChatMessage[] => {
 };
 const writeChat = (id: string, m: ChatMessage[]) => { try { window.sessionStorage.setItem(chatKey(id), JSON.stringify(m.slice(-40))); } catch { /* ignore */ } };
 
-export default function SpecAssistantPanel({ projectId, schema, lang, beforeApply, onApplied }: Props) {
+export default function SpecAssistantPanel({ projectId, schema, lang, beforeApply, onApplied, docked = false }: Props) {
   const { t } = useTranslation('development');
   const ui = langOf(lang);
   const [status, setStatus] = useState<AssistantStatus | null>(null);
@@ -115,7 +117,7 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
     return (
       <Tooltip title={t('specAssistant.tip')} placement="left">
         <Button size="small" variant="contained" startIcon={<SmartToyOutlinedIcon />} onClick={() => toggle(true)}
-          sx={{ position: 'fixed', right: 0, top: '38%', zIndex: 1190, textTransform: 'none', borderRadius: '8px 0 0 8px', minWidth: 0 }}>
+          sx={docked ? { position: 'sticky', top: 8, alignSelf: 'flex-start', flex: '0 0 auto', minHeight: 44, textTransform: 'none' } : { position: 'fixed', right: 0, top: '38%', zIndex: 1190, textTransform: 'none', borderRadius: '8px 0 0 8px', minWidth: 0 }}>
           {t('specAssistant.title')}{proposals.length > 0 ? ` (${proposals.length})` : ''}
         </Button>
       </Tooltip>
@@ -123,8 +125,9 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
   }
   const cards = openProposals(proposals);
   return (
-    <Paper elevation={6} data-testid="spec-assistant" sx={{ position: 'fixed', right: 0, top: 64, bottom: 8, width: { xs: '100vw', sm: 380 }, zIndex: 1190,
-      display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px 0 0 8px' }}>
+    <Paper elevation={docked ? 0 : 6} data-testid="spec-assistant" sx={docked
+      ? { position: 'sticky', top: 8, alignSelf: 'flex-start', flex: '0 0 360px', width: 360, height: 'calc(100vh - 120px)', minHeight: 420, display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px' }
+      : { position: 'fixed', right: 0, top: 64, bottom: 8, width: { xs: '100vw', sm: 380 }, zIndex: 1190, display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px 0 0 8px' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.8, borderBottom: '1px solid var(--line-soft)' }}>
         <SmartToyOutlinedIcon sx={{ fontSize: 18 }} />
         <Tooltip title={t('specAssistant.tip')}><Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{t('specAssistant.title')}</Typography></Tooltip>

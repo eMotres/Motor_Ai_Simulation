@@ -55,6 +55,14 @@ def sleeve_thickness_mm(source: Any) -> Optional[float]:
 
 def _run_has_sleeve(run: Mapping) -> bool:
     """A run summary with no geometry: does the run itself carry a sleeve?"""
+    if isinstance(run.get("has_sleeve"), bool):                 # a solved stress result says so
+        return run["has_sleeve"]
+    parts = run.get("parts")                                    # ... or lists the sleeve among its solved parts
+    if isinstance(parts, Mapping) and isinstance(parts.get("sleeve"), Mapping):
+        return True
+    stress = run.get("rotor_stress")                            # a duty's stored records: the stress record's parts
+    if isinstance(stress, Mapping) and _run_has_sleeve(stress):
+        return True
     for comp in run.get("mass_components") or []:
         if isinstance(comp, Mapping) and str(comp.get("name") or "").lower().startswith("sleeve"):
             if (_pos(comp.get("mass_kg")) or 0.0) > 0.0 or (_pos(comp.get("mass_modelled_kg")) or 0.0) > 0.0:

@@ -58,3 +58,38 @@ def test_inertia_and_loss_tables_drop_the_sleeve_without_one():
     assert "sleeve" not in str(R.em_loss_rows(em, None)).lower()
     em_s = {**em, "P_sleeve_W": 0.2, "mass_components": [{"name": "Sleeve", "mass_kg": 0.02}]}
     assert "Sleeve (eddy)" in str(R.em_loss_rows(em_s, None))
+
+
+# ── the remaining surfaces (review of #439) ──────────────────────────────────────────────────────────────────────
+
+def test_helper_reads_a_stress_result_and_a_duty_record():
+    assert has_sleeve({"has_sleeve": True}) and not has_sleeve({"has_sleeve": False, "parts": {"sleeve": {}}})
+    assert has_sleeve({"parts": {"sleeve": {"hoop_max_mpa": 300}}})
+    assert not has_sleeve({"parts": {"magnet": {}}})
+    assert has_sleeve({"rotor_stress": {"parts": {"sleeve": {}}}}) and not has_sleeve({"rotor_stress": {"parts": {}}})
+
+
+def test_mechanical_fit_table_has_no_sleeve_interference_without_a_sleeve():
+    res = {"interference_mm": 0.05, "interference_effective_mm": 0.04}
+    none = R.mech_fit_rows({"parts": {"magnet": {}}}, {**res, "has_sleeve": False})
+    assert "Sleeve" not in str(none) and "Maximum displacement" in str(none)
+    some = R.mech_fit_rows({"parts": {"sleeve": {"hoop_max_mpa": 1.0}}}, res)
+    assert "Sleeve interference, geometric" in str(some) and "Sleeve interference, effective at temperature" in str(some)
+
+
+def test_limits_table_drops_the_sleeve_hoop_row_only_for_a_sleeveless_machine():
+    base = {"cooling_kind": "air"}
+    assert "Sleeve hoop stress" not in str(R.limit_rules_rows({**base, "has_sleeve": False}))
+    assert "Sleeve hoop stress" in str(R.limit_rules_rows({**base, "has_sleeve": True}))
+    assert "Sleeve hoop stress" in str(R.limit_rules_rows(base))            # an unstamped context keeps the row as before
+
+
+def test_pwm_words_say_shaft_alone_without_a_sleeve():
+    col = {"em": {"P_loss_total_W": 100.0}}
+    assert not R._col_sleeved(col) and R._col_sleeved({"em": {"P_sleeve_W": 0.2}})
+    assert R._col_sleeved({"has_sleeve": True, "em": {}}) and not R._col_sleeved({"has_sleeve": False, "em": {"P_sleeve_W": 0.2}})
+    label = "…of which sleeve + shaft [W]"
+    assert R._shaft_only(label, False) == "…of which shaft [W]" and R._shaft_only(label, True) == label
+    text = "against 3 W in the magnets and 4 W in the sleeve and shaft."
+    assert R._shaft_only(text, False).endswith("in the shaft.") and R._shaft_only(text, True) == text
+    assert R._shaft_only("Sleeve + shaft", False) == "Shaft"

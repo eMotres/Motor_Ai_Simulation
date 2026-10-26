@@ -10,6 +10,7 @@
 import { tempTileSpec, type TempTileSpec } from './configuratorTiles';
 import { tempLimits, judgeTemps, type TempLimits } from './configuratorPropeller';
 import { shaftBalance } from './shaftBalance';
+import { hasSleeve } from './hasSleeve.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
 
@@ -342,8 +343,9 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       level: unsettled && !notSolved && num(s.P_mag_W) != null ? 'warn' : undefined }),
     tile({ id: 'shaftLoss', labelKey: 'configure.shaftLoss', tipKey: 'emTiles.shaftLossTip', unit: 'W', d: 1,
       value: num(s.P_shaft_W) }),
-    tile({ id: 'sleeveLoss', labelKey: 'configure.sleeveLoss', tipKey: 'emTiles.sleeveLossTip', unit: 'W', d: 4,
-      value: num(s.P_sleeve_W) }),
+    // a machine with no sleeve has no sleeve-loss tile (owner 2026-10-26)
+    ...(hasSleeve(s) ? [tile({ id: 'sleeveLoss', labelKey: 'configure.sleeveLoss', tipKey: 'emTiles.sleeveLossTip', unit: 'W', d: 4,
+      value: num(s.P_sleeve_W) })] : []),
     // the mechanical half (analytic, never from the field solve): an unknown loss is "-", not 0
     ...(mech != null ? [
       tile({ id: 'bearings', labelKey: 'configure.bearings', tipKey: 'emTiles.bearingsTip',

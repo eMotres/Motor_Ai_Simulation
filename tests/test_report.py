@@ -3307,8 +3307,8 @@ class TestPwmInfluence:
     def _cols(self, with_record=True):
         from motor_ai_sim import duty_results as dr
         res = {"pwm": dr.compact_pwm(self.REC)} if with_record else {}
-        return [{"duty": "rated", "d": {}, "em": dict(self.EM), "res": {}},
-                {"duty": "peak", "d": {}, "em": dict(self.EM), "res": res}]
+        return [{"duty": "rated", "d": {}, "em": dict(self.EM), "res": {}, "has_sleeve": True},
+                {"duty": "peak", "d": {}, "em": dict(self.EM), "res": res, "has_sleeve": True}]
 
     # ── the record survives the store ───────────────────────────────────────
     def test_compact_pwm_is_a_round_trip(self):
@@ -3401,7 +3401,7 @@ class TestPwmInfluence:
             "total": 2196.4})]
         rows2 = {r[0]: r[1:] for r in R2.pwm_rows(
             [{"duty": "peak", "d": {}, "em": dict(self.EM),
-              "res": {"pwm": dr.compact_pwm(rec)}}], self.BRG)[0]["rows"]}
+              "res": {"pwm": dr.compact_pwm(rec)}, "has_sleeve": True}], self.BRG)[0]["rows"]}
         assert rows2[key][1] == "−46.7"
         parts = sum(_f(rows2[k][1]) for k in
                     ("…of which copper [W]", "…of which iron [W]",

@@ -605,11 +605,12 @@ def build_bom(dump, inputs):
         tbs_text="slot liner material and thickness" + (" (%s.yaml names %s, no thickness)" % (cfg, slot_ins) if slot_ins else ""))
     sleeve = inputs["sim_materials"].get("sleeve")
     # OWNER 2026-10-26: a rotor with no sleeve (thickness 0) has no sleeve line at all, however its material assignment
-    # reads - not a zero-quantity row, not a "confirm that no sleeve is wanted" question.
+    # reads - not a zero-quantity row, not a "confirm that no sleeve is wanted" question.  With a sleeve it is ONE part of the
+    # rotor: the model carries its thickness (no CAD rule claims a sleeve body), the simulation config names its material.
     if sleeve and has_sleeve(m.params.get("sleeve_thickness", 0)):
-        add("sleeve", "Rotor sleeve", "manufactured", 0, "pcs", sleeve, "sleeve_thickness = %s mm in the model" % _num(m.params.get("sleeve_thickness", 0)),
-            None, "simulation config " + cfg, "%s.yaml names sleeve material %s but the thickness is 0: no sleeve in the CAD or here" % (cfg, sleeve),
-            tbs_text="%s.yaml names rotor sleeve %s with zero thickness - confirm that no sleeve is wanted" % (cfg, sleeve))
+        add("sleeve", "Rotor sleeve", "manufactured", 1, "pcs", sleeve, "sleeve_thickness = %s mm in the model" % _num(m.params.get("sleeve_thickness", 0)),
+            None, "simulation config " + cfg, "%s.yaml names sleeve material %s; the model gives the thickness only (length, fit and supplier are not in the CAD)" % (cfg, sleeve),
+            tbs_text="rotor sleeve %s: length, interference fit and supplier (the model gives the thickness only)" % sleeve)
     add("leads", "Power leads / soldering", "material", 1, "set", "to be specified", "-", None, "PCB project ASSEMBLY_NOTES_MOTOR",
         "PCB notes: a 12 AWG wire soldered onto each pin in the MOTOR build; not in the CAD", tbs_text="power leads (wire, length, termination) and solder")
 

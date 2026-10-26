@@ -40,3 +40,22 @@ test('wiring: the materials panel and the Compare mechanical row ask the helper,
   assert.match(rows, /if \(withSleeve\) put\(out, 'sleeve_mat'/);
   assert.match(rows, /if \(withSleeve\) \{\s*put\(out, 'sleeve_c'/);
 });
+
+test('a run summary without geometry is read by its own sleeve signals (mirror of sleeve.py)', () => {
+  assert.equal(hasSleeve({ mass_components: [{ name: 'Sleeve (CFRP)', mass_kg: 0.02 }] }), true);
+  assert.equal(hasSleeve({ mass_components: [{ name: 'Sleeve', mass_kg: 0 }, { name: 'Magnets', mass_kg: 0.1 }] }), false);
+  assert.equal(hasSleeve({ rotor_inertia: { sleeve: 1e-5 } }), true);
+  assert.equal(hasSleeve({ rotor_inertia: { sleeve: 0 } }), false);
+  assert.equal(hasSleeve({ P_sleeve_W: 0.0012 }), true);
+  assert.equal(hasSleeve({ P_sleeve_W: 0 }), false);
+  assert.equal(hasSleeve({ sleeve_hoop: { sigma_hoop_MPa: 400 } }), true);
+  assert.equal(hasSleeve({ rotor_stress: { parts: { sleeve: {} } } }), true);
+  assert.equal(hasSleeve({}), false);
+});
+
+test('wiring: the thermal tiles, the mechanical temperature badge and the sleeve-loss tile ask the helper', () => {
+  const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+  assert.match(src('../../components/thermal/ThermalPanel.tsx'), /p\.key !== 'sleeve' \|\| sleeved/);
+  assert.match(src('../../components/mechanical/MechanicalPanel.tsx'), /tempBadge\(res\.thermal, res\.has_sleeve \?\? hasSleeveGeo\)/);
+  assert.match(src('../emResultTiles.ts'), /\.\.\.\(hasSleeve\(s\) \? \[tile\(\{ id: 'sleeveLoss'/);
+});

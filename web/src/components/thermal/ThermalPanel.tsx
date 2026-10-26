@@ -26,6 +26,7 @@ import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import { coolingIssue, effectiveBoreMode, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
 import type { HeatPath } from '../../stores/thermalStore';
 import { historyNoticeFor } from '../../lib/historyNotice';
+import { hasSleeve } from '../../lib/hasSleeve.ts';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
 import { MAX_LOCAL_ROWS, localThermalRow, partMaxLabel } from '../compare/resultRows';
 import LocalCompareTable from '../common/LocalCompareTable';
@@ -992,9 +993,11 @@ const ThermalPanel: React.FC = () => {
   /** the cooling as typed — a sentence while it cannot be solved, else null */
   const coolErr = coolingIssue(st) ?? slipstreamIssue;
   const comps = (res?.components ?? {}) as Record<string, { max?: number; avg?: number } | null | undefined>;
+  // the sleeve is a part only of a machine that has one (owner 2026-10-26): the solved map says so, else the live geometry
+  const sleeved = res?.cooling?.sleeve?.present === true || hasSleeve(liveGeometry);
   const partTiles = [
-    ...PART_TILES.filter((p) => comps[p.key]),
-    ...Object.keys(comps).filter((k) => comps[k] && !PART_TILES.some((p) => p.key === k))
+    ...PART_TILES.filter((p) => comps[p.key] && (p.key !== 'sleeve' || sleeved)),
+    ...Object.keys(comps).filter((k) => comps[k] && k !== 'sleeve' && !PART_TILES.some((p) => p.key === k))
       .map((k) => ({ key: k, label: PART_LABEL(k), limit: undefined as number | undefined,
                      tip: `Peak and mean temperature of "${PART_LABEL(k)}" — a part the solver reported that this panel has no note for yet.` })),
   ];

@@ -36,6 +36,23 @@ export function sleeveThicknessMm(source: unknown): number | null {
   return finite(source);
 }
 
+/** A run summary with no geometry (mirror of `_run_has_sleeve` in sleeve.py): the run itself carries a sleeve - a sleeve mass
+ *  row, a sleeve inertia, a sleeve eddy loss above zero, a hoop-stress block, or a stress record listing the sleeve part. */
+function runHasSleeve(run: Record<string, unknown>): boolean {
+  const comps = run.mass_components;
+  if (Array.isArray(comps)) {
+    for (const c of comps) {
+      if (isRecord(c) && String(c.name ?? '').toLowerCase().startsWith('sleeve')
+        && ((finite(c.mass_kg) ?? 0) > 0 || (finite(c.mass_modelled_kg) ?? 0) > 0)) return true;
+    }
+  }
+  const inertia = run.rotor_inertia;
+  if (isRecord(inertia) && (finite(inertia.sleeve) ?? 0) > 0) return true;
+  if ((finite(run.P_sleeve_W) ?? 0) > 0) return true;
+  if (isRecord(run.sleeve_hoop) && Object.keys(run.sleeve_hoop).length > 0) return true;
+  return isRecord(run.rotor_stress) && hasSleeve(run.rotor_stress);
+}
+
 /** True only when the machine really has a retaining sleeve (thickness > 0, or a solved result that carries one). */
 export function hasSleeve(source: unknown): boolean {
   if (isRecord(source)) {
@@ -43,7 +60,8 @@ export function hasSleeve(source: unknown): boolean {
     if (thickness !== null) return thickness > 0;
     if (typeof source.has_sleeve === 'boolean') return source.has_sleeve;
     const parts = source.parts;
-    return isRecord(parts) && isRecord(parts.sleeve);
+    if (isRecord(parts) && isRecord(parts.sleeve)) return true;
+    return runHasSleeve(source);
   }
   const thickness = finite(source);
   return thickness !== null && thickness > 0;

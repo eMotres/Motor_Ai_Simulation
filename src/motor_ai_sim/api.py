@@ -434,6 +434,8 @@ app.include_router(development_router)
 app.include_router(development_admin_router)
 app.include_router(development_motors_router)
 app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
+from motor_ai_sim.development.spec_assistant_routes import router as development_spec_assistant_router
+app.include_router(development_spec_assistant_router)  # Specification side panel: assistant turn + proposals (apply: spec editors only)
 # Activity digests (owner 2026-10-26): settings, unsubscribe link, Admin -> Digests (the only place a digest is sent)
 from motor_ai_sim.digest.routes import router as digest_router, admin_router as digest_admin_router
 app.include_router(digest_router)

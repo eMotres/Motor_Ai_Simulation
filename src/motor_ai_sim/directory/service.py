@@ -29,9 +29,28 @@ log = logging.getLogger(__name__)
 
 # -- Helper queries -----------------------------------------------------------
 
+def _live_verification(v: Any) -> Any:
+    """The company's verification block with the status of its case AS IT IS NOW.
+
+    The block is written once, when the NDA is signed, and the admin's later decision (approve / deny / request more
+    information) lands on the case only - so the directory showed PENDING for companies whose case had long been
+    VERIFIED (owner 2026-10-27).  Read the case by its id; a missing or unreadable case keeps the stored status."""
+    if not isinstance(v, dict) or not v.get("case_id"):
+        return v
+    try:
+        from motor_ai_sim.verification import store as verif_store
+        case = verif_store.get(str(v["case_id"]))
+    except Exception:  # noqa: BLE001 - the directory never fails on a verification read
+        case = None
+    status = (case or {}).get("status")
+    return {**v, "status": status} if status else v
+
+
 def _enrich_company(c: dict, all_affs: list[dict], all_people: list[dict]) -> dict:
     comp = dict(c)
     cid = comp["id"]
+    if comp.get("verification"):
+        comp["verification"] = _live_verification(comp["verification"])
     affs = [a for a in all_affs if a.get("company_id") == cid]
     comp["people_count"] = len({a["person_id"] for a in affs if a.get("status") in ("confirmed", "proposed")})
     comp["proposed_count"] = len([a for a in affs if a.get("status") == "proposed"])

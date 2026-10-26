@@ -437,3 +437,19 @@ def test_commercial_documents_lifecycle(dir_env):
     c_summary = next(c for c in r_list.json()["companies"] if c["id"] == cid)
     assert c_summary["documents_summary"]["paid_count"] == 1
     assert c_summary["documents_summary"]["paid_total"] == 2500.0
+
+
+def test_company_verification_shows_the_case_status_now(monkeypatch):
+    """The block is written at NDA time; the admin's later decision lands on the case only (owner 2026-10-27:
+    companies showed PENDING with their case long VERIFIED)."""
+    from motor_ai_sim.directory import service as S
+    from motor_ai_sim.verification import store as VS
+    cases = {"v20261025-aaaaaaaaaaaa": {"status": "VERIFIED"}, "v20261025-bbbbbbbbbbbb": {"status": "DENIED"}}
+    monkeypatch.setattr(VS, "get", lambda cid: cases.get(cid))
+    comp = {"id": "c1", "verification": {"status": "PENDING", "case_id": "v20261025-aaaaaaaaaaaa"}}
+    assert S._enrich_company(comp, [], [])["verification"]["status"] == "VERIFIED"
+    comp["verification"]["case_id"] = "v20261025-bbbbbbbbbbbb"
+    assert S._enrich_company(comp, [], [])["verification"]["status"] == "DENIED"
+    comp["verification"]["case_id"] = "v20261025-cccccccccccc"          # case missing: the stored status stays
+    assert S._enrich_company(comp, [], [])["verification"]["status"] == "PENDING"
+    assert S._enrich_company({"id": "c2", "verification": {"status": "none"}}, [], [])["verification"]["status"] == "none"

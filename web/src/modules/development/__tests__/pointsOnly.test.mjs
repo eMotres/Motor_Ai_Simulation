@@ -104,8 +104,10 @@ test('wiring: ONE display system - Configure decides points-limited from the loa
   const page = src('../components/DevelopmentPage.tsx');
   assert.match(page, /canEditProject && <MotorNoteField value=\{live\.note \?\? ''\}/);       // the note editor sits in the variant's group header
   const admin = src('../../../components/admin/sections/ProjectsSection.tsx');
-  assert.match(admin, /<MotorNoteField value=\{m\.note \?\? ''\}/);
-  assert.match(admin, /\/motors\/note', 'PATCH'/);
+  assert.doesNotMatch(admin, /MotorNoteField|\/motors\/note/);                             // no inline note editor in the admin drawer
+  assert.match(admin, /data-testid="linked-motor-row"/);                                 // one grid row per motor
+  assert.match(admin, /gridTemplateColumns: 'minmax\(0,1fr\) 112px 32px 32px 32px'/);
+  assert.match(admin, /\/motors\/status', 'PATCH'/);
   const panel = src('../../../components/compare/PointsConfigure.tsx');
   assert.match(panel, /<Slider disabled/);                                       // continuous knobs stay disabled
   assert.match(panel, /<StoredFieldViewer /);                                    // read-only maps, no run buttons

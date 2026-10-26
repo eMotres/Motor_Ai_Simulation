@@ -67,7 +67,7 @@ test('Development links load only on explicit clicks; customers are gated and hi
   assert.match(actions, /onClick=\{\(\) => openConfigure\(/);
   assert.match(actions, /onClick=\{\(\) => openSimulation\(/);
   assert.match(source, /r\.history \? null : <MotorOpenActions/);                          // history rows carry no open actions
-  assert.match(admin, /<MotorOpenActions motor=\{m\} allowMotorDefault engineer t=\{td\}/);
+  assert.doesNotMatch(admin, /MotorOpenActions|MotorNoteField/);                          // the admin drawer opens nothing (owner 2026-10-26)
   assert.match(admin, /m\.kind !== 'history'/);
   assert.doesNotMatch(source, /handoverTip|tr\('handover'\)/);
 });

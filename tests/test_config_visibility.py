@@ -386,6 +386,8 @@ NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog conf
     ("GET", "/api/projects/{project_id}/motors/points"), ("GET", "/api/projects/{project_id}/motors/view"),
     ("GET", "/api/projects/{project_id}/motors/field"), ("PATCH", "/api/projects/{project_id}/motors/note"),
     ("PATCH", "/api/projects/{project_id}/motors/status"), ("POST", "/api/projects/{project_id}/motors"),
+    ("PATCH", "/api/projects/{project_id}/motors/report_reviewed"), ("PATCH", "/api/projects/{project_id}/motors/recommended"),
+    ("GET", "/api/projects/{project_id}/motors/report"),
 }
 
 

@@ -687,6 +687,9 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
                       "nothing was solved to produce this document.")
 
     _cover(doc, D)
+    _rec = R._recommended_line(die, cfg)
+    if _rec:
+        _p(doc, "\u2605 " + _rec, size=10, bold=True)
     _machine(doc, D)
     _duties(doc, D)
     _comparisons(doc, D)
@@ -697,6 +700,7 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
     _controller(doc, D)
     _mech_detail(doc, D)
     _warnings(doc, D)
+    _still_to_compute(doc, die, cfg, cfg_doc)
     _notes(doc, D)
     # Every section is on the page: what is left is python-docx zipping it.
     _RP.stage("tables")
@@ -1730,6 +1734,19 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
 
 
 # ── 8 warnings ──────────────────────────────────────────────────────────────
+
+
+def _still_to_compute(doc, die: str, cfg: str, cfg_doc: Dict[str, Any]) -> None:
+    """The "Still to compute" section (owner 2026-10-26): every missing or stale result once, by duty."""
+    from motor_ai_sim import report_missing as RM
+    _h(doc, RM.HEADING, 1)
+    rows = R._still_to_compute_rows(die, cfg, cfg_doc)
+    if not rows:
+        _p(doc, RM.NONE_LINE, size=9)
+        return
+    _p(doc, RM.INTRO, size=9)
+    for line in RM.as_lines(rows):
+        _p(doc, "\u2022 " + line, size=9)
 
 
 def _warnings(doc, D: Dict[str, Any]) -> None:

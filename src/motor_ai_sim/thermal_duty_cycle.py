@@ -2211,7 +2211,8 @@ def _aitken(a: Mapping[str, float], b: Mapping[str, float],
 # S2 — how long may it pull?
 # ---------------------------------------------------------------------------
 
-def default_limits(magnet_limit_c: Optional[float] = None) -> Dict[str, float]:
+def default_limits(magnet_limit_c: Optional[float] = None,
+                   winding_limit_c: Optional[float] = None) -> Dict[str, float]:
     """The limits a duty cycle is judged against.
 
     The winding is the PROJECT's class — 200 °C, ``report.PROJECT_INSULATION_C``
@@ -2222,14 +2223,9 @@ def default_limits(magnet_limit_c: Optional[float] = None) -> Dict[str, float]:
         from motor_ai_sim.report import PROJECT_INSULATION_C as _lim
     except Exception:                                    # noqa: BLE001
         _lim = PROJECT_INSULATION_C
-    # …unless the configuration states its own winding limit (owner 2026-10-26, e.g. 180 °C)
-    try:
-        from motor_ai_sim import winding_limit as _wl
-        _own = _wl.resolve(None)
-        if _own is not None:
-            _lim = _own
-    except Exception:                                    # noqa: BLE001
-        pass
+    # …unless the caller passes the solved configuration's own winding limit (owner 2026-10-26, e.g. 180 °C)
+    if winding_limit_c is not None:
+        _lim = float(winding_limit_c)
     out = {"winding": float(_lim)}
     if magnet_limit_c is not None:
         out["magnet"] = float(magnet_limit_c)

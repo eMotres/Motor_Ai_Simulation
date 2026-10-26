@@ -7045,15 +7045,18 @@ def _duty_at_point(duties: List[Dict[str, Any]], rpm: Any, cur: Any) -> Optional
     The current is compared only when BOTH sides carry it: a rotor-stress solve
     knows a speed and a torque, not a winding current.
     """
+    # THE SAME TOLERANCES AS THE PER-POINT RULE (development.motor_view.belongs_to_point): rpm 1 % / 1 rpm,
+    # current 3 % / 0.5 A, relative to the larger of the two
+    from motor_ai_sim.development import motor_view as _mv
     rpm, cur = _numf(rpm), _numf(cur)
     if not rpm:
         return None
     hits = []
     for d in duties:
         d_rpm, d_cur = _numf(d.get("rpm")), _numf(d.get("current_arms"))
-        if not d_rpm or abs(d_rpm - rpm) > max(1.0, 0.01 * d_rpm):
+        if not d_rpm or not _mv._close(rpm, d_rpm, _mv.RPM_REL_TOL, _mv.RPM_ABS_TOL):
             continue
-        if cur and d_cur and abs(d_cur - cur) > max(0.5, 0.02 * d_cur):
+        if cur and d_cur and not _mv._close(cur, d_cur, _mv.CURRENT_REL_TOL, _mv.CURRENT_ABS_TOL):
             continue
         hits.append(str(d.get("name") or ""))
     return hits[0] if len(hits) == 1 else None
@@ -9574,6 +9577,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     return {
         "pair": pair,
         "requirements": requirements, "req_rows": req_rows,
+        "req_source": _rc.requirements_source_line(requirements),
         "bearing_load_rows": brg_load_rows, "bearing_load_notes": brg_load_notes,
         "winding_limit_c": winding_limit_cfg, "ins_lim": ins_lim,
         # One running figure number per document; both renderers count in the
@@ -9698,7 +9702,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story += _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src,
                     brg, sources, delta, batt,
                     used_live=bool(D.get("em_from_run")), cols=cols, ctxs=ctxs,
-                    supply=D.get("supply"), sec=sec, req_rows=D.get("req_rows"))
+                    supply=D.get("supply"), sec=sec, req_rows=D.get("req_rows"),
+                    req_source=D.get("req_source") or "")
     _rec = _recommended_line(die, cfg)
     if _rec:
         story.append(_para("\u2605 " + _rec, st["body"]))
@@ -10301,7 +10306,8 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
            sec: Optional[Dict[str, int]] = None,
            cols: Optional[List[Dict[str, Any]]] = None,
            ctxs: Optional[Dict[str, Any]] = None,
-           req_rows: Optional[List[List[str]]] = None) -> List[Any]:
+           req_rows: Optional[List[List[str]]] = None,
+           req_source: str = "") -> List[Any]:
     from reportlab.platypus import Spacer
 
     out: List[Any] = [
@@ -10321,6 +10327,8 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
         _w[2] = CONTENT_W - _w[0] - _w[1] - _w[3]
         out.append(_table([[_para(str(v), st["hcell"] if i == 0 else st["cell"]) for v in r]
                            for i, r in enumerate(req_rows)], _w, header=True, size=8.8))
+        if req_source:
+            out.append(_para(req_source, st["note"]))
         out.append(Spacer(1, 10))
     if cols:
         # THE KEY POINT OF EVERY DUTY AT ONCE (owner 2026-10-25).

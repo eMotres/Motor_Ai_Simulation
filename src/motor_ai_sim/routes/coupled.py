@@ -1169,6 +1169,7 @@ def _cycle_inputs(body: Dict[str, Any],
         "materials": _assignments(),
         "part_states": None,          # = the states the run's summary carries
         "magnet_limit_c": lim, "magnet_limit_source": lim_src,
+        "winding_limit_c": _winding_limit_for(body),
         "rated_state_c": rated, "rated_duty": rated_duty,
         "rated_state_source": rated_why,
         "cooling": dict(cooling or {}),
@@ -1220,6 +1221,7 @@ def _cycle_step(inputs: Dict[str, Any], em_summary: Dict[str, Any],
         materials=inputs["materials"], part_states=inputs["part_states"],
         magnet_limit_c=inputs["magnet_limit_c"],
         magnet_limit_source=inputs["magnet_limit_source"],
+        winding_limit_c=inputs.get("winding_limit_c"),
         side_areas=side, d_housing_m=inputs["d_housing_m"],
         rated_state_c=inputs["rated_state_c"])
     regime = _cdc.solve_regime(
@@ -1327,6 +1329,7 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
         thermal_result=field, em_summary=em_summary,
         magnet_grade=mats.get("magnet"),
         bearing_temp_c=bearing_temp_c,
+        winding_limit_c=_winding_limit_for(body),
         magnet_limit_c=(float(body["magnet_limit_c"])
                         if body.get("magnet_limit_c") not in (None, "") else None))
     if not limits:
@@ -7440,6 +7443,16 @@ def _setpoint_only_limited_line(i_duty: Optional[float],
                else "its limit"))
 
 
+def _winding_limit_for(body: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The winding limit of the configuration THIS solve is for (``winding_limit.for_solve``: the body's die /
+    config, else the catalogue context the record is filed under), passed explicitly to every limit below."""
+    try:
+        from motor_ai_sim import winding_limit as _wl
+        return _wl.for_solve(body)
+    except Exception:  # noqa: BLE001 — a limit read never fails a solve
+        return None
+
+
 def _active_application() -> Optional[str]:
     """The default application of the catalogued configuration this run is
     on (``applications``: propeller / robot / aviation / marine), or ``None``
@@ -8170,7 +8183,9 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
             # temperature the EM solve runs at.  The bearing seat is NOT
             # judged: it is reported, never a limit on rated.
             rated_winding=True,
-            winding_limit_c=_ttl.rated_winding_limit(_active_application())[0],
+            # …and THE SOLVED CONFIGURATION's own winding limit when it states one (owner 2026-10-26)
+            winding_limit_c=_ttl.rated_winding_limit(
+                _active_application(), limit_c=_winding_limit_for(body))[0],
             speed_search=_cr_speed_search_opts(cooling, summary, float(rpm),
                                                pwm=pwm),
             eddy_noload_fraction=_cr_eddy_f0(summary, float(rpm))[0])

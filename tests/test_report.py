@@ -5684,8 +5684,11 @@ def foreign_tab_stores(monkeypatch, tmp_path, dies, solved, as_another_machine):
         assert dr.record(DIE, CFG, DUTY, kind, dr.compact_mechanical(
             kind, e.get("result") or {}, e.get("params") or {}, OUR_FP,
             "2026-09-15T01:00:00"))
+    # …stamped with the point it was solved at: an unstamped coupled row cannot be tied to the duty and is not
+    # used (owner 2026-10-26, #437 per-point rules)
     assert dr.record(DIE, CFG, DUTY, "coupled", {
         "kind": "coupled", "computed_at": "2026-09-15T01:00:00",
+        "point": {"rpm": FAST["rpm"], "I_phase_rms": FAST["I_phase_rms"]},
         "geometry_fingerprint": OUR_FP, "converged": True, "iterations": 2,
         "em_runs": 2, "coil_temp_c": 117.6, "magnet_temp_c": 133.0,
         "magnet_temp_max_c": 135.3, "bearing_temp_c": 96.0, "tol_K": 2.0,

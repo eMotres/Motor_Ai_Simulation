@@ -88,45 +88,61 @@ def _secs(s: Any) -> str:
 # the customer's numbers
 # ---------------------------------------------------------------------------
 
-def requirements_from_draft(draft: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-    """The requirements this report checks, from one specification draft (``{"fields": {...}}``)."""
+#: The configuration key of an EXPLICIT requirements override (offline builds, a variant outside any project).  The
+#: report labels it as such; the project specification is the normal source.
+REQUIREMENTS_OVERRIDE_KEY = "requirements_override"
+OVERRIDE_SOURCE = "configuration override (not the project specification)"
+
+
+def requirements_from_draft(draft: Optional[Mapping[str, Any]], source: str = "project specification"
+                            ) -> Dict[str, Any]:
+    """The requirements this report checks, from one specification draft (``{"fields": {...}}``), read the CANONICAL
+    way (``development.models``): only FILLED answers (``_active_value``), the key points through their own list,
+    the overspeed through ``proof_speed_rpm`` (the larger of the maximum and a stored overspeed) and the thermal
+    basis through ``thermal_basis`` (ambient air, coolant inlet or water, by the cooling medium)."""
     from motor_ai_sim.development import models as M
     draft = dict(draft or {})
     fields = draft.get("fields") if isinstance(draft.get("fields"), Mapping) else {}
 
     def val(fid: str) -> Dict[str, Any]:
-        a = fields.get(fid)
-        if not isinstance(a, Mapping) or a.get("status") == "not_known_yet":
-            return {}
-        v = a.get("value")
+        v = M._active_value(fields, fid)
         return dict(v) if isinstance(v, Mapping) else {}
 
-    out: Dict[str, Any] = {"source": "project specification"}
+    out: Dict[str, Any] = {"source": source}
+    if M.key_points_stored(draft):
+        kp = M._active_value(fields, M.KEY_POINTS_FIELD)
+        rows = [dict(r) for r in kp if isinstance(r, Mapping)] if isinstance(kp, list) else []
+    else:
+        rows = M.legacy_key_points({k: v for k, v in fields.items()
+                                    if k in ("1_4", "1_5") and M._active_value(fields, k) is not None})
     try:
-        rows = M.key_points_effective(draft)
         cont, peak = M.derive_continuous_peak(rows)
     except Exception:                                           # noqa: BLE001
         cont, peak = None, None
-    s1, pk = val("1_4"), val("1_5")
-    if cont or s1:
-        out["continuous"] = {"torque_Nm": _num((cont or {}).get("torque_Nm")) or _num(s1.get("torque_Nm")),
-                             "speed_rpm": _num((cont or {}).get("speed_rpm")) or _num(s1.get("speed_rpm"))}
-    if peak or pk:
-        dur = (peak or {}).get("duration_s")
-        out["peak"] = {"torque_Nm": _num((peak or {}).get("torque_Nm")) or _num(pk.get("torque_Nm")),
-                       "speed_rpm": _num((peak or {}).get("speed_rpm")) or _num(pk.get("speed_rpm")),
-                       "duration_s": _num(dur) if dur not in (None, "continuous") else _num(pk.get("duration_s"))}
+    if not cont and not M.key_points_stored(draft) and val("1_4"):
+        cont = val("1_4")                     # a legacy S1 answer the key-point rules cannot use as a row
+    if not peak and not M.key_points_stored(draft) and val("1_5"):
+        peak = val("1_5")
+    if cont:
+        out["continuous"] = {"torque_Nm": _num(cont.get("torque_Nm")), "speed_rpm": _num(cont.get("speed_rpm"))}
+    if peak:
+        dur = peak.get("duration_s")
+        if dur in (None, M.CONTINUOUS):
+            dur = val("1_5").get("duration_s")
+        out["peak"] = {"torque_Nm": _num(peak.get("torque_Nm")), "speed_rpm": _num(peak.get("speed_rpm")),
+                       "duration_s": _num(dur)}
     b = val("2_1")
     if b:
         out["battery"] = {"v_min": _num(b.get("voltage_min_V")), "v_nom": _num(b.get("voltage_nominal_V")),
                           "v_max": _num(b.get("voltage_max_V")), "cells": _num(b.get("series_cells")),
                           "chemistry": b.get("chemistry")}
-    amb = val("3_2")
-    if amb:
-        out["ambient_max_c"] = _num(amb.get("temperature_max_C"))
-    sp = val("1_6")
-    if sp:
-        out["overspeed_rpm"] = _num(sp.get("overspeed_rpm")) or _num(sp.get("maximum_rpm"))
+    tb = M.thermal_basis(draft)
+    if _num(tb.get("temperature_C")) is not None:
+        out["ambient_max_c"] = _num(tb.get("temperature_C"))
+        out["thermal_medium"] = tb.get("medium") or "air"
+    ov = M.proof_speed_rpm(draft)
+    if ov is not None:
+        out["overspeed_rpm"] = float(ov)
     ld = val("4_6")
     if ld:
         out["axial_thrust_N"] = _num(ld.get("axial_thrust_N"))
@@ -135,36 +151,45 @@ def requirements_from_draft(draft: Optional[Mapping[str, Any]]) -> Dict[str, Any
     return {k: v for k, v in out.items() if v not in (None, {}, "")}
 
 
-def _latest_spec_draft(project_id: str) -> Optional[Dict[str, Any]]:
+def _latest_spec_draft(project_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """``(draft, source words)``: the newest SUBMITTED specification version, else the working draft."""
     from motor_ai_sim.development import store
     idx = store.load_json(project_id, "spec/index.json", {"versions": []}) or {}
     nums = [int(v.get("version", 0)) for v in (idx.get("versions") or []) if isinstance(v, Mapping)]
     for n in sorted(nums, reverse=True):
         ver = store.load_json(project_id, f"spec/v{n}.json", None)
         if isinstance(ver, Mapping) and isinstance(ver.get("draft"), Mapping):
-            return dict(ver["draft"])
+            return dict(ver["draft"]), "project specification v%d" % n
     cur = store.load_json(project_id, "draft.json", {}) or {}
-    return dict(cur.get("draft")) if isinstance(cur.get("draft"), Mapping) else None
+    return ((dict(cur.get("draft")), "project specification (draft, not submitted)")
+            if isinstance(cur.get("draft"), Mapping) else (None, ""))
 
 
 def project_requirements(die: str, cfg: str, cfg_doc: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-    """The customer's requirements for ``die/cfg``: the configuration's own ``requirements:`` block first (an explicit
-    override, and what an offline build passes), else the latest specification of the project the variant is linked
-    to.  ``{}`` when neither exists.  Never raises."""
-    own = (cfg_doc or {}).get("requirements") if isinstance(cfg_doc, Mapping) else None
+    """The customer's requirements for ``die/cfg``: the latest specification of the project the variant is linked
+    to.  A configuration may carry an EXPLICIT ``requirements_override:`` block instead (offline builds, a variant
+    outside any project); it is used only when present and is labelled as an override everywhere it shows.
+    ``{}`` when neither exists.  Never raises."""
+    own = (cfg_doc or {}).get(REQUIREMENTS_OVERRIDE_KEY) if isinstance(cfg_doc, Mapping) else None
     if isinstance(own, Mapping) and own:
         out = {k: v for k, v in dict(own).items()}
-        out.setdefault("source", "configuration")
+        out["source"] = OVERRIDE_SOURCE
         return out
     try:
         from motor_ai_sim.development.motors import report_link_state
         st = report_link_state(die, cfg)
         if not st:
             return {}
-        draft = _latest_spec_draft(str(st["project_id"]))
-        return requirements_from_draft(draft) if draft else {}
+        draft, words = _latest_spec_draft(str(st["project_id"]))
+        return requirements_from_draft(draft, words) if draft else {}
     except Exception:                                           # noqa: BLE001 - a report never fails over the spec
         return {}
+
+
+def requirements_source_line(req: Mapping[str, Any]) -> str:
+    """The one line under the requirements table: where the requirements came from."""
+    src = str((req or {}).get("source") or "").strip()
+    return ("Requirements from: %s." % src) if src else ""
 
 
 def customer_battery(batt: Optional[Mapping[str, Any]], req: Mapping[str, Any]) -> Dict[str, Any]:
@@ -198,8 +223,16 @@ def _rpm(col: Mapping[str, Any]) -> Optional[float]:
 
 
 def _torque(col: Mapping[str, Any]) -> Optional[float]:
-    t = _num(_em(col).get("T_em_avg_Nm"))
+    """The duty's torque on the SAME basis as the report's main torque tables: the end-effect corrected
+    ``end3d.T_corrected_Nm`` when the run has one, else the 2-D average."""
+    t = _num(_g(_em(col), "end3d.T_corrected_Nm"))
+    if t is None:
+        t = _num(_em(col).get("T_em_avg_Nm"))
     return abs(t) if t is not None else None
+
+
+def _torque_basis(col: Mapping[str, Any]) -> str:
+    return ("3-D corrected" if _num(_g(_em(col), "end3d.T_corrected_Nm")) is not None else "2-D")
 
 
 def match_duty(cols: Sequence[Mapping[str, Any]], rpm: Optional[float], torque: Optional[float]
@@ -253,11 +286,18 @@ def _s1_block(col: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _s1_torque(blk: Mapping[str, Any]) -> Optional[float]:
+def _s1_torque(blk: Mapping[str, Any], rpm: Optional[float] = None) -> Tuple[Optional[float], str]:
+    """``(torque, "shaft" | "EM")`` of a verified S1 rating: the SHAFT torque (shaft power over the speed) when the
+    block states a shaft power, else the electromagnetic torque, named as such."""
     if blk.get("verified") is False or blk.get("trustworthy") is False or blk.get("feasible") is False:
-        return None
-    t = _num((blk.get("power") or {}).get("T_em_Nm"))
-    return abs(t) if t is not None else None
+        return None, ""
+    pw = blk.get("power") or {}
+    n = _num((blk.get("reference") or {}).get("rpm")) or _num(rpm)
+    ps = _num(pw.get("P_shaft_W"))
+    if ps is not None and n:
+        return abs(ps) / (2.0 * math.pi * n / 60.0), "shaft"
+    t = _num(pw.get("T_em_Nm"))
+    return (abs(t), "EM") if t is not None else (None, "")
 
 
 def _s2_time(col: Mapping[str, Any]) -> Tuple[Optional[float], Optional[float], str]:
@@ -335,7 +375,8 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
             t = _torque(c)
             ok = t >= T * (1.0 - TORQUE_TOL_REL)
             rows.append([label + ", torque", "%s (%s)" % (_fmt(t, 1, "N·m"), c.get("duty")),
-                         "EM run, winding %s" % _fmt(_num(_em(c).get("coil_temp_C")), 0, "°C"),
+                         "EM run %s, winding %s" % (_torque_basis(c),
+                                                    _fmt(_num(_em(c).get("coil_temp_C")), 0, "°C")),
                          MET if ok else "%s (%s)" % (NOT_MET, _pct_short(t, T))])
         # …and HELD continuously: the S1 search at the project's winding limit
         blk = _s1_block(c) if c is not None else None
@@ -344,9 +385,9 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
             rows.append([s1_label, "—", "S1 search", NOT_COMPUTED])
         else:
             lim = _num((blk.get("limits_c") or {}).get("winding"))
-            ts1 = _s1_torque(blk)
+            ts1, kind = _s1_torque(blk, n)
             i_s1 = _num(blk.get("I_cont_A_rms"))
-            ach = ("%s at %s" % (_fmt(ts1, 1, "N·m"), _fmt(i_s1, 1, "A")) if ts1 is not None
+            ach = ("%s %s at %s" % (_fmt(ts1, 1, "N·m"), kind, _fmt(i_s1, 1, "A")) if ts1 is not None
                    else ("%s, torque not verified" % _fmt(i_s1, 1, "A") if i_s1 is not None else "no rating"))
             src = "S1 search, winding %s" % _fmt(lim, 0, "°C")
             if blk.get("cooling_label"):
@@ -373,7 +414,8 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
             t = _torque(c)
             ok = t is not None and t >= T * (1.0 - TORQUE_TOL_REL)
             rows.append([label, "%s (%s)" % (_fmt(t, 1, "N·m"), c.get("duty")),
-                         "EM run, winding %s" % _fmt(_num(_em(c).get("coil_temp_C")), 0, "°C"),
+                         "EM run %s, winding %s" % (_torque_basis(c),
+                                                    _fmt(_num(_em(c).get("coil_temp_C")), 0, "°C")),
                          MET if ok else "%s (%s)" % (NOT_MET, _pct_short(t or 0.0, T))])
         if dur is not None:
             d_label = "Peak held %s, winding ≤ %s" % (_secs(dur), wl_txt)
@@ -418,7 +460,8 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
     if amb is not None:
         from motor_ai_sim.report import ambient_c_of
         ambs = [a for a in (ambient_c_of((c.get("res") or {}).get("thermal")) for c in cols) if a is not None]
-        label = "Maximum ambient %s" % _fmt(amb, 0, "°C")
+        label = "%s %s" % ({"liquid": "Coolant inlet", "submerged": "Water temperature"}.get(
+            str(req.get("thermal_medium") or "air"), "Maximum ambient"), _fmt(amb, 0, "°C"))
         if not ambs:
             rows.append([label, "—", "thermal map", NOT_COMPUTED])
         else:
@@ -430,8 +473,9 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
     ov = _num(req.get("overspeed_rpm"))
     if ov is not None:
         cell, sf = overspeed_cell(cols, ov)
+        from motor_ai_sim.report import SF_ACCEPT
         rows.append(["Mechanics at %s overspeed" % _fmt(ov, 0, "rpm"), cell, "rotor stress",
-                     NOT_COMPUTED if sf is None else (MET if sf >= 3.0 else NOT_MET)])
+                     NOT_COMPUTED if sf is None else (MET if sf >= SF_ACCEPT else NOT_MET)])
 
     if not rows:
         return []
@@ -567,10 +611,11 @@ def bearing_load_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
                 life = "%s h (%s)" % (_fmt(l10["single_bearing"]["l10h_hours"], 0), card.name)
         rows.append([str(c.get("duty") or ""), _fmt(rpm, 0, "rpm"), ax, rad, life])
     notes = [
-        "Axial: propeller thrust %s (tilt-rotor: direction changes with the flight phase) + magnetic force at %s "
-        "axial offset." % ("from the customer specification" if thrust is not None else "— customer input needed",
-                           _fmt(s["axial_offset_mm"], 2, "mm")),
-        "Radial: rotating mass × %s g + unbalanced magnetic pull at %s %% of the %s gap eccentricity%s."
+        "Axial: propeller thrust %s (tilt-rotor: direction changes with the flight phase) + magnetic centring force "
+        "at %s axial offset — an estimate." % ("from the customer specification" if thrust is not None
+                                               else "— customer input needed", _fmt(s["axial_offset_mm"], 2, "mm")),
+        "Radial: rotating mass × %s g + unbalanced magnetic pull at %s %% of the %s gap eccentricity — an estimate "
+        "from the mean air-gap |B|%s."
         % (_fmt(s["load_factor_g"], 1), _fmt(s["eccentricity_pct_of_gap"], 0),
            _fmt((gap or 0) * 1000.0, 2, "mm"), "" if radial_cust is None else " + customer radial load"),
         "L10h: ISO 281, one bearing taking the whole thrust.",

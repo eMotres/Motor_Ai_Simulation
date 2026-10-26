@@ -222,6 +222,7 @@ def build_model(*, block: Mapping[str, Any],
                 d_housing_m: Optional[float] = None,
                 magnet_k_w_per_mk: Optional[float] = None,
                 rated_state_c: Optional[Mapping[str, float]] = None,
+                winding_limit_c: Optional[float] = None,
                 ) -> CycleModel:
     """Fit this pass's cycle model to the map this pass just solved.
 
@@ -318,7 +319,7 @@ def build_model(*, block: Mapping[str, Any],
 
     return CycleModel(
         kind=kind, duty=str(duty_name), network=net, caps=caps, profile=profile,
-        limits=tdc.default_limits(magnet_limit_c),
+        limits=tdc.default_limits(magnet_limit_c, winding_limit_c),
         cycle_s=float(profile.cycle_s),
         requested_ed_pct=(float(profile.ed_pct)
                           if (kind == "S3" and profile.ed_given

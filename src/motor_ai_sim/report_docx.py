@@ -736,6 +736,8 @@ def _cover(doc, D: Dict[str, Any]) -> None:
     if D.get("req_rows"):
         _h(doc, R.REQUIREMENTS_HEADING, 1)
         _table(doc, D["req_rows"], size=10.5, widths_cm=[7.4, 6.4, 8.6, 4.0])
+        if D.get("req_source"):
+            _p(doc, D["req_source"], size=9, italic=True, color=NOTE, space_after=8.0)
 
     if D.get("cols"):
         # THE KEY POINT OF EVERY DUTY AT ONCE (owner 2026-10-25).

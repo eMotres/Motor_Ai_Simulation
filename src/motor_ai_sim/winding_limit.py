@@ -12,15 +12,15 @@ the duty-cycle limits and Configure's tiles.  A configuration that states none
 keeps the project defaults exactly as before (insulation class N 200 °C for the
 overheat verdicts, the application's rated temperature for S1).
 
-The paths that run on the LIVE machine (the coupled loop, the duty cycle) have
-no configuration document in hand; they ask :func:`active_config_winding_limit_c`,
-which reads the catalogued configuration the editor's context names.  Never
-raises: a limit nobody stated is ``None``.
+The solver paths (the coupled loop's S1 search, time-to-limit, the duty cycle)
+pass the limit of the configuration they solve explicitly (:func:`for_solve`); no
+path reads the editor's context implicitly.  Never raises: a limit nobody stated
+is ``None``.
 """
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 #: Where the setting lives in a configuration yaml.
 LIMITS_KEY = "limits"
@@ -48,25 +48,74 @@ def config_winding_limit_c(cfg_doc: Optional[Mapping[str, Any]]) -> Optional[flo
     return v
 
 
-def active_config_winding_limit_c() -> Optional[float]:
-    """The winding limit of the catalogued configuration the editor has loaded, or ``None``."""
+#: (die, cfg) -> ((file mtime_ns, size), limit) - the yaml is read once per change of the file
+_CACHE: Dict[Tuple[str, str], Tuple[Tuple[int, int], Optional[float]]] = {}
+
+
+def for_config(die: Any, cfg: Any) -> Optional[float]:
+    """The winding limit of the catalogued configuration ``die/cfg`` - the configuration a solve is FOR.  The yaml read
+    is cached on the file's stamp.  ``None`` when it states none or cannot be read."""
+    die, cfg = str(die or "").strip(), str(cfg or "").strip()
+    if not die or not cfg:
+        return None
+    try:
+        from motor_ai_sim.routes import family as _fam
+        try:
+            st = _fam._cfg_file(die, cfg).stat()
+            stamp = (int(st.st_mtime_ns), int(st.st_size))
+        except Exception:                                    # noqa: BLE001 - no file stamp: read, do not cache
+            stamp = None
+        hit = _CACHE.get((die, cfg))
+        if stamp is not None and hit is not None and hit[0] == stamp:
+            return hit[1]
+        lim = config_winding_limit_c(_fam.config_doc(die, cfg))
+        if stamp is not None:
+            _CACHE[(die, cfg)] = (stamp, lim)
+        return lim
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def solved_config(body: Optional[Mapping[str, Any]] = None) -> Tuple[str, str]:
+    """``(die, cfg)`` a solve is FOR: the request's own ``die`` / ``config`` when it names them, else the catalogue
+    context the solve itself is filed under (``duty_results.active_context`` - the same rule the coupled loop
+    files its record by).  ``("", "")`` off the catalogue."""
+    b = body if isinstance(body, Mapping) else {}
+    die, cfg = str(b.get("die") or "").strip(), str(b.get("config") or "").strip()
+    if die and cfg:
+        return die, cfg
     try:
         from motor_ai_sim.duty_results import active_context
-        from motor_ai_sim.routes import family as _fam
         ctx = active_context()
-        if not ctx:
-            return None
-        return config_winding_limit_c(_fam.config_doc(str(ctx[0]), str(ctx[1])))
+        return (str(ctx[0]), str(ctx[1])) if ctx else ("", "")
+    except Exception:                                        # noqa: BLE001
+        return "", ""
+
+
+def for_solve(body: Optional[Mapping[str, Any]] = None) -> Optional[float]:
+    """The winding limit of the configuration a solve is for (:func:`solved_config`); the S1 search, the S2 /
+    duty-cycle and the time-to-limit calls pass this explicitly."""
+    return for_config(*solved_config(body))
+
+
+def active_config_winding_limit_c() -> Optional[float]:
+    """The winding limit of the configuration the EDITOR has loaded - for the interactive panel only; no solver path
+    reads it implicitly."""
+    try:
+        from motor_ai_sim.duty_results import active_context
+        ctx = active_context()
+        return for_config(ctx[0], ctx[1]) if ctx else None
     except Exception:                                        # noqa: BLE001 - no context is the ordinary case
         return None
 
 
-def resolve(cfg_doc: Optional[Mapping[str, Any]] = None, *, use_active: bool = True
-            ) -> Optional[float]:
-    """The configuration's limit: the document's own when one is handed in, else the live context's."""
-    if cfg_doc is not None:
-        return config_winding_limit_c(cfg_doc)
-    return active_config_winding_limit_c() if use_active else None
+def resolve(cfg_doc: Optional[Mapping[str, Any]] = None, *, limit_c: Any = None) -> Optional[float]:
+    """An explicitly passed limit first, then the handed-in configuration document's own.  NEVER the editor's
+    context: a caller that wants the solved configuration's limit passes it (:func:`for_solve`)."""
+    v = _num(limit_c)
+    if v is not None:
+        return v
+    return config_winding_limit_c(cfg_doc)
 
 
 def basis_words(limit_c: float) -> str:

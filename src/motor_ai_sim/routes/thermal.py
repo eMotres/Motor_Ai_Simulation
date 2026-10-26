@@ -8772,7 +8772,9 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
             raise _dc_from_error(exc)
 
         samples = max(8, min(int(_dc_num(body, "samples_per_segment", 60)), 400))
-        limits_c = default_limits(body.get("magnet_limit_c"))
+        # …the solved configuration's own winding limit when it states one (owner 2026-10-26)
+        from motor_ai_sim import winding_limit as _wl
+        limits_c = default_limits(body.get("magnet_limit_c"), _wl.for_solve(body))
         ed_search = bool(body.get("ed_search", True))
         # An explicit EMPTY list is an answer ("no curve, just the one period"),
         # so it is honoured rather than falling back to the default span.

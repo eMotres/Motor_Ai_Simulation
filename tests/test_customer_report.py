@@ -105,16 +105,54 @@ def test_requirements_read_from_a_specification_draft():
             {"name": "takeoff", "torque_Nm": 1500.0, "speed_rpm": 1000.0, "duration_s": 60.0}]},
         "2_1": {"status": "filled", "value": {"voltage_min_V": 633, "voltage_nominal_V": 710, "voltage_max_V": 806}},
         "3_2": {"status": "filled", "value": {"temperature_max_C": 45}},
-        "1_6": {"status": "filled", "value": {"overspeed_rpm": 1200}},
+        # the canonical proof speed: the LARGER of the maximum speed and a stored overspeed
+        "1_6": {"status": "filled", "value": {"maximum_rpm": 1200, "overspeed_rpm": 1100}},
         "4_6": {"status": "filled", "value": {"axial_thrust_N": 2500}}}}
-    req = rc.requirements_from_draft(draft)
+    req = rc.requirements_from_draft(draft, "project specification v3")
+    assert req["source"] == "project specification v3"
     assert req["continuous"] == {"torque_Nm": 1000.0, "speed_rpm": 850.0}
     assert req["peak"]["duration_s"] == 60.0 and req["peak"]["torque_Nm"] == 1500.0
     assert req["battery"]["v_min"] == 633.0 and req["ambient_max_c"] == 45.0
+    assert req["thermal_medium"] == "air"
     assert req["overspeed_rpm"] == 1200.0 and req["axial_thrust_N"] == 2500.0
     # the customer's pack replaces the derived one, and says so (M06)
     b = rc.customer_battery({"v_min": 633.6, "v_nom": 710.4, "v_max": 806.4, "cells": 192}, req)
     assert (b["v_min"], b["v_nom"], b["v_max"], b["source"]) == (633.0, 710.0, 806.0, "customer")
+
+
+def test_only_filled_answers_are_requirements():
+    from motor_ai_sim import report_customer as rc
+
+    draft = {"fields": {
+        "2_1": {"status": "missing", "value": {"voltage_min_V": 633}},
+        "3_2": {"status": "not_known_yet", "value": {"temperature_max_C": 45}},
+        "4_6": {"status": "missing", "value": {"axial_thrust_N": 2500}}}}
+    req = rc.requirements_from_draft(draft)
+    assert "battery" not in req and "ambient_max_c" not in req and "axial_thrust_N" not in req
+
+
+def test_a_configuration_override_is_explicit_and_labelled():
+    from motor_ai_sim import report_customer as rc
+
+    assert rc.project_requirements("D", "C", {"requirements": {"overspeed_rpm": 1200}}) == {}
+    req = rc.project_requirements("D", "C", {rc.REQUIREMENTS_OVERRIDE_KEY: {"overspeed_rpm": 1200}})
+    assert req["source"] == rc.OVERRIDE_SOURCE
+    assert rc.requirements_source_line(req) == "Requirements from: %s." % rc.OVERRIDE_SOURCE
+
+
+def test_requirement_torque_is_on_the_main_tables_basis_and_s1_is_shaft():
+    from motor_ai_sim import report_customer as rc
+
+    em = dict(EM_CONT, end3d={"k_flux": 0.97, "T_corrected_Nm": 101.0})
+    s1 = {"continuous_rating": {"I_cont_A_rms": 110.0, "verified": True, "limits_c": {"winding": 180.0},
+                                "reference": {"rpm": 1000.0},
+                                "power": {"T_em_Nm": 104.0, "P_shaft_W": 100.0 * 2 * math.pi * 1000.0 / 60.0}}}
+    by = _rows_by_label(rc.requirements_rows({"continuous": REQ["continuous"]},
+                                             [_col("cont", em, {"coupled_limit": s1})], winding_limit_c=180.0))
+    t = by["Continuous 100 N·m @ 1,000 rpm, torque"]
+    assert t[1].startswith("101 N·m") and "3-D corrected" in t[2] and t[3] == "met"
+    held = by["100 N·m held continuously, winding ≤ 180 °C"]
+    assert held[1] == "100 N·m shaft at 110 A" and held[3] == "met"
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +239,41 @@ def test_the_configuration_winding_limit_is_read_by_every_path(monkeypatch):
     assert R._insulation_limit({}, cfg)[0] == 180.0
     assert CL.thermal_limits(cfg)["winding_C"] == 180.0
     # a configuration without it keeps the project defaults
-    monkeypatch.setattr(wl, "active_config_winding_limit_c", lambda: None)
     assert ttl.winding_limit({"materials": {}})[0] == R.PROJECT_INSULATION_C
     assert R._insulation_limit({}, {})[0] == R.PROJECT_INSULATION_C
     assert tdc.default_limits()["winding"] == R.PROJECT_INSULATION_C
-    # the live paths (S1 / S2 / duty cycle) ask the loaded configuration
+    # the solver paths pass the SOLVED configuration's limit explicitly ...
+    assert tdc.default_limits(150.0, 180.0) == {"winding": 180.0, "magnet": 150.0}
+    assert ttl.winding_limit(limit_c=180.0)[0] == 180.0
+    assert ttl.rated_winding_limit("propeller", limit_c=180.0)[0] == 180.0
+    # ... and NOTHING reads the editor's active configuration implicitly
     monkeypatch.setattr(wl, "active_config_winding_limit_c", lambda: 180.0)
-    assert tdc.default_limits(150.0) == {"winding": 180.0, "magnet": 150.0}
-    assert ttl.winding_limit()[0] == 180.0 and ttl.rated_winding_limit("propeller")[0] == 180.0
+    assert tdc.default_limits()["winding"] == R.PROJECT_INSULATION_C
+    assert ttl.winding_limit()[0] == R.PROJECT_INSULATION_C
+
+
+def test_the_solved_configuration_limit_is_read_once_per_file_change(monkeypatch, tmp_path):
+    from motor_ai_sim import winding_limit as wl
+    from motor_ai_sim.routes import family as fam
+
+    f = tmp_path / "C.yaml"
+    f.write_text("limits:\n  winding_c: 180\n", encoding="utf-8")
+    reads = []
+
+    def _doc(die, cfg):
+        reads.append((die, cfg))
+        import yaml
+        return yaml.safe_load(f.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(fam, "_cfg_file", lambda die, cfg: f)
+    monkeypatch.setattr(fam, "config_doc", _doc)
+    wl._CACHE.clear()
+    assert wl.for_config("D", "C") == 180.0 and wl.for_config("D", "C") == 180.0
+    assert len(reads) == 1
+    # the request's own die / config name the configuration being solved
+    assert wl.solved_config({"die": "D", "config": "C"}) == ("D", "C")
+    assert wl.for_solve({"die": "D", "config": "C"}) == 180.0
+    assert wl.for_config("", "") is None
 
 
 def test_winding_limit_validation():
@@ -402,7 +467,7 @@ def test_still_to_compute_names_the_runs_at_the_project_limit(monkeypatch):
               "cont": {"coupled_limit": {"continuous_rating": {"limits_c": {"winding": 200.0}}}}}
     monkeypatch.setattr(dr, "get", lambda die, cfg: stored)
     cfg = {"limits": {"winding_c": 180},
-           "requirements": {"peak": {"torque_Nm": 150.0, "speed_rpm": 1000.0, "duration_s": 60.0},
+           "requirements_override": {"peak": {"torque_Nm": 150.0, "speed_rpm": 1000.0, "duration_s": 60.0},
                             "overspeed_rpm": 1200.0},
            "duties": [{"name": "cont", "rpm": 1000.0, "summary": dict(EM_CONT)},
                       {"name": "peak", "rpm": 1000.0, "summary": dict(EM_PEAK)}]}
@@ -414,9 +479,38 @@ def test_still_to_compute_names_the_runs_at_the_project_limit(monkeypatch):
     assert "our engineers" not in RM.RECOMMENDED_LINE
 
 
+def test_unstamped_coupled_results_are_named_once(monkeypatch):
+    from motor_ai_sim import duty_results as dr
+    from motor_ai_sim import report_missing as RM
+
+    stored = {"a": {"coupled": {"coil_temp_c": 150.0}}, "b": {"coupled": {"coil_temp_c": 160.0}},
+              "c": {"coupled": {"coil_temp_c": 150.0, "point": {"rpm": 1000.0, "I_phase_rms": 100.0}}}}
+    monkeypatch.setattr(dr, "get", lambda die, cfg: stored)
+    rows = [r for r in RM.still_to_compute("D", "C", {"duties": []}) if r["item"] == RM.ITEM_UNSTAMPED]
+    assert len(rows) == 1 and rows[0]["duty"] == "a, b"
+
+
+def test_duty_at_point_uses_the_per_point_tolerances():
+    from motor_ai_sim import report as R
+
+    duties = [{"name": "a", "rpm": 1000.0, "current_arms": 100.0}]
+    assert R._duty_at_point(duties, 1009.0, 102.5) == "a"          # inside 1 % / 3 %
+    assert R._duty_at_point(duties, 1000.0, 104.0) is None          # 4 % off in current
+    assert R._duty_at_point(duties, 1015.0, 100.0) is None          # 1.5 % off in speed
+
+
 def test_record_ids_live_in_the_appendix_only():
     from motor_ai_sim import report_customer as rc
 
     rows = rc.record_id_rows([{"duty": "a", "fp2": "0123456789abcdef",
                                "res": {"thermal": {"geometry_fingerprint": "fedcba9876543210"}}}])
     assert rows[1] == ["a", "01234567", "fedcba98*", "—", "—"]
+
+
+def test_the_bearing_load_notes_call_the_magnetic_forces_estimates():
+    from motor_ai_sim import report_customer as rc
+
+    _rows, notes = rc.bearing_load_rows({}, [_col("cont", dict(EM_CONT, rotating_mass_kg=2.0))], geo=GEO,
+                                        brg_assign={}, cfg_doc={})
+    assert "estimate" in notes[0] and "axial offset" in notes[0]
+    assert "estimate" in notes[1] and "mean air-gap |B|" in notes[1]

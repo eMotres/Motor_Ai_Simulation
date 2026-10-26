@@ -198,7 +198,8 @@ def _rated_tables() -> Tuple[float, Dict[str, float], Dict[str, float]]:
 
 
 def rated_winding_limit(application: Optional[str] = None,
-                        cfg_doc: Optional[Mapping[str, Any]] = None) -> Tuple[float, str]:
+                        cfg_doc: Optional[Mapping[str, Any]] = None,
+                        limit_c: Optional[float] = None) -> Tuple[float, str]:
     """The RATED winding temperature — the coils' mean at the rated point —
     for a configuration's ``application`` (owner 2026-10-19: 180 °C for
     aviation / propeller, 70 °C for robots), from the ONE place the project
@@ -207,7 +208,7 @@ def rated_winding_limit(application: Optional[str] = None,
     here.  No / an unlisted application: ``report.PROJECT_RATED_WINDING_C``."""
     # THE CONFIGURATION'S OWN WINDING LIMIT wins (owner 2026-10-26, 180 °C for every verdict of a project)
     from motor_ai_sim import winding_limit as _wl
-    own = _wl.resolve(cfg_doc)
+    own = _wl.resolve(cfg_doc, limit_c=limit_c)
     if own is not None:
         return float(own), _wl.basis_words(own)
     default, by_app, _amb = _rated_tables()
@@ -236,12 +237,13 @@ def rated_ambient(application: Optional[str] = None) -> Optional[float]:
 ADVISORY_PARTS: Tuple[str, ...] = ("bearing",)
 
 
-def winding_limit(cfg_doc: Optional[Mapping[str, Any]] = None) -> Tuple[float, str]:
+def winding_limit(cfg_doc: Optional[Mapping[str, Any]] = None,
+                  limit_c: Optional[float] = None) -> Tuple[float, str]:
     """The winding limit: the configuration's own (``limits.winding_c``, owner 2026-10-26) when it states one -
-    the handed-in document, else the live context's - otherwise the insulation class, from the ONE place the
-    project states it."""
+    passed in (``limit_c``) or read off the handed-in document - otherwise the insulation class, from the ONE place
+    the project states it.  The editor's context is never read here."""
     from motor_ai_sim import winding_limit as _wl
-    own = _wl.resolve(cfg_doc)
+    own = _wl.resolve(cfg_doc, limit_c=limit_c)
     if own is not None:
         return float(own), _wl.basis_words(own)
     try:

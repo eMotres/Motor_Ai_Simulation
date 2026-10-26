@@ -52,6 +52,19 @@ def still_to_compute(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[s
             or bool(kinds.get("continuous_rating"))
         if not has_s1:
             rows.append({"duty": name, "item": ITEM_S1, "reason": REASON_MISSING})
+    # COUPLED RESULTS MADE BEFORE THE OPERATING-POINT STAMP (owner 2026-10-26): they cannot be tied to their duty and
+    # are not used by the report - said ONCE, for every duty that has one
+    unstamped = []
+    for name, kinds in stored.items():
+        for k in ("coupled", "coupled_limit"):
+            row = (kinds or {}).get(k)
+            if isinstance(row, dict) and row:
+                st = motor_view.record_stamp(k, row)
+                if not st["rpm"] and not st["current"]:
+                    unstamped.append(str(name))
+                    break
+    if unstamped:
+        rows.append({"duty": ", ".join(sorted(unstamped)), "item": ITEM_UNSTAMPED, "reason": REASON_UNSTAMPED})
     rows += _requirement_rows(die, cfg, cfg_doc, stored)
     worst = motor_view.worst_case_rotor_stress(stored)
     if worst is None:
@@ -64,6 +77,8 @@ def still_to_compute(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[s
     return rows
 
 
+ITEM_UNSTAMPED = "Coupled results made before the operating-point stamp"
+REASON_UNSTAMPED = "not used in this report (no stated point); to be re-run"
 ITEM_OVERSPEED = "Rotor stress at the {rpm} rpm overspeed"
 ITEM_S1_LIMIT = "Continuous (S1) rating at the {lim} °C winding limit"
 ITEM_S2_LIMIT = "Peak held {dur} s at the {lim} °C winding limit (S2)"

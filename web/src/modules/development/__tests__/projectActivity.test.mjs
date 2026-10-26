@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { newestLinked, latestAndRecommended } from '../motorGroups.ts';
-import { ACTIVITY_POLL_MS, activityChip, activityForMotor, createActivityPoller, elapsedMinutes } from '../projectActivity.ts';
+import { ACTIVITY_POLL_MS, activityChip, activityForMotor, createActivityPoller, elapsedMinutes, etaClock } from '../projectActivity.ts';
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const en = JSON.parse(read('../../../locales/en/development.json'));
@@ -41,34 +41,68 @@ test('rows without a stamp keep their order and rank older than any stamped row;
 
 // ── the chip ───────────────────────────────────────────────────────────────────────────────────
 
-test('a running variant: "Computing on the server: <label> · <duty> · <N> min", with a tooltip line per run', () => {
-  const chip = activityChip([row()], NOW, tEn);
+/** a fixed clock (UTC) so the tests do not depend on the machine time zone or language */
+const UTC = {
+  time: (ms) => new Date(ms).toISOString().slice(11, 16),
+  day: (ms) => new Date(ms).toISOString().slice(0, 10),
+  dayTime: (ms) => new Date(ms).toISOString().slice(5, 16).replace('T', ' '),
+};
+const at = (minutes) => new Date(NOW + minutes * 60_000).toISOString();
+const eta = (finishMin, startMin = null, confidence = 'medium') => ({ expected_start: startMin === null ? null : at(startMin), expected_finish: finishMin === null ? null : at(finishMin), confidence, basis: 'queue' });
+
+test('a running variant: "Computing on the server: <label> · <duty> · <N> min · results ~15:05", with a tooltip line per run', () => {
+  const chip = activityChip([row({ eta: eta(65) })], NOW, tEn, UTC);
   assert.equal(chip.state, 'running');
-  assert.equal(chip.text, 'Computing on the server: Coupled thermal run · rated · 12 min');
-  assert.deepEqual(chip.lines, ['Computing: Coupled thermal run · rated · 12 min']);
-  const noDuty = activityChip([row({ duty: '' })], NOW, tEn);
-  assert.equal(noDuty.text, 'Computing on the server: Coupled thermal run · 12 min');
-  assert.equal(activityChip([row({ started_at: minutesAgo(0.4) })], NOW, tEn).text, 'Computing on the server: Coupled thermal run · rated · <1 min');
-  assert.equal(activityChip([row({ started_at: null })], NOW, tEn).text, 'Computing on the server: Coupled thermal run · rated');   // start unknown: no time
-  assert.equal(activityChip([row({ started_at: minutesAgo(-5) })], NOW, tEn).text, 'Computing on the server: Coupled thermal run · rated · <1 min');   // clock skew never goes negative
+  assert.equal(chip.text, 'Computing on the server: Coupled thermal run · rated · 12 min · results ~13:05');
+  assert.deepEqual(chip.lines, ['Computing: Coupled thermal run · rated · 12 min · results ~13:05 · fair estimate']);
+  const noDuty = activityChip([row({ duty: '', eta: eta(65) })], NOW, tEn, UTC);
+  assert.equal(noDuty.text, 'Computing on the server: Coupled thermal run · 12 min · results ~13:05');
+  assert.equal(activityChip([row({ started_at: minutesAgo(0.4), eta: eta(65) })], NOW, tEn, UTC).text, 'Computing on the server: Coupled thermal run · rated · <1 min · results ~13:05');
+  assert.equal(activityChip([row({ started_at: null, eta: eta(65) })], NOW, tEn, UTC).text, 'Computing on the server: Coupled thermal run · rated · results ~13:05');   // start unknown: no elapsed time
+  assert.equal(activityChip([row({ started_at: minutesAgo(-5), eta: eta(65) })], NOW, tEn, UTC).text, 'Computing on the server: Coupled thermal run · rated · <1 min · results ~13:05');   // clock skew never goes negative
 });
 
-test('a queued variant: "Queued: <label>"; running beats queued; more runs add +N; progress shows in the tooltip', () => {
-  const queued = row({ state: 'queued', started_at: null, label: 'Continuous rating (S1)', duty: '' });
-  assert.equal(activityChip([queued], NOW, tEn).text, 'Queued: Continuous rating (S1)');
-  assert.equal(activityChip([queued], NOW, tEn).state, 'queued');
-  const both = activityChip([queued, row({ progress: 0.4 })], NOW, tEn);
+test('no history yet: no number, the page says the estimate comes after the first runs', () => {
+  assert.equal(activityChip([row()], NOW, tEn, UTC).text, 'Computing on the server: Coupled thermal run · rated · 12 min · estimate after the first runs');
+  assert.equal(activityChip([row({ eta: eta(null) })], NOW, tEn, UTC).text, 'Computing on the server: Coupled thermal run · rated · 12 min · estimate after the first runs');
+  const q = activityChip([row({ state: 'queued', started_at: null, position: 2, ahead: 1, eta: { expected_start: at(10), expected_finish: null, confidence: 'low', basis: 'no_history' } })], NOW, tEn, UTC);
+  assert.equal(q.text, 'Queued: Coupled thermal run · 1 ahead · starts ~12:10 · estimate after the first runs');
+});
+
+test('a queued variant: "Queued: <label> · 3 ahead · starts ~14:20 · results ~15:05"; next in line when none is ahead', () => {
+  const queued = row({ state: 'queued', started_at: null, label: 'Continuous rating (S1)', duty: '', position: 4, ahead: 3, eta: eta(125, 80) });
+  const chip = activityChip([queued], NOW, tEn, UTC);
+  assert.equal(chip.text, 'Queued: Continuous rating (S1) · 3 ahead · starts ~13:20 · results ~14:05');
+  assert.equal(chip.state, 'queued');
+  assert.deepEqual(chip.lines, ['Queued: Continuous rating (S1) · queue place 4 · 3 ahead · starts ~13:20 · results ~14:05 · fair estimate']);
+  assert.equal(activityChip([{ ...queued, position: 1, ahead: 0 }], NOW, tEn, UTC).text, 'Queued: Continuous rating (S1) · next in line · starts ~13:20 · results ~14:05');
+  assert.equal(activityChip([{ ...queued, position: undefined, ahead: undefined }], NOW, tEn, UTC).text, 'Queued: Continuous rating (S1) · starts ~13:20 · results ~14:05');   // an older server: no place, no word about it
+});
+
+test('running beats queued; more runs add +N; the nearest queued run speaks for the queue; progress shows in the tooltip', () => {
+  const far = row({ state: 'queued', started_at: null, label: 'Far', duty: '', position: 5, ahead: 4, eta: eta(300, 200) });
+  const near = row({ state: 'queued', started_at: null, label: 'Near', duty: '', position: 2, ahead: 1, eta: eta(100, 40) });
+  assert.match(activityChip([far, near], NOW, tEn, UTC).text, /^Queued: Near · 1 ahead · starts ~12:40 · results ~13:40 \+1$/);
+  const both = activityChip([near, row({ progress: 0.4, eta: eta(65) })], NOW, tEn, UTC);
   assert.equal(both.state, 'running');
-  assert.equal(both.text, 'Computing on the server: Coupled thermal run · rated · 12 min +1');
-  assert.deepEqual(both.lines, ['Queued: Continuous rating (S1)', 'Computing: Coupled thermal run · rated · 12 min · 40 %']);
-  assert.equal(activityChip([], NOW, tEn), null);
+  assert.equal(both.text, 'Computing on the server: Coupled thermal run · rated · 12 min · results ~13:05 +1');
+  assert.ok(both.lines[1].startsWith('Computing: Coupled thermal run · rated · 12 min · 40 % · results ~13:05'));
+  assert.equal(activityChip([], NOW, tEn, UTC), null);
+});
+
+test('a time on another day carries its date; the tilde is never dropped', () => {
+  assert.equal(etaClock(at(65), NOW, UTC), '~13:05');
+  assert.equal(etaClock(at(60 * 20), NOW, UTC), '~10-28 08:00');
+  assert.equal(etaClock(null, NOW, UTC), null);
+  assert.equal(etaClock('garbage', NOW, UTC), null);
 });
 
 test('the Chinese strings mirror the English ones and format the same way', () => {
-  const chip = activityChip([row()], NOW, tZh);
-  assert.equal(chip.text, '服务器正在计算：Coupled thermal run · rated · 12 分钟');
-  assert.equal(activityChip([row({ state: 'queued', started_at: null })], NOW, tZh).text, '排队中：Coupled thermal run');
-  for (const key of ['running', 'queued', 'lineRunning', 'lineQueued', 'minutes', 'underMinute', 'more']) {
+  const chip = activityChip([row({ eta: eta(65) })], NOW, tZh, UTC);
+  assert.equal(chip.text, '服务器正在计算：Coupled thermal run · rated · 12 分钟 · 预计出结果 ~13:05');
+  assert.equal(activityChip([row({ state: 'queued', started_at: null, position: 3, ahead: 2, eta: eta(65, 20) })], NOW, tZh, UTC).text,
+    '排队中：Coupled thermal run · 前面还有 2 个 · 预计开始 ~12:20 · 预计出结果 ~13:05');
+  for (const key of ['running', 'queued', 'lineRunning', 'lineQueued', 'minutes', 'underMinute', 'more', 'ahead', 'nextInLine', 'position', 'starts', 'results', 'noEstimate', 'confidence.low', 'confidence.medium', 'confidence.high']) {
     assert.ok(get(en, `activity.${key}`), `EN activity.${key}`);
     assert.ok(get(zh, `activity.${key}`), `zh-CN activity.${key}`);
   }
@@ -154,12 +188,13 @@ test('stop() ends everything; a failed request keeps the last rows and is retrie
 
 test('the page polls once per project on the Motors tab and shows the chip on each variant header and on the toggle row', () => {
   const page = read('../components/DevelopmentPage.tsx');
-  assert.match(page, /const activityRows = useProjectActivity\(view === 'motors' \? selected\?\.id : null\)/);
+  assert.match(page, /const activity = useProjectActivity\(view === 'motors' \|\| view === 'specification' \? selected\?\.id : null\)/);
+  assert.match(page, /const activityRows = activity\.rows;/);
   assert.match(page, /\{live && <ActivityChip rows=\{activityRows\} motor=\{live\} t=\{tr\} \/>\}/);
   assert.match(page, /<ActivityChip rows=\{activityRows\} t=\{tr\} \/>/);
   assert.equal((page.match(/useProjectActivity\(/g) ?? []).length, 1);                      // one hook call: one request per project, not per row
   const api = read('../api.ts');
-  assert.match(api, /activity: async \(id: string\)/);
+  assert.match(api, /activity: async \(id: string, since\?: string \| null\)/);
   assert.match(api, /\$\{p\(id\)\}\/activity/);
   const hook = read('../useProjectActivity.ts');
   assert.match(hook, /visibilitychange/);

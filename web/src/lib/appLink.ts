@@ -15,7 +15,7 @@
  *  A link GRANTS NOTHING: the app asks the server who the caller is after sign-in. */
 import { parseProductionLink, validDay, MAX_LINK_IDS } from './productionLink.ts';
 
-export const PRODUCTION_TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
+export const PRODUCTION_TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes', 'tests'] as const;
 export type ProductionTabId = (typeof PRODUCTION_TABS)[number];
 export const PROJECT_VIEWS = ['specification', 'motors', 'messages', 'notes'] as const;
 export type ProjectViewId = (typeof PROJECT_VIEWS)[number];

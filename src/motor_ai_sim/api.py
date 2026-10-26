@@ -436,6 +436,11 @@ app.include_router(development_motors_router)
 from motor_ai_sim.digest.routes import router as digest_router, admin_router as digest_admin_router
 app.include_router(digest_router)
 app.include_router(digest_admin_router)
+# Tests (owner 2026-10-26): measured data per configuration, compared with the simulation of the same point -
+# /api/motor-tests/{die}/{config} (production side) and /api/projects/{id}/motors/tests (read-only project view)
+from motor_ai_sim.motor_tests.routes import router as motor_tests_router, project_router as motor_tests_project_router
+app.include_router(motor_tests_router)
+app.include_router(motor_tests_project_router)
 # Directory module: /api/admin/directory
 from motor_ai_sim.directory.routes import router as directory_admin_router
 app.include_router(directory_admin_router)

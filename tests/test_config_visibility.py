@@ -394,6 +394,8 @@ NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog conf
     # activity digest settings of a PRODUCTION (die + config name a production, not a catalog configuration): admin only
     # (tests/test_digest.py::test_production_settings_are_admin_only)
     ("GET", "/api/digest/settings/production/{die}/{config}"), ("PUT", "/api/digest/settings/production/{die}/{config}"),
+    # project motor tests: the same project + motor gate, then the customer flag (tests/test_motor_tests_routes.py)
+    ("GET", "/api/projects/{project_id}/motors/tests"),
 }
 
 
@@ -417,9 +419,12 @@ def _api_routes():
 
 
 def _production_route(r) -> bool:
-    """Production routes are gated by explicit production MEMBERSHIP (production/access.py), stricter than catalog
-    visibility; tested in tests/test_production_access.py."""
-    return r[1].startswith("/api/production/") or r[1].startswith("/api/admin/production/")
+    """Production (and Tests) routes are gated by explicit production MEMBERSHIP (production/access.py), stricter than
+    catalog visibility; tested in tests/test_production_access.py and tests/test_motor_tests_routes.py."""
+    return (r[1].startswith("/api/production/") or r[1].startswith("/api/admin/production/")
+            # the Tests section (motor_tests/access.py): the same production membership + NDA gate; tested in
+            # tests/test_motor_tests_routes.py
+            or r[1].startswith("/api/motor-tests/"))
 
 
 def test_every_config_route_is_covered():

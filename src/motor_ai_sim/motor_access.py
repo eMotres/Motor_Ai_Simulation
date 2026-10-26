@@ -292,6 +292,28 @@ def all_die_access() -> dict:
     return {k: normalize_die_access(v) for k, v in _load_die_access().items()}
 
 
+def rename_die_access(old: str, new: str, *, dry_run: bool = False):
+    """A die was renamed: its public / selected-clients entry follows.  Returns
+    ``(had_entry, undo)`` - ``undo`` is ``None`` when nothing was written."""
+    old, new = str(old).strip(), str(new).strip()
+    with _DA_LOCK:
+        store = _load_die_access()
+        if old not in store:
+            return False, None
+        if new in store:
+            raise ValueError(f"die access already has an entry for '{new}'")
+        if dry_run:
+            return True, None
+        before = dict(store)
+        store[new] = store.pop(old)
+        _save_die_access(store)
+
+    def undo() -> None:
+        with _DA_LOCK:
+            _save_die_access(before)
+    return True, undo
+
+
 def set_die_access(die: str, *, visibility: str, clients: Optional[list] = None) -> dict:
     """Replace one die's access.  Same atomic-write discipline as
     users.set_motor_grants: one writer, one lock, one file."""

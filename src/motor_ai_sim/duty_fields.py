@@ -724,15 +724,27 @@ def kinds_present(die: str, cfg: str) -> Dict[str, List[str]]:
     return {duty: [r["kind"] for r in rows] for duty, rows in have(die, cfg).items()}
 
 
-def _retag_duty(path: Path, duty: str) -> None:
-    """Rewrite one stored field's ``meta["duty"]`` in place.
+def meta_die(path: Path) -> Optional[str]:
+    """The ``die`` a stored field file names in its own ``meta`` member (``None`` when unreadable)."""
+    try:
+        import numpy as np
+        with np.load(path, allow_pickle=False) as z:
+            return json.loads(str(z["meta"])).get("die")
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def retag_meta(path: Path, *, duty: Optional[str] = None, die: Optional[str] = None) -> bool:
+    """Rewrite one stored field's ``meta["duty"]`` and/or ``meta["die"]`` in place.
 
     :func:`have` keys its listing off the name INSIDE the file, not off the
-    folder — it cannot invert the hash — so a folder moved by :func:`rename`
+    folder - it cannot invert the hash - so a folder moved by :func:`rename`
     whose files still name the old duty would list the maps under a duty that
-    no longer exists.  Every array member is copied over byte for byte (the
-    ``.npy`` payloads are read and written back unchanged); only the ``meta``
-    member is rebuilt.
+    no longer exists.  The same holds for the DIE: a die rename moves the folder
+    and every file must say the new die (``routes.family.rename_die``).  Every
+    array member is copied over byte for byte (the ``.npy`` payloads are read and
+    written back unchanged); only the ``meta`` member is rebuilt.  Returns True
+    when the file was rewritten.
     """
     import io as _io
     import zipfile
@@ -741,13 +753,19 @@ def _retag_duty(path: Path, duty: str) -> None:
         infos = list(z.infolist())
         names = [i.filename for i in infos]
         if "meta.npy" not in names:
-            return
+            return False
         raw = {n: z.read(n) for n in names}
     meta = json.loads(str(np.load(_io.BytesIO(raw["meta.npy"]),
                                   allow_pickle=False)))
-    if str(meta.get("duty")) == str(duty):
-        return
-    meta["duty"] = str(duty)
+    changed = False
+    if duty is not None and str(meta.get("duty")) != str(duty):
+        meta["duty"] = str(duty)
+        changed = True
+    if die is not None and str(meta.get("die")) != str(die):
+        meta["die"] = str(die)
+        changed = True
+    if not changed:
+        return False
     buf = _io.BytesIO()
     np.lib.format.write_array(buf, np.array(json.dumps(meta, default=str)),
                               allow_pickle=False)
@@ -758,6 +776,12 @@ def _retag_duty(path: Path, duty: str) -> None:
             out.writestr(info, raw[info.filename],
                          compress_type=info.compress_type)
     os.replace(tmp, path)
+    return True
+
+
+def _retag_duty(path: Path, duty: str) -> None:
+    """Rewrite one stored field's ``meta["duty"]`` in place (see :func:`retag_meta`)."""
+    retag_meta(path, duty=duty)
 
 
 def rename(die: str, cfg: str, old: str, new: str) -> int:

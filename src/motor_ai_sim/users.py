@@ -1111,6 +1111,59 @@ def set_motor_grants(email: str, *, all_motors: bool,
     return get_stored_motor_grants(email)
 
 
+def rename_die_in_grants(old: str, new: str, *, dry_run: bool = False):
+    """A die was renamed: carry every account's grants to the new name.
+
+    Touches, in each stored ``motors`` record, the ``dies`` list, the
+    ``"<die>/<config>"`` entries of ``configs`` and ``default.die``.  One load,
+    one atomic save under the registry lock.  Returns ``(hits, undo)``:
+    ``hits`` is ``[(email, what), ...]`` (what the rename changes - or would, in a
+    ``dry_run``), ``undo`` restores the touched records (``None`` when nothing
+    was written)."""
+    import copy
+    old, new = str(old), str(new)
+    with _LOCK:
+        users = _load()
+        before: dict = {}
+        hits: list = []
+        for email, rec in users.items():
+            m = rec.get("motors") if isinstance(rec, dict) else None
+            if not isinstance(m, dict):
+                continue
+            what = []
+            nm = copy.deepcopy(m)
+            if old in (nm.get("dies") or []):
+                nm["dies"] = sorted({new if d == old else d for d in nm["dies"]})
+                what.append("die grant")
+            cfgs = []
+            for key in nm.get("configs") or []:
+                die, sep, cfg = str(key).rpartition("/")
+                cfgs.append(f"{new}/{cfg}" if sep and die == old else key)
+            if cfgs != list(nm.get("configs") or []):
+                nm["configs"] = sorted(set(cfgs))
+                what.append("configuration grants")
+            default = nm.get("default")
+            if isinstance(default, dict) and default.get("die") == old:
+                default["die"] = new
+                what.append("default motor")
+            if what:
+                before[email] = copy.deepcopy(m)
+                hits.append((email, ", ".join(what)))
+                rec["motors"] = nm
+        if dry_run or not hits:
+            return hits, None
+        _save(users)
+
+    def undo() -> None:
+        with _LOCK:
+            cur = _load()
+            for email, motors in before.items():
+                if isinstance(cur.get(email), dict):
+                    cur[email]["motors"] = motors
+            _save(cur)
+    return hits, undo
+
+
 def config_grant_index() -> dict:
     """``{"<die>/<config>": [emails]}`` over every account's STORED grants (one
     registry read) - the "selected clients" of each private configuration.

@@ -13,6 +13,8 @@ Codex, others). Read them at the start of every session.
 4. Private design rules (one set for all motors and all design aspects): motor-ai-sim-private/docs/DESIGN_RULES.md -- read before editing any motor, die, CAD model or board.
 5. NEVER commit a 3-D model (STEP, FCStd, GLB, STL, BREP, IGES, KiCad board, DXF) or the data of a closed motor (die.yaml, passport, S1 model, BOM, Fusion parameter dump, reference profile) to this PUBLIC repository (owner 2026-10-19): they live in the private repository eMotres/motor-ai-sim-private under the same relative path (see docs/OPEN_PRIVATE_DATA.md, "3-D models and closed-motor data"). `scripts/check_no_private_data.py` runs in CI and in the test suite and fails the pull request.
 
+6. Motor (die) names (owner 2026-10-26): a new variant is `<family base> <user suffix> <n>` ("CIANO56 400_80 vadim", "... vadim 2"), never with the diameter, slots/poles or words like opt3/edited; use `motor_ai_sim.die_names` (every creator does). A die is renamed ONLY through `PATCH /api/family/die/{die}` (`die_rename.py`, `?dry_run=1` lists what moves) - never by moving folders by hand: results, grants, projects, production and CAD are keyed by the name. A new store keyed by a die name must be added to `die_rename.py` and its test. Details: `docs/DIE_NAMES_AND_RENAME_2026-10-26.md`.
+
 ## UI text rules (owner 2026-10-26: repeated "a thousand times" - follow them on every screen the customer sees)
 
 - **No caption or helper lines.** No small grey line under a field, tile, panel or table that only explains something

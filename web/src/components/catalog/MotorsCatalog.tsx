@@ -26,6 +26,7 @@ import { nsT } from '../../i18n/nsT';
 import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, uiCanWrite } from '../../lib/accessUi';
 import { useAuth } from '../../contexts/AuthContext';
+import { suggestDieName } from '../../lib/dieNames';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -121,9 +122,11 @@ const MotorsCatalog: React.FC = () => {
   // Page-level "+ die": freeze the CURRENT geometry as a new stamped die.
   const [dieMsg, setDieMsg] = useState<string | null>(null);
   const [askDie, setAskDie] = useState<TextPromptState | null>(null);
-  const createDie = () => setAskDie({
+  const createDie = async () => setAskDie({
     title: 'New die from the current geometry',
     label: 'Die name',
+    // pre-filled with "<family base> <your suffix> <n>" (owner 2026-10-26); editable
+    initial: await suggestDieName(),
     onSubmit: async (name) => {
       setDieMsg(null);
       try {

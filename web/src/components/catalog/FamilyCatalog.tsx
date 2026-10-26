@@ -53,6 +53,7 @@ import { isConfigHighlighted, isDieHighlighted } from '../../modules/development
 import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
+import { suggestDieName } from '../../lib/dieNames';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -534,12 +535,17 @@ const FamilyCatalog: React.FC<{
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
 
   // ── create/delete ─────────────────────────────────────────────────────────
-  const createDie = () => setAskText({
-    title: 'New die from the current geometry',
-    label: 'Die name',
-    onSubmit: (name) => mutate(`die '${name}' created`,
-      () => post('/api/family/die', { name })),
-  });
+  // The name opens pre-filled with "<family base> <your suffix> <n>" (editable) - owner 2026-10-26.
+  const createDie = async () => {
+    const initial = await suggestDieName();
+    setAskText({
+      title: 'New die from the current geometry',
+      label: 'Die name',
+      initial,
+      onSubmit: (name) => mutate(`die '${name}' created`,
+        () => post('/api/family/die', { name })),
+    });
+  };
   const createCfg = (die: string) => setAskText({
     title: `New configuration under ${die}`,
     label: 'Configuration name',
@@ -669,19 +675,27 @@ const FamilyCatalog: React.FC<{
   const renameDie = (die: string) => setAskText({
     title: `Rename die '${die}'`,
     label: 'New name', initial: die,
-    onSubmit: (name) => { if (name !== die) mutate(`die renamed to '${name}'`, () =>
+    // The server moves every store keyed by the name (results, grants, projects, production ...) in one
+    // transaction; `manual` lists deploy files it cannot rewrite - say so, they are the operator's to move.
+    onSubmit: (name) => { if (name !== die) mutate((data) => {
+      const manual = Array.isArray(data?.manual) ? data.manual.length : 0;
+      return `die renamed to '${name}'` + (manual ? ` - ${manual} deploy file(s) still name '${die}'` : '');
+    }, () =>
       fetch(`${API}/api/family/die/${encodeURIComponent(die)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       })); },
   });
-  const duplicateDie = (die: string) => setAskText({
-    title: `Duplicate die '${die}'`,
-    label: 'Name of the copy', initial: `${die} copy`,
-    hint: 'Copies the stamped geometry + EVERY configuration with its duties and results; the copy starts unlocked',
-    onSubmit: (name) => mutate(`die '${die}' duplicated as '${name}'`,
-      () => post(`/api/family/die/${encodeURIComponent(die)}/duplicate`, { name })),
-  });
+  const duplicateDie = async (die: string) => {
+    const initial = (await suggestDieName(die)) || `${die} copy`;
+    setAskText({
+      title: `Duplicate die '${die}'`,
+      label: 'Name of the copy', initial,
+      hint: 'Copies the stamped geometry + EVERY configuration with its duties and results; the copy starts unlocked',
+      onSubmit: (name) => mutate(`die '${die}' duplicated as '${name}'`,
+        () => post(`/api/family/die/${encodeURIComponent(die)}/duplicate`, { name })),
+    });
+  };
   const duplicateCfg = (die: string, cfg: string) => setAskText({
     title: `Duplicate '${cfg}' under ${die}`,
     label: 'Name of the copy', initial: `${cfg} copy`,

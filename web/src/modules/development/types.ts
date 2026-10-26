@@ -39,7 +39,7 @@ export interface StoredProvenance { computed_at?: string; recorded_at?: string; 
 export type FieldKind = 'em' | 'thermal' | 'rotor_stress';
 export interface StoredThermal {
   /** the DUTY's temperatures: the converged coupled loop at the duty's own point, else the steady temperature map; `kind` says which */
-  duty_temps?: { kind: 'coupled' | 'thermal'; winding_c?: number; magnet_c?: number; magnet_max_c?: number; bearing_c?: number; housing_c?: number; converged?: boolean; drive?: string; provenance?: StoredProvenance };
+  duty_temps?: { kind: 'coupled' | 'thermal'; winding_c?: number; magnet_c?: number; magnet_max_c?: number; bearing_c?: number; housing_c?: number; converged?: boolean; drive?: string; /** the coupled loop's OWN electromagnetic numbers (its torque / losses at its own temperatures) */ em?: { torque_nm?: number; p_loss_total_w?: number; efficiency_pct?: number }; provenance?: StoredProvenance };
   /** an S1 / limit-search state of the coupled loop: shown on its own line, never as the duty's temperature */
   limit_search?: { kind: string; solve_to?: string; mode?: string; winding_c?: number; magnet_c?: number; provenance?: StoredProvenance };
   s1?: { ok?: boolean; feasible?: boolean; I_cont_A_rms?: number; limiting_part?: string; limits_c?: Record<string, number>; provenance?: StoredProvenance };
@@ -58,7 +58,7 @@ export interface StoredRotorStress { case?: string; sf_min?: number; sf_min_part
   stale?: boolean;
   retention?: { status?: string; verdict?: string; message?: string }; magnet_retention?: Record<string, unknown>; air_gap?: Record<string, number>; parts?: Record<string, { material?: string; safety_factor?: number; von_mises_max_mpa?: number; strength_mpa?: number }>; provenance?: StoredProvenance }
 export interface StoredMechanical { rotor_stress?: StoredRotorStress; modes?: { frequencies_hz?: number[]; provenance?: StoredProvenance }; critical_speeds?: { verdict?: string; rated_rpm?: number; critical_speeds?: Array<{ rpm?: number }>; provenance?: StoredProvenance } }
-export interface MotorViewDuty extends MotorPoint { em_run?: { numbers?: Record<string, number>; provenance?: StoredProvenance } | null; thermal?: StoredThermal | null; mechanical?: StoredMechanical | null; fields?: Partial<Record<FieldKind, { provenance?: StoredProvenance; point?: Record<string, number> }>>; kinds?: string[] }
+export interface MotorViewDuty extends MotorPoint { /** where the EM tiles come from: the EM run (fixed winding temperature) or, with no EM torque stored, the coupled loop */ sources?: { em?: { kind?: 'em_run' | 'coupled'; coil_temp_c?: number; magnet_temp_c?: number } }; em_run?: { numbers?: Record<string, number>; provenance?: StoredProvenance } | null; thermal?: StoredThermal | null; mechanical?: StoredMechanical | null; fields?: Partial<Record<FieldKind, { provenance?: StoredProvenance; point?: Record<string, number> }>>; kinds?: string[] }
 /** `mode`: full = a passport exists (ordinary Configure); points = stored points only (points-limited Configure); empty = nothing stored. */
 export interface MotorView { die: string; config: string; configure_available: boolean; configure_duties: string[]; mode: 'full' | 'points' | 'empty'; duties: MotorViewDuty[]; solver_now?: { code_version?: string; version?: string } }
 /** One stored field map: the payload has the shape the tab adapter of its kind draws. */

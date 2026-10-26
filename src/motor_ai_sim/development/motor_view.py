@@ -157,6 +157,22 @@ def _newest(*rows: Any) -> Optional[Dict[str, Any]]:
     return best
 
 
+def _coupled_em(cp: Dict[str, Any]) -> Dict[str, Any]:
+    """The electromagnetic numbers the COUPLED LOOP itself ended on (its own torque and losses at its own temperatures) - kept
+    apart from the EM run's, which was made at a fixed winding temperature."""
+    from motor_ai_sim.development import motors
+    em = motors._metric_projection(cp.get("em") if isinstance(cp.get("em"), dict) else {})
+    out = {}
+    for name, keys in (("torque_nm", ("t_em_avg_nm", "t_em_nm", "t_avg_nm", "torque_avg_nm", "torque_nm")),
+                       ("p_loss_total_w", ("p_loss_total_w", "loss_w")),
+                       ("efficiency_pct", ("efficiency_pct", "efficiency_percent", "eta_pct"))):
+        for k in keys:
+            if _num(em.get(k)) is not None:
+                out[name] = _num(em[k])
+                break
+    return out
+
+
 def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Thermal results of one duty - or ``None`` when nothing is stored.
 
@@ -184,6 +200,9 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                       "magnet_max_c": _num(cp.get("magnet_temp_max_c")), "bearing_c": _num(cp.get("bearing_temp_c")),
                       "converged": cp.get("converged") if isinstance(cp.get("converged"), bool) else None,
                       "drive": cp.get("drive"), "provenance": provenance(cp)}
+        em = _coupled_em(cp)
+        if em:
+            duty_temps["em"] = em
         # the housing of the same loop's map, when that map states it
     elif cp is None and th and str(th.get("state") or "steady").lower() == "steady":
         comps = th.get("components") if isinstance(th.get("components"), dict) else {}
@@ -365,8 +384,14 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
         # the worst case is the motor's, shown everywhere: it alone does not make a duty a stored POINT
         has_anything = bool(row.get("has_result") or thermal or (stored.get("rotor_stress") or stored.get("modes")
                                                                    or stored.get("critical_speeds")) or em_run or fields)
+        em_nums = row.get("electromagnetic") if isinstance(row.get("electromagnetic"), dict) else {}
+        has_em_torque = any(_num(em_nums.get(k)) is not None for k in ("t_em_avg_nm", "t_em_nm", "t_avg_nm", "torque_avg_nm", "torque_nm"))
         duties.append({
             "duty": name,
+            # WHERE the electromagnetic tiles come from: the EM run (made at a fixed winding temperature, magnets at their
+            # card temperature) - never silently the coupled loop, whose own numbers are in the thermal block
+            "sources": {"em": {"kind": "em_run" if has_em_torque else "coupled",
+                               "coil_temp_c": _num(em_nums.get("coil_temp_c")), "magnet_temp_c": _num(em_nums.get("magnet_temp_c"))}},
             "has_result": has_anything,
             "operating_point": row.get("operating_point") or {},
             "electromagnetic": row.get("electromagnetic") or {},

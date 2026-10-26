@@ -298,6 +298,7 @@
     "tRippleTip": "Torque ripple at the rated point.",
     "tPerMass": "T / mass",
     "tPerMassActive": "T / active mass",
+    "tPerMassActive": "T / active mass",
     "tPerMassTip": "Torque per kg of motor mass.",
     "pPerMass": "P / mass",
     "pPerMassActive": "P / active mass",

@@ -2647,7 +2647,7 @@ ${s1Text.text}` : '';
               <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
             )}
-            <MetricTile label={tx('configure.tPerMass')} value={pointGate.accepted ? result.torque_per_mass : null} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi tip={tx('configure.tPerMassTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx(result.mass_partial ? 'configure.tPerMassActive' : 'configure.tPerMass')} value={pointGate.accepted ? result.torque_per_mass : null} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi tip={tx('configure.tPerMassTip')} blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.pPerMass')} value={pointGate.accepted ? result.power_per_mass_W_kg / 1000 : null} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi tip={tx('configure.pPerMassTip')} blankTip={pointBlankTip} />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>

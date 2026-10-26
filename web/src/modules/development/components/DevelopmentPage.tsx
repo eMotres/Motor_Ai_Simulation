@@ -33,8 +33,10 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import { answerWithUnknown, createDraftSaveCoordinator, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, fieldRequired, propertyRequired, requiredFieldIds, sectionAnswerCounts, setFieldAnswer, sectionStatus, rangeWorst, wizardCompleteness, withS1DerivedPower, withSpecDefaults, type SpecDraft } from '../wizardState';
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
+  import { VariantControls } from './VariantControls';
+  import { isRecommended } from '../projectFlags';
   import { openProjectMotor } from '../../../lib/openProjectMotor';
-  import { headerFlags, latestAndBest, motorColor, orderByGroup, variantKey } from '../motorGroups';
+  import { headerFlags, latestAndRecommended, motorColor, orderByGroup, variantKey } from '../motorGroups';
   import HistoryIcon from '@mui/icons-material/History';
   import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
   import { useProjectStripContext } from '../projectStripContext';
@@ -908,11 +910,11 @@ export default function DevelopmentPage() {
         // ONE group per geometry variant (name + step note once in its header, a colour accent per die), its duties as compact sub-rows;
         // history snapshots sit under their variant and show only in "All versions" (owner 2026-10-26)
         const versions = visibleProjectVersions(motors, snapshots, showAllVersions);
-        const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndBest(versions);
+        const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndRecommended(versions);
         const rows = developmentComparisonRows(visibleMotors);
         const rowMotors = rows.map((r) => r.motor);
         const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 10.5, color: 'var(--text-3)', whiteSpace: 'normal', maxWidth: 520 }}>{m.note}</Typography> : null;
-        const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode) => <Box component="tr"><Box component="td" colSpan={colSpan} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}>{content}</Box></Box>;
+        const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode, strong = false) => <Box component="tr"><Box component="td" colSpan={colSpan} data-recommended={strong ? 'true' : undefined} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: strong ? 'rgba(245,158,11,0.10)' : 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: strong ? `inset 9px 0 0 ${accent}` : `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}>{content}</Box></Box>;
         const groupHeader = (r: (typeof rows)[number], colSpan: number) => {
           const live = motors.find((m) => variantKey(m) === variantKey(r.motor)) ?? null;
           const note = live ?? r.motor;
@@ -922,13 +924,15 @@ export default function DevelopmentPage() {
               <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}</Typography>
               {stepNote(note)}
             </Stack>
+            {live && selected && <VariantControls projectId={selected.id} motor={live} staff={canManageGlobally} busy={busy} t={tr} showAll={showAllVersions}
+              onChanged={async () => { await loadProjectMotors(selected.id, projectToken.current); }} />}
             {live && <Stack direction="row" spacing={0.5} alignItems="center">
               {canEditProject && <MotorNoteField value={live.note ?? ''} disabled={busy} t={tr} onSave={(text) => changeMotorNote(live, text)} />}
               <span>{canManageProjectMotors ? <Select size="small" value={live.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(live, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${live.status === 'trial' ? 'trial' : 'current'}`)} />}</span>
               <HelpTip title={tr('motorStatus.tip')} />
               {canManageProjectMotors && <Tooltip title={tr('unlink')}><span><IconButton size="small" aria-label={tr('unlink')} disabled={busy} onClick={() => setUnlinkTarget(live)} sx={{ color: 'var(--text-3)' }}><DeleteOutlineIcon sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>}
             </Stack>}
-          </Stack>);
+          </Stack>, isRecommended(live));
         };
         const historyHeader = (r: (typeof rows)[number], colSpan: number) => headerRow(colSpan, motorColor(r.motor), true, <Stack direction="row" alignItems="center" spacing={0.8} flexWrap="wrap" useFlexGap data-testid="history-header">
           <Chip size="small" variant="outlined" icon={<HistoryIcon sx={{ fontSize: 14 }} />} label={tr('snapshots.history')} sx={{ height: 20, fontSize: 10.5 }} />

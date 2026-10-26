@@ -24,7 +24,8 @@ import { askDutyGeometryChoice } from './dutyGeometryDialogService';
 import { canWriteServer, getStoredUser } from './localAuth';
 import { loadStopReason } from './geometryApplyOutcome';
 import { uiCanWrite } from './accessUi';
-import { beginLastMotorSelection, isCurrentLastMotorOperation, rememberLoadedMotor, restoreLastMotor } from './lastMotor';
+import { clearFamilyTarget } from './familyLoad';
+import { beginLastMotorSelection,isCurrentLastMotorOperation, rememberLoadedMotor, restoreLastMotor } from './lastMotor';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -269,9 +270,13 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     //    so the two paths cannot drift apart.
     const result = await applyDutyLocal(die, cfg, duty, p, prev, canWrite);
     completed = true;
+    // The requested-motor marker (lib/familyLoad) stays until the account's record names the motor; where no record will
+    // ever be written (anonymous, or the remember step fails) it is dropped here so it cannot outlive the load.
     if (rememberedEmail) void rememberLoadedMotor(rememberedEmail, die, cfg, duty, selectionEpoch).catch(() => {
       // The local load is complete even if cross-device memory is unavailable.
+      clearFamilyTarget({ die, config: cfg });
     });
+    else clearFamilyTarget({ die, config: cfg });
     if (staleGeometryNotice) result.message += staleGeometryNotice;
     return result;
   } finally {

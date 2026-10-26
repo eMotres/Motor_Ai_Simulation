@@ -247,7 +247,7 @@
     "corrected3d": "3-D end effect included",
     "targetValue": "Target from the duty - not computed yet",
     "linePeakUnavailable": "Physical line peak unavailable for this result.",
-    "partialMass": "Active or unstamped mass; not a full assembled mass.",
+    "partialMass": "Active mass (EM parts x stack), not the whole assembled motor.",
     "partialLosses": "Stored total excludes unknown mechanical losses.",
     "componentTemp": "{part} temp",
     "temperaturePart": {
@@ -380,6 +380,23 @@
     "tip": "Latest: the latest current variant, plus the best one (highest average efficiency) when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
   },
   "points": {
+    "loadingMotor": "Loading {motor}...",
+    "batteryMarkerTip": "Voltage this point needs (selected mode), against the pack window.",
+    "source": {
+      "emChip": "EM run, winding {winding} °C",
+      "emChipPlain": "EM run",
+      "coupledChip": "Coupled loop",
+      "emTip": "These electromagnetic values come from the EM run made at a fixed winding temperature of {winding} °C (magnets {magnet} °C). The temperatures and the coupled loop's own torque are in the thermal block.",
+      "emTipPlain": "These electromagnetic values come from the EM run; its winding temperature is not stored. The temperatures and the coupled loop's own torque are in the thermal block.",
+      "coupledTip": "No EM run is stored for this point: the electromagnetic values come from the coupled loop."
+    },
+    "chart": {
+      "title": "Change over the steps",
+      "switchTip": "Choose the value to follow over the optimization steps, for the selected mode. Only values stored for at least two steps are offered; a step without the value is a gap, never zero."
+    },
+    "series": {
+      "current": "Current"
+    },
     "notComputed": "Not computed",
     "noProvenance": "No provenance is stored for this result.",
     "thermal": {
@@ -392,6 +409,7 @@
       "limitLine": "S1 limit search ({day}): winding {winding} °C at the limit",
       "limitTip": "State of the limit search (S1), not the temperature of this duty.",
       "tile": {
+        "emTorque": "Torque (coupled loop)",
         "winding": "Winding",
         "magnet": "Magnet",
         "housing": "Housing",
@@ -400,6 +418,8 @@
         "s2": "S2 time"
       },
       "tileTip": {
+      "torqueActiveMass": "Torque per active mass (EM parts), not the whole motor.",
+        "emTorque": "Torque the coupled loop ended on, at its own temperatures. The torque tile in the EM block is the EM run's.",
         "winding": "Settled winding temperature of this point (coupled loop).",
         "magnet": "Settled magnet temperature, hottest value.",
         "housing": "Housing temperature, where the thermal map states it.",
@@ -462,7 +482,7 @@
     "title": "Configure · computed points",
     "pending": "Points only",
     "pendingTip": "Points-limited: only the stored computed points are shown, nothing in between. The full operating map (any speed, current or voltage) is not available for this motor.",
-    "step": "Step",
+    "step": "Optimization steps",
     "noteHead": "Design step",
     "mode": "Mode",
     "modeTip": "One computed point per mode. Click a mode to see its stored results.",
@@ -489,12 +509,6 @@
     "knobTip": "Disabled: scrolling needs the full operating map, which is still being computed.",
     "knobsDisabledTip": "Speed, current and angle cannot be scrolled yet; only the stored points are shown. No value is interpolated.",
     "notStored": "Not stored for this point.",
-    "bus": "DC bus, V",
-    "busTip": "Type your supply voltage to check it against the bus this point was computed to need. Uses the stored requirement only.",
-    "busInvalid": "Enter a positive voltage.",
-    "busNoRequirement": "This point stores no required bus voltage.",
-    "busOk": "Covers the {required} V this point needs ({margin} % margin).",
-    "busShort": "Short of the {required} V this point needs by {margin} %.",
     "stepsTable": "Mode {duty} across the steps",
     "openTip": "Opens the computed points of this motor in Configure (full operating map pending).",
     "tile": {
@@ -729,5 +743,17 @@
     "ramAir": "A water-propeller motor sits in the hull or pod; no airstream reaches it."
   },
   "specReadOnly": "View only",
-  "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages."
+  "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages.",
+  "recommended": {
+    "label": "Recommended",
+    "tip": "Recommended variant of this project, marked by our engineers.",
+    "setTip": "Mark this variant as the recommended one of the project (one at a time). Without a mark the latest current variant is shown instead."
+  },
+  "report": {
+    "word": "Report (Word)",
+    "pdf": "Report (PDF)",
+    "reviewed": "Report reviewed",
+    "reviewedTip": "The report was checked by our engineers: project members can download it. Staff can always build it.",
+    "notReviewedTip": "The report is being checked by our engineers."
+  }
 }

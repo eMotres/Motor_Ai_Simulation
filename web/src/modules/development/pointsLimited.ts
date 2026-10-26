@@ -65,6 +65,8 @@ export function thermalTiles(t: MotorViewDuty['thermal']): ResultTile[] {
     { id: 'magnet', value: num(d.magnet_max_c) ?? num(d.magnet_c), unit: '°C', d: 0 },
     { id: 'housing', value: num(d.housing_c), unit: '°C', d: 0 },
   ] : [];
+  const emTorque = num(d?.em?.torque_nm);
+  if (emTorque !== null) out.push({ id: 'emTorque', value: emTorque, unit: 'N·m', d: 2 });
   const bearing = num(d?.bearing_c);
   if (bearing !== null) out.push({ id: 'bearing', value: bearing, unit: '°C', d: 0 });
   if (t.s1) out.push({ id: 's1', value: num(t.s1.I_cont_A_rms), unit: 'A', d: 1 });
@@ -158,4 +160,23 @@ export function dutyToOpen(motor: Pick<ProjectMotor, 'configure_duty' | 'default
     if (ok(name)) return name;
   }
   return null;
+}
+
+/** Whether a point's mass is the ACTIVE mass (EM parts x stack, no holders / housing / bearings) or the whole assembled motor:
+ *  the server's stamp `mass_partial` - anything but an explicit `false` is active (never claim a full mass on a guess). */
+export function massKind(point: { comparison?: Record<string, unknown> } | null | undefined): 'active' | 'full' {
+  return point?.comparison?.mass_partial === false ? 'full' : 'active';
+}
+
+/** The Configure label key (`controller` namespace) of a points-limited tile: the SAME names the ordinary Configure uses
+ *  (owner 2026-10-26).  null = Configure has no such tile; the caller keeps its own wording. */
+export function configureTileKey(tileId: string, point?: { comparison?: Record<string, unknown> } | null): string | null {
+  const map: Record<string, string> = {
+    torque: 'configure.torque', power: 'configure.power', efficiency: 'configure.efficiency', ripple: 'configure.tRipple',
+    losses: 'configure.totalLoss', pCu: 'configure.copperLoss', pFe: 'configure.ironLoss', pMag: 'configure.magnetLoss',
+    vLine: 'configure.vLinePeak', vPhase: 'configure.vPhasePeak', vDc: 'configure.dcBusMin', j: 'configure.currDensity',
+  };
+  if (tileId === 'mass') return massKind(point) === 'active' ? 'configure.massPartial' : 'configure.mass';
+  if (tileId === 'torqueMass') return massKind(point) === 'active' ? 'configure.tPerMassActive' : 'configure.tPerMass';
+  return map[tileId] ?? null;
 }

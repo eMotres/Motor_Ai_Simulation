@@ -605,3 +605,22 @@ def test_g_thermal_outlines_keep_their_domain_grouping(sandbox):
     th._remember_last("field", res, {"rpm": 3000.0}, "fp1")
     got = motor_view.field_payload(DIE, CFG, DUTY, "thermal")["payload"]["outlines"]
     assert sorted(e["domain"] for e in got) == [1, 2] and all(len(e["loops"]) == 1 for e in got)
+
+
+# ---------------------------------------------------------------------------
+# (h) which run each tile group comes from (owner 2026-10-26)
+# ---------------------------------------------------------------------------
+
+def test_h_the_em_tiles_name_their_run_and_the_coupled_loop_keeps_its_own_torque():
+    rows = [{"duty": "cruise", "has_result": True, "operating_point": {},
+             "electromagnetic": {"t_em_avg_nm": 818.84, "coil_temp_c": 150.0, "magnet_temp_c": 65.0}, "comparison": {}}]
+    stored = {"cruise": {"coupled": {"computed_at": "2026-10-25T10:00:00", "coil_temp_c": 134.0, "magnet_temp_c": 70.0,
+                                     "em": {"T_avg_Nm": 865.0, "P_loss_total_W": 9000.0}}}}
+    view = motor_view.build_view(DIE, CFG, rows, stored, {}, set())
+    d = view["duties"][0]
+    assert d["sources"]["em"] == {"kind": "em_run", "coil_temp_c": 150.0, "magnet_temp_c": 65.0}
+    assert d["thermal"]["duty_temps"]["winding_c"] == 134.0
+    assert d["thermal"]["duty_temps"]["em"]["torque_nm"] == 865.0          # kept apart from the EM run's 818.84
+    # no EM torque stored: the tiles say they come from the coupled loop
+    rows[0]["electromagnetic"] = {}
+    assert motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]["sources"]["em"]["kind"] == "coupled"

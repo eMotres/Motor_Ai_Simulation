@@ -13,8 +13,12 @@ import type { ProjectMember, ProjectMotor, ProjectMotorPickerItem, ProjectStatus
 import { useUIStore } from '../../../stores/uiStore';
 import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, projectOwnerLabel, projectMotorKey, projectOpenEvent, projectOpenIntent, projectRoleBody, validProjectId } from '../adminProjectsModel';
 import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey } from '../../../modules/development/pickerModel';
-import { MotorOpenActions } from '../../../modules/development/MotorOpenActions';
-import { MotorNoteField } from '../../../modules/development/MotorNoteField';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import { flagWho } from '../../../modules/development/projectFlags';
+import { motorLinkAvailability } from '../../../modules/development/motorAvailability';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const ROLES: ProjectMember['role'][] = ['customer', 'engineer', 'owner'];
@@ -164,7 +168,36 @@ const ProjectDrawer: React.FC<{ project: ProjectRow; users: RegistryUser[]; onCl
       {ROLES.map((r) => <MenuItem key={r} value={r}>{t(`projects.role.${r}`)}</MenuItem>)}</TextField><Button size="small" disabled={busy || !email} onClick={() => { if (email) void act(`/api/admin/projects/${enc(project.id)}/members`, 'POST', { email, role }, t('projects.memberAdded')); }} sx={{ textTransform: 'none' }}>{t('projects.add')}</Button></Box>
     <Divider sx={{ my: 1.5, borderColor: 'var(--line-soft)' }} />
     <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', mb: 0.5 }}>{t('projects.motors')}</Typography>
-    {adminMotors.map((m) => <Box key={projectMotorKey(m.canonical_die ?? m.die, m.config) + (m.snapshot_id ?? '')} sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, py: 0.2 }}><Typography sx={{ flex: '1 0 100%', fontSize: 12, overflowWrap: 'anywhere' }}>{m.canonical_die ?? m.die} / {m.config}</Typography>{m.kind !== 'history' && <><MotorOpenActions motor={m} allowMotorDefault engineer t={td} projectId={project.id} showAll /><MotorNoteField value={m.note ?? ''} disabled={busy} t={td} onSave={(note) => act('/api/projects/' + enc(project.id) + '/motors/note', 'PATCH', { die: m.canonical_die ?? m.die, config: m.config, note }, td('stepNote.saved'))} /><Tooltip title={td('motorStatus.tip')}><TextField select size="small" value={m.status === 'trial' ? 'trial' : 'current'} disabled={busy} aria-label={td('motorStatus.label')} sx={{ width: 125 }} onChange={async (e) => { const status = e.target.value as 'current' | 'trial'; const motorDie = m.canonical_die ?? m.die; await act('/api/projects/' + enc(project.id) + '/motors/status', 'PATCH', { die: motorDie, config: m.config, status }, td('motorStatus.updated')); }}>{['current', 'trial'].map((status) => <MenuItem key={status} value={status}>{td(`motorStatus.${status}`)}</MenuItem>)}</TextField></Tooltip><IconButton size="small" disabled={busy} aria-label={t('projects.unlinkMotor')} onClick={() => setUnlinkTarget({ die: m.canonical_die ?? m.die, config: m.config })}><CloseIcon sx={{ fontSize: 14 }} /></IconButton></>}</Box>)}
+    {/* ONE tidy row per motor in a fixed grid (owner 2026-10-26): name (one line, the full name + step note in the tooltip) | status |
+        recommended star | report reviewed | unlink.  Nothing is opened from here and no note is edited here (both live in the
+        Development project table). */}
+    {adminMotors.map((m) => {
+      const motorDie = m.canonical_die ?? m.die;
+      const live = m.kind !== 'history';
+      const avail = motorLinkAvailability(m, undefined, true);
+      const computed = !!(avail.configureDuty ?? avail.pointsDuty);     // the same test the open buttons used to make
+      const flag = (name: 'recommended' | 'report_reviewed', value: boolean) => act('/api/projects/' + enc(project.id) + '/motors/' + name, 'PATCH', { die: motorDie, config: m.config, value }, td(name === 'recommended' ? 'recommended.label' : 'report.reviewed'));
+      return (
+        <Box key={projectMotorKey(motorDie, m.config) + (m.snapshot_id ?? '')} data-testid="linked-motor-row"
+          sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 112px 32px 32px 32px', alignItems: 'center', columnGap: 0.5, py: 0.2 }}>
+          <Tooltip title={`${motorDie} / ${m.config}${m.note ? ` — ${m.note}` : ''}`}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+              <Typography noWrap sx={{ fontSize: 12, minWidth: 0 }}>{motorDie} / {m.config}</Typography>
+              {live && !computed && <Chip size="small" label={td('notComputed')} sx={{ height: 18, fontSize: 10, flex: '0 0 auto', color: 'var(--text-4)', bgcolor: 'var(--panel-2)' }} />}
+            </Box>
+          </Tooltip>
+          {live ? <>
+            <Tooltip title={td('motorStatus.tip')}><TextField select size="small" value={m.status === 'trial' ? 'trial' : 'current'} disabled={busy} aria-label={td('motorStatus.label')}
+              sx={{ '& .MuiSelect-select': { py: 0.3, fontSize: 11 } }}
+              onChange={async (e) => { const status = e.target.value as 'current' | 'trial'; await act('/api/projects/' + enc(project.id) + '/motors/status', 'PATCH', { die: motorDie, config: m.config, status }, td('motorStatus.updated')); }}>{['current', 'trial'].map((status) => <MenuItem key={status} value={status}>{td(`motorStatus.${status}`)}</MenuItem>)}</TextField></Tooltip>
+            <Tooltip title={m.recommended ? `${td('recommended.tip')} ${flagWho(m.recommended)}` : td('recommended.setTip')}><span><IconButton size="small" disabled={busy} aria-label={td('recommended.label')} aria-pressed={!!m.recommended}
+              onClick={() => void flag('recommended', !m.recommended)} sx={{ color: m.recommended ? '#f59e0b' : 'var(--text-4)' }}>{m.recommended ? <StarIcon sx={{ fontSize: 17 }} /> : <StarBorderIcon sx={{ fontSize: 17 }} />}</IconButton></span></Tooltip>
+            <Tooltip title={m.report_reviewed ? `${td('report.reviewedTip')} ${flagWho(m.report_reviewed)}` : td('report.reviewedTip')}><span><IconButton size="small" disabled={busy} aria-label={td('report.reviewed')} aria-pressed={!!m.report_reviewed}
+              onClick={() => void flag('report_reviewed', !m.report_reviewed)} sx={{ color: m.report_reviewed ? '#22c55e' : 'var(--text-4)' }}>{m.report_reviewed ? <TaskAltIcon sx={{ fontSize: 17 }} /> : <RadioButtonUncheckedIcon sx={{ fontSize: 17 }} />}</IconButton></span></Tooltip>
+            <IconButton size="small" disabled={busy} aria-label={t('projects.unlinkMotor')} onClick={() => setUnlinkTarget({ die: motorDie, config: m.config })}><CloseIcon sx={{ fontSize: 14 }} /></IconButton>
+          </> : <><span /><span /><span /><span /></>}
+        </Box>);
+    })}
     <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}><Button size="small" disabled={busy} onClick={() => { setPickerOpen(true); void loadPicker(); }} sx={{ textTransform: 'none' }}>{td('linkMotor')}</Button></Box>
     <Dialog open={pickerOpen} onClose={() => !busy && setPickerOpen(false)} fullWidth maxWidth="sm"><DialogTitle>{td('linkMotor')}</DialogTitle><DialogContent>
       <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5 }}>{td('picker.thisProject')}</Typography>{picker.this_project.map((item) => <Box key={`${item.die}/${item.config}`} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.3 }}><Tooltip title={`${item.unlinked_by ?? ''} ${item.unlinked_at ?? ''}`}><Typography sx={{ flex: 1, fontSize: 11 }}>{pickerDisplayLabel(item, td)} · {item.die}/{item.config}</Typography></Tooltip><Tooltip title={item.disabled ? td(pickerReasonKey(item.reason)) : ''}><span><Button size="small" disabled={busy || item.disabled} onClick={() => void act(adminProjectPaths.motors(project.id), 'POST', { die: item.die, config: item.config }, td('picker.restored'))}>{td('picker.restore')}</Button></span></Tooltip></Box>)}

@@ -58,3 +58,23 @@ t('the end of an older load never clears or fails the line of a newer one', () =
   F.finishFamilyLoad(b);
   assert.equal(F.getFamilyLoad().status, 'idle');
 });
+
+t('the REQUESTED motor is named from the click on, outlives the load, and is cleared by the record or a failure', () => {
+  F.clearFamilyTarget();
+  assert.equal(F.getFamilyTarget(), null);
+  const v0 = F.getFamilyVersion();
+  const tok = F.beginFamilyLoad('D1', 'C1', 'rated');
+  assert.deepEqual(F.getFamilyTarget(), { die: 'D1', config: 'C1', duty: 'rated' });   // at the click, before any request returns
+  assert.ok(F.getFamilyVersion() > v0);
+  F.finishFamilyLoad(tok);
+  assert.deepEqual(F.getFamilyTarget(), { die: 'D1', config: 'C1', duty: 'rated' });   // the account record is written after the load
+  F.clearFamilyTarget({ die: 'D2', config: 'C1' });                                     // another motor's end must not clear it
+  assert.notEqual(F.getFamilyTarget(), null);
+  const v1 = F.getFamilyVersion();
+  F.clearFamilyTarget({ die: 'D1', config: 'C1' });
+  assert.equal(F.getFamilyTarget(), null);
+  assert.ok(F.getFamilyVersion() > v1);                                                 // subscribers are told
+  const tok2 = F.beginFamilyLoad('D3', 'C3', 'rated');
+  F.failFamilyLoad(tok2, 'boom');
+  assert.equal(F.getFamilyTarget(), null);                                              // a failed load names no motor
+});

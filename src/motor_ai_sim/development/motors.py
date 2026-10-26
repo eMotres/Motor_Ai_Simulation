@@ -1301,6 +1301,139 @@ def update_project_motor_status(project_id: str, req: MotorStatusUpdate, request
             "status": req.status if changed else old_status}
 
 
+class FlagUpdate(BaseModel):
+    die: str
+    config: str
+    value: bool = True
+
+
+def _is_staff_identity(ident: dict) -> bool:
+    """A GLOBAL engineer or admin (not a project role): staff may always build a report and mark variants."""
+    return bool(ident.get("is_admin")) or str(ident.get("role") or "").lower() in {"admin", "engineer"}
+
+
+def _set_link_flag(project_id: str, req: FlagUpdate, request: Request, flag: str, audit_action: str, *,
+                   exclusive: bool = False) -> dict:
+    """Set / clear one staff flag (``report_reviewed``, ``recommended``) on a linked motor of the project.
+
+    Staff only (global engineer / admin).  The value stored is who / when (and, for a reviewed report, the code version the
+    reviewer looked at).  ``exclusive``: at most one linked motor of the project carries the flag (the recommended variant).
+    """
+    user, _project, _role = access.require_project(request, project_id, edit=True)
+    if not access.is_engineer(user):
+        raise HTTPException(403, detail="Engineer access required")
+    if not req.die.strip() or not req.config.strip():
+        raise HTTPException(422, detail="Invalid motor identity")
+    actor = str(user.get("email") or "")
+    with transaction():
+        project = store.get_project(project_id)
+        if project is None:
+            raise HTTPException(404, detail="Project not found")
+        linked = _linked_motor_for_status(project, req.die.strip(), req.config.strip())
+        if linked is None:
+            raise HTTPException(404, detail="Linked motor not found")
+        key_die, key_config = str(linked.get("die") or ""), str(linked.get("config") or "")
+        from motor_ai_sim.development.models import now
+        stamp: dict = {"by": actor, "at": now()}
+        if flag == "report_reviewed":
+            try:
+                from motor_ai_sim import run_history
+                stamp["report_commit"] = run_history.code_version()
+            except Exception:
+                stamp["report_commit"] = "unknown"
+
+        def mutate(doc):
+            found = False
+            for item in doc.get("linked_motors", []):
+                if not isinstance(item, dict):
+                    continue
+                same = _key(str(item.get("die") or ""), str(item.get("config") or "")) == _key(key_die, key_config)
+                if same:
+                    found = True
+                    if req.value:
+                        item[flag] = dict(stamp)
+                    else:
+                        item.pop(flag, None)
+                elif exclusive and req.value:
+                    item.pop(flag, None)
+            if not found:
+                raise HTTPException(404, detail="Linked motor not found")
+            doc["updated_at"] = now()
+        store.mutate_project(project_id, mutate)
+        store.append_audit(project_id, actor, audit_action, "motor", f"{key_die}/{key_config}",
+                           {"value": bool(req.value)})
+    return {"die": key_die, "config": key_config, flag: stamp if req.value else None}
+
+
+@router.patch("/report_reviewed")
+def set_report_reviewed(project_id: str, req: FlagUpdate, request: Request):
+    """Mark the variant's report as checked by our engineers (staff only): project members then may download it."""
+    return _set_link_flag(project_id, req, request, "report_reviewed", "motor.report_reviewed")
+
+
+@router.patch("/recommended")
+def set_recommended(project_id: str, req: FlagUpdate, request: Request):
+    """Mark ONE variant of the project as the recommended one (staff only; setting it clears the previous one)."""
+    return _set_link_flag(project_id, req, request, "recommended", "motor.recommended", exclusive=True)
+
+
+def report_link_state(die: str, config: str) -> dict | None:
+    """The project link behind ``die/config`` (``{"project_id", "link"}``) or ``None`` when it belongs to no project."""
+    try:
+        row = (_index().get("motors") or {}).get(_key(die, config))
+        if not isinstance(row, dict) or not row.get("project_id"):
+            return None
+        project = store.get_project(str(row["project_id"]))
+        if project is None:
+            return None
+        link = next((m for m in project.get("linked_motors", []) if isinstance(m, dict)
+                     and _key(str(m.get("die") or ""), str(m.get("config") or "")) == _key(die, config)), None)
+        return {"project_id": str(row["project_id"]), "link": link} if link is not None else None
+    except Exception:
+        return None
+
+
+def require_report_reviewed(die: str, config: str, authorization: str | None) -> None:
+    """The review gate of the report: a variant that belongs to a project is built for a non-staff caller only after an
+    admin / engineer marked its report reviewed.  Staff always build; a motor outside every project is not gated."""
+    from motor_ai_sim.auth import caller_identity
+    if _is_staff_identity(caller_identity(authorization)):
+        return
+    state = report_link_state(die, config)
+    if state is None:
+        return
+    if not isinstance((state["link"] or {}).get("report_reviewed"), dict):
+        raise HTTPException(403, detail={"code": "report_not_reviewed",
+                                         "message": "The report is being checked by our engineers."})
+
+
+@router.get("/report")
+def project_motor_report(project_id: str, request: Request, die: str, config: str, format: str = "docx",
+                         show_all: bool = False):
+    """The motor report of one project variant (every computed duty), for project members.
+
+    Same ``_require_die_access`` gate and CAD-cooling NDA gate as ``GET /api/family/report`` (both go through
+    ``routes.report.build_for``).  Staff always; a non-staff member only after the report was marked reviewed.  A variant with
+    results missing is built all the same - the report lists what is still to compute.  Every non-staff download is audited.
+    """
+    from fastapi.responses import Response
+    from motor_ai_sim.routes import report as report_routes
+    user, role, open_die, cfg_name, _path, _cfg, link = _project_motor(project_id, request, die, config, show_all)
+    authorization = request.headers.get("authorization")
+    staff = access.is_engineer(user)
+    if not staff and not isinstance(link.get("report_reviewed"), dict):
+        raise HTTPException(403, detail={"code": "report_not_reviewed",
+                                         "message": "The report is being checked by our engineers."})
+    blob, fname, rid = report_routes.build_for(open_die, cfg_name, format, authorization)
+    fmt = str(format or "").strip().lower()
+    if not staff:
+        store.append_audit(project_id, str(user.get("email") or ""), "motor.report.download", "motor",
+                           f"{open_die}/{cfg_name}", {"format": fmt})
+    return Response(content=blob, media_type=report_routes._MEDIA[fmt],
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                             "Content-Length": str(len(blob)), "X-Run-Id": rid})
+
+
 @router.get("")
 def list_project_motors(project_id: str, request: Request, show_all: bool = False):
     user, project, role = access.require_project(request, project_id)
@@ -1375,6 +1508,9 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
                 # Points-only Configure: any stored duty result is enough (no passport maps needed).
                 "can_open_points": available and any(row.get("has_result") for row in result_rows),
                 "note": str(link.get("note") or ""),
+                # staff marks: the variant whose report was checked, and THE recommended variant of the project
+                "report_reviewed": link.get("report_reviewed") if isinstance(link.get("report_reviewed"), dict) else None,
+                "recommended": link.get("recommended") if isinstance(link.get("recommended"), dict) else None,
                 "results": result_rows}
         results.append(item)
         if is_customer:
@@ -1435,6 +1571,9 @@ def project_motor_points(project_id: str, request: Request, die: str | None = No
         points = _point_rows(_results(open_die, cfg_name, cfg, stored, set()))
         variants.append({"step": len(variants) + 1, "die": open_die, "canonical_die": canonical,
                          "config": cfg_name, "status": status, "note": str(link.get("note") or ""),
+                         # the staff marks ride on the light steps feed: the points-limited view needs no project motor list
+                         "report_reviewed": link.get("report_reviewed") if isinstance(link.get("report_reviewed"), dict) else None,
+                         "recommended": link.get("recommended") if isinstance(link.get("recommended"), dict) else None,
                          "points": points})
     selected = None
     if die is not None or config is not None:

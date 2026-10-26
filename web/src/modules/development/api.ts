@@ -63,6 +63,10 @@ export const developmentApi = {
     call<MotorView>('GET', `${p(id)}/motors/view?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
   motorField: (id: string, die: string, config: string, duty: string, kind: FieldKind, showAll = false) =>
     call<StoredField>('GET', `${p(id)}/motors/field?die=${enc(die)}&config=${enc(config)}&duty=${enc(duty)}&kind=${kind}${showAll ? '&show_all=true' : ''}`),
+  /** Staff only: mark / unmark the variant's report as checked (members may download it only then). */
+  setReportReviewed: (id: string, die: string, config: string, value: boolean) => call<unknown>('PATCH', `${p(id)}/motors/report_reviewed`, { die, config, value }),
+  /** Staff only: THE recommended variant of the project (setting it clears the previous one). */
+  setRecommended: (id: string, die: string, config: string, value: boolean) => call<unknown>('PATCH', `${p(id)}/motors/recommended`, { die, config, value }),
   setMotorNote: (id: string, die: string, config: string, note: string) => call<{ die: string; config: string; note: string }>('PATCH', `${p(id)}/motors/note`, { die, config, note }),
   setMotorStatus: (id: string, die: string, config: string, status: 'current' | 'trial') => call<unknown>('PATCH', `${p(id)}/motors/status`, { die, config, status }),
   motorPicker: (id: string) => call<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>('GET', `${p(id)}/motors/picker`),

@@ -687,6 +687,9 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
                       "nothing was solved to produce this document.")
 
     _cover(doc, D)
+    _rec = R._recommended_line(die, cfg)
+    if _rec:
+        _p(doc, "\u2605 " + _rec, size=10, bold=True)
     _machine(doc, D)
     _duties(doc, D)
     _comparisons(doc, D)

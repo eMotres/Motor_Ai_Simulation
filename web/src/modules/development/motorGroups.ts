@@ -58,18 +58,19 @@ export function averageEfficiency(motor: ProjectMotor): number | null {
   }).filter((v): v is number => v !== null);
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 }
-/** The latest current variant (the last linked one that is not a trial) and the best one - the highest average efficiency - when
- *  that is another variant.  Everything else (trials, older variants, history) is hidden. */
-export function latestAndBest(motors: ProjectMotor[]): ProjectMotor[] {
+/** The latest current variant (the last linked one that is not a trial) and the RECOMMENDED one when that is another variant.
+ *  "Recommended" is an explicit staff choice (`ProjectMotor.recommended`, one per project), never an automatic metric: a variant
+ *  picked by efficiency alone can fail mechanics (owner 2026-10-26).  With none marked, only the latest.  Everything else
+ *  (trials, older variants, history) is hidden. */
+export function latestAndRecommended(motors: ProjectMotor[]): ProjectMotor[] {
   const current = motors.filter(isCurrent);
   if (!current.length) return [];
   const latest = current[current.length - 1];
-  let best: ProjectMotor | null = null, bestValue = -Infinity;
-  for (const m of current) { const v = averageEfficiency(m); if (v !== null && v > bestValue) { best = m; bestValue = v; } }
-  const picked = best && best !== latest ? [best, latest] : [latest];
+  const recommended = current.find((m) => m.recommended && typeof m.recommended === 'object') ?? null;
+  const picked = recommended && recommended !== latest ? [recommended, latest] : [latest];
   return motors.filter((m) => picked.includes(m));                       // keep the table's own order
 }
-/** What the table shows for a view: `latest` = latest + best of the current variants, `all` = every variant (trials too) with its history. */
+/** What the table shows for a view: `latest` = latest + recommended of the current variants, `all` = every variant (trials too) with its history. */
 export function versionsForView(all: ProjectMotor[], view: VersionView): ProjectMotor[] {
-  return view === 'all' ? orderByGroup(all) : latestAndBest(all);
+  return view === 'all' ? orderByGroup(all) : latestAndRecommended(all);
 }

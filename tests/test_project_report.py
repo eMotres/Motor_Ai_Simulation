@@ -202,3 +202,10 @@ def test_d_stale_mechanics_is_listed_not_printed_as_current(results):
     # a limit search is not the duty's own point result
     dr.record(DIE, CFG, "cruise", "coupled", {"computed_at": "2026-10-26T08:00:00", "coil_temp_c": 180.0, "solve_to": "continuous", "mode": "limited"})
     assert ("cruise", report_missing.ITEM_COUPLED) in {(r["duty"], r["item"]) for r in report_missing.still_to_compute(DIE, CFG, CFG_DOC)}
+
+
+def test_a_the_title_page_names_the_recommended_variant_only(client):
+    assert report_missing.recommended_banner(DIE, CFG) == ""                  # nothing marked: no automatic pick
+    patch(client, "admin", "recommended", CFG)
+    assert "Alpha" in report_missing.recommended_banner(DIE, CFG)
+    assert report_missing.recommended_banner(DIE, CFG2) == ""

@@ -34,7 +34,7 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { openProjectMotor } from '../../../lib/openProjectMotor';
-  import { headerFlags, latestAndBest, motorColor, orderByGroup, variantKey } from '../motorGroups';
+  import { headerFlags, latestAndRecommended, motorColor, orderByGroup, variantKey } from '../motorGroups';
   import HistoryIcon from '@mui/icons-material/History';
   import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
   import { useProjectStripContext } from '../projectStripContext';
@@ -908,7 +908,7 @@ export default function DevelopmentPage() {
         // ONE group per geometry variant (name + step note once in its header, a colour accent per die), its duties as compact sub-rows;
         // history snapshots sit under their variant and show only in "All versions" (owner 2026-10-26)
         const versions = visibleProjectVersions(motors, snapshots, showAllVersions);
-        const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndBest(versions);
+        const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndRecommended(versions);
         const rows = developmentComparisonRows(visibleMotors);
         const rowMotors = rows.map((r) => r.motor);
         const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 10.5, color: 'var(--text-3)', whiteSpace: 'normal', maxWidth: 520 }}>{m.note}</Typography> : null;

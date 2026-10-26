@@ -66,3 +66,20 @@ def still_to_compute(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[s
 def as_lines(rows: List[Dict[str, str]]) -> List[str]:
     """One printable line per row: ``<duty>: <item> - <reason>``."""
     return [f"{r['duty']}: {r['item']} - {r['reason']}" for r in rows]
+
+
+RECOMMENDED_LINE = "Recommended variant of project {project} (marked by our engineers)"
+
+
+def recommended_banner(die: str, cfg: str) -> str:
+    """The title-page line of the variant the staff marked as the project's recommended one; '' for any other variant
+    (no automatic pick: an unmarked project has no recommended variant on its reports)."""
+    try:
+        from motor_ai_sim.development import motors, store
+        state = motors.report_link_state(die, cfg)
+        if not state or not isinstance((state["link"] or {}).get("recommended"), dict):
+            return ""
+        project = store.get_project(state["project_id"]) or {}
+        return RECOMMENDED_LINE.format(project=str(project.get("title") or state["project_id"]))
+    except Exception:                                       # noqa: BLE001
+        return ""

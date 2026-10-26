@@ -134,7 +134,10 @@ def build_for(die: str, cfg: str, fmt: str, authorization: Optional[str], *, dut
         # Opened around the WHOLE build, so an exception finalises the entry
         # with its own sentence instead of leaving a ring spinning on a run
         # that died (progress entries are only evicted by TTL).
-        with _RP.build(rid, fmt, key=f"{die}/{cfg}/{fmt}"):
+        # the "Tests vs simulation" section: staff always, others only behind the configuration's customer flag
+        from motor_ai_sim.motor_tests import report as _MTR
+        with _RP.build(rid, fmt, key=f"{die}/{cfg}/{fmt}"), \
+                _MTR.including(_MTR.viewer_may_see(authorization, die, cfg)):
             # Wire coating is pure geometry — measured here (cached), never a
             # solve.  Best-effort, exactly as the datasheet route treats it: a
             # CAD that cannot build the slot is one missing row, not a failed

@@ -662,6 +662,7 @@ SELF_GATED_PREFIXES = (
     "/api/model3d",         # "No 3D model for this motor."
     "/api/family/history/",  # an empty snapshot list, like a missing configuration
     "/api/production",      # production module gates itself (members, NDA gate)
+    "/api/motor-tests",     # Tests: the production membership + NDA gate, in-route (motor_tests.access)
 )
 #: …and these single routes (their natural "missing" answer is a 200 with a reason).
 SELF_GATED_SUFFIXES = ("/part_materials",)

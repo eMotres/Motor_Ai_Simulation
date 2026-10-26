@@ -168,6 +168,11 @@ def world(tmp_path, monkeypatch):
     _write_json(prod / "bom.json", {"rows": [{"part": "stator"}]})
     (prod / "files").mkdir()
     (prod / "files" / "photo.bin").write_bytes(b"\x00\x01die")
+    # the Tests store (motor_tests), a sibling of production with the same folder naming
+    monkeypatch.setenv("MOTRES_MOTOR_TESTS_ROOT", str(t / "motor_tests"))
+    _write_json(t / "motor_tests" / OLD.replace(" ", "_") / CFG / "tests.json",
+                {"die": OLD, "config": CFG, "settings": {"tests_visible_to_customer": False},
+                 "tests": [{"id": "test_1", "kind": "parameters", "date": "2026-10-18"}]})
     monkeypatch.setenv("MOTRES_CAD_ROOT", str(t / "cad"))
     _write_json(t / "cad" / OLD / CFG / "manifest.json", {"die": OLD, "config": CFG, "motor_id": "m1",
                                                           "files": {"m1_full.glb": {"sha256": "ab"}}})
@@ -285,6 +290,13 @@ def test_rename_moves_everything_keyed_by_the_die_name(world):
     assert not (world / "production" / OLD.replace(" ", "_")).exists()
     assert "die.rename" in (prod / "audit.jsonl").read_text(encoding="utf-8")
 
+    # Tests: folder and the record's die field follow; the rename is in its audit
+    mt = world / "motor_tests" / NEW.replace(" ", "_") / CFG
+    assert json.loads((mt / "tests.json").read_text(encoding="utf-8"))["die"] == NEW
+    assert not (world / "motor_tests" / OLD.replace(" ", "_")).exists()
+    assert "die.rename" in (mt / "audit.jsonl").read_text(encoding="utf-8")
+    assert "motor_tests" in stores
+
     # CAD model folder, manifest, rebuild request
     from motor_ai_sim import model3d
     from motor_ai_sim.cad import rebuild_queue as RQ
@@ -338,7 +350,8 @@ def test_failure_in_a_late_step_rolls_everything_back(world, monkeypatch):
         raise RuntimeError("disk full")
     monkeypatch.setattr(DRN, "step_cad", boom)
     monkeypatch.setattr(DRN, "GLOBAL_STEPS", (DRN.step_grants, DRN.step_die_access, DRN.step_projects,
-                                              DRN.step_production, boom, DRN.step_manual))
+                                              DRN.step_production, DRN.step_motor_tests, boom,
+                                              DRN.step_manual))
     with pytest.raises(RuntimeError, match="disk full"):
         _rename(world)
     assert _tree_digest(world) == before                                # every store is back as it was

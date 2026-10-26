@@ -355,6 +355,28 @@ def test_a2_a_partly_computed_variant_builds_and_lists_what_is_still_to_compute(
     assert "Mechanics with magnetic pull" in body and "Coupled thermal loop at the duty" in body
 
 
+def test_a3_tests_vs_simulation_section_only_with_tests_and_only_for_who_may_see_them(dies, tmp_path, monkeypatch):
+    """Owner 2026-10-26: the configuration's bench tests appear as "Tests vs simulation" (measured | model | delta),
+    in the PDF and in Word alike; no tests -> no section; a viewer behind the customer flag gets none."""
+    from motor_ai_sim.motor_tests import report as MTR
+    from motor_ai_sim.motor_tests import store as MTS
+    monkeypatch.setenv("MOTRES_MOTOR_TESTS_ROOT", str(tmp_path / "motor_tests"))
+    assert MTR.tables(DIE, CFG) == []
+    MTS.mutate(DIE, CFG, lambda d: d["tests"].append(
+        {"id": "test_r", "kind": "parameters", "date": "2026-10-26", "instrument": "LCR", "conditions": {},
+         "resistance": {"temp_c": 25.0, "pairs": [{"pair": "1-2", "value_mohm": 120.0},
+                                                  {"pair": "2-3", "value_mohm": 121.0}]}}))
+    tabs = MTR.tables(DIE, CFG)
+    assert len(tabs) == 1 and tabs[0]["rows"][0] == ["Quantity", "Unit", "Measured", "Model", "Δ %"]
+    with MTR.including(False):
+        assert MTR.tables(DIE, CFG) == []
+    txt = _text(_build(dies))
+    assert "Tests vs simulation" in txt and "R line-line, mean of 2" in txt
+    dx = _dx(_build_docx(dies))
+    assert "Tests vs simulation" in _dx_headings(dx)
+    assert "R line-line, mean of 2" in _dx_text(dx)
+
+
 # ---------------------------------------------------------------------------
 # The three real solves, once for the whole module
 # ---------------------------------------------------------------------------

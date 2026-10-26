@@ -34,6 +34,7 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import { CONTINUOUS, blankKeyPoint, effectiveKeyPoints, keyPointErrors, keyPointsSlotState, keyPointsStored, withKeyPoints, type KeyPoint, type KeyPointProp } from '../keyPoints';
   import { MotorOpenActions } from '../MotorOpenActions';
   import { VariantControls } from './VariantControls';
+  import { ProjectMotorTests } from '../ProjectMotorTests';
   import { isRecommended } from '../projectFlags';
   import { openProjectMotor } from '../../../lib/openProjectMotor';
   import { headerFlags, latestAndRecommended, motorColor, orderByGroup, variantKey } from '../motorGroups';
@@ -926,6 +927,7 @@ export default function DevelopmentPage() {
             </Stack>
             {live && selected && <VariantControls projectId={selected.id} motor={live} staff={canManageGlobally} busy={busy} t={tr} showAll={showAllVersions}
               onChanged={async () => { await loadProjectMotors(selected.id, projectToken.current); }} />}
+            {live && selected && <ProjectMotorTests projectId={selected.id} motor={live} showAll={showAllVersions} t={tr} />}
             {live && <Stack direction="row" spacing={0.5} alignItems="center">
               {canEditProject && <MotorNoteField value={live.note ?? ''} disabled={busy} t={tr} onSave={(text) => changeMotorNote(live, text)} />}
               <span>{canManageProjectMotors ? <Select size="small" value={live.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(live, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${live.status === 'trial' ? 'trial' : 'current'}`)} />}</span>

@@ -45,8 +45,15 @@ import {
   caseKeys, coupledPoint, fmt, fmtSecs, pickCase, readSimSetting, sfAccent,
 } from './api';
 import type {
-  CaseResult, CaseName, ContactType, LoadsMode, PartResult, RotorStress,
+  CaseResult, CaseName, ContactType, LoadsMode, PartResult, PullMode, RotorStress,
 } from './api';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+import { pullMpaError } from '../../lib/mechPull';
+
+/** The `mechanical` namespace — the magnetic-pull control (2026-10-26) is the
+ *  first part of this panel that is translated (EN + zh-CN). */
+const tx = nsT('mechanical');
 import type { MechView } from './fieldAdapters';
 
 /** Tooltip on a Select: keep the hint UNDER the menu the Select opens (MUI
@@ -296,11 +303,13 @@ const MechanicalPanel: React.FC = () => {
   // the restored result — see `mechanicalStore.isStale`).
   const liveGeometry = useMotorStore((s) => s.geometry);
 
+  // subscribes the panel to language changes and loads the namespace
+  useTranslation('mechanical');
   const st = useMechanicalStore();
   const {
     cases, loads, torque, rpm, rpm1, osf, interf, rotorTempC, sleeveTempC,
     tempSource, thermalTemps,
-    meshMm, contacts, viewCase,
+    meshMm, contacts, viewCase, pull, pullMpa,
     view, exagg, showContacts, sfLow, sfHigh, geom, geomBusy, geomErr,
   } = st;
   const single = cases === 'single';
@@ -776,6 +785,27 @@ const MechanicalPanel: React.FC = () => {
                 InputLabelProps={{ style: { fontSize: 12 } }} />
             </Tooltip>
           )}
+          {/* ── the magnetic pull (2026-10-26) ────────────────────────────
+              Owner: make the air-gap pull a real load, not a density factor.
+              One menu (+ the pressure for the estimate), the rest in the tip. */}
+          <Tooltip title={tx('pull.tooltip')} slotProps={SELECT_TIP}>
+            <Select size="small" value={pull}
+              onChange={(e) => setField('pull', e.target.value as PullMode)}
+              sx={{ fontSize: 11, height: 30, minWidth: 120 }}>
+              {(['none', 'em', 'uniform'] as PullMode[]).map((m) => (
+                <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{tx(`pull.${m}`)}</MenuItem>
+              ))}
+            </Select>
+          </Tooltip>
+          {pull === 'uniform' && (
+            <Tooltip title={`${tx('pull.mpaTooltip')} ${tx('pull.mpaError')}`}>
+              <TextField label={tx('pull.mpa')} size="small" value={pullMpa}
+                error={pullMpaError(pullMpa) !== null}
+                onChange={(e) => setField('pullMpa', e.target.value)}
+                sx={{ width: 80 }} inputProps={{ style: { fontSize: 12 } }}
+                InputLabelProps={{ style: { fontSize: 12 } }} />
+            </Tooltip>
+          )}
           <Tooltip title={hasSleeveGeo
             ? 'Radial interference of the sleeve fit, in mm. It pre-compresses the rotor at standstill, which is what keeps the magnets pressed on at speed.'
             : 'This machine has no sleeve (sleeve_thickness = 0), so there is no fit to specify.'}>
@@ -924,6 +954,13 @@ const MechanicalPanel: React.FC = () => {
             <Tooltip title={`${solvedIn(res) || 'no timing in this result'}${
               res.mesh.mesh_s ? ` — of which ${fmtSecs(res.mesh.mesh_s)} was the mesh${res.mesh.mesh_reused ? ', already built by a previous Build mesh or Solve, so this press did not pay it' : ''}` : ''}. Measured on the backend, around the geometry build and the ${resCases.length} nonlinear contact solve${resCases.length === 1 ? '' : 's'}.${res.case_mode === 'single' ? ` Single speed: only ${Math.round(res.rpm).toLocaleString()} rpm was solved, so nothing here describes any other speed.` : ''}${
               res.torque_load ? ` Torque ${fmt(res.torque_nm, 1)} N·m (${res.torque_source ?? '—'}) as ${fmt(res.torque_load.traction_mpa, 4)} MPa of tangential traction over ${fmt(res.torque_load.surface_mm, 0)} mm of gap-facing surface at r ${fmt(res.torque_load.r_gap_mm, 1)} mm — ${fmt((res.torque_load.coverage ?? 0) * 100, 0)} % of the full circle — reacted at the ${res.torque_load.reaction_at}.` : ''}${
+              res.pull_load ? ` ${tx('pull.summary', {
+                source: res.pull_load.label,
+                peak: fmt(res.pull_load.pressure_peak_mpa, 3),
+                mean: fmt(res.pull_load.pressure_mean_mpa, 3),
+                perPole: fmt(Math.abs(res.pull_load.radial_force_per_pole_n) / 1000, 2),
+                ratio: res.pull_load.check?.ratio != null ? fmt(res.pull_load.check.ratio, 3) : '—',
+              })}` : ''}${
               res.thermal?.active ? `${tempSentence(res.thermal, res.has_sleeve ?? hasSleeveGeo)}${res.thermal.fit ? ` Under the band the parts would grow ${fmt(res.thermal.fit.free_growth_under_sleeve_um, 1)} µm on their own and the band's own bore ${fmt(res.thermal.fit.free_growth_sleeve_bore_um, 1)} µm, so the ${fmt(res.interference_mm, 3)} mm fit is effectively ${fmt(res.interference_effective_mm, 3)} mm at temperature.` : ''}` : ''}`}>
               <Typography sx={{ ...lbl, ml: 'auto', cursor: 'help' }}>
                 {/* What was solved, before how big it was: a one-case answer
@@ -932,6 +969,8 @@ const MechanicalPanel: React.FC = () => {
                 {res.case_mode === 'single' ? 'single speed · ' : ''}
                 {res.loads ? `${LOADS_LABEL[res.loads].toLowerCase()}${
                   res.torque_nm ? ` ${Math.round(res.torque_nm).toLocaleString()} N·m` : ''} · ` : ''}
+                {res.pull_load
+                  ? `${tx('pull.badge', { mpa: fmt(res.pull_load.pressure_peak_mpa, 2) })} · ` : ''}
                 {/* Only when something is actually heated: a 20/20 °C answer is
                     the machine as drawn and saying so every time would be noise
                     (2026-09-07).  Four numbers only when the parts differ

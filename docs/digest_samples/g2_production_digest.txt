@@ -1,0 +1,47 @@
+Subject: G2 generator L40 - what changed 2026-09-21 / G2 发电机 L40 - 更新摘要 2026-09-21
+To: li@example.com
+
+G2 generator L40
+What changed since 2026-09-20:
+
+- New document: stator-winding-photo-03.jpg
+  https://aerostator.com/production/CILN28/G2-L40/documents?ids=doc_g2a
+- New message from 李: Magnets arrive on Thursday [machine-translated]
+  https://aerostator.com/production/CILN28/G2-L40/discussion?item=th_g2
+- New proposal: Use 8x5 mm magnets
+  https://aerostator.com/production/CILN28/G2-L40/proposals?item=pr_g2
+- Proposal accepted: Use 8x5 mm magnets
+  https://aerostator.com/production/CILN28/G2-L40/proposals?item=pr_g2
+- Bill of materials updated
+  https://aerostator.com/production/CILN28/G2-L40/bom
+- Revision 2.3 published: Rotor sleeve 0.3 mm thicker (3 changes)
+  https://aerostator.com/production/CILN28/G2-L40/changes?item=2.3
+
+----------------------------------------
+
+G2 发电机 L40
+2026-09-20 以来的更新:
+
+- 新文档：stator-winding-photo-03.jpg
+  https://aerostator.com/production/CILN28/G2-L40/documents?ids=doc_g2a
+- 李 的新留言：磁钢周四到货
+  https://aerostator.com/production/CILN28/G2-L40/discussion?item=th_g2
+- 新提案：使用 8x5 毫米磁钢 [机器翻译]
+  https://aerostator.com/production/CILN28/G2-L40/proposals?item=pr_g2
+- 提案已接受：使用 8x5 毫米磁钢 [机器翻译]
+  https://aerostator.com/production/CILN28/G2-L40/proposals?item=pr_g2
+- 物料清单已更新
+  https://aerostator.com/production/CILN28/G2-L40/bom
+- 版本 2.3 已发布：转子护套加厚 0.3 毫米 [机器翻译]（3 项变更）
+  https://aerostator.com/production/CILN28/G2-L40/changes?item=2.3
+
+--
+You get this because you are a member of the production "G2 generator L40".
+Stop updates for this production: https://aerostator.com/api/digest/unsubscribe/cHJvZHVjdGlvbjpDSUxOMjgvRzItTDQw/<signed-token>
+All e-mail preferences: https://aerostator.com/zh-cn/preferences?t=<signed-token>
+
+您收到此邮件是因为您是生产“G2 发电机 L40”的成员。
+不再接收此生产的更新：https://aerostator.com/api/digest/unsubscribe/cHJvZHVjdGlvbjpDSUxOMjgvRzItTDQw/<signed-token>
+邮件偏好设置：https://aerostator.com/zh-cn/preferences?t=<signed-token>
+
+MOTRES d.o.o., Kotnikova 34, 1000 Ljubljana, Slovenia

@@ -18,7 +18,8 @@
     "verification": "身份核实",
     "productionAccess": "生产权限",
     "projects": "项目",
-    "directory": "企业与人员"
+    "directory": "企业与人员",
+    "digests": "摘要"
   },
   "motors": {
     "title": "电机 — {email}",

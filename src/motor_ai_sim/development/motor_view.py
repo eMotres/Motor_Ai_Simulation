@@ -447,6 +447,8 @@ def _rotor_stress_block(rs: Dict[str, Any]) -> Dict[str, Any]:
                                          "governing_stress_mpa", "strength_mpa", "strength_kind"))
     point = rs.get("point") if isinstance(rs.get("point"), dict) else {}
     rpm = _num(rs.get("rpm")) if _num(rs.get("rpm")) is not None else _num(point.get("rpm"))
+    # the magnetic pull the worst case carried (2026-10-26): its source and size
+    pull = rs.get("pull") if isinstance(rs.get("pull"), dict) else {}
     return {
         **_pick(rs, ("case", "sf_min", "sf_min_part", "sf_min_p05", "overspeed_factor",
                      "max_displacement_um", "rotor_od_growth_um", "interference_mm")),
@@ -456,8 +458,17 @@ def _rotor_stress_block(rs: Dict[str, Any]) -> Dict[str, Any]:
         "request_rpm": _num(point.get("rpm")),
         # the load case, from the record's own fields: speed, torque and which loads were applied
         "worst_case": {k: v for k, v in {"rpm": rpm, "torque_nm": _num(point.get("torque_nm")),
-                                         "loads": point.get("loads"), "case": rs.get("case")}.items() if v is not None},
+                                         "loads": point.get("loads"), "case": rs.get("case"),
+                                         "pull_source": pull.get("source"),
+                                         "pull_mpa": _num(pull.get("pressure_peak_mpa")),
+                                         "pull_per_pole_n": _num(pull.get("radial_force_per_pole_n")),
+                                         "pull_label": pull.get("label"),
+                                         "pull_estimate": pull.get("estimate"),
+                                         # single snapshot (not a worst case)
+                                         # or the frames' envelope (F1)
+                                         "pull_load_basis": pull.get("load_basis")}.items() if v is not None},
         "retention": _pick(rs.get("retention"), ("status", "verdict", "message")),
+        "load_case": rs.get("load_case"),
         "magnet_retention": _pick(rs.get("magnet_retention"), ("verdict", "share", "seated")),
         "air_gap": _pick(rs.get("air_gap"), ("clearance_um", "remaining_um", "closed_pct")),
         "limit_speed_rpm": _num((rs.get("limit_speed") or {}).get("rpm_sf1")),

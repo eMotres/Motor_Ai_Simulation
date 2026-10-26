@@ -432,6 +432,10 @@ from motor_ai_sim.development.motors import router as development_motors_router
 app.include_router(development_router)
 app.include_router(development_admin_router)
 app.include_router(development_motors_router)
+# Activity digests (owner 2026-10-26): settings, unsubscribe link, Admin -> Digests (the only place a digest is sent)
+from motor_ai_sim.digest.routes import router as digest_router, admin_router as digest_admin_router
+app.include_router(digest_router)
+app.include_router(digest_admin_router)
 # Directory module: /api/admin/directory
 from motor_ai_sim.directory.routes import router as directory_admin_router
 app.include_router(directory_admin_router)

@@ -18,7 +18,8 @@
     "verification": "Verification",
     "productionAccess": "Production access",
     "projects": "Projects",
-    "directory": "Companies & people"
+    "directory": "Companies & people",
+    "digests": "Digests"
   },
   "motors": {
     "title": "Motors — {email}",

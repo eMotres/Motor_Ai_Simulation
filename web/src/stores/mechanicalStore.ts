@@ -37,9 +37,10 @@ import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
 import { mechTempParams, partTempsFromComponents } from '../lib/mechThermalTemps';
+import { pullParams } from '../lib/mechPull';
 import type { MechThermalTemps } from '../lib/mechThermalTemps';
 import { fetchLastThermalLight } from '../components/thermal/api';
-import type { SymmetryMode } from '../components/mechanical/api';
+import type { PullMode, SymmetryMode } from '../components/mechanical/api';
 import {
   DEFAULT_BEAM, DEFAULT_CONTACTS, REF_TEMP_C, coupledPoint, fetchCriticalSpeeds,
   fetchLastMechanical, fetchLimitSpeed, fetchMechMesh, fetchModes, fetchRotorStress,
@@ -214,6 +215,11 @@ export interface MechanicalState {
    *  periodicity, like I do in Fusion") — persisted with the panel, so the
    *  coupled loop's mechanical step solves the same way the button does. */
   symmetry: SymmetryMode;
+  /** the radial MAGNETIC PULL of the air-gap field (2026-10-26): `none`, the
+   *  duty's own stored EM field (`em`), or a `uniform` estimate of `pullMpa` */
+  pull: PullMode;
+  /** pull = uniform: the outward pressure, MPa, as text (it is a field) */
+  pullMpa: string;
   contacts: Record<ContactPair, ContactSpec>;
 
   /** The tab's OWN comparison stack — the Configure tab's "Saved
@@ -298,7 +304,7 @@ export interface MechanicalState {
 const PERSISTED: (keyof MechanicalState)[] = [
   'cases', 'loads', 'torque', 'rpm',
   'rpm1', 'osf', 'interf', 'rotorTempC', 'sleeveTempC', 'tempSource',
-  'meshMm', 'symmetry', 'contacts', 'viewCase', 'view', 'exagg',
+  'meshMm', 'symmetry', 'pull', 'pullMpa', 'contacts', 'viewCase', 'view', 'exagg',
   'showContacts', 'sfLow', 'sfHigh', 'body', 'support', 'nModes',
   'modalExagg', 'beam',
   // The bearing pickers ride the same path: one way this tab remembers things.
@@ -411,6 +417,11 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   // set the modal box keeps their size when the two fields became one.
   meshMm: readMech('meshMm', readMech('modal.mesh', '1.5')),
   symmetry: (readMech<string>('symmetry', 'full') === 'sector' ? 'sector' : 'full'),
+  pull: ((): PullMode => {
+    const v = readMech<string>('pull', 'none');
+    return v === 'em' || v === 'uniform' ? v : 'none';
+  })(),
+  pullMpa: readMech('pullMpa', ''),
   contacts: { ...DEFAULT_CONTACTS, ...readMech('contacts', {}) },
 
   // Whatever this browser stacked last time, re-validated: what is in
@@ -670,6 +681,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         // app has always made unless the user picked the sector.
         ...(s.symmetry === 'sector' ? { symmetry: 'sector' as const } : {}),
         contacts: s.contacts,
+        ...pullParams(s.pull, s.pullMpa),
         ...(fresh ? { fresh: true } : {}),
       });
       set({ stress: { data: out, busy: false, err: null,
@@ -711,6 +723,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         order: 2,
         ...(s.symmetry === 'sector' ? { symmetry: 'sector' as const } : {}),
         contacts: s.contacts,
+        ...pullParams(s.pull, s.pullMpa),
         ...(fresh ? { fresh: true } : {}),
       });
       set({ stress: { data: out, busy: false, err: null,

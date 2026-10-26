@@ -22,12 +22,12 @@ export interface StripMotor {
 export interface StripProject { id: string; title: string; motors: StripMotor[] }
 
 /** The production open on the Production tab, published by the Production tab. */
-export interface StripProduction { die: string; config: string }
+export interface StripProduction { die: string; config: string; /** the production's title, only when it is short (see shortTitle) */ title?: string }
 
 export type StripContext =
   | { kind: 'live' }
   | { kind: 'none' }
-  | { kind: 'production'; die: string; config: string }
+  | { kind: 'production'; die: string; config: string; title?: string }
   | { kind: 'project'; projectId: string; title: string | null; motors: StripMotor[]; selected: { die: string; config: string } | null };
 
 /** Tabs that show NO machine at all. */
@@ -36,8 +36,11 @@ const NO_MOTOR_TABS = new Set(['admin', 'designer']);
 /** Which kind of context a tab owns by default.  Every machine-bound tab (Configure, 3-D model, Simulation, Thermal,
  *  Mechanical, Controller, Geometry, Optimization, ...) and every tab not listed here keeps the live machine. */
 export function stripKindForTab(tab: string): StripKind {
-  // Development and Production show no strip for now (owner 2026-10-26: «убери пока, только вводит в заблуждение»).
-  if (tab === 'development' || tab === 'production') return 'none';
+  // Development shows no strip for now (owner 2026-10-26: «убери пока, только вводит в заблуждение»).  Production shows the
+  // motor of the production being viewed, in the Configure strip's style (owner 2026-10-26: «нужно подсвечивать мотор,
+  // который загружен в производстве, в том же стиле, как и для Configure, между этими меню»).
+  if (tab === 'development') return 'none';
+  if (tab === 'production') return 'production';
   if (NO_MOTOR_TABS.has(tab)) return 'none';
   return 'live';
 }
@@ -61,7 +64,11 @@ export interface StripInput {
 export function stripContextFor({ tab, project, production }: StripInput): StripContext {
   const kind = stripKindForTab(tab);
   if (kind === 'none') return { kind: 'none' };
-  if (kind === 'production') return production ? { kind: 'production', die: production.die, config: production.config } : { kind: 'none' };
+  if (kind === 'production') {
+    return production
+      ? { kind: 'production', die: production.die, config: production.config, ...(production.title ? { title: production.title } : {}) }
+      : { kind: 'none' };
+  }
   if (kind === 'project') {
     if (!project) return { kind: 'none' };
     const chosen = latestCurrentMotor(project.motors);
@@ -81,6 +88,12 @@ export function visibleChips(motors: readonly StripMotor[], selected: { die: str
   if (selIndex >= 0 && selIndex < start) start = selIndex;
   const shown = wanted.slice(start, start + max);
   return { shown, hidden: wanted.filter((m) => !shown.includes(m)) };
+}
+
+/** A title short enough for the one-line strip (the full title stays on the production page); '' otherwise. */
+export function shortTitle(text: string | null | undefined, max = 40): string {
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > 0 && t.length <= max ? t : '';
 }
 
 export const motorLabel = (m: { die: string; config: string }) => `${m.die} / ${m.config}`;

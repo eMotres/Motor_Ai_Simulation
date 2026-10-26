@@ -33,5 +33,17 @@
     "safetyFactor": "Safety factor",
     "deflection": "Max deflection",
     "conventionTip": "Project convention: every stress AVERAGED, SF = strength / averaged stress. Peak is singularity gauge only."
+  },
+  "pull": {
+    "label": "Magnetic pull",
+    "none": "no pull",
+    "em": "pull: EM field",
+    "uniform": "pull: uniform",
+    "mpa": "p MPa",
+    "tooltip": "Radial pull of the air-gap field on the rotor, applied as a surface traction on the iron pole tops and magnet faces the gap sees, at every speed including standstill. EM field: the Maxwell stress of the loaded duty's own stored electromagnetic run, radial part only (the torque stays the torque load's); the pole with the largest pull at that instant is applied to every pole. Uniform: an estimate, one outward pressure p = B²/2μ0.",
+    "mpaTooltip": "Uniform outward pressure on the gap faces, MPa (0.4 MPa ≈ 1.0 T in the gap, 0.7 MPa ≈ 1.33 T). An estimate; prefer the EM field once the duty has been run.",
+    "mpaError": "0 < p ≤ 5 MPa",
+    "badge": "pull {mpa} MPa",
+    "summary": "Magnetic pull, {source}: {peak} MPa peak, {mean} MPa mean on the gap faces, {perPole} kN per pole; surface against field check {ratio}."
   }
 }

@@ -13,9 +13,12 @@ import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import { ProductionApiError, productionApi } from '../api';
-import { callerRole, canEditRole, unackedRevisions } from '../helpers';
+import { callerRole, canEditRole, displayText, unackedRevisions } from '../helpers';
+import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
+import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
+import DigestSettings from '../../../components/digest/DigestSettings';
 import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
@@ -46,7 +49,14 @@ function linkFromAddressBar(): ProductionLink | null {
   try { return parseProductionLink(window.location.pathname, window.location.search); } catch { return null; }
 }
 
-const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; link?: ProductionLink | null }> = ({ die, config, onBack, link: linkProp = null }) => {
+/** Any production link in the address bar (a tab and an item too, e.g. from an activity e-mail), read once at mount. */
+function appLinkFromAddressBar() {
+  try { const l = parseAppLink(window.location.pathname, window.location.search); return l && l.kind === 'production' ? l : null; } catch { return null; }
+}
+
+const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; link?: ProductionLink | null;
+  /** the tab a link named (not documents: that one comes with `link`) and the item inside it */
+  initialTab?: TabId; itemId?: string }> = ({ die, config, onBack, link: linkProp = null, initialTab, itemId }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const { user, isAdmin } = useAuth();
@@ -58,6 +68,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const [link, setLink] = useState<ProductionLink | null>(linkProp);
   const [tab, setTabState] = useState<TabId>(() => {
     if (linkProp) return 'documents';
+    if (initialTab) return initialTab;
     const saved = readStore<string>(TAB_KEY(die, config));
     return saved && (TABS as readonly string[]).includes(saved) ? (saved as TabId) : 'bom';
   });
@@ -69,11 +80,15 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
       if (linkProp && tab === 'documents') {
         const p = productionLinkPath({ die, config, since: link?.since, ids: link?.ids });
         if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(null, '', p);
-      } else if (isProductionLinkPath(window.location.pathname)) {
+      } else if (!linkProp && initialTab && tab === initialTab) {
+        // entered by a link to this tab: the bar keeps that link (reload / copy from the bar both work)
+        const p = appLinkPath({ kind: 'production', die, config, tab: initialTab, ...(itemId ? { item: itemId } : {}) });
+        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(null, '', p);
+      } else if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) {
         window.history.replaceState(null, '', '/');
       }
     } catch { /* no history API */ }
-  }, [linkProp, tab, link, die, config]);
+  }, [linkProp, tab, link, die, config, initialTab, itemId]);
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -99,8 +114,23 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     } finally { setLoading(false); }
   }, [die, config, t]);
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
+  // a link to one revision / proposal: scroll to it once the tab has drawn it
+  const scrolledTo = React.useRef('');
+  useEffect(() => {
+    if (!itemId || loading || scrolledTo.current === `${tab}:${itemId}`) return;
+    const el = document.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`);
+    if (el) { scrolledTo.current = `${tab}:${itemId}`; el.scrollIntoView({ block: 'center' }); }
+  }, [itemId, loading, tab, data]);
 
   const role = prod ? callerRole(prod.members, email, isAdmin) : null;
+  // the strip above the page names this production's motor with its title when that is short (lib/stripContext.shortTitle)
+  const stripTitle = shortTitle(displayText(prod?.title, ui).text);
+  useEffect(() => {
+    const cur = useTabContextStore.getState().production;
+    if (cur && cur.die === die && cur.config === config && (cur.title ?? '') !== stripTitle) {
+      useTabContextStore.getState().setProduction({ die, config, ...(stripTitle ? { title: stripTitle } : {}) });
+    }
+  }, [die, config, stripTitle]);
   const ctx = useMemo(() => ({
     die, config, role, email, uiLang: ui, canEdit: canEditRole(role), productType: prod?.product_type ?? 'motor',
     reload: () => { void reload(); },
@@ -246,6 +276,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}
+          {isAdmin && <Box sx={{ mt: 2 }}><DigestSettings target={{ kind: 'production', die, config }} /></Box>}
         </>
       )}
     </Box>
@@ -256,8 +287,11 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 export const ProductionTab: React.FC = () => {
   // opened by a shared documents link: that production (and its filter) wins over the remembered one
   const [entry, setEntry] = useState<ProductionLink | null>(linkFromAddressBar);
+  // a link to another tab of a production (activity e-mails): that production, that tab, that item - read once
+  const [appEntry, setAppEntry] = useState(appLinkFromAddressBar);
   const [sel, setSelState] = useState<{ die: string; config: string } | null>(() => {
     if (entry) return { die: entry.die, config: entry.config };
+    if (appEntry) return { die: appEntry.die, config: appEntry.config };
     const v = readStore<{ die?: unknown; config?: unknown }>(LAST_KEY);
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
@@ -273,9 +307,11 @@ export const ProductionTab: React.FC = () => {
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ px: 3, pt: 3, pb: 3 }}>
         {sel
-          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => { setEntry(null); setSel(null); }}
-              link={entry && entry.die === sel.die && entry.config === sel.config ? entry : null} />
-          : <ProductionListPage onOpen={(p) => { setEntry(null); setSel({ die: p.die, config: p.config }); }} />}
+          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => { setEntry(null); setAppEntry(null); setSel(null); }}
+              link={entry && entry.die === sel.die && entry.config === sel.config ? entry : null}
+              initialTab={appEntry && appEntry.tab && appEntry.tab !== 'documents' && appEntry.die === sel.die && appEntry.config === sel.config ? appEntry.tab : undefined}
+              itemId={appEntry && appEntry.die === sel.die && appEntry.config === sel.config ? appEntry.item : undefined} />
+          : <ProductionListPage onOpen={(p) => { setEntry(null); setAppEntry(null); setSel({ die: p.die, config: p.config }); }} />}
       </Box>
     </Box>
   );

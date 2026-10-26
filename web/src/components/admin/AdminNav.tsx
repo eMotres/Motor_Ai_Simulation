@@ -8,7 +8,7 @@ import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
 
 export type AdminSectionId =
-  | 'overview' | 'users' | 'directory' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'productionAccess' | 'projects' | 'mailing' | 'logs' | 'downloads3d' | 'verification' | 'analytics' | 'activity';
+  | 'overview' | 'users' | 'directory' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'productionAccess' | 'projects' | 'digests' | 'mailing' | 'logs' | 'downloads3d' | 'verification' | 'analytics' | 'activity';
 
 export interface AdminSectionDef { id: AdminSectionId; label: string; badge?: number }
 
@@ -25,6 +25,7 @@ export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
   { id: 'motorsAccess', label: 'Motors access' },
   { id: 'productionAccess', label: 'Production access' },
   { id: 'projects', label: 'Projects' },
+  { id: 'digests', label: 'Digests' },
   { id: 'mailing', label: 'Mailing & notices' },
   { id: 'logs', label: 'Logs / Events' },
   { id: 'downloads3d', label: '3D downloads' },

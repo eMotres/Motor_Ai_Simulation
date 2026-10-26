@@ -43,7 +43,6 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import HistoryIcon from '@mui/icons-material/History';
   import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
   import { useProjectStripContext } from '../projectStripContext';
-  import { MotorNoteField } from '../MotorNoteField';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
   import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
@@ -561,16 +560,6 @@ export default function DevelopmentPage() {
     } catch (err) { if (isCurrentProject(id, token)) setError(err instanceof Error ? err.message : String(err)); }
     finally { if (isCurrentProject(id, token)) setBusy(false); }
   };
-  const changeMotorNote = async (motor: ProjectMotor, note: string): Promise<boolean> => {
-    if (!selected) return false;
-    const id = selected.id; const token = projectToken.current;
-    setError('');
-    try {
-      await developmentApi.setMotorNote(id, motor.canonical_die ?? motor.die, motor.config, note);
-      if (isCurrentProject(id, token)) await loadProjectMotors(id, token);
-      return true;
-    } catch (err) { if (isCurrentProject(id, token)) setError(err instanceof Error ? err.message : String(err)); return false; }
-  };
   const submitCreate = async () => {
     setBusy(true); setError('');
     try { const p = await developmentApi.create({ id: projectId.trim(), title: title.trim(), customer_org: org.trim() }); setCreateOpen(false); setTitle(''); setOrg(''); setProjectId(''); await refreshProjects(); await loadProject(p); }
@@ -973,7 +962,6 @@ export default function DevelopmentPage() {
             {live && selected && <ProjectMotorTests projectId={selected.id} motor={live} showAll={showAllVersions} t={tr} />}
             {live && <ActivityChip rows={activityRows} motor={live} t={tr} />}
             {live && <Stack direction="row" spacing={0.5} alignItems="center">
-              {canEditProject && <MotorNoteField value={live.note ?? ''} disabled={busy} t={tr} onSave={(text) => changeMotorNote(live, text)} />}
               <span>{canManageProjectMotors ? <Select size="small" value={live.status === 'trial' ? 'trial' : 'current'} disabled={busy} onChange={(e) => void changeMotorStatus(live, e.target.value as 'current' | 'trial')} aria-label={tr('motorStatus.label')} sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.35, fontSize: 11 } }}><MenuItem value="current">{tr('motorStatus.current')}</MenuItem><MenuItem value="trial">{tr('motorStatus.trial')}</MenuItem></Select> : <Chip size="small" label={tr(`motorStatus.${live.status === 'trial' ? 'trial' : 'current'}`)} />}</span>
               <HelpTip title={tr('motorStatus.tip')} />
               {canManageProjectMotors && <Tooltip title={tr('unlink')}><span><IconButton size="small" aria-label={tr('unlink')} disabled={busy} onClick={() => setUnlinkTarget(live)} sx={{ color: 'var(--text-3)' }}><DeleteOutlineIcon sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>}

@@ -113,7 +113,7 @@ test('wiring: ONE display system - Configure decides points-limited from the loa
   assert.match(actions, /openProjectMotor\(\{ id: projectId/);
   assert.doesNotMatch(actions, /PointsConfigure|pointsConfigureStore/);
   const page = src('../components/DevelopmentPage.tsx');
-  assert.match(page, /canEditProject && <MotorNoteField value=\{live\.note \?\? ''\}/);       // the note editor sits in the variant's group header
+  assert.doesNotMatch(page, /MotorNoteField/);                                           // no note editor in the variant header (owner 2026-10-27)
   const admin = src('../../../components/admin/sections/ProjectsSection.tsx');
   assert.doesNotMatch(admin, /MotorNoteField|\/motors\/note/);                             // no inline note editor in the admin drawer
   assert.match(admin, /data-testid="linked-motor-row"/);                                 // one grid row per motor

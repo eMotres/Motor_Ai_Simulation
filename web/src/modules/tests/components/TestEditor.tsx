@@ -25,7 +25,7 @@ const str = (v: unknown) => (v === undefined || v === null ? '' : String(v));
 const R_PAIRS = ['1-2', '2-3', '1-3'];
 const L_PAIRS = ['1-2', '3-2', '1-3'];
 
-/** "1-2 parallel R 15.896 Ohm 1000 0.6" per line -> LCR rows (pair mode quantity value unit freq level). */
+/** "1-2 parallel R 12.5 Ohm 1000 0.5" per line -> LCR rows (pair mode quantity value unit freq level). */
 function parseLcr(text: string) {
   return text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const [pair, mode, quantity, value, unit, freq, level] = l.split(/\s+/);

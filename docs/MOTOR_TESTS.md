@@ -26,8 +26,9 @@ Owner 2026-10-26: «да, делай раздел Tests; нужно сделат
 | no-load loss | core (hyst ~n, eddy ~n², excess ~n^1.5; P_core ~n^1.5 without the split) + P_solid ~n² (P_solid already holds P_mag), x (Br ratio)², + bearings (SKF, when set) + windage. Remainder = "unexplained". Fit P = a n + b n² (krpm) for both. |
 | loads | the duty within 2 % speed and 3 % current; else "no model point" and (admin) one click adds the duty via `POST /api/family/duty`. |
 
-Check numbers (200 mm stator, 2026-10-18 / 10-26): R model 16.62 + 0.67 = 17.29 vs 18.03 mOhm (−4.1 %); fitted
-Ld 42.8 uH, Lq 61.6 uH from 113.1 / 85.6 / 114.4 uH. Tests: `tests/test_motor_tests_compare.py`,
+Check (synthetic numbers): R pairs 20.0 / 20.1 / 19.9 mOhm at 30 C, R_phase 9.0 mOhm at 20 C, two 200 mm leads of
+10 mm² -> model 18.707 + 0.717 = 19.424 mOhm (−2.88 %); L 100 / 80 / 104 uH -> Ld 39.91, Lq 54.76 uH. The regression on
+real bench data lives with the seed in the private repository. Tests: `tests/test_motor_tests_compare.py`,
 `tests/test_motor_tests_routes.py`, `web/src/modules/tests/__tests__/tableModel.test.mjs`.
 
 The bench data of the closed motor itself is in the private repository (`docs/tests_seed/`), not here.

@@ -17,11 +17,11 @@ NON_MEMBER = "nonmember@example.com"
 DIE, CONFIG = "Demo die", "L50"
 BASE = f"/api/motor-tests/{DIE}/{CONFIG}"
 
-PARAM_TEST = {"kind": "parameters", "date": "2026-10-26", "instrument": "TH2822D", "profile": "jiqiren",
-              "conditions": {"ambient_c": 26.3, "rotor": "in"},
-              "resistance": {"temp_c": 26.3, "pairs": [{"pair": "1-2", "value_mohm": 17.57},
-                                                       {"pair": "2-3", "value_mohm": 17.47},
-                                                       {"pair": "1-3", "value_mohm": 17.27}]}}
+PARAM_TEST = {"kind": "parameters", "date": "2026-01-15", "instrument": "LCR meter", "profile": "profile-a",
+              "conditions": {"ambient_c": 25.0, "rotor": "in"},
+              "resistance": {"temp_c": 25.0, "pairs": [{"pair": "1-2", "value_mohm": 20.0},
+                                                       {"pair": "2-3", "value_mohm": 20.1},
+                                                       {"pair": "1-3", "value_mohm": 19.9}]}}
 
 
 def _empty_model(die, config):

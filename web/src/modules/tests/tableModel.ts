@@ -10,7 +10,7 @@ export function columnsFor(kind: TestKind): readonly string[] {
   return kind === 'load' ? LOAD_COLUMNS : FREE_RUN_COLUMNS;
 }
 
-/** A value with sensible digits: 1286 | 513.6 | 17.29 | 0.674; null -> an em dash. */
+/** A value with sensible digits: 1234 | 512.6 | 19.42 | 0.717; null -> an em dash. */
 export function fmtValue(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return '—';
   const a = Math.abs(v);
@@ -100,7 +100,7 @@ function toNumber(s: string, decimalComma: boolean): number | null | undefined {
 
 /**
  * Pasted bench rows -> request rows.  Two formats:
- *  - slash rows "613/75/74/26.7/45.2, 812/111/101.5/35.2" (records split by commas or new lines);
+ *  - slash rows "1000/140/80/28.3/40, 1500/240/120/42.4" (records split by commas or new lines);
  *  - a sheet: one record per line, fields split by tabs, semicolons or spaces, a decimal comma allowed.
  * "-" = not measured.  A row with fewer fields leaves the trailing columns empty.
  */
@@ -138,7 +138,7 @@ export function rowsToText(rows: Array<Record<string, number>> | undefined, kind
   }).join('\n');
 }
 
-/** "18.13 / 18.03 / 17.94" or "18.13 18.03 17.94" -> numbers (null for an empty field). */
+/** "20.0 / 20.1 / 19.9" or "20.0 20.1 19.9" -> numbers (null for an empty field). */
 export function parseNumberList(text: string): Array<number | null> {
   return text.split(/[\s/;]+/).filter((s) => s.trim() !== '').map((s) => {
     const v = Number(s.replace(',', '.'));

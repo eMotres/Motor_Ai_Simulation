@@ -8,12 +8,12 @@ try { M = await import('../tableModel.ts'); } catch { /* old Node */ }
 const t = M ? test : test.skip;
 
 t('values and deltas are formatted with sensible digits, missing = em dash', () => {
-  assert.equal(M.fmtValue(1286.4), '1286');
-  assert.equal(M.fmtValue(513.61), '513.6');
-  assert.equal(M.fmtValue(17.2946), '17.29');
-  assert.equal(M.fmtValue(0.67457), '0.675');
+  assert.equal(M.fmtValue(1234.4), '1234');
+  assert.equal(M.fmtValue(512.61), '512.6');
+  assert.equal(M.fmtValue(19.424), '19.42');
+  assert.equal(M.fmtValue(0.71674), '0.717');
   assert.equal(M.fmtValue(null), '—');
-  assert.equal(M.fmtDelta(-4.0967), '-4.1');
+  assert.equal(M.fmtDelta(-2.88), '-2.9');
   assert.equal(M.fmtDelta(2), '+2.0');
   assert.equal(M.fmtDelta(undefined), '—');
 });
@@ -28,7 +28,7 @@ t('units print as symbols', () => {
 });
 
 t('delta bands: 5 % ok, 15 % warn, beyond bad', () => {
-  assert.equal(M.deltaLevel(-4.1), 'ok');
+  assert.equal(M.deltaLevel(-2.9), 'ok');
   assert.equal(M.deltaLevel(12), 'warn');
   assert.equal(M.deltaLevel(-30), 'bad');
   assert.equal(M.deltaLevel(null), null);
@@ -40,8 +40,8 @@ const row = (o) => ({ key: 'x', label: 'x', params: {}, unit: '', measured: null
 t('one table per test: group headers, rows, the empty info rows dropped, notes attached', () => {
   const cmp = { test_id: 'a', kind: 'parameters', model_available: true, groups: [
     { key: 'resistance', label: 'Resistance', params: {}, tip: 'resistance', rows: [
-      row({ key: 'r_ll_mean', measured: 18.0333, model: 17.2946, delta_pct: -4.0967, status: 'ok', extra: { remaining_mohm: 0.7387 } }),
-      row({ key: 'r_pair', measured: 18.13 }),
+      row({ key: 'r_ll_mean', measured: 20.0, model: 19.424, delta_pct: -2.88, status: 'ok', extra: { remaining_mohm: 0.576 } }),
+      row({ key: 'r_pair', measured: 20.1 }),
       row({ key: 'nothing' }),
     ] },
     { key: 'insulation', label: 'Insulation', params: {}, rows: [row({ key: 'surge', params: { result: 'ok' } })] },
@@ -50,9 +50,9 @@ t('one table per test: group headers, rows, the empty info rows dropped, notes a
   const lines = M.tableLines(cmp);
   assert.deepEqual(lines.map((l) => l.type === 'group' ? `#${l.key}` : l.row.key), ['#resistance', 'r_ll_mean', 'r_pair', '#insulation', 'surge']);
   const r = lines[1];
-  assert.equal(r.measured, '18.03'); assert.equal(r.model, '17.29'); assert.equal(r.delta, '-4.1'); assert.equal(r.level, 'ok');
-  assert.deepEqual(r.note, { key: 'remaining', params: { mohm: '0.739' } });
-  assert.deepEqual(M.summary(cmp), { compared: 1, worst: -4.0967 });
+  assert.equal(r.measured, '20.00'); assert.equal(r.model, '19.42'); assert.equal(r.delta, '-2.9'); assert.equal(r.level, 'ok');
+  assert.deepEqual(r.note, { key: 'remaining', params: { mohm: '0.576' } });
+  assert.deepEqual(M.summary(cmp), { compared: 1, worst: -2.88 });
   assert.deepEqual(M.tableLines(null), []);
 });
 
@@ -65,11 +65,11 @@ t('row notes: unexplained loss, no model point (with the compute action), freque
 });
 
 t('pasted free-run rows in the slash format, "-" = not measured, a bad row reported by its line', () => {
-  const p = M.parseRows('613/75/74/26.7/45.2, 812/111/101.5/35.2,\n4786/-/576/202.8, x/1', 'free_run');
+  const p = M.parseRows('1000/140/80/28.3/40, 1500/240/120/42.4,\n4000/-/320/113.2, x/1', 'free_run');
   assert.deepEqual(p.rows, [
-    { rpm: 613, shaft_power_w: 75, v_ll_pp_v: 74, v_ll_rms_v: 26.7, temp_c: 45.2 },
-    { rpm: 812, shaft_power_w: 111, v_ll_pp_v: 101.5, v_ll_rms_v: 35.2 },
-    { rpm: 4786, v_ll_pp_v: 576, v_ll_rms_v: 202.8 },
+    { rpm: 1000, shaft_power_w: 140, v_ll_pp_v: 80, v_ll_rms_v: 28.3, temp_c: 40 },
+    { rpm: 1500, shaft_power_w: 240, v_ll_pp_v: 120, v_ll_rms_v: 42.4 },
+    { rpm: 4000, v_ll_pp_v: 320, v_ll_rms_v: 113.2 },
   ]);
   assert.equal(p.errors.length, 1);
   assert.equal(M.parseRows('1/2/3/4/5/6', 'free_run').errors.length, 1);        // more fields than columns
@@ -83,14 +83,14 @@ t('pasted load rows from a sheet: tabs or spaces, decimal comma', () => {
 });
 
 t('rows round-trip to the slash text the editor shows', () => {
-  const rows = [{ rpm: 613, shaft_power_w: 75, v_ll_pp_v: 74 }, { rpm: 4786, v_ll_pp_v: 576, v_ll_rms_v: 202.8 }];
+  const rows = [{ rpm: 1000, shaft_power_w: 140, v_ll_pp_v: 80 }, { rpm: 4000, v_ll_pp_v: 320, v_ll_rms_v: 113.2 }];
   const text = M.rowsToText(rows, 'free_run');
-  assert.equal(text, '613/75/74\n4786/-/576/202.8');
+  assert.equal(text, '1000/140/80\n4000/-/320/113.2');
   assert.deepEqual(M.parseRows(text, 'free_run').rows, rows);
 });
 
 t('number lists and the newest-first order of a sub-menu', () => {
-  assert.deepEqual(M.parseNumberList('18.13 / 18.03 / 17,94'), [18.13, 18.03, 17.94]);
+  assert.deepEqual(M.parseNumberList('20.0 / 20.1 / 19,9'), [20.0, 20.1, 19.9]);
   const tests = [{ id: 'a', kind: 'parameters', date: '2026-10-18' }, { id: 'b', kind: 'free_run', date: '2026-10-21' },
     { id: 'c', kind: 'parameters', date: '2026-10-26' }];
   assert.deepEqual(M.testsOfKind(tests, 'parameters').map((x) => x.id), ['c', 'a']);

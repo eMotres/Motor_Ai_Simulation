@@ -84,6 +84,9 @@ def _start_session(email: str, *, method: str, request: Optional[Request]) -> st
             claim_pending_invites(email)
         except Exception:  # noqa: BLE001
             log.exception("development invite claim failed for a sign-in")
+        # an NDA signed outside the platform and listed by an admin before the account existed (owner 2026-10-27)
+        from motor_ai_sim import nda_preapproval as _NP
+        _NP.apply(email)
     sid = S.create(email, expires=time.time() + U._TOKEN_TTL_S,
                    login_method=method, ip=ip, user_agent=ua)
     token = U.issue_token(email, sid=sid)

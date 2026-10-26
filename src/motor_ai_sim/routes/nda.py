@@ -159,6 +159,28 @@ def signatures(limit: int = 100, _admin: dict = Depends(require_admin)):
     return {"signatures": rows, "consenting_users": len(DS.consenting_users())}
 
 
+@router.get("/preapproved")
+def preapproved_list(_admin: dict = Depends(require_admin)):
+    """Addresses whose NDA was signed outside the platform (admin-listed before or after the account exists)."""
+    from motor_ai_sim import nda_preapproval as NP
+    return {"preapproved": NP.load()}
+
+
+@router.post("/preapproved")
+def preapproved_add(body: dict = Body(...), _admin: dict = Depends(require_admin)):
+    """List ``{email, date: YYYY-MM-DD, reference}``: the account is flagged "NDA signed" at its verified sign-in (or now,
+    when it exists), so the person never sees the online click-through (owner 2026-10-27, customer NDAs)."""
+    from motor_ai_sim import admin_audit as AA
+    from motor_ai_sim import nda_preapproval as NP
+    try:
+        entry = NP.add((body or {}).get("email"), (body or {}).get("date"), (body or {}).get("reference"),
+                       by=AA.actor_of(_admin))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    AA.record(AA.actor_of(_admin), "nda.preapprove", str((body or {}).get("email") or ""), details=entry)
+    return {"ok": True, "entry": entry}
+
+
 @router.get("/{record_id}/pdf")
 def record_pdf(record_id: str, _admin: dict = Depends(require_admin)):
     from motor_ai_sim import admin_audit as AA

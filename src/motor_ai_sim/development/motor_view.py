@@ -492,6 +492,21 @@ def _em_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return out
 
 
+def _thermal_outlines(d: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Stored thermal outlines regrouped as the tab's ``[{domain, loops}]`` ([] when the record has none)."""
+    import numpy as np
+    from motor_ai_sim.duty_fields import unpack_rings
+    rings = unpack_rings(d)
+    if not rings:
+        return []
+    doms = d.get("outline_domain")
+    doms = np.asarray(doms, dtype=int).tolist() if doms is not None else [0] * len(rings)
+    by: Dict[int, List[Any]] = {}
+    for dom, ring in zip(doms, rings):
+        by.setdefault(int(dom), []).append(ring)
+    return [{"domain": k, "loops": v} for k, v in by.items()]
+
+
 def _thermal_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     import numpy as np
     p = np.asarray(d.get("vertices"), dtype=float)
@@ -509,7 +524,7 @@ def _thermal_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "temperature_per_node": _list(t, 3),
         "T_min": float(np.min(t)), "T_max": float(np.max(t)),
         "part_names": meta.get("part_names") or {},
-        "outlines": [],
+        "outlines": _thermal_outlines(d),
     }
     views = ["temp"]
     hf = d.get("heat_flux_per_tri")
@@ -553,6 +568,8 @@ def _mech_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         case_field["u_mag_per_node"] = [0.0] * int(verts.shape[0])
         case_field["u_per_node"] = [[0.0, 0.0]] * int(verts.shape[0])
     ext = float(np.abs(verts).max())
+    from motor_ai_sim.duty_fields import unpack_rings
+    rings = unpack_rings(d)            # the outlines the live Mechanical tab drew (new records); [] on an old one
     segs = {}
     for name in list(d.keys()):
         if isinstance(name, str) and name.startswith("contact_seg::"):
@@ -560,7 +577,7 @@ def _mech_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             segs[name.split("::", 1)[1]] = _list(arr, 4)
     return {
         "vertices": _list(verts, 5), "triangles": tris.tolist(), "domain_per_tri": dom,
-        "part_names": meta.get("part_names") or {}, "outlines": [], "extent": ext,
+        "part_names": meta.get("part_names") or {}, "outlines": rings, "extent": ext,
         "n_sectors": int(meta.get("n_sectors") or 1), "symmetry_mult": int(meta.get("n_sectors") or 1),
         "contact_segments_per_pair": segs,
         "cases": {case: case_field}, "case": case, "views": views,

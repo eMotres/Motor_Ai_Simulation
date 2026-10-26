@@ -3936,6 +3936,48 @@ def solve_rotor_stress(polys: dict,
     return out
 
 
+def domain_boundary_loops(vertices_mm: Any, triangles: Any, domain: Any, *,
+                          rel: float = 2e-4, ndigits: int = 4) -> List[List[List[float]]]:
+    """The part outlines of a mesh as its DOMAIN-BOUNDARY EDGES: ``[[[x0, y0], [x1, y1]], ...]`` (mm), one two-point loop
+    per edge (the viewers close every loop onto itself, so an unchained edge draws exactly that edge).
+
+    An edge is an outline when the triangles on its two sides belong to different parts, or when it is the outer border.
+    The vertices are WELDED by coordinate first (bucket = ``rel`` x the largest coordinate): the mesh is SPLIT (interface
+    nodes are duplicated, one set per part) and a replicated sector answer is the sector copied with its own nodes, so by
+    index a seam between two copies looks like a border.  The polygon outlines of a clipped sector carry the cut faces too;
+    replicated, those are radial lines from the rim down to the hub between the poles - not part of the rotor (owner screen
+    2026-10-26).  Drawn from the mesh, the picture is the plain domain plot of it.
+    """
+    v = np.asarray(vertices_mm, dtype=float)
+    t = np.asarray(triangles, dtype=np.int64)
+    d = np.asarray(domain, dtype=np.int64)
+    if v.size == 0 or t.size == 0:
+        return []
+    q = float(np.abs(v).max()) * rel or 1.0
+    keys = np.round(v / q).astype(np.int64)
+    _, first, ids = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    ids = np.asarray(ids).reshape(-1)
+    xy = v[first]
+    w = ids[t]                                               # welded triangle corners
+    e = np.concatenate([w[:, [0, 1]], w[:, [1, 2]], w[:, [2, 0]]])
+    dom = np.concatenate([d, d, d])
+    keep = e[:, 0] != e[:, 1]
+    e, dom = e[keep], dom[keep]
+    lo, hi = np.minimum(e[:, 0], e[:, 1]), np.maximum(e[:, 0], e[:, 1])
+    key = lo * (int(ids.max()) + 1) + hi
+    order = np.argsort(key, kind="stable")
+    key, lo, hi, dom = key[order], lo[order], hi[order], dom[order]
+    first_of = np.concatenate([[True], key[1:] != key[:-1]])
+    starts = np.nonzero(first_of)[0]
+    counts = np.diff(np.concatenate([starts, [key.size]]))
+    d0 = dom[starts]
+    d1 = np.where(counts > 1, dom[np.minimum(starts + 1, key.size - 1)], d0)
+    draw = (counts == 1) | ((counts == 2) & (d0 != d1)) | (counts > 2)
+    a, b = lo[starts][draw], hi[starts][draw]
+    return [[[round(float(xy[i, 0]), ndigits), round(float(xy[i, 1]), ndigits)],
+             [round(float(xy[j, 0]), ndigits), round(float(xy[j, 1]), ndigits)]] for i, j in zip(a, b)]
+
+
 def _replicate_field(fld: Dict[str, Any], n: int) -> Dict[str, Any]:
     """The sector's field payload, turned into the whole rotor's.
 
@@ -3978,15 +4020,10 @@ def _replicate_field(fld: Dict[str, Any], n: int) -> Dict[str, Any]:
     out["extent"] = float(np.abs(vr).max())
     out["triangles"] = sym.replicate_triangles(t, nv, n).astype(np.int32).tolist()
     out["domain_per_tri"] = list(fld["domain_per_tri"]) * n
-    outlines = []
-    for k in range(n):
-        th = 2.0 * math.pi * k / n
-        c, s = math.cos(th), math.sin(th)
-        for o in fld["outlines"]:
-            a = np.asarray(o, dtype=float)
-            outlines.append([[float(c * x - s * y), float(s * x + c * y)]
-                             for x, y in a])
-    out["outlines"] = outlines
+    # The outlines of the WHOLE rotor are the domain boundaries of the replicated mesh.  The sector's polygon outlines also
+    # carry the two cut faces; rotated n times they would be n radial lines from the rim to the hub, which are not rotor
+    # edges (see `domain_boundary_loops`).
+    out["outlines"] = domain_boundary_loops(out["vertices"], out["triangles"], out["domain_per_tri"])
     out["n_sectors"] = int(n)
     out["symmetry_mult"] = int(n)
     out["replicated_from_sector"] = True

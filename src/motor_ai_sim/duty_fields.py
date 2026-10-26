@@ -295,6 +295,49 @@ def _point(src: Any, keys) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _pack_rings(rings: Any, domains: Any = None) -> Dict[str, Any]:
+    """Part outlines (rings of [x, y] points) as three flat arrays: ``outline_xy`` (N, 2), ``outline_len`` (rings,), and
+    ``outline_domain`` (rings,) when each ring belongs to a domain.  Empty dict when there is nothing usable.
+
+    Stored with the field (2026-10-26) so the read-only viewer draws the SAME outlines the live tab drew, instead of
+    re-deriving them from the mesh (which cannot tell a sector seam from a part boundary).
+    """
+    try:
+        import numpy as np
+        pts: List[Any] = []
+        lens: List[int] = []
+        doms: List[int] = []
+        for k, ring in enumerate(rings or []):
+            a = np.asarray(ring, dtype=float)
+            if a.ndim != 2 or a.shape[1] != 2 or a.shape[0] < 2:
+                continue
+            pts.append(a)
+            lens.append(int(a.shape[0]))
+            if domains is not None:
+                doms.append(int(domains[k]))
+        if not pts or len(pts) > 80000:
+            return {}
+        out = {"outline_xy": _f32(np.vstack(pts)), "outline_len": _i32(lens)}
+        if domains is not None:
+            out["outline_domain"] = _i32(doms)
+        return {k: v for k, v in out.items() if v is not None}
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def unpack_rings(arrays: Dict[str, Any]) -> List[Any]:
+    """The inverse of :func:`_pack_rings`: ``[ring, ...]`` (each ring ``[[x, y], ...]``), plus ``domains`` kept aside."""
+    import numpy as np
+    xy, ln = arrays.get("outline_xy"), arrays.get("outline_len")
+    if xy is None or ln is None:
+        return []
+    out, i = [], 0
+    for n in np.asarray(ln, dtype=int).tolist():
+        out.append(np.asarray(xy[i:i + n], dtype=float).tolist())
+        i += n
+    return out
+
+
 def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """One ``_transient_field_snap`` entry → the arrays the |B| / loss / demag
     maps are drawn from.
@@ -388,6 +431,11 @@ def pack_thermal(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         hf = _f32(inner.get("heat_flux_per_tri"))
         if hf is not None:
             arrays["heat_flux_per_tri"] = hf
+        outl = inner.get("outlines")
+        if isinstance(outl, list) and outl and isinstance(outl[0], dict):
+            rings = [lp for e in outl for lp in (e.get("loops") or [])]
+            doms = [int(e.get("domain") or 0) for e in outl for _lp in (e.get("loops") or [])]
+            arrays.update(_pack_rings(rings, doms))
         names = inner.get("part_names")
         meta = {
             "computed_at": result.get("computed_at"),
@@ -449,6 +497,8 @@ def pack_rotor_stress(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     continue
                 arrays[f"contact_seg::{label}"] = a
                 seg_labels.append(str(label))
+        if isinstance(fld.get("outlines"), list):
+            arrays.update(_pack_rings(fld["outlines"]))
         names = fld.get("part_names")
         meta = {
             "computed_at": result.get("computed_at"),

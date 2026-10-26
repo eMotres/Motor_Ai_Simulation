@@ -903,3 +903,51 @@ def test_f_the_ties_refuse_a_mesh_whose_faces_do_not_match():
         sym.build_cyclic_ties(basis2, bad, None, plan)
     msg = str(exc.value)
     assert "do not match" in msg or "not periodic" in msg, msg
+
+
+def test_d_the_g2_sector_map_has_the_outlines_of_the_whole_rotor(g2, tmp_path):
+    """The replicated sector's outlines are the domain boundaries of the rotor - the same as the FULL solve's - with no
+    radial cut faces between the poles (the zigzag of the stored map, owner screen 2026-10-26)."""
+    import os
+    from pathlib import Path
+
+    from motor_ai_sim.simulation.mechanical.rotor_stress import domain_boundary_loops
+
+    def segs(loops, q=5e-2):
+        out = set()
+        for lp in loops:
+            for i in range(len(lp)):
+                a, b = lp[i], lp[(i + 1) % len(lp)]
+                pa, pb = (round(a[0] / q), round(a[1] / q)), (round(b[0] / q), round(b[1] / q))
+                if pa != pb:
+                    out.add((min(pa, pb), max(pa, pb)))
+        return out
+
+    f_full, f_sec = g2["full"]["field"], g2["sector"]["field"]
+    truth = domain_boundary_loops(f_full["vertices"], f_full["triangles"], f_full["domain_per_tri"])
+    got = f_sec["outlines"]
+    # the two meshes are different meshes of one rotor: compare the OUTLINES as lines - every vertex of one outline lies on
+    # the other (within the mesh size), so the drawn pictures are the same
+    import numpy as np
+    pts_t = np.array([p for lp in truth for p in lp])
+    pts_g = np.array([p for lp in got for p in lp])
+    def far(a, b):
+        d = np.sqrt(((a[:, None, :] - b[None, :, :]) ** 2).sum(-1)).min(axis=1)
+        return float(d.max())
+    assert far(pts_g[::7], pts_t) < 1.5            # mm: the mesh size of the fixture
+    assert far(pts_t[::7], pts_g) < 1.5
+    out = Path(os.environ.get("MOTRES_TEST_ARTIFACTS") or tmp_path)
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as pl
+        fig, axes = pl.subplots(1, 2, figsize=(12, 6))
+        for ax, loops, title in ((axes[0], truth, "G2 full solve: domain boundaries"), (axes[1], got, "G2 sector, replicated")):
+            for lp in loops:
+                ax.plot([lp[0][0], lp[1][0]], [lp[0][1], lp[1][1]], "k-", lw=0.4)
+            ax.set_aspect("equal"); ax.set_title(title)
+        out.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out / "stored_outlines_g2.png", dpi=110)
+        pl.close(fig)
+    except ImportError:
+        pass

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   configureShow, dutyToOpen, fieldKindFromName, isNotComputed, mechStaleReasons, mechTiles, thermalSource, worstCaseLabel, partSafetyFactors, pickPointDuty, pointDuties, provenanceLine, retentionVerdict,
-  storedFieldKinds, thermalTiles,
+  storedFieldKinds, thermalTiles, limitKind, ownRotorStress, pointBlocks, pointMechanical, pointThermal, plausibleC, sameRpm,
 } from '../pointsLimited.ts';
 import { highlightIndex, isConfigHighlighted, isDieHighlighted, motorKey, pickFocusProject } from '../projectFocus.ts';
 import { outlineLoops, parametersLine, partBoundaryEdges, segmentSet, weldVertices } from '../storedFieldPayload.ts';
@@ -60,7 +60,7 @@ test('thermal tiles: only the duty\'s own temperatures (coupled loop / steady ma
   assert.deepEqual(byId, { winding: 128.5, magnet: 70, housing: 64, bearing: 55, s1: 41.5, s2: 160 });
   assert.deepEqual(thermalSource(t), { kind: 'coupled', day: '2026-10-25 10:00' });
   const noHousing = Object.fromEntries(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: 120 } }).map((x) => [x.id, x.value]));
-  assert.deepEqual(noHousing, { winding: 120, magnet: null, housing: null });         // missing stays null, never 0
+  assert.deepEqual(noHousing, { winding: 120 });                                       // a missing value is not drawn (owner 2026-10-26), never 0
   assert.deepEqual(thermalTiles(null), []);
 });
 
@@ -196,7 +196,7 @@ test('wiring: the UI asks only for the stored kind names and shows a 404 as "not
   assert.match(panel, /FIELD_KIND_ORDER\.map/);                                   // the toggles are the stored kind names
   assert.deepEqual(['em', 'thermal', 'rotor_stress'], [...src('../pointsLimited.ts').matchAll(/FIELD_KIND_ORDER: readonly FieldKind\[\] = \[([^\]]*)\]/g)][0][1].split(',').map((x) => x.trim().replace(/'/g, '')));
   const results = src('../../../components/compare/StoredPointResults.tsx');
-  assert.match(results, /mech-stale-/);                                           // stale answers carry a visible flag
+  assert.doesNotMatch(results, /mech-stale-|notComputed|not computed/i);          // a superseded / foreign record is not drawn, and nothing says "not computed"
 });
 
 // ── the part outlines are the domain boundaries of the mesh (owner screen 2026-10-26) ────────────────────────────────
@@ -255,4 +255,86 @@ test('EM rule: the air side does not make an outline of its own, classes decide 
   assert.equal(outlineLoops(v, t, [0, 0], 1, opts).length, 0);          // air only: nothing
   assert.equal(outlineLoops(v, t, [10, 11], 1, opts).length, 4);        // two tags of ONE class: border only, no line between them
   assert.equal(outlineLoops(v, t, [0, 10], 1, opts).length, 3);         // air | material: the contact line + the material's own 2 border edges (air borders are not outlines)
+});
+
+// ── only real results that belong to the selected point (owner 2026-10-26) ───────────────────────────────────────────
+
+const peak = (extra = {}) => ({ duty: 'peak', has_result: true, operating_point: { rpm: 1000, current_arms: 336 }, ...extra });
+const stress = (over = {}) => ({ sf_min: 24.21, max_displacement_um: 8, proof_rpm: 1000, request_rpm: 1000, worst_case: { rpm: 1000, torque_nm: 900 }, solver_status: 'current', geometry_status: 'match', stale: false, ...over });
+
+test('a stress record solved at another speed than the point is not the point\'s mechanical result (850 rpm card under the 1000 rpm point)', () => {
+  const foreign = peak({ mechanical: { rotor_stress: stress({ proof_rpm: 850, request_rpm: 850, worst_case: { rpm: 850, torque_nm: 721.65 } }) } });
+  assert.equal(ownRotorStress(foreign), null);
+  assert.equal(pointMechanical(foreign), null);
+  assert.equal(pointBlocks(foreign).mechanical, false);
+  const own = peak({ mechanical: { rotor_stress: stress() } });
+  assert.equal(ownRotorStress(own).sf_min, 24.21);
+  assert.equal(pointBlocks(own).mechanical, true);
+  assert.equal(worstCaseLabel(pointMechanical(own)), '1,000 rpm, 900.00 N·m');         // the card states the record's own speed and torque
+  // the proof case may run above the point's speed: the speed it was ASKED at is the point's
+  assert.equal(ownRotorStress(peak({ mechanical: { rotor_stress: stress({ proof_rpm: 1200, worst_case: { rpm: 1200 } }) } })).sf_min, 24.21);
+  assert.ok(sameRpm(1000, 1005) && !sameRpm(1000, 1100));
+});
+
+test('a superseded or other-geometry stress record is hidden; with nothing else in the block the block is not drawn', () => {
+  for (const bad of [{ solver_status: 'superseded' }, { geometry_status: 'differs' }, { stale: true }]) {
+    const d = peak({ mechanical: { rotor_stress: stress(bad) } });
+    assert.equal(pointMechanical(d), null, JSON.stringify(bad));
+    assert.equal(pointBlocks(d).mechanical, false);
+  }
+  assert.equal(pointMechanical(peak()), null);                                          // never computed: no block
+  assert.equal(pointBlocks(peak()).mechanical, false);
+  // ring modes of the duty keep a mechanical block, but without a stress record there are no stress tiles to draw
+  const modesOnly = peak({ mechanical: { modes: { frequencies_hz: [100] }, rotor_stress: stress({ solver_status: 'superseded' }) } });
+  assert.deepEqual(Object.keys(pointMechanical(modesOnly)), ['modes']);
+  assert.equal(pointBlocks(modesOnly).mechanical, false);
+});
+
+test('thermal block: drawn only with a real temperature, S1 / S2 value or a labelled limit line; impossible numbers are never shown', () => {
+  assert.equal(pointThermal(peak()), null);
+  assert.equal(pointBlocks(peak()).thermal, false);
+  assert.equal(pointThermal(peak({ thermal: {} })), null);
+  assert.equal(pointThermal(peak({ thermal: { duty_temps: { kind: 'coupled' } } })), null);       // no number in it
+  const withS2 = peak({ thermal: { s2: { time_to_limit_s: 44, limiting_part: 'winding' } } });
+  assert.deepEqual(thermalTiles(withS2.thermal).map((x) => [x.id, x.value]), [['s2', 44]]);
+  assert.equal(pointBlocks(withS2).thermal, true);
+  // t_min -147.4 degC on the peak record (a translated 'limited' map): nothing impossible reaches a tile or a line
+  assert.equal(plausibleC(-147.4), false);
+  assert.equal(plausibleC(200), true);
+  assert.deepEqual(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: -147.4, magnet_c: 90, bearing_c: -300 } }).map((x) => x.id), ['magnet']);
+  assert.equal(pointThermal(peak({ thermal: { duty_temps: { kind: 'thermal', winding_c: -147.4 } } })), null);
+  assert.equal(pointThermal(peak({ thermal: { limit_search: { kind: 'coupled_limit', solve_to: 'continuous', winding_c: -147.4 } } })), null);
+  assert.notEqual(pointThermal(peak({ thermal: { limit_search: { kind: 'coupled_limit', solve_to: 'continuous', winding_c: 200 } } })), null);
+});
+
+test('a limit line says what the record is: S1 continuous limit, time-to-limit run, or a plain search', () => {
+  assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'continuous' }), 'continuous');
+  assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'limits', mode: 'limited' }), 'time');
+  assert.equal(limitKind({ kind: 'coupled' }), 'search');
+  assert.equal(limitKind(null), 'search');
+});
+
+test('map kinds: a map stamped with another speed, an impossible temperature range, or a foreign stress map is not offered', () => {
+  const d = peak({ fields: {
+    em: { point: { rpm: 1000 } }, thermal: { point: { rpm: 1000, T_min: -147.4, T_max: 200 } }, rotor_stress: { point: { rpm: 850 } },
+  } });
+  assert.deepEqual(storedFieldKinds(d), ['em']);
+  assert.deepEqual(storedFieldKinds(peak({ fields: { thermal: { point: { rpm: 1000, T_min: 25, T_max: 120 } }, em: { point: { rpm: 850 } } } })), ['thermal']);
+  // the stress map is the point's when the point's own stress record is
+  assert.deepEqual(storedFieldKinds(peak({ mechanical: { rotor_stress: stress() }, fields: { rotor_stress: { point: { rpm: 1200 } } } })), ['rotor_stress']);
+  assert.equal(pointBlocks(d).fields, true);
+  assert.equal(pointBlocks(peak({ fields: { em: { point: { rpm: 850 } } } })).fields, false);
+});
+
+test('wiring: blocks without real results are not drawn at all - no header, no empty tiles, no "not computed" line', () => {
+  const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+  const results = src('../../../components/compare/StoredPointResults.tsx');
+  assert.match(results, /if \(!blocks\.thermal && !blocks\.mechanical\) return null;/);
+  assert.match(results, /\{blocks\.thermal && <Box/);
+  assert.match(results, /\{blocks\.mechanical && <Box/);
+  const panel = src('../../../components/compare/PointsConfigure.tsx');
+  assert.match(panel, /const showTiles = grid\.length > 0;/);
+  assert.match(panel, /\{showTiles && <Box/);
+  assert.match(panel, /\{kinds\.length > 0 && <Box/);                                       // the maps panel only when a map belongs to the point
+  assert.doesNotMatch(panel, /field\?\.missing && <Typography|kinds\.length === 0 &&/);
 });

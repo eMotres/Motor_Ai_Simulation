@@ -1618,6 +1618,10 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         "computed_at": o.get("computed_at"),
         "geometry_fingerprint": o.get("geometry_fingerprint"),
         **_fp2_block(),
+        # the operating point the loop was asked about (speed, phase current, angle) - the stamp the points view ties a
+        # record to its point by
+        **({"point": _pick(c.get("point"), ("rpm", "I_phase_rms", "gamma_deg"))}
+           if isinstance(c.get("point"), dict) and c["point"] else {}),
         # WHICH EXCITATION these temperatures were reached on, and — when it is
         # the inverter — the bridge that reached them.  A record with no
         # `drive` predates the PWM loop and is a sinusoid (see `_entry_drive`).

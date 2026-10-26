@@ -1123,6 +1123,18 @@ def config_default_duty(c: dict) -> Optional[str]:
     return low[0] if low else names[0]
 
 
+def _cogging_view(die_doc: dict, cfg_doc: dict, stored_by_duty: Optional[dict], build_sig: str) -> Optional[dict]:
+    """The saved cogging torque of a configuration as a screen shows it (None = nothing saved; never raises)."""
+    try:
+        from motor_ai_sim import cogging as _cg
+        blk = _cg.block_of(cfg_doc)
+        if blk is None:
+            return None
+        return _cg.view(blk, current_sig=build_sig, cfg_doc=cfg_doc, stored_by_duty=stored_by_duty)
+    except Exception:                                        # noqa: BLE001 - a display number must never fail the tree
+        return None
+
+
 def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
     """Fingerprint of the BUILD a result was computed on: the die's stamped
     geometry + the configuration's free-key overrides + winding + materials.
@@ -1264,6 +1276,11 @@ def _restamp_results(c: dict, old_sig: str, new_sig: str) -> int:
             if isinstance(holder, dict) and holder.get("build_sig") == old_sig:
                 holder["build_sig"] = new_sig
                 n += 1
+    # the configuration's no-load cogging torque is judged by the same build
+    _cog = c.get("cogging")
+    if isinstance(_cog, dict) and _cog.get("build_sig") == old_sig:
+        _cog["build_sig"] = new_sig
+        n += 1
     return n
 
 
@@ -2407,6 +2424,9 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 # saved — the catalog chip (when built) and the Controller
                 # tab both read that as "nothing saved yet", never an error.
                 "controller": c.get("controller"),
+                # The no-load cogging torque of the configuration (owner 2026-10-26): pk-pk, half-amplitude, share of
+                # the continuous torque, `stale` when the build moved.  Absent when none is saved.
+                **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsig)) else {}),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "saved_at": d.get("saved_at"),

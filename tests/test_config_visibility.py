@@ -328,6 +328,7 @@ READ_ROUTES = {          # (method, path template) -> request builder key
     # the Motors-tab read-only view of stored results (tests/test_motor_view.py): gated by the app-wide path gate
     ("GET", "/api/motor-view/{die}/{cfg}"): "plain",
     ("GET", "/api/motor-view/{die}/{cfg}/{duty}/field/{kind}"): "plain",
+    ("GET", "/api/simulation/cogging/{die}/{cfg}"): "plain",          # the saved no-load cogging torque (tests/test_cogging.py)
 }
 WRITE_ROUTES = {         # layered-only (a registered account writes into its own workspace); flat = admin-only
     ("PATCH", "/api/family/config/{die}/{cfg}"): {"name": "Lx"},
@@ -349,6 +350,7 @@ WRITE_ROUTES = {         # layered-only (a registered account writes into its ow
     ("DELETE", "/api/family/publish/{die}/{cfg}"): None,
     ("POST", "/api/family/publish/{die}/{cfg}/{duty}"): None,
     ("DELETE", "/api/family/publish/{die}/{cfg}/{duty}"): None,
+    ("PUT", "/api/simulation/cogging/{die}/{cfg}"): {"cogging_id": "cog_none"},
 }
 BODY_ROUTES = {          # (method, path) -> body builder(cfg)
     ("POST", "/api/family/activate"): lambda c: {"die": DIE, "config": c, "duty": DUTY},
@@ -358,6 +360,7 @@ BODY_ROUTES = {          # (method, path) -> body builder(cfg)
     ("POST", "/api/family/duty_run"): lambda c: {"die": DIE, "config": c, "duty": DUTY, "drive": "current", "summary": {}},
     ("POST", "/api/family/history/restore"): lambda c: {"die": DIE, "config": c, "stamp": "20260101-000000"},
     ("POST", "/api/my_motors/duplicate"): lambda c: {"die": DIE, "config": c, "duty": DUTY},
+    ("POST", "/api/simulation/cogging/run"): lambda c: {"die": DIE, "config": c},
     ("POST", "/api/family/config"): lambda c: {"die": DIE, "name": c},     # CREATE: nothing hidden to leak, covered by its own test
 }
 SELF_GATED = {           # routes whose natural "missing" answer is not a 404: gated in-route and tested below

@@ -1050,7 +1050,8 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     # The pack rides along so the modulation-index row can be formed (reviewer
     # 2026-09-14 / PWM study §1.7) — it needs the pack's minimum voltage.
     _table(doc, R.em_torque_rows(em, D.get("batt"), _drive(D),
-                                 _em_sine(D), _inverter(D)), size=10.5,
+                                 _em_sine(D), _inverter(D),
+                                 cogging=D.get("cogging")), size=10.5,
            widths_cm=[6.4, 3.6, 12.0])
     # The "both columns are printed" footnote belongs to the TORQUE table,
     # which has two of them (reviewer 2026-09-14, B1).

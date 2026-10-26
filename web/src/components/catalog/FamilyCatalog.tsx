@@ -39,6 +39,7 @@ import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { coggingDigits, coggingTipText, coggingValue, type CoggingView } from '../../lib/coggingTile';
 import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
@@ -57,6 +58,7 @@ import { suggestDieName } from '../../lib/dieNames';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
+const txc = nsT('controller');   // the cogging tile's strings live with Configure's (one label, one tooltip everywhere)
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -152,6 +154,8 @@ interface Cfg {
   application?: string | null;
   applications_error?: string | null;
   battery?: Battery | null;
+  /** the saved no-load cogging torque of the configuration (owner 2026-10-26); absent = none saved */
+  cogging?: CoggingView | null;
   /** the mode the row shows and loads (server-resolved; owner 2026-10-13) */
   default_duty?: string | null;
   stack_mm: number | null;
@@ -289,6 +293,7 @@ const FamilyCatalog: React.FC<{
   application?: ApplicationFilter;
 }> = ({ diameter, embedded, application = 'all' }) => {
   useTranslation('motors'); // re-render on language change; lazy-loads the namespace
+  useTranslation('controller'); // the cogging chip borrows Configure's label and tooltip
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
@@ -1194,6 +1199,14 @@ const FamilyCatalog: React.FC<{
                     <Chip size="small" label={tx('nameStack')}
                       sx={{ height: 18, fontSize: 10, color: '#f59e0b',
                             bgcolor: 'transparent', border: '1px solid #f59e0b88' }} />
+                  </Tooltip>
+                )}
+                {coggingValue(c.cogging) !== null && (
+                  <Tooltip title={coggingTipText(c.cogging, txc)}>
+                    <Typography component="span" data-testid="cogging-chip"
+                      sx={{ fontSize: 11, color: c.cogging?.stale ? '#fbbf24' : 'var(--text-3)', cursor: 'help' }}>
+                      {txc('configure.cogging')} {coggingValue(c.cogging)!.toFixed(coggingDigits(coggingValue(c.cogging)!))} N·m
+                    </Typography>
                   </Tooltip>
                 )}
                 {c.battery && (

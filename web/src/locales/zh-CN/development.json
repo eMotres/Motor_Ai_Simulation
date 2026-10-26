@@ -228,6 +228,7 @@
       "mass": "质量",
       "torqueMass": "转矩/质量",
       "ripple": "转矩脉动",
+      "cogging": "齿槽转矩（峰峰值）",
       "phasePeak": "相电压峰值",
       "linePeak": "线电压峰值",
       "dcBus": "所需直流母线电压",
@@ -248,6 +249,7 @@
     "targetValue": "工况目标值 - 尚未计算",
     "linePeakUnavailable": "此结果没有可用的实际线电压峰值。",
     "partialMass": "有效质量（电磁部件 × 叠长），不是整机质量。",
+    "coggingStale": "基于该电机的旧版本计算。",
     "partialLosses": "已存储的总损耗不包含未知的机械损耗。",
     "componentTemp": "{part} 温度",
     "temperaturePart": {

@@ -10,6 +10,7 @@
 // re-run the extractor against a reference config to refresh them.
 
 import type { Passport } from './motorScaling';
+import type { CoggingView } from './coggingTile';
 import { isReferenceOnlyCard } from './referenceOnlyPassport';
 import { referenceCandidateProvenanceFromCatalogEntry } from './referenceCardProvenance';
 import { parseReferenceBasisAnswer, type ReferenceBasisAnswer } from './configuratorReferenceTemperature';
@@ -28,6 +29,8 @@ export interface ReferenceMotor {
   hasMachine?: boolean;
   /** the FULL passport card (v1 record) behind this machine, from the server; null/absent = none */
   card?: { die: string; config: string; date: string } | null;
+  /** The saved no-load cogging torque of this machine's configuration (owner 2026-10-26); absent = none saved. */
+  cogging?: CoggingView | null;
   /** The server's pinned provenance identity; used only to select matching source metadata. */
   referenceProvenance?: { candidate_sha256?: string | null } | null;
   /** The server's audited-basis block for this card (`reference_basis` of the references answer); absent = not an audited card. */
@@ -156,6 +159,7 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
         referenceOnly,
         hasMachine: m.has_machine === true,
         card: m.card && typeof m.card === 'object' ? (m.card as ReferenceMotor['card']) : null,
+        cogging: m.cogging && typeof m.cogging === 'object' && Number.isFinite(m.cogging.pkpk_Nm) ? (m.cogging as CoggingView) : null,
         // The API's passport card is a wrapper: provenance sits beside the
         // nested `passport` within `m.passport`, not on the motor row itself.
         // Accept the old top-level shape too, and fail closed on conflicts.

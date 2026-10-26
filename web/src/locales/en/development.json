@@ -380,6 +380,7 @@
     "tip": "Latest: the latest current variant, plus the best one (highest average efficiency) when that is another variant. All versions: every variant, trial variants and older variants with their history snapshots, grouped by variant."
   },
   "points": {
+    "loadingMotor": "Loading {motor}...",
     "batteryMarkerTip": "Voltage this point needs (selected mode), against the pack window.",
     "source": {
       "emChip": "EM run, winding {winding} °C",

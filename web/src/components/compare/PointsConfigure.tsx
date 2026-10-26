@@ -35,7 +35,7 @@ import {
 } from '../../modules/development/pointsOnly';
 import { FIELD_KIND_ORDER, configureTileKey, isNotComputed, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
 import { parametersLine } from '../../modules/development/storedFieldPayload';
-import { motorColor, variantKey } from '../../modules/development/motorGroups';
+import { motorColor } from '../../modules/development/motorGroups';
 import { fetchMotorField } from '../../lib/motorViewApi';
 import { openProjectMotor } from '../../lib/openProjectMotor';
 import { nsT } from '../../i18n/nsT';
@@ -65,9 +65,9 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const { isAdmin, role } = useAuth();
   const staff = isAdmin || role === 'engineer';
   // the project's variants with their staff marks (recommended / report reviewed), keyed like the step variants
-  const [projectMotors, setProjectMotors] = useState<ProjectMotor[]>([]);
-  const motorOf = (v: { die: string; canonical_die?: string; config: string }) => projectMotors.find((m) => variantKey(m) === variantKey(v)) ?? null;
-  const reloadMotors = async () => { if (focus) { try { setProjectMotors((await developmentApi.motors(focus.id, true)).filter((m) => m.kind !== 'history')); } catch { /* marks stay as they were */ } } };
+  const motorOf = (v: MotorPointVariant): ProjectMotor => ({ die: v.die, canonical_die: v.canonical_die, config: v.config, status: v.status, report_reviewed: v.report_reviewed, recommended: v.recommended });
+  const [stepsTick, setStepsTick] = useState(0);
+  const reloadMotors = async () => { setStepsTick((n) => n + 1); };
   const [steps, setSteps] = useState<MotorPointVariant[]>([]);
   const [stepIndex, setStepIndex] = useState(-1);
   const [duty, setDuty] = useState<string | null>(() => pickPointDuty(view, loadedDuty));
@@ -83,7 +83,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   // a new motor (or the same one reloaded) restarts the mode at the loaded duty; the user's own switch is kept otherwise
   useEffect(() => { setDuty((cur) => pickPointDuty(view, loadedDuty, cur)); cache.current.clear(); setField(null); }, [view, loadedDuty]);
 
-  useEffect(() => { setProjectMotors([]); void reloadMotors(); }, [focus?.id, motorKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setSpecBattery(null);
     if (!focus) return;
@@ -111,7 +110,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
       })
       .catch(() => { /* no project steps: the motor is still shown */ });
     return () => { cancelled = true; };
-  }, [focus?.id, motorKey]);
+  }, [focus?.id, motorKey, stepsTick]);
 
   const points = useMemo(() => pointDuties(view), [view]);
   const current: MotorViewDuty | null = points.find((d) => d.duty === duty) ?? null;
@@ -177,7 +176,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
         <Chip size="small" label={t('points.pending')} sx={{ color: 'var(--text-3)', bgcolor: 'var(--panel-2)' }} />
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{view.die} / {view.config}</Typography>
         <Box sx={{ flex: 1 }} />
-        {focus && stepIndex >= 0 && motorOf(steps[stepIndex]) && <VariantControls projectId={focus.id} motor={motorOf(steps[stepIndex])!} staff={staff} t={t} showAll onChanged={reloadMotors} />}
+        {focus && stepIndex >= 0 && steps[stepIndex] && <VariantControls projectId={focus.id} motor={motorOf(steps[stepIndex])} staff={staff} t={t} showAll onChanged={reloadMotors} />}
         {focus && steps.length > 0 && <Button size="small" onClick={() => setActiveTab('development' as never)}>{t('points.backToProject')}</Button>}
       </Box>
       {openError && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.loadFailed')}: {openError}</Typography>}
@@ -191,7 +190,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               {steps.map((v, index) => (
                 <ToggleButton key={`${v.die}/${v.config}`} value={index} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12, boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>
                   <Box component="span" aria-hidden data-testid="step-accent" sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: motorColor(v), mr: 0.75, flex: '0 0 8px' }} />
-                  {isRecommended(motorOf(v)) && <Tooltip title={`${t('recommended.tip')} ${flagWho(motorOf(v)?.recommended)}`}><StarIcon data-testid="step-star" sx={{ fontSize: 14, color: '#f59e0b', mr: 0.5 }} /></Tooltip>}
+                  {isRecommended(v) && <Tooltip title={`${t('recommended.tip')} ${flagWho(v.recommended)}`}><StarIcon data-testid="step-star" sx={{ fontSize: 14, color: '#f59e0b', mr: 0.5 }} /></Tooltip>}
                   <Tooltip title={`${v.canonical_die} / ${v.config}`}><span>{labels[index]}</span></Tooltip>
                   {v.status === 'trial' && <Chip size="small" label={t('motorStatus.trial')} sx={{ ml: 0.75, height: 16, fontSize: 9 }} />}
                 </ToggleButton>
@@ -250,7 +249,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               </Box>
             )}
           </Box>
-          {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} recommended={steps.map((v) => isRecommended(motorOf(v)))} />}
+          {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} recommended={steps.map((v) => isRecommended(v))} />}
         </Box>
 
         <StoredPointResults duty={current} />

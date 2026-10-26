@@ -34,7 +34,7 @@ export interface ProjectMotor { /** staff checked this variant's report: members
 /** One stored duty point of the points-only Configure card: stored numbers only. */
 export interface MotorPoint { duty: string; has_result?: boolean; operating_point?: Record<string, unknown>; electromagnetic?: Record<string, unknown>; comparison?: Record<string, unknown>; stored_results?: Record<string, unknown> }
 /** One design step (linked motor) of a project with its stored points; `note` is the engineers' short design-step note. */
-export interface MotorPointVariant { step: number; die: string; canonical_die: string; config: string; status: 'current' | 'trial'; note: string; points: MotorPoint[] }
+export interface MotorPointVariant { /** staff marks of the variant (recommended / report reviewed) */ report_reviewed?: StaffFlag | null; recommended?: StaffFlag | null; step: number; die: string; canonical_die: string; config: string; status: 'current' | 'trial'; note: string; points: MotorPoint[] }
 export interface MotorPointsAnswer { project_id: string; variants: MotorPointVariant[]; selected: { die: string; config: string } | null }
 /** Where a stored block came from (every field is optional: an old row has no solver stamp). */
 export interface StoredProvenance { computed_at?: string; recorded_at?: string; code_version?: string; app_version?: string; image?: string; geometry_fingerprint?: string; mesh_size_mm?: number; n_triangles?: number; element_order?: number }

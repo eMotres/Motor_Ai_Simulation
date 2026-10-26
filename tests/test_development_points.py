@@ -180,3 +180,17 @@ def test_note_validation_is_loud_and_non_mutating(client):
     assert client.patch("/api/projects/alpha/motors/note", headers={"x-user": "engineer"},
                         json={"die": " ", "config": "opt1", "note": "x"}).status_code == 422
     assert store.get_project("alpha") == before
+
+
+def test_steps_feed_carries_the_staff_marks_so_the_points_view_needs_no_project_motor_list(client):
+    """Slow Configure load (owner 2026-10-26): the staff marks ride on the light steps feed (no second, heavy list)."""
+    before = get(client, "customer").json()["variants"]
+    assert all(v["recommended"] is None and v["report_reviewed"] is None for v in before)
+    for what in ("recommended", "report_reviewed"):
+        done = client.patch(f"/api/projects/alpha/motors/{what}", headers={"x-user": "admin"},
+                            json={"die": "die", "config": "opt2", "value": True})
+        assert done.status_code == 200, done.text
+    after = {v["config"]: v for v in get(client, "customer").json()["variants"]}
+    assert after["opt2"]["recommended"]["by"] and after["opt2"]["recommended"]["at"]
+    assert after["opt2"]["report_reviewed"]["by"] and after["opt2"]["report_reviewed"]["at"]
+    assert after["opt1"]["recommended"] is None and after["opt1"]["report_reviewed"] is None

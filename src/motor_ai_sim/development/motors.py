@@ -1571,6 +1571,9 @@ def project_motor_points(project_id: str, request: Request, die: str | None = No
         points = _point_rows(_results(open_die, cfg_name, cfg, stored, set()))
         variants.append({"step": len(variants) + 1, "die": open_die, "canonical_die": canonical,
                          "config": cfg_name, "status": status, "note": str(link.get("note") or ""),
+                         # the staff marks ride on the light steps feed: the points-limited view needs no project motor list
+                         "report_reviewed": link.get("report_reviewed") if isinstance(link.get("report_reviewed"), dict) else None,
+                         "recommended": link.get("recommended") if isinstance(link.get("recommended"), dict) else None,
                          "points": points})
     selected = None
     if die is not None or config is not None:

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { getStoredToken, getStoredUser } from './localAuth';
+import { clearFamilyTarget } from './familyLoad';
 import { clearActiveDuty, clearDutyMaterialsKeys } from './dutySettings';
 import type { MotorGeometryParams } from '../types/motor';
 
@@ -63,6 +64,7 @@ export function writeLocalLastMotor(email: string | null | undefined,
 
 export function setLastMotorState(next: LastMotorState): void {
   current = next;
+  if (next.status === 'loaded') clearFamilyTarget();      // the record names the loaded motor now: it is authoritative
   listeners.forEach((listener) => listener());
 }
 

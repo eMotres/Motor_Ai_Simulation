@@ -238,7 +238,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               <TileRow key={index}>
                 {row.map((cell) => (
                   <MetricTile key={cell.id} label={tc(cell.labelKey)} value={cell.value} unit={cell.unit} d={cell.d}
-                    base={cell.value} plain tip={cell.tipKey ? tc(cell.tipKey) : undefined} />
+                    base={cell.value} plain
+                    tip={cell.tipKey ? [tc(cell.tipKey), ...(cell.tipParts ?? []).map((p) => tc(p.key, p.args))].join(' ') : undefined} />
                 ))}
               </TileRow>
             ))}

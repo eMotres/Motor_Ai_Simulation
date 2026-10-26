@@ -473,10 +473,32 @@ def get_references(authorization: Optional[str] = Header(default=None)):
             "passport": m["passport"]} for m in cards]        # new dicts: the cache is never mutated
     for o in out:
         o["passport"] = _with_full_mass(o["passport"], o.get("card"))
+        # The no-load cogging torque of the machine behind the card (owner 2026-10-26); absent when none is saved.
+        _cg = _cogging_of_card(o.get("card"))
+        if _cg:
+            o["cogging"] = _cg
     _ps.attach(out)
     from motor_ai_sim import reference_basis as _rb
     _rb.attach(out)                     # audited input basis of reviewed cards (kept out of the web bundle)
     return {"motors": out}
+
+
+def _cogging_of_card(card: Optional[dict]) -> Optional[dict]:
+    """The saved cogging torque (``cogging.view``) of the configuration a full-passport card was made from, or None.
+    Never raises: Configure's reference list must load whatever a yaml holds."""
+    try:
+        die, cfg = (card or {}).get("die"), (card or {}).get("config")
+        if not die or not cfg:
+            return None
+        from motor_ai_sim import cogging as _cg, duty_results as _dr
+        from motor_ai_sim.routes import family as _fam
+        c = _fam._load_yaml(_fam._cfg_file(str(die), str(cfg)), "configuration")
+        if _cg.block_of(c) is None:
+            return None
+        sig = _fam._build_sig(_fam._die_doc_for_sig(str(die)), c)
+        return _cg.view(_cg.block_of(c), current_sig=sig, cfg_doc=c, stored_by_duty=_dr.get(str(die), str(cfg)))
+    except Exception:                                           # noqa: BLE001
+        return None
 
 
 def hidden_preset_view(authorization: Optional[str]) -> tuple:

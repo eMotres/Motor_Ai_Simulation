@@ -185,6 +185,8 @@ def anonymous_allowed(path: str) -> bool:
 _GATED: dict[tuple[str, str], str] = {
     ("GET",  "/api/simulation/physics/fem_transient"): "user",
     ("GET",  "/api/simulation/physics/fem_field2d"): "user",
+    # The no-load cogging torque of a configuration (owner 2026-10-26): one FEM transient, the same tier as the solves above.
+    ("POST", "/api/simulation/cogging/run"): "user",
     # The System graph (Simulations > System): how the simulations are chained.  A read of the
     # code's structure plus the caller's own last-run status; the Simulation menus' audience.
     ("GET",  "/api/system/graph"): "engineer",

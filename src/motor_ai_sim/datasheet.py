@@ -1320,6 +1320,24 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     row("Torque ripple (%)",
         [_g(d, "result.ripple_pct", "summary.T_ripple_pct") for d in duties],
         "peak-to-peak over mean, cogging included", 1)
+    # NO-LOAD COGGING TORQUE (owner 2026-10-26): a property of the machine, one value for every duty (a grey band row),
+    # next to the ripple.  Absent when none is saved; the note says what a reader needs and flags an older build.
+    try:
+        from motor_ai_sim import cogging as _cog
+        _cv = _cog.view(_cog.block_of(cfg_doc),
+                        current_sig=_cog.current_build_sig(die_doc, cfg_doc),
+                        cfg_doc=cfg_doc, stored_by_duty=_ctrl_by_duty)
+    except Exception:                            # noqa: BLE001 - a missing row must not fail a datasheet
+        _cv = None
+    if _cv:
+        _bits = ["no current; half-amplitude %.4g N·m" % _cv["half_amp_Nm"]]
+        if _cv.get("pct_of_continuous") is not None:
+            _bits.append("%.2f %% of the continuous torque" % _cv["pct_of_continuous"])
+        if _cv.get("magnet_temp_c") is not None:
+            _bits.append("magnets %.0f °C" % _cv["magnet_temp_c"])
+        if _cv.get("stale"):
+            _bits.append("computed on an older build of this machine")
+        one("Cogging torque, peak-to-peak (N·m)", _cv["pkpk_Nm"], "; ".join(_bits), 4)
     # ── three rows that were only ever visible in a picture (2026-09-09) ─────
     # With the charts gone, the numbers they carried become rows of their own:
     # the terminal distortion, how much remanence the run left in the magnets,

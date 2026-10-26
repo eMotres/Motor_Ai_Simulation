@@ -9,6 +9,7 @@
  *  block of the points view (the coupled loop, with its own source label).  Pure functions: `node --test` imports this file. */
 import { finite } from './pointsOnly.ts';
 import { massKind } from './pointsLimited.ts';
+import { coggingDigits, coggingFromFlat, coggingTipParts } from '../../lib/coggingTile.ts';
 
 type Rec = Record<string, unknown>;
 
@@ -21,15 +22,26 @@ export interface GridCell {
   unit: string;
   d: number;
   value: number;
+  /** more tooltip sentences (locale key + interpolation values), joined after `tipKey`'s; only the cogging cell has any */
+  tipParts?: Array<{ key: string; args?: Record<string, string | number> }>;
 }
 
-interface Spec { id: string; labelKey: (mass: 'active' | 'full') => string; tipKey: (mass: 'active' | 'full') => string | null; unit: string; d: number; value: (c: Rec) => number | null }
+interface Spec {
+  id: string; labelKey: (mass: 'active' | 'full') => string; tipKey: (mass: 'active' | 'full') => string | null; unit: string;
+  d: number | ((value: number) => number); value: (c: Rec) => number | null;
+  tipParts?: (c: Rec) => GridCell['tipParts'];
+}
 
 const num = (c: Rec, key: string): number | null => finite(c[key]);
 const SQRT2 = Math.SQRT2;
 const SQRT3 = Math.sqrt(3);
 const per = (a: number | null, b: number | null, scale = 1): number | null => (a !== null && b !== null && b > 0 ? (a / b) * scale : null);
 const times = (a: number | null, k: number): number | null => (a === null ? null : a * k);
+
+/** The tooltip sentences of the cogging cell (shared with the other screens: lib/coggingTile). */
+function coggingParts(c: Rec): GridCell['tipParts'] {
+  return coggingTipParts(coggingFromFlat(c));
+}
 
 const same = (key: string) => () => key;
 const none = () => null;
@@ -42,6 +54,10 @@ const ROWS: Spec[][] = [
     { id: 'mass', labelKey: (m) => (m === 'active' ? 'configure.massPartial' : 'configure.mass'), tipKey: (m) => (m === 'active' ? 'configure.massPartialTip' : 'configure.massFullTip'), unit: 'kg', d: 3, value: (c) => num(c, 'mass_kg') },
     { id: 'efficiency', labelKey: same('configure.efficiency'), tipKey: same('configure.efficiencyTip'), unit: '%', d: 1, value: (c) => num(c, 'efficiency_pct') },
     { id: 'ripple', labelKey: same('configure.tRipple'), tipKey: same('configure.tRippleTip'), unit: '%', d: 1, value: (c) => num(c, 'ripple_pct') },
+    // COGGING TORQUE (owner 2026-10-26): peak-to-peak with no current, a property of the configuration (the same stored number on
+    // every duty); half-amplitude, share of the continuous torque, magnet state and method go to the tooltip.  Not drawn without a value.
+    { id: 'cogging', labelKey: same('configure.cogging'), tipKey: same('configure.coggingTip'), unit: 'N·m', d: coggingDigits,
+      value: (c) => num(c, 'cogging_pkpk_nm'), tipParts: coggingParts },
     { id: 'torqueMass', labelKey: (m) => (m === 'active' ? 'configure.tPerMassActive' : 'configure.tPerMass'), tipKey: same('configure.tPerMassTip'), unit: 'N·m/kg', d: 2,
       value: (c) => num(c, 'torque_to_mass_nm_kg') ?? per(num(c, 'torque_nm'), num(c, 'mass_kg')) },
     { id: 'powerMass', labelKey: (m) => (m === 'active' ? 'configure.pPerMassActive' : 'configure.pPerMass'), tipKey: same('configure.pPerMassTip'), unit: 'kW/kg', d: 2,
@@ -75,7 +91,9 @@ export function configureGrid(point: { comparison?: Record<string, unknown> } | 
     .map((row) => row.flatMap((s): GridCell[] => {
       const v = s.value(c);
       if (v === null || !Number.isFinite(v) || v === 0) return [];
-      return [{ id: s.id, labelKey: s.labelKey(mass), tipKey: s.tipKey(mass), unit: s.unit, d: s.d, value: v }];
+      const parts = s.tipParts?.(c);
+      return [{ id: s.id, labelKey: s.labelKey(mass), tipKey: s.tipKey(mass), unit: s.unit, d: typeof s.d === 'function' ? s.d(v) : s.d, value: v,
+        ...(parts && parts.length ? { tipParts: parts } : {}) }];
     }))
     .filter((row) => row.length > 0);
 }

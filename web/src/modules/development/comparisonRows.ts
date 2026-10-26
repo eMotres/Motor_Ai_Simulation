@@ -1,3 +1,4 @@
+import { coggingDigits } from '../../lib/coggingTile.ts';
 import type { ProjectMotor, MotorResult } from './types';
 import type { SharedComparisonColumn } from '../../components/compare/SharedComparisonTable';
 import { comparisonNumber } from '../../components/compare/comparisonModel.ts';
@@ -62,7 +63,7 @@ export function developmentComparisonRows(motors: ProjectMotor[]): DevelopmentCo
       vPhase: finite(solved.v_phase_peak_v), k3d: finite(solved.k_3d),
       losses: finite(solved.p_loss_total_w), lossPartial: solved.loss_total_partial === true,
       pCu: finite(solved.p_cu_w), pFe: finite(solved.p_fe_w), pSolid: finite(solved.p_solid_w), pMag: finite(solved.p_mag_w), pMech: finite(solved.p_mech_total_w),
-      mass: finite(solved.mass_kg), torqueMass: finite(solved.torque_to_mass_nm_kg), massPartial: solved.mass_partial === true, ripple: finite(solved.ripple_pct),
+      mass: finite(solved.mass_kg), torqueMass: finite(solved.torque_to_mass_nm_kg), massPartial: solved.mass_partial === true, ripple: finite(solved.ripple_pct), cogging: finite(solved.cogging_pkpk_nm), coggingStale: solved.cogging_stale === true,
       vLine: linePeakUnavailableReason ? null : finite(solved.v_line_peak_v), linePeakUnavailableReason,
       vDc: finite(solved.v_dc_required_v), currentDensity: finite(solved.current_density_a_mm2),
       coilTemp: finite(solved.coil_temp_c) ?? mappedTemperature(temperatures, ['winding', 'windings', 'coil', 'coils']),
@@ -149,6 +150,13 @@ export function developmentComparisonColumns(t: (key: string, args?: Record<stri
     result('efficiency', 'efficiency', '%', 'hi'),
     losses, result('pCu', 'copperLoss', 'W', 'lo'), result('pFe', 'ironLoss', 'W', 'lo'), result('pMag', 'magnetLoss', 'W', 'lo'), result('pSolid', 'solidLoss', 'W', 'lo'), result('pMech', 'mechanicalLoss', 'W', 'lo'),
     mass, torqueMass, result('ripple', 'ripple', '%', 'lo'),
+    (() => {
+      // no-load cogging torque of the configuration, pk-pk (owner 2026-10-26); the digits follow its size
+      const cogging = result('cogging', 'cogging', 'N·m', 'lo');
+      cogging.format = (v) => { const n = finite(v); return n === undefined ? '-' : n.toFixed(coggingDigits(n)); };
+      cogging.title = (_v, r) => r.values.coggingStale === true ? t('comparison.coggingStale') : undefined;
+      return cogging;
+    })(),
     (() => {
       const linePeak = result('vLine', 'linePeak', 'V', 'lo');
       linePeak.value = (row) => row.values.linePeakUnavailableReason ? null : row.values.vLine;

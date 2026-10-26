@@ -980,6 +980,13 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
     else:
         doc = stored_by_duty
     by_duty = doc if isinstance(doc, dict) else {}
+    # COGGING TORQUE (owner 2026-10-26) is a property of the configuration, not of a duty: the same saved number rides on
+    # every duty row, so every grid that draws a stored point can draw it.  Absent (never 0) when none is saved.
+    try:
+        from motor_ai_sim import cogging
+        cogging_keys = cogging.flat_keys(cogging.for_config(die, cfg, by_duty))
+    except Exception:  # noqa: BLE001 - a display number must never fail the project list
+        cogging_keys = {}
     out = []
     for duty in cfg.get("duties") or []:
         if not isinstance(duty, dict): continue
@@ -1009,7 +1016,7 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
                     "electromagnetic": em,
                     "stored_results": {str(kind): _metric_projection(row) for kind, row in stored_duty.items()
                                        if isinstance(row, dict) and _metric_projection(row)},
-                    "comparison": _comparison_projection({**duty, "result": primary_result}, stored_duty)})
+                    "comparison": {**_comparison_projection({**duty, "result": primary_result}, stored_duty), **cogging_keys}})
     return out
 
 

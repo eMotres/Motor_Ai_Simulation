@@ -42,6 +42,7 @@ import { getStoredUser } from '../../lib/localAuth';
 import PerformanceCharts from './PerformanceCharts';
 import PropellerLoadChart from './PropellerLoadChart';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
+import { coggingDigits, coggingTipText, coggingValue } from '../../lib/coggingTile';
 import {
   driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
@@ -2646,6 +2647,10 @@ ${s1Text.text}` : '';
             {ref.passport.ripple0_pct != null && (
               <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
+            )}
+            {coggingValue(ref.cogging) !== null && (
+              <MetricTile label={tx('configure.cogging')} value={coggingValue(ref.cogging)} unit="N·m" d={coggingDigits(coggingValue(ref.cogging) ?? 0)}
+                base={coggingValue(ref.cogging) ?? 0} goodHi={false} tip={coggingTipText(ref.cogging, tx)} />
             )}
             <MetricTile label={tx(result.mass_partial ? 'configure.tPerMassActive' : 'configure.tPerMass')} value={pointGate.accepted ? result.torque_per_mass : null} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi tip={tx('configure.tPerMassTip')} blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.pPerMass')} value={pointGate.accepted ? result.power_per_mass_W_kg / 1000 : null} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi tip={tx('configure.pPerMassTip')} blankTip={pointBlankTip} />

@@ -228,6 +228,7 @@
       "mass": "Mass",
       "torqueMass": "Torque / mass",
       "ripple": "Ripple",
+      "cogging": "Cogging torque (pk-pk)",
       "phasePeak": "Phase peak",
       "linePeak": "Line peak",
       "dcBus": "DC bus needed",
@@ -248,6 +249,7 @@
     "targetValue": "Target from the duty - not computed yet",
     "linePeakUnavailable": "Physical line peak unavailable for this result.",
     "partialMass": "Active mass (EM parts x stack), not the whole assembled motor.",
+    "coggingStale": "Computed on an older build of this machine.",
     "partialLosses": "Stored total excludes unknown mechanical losses.",
     "componentTemp": "{part} temp",
     "temperaturePart": {

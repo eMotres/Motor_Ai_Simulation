@@ -849,6 +849,11 @@ def _load_yaml(p: Path, what: str) -> dict:
 
 
 def _save_yaml(p: Path, d: dict) -> None:
+    # A configuration that is a FROZEN product revision (Rev A once Rev B exists) is read-only for good - one check here covers
+    # every route that would rewrite it (owner 2026-10-27, motor_revisions).
+    if p.name != "die.yaml":
+        from motor_ai_sim import motor_revisions as _mr
+        _mr.guard_config_write(p.parent.name, p.stem)
     # Stage 2: THE write seam.  A document resolved out of published/ or shared/
     # is redirected into the caller's own workspace (copying the die's yaml
     # documents across on the way), and an admin's ``?layer=shared`` write is
@@ -2636,6 +2641,8 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
     """
     die = _check_name(die, "die")
     _require_die_write(die, _w)
+    from motor_ai_sim import motor_revisions as _mr
+    _mr.refuse_delete_die(die)             # a product revision (Rev A, B ...) is never deleted, force or not
     # A verified admin READS shared first (2026-10-06), but deleting must not
     # follow that order: when the admin still holds a workspace copy, the
     # DELETE removes exactly that copy and the shared die stays for everyone
@@ -2766,6 +2773,8 @@ def retire_die(die: str, req: DieRetire,
     admin_email = _require_verified_admin(_w)
     if not (_shared_die_dir(die) / "die.yaml").is_file():
         raise HTTPException(404, detail=f"'{die}' is not a shared catalog die")
+    from motor_ai_sim import motor_revisions as _mr
+    _mr.refuse_delete_die(die)             # retiring hides the die for everybody: not while it holds a product revision
     if str(req.confirm or "").strip() != die:
         raise HTTPException(422, detail=(
             f"repeat the die name '{die}' to confirm retiring it for all users"))
@@ -2984,6 +2993,8 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(requ
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
     if new == cfg:
         return {"ok": True, "config": cfg}
+    from motor_ai_sim import motor_revisions as _mr
+    _mr.refuse_rename_config(die, cfg)     # the revision record names the configuration
     # Copy-on-write BEFORE anything is unlinked or moved: a rename inside a
     # published or shared die happens on this workspace's own copy of it.
     _wdir = _ensure_writable_die(die)
@@ -3124,6 +3135,8 @@ def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write))
     p = _cfg_file(die, cfg)
     if not p.is_file():
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    from motor_ai_sim import motor_revisions as _mr
+    _mr.refuse_delete_config(die, cfg)     # a product revision (Rev A, B ...) is never deleted
     n = len((_load_yaml(p, "configuration").get("duties")) or [])
     # Copy-on-write first: deleting a configuration of a published or shared die
     # removes it from THIS workspace's view, never from the layer that holds it.
@@ -5124,6 +5137,9 @@ class LockPatch(BaseModel):
 def lock_die(die: str, req: LockPatch, _w: dict = Depends(require_catalog_write)):
     die = _check_name(die, "die")
     _require_die_write(die, _w)
+    if not req.locked:
+        from motor_ai_sim import motor_revisions as _mr
+        _mr.refuse_unlock_die(die)         # the lamination of a replaced product revision stays locked
     d = _load_yaml(_die_file(die), "die")
     d["locked"] = bool(req.locked)
     _save_yaml(_die_file(die), d)

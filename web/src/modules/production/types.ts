@@ -24,6 +24,8 @@ export interface Production {
   order_quantity: number;
   status: 'active' | 'paused' | 'archived';
   current_revision: string;
+  /** the PRODUCT revision of the motor (Rev A, Rev B ...; the level above this production's own revisions); absent when none */
+  product_revision?: { rev: string; label?: string; lineage?: string; latest?: boolean; frozen?: boolean } | null;
   share_costs_with_oem?: boolean;
   /** what is produced: a motor (default) or electronics (the 800 V controller) */
   product_type?: 'motor' | 'electronics';

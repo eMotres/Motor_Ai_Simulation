@@ -459,6 +459,9 @@
     "settings": "Cookie settings"
   },
   "model3dViewed": "Viewing 3D model: {name}",
+  "revisions": {
+    "label": "Rev {rev}"
+  },
   "strip": {
     "project": "Project",
     "projectTip": "The project you are viewing and its motors; the selected variant is highlighted. This line does not change the live machine.",

@@ -107,8 +107,19 @@ def _production_list_for(email: str, is_admin: bool) -> list[dict]:
             if not isinstance(rec, dict) or not rec.get("die"):
                 continue
             if is_admin or models.is_member(email, rec) is not None:
-                out.append(rec)
+                out.append(_with_product_revision(rec))
     return out
+
+
+def _with_product_revision(rec: dict) -> dict:
+    """The production tells which PRODUCT revision of the motor it is for ("Rev A"; ``motor_revisions``, owner 2026-10-27).  The
+    key is absent for a motor with no product revision.  Not to be confused with the production's own revisions (1.4, 1.5 ...)."""
+    try:
+        from motor_ai_sim import motor_revisions
+        info = motor_revisions.label_for(str(rec.get("die") or ""), str(rec.get("config") or ""))
+    except Exception:                                       # noqa: BLE001 - a label never breaks the page
+        info = None
+    return {**rec, "product_revision": info} if info else rec
 
 
 def _touch(die: str, config: str) -> None:
@@ -269,7 +280,7 @@ def get_die_timeline(request: Request, die: str, today: Optional[str] = None):
 @router.get("/{die}/{config}")
 def get_production(request: Request, die: str, config: str):
     user, production = require_member_with_full_view(request, die, config)
-    return production
+    return _with_product_revision(production)
 
 
 # ── shared links: who may open a production's page, and how a stranger asks ─────

@@ -4,6 +4,7 @@ import { Box, Button, Chip, CircularProgress, Paper, Table, TableBody, TableCell
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
+import { RevisionLabel } from '../../../components/common/MotorRevisionText';
 import { useAuth } from '../../../contexts/AuthContext';
 import BilingualText from './BilingualText';
 import { productionApi } from '../api';
@@ -63,7 +64,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
                 const role = callerRole(p.members, user?.email ?? '', isAdmin);
                 return (
                   <TableRow key={`${p.die}/${p.config}`} hover sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)}>
-                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /></TableCell>
                     <TableCell><BilingualText value={p.title} size={12.5} /></TableCell>
                     <TableCell align="right">{p.order_quantity}</TableCell>
                     <TableCell align="center">{p.current_revision}</TableCell>

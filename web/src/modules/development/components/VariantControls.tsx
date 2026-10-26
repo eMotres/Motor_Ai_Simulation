@@ -4,6 +4,10 @@ import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { downloadExport } from '../../../lib/exportDownload';
 import { IDLE as RING_IDLE, newRunId, ringDone, ringFail, ringPoll, ringStart, ringTip, type ReportProgressInfo, type ReportRing } from '../../../components/catalog/reportProgress';
+import { motorRevisionsApi } from '../../../lib/motorRevisionsApi';
+import { revisionAction } from '../../../lib/motorRevisions';
+import { useMotorRevision, useMotorRevisionsStore } from '../../../stores/motorRevisionsStore';
+import { NewRevisionDialog } from './NewRevisionDialog';
 import { developmentApi } from '../api';
 import { flagWho, isRecommended, reportAccess } from '../projectFlags';
 import type { ProjectMotor } from '../types';
@@ -12,14 +16,19 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 /** What a project variant offers next to its name (owner 2026-10-26): the "Recommended" star (staff mark it, everybody sees it),
  *  the report buttons (members only after our engineers checked the report; staff always) and, for staff, the "Report
- *  reviewed" toggle.  One line, labels + tooltips only. */
+ *  reviewed" toggle.  Owner 2026-10-27: staff also get «Assign Rev A» on a motor with no product revision and «New revision» on the
+ *  working revision of a lineage (an older revision is read-only and offers neither).  One line, labels + tooltips only. */
 export function VariantControls({ projectId, motor, staff, busy = false, t, onChanged, showAll = false }: {
   projectId: string; motor: ProjectMotor; staff: boolean; busy?: boolean; t: (key: string, o?: Record<string, unknown>) => string;
   onChanged: () => void | Promise<void>; showAll?: boolean;
 }) {
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
+  const [revisionOpen, setRevisionOpen] = useState(false);
   const die = motor.canonical_die ?? motor.die;
+  const revision = useMotorRevision(motor);
+  const revisionButton = revisionAction(revision, staff);
+  const refreshRevisions = () => useMotorRevisionsStore.getState().ensure(true);
   const access = reportAccess(motor, staff);
   const recommended = isRecommended(motor);
   const run = async (action: () => Promise<unknown>) => {
@@ -87,6 +96,21 @@ export function VariantControls({ projectId, motor, staff, busy = false, t, onCh
             onChange={(e) => void run(() => developmentApi.setReportReviewed(projectId, die, motor.config, e.target.checked))} />}
             label={<span style={{ fontSize: 11 }}>{t('report.reviewed')}</span>} />
         </Tooltip>
+      )}
+      {revisionButton === 'assign' && (
+        <Tooltip title={t('revisions.assignTip')}>
+          <span><Button size="small" disabled={busy || working} data-testid="assign-revision"
+            onClick={() => void run(async () => { await motorRevisionsApi.assign({ die, config: motor.config, project_id: projectId, agreed_with_client: true }); await refreshRevisions(); })}>{t('revisions.assign')}</Button></span>
+        </Tooltip>
+      )}
+      {revisionButton === 'new' && revision && (
+        <>
+          <Tooltip title={t('revisions.newTip')}>
+            <span><Button size="small" disabled={busy || working} data-testid="new-revision" onClick={() => setRevisionOpen(true)}>{t('revisions.new')}</Button></span>
+          </Tooltip>
+          <NewRevisionDialog revision={revision} open={revisionOpen} t={t} onClose={() => setRevisionOpen(false)}
+            onCreated={async () => { await refreshRevisions(); await onChanged(); }} />
+        </>
       )}
       {error && <Tooltip title={error}><Chip size="small" color="error" label="!" /></Tooltip>}
     </Stack>

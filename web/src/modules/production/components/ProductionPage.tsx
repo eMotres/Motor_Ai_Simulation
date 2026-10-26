@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Paper, Tab, Tabs, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
+import { RevisionLabel } from '../../../components/common/MotorRevisionText';
 import { useAuth } from '../../../contexts/AuthContext';
 import AssemblyProcess from './AssemblyProcess';
 import BilingualText, { useContentLang } from './BilingualText';
@@ -127,12 +128,14 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const role = prod ? callerRole(prod.members, email, isAdmin) : null;
   // the strip above the page names this production's motor with its title when that is short (lib/stripContext.shortTitle)
   const stripTitle = shortTitle(displayText(prod?.title, ui).text);
+  // ... and the product revision of the motor ("Rev A"), which the production itself carries (no catalogue visibility needed)
+  const stripRev = prod?.product_revision?.rev ?? '';
   useEffect(() => {
     const cur = useTabContextStore.getState().production;
-    if (cur && cur.die === die && cur.config === config && (cur.title ?? '') !== stripTitle) {
-      useTabContextStore.getState().setProduction({ die, config, ...(stripTitle ? { title: stripTitle } : {}) });
+    if (cur && cur.die === die && cur.config === config && ((cur.title ?? '') !== stripTitle || (cur.rev ?? '') !== stripRev)) {
+      useTabContextStore.getState().setProduction({ die, config, ...(stripTitle ? { title: stripTitle } : {}), ...(stripRev ? { rev: stripRev } : {}) });
     }
-  }, [die, config, stripTitle]);
+  }, [die, config, stripTitle, stripRev]);
   const ctx = useMemo(() => ({
     die, config, role, email, uiLang: ui, canEdit: canEditRole(role), productType: prod?.product_type ?? 'motor',
     reload: () => { void reload(); },
@@ -146,7 +149,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
         <Button size="small" onClick={onBack} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>← {t('back')}</Button>
-        <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{die} / {config}</Typography>
+        <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{die} / {config}<RevisionLabel rev={prod?.product_revision?.rev} /></Typography>
         {prod && (
           <>
             <Chip size="small" label={t('parts.revision', { rev: prod.current_revision })} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />

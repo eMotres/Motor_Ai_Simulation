@@ -362,9 +362,8 @@ def six_phase_current_cells(em: Optional[Dict[str, Any]]) -> Tuple[str, str]:
 # Every calculation is at the project's MAXIMUM ambient and the hot state; the
 # only cold case is the magnet EMF / overvoltage check with the magnets at
 # 20 °C.  Sub-zero is not considered yet (an open item for aviation).
-TEMP_BASIS_NOTE = ("Temperature basis: the hot state at the project's maximum "
-                   "ambient; the only cold case is the magnet EMF / overvoltage "
-                   "check, with the magnets at 20 °C.")
+TEMP_BASIS_NOTE = ("Thermal results are at the project's maximum ambient; EM runs are at the winding and magnet "
+                   "temperatures their row 'Basis' states; the cold case is the magnet EMF check at 20 °C.")
 
 
 def thermal_point(t: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -420,7 +419,8 @@ def cooling_basis_words(t: Optional[Dict[str, Any]],
     if kind == "robotics":
         return "still air (natural convection + radiation)"
     if mode.startswith("air"):
-        return "forced air, %s" % _fmt(speed, 1, "m/s")
+        # AN INPUT, said so (owner 2026-10-26, H05): the air speed is stated, not derived from the propeller
+        return "forced air, %s (input)" % _fmt(speed, 1, "m/s")
     return "housing adiabatic" if mode.startswith("non") else "fixed film"
 
 
@@ -1835,6 +1835,73 @@ def _thermal_map(res: Optional[Dict[str, Any]],
                     outline=_winding_as_one(inner.get("domain_per_tri")))
 
 
+#: THE MECHANICS MAPS AS A SECTOR PIECE (owner 2026-10-26, edit 6): the whole rotor ring of a 56-pole machine is
+#: unreadable; like the electromagnetic and thermal maps (a 1/8 sector mesh) the stress, |u| and SF maps are drawn as
+#: a sector around the hot spot - this many poles when the record states its pole count, else this angle.
+MECH_SECTOR_POLES = 3
+MECH_SECTOR_DEG = 45.0
+
+
+def sector_tri_mask(verts: Any, tris: Any, centre_tri: Optional[int],
+                    span_deg: float) -> Optional[Any]:
+    """Boolean mask of the triangles whose centroid lies within ``span_deg`` (total) of the centre triangle's
+    angle; ``None`` when the mesh already spans no more than that (nothing to crop) or cannot be read."""
+    try:
+        import numpy as _np
+        V = _np.asarray(verts, float)
+        T = _np.asarray(tris, int)
+        if V.ndim != 2 or T.ndim != 2 or not len(T) or centre_tri is None:
+            return None
+        c = V[T].mean(axis=1)
+        ang = _np.arctan2(c[:, 1], c[:, 0])
+        spread = float(_np.degrees(_np.ptp(_np.unwrap(_np.sort(ang)))))
+        if spread <= span_deg * 1.05:
+            return None
+        a0 = ang[int(centre_tri)]
+        d = _np.angle(_np.exp(1j * (ang - a0)))
+        mask = _np.abs(d) <= _np.radians(span_deg) / 2.0
+        return mask if mask.any() else None
+    except Exception:                                       # noqa: BLE001 - a crop never fails a picture
+        return None
+
+
+def mech_sector_span_deg(res: Optional[Dict[str, Any]]) -> float:
+    """The sector the mechanics maps are drawn on: ``MECH_SECTOR_POLES`` poles of the record's pole count, else
+    ``MECH_SECTOR_DEG``."""
+    fld = (res or {}).get("field") or {}
+    n = _numf((res or {}).get("n_poles")) or _numf(fld.get("n_poles"))
+    if n and n >= 2:
+        return min(360.0, MECH_SECTOR_POLES * 360.0 / n)
+    return MECH_SECTOR_DEG
+
+
+def _crop_to_sector(verts: Any, tris: Any, per_tri: Dict[str, Any], centre_tri: Optional[int],
+                    span_deg: float) -> Tuple[Any, Dict[str, Any]]:
+    """``(triangles, per_tri arrays)`` restricted to the sector; unchanged when there is nothing to crop."""
+    m = sector_tri_mask(verts, tris, centre_tri, span_deg)
+    if m is None:
+        return tris, per_tri
+    import numpy as _np
+    out = {}
+    for k, v in per_tri.items():
+        try:
+            a = _np.asarray(v)
+            out[k] = a[m] if a.shape[:1] == m.shape else v
+        except Exception:                                   # noqa: BLE001
+            out[k] = v
+    return _np.asarray(tris, int)[m], out
+
+
+def _hot_tri(values: Any, lowest: bool = False) -> Optional[int]:
+    try:
+        import numpy as _np
+        a = _np.asarray(values, float)
+        a = _np.where(_np.isfinite(a), a, _np.nan)
+        return int(_np.nanargmin(a) if lowest else _np.nanargmax(a))
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 def _mech_map(res: Optional[Dict[str, Any]],
               pair_range: Optional[Tuple[float, float]] = None,
               range_only: bool = False,
@@ -1862,8 +1929,11 @@ def _mech_map(res: Optional[Dict[str, Any]],
     vm = (cases[case] or {}).get("vm_per_tri")
     if vm is None:
         return None, ""
-    png = _map_png(fld.get("vertices"), fld.get("triangles"), vm,
-                   label="von Mises  [MPa]", grp=fld.get("domain_per_tri"),
+    _tris, _pt = _crop_to_sector(fld.get("vertices"), fld.get("triangles"),
+                                 {"vm": vm, "grp": fld.get("domain_per_tri")},
+                                 _hot_tri(vm), mech_sector_span_deg(res))
+    png = _map_png(fld.get("vertices"), _tris, _pt["vm"],
+                   label="von Mises  [MPa]", grp=_pt["grp"],
                    range_from="nodal", pair_range=pair_range,
                    range_only=range_only, width_cm=width_cm)
     return png, str(case)
@@ -1910,7 +1980,13 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
     if not case or case not in cases:
         return out
     c = cases[case] or {}
-    grp = fld.get("domain_per_tri")
+    # THE SAME SECTOR AS THE STRESS MAP, centred on the lowest safety factor (else the highest stress)
+    _sf0, _vm0 = c.get("sf_per_tri"), c.get("vm_per_tri")
+    _ctr = _hot_tri(_sf0, lowest=True) if _sf0 is not None else _hot_tri(_vm0)
+    _tris, _pt = _crop_to_sector(fld.get("vertices"), fld.get("triangles"),
+                                 {"grp": fld.get("domain_per_tri"), "sf": _sf0},
+                                 _ctr, mech_sector_span_deg(res))
+    grp = _pt["grp"]
     u = c.get("u_mag_per_node")
     if u is not None:
         # DRAWN DEFORMED, like the tab (user 2026-09-10: "make this chart like
@@ -1936,12 +2012,12 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
         except Exception:                                # noqa: BLE001
             _v, _k = fld.get("vertices"), 0.0
         out["disp_exagg"] = round(_k, 1) if _k else None
-        out["disp"] = _mp("disp", _v, fld.get("triangles"), u,
+        out["disp"] = _mp("disp", _v, _tris, u,
                           label="displacement |u|  [µm]", per_node=True,
                           grp=grp, range_from="nodal")
-    sf = c.get("sf_per_tri")
+    sf = _pt["sf"]
     if sf is not None:
-        out["sf"] = _mp("sf", fld.get("vertices"), fld.get("triangles"), sf,
+        out["sf"] = _mp("sf", fld.get("vertices"), _tris, sf,
                         label="safety factor  [-]", grp=grp,
                         vmax_fixed=2.0 * SF_ACCEPT, reverse=True)
     return out
@@ -2649,7 +2725,11 @@ def temp_chart_limits(mats: Dict[str, Any],
     insulation class and the magnet grade's.  Both come from the same places the
     warnings engine reads, so a bar past a line and a red row are one fact."""
     out: Dict[str, float] = {}
-    lim, _n = _insulation_limit(mats)
+    lim = next((_numf((c or {}).get("winding_limit_c"))
+                for c in (ctxs or {}).values()
+                if (c or {}).get("winding_limit_c") is not None), None)
+    if lim is None:
+        lim, _n = _insulation_limit(mats)
     if lim:
         out["insulation"] = float(lim)
     mag = next((_numf((c or {}).get("magnet_limit_c"))
@@ -4654,9 +4734,9 @@ def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
     # used to truncate to twelve characters, so the two lines three rows apart
     # read "f3b4728f381c5b31" and "f3b4728f381c" and invited the reader to
     # take one for the other.
-    short = fp
+    # NO HASH IN THE CUSTOMER TEXT (owner 2026-10-26, H07/L01): the short record ids are in the appendix.
     if all_agree:
-        return "All records of this duty share geometry %s." % short
+        return "All records of this duty were solved on one geometry."
     odd = sorted({n for n, f in per_kind if f and f != fp})
     other_fps = sorted({f for _n, f in per_kind if f and f != fp})
     # A record with NO fingerprint of its own — the audited stale EM
@@ -4666,11 +4746,10 @@ def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
     unverified = sorted({n for n, f in per_kind if not f})
     bits = []
     if odd:
-        bits.append("%s %s geometry %s"
-                    % (", ".join(odd), "carries" if len(odd) == 1 else "carry",
-                       ", ".join(other_fps)))
+        bits.append("%s %s another geometry"
+                    % (", ".join(odd), "is on" if len(odd) == 1 else "are on"))
     if unverified:
-        bits.append("%s carries no stored fingerprint at all"
+        bits.append("%s carries no stored geometry print"
                     % ", ".join(unverified))
     # PLAIN TEXT — no markup.  Each renderer prepends its own flag/colour
     # (`report._machine_page` and `report_docx._machine`), the same split
@@ -4680,9 +4759,9 @@ def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
     # "… DIFFERENT geometries — Electromagnetic carries no stored fingerprint
     # at all: the rest f3b4728f381c: never read as one machine." — no verb, a
     # truncated hash and no full stop after it.
-    return ("this duty blends records solved on DIFFERENT geometries: %s, "
-            "while the rest were solved on %s — they may not be read as one "
-            "machine." % ("; ".join(bits) or "one record", short))
+    del other_fps
+    return ("this duty blends records solved on DIFFERENT geometries: %s; they may not be read as one "
+            "machine (record ids in the appendix)." % ("; ".join(bits) or "one record"))
 
 
 def _record_geometry_for_v2(res: Optional[Dict[str, Any]],
@@ -5509,8 +5588,7 @@ def overspeed_remedy_clause(factor: Any, case: Any = None) -> str:
                    "" if not _c or _c.lower() == OVERSPEED_CASE else
                    "; this report carries the '%s' case, not that one" % _c))
     return (". This solve ran at the duty's own speed only (overspeed factor "
-            "1) — re-run the rotor stress at 1.2, the case a band is sized "
-            "against")
+            "1); the overspeed case at 1.2 is pending")
 
 
 def is_rotor_bridge_part(part: Any) -> bool:
@@ -5540,11 +5618,9 @@ def retention_words(has_sleeve: bool, open_pct: Optional[float]) -> str:
     """
     if has_sleeve and (open_pct is None or open_pct < 50.0):
         return ROTOR_BRIDGE_POLICY
-    tail = (" (contact opening %s)" % _fmt(open_pct, 0, "%")
-            if open_pct is not None else "")
-    return ("the bridges between the poles are assembly-only and carry no "
-            "load in operation; the current design does not confirm magnet "
-            "retention and the torque path%s" % tail)
+    # ONE LINE, the fact and its number (owner 2026-10-26, edit 1)
+    tail = (" (%s open)" % _fmt(open_pct, 0, "%") if open_pct is not None else "")
+    return "assembly only; retention not confirmed%s" % tail
 
 
 def retention_words_ctx(ctx: Dict[str, Any]) -> str:
@@ -5620,8 +5696,7 @@ def overspeed_glossary_text(factor: Any) -> str:
     if f is not None:
         return (base + "On this machine the factor is 1: every stress in this "
                 "report was solved at the duty's own speed and there is NO "
-                "overspeed case — re-run the rotor stress with a factor of 1.2 "
-                "before the band is signed off.")
+                "overspeed case; the case at 1.2 is pending.")
     return (base + "No rotor-stress answer on this machine states a factor, so "
             "nothing here is an overspeed case.")
 
@@ -5679,9 +5754,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     out.append(_warn(
         "winding_temperature", duty, "Winding temperature",
         ctx.get("winding_temp_c"), ctx.get("winding_limit_c"), "°C",
-        "Lower the current density (more copper or fewer turns), improve the "
-        "housing cooling, or specify a higher insulation class - class R (220 "
-        "°C) or S (240 °C) enamel and slot insulation.",
+        "Lower the current density (more copper or fewer turns) or improve the cooling.",
         note=(str(ctx.get("winding_limit_note") or "")
               + time_to_limit_clause({"time_to_limit": _ttl}, "winding")
               + _ttl_resid)))
@@ -5701,7 +5774,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         "demag_br_loss", duty, "Irreversible demagnetisation (Br lost)",
         (None if kept is None else 100.0 - kept), DEMAG_LOSS_LIMIT_PCT, "%",
         "Higher-coercivity grade, cooler magnets, or the load line off the "
-        "knee: less current, less negative gamma, a thicker magnet.",
+        "knee: less current, a smaller gamma (less negative i_d), a thicker magnet.",
         note="the design criterion is Br kept >= 99 % of the card value"))
     # …and the WORST SINGLE ELEMENT beside it, as what it is: a CORNER
     # diagnostic (task 2026-09-26).  It was a red/amber rule (B6), but that
@@ -5910,13 +5983,9 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         out.append(_warn(
             "voltage_headroom", duty, "Line voltage, waveform peak",
             ctx.get("v_line_peak_v"), ctx.get("v_pack_min_v"), "V",
-            "The peak of the terminal waveform is what the winding insulation "
-            "and the bridge's devices see: fewer turns, more field weakening at "
-            "this point, or a pack with a higher minimum voltage. Whether the "
-            "DRIVE can hold the current is the modulation row below, not this "
-            "one.",
-            note="limit = the pack's minimum (fully discharged) voltage; the "
-                 "value is the peak of the whole solved line-voltage waveform, "
+            "Voltage capability at the empty pack: fewer turns, field weakening at this point, or a higher "
+            "minimum pack voltage. Device and insulation stress is the pack maximum plus switching transients.",
+            note="limit = the pack minimum; value = the solved line waveform peak, "
                  "2-D peak × k_3d"
                  + ("" if not _numf(ctx.get("k_3d")) else
                     (" (%s × %s)" % (_fmt(ctx.get("v_line_peak_2d_v"), 1, "V"),
@@ -6086,28 +6155,35 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
              + ("" if _numf(ctx.get("magnet_stress_p995_mpa")) is None
                 else (", with p99.5 at %s as the singularity gauge"
                       % _fmt(ctx.get("magnet_stress_p995_mpa"), 1, "MPa")))))
-    out.append(_warn(
-        "contact_open", duty, "Separation joint open fraction%s" % (
+    # THE PRESSURE CONTACT'S OPENING IS A NUMBER, NOT AN ESCAPE (owner 2026-10-26, H01): with the magnets seated on
+    # the pocket iron the opening alone decides nothing - the row stays, capped at amber, and the retention / torque
+    # path is stated as unresolved rather than as "let go".
+    _form = "held by the iron" in str(ctx.get("magnet_retention_cell") or "")
+    _co = _warn(
+        "contact_open", duty, "Pressure-contact opening%s" % (
             " (%s)" % _interface_words(ctx["open_interface"])
             if ctx.get("open_interface") else ""),
         ctx.get("open_fraction_pct"), OPEN_FRACTION_LIMIT_PCT, "%",
-        "More interference on the fit, a thicker sleeve, or a form lock (a "
-        "dovetail or a deeper pocket) so the joint does not have to be held by "
-        "pressure alone.",
-        note="a separation joint may open; past half its length it is not a "
-             "joint any more"))
-    if ctx.get("lift_off"):
+        "More interference, or a form lock (dovetail, deeper pocket) so retention does not rest on pressure.",
+        note=("pressure contact only; the magnets sit on the pocket iron (%s)" % ctx.get("magnet_retention_cell")
+              if _form else "pressure contact only; retention by form is judged separately"))
+    if _co and _form and _co.get("level") == "red":
+        _co["level"] = "amber"
+    out.append(_co)
+    # ONE ROW for retention + torque path (owner 2026-10-26, merge duplicates): the torque-path row below carries
+    # it whenever the solve gave a torque-path verdict
+    if ctx.get("lift_off") and not str(ctx.get("torque_path_verdict") or "").strip():
         out.append({
-            "rule": "lift_off", "level": "red", "duty": duty,
-            "quantity": "Lift-off%s" % (
+            "rule": "lift_off", "level": "amber", "duty": duty,
+            "quantity": "Retention and torque path%s" % (
                 " (%s)" % _interface_words(ctx["open_interface"])
             if ctx.get("open_interface") else ""),
             "value": None, "limit": None, "unit": "", "kind": "verdict",
             "margin_pct": None,
-            "remedy": "The joint has let go at this speed. Raise the sleeve "
-                      "interference or thickness, lower the speed case, or "
-                      "carry the load by form rather than by friction.",
-            "note": "the contact solve reported this pair as lifted off"})
+            "remedy": "Qualify with the rotor-stress case at the overspeed, with the agreed torque and the "
+                      "magnetic pull.",
+            "note": "unresolved: pressure contact open; magnets %s"
+                    % (ctx.get("magnet_retention_cell") or "not reported")})
     # A TIE IN TENSION IS A JOINT THAT IS NOT THERE (user 2026-09-14).  The
     # mechanical model may bond a pair the real machine only presses together;
     # when that bond carries TENSION the solve is holding the rotor onto its
@@ -6148,8 +6224,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Assess torque capacity including pocket-wall normal contact "
                 "and continuous iron paths; friction alone is not a rotor "
                 "capacity." if "friction-only capacity" in _tp else
-                "The torque path could not be judged on this solve - re-run the "
-                "rotor stress with loads='both' so the reaction is computed.")
+                "The torque path is not judged on this solve: the torque reaction was not computed.")
         else:
             lvl, rem = "", ""
         if lvl:
@@ -6157,7 +6232,9 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "quantity": "Torque path", "value": None, "limit": None,
                         "unit": "", "kind": "verdict", "margin_pct": None,
                         "remedy": rem,
-                        "note": str(ctx.get("torque_path_verdict") or "")})
+                        # ONE LINE (owner 2026-10-26, edit 2)
+                        "note": torque_path_cell({"torque_path": {"verdict": ctx.get("torque_path_verdict")}})
+                        or ""})
 
     # ── bearings ────────────────────────────────────────────────────────────
     out.append(_warn(
@@ -6212,9 +6289,12 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             # row read "0.12 % − 10 % = −9.9 %", which is not arithmetic.
             "margin_unit": "pp",
             "kind": "min", "margin_pct": round(_m - RING_MODE_AMBER_PCT, 1),
-            "remedy": ("Shift the carrier a few kHz, or stiffen/soften the "
-                       "rotor ring — a mode on the carrier is an acoustic and "
-                       "fatigue problem."),
+            # THE REMEDY FOLLOWS THE EXCITATION (owner 2026-10-26, M04): a slot-passing line moves with the
+            # mechanical speed and no carrier change touches it
+            "remedy": (("Change the rotor ring's stiffness or mass, or keep the operating speed off this "
+                        "crossing — slot passing follows the mechanical speed.")
+                       if "slot" in str(ctx.get("ring_mode_excitation") or "").lower() else
+                       ("Shift the carrier a few kHz, or change the rotor ring's stiffness or mass.")),
             "note": str(ctx.get("ring_mode_note") or "")})
 
     got = [w for w in out if w]
@@ -6262,7 +6342,9 @@ def _magnet_limit(grade: Any) -> Tuple[Optional[float], str]:
                  f"is {lim:g} °C; no card on this machine states one")
 
 
-def _insulation_limit(mats: Dict[str, Any]) -> Tuple[float, str]:
+def _insulation_limit(mats: Dict[str, Any],
+                      cfg_doc: Optional[Dict[str, Any]] = None,
+                      limit_c: Optional[float] = None) -> Tuple[float, str]:
     """The winding's temperature limit.  Always an ASSUMPTION, always said so.
 
     The materials library's enamel and liner entries are thermal-property cards
@@ -6272,6 +6354,11 @@ def _insulation_limit(mats: Dict[str, Any]) -> Tuple[float, str]:
     60085 ladder is class N — not class H, which is 180 °C (reviewer
     2026-09-14).
     """
+    # THE CONFIGURATION'S OWN LIMIT FIRST (owner 2026-10-26, 180 °C for every verdict of a project) - one number, stated once
+    from motor_ai_sim import winding_limit as _wl
+    own = _numf(limit_c) if limit_c is not None else _wl.config_winding_limit_c(cfg_doc)
+    if own is not None:
+        return float(own), "the project's winding limit (%g °C)" % float(own)
     lim = PROJECT_INSULATION_C
     en = str((mats or {}).get("wire_insulation") or "polyimide")
     li = str((mats or {}).get("slot_insulation") or "Nomex")
@@ -6938,7 +7025,16 @@ def _duty_record(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]:
         rec = (_dr.get(die, cfg) or {}).get(duty)
     except Exception:                                        # noqa: BLE001
         return {}
-    return rec if isinstance(rec, dict) else {}
+    rec = dict(rec) if isinstance(rec, dict) else {}
+    # A ROTOR-STRESS ROW MADE BEFORE THE CONTACT-SOLVER REPAIR is never drawn as current (#437 rules, owner
+    # 2026-10-26) - the same rule the comparison table's per-point filter applies
+    try:
+        from motor_ai_sim.development import motor_view as _mv
+        if isinstance(rec.get("rotor_stress"), dict) and _mv.solver_status(rec["rotor_stress"]) == "superseded":
+            rec.pop("rotor_stress", None)
+    except Exception:                                        # noqa: BLE001
+        pass
+    return rec
 
 
 def _duty_at_point(duties: List[Dict[str, Any]], rpm: Any, cur: Any) -> Optional[str]:
@@ -6949,15 +7045,18 @@ def _duty_at_point(duties: List[Dict[str, Any]], rpm: Any, cur: Any) -> Optional
     The current is compared only when BOTH sides carry it: a rotor-stress solve
     knows a speed and a torque, not a winding current.
     """
+    # THE SAME TOLERANCES AS THE PER-POINT RULE (development.motor_view.belongs_to_point): rpm 1 % / 1 rpm,
+    # current 3 % / 0.5 A, relative to the larger of the two
+    from motor_ai_sim.development import motor_view as _mv
     rpm, cur = _numf(rpm), _numf(cur)
     if not rpm:
         return None
     hits = []
     for d in duties:
         d_rpm, d_cur = _numf(d.get("rpm")), _numf(d.get("current_arms"))
-        if not d_rpm or abs(d_rpm - rpm) > max(1.0, 0.01 * d_rpm):
+        if not d_rpm or not _mv._close(rpm, d_rpm, _mv.RPM_REL_TOL, _mv.RPM_ABS_TOL):
             continue
-        if cur and d_cur and abs(d_cur - cur) > max(0.5, 0.02 * d_cur):
+        if cur and d_cur and not _mv._close(cur, d_cur, _mv.CURRENT_REL_TOL, _mv.CURRENT_ABS_TOL):
             continue
         hits.append(str(d.get("name") or ""))
     return hits[0] if len(hits) == 1 else None
@@ -7021,6 +7120,27 @@ def cogging_words(v: Optional[Dict[str, Any]]) -> str:
     return "; ".join(bits)
 
 
+def own_point_records(stored_duty: Any, d: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The stored records of ONE duty that belong to its operating point (#437 per-point rules, owner 2026-10-26).
+
+    A record whose speed / current does not match the duty's point, a superseded rotor-stress row, or a ``limited``
+    thermal map outside the physical window is NOT used by the report - the same rule the project's points view
+    applies (``development.motor_view.own_records``).  Below-floor single temperatures are dropped from what stays."""
+    stored_duty = stored_duty if isinstance(stored_duty, dict) else {}
+    d = d if isinstance(d, dict) else {}
+    try:
+        from motor_ai_sim.development import motor_view as _mv
+        op = {"rpm": _numf(d.get("rpm")), "current": _numf(d.get("current_arms"))}
+        kept, hidden = _mv.own_records(stored_duty, op)
+        if hidden:
+            log.info("report: duty %r - records not used (not this point): %s", d.get("name"),
+                     ", ".join("%s:%s" % (h.get("kind"), h.get("reason")) for h in hidden))
+        return dict(kept)
+    except Exception as exc:                                  # noqa: BLE001 - a filter hiccup never fails a report
+        log.debug("report: per-point filter unavailable (%s)", exc)
+        return dict(stored_duty)
+
+
 def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
                   th: Dict[str, Any], me: Dict[str, Any],
                   cp: Optional[Dict[str, Any]],
@@ -7068,7 +7188,7 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
     cols: List[Dict[str, Any]] = []
     for d in duties:
         name = str(d.get("name") or "-")
-        res = dict(stored.get(name) or {})
+        res = own_point_records(stored.get(name), d)
         origin = {k: "the per-duty store" for k in res}
         for k, v in last.items():
             if owners.get(k) != name:
@@ -7745,7 +7865,7 @@ def demag_from_field(die: str, cfg: str, duty: Optional[str],
 EM_SOURCE_WORDS = {
     "coupled": "the coupled electromagnetic/thermal run of this duty",
     "pwm": "the PWM run of this duty",
-    "standalone": "a standalone electromagnetic solve, no coupled loop",
+    "standalone": "the electromagnetic run of this duty, at a fixed winding temperature",
     "none": "no electromagnetic solve is stored for this duty",
 }
 
@@ -7753,9 +7873,17 @@ EM_SOURCE_WORDS = {
 EM_SOURCE_SHORT = {
     "coupled": "coupled loop",
     "pwm": "PWM run",
-    "standalone": "standalone solve",
+    "standalone": "EM run",
     "none": NOT_SOLVED,
 }
+
+#: THE ELECTROMAGNETIC BASIS OF THE REPORT (owner 2026-10-26, customer review B01/H02/H06): every electromagnetic table
+#: cell, the cover and the figures of a SINUSOIDAL duty are the duty's own EM run - the run whose waveforms and field maps
+#: the figures are drawn from, at the winding temperature it states.  The coupled loop's own torque and losses (at the
+#: temperatures it settled at, or stopped at) are a separate answer and are printed only in the coupled-loop table, under
+#: their own label.  A PWM duty keeps its PWM run, whose waveforms are its own.  ``duty_em_source``'s default ("coupled")
+#: is the controller's operating point resolution and is unchanged.
+REPORT_EM_BASIS = "em_run"
 
 
 def em_source_note(kind: Any, duty: Any = None) -> str:
@@ -7769,9 +7897,8 @@ def em_source_note(kind: Any, duty: Any = None) -> str:
     """
     k = str(kind or "")
     if k == "standalone":
-        return ("Electromagnetic numbers: standalone electromagnetic solve, "
-                "no coupled loop — they were not solved at the temperatures "
-                "this report gives elsewhere.")
+        return ("Electromagnetic numbers: the duty's EM run at a fixed winding temperature; "
+                "coupled-loop results are in their own table.")
     if k == "none":
         return "No electromagnetic solve is stored for this duty."
     return ""
@@ -7839,7 +7966,8 @@ def duty_em_source(die: str, cfg: str, duty: Optional[str],
                    cfg_doc: Optional[Dict[str, Any]] = None,
                    d: Optional[Dict[str, Any]] = None,
                    res: Optional[Dict[str, Any]] = None,
-                   sine: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   sine: Optional[Dict[str, Any]] = None,
+                   basis: str = "coupled") -> Dict[str, Any]:
     """THE electromagnetic answer this duty's report is built from — one
     policy, one place, for every number and every figure (see the block
     comment above).
@@ -7903,12 +8031,18 @@ def duty_em_source(die: str, cfg: str, duty: Optional[str],
                 em[_k] = _v
         out["wf_drive"] = PWM_RUN_DRIVE if side.get("payload_file") else None
         out["em"], out["kind"] = em, "pwm"
-    elif has_coupled_em:
+    elif has_coupled_em and not (basis == REPORT_EM_BASIS and sine):
         out["em"], out["kind"] = _em_from_coupled(sine, rec, demag), "coupled"
     elif sine:
         em = dict(sine)
-        if demag:
+        # THE RUN'S OWN demagnetisation on the report's EM basis (H02): a stored field map may be another solve's
+        # (the coupled loop's last pass); the run's summary block is the one that belongs to its torque.
+        if demag and not (basis == REPORT_EM_BASIS and isinstance(sine.get("demag"), dict) and sine.get("demag")):
             em["demag"] = demag
+        if basis == REPORT_EM_BASIS:
+            # the loop the summary embedded when it was saved is ANOTHER record: its magnet temperature is not the
+            # temperature this run's field was solved at (B01)
+            em.pop("coupling", None)
         out["em"], out["kind"] = em, "standalone"
     else:
         out["em"], out["kind"] = {}, "none"
@@ -7945,7 +8079,7 @@ def apply_pwm_view(col: Dict[str, Any],
     """
     src = duty_em_source(die, cfg, col.get("duty"), cfg_doc,
                          d=col.get("d"), res=col.get("res"),
-                         sine=col.get("em"))
+                         sine=col.get("em"), basis=REPORT_EM_BASIS)
     col["drive"] = src["drive"]
     col["em_source"] = src["kind"]
     col["em_source_words"] = src["words"]
@@ -8232,6 +8366,14 @@ def _drop_empty(rows: List[List[Any]]) -> List[List[Any]]:
             if any(str(v).strip() not in ("—", "", "None") for v in r[1:])]
 
 
+def _drop_unanswered(rows: List[List[Any]], keep: Tuple[str, ...] = ("Basis",)) -> List[List[Any]]:
+    """Rows where no duty has a value at all ("—" or "not solved" in every cell), taken out - the SHORT rule of the
+    customer report (owner 2026-10-26).  The rows named in ``keep`` stay: they say what each column is."""
+    return [r for r in rows
+            if str(r[0]) in keep
+            or any(str(v).strip() not in ("—", "", "None", NOT_SOLVED) for v in r[1:])]
+
+
 def _local_stamp(s: Any, missing: str = "unstamped") -> str:
     """``2026-09-13 15:20:02`` — a stored timestamp in the machine's LOCAL time.
 
@@ -8316,6 +8458,9 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     rr = col.get("result") or {}
     res = col.get("res") or {}
     t = res.get("thermal") if isinstance(res.get("thermal"), dict) else None
+    # A TRANSLATED MAP IS NOT A TEMPERATURE ANSWER (owner 2026-10-26, B05): no verdict reads it
+    if thermal_is_translated(t):
+        t = None
     ms = res.get("rotor_stress") if isinstance(res.get("rotor_stress"), dict) else None
     cp = res.get("coupled") if isinstance(res.get("coupled"), dict) else None
     comps = (t or {}).get("components") or {}
@@ -8363,7 +8508,12 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                   % (str(_limited.get("line") or "").rstrip(".") or
                      "stopped at the first limit"))
         ctx["temp_basis"] = _basis
-        if _wl is not None:
+        if _wl is not None and ins_lim is not None and abs(float(_wl) - float(ins_lim)) > 0.5:
+            # STOPPED AT ANOTHER WINDING LIMIT (owner 2026-10-26, B04): the instant it describes is that limit,
+            # not this project's - not judged here; "Still to compute" names the run at the project limit
+            ctx["winding_temp_c"] = None
+            ctx["hot_spot_c"] = None
+        elif _wl is not None:
             ctx["winding_temp_c"] = _wl
             ctx["hot_spot_c"] = _wl
             ctx["winding_limit_note"] = ((ins_note + "; " if ins_note else "")
@@ -8702,6 +8852,9 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         else:
             ctx["lift_off"] = False
         ctx["torque_path_verdict"] = (ms.get("torque_path") or {}).get("verdict")
+        # WHAT HOLDS THE MAGNETS, in one cell (owner 2026-10-26, H01): a form lock on the pocket iron is not judged
+        # by the pressure contact's opening
+        ctx["magnet_retention_cell"] = magnet_retention_cell(ms)
         # A BONDED / TIED joint that goes into TENSION (user 2026-09-14).  The
         # interfaces table said "shaft/rotor — tie goes into tension at 14,200
         # rpm" and section 7 fired nothing, because the only contact rule is the
@@ -8935,7 +9088,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     em_from_run = False
     if duty_summary:
         em, em_src = dict(duty_summary), (
-            "the duty '%s' as saved from the Simulation tab" % (d_duty.get("name") or "—"))
+            "the EM run of the duty '%s'" % (d_duty.get("name") or "—"))
     elif run_summary:
         # ONE WORDING, WHETHER OR NOT THE LOADED MACHINE MATCHES (client review
         # 2026-09-14).  The second branch used to append "— on a machine that
@@ -9035,7 +9188,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
             if em_from_run:
                 if duty_summary:
                     em, em_src = dict(duty_summary), (
-                        "the duty '%s' as saved from the Simulation tab"
+                        "the EM run of the duty '%s'"
                         % (d_duty.get("name") or "—"))
                     em_from_run = False
                 else:
@@ -9134,9 +9287,13 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     em_duty = (active_duty or _duty_at_point(
         [d for d in (cfg_doc.get('duties') or []) if isinstance(d, dict)],
         _g(em, 'rpm'), _g(em, 'I_phase_rms_A') or _g(em, 'I_phase_rms')))
-    batt = cfg_doc.get("battery") or {}
+    # THE CUSTOMER'S NUMBERS (owner 2026-10-26, customer review B02/M06): the project's specification, read once; the
+    # pack every check below uses is the customer's stated pack when the specification gives one.
+    from motor_ai_sim import report_customer as _rc
+    requirements = _rc.project_requirements(die, cfg, cfg_doc)
+    batt = _rc.customer_battery(cfg_doc.get("battery") or {}, requirements)
     mag_lim, mag_note = _magnet_limit(mats.get("magnet"))
-    ins_lim, ins_note = _insulation_limit(mats)
+    ins_lim, ins_note = _insulation_limit(mats, cfg_doc)
     cold_k, cold_note = _cold_br_factor(mats.get("magnet"))
     # The speed a runaway must stay above is the fastest point this
     # configuration is designed for — its own duties, not a number typed here.
@@ -9224,6 +9381,11 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # machine keeps quoting its live solve.
     _fb = _duty_detail_sources(die, cfg, detail_duty or active_duty, detail_src)
     th_detail_from_duty = me_detail_from_duty = False
+    _det_th = (_duty_record(die, cfg, detail_duty) or {}).get("thermal") if detail_duty else None
+    if thermal_is_translated(_det_th):
+        # the report duty's own map is a translated shape: no detail table, no map (B05)
+        _fb["th"] = {}
+        detail_src = {k: v for k, v in detail_src.items() if k != "thermal"}
     if _fb["th"] and not (th.get("field") or th.get("coupled")):
         th.update(_fb["th"])
         th_detail_from_duty = True
@@ -9337,6 +9499,13 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         _rpm, _cur = duty_point(cfg_doc, name, cols)
         _col = next((c for c in cols if c.get("duty") == name), None)
         _th = _side_thermal(die, cfg, name, s, th, th_map_duty)
+        # A TRANSLATED MAP IS NEVER DRAWN AS A SOLVED FIELD (owner 2026-10-26, B05): its absolute temperatures are a
+        # level shift of another pass; the side says so in words instead.
+        _raw_th = (_duty_record(die, cfg, name) or {}).get("thermal")
+        _th_hidden = bool(thermal_is_translated(_raw_th) or thermal_is_translated(_th))
+        if _th_hidden:
+            _th = None
+            s = {k: v for k, v in (s or {}).items() if k != "thermal"}
         _me = _side_mech(die, cfg, name, s, me, me_map_duty)
         # The same rule as the report duty's charts: a PWM duty's own run
         # first, the sinusoid's only as a labelled substitute.
@@ -9361,6 +9530,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "th_inner": ((_th.get("field") if isinstance((_th or {}).get("field"),
                                                          dict) else _th)
                          if _th else None),
+            "th_hidden": _th_hidden,
             "mech": _me, "case": _side_case(_me),
             "demag": demag_corner_stats(die, cfg, name),
             # THIS SIDE'S OWN COUPLED RECORD (item 6/12, owner review
@@ -9381,6 +9551,9 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "note": _pair_note,
         "n_duties": len(_duties_l),
     }
+    _hid = [str(x.get("duty")) for x in (pair["left"], pair["right"]) if x and x.get("th_hidden")]
+    if _hid:
+        pair["thermal_note"] = "%s: %s." % (", ".join(_hid), TRANSLATED_MAP_WORDS)
 
     # ── HOW MANY SECTIONS THIS DOCUMENT HAS (2026-09-14) ────────────────────
     # The duty-cycle section is printed only when a duty has a cycle record —
@@ -9391,9 +9564,22 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # where a duty of this configuration has been solved for an inverter.
     has_controller = any(controller_record(c) is not None for c in cols)
     sec = section_numbers(has_duty_cycle, has_controller)
+    # ── THE REQUIREMENTS CHECK AND THE BEARING LOADS (owner 2026-10-26) ─────
+    from motor_ai_sim import winding_limit as _wl
+    winding_limit_cfg = _wl.config_winding_limit_c(cfg_doc)
+    req_rows = _rc.requirements_rows(requirements, cols, winding_limit_c=ins_lim, batt=batt)
+    brg_load_rows, brg_load_notes = _rc.bearing_load_rows(requirements, cols, geo=geo,
+                                                          brg_assign=brg_assign, cfg_doc=cfg_doc)
+    _card_t = _magnet_card_temp(mats.get("magnet"))
+    for _c in cols:
+        _c["basis"] = _rc.duty_basis_words(_c, _card_t)
 
     return {
         "pair": pair,
+        "requirements": requirements, "req_rows": req_rows,
+        "req_source": _rc.requirements_source_line(requirements),
+        "bearing_load_rows": brg_load_rows, "bearing_load_notes": brg_load_notes,
+        "winding_limit_c": winding_limit_cfg, "ins_lim": ins_lim,
         # One running figure number per document; both renderers count in the
         # same order, so "Fig. 7" is the same picture in the .docx and the PDF.
         "fig_n": [0],
@@ -9516,7 +9702,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story += _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src,
                     brg, sources, delta, batt,
                     used_live=bool(D.get("em_from_run")), cols=cols, ctxs=ctxs,
-                    supply=D.get("supply"), sec=sec)
+                    supply=D.get("supply"), sec=sec, req_rows=D.get("req_rows"),
+                    req_source=D.get("req_source") or "")
     _rec = _recommended_line(die, cfg)
     if _rec:
         story.append(_para("\u2605 " + _rec, st["body"]))
@@ -9551,7 +9738,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _thermal_compare(st, cols)
     story.append(CondPageBreak(PAGE_H * 0.45))
-    story += _mech_compare(st, cols)
+    story += _mech_compare(st, cols, (D.get("requirements") or {}).get("overspeed_rpm"),
+                           (D.get("bearing_load_rows") or [], D.get("bearing_load_notes") or []))
     story.append(CondPageBreak(PAGE_H * 0.4))
     story += _coupled_compare(st, cols)
     story.append(PageBreak())
@@ -9631,7 +9819,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story += _still_to_compute_page(st, die, cfg, cfg_doc)
     story += _tests_vs_simulation_page(st, die, cfg)
     story.append(CondPageBreak(PAGE_H * 0.45))
-    story += _notes_page(st, sources, brg, em, th, me, cp, sec)
+    story += _notes_page(st, sources, brg, em, th, me, cp, sec, cols=cols)
     story.append(CondPageBreak(PAGE_H * 0.35))
     # No per-duty source table (user 2026-09-10: "throw that one out too") — it listed
     # which store each column was read from and when, and since a foreign answer
@@ -9676,6 +9864,11 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
 
 # ── page 1 · cover ──────────────────────────────────────────────────────────
 
+
+#: The cover's one line about where its numbers come from (owner 2026-10-26, customer review B01).
+COVER_BASIS_LINE = ("Each duty's numbers come from ONE stated basis (row 'Basis'); coupled-loop, S1, S2 and mechanics "
+                    "results are labelled in their own tables.")
+REQUIREMENTS_HEADING = "Requirements check"
 
 NO_SOURCES_YET = (
     "No solver result is stored on this server yet — run the point on the "
@@ -9945,8 +10138,7 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
                     "bearings + windage taken off the shaft (SKF model)"))
     else:
         eta_row = ("Electromagnetic efficiency", eta_em,
-                   "bearing and windage losses are NOT included — this "
-                   "configuration names no bearings")
+                   "EM losses only; no bearings, no inverter")
 
     # ONE MASS (user 2026-09-10: "we only have one mass").
     #
@@ -9976,9 +10168,10 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
         ["Speed", _fmt(_g(em, "rpm") or _g(d_duty, "rpm"), 0, "rpm"),
          "the speed every number in this table belongs to"
          + (" (duty '%s')" % d_duty.get("name") if d_duty.get("name") else "")],
-        ["Shaft power", _fmt((P_shaft or 0) / 1000.0 if P_shaft else None, 2, "kW"),
+        [("Shaft power" if sv["P_shaft_W"] is not None else "Rotor power, 2-D"),
+         _fmt((P_shaft or 0) / 1000.0 if P_shaft else None, 2, "kW"),
          (_kclause if k3d else
-          "2-D; no 3-D passport for this machine, k = 1 assumed")
+          "2-D only, no end-effect correction")
          + ((", plus bearings and windage — what the prime mover must supply"
              if gen else ", minus bearings and windage")
             if (brg and sv["P_shaft_W"] is not None) else "")],
@@ -10064,13 +10257,19 @@ def key_point_rows(role: str, cols: List[Dict[str, Any]],
 
     head = ["Key points"] + [c["duty"] for c in cols]
     rows: List[List[str]] = []
+    # THE ONE DECLARED BASIS OF EVERY NUMBER IN A COLUMN (owner 2026-10-26, customer review B01)
+    if any(c.get("basis") for c in cols):
+        rows.append(["Basis"] + [str(c.get("basis") or "—") for c in cols])
     if any(six_phase_block(c.get("em")) for c in cols):
         rows.append(["Winding"] + [
             (six_phase_words(six_phase_block(c.get("em")))
              if six_phase_block(c.get("em")) else "3-phase") for c in cols])
     rows.append(["Speed"] + [pick(h, "Speed") for h in per])
     rows.append(["Torque at the rotor"] + [pick(h, "Torque") for h in per])
-    rows.append(["Shaft power"] + [pick(h, "Shaft power") for h in per])
+    _shaft = all(any(k.startswith("Shaft power") for k in h) for h in per) and per
+    rows.append(["Shaft power" if _shaft else "Rotor power, 2-D"]
+                + [pick(h, "Shaft power") if any(k.startswith("Shaft power") for k in h)
+                   else pick(h, "Rotor power") for h in per])
     _dl = all(str(_g(c.get("em") or {}, "star_delta") or "").lower().startswith("d")
               for c in cols)
     rows.append([("Line" if _dl else "Phase") + " current, rms"
@@ -10084,7 +10283,7 @@ def key_point_rows(role: str, cols: List[Dict[str, Any]],
                 for h in per for k in h if "efficiency" in k]
     rows.append(["Efficiency (shaft)" if all(l.startswith("Shaft")
                                              for l in _eff_lbl) and _eff_lbl
-                 else "Efficiency"]
+                 else "Efficiency, EM losses only"]
                 + [pick(h, "Shaft efficiency")
                    if any(k.startswith("Shaft efficiency") for k in h)
                    else pick(h, "Electromagnetic efficiency") for h in per])
@@ -10106,22 +10305,31 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
            used_live: bool = False, supply: Optional[str] = None,
            sec: Optional[Dict[str, int]] = None,
            cols: Optional[List[Dict[str, Any]]] = None,
-           ctxs: Optional[Dict[str, Any]] = None) -> List[Any]:
+           ctxs: Optional[Dict[str, Any]] = None,
+           req_rows: Optional[List[List[str]]] = None,
+           req_source: str = "") -> List[Any]:
     from reportlab.platypus import Spacer
 
     out: List[Any] = [
         _para(f"{die} · {cfg}", st["title"]),
         _para(machine_subtitle(role, geo, mats), st["sub"]),
-        _para(
-            f"Duty <b>{d_duty.get('name') or '—'}</b> · every number is read "
-            f"from a stored solver result.",
-            st["sub"]),
+        _para(COVER_BASIS_LINE, st["sub"]),
         Spacer(1, 6),
         # WHO OWNS THIS, before anything else on the page (2026-09-10).
         _para(f'<font color="{WARN}"><b>{CONFIDENTIAL_NOTICE}</b></font>',
               st["body"]),
         Spacer(1, 12),
     ]
+    # ── REQUIREMENTS FIRST (owner 2026-10-26, customer review B02/B03) ─────────
+    if req_rows:
+        out.append(_para(REQUIREMENTS_HEADING, st["h1"]))
+        _w = [150.0, 120.0, 0.0, 70.0]
+        _w[2] = CONTENT_W - _w[0] - _w[1] - _w[3]
+        out.append(_table([[_para(str(v), st["hcell"] if i == 0 else st["cell"]) for v in r]
+                           for i, r in enumerate(req_rows)], _w, header=True, size=8.8))
+        if req_source:
+            out.append(_para(req_source, st["note"]))
+        out.append(Spacer(1, 10))
     if cols:
         # THE KEY POINT OF EVERY DUTY AT ONCE (owner 2026-10-25).
         _kh, _kr = key_point_rows(role, cols, batt, ctxs)
@@ -10140,7 +10348,8 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
             [[r[0], r[1], _para(str(r[2]), st["cell"])]
              for r in headline_rows(role, d_duty, em, brg, cols, ctxs, supply)],
             [140, 95, CONTENT_W - 235], header=True, size=9.4))
-    out.append(_para(f"Operating point taken from {em_src or '— nothing solved yet'}.",
+    if not cols:
+        out.append(_para(f"Operating point taken from {em_src or '— nothing solved yet'}.",
                          st["note"]))
     out.append(Spacer(1, 12))
 
@@ -10228,19 +10437,13 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
         # never printed and the reader was shown "geometry <hash> — the
         # snapshot this duty was solved on" over a table that was, in fact,
         # the live configuration.  It is unconditional now.
-        _cfg_hash = (" %s" % geo_hash) if geo_hash else ""
+        _cfg_hash = ""
         out.append(_para(
             f'<font color="{WARN}"><b>{FLAG}</b></font> no geometry snapshot '
             "stored with this run — design values from the configuration "
             f"file{_cfg_hash}, not verified against what the run actually "
             "solved", st["body"]))
-    elif geo_hash:
-        # ITEM 1 (owner review 2026-09-19): the snapshot every number in this
-        # report was solved on, printed once, so a reader can check it against
-        # the run's own record rather than trust that nobody edited a
-        # dimension since.
-        out.append(_para(geometry_hash_line(geo_hash, geo_hash_duty),
-                         st["note"]))
+    # NO HASH LINE IN §1 (owner 2026-10-26, H07/L01): the records' short ids are in the appendix.
     if geo_mismatch and not geo_no_snapshot:
         # This claim ("every number below is the STORED snapshot") is only
         # true when there is a real snapshot to be built from; with none
@@ -10329,9 +10532,8 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
 #: The "no bearings" sentence.  The PDF version escapes the arrow and the
 #: ampersand for reportlab's mini-markup; the plain one is what Word gets.
 NO_BEARINGS_TEXT = (
-    "No bearings assigned to this configuration — the mechanical loss is "
-    "UNKNOWN, not zero. Assign a pair in Mechanical -> Shaft & bearings and the "
-    "report will carry the SKF friction model and the shaft efficiency.")
+    "Bearings not selected yet: bearing friction and windage are not in any efficiency here (unknown, not zero); "
+    "the bearing loads they will be chosen for are in section 3.")
 NO_BEARINGS_TEXT_PDF = NO_BEARINGS_TEXT.replace("&", "&amp;").replace("->", "-&gt;")
 
 
@@ -10481,7 +10683,8 @@ def _n_slices(seg: Dict[str, Any]) -> Optional[int]:
 def material_rows(mats: Dict[str, Any],
                   em: Optional[Dict[str, Any]] = None,
                   geo: Optional[Dict[str, Any]] = None,
-                  sec: Optional[Dict[str, int]] = None) -> List[List[str]]:
+                  sec: Optional[Dict[str, int]] = None,
+                  winding_limit_c: Optional[float] = None) -> List[List[str]]:
     """Which card every part is made of.  Header row included.
 
     The magnet row also says how the magnet is CUT (user 2026-09-11).  Its
@@ -10533,6 +10736,11 @@ def material_rows(mats: Dict[str, Any],
         # rows never appeared — while the winding's whole temperature limit
         # rests on them.  Unassigned now prints the build the limit ASSUMES,
         # marked as an assumption rather than passed off as a choice.
+        if key == "__class__" and _numf(winding_limit_c) is not None:
+            # THE PROJECT'S OWN WINDING LIMIT (owner 2026-10-26): stated once, one line
+            mrows.append(["Winding limit", _fmt(winding_limit_c, 0, "°C"),
+                          "project limit; every winding verdict uses it"])
+            continue
         if key == "__class__":
             mrows.append([label, PROJECT_INSULATION_LABEL,
                 "ASSUMED: no card carries a rating. Every winding and hot-spot "
@@ -10829,7 +11037,7 @@ def mass_rows(em: Dict[str, Any],
         # printed; the components are the same mass split up, and a gram of
         # rounding between them is not a second answer.
         _mtt = mass_table_total(em, tot)
-        rows.append(["TOTAL — mass used for N·m/kg", "", "",
+        rows.append(["Modelled total (the N·m/kg divisor)", "", "",
                      _fmt(_mtt, 3, "kg"), ""])
         # …AND THE FULL MASS, when a reference or customer-supplied part keeps
         # it out of the row above (item 7).  Every row's Share is of THIS
@@ -10841,7 +11049,8 @@ def mass_rows(em: Dict[str, Any],
         # where it differs from the TOTAL above — most configurations carry
         # one mass and this row does not print.
         if _g(em, "mass_partial"):
-            rows.append(["Full mass incomplete: active parts only", "", "", "", ""])
+            rows.append(["Complete motor (housing, holders, bearings, screws, board): not weighed yet",
+                         "", "", "", ""])
         _act = _numf(_g(em, "mass_active_total_kg")) or _numf(_g(em, "mass_active_kg"))
         if (_act is not None and _mtt is not None
                 and abs(_act - _mtt) > MASS_SUM_TOL_KG):
@@ -10893,7 +11102,7 @@ def mass_table_total(em: Dict[str, Any], parts_sum: Optional[float] = None
 
 #: A gram.  Below this the component sum and the summary's total are the same
 #: number rounded twice and nothing is said about it.
-MASS_SUM_TOL_KG = 0.001
+MASS_SUM_TOL_KG = 0.005
 
 
 def mass_total_note(em: Dict[str, Any]) -> str:
@@ -10907,9 +11116,11 @@ def mass_total_note(em: Dict[str, Any]) -> str:
     mt = _numf(_g(em, "mass_total_kg"))
     if mt is None or not parts or abs(mt - parts) <= MASS_SUM_TOL_KG:
         return ""
-    return ("The TOTAL is the run's own mass_total_kg; the parts above add up "
-            "to %s — %s apart, which is a part carried as reference or "
-            "excluded." % (_fmt(parts, 3, "kg"), _fmt(abs(mt - parts), 3, "kg")))
+    if abs(mt - parts) < 0.005:
+        return ("The parts add up to %s against the total %s: rounding."
+                % (_fmt(parts, 3, "kg"), _fmt(mt, 3, "kg")))
+    return ("The parts add up to %s against the total %s — %s apart: a part carried as reference or "
+            "excluded." % (_fmt(parts, 3, "kg"), _fmt(mt, 3, "kg"), _fmt(abs(mt - parts), 3, "kg")))
 
 
 MASS_TABLE_NOTE = (
@@ -10981,7 +11192,8 @@ def lamination_text(mats: Dict[str, Any], em: Dict[str, Any]) -> str:
     return out.strip()
 
 
-def insulation_text(mats: Dict[str, Any], ctxs: Dict[str, Any]) -> str:
+def insulation_text(mats: Dict[str, Any], ctxs: Dict[str, Any],
+                    winding_limit_c: Optional[float] = None) -> str:
     """The winding insulation in one paragraph: what it is, what it is rated
     for, and how close this machine's duties come to it.
 
@@ -10989,7 +11201,7 @@ def insulation_text(mats: Dict[str, Any], ctxs: Dict[str, Any]) -> str:
     row in the limits table, but nothing in the document SAID so — a reader
     looking for "what insulation is this wound with" found nothing.
     """
-    lim, note = _insulation_limit(mats)
+    lim, note = _insulation_limit(mats, limit_c=winding_limit_c)
     en = str((mats or {}).get("wire_insulation") or "")
     li = str((mats or {}).get("slot_insulation") or "")
     built = ((en or INSULATION_ASSUMED["wire_insulation"]) + " on the wire, "
@@ -11019,10 +11231,14 @@ def insulation_text(mats: Dict[str, Any], ctxs: Dict[str, Any]) -> str:
                 lim if lim_key == "winding_limit_c" else None)
             if v is not None and L:
                 hot.append((v, prio, duty, what, L))
-    out = ("The winding is taken as %s — wound with %s. %s. "
-           % (PROJECT_INSULATION_TEXT, built,
-              "That rating is an ASSUMPTION: no card in the library carries a "
-              "temperature rating"))
+    if _numf(winding_limit_c) is not None:
+        out = ("Winding limit %s (project setting), wound with %s. "
+               % (_fmt(winding_limit_c, 0, "°C"), built))
+    else:
+        out = ("The winding is taken as %s — wound with %s. %s. "
+               % (PROJECT_INSULATION_TEXT, built,
+                  "That rating is an ASSUMPTION: no card in the library carries a "
+                  "temperature rating"))
     if hot:
         v, _prio, duty, what, L = max(hot)
         _whose = {"the magnets": "their own", "the winding": "its own",
@@ -11187,17 +11403,12 @@ def bearing_note_text(brg: Dict[str, Any]) -> str:
 
 
 EM_PAGE_UNSOLVED = (
-    "Not solved yet — no electromagnetic run is stored on this server and this "
-    "configuration has no saved duty. Run the point on the Simulation tab and "
-    "save it to a duty.")
+    "Not solved yet — no electromagnetic run is stored for this configuration.")
 
-EM_NO_PASSPORT = (
-    "No 3-D passport for this geometry — no end-effect correction is applied "
-    "and the 2-D column is the whole answer.")
+EM_NO_PASSPORT = "2-D only: no validated 3-D end-effect correction for this geometry."
 
 EM_NO_SNAPSHOT = (
-    "The field snapshot was not kept (or was solved by a different process). "
-    "Re-run the point on the Electromagnetic tab to store one.")
+    "The field snapshot of this run is not stored.")
 
 
 def em_k3d_note(k3d: Any) -> str:
@@ -11209,7 +11420,7 @@ def em_k3d_note(k3d: Any) -> str:
     """
     if not k3d:
         return EM_NO_PASSPORT
-    return ("k_3d = %.4f, the Stage-A 3-D passport of this geometry; both "
+    return ("k_3d = %.4f, the 3-D end-effect factor of this geometry; both "
             "columns are printed above." % float(k3d))
 
 
@@ -11294,7 +11505,7 @@ def em_constants_note(k3d: Any, drive: str = "sine",
             "no KV — except the resistances, which belong to this run and to "
             "the winding temperature printed beside them.")
     if not k3d:
-        return ("No 3-D passport for this geometry, so every constant above is "
+        return ("2-D only (no end-effect correction): every constant above is "
                 "the 2-D value as solved." + tail)
     from motor_ai_sim.end3d_factors import BASIS_FLUX, BASIS_MEASURED, basis_note
     kq = float(k_t) if k_t else float(k3d)
@@ -11452,7 +11663,7 @@ def em_torque_rows(em: Dict[str, Any],
     _pwm_drive = str(drive or "sine") == "pwm"
     tp = [["", "2-D FEM", "with the 3-D factor"]]
     tp.append(["Torque [N·m]", _fmt(T2d, 3),
-               _fmt(_g(em, "end3d.T_corrected_Nm"), 3) if k3d else "no 3-D passport"])
+               _fmt(_g(em, "end3d.T_corrected_Nm"), 3) if k3d else "2-D only"])
     # ROTOR power (T·ω) — "shaft power" is the coupling's number with the
     # bearings and windage in it, and it has its own rows (headline, duty
     # table); one label per quantity (2026-09-13).
@@ -11665,16 +11876,15 @@ def saliency_note(ratio: Any) -> str:
     """
     v = _numf(ratio)
     lo, hi = SALIENCY_FLAT_BAND
+    # THE SIGN FOLLOWS THE STORED CONVENTION (owner 2026-10-26, M02): i_d = -√2·I·sin γ, so a POSITIVE gamma is a
+    # negative i_d; reluctance torque 1.5·p·(Ld - Lq)·i_d·i_q is positive for Lq > Ld and negative for Lq < Ld.
     if v is None:
-        return ("Lq over Ld at this operating point — above 1 there is "
-                "reluctance torque to take with a negative gamma, below 1 "
-                "there is none")
+        return ("Lq over Ld at this point; with i_d = −√2·I·sin γ a positive gamma adds reluctance torque "
+                "only when Lq > Ld")
     if v > hi:
-        return ("above 1: Lq > Ld, so a negative gamma (current advanced into "
-                "the d-axis) adds reluctance torque on top of the magnet torque")
+        return ("above 1: Lq > Ld, so a positive gamma (negative i_d) adds reluctance torque")
     if v < lo:
-        return ("below 1 here: the q-axis saturates first, so there is no "
-                "reluctance torque to harvest by advancing the current")
+        return ("below 1: Ld > Lq, so a positive gamma (negative i_d) costs reluctance torque")
     return "≈ 1: no usable reluctance torque either way"
 
 
@@ -11707,8 +11917,7 @@ COLD_CONSTANTS_NOTE = (
 #: …and what the table says when the pass was never made.  No extrapolation:
 #: KV goes as Br(T) and Kt with it, but R goes as rho_Cu(T) and Km as the two
 #: together, and a "20 °C Km" derived from a hot one is a number nobody solved.
-COLD_CONSTANTS_UNSOLVED = (
-    "not solved — re-run the coupled loop, or POST /api/coupled/constants_20c")
+COLD_CONSTANTS_UNSOLVED = "not computed"
 
 
 def cold_constants_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -11742,7 +11951,7 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]], em: Optional[Dict[str, Any
 
     delta = str((c.get("point") or {}).get("star_delta")
                 or two.get("star_delta") or "star").lower().startswith("d")
-    _tail = ("; × k_3d = %s" % _fmt(k3, 4)) if k3 else "; 2-D, no 3-D passport"
+    _tail = ("; × k_3d = %s" % _fmt(k3, 4)) if k3 else "; 2-D only"
     # Kt / Km / Km per mass: the MEASURED torque factor or plain 2-D (owner
     # 2026-09-30); blocks written before the rule are re-read the same way.
     _ct = cold_torque_constants(c)
@@ -11774,8 +11983,12 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]], em: Optional[Dict[str, Any
         R("Km per mass [N·m/(√W·kg)]", float(_ct["km_Nm_sqrtW"]) / _full, 4, "",
           "the figure of merit that survives scaling; over the full motor mass" + _tail_t)
     else:
-        R("Km per active mass [N·m/(√W·kg)]", _ct["km_per_mass_Nm_sqrtW_kg"], 4, "",
-          "over the active parts only (full mass incomplete); the figure of merit that survives scaling" + _tail_t)
+        # THE ACTIVE MASS IS THE DIVISOR the label names (owner 2026-10-26, M01) - never the modelled total
+        _act = _numf((em or {}).get("mass_active_kg"))
+        R("Km per active mass [N·m/(√W·kg)]",
+          (float(_ct["km_Nm_sqrtW"]) / _act) if (_act and _ct["km_Nm_sqrtW"] is not None)
+          else _ct["km_per_mass_Nm_sqrtW_kg"], 4, "",
+          "over the active (electromagnetic) parts only" + _tail_t)
     R("Phase resistance R₂₀ [mΩ]",
       (lambda v: None if v is None else v * 1000.0)(
           _numf(c.get("R_phase_20_ohm"))), 3, "",
@@ -11904,9 +12117,9 @@ def em_constant_rows(em: Dict[str, Any],
         "" if _chord_q_v is None else
         "; the chord Psi_q/i_q is %s" % _fmt(_chord_q_v, 4, "mH"))
     rows.append(["Terminal connection", "DELTA (Δ)" if _delta else "STAR (Y)",
-                 ("windings between the lines: I_line = √3·I_winding" if _delta
-                  else "isolated neutral: V_line = √3·V_phase, "
-                       "I_line = I_phase")])
+                 ("windings between the lines: I_line = √3·I_winding (balanced fundamental)" if _delta
+                  else "isolated neutral: I_line = I_phase; V_line = √3·V_phase for the balanced "
+                       "fundamental only, not for waveform peaks")])
     # ψ_PM is the no-load probe; how far the LOAD moves it is measured on the
     # same frozen-permeability solve as Ld/Lq, and said in one clause here
     # rather than left to be inferred from the chord.
@@ -11946,7 +12159,7 @@ def em_constant_rows(em: Dict[str, Any],
         R("Saliency Lq/Ld", _g(em, "saliency_Lq_over_Ld"), 3, "",
           saliency_note(_g(em, "saliency_Lq_over_Ld")))
     else:
-        _inc_missing = NOT_SOLVED + " — re-run the electromagnetic solve"
+        _inc_missing = "not computed"
         _inc_missing_note = (REGULARIZED_NOTE if _ldq_st == "regularized" else
                              "this run predates the differential "
                              "(small-signal) Ld/Lq measurement; the "
@@ -12910,8 +13123,7 @@ def _cooling_words(cooling: Dict[str, Any]) -> List[str]:
 
 
 THERMAL_PAGE_UNSOLVED = (
-    "Not solved yet — no temperature map is stored. Open the Thermal tab, set "
-    "the cooling and press Solve; the map is then part of every later report.")
+    "Not solved yet — no temperature map is stored for this duty.")
 
 THERMAL_MAP_MISSING = (
     "The temperature map image is not stored on this result (the per-node array "
@@ -13020,7 +13232,7 @@ def thermal_source_text(th: Dict[str, Any], entry: Dict[str, Any],
     what = "coupled run" if th.get("field") is None else "map"
     who = (("the thermal %s stored for the duty '%s'" % (what, duty))
           if (from_duty and duty) else
-          ("the Thermal tab's last %s" % what))
+          ("the last stored thermal %s" % what))
     res = (entry or {}).get("result") or {}
     inner = res.get("field") if isinstance(res.get("field"), dict) else res
     point = (res.get("point") if isinstance(res.get("point"), dict)
@@ -13131,6 +13343,9 @@ def thermal_pair_source_lines(pair: Optional[Dict[str, Any]],
                 thermal_source_text({"field": entry0}, entry0, duty0, True,
                                     (side0 or {}).get("coupled"),
                                     (side0 or {}).get("em"))))
+            continue
+        if (side0 or {}).get("th_hidden"):
+            lines.append("%s (duty '%s'): %s." % (lbl0, duty0, TRANSLATED_MAP_WORDS))
             continue
         cp0 = (side0 or {}).get("coupled")
         if isinstance(cp0, dict) and cp0:
@@ -13371,10 +13586,11 @@ def thermal_budget_rows(res: Dict[str, Any],
             _b = _ef.get(_k)
             if isinstance(_b, dict) and _b.get("heat_removed_W") is not None:
                 brows.append([_lbl, _fmt(_b.get("heat_removed_W"), 1)])
-    for k, label in (("residual_W", "Residual (closure error)"),
-                     ("P_gap_W", "Across the air gap")):
-        if budget.get(k) is not None:
-            brows.append([label, _fmt(budget.get(k), 2)])
+    _resid = heat_budget_residual_w(cooling)
+    if _resid is not None:
+        brows.append(["Residual, in − out (closure error)", _fmt(_resid, 1)])
+    if budget.get("P_gap_W") is not None:
+        brows.append(["Across the air gap", _fmt(budget.get("P_gap_W"), 2)])
     # THE ROTOR's own balance: the two ways its heat leaves this cross-section
     # (user 2026-09-10 — "through the gap and through the shaft").  Every watt made inside the
     # slip radius goes one way or the other, so the shares are the cooling
@@ -14949,11 +15165,13 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
     # this page where rated beside peak IS the answer.
     _L, _R = (pair or {}).get("left"), (pair or {}).get("right")
     _note = (pair or {}).get("note") or ""
+    # A TRANSLATED SIDE IS NOT DRAWN, and never falls back to another duty's map (owner 2026-10-26, B05)
+    _Lh = bool((_L or {}).get("th_hidden"))
     _lims = temp_chart_limits(mats or {}, ctxs or {})
     from reportlab.platypus import KeepTogether as _KTt
     if _R:
-        _bl = _temp_bars_png((_L or {}).get("th") or res,
-                             (_L or {}).get("th_inner") or inner, _lims,
+        _bl = _temp_bars_png(({} if _Lh else ((_L or {}).get("th") or res)),
+                             ({} if _Lh else ((_L or {}).get("th_inner") or inner)), _lims,
                              width_cm=PAIR_CM)
         _br = _temp_bars_png(_R.get("th") or {}, _R.get("th_inner") or {},
                              _lims, width_cm=PAIR_CM)
@@ -14962,7 +15180,7 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
                 _L, _R, have=(bool(_bl), bool(_br)),
                 numbers=pair_number_clause(
                     "hottest solid",
-                    thermal_solid_max_c((_L or {}).get("th_inner") or inner),
+                    thermal_solid_max_c(({} if _Lh else ((_L or {}).get("th_inner") or inner))),
                     thermal_solid_max_c(_R.get("th_inner") or {}), 1, "°C"),
                 note=_note, map_kind="thermal"),
             max_height=PAIR_MAX_H, figs=figs)
@@ -15014,15 +15232,15 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
     if _limited_budget:
         pass
     elif _R:
-        _hl = _heat_waterfall_png((_L or {}).get("th") or res,
-                                  (_L or {}).get("th_inner") or inner,
+        _hl = _heat_waterfall_png(({} if _Lh else ((_L or {}).get("th") or res)),
+                                  ({} if _Lh else ((_L or {}).get("th_inner") or inner)),
                                   width_cm=PAIR_CM)
         _hr = _heat_waterfall_png(_R.get("th") or {}, _R.get("th_inner") or {},
                                   width_cm=PAIR_CM)
         _blk = _fig_pair(st, _hl, _hr, pair_caption(
                 heat_chart_caption_pair(
-                    (_L or {}).get("th") or res,
-                    (_L or {}).get("th_inner") or inner,
+                    ({} if _Lh else ((_L or {}).get("th") or res)),
+                    ({} if _Lh else ((_L or {}).get("th_inner") or inner)),
                     _R.get("th") or {}, _R.get("th_inner") or {}),
                 _L, _R, have=(bool(_hl), bool(_hr)), note=_note),
             max_height=PAIR_MAX_H, figs=figs)
@@ -15044,8 +15262,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
     _pair_blk = None
     if _R:
         _ml, _mr = thermal_map_pair(
-            ((_L or {}).get("src") or {}).get("thermal")
-            or (_L or {}).get("th") or field_src or res,
+            ({} if _Lh else (((_L or {}).get("src") or {}).get("thermal")
+                             or (_L or {}).get("th") or field_src or res)),
             (_R.get("src") or {}).get("thermal") or _R.get("th"),
             width_cm=PAIR_CM)
         _pair_blk = _fig_pair(st, _ml, _mr, pair_caption(
@@ -15053,7 +15271,7 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
                 _L, _R, have=(bool(_ml), bool(_mr)),
                 numbers=pair_number_clause(
                     "hottest solid",
-                    thermal_solid_max_c((_L or {}).get("th_inner") or inner),
+                    thermal_solid_max_c(({} if _Lh else ((_L or {}).get("th_inner") or inner))),
                     thermal_solid_max_c(_R.get("th_inner") or {}), 1, "°C"),
                 note=_note, map_kind="thermal"),
             max_height=PAIR_MAX_H, figs=figs)
@@ -15129,24 +15347,21 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
 # it is read from that record; nothing here integrates anything.
 
 DUTY_CYCLE_INTRO = (
-    "An intermittent duty is judged on the SETTLED cycle — the machine is put "
-    "through the cycle until it repeats itself, and the peak of that cycle is "
-    "what the insulation and the magnets see. The temperatures in the warnings "
-    "section are these, not the steady states in the thermal section.")
+    "S2 = one pull from its stated start temperature; S3 = the settled repeating cycle. The warnings section "
+    "judges these peaks, not the steady states of the thermal section.")
 
 DUTY_CYCLE_NOT_RUN = (
     "No duty cycle has been run for this duty — the temperatures for it "
     "elsewhere in this report are steady states.")
 
 #: What the warnings section says its temperatures are, on a cycle duty.
-DUTY_CYCLE_TEMP_BASIS = "peak of the settled %s cycle"
+DUTY_CYCLE_TEMP_BASIS = "peak of the %s run"
 
 DUTY_CYCLE_PROFILE_CAPTION = (
     "The cycle as it was integrated: the shaft torque of the duty running in "
     "each segment, over one period, with the time-weighted mean.")
 DUTY_CYCLE_TEMPS_CAPTION = (
-    "One settled cycle: the four lumped nodes and the winding hot spot, "
-    "against the limits they are judged on.")
+    "The run as integrated: the four lumped nodes and the winding hot spot against their limits.")
 DUTY_CYCLE_ED_CAPTION = (
     "The winding peak against the on-time share — where that curve crosses the "
     "limit is the allowable ED.")
@@ -15800,8 +16015,7 @@ CONTROLLER_INTRO = (
     "them at.")
 
 CONTROLLER_NOT_RUN = (
-    "No controller solved for this duty — open the Controller tab, choose a "
-    "device and a topology and press Solve.")
+    "No controller solved for this duty: power devices and topology not chosen yet.")
 
 CONTROLLER_SHAFT_NOTE = (
     "The machine's efficiency is the shaft efficiency and it is unchanged by "
@@ -16365,8 +16579,7 @@ def _controller_page(st, cols: List[Dict[str, Any]],
 
 
 MECH_PAGE_UNSOLVED = (
-    "Not solved yet — no rotor-stress answer is stored. Open the Mechanical "
-    "tab, set the speed and the contacts and press Solve.")
+    "Not solved yet — no rotor-stress answer is stored for this duty.")
 
 MECH_MAP_MISSING = (
     "The stress map is not stored on this result (the per-element field was "
@@ -16408,8 +16621,7 @@ CRIT_HEADING = "Rotor critical speeds (rotordynamics)"
 MODES_GALLERY_ROWS, MODES_GALLERY_COLS = 3, 4
 
 MODES_PAGE_UNSOLVED = (
-    "No modal solve stored for this machine — press Solve modes on the "
-    "Mechanical tab and the ring modes appear here.")
+    "No modal solve stored for this machine: the ring modes are not computed yet.")
 MODES_GALLERY_MISSING = (
     "The mode shapes were not stored with this solve (solved before shapes "
     "were kept) — re-run Solve modes and the gallery appears here.")
@@ -16849,7 +17061,7 @@ def mech_source_text(entry: Dict[str, Any], res: Dict[str, Any],
     # reason; the thermal and mechanical provenance lines had kept theirs.
     head = ("the rotor-stress solve stored for the duty '%s'" % duty
             if (from_duty and duty) else
-            "the Mechanical tab's last rotor-stress solve")
+            "the last stored rotor-stress solve")
     return ("Source: %s. Case "
             "'%s' at %s (overspeed factor %s). Plane stress, %s elements, "
             "order %s." % (
@@ -16920,13 +17132,14 @@ def mech_extra_captions() -> List[Tuple[str, str, str]]:
         # is the area-averaged nodal field, which ends a little under the part
         # maximum.  The thermal caption has said so since CS-6; this one did
         # not, and the reader was left with two numbers for one displacement.
-        ("disp", "Displacement magnitude |u| over the same case, µm, drawn on "
+        ("disp", "Displacement magnitude |u| over the same sector, µm, drawn on "
                  "the deformed shape. The bar is the drawn field's own "
                  "area-averaged range, a little under the maximum in the "
                  "tables.",
          "the displacement field was not stored with this result"),
-        ("sf", "Safety factor over the same case, each element against its own "
-               "material's criterion; the bar stops at 4.",
+        ("sf", "Safety factor over the same sector, each element against its own "
+               "material's criterion; the bar stops at %s (2 × the SF %s target)."
+               % (_fmt(2.0 * SF_ACCEPT, 0), _fmt(SF_ACCEPT, 0)),
          "the safety-factor field was not stored with this result"),
     ]
 
@@ -17104,10 +17317,9 @@ def mech_contact_rows(case: Dict[str, Any],
             # squeezing the magnet at the worst point on the arc is an answer;
             # "held" on its own is an assertion.
             _pmin = _numf(i.get("pressure_min_mpa"))
-            verdict = ("LIFT-OFF " + FLAG) if bad else (
-                "held — RETENTION JOINT" + (
-                    ", %s still pressing at its weakest facet"
-                    % _fmt(_pmin, 1, "MPa") if _pmin else ""))
+            # NO "LIFT-OFF" VERDICT ON AN OPENING ALONE (owner 2026-10-26, H01): one line, the fact
+            verdict = "pressure contact open" if bad else (
+                "pressed" + (", %s at its weakest facet" % _fmt(_pmin, 1, "MPa") if _pmin else ""))
         else:
             verdict = ("tie in TENSION " + FLAG) if bad else "in compression"
         crows.append([
@@ -17130,9 +17342,9 @@ def mech_contact_rows(case: Dict[str, Any],
                           _fmt(v, 0, "rpm")
                           + ("" if label == _ret_lbl else "  (not the "
                              "retention joint)")])
-    ret = case.get("magnet_retention") or {}
-    if ret.get("verdict"):
-        crows.append(["Magnet retention", "", "", str(ret["verdict"])[:60]])
+    _mr = magnet_retention_cell(case)
+    if _mr:
+        crows.append(["Magnet retention", "", "", _mr])
     return crows
 
 
@@ -17294,7 +17506,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
             out.append(fit_t)
             _blk = _fig_pair(st, png, png_r, pair_caption(
                     "Von Mises stress over %s, MPa, averaged onto each part's "
-                    "own nodes." % mech_case_words(case_used, case_r),
+                    "own nodes; a sector of a few poles around the hot spot." % mech_case_words(case_used, case_r),
                     _L, _R, have=(bool(png), bool(png_r)),
                     numbers=pair_number_clause(
                         "highest averaged", _peak_vm((_L or {}).get("case")
@@ -17318,7 +17530,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                                 map_cur),
                        caption_with_provenance(
                            "Von Mises stress over the '%s' case, MPa, averaged "
-                           "onto each part's own nodes." % case_used,
+                           "onto each part's own nodes; a sector of a few poles around the hot spot." % case_used,
                            _L, "rotor_stress")),
                     st["note"])]))
             else:
@@ -17457,37 +17669,20 @@ def assumption_bullets(sec: Optional[Dict[str, int]] = None) -> List[str]:
     bullet said "the electromagnetic run named on page 3", and page 3 is
     "1 · Machine" in the Word render and "2 · Duties" in the PDF."""
     return [
-        "<b>Electromagnetic</b> — 2-D transient finite elements on the sliding "
-        "band, torque by the energy / flux-linkage method. The 3-D end effect "
-        "is a separate Stage-A static passport applied as one scalar k to "
-        "torque and voltage.",
-        "<b>Losses</b> — iron from the steel's measured P(B,f) surface "
-        "(Bertotti), copper as I²R at the stated winding temperature plus the "
-        "solved proximity term, magnets / shaft / sleeve as solved eddy "
-        "currents. A class the solver did not model is reported as unmodelled, "
-        "never as no loss.",
-        "<b>Thermal</b> — steady state, on the cycle-averaged loss map of the "
-        "electromagnetic run named in %s; the air-gap conductivity is "
-        "derived from clearance, speed and gap temperature, not typed in."
-        % sec_ref(sec, "compare"),
-        "<b>Mechanical</b> — plane-stress 2-D with contact; a separation "
-        "contact may open, a bonded one may not. Peak stresses at re-entrant "
-        "corners are mesh-dependent singularities, hence the p99.5 column.",
-        # ONE BALANCE, AND WHY IT IS NOT THE STORED NUMBER (reviewer
-        # 2026-09-14, D14).  F8/N6, round 3: the old wording said the two
-        # balances were "a few hundredths of a point apart", and on the L13
-        # rated duty the gap is 1.52 points (72.76 % here against the solver's
-        # 74.28 %).  It is not rounding and never was — the solver's figure is
-        # the 2-D balance and this document's takes the end-effect factor off
-        # the rotor power first, so the gap is the size of k_3d.  Said plainly.
-        "<b>Efficiency</b> — one balance everywhere: rotor power × k_3d "
-        "against the 2-D losses, bearings and windage where they sit. The "
-        "solver's solve-time figure, which the catalog quotes, divides by the "
-        "uncorrected rotor power and reads higher by about k_3d.",
-        "<b>Bearings and windage</b> — the SKF frictional-moment model plus an "
-        "analytic windage term, not FEM. The radial load is the rotor's own "
-        "weight only: magnetic pull, coupling, belt and gear side loads are "
-        "NOT in it.",
+        "<b>Electromagnetic</b> — 2-D transient finite elements, torque by energy / flux linkage; 2-D only, "
+        "no validated 3-D end-effect correction unless a k_3d value is stated.",
+        "<b>Losses</b> — iron from the steel's measured P(B,f) surface, copper as I²R at the stated winding "
+        "temperature plus the solved proximity term, magnets / shaft as solved eddy currents; an unmodelled "
+        "loss is reported as unmodelled, never as zero.",
+        "<b>Thermal</b> — steady state on the duty's loss map (%s); a translated limit-instant map is not "
+        "shown as a temperature field." % sec_ref(sec, "compare"),
+        "<b>Mechanical</b> — plane-stress 2-D with contact; peak stresses at re-entrant corners are "
+        "mesh-dependent, hence the p99.5 column.",
+        "<b>Efficiency</b> — one balance everywhere: rotor power (× k_3d where stated) against the 2-D "
+        "losses, bearings and windage only where bearings are chosen, no inverter loss; the solve-time "
+        "figure the catalog quotes uses the uncorrected rotor power.",
+        "<b>Bearings</b> — SKF friction model and analytic windage once bearings are chosen; the bearing "
+        "loads in section 3 include the unbalanced magnetic pull at the stated eccentricity.",
     ]
 
 
@@ -17551,13 +17746,21 @@ def solved_at_rows(sources: List[Any]) -> List[List[str]]:
 
 
 def _notes_page(st, sources, brg, em, th, me, cp,
-                sec: Optional[Dict[str, int]] = None) -> List[Any]:
+                sec: Optional[Dict[str, int]] = None,
+                cols: Optional[List[Dict[str, Any]]] = None) -> List[Any]:
     from reportlab.platypus import Spacer
 
+    from motor_ai_sim import report_customer as _rc
     out: List[Any] = [_para(section_heading(sec, "notes"), st["h1"])]
     for b in assumption_bullets(sec):
         out.append(_para("• " + b, st["body"]))
         out.append(Spacer(1, 2))
+    # THE SHORT RECORD IDS, here and nowhere else (owner 2026-10-26, H07/L01)
+    _ids = _rc.record_id_rows(cols or [])
+    if len(_ids) > 1:
+        out.append(_para(_rc.RECORD_IDS_HEADING, st["h2"]))
+        out.append(_table(_ids, [110] + [(CONTENT_W - 110) / 4.0] * 4, header=True, size=8.0))
+        out.append(_para(_rc.RECORD_IDS_NOTE, st["note"]))
     # NOTHING AFTER THE ASSUMPTIONS (user 2026-09-11: "I don't think we need this").
     # Three blocks went together, and they had one thing in common — they were
     # about the REPORT rather than about the machine:
@@ -17595,18 +17798,15 @@ def _notes_page(st, sources, brg, em, th, me, cp,
 # not the other is a report that says two things about one machine.
 
 DUTY_OVERVIEW_EMPTY = (
-    "This configuration has no saved duty: run a point on the Simulation tab "
-    "and save it as a duty.")
+    "This configuration has no operating point computed yet.")
 
 COMPARE_INTRO = (
-    "One column per operating point, one table per simulation; \"" + NOT_SOLVED
-    + "\" means nothing is stored for that duty — never a number from another "
-    "column. " + TEMP_BASIS_NOTE)
+    "One column per operating point, one table per record kind; \"" + NOT_SOLVED
+    + "\" means no record of that point is stored. " + TEMP_BASIS_NOTE)
 
 EM_COMPARE_NOTE = (
-    "Each column is that duty's own saved 2-D transient; torque is the "
-    "energy/flux-linkage average over one electrical period, and the 3-D column "
-    "applies the end-effect factor.")
+    "Each column is the duty's own 2-D EM run (row 'Basis'); torque = energy/flux-linkage average over one "
+    "electrical period; no validated 3-D end-effect correction unless a k_3d row is shown.")
 
 EM_BEARING_NOTE = (
     "Bearing and windage watts are at each duty's own speed and temperature.")
@@ -17616,15 +17816,11 @@ THERMAL_COMPARE_NOTE = (
     "a large budget residual means a missing heat path.")
 
 THERMAL_COMPARE_EMPTY = (
-    "No duty of this configuration has a stored temperature map: solve it on "
-    "the Thermal tab with a duty loaded.")
+    "No duty of this configuration has a solved temperature map yet.")
 
 MECH_COMPARE_NOTE = (
-    "Plane-stress 2-D with contact. Safety factors are on the AVERAGED PEAK of "
-    "each part's own criterion, p99.5 beside it as the singularity gauge; "
-    "strengths are not de-rated for temperature. The target is the worst case "
-    "(overspeed + peak torque + magnetic pull); the stored result has no "
-    "magnetic pull yet.")
+    "Plane-stress 2-D with contact; SF = strength / averaged peak of each part's own criterion; one target, "
+    "SF ≥ 3, on the worst case (overspeed + peak torque + magnetic pull); strengths not de-rated for temperature.")
 
 CRIT_COMPARE_NOTE = (
     "A critical speed is where a forward whirl branch crosses the 1× unbalance "
@@ -17803,11 +17999,14 @@ def battery_rows(batt: Dict[str, Any]) -> List[List[str]]:
     R("Cell, minimum", "v_cell_min", "V", "the end of discharge", 3)
     R("Cell, nominal", "v_cell_nom", "V", "the plateau", 3)
     R("Cell, maximum", "v_cell_max", "V", "fully charged", 3)
-    R("Pack, minimum", "v_min", "V", "cells x minimum cell — THE LIMIT the "
-      "line voltage is checked against")
-    R("Pack, nominal", "v_nom", "V", "cells x nominal cell")
-    R("Pack, maximum", "v_max", "V", "cells x maximum cell — what the "
-      "insulation sees on a full charge")
+    # THE CUSTOMER'S PACK (owner 2026-10-26, M06/H04): his stated voltages, never re-derived; the minimum is the
+    # voltage-capability check, the maximum is the DC-link stress (plus switching transients) - two different checks
+    _cust = str(b.get("source") or "") == "customer"
+    R("Pack, minimum", "v_min", "V", ("customer value" if _cust else "cells x minimum cell")
+      + " — the voltage-capability check")
+    R("Pack, nominal", "v_nom", "V", "customer value" if _cust else "cells x nominal cell")
+    R("Pack, maximum", "v_max", "V", ("customer value" if _cust else "cells x maximum cell")
+      + " — DC-link stress for devices and insulation (plus switching transients)")
     return rows
 
 
@@ -17815,11 +18014,8 @@ BATTERY_NOTE = (
     # TWO CHECKS, and they are not the same check (reviewer 2026-09-14 / PWM
     # study §1.7): the old single sentence described the waveform peak and
     # claimed the control consequence of the fundamental for it.
-    "The warnings section checks two limits against this pack: the peak LINE "
-    "voltage against the pack minimum (insulation and device rating), and the "
-    "FUNDAMENTAL line voltage × k_3d against 0.996 × the pack minimum — "
-    "modulation index m ≤ 1.15 — past which the drive runs out of voltage and "
-    "the torque collapses."
+    "Voltage capability at the pack minimum: the line waveform peak below it, and the fundamental below "
+    "0.996 × it (m ≤ 1.15). A sinusoidal-current check, not a PWM or insulation qualification."
 )
 
 #: …AND A PWM DOCUMENT IS JUDGED AGAINST A LINK, NOT A FLOOR (reviewer
@@ -17921,32 +18117,20 @@ def glossary_rows(em: Dict[str, Any],
     return [
         ["Symbol", "What it is"],
         ["gamma (γ)",
-         "The current angle in ELECTRICAL degrees between the current vector "
-         "and the rotor's q-axis. An input, not a result: the report solves at "
-         "the angle the duty was saved with."],
-        ["k_3d" + (" (this machine: %s)" % _fmt(k3d, 4) if k3d else ""),
-         "The 3-D end-effect factor the 2-D slice is multiplied by. EMF, KV "
-         "and the voltages carry the flux factor k_flux; torque, power, Kt "
-         "and Km carry the measured torque factor k_T where one exists, else "
-         "k_flux; the losses carry neither."],
+         "Current angle from the q-axis, electrical degrees: i_d = −√2·I·sin γ, i_q = √2·I·cos γ "
+         "(positive γ = negative i_d). An input of the duty."],
+        *((["k_3d (this machine: %s)" % _fmt(k3d, 4),
+            "3-D end-effect factor on the 2-D slice: k_flux on EMF, KV and voltages; k_T (else k_flux) on "
+            "torque, power, Kt and Km; none on losses."],) if k3d else ()),
         ["p99.5 / p05",
-         "A percentile of a field instead of its extreme, printed beside the "
-         "peak as a GAUGE of how singular that peak is. Not the number a part "
-         "is sized on."],
+         "A field percentile beside its peak: a gauge of how singular the peak is, not a sizing number."],
         ["Safety factor (SF)",
-         "The part's strength over the AVERAGED PEAK stress of its own "
-         "criterion — von Mises on yield for steel, the principal stresses for "
-         "a magnet, the hoop fibres for the band. That peak is the 'Criterion' "
-         "column of the mechanical table."],
+         "Strength / averaged peak of the part's own criterion (von Mises for steel, principal for a magnet)."],
         ["Kt / Km",
-         "Kt is torque per amp (per LINE amp where the table says so); Km is "
-         "torque per root watt of copper, the size-independent figure of merit. "
-         "Both carry the same 3-D factor as the torque."],
+         "Kt = torque per A rms (per line A where stated); Km = torque per √W of DC copper loss "
+         "(3·I²·R); Km grows with motor size."],
         ["THD_LL",
-         "Total harmonic distortion of the LINE (terminal) voltage: everything "
-         "in the line-to-line waveform that is not the fundamental, per cent of "
-         "the fundamental. In delta the circulating 3rd-harmonic EMF never "
-         "reaches the terminals and is not in this figure."],
+         "Harmonic content of the line-to-line voltage, % of its fundamental."],
     ]
 
 
@@ -18106,6 +18290,26 @@ def _mass_cause_text(got: List[Tuple[str, float, Any, Dict[str, Any]]],
             "different builds; re-run so the build is one" % k_txt)
 
 
+def power_accounting_residual(em: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """``(W, % of the solved input)``: the run's solved terminal input minus (rotor power + total EM loss), or
+    ``None`` when the run did not record a solved input."""
+    pin = _numf(_g(em, "P_elec_in_solved_W"))
+    pm = _numf(_g(em, "P_mech_W"))
+    pl = _numf(_g(em, "P_loss_total_W"))
+    if pin is None or pm is None or pl is None or pin == 0:
+        return None
+    r = pin - (abs(pm) + pl)
+    return r, 100.0 * r / abs(pin)
+
+
+def power_accounting_cell(em: Dict[str, Any]) -> str:
+    """'-3,284.2 (-1.98 %)' or '—'."""
+    v = power_accounting_residual(em)
+    if v is None:
+        return "—"
+    return "%s (%s)" % (_fmt(v[0], 1), _fmt(v[1], 2, "%"))
+
+
 def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
                     ) -> Tuple[str, List[List[Any]]]:
     """The electromagnetic comparison as ``(row header, rows)`` — plain data.
@@ -18178,23 +18382,16 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # line for the whole document was comparing two snapshots without being
     # told.  One row, one print per column, and where they are the same the
     # row says so by simply repeating.
-    if any(c.get("fp") for c in cols):
-        rows.append(["Geometry snapshot"] + _col_vals(
-            cols, lambda c: str(c.get("fp") or "")))
-    # …AND WHICH ELECTROMAGNETIC RUN IT IS (F2/N2).  A column read from its
-    # coupled loop and one read from a standalone solve are not the same kind
-    # of answer, and the reader is told which is which in the same place.
-    if any(str(c.get("em_source") or "") not in ("", "coupled") for c in cols):
-        rows.append(["Electromagnetic source"] + _col_vals(
-            cols, lambda c: EM_SOURCE_SHORT.get(
-                str(c.get("em_source") or ""), "")))
+    # NO HASH IN A CUSTOMER TABLE (owner 2026-10-26, customer review H07/L01): a short record id is in the appendix.
+    # …AND THE ONE BASIS OF EVERY NUMBER IN THE COLUMN (B01): which record, at which temperatures.
+    rows.append(["Basis"] + _col_vals(
+        cols, lambda c: str(c.get("basis") or EM_SOURCE_SHORT.get(str(c.get("em_source") or ""), "—"))))
     # Per duty, because two duties of one configuration may be solved in Y
     # and in Δ (user 2026-09-13: "need to add the connection to the report").
     rows.append(["Terminal connection"] + _col_vals(
         cols, lambda c: _sd_words(None, c["em"] or {}, c["d"])))
     # THE BASIS each column was solved on (owner 2026-10-25): temperatures at
     # the project's maximum ambient, and the duty's own mesh.
-    rows.append(["Solved at (hot state)"] + _col_vals(cols, temperature_basis_cell))
     rows.append(["Mesh and time step"] + _col_vals(cols, mesh_basis_cell))
     if any(six_phase_block(c["em"]) for c in cols):
         rows.append(["Winding"] + _col_vals(cols, lambda c: (
@@ -18400,7 +18597,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     R("Kt, line current [N·m/A rms%s]" % _kt_lbl + _sine_tail,
       lambda c: _ktmul(c, _kt(c)), 4)
     if any(_six_cols):
-        R("Kt " + SET_CURRENT_LABEL + " [N·m/A rms%s]" % _kt_lbl + _sine_tail,
+        R("Kt per set current, both sets energised [N·m/A rms%s]" % _kt_lbl + _sine_tail,
           lambda c: (_ktmul(c, 2.0 * _kt(c))
                      if (six_phase_block(c["em"]) and _kt(c) is not None)
                      else None), 4)
@@ -18446,8 +18643,12 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # printed to two decimals, so "304.19 W" here met "304.2 W" in sections 1
     # and 4.
     R("Windage [W]", lambda c: _e(c, "P_windage_W"), 1)
-    R("Electromagnetic efficiency [%]", _eta, 2)
+    R("EM efficiency, EM losses only [%]", _eta, 2)
     R("Shaft efficiency [%]", _eta_sh, 2)
+    # THE REAL POWER-ACCOUNTING RESIDUAL (owner 2026-10-26, H08): the run's solved terminal input against rotor power
+    # plus its losses - printed as it is, never folded into the efficiency
+    rows.append(["Power accounting: solved input − (rotor + losses) [W]"] + _col_vals(
+        cols, lambda c: power_accounting_cell(c["em"] or {})))
     R("Br kept in the magnets [%]",
       lambda c: _g(c["em"], "demag.br_kept_vol_pct"), 3)
     # The worst element as the flagged CORNER diagnostic it is (value marked
@@ -18553,16 +18754,23 @@ def battery_current_rows(cols: List[Dict[str, Any]], batt: Optional[Dict[str, An
     def row(label, fn):
         rows.append([label] + _col_vals(cols, fn))
 
+    # THE SCOPE IN THE LABEL (owner 2026-10-26, H03): without bearings these are the 2-D rotor power and the
+    # EM-only efficiency, and the current is a motor-only estimate - never a complete shaft / battery rating
+    _sh = all(shaft_view(c.get("em") or {}, c.get("brg"), (c.get("d") or {}).get("mode")).get("P_shaft_W")
+              is not None for c in cols) and bool(cols)
+    _motor_only = any(not pts[id(c)]["modelled"] for c in cols)
     row("Direction", lambda c: "charge (regeneration)" if pts[id(c)]["generating"] else "discharge")
-    row("Shaft power [kW]", lambda c: _fmt(None if pts[id(c)]["p_shaft_w"] is None else abs(pts[id(c)]["p_shaft_w"]) / 1000.0, 2))
-    row("Motor efficiency, at the shaft [%]",
+    row("Shaft power [kW]" if _sh else "Rotor power, 2-D [kW]",
+        lambda c: _fmt(None if pts[id(c)]["p_shaft_w"] is None else abs(pts[id(c)]["p_shaft_w"]) / 1000.0, 2))
+    row("Motor efficiency, at the shaft [%]" if _sh else "EM efficiency, EM losses only [%]",
         lambda c: _fmt(None if pts[id(c)]["eta_motor"] is None else 100.0 * pts[id(c)]["eta_motor"], 2))
     row("Inverter efficiency [%]",
         lambda c: (_fmt(100.0 * pts[id(c)]["eta_inverter"], 2) if pts[id(c)]["modelled"] else "not modelled"))
     row("DC power [kW]", lambda c: _fmt(None if pts[id(c)]["p_dc_w"] is None else pts[id(c)]["p_dc_w"] / 1000.0, 2))
     if levels:
         for label, v in levels:
-            row("Battery current at the pack %s, %s V [A]" % (label, _fmt(v, 1)),
+            row(("Motor-only DC current estimate, pack %s %s V [A]" if _motor_only else
+                 "Battery current at the pack %s, %s V [A]") % (label, _fmt(v, 1)),
                 lambda c, v=v: _fmt(battery_dc_current_a(pts[id(c)]["p_dc_w"], v), 1))
     else:
         notes.append(BATTERY_CURRENT_NO_PACK)
@@ -18655,20 +18863,61 @@ def _em_compare(st, cols: List[Dict[str, Any]], batt: Dict[str, Any],
         out.append(_para("%s %s." % (FLAG, _mc["text"]), st["warn"]))
     # M2 (L13 server audit round 4): whether the row above's disagreeing
     # geometry hashes are a real geometry difference or just a remesh.
-    _gn = geometry_snapshot_note(cols)
-    if _gn:
-        out.append(_para(_gn, st["note"]))
     out.append(_para(EM_COMPARE_NOTE, st["body"]))
     if brg and brg.get("has_bearings"):
         out.append(_para(EM_BEARING_NOTE, st["note"]))
     return out
 
 
+#: What a translated (``limited``) thermal map prints instead of its temperatures (owner 2026-10-26, customer review B05).
+TRANSLATED_MAP_WORDS = "map not shown: translated shape"
+
+
+def thermal_is_translated(t: Any) -> bool:
+    """A ``limited`` thermal record: the last solved map TRANSLATED onto the node temperatures of a limit instant
+    (``routes.thermal.rescale_map_to_nodes``).  Its absolute temperatures are not a solved field - never printed."""
+    if not isinstance(t, dict):
+        return False
+    return (str(t.get("state") or "").lower() == "limited"
+            or str((t.get("point") or {}).get("state") or "").lower() == "limited"
+            or bool(t.get("translated")))
+
+
+def heat_budget_residual_w(cooling: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The REAL closure of a map's heat budget: heat put in minus every path's heat out (owner 2026-10-26, B06) -
+    never the stored ``residual_W`` when that was forced.  ``None`` when the record has no input or no path."""
+    cooling = cooling if isinstance(cooling, dict) else {}
+    b = cooling.get("heat_budget") or {}
+    pin = _numf(b.get("losses_W") or b.get("P_in_W"))
+    outs = [_numf((cooling.get(k) or {}).get("heat_removed_W"))
+            for k in ("outer", "inner", "shaft_ends", "mount", "end_faces", "end_windings", "slot_channels")
+            if isinstance(cooling.get(k), dict)]
+    outs = [o for o in outs if o is not None]
+    if pin is None or not outs:
+        return _numf(b.get("residual_W"))
+    return pin - sum(outs)
+
+
+def thermal_basis_cell(t: Any) -> str:
+    """'thermal map · steady · 45 °C ambient' or the translated-map line - the thermal column's own basis."""
+    if not isinstance(t, dict):
+        return NOT_SOLVED
+    if thermal_is_translated(t):
+        return TRANSLATED_MAP_WORDS
+    amb = ambient_c_of(t)
+    return "thermal map · steady" + (" · %s ambient" % _fmt(amb, 0, "°C") if amb is not None else "")
+
+
 def thermal_compare_rows(cols: List[Dict[str, Any]]
                          ) -> Tuple[str, List[List[Any]]]:
     """Per-component temperatures, the boundary conditions and the heat budget,
-    duty by duty — plain rows, no renderer."""
+    duty by duty — plain rows, no renderer.  A translated (``limited``) map prints
+    its basis line and nothing else (owner 2026-10-26, B05)."""
     def _t(c):
+        v = (c.get("res") or {}).get("thermal")
+        return v if isinstance(v, dict) and not thermal_is_translated(v) else None
+
+    def _t_any(c):
         v = (c.get("res") or {}).get("thermal")
         return v if isinstance(v, dict) else None
 
@@ -18684,14 +18933,18 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
     # and its operating point, both of which are stated.
     rows: List[List[Any]] = []
 
+    def _blank(c):
+        return "—" if _t_any(c) is not None else NOT_SOLVED
+
     def R(label, fn, d=1, unit=""):
         rows.append([label] + _col_vals(
-            cols, lambda c: (NOT_SOLVED if _t(c) is None else _fmt(fn(c), d, unit))))
+            cols, lambda c: (_blank(c) if _t(c) is None else _fmt(fn(c), d, unit))))
 
     def S(label, fn):
         rows.append([label] + _col_vals(
-            cols, lambda c: (NOT_SOLVED if _t(c) is None else fn(c))))
+            cols, lambda c: (_blank(c) if _t(c) is None else fn(c))))
 
+    rows.append(["Basis"] + _col_vals(cols, lambda c: thermal_basis_cell(_t_any(c))))
     # `slot_fill` joined the list on 2026-09-14 (reviewer, D11): it is in the
     # detail table and on the bar chart and was the only part missing here.
     # …IN THE ONE ORDER (BT-17): this table listed the stator core between the
@@ -18718,10 +18971,11 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
         S(f"{label}, max / avg [°C]",
           lambda c, k=key: _pair(_comp(c, k, "max"), _comp(c, k, "avg")))
     # THE BASIS (owner 2026-10-25): maximum ambient, and how the heat leaves.
-    S("Ambient, the project's maximum [°C]",
-      lambda c: _fmt(ambient_c_of(_t(c)), 0) if ambient_c_of(_t(c)) is not None
-      else "—")
-    S("Cooling", lambda c: cooling_basis_words(_t(c)))
+    rows.append(["Ambient [°C]"] + _col_vals(
+        cols, lambda c: (NOT_SOLVED if _t_any(c) is None else
+                         (_fmt(ambient_c_of(_t_any(c)), 0) if ambient_c_of(_t_any(c)) is not None else "—"))))
+    rows.append(["Cooling"] + _col_vals(
+        cols, lambda c: NOT_SOLVED if _t_any(c) is None else cooling_basis_words(_t_any(c))))
     R("Hot spot in the machine [°C]", lambda c: (_t(c) or {}).get("T_max"))
     R("Coolest point [°C]", lambda c: (_t(c) or {}).get("T_min"))
     # WHAT THE MAP CARRIES is `losses_W`, the integral of the loss density over
@@ -18738,6 +18992,8 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
     R("Losses put into the map [W]",
       lambda c: (_budget(c, "losses_W") or _budget(c, "P_in_W")
                  or (_t(c) or {}).get("P_loss_total_W")))
+    # …AGAINST THE DUTY'S EM RUN (B06): two different records, both named, so a map driven by other losses shows
+    R("EM run loss of this point [W]", lambda c: _g(c.get("em") or {}, "P_loss_total_W"))
     R("  of which copper [W]", lambda c: (_t(c) or {}).get("P_cu_W"))
     R("  of which iron [W]", lambda c: (_t(c) or {}).get("P_fe_W"))
     # …and the solid-conductor eddy terms, so the sub-rows ADD UP to the row
@@ -18765,7 +19021,7 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
           lambda c: _g(c.get("em") or {}, "P_sleeve_W"))
     # ONE comparison, the same one the reconcile paragraph under the heat
     # budget makes — see `thermal_budget_gap_w` (reviewer 2026-09-14, B3).
-    R("  loss-map integration vs the summed terms [W]",
+    R("  map input minus the summed EM terms [W]",
       lambda c: thermal_budget_gap_w(
           _g(_t(c) or {}, "cooling.heat_budget") or {}, c.get("em") or {}), 2)
     R("Removed through the housing [W]",
@@ -18803,8 +19059,8 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
                      ("magnet", "  of which the magnet ends [W]")):
         R(_lbl, lambda c, k=_k: _g(_t(c) or {},
                                    "cooling.end_faces.%s.heat_removed_W" % k))
-    R("Budget residual [W]",
-      lambda c: _g(_t(c) or {}, "cooling.heat_budget.residual_W"), 2)
+    R("Budget residual, in − out [W]",
+      lambda c: heat_budget_residual_w((_t(c) or {}).get("cooling")), 1)
     R("Rotor heat out across the gap [W]",
       lambda c: _g(_t(c) or {}, "cooling.heat_budget.rotor_heat_split.gap_W"), 1)
     R("…as a share of the rotor's loss [%]",
@@ -18862,7 +19118,7 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
           lambda c: _g(_t(c) or {}, "cooling.end_windings.heat_removed_W"))
         R("Removed down the slot ducts [W]",
           lambda c: _g(_t(c) or {}, "cooling.slot_channels.heat_removed_W"))
-    return "Thermal", _drop_empty(rows)
+    return "Thermal", _drop_unanswered(rows)
 
 
 def _thermal_compare(st, cols: List[Dict[str, Any]]) -> List[Any]:
@@ -18930,8 +19186,7 @@ def _worst_open(m: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[fl
     if i is None:
         return None, None
     f = _numf(i.get("open_fraction"))
-    label = (f"{_interface_words(lbl)} {FLAG} LIFT-OFF" if i.get("lift_off")
-             else _interface_words(lbl))
+    label = _interface_words(lbl)
     return label, (None if f is None else 100.0 * f)
 
 
@@ -19035,7 +19290,78 @@ def _first_num(m: Optional[Dict[str, Any]], *keys: str) -> Optional[float]:
     return None
 
 
-def mech_compare_rows(cols: List[Dict[str, Any]]
+def short_cell(text: Any, limit: int = 70) -> Optional[str]:
+    """The first clause of a stored sentence - one line for a customer cell (owner 2026-10-26)."""
+    t = str(text or "").strip()
+    if not t:
+        return None
+    import re as _re
+    t = _re.split(r"\s+[—–-]\s+|;\s+|\.\s+", t, maxsplit=1)[0].strip().rstrip(".")
+    return t if len(t) <= limit else t[:limit - 1].rstrip() + "…"
+
+
+def torque_path_cell(m: Optional[Dict[str, Any]]) -> Optional[str]:
+    """'held' / 'slips' / 'no verdict (friction alone 1,097 N·m vs 722 applied)' (owner 2026-10-26, edit 2)."""
+    if not isinstance(m, dict):
+        return None
+    tp = m.get("torque_path") or {}
+    if tp.get("held") is True:
+        return "held"
+    if tp.get("held") is False:
+        return "slips"
+    v = str(tp.get("verdict") or "")
+    if not v:
+        return None
+    import re as _re
+    mm = _re.search(r"capacity[^0-9]*([\d,.]+)\s*N[·*]?m[^0-9]*([\d,.]+)\s*N[·*]?m\s*applied", v)
+    if mm:
+        return "no verdict (friction alone %s N·m vs %s applied)" % (mm.group(1).rstrip("."), mm.group(2).rstrip("."))
+    return "no verdict" if v.lower().startswith("no verdict") else short_cell(v)
+
+
+def magnet_retention_cell(m: Optional[Dict[str, Any]]) -> Optional[str]:
+    """'held by the iron, 0.2 µm' - the retention verdict and the seated travel in one cell (owner 2026-10-26,
+    edit 3: the duplicate "Magnets seated" row is merged into this one)."""
+    if not isinstance(m, dict):
+        return None
+    v = str((m.get("magnet_retention") or {}).get("verdict") or "").lower()
+    seated = [x for x in ((m.get("contact") or {}).get("seated") or [])
+              if str((x or {}).get("part") or "") == "magnet"]
+    travel = max(((_numf(x.get("travel_rel_um")) or 0.0) for x in seated), default=None)
+    if not v and travel is None:
+        return None
+    if any(w in v for w in ("not retained", "escap", "fails", "lost")):
+        head = "not retained"
+    elif "sleeve" in v:
+        head = "held by the sleeve"
+    elif any(w in v for w in ("iron", "pocket", "shoulder", "tab")):
+        head = "held by the iron"
+    else:
+        head = short_cell(v, 40) or "—"
+    return head + (", %s µm" % _fmt(travel, 1) if travel is not None else "")
+
+
+def contact_open_cell(m: Optional[Dict[str, Any]]) -> Optional[str]:
+    """'magnet–rotor 91 %' - how much of the retention joint's pressure contact is open; no verdict (H01)."""
+    lbl, i = retention_interface(m or {}) if isinstance(m, dict) else (None, None)
+    f = _numf((i or {}).get("open_fraction"))
+    if f is None:
+        return None
+    return "%s %s" % (_interface_words(lbl), _fmt(100.0 * f, 0, "%"))
+
+
+def overspeed_case_cell(m: Optional[Dict[str, Any]], overspeed_rpm: Any) -> str:
+    """The overspeed case of one duty's rotor-stress record: 'SF 3.40 at 1,200 rpm' or 'pending (1,200 rpm)' (B07)."""
+    ov = _numf(overspeed_rpm)
+    rpm = _numf((m or {}).get("rpm")) if isinstance(m, dict) else None
+    sf = _numf((m or {}).get("sf_min")) if isinstance(m, dict) else None
+    if ov is not None and rpm is not None and sf is not None and rpm >= ov - 0.5:
+        return "SF %s at %s" % (_fmt(sf, 2), _fmt(rpm, 0, "rpm"))
+    return "pending" + (" (%s)" % _fmt(ov, 0, "rpm") if ov is not None else "")
+
+
+def mech_compare_rows(cols: List[Dict[str, Any]],
+                      overspeed_rpm: Any = None
                       ) -> Tuple[str, List[List[Any]]]:
     """Rotor stress and contacts, duty by duty — plain rows, no renderer."""
     def _m(c):
@@ -19063,6 +19389,13 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
             cols, lambda c: (NOT_SOLVED if _m(c) is None
                              else (str(fn(c)) if fn(c) is not None else "—"))))
 
+    rows.append(["Basis"] + _col_vals(cols, lambda c: (
+        NOT_SOLVED if _m(c) is None else "rotor stress · %s%s" % (
+            _fmt((_m(c) or {}).get("rpm"), 0, "rpm"),
+            (" · %s" % _fmt((((_m(c) or {}).get("point") or {}).get("torque_nm")), 1, "N·m"))
+            if _numf(((_m(c) or {}).get("point") or {}).get("torque_nm")) else ""))))
+    # THE OVERSPEED CASE, stated or "pending" - never left out (owner 2026-10-26, B07)
+    rows.append(["Overspeed case"] + _col_vals(cols, lambda c: overspeed_case_cell(_m(c), overspeed_rpm)))
     R("Speed solved [rpm]", lambda c: (_m(c) or {}).get("rpm"), 0)
     R("Overspeed factor", lambda c: (_m(c) or {}).get("overspeed_factor"), 2)
     S("Case", lambda c: (_m(c) or {}).get("case"))
@@ -19074,6 +19407,8 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
                  else rotor_sf_cell((_m(c) or {}).get("sf_min"))))
     S("…on part", lambda c: (_m(c) or {}).get("sf_min_part"))
     S("Worst case solved", lambda c: rotor_worst_case_words(_m(c)))
+    S("Magnetic pull in the case", lambda c: (short_cell(((_m(c) or {}).get("pull") or {}).get("label"), 50)
+                                              or "not in this case"))
     # Dimensions the rotor's margin hangs on, when the result carries them.
     R("Rotor iron bridge thickness [mm]",
       lambda c: _first_num(_m(c), "bridge_thickness_mm", "bridge_mm"), 2)
@@ -19110,8 +19445,6 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
             continue
         R(f"{label} von Mises p99.5 [MPa]",
           lambda c, p=part: _p(c, p, "von_mises_p995_mpa"), 1)
-        R(f"…{label} von Mises peak, unaveraged [MPa]",
-          lambda c, p=part: _p(c, p, "von_mises_max_unaveraged_mpa"), 1)
         # THE NUMBER THE SAFETY FACTOR IS TAKEN ON (MJ-6, reviewer
         # 2026-09-14).  Strength and SF sat under a von Mises p99.5 that does
         # not divide into them — 80 / 263.1 = 0.30 beside a printed 2.05 —
@@ -19141,12 +19474,11 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
            for c in cols):
         R("Magnet max principal p99.5 [MPa]",
           lambda c: _p(c, "magnet", "principal_max_p995_mpa"), 1)
-    S("Worst separation joint", lambda c: _worst_open(_m(c))[0])
-    R("…open fraction [%]", lambda c: _worst_open(_m(c))[1], 1)
-    S("Torque path", lambda c: _g(_m(c) or {}, "torque_path.verdict"))
-    S("Magnet retention", lambda c: _g(_m(c) or {}, "magnet_retention.verdict"))
-    S("Magnets seated during the solve", lambda c: _seated_words(_m(c)))
-    S("Lift-off speed", lambda c: _liftoff_words(_m(c)))
+    # ONE LINE EACH, no contradiction (owner 2026-10-26, edits 2-3; H01): the pressure contact's opening is a
+    # number, not a verdict; the retention cell carries the seated travel (the duplicate row is merged into it)
+    S("Contact opening, retention joint", lambda c: contact_open_cell(_m(c)))
+    S("Torque path", lambda c: torque_path_cell(_m(c)))
+    S("Magnet retention", lambda c: magnet_retention_cell(_m(c)))
     R("Rotor OD growth [µm]",
       lambda c: (_m(c) or {}).get("rotor_od_growth_um"), 1)
     R("…outer surface travel, maximum [µm]",
@@ -19185,8 +19517,8 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
     rows.append(["Speed at SF = 1 (same loads)"] + _col_vals(
         cols, lambda c: (NOT_SOLVED if _m(c) is None else
                         (_limit_speed_words((_m(c) or {}).get("limit_speed"))
-                         or (NOT_SOLVED + " — re-run the coupled loop")))))
-    return "Mechanical", _drop_empty(rows)
+                         or "not computed"))))
+    return "Mechanical", _drop_unanswered(rows, keep=("Basis", "Overspeed case"))
 
 
 def _limit_speed_words(ls: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -19273,17 +19605,30 @@ def crit_compare_rows(cols: List[Dict[str, Any]]
     return "Critical speeds", _drop_empty(crows)
 
 
-def _mech_compare(st, cols: List[Dict[str, Any]]) -> List[Any]:
+BEARING_LOADS_HEADING = "Bearing loads"
+
+
+def _mech_compare(st, cols: List[Dict[str, Any]], overspeed_rpm: Any = None,
+                  bearing: Optional[Tuple[List[List[str]], List[str]]] = None) -> List[Any]:
     """Rotor stress, contacts and critical speeds, duty by duty."""
     from reportlab.platypus import Spacer
 
     out: List[Any] = [_para("Mechanical", st["h2"])]
     if not cols:
         return out
-    header, rows = mech_compare_rows(cols)
+    header, rows = mech_compare_rows(cols, overspeed_rpm)
     out.append(_cmp_table(header, cols, rows, st=st))
     out.append(Spacer(1, 2))
     out.append(_para(MECH_COMPARE_NOTE, st["body"]))
+    # BEARING LOADS per duty (owner 2026-10-26, edit 5)
+    if bearing and len(bearing[0]) > 1:
+        out.append(_para(BEARING_LOADS_HEADING, st["h2"]))
+        _bw = [70.0, 60.0, 0.0, 0.0, 90.0]
+        _bw[2] = _bw[3] = (CONTENT_W - _bw[0] - _bw[1] - _bw[4]) / 2.0
+        out.append(_table([[_para(str(v), st["hcell"] if i == 0 else st["cell"]) for v in r]
+                           for i, r in enumerate(bearing[0])], _bw, header=True, size=8.4))
+        for _n in bearing[1]:
+            out.append(_para(_n, st["note"]))
 
     cheader, crows = crit_compare_rows(cols)
     if crows:
@@ -20016,6 +20361,21 @@ def converged_words(rec: Optional[Dict[str, Any]],
     return "no"
 
 
+def coupled_basis_cell(rec: Optional[Dict[str, Any]]) -> str:
+    """'coupled loop · converged' / 'coupled loop · stopped at the limit after 44 s' / 'S1 limit search'."""
+    if not isinstance(rec, dict):
+        return NOT_SOLVED
+    blk = limited_of(rec)
+    if continuous_rating_of(rec) is not None and str(rec.get("solve_to") or "") == "continuous":
+        return "S1 limit search"
+    if blk or coupled_mode(rec) == "limited":
+        t = _numf((blk or {}).get("t_cold_s"))
+        return "coupled loop · stopped at the limit" + (" after %s from cold" % _secs_words(t) if t is not None else "")
+    if rec.get("converged") is False:
+        return "coupled loop · not converged"
+    return "coupled loop · converged"
+
+
 def coupled_compare_rows(cols: List[Dict[str, Any]]
                          ) -> Tuple[str, List[List[Any]]]:
     """The coupled electromagnetic/thermal loop, duty by duty — plain rows."""
@@ -20059,6 +20419,12 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
         v = float(v)
         return v * 100.0 if v <= 1.5 else v
 
+    # WHAT THIS RECORD IS, and the torque it ended on - its own answer at its own temperatures, never the EM table's
+    # (owner 2026-10-26, B01/H06)
+    rows.append(["Basis"] + _col_vals(cols, lambda c: coupled_basis_cell(_c(c))))
+    R("Torque at these temperatures [N·m]",
+      lambda c: (abs(_numf(_g(_c(c) or {}, "em.T_em_avg_Nm")))
+                 if _numf(_g(_c(c) or {}, "em.T_em_avg_Nm")) is not None else None), 1)
     R("Electromagnetic runs", lambda c: (_c(c) or {}).get("em_runs")
       or (_c(c) or {}).get("iterations"), 0)
     S("Converged", lambda c: converged_words(
@@ -20336,7 +20702,9 @@ def warning_row(w: Dict[str, Any]) -> List[str]:
     return [
         {"red": "OVER", "amber": "near", "info": "info"}.get(w["level"], "ok"),
         str(w["duty"]), str(w["quantity"]),
-        (_fmt(w["value"], 2, w["unit"]) if w["value"] is not None else "flagged"),
+        (_fmt(w["value"], 2, w["unit"]) if w["value"] is not None
+         else ((short_cell(w.get("note"), 60) if w.get("rule") in ("torque_path", "lift_off") else None)
+               or "flagged")),
         (_fmt(w["limit"], 2, w["unit"]) if w["limit"] is not None else "—"),
         (_fmt(w["margin_pct"], 1, w.get("margin_unit") or "%")
          if w["margin_pct"] is not None else "—"),
@@ -20373,6 +20741,13 @@ def limit_rules_context(ctxs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
+    """The "where every limit comes from" table, header row included - each source cell ONE line (owner
+    2026-10-26): the first clause of the full sentence."""
+    rows = _limit_rules_rows_full(ex)
+    return [r if i == 0 else [r[0], r[1], short_cell(r[2], 110) or ""] for i, r in enumerate(rows)]
+
+
+def _limit_rules_rows_full(ex: Dict[str, Any]) -> List[List[str]]:
     """The "where every limit comes from" table, header row included.
 
     ``ex`` is any one duty's warning context — the limits it carries are the
@@ -20397,9 +20772,8 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
          "a sharp-corner value that does not converge with mesh refinement; "
          "shown with its location, never judged — the magnet's figure is the "
          "volume average above"],
-        ["Mechanical safety factor", _fmt(2.0, 1),
-         "the project's acceptance level, on the AVERAGED PEAK of each part's "
-         "criterion"],
+        ["Mechanical safety factor", "≥ %s" % _fmt(SF_ACCEPT, 0),
+         "one target, on the averaged peak of each part's criterion"],
         *((["Sleeve hoop stress", "the sleeve card",
             "the assigned sleeve material's own strength"],)
           if ex.get("has_sleeve") is not False else ()),
@@ -20433,8 +20807,8 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
           % (_fmt(ex.get("v_pack_nom_v"), 1, "V"), DC_LINK_AMBER_NOTE)]
          if str(ex.get("drive") or "") == "pwm" else
          ["Line voltage, waveform peak", _fmt(ex.get("v_pack_min_v"), 1, "V"),
-          "the pack minimum against the solved waveform peak × k_3d — the "
-          "INSULATION and device-rating question"]),
+          "the pack minimum against the solved waveform peak × k_3d — voltage capability, not an "
+          "insulation qualification"]),
         ["Line voltage, fundamental vs linear modulation",
          _fmt(ex.get("v_mod_ceiling_v"), 1, "V"),
          # THE RUN'S OWN CLAMP, where it has one (2026-09-16): the largest
@@ -20462,7 +20836,7 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
          str(ex.get("runaway_note") or "no cold-magnet card was available, so a "
              "factor of 1.0 was used and the true crossing speed is LOWER")],
         ["Current density", _fmt(_j_rule[0], 1, "A/mm²"),
-         J_BAND_TEXT + ("; " + _j_rule[1] if _j_rule[1] else "")],
+         (_j_rule[1] or J_BAND_TEXT)],
         ["Torque ripple, low-order", _fmt(RIPPLE_LIMIT_PCT, 1, "%"),
          "this project's own gate — no standard fixes it; judged on the "
          "SINUSOIDAL run, which is what the geometry makes"],
@@ -20591,7 +20965,7 @@ def _warnings_page(st, cols: List[Dict[str, Any]],
             # used to follow as a third paragraph; it is in the limits table at
             # the foot of this section and does not need saying twice.
             blk = [_para("• " + head, st["body"]),
-                   _para("&nbsp;&nbsp;&nbsp;" + w["remedy"], st["body"])]
+                   _para("&nbsp;&nbsp;&nbsp;" + (short_cell(w["remedy"], 160) or ""), st["body"])]
             blk.append(Spacer(1, 3))
             out.append(KeepTogether(blk))
 

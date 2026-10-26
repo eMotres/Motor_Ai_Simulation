@@ -197,13 +197,20 @@ def _rated_tables() -> Tuple[float, Dict[str, float], Dict[str, float]]:
                 dict(tdc.RATED_AMBIENT_C_BY_APPLICATION))
 
 
-def rated_winding_limit(application: Optional[str] = None) -> Tuple[float, str]:
+def rated_winding_limit(application: Optional[str] = None,
+                        cfg_doc: Optional[Mapping[str, Any]] = None,
+                        limit_c: Optional[float] = None) -> Tuple[float, str]:
     """The RATED winding temperature — the coils' mean at the rated point —
     for a configuration's ``application`` (owner 2026-10-19: 180 °C for
     aviation / propeller, 70 °C for robots), from the ONE place the project
     states it (``report.RATED_WINDING_C_BY_APPLICATION``).  Configure's rated
     cap, the S1 rating, ``solve_to: continuous`` and the duty class read it
     here.  No / an unlisted application: ``report.PROJECT_RATED_WINDING_C``."""
+    # THE CONFIGURATION'S OWN WINDING LIMIT wins (owner 2026-10-26, 180 °C for every verdict of a project)
+    from motor_ai_sim import winding_limit as _wl
+    own = _wl.resolve(cfg_doc, limit_c=limit_c)
+    if own is not None:
+        return float(own), _wl.basis_words(own)
     default, by_app, _amb = _rated_tables()
     app = str(application or "").strip().lower()
     lim = float(by_app.get(app, default))
@@ -230,8 +237,15 @@ def rated_ambient(application: Optional[str] = None) -> Optional[float]:
 ADVISORY_PARTS: Tuple[str, ...] = ("bearing",)
 
 
-def winding_limit() -> Tuple[float, str]:
-    """The insulation class, from the ONE place the project states it."""
+def winding_limit(cfg_doc: Optional[Mapping[str, Any]] = None,
+                  limit_c: Optional[float] = None) -> Tuple[float, str]:
+    """The winding limit: the configuration's own (``limits.winding_c``, owner 2026-10-26) when it states one -
+    passed in (``limit_c``) or read off the handed-in document - otherwise the insulation class, from the ONE place
+    the project states it.  The editor's context is never read here."""
+    from motor_ai_sim import winding_limit as _wl
+    own = _wl.resolve(cfg_doc, limit_c=limit_c)
+    if own is not None:
+        return float(own), _wl.basis_words(own)
     try:
         from motor_ai_sim.report import PROJECT_INSULATION_C as lim
     except Exception:                                        # noqa: BLE001

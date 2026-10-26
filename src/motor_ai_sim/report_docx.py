@@ -726,13 +726,18 @@ def _cover(doc, D: Dict[str, Any]) -> None:
        size=10, color=NOTE, space_after=2.0)
     # NO GENERATION TIMESTAMP (user 2026-09-10; reviewer 2026-09-14, D4 — the
     # PDF carried two of them a minute apart).
-    _p(doc, "Duty <b>%s</b> · every number is read from a stored solver "
-            "result." % (D["d_duty"].get("name") or "—"),
-       size=9.5, color=NOTE, space_after=10.0)
+    _p(doc, R.COVER_BASIS_LINE, size=9.5, color=NOTE, space_after=10.0)
 
     # WHO OWNS THIS, first thing on the page (user 2026-09-10).
     _p(doc, R.CONFIDENTIAL_NOTICE, size=9.5, bold=True, color=WARN,
        space_after=10.0)
+
+    # REQUIREMENTS FIRST (owner 2026-10-26, customer review B02/B03)
+    if D.get("req_rows"):
+        _h(doc, R.REQUIREMENTS_HEADING, 1)
+        _table(doc, D["req_rows"], size=10.5, widths_cm=[7.4, 6.4, 8.6, 4.0])
+        if D.get("req_source"):
+            _p(doc, D["req_source"], size=9, italic=True, color=NOTE, space_after=8.0)
 
     if D.get("cols"):
         # THE KEY POINT OF EVERY DUTY AT ONCE (owner 2026-10-25).
@@ -751,9 +756,10 @@ def _cover(doc, D: Dict[str, Any]) -> None:
                                     D.get("cols"), D.get("ctxs"),
                                     D.get("supply")),
                size=10.5, widths_cm=[5.0, 3.4, 18.0])
-    _p(doc, "Operating point taken from %s."
-            % (D["em_src"] or "— nothing solved yet"),
-       size=9.5, italic=True, color=NOTE, space_after=10.0)
+    if not D.get("cols"):
+        _p(doc, "Operating point taken from %s."
+                % (D["em_src"] or "— nothing solved yet"),
+           size=9.5, italic=True, color=NOTE, space_after=10.0)
 
     # THE PACK the voltage limit comes from (user 2026-09-10: "couldn't find
     # any information about the battery and the voltage limits anywhere").
@@ -814,17 +820,12 @@ def _machine(doc, D: Dict[str, Any]) -> None:
         # `elif` after `_ghash`, and a run's own fingerprint (recovered
         # even with no design snapshot at all) made `_ghash` truthy on the
         # ordinary case, so this honest warning never printed.
-        _cfg_hash = (" %s" % _ghash) if _ghash else ""
+        _cfg_hash = ""
         _p(doc, "%s no geometry snapshot stored with this run — design "
                 "values from the configuration file%s, not verified "
                 "against what the run actually solved"
                 % (R.FLAG, _cfg_hash), size=9, bold=True, color=WARN)
-    elif _ghash:
-        # ITEM 1 (owner review 2026-09-19), NAMING ITS DUTY since round 3 of
-        # the audit — see `report.geometry_hash_line`.
-        _p(doc, R.geometry_hash_line(
-            _ghash, str((D.get("d_duty") or {}).get("name") or "") or None),
-           size=9, italic=True)
+    # NO HASH LINE IN §1 (owner 2026-10-26, H07/L01): the records' short ids are in the appendix.
     if D.get("geo_mismatch") and not _no_snap:
         # Only true when there IS a stored snapshot to be built from — see
         # report._machine_page.
@@ -941,9 +942,6 @@ def _comparisons(doc, D: Dict[str, Any]) -> None:
         _p(doc, "%s %s." % (R.FLAG, _mc["text"]), size=9, bold=True, color=WARN)
     # M2 (L13 server audit round 4): whether the row above's disagreeing
     # geometry hashes are a real geometry difference or just a remesh.
-    _gn = R.geometry_snapshot_note(cols)
-    if _gn:
-        _p(doc, _gn, size=9.5, italic=True, color=NOTE)
     _p(doc, R.EM_COMPARE_NOTE, size=9)
     if D["brg"] and D["brg"].get("has_bearings"):
         _p(doc, R.EM_BEARING_NOTE, size=9.5, italic=True, color=NOTE)
@@ -972,9 +970,14 @@ def _comparisons(doc, D: Dict[str, Any]) -> None:
         _p(doc, R.THERMAL_COMPARE_EMPTY, size=9, bold=True, color=WARN)
 
     _h(doc, "Mechanical", 2)
-    header, rows = R.mech_compare_rows(cols)
+    header, rows = R.mech_compare_rows(cols, (D.get("requirements") or {}).get("overspeed_rpm"))
     _cmp_table(doc, header, cols, rows)
     _p(doc, R.MECH_COMPARE_NOTE, size=9)
+    if len(D.get("bearing_load_rows") or []) > 1:
+        _h(doc, R.BEARING_LOADS_HEADING, 2)
+        _table(doc, D["bearing_load_rows"], size=10, widths_cm=[3.4, 2.8, 7.6, 7.6, 5.0])
+        for _n in D.get("bearing_load_notes") or []:
+            _p(doc, _n, size=9, italic=True, color=NOTE)
 
     cheader, crows = R.crit_compare_rows(cols)
     if crows:
@@ -1289,9 +1292,11 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
                         map_cur)
 
     _L, _R = (D.get("pair") or {}).get("left"), (D.get("pair") or {}).get("right")
+    # A TRANSLATED SIDE IS NOT DRAWN, and never falls back to another duty's map (owner 2026-10-26, B05)
+    _Lh = bool((_L or {}).get("th_hidden"))
     _t_num = R.pair_number_clause(
         "hottest solid",
-        R.thermal_solid_max_c((_L or {}).get("th_inner") or inner),
+        R.thermal_solid_max_c(({} if _Lh else ((_L or {}).get("th_inner") or inner))),
         R.thermal_solid_max_c((_R or {}).get("th_inner") or {}), 1, "°C")
 
     _h(doc, "Temperatures", 2)
@@ -1307,8 +1312,8 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
             # per side, same axis, same dashed limits.
             _table(doc, trows, size=10.5, widths_cm=[7.0, 4.2])
             _pair_fig(doc, D,
-                      R._temp_bars_png((_L or {}).get("th") or res,
-                                       (_L or {}).get("th_inner") or inner,
+                      R._temp_bars_png(({} if _Lh else ((_L or {}).get("th") or res)),
+                                       ({} if _Lh else ((_L or {}).get("th_inner") or inner)),
                                        _lims, width_cm=PAIR_CM),
                       R._temp_bars_png(_R.get("th") or {},
                                        _R.get("th_inner") or {}, _lims,
@@ -1355,15 +1360,15 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
             _table(doc, R.thermal_budget_rows(res, inner, D.get("em")),
                    size=10.5, widths_cm=[6.4, 2.6])
             _pair_fig(doc, D,
-                      R._heat_waterfall_png((_L or {}).get("th") or res,
-                                            (_L or {}).get("th_inner") or inner,
+                      R._heat_waterfall_png(({} if _Lh else ((_L or {}).get("th") or res)),
+                                            ({} if _Lh else ((_L or {}).get("th_inner") or inner)),
                                             width_cm=PAIR_CM),
                       R._heat_waterfall_png(_R.get("th") or {},
                                             _R.get("th_inner") or {},
                                             width_cm=PAIR_CM),
                       R.heat_chart_caption_pair(
-                          (_L or {}).get("th") or res,
-                          (_L or {}).get("th_inner") or inner,
+                          ({} if _Lh else ((_L or {}).get("th") or res)),
+                          ({} if _Lh else ((_L or {}).get("th_inner") or inner)),
                           (_R or {}).get("th") or {},
                           (_R or {}).get("th_inner") or {}))
         elif _wf_png is not None:
@@ -1390,8 +1395,8 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
     # other duty's beside it, on one colour bar, since 2026-09-14.
     if _R:
         _ml, _mr = R.thermal_map_pair(
-            ((_L or {}).get("src") or {}).get("thermal") or (_L or {}).get("th")
-            or (D.get("detail_src") or {}).get("thermal") or res,
+            ({} if _Lh else (((_L or {}).get("src") or {}).get("thermal") or (_L or {}).get("th")
+                             or (D.get("detail_src") or {}).get("thermal") or res)),
             (_R.get("src") or {}).get("thermal") or _R.get("th"),
             width_cm=PAIR_CM)
         if not _pair_fig(doc, D, _ml, _mr,
@@ -1611,7 +1616,8 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
             _lsrc, _rsrc if _R else None,
             width_cm=PAIR_CM if _R else PIC_CM)
         _vm_cap = ("Von Mises stress over %s, MPa, averaged onto each part's "
-                   "own nodes." % R.mech_case_words(case_used, case_r))
+                   "own nodes; a sector of a few poles around the hot spot."
+                   % R.mech_case_words(case_used, case_r))
         _vm_num = R.pair_number_clause(
             "highest averaged", R._peak_vm((_L or {}).get("case") or case),
             R._peak_vm((_R or {}).get("case")), 1, "MPa")
@@ -1623,7 +1629,7 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
             _caption(doc, R.fig_label(
                 _numbered(D), _prov(
                     D, "Von Mises stress over the '%s' case, MPa, averaged "
-                       "onto each part's own nodes." % case_used,
+                       "onto each part's own nodes; a sector of a few poles around the hot spot." % case_used,
                     "rotor_stress"), _tag))
         else:
             _p(doc, R.MECH_MAP_MISSING, size=9.5, italic=True, color=NOTE)
@@ -1791,7 +1797,7 @@ def _warnings(doc, D: Dict[str, Any]) -> None:
             # quantity that passed (user 2026-09-10).
             # The remedy column is for RED rows only: green passed, and amber
             # is inside its limit with the margin printed beside it.
-            rows.append(cells[1:] + [str(w["remedy"]) if w["level"] == "red"
+            rows.append(cells[1:] + [(R.short_cell(w["remedy"], 160) or "") if w["level"] == "red"
                                      else ""])
         t = _table(doc, rows, size=10.5,
                    widths_cm=[2.6, 5.0, 2.8, 2.6, 2.2, 11.5])
@@ -1815,7 +1821,7 @@ def _warnings(doc, D: Dict[str, Any]) -> None:
                 size=9, bold=True, color=_ink(w["level"]))
             # ONE LINE + ONE REMEDY (user 2026-09-14): the rule's own basis is
             # in the limits table below and is not repeated here.
-            _p(doc, str(w["remedy"]), size=9, space_after=4.0, indent_cm=0.9)
+            _p(doc, R.short_cell(w["remedy"], 160) or "", size=9, space_after=4.0, indent_cm=0.9)
 
     _h(doc, "The rules, and where each limit comes from", 2)
     ex = R.limit_rules_context(D["ctxs"])
@@ -1836,6 +1842,12 @@ def _notes(doc, D: Dict[str, Any]) -> None:
         par = _bullet(doc, b)
         if i < len(_bs) - 1:
             par.paragraph_format.keep_with_next = True
+    from motor_ai_sim import report_customer as _rc
+    _ids = _rc.record_id_rows(D.get("cols") or [])
+    if len(_ids) > 1:
+        _h(doc, _rc.RECORD_IDS_HEADING, 2)
+        _table(doc, _ids, size=9.5, widths_cm=[4.4, 5.0, 5.0, 5.0, 5.0])
+        _p(doc, _rc.RECORD_IDS_NOTE, size=9, italic=True, color=NOTE)
     # Nothing after the assumptions — see `report._notes_page` for why the
     # "Not included" list, the read-only closing and the "ANOTHER machine"
     # paragraph went together (user 2026-09-11).

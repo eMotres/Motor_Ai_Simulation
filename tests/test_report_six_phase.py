@@ -159,7 +159,8 @@ def test_the_overview_and_the_key_points_show_total_and_per_set():
     assert rows["Phase voltage, peak"] == ["290 V", "290 V"]
     assert rows["Battery"][0] == "216 cells · 756 V nominal (600 – 900 V)"
     assert rows["Maximum ambient"] == ["45 °C", "45 °C"]
-    for k in ("Speed", "Torque at the rotor", "Shaft power", "Cooling", "Mass"):
+    # no bearings named: the power row is the 2-D rotor power (owner 2026-10-26, H03); the basis row leads
+    for k in ("Speed", "Torque at the rotor", "Rotor power, 2-D", "Cooling", "Mass"):
         assert k in rows
     assert any(k.startswith("Efficiency") for k in rows)
 
@@ -169,11 +170,14 @@ def test_every_comparison_table_states_its_temperature_basis():
     assert "maximum ambient" in R.COMPARE_INTRO
     assert "20 °C" in R.COMPARE_INTRO and "EMF" in R.COMPARE_INTRO
     c = _col()
+    # ONE declared basis per column (owner 2026-10-26, B01): the EM run's own temperatures
+    from motor_ai_sim import report_customer as rc
+    c["basis"] = rc.duty_basis_words(c)
     em_rows = {r[0]: r[1] for r in R.em_compare_rows([c], {})[1]}
-    assert em_rows["Solved at (hot state)"] == \
-        "winding 120 / magnets 110 °C, ambient 45 °C"
+    assert em_rows["Basis"] == c["basis"] and "winding 120 °C" in c["basis"]
     th_rows = {r[0]: r[1] for r in R.thermal_compare_rows([c])[1]}
-    assert th_rows["Ambient, the project's maximum [°C]"] == "45"
+    assert th_rows["Ambient [°C]"] == "45"
+    assert th_rows["Basis"].startswith("thermal map · steady")
 
 
 # -- 3 . rotor mechanics -----------------------------------------------------
@@ -211,7 +215,7 @@ def test_propeller_slipstream_cooling_is_named_with_its_air_speed():
     assert "propeller slipstream cooling (propeller_air)" in words
     assert "14.2 m/s" in words and "G40x13" in words and "4,000 rpm" in words
     plain = {"cooling": {"outer": {"mode": "air", "air_speed_mps": 10.0}}}
-    assert R.cooling_basis_words(plain) == "forced air, 10 m/s"
+    assert R.cooling_basis_words(plain) == "forced air, 10 m/s (input)"
 
 
 def test_the_stored_thermal_record_keeps_the_propeller_source():

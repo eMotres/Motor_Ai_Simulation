@@ -348,7 +348,7 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             mag = None
     try:
         from motor_ai_sim.coupled_time_to_limit import winding_limit
-        w_c, w_basis = winding_limit()
+        w_c, w_basis = winding_limit(fam if isinstance(fam, dict) and fam else None)
     except Exception:                                   # noqa: BLE001
         w_c, w_basis = WINDING_LIMIT_C, "project insulation class N (200 °C)"
     try:
@@ -357,7 +357,7 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         app = default_application(config_applications(fam)[0])
     except Exception:                                   # noqa: BLE001
         app = None
-    r_c, r_basis = rated_winding(app)
+    r_c, r_basis = rated_winding(app, fam if isinstance(fam, dict) and fam else None)
     out = {"winding_C": float(w_c), "winding_basis": w_basis,
            # THE RATED POINT (owner 2026-10-19): the coils' mean at the rated
            # winding temperature of this configuration's application (180 °C
@@ -377,13 +377,13 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 RATED_WINDING_C = 180.0
 
 
-def rated_winding(application: Optional[str] = None) -> tuple:
+def rated_winding(application: Optional[str] = None, cfg_doc: Optional[Dict[str, Any]] = None) -> tuple:
     """``(rated winding °C, basis)`` for ``application`` from
     ``coupled_time_to_limit.rated_winding_limit`` — the ONE place the S1
     rating, ``solve_to: continuous``, the duty class and Configure all read."""
     try:
         from motor_ai_sim.coupled_time_to_limit import rated_winding_limit
-        c, basis = rated_winding_limit(application)
+        c, basis = rated_winding_limit(application, cfg_doc)
         return float(c), basis
     except Exception:                                   # noqa: BLE001
         return RATED_WINDING_C, "project rated winding temperature (180 °C)"

@@ -9562,6 +9562,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                         detail_from_duty=bool(D.get("me_detail_from_duty")))
     story.append(PageBreak())
     story += _warnings_page(st, cols, ctxs, sec)
+    story.append(CondPageBreak(PAGE_H * 0.35))
+    story += _still_to_compute_page(st, die, cfg, cfg_doc)
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _notes_page(st, sources, brg, em, th, me, cp, sec)
     story.append(CondPageBreak(PAGE_H * 0.35))
@@ -20404,6 +20406,30 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
            % str(ex.get("ed_limiting_part") or "hottest part")
            + _ed_limit_clause(ex)]]
           if _numf(ex.get("ed_allowable_pct")) is not None else [])
+
+
+def _still_to_compute_rows(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What the variant still needs (``report_missing``); a store that cannot be read is one more missing result, never an error."""
+    try:
+        from motor_ai_sim import report_missing as RM
+        return RM.still_to_compute(die, cfg, cfg_doc or {})
+    except Exception:                                       # noqa: BLE001
+        log.debug("report: could not list the missing results", exc_info=True)
+        return []
+
+
+def _still_to_compute_page(st, die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Any]:
+    """The "Still to compute" section: every missing or stale result once, by duty (owner 2026-10-26)."""
+    from motor_ai_sim import report_missing as RM
+    out: List[Any] = [_para(RM.HEADING, st["h1"])]
+    rows = _still_to_compute_rows(die, cfg, cfg_doc)
+    if not rows:
+        out.append(_para(RM.NONE_LINE, st["body"]))
+        return out
+    out.append(_para(RM.INTRO, st["body"]))
+    for line in RM.as_lines(rows):
+        out.append(_para("\u2022 " + line, st["body"]))
+    return out
 
 
 def _warnings_page(st, cols: List[Dict[str, Any]],

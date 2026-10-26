@@ -1007,6 +1007,14 @@ def normalize_grants(raw) -> dict:
     cfgs = normalize_config_grants(raw.get("configs"))
     if cfgs:
         out["configs"] = cfgs
+        # WHO made a configuration grant (owner 2026-10-27, project grants follow the project):
+        # ``{"<die>/<config>": ["project:<id>", ...]}``.  Only the grants a development project added by
+        # itself carry an entry; one an admin gave stays without.  Kept only for a key that is still granted,
+        # so removing a grant (an admin un-ticking it) also forgets its origin and a later re-issue by
+        # hand is an independent grant.  Key present ONLY when non-empty -> older records round-trip byte-identical.
+        sources = normalize_grant_sources(raw.get("sources"), cfgs)
+        if sources:
+            out["sources"] = sources
     if _default_allowed(all_motors, dies, default):
         out["default"] = default
     return out
@@ -1025,6 +1033,22 @@ def normalize_config_grants(raw) -> list:
         if sep and die and cfg:
             out.add(f"{die}/{cfg}")
     return sorted(out)
+
+
+def normalize_grant_sources(raw, cfgs) -> dict:
+    """Any stored shape -> ``{"<die>/<config>": ["project:<id>", ...]}`` for the keys in ``cfgs`` only."""
+    if not isinstance(raw, dict):
+        return {}
+    keep = set(cfgs or [])
+    out: dict = {}
+    for key, value in raw.items():
+        key = str(key or "").strip()
+        if key not in keep or not isinstance(value, (list, tuple, set)):
+            continue
+        names = sorted({str(v).strip() for v in value if str(v or "").strip()})
+        if names:
+            out[key] = names
+    return out
 
 
 _BASELINE_DIE = "CIANO14 40 new"
@@ -1102,11 +1126,14 @@ def set_motor_grants(email: str, *, all_motors: bool,
                                     if isinstance(users[email].get("motors"), dict) else None)
         else:
             default = _norm_default(default)
+        previous = users[email].get("motors") if isinstance(users[email].get("motors"), dict) else {}
         if configs is _KEEP:
-            configs = (users[email].get("motors") or {}).get("configs")                 if isinstance(users[email].get("motors"), dict) else None
+            configs = previous.get("configs")
+        # the origin of a grant that stays granted stays with it (``normalize_grants`` drops the origin of a
+        # grant that is gone)
         users[email]["motors"] = normalize_grants(
             {"all": all_motors, "dies": list(dies or []), "default": default,
-             "configs": configs})
+             "configs": configs, "sources": previous.get("sources")})
         _save(users)
     return get_stored_motor_grants(email)
 
@@ -1142,6 +1169,12 @@ def rename_die_in_grants(old: str, new: str, *, dry_run: bool = False):
             if cfgs != list(nm.get("configs") or []):
                 nm["configs"] = sorted(set(cfgs))
                 what.append("configuration grants")
+                if isinstance(nm.get("sources"), dict):
+                    renamed = {}
+                    for key, value in nm["sources"].items():
+                        die_part, sep, cfg_part = str(key).rpartition("/")
+                        renamed[f"{new}/{cfg_part}" if sep and die_part == old else key] = value
+                    nm["sources"] = renamed
             default = nm.get("default")
             if isinstance(default, dict) and default.get("die") == old:
                 default["die"] = new
@@ -1215,6 +1248,88 @@ def set_config_grant_holders(key: str, emails) -> list:
         if changed:
             _save(users)
     return config_grant_holders(key)
+
+
+#: ``release_config_grant`` outcomes
+GRANT_REMOVED = "removed"
+GRANT_KEPT_OTHER_SOURCE = "kept_other_source"
+GRANT_KEPT_INDEPENDENT = "kept_independent"
+GRANT_ABSENT = "absent"
+GRANT_NO_ACCOUNT = "no_account"
+GRANT_STAFF = "staff"
+
+
+def get_grant_sources(email: str) -> dict:
+    """``{"<die>/<config>": ["project:<id>", ...]}`` - who made the account's stored configuration grants."""
+    return dict(get_stored_motor_grants(email).get("sources") or {})
+
+
+def add_grant_source(email: str, key: str, source: str) -> bool:
+    """Record that ``source`` (``"project:<id>"``) made - or, when another source did, also vouches for - the
+    configuration grant ``key``.  Never adds the grant itself.  False when the account or the grant is missing."""
+    email, key, source = _norm(email), str(key or "").strip(), str(source or "").strip()
+    if not source:
+        return False
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        stored = rec.get("motors") if isinstance(rec, dict) and isinstance(rec.get("motors"), dict) else None
+        if stored is None or key not in normalize_config_grants(stored.get("configs")):
+            return False
+        merged = dict(stored.get("sources") or {}) if isinstance(stored.get("sources"), dict) else {}
+        current = normalize_grant_sources(merged, [key]).get(key, [])
+        if source in current:
+            return True
+        merged[key] = sorted(set(current) | {source})
+        rec["motors"] = normalize_grants({**stored, "sources": merged})
+        _save(users)
+    return True
+
+
+def release_config_grant(email: str, key: str, source: str, *, legacy: bool = False, keep: bool = False) -> str:
+    """Take back the configuration grant ``key`` for ``source`` (``"project:<id>"``).
+
+    * ``source`` is among the grant's origins and the only one -> the grant is removed (``removed``);
+    * other origins remain (another project) -> only this origin is dropped, the grant stays (``kept_other_source``);
+    * the grant has no origin at all: an admin gave it (``kept_independent``) - unless ``legacy`` says the caller
+      holds other proof that the project made it (a grant stored before origins were recorded), then it is removed;
+    * the grant has origins but not ``source`` -> somebody else's (``kept_independent``);
+    * ``keep`` (the grant is still warranted elsewhere): only ``source`` is dropped from the origins, when another origin
+      remains; the grant itself always stays (``kept_other_source``);
+    * not granted any more (``absent``), no such account (``no_account``), a staff account (admin / engineer role)
+      whose access is the role's, never touched (``staff``).  One load, one atomic save under the registry lock."""
+    email, key, source = _norm(email), str(key or "").strip(), str(source or "").strip()
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if not isinstance(rec, dict):
+            return GRANT_NO_ACCOUNT
+        if str(rec.get("role") or "") in ("admin", "engineer"):
+            return GRANT_STAFF
+        stored = rec.get("motors") if isinstance(rec.get("motors"), dict) else None
+        cfgs = normalize_config_grants((stored or {}).get("configs"))
+        if key not in cfgs:
+            return GRANT_ABSENT
+        raw_sources = dict(stored.get("sources") or {}) if isinstance(stored.get("sources"), dict) else {}
+        origins = normalize_grant_sources(raw_sources, [key]).get(key, [])
+        if source in origins:
+            rest = [o for o in origins if o != source]
+            if rest:
+                raw_sources[key] = rest
+                rec["motors"] = normalize_grants({**stored, "sources": raw_sources})
+                _save(users)
+                return GRANT_KEPT_OTHER_SOURCE
+            if keep:
+                return GRANT_KEPT_OTHER_SOURCE
+        elif origins or not legacy:
+            return GRANT_KEPT_INDEPENDENT
+        if keep:
+            return GRANT_KEPT_OTHER_SOURCE
+        raw_sources.pop(key, None)
+        rec["motors"] = normalize_grants({**stored, "configs": [c for c in cfgs if c != key],
+                                          "sources": raw_sources})
+        _save(users)
+        return GRANT_REMOVED
 
 
 # ── invites ──────────────────────────────────────────────────────────────────

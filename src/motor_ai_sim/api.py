@@ -192,6 +192,16 @@ async def _lifespan(_app):
         except Exception as _e:
             _log.warning("sweep resumption failed: %s", _e)
     _watchdog.start()
+    # Project motor grants follow the project (owner 2026-10-27): the candidates stored before that (the "21 motor grants may
+    # need review") are settled once, idempotently; what fails the rule stays listed.  A no-op without candidates.
+    if not _roles.is_worker():
+        try:
+            from motor_ai_sim.development import grant_cleanup as _grant_cleanup
+            _gc = _grant_cleanup.drain_all()
+            if _gc.get("removed") or _gc.get("left"):
+                _log.info("project grant cleanup at start: %s", _gc)
+        except Exception as _e:                          # noqa: BLE001
+            _log.warning("project grant cleanup not run: %s", _e)
     # The stored Configure answers are built ahead of any request (owner 2026-10-19: "it must already be ready"):
     # a separate low-priority process, so its S1 searches never hold this process's GIL.  Off on a workstation.
     try:

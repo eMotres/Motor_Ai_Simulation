@@ -581,6 +581,54 @@ def step_production(ctx: Ctx) -> None:
             "time": __import__("datetime").datetime.now().isoformat(timespec="seconds")}))
 
 
+def step_motor_tests(ctx: Ctx) -> None:
+    """The Tests store (``<shared>/motor_tests/<die>/<config>/tests.json``): same folder naming as production."""
+    from motor_ai_sim.motor_tests import store as MT
+    try:
+        root = MT.root()
+    except Exception:                                       # noqa: BLE001
+        return
+    from motor_ai_sim.production.store import _safe_slug
+    old_dir, new_dir = root / _safe_slug(ctx.old), root / _safe_slug(ctx.new)
+    if not old_dir.is_dir():
+        return
+    moving = old_dir != new_dir
+    if moving and new_dir.exists() and any(new_dir.iterdir()):
+        raise RenameBlocked(f"motor tests folder '{new_dir.name}' already exists")
+    originals = {p.relative_to(old_dir): _read_bytes(p) for p in sorted(old_dir.rglob("*.json"))}
+    configs = sorted(p.name for p in old_dir.iterdir() if p.is_dir())
+    ctx.add("motor_tests", old_dir, (f"folder moves to '{new_dir.name}'" if moving else "records keep their folder")
+            + f"; {len(configs)} configuration(s)")
+    for rel, raw in originals.items():
+        try:
+            doc = json.loads((raw or b"{}").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if walk_replace(doc, ctx.old, ctx.new):
+            ctx.add("motor_tests", old_dir / rel, "die field")
+    if ctx.dry_run:
+        return
+    if moving:
+        if new_dir.exists():
+            new_dir.rmdir()
+        old_dir.rename(new_dir)
+        ctx.undo.append(lambda: new_dir.rename(old_dir))
+    from motor_ai_sim import json_store
+    for rel, raw in originals.items():
+        p = new_dir / rel
+        try:
+            doc = json.loads((raw or b"{}").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if walk_replace(doc, ctx.old, ctx.new):
+            json_store.atomic_write_json(p, doc)
+            ctx.undo.append(lambda p=p, b=raw: _restore_bytes(p, b))
+    for cfg_slug in configs:
+        ctx.after.append(lambda c=cfg_slug: MT.append_audit(ctx.new, c, {
+            "action": "die.rename", "from": ctx.old, "to": ctx.new, "who": ctx.actor or "system",
+            "time": __import__("datetime").datetime.now().isoformat(timespec="seconds")}))
+
+
 def step_cad(ctx: Ctx) -> None:
     from motor_ai_sim import model3d
     from motor_ai_sim.cad import rebuild_queue as RQ
@@ -669,7 +717,7 @@ def step_manual(ctx: Ctx) -> None:
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_cad,
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_tests, step_cad,
                 step_manual)
 
 

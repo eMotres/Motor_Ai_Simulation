@@ -758,5 +758,9 @@
     "reviewed": "Report reviewed",
     "reviewedTip": "The report was checked by our engineers: project members can download it. Staff can always build it.",
     "notReviewedTip": "The report is being checked by our engineers."
+  },
+  "motorTests": {
+    "button": "Tests",
+    "tip": "Bench measurements of this motor against the simulation of the same point (read-only)."
   }
 }

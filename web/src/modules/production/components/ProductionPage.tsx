@@ -12,7 +12,8 @@ import DocumentsPanel from './DocumentsPanel';
 import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
-import { ProductionApiError, productionApi } from '../api';
+import TestsPanel from '../../tests/components/TestsPanel';
+import { downloadFile, ProductionApiError, productionApi } from '../api';
 import { callerRole, canEditRole, displayText, unackedRevisions } from '../helpers';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
@@ -24,7 +25,8 @@ import type {
 } from '../types';
 
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
-const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
+// 'tests' (owner 2026-10-26): bench tests of this configuration against the simulation (modules/tests)
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'tests', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -273,6 +275,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} />}
+          {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
+            onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}

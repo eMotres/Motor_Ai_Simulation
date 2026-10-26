@@ -9629,6 +9629,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story += _warnings_page(st, cols, ctxs, sec)
     story.append(CondPageBreak(PAGE_H * 0.35))
     story += _still_to_compute_page(st, die, cfg, cfg_doc)
+    story += _tests_vs_simulation_page(st, die, cfg)
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _notes_page(st, sources, brg, em, th, me, cp, sec)
     story.append(CondPageBreak(PAGE_H * 0.35))
@@ -20522,6 +20523,23 @@ def _still_to_compute_page(st, die: str, cfg: str, cfg_doc: Dict[str, Any]) -> L
     out.append(_para(RM.INTRO, st["body"]))
     for line in RM.as_lines(rows):
         out.append(_para("\u2022 " + line, st["body"]))
+    return out
+
+
+def _tests_vs_simulation_page(st, die: str, cfg: str) -> List[Any]:
+    """"Tests vs simulation" (owner 2026-10-26): one table per bench test, measured | model | delta; absent without tests."""
+    from reportlab.platypus import CondPageBreak, KeepTogether, Spacer
+    from motor_ai_sim.motor_tests import report as MTR
+    tabs = MTR.tables(die, cfg)
+    if not tabs:
+        return []
+    out: List[Any] = [CondPageBreak(PAGE_H * 0.35), _para(MTR.HEADING, st["h1"]), _para(MTR.INTRO, st["body"])]
+    for t in tabs:
+        cm = 28.3465
+        title = str(t["title"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        out.append(KeepTogether([_para(title, st["h2"]),
+                                 _table(t["rows"], [8.6 * cm, 2.0 * cm, 2.6 * cm, 2.6 * cm, 2.0 * cm], header=True)]))
+        out.append(Spacer(1, 4))
     return out
 
 

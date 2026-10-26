@@ -49,7 +49,7 @@ import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
-import { isConfigHighlighted, isDieHighlighted } from '../../modules/development/projectFocus';
+import { isConfigHighlighted, isConfigRecommended, isDieHighlighted } from '../../modules/development/projectFocus';
 import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
@@ -906,7 +906,7 @@ const FamilyCatalog: React.FC<{
                             sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,
                                   ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}),
                                   ...(isConfigHighlighted(projectIndex, die.name, b.config) && !loaded ? { borderColor: '#f59e0b', color: b.config === sel ? undefined : '#f59e0b' } : {}) }}>
-                            {b.config}{loaded ? ' \u25cf' : ''}{isConfigHighlighted(projectIndex, die.name, b.config) ? ' \u25c6' : ''}
+                            {b.config}{loaded ? ' \u25cf' : ''}{isConfigRecommended(projectIndex, die.name, b.config) ? ' \u2605' : isConfigHighlighted(projectIndex, die.name, b.config) ? ' \u25c6' : ''}
                           </Button>
                         </Tooltip>
                       );

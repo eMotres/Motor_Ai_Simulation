@@ -302,6 +302,7 @@
     "tPerMassTip": "每千克电机质量的转矩。",
     "pPerMass": "功率 / 质量",
     "pPerMassActive": "功率 / 有效质量",
+    "pPerMassActive": "功率 / 有效质量",
     "pPerMassTip": "每千克电机质量的轴功率。",
     "totalLoss": "总损耗",
     "totalLossTip": "电机 + PWM 附加 + 控制器损耗。",

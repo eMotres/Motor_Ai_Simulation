@@ -15,25 +15,33 @@
  * Nothing is interpolated or invented; a missing value stays "-", a missing kind says "not computed".
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Chip, Slider, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { MetricTile, PANEL, LABEL, TileRow, fmt } from '../common/ResultTiles';
 import StoredFieldViewer from './StoredFieldViewer';
 import StoredPointResults from './StoredPointResults';
 import StepsChart from './StepsChart';
+import StarIcon from '@mui/icons-material/Star';
+import { VariantControls } from '../../modules/development/components/VariantControls';
+import { isRecommended, flagWho } from '../../modules/development/projectFlags';
+import { useAuth } from '../../contexts/AuthContext';
+import type { ProjectMotor } from '../../modules/development/types';
+import BatteryPanel, { defaultBattery, type Battery } from './BatteryPanel';
 import { developmentApi } from '../../modules/development/api';
 import type { FieldKind, MotorPointVariant, MotorView, MotorViewDuty, StoredField } from '../../modules/development/types';
 import {
-  POINT_TILES, TILE_GROUPS, busHeadroom, findVariantIndex, pointOperating, tileValue, visibleTiles,
+  POINT_TILES, findVariantIndex, pointOperating, tileValue,
 } from '../../modules/development/pointsOnly';
-import { FIELD_KIND_ORDER, configureTileKey, isNotComputed, massKind, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
+import { FIELD_KIND_ORDER, configureTileKey, isNotComputed, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
 import { parametersLine } from '../../modules/development/storedFieldPayload';
-import { motorColor } from '../../modules/development/motorGroups';
+import { motorColor, variantKey } from '../../modules/development/motorGroups';
 import { fetchMotorField } from '../../lib/motorViewApi';
 import { openProjectMotor } from '../../lib/openProjectMotor';
 import { nsT } from '../../i18n/nsT';
 import { stepLabels } from '../../modules/development/stepSeries';
+import { configureGrid } from '../../modules/development/configureGrid';
+import { specBatteryView } from '../../modules/development/specBattery';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
 
@@ -54,18 +62,41 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   useTranslation('controller');                       // lazy-loads the Configure labels the tiles borrow
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const focus = useProjectFocusStore((s) => s.focus);
+  const { isAdmin, role } = useAuth();
+  const staff = isAdmin || role === 'engineer';
+  // the project's variants with their staff marks (recommended / report reviewed), keyed like the step variants
+  const [projectMotors, setProjectMotors] = useState<ProjectMotor[]>([]);
+  const motorOf = (v: { die: string; canonical_die?: string; config: string }) => projectMotors.find((m) => variantKey(m) === variantKey(v)) ?? null;
+  const reloadMotors = async () => { if (focus) { try { setProjectMotors((await developmentApi.motors(focus.id, true)).filter((m) => m.kind !== 'history')); } catch { /* marks stay as they were */ } } };
   const [steps, setSteps] = useState<MotorPointVariant[]>([]);
   const [stepIndex, setStepIndex] = useState(-1);
   const [duty, setDuty] = useState<string | null>(() => pickPointDuty(view, loadedDuty));
   const [kind, setKind] = useState<FieldKind | null>(null);
   const [field, setField] = useState<{ key: string; value: StoredField | null; error: string; missing?: boolean } | null>(null);
   const [openError, setOpenError] = useState('');
-  const [busText, setBusText] = useState('');
+  // Configure's own battery block, pre-filled from the project's specification when there is one (else Configure's default)
+  const [battery, setBattery] = useState<Battery>(() => defaultBattery());
+  const [specBattery, setSpecBattery] = useState<Battery | null>(null);
   const cache = useRef(new Map<string, StoredField>());
 
   const motorKey = `${view.die}\u0000${view.config}`;
   // a new motor (or the same one reloaded) restarts the mode at the loaded duty; the user's own switch is kept otherwise
   useEffect(() => { setDuty((cur) => pickPointDuty(view, loadedDuty, cur)); cache.current.clear(); setField(null); }, [view, loadedDuty]);
+
+  useEffect(() => { setProjectMotors([]); void reloadMotors(); }, [focus?.id, motorKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setSpecBattery(null);
+    if (!focus) return;
+    let cancelled = false;
+    developmentApi.spec(focus.id).then((sp) => {
+      if (cancelled) return;
+      const raw = ((sp.draft?.fields ?? {}) as Record<string, unknown>)['2_1'];
+      const value = raw && typeof raw === 'object' && !Array.isArray(raw) && 'value' in raw ? (raw as { value?: unknown }).value : raw;
+      const bat = specBatteryView(value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}).bat as Battery;
+      if ([bat.cells, bat.min, bat.nom, bat.max].every((n) => Number.isFinite(n))) { setSpecBattery(bat); setBattery(bat); }
+    }).catch(() => { /* no specification battery: Configure's default stays */ });
+    return () => { cancelled = true; };
+  }, [focus?.id]);
 
   // design steps: only when the loaded motor belongs to the project in focus
   useEffect(() => {
@@ -106,14 +137,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
   const peers = useMemo(() => steps.map((v) => v.points.find((p) => p.duty === duty) ?? null), [steps, duty]);
   const labels = useMemo(() => stepLabels(steps), [steps]);
-  // temperatures are NOT in this group of tiles: they belong to the coupled loop and sit in the thermal block with their own source
-  const tiles = visibleTiles(current, peers).filter((spec) => spec.group !== 'thermal');
+  // the result grid of the ordinary Configure, fed from the stored point (cells that cannot be computed or are 0 are not drawn);
+  // temperatures are NOT in it: they belong to the coupled loop and sit in the thermal block with their own source
+  const grid = useMemo(() => configureGrid(current), [current]);
+  const dcBus = grid.flat().find((c) => c.id === 'dcBus')?.value ?? null;
   const tileName = (id: string) => { const key = configureTileKey(id, current); return key ? tc(key) : t(`points.tile.${id}`); };
-  const tileTip = (id: string) => {
-    if (id === 'mass') return massKind(current) === 'active' ? tc('configure.massPartialTip') : tc('configure.massFullTip');
-    if (id === 'torqueMass') return massKind(current) === 'active' ? t('points.tileTip.torqueActiveMass') : t('points.tileTip.torqueMass');
-    return t(`points.tileTip.${id}`);
-  };
   const emSource = current?.sources?.em;
   const emChip = emSource?.kind === 'coupled' ? t('points.source.coupledChip')
     : emSource?.coil_temp_c !== undefined ? t('points.source.emChip', { winding: Math.round(emSource.coil_temp_c) }) : t('points.source.emChipPlain');
@@ -121,9 +149,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
     : t(emSource?.coil_temp_c !== undefined ? 'points.source.emTip' : 'points.source.emTipPlain', { winding: emSource?.coil_temp_c !== undefined ? Math.round(emSource.coil_temp_c) : '', magnet: emSource?.magnet_temp_c !== undefined ? Math.round(emSource.magnet_temp_c) : '—' });
   const showChart = steps.length > 1 && stepIndex >= 0;
   const operating = pointOperating(current);
-  const busV = busText.trim() === '' ? null : Number(busText.replace(',', '.'));
-  const busValid = busV !== null && Number.isFinite(busV) && busV > 0;
-  const headroom = busValid ? busHeadroom(current, busV) : null;
 
   const openStep = (index: number) => {
     const v = steps[index];
@@ -152,6 +177,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
         <Chip size="small" label={t('points.pending')} sx={{ color: 'var(--text-3)', bgcolor: 'var(--panel-2)' }} />
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{view.die} / {view.config}</Typography>
         <Box sx={{ flex: 1 }} />
+        {focus && stepIndex >= 0 && motorOf(steps[stepIndex]) && <VariantControls projectId={focus.id} motor={motorOf(steps[stepIndex])!} staff={staff} t={t} showAll onChanged={reloadMotors} />}
         {focus && steps.length > 0 && <Button size="small" onClick={() => setActiveTab('development' as never)}>{t('points.backToProject')}</Button>}
       </Box>
       {openError && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.loadFailed')}: {openError}</Typography>}
@@ -165,6 +191,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               {steps.map((v, index) => (
                 <ToggleButton key={`${v.die}/${v.config}`} value={index} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12, boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>
                   <Box component="span" aria-hidden data-testid="step-accent" sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: motorColor(v), mr: 0.75, flex: '0 0 8px' }} />
+                  {isRecommended(motorOf(v)) && <Tooltip title={`${t('recommended.tip')} ${flagWho(motorOf(v)?.recommended)}`}><StarIcon data-testid="step-star" sx={{ fontSize: 14, color: '#f59e0b', mr: 0.5 }} /></Tooltip>}
                   <Tooltip title={`${v.canonical_die} / ${v.config}`}><span>{labels[index]}</span></Tooltip>
                   {v.status === 'trial' && <Chip size="small" label={t('motorStatus.trial')} sx={{ ml: 0.75, height: 16, fontSize: 9 }} />}
                 </ToggleButton>
@@ -208,23 +235,22 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
             <Tooltip title={emChipTip}>
               <Chip size="small" label={emChip} data-testid="em-source-chip" sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />
             </Tooltip>
-            {TILE_GROUPS.filter((g) => g !== 'thermal').map((group) => {
-              const groupTiles = tiles.filter((spec) => spec.group === group);
-              if (groupTiles.length === 0) return null;
-              return (
-                <Box key={group}>
-                  <TileRow>
-                    {groupTiles.map((spec) => {
-                      const value = tileValue(current, spec);
-                      return <MetricTile key={spec.id} label={tileName(spec.id)} value={value} unit={spec.unit} d={spec.d}
-                        base={value ?? 0} plain blankTip={t('points.notStored')} tip={tileTip(spec.id)} />;
-                    })}
-                  </TileRow>
-                </Box>
-              );
-            })}
+            {grid.map((row, index) => (
+              <TileRow key={index}>
+                {row.map((cell) => (
+                  <MetricTile key={cell.id} label={tc(cell.labelKey)} value={cell.value} unit={cell.unit} d={cell.d}
+                    base={cell.value} plain tip={cell.tipKey ? tc(cell.tipKey) : undefined} />
+                ))}
+              </TileRow>
+            ))}
+            {dcBus !== null && (
+              <Box sx={{ mt: 0.5 }} data-testid="battery-panel">
+                <BatteryPanel vDc={dcBus} bat={battery} onChange={setBattery} machinePack={specBattery} onReset={() => { if (specBattery) setBattery(specBattery); }}
+                  stockNote={!specBattery} vDcTip={t('points.batteryMarkerTip', { duty: duty ?? '' })} />
+              </Box>
+            )}
           </Box>
-          {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} />}
+          {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} recommended={steps.map((v) => isRecommended(motorOf(v)))} />}
         </Box>
 
         <StoredPointResults duty={current} />
@@ -248,19 +274,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           {field?.value && <StoredFieldViewer key={field.key} field={field.value} contextLabel={fieldLabel} />}
         </Box>
 
-        {stepIndex >= 0 && (
-          <Box sx={{ ...PANEL, p: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <Typography sx={LABEL}>{t('points.bus')}</Typography>
-            <TextField size="small" value={busText} onChange={(e) => setBusText(e.target.value)} placeholder="V"
-              inputProps={{ inputMode: 'decimal', 'aria-label': t('points.bus') }} sx={{ width: 96, '& input': { py: 0.45, fontSize: 12 } }}
-              error={busText.trim() !== '' && !busValid} />
-            <HelpTip title={busValid && headroom === null ? `${t('points.busTip')} ${t('points.busNoRequirement')}` : t('points.busTip')} />
-            {busText.trim() !== '' && !busValid && <Typography role="alert" sx={{ fontSize: 11, color: 'error.main' }}>{t('points.busInvalid')}</Typography>}
-            {headroom && <Typography role="status" sx={{ fontSize: 12, fontWeight: 700, color: headroom.ok ? '#4ade80' : '#f87171' }}>
-              {headroom.ok ? t('points.busOk', { required: fmt(headroom.requiredV, 1), margin: fmt(headroom.headroomPct, 1) }) : t('points.busShort', { required: fmt(headroom.requiredV, 1), margin: fmt(-headroom.headroomPct, 1) })}
-            </Typography>}
-          </Box>
-        )}
       </>}
 
       {duty && steps.length > 0 && <Box sx={{ ...PANEL, overflowX: 'auto' }}>
@@ -281,7 +294,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
                   <Box component="td" sx={{ ...TD, textAlign: 'left', boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>{labels[index]}</Box>
                   {POINT_TILES.filter((spec) => spec.group !== 'thermal' && (spec.core || peers.some((peer) => tileValue(peer, spec) !== null))).map((spec) => {
                     const value = tileValue(p, spec);
-                    return <Box component="td" key={spec.id} sx={TD}>{value === null ? '—' : fmt(value, spec.d)}</Box>;
+                    return <Box component="td" key={spec.id} sx={TD}>{value === null ? '' : fmt(value, spec.d)}</Box>;
                   })}
                 </Box>
               );

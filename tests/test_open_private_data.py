@@ -653,3 +653,19 @@ def test_intent_is_written_before_any_git_action(api, monkeypatch):
     j = seen["journal"]
     assert j["files"] and j["snapshot"] and j["plan"] == list(DP.PLAN)
     assert j["steps"][DP.PLAN[0]]["status"] == "running"
+
+
+def test_tree_marks_every_die_open_or_private(api):
+    """The Motors list shows ONE marker per row: ``source`` is ``open`` for a die in the
+    public repository's data set and ``private`` for every other place (owner 2026-10-27)."""
+    from motor_ai_sim.routes import family as F
+    F._TREE_CACHE.clear()
+    r = client.get("/api/family/tree", headers=api["admin"])
+    assert r.status_code == 200, r.text
+    rows = {d["name"]: d for d in r.json()["dies"]}
+    assert {"Real A", "Real B"} <= set(rows)
+    demos = [n for n in rows if n.startswith("Demo")]
+    assert demos
+    assert all(rows[n]["source"] == "open" for n in demos)
+    assert rows["Real A"]["source"] == "private" and rows["Real B"]["source"] == "private"
+    assert all(d["source"] in ("open", "private") for d in rows.values())

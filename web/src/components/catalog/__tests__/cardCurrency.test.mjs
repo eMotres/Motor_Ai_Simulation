@@ -26,12 +26,12 @@ test('unknown and empty build signatures do not invent staleness', () => {
   ]), []);
 });
 
-test('FamilyCatalog wires stale duties to both visible card badge levels', () => {
+test('the older-build information lives in the configuration button tooltip, not in a chip in the row', () => {
   const family = readFileSync(new URL('../FamilyCatalog.tsx', import.meta.url), 'utf8');
+  assert.match(family, /staleDuties: staleCatalogDutyNames\(c\.build_sig, c\.duties\)/);
+  assert.match(family, /configCardTip\(die, b\.config\)/);
+  assert.doesNotMatch(family, /CardBadge|CardSummary/);
+  // the shared badge component stays for the admin pickers and Configure
   const badge = readFileSync(new URL('../../common/CardBadge.tsx', import.meta.url), 'utf8');
-  assert.match(family, /olderBuildConfigs=\{die\.configs\.filter\(/);
-  assert.match(family, /olderBuild=\{curStaleDuties\.length > 0\}/);
-  assert.match(family, /olderBuild=\{staleCatalogDutyNames\(c\.build_sig, c\.duties\)\.length > 0\}/);
   assert.match(badge, /olderBuild \? AMBER : GREEN/);
-  assert.match(badge, /s\.state === 'all' && !olderBuild \? GREEN : AMBER/);
 });

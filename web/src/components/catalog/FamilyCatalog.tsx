@@ -11,8 +11,11 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
-  Dialog, DialogTitle, DialogContent,
+  Dialog, DialogTitle, DialogContent, Menu, MenuItem,
 } from '@mui/material';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
 import MotorThumbnail from './MotorThumbnail';
 import {
@@ -43,8 +46,8 @@ import { coggingDigits, coggingTipText, coggingValue, type CoggingView } from '.
 import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
-import { CardBadge, CardSummary } from '../common/CardBadge';
 import { staleCatalogDutyNames } from '../../lib/catalogCardStaleness';
+import { cardStatusTip, dieOpenness, OPENNESS_COLOR, OPENNESS_TIP_KEY } from '../../lib/catalogOpenness';
 import { configButtons, configClickPlan, isListableForClient, isPointsOnly, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
@@ -58,6 +61,7 @@ import { suggestDieName } from '../../lib/dieNames';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
+const txCommon = nsT('common');   // the passport-card tooltip strings (card.*) live in the common namespace
 const txc = nsT('controller');   // the cogging tile's strings live with Configure's (one label, one tooltip everywhere)
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -176,6 +180,9 @@ interface Die {
    *  (single-catalog workstation). Only a catalog admin may delete a
    *  published or shared die; see AGENTS.md / DELETE /api/family/die. */
   layer?: string;
+  /** 'open' = the die's data lives in the public repository; anything else is a closed
+   *  motor (owner 2026-10-27).  Stamped by GET /api/family/tree; see lib/catalogOpenness. */
+  source?: string | null;
 }
 
 /** "21:24" today, "19.08 21:24" otherwise — the exact stamp lives in the tooltip. */
@@ -239,6 +246,24 @@ const ReportRing: React.FC<{ ring: ReportRing; size?: number }> = ({ ring, size 
     {ring.pct != null && <span>{ring.pct} %</span>}
   </Box>
 );
+
+/** THE one per-row distinction of the Motors list (owner 2026-10-27): open (public data) or
+ *  closed (private, NDA) - the same small icon on every row, muted grey for open, amber for
+ *  closed, the meaning in the tooltip. */
+const OpennessMarker: React.FC<{ die: Die }> = ({ die }) => {
+  const kind = dieOpenness(die);
+  const Icon = kind === 'open' ? PublicOutlinedIcon : LockOutlinedIcon;
+  return (
+    <Tooltip title={tx(OPENNESS_TIP_KEY[kind])}>
+      <Box component="span" data-testid="openness-marker" data-openness={kind}
+        aria-label={tx(OPENNESS_TIP_KEY[kind])}
+        sx={{ display: 'inline-flex', alignItems: 'center', cursor: 'help',
+              color: OPENNESS_COLOR[kind] }}>
+        <Icon sx={{ fontSize: 15 }} />
+      </Box>
+    </Tooltip>
+  );
+};
 
 /** The configuration's application as a small badge (owner 2026-10-13); a configuration with no
  *  list shows nothing here (Admin flags it), a malformed one shows a red "?" with the reason. */
@@ -336,6 +361,8 @@ const FamilyCatalog: React.FC<{
   const [histOf, setHistOf] = useState<{ die: string; config: string | null } | null>(null);
   const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
   const [batteryFor, setBatteryFor] = useState<{ die: string; cfg: Cfg } | null>(null);
+  // the admin overflow menu of a die row (owner 2026-10-27): holds "Retire for all users"
+  const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: string } | null>(null);
 
   // null = not loaded yet / load FAILED — a different state from "loaded and
   // empty".  A backend mid-restart used to render as "no dies yet" (live
@@ -806,6 +833,16 @@ const FamilyCatalog: React.FC<{
         body: JSON.stringify({ duty }),
       }));
 
+  /** Editors only: the passport card / older-build line of a configuration, as tooltip text
+   *  (it used to be a coloured chip in the row; the rows are uniform since 2026-10-27). */
+  const configCardTip = (die: Die, config: string): string => {
+    if (!canWrite) return '';
+    const c = die.configs.find((x) => x.name === config);
+    if (!c) return '';
+    const line = cardStatusTip(txCommon, { date: c.card_date, staleDuties: staleCatalogDutyNames(c.build_sig, c.duties) });
+    return line ? ` ${line}` : '';
+  };
+
   const roleColor = (role: string) =>
     role === 'generator' ? '#38bdf8' : role === 'mixed' ? '#a78bfa' : '#f59e0b';
   /** Where the chip's word came from.  The role is READ OFF THE DUTIES since
@@ -870,12 +907,9 @@ const FamilyCatalog: React.FC<{
                 thumbSvg={die.thumb_svg ?? undefined} />
             </Box>
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-              {canWrite && die.locked ? '🔒 ' : ''}{die.name}
+              {die.name}
             </Typography>
-            {/* card status / build currency are editor information, not for clients (owner 2026-10-17) */}
-            {canWrite && <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length}
-              olderBuildConfigs={die.configs.filter((c) => c.card_date
-                && staleCatalogDutyNames(c.build_sig, c.duties).length > 0).map((c) => c.name)} />}
+            <OpennessMarker die={die} />
             {(() => {
               // The configurations as small buttons; the numbers beside them are those of
               // the picked configuration's DEFAULT mode (lib/catalogRows).
@@ -883,15 +917,13 @@ const FamilyCatalog: React.FC<{
               const sel = selectedConfig(btns, active?.die === die.name ? active.config ?? null : null,
                                          picked[die.name] ?? null);
               const cur = btns.find((b) => b.config === sel) ?? null;
-              const curCfg = cur ? die.configs.find((x) => x.name === cur.config) : undefined;
-              const curStaleDuties = staleCatalogDutyNames(curCfg?.build_sig, curCfg?.duties);
               return (
                 <>
                   <Box sx={{ display: 'inline-flex', gap: 0.4, flexWrap: 'wrap' }}>
                     {btns.map((b) => {
                       const loaded = active?.die === die.name && active?.config === b.config;
                       return (
-                        <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes }) + (isConfigHighlighted(projectIndex, die.name, b.config) ? ` ${tx('projectFocus.configTip')}` : '')}>
+                        <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes }) + (isConfigHighlighted(projectIndex, die.name, b.config) ? ` ${tx('projectFocus.configTip')}` : '') + configCardTip(die, b.config)}>
                           <Button size="small" variant={b.config === sel ? 'contained' : 'outlined'}
                             onClick={() => {
                               // pick it AND load its default mode; a click that cannot load says why
@@ -922,7 +954,6 @@ const FamilyCatalog: React.FC<{
                       {cur && isPointsOnly(die.configs.find((x) => x.name === cur.config) ?? { name: cur.config, duties: [] }) && (
                         <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
                       )}
-                      {canWrite && <CardBadge date={cur.card_date} olderBuild={curStaleDuties.length > 0} staleDuties={curStaleDuties} />}
                       <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
@@ -1014,14 +1045,14 @@ const FamilyCatalog: React.FC<{
               </Tooltip>
             )}
             {canWrite && isAdmin && die.layer === 'shared' && (
-              <Tooltip title={tx('retireDieTip')}>
+              <Tooltip title={tx('dieMenuTip')}>
                 <span>
-                  <Button size="small" disabled={!!busy}
-                    onClick={() => retireDie(die.name)}
-                    sx={{ fontSize: 12, py: 0, px: 0.6, minWidth: 0,
-                          textTransform: 'none', color: '#f87171' }}>
-                    {tx('retireDieButton')}
-                  </Button>
+                  <IconButton size="small" disabled={!!busy} data-testid="die-menu-button"
+                    aria-label={tx('dieMenuTip')}
+                    onClick={(e) => setDieMenu({ el: e.currentTarget, die: die.name })}
+                    sx={{ color: 'var(--text-4)', p: 0.3 }}>
+                    <MoreVertIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
                 </span>
               </Tooltip>
             )}
@@ -1037,9 +1068,6 @@ const FamilyCatalog: React.FC<{
                   {(active?.die === die.name && active?.config === c.name)
                     ? ' ●' : ''}
                 </Typography>
-                {canWrite && <CardBadge date={c.card_date}
-                  olderBuild={staleCatalogDutyNames(c.build_sig, c.duties).length > 0}
-                  staleDuties={staleCatalogDutyNames(c.build_sig, c.duties)} />}
                 {canWrite && (
                   <Tooltip title={tx('renameConfiguration')}>
                     <span>
@@ -1514,6 +1542,14 @@ const FamilyCatalog: React.FC<{
     <>
       <TextPromptDialog state={askText} onClose={() => setAskText(null)} />
       <ConfirmDialog state={askConfirm} onClose={() => setAskConfirm(null)} />
+      <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>
+        <Tooltip title={tx('retireDieTip')} placement="left">
+          <MenuItem dense data-testid="retire-die-item" sx={{ fontSize: 12, color: '#f87171' }}
+            onClick={() => { const d = dieMenu?.die; setDieMenu(null); if (d) retireDie(d); }}>
+            {tx('retireDieConfirm')}
+          </MenuItem>
+        </Tooltip>
+      </Menu>
       <BatteryDialog open={!!batteryFor}
         configName={batteryFor?.cfg.name ?? ''}
         initial={(batteryFor?.cfg.battery ?? null) as BatteryValue | null}

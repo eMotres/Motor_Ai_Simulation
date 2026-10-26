@@ -39,23 +39,26 @@ import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { coggingDigits, coggingTipText, coggingValue, type CoggingView } from '../../lib/coggingTile';
 import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
 import { staleCatalogDutyNames } from '../../lib/catalogCardStaleness';
-import { configButtons, configClickPlan, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import { configButtons, configClickPlan, isListableForClient, isPointsOnly, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
-import { isConfigHighlighted, isDieHighlighted } from '../../modules/development/projectFocus';
+import { isConfigHighlighted, isConfigRecommended, isDieHighlighted } from '../../modules/development/projectFocus';
 import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
+import { suggestDieName } from '../../lib/dieNames';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
+const txc = nsT('controller');   // the cogging tile's strings live with Configure's (one label, one tooltip everywhere)
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -151,6 +154,8 @@ interface Cfg {
   application?: string | null;
   applications_error?: string | null;
   battery?: Battery | null;
+  /** the saved no-load cogging torque of the configuration (owner 2026-10-26); absent = none saved */
+  cogging?: CoggingView | null;
   /** the mode the row shows and loads (server-resolved; owner 2026-10-13) */
   default_duty?: string | null;
   stack_mm: number | null;
@@ -288,6 +293,7 @@ const FamilyCatalog: React.FC<{
   application?: ApplicationFilter;
 }> = ({ diameter, embedded, application = 'all' }) => {
   useTranslation('motors'); // re-render on language change; lazy-loads the namespace
+  useTranslation('controller'); // the cogging chip borrows Configure's label and tooltip
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
@@ -534,12 +540,17 @@ const FamilyCatalog: React.FC<{
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
 
   // ── create/delete ─────────────────────────────────────────────────────────
-  const createDie = () => setAskText({
-    title: 'New die from the current geometry',
-    label: 'Die name',
-    onSubmit: (name) => mutate(`die '${name}' created`,
-      () => post('/api/family/die', { name })),
-  });
+  // The name opens pre-filled with "<family base> <your suffix> <n>" (editable) - owner 2026-10-26.
+  const createDie = async () => {
+    const initial = await suggestDieName();
+    setAskText({
+      title: 'New die from the current geometry',
+      label: 'Die name',
+      initial,
+      onSubmit: (name) => mutate(`die '${name}' created`,
+        () => post('/api/family/die', { name })),
+    });
+  };
   const createCfg = (die: string) => setAskText({
     title: `New configuration under ${die}`,
     label: 'Configuration name',
@@ -669,19 +680,27 @@ const FamilyCatalog: React.FC<{
   const renameDie = (die: string) => setAskText({
     title: `Rename die '${die}'`,
     label: 'New name', initial: die,
-    onSubmit: (name) => { if (name !== die) mutate(`die renamed to '${name}'`, () =>
+    // The server moves every store keyed by the name (results, grants, projects, production ...) in one
+    // transaction; `manual` lists deploy files it cannot rewrite - say so, they are the operator's to move.
+    onSubmit: (name) => { if (name !== die) mutate((data) => {
+      const manual = Array.isArray(data?.manual) ? data.manual.length : 0;
+      return `die renamed to '${name}'` + (manual ? ` - ${manual} deploy file(s) still name '${die}'` : '');
+    }, () =>
       fetch(`${API}/api/family/die/${encodeURIComponent(die)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       })); },
   });
-  const duplicateDie = (die: string) => setAskText({
-    title: `Duplicate die '${die}'`,
-    label: 'Name of the copy', initial: `${die} copy`,
-    hint: 'Copies the stamped geometry + EVERY configuration with its duties and results; the copy starts unlocked',
-    onSubmit: (name) => mutate(`die '${die}' duplicated as '${name}'`,
-      () => post(`/api/family/die/${encodeURIComponent(die)}/duplicate`, { name })),
-  });
+  const duplicateDie = async (die: string) => {
+    const initial = (await suggestDieName(die)) || `${die} copy`;
+    setAskText({
+      title: `Duplicate die '${die}'`,
+      label: 'Name of the copy', initial,
+      hint: 'Copies the stamped geometry + EVERY configuration with its duties and results; the copy starts unlocked',
+      onSubmit: (name) => mutate(`die '${die}' duplicated as '${name}'`,
+        () => post(`/api/family/die/${encodeURIComponent(die)}/duplicate`, { name })),
+    });
+  };
   const duplicateCfg = (die: string, cfg: string) => setAskText({
     title: `Duplicate '${cfg}' under ${die}`,
     label: 'Name of the copy', initial: `${cfg} copy`,
@@ -805,10 +824,14 @@ const FamilyCatalog: React.FC<{
       : 'No duties saved yet, so this is the Simulation mode that was set when the configuration was created. It follows the duties as soon as there is one.');
 
   const shownAll = diameter == null ? filterDiesByApplication(dies, application) : diesOfDiameter(dies, application, diameter);
-  // Clients see only what is computed (owner 2026-10-17): a configuration without a catalogue card is hidden, and a motor
-  // with none left is not listed.  Editors keep every row (they need the uncomputed ones to work on).
+  // Clients see what is computed (owner 2026-10-17) - a configuration with a catalogue card - AND, since 2026-10-26, every
+  // configuration they may open that stores computed points (no card yet) or that belongs to the project the tab highlights;
+  // those open points-limited in Configure.  A motor with none left is not listed.  Editors keep every row.
   const shown = canWrite ? shownAll : shownAll
-    .map((d) => ({ ...d, configs: d.configs.filter((c) => !!c.card_date), config_count: d.configs.filter((c) => !!c.card_date).length }))
+    .map((d) => {
+      const configs = d.configs.filter((c) => isListableForClient(c, isConfigHighlighted(projectIndex, d.name, c.name)));
+      return { ...d, configs, config_count: configs.length };
+    })
     .filter((d) => d.configs.length > 0);
   if (embedded && shown.length === 0 && !msg) return null;
 
@@ -888,7 +911,7 @@ const FamilyCatalog: React.FC<{
                             sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,
                                   ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}),
                                   ...(isConfigHighlighted(projectIndex, die.name, b.config) && !loaded ? { borderColor: '#f59e0b', color: b.config === sel ? undefined : '#f59e0b' } : {}) }}>
-                            {b.config}{loaded ? ' \u25cf' : ''}{isConfigHighlighted(projectIndex, die.name, b.config) ? ' \u25c6' : ''}
+                            {b.config}{loaded ? ' \u25cf' : ''}{isConfigRecommended(projectIndex, die.name, b.config) ? ' \u2605' : isConfigHighlighted(projectIndex, die.name, b.config) ? ' \u25c6' : ''}
                           </Button>
                         </Tooltip>
                       );
@@ -896,6 +919,9 @@ const FamilyCatalog: React.FC<{
                   </Box>
                   {cur && (
                     <>
+                      {cur && isPointsOnly(die.configs.find((x) => x.name === cur.config) ?? { name: cur.config, duties: [] }) && (
+                        <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
+                      )}
                       {canWrite && <CardBadge date={cur.card_date} olderBuild={curStaleDuties.length > 0} staleDuties={curStaleDuties} />}
                       <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
@@ -1173,6 +1199,14 @@ const FamilyCatalog: React.FC<{
                     <Chip size="small" label={tx('nameStack')}
                       sx={{ height: 18, fontSize: 10, color: '#f59e0b',
                             bgcolor: 'transparent', border: '1px solid #f59e0b88' }} />
+                  </Tooltip>
+                )}
+                {coggingValue(c.cogging) !== null && (
+                  <Tooltip title={coggingTipText(c.cogging, txc)}>
+                    <Typography component="span" data-testid="cogging-chip"
+                      sx={{ fontSize: 11, color: c.cogging?.stale ? '#fbbf24' : 'var(--text-3)', cursor: 'help' }}>
+                      {txc('configure.cogging')} {coggingValue(c.cogging)!.toFixed(coggingDigits(coggingValue(c.cogging)!))} N·m
+                    </Typography>
                   </Tooltip>
                 )}
                 {c.battery && (

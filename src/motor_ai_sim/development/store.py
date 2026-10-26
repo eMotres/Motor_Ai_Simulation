@@ -202,7 +202,7 @@ def motor_history(project_id: str, project: dict | None = None) -> list[dict]:
     known = {(str(row.get("die") or "").casefold(), str(row.get("config") or "").casefold())
              for row in rows}
     audit_path = _file(project_id, "audit.jsonl")
-    events: dict[tuple[str, str], list[dict]] = {}
+    ordered: list[dict] = []
     try:
         with audit_path.open("r", encoding="utf-8") as stream:
             for line in stream:
@@ -212,14 +212,27 @@ def motor_history(project_id: str, project: dict | None = None) -> list[dict]:
                     continue
                 if not isinstance(event, dict) or event.get("entity") != "motor":
                     continue
+                if event.get("action") == "motor.rename":
+                    # A die was renamed (die_rename.py): the earlier link / unlink events
+                    # of that die belong to the NEW name - the audit log itself is append-only.
+                    old_die = str(event.get("entity_id") or "").casefold()
+                    new_die = str((event.get("details") or {}).get("to") or "")
+                    if old_die and new_die:
+                        for prior in ordered:
+                            if prior["die"].casefold() == old_die:
+                                prior["die"] = new_die
+                    continue
                 die, sep, config = str(event.get("entity_id") or "").partition("/")
                 if not sep or not die or not config or event.get("action") not in ("motor.link", "motor.unlink"):
                     continue
-                events.setdefault((die.casefold(), config.casefold()), []).append({
+                ordered.append({
                     "die": die, "config": config, "action": event.get("action"),
                     "time": event.get("time"), "actor": event.get("actor_email") or ""})
     except OSError:
         pass
+    events: dict[tuple[str, str], list[dict]] = {}
+    for item in ordered:
+        events.setdefault((item["die"].casefold(), item["config"].casefold()), []).append(item)
     for key, history in events.items():
         if key in known:
             continue

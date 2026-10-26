@@ -9,7 +9,7 @@
 import { nullableText, readView, shape, text, writeView, type ViewStorage } from '../../lib/viewMemory.ts';
 
 export interface FocusProject { id: string; /** unknown when the project was opened from a place that only knows its id */ title: string | null }
-export interface MotorRef { die: string; config: string; canonical_die?: string }
+export interface MotorRef { die: string; config: string; canonical_die?: string; /** the staff-marked recommended variant of the project */ recommended?: unknown }
 
 export const focusScope = (email: string | null | undefined): string =>
   `projects.focus.${(email ?? 'anonymous').trim().toLowerCase() || 'anonymous'}`;
@@ -26,22 +26,25 @@ const norm = (s: string) => s.trim().toLowerCase();
 export const motorKey = (die: string, config: string): string => `${norm(die)}\u0000${norm(config)}`;
 
 /** Index of a project's linked motors for O(1) lookups; both the ordinary alias and the canonical die name count. */
-export interface HighlightIndex { configs: Set<string>; dies: Set<string> }
+export interface HighlightIndex { configs: Set<string>; dies: Set<string>; recommended: Set<string> }
 
 export function highlightIndex(motors: readonly MotorRef[] | null | undefined): HighlightIndex {
   const configs = new Set<string>();
   const dies = new Set<string>();
+  const recommended = new Set<string>();
   for (const m of motors ?? []) {
     for (const die of [m.die, m.canonical_die]) {
       if (!die) continue;
       configs.add(motorKey(die, m.config));
       dies.add(norm(die));
+      if (m.recommended && typeof m.recommended === 'object') recommended.add(motorKey(die, m.config));
     }
   }
-  return { configs, dies };
+  return { configs, dies, recommended };
 }
 
 export const isConfigHighlighted = (index: HighlightIndex, die: string, config: string): boolean => index.configs.has(motorKey(die, config));
+export const isConfigRecommended = (index: HighlightIndex, die: string, config: string): boolean => index.recommended.has(motorKey(die, config));
 export const isDieHighlighted = (index: HighlightIndex, die: string): boolean => index.dies.has(norm(die));
 
 /** The project to highlight: the remembered one while the caller still sees it, else null (no highlight; never a guess). */

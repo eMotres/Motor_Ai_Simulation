@@ -37,6 +37,8 @@
  * `allow_new_lamination` for no longer refuses anything.
  */
 
+import { familyBase } from './dieNameRule';
+
 /** One identity key on which the live machine differs from the released die,
  *  as the backend reports it (`die_identity_diffs`). */
 export interface DieDiff { key: string; label?: string; die: number; live: number }
@@ -77,16 +79,13 @@ export function diffText(diffs: DieDiff[] | null | undefined): string {
     .join('; ');
 }
 
-/** The name the "Save as new die" prompt opens with: the released die plus
- *  the live topology ("CIANO14 50 edited 12s16p"), so the catalog tells the
- *  two laminations apart at a glance.  Never returns the released name
- *  itself — the backend refuses a taken name (409). */
+/** The OFFLINE fallback of the "Save as new die" prompt's name: the released die's
+ *  family base ("CIANO14 50 edited" -> "CIANO14 50").  The prompt really opens with
+ *  the server's "<family base> <your suffix> <n>" (lib/dieNames.suggestDieName;
+ *  owner 2026-10-26: no diameter / topology / free words in new names).  The
+ *  backend refuses a taken name (409). */
 export function suggestedDieName(ctx: ReleasedCtxLike): string {
-  const rel = String(ctx.released_from ?? '').trim() || 'new die';
-  const t = ctx.live_topology ?? null;
-  const topo = t && t.slots && t.poles ? `${t.slots}s${t.poles}p` : '';
-  const base = rel.replace(/\s+\d+s\d+p$/, '');
-  return topo ? `${base} ${topo}` : `${rel} new`;
+  return familyBase(String(ctx.released_from ?? '')) || 'new die';
 }
 
 export interface ReleasedOffers {

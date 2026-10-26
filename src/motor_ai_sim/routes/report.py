@@ -71,43 +71,24 @@ def report_progress(run_id: str = Query(
     return _RP.snapshot(run_id)
 
 
-@router.get("/report/{die}/{cfg}")
-def report(die: str, cfg: str, duty: Optional[str] = Query(default=None),
-           format: str = Query(default="docx"),
-           pictures: Optional[str] = Query(
-               default=None,
-               description="duty whose STORED fields the maps are drawn from; "
-                           "default: the rated duty, then the loaded one"),
-           run_id: Optional[str] = Query(
-               default=None,
-               description="id to publish this build's progress under; poll it "
-                           "at /api/family/report/progress?run_id=…"),
-           authorization: str = Header(default=None)):
-    """Eight sections: the machine, and every solver's last answer about it.
+def build_for(die: str, cfg: str, fmt: str, authorization: Optional[str], *, duty: Optional[str] = None,
+              pictures: Optional[str] = None, run_id: Optional[str] = None):
+    """Validate, gate and build one report: ``(blob, filename, run_id)``.
 
-    ``duty`` names the operating point the cover is about; the first saved duty
-    is used when it is omitted.  A configuration with no duty at all is still a
-    valid report — the electromagnetic section then quotes the last run on this
-    server (flagged when that run was solved on a different machine), which is
-    the case the datasheet refuses with a 400 because a duty-column spreadsheet
-    would genuinely be empty.
-
-    ``format`` is ``docx`` (the default) or ``pdf``.  Anything else is a 422
-    naming the field, not a silent fallback: a caller who asked for ``doc`` or
-    ``word`` and got a PDF would only find out when the client did.
-
-    Costs no solve time: every figure comes out of a store some solver already
-    wrote.
+    The ONE builder behind ``GET /api/family/report/{die}/{cfg}`` and the project route (``/api/projects/{id}/motors/report``):
+    both keep the same ``_require_die_access`` gate and the NDA / verification gate for CAD-measured cooling; the project route
+    adds its review gate before it gets here.  A variant with only part of its results builds all the same: what is missing is
+    listed in the "Still to compute" section (``report_missing``).
     """
     from motor_ai_sim.routes.family import (_check_name, _cfg_file, _die_file,
                                             _load_yaml, _require_die_access)
 
-    fmt = str(format or "").strip().lower()
+    fmt = str(fmt or "").strip().lower()
     if fmt not in _MEDIA:
         raise HTTPException(422, detail=[{
             "loc": ["query", "format"], "type": "value_error",
             "msg": ("format must be 'docx' (default) or 'pdf'; got %r"
-                    % (format,))}])
+                    % (fmt,))}])
 
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     _require_die_access(die, authorization, cfg)
@@ -183,6 +164,43 @@ def report(die: str, cfg: str, duty: Optional[str] = Query(default=None),
         raise HTTPException(500, detail=f"report build failed: {e}")
 
     fname = f"{die} {cfg} report.{fmt}".replace('"', "")
+    return blob, fname, rid
+
+
+@router.get("/report/{die}/{cfg}")
+def report(die: str, cfg: str, duty: Optional[str] = Query(default=None),
+           format: str = Query(default="docx"),
+           pictures: Optional[str] = Query(
+               default=None,
+               description="duty whose STORED fields the maps are drawn from; "
+                           "default: the rated duty, then the loaded one"),
+           run_id: Optional[str] = Query(
+               default=None,
+               description="id to publish this build's progress under; poll it "
+                           "at /api/family/report/progress?run_id=…"),
+           authorization: str = Header(default=None)):
+    """Eight sections: the machine, and every solver's last answer about it.
+
+    ``duty`` names the operating point the cover is about; the first saved duty
+    is used when it is omitted.  A configuration with no duty at all is still a
+    valid report — the electromagnetic section then quotes the last run on this
+    server (flagged when that run was solved on a different machine), which is
+    the case the datasheet refuses with a 400 because a duty-column spreadsheet
+    would genuinely be empty.
+
+    ``format`` is ``docx`` (the default) or ``pdf``.  Anything else is a 422
+    naming the field, not a silent fallback: a caller who asked for ``doc`` or
+    ``word`` and got a PDF would only find out when the client did.
+
+    Costs no solve time: every figure comes out of a store some solver already
+    wrote.
+    """
+    # a motor of a project: the report goes out to non-staff only after our engineers marked it reviewed (no way round the
+    # project route through this one)
+    from motor_ai_sim.development import motors as _project_motors
+    _project_motors.require_report_reviewed(die, cfg, authorization)
+    blob, fname, rid = build_for(die, cfg, format, authorization, duty=duty, pictures=pictures, run_id=run_id)
+    fmt = str(format or "").strip().lower()
     return Response(
         content=blob, media_type=_MEDIA[fmt],
         headers={"Content-Disposition": f'attachment; filename="{fname}"',

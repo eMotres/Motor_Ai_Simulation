@@ -228,6 +228,7 @@
       "mass": "质量",
       "torqueMass": "转矩/质量",
       "ripple": "转矩脉动",
+      "cogging": "齿槽转矩（峰峰值）",
       "phasePeak": "相电压峰值",
       "linePeak": "线电压峰值",
       "dcBus": "所需直流母线电压",
@@ -247,7 +248,8 @@
     "corrected3d": "已计入三维端部效应",
     "targetValue": "工况目标值 - 尚未计算",
     "linePeakUnavailable": "此结果没有可用的实际线电压峰值。",
-    "partialMass": "主动部件质量或未盖章质量；并非整机装配质量。",
+    "partialMass": "有效质量（电磁部件 × 叠长），不是整机质量。",
+    "coggingStale": "基于该电机的旧版本计算。",
     "partialLosses": "已存储的总损耗不包含未知的机械损耗。",
     "componentTemp": "{part} 温度",
     "temperaturePart": {
@@ -380,6 +382,23 @@
     "tip": "最新：最新的当前方案；若最优方案（平均效率最高）是另一个方案，则一并显示。全部版本：所有方案，包括试验方案、旧方案及其历史快照，按方案分组。"
   },
   "points": {
+    "loadingMotor": "正在加载 {motor}...",
+    "batteryMarkerTip": "该工况（所选模式）所需的电压，对照电池组的电压窗口。",
+    "source": {
+      "emChip": "电磁计算，绕组 {winding} °C",
+      "emChipPlain": "电磁计算",
+      "coupledChip": "耦合迭代",
+      "emTip": "这些电磁数值来自固定绕组温度 {winding} °C（磁钢 {magnet} °C）的电磁计算。温度和耦合迭代自身的转矩见热块。",
+      "emTipPlain": "这些电磁数值来自电磁计算，其绕组温度未存储。温度和耦合迭代自身的转矩见热块。",
+      "coupledTip": "此工况没有存储电磁计算：电磁数值来自耦合迭代。"
+    },
+    "chart": {
+      "title": "各步骤的变化",
+      "switchTip": "为所选模式选择要跟踪的数值。只提供至少两个步骤存有的数值；缺少该数值的步骤显示为断点，不会当作零。"
+    },
+    "series": {
+      "current": "电流"
+    },
     "notComputed": "未计算",
     "noProvenance": "该结果未存储来源信息。",
     "thermal": {
@@ -388,18 +407,22 @@
         "coupled": "耦合迭代",
         "thermal": "温度图"
       },
-      "onlyLimit": "此工况只存有极限搜索状态，没有它自己的温度。",
-      "limitLine": "S1 极限搜索（{day}）：极限时绕组 {winding} °C",
+      "limitLine": "S1 持续极限（{day}）：极限时绕组 {winding} °C",
+      "timeLine": "到限时间运行（{day}）：达到首个极限时绕组 {winding} °C",
+      "searchLine": "极限搜索（{day}）：绕组 {winding} °C",
       "limitTip": "这是极限搜索（S1）的状态，不是该工况的温度。",
       "tile": {
+        "emTorque": "转矩（耦合迭代）",
         "winding": "绕组",
         "magnet": "磁钢",
         "housing": "外壳",
         "bearing": "轴承",
         "s1": "S1 电流",
-        "s2": "S2 时间"
+        "s2": "S2：到限时间"
       },
       "tileTip": {
+      "torqueActiveMass": "转矩 / 有效质量（电磁部件），不含整机。",
+        "emTorque": "耦合迭代在其自身温度下得到的转矩。电磁块中的转矩是电磁计算的结果。",
         "winding": "该点的稳定绕组温度（耦合迭代结果）。",
         "magnet": "稳定磁钢温度，取最高值。",
         "housing": "外壳温度（热图给出时显示）。",
@@ -412,7 +435,7 @@
     },
     "mech": {
       "title": "机械",
-      "worstCase": "最不利工况：{case}",
+      "atCase": "求解工况：{case}",
       "filedUnder": "存于工况 {duty}",
       "stale": {
         "superseded": "求解器已过时",
@@ -462,7 +485,7 @@
     "title": "配置 · 已计算工况点",
     "pending": "仅工况点",
     "pendingTip": "仅显示已计算的工况点，点与点之间不插值。此电机暂无完整运行图（任意转速、电流或电压）。",
-    "step": "步骤",
+    "step": "优化步骤",
     "noteHead": "设计步骤",
     "mode": "模式",
     "modeTip": "每个模式对应一个已计算工况点。点击模式查看其已保存的结果。",
@@ -489,12 +512,6 @@
     "knobTip": "已禁用：滚动调节需要完整运行图，该图仍在计算中。",
     "knobsDisabledTip": "转速、电流和角度暂时无法滚动调节；仅显示已保存的工况点。不做任何插值。",
     "notStored": "此工况点未保存该值。",
-    "bus": "直流母线，V",
-    "busTip": "输入您的供电电压，与此工况点计算所需的母线电压对比。仅使用已保存的需求值。",
-    "busInvalid": "请输入正电压。",
-    "busNoRequirement": "此工况点未保存所需母线电压。",
-    "busOk": "满足此工况点所需的 {required} V（裕量 {margin} %）。",
-    "busShort": "低于此工况点所需的 {required} V，相差 {margin} %。",
     "stepsTable": "模式 {duty} 在各步骤中的结果",
     "openTip": "在配置中打开此电机的已计算工况点（完整运行图待完成）。",
     "tile": {
@@ -729,5 +746,17 @@
     "ramAir": "船用螺旋桨电机位于船体或吊舱内，没有迎面气流。"
   },
   "specReadOnly": "仅查看",
-  "specReadOnlyTip": "只有项目所有者可以修改规格。您可以在配置中测试，并在消息中写建议。"
+  "specReadOnlyTip": "只有项目所有者可以修改规格。您可以在配置中测试，并在消息中写建议。",
+  "recommended": {
+    "label": "推荐",
+    "tip": "本项目的推荐方案，由我们的工程师标记。",
+    "setTip": "将此方案标记为项目推荐方案（同一时间只有一个）。未标记时显示最新的当前方案。"
+  },
+  "report": {
+    "word": "报告（Word）",
+    "pdf": "报告（PDF）",
+    "reviewed": "报告已审核",
+    "reviewedTip": "报告已由我们的工程师审核：项目成员可以下载。工程师随时可以生成。",
+    "notReviewedTip": "报告正在由我们的工程师审核。"
+  }
 }

@@ -28,20 +28,22 @@ export interface ResultProvenance {
 }
 export interface MotorResult { duty?: string; has_result?: boolean; can_open_configure?: boolean; can_open_simulation?: boolean; operating_point?: Record<string, unknown>; electromagnetic?: Record<string, unknown>; stored_results?: Record<string, unknown>; comparison?: Record<string, unknown>; provenance?: ResultProvenance; result_provenance?: string; torque_Nm?: number; power_W?: number; efficiency_pct?: number; losses_W?: number; temperatures_C?: Record<string, number> | number; computed_at?: string }
 /** `canonical_die` is used for link management; `die` is the caller's ordinary resolver alias for opening. */
-export interface ProjectMotor { die: string; canonical_die?: string; config: string; status?: 'current' | 'trial'; available?: boolean; can_open_configure?: boolean; /** any stored duty result: Configure opens as a points-only card */ can_open_points?: boolean; configure_duty?: string | null; can_open_simulation?: boolean; simulation_duty?: string | null; duties?: Array<string | { name?: string | null }>; default_duty?: string | null; results?: MotorResult[]; kind?: 'history'; snapshot_id?: string; created_at?: string; author_display_name?: string; note?: string; source?: string }
+/** A staff mark on a linked motor: who set it and when (`report_commit`: the code the reviewer looked at). */
+export interface StaffFlag { by?: string; at?: string; report_commit?: string }
+export interface ProjectMotor { /** staff checked this variant's report: members may download it */ report_reviewed?: StaffFlag | null; /** THE recommended variant of the project (one at a time, a staff choice) */ recommended?: StaffFlag | null; die: string; canonical_die?: string; config: string; status?: 'current' | 'trial'; available?: boolean; can_open_configure?: boolean; /** any stored duty result: Configure opens as a points-only card */ can_open_points?: boolean; configure_duty?: string | null; can_open_simulation?: boolean; simulation_duty?: string | null; duties?: Array<string | { name?: string | null }>; default_duty?: string | null; results?: MotorResult[]; kind?: 'history'; snapshot_id?: string; created_at?: string; author_display_name?: string; note?: string; source?: string }
 /** One stored duty point of the points-only Configure card: stored numbers only. */
 export interface MotorPoint { duty: string; has_result?: boolean; operating_point?: Record<string, unknown>; electromagnetic?: Record<string, unknown>; comparison?: Record<string, unknown>; stored_results?: Record<string, unknown> }
 /** One design step (linked motor) of a project with its stored points; `note` is the engineers' short design-step note. */
-export interface MotorPointVariant { step: number; die: string; canonical_die: string; config: string; status: 'current' | 'trial'; note: string; points: MotorPoint[] }
+export interface MotorPointVariant { /** staff marks of the variant (recommended / report reviewed) */ report_reviewed?: StaffFlag | null; recommended?: StaffFlag | null; step: number; die: string; canonical_die: string; config: string; status: 'current' | 'trial'; note: string; points: MotorPoint[] }
 export interface MotorPointsAnswer { project_id: string; variants: MotorPointVariant[]; selected: { die: string; config: string } | null }
 /** Where a stored block came from (every field is optional: an old row has no solver stamp). */
 export interface StoredProvenance { computed_at?: string; recorded_at?: string; code_version?: string; app_version?: string; image?: string; geometry_fingerprint?: string; mesh_size_mm?: number; n_triangles?: number; element_order?: number }
 export type FieldKind = 'em' | 'thermal' | 'rotor_stress';
 export interface StoredThermal {
   /** the DUTY's temperatures: the converged coupled loop at the duty's own point, else the steady temperature map; `kind` says which */
-  duty_temps?: { kind: 'coupled' | 'thermal'; winding_c?: number; magnet_c?: number; magnet_max_c?: number; bearing_c?: number; housing_c?: number; converged?: boolean; drive?: string; provenance?: StoredProvenance };
+  duty_temps?: { kind: 'coupled' | 'thermal'; winding_c?: number; magnet_c?: number; magnet_max_c?: number; bearing_c?: number; housing_c?: number; converged?: boolean; drive?: string; /** the coupled loop's OWN electromagnetic numbers (its torque / losses at its own temperatures) */ em?: { torque_nm?: number; p_loss_total_w?: number; efficiency_pct?: number }; provenance?: StoredProvenance };
   /** an S1 / limit-search state of the coupled loop: shown on its own line, never as the duty's temperature */
-  limit_search?: { kind: string; solve_to?: string; mode?: string; winding_c?: number; magnet_c?: number; provenance?: StoredProvenance };
+  limit_search?: { kind: string; solve_to?: 'continuous' | 'limits' | string; mode?: string; winding_c?: number; magnet_c?: number; provenance?: StoredProvenance };
   s1?: { ok?: boolean; feasible?: boolean; I_cont_A_rms?: number; limiting_part?: string; limits_c?: Record<string, number>; provenance?: StoredProvenance };
   s2?: { within_limits?: boolean; limiting_part?: string; time_to_limit_s?: number; limits_c?: Record<string, number>; starts?: Record<string, { time_to_limit_s?: number }>; provenance?: StoredProvenance };
   cycle?: Record<string, unknown>;
@@ -54,6 +56,8 @@ export interface StoredRotorStress { case?: string; sf_min?: number; sf_min_part
     pull_source?: 'em' | 'uniform'; pull_mpa?: number; pull_per_pole_n?: number; pull_label?: string; pull_estimate?: boolean };
   /** the load case the retention verdict was reached under, when it carried a pull */
   load_case?: string;
+  /** the speed the solve was asked at (the proof case may run above it) */
+  request_rpm?: number;
   filed_under?: string; records?: number;
   /** superseded = made before the contact repair (#422); unknown = no date */
   solver_status?: 'current' | 'superseded' | 'unknown';
@@ -62,7 +66,7 @@ export interface StoredRotorStress { case?: string; sf_min?: number; sf_min_part
   stale?: boolean;
   retention?: { status?: string; verdict?: string; message?: string }; magnet_retention?: Record<string, unknown>; air_gap?: Record<string, number>; parts?: Record<string, { material?: string; safety_factor?: number; von_mises_max_mpa?: number; strength_mpa?: number }>; provenance?: StoredProvenance }
 export interface StoredMechanical { rotor_stress?: StoredRotorStress; modes?: { frequencies_hz?: number[]; provenance?: StoredProvenance }; critical_speeds?: { verdict?: string; rated_rpm?: number; critical_speeds?: Array<{ rpm?: number }>; provenance?: StoredProvenance } }
-export interface MotorViewDuty extends MotorPoint { em_run?: { numbers?: Record<string, number>; provenance?: StoredProvenance } | null; thermal?: StoredThermal | null; mechanical?: StoredMechanical | null; fields?: Partial<Record<FieldKind, { provenance?: StoredProvenance; point?: Record<string, number> }>>; kinds?: string[] }
+export interface MotorViewDuty extends MotorPoint { /** where the EM tiles come from: the EM run (fixed winding temperature) or, with no EM torque stored, the coupled loop */ sources?: { em?: { kind?: 'em_run' | 'coupled'; coil_temp_c?: number; magnet_temp_c?: number } }; em_run?: { numbers?: Record<string, number>; provenance?: StoredProvenance } | null; thermal?: StoredThermal | null; mechanical?: StoredMechanical | null; fields?: Partial<Record<FieldKind, { provenance?: StoredProvenance; point?: Record<string, number> }>>; kinds?: string[]; /** records filed under this duty that were left out (another point, superseded, impossible numbers) - diagnostics, never drawn */ hidden_records?: Array<{ kind: string; reason: string; value?: string }> }
 /** `mode`: full = a passport exists (ordinary Configure); points = stored points only (points-limited Configure); empty = nothing stored. */
 export interface MotorView { die: string; config: string; configure_available: boolean; configure_duties: string[]; mode: 'full' | 'points' | 'empty'; duties: MotorViewDuty[]; solver_now?: { code_version?: string; version?: string } }
 /** One stored field map: the payload has the shape the tab adapter of its kind draws. */

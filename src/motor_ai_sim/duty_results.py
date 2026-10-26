@@ -81,6 +81,7 @@ import json
 import logging
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -142,8 +143,34 @@ def _config_dir() -> Path:
         return Path(__file__).resolve().parents[2] / "config"
 
 
+#: A store chosen by the CALLER instead of by the request identity (:func:`using_store`).  The die rename
+#: (``die_rename.py``) must touch the shared catalog's ledger when the shared die is renamed, whoever the
+#: calling context says it is - an in-process call without the verified-admin request context used to miss it.
+_FORCED_STORE: "ContextVar[Optional[Path]]" = ContextVar("duty_results_forced_store", default=None)
+
+
+def shared_store_path() -> Path:
+    """The shared catalog's ledger (``<shared>/.duty_results.json``), whatever the request identity."""
+    from motor_ai_sim import workspace as _ws
+    return Path(str(_ws.shared_root())) / ".duty_results.json"
+
+
+@contextmanager
+def using_store(path: Optional[Path]):
+    """Run the enclosed reads/writes of this module against ``path`` (``None`` = the usual choice).
+    A forced store is treated like the shared one: written under the cross-process file lock."""
+    tok = _FORCED_STORE.set(Path(path) if path is not None else None)
+    try:
+        yield
+    finally:
+        _FORCED_STORE.reset(tok)
+
+
 def store_path() -> Path:
     """Store for this request identity: shared for verified admins, local otherwise."""
+    _forced = _FORCED_STORE.get()
+    if _forced is not None:
+        return _forced
     try:
         from motor_ai_sim import workspace as _ws
     except Exception:                                       # noqa: BLE001 — fail closed
@@ -163,7 +190,7 @@ def _store_write_lock():
     with _STORE_LOCK:
         try:
             from motor_ai_sim import workspace as _ws
-            shared_admin = _ws.is_verified_admin_request()
+            shared_admin = _ws.is_verified_admin_request() or _FORCED_STORE.get() is not None
         except Exception:                                   # noqa: BLE001
             shared_admin = False
         if not shared_admin:
@@ -771,6 +798,61 @@ def rename(die: str, cfg: str, old: str, new: str) -> bool:
             return False
     except Exception:                                       # noqa: BLE001
         return False
+
+
+def die_rows(die: str) -> Dict[str, Any]:
+    """What this request's store holds under ``die``: ``{"path", "exists", "results", "history"}`` where the two
+    counts are the numbers of (configuration, duty, kind) rows (history: replaced rows).  Use :func:`using_store`
+    to ask another store.  Never raises - an unreadable store counts as empty."""
+    p = store_path()
+    out: Dict[str, Any] = {"path": str(p), "exists": p.is_file(), "results": 0, "history": 0}
+    try:
+        doc = read_all()
+        out["results"] = sum(len(kinds) for duties in ((doc.get("results") or {}).get(str(die)) or {}).values()
+                             for kinds in duties.values() if isinstance(kinds, dict))
+        out["history"] = sum(len(rows) for duties in ((doc.get("history") or {}).get(str(die)) or {}).values()
+                             for kinds in duties.values() if isinstance(kinds, dict)
+                             for rows in kinds.values() if isinstance(rows, list))
+    except Exception:                                       # noqa: BLE001
+        pass
+    return out
+
+
+def has_die(die: str) -> bool:
+    """Does this request's store hold any result or history row filed under ``die``?"""
+    rows = die_rows(die)
+    return bool(rows["results"] or rows["history"])
+
+
+def rename_die(old: str, new: str) -> bool:
+    """Carry every row of a RENAMED die to its new name - the results and the per-kind history.
+
+    Everything here is keyed by the die NAME, so a die rename that left the rows
+    behind hid every thermal, mechanical, coupled and duty-cycle answer of the
+    machine (and the history that keeps replaced runs).  Returns True when a
+    row moved.  Refuses (``ValueError``) to merge into a name that already has
+    rows - the caller has checked that the target die does not exist.  A write
+    failure raises ``OSError``: unlike the solve routes, a rename must know.
+    """
+    old, new = str(old), str(new)
+    if old == new:
+        return False
+    with _store_write_lock():
+        doc = read_all()
+        moved = False
+        for block in ("results", "history"):
+            node = doc.get(block)
+            if not isinstance(node, dict) or old not in node:
+                continue
+            if node.get(new):
+                raise ValueError(f"{block} already has rows for '{new}'")
+            node[new] = node.pop(old)
+            moved = True
+        if not moved:
+            return False
+        if not _write_all(doc):
+            raise OSError("could not persist the renamed duty results")
+        return True
 
 
 def forget(die: str, cfg: str, duty: Optional[str] = None) -> bool:
@@ -1581,6 +1663,10 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         "computed_at": o.get("computed_at"),
         "geometry_fingerprint": o.get("geometry_fingerprint"),
         **_fp2_block(),
+        # the operating point the loop was asked about (speed, phase current, angle) - the stamp the points view ties a
+        # record to its point by
+        **({"point": _pick(c.get("point"), ("rpm", "I_phase_rms", "gamma_deg"))}
+           if isinstance(c.get("point"), dict) and c["point"] else {}),
         # WHICH EXCITATION these temperatures were reached on, and — when it is
         # the inverter — the bridge that reached them.  A record with no
         # `drive` predates the PWM loop and is a sinusoid (see `_entry_drive`).

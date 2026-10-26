@@ -127,3 +127,33 @@ t('a click that cannot load is never silent: it names the reason', () => {
   const busy = C.configClickPlan(btns, 'L155 motor', null, true);
   assert.equal(busy.load, null); assert.equal(busy.refuse, 'busy');
 });
+
+// ── the Motors tab lists what the user may open, card or not (owner 2026-10-26) ─────────────────────────────────────
+import { hasStoredPoint, isListableForClient, isPointsOnly } from '../catalogRows.ts';
+import { highlightIndex, isConfigHighlighted } from '../../modules/development/projectFocus.ts';
+import { readFileSync as readSrc } from 'node:fs';
+
+test('a die without a catalogue card is listed when it stores points or belongs to the highlighted project', () => {
+  const tree = [
+    { name: 'CIANO56 400_80 opt3', configs: [
+      { name: 'L80-2x3ph', card_date: null, duties: [{ name: 'cruise', result: { efficiency_pct: 95 } }] },
+      { name: 'L70', card_date: null, duties: [{ name: 'cruise' }] }] },
+    { name: 'Public die', configs: [{ name: 'A', card_date: '2026-10-01', duties: [] }] },
+    { name: 'Hidden die', configs: [{ name: 'X', card_date: null, duties: [{ name: 'd' }] }] },
+  ];
+  const project = highlightIndex([{ die: 'CIANO56 400_80 opt3', config: 'L70' }]);
+  const listed = (index) => tree.flatMap((d) => d.configs.filter((c) => isListableForClient(c, isConfigHighlighted(index, d.name, c.name))).map((c) => `${d.name}/${c.name}`));
+  assert.deepEqual(listed(highlightIndex([])), ['CIANO56 400_80 opt3/L80-2x3ph', 'Public die/A']);       // points-only listed, card listed, nothing else
+  assert.deepEqual(listed(project), ['CIANO56 400_80 opt3/L80-2x3ph', 'CIANO56 400_80 opt3/L70', 'Public die/A']);   // the project's own motor too
+  assert.equal(hasStoredPoint(tree[0].configs[0]), true);
+  assert.equal(hasStoredPoint(tree[0].configs[1]), false);
+  assert.equal(isPointsOnly(tree[0].configs[0]), true);
+  assert.equal(isPointsOnly(tree[1].configs[0]), false);
+});
+
+test('wiring: both Motors-tab filters use the one rule and a points-only configuration carries a badge', () => {
+  const src = (p) => readSrc(new URL(p, import.meta.url), 'utf8');
+  assert.match(src('../../components/catalog/FamilyCatalog.tsx'), /isListableForClient\(c, isConfigHighlighted\(projectIndex, d\.name, c\.name\)\)/);
+  assert.match(src('../../components/catalog/MotorsCatalog.tsx'), /isListableForClient\(c as never, isConfigHighlighted\(projectIndex, d\.name, c\.name\)\)/);
+  assert.match(src('../../components/catalog/FamilyCatalog.tsx'), /data-testid="points-only-badge"/);
+});

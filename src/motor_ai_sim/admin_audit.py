@@ -62,7 +62,7 @@ ACTIONS = frozenset({
     "support.requests.status", "support.requests.delete",
     "support.chats.read", "support.config",
     # catalog / workspaces
-    "die.access", "die.retire", "die.restore", "workspace.read", "workspace.export",
+    "die.access", "die.rename", "die.retire", "die.restore", "workspace.read", "workspace.export",
     "config.applications",
     # Geometry tab Full: CAD-only construction edits and the server CAD rebuild they request
     "cad.params", "cad.rebuild",

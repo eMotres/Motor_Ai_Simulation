@@ -43,6 +43,7 @@ import { fetchFamilyTree } from '../../lib/familyTree';
 import { modeNames, type RowDie } from '../../lib/catalogRows';
 import { dutyEfficiencyPct } from '../../lib/dutyEfficiency';
 import { dutyLabel, isShortTime, type DutyClassInfo } from '../../lib/dutyClass';
+import { suggestDieName } from '../../lib/dieNames';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -880,13 +881,18 @@ const ActiveFamilyStrip: React.FC = () => {
         )}
         {offers.saveNewDie && (
           <Button size="small" variant="contained" disabled={busy}
-            onClick={() => setAskDie({
-              title: 'Save the machine on screen as a NEW die',
-              label: 'Die name',
-              initial: offers.saveNewDie!.initialName,
-              hint: offers.saveNewDie!.hint,
-              onSubmit: (n) => { void saveAsNewDie(n.trim()); },
-            })}
+            onClick={async () => {
+              // "<family base of the released die> <your suffix> <n>", editable (owner 2026-10-26)
+              const src = String((ctx as { released_from?: string } | null)?.released_from ?? '');
+              const initial = (await suggestDieName(src)) || offers.saveNewDie!.initialName;
+              setAskDie({
+                title: 'Save the machine on screen as a NEW die',
+                label: 'Die name',
+                initial,
+                hint: offers.saveNewDie!.hint,
+                onSubmit: (n) => { void saveAsNewDie(n.trim()); },
+              });
+            }}
             sx={{ ...btnSx, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
             {busy ? <CircularProgress size={11} /> : offers.saveNewDie.label}
           </Button>

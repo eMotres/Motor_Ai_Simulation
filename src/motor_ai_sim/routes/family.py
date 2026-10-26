@@ -1123,6 +1123,18 @@ def config_default_duty(c: dict) -> Optional[str]:
     return low[0] if low else names[0]
 
 
+def _cogging_view(die_doc: dict, cfg_doc: dict, stored_by_duty: Optional[dict], build_sig: str) -> Optional[dict]:
+    """The saved cogging torque of a configuration as a screen shows it (None = nothing saved; never raises)."""
+    try:
+        from motor_ai_sim import cogging as _cg
+        blk = _cg.block_of(cfg_doc)
+        if blk is None:
+            return None
+        return _cg.view(blk, current_sig=build_sig, cfg_doc=cfg_doc, stored_by_duty=stored_by_duty)
+    except Exception:                                        # noqa: BLE001 - a display number must never fail the tree
+        return None
+
+
 def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
     """Fingerprint of the BUILD a result was computed on: the die's stamped
     geometry + the configuration's free-key overrides + winding + materials.
@@ -1264,6 +1276,11 @@ def _restamp_results(c: dict, old_sig: str, new_sig: str) -> int:
             if isinstance(holder, dict) and holder.get("build_sig") == old_sig:
                 holder["build_sig"] = new_sig
                 n += 1
+    # the configuration's no-load cogging torque is judged by the same build
+    _cog = c.get("cogging")
+    if isinstance(_cog, dict) and _cog.get("build_sig") == old_sig:
+        _cog["build_sig"] = new_sig
+        n += 1
     return n
 
 
@@ -1985,7 +2002,7 @@ def duty_entry(die: str, cfg: str, duty: str) -> Optional[dict]:
 
 
 class DieCreate(BaseModel):
-    name: str
+    name: Optional[str] = None      # absent = "<family base> <your suffix> <n>" (die_names.py)
 
 
 # Computed numbers a RUN produced at this duty's operating point — never
@@ -2407,6 +2424,9 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 # saved — the catalog chip (when built) and the Controller
                 # tab both read that as "nothing saved yet", never an error.
                 "controller": c.get("controller"),
+                # The no-load cogging torque of the configuration (owner 2026-10-26): pk-pk, half-amplitude, share of
+                # the continuous torque, `stale` when the build moved.  Absent when none is saved.
+                **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsig)) else {}),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "saved_at": d.get("saved_at"),
@@ -2481,7 +2501,8 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
 
 @router.post("/die")
 def create_die(req: DieCreate, _w: dict = Depends(require_catalog_write)):
-    name = _check_name(req.name, "die")
+    name = _check_name(req.name or _default_die_name(_active_die_name(), _w.get("authorization")),
+                       "die")
     if _die_file(name).exists():
         raise HTTPException(409, detail=f"die '{name}' already exists — delete it "
                                         "first or pick another name")
@@ -2517,9 +2538,22 @@ class DieRename(BaseModel):
 
 
 @router.patch("/die/{die}")
-def rename_die(die: str, req: DieRename, _w: dict = Depends(require_catalog_write)):
-    """Rename a die: the folder moves, die.yaml and every configuration's
-    back-reference are updated."""
+def rename_die(die: str, req: DieRename, dry_run: bool = False,
+               _w: dict = Depends(require_catalog_write)):
+    """Rename a die - and everything that is keyed by its name.
+
+    One transaction (``motor_ai_sim.die_rename``): the folder moves, die.yaml and
+    every configuration's back-reference follow, and so do the stored duty results
+    and their history, the stored field files, the active context, the remembered
+    panel fields, the catalog cards; for a shared-catalog die also the account
+    grants, the per-die access list, the development projects that link the motor
+    (and their motor index and snapshots), the production records, the CAD models.
+    When one step fails the ones already done are undone.
+
+    ``?dry_run=1`` changes nothing and lists every place the rename would touch
+    (``changes``); ``manual`` lists deploy-managed files that still name the old
+    die and that the application cannot rewrite.
+    """
     die = _check_name(die, "die")
     new = _check_name(req.name, "die")
     _require_die_write(die, _w)
@@ -2527,34 +2561,42 @@ def rename_die(die: str, req: DieRename, _w: dict = Depends(require_catalog_writ
     if not (src / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
     if new == die:
-        return {"ok": True, "die": die}
+        return {"ok": True, "die": die, "dry_run": dry_run, "changes": [], "manual": []}
     _require_writable_die(die)
     # The rename stays in the layer that holds the die: a workspace die moves
     # inside the workspace, an admin's ``?layer=shared`` rename inside shared.
     dst = src.parent / new
     if dst.exists() or (_ws_layering() and _ws_resolve_die_dir(new) is not None):
         raise HTTPException(409, detail=f"die '{new}' already exists")
-    src.rename(dst)
-    d = _load_yaml(dst / "die.yaml", "die")
-    d["name"] = new
-    _save_yaml(dst / "die.yaml", d)
-    for cf in dst.glob("*.yaml"):
-        if cf.name == "die.yaml":
-            continue
-        c = _load_yaml(cf, "configuration")
-        c["die"] = new
-        _save_yaml(cf, c)
-    # Keep the active context pointing at the renamed die (same pattern as the
-    # upsert_duty auto-rename).  A stale context made geometry_lock_check 404 on
-    # the old path and return None — i.e. renaming the ACTIVE die silently
-    # unlocked the live machine until the next activate.
-    ctx = _read_ctx() or {}
-    if ctx.get("die") == die:
-        import json as _json
-        ctx["die"] = new
-        _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
-    log.info("family: die '%s' renamed to '%s'", die, new)
-    return {"ok": True, "die": new}
+    # The shared catalog's NAME changes only when the shared die is renamed; a
+    # private copy in a workspace does not retarget what everybody else's grants,
+    # projects and production records mean by that name.
+    glob_scope = True
+    if _ws_layering():
+        glob_scope = _classify_die_dir(src)[0] == _WS.LAYER_SHARED
+    import sys as _sys
+    from motor_ai_sim import die_rename as _dr
+    from motor_ai_sim.admin_audit import actor_of
+    try:
+        out = _dr.run(_sys.modules[__name__], die, new, src_dir=src, dst_dir=dst,
+                      dry_run=bool(dry_run), glob_scope=glob_scope,
+                      actor=actor_of(_w.get("user")))
+    except _dr.RenameBlocked as exc:
+        raise HTTPException(409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("family: die '%s' -> '%s' rename failed; rolled back", die, new)
+        bad = getattr(exc, "rollback_failures", None)
+        if bad:
+            raise HTTPException(500, detail=(
+                f"renaming die '{die}' failed ({type(exc).__name__}: {exc}) and the rollback "
+                f"was INCOMPLETE ({'; '.join(bad)}) - check the stores listed by "
+                f"PATCH /api/family/die/{die}?dry_run=1 before retrying"))
+        raise HTTPException(500, detail=(
+            f"renaming die '{die}' failed and was rolled back ({type(exc).__name__}: {exc}); "
+            "nothing was changed"))
+    return out
 
 
 @router.delete("/die/{die}")
@@ -2899,7 +2941,7 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(requ
 
 
 class DieDuplicate(BaseModel):
-    name: str                       # the copy's name
+    name: Optional[str] = None      # the copy's name; absent = "<family base> <your suffix> <n>"
 
 
 @router.post("/die/{die}/duplicate")
@@ -2909,7 +2951,7 @@ def duplicate_die(die: str, req: DieDuplicate,
     its duties and recorded results.  The copy starts UNLOCKED (it is a new
     stamp-to-be, free to edit), everything else rides along verbatim."""
     die = _check_name(die, "die")
-    new = _check_name(req.name, "die")
+    new = _check_name(req.name or _default_die_name(die, _w.get("authorization")), "die")
     _require_die_write(die, _w)
     src_dir = _die_dir(die)
     if not (src_dir / "die.yaml").is_file():
@@ -3999,11 +4041,68 @@ def _unique_name(exists, base: str) -> str:
     return f"{base} {i}"
 
 
+def _die_name_taken(name: str) -> bool:
+    return (_die_file(name).exists()
+            or (_ws_layering() and _ws_resolve_die_dir(name) is not None))
+
+
 def _unique_die_name(base: str) -> str:
-    def _exists(n: str) -> bool:
-        return (_die_file(n).exists()
-                or (_ws_layering() and _ws_resolve_die_dir(n) is not None))
-    return _unique_name(_exists, base)
+    return _unique_name(_die_name_taken, base)
+
+
+def _acting_account(authorization: Optional[str] = None) -> tuple:
+    """``(profile name, account id)`` of whoever is creating something right now -
+    the pair the naming rule (``die_names.user_suffix``) turns into a short suffix.
+
+    The caller bound for this request, else the one the header names; an
+    unconfigured local install is the ``admin`` account."""
+    ident = ""
+    try:
+        who = _WS.caller()
+        if not isinstance(who, dict):
+            from motor_ai_sim import motor_access as _ma
+            if authorization is None and _ma._REQ_AUTH.get() is not _ma._UNBOUND:
+                authorization = _ma._REQ_AUTH.get()
+            who = _auth.caller_identity(authorization)
+        ident = str(who.get("id") or "")
+    except Exception:                                       # noqa: BLE001
+        ident = ""
+    name = ""
+    if "@" in ident:
+        try:
+            from motor_ai_sim import users as _users
+            name = str((_users.get_user(ident) or {}).get("name") or "")
+        except Exception:                                   # noqa: BLE001
+            name = ""
+    return name, ident
+
+
+def _default_die_name(source: Optional[str], authorization: Optional[str] = None) -> str:
+    """The proposed name of a new variant of ``source``: ``<family base> <user suffix> <n>``
+    (owner decision 2026-10-26, ``motor_ai_sim.die_names``)."""
+    from motor_ai_sim import die_names as _dn
+    name, ident = _acting_account(authorization)
+    return _dn.suggest(str(source or ""), name, ident, _die_name_taken)
+
+
+def _active_die_name() -> str:
+    """The die the editor works on (the released one when the context is released), else ''."""
+    try:
+        c = _read_ctx() or _read_released() or {}
+        return str(c.get("die") or c.get("released_from") or "")
+    except Exception:                                       # noqa: BLE001
+        return ""
+
+
+@router.get("/die_name")
+def suggest_die_name(source: Optional[str] = None, authorization: str = Header(default=None)):
+    """The name the New / Duplicate / Save-as-new dialogs open with (editable there):
+    ``<family base of source> <your suffix> <n>``.  ``source`` defaults to the active die."""
+    from motor_ai_sim import die_names as _dn
+    src = (source or "").strip() or _active_die_name()
+    name, ident = _acting_account(authorization)
+    return {"name": _default_die_name(src, authorization), "base": _dn.family_base(src),
+            "suffix": _dn.user_suffix(name, ident)}
 
 
 def _unique_config_name(die: str, base: str) -> str:
@@ -4012,41 +4111,18 @@ def _unique_config_name(die: str, base: str) -> str:
 
 def _die_transition_name(source_die: str, die_geo: dict, live_geo: dict,
                          diffs: list) -> str:
-    """The auto-transition's target name, before the collision suffix.
+    """The auto-transition's target name, before the collision number.
 
-    A pole/segment (or any non-diameter) change keeps the source die's own
-    name and appends the new topology — owner's example, 2026-09-20:
-    'CIANO14 50 edited' 7 -> 8 poles/segment => 'CIANO14 50 edited 12s16p'.
-    A DIAMETER change additionally drops the old diameter token from the name
-    and states the new one: 'CIANO14 50 edited' Ø50 -> Ø60 =>
-    'CIANO14 edited Ø60 12s14p'.  Pure — pinned by tests, independent of the
-    collision suffix (``_unique_die_name``) and of ``_check_name``."""
-    def _int(v) -> int:
-        try:
-            return int(round(float(v)))
-        except (TypeError, ValueError):
-            return 0
-    ns = float(live_geo.get("num_seg") or 0)
-    slots = _int(ns * float(live_geo.get("num_slots_per_segment") or 0))
-    poles = _int(ns * float(live_geo.get("num_poles_per_segment") or 0))
-    topo = f"{slots}s{poles}p"
-    keys = {x["key"] for x in (diffs or [])}
-    base = str(source_die).strip()
-    if "stator_diameter" in keys:
-        old = die_geo.get("stator_diameter")
-        try:
-            token = "%g" % float(old)
-        except (TypeError, ValueError):
-            token = None
-        if token:
-            words = [w for w in base.split(" ") if w != token]
-            if words:
-                base = " ".join(words)
-        new_dia = live_geo.get("stator_diameter")
-        dia_txt = ("%g" % float(new_dia)) if isinstance(new_dia, (int, float)) \
-            else str(new_dia)
-        return f"{base} Ø{dia_txt} {topo}".strip()
-    return f"{base} {topo}".strip()
+    Owner decision 2026-10-26: "normal names, just add the user's suffix" - the new
+    die is ``<family base of the source> <your suffix>`` ("CIANO14 50 edited" ->
+    "CIANO14 50 vadim"); the diameter, the slots/poles and free words are NOT in
+    the name (they are visible in the parameters).  The collision number
+    (``_unique_die_name``: "... vadim 2") is added by the caller.  The geometry
+    arguments are kept for the signature the callers and tests know.  Pure given
+    the acting account - pinned by tests."""
+    from motor_ai_sim import die_names as _dn
+    name, ident = _acting_account()
+    return f"{_dn.family_base(str(source_die)) or 'Motor'} {_dn.user_suffix(name, ident)}"
 
 
 def _matching_die(live_geo: dict, exclude: str) -> Optional[str]:
@@ -4752,7 +4828,7 @@ def reattach(req: Reattach, _w: dict = Depends(require_catalog_write)):
 
 
 class SaveAsNewDie(BaseModel):
-    name: str                            # the new die's name
+    name: Optional[str] = None           # the new die's name; absent = "<family base> <your suffix> <n>"
     config: Optional[str] = None         # default: the released configuration's name
     duty: Optional[str] = None           # default: the released duty's name, else "rated"
     mode: Optional[str] = None           # "motor" | "generator"; default: the live Simulation mode
@@ -4775,7 +4851,9 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
     optimised geometry.  Nothing here touches the released die or the live
     config; it only writes the new die's folder and the context file.
     """
-    name = _check_name(req.name, "die")
+    rel = released_state() or {}
+    name = _check_name(req.name or _default_die_name(rel.get("released_from") or _active_die_name(),
+                                                     _w.get("authorization")), "die")
     if req.mode is not None and req.mode not in ("motor", "generator"):
         raise HTTPException(422, detail="mode must be 'motor' or 'generator'")
     if _die_file(name).exists() or (_ws_layering() and _ws_resolve_die_dir(name) is not None):
@@ -4785,7 +4863,6 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
     if not geo:
         raise HTTPException(500, detail="live config has no geometry block")
     sim = _sim_of(live)
-    rel = released_state() or {}
     _cfg_src = req.config or rel.get("released_config")
     if not _cfg_src:
         try:

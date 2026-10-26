@@ -16,6 +16,14 @@ export const projectAdminMembers = (
   return [...byEmail.values()];
 };
 
+/** The project's owner(s) for the admin list: owner members first, then pending owner invites (marked). */
+export const projectOwnerLabel = (
+  members: AdminProjectMemberLike[] = [], pendingInvites: AdminProjectMemberLike[] = [],
+): string => {
+  const owners = projectAdminMembers(members, pendingInvites).filter((m) => m.role === 'owner');
+  return owners.length ? owners.map((m) => (m.pending ? `${m.email} (pending)` : m.email)).join(', ') : '—';
+};
+
 export const projectRoleBody = (email: string, role: AdminProjectMemberLike['role']) => ({ email, role });
 export const projectOpenIntent = (projectId: string) => ({ storageKey: projectOpenStorageKey, projectId });
 export { projectOpenEvent, projectOpenStorageKey };

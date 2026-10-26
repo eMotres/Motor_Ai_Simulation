@@ -92,6 +92,17 @@ test('wiring: ONE display system - Configure decides points-limited from the loa
   assert.match(tab, /configureShow\(loaded\.view\) === 'points-limited'/);
   assert.match(tab, /<PointsConfigure view=\{loaded\.view\}/);
   assert.match(tab, /: <ConfiguratorPanel \/>/);                                          // the full path is the fallback
+  // Slow / stale Configure load (owner 2026-10-26): the REQUESTED motor is shown at once as a clean loading state, the view is
+  // fetched at the click (in parallel with the machine load), the ordinary Configurator is never drawn first and swapped.
+  assert.match(tab, /data-testid="configure-loading"/);
+  assert.match(tab, /loaded\.selection !== null && !pointsLimited && \(loaded\.status === 'loading' \|\| loaded\.applying\)/);
+  const hook = src('../../../lib/useLoadedMotorView.ts');
+  assert.match(hook, /getFamilyTarget\(\)/);                                              // the requested motor, not the late account record
+  assert.match(hook, /if \(state\.key !== key\) return \{ selection, status: 'loading', view: null/);   // never the previous motor's view
+  const fam = src('../../../lib/familyLoad.ts');
+  assert.match(fam, /target = \{ die, config, duty \};/);                                   // set at the click
+  assert.match(src('../../../lib/lastMotor.ts'), /status === 'loaded'\) clearFamilyTarget\(\)/);
+  assert.doesNotMatch(src('../../../components/compare/PointsConfigure.tsx'), /developmentApi\.motors\(/);   // no heavy project list
   // the second path is gone: no points-only store, no separate open route from a project
   assert.throws(() => src('../../../stores/pointsConfigureStore.ts'));
   assert.throws(() => src('../../../lib/stripActions.ts'));
@@ -104,8 +115,10 @@ test('wiring: ONE display system - Configure decides points-limited from the loa
   const page = src('../components/DevelopmentPage.tsx');
   assert.match(page, /canEditProject && <MotorNoteField value=\{live\.note \?\? ''\}/);       // the note editor sits in the variant's group header
   const admin = src('../../../components/admin/sections/ProjectsSection.tsx');
-  assert.match(admin, /<MotorNoteField value=\{m\.note \?\? ''\}/);
-  assert.match(admin, /\/motors\/note', 'PATCH'/);
+  assert.doesNotMatch(admin, /MotorNoteField|\/motors\/note/);                             // no inline note editor in the admin drawer
+  assert.match(admin, /data-testid="linked-motor-row"/);                                 // one grid row per motor
+  assert.match(admin, /gridTemplateColumns: 'minmax\(0,1fr\) 112px 32px 32px 32px'/);
+  assert.match(admin, /\/motors\/status', 'PATCH'/);
   const panel = src('../../../components/compare/PointsConfigure.tsx');
   assert.match(panel, /<Slider disabled/);                                       // continuous knobs stay disabled
   assert.match(panel, /<StoredFieldViewer /);                                    // read-only maps, no run buttons

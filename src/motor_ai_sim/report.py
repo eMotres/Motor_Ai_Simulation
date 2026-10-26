@@ -6968,6 +6968,35 @@ def _match_duty_by_point(duties: List[Dict[str, Any]],
     return out
 
 
+def _cogging_view_for(die: str, cfg_doc: Dict[str, Any], stored: Optional[Dict[str, Any]] = None
+                      ) -> Optional[Dict[str, Any]]:
+    """The saved no-load cogging torque of this configuration (``cogging.view``) or None.  Never raises."""
+    try:
+        from motor_ai_sim import cogging as _cg
+        return _cg.for_config(die, cfg_doc, stored)
+    except Exception:                                       # noqa: BLE001 - a missing row must not fail a report
+        return None
+
+
+def cogging_words(v: Optional[Dict[str, Any]]) -> str:
+    """The note beside the cogging row: one clause - half-amplitude, share of the continuous torque, magnet state."""
+    if not v:
+        return ""
+    bits = ["no current; half-amplitude %s N·m" % _fmt(v.get("half_amp_Nm"), 4)]
+    if v.get("pct_of_continuous") is not None:
+        bits.append("%s %% of the continuous torque" % _fmt(v["pct_of_continuous"], 2))
+    elif v.get("pct_of_rated_duty") is not None:
+        bits.append("%s %% of the rated duty torque (%s)"
+                    % (_fmt(v["pct_of_rated_duty"], 2), v.get("continuous_torque_source") or "rated duty"))
+    if v.get("magnet_temp_c") is not None:
+        bits.append("magnets %s °C" % _fmt(v["magnet_temp_c"], 0))
+    if v.get("overrides"):
+        bits.append("non-standard run: " + ", ".join(v["overrides"]))
+    if v.get("stale"):
+        bits.append("computed on an older build of this machine")
+    return "; ".join(bits)
+
+
 def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
                   th: Dict[str, Any], me: Dict[str, Any],
                   cp: Optional[Dict[str, Any]],
@@ -6993,6 +7022,8 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: per-duty store unavailable (%s)", exc)
     last = _machine_last_entries(th, me, cp)
+    # COGGING TORQUE is the configuration's, the same for every duty column (owner 2026-10-26).
+    _cog_view = _cogging_view_for(die, cfg_doc, stored)
     # WHO OWNS each machine-level answer.  The context's duty owns all of them
     # while the editor has this configuration open; otherwise each is matched to
     # the duty it was solved at (2026-09-09) — see `_match_duty_by_point`.
@@ -7029,6 +7060,7 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
             "res": res,
             "origin": origin,
             "active": (name == active),
+            "cogging": _cog_view,
         }, cfg_doc, die, cfg)
         # F1/F2 (L13 server audit 2026-09-19): whether every record this duty
         # leans on — the electromagnetic data above included — was solved on
@@ -9358,6 +9390,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "em_run": em_run, "snap": snap, "th": th, "me": me, "cp": cp,
         "cols": cols, "map_owner": map_owner, "active_duty": active_duty,
         "em_duty": em_duty, "batt": batt, "ctxs": ctxs,
+        "cogging": (cols[0].get("cogging") if cols else _cogging_view_for(die, cfg_doc)),
         "pic_duty": pic_duty, "pic_src": pic_src,
         # The REPORT duty's own stored fields — what sections 6 and 7 read
         # when they are not drawing a pair (BL-1).
@@ -9455,6 +9488,9 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                     brg, sources, delta, batt,
                     used_live=bool(D.get("em_from_run")), cols=cols, ctxs=ctxs,
                     supply=D.get("supply"), sec=sec)
+    _rec = _recommended_line(die, cfg)
+    if _rec:
+        story.append(_para("\u2605 " + _rec, st["body"]))
     story.append(PageBreak())
     # The stamp every chart drawn from the REPORT duty's own summary carries —
     # the same one `report_docx._report_tag` builds (B9 / MJ-5).
@@ -9512,7 +9548,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                       coupled=((_col_of(cols, str(d_duty.get("name") or ""))
                                 or {}).get("res") or {}).get("coupled"),
                       fp_mismatch=duty_fp_mismatch, fp_note=duty_fp_note,
-                      sec=sec)
+                      sec=sec, cogging=D.get("cogging"))
     # From here on a section opens a NEW page only when less than half of the
     # current one is left: with full-width field maps a hard break after each
     # section left a map alone on a page with three quarters of white under it
@@ -9562,6 +9598,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                         detail_from_duty=bool(D.get("me_detail_from_duty")))
     story.append(PageBreak())
     story += _warnings_page(st, cols, ctxs, sec)
+    story.append(CondPageBreak(PAGE_H * 0.35))
+    story += _still_to_compute_page(st, die, cfg, cfg_doc)
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _notes_page(st, sources, brg, em, th, me, cp, sec)
     story.append(CondPageBreak(PAGE_H * 0.35))
@@ -11364,9 +11402,10 @@ def em_torque_rows(em: Dict[str, Any],
                    batt: Optional[Dict[str, Any]] = None,
                    drive: str = "sine",
                    em_sine: Optional[Dict[str, Any]] = None,
-                   inverter: Optional[Dict[str, Any]] = None) -> List[List[str]]:
+                   inverter: Optional[Dict[str, Any]] = None,
+                   cogging: Optional[Dict[str, Any]] = None) -> List[List[str]]:
     """Torque, power and voltage, 2-D beside the 3-D-corrected column.  Header
-    row included.
+    row included.  ``cogging`` (``cogging.view``) adds the no-load cogging row beside the ripple.
 
     ``batt`` is optional and only buys one row: the modulation index at the
     pack minimum, which cannot be formed without a pack (reviewer 2026-09-14 /
@@ -11547,6 +11586,9 @@ def em_torque_rows(em: Dict[str, Any],
                 "CARRIER — the low-order ripple the 5 % limit is on is the row "
                 "below" if _pwm_drive else
                 "peak-to-peak over mean, cogging included")])
+    if cogging and cogging.get("pkpk_Nm"):
+        tp.append(["Cogging torque, peak-to-peak [N·m]", _fmt(cogging["pkpk_Nm"], 4),
+                   cogging_words(cogging)])
     if _pwm_drive and _g(em_sine or {}, "T_ripple_pct") is not None:
         tp.append(["…of which low-order (cogging + slotting), sinusoidal "
                    "run [%]", _fmt(_g(em_sine or {}, "T_ripple_pct"), 1),
@@ -12371,7 +12413,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
              coupled: Optional[Dict[str, Any]] = None,
              fp_mismatch: bool = False,
              fp_note: str = "",
-             sec: Optional[Dict[str, int]] = None) -> List[Any]:
+             sec: Optional[Dict[str, int]] = None,
+             cogging: Optional[Dict[str, Any]] = None) -> List[Any]:
     out: List[Any] = [_para(section_heading(None, "em"), st["h1"])]
     if not em:
         out.append(_para(EM_PAGE_UNSOLVED, st["warn"]))
@@ -12400,7 +12443,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
     # reportlab — "…I_line =" on the page, reviewer 2026-09-13).
     out.append(_table([[r[0], r[1], _para(r[2], st["cell"])]
                        for r in em_torque_rows(em, batt, drive, em_sine,
-                                               inverter)],
+                                               inverter,
+                                               cogging=cogging)],
                       [175, 95, CONTENT_W - 270], header=True, size=8.8))
     # The k_3d footnote belongs to the TORQUE table above, which really has
     # two columns (reviewer 2026-09-14, B1).
@@ -18241,6 +18285,10 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     R("Torque ripple [%]",
       lambda c: _e(c, "T_ripple_pct")
       or (c.get("result") or {}).get("ripple_pct"), 2)
+    # NO-LOAD COGGING, a property of the configuration (owner 2026-10-26): the same number in every column.
+    if any((c.get("cogging") or {}).get("pkpk_Nm") for c in cols):
+        R("Cogging torque, peak-to-peak [N·m]",
+          lambda c: (c.get("cogging") or {}).get("pkpk_Nm"), 4)
     # TWO RIPPLES ON A PWM DOCUMENT (2026-09-14).  The row above is the supply's
     # own — on a bridge it is the CARRIER's, tens of per cent — and the 5 % gate
     # in the warnings section is on the low-order one, which is the sinusoidal
@@ -20404,6 +20452,38 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
            % str(ex.get("ed_limiting_part") or "hottest part")
            + _ed_limit_clause(ex)]]
           if _numf(ex.get("ed_allowable_pct")) is not None else [])
+
+
+def _recommended_line(die: str, cfg: str) -> str:
+    try:
+        from motor_ai_sim import report_missing as RM
+        return RM.recommended_banner(die, cfg)
+    except Exception:                                       # noqa: BLE001
+        return ""
+
+
+def _still_to_compute_rows(die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What the variant still needs (``report_missing``); a store that cannot be read is one more missing result, never an error."""
+    try:
+        from motor_ai_sim import report_missing as RM
+        return RM.still_to_compute(die, cfg, cfg_doc or {})
+    except Exception:                                       # noqa: BLE001
+        log.debug("report: could not list the missing results", exc_info=True)
+        return []
+
+
+def _still_to_compute_page(st, die: str, cfg: str, cfg_doc: Dict[str, Any]) -> List[Any]:
+    """The "Still to compute" section: every missing or stale result once, by duty (owner 2026-10-26)."""
+    from motor_ai_sim import report_missing as RM
+    out: List[Any] = [_para(RM.HEADING, st["h1"])]
+    rows = _still_to_compute_rows(die, cfg, cfg_doc)
+    if not rows:
+        out.append(_para(RM.NONE_LINE, st["body"]))
+        return out
+    out.append(_para(RM.INTRO, st["body"]))
+    for line in RM.as_lines(rows):
+        out.append(_para("\u2022 " + line, st["body"]))
+    return out
 
 
 def _warnings_page(st, cols: List[Dict[str, Any]],

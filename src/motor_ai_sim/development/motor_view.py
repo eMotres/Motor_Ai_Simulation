@@ -253,7 +253,10 @@ def _rotor_stress_block(rs: Dict[str, Any]) -> Dict[str, Any]:
                                          "pull_mpa": _num(pull.get("pressure_peak_mpa")),
                                          "pull_per_pole_n": _num(pull.get("radial_force_per_pole_n")),
                                          "pull_label": pull.get("label"),
-                                         "pull_estimate": pull.get("estimate")}.items() if v is not None},
+                                         "pull_estimate": pull.get("estimate"),
+                                         # single snapshot (not a worst case)
+                                         # or the frames' envelope (F1)
+                                         "pull_load_basis": pull.get("load_basis")}.items() if v is not None},
         "retention": _pick(rs.get("retention"), ("status", "verdict", "message")),
         "load_case": rs.get("load_case"),
         "magnet_retention": _pick(rs.get("magnet_retention"), ("verdict", "share", "seated")),

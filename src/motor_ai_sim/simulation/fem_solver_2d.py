@@ -2862,6 +2862,11 @@ SIGMA_SHAFT  = 4.5e6             # carbon-steel shaft
 # eddy loss by ~400x for a current that cannot follow the fibres.  Last-resort
 # default only: the real number comes from the assigned material's `sigma`.
 SIGMA_SLEEVE = 80.0              # S/m
+#: Most frames of the air around the rotor a run keeps for the magnetic pull
+#: (``pull_frames`` in the field snapshot); a longer reported window is
+#: decimated evenly and says so (``stride``).  1024 frames x ~5,000 elements
+#: is ~40 MB of float32 per component before the duty store compresses it.
+_PULL_FRAMES_MAX = 1024
 
 
 
@@ -7611,6 +7616,56 @@ def _fem_transient_sliding_band_once(
     _gap_idx2 = (np.concatenate([_gap_s_idx, _gap_r_idx + nst])
                  if (_gap_s_idx.size or _gap_r_idx.size) else np.array([], int))
     _bgap2: list = []
+    # ── THE AIR AROUND THE ROTOR, ON EVERY FRAME — for the magnetic pull ─────
+    # (review F1, 2026-10-26).  The rotor mechanics reads the Maxwell stress of
+    # this field on the rotor's surface (``mechanical.magnetic_pull``), and ONE
+    # stored instant is not a worst case over the rotation: every pole can
+    # share one slot phase at an instant, so no pole spread reveals the ripple.
+    # When a field snapshot is asked for, the element-mean B of the air that
+    # touches the rotor solids, of the sleeve and of the rotor side of the gap
+    # (a complete annulus — the pull checks itself against its integral) is
+    # kept on every frame of the REPORTED window.  Rotor-half elements only:
+    # they sit in the ROTOR frame on every frame, like the snapshot's.
+    _pull_fr_idx = np.array([], int)
+    _pull_fr_bx: list = []
+    _pull_fr_by: list = []
+    _pull_fr_ang: list = []
+    _pull_fr_t: list = []
+    _pull_fr_stride = 1
+    if return_field:
+        try:
+            _pf_rt = np.asarray(tr).astype(int)
+            _pf_T = np.asarray(mesh_all.t)
+            _pf_Tr = _pf_T[:, nst:]
+            _pf_P = np.asarray(mesh_all.p)
+            _pf_solid = (_pf_rt == int(DOM_ROTOR)) | (_pf_rt >= int(DOM_MAG_BASE))
+            _pf_air = np.isin(_pf_rt, (int(DOM_AIR), int(DOM_AIRGAP),
+                                       int(DOM_BAND), int(DOM_SLEEVE)))
+            if _pf_solid.any() and _pf_air.any():
+                _pf_touch = np.zeros(_pf_P.shape[1], dtype=bool)
+                _pf_touch[_pf_Tr[:, _pf_solid].ravel()] = True
+                _pf_keep = _pf_air & _pf_touch[_pf_Tr].any(axis=0)
+                _pf_keep |= _pf_rt == int(DOM_SLEEVE)
+                _pf_rc = np.hypot(_pf_P[0][_pf_Tr].mean(axis=0),
+                                  _pf_P[1][_pf_Tr].mean(axis=0))
+                _pf_rv = np.hypot(_pf_P[0][_pf_Tr[:, _pf_solid]],
+                                  _pf_P[1][_pf_Tr[:, _pf_solid]])
+                _pf_st = np.asarray(ts).astype(int) == int(DOM_STATOR)
+                _pf_ring = np.isin(_pf_rt, (int(DOM_AIRGAP), int(DOM_BAND)))
+                if _pf_st.any():
+                    _pf_sv = np.hypot(_pf_P[0][_pf_T[:, :nst][:, _pf_st]],
+                                      _pf_P[1][_pf_T[:, :nst][:, _pf_st]])
+                    if float(_pf_rv.max()) <= float(_pf_sv.min()):
+                        # inner rotor: the gap ring lies outside the rotor
+                        _pf_keep |= _pf_ring & (_pf_rc > float(_pf_rv.max()))
+                    elif float(_pf_rv.min()) >= float(_pf_sv.max()):
+                        # outer rotor: inside it
+                        _pf_keep |= _pf_ring & (_pf_rc < float(_pf_rv.min()))
+                _pull_fr_idx = np.nonzero(_pf_keep)[0] + nst
+        except Exception as _pf_e:      # noqa: BLE001 - a store convenience
+            log.warning("magnetic-pull frames: element set not built (%s)",
+                        _pf_e)
+            _pull_fr_idx = np.array([], int)
     # FROZEN PERMEABILITY (frozen_nu): converge the saturation ONCE at frame
     # 0 (extended Picard) then hold the per-element ν fixed for every rotor
     # position — the industry-standard honest cogging/ripple method.  It
@@ -11789,6 +11844,19 @@ def _fem_transient_sliding_band_once(
         if rotor_eddy and not _GAP_PROBE_CTX.get():
             # rotor-frame nodal A (magnet/shaft eddy via honest_rotor_eddy)
             _histA_rot2.append(A2[_rot_vdof].copy())
+        if _pull_fr_idx.size:
+            # the air around the rotor on this frame (see the set above) —
+            # every frame of the reported window, evenly decimated past
+            # _PULL_FRAMES_MAX so a long fine schedule stays a bounded store
+            _pf_k0 = int(_vskip) + int(_dmskip)
+            if k >= _pf_k0:
+                _pf_nw = max(int(n_total) - _pf_k0, 1)
+                _pull_fr_stride = max(1, -(-_pf_nw // _PULL_FRAMES_MAX))
+                if (k - _pf_k0) % _pull_fr_stride == 0:
+                    _pull_fr_bx.append(_bx_el[_pull_fr_idx].astype(np.float32))
+                    _pull_fr_by.append(_by_el[_pull_fr_idx].astype(np.float32))
+                    _pull_fr_ang.append(float(theta_eff))
+                    _pull_fr_t.append(float((k - _pf_k0) * dt))
         if _anim_idx and k in _anim_idx:
             # Animation keyframe.  The band encodes rotation in the slip
             # PAIRING, not in coordinates, so the rotor half sits at angle 0 in
@@ -11863,6 +11931,19 @@ def _fem_transient_sliding_band_once(
                             "signs", [1.0] * len(_tgs_i))):
                         _u_n[_bdofs(_elm[_tg_i])] = float(_Uev[_ci]) * _sg_i
                 _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
+    if _snap2 is not None:
+        # Did the sleeve carry induced current in THIS field?  (review F4)  The
+        # magnetic pull reads the field next to the rotor as current-free air;
+        # with the sleeve in the coupled sigma*dA/dt solve it is not, and the
+        # pull refuses such a field instead of guessing.
+        _snap2["sleeve_eddy_in_field"] = bool("sleeve" in _Msig_grp)
+        if _pull_fr_bx:
+            _snap2["pull_frames"] = {
+                "elem": _pull_fr_idx.astype(np.int32),
+                "bx": np.stack(_pull_fr_bx), "by": np.stack(_pull_fr_by),
+                "rotor_angle_deg": np.asarray(_pull_fr_ang, dtype=np.float32),
+                "time_s": np.asarray(_pull_fr_t, dtype=np.float64),
+                "stride": int(_pull_fr_stride)}
     # ── What the run COST, captured before the settling frames are stripped ──
     # `n_total` is about to be decremented back to the REPORTED window, and both
     # the log line and the result dict below read it — so both understated the

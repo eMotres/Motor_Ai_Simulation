@@ -1378,14 +1378,21 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             base["pull"] = {
                 **_pick(_pl, ("source", "label", "estimate", "gap_side",
                               "b_source", "instant", "b_gap_t",
-                              "b_equivalent_t", "n_poles")),
+                              "b_equivalent_t", "n_poles",
+                              # single snapshot (not a worst case) or the
+                              # frames' envelope — review F1, 2026-10-26
+                              "load_basis", "worst_case")),
                 **{k: _f(_pl.get(k)) for k in (
                     "pressure_peak_mpa", "pressure_mean_mpa",
                     "pressure_nominal_mpa", "radial_force_per_pole_n",
                     "radial_force_total_n", "maxwell_torque_nm",
                     "matched_fraction") if _f(_pl.get(k)) is not None},
                 "envelope": ({"worst_pole": _env.get("worst_pole"),
-                              "pole_spread": _env.get("pole_spread")}
+                              "pole_spread": _env.get("pole_spread"),
+                              "n_frames": _env.get("n_frames"),
+                              "max_total": _env.get("max_total"),
+                              "envelope_over_max_total": _f(
+                                  _env.get("envelope_over_max_total"))}
                              if _env else None),
                 "check": ({"ratio": _f(_chk.get("ratio")),
                            "within_tol": _chk.get("within_tol"),

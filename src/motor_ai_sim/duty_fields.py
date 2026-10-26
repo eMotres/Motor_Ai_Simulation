@@ -351,6 +351,27 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                   else fld.get("A_z_per_node"))
         if az is not None:
             arrays["a_z_per_node"] = az
+        # The AIR AROUND THE ROTOR on every frame of the settled window
+        # (2026-10-26, review F1 of the magnetic pull): the pull is an
+        # envelope over these frames, not over the one instant above.
+        pf = fld.get("pull_frames") if isinstance(fld.get("pull_frames"),
+                                                  dict) else None
+        pull_frames_meta = None
+        if pf and pf.get("bx") is not None and pf.get("elem") is not None:
+            arrays["pull_frames_elem"] = _i32(pf.get("elem"))
+            arrays["pull_frames_bx"] = _f32(pf.get("bx"))
+            arrays["pull_frames_by"] = _f32(pf.get("by"))
+            arrays["pull_frames_rotor_angle_deg"] = _f32(
+                pf.get("rotor_angle_deg"))
+            arrays["pull_frames_time_s"] = _f32(pf.get("time_s"))
+            pull_frames_meta = {
+                "n": int(np.asarray(pf["bx"]).shape[0]),
+                "n_elements": int(np.asarray(pf["elem"]).size),
+                "stride": int(pf.get("stride") or 1),
+                "what": ("element-mean Bx, By of the air touching the rotor, "
+                         "the sleeve and the rotor side of the gap, rotor "
+                         "frame, every frame of the reported (settled) "
+                         "window")}
         arrays = {k: v for k, v in arrays.items() if v is not None}
         meta = {
             "computed_at": meta_in.get("computed_at"),
@@ -364,8 +385,18 @@ def pack_em(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # in the rotor frame (the sliding-band rotor mesh stays at its
             # drawn angle) — the magnetic pull quotes it
             "instant": "last time step of the transient (rotor frame)",
+            # the settled window's frames of the air around the rotor, and
+            # whether the sleeve carried induced current in this field — the
+            # magnetic pull refuses a sleeve that did (2026-10-26)
+            "pull_frames": pull_frames_meta,
+            "sleeve_eddy_in_field": (bool(fld.get("sleeve_eddy_in_field"))
+                                     if fld.get("sleeve_eddy_in_field")
+                                     is not None else None),
             "units": {"vertices": "mm", "b_mag_per_tri": "T",
                       "bx_per_tri": "T", "by_per_tri": "T",
+                      "pull_frames_bx": "T", "pull_frames_by": "T",
+                      "pull_frames_rotor_angle_deg": "deg",
+                      "pull_frames_time_s": "s",
                       "loss_dens_per_tri": "W/m^3",
                       "demag_coef_per_tri": "fraction of Br remaining",
                       "a_z_per_node": "Wb/m"},

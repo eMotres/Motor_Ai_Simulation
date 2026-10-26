@@ -576,6 +576,8 @@ def _resolve_pull(pull: Optional[str], pull_duty: Optional[str],
             geometry = "match"
     try:
         fld = mpl.em_field_from_record(rec)
+        # a sleeve that carried induced current is not air (review F4)
+        fld.check_current_free()
     except mpl.PullFieldError as exc:
         raise _pull_422("pull_duty", duty, str(exc), kind="unusable")
     origin = {"die": die, "config": cfg, "duty": duty,
@@ -583,7 +585,11 @@ def _resolve_pull(pull: Optional[str], pull_duty: Optional[str],
               "saved_at": meta.get("saved_at"),
               "geometry": geometry,
               "point": meta.get("point"),
-              "solver": meta.get("solver")}
+              "solver": meta.get("solver"),
+              # which instants the load is built from (review F1)
+              "frames": int(fld.n_frames),
+              "load_basis": ("frames_envelope" if fld.n_frames
+                             else "single_snapshot")}
     spec = mpl.PullSpec("em", field=fld, origin=origin,
                         label=f"EM field of duty '{duty}' ({die} / {cfg})")
     params = {"pull": "em", "pull_duty": duty}

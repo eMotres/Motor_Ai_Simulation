@@ -6997,10 +6997,9 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
     if not geo_fp:
         return None
     try:
-        import json as _json
-        from motor_ai_sim.workspace import root as _ws_root
-        _p = _ws_root() / "end_effect_passports.json"
-        store = _json.loads(_p.read_text(encoding="utf-8")) or {}
+        # shared store (every account) overlaid by this workspace's own - a passport is the machine's (owner 2026-10-27)
+        from motor_ai_sim import end3d_store as _e3_store
+        store = _e3_store.load()
         from motor_ai_sim.end3d_factors import enrich as _e3_enrich
         rec = store.get(str(geo_fp))
         if isinstance(rec, dict):

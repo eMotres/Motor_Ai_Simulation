@@ -231,7 +231,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
         </Box>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart && showTiles ? 'minmax(0,1.5fr) minmax(320px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
+        {/* the chart sits next to the tiles (owner 2026-10-26: "move the chart left"): the tile column takes its content width (up to 860 px), the chart the rest */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart && showTiles ? 'fit-content(860px) minmax(360px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
           {showTiles && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
             <Tooltip title={emChipTip}>
               <Chip size="small" label={emChip} data-testid="em-source-chip" sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />

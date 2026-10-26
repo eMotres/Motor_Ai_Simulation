@@ -243,7 +243,10 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               </TileRow>
             ))}
             {dcBus !== null && (
-              <Box sx={{ mt: 0.5 }} data-testid="battery-panel">
+              // the same size as in the ordinary Configure (owner 2026-10-26): there the panel shares a row with the cross-section
+              // and the side view (flex 1 1 300px, about a third of the page); here it sat alone in the wide column and its bar and
+              // labels scaled up ~3x
+              <Box sx={{ mt: 0.5, maxWidth: 520 }} data-testid="battery-panel">
                 <BatteryPanel vDc={dcBus} bat={battery} onChange={setBattery} machinePack={specBattery} onReset={() => { if (specBattery) setBattery(specBattery); }}
                   stockNote={!specBattery} vDcTip={t('points.batteryMarkerTip', { duty: duty ?? '' })} />
               </Box>

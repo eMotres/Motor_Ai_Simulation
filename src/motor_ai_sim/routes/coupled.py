@@ -1077,6 +1077,43 @@ def _cycle_catalogue(body: Dict[str, Any],
     return duties, duty
 
 
+def _continuous_duty(die: str, cfg: str, duties: List[Dict[str, Any]],
+                     this_duty: str) -> str:
+    """The configuration's CONTINUOUS duty when none is named "rated…" — the
+    state a machine is in when a peak follows normal operation (owner
+    2026-10-27: an eVTOL's emergency peak comes after cruise, warm).
+
+    A duty saved as ``duty_class: continuous`` or whose stored coupled record
+    holds its current (``duty_class.classify``); of several, the one whose
+    stored map has the hottest winding, so the warm start is never the mildest
+    one.  ``""`` when there is none."""
+    try:
+        from motor_ai_sim import duty_class as _dc
+        from motor_ai_sim import duty_results as _dr
+        recs = _dr.get(die, cfg) or {}
+    except Exception:  # noqa: BLE001 — a store read never fails a solve
+        log.debug("coupled: could not read the duty records", exc_info=True)
+        return ""
+    best, best_t = "", None
+    for d in (duties or ()):
+        nm = str((d or {}).get("name") or "")
+        if not nm or nm == str(this_duty):
+            continue
+        rec = recs.get(nm) or {}
+        cls = _dc.classify(d, rec.get("coupled"))
+        if (cls or {}).get("duty_class") != _dc.CONTINUOUS:
+            continue
+        w = ((((rec.get("thermal") or {}).get("components") or {})
+              .get("winding") or {}).get("avg"))
+        try:
+            w = float(w)
+        except (TypeError, ValueError):
+            continue                      # no map: no warm state to take
+        if best_t is None or w > best_t:
+            best, best_t = nm, w
+    return best
+
+
 def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
                    this_duty: str) -> Tuple[Dict[str, float], str, str]:
     """The node MEANS of the RATED duty's own stored thermal map — the warm
@@ -1096,9 +1133,11 @@ def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
             rated = nm
             break
     if not rated:
-        return {}, "", ("this configuration has no rated duty beside %r, so "
-                        "there is no warm state to start a pull from"
-                        % this_duty)
+        rated = _continuous_duty(die, cfg, duties, this_duty)
+    if not rated:
+        return {}, "", ("this configuration has no rated or continuous duty "
+                        "beside %r, so there is no warm state to start a pull "
+                        "from" % this_duty)
     try:
         from motor_ai_sim import duty_results as _dr
         from motor_ai_sim.thermal_capacities import NODES as _NODES

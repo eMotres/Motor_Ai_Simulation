@@ -1173,7 +1173,8 @@ def _shared_source(src: Any) -> bool:
 #: the code a stored Configure answer is computed by: a deploy that changes it invalidates every stored answer
 _CONFIGURE_CODE = ("routes/catalog.py", "configure_limits.py", "configure_load.py", "configure_anchor.py",
                    "propeller_s1.py", "propeller.py", "cooling_options.py", "passport_store.py", "duty_class.py",
-                   "duty_results.py", "applications.py", "routes/propellers.py", "modules/motor_mass.py")
+                   "duty_results.py", "applications.py", "routes/propellers.py", "modules/motor_mass.py",
+                   "bearings.py", "duty_kind.py")
 
 
 #: the version of the stored Configure answers; part of every stamp (bump it to make every stored answer stale)
@@ -1198,6 +1199,11 @@ def _configure_stamp(src: Any = None) -> str:
         paths += [sr / "cooling_options.yaml", sr / "materials_library.yaml"]
     except Exception:                                           # noqa: BLE001
         log.debug("configure stamp: dies unavailable", exc_info=True)
+    try:                                                        # the bearing library: the speed limit reads its cards
+        from motor_ai_sim import bearings as _brg
+        paths.append(_brg._lib_path())
+    except Exception:                                           # noqa: BLE001
+        log.debug("configure stamp: bearing library unavailable", exc_info=True)
     try:
         from motor_ai_sim import cooling_options as _co, passport_store as _ps, propeller as _pp
         from motor_ai_sim import propeller_s1 as _s1
@@ -1498,35 +1504,54 @@ def _mark_duty_classes(pr: dict, docs: list) -> None:
 @router.patch("/{motor_id}/configure_limits")
 def set_configure_limits(motor_id: str, body: dict,
                          authorization: Optional[str] = Header(default=None)):
-    """Admin: set (or clear with ``null``) the stack-length maximum of ONE
-    machine.  Stored on its catalogue card beside the passport; Configure reads
-    it as the physical maximum of its length slider."""
+    """Admin: set (or clear with ``null``) the stack-length maximum (``L_max_mm``) and / or the speed maximum
+    (``rpm_max``, owner 2026-10-28) of ONE machine.  Stored on its catalogue card beside the passport; Configure
+    reads them as the physical maxima of its length and speed sliders.  A key that is not sent is left as it is."""
     from datetime import datetime
     from motor_ai_sim import configure_limits as _cl
     ident = _caller_identity(authorization)
     if not ident.get("is_admin"):
         raise HTTPException(status_code=403,
                             detail="only an admin can set a machine's Configure limits")
-    if "L_max_mm" not in (body or {}):
-        raise HTTPException(status_code=422, detail="send {\"L_max_mm\": number | null}")
-    try:
-        v = _cl.validate_l_max(body.get("L_max_mm"))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    found = {"ok": False}
+    body = body if isinstance(body, dict) else {}
+    validators = {"L_max_mm": _cl.validate_l_max, "rpm_max": _cl.validate_rpm_max}
+    sent = [k for k in validators if k in body]
+    if not sent:
+        raise HTTPException(status_code=422,
+                            detail="send {\"L_max_mm\": number | null} and / or {\"rpm_max\": number | null}")
+    new: Dict[str, Any] = {}
+    for k in sent:
+        try:
+            new[k] = validators[k](body.get(k))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    found = {"ok": False, "blk": {}}
 
     def _m(d: dict) -> None:
         for m in d.get("motors", []):
             if m.get("id") == motor_id:
                 found["ok"] = True
-                if v is None:
-                    m.pop("configure_limits", None)
+                blk = dict(m.get("configure_limits") if isinstance(m.get("configure_limits"), dict) else {})
+                for k, v in new.items():
+                    if v is None:
+                        blk.pop(k, None)
+                    else:
+                        blk[k] = v
+                if any(blk.get(k) is not None for k in validators):
+                    blk["set_by"] = ident.get("id")
+                    blk["set_at"] = datetime.now().isoformat(timespec="seconds")
+                else:                                   # no hand-set limit left: drop its stamp, keep other keys
+                    blk.pop("set_by", None)             # (the card-level ``bearings`` fallback lives here too)
+                    blk.pop("set_at", None)
+                if blk:
+                    m["configure_limits"] = blk
                 else:
-                    m["configure_limits"] = {
-                        "L_max_mm": v, "set_by": ident.get("id"),
-                        "set_at": datetime.now().isoformat(timespec="seconds")}
+                    m.pop("configure_limits", None)
+                found["blk"] = blk
                 return
     _mutate(_m)
     if not found["ok"]:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
-    return {"ok": True, "motor_id": motor_id, "L_max_mm": v}
+    return {"ok": True, "motor_id": motor_id,
+            "L_max_mm": _cl.hand_limits({"configure_limits": found["blk"]})["L_max_mm"],
+            "rpm_max": _cl.hand_limits({"configure_limits": found["blk"]})["rpm_max"]}

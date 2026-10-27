@@ -157,3 +157,28 @@ test('wiring: both Motors-tab filters use the one rule and a points-only configu
   assert.match(src('../../components/catalog/MotorsCatalog.tsx'), /isListableForClient\(c as never, isConfigHighlighted\(projectIndex, d\.name, c\.name\)\)/);
   assert.match(src('../../components/catalog/FamilyCatalog.tsx'), /data-testid="points-only-badge"/);
 });
+
+// ── test / validation duties never appear on the Motors row (owner 2026-10-28) ──
+const bench = (name, extra = {}) => ({ ...duty(name, 0.01, 0.001, 3021, 9), ...extra });
+const L50 = { name: 'L50', card_date: '2026-10-28', duties: [
+  bench('noload_3021'), bench('bench 4000', { kind: 'test' }), duty('continuous', 1.5, 5, 3000, 9), duty('peak', 3, 9, 3500, 9)] };
+
+t('a test duty is flagged, or (no kind at all) a legacy noload_ name; an explicit kind wins', () => {
+  assert.equal(C.isTestDuty({ name: 'x', kind: 'test' }), true);
+  assert.equal(C.isTestDuty({ name: 'noload_1' }), true);
+  assert.equal(C.isTestDuty({ name: 'noload_1', kind: 'operating' }), false);
+  assert.equal(C.isTestDuty({ name: 'rated' }), false);
+  assert.equal(C.isTestDuty(null), false);
+});
+
+t('the row never takes a test duty as its default mode, mode count or mode list', () => {
+  assert.equal(C.defaultDutyOf(L50).name, 'continuous');            // the first duty is a bench point: skipped
+  const b = C.configButtons({ name: 'D', configs: [L50] })[0];
+  assert.equal(b.duty, 'continuous'); assert.equal(b.modes, 2); assert.equal(b.power_kw, 1.5);
+  assert.deepEqual(C.modeNames([{ name: 'D', configs: [L50] }], 'D', 'L50'), ['peak', 'continuous']);
+  // only bench points -> no mode at all, and their stored results do not make the motor listable
+  const onlyBench = { name: 'T', duties: [bench('noload_1', { result: { mass_kg: 1 } })] };
+  assert.equal(C.defaultDutyOf(onlyBench), null);
+  assert.equal(C.hasStoredPoint(onlyBench), false);
+  assert.equal(C.configButtons({ name: 'D', configs: [onlyBench] })[0].modes, 0);
+});

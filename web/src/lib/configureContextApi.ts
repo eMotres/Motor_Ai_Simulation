@@ -2,12 +2,16 @@
 // (src/motor_ai_sim/configure_limits.py): GET /api/catalog/{id}/configure_context
 // and, admin only, PATCH /api/catalog/{id}/configure_limits.
 import type { Preset } from './configuratorPresets';
+import type { BearingSpeed } from './configuratorLimits';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 export interface ConfigureContext {
   motor_id: string;
-  limits: { L_max_mm: number | null; set_by?: string | null; set_at?: string | null };
+  /** the two limits an admin sets BY HAND per motor: stack length [mm] and speed maximum [rpm] (owner 2026-10-28) */
+  limits: { L_max_mm: number | null; rpm_max?: number | null; set_by?: string | null; set_at?: string | null };
+  /** the speed limits the machine's records state beside the pack's: the bearings (owner 2026-10-28) */
+  speed?: { bearing?: BearingSpeed | null };
   current: {
     set: boolean; reason?: string; device?: string; devices_parallel?: number;
     i_d_rating_A?: number; t_case_c?: number; t_j_max_c?: number; basis?: string;
@@ -56,10 +60,15 @@ export async function fetchConfigureContext(motorId: string): Promise<ConfigureC
 }
 
 /** Admin: set (number) or clear (null) the stack-length maximum of one machine. */
-export async function saveLMax(motorId: string, lMaxMm: number | null): Promise<void> {
+export const saveLMax = (motorId: string, lMaxMm: number | null): Promise<void> => saveHandLimit(motorId, { L_max_mm: lMaxMm });
+
+/** Admin: set (number) or clear (null) the speed maximum [rpm] of one machine. */
+export const saveRpmMax = (motorId: string, rpmMax: number | null): Promise<void> => saveHandLimit(motorId, { rpm_max: rpmMax });
+
+async function saveHandLimit(motorId: string, body: { L_max_mm: number | null } | { rpm_max: number | null }): Promise<void> {
   const r = await fetch(`${API}/api/catalog/${encodeURIComponent(motorId)}/configure_limits`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ L_max_mm: lMaxMm }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     const b = await r.json().catch(() => ({}));

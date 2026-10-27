@@ -46,6 +46,8 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from motor_ai_sim.duty_kind import is_test_duty
+
 logger = logging.getLogger(__name__)
 
 #: Stator diameters (mm) of the machines whose first production batch is underway
@@ -135,7 +137,8 @@ def _is_peak(name: Any) -> bool:
 # ── one configuration ───────────────────────────────────────────────────────
 
 def _pick_rated(c: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    duties = [d for d in (c.get("duties") or []) if isinstance(d, dict)]
+    # a bench-test / validation point (``duty_kind``) is never the rating
+    duties = [d for d in (c.get("duties") or []) if isinstance(d, dict) and not is_test_duty(d)]
     if not duties:
         return None
     want = c.get("default_duty")
@@ -186,7 +189,8 @@ def _rated_lines(d: Dict[str, Any]) -> List[str]:
 def _other_duties(c: Dict[str, Any], rated: Dict[str, Any]) -> List[str]:
     """Peak first, then the other short-time duties, each with its time."""
     others = [d for d in (c.get("duties") or [])
-              if isinstance(d, dict) and d is not rated and d.get("name") != rated.get("name")]
+              if isinstance(d, dict) and d is not rated and d.get("name") != rated.get("name")
+              and not is_test_duty(d)]
     others.sort(key=lambda d: (0 if _is_peak(d.get("name")) else 1))
     out = []
     for d in others[:_MAX_EXTRA_DUTIES]:

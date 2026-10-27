@@ -8,7 +8,8 @@
 // variant computed for it, else Sine).  The tuner then says "modified from <name> preset" as
 // soon as anything differs.
 //
-// Pure, no imports: web/src/lib/__tests__/configuratorPresets.test.mjs imports this file.
+// Pure, type imports only: web/src/lib/__tests__/configuratorPresets.test.mjs imports this file.
+import type { BearingSpeed } from './configuratorLimits';
 
 /** The knobs the server states for a configuration (`null` = the configuration does not say). */
 export interface PresetKnobs {
@@ -49,6 +50,8 @@ export interface Preset {
   /** what this configuration is for (`applications` in its yaml, first = default); [] = not set */
   applications?: string[];
   application?: string | null;
+  /** this configuration's own speed limits beside the pack's: its bearings (owner 2026-10-28); absent on older servers */
+  speed?: { bearing?: BearingSpeed | null };
   /** THE masses of this configuration as the server computes them (owner 2026-10-19): "Mass" = full_kg, "Active mass" =
    *  active_kg for this exact build; absent on older servers / when the die cannot be weighed */
   mass?: PresetMass | null;

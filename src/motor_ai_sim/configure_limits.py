@@ -5,7 +5,11 @@ slot fit, the wire minimum); two need data that lives with the MACHINE and
 therefore comes from here, through ``GET /api/catalog/{motor_id}/configure_context``:
 
 * the **stack-length maximum**, set BY HAND per motor by an admin and stored on
-  the catalogue card (``configure_limits.L_max_mm``);
+  the catalogue card (``configure_limits.L_max_mm``).  The same card block holds ``rpm_max`` (the
+  hand-set speed maximum) and, for a card with NO die / configuration behind it, ``bearings`` (a block
+  shaped like a configuration's own - ``{A: {card}, B: {card}, lubrication}``) which the speed limit
+  reads ONLY when the card's configuration is not found (a configuration's own bearings always win;
+  there is no UI editor for the fallback);
 * the **phase-current maximum** (owner 2026-10-20): the binding REAL limit, not the
   bare drain-current rating of the MOSFET (``current_limit`` below is only the
   device's datasheet figure and is kept as information).  The server states the
@@ -15,7 +19,11 @@ therefore comes from here, through ``GET /api/catalog/{motor_id}/configure_conte
   under a duty the loaded configuration saved) and only MARKS the board's
   continuous current on the slider - it is a warning, never a cap
   (``web/src/lib/configuratorLimits.ts``);
-* the pack and the modulation index the speed limit is read against.
+* the pack and the modulation index the speed limit is read against;
+* the **speed maximum** (owner 2026-10-28) is the lowest of the pack's full-charge speed (the web computes it), the
+  machine's BEARINGS (``speed.bearing``: the library's limiting speed for the configuration's lubrication; a
+  frameless kit has none - the bearings are the customer's) and a limit set BY HAND per motor by an admin and stored
+  beside the stack-length maximum (``configure_limits.rpm_max``).
 
 Nothing here solves a field and nothing is written except the one hand-set
 field.  The current limit uses the SAME card method the Controller tab's
@@ -39,6 +47,9 @@ DEFAULT_MODULATION_INDEX = 0.89
 
 #: Upper bound on a hand-set stack length [mm] — a typo guard, not a physics limit.
 L_MAX_SANITY_MM = 2000.0
+
+#: Upper bound on a hand-set speed maximum [rpm] — a typo guard, not a physics limit.
+RPM_MAX_SANITY = 200000.0
 
 
 def _pos(v: Any) -> Optional[float]:
@@ -205,10 +216,11 @@ def pack(batt: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def hand_limits(card: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The hand-set limits stored on a catalogue card (``L_max_mm`` or ``None``)."""
+    """The hand-set limits stored on a catalogue card (``L_max_mm`` and ``rpm_max``, each a number or ``None``).
+    ``set_by`` / ``set_at`` stamp the last hand-set change of either."""
     blk = (card or {}).get("configure_limits")
     blk = blk if isinstance(blk, dict) else {}
-    return {"L_max_mm": _pos(blk.get("L_max_mm")),
+    return {"L_max_mm": _pos(blk.get("L_max_mm")), "rpm_max": _pos(blk.get("rpm_max")),
             "set_by": blk.get("set_by"), "set_at": blk.get("set_at")}
 
 
@@ -221,6 +233,18 @@ def validate_l_max(value: Any) -> Optional[float]:
         raise ValueError(
             f"L_max_mm must be a positive length up to {L_MAX_SANITY_MM:g} mm "
             f"(or null to fall back to the default rule); got {value!r}")
+    return v
+
+
+def validate_rpm_max(value: Any) -> Optional[float]:
+    """The hand-set speed maximum (owner 2026-10-28): ``None`` clears it; a number must be positive and sane."""
+    if value is None:
+        return None
+    v = _pos(value)
+    if v is None or v > RPM_MAX_SANITY:
+        raise ValueError(
+            f"rpm_max must be a positive speed up to {RPM_MAX_SANITY:g} rpm "
+            f"(or null to fall back to the pack / bearing limit); got {value!r}")
     return v
 
 
@@ -256,7 +280,10 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
     base = dict(die_geometry or {})
     geo = {**base, **(doc.get("geometry_overrides") or {})}
     wnd = doc.get("winding") if isinstance(doc.get("winding"), dict) else {}
-    duties = [d for d in (doc.get("duties") or []) if isinstance(d, dict)]
+    # test / validation points (bench free-run reproductions) are never a preset, a duty pill or the
+    # default duty (owner 2026-10-28); they stay in the configuration for motor_tests
+    from motor_ai_sim.duty_kind import operating_duties
+    duties = operating_duties(d for d in (doc.get("duties") or []) if isinstance(d, dict))
     duty = next((d for d in duties if d.get("name") == PREFERRED_DUTY), duties[0] if duties else None)
     n_par = _num(wnd.get("n_parallel"))
     split = _num(geo.get("wire_split"))
@@ -289,6 +316,8 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
             for d in duties if d.get("name")
         ],
         "battery": pack(doc.get("battery")),
+        # this configuration's own bearings' speed limit (a die can mix bearings between configurations)
+        "speed": speed_limits(doc),
         "device": (str(ctrl.get("device")).strip() or None) if ctrl.get("device") else None,
         "pwm_variants": vs,
         # the configuration's own application list (a die can mix applications)
@@ -411,11 +440,82 @@ def cooling(fam: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]] = None
     return cooling_options(die, cfg, applications=config_applications(fam)[0])
 
 
+def bearing_speed_limit(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The speed the machine's BEARINGS allow (owner 2026-10-28: the speed slider's maximum is also limited by the
+    bearings), read from the configuration's own ``bearings:`` block with the SAME reader the friction model uses
+    (:func:`motor_ai_sim.bearings.resolve_assignment` - a machine with one card named has two of it, an unknown
+    lubrication is grease) and the library's limiting speed for that lubrication
+    (``n_limit_grease_rpm`` / ``n_limit_oil_air_rpm`` of the card).
+
+    ``{set: False, customer_owned: True, reason}`` for a frameless kit.
+    ``{set: True, rpm, lubrication, cards, ends, basis}`` - ``rpm`` is the LOWEST limit over the two ends and ``cards``
+    names the bearing(s) that set it.  ``{set: False, reason, ...}`` whenever it cannot be stated: no bearings in the
+    configuration, a card the library does not have, or a card with no limiting speed for the lubrication (a sealed
+    grease-for-life card has no oil-air figure).  A limit that cannot be stated is never replaced by a default number."""
+    from motor_ai_sim import bearings as _brg
+
+    d = doc if isinstance(doc, dict) else {}
+    # A FRAMELESS KIT (``cad_variant: frameless``, same rule as ``motor_mass.config_cad_variant``) ships without
+    # bearings: they are the customer's, so no bearing limit applies and none is "missing" (owner 2026-10-28).
+    if str(d.get("cad_variant") or "").strip().lower() == "frameless":
+        return {"set": False, "customer_owned": True,
+                "reason": "frameless kit: the bearings are the customer's"}
+    assignment = d.get("bearings") if isinstance(d.get("bearings"), dict) else None
+    try:
+        res = _brg.resolve_assignment(assignment)
+    except (TypeError, ValueError) as exc:                      # a malformed number in the saved block
+        return {"set": False, "reason": f"the saved bearings block cannot be read: {exc}"}
+    if not (res["A"].get("card") or res["B"].get("card")):
+        return {"set": False, "reason": "no bearings are saved with this configuration"}
+    lub = res["lubrication"]
+    ends, problems = [], []
+    for end in ("A", "B"):
+        name = str((res.get(end) or {}).get("card") or "").strip()
+        row: Dict[str, Any] = {"end": end, "card": name, "limit_rpm": None}
+        if not name:
+            problems.append(f"bearing {end} names no card")
+        else:
+            try:
+                card = _brg.get_bearing(name)
+            except Exception as exc:                            # noqa: BLE001 - unknown card / unreadable library
+                problems.append(f"bearing {end} '{name}' is not in the bearing library ({exc})")
+            else:
+                lim = card.limit_rpm(lub)
+                row["limit_rpm"] = lim
+                if lim is None:
+                    problems.append(f"{name} has no {lub.replace('_', '-')} limiting speed in the library")
+        ends.append(row)
+    out: Dict[str, Any] = {"lubrication": lub, "ends": ends}
+    if problems:
+        return {"set": False, "reason": "; ".join(problems), **out}
+    low = min(r["limit_rpm"] for r in ends)
+    cards: list = []
+    for r in ends:
+        if r["limit_rpm"] <= low + 1e-9 and r["card"] not in cards:
+            cards.append(r["card"])
+    return {"set": True, "rpm": round(float(low), 1), "cards": cards,
+            "basis": "bearing library limiting speed for " + lub.replace("_", "-"), **out}
+
+
+def speed_limits(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The speed limits the machine's own records state beside the pack's (which the web computes from the
+    voltage model): today the bearings.  Same shape under ``context()['speed']`` and on every preset."""
+    return {"bearing": bearing_speed_limit(doc)}
+
+
 def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
             ) -> Dict[str, Any]:
     """Everything Configure reads about one machine's physical limits."""
     fam = family_doc if isinstance(family_doc, dict) else {}
     ctrl = fam.get("controller") if isinstance(fam.get("controller"), dict) else {}
+    # the speed limit's bearings: the configuration's own; only a card whose configuration is NOT found
+    # falls back to the ``bearings`` block stored on the card (``configure_limits.bearings``)
+    blk = (card or {}).get("configure_limits")
+    card_brg = blk.get("bearings") if isinstance(blk, dict) and isinstance(blk.get("bearings"), dict) else None
+    from_card = not fam and card_brg is not None
+    speed = speed_limits({"bearings": card_brg} if from_card else fam)
+    if from_card:
+        speed["bearing"]["source"] = "catalogue card"
     from motor_ai_sim.applications import config_applications, default_application
     apps, apps_err = config_applications(fam)
     return {
@@ -429,6 +529,8 @@ def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
         "current": {**current_limit(ctrl), "caps": current_caps(fam, ctrl)},
         "modulation": modulation(ctrl),
         "battery": pack(fam.get("battery")),
+        # the speed limits the machine's records state beside the pack's (owner 2026-10-28: the bearings)
+        "speed": speed,
         "has_family_doc": bool(fam),
         "thermal_limits": thermal_limits(fam),
         "cooling": cooling(fam, card),

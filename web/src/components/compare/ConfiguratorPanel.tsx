@@ -77,13 +77,13 @@ import { buildModePresets, baseModeLabel, presetButtons, type ModePreset } from 
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
-  physicalRanges, narrowRange, speedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
+  physicalRanges, narrowRange, speedLimit, withSpeedCaps, type SpeedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
   sliderCurrentCap, boardMarker, type CurrentCap,
-  type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis,
+  type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis, type BearingSpeed,
 } from '../../lib/configuratorLimits';
 import {
-  fetchConfigureContext, saveLMax, catalogIdOf, type ConfigureContext,
+  fetchConfigureContext, saveLMax, saveRpmMax, catalogIdOf, type ConfigureContext,
 } from '../../lib/configureContextApi';
 import { ConfigureContextRequestGuard, contextForIdentity } from '../../lib/configureContextRequest';
 import { configuratorReferenceTemperatureBasis, configuratorResistanceReferenceTemperature } from '../../lib/configuratorReferenceTemperature';
@@ -735,7 +735,7 @@ const ConfiguratorPanel: React.FC = () => {
   // the base of THIS machine was named from the loaded selection (a key is `${refId}|...`)
   const reconciledHere = !!reconciledKey && reconciledKey.startsWith(`${refId}|`);
   const [restoreMisfitNote, setRestoreMisfitNote] = useState<{ what: Misfit[]; line: number; nominal: number | null;
-    rpm: number; max: number | null; mode: string } | null>(null);
+    rpm: number; max: number | null; mode: string; speedBasis?: SpeedLimit['basis'] } | null>(null);
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
   // `ctxDone`: the context has been ANSWERED (or there is none to ask for) — blocks that depend on
   // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
@@ -768,6 +768,10 @@ const ConfiguratorPanel: React.FC = () => {
   }, [loadCtx]);
   const presets: Preset[] = currentContext?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
+  // THE SPEED CAPS beside the pack's (owner 2026-10-28): the loaded configuration's own bearings (the machine's, when the
+  // server states no preset for it) and the maximum an admin set by hand for this motor
+  const bearingSpeed: BearingSpeed | null = basePreset?.speed?.bearing ?? currentContext?.speed?.bearing ?? null;
+  const handRpm: number | null = currentContext?.limits.rpm_max ?? null;
   // THE MASSES OF THE LOADED BUILD ARE THE SERVER'S (owner 2026-10-19): the loaded configuration's full / active mass anchor
   // the mass model, so the tiles show exactly those at that build and scale from them only when the build moves
   const massPreset = basePreset ?? presetOfBuild(presets, refKnobs ?? baseKnobs(p));
@@ -926,12 +930,12 @@ const ConfiguratorPanel: React.FC = () => {
     const at0 = scaleMotor(p, { ...knobs, rpm: 0 }, ref.poles);
     const at1k = scaleMotor(p, { ...knobs, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
-    return speedLimit({
+    return withSpeedCaps(speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
       v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
       batteryValid,
-    });
-  }, [p, knobs, ref.poles, packMaxV, modM, batteryValid]);
+    }), { bearing: bearingSpeed, handRpm });
+  }, [p, knobs, ref.poles, packMaxV, modM, batteryValid, bearingSpeed, handRpm]);
   const sinePointAccepted = batteryValid && speedRequestAccepted(knobs.rpm, speedLim.rpm);
   // The slider's visual scale is a no-load/build envelope.  The physical
   // current-dependent cap remains available through speedLim for validation;
@@ -940,12 +944,12 @@ const ConfiguratorPanel: React.FC = () => {
     const at0 = scaleMotor(p, { ...knobs, I_A: 0, rpm: 0 }, ref.poles);
     const at1k = scaleMotor(p, { ...knobs, I_A: 0, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
-    return speedLimit({
+    return withSpeedCaps(speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
       v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
       batteryValid,
-    });
-  }, [p, knobs, ref.poles, packMaxV, modM, batteryValid]);
+    }), { bearing: bearingSpeed, handRpm });
+  }, [p, knobs, ref.poles, packMaxV, modM, batteryValid, bearingSpeed, handRpm]);
   // PHASE-CURRENT MAXIMUM = THE LOWEST MOTOR LIMIT (owner 2026-10-20: 238 A on 85 L15 had nothing to do with the
   // motor or a real board).  Never the transistor's bare drain-current rating, and NOT the controller board's
   // continuous current either (the board is a marker on the slider, `boardMark` below): the lowest of the saved
@@ -1016,9 +1020,27 @@ const ConfiguratorPanel: React.FC = () => {
     setLimitMsg(null);
     void saveLMax(catId, null).then(loadCtx).catch(() => setLimitMsg(tx('configureLimits.saveFailed')));
   };
+  /** the speed maximum is the second limit an admin SETS (stored with the motor, beside the stack length) */
+  const setRpmRange = (min: number, max: number) => {
+    if (catId && Math.abs(max - ranges.rpm.max) > 1e-9 && max > 0) {
+      setLimitMsg(null);
+      void saveRpmMax(catId, max).then(loadCtx).catch(() => setLimitMsg(tx('configureLimits.saveFailed')));
+      setOverrides((o) => { const rest = { ...o }; delete rest.rpm; return rest; });
+      return;
+    }
+    setRange('rpm')(min, max);
+  };
+  const clearRpmMax = () => {
+    if (!catId) return;
+    setLimitMsg(null);
+    void saveRpmMax(catId, null).then(loadCtx).catch(() => setLimitMsg(tx('configureLimits.saveFailed')));
+  };
   /** one short line under a slider: where its maximum comes from (+ tooltip) */
   const limitNote = (k: KnobKey): { text: string; tip: string; hand?: boolean } => {
-    const b: LimitBasis = (phys as Record<KnobKey, PhysRange>)[k].basis;
+    // the slider's maximum is the display one: when the bearings (or the hand-set speed) bind it, the note names them
+    const dispBasis = displayPhys[k].basis;
+    const b: LimitBasis = k === 'rpm' && (dispBasis === 'bearing' || dispBasis === 'hand')
+      ? dispBasis : (phys as Record<KnobKey, PhysRange>)[k].basis;
     const mx = fmt(ranges[k].max, k === 'wireH_mm' ? 1 : 0);
     if (k === 'L_mm') {
       return b === 'hand'
@@ -1043,7 +1065,8 @@ const ConfiguratorPanel: React.FC = () => {
       }
     }
     if (k === 'rpm' && !batteryValid) return { text: tx('configure.invalidPack'), tip: tx('configure.invalidPackTip') };
-    return speedLimitNote(tx, { basis: b, max: mx, packV: fmt(packMaxV ?? NaN, 1), m: fmt(modM, 2) });
+    const note = speedLimitNote(tx, { basis: b, max: mx, packV: fmt(packMaxV ?? NaN, 1), m: fmt(modM, 2), bearing: bearingSpeed });
+    return b === 'hand' ? { ...note, hand: true } : note;
   };
   const above = (v: number, r: KRange) => v > r.max * 1.0005 + 1e-9;
   /** the connection stays free: only a warning when the winding's line voltage exceeds the pack nominal */
@@ -1135,8 +1158,9 @@ const ConfiguratorPanel: React.FC = () => {
       return [{ text: tx('configureDrive.refuseInvalidPack'), tip: tx('configure.invalidPackTip') }];
     }
     if (!speedRequestAccepted(knobs.rpm, speedLim.rpm)) {
-      return [{ text: tx('configure.refuseSpeedPack', { rpm: fmt(knobs.rpm, 0), max: fmt(speedLim.rpm ?? NaN, 0) }),
-        tip: tx('configure.refuseSpeedPackTip', { rpm: fmt(knobs.rpm, 0), max: fmt(speedLim.rpm ?? NaN, 0) }) }];
+      const k = speedLim.basis === 'bearing' ? 'refuseSpeedBearing' : speedLim.basis === 'hand' ? 'refuseSpeedHand' : 'refuseSpeedPack';
+      return [{ text: tx(`configure.${k}`, { rpm: fmt(knobs.rpm, 0), max: fmt(speedLim.rpm ?? NaN, 0) }),
+        tip: tx(`configure.${k}Tip`, { rpm: fmt(knobs.rpm, 0), max: fmt(speedLim.rpm ?? NaN, 0) }) }];
     }
     if (!driveOn) return motorLossesComputed ? []
       : [{ text: tx('configure.lossNotComputed'), tip: tx('configure.lossNotComputedTip') }];
@@ -1687,8 +1711,9 @@ ${s1Text.text}` : '';
     const at0 = scaleMotor(p, { ...kI, rpm: 0 }, ref.poles);
     const at1k = scaleMotor(p, { ...kI, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
-    const lim = speedLimit({ vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
-      v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null, batteryValid });
+    const lim = withSpeedCaps(speedLimit({ vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
+      v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null, batteryValid }),
+      { bearing: bearingSpeed, handRpm });
     const speedOk = batteryValid && speedRequestAccepted(rpm, lim.rpm);
     let dr: VariantReading | null = null;
     if (driveOn) {
@@ -2058,7 +2083,7 @@ ${s1Text.text}` : '';
     const target = baseModePreset ?? basePreset;
     if (!what.length || !target || !modified) return;
     const shown = { what, line: result.Vline_peak_V, nominal: packNomV, rpm: knobs.rpm, max: speedLim.rpm,
-      mode: baseLabel ?? target.config };
+      mode: baseLabel ?? target.config, speedBasis: speedLim.basis };
     startLoad(target.config, target.duty ?? null);
     setRestoreMisfitNote(shown);
   }, [loadSettled, reconciledKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2346,7 +2371,9 @@ ${s1Text.text}` : '';
                 restoreMisfitNote.what.includes('voltage')
                   ? tx('configure.restoreWhyVoltage', { line: fmt(restoreMisfitNote.line, 1), nominal: fmt(restoreMisfitNote.nominal ?? NaN, 1) }) : '',
                 restoreMisfitNote.what.includes('speed')
-                  ? tx('configure.restoreWhySpeed', { rpm: fmt(restoreMisfitNote.rpm, 0), max: fmt(restoreMisfitNote.max ?? NaN, 0) }) : '',
+                  ? tx(restoreMisfitNote.speedBasis === 'bearing' ? 'configure.restoreWhySpeedBearing'
+                    : restoreMisfitNote.speedBasis === 'hand' ? 'configure.restoreWhySpeedHand' : 'configure.restoreWhySpeed',
+                    { rpm: fmt(restoreMisfitNote.rpm, 0), max: fmt(restoreMisfitNote.max ?? NaN, 0) }) : '',
               ].filter(Boolean).join('; ') })}>
               {tx('configure.restoreFallback', { mode: restoreMisfitNote.mode })}
             </Typography>
@@ -2517,7 +2544,7 @@ ${s1Text.text}` : '';
             limitNote={propLoad
               ? propellerCurrentNote(tx, { max: fmt(ranges.I_A.max, 0), basisTip: limitNote('I_A').tip })
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
-          <KnobSlider label={tx('configureLimits.speed')} tip={tx('configureLimits.speedTip')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
+          <KnobSlider label={tx('configureLimits.speed')} tip={tx('configureLimits.speedTip')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRpmRange : undefined} onClearHand={isAdmin ? clearRpmMax : undefined}
             warn={above(knobs.rpm, ranges.rpm) || (speedLim.rpm != null && knobs.rpm > speedLim.rpm)} zone={cooled ? zones.rpm : null}
             hideRange={!pointGate.showBatteryDerived}
             limitNote={(() => {

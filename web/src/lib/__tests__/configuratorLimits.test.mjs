@@ -208,3 +208,36 @@ t('the warehouse-stock hook is present and inert until the feed exists', () => {
   assert.equal(stocked.wireH_mm.max, 0.6);
   assert.deepEqual(L.physicalRanges(inputs({ allowedWireH: null })).wireH_mm, free.wireH_mm);
 });
+
+// ── the speed maximum is the LOWEST of the pack, the bearings and the hand-set value (owner 2026-10-28) ──
+const PACK = { rpm: 9000, basis: 'envelope' };
+const BRG = { set: true, rpm: 6300, lubrication: 'grease', cards: ['61814-2RZ'] };
+
+t('speed caps: the lowest binds, the pack on a tie, an invalid pack stays invalid', () => {
+  assert.deepEqual(L.withSpeedCaps(PACK, {}), PACK);                                   // nothing to combine
+  assert.deepEqual(L.withSpeedCaps(PACK, { bearing: { set: false, reason: 'x' }, handRpm: null }), PACK);
+  assert.deepEqual(L.withSpeedCaps(PACK, { bearing: BRG }), { rpm: 6300, basis: 'bearing', packRpm: 9000 });
+  assert.deepEqual(L.withSpeedCaps(PACK, { bearing: BRG, handRpm: 5000 }), { rpm: 5000, basis: 'hand', packRpm: 9000 });
+  assert.deepEqual(L.withSpeedCaps(PACK, { bearing: BRG, handRpm: 7000 }), { rpm: 6300, basis: 'bearing', packRpm: 9000 });
+  assert.deepEqual(L.withSpeedCaps(PACK, { bearing: { ...BRG, rpm: 9000 }, handRpm: 9000 }), PACK);   // tie: the pack
+  assert.deepEqual(L.withSpeedCaps({ rpm: 4000, basis: 'kv' }, { bearing: BRG, handRpm: 5000 }), { rpm: 4000, basis: 'kv' });
+  // no pack known: the bearings still limit, with no pack figure beside them
+  assert.deepEqual(L.withSpeedCaps({ rpm: null, basis: 'no_battery' }, { bearing: BRG }), { rpm: 6300, basis: 'bearing', packRpm: null });
+  const bad = { rpm: null, basis: 'invalid_battery' };
+  assert.equal(L.withSpeedCaps(bad, { bearing: BRG, handRpm: 100 }), bad);
+  // a not-set / customer-owned bearing limit and junk hand values never limit
+  assert.deepEqual(L.withSpeedCaps(PACK, { bearing: { set: false, customer_owned: true }, handRpm: 0 }), PACK);
+  assert.deepEqual(L.withSpeedCaps(PACK, { handRpm: Number.NaN }), PACK);
+});
+
+t('speed caps: the slider range carries the binding basis and every judgement reads the combined limit', () => {
+  const lim = L.withSpeedCaps(PACK, { bearing: BRG });
+  const r = L.physicalRanges(inputs({ speed: lim }));
+  assert.equal(r.rpm.basis, 'bearing'); assert.equal(r.rpm.max, 6300);
+  assert.equal(L.physicalRanges(inputs({ speed: L.withSpeedCaps(PACK, { handRpm: 5000 }) })).rpm.basis, 'hand');
+  assert.equal(L.physicalRanges(inputs({ speed: PACK })).rpm.basis, 'envelope');
+  // a speed above the bearings is refused although the pack would carry it
+  assert.equal(L.speedRequestAccepted(7000, PACK.rpm), true);
+  assert.equal(L.speedRequestAccepted(7000, lim.rpm), false);
+  assert.equal(L.speedRequestAccepted(6300, lim.rpm), true);
+});

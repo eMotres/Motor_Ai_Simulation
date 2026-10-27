@@ -26,6 +26,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
 from motor_ai_sim.agent_keys import Principal
+from motor_ai_sim.duty_kind import is_test_duty
 from motor_ai_sim.public_text import public_strings, public_text, public_wire_spec
 
 CATALOG_KINDS = ("magnets", "steels", "wires", "bearings", "devices", "dies")
@@ -345,7 +346,8 @@ def _machines() -> List[Dict[str, Any]]:
     out = []
     for die in _visible_tree():
         for c in die.get("configs") or []:
-            duties = [_duty_headline(d) for d in c.get("duties") or []]
+            # bench-test / validation points are not offered to outside agents (owner 2026-10-28)
+            duties = [_duty_headline(d) for d in c.get("duties") or [] if not is_test_duty(d)]
             masses = [x["mass_kg"] for x in duties if x["mass_kg"] is not None]
             out.append({
                 "die": die.get("name"), "config": c.get("name"),

@@ -33,6 +33,7 @@ from motor_ai_sim import auth as _auth
 from motor_ai_sim.applications import APPLICATIONS, config_applications, default_application
 from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import get_config
+from motor_ai_sim.duty_kind import TEST_KIND as TEST_DUTY_KIND, is_test_duty
 from motor_ai_sim import workspace as _WS
 from motor_ai_sim.workspace import layering as _ws_layering
 from motor_ai_sim.workspace import resolve_die_dir as _ws_resolve_die_dir
@@ -1060,7 +1061,7 @@ def _config_role(c: dict) -> tuple:
     stored = str(c.get("role") or "motor").strip().lower()
     modes = set()
     for d in (c.get("duties") or []):
-        if not isinstance(d, dict):
+        if not isinstance(d, dict) or is_test_duty(d):      # a bench-test point says nothing of the role
             continue
         m = str(d.get("mode") or "").strip().lower()
         if m in ("motor", "generator"):
@@ -1102,7 +1103,7 @@ def config_rated_duty(c: dict, classes: Optional[Dict[str, Any]] = None
     shown as the rating."""
     from motor_ai_sim import duty_class as _dcl
     names = [str(d.get("name")) for d in (c.get("duties") or [])
-             if isinstance(d, dict) and d.get("name")]
+             if isinstance(d, dict) and d.get("name") and not is_test_duty(d)]
     return _dcl.prefer_continuous(config_default_duty(c), classes or {}, names)
 
 
@@ -1115,8 +1116,9 @@ def config_default_duty(c: dict) -> Optional[str]:
     error: the rule falls back, in order, to a duty named exactly ``rated``,
     the first duty whose name starts with ``rated`` (``rated 0.5x9 mm``), then
     the first duty.  ``None`` only when the configuration has no duties."""
+    # a test / validation point is never the default mode (owner 2026-10-28)
     names = [str(d.get("name")) for d in (c.get("duties") or [])
-             if isinstance(d, dict) and d.get("name")]
+             if isinstance(d, dict) and d.get("name") and not is_test_duty(d)]
     if not names:
         return None
     want = str(c.get("default_duty") or "rated").strip()
@@ -1855,6 +1857,12 @@ class DutySpec(BaseModel):
     torque_nm: Optional[float] = None    # target/rated torque — shown on the card
     power_kw: Optional[float] = None     # target/rated power — shown on the card
     note: Optional[str] = None           # None = keep the previous note on upsert
+    # "test" marks a bench-test / validation point (owner 2026-10-28: the free-run reproductions
+    # of a built test motor): kept in the configuration for motor_tests, but never a Configure
+    # preset, a default duty or a public card row (``duty_kind``).  None = keep the previous
+    # value on upsert; "operating" = an ordinary duty again (outranks the legacy ``noload_`` name rule),
+    # "" drops the field.
+    kind: Optional[str] = None
     from_current: bool = False           # fill the Nones from the live Simulation
     # The COMPLETE computed state of the run being saved (user 2026-08-25:
     # "all of this needs to be saved"): the mesh settings the numbers were solved
@@ -2445,6 +2453,9 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsig)) else {}),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
+                     # "test" = a bench-test / validation point: the public Motors row, its mode list and the
+                     # public datasheet leave it out (``duty_kind``); absent on an ordinary duty
+                     **({"kind": TEST_DUTY_KIND} if is_test_duty(d) else {}),
                      "saved_at": d.get("saved_at"),
                      "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
                      "gamma_deg": d.get("gamma_deg"),
@@ -3375,6 +3386,17 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
              # operating point must not silently erase targets or the note.
              "note": (d.note if d.note is not None
                       else (prev or {}).get("note", "") or "")}
+    # the duty kind: sent -> written ("test" / "operating"; "" drops it); absent -> the previous value survives
+    if d.kind is not None:
+        _kind = str(d.kind).strip().lower()
+        if _kind not in ("", "operating", TEST_DUTY_KIND):
+            raise HTTPException(422, detail="duty kind must be 'test' (a bench-test / validation point) "
+                                            "or 'operating' (an ordinary duty)")
+        if _kind:
+            # "operating" is written too: an explicit kind outranks the legacy ``noload_`` name rule
+            entry["kind"] = _kind
+    elif (prev or {}).get("kind") is not None:
+        entry["kind"] = prev["kind"]
     tq = d.torque_nm if d.torque_nm is not None else (prev or {}).get("torque_nm")
     pw = d.power_kw if d.power_kw is not None else (prev or {}).get("power_kw")
     if tq is not None:

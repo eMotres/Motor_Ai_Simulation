@@ -362,6 +362,25 @@ def own_fields(rows: Any, op: Dict[str, Optional[float]], kept: Dict[str, Any]) 
     return out, hidden
 
 
+def _cooling_air_speed(th: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The air speed over the housing the duty's steady temperature map was solved with (m/s), when the map states it.
+
+    Propeller slipstream first (the speed the propeller gave), then the housing film's own speed, then the open-frame
+    speed.  Read-only: it only repeats a number the thermal record already stores; ``None`` for a liquid-cooled or
+    still-air map that states none.
+    """
+    if not (th and str(th.get("state") or "steady").lower() == "steady"):
+        return None
+    src = th.get("cooling_air_source") if isinstance(th.get("cooling_air_source"), dict) else {}
+    cool = th.get("cooling") if isinstance(th.get("cooling"), dict) else {}
+    for cand in (src.get("air_speed_mps"), (cool.get("outer") or {}).get("air_speed_mps") if isinstance(cool.get("outer"), dict) else None,
+                 (cool.get("frame") or {}).get("open_air_speed_mps") if isinstance(cool.get("frame"), dict) else None):
+        v = _num(cand)
+        if v is not None and v > 0:
+            return round(v, 1)
+    return None
+
+
 def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Thermal results of one duty - or ``None`` when nothing is stored.
 
@@ -407,6 +426,9 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     duty_temps["housing_from"] = {"kind": "thermal", "computed_at": th.get("computed_at")}
                     break
         out["duty_temps"] = {k: v for k, v in duty_temps.items() if v is not None}
+        air = _cooling_air_speed(th)
+        if air is not None:
+            out["cooling_air_speed_mps"] = air
     if limit_row:
         out["limit_search"] = {"kind": "coupled_limit" if limit_row is cl else "coupled", "solve_to": limit_row.get("solve_to"),
                                "mode": limit_row.get("mode"),

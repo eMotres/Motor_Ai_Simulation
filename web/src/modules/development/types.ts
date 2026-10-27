@@ -47,6 +47,8 @@ export interface StoredThermal {
   s1?: { ok?: boolean; feasible?: boolean; I_cont_A_rms?: number; limiting_part?: string; limits_c?: Record<string, number>; provenance?: StoredProvenance };
   s2?: { within_limits?: boolean; limiting_part?: string; time_to_limit_s?: number; limits_c?: Record<string, number>; starts?: Record<string, { time_to_limit_s?: number }>; provenance?: StoredProvenance };
   cycle?: Record<string, unknown>;
+  /** air speed over the housing the duty's steady map was solved with (m/s), when the map states it */
+  cooling_air_speed_mps?: number;
   provenance?: StoredProvenance;
 }
 export interface StoredRotorStress { case?: string; sf_min?: number; sf_min_part?: string; sf_min_p05?: number; overspeed_factor?: number; max_displacement_um?: number; rotor_od_growth_um?: number; interference_mm?: number; proof_rpm?: number; limit_speed_rpm?: number;

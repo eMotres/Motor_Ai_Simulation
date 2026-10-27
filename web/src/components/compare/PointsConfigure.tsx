@@ -41,6 +41,7 @@ import { openProjectMotor } from '../../lib/openProjectMotor';
 import { nsT } from '../../i18n/nsT';
 import { stepLabels } from '../../modules/development/stepSeries';
 import { configureGrid } from '../../modules/development/configureGrid';
+import { temperatureRowIndex, temperatureTiles } from '../../modules/development/temperatureTiles';
 import { specBatteryView } from '../../modules/development/specBattery';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -137,8 +138,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const peers = useMemo(() => steps.map((v) => v.points.find((p) => p.duty === duty) ?? null), [steps, duty]);
   const labels = useMemo(() => stepLabels(steps), [steps]);
   // the result grid of the ordinary Configure, fed from the stored point (cells that cannot be computed or are 0 are not drawn);
-  // temperatures are NOT in it: they belong to the coupled loop and sit in the thermal block with their own source
+  // the MAGNET / WINDING temperature tiles are a row of their own (owner 2026-10-27): the coupled loop's values, or the EM run's
+  // input temperatures drawn muted; the rest of the temperatures stay in the thermal block with their own source
   const grid = useMemo(() => configureGrid(current), [current]);
+  const temps = useMemo(() => temperatureTiles(current), [current]);
+  const tempAt = temperatureRowIndex(grid);
   const dcBus = grid.flat().find((c) => c.id === 'dcBus')?.value ?? null;
   const tileName = (id: string) => { const key = configureTileKey(id, current); return key ? tc(key) : t(`points.tile.${id}`); };
   const emSource = current?.sources?.em;
@@ -148,7 +152,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
     : t(emSource?.coil_temp_c !== undefined ? 'points.source.emTip' : 'points.source.emTipPlain', { winding: emSource?.coil_temp_c !== undefined ? Math.round(emSource.coil_temp_c) : '', magnet: emSource?.magnet_temp_c !== undefined ? Math.round(emSource.magnet_temp_c) : '—' });
   const showChart = steps.length > 1 && stepIndex >= 0;
   // a block is drawn only when this point has real results for it (owner 2026-10-26): no header, no empty tiles, no placeholder
-  const showTiles = grid.length > 0;
+  const showTiles = grid.length > 0 || temps.length > 0;
   const operating = pointOperating(current);
 
   const openStep = (index: number) => {
@@ -237,7 +241,19 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
             <Tooltip title={emChipTip}>
               <Chip size="small" label={emChip} data-testid="em-source-chip" sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />
             </Tooltip>
-            {grid.map((row, index) => (
+            {[...grid.slice(0, tempAt), ...(temps.length > 0 ? [null] : []), ...grid.slice(tempAt)].map((row, index) => (
+              row === null ? (
+                <TileRow key="temperatures">
+                  {temps.map((tile) => (
+                    <Box key={tile.id} data-testid={`temp-tile-${tile.id}`} data-basis={tile.basis} sx={{ display: 'flex', opacity: tile.muted ? 0.65 : 1 }}>
+                      <MetricTile label={t(tile.labelKey)} value={tile.value} unit={tile.unit} d={tile.d} base={tile.value} plain
+                        valueColor={tile.muted ? 'var(--text-3)' : 'var(--text-0)'}
+                        tip={tile.tip.map((p) => t(p.key, p.args)).join('
+')} />
+                    </Box>
+                  ))}
+                </TileRow>
+              ) : (
               <TileRow key={index}>
                 {row.map((cell) => (
                   <MetricTile key={cell.id} label={tc(cell.labelKey)} value={cell.value} unit={cell.unit} d={cell.d}
@@ -245,6 +261,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
                     tip={cell.tipKey ? [tc(cell.tipKey), ...(cell.tipParts ?? []).map((p) => tc(p.key, p.args))].join(' ') : undefined} />
                 ))}
               </TileRow>
+              )
             ))}
             {dcBus !== null && (
               // the same size as in the ordinary Configure (owner 2026-10-26): there the panel shares a row with the cross-section

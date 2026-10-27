@@ -15,9 +15,12 @@
 //                 marker on the slider, never a cap (a rated / peak mode must fit).
 //                 Never the bare drain-current rating of the MOSFET.  Nothing
 //                 known = the passport rule
-//   speed         max = the speed at which the line voltage reaches the fully
-//                 charged pack (x the modulation index): from the passport's
-//                 voltage model when it has one, else Kv x V_max x m
+//   speed         max = the LOWEST of: the speed at which the line voltage reaches the fully
+//                 charged pack (x the modulation index) - from the passport's voltage model
+//                 when it has one, else Kv x V_max x m; the machine's BEARINGS (the library's
+//                 limiting speed for its lubrication, owner 2026-10-28; none for a frameless
+//                 kit - the bearings are the customer's); and a maximum set BY HAND per motor
+//                 by an admin, stored beside the stack-length maximum
 //   connection    free; only a WARNING when the line voltage exceeds the pack
 //
 // An admin may NARROW any of these locally (per machine), never widen them.
@@ -29,7 +32,7 @@ export interface KRange { min: number; max: number; }
 
 /** Where a range's maximum comes from — the card prints it, the tooltip explains it. */
 export type LimitBasis =
-  | 'hand'          // L: set by an admin for this motor
+  | 'hand'          // L / rpm: set by an admin for this motor
   | 'default'       // today's rule (a multiple of the passport base)
   | 'fit'           // wire / turns: the slot
   | 'motor_peak'    // I: the motor's saved peak duty
@@ -37,6 +40,7 @@ export type LimitBasis =
   | 'grid'          // I: top of the passport's measured current grid
   | 'duty'          // I: the highest duty the loaded configuration saved
   | 'no_limit'      // I: no real limit known -> the passport rule
+  | 'bearing'       // rpm: the bearings' limiting speed (lowest of the two ends)
   | 'envelope'      // rpm: the passport's voltage model at the pack maximum
   | 'kv'            // rpm: Kv x V_max x m
   | 'no_battery'    // rpm: no pack known -> the passport rule
@@ -209,7 +213,37 @@ export function envelopeRpm(v0: number, v1000: number, vLim: number): number | n
   return (vLim - v0) / a;
 }
 
-export interface SpeedLimit { rpm: number | null; basis: 'envelope' | 'kv' | 'no_battery' | 'invalid_battery'; }
+export interface SpeedLimit {
+  rpm: number | null;
+  basis: 'envelope' | 'kv' | 'no_battery' | 'invalid_battery' | 'bearing' | 'hand';
+  /** the pack's own limit when the bearings or the hand-set maximum bind instead (null = no pack limit known) */
+  packRpm?: number | null;
+}
+
+/** The server's bearing speed limit of one configuration (`speed.bearing` of the Configure context / a preset):
+ *  `set` = the library states one (`rpm`, the lowest over the two ends, set by `cards` on `lubrication`); not set
+ *  = no bearings saved / a card the library lacks (`reason`), or `customer_owned` = a frameless kit whose bearings
+ *  the customer supplies (no limit, and nothing missing). */
+export interface BearingSpeed {
+  set: boolean; rpm?: number | null; lubrication?: string; cards?: string[];
+  reason?: string; customer_owned?: boolean;
+}
+
+/** The pack's speed limit combined with the bearings' and the hand-set maximum: the LOWEST binds (the pack on a tie,
+ *  then the hand-set value, then the bearings).  Nothing to combine = `lim` unchanged.  An invalid pack stays
+ *  invalid (its input is fixed first).  Every judgement of a requested speed (`speedRequestAccepted`,
+ *  `restoreMisfit`, the PWM / Sine acceptance) reads THIS limit. */
+export function withSpeedCaps(lim: SpeedLimit, caps: { bearing?: BearingSpeed | null; handRpm?: number | null }): SpeedLimit {
+  if (lim.basis === 'invalid_battery') return lim;
+  const pos = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  let best: SpeedLimit = lim;
+  const consider = (rpm: number | null | undefined, basis: 'hand' | 'bearing') => {
+    if (pos(rpm) && (!pos(best.rpm) || rpm < best.rpm - 1e-9)) best = { rpm, basis, packRpm: pos(lim.rpm) ? lim.rpm : null };
+  };
+  consider(caps.handRpm, 'hand');
+  consider(caps.bearing?.set ? caps.bearing.rpm : null, 'bearing');
+  return best;
+}
 
 /** A requested Sine operating point beyond the pack's full-charge speed is refused. */
 export function speedRequestAccepted(rpm: number, maxRpm: number | null): boolean {
@@ -272,7 +306,7 @@ export function physicalRanges(a: RangeInputs): Record<KnobKey, PhysRange> {
       ? { min: 0, max: a.iCap.A, basis: CURRENT_BASIS[a.iCap.kind] }
       : { ...d.I_A, basis: 'no_limit' },
     rpm: a.speed.rpm != null && a.speed.rpm > 0
-      ? { min: 0, max: a.speed.rpm, basis: a.speed.basis === 'kv' ? 'kv' : 'envelope' }
+      ? { min: 0, max: a.speed.rpm, basis: (['kv', 'bearing', 'hand'] as const).find((b) => b === a.speed.basis) ?? 'envelope' }
       : { ...d.rpm, basis: a.speed.basis === 'invalid_battery' ? 'invalid_battery' : 'no_battery' },
   };
 }
@@ -332,18 +366,34 @@ export function writeOverrides(raw: string | null, refId: string, ov: Overrides)
  *  `tx` is the i18n lookup; `basisTip` is the limit's own explanation. */
 export interface LimitNoteText { text: string; tip: string; }
 
-/** Speed: always names the live maximum, whatever the load mode or drive. */
+/** Speed: always names the live maximum, whatever the load mode or drive, and which limit binds: the pack, the
+ *  bearings, or the maximum set by hand for this motor.  `bearing` = the server's bearing limit of the loaded
+ *  configuration (`undefined`/`null` = the server said nothing): when it is not what binds, the line ends with
+ *  "bearings not set" (or "bearings are the customer's" for a frameless kit) and the tooltip says why. */
 export function speedLimitNote(
   tx: (key: string, vars?: Record<string, string | number>) => string,
-  a: { basis: LimitBasis; max: string; packV: string; m: string },
+  a: { basis: LimitBasis; max: string; packV: string; m: string; bearing?: BearingSpeed | null },
 ): LimitNoteText {
-  if (a.basis === 'envelope') {
-    return { text: tx('configureLimits.rpmEnvelope', { max: a.max }), tip: tx('configureLimits.rpmEnvelopeTip', { m: a.m, v: a.packV }) };
+  const b = a.bearing;
+  if (a.basis === 'bearing') {
+    const vars = { max: a.max, cards: (b?.cards ?? []).join(' + '), lube: tx(`configureLimits.lube_${b?.lubrication === 'oil_air' ? 'oil_air' : 'grease'}`) };
+    return { text: tx('configureLimits.rpmBearing', vars), tip: tx('configureLimits.rpmBearingTip', vars) };
   }
-  if (a.basis === 'kv') {
-    return { text: tx('configureLimits.rpmKv', { max: a.max }), tip: tx('configureLimits.rpmKvTip', { m: a.m, v: a.packV }) };
+  let n: LimitNoteText;
+  if (a.basis === 'hand') {
+    n = { text: tx('configureLimits.rpmHand', { max: a.max }), tip: tx('configureLimits.rpmHandTip') };
+  } else if (a.basis === 'envelope') {
+    n = { text: tx('configureLimits.rpmEnvelope', { max: a.max }), tip: tx('configureLimits.rpmEnvelopeTip', { m: a.m, v: a.packV }) };
+  } else if (a.basis === 'kv') {
+    n = { text: tx('configureLimits.rpmKv', { max: a.max }), tip: tx('configureLimits.rpmKvTip', { m: a.m, v: a.packV }) };
+  } else {
+    n = { text: tx('configureLimits.rpmNoBattery', { max: a.max }), tip: tx('configureLimits.rpmNoBatteryTip') };
   }
-  return { text: tx('configureLimits.rpmNoBattery', { max: a.max }), tip: tx('configureLimits.rpmNoBatteryTip') };
+  if (b && !b.set) {
+    const k = b.customer_owned ? 'rpmBearingsCustomer' : 'rpmBearingsUnset';
+    return { text: `${n.text} · ${tx(`configureLimits.${k}`)}`, tip: `${n.tip} ${tx(`configureLimits.${k}Tip`)}` };
+  }
+  return n;
 }
 
 /** Phase current in propeller mode: "FROM THE PROPELLER" plus the maximum; the tip adds the limit's basis. */

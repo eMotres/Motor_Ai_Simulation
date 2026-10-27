@@ -24,6 +24,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from motor_ai_sim.duty_kind import is_test_duty
+
 log = logging.getLogger(__name__)
 
 _TITLE = "1F4E79"     # dark blue   — section bars
@@ -967,8 +969,9 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     mats = cfg_doc.get("materials") or {}
     batt = cfg_doc.get("battery") or {}
     role = str(cfg_doc.get("role") or "motor")
+    # bench-test / validation points (``duty_kind``) are not on the customer datasheet
     duties: List[Dict[str, Any]] = [d for d in (cfg_doc.get("duties") or [])
-                                    if isinstance(d, dict)]
+                                    if isinstance(d, dict) and not is_test_duty(d)]
     # SHORT-TIME OR CONTINUOUS (owner 2026-10-19), read off each duty's stored
     # coupled record: a CONTINUOUS duty leads the card (it is the rating), a
     # SHORT-TIME one is never shown as the rating — it keeps its own column,

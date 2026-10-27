@@ -70,8 +70,9 @@ def _create_duty(die: str, config: str, *, rpm: float, current: float, mode: str
     """The body of ``POST /api/family/duty`` that adds the missing operating point (no solve; the engineer runs it)."""
     nm = name or (f"test {int(round(rpm))} rpm" + (" no-load" if current <= 0.5 else f" {current:g} A"))
     return {"kind": "create_duty", "body": {"die": die, "config": config,
+                                            # a bench point, not a product duty: never a preset or a public card row
                                             "duty": {"name": nm[:60], "mode": mode, "rpm": round(float(rpm), 1),
-                                                     "current_arms": round(float(current), 2)}}}
+                                                     "current_arms": round(float(current), 2), "kind": "test"}}}
 
 
 # ---------------------------------------------------------------------------

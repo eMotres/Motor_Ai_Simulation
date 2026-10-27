@@ -99,6 +99,10 @@ catalog_sources:
     file: "docs/measurements/2026-08-04_noload_decomposition_150mm.md"
     page: "§4.1"
     read: "2026-08-04"
+  distributor:
+    doc: "Distributor listings of SKF bearings (RS Components uk.rs-online.com 2076983 / 2076971, Rubix uk.rubix.com G1321001180)"
+    url: "https://uk.rs-online.com/web/p/ball-bearings/2076983"
+    read: "2026-10-28"
 
 # ── GREASES AND OILS ────────────────────────────────────────
 # Only the base-oil viscosity matters to the friction model: nu at the RUNNING
@@ -740,3 +744,79 @@ bearings:
       7010 CE/HCP4A, ceramic balls too, and it still cannot go near 23 000 rpm —
       the seals cap it at ~6 300 rpm. Compare its speed check against the
       angular-contact cards to see that the limit is a SEAL, not a ball.
+  61814-2RZ:
+    description: "SKF 61814-2RZ — deep groove, series 618, non-contact low-friction seals both sides (CIANO20 200_50, production BOM 2026-10-28)"
+    type: deep_groove
+    d: 70
+    D: 90
+    B: 10
+    d_m: 80
+    balls: steel
+    seals: shields          # RZ seals do not touch the inner ring: seal drag taken as 0, like a 2Z shield
+    default_lubricant: MT47
+    n_limit_grease_rpm: 7500
+    n_limit_oil_air_rpm: null    # sealed for life
+    C_kn: 11.9
+    C0_kn: 11.4
+    stiffness_n_per_m: 1.2e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 61814-2RZ
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: distributor, verify: true, note: "limiting speed 7500 rpm (reference 15000) as listed by RS Components 2076983 and Rubix G1321001180 for SKF 61814-2RZ — to verify against the SKF catalogue table"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "same rings and balls as the 61814-2RS1 card"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "same rings and balls as the 61814-2RS1 card"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
+      revision: {n: 1, date: "2026-10-28", by: orchestrator, why: "the bearing of the built CIANO20 200_50 (production BOM part pt_bearing)"}
+    friction:
+      R1: 4.7e-7
+      S1: 6.50e-3
+      K_z: 3.1
+      mu_sl: 0.05
+      ball_density_ratio: 1.0
+    note: >-
+      The 61814-2RS1's rings and balls with non-contact RZ seals: the seal drag of
+      the 2RS1 is gone and the limiting speed is the shielded value.  Not bench-validated.
+  61810-2Z:
+    description: "SKF 61810-2Z (6810ZZ) — deep groove, series 618, metal shields both sides (CIANO42 150_30, production BOM '6810 ZZ' 2026-10-28)"
+    type: deep_groove
+    d: 50
+    D: 65
+    B: 7
+    d_m: 57.5
+    balls: steel
+    seals: shields          # 2Z shields do not touch the inner ring: M_seal = 0
+    default_lubricant: MT47
+    n_limit_grease_rpm: 13000
+    n_limit_oil_air_rpm: null    # shielded, grease-filled
+    C_kn: 6.76
+    C0_kn: 6.8
+    stiffness_n_per_m: 8.0e+7
+    catalog:
+      manufacturer: SKF
+      part_number: 61810-2Z
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: distributor, verify: true, note: "SKF: with Z shields the open bearing's limiting speed applies; open 61810 = 13000 rpm (RS Components 2076971). The factory BOM names a generic 6810 ZZ - its maker's own limit may be lower; to verify"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
+      revision: {n: 1, date: "2026-10-28", by: orchestrator, why: "the bearing of CIANO42 150_30 (production BOM)"}
+    friction:
+      R1: 4.7e-7
+      S1: 6.50e-3
+      K_z: 3.1
+      mu_sl: 0.05
+      ball_density_ratio: 1.0
+    note: >-
+      Thin-section 618 deep groove with shields, the SKF equivalent of the factory's
+      6810 ZZ.  Not bench-validated.

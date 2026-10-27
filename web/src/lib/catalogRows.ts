@@ -7,7 +7,9 @@
 // Pure, no imports: web/src/lib/__tests__/catalogRows.test.mjs imports this file.
 
 export interface RowDuty {
-  name: string; mode?: string; power_kw?: number | null; torque_nm?: number | null;
+  name: string; mode?: string;
+  /** "test" = a bench-test / validation point (owner 2026-10-28): never a mode, a default duty or a card number */
+  kind?: string | null; power_kw?: number | null; torque_nm?: number | null;
   rpm?: number | null; current_arms?: number | null;
   /** SHORT-TIME OR CONTINUOUS (owner 2026-10-19), from the server */
   duty_class?: string | null;
@@ -20,10 +22,22 @@ export interface RowCfg {
 }
 export interface RowDie { name: string; configs: RowCfg[]; }
 
+/** A test / validation duty (mirrors motor_ai_sim.duty_kind.is_test_duty): `kind: "test"`; with no `kind` at all, the
+ *  legacy bench free-run name `noload_*` (a tree from an older server).  An explicit other kind is an ordinary duty. */
+export function isTestDuty(d: { name?: string | null; kind?: string | null } | null | undefined): boolean {
+  const kind = String(d?.kind ?? '').trim();
+  if (kind) return kind.toLowerCase() === 'test';
+  return String(d?.name ?? '').trim().toLowerCase().startsWith('noload_');
+}
+
+/** The duties a customer sees: the configuration's own without its test / validation points. */
+export const shownDuties = <D extends { name?: string | null; kind?: string | null }>(duties: readonly D[] | null | undefined): D[] =>
+  (duties ?? []).filter((d) => !isTestDuty(d));
+
 /** Does the configuration store a computed point (any duty with a saved result)?  Such a motor can be opened in Configure
- *  points-limited even though it has no catalogue card / passport. */
+ *  points-limited even though it has no catalogue card / passport.  A test duty's bench point does not count. */
 export function hasStoredPoint(c: RowCfg): boolean {
-  return (c.duties ?? []).some((d) => d.result !== null && d.result !== undefined && typeof d.result === 'object');
+  return shownDuties(c.duties).some((d) => d.result !== null && d.result !== undefined && typeof d.result === 'object');
 }
 
 /** Which configurations a client's Motors tab lists (owner 2026-10-26): every one it may open - a configuration with a
@@ -37,9 +51,9 @@ export function isListableForClient(c: RowCfg, highlighted: boolean): boolean {
 /** A configuration listed without a catalogue card: it opens points-limited. */
 export const isPointsOnly = (c: RowCfg): boolean => !c.card_date;
 
-/** Same rule as the server: the flag, else "rated", else "rated ...", else the first duty. */
+/** Same rule as the server: the flag, else "rated", else "rated ...", else the first duty - never a test duty. */
 export function defaultDutyOf(c: RowCfg): RowDuty | null {
-  const ds = c.duties ?? [];
+  const ds = shownDuties(c.duties);
   if (!ds.length) return null;
   const by = (n?: string | null) => (n ? ds.find((d) => d.name === n) : undefined);
   return by(c.default_duty) ?? by('rated')
@@ -72,7 +86,7 @@ export function configButtons(die: RowDie): ConfigButton[] {
       power_kw: num(d?.power_kw), torque_nm: num(d?.torque_nm),
       mass_kg: num(d?.result?.mass_kg), rpm: num(d?.rpm),
       mass_partial: d?.result?.mass_partial !== false, mass_active_kg: num(d?.result?.mass_active_kg),
-      card_date: c.card_date ?? null, modes: (c.duties ?? []).length,
+      card_date: c.card_date ?? null, modes: shownDuties(c.duties).length,
       short_time: d?.duty_class === 'short_time',
       short_time_s: num(d?.short_time?.time_to_limit_s),
     };
@@ -154,7 +168,7 @@ const modeRank = (name: string): number => {
 export function modeNames(dies: readonly RowDie[], die: string | null | undefined,
                           config: string | null | undefined): string[] {
   const c = dies.find((d) => d.name === die)?.configs.find((x) => x.name === config);
-  const names = (c?.duties ?? []).map((d) => d.name);
+  const names = shownDuties(c?.duties).map((d) => d.name);
   return names.map((n, i) => ({ n, i }))
     .sort((a, b) => modeRank(a.n) - modeRank(b.n) || a.i - b.i).map((x) => x.n);
 }

@@ -8488,7 +8488,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
 
     # ── temperatures: solved first, settled second, quoted last ─────────────
     ctx["magnet_temp_c"] = (_comp("magnet")
-                            or _numf((cp or {}).get("magnet_temp_max_c"))
+                            or coupled_magnet_max_c(cp)
                             or _numf((cp or {}).get("magnet_temp_c"))
                             or _numf(_setting_of(col, "sim.magnetTempC"))
                             or _magnet_card_temp(mats.get("magnet")))
@@ -20452,6 +20452,25 @@ def converged_words(rec: Optional[Dict[str, Any]],
     return "no"
 
 
+def coupled_magnet_max_c(rec: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The record's hottest magnet element - ``None`` when it is another solve's map (audit 2026-10-27, claim 2).
+
+    A record the continuous-rating search REPLACED with its verified S1 pass (``record_is_s1``) carries that pass's
+    temperatures; its ``magnet_temp_max_c`` belongs to the same column only when it was read off that pass's own map
+    (``magnet_temp_max_pass == "s1_verify"``).  Records written before 2026-10-27 took it from the setpoint loop's
+    last map (the L100 cruise column: hottest 86.7 degC under a magnet temperature of 92.3 degC) and print none."""
+    if not isinstance(rec, dict):
+        return None
+    v = _numf(rec.get("magnet_temp_max_c"))
+    if v is None:
+        return None
+    cr = rec.get("continuous_rating") if isinstance(rec.get("continuous_rating"), dict) else {}
+    if cr.get("record_is_s1") is True and str(rec.get("magnet_temp_max_pass") or "") not in ("s1_verify",
+                                                                                              "pwm_final"):
+        return None
+    return v
+
+
 def coupled_basis_cell(rec: Optional[Dict[str, Any]]) -> str:
     """'coupled loop · converged' / 'coupled loop · stopped at the limit after 44 s' / 'S1 limit search'."""
     if not isinstance(rec, dict):
@@ -20547,7 +20566,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     T("Winding temperature [°C]", "coil_temp_c", "winding")
     T("Magnet temperature [°C]", "magnet_temp_c", "magnet")
     R("Magnet temperature, hottest [°C]",
-      lambda c: (_c(c) or {}).get("magnet_temp_max_c"), 1)
+      lambda c: coupled_magnet_max_c(_c(c)), 1)
     R("Bearing temperature [°C]", lambda c: (_c(c) or {}).get("bearing_temp_c"), 1)
     # HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).  Only on a duty whose
     # converged state is past a limit — `_drop_empty` takes the row out on a

@@ -46,3 +46,33 @@ class TestClaim1TranslatedMapTemperatures:
         t = {"cooling": {"outer": {"mode": "liquid", "t_sink_c": 30.0}}, "point": {"ambient_temp": 45.0}}
         assert R.thermal_floor_c(t) == 30.0
         assert R.thermal_floor_c({}) is None
+
+
+class TestClaim2OneSolvePerCoupledColumn:
+    def _s1(self, **kw):
+        rec = {"coil_temp_c": 180.0, "magnet_temp_c": 92.3, "magnet_temp_max_c": 86.7,
+               "continuous_rating": {"record_is_s1": True, "verified": True}}
+        rec.update(kw)
+        return rec
+
+    def test_a_legacy_s1_record_prints_no_hottest_magnet_of_another_solve(self):
+        assert R.coupled_magnet_max_c(self._s1()) is None
+
+    def test_the_s1_passs_own_map_is_printed(self):
+        assert R.coupled_magnet_max_c(self._s1(magnet_temp_max_c=95.1,
+                                               magnet_temp_max_pass="s1_verify")) == 95.1
+
+    def test_a_record_the_loop_settled_keeps_its_hottest_magnet(self):
+        assert R.coupled_magnet_max_c({"magnet_temp_c": 55.6, "magnet_temp_max_c": 61.0}) == 61.0
+
+    def test_the_compare_row_and_the_warning_context_read_the_same_rule(self):
+        col = {"duty": "cruise", "res": {"coupled": self._s1()}, "em": {}, "d": {}}
+        _hdr, rows = R.coupled_compare_rows([col])
+        row = [r for r in rows if r[0].startswith("Magnet temperature, hottest")]
+        assert not row or "86.7" not in str(row[0][1])
+
+    def test_the_duty_store_keeps_which_pass_the_hottest_magnet_is(self):
+        from motor_ai_sim import duty_results as dr
+        out = dr.compact_coupled({"coupling": {"magnet_temp_max_c": 95.1,
+                                               "magnet_temp_max_pass": "s1_verify"}})
+        assert out["magnet_temp_max_pass"] == "s1_verify"

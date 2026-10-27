@@ -6257,8 +6257,13 @@ def _run(body: Dict[str, Any],
                             "T_coil_in": round(float(t_coil), 2),
                             "T_magnet_in": (None if t_mag is None
                                            else round(float(t_mag), 2)),
+                            # THIS PASS'S OWN MAP (audit 2026-10-27, claim 2):
+                            # left None, the record's `magnet_temp_max_c` fell
+                            # back to the SETPOINT loop's map — a hottest magnet
+                            # (86.7 °C) under a magnet temperature (92.3 °C) of
+                            # another solve in one column.
                             "T_coil_out": None, "T_magnet_out": None,
-                            "T_magnet_max": None,
+                            "T_magnet_max": _component(field, "magnet").get("max"),
                             "P_loss_W": _s_v.get("P_loss_total_W"),
                             "T_em_Nm": _s_v.get("T_em_avg_Nm"),
                             "bearing_temp_c": _s_v.get("bearing_temp_c"),
@@ -6853,6 +6858,11 @@ def _run(body: Dict[str, Any],
         **_mech_top,
         "magnet_temp_max_c": next(
             (r["T_magnet_max"] for r in reversed(history)
+             if r.get("T_magnet_max") is not None), None),
+        # …and WHICH PASS that map was (audit 2026-10-27, claim 2), so a reader
+        # can tell it belongs to the pass the temperatures above were solved in.
+        "magnet_temp_max_pass": next(
+            (r.get("phase") or "loop" for r in reversed(history)
              if r.get("T_magnet_max") is not None), None),
         "iterations": n_em,
         "em_runs": n_em,

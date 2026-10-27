@@ -801,30 +801,59 @@ def frozen_permeability_vsd(p2, Pro, free, A2, f_set, sc_psi, th_dq,
     """
     import numpy as _np
     from motor_ai_sim.winding_sets import vsd_basis as _vb
-    K, _ = p2.Kpw(A2)
+    K, info = p2.Kpw(A2)
     Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
     _keys = [(s, ph) for s in (1, 2) for ph in 'ABC']
     _nb = float(max(1.0, n_branch_per_set))
 
     def _red(v):
         return _np.asarray(Pro.T @ v).ravel()[free]
-    X = p2.solve_ff(Kff, _np.column_stack(
-        [_red(f_set[s][ph] / _nb) for s, ph in _keys]), spd=True)
-    L6 = _np.zeros((6, 6))
-    for j in range(6):
-        A = p2.pad2(Pro, free, X[:, j])
-        for i, (s, ph) in enumerate(_keys):
-            L6[i, j] = sc_psi * float(A @ f_set[s][ph])
+    _F = _np.column_stack([_red(f_set[s][ph] / _nb) for s, ph in _keys])
+
+    def _l6(X):
+        L = _np.zeros((6, 6))
+        for j in range(6):
+            A = p2.pad2(Pro, free, X[:, j])
+            for i, (s, ph) in enumerate(_keys):
+                L[i, j] = sc_psi * float(A @ f_set[s][ph])
+        return L
+
+    # SECANT (frozen ν) — kept under its own name, as `frozen_permeability_ldq`
+    # keeps its `*_fp_H`: it over-reads the small-signal inductance on
+    # saturated iron (docs/BUG_LDLQ_REPORTED_2026-10-05.md).
+    L6_fp = _l6(p2.solve_ff(Kff, _F, spd=True))
+    # DIFFERENTIAL: J = K + T, the SAME operator the machine's own Ld/Lq are
+    # measured on (audit 2026-10-27, claim 8).  The per-set values were the
+    # secant ones until today: the audited 48s/56p variant printed a per-set
+    # Ld 2.96x the machine's differential Ld where two identical in-phase sets
+    # give exactly 2x — the reduction was right, the operator was not.
+    _clamped = False
+    T = p2.tangent2(info, clamp=False) if info else None
+    _dhdb = getattr(p2, "last_dhdb_min_rel", None) if info else None
+    if T is not None and _dhdb is not None and _dhdb <= 0.0:
+        T = p2.tangent2(info, clamp=True)
+        _clamped = True
+    if T is None:                               # no saturable iron: J = K
+        L6 = L6_fp
+    else:
+        Jff = (Pro.T @ (K + T).tocsr() @ Pro).tocsr()[free][:, free].tocsc()
+        L6 = _l6(p2.solve_ff(Jff, _F, spd=True))
     B = _vb(th_dq, _ipark_dq)
     ed, eq, XY = B["d"], B["q"], B["xy"]
-    Lxy2 = XY.T @ L6 @ XY
-    Lxy2 = 0.5 * (Lxy2 + Lxy2.T)
-    ev = _np.linalg.eigvalsh(Lxy2)
+
+    def _xy(L):
+        M = XY.T @ L @ XY
+        return _np.linalg.eigvalsh(0.5 * (M + M.T))
+    ev, ev_fp = _xy(L6), _xy(L6_fp)
     _ref = max(float(_np.max(_np.abs(L6))), 1e-30)
     return {
         "Ld_set_H": float(ed @ L6 @ ed), "Lq_set_H": float(eq @ L6 @ eq),
         "Lxy_H": float(0.5 * (ev[0] + ev[1])),
         "Lxy_min_H": float(ev[0]), "Lxy_max_H": float(ev[1]),
+        "Ld_set_fp_H": float(ed @ L6_fp @ ed), "Lq_set_fp_H": float(eq @ L6_fp @ eq),
+        "Lxy_fp_H": float(0.5 * (ev_fp[0] + ev_fp[1])),
+        "basis": "differential",
+        "tangent_clamped": bool(_clamped),
         # coupling of the air-gap plane into x-y: ~0 for identical sets
         "dq_xy_coupling_pct": float(100.0 * _np.max(_np.abs(
             _np.vstack([ed, eq]) @ L6 @ XY)) / _ref),
@@ -13857,15 +13886,27 @@ def _fem_transient_sliding_band_once(
                     "reciprocity_pct": round(max(
                         _r["reciprocity_pct"] for _r in _six_rows), 4),
                     "samples": len(_six_rows),
+                    # WHICH OPERATOR (audit 2026-10-27, claim 8): the
+                    # differential one, like the machine's Ld/Lq; the secant
+                    # (frozen ν) values ride beside them under *_fp_mH.
+                    "basis": "differential",
+                    "Ld_set_fp_mH": round(1e3 * _m6("Ld_set_fp_H"), 6),
+                    "Lq_set_fp_mH": round(1e3 * _m6("Lq_set_fp_H"), 6),
+                    "Lxy_fp_mH": round(1e3 * _m6("Lxy_fp_H"), 6),
+                    "tangent_clamped": any(bool(_r.get("tangent_clamped"))
+                                           for _r in _six_rows),
                     "reference": "per SET phase (a set = half the paths); "
                                  "L_xy % is of the per-set L_d, the ripple "
                                  "model's bridge-phase reference",
-                    "method": ("frozen permeability at the operating point: "
-                               "the 6x6 incremental L of the two sets "
+                    "method": ("differential (small-signal) at the operating "
+                               "point: the 6x6 incremental L of the two sets "
                                "(six unit-current back-solves on the loaded "
-                               "frame's frozen ν) projected on the orthonormal "
-                               "VSD — d/q = the air-gap plane, x-y = its "
-                               "complement without the zero sequences"),
+                               "frame's tangent operator J = K + T, the one the "
+                               "machine's Ld/Lq use) projected on the "
+                               "orthonormal VSD — d/q = the air-gap plane, x-y "
+                               "= its complement without the zero sequences; "
+                               "the frozen-permeability (secant) values beside "
+                               "them as *_fp_mH"),
                 }
             elif not _six_blk.get("xy_probe_valid"):
                 _six_out["inductances_note"] = (

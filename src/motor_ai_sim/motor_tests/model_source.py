@@ -293,4 +293,23 @@ def collect(die: str, config: str) -> Dict[str, Any]:
         e3 = resolve_end3d(die_doc, cfg_doc)
     except Exception:                                       # noqa: BLE001 - no passport is the normal state
         log.debug("motor tests: no 3-D passport for %s/%s", die, config, exc_info=True)
-    return from_docs(die_doc, cfg_doc, stored, library, mech=mech, end3d=e3)
+    out = from_docs(die_doc, cfg_doc, stored, library, mech=mech, end3d=e3)
+    out["mass"] = whole_motor_mass(die, config)
+    return out
+
+
+def whole_motor_mass(die: str, config: str) -> Optional[Dict[str, Any]]:
+    """``motor_mass.mass_summary`` of the configuration (full mass, partial flag and why, source) for the Tests weight row;
+    ``None`` when it cannot be read.  A stated CAD mass names its source (``cad_source``)."""
+    try:
+        from motor_ai_sim.modules import motor_mass as _mm
+        ms = _mm.mass_summary(die, config)
+        if ms is None:
+            return None
+        if ms.get("source") == "cad_stated":
+            cad = _mm.config_cad_mass(_mm.find_die_dir(die), config) or {}
+            ms = dict(ms, cad_source=cad.get("source"), cad_date=cad.get("date"))
+        return ms
+    except Exception:                                       # noqa: BLE001 - a mass hiccup never fails the table
+        log.debug("motor tests: no full mass for %s/%s", die, config, exc_info=True)
+        return None

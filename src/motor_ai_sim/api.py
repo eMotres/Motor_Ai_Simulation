@@ -135,7 +135,7 @@ from motor_ai_sim.routes.activity import router as activity_router, admin_router
 from motor_ai_sim.routes.model3d import router as model3d_router
 from motor_ai_sim.routes.construction import router as construction_router
 from motor_ai_sim.routes.nda import router as nda_router
-from motor_ai_sim.routes.platform_agreement import admin_router as agreement_admin_router, router as agreement_router
+from motor_ai_sim.routes.platform_agreement import admin_router as agreement_admin_router, dataset_router as dataset_exclusions_router, router as agreement_router
 from motor_ai_sim.routes.verification import router as verification_router, admin_router as verification_admin_router
 from motor_ai_sim.routes.data_sharing import router as data_sharing_router
 from motor_ai_sim.routes.cluster import router as cluster_router
@@ -403,6 +403,7 @@ app.include_router(construction_router)
 app.include_router(nda_router)
 app.include_router(agreement_router)
 app.include_router(agreement_admin_router)
+app.include_router(dataset_exclusions_router)
 app.include_router(verification_router)
 app.include_router(verification_admin_router)
 app.include_router(data_sharing_router)
@@ -455,6 +456,9 @@ app.include_router(development_spec_assistant_router)  # Specification side pane
 from motor_ai_sim.digest.routes import router as digest_router, admin_router as digest_admin_router
 app.include_router(digest_router)
 app.include_router(digest_admin_router)
+# Owner's daily report (owner 2026-10-27): preview + send-now, admin only, to the owner's address only
+from motor_ai_sim.owner_report.routes import router as owner_report_router
+app.include_router(owner_report_router)
 # Tests (owner 2026-10-26): measured data per configuration, compared with the simulation of the same point -
 # /api/motor-tests/{die}/{config} (production side) and /api/projects/{id}/motors/tests (read-only project view)
 from motor_ai_sim.motor_tests.routes import router as motor_tests_router, project_router as motor_tests_project_router

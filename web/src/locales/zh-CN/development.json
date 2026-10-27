@@ -537,7 +537,18 @@
     "lineQueued": "排队中：{what}",
     "minutes": "{count} 分钟",
     "underMinute": "不足 1 分钟",
-    "more": "+{count}"
+    "more": "+{count}",
+    "ahead": "前面还有 {count} 个",
+    "nextInLine": "下一个",
+    "position": "队列第 {count} 位",
+    "starts": "预计开始 {time}",
+    "results": "预计出结果 {time}",
+    "noEstimate": "完成首批计算后给出预计时间",
+    "confidence": {
+      "low": "粗略估计",
+      "medium": "较可靠估计",
+      "high": "可靠估计"
+    }
   },
   "points": {
     "loadingMotor": "正在加载 {motor}...",
@@ -579,7 +590,7 @@
         "s2": "S2：到限时间"
       },
       "tileTip": {
-      "torqueActiveMass": "转矩 / 有效质量（电磁部件），不含整机。",
+        "torqueActiveMass": "转矩 / 有效质量（电磁部件），不含整机。",
         "emTorque": "耦合迭代在其自身温度下得到的转矩。电磁块中的转矩是电磁计算的结果。",
         "winding": "该点的稳定绕组温度（耦合迭代结果）。",
         "magnet": "稳定磁钢温度，取最高值。",
@@ -896,8 +907,12 @@
   "coolingInferred": "根据已存数值推断；点击一种冷却方式即可确认。",
   "addLoadComponent": "添加载荷分量",
   "coolingReason": {
-    "air_propeller": { "submerged": "空气螺旋桨在空气中工作，电机不会在水下运行。" },
-    "wheel": { "submerged": "车轮驱动在地面运行，不在水下。" }
+    "air_propeller": {
+      "submerged": "空气螺旋桨在空气中工作，电机不会在水下运行。"
+    },
+    "wheel": {
+      "submerged": "车轮驱动在地面运行，不在水下。"
+    }
   },
   "airflowReason": {
     "propellerWash": "只有空气螺旋桨后方才有螺旋桨滑流。",
@@ -935,5 +950,38 @@
     "create": "创建版本 {to}",
     "cancel": "取消",
     "failed": "无法创建版本"
+  },
+  "stages": {
+    "label": "仿真阶段",
+    "names": {
+      "em": "电磁点",
+      "thermal": "热",
+      "mechanics": "机械",
+      "end3d": "三维端部",
+      "report": "报告"
+    },
+    "state": {
+      "not_started": "未开始",
+      "queued": "排队中",
+      "computing": "计算中",
+      "partial": "部分完成",
+      "done": "已完成",
+      "failed": "失败，我们正在处理"
+    },
+    "points": "{done} / {total} 个点",
+    "reviewed": "已由我们的工程师审核",
+    "awaitingReview": "等待工程师审核",
+    "doneOn": "完成于 {date}",
+    "complete": "全部完成",
+    "stageOf": "第 {index} / {count} 阶段"
+  },
+  "statusLine": {
+    "computing": "仿真：正在计算 {runs}",
+    "queued": "仿真：排队 {runs}",
+    "runOne": "1 项计算",
+    "runMany": "{count} 项计算",
+    "expected": "预计出结果 {time}",
+    "ready": "结果已就绪",
+    "server": "服务器当前：运行 {running} 项，等待 {queued} 项"
   }
 }

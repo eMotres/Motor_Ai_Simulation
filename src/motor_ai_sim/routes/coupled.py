@@ -1077,6 +1077,43 @@ def _cycle_catalogue(body: Dict[str, Any],
     return duties, duty
 
 
+def _continuous_duty(die: str, cfg: str, duties: List[Dict[str, Any]],
+                     this_duty: str) -> str:
+    """The configuration's CONTINUOUS duty when none is named "rated…" — the
+    state a machine is in when a peak follows normal operation (owner
+    2026-10-27: an eVTOL's emergency peak comes after cruise, warm).
+
+    A duty saved as ``duty_class: continuous`` or whose stored coupled record
+    holds its current (``duty_class.classify``); of several, the one whose
+    stored map has the hottest winding, so the warm start is never the mildest
+    one.  ``""`` when there is none."""
+    try:
+        from motor_ai_sim import duty_class as _dc
+        from motor_ai_sim import duty_results as _dr
+        recs = _dr.get(die, cfg) or {}
+    except Exception:  # noqa: BLE001 — a store read never fails a solve
+        log.debug("coupled: could not read the duty records", exc_info=True)
+        return ""
+    best, best_t = "", None
+    for d in (duties or ()):
+        nm = str((d or {}).get("name") or "")
+        if not nm or nm == str(this_duty):
+            continue
+        rec = recs.get(nm) or {}
+        cls = _dc.classify(d, rec.get("coupled"))
+        if (cls or {}).get("duty_class") != _dc.CONTINUOUS:
+            continue
+        w = ((((rec.get("thermal") or {}).get("components") or {})
+              .get("winding") or {}).get("avg"))
+        try:
+            w = float(w)
+        except (TypeError, ValueError):
+            continue                      # no map: no warm state to take
+        if best_t is None or w > best_t:
+            best, best_t = nm, w
+    return best
+
+
 def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
                    this_duty: str) -> Tuple[Dict[str, float], str, str]:
     """The node MEANS of the RATED duty's own stored thermal map — the warm
@@ -1096,9 +1133,11 @@ def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
             rated = nm
             break
     if not rated:
-        return {}, "", ("this configuration has no rated duty beside %r, so "
-                        "there is no warm state to start a pull from"
-                        % this_duty)
+        rated = _continuous_duty(die, cfg, duties, this_duty)
+    if not rated:
+        return {}, "", ("this configuration has no rated or continuous duty "
+                        "beside %r, so there is no warm state to start a pull "
+                        "from" % this_duty)
     try:
         from motor_ai_sim import duty_results as _dr
         from motor_ai_sim.thermal_capacities import NODES as _NODES
@@ -6257,8 +6296,13 @@ def _run(body: Dict[str, Any],
                             "T_coil_in": round(float(t_coil), 2),
                             "T_magnet_in": (None if t_mag is None
                                            else round(float(t_mag), 2)),
+                            # THIS PASS'S OWN MAP (audit 2026-10-27, claim 2):
+                            # left None, the record's `magnet_temp_max_c` fell
+                            # back to the SETPOINT loop's map — a hottest magnet
+                            # (86.7 °C) under a magnet temperature (92.3 °C) of
+                            # another solve in one column.
                             "T_coil_out": None, "T_magnet_out": None,
-                            "T_magnet_max": None,
+                            "T_magnet_max": _component(field, "magnet").get("max"),
                             "P_loss_W": _s_v.get("P_loss_total_W"),
                             "T_em_Nm": _s_v.get("T_em_avg_Nm"),
                             "bearing_temp_c": _s_v.get("bearing_temp_c"),
@@ -6853,6 +6897,11 @@ def _run(body: Dict[str, Any],
         **_mech_top,
         "magnet_temp_max_c": next(
             (r["T_magnet_max"] for r in reversed(history)
+             if r.get("T_magnet_max") is not None), None),
+        # …and WHICH PASS that map was (audit 2026-10-27, claim 2), so a reader
+        # can tell it belongs to the pass the temperatures above were solved in.
+        "magnet_temp_max_pass": next(
+            (r.get("phase") or "loop" for r in reversed(history)
              if r.get("T_magnet_max") is not None), None),
         "iterations": n_em,
         "em_runs": n_em,

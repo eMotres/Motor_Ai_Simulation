@@ -1,0 +1,29 @@
+# The owner's daily report (owner 2026-10-27): one INTERNAL e-mail at 06:00 Europe/Ljubljana to the owner's address only.
+#
+# Runs `python -m motor_ai_sim.owner_report --send` inside the api container.  In this order:
+#   1. the digest package's own scheduler writes the due activity-digest DRAFTS (it never sends: customer digests
+#      wait in Admin -> Digests for the owner's approval);
+#   2. the report is built (new users, user activity, projects, productions, motors, digests to approve);
+#   3. it is mailed to OWNER_REPORT_TO (default: the admin address; only administrator addresses are accepted) ONCE per date.
+# Idempotent: `<shared>/owner_report/state.json` marks the date as sent, so the timer firing again (07:00 / 08:00 retries after
+# a failed send), a restart or a second host run is a no-op.  Exit 1 = the mail failed (the next trigger retries).
+# This unit REPLACES the separate `motres-digest` timer of docs/DIGEST.md (do not install both: the digest run is idempotent, but
+# one scheduler is easier to reason about).
+#
+# Setup (orchestrator, on the server):
+#   sudo cp deploy/systemd/motres-owner-report.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now motres-owner-report.timer
+# Dry run (prints the text, sends nothing, makes no drafts):
+#   bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.owner_report --dry-run
+# Needs SMTP_USER / SMTP_PASSWORD in /etc/motres/api.env (the same as every other mail); OWNER_REPORT_TO is optional.
+
+[Unit]
+Description=AeroStator owner's daily report (digest drafts + one e-mail to the owner)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+WorkingDirectory=/opt/motres/app/deploy
+ExecStart=/bin/bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.owner_report --send

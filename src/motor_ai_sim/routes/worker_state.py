@@ -48,6 +48,20 @@ def _live_activity():
         return []
 
 
+def _recent_failures():
+    try:
+        return _JOBS.recent_failures()
+    except Exception:                       # noqa: BLE001
+        return []
+
+
+def _server_load():
+    try:
+        return _JOBS.server_load()
+    except Exception:                       # noqa: BLE001
+        return None
+
+
 def state_payload() -> Dict[str, Any]:
     """What ``GET /api/worker/state`` answers (a function so the tests and the CLI can use it without HTTP)."""
     out: Dict[str, Any] = {
@@ -58,6 +72,9 @@ def state_payload() -> Dict[str, Any]:
         "jobs": L.job_rows(),
         # which machine each running / queued run is for (no run ids, owners or bodies): the project pages' live activity
         "activity": _live_activity(),
+        # how many runs run / wait on this server (counts only): the "N on the server" line of the project pages
+        "queue": _server_load(),
+        "failures": _recent_failures(),
     }
     try:                                    # Admin -> Servers shows the queue of the process that runs it
         from motor_ai_sim import cluster_monitor as CM

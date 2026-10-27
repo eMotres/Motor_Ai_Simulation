@@ -321,12 +321,28 @@ def _s2_time(col: Mapping[str, Any]) -> Tuple[Optional[float], Optional[float], 
                 lb = rec.get("limited") if isinstance(rec.get("limited"), Mapping) else {}
                 t = _num(lb.get("t_cold_s"))
             if t is not None:
-                return t, lim, "coupled loop time-to-limit, from cold"
+                return t, lim, "coupled loop time-to-limit, from cold" + _ttl_preliminary(blk)
         lb = rec.get("limited") if isinstance(rec, Mapping) and isinstance(rec.get("limited"), Mapping) else None
         if lb and _num(lb.get("t_cold_s")) is not None:
             lim = _num((lb.get("at_limit_c") or {}).get("winding")) or _num(rec.get("coil_temp_c"))
             return _num(lb.get("t_cold_s")), lim, "coupled loop stopped at the limit, from cold"
     return None, None, ""
+
+
+#: What a requirement cell answered by a time the report itself calls a preliminary estimate carries.
+PRELIMINARY = "preliminary"
+
+
+def _ttl_preliminary(blk: Mapping[str, Any]) -> str:
+    """``"; preliminary estimate (network residual 51.3 % of losses)"`` when the lumped network the time is fitted to
+    is out of balance past the report's own threshold, else ``""`` (audit 2026-10-27, claim 3: the requirements table
+    quoted the 47 s as a firm "not met" while section 3 and section 8 call the same time a preliminary estimate)."""
+    from motor_ai_sim.report import TTL_RESIDUAL_LIMIT_PCT, ttl_residual_words
+    net = blk.get("network") if isinstance(blk.get("network"), Mapping) else {}
+    pct = _num(net.get("worst_residual_pct_of_losses"))
+    if pct is None or pct <= TTL_RESIDUAL_LIMIT_PCT:
+        return ""
+    return ttl_residual_words(dict(blk))
 
 
 def duty_s2_seconds(col: Mapping[str, Any]) -> Optional[float]:
@@ -441,6 +457,8 @@ def requirements_rows(req: Mapping[str, Any], cols: Sequence[Mapping[str, Any]],
                         st = "%s at %s" % (NOT_COMPUTED, wp_txt)
                     else:
                         st = MET if t_s >= dur else NOT_MET
+                        if "preliminary estimate" in src:
+                            st = "%s (%s)" % (st, PRELIMINARY)
                     rows.append([d_label, ach, src, st])
 
     # ── the battery ─────────────────────────────────────────────────────

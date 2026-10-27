@@ -248,8 +248,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
                     <Box key={tile.id} data-testid={`temp-tile-${tile.id}`} data-basis={tile.basis} sx={{ display: 'flex', opacity: tile.muted ? 0.65 : 1 }}>
                       <MetricTile label={t(tile.labelKey)} value={tile.value} unit={tile.unit} d={tile.d} base={tile.value} plain
                         valueColor={tile.muted ? 'var(--text-3)' : 'var(--text-0)'}
-                        tip={tile.tip.map((p) => t(p.key, p.args)).join('
-')} />
+                        tip={tile.tip.map((p) => t(p.key, p.args)).join('\n')} />
                     </Box>
                   ))}
                 </TileRow>

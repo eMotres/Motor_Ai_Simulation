@@ -10,15 +10,10 @@ export default function OperatingChart({ model, t, generator }: { model: ChartMo
   const { plot } = model;
   const dur = (d: unknown) => d === CONTINUOUS ? t('keyPoints.continuous') : typeof d === 'number' ? `${formatNumber(d)} s` : '';
   const empty = model.points.length === 0;
-  const legend = model.points.map((p) => ({ id: p.id, color: p.duration === CONTINUOUS ? blue : amber, text: `${p.name || t('keyPoints.name')} · ${formatNumber(p.torque)} N·m · ${formatNumber(p.speed)} rpm${dur(p.duration) ? ` · ${dur(p.duration)}` : ''}` }));
-  return <Box sx={{ display: 'flex', gap: { xs: 1.5, md: 3.5 }, flexDirection: { xs: 'column', md: 'row' }, alignItems: { md: 'stretch' } }}>
-    <Box sx={{ width: { md: 250 }, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Typography component="h2" sx={{ fontSize: 15, fontWeight: 600, color: 'var(--text-0)' }}>{t('wizard.chart.title')}</Typography>
-      <Box component="ul" aria-label={t('wizard.chart.legend')} sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.9, fontSize: 13, color: 'var(--text-1)' }}>
-        {legend.map((l) => <li key={l.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}><span aria-hidden style={{ width: 10, height: 10, borderRadius: 5, background: l.color, flex: '0 0 10px', transform: 'translateY(1px)' }} /><span style={{ overflowWrap: 'anywhere' }}>{l.text}</span></li>)}
-        <li style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}><span aria-hidden style={{ width: 10, height: 0, borderTop: `2px dashed ${grey}`, flex: '0 0 10px', transform: 'translateY(-3px)' }} /><span>{model.maxSpeed ? `${t('wizard.chart.maxSpeed')} · ${formatNumber(model.maxSpeed.value)} rpm` : `${t('wizard.chart.maxSpeed')} · ${t('wizard.chart.notSet')}`}</span></li>
-      </Box>
-    </Box>
+  // no legend (owner 2026-10-27): the points are listed right above the chart; each marker names its point on hover
+  const label = (p: ChartModel['points'][number]) => `${p.name || t('keyPoints.name')} · ${formatNumber(p.torque)} N·m · ${formatNumber(p.speed)} rpm${dur(p.duration) ? ` · ${dur(p.duration)}` : ''}`;
+  return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Typography component="h2" sx={{ fontSize: 15, fontWeight: 600, color: 'var(--text-0)' }}>{t('wizard.chart.title')}</Typography>
     <Box component="svg" role="img" aria-label={t('wizard.chart.aria')} viewBox={`0 0 ${model.width} ${model.height}`} sx={{ flex: 1, minWidth: 0, width: '100%', height: 'auto', maxHeight: 320 }}>
       <rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill="var(--app-bg)" />
       {model.yTicks.map((tick) => <g key={`y${tick.value}`}><line x1={plot.left} x2={plot.right} y1={tick.y} y2={tick.y} stroke="var(--line-soft)" /><text x={plot.left - 8} y={tick.y + 4} textAnchor="end" fontSize="11" fill="var(--text-3)">{formatNumber(tick.value)}</text></g>)}
@@ -32,7 +27,7 @@ export default function OperatingChart({ model, t, generator }: { model: ChartMo
       {model.points.map((p) => {
         const left = p.x > plot.right - 120;
         return <g key={p.id}>
-          <circle cx={p.x} cy={p.y} r={8} fill={p.duration === CONTINUOUS ? blue : amber} stroke="var(--panel)" strokeWidth="2" />
+          <circle cx={p.x} cy={p.y} r={8} fill={p.duration === CONTINUOUS ? blue : amber} stroke="var(--panel)" strokeWidth="2"><title>{label(p)}</title></circle>
           <text x={left ? p.x - 13 : p.x + 13} y={p.y + 4} textAnchor={left ? 'end' : 'start'} fontSize="12" fill="var(--text-0)">{formatNumber(p.torque)} N·m{dur(p.duration) && p.duration !== CONTINUOUS ? ` · ${dur(p.duration)}` : ''}</text>
         </g>;
       })}

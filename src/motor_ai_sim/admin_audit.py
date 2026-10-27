@@ -64,7 +64,7 @@ ACTIONS = frozenset({
     "support.chats.read", "support.config",
     # catalog / workspaces
     "die.access", "die.rename", "die.retire", "die.restore", "workspace.read", "workspace.export",
-    "config.applications",
+    "config.applications", "config.cad_mass",
     # Geometry tab Full: CAD-only construction edits and the server CAD rebuild they request
     "cad.params", "cad.rebuild",
     # agent drafts (MCP Stage 3) — cross-account reads/writes

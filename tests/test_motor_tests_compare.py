@@ -218,7 +218,9 @@ def test_parameters_record_resistance_and_inductance_rows():
     assert lrows["l_sum"]["extra"]["high_freq"] is True          # 1 kHz vs a low-frequency model: flagged
     w = groups["mass"]["rows"][0]
     assert w["measured"] == 9300 and w["model"] == pytest.approx(9000.0)
-    assert w["delta_pct"] == pytest.approx((9000 - 9300) / 9300 * 100)
+    # the run mass is the ACTIVE parts only: shown as such, never compared with the whole motor on the bench
+    # (owner 2026-10-27; tests/test_motor_tests_weight.py has the full-mass case)
+    assert w["delta_pct"] is None and w["params"]["model_scope"] == "active"
 
 
 def test_rotor_out_inductance_without_a_stator_only_run_is_no_model_point():

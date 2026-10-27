@@ -1761,6 +1761,9 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         "coil_temp_c": _f(c.get("coil_temp_c")),
         "magnet_temp_c": _f(c.get("magnet_temp_c")),
         "magnet_temp_max_c": _f(c.get("magnet_temp_max_c")),
+        # which pass's map the hottest magnet is (audit 2026-10-27, claim 2)
+        **({"magnet_temp_max_pass": str(c["magnet_temp_max_pass"])}
+           if c.get("magnet_temp_max_pass") else {}),
         "bearing_temp_c": _f(c.get("bearing_temp_c")),
         "bearing_temp_source": c.get("bearing_temp_source"),
         "P_bearings_W": _f(c.get("P_bearings_W")),

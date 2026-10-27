@@ -252,6 +252,48 @@ def _config_says_variant(ddir: Optional[os.PathLike], config: str) -> bool:
         return False
     return bool(str(cy.get("cad_variant") or "").strip())
 
+#: A STATED CAD MASS (owner 2026-10-27): a configuration with no server CAD BOM may carry the whole-motor mass of its design CAD
+#: (Fusion is the design truth) under ``cad_mass: {grams, source, date}``, set by an admin.  It is the full mass then, never a
+#: guess: ``source = "cad_stated"``, the non-active mass = CAD mass - the app's active mass.  A built BOM always wins.
+CAD_MASS_KEY = "cad_mass"
+CAD_MASS_MIN_G, CAD_MASS_MAX_G = 1.0, 1e8
+CAD_STATED_BASIS = ("the whole motor's mass as stated from its design CAD model ({source}{date}); the app's active parts "
+                    "(masses.compute_masses) are inside it, the rest of the CAD mass is the non-active parts (housing, "
+                    "holders, bearings, screws, board ...) as one number - no per-part breakdown.")
+
+
+def validate_cad_mass(v: Any) -> Dict[str, Any]:
+    """The ``cad_mass`` block, checked: ``{grams, source, date}`` with ``grams`` in [1 g, 1e8 g].  Raises ``ValueError``."""
+    if not isinstance(v, dict):
+        raise ValueError("cad_mass must be an object {grams, source, date}")
+    try:
+        g = float(v.get("grams"))
+    except (TypeError, ValueError):
+        raise ValueError("cad_mass.grams must be a number") from None
+    if not (CAD_MASS_MIN_G <= g <= CAD_MASS_MAX_G) or g != g:
+        raise ValueError("cad_mass.grams must be between %g g and %g g" % (CAD_MASS_MIN_G, CAD_MASS_MAX_G))
+    src = str(v.get("source") or "").strip()
+    if not src:
+        raise ValueError("cad_mass.source must name the CAD model the mass was read from")
+    out = {"grams": round(g, 3), "source": src[:200]}
+    date = str(v.get("date") or "").strip()
+    if date:
+        out["date"] = date[:32]
+    return out
+
+
+def config_cad_mass(ddir: Optional[os.PathLike], config: str) -> Optional[Dict[str, Any]]:
+    """The configuration's stated CAD whole-motor mass (``validate_cad_mass`` shape), or ``None`` (absent or invalid)."""
+    if ddir is None:
+        return None
+    try:
+        cy = _fsc_read_yaml(Path(ddir) / f"{config}.yaml") or {}
+        v = cy.get(CAD_MASS_KEY)
+        return validate_cad_mass(v) if v else None
+    except Exception:                                                      # noqa: BLE001 - an unreadable value is no value
+        return None
+
+
 #: the consistency guard: the non-active parts counted must be at least this fraction of what the BOM itself lists beyond the
 #: simulation (its own "parts the simulation mass does not contain" row), else the mass is flagged partial
 GUARD_FRACTION = 0.5
@@ -430,7 +472,7 @@ class FullMass:
     active_kg: float                       # the app's active mass: what the EM simulation / optimizer use
     rotating_kg: float
     partial: bool
-    source: str                            # "cad_bom" | "active_only"
+    source: str                            # "cad_bom" | "cad_stated" | "active_only"
     parts: List[MotorPart] = field(default_factory=list)
     basis: str = ""
     bom_file: Optional[str] = None
@@ -467,6 +509,18 @@ def _partial_mass(die: str, config: str, mm: "MotorMass", why: str, kit: bool, *
                     SCOPE_KIT)
 
 
+def _cad_stated_mass(die: str, config: str, mm: "MotorMass", cad: Dict[str, Any]) -> FullMass:
+    """The full mass from a stated CAD whole-motor mass: the app's active parts + one row for the rest of the CAD mass."""
+    total = float(cad["grams"]) / 1000.0
+    rest = total - mm.total_kg
+    words = CAD_STATED_BASIS.format(source=cad["source"], date=(", " + cad["date"]) if cad.get("date") else "")
+    parts = list(mm.parts) + [MotorPart("Non-active parts (CAD mass - active parts)", "CAD_stated", rest, "other", True,
+                                        "stated", "stated CAD whole-motor mass minus the app's active parts",
+                                        key="cad_non_active", em=False)]
+    rot = sum(p.mass_kg for p in mm.parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
+    return FullMass(die, config, total, mm.total_kg, rot, False, "cad_stated", parts, words, None, "")
+
+
 def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
                     cad_dir: Optional[os.PathLike] = None) -> FullMass:
     """The FULL assembled motor mass of ``die`` / ``config`` (see the header).  Raises ``MotorMassError`` when the die
@@ -500,7 +554,11 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
                 if kit else "no CAD bill of materials has been built for this motor: holders, rings, bearings, screws, phase "
                             "board, pins and wire enamel are not weighed") if bf is None
                else "the CAD bill of materials carries no part with a mass")
-        out = _partial_mass(die, config, mm, why, kit, unmassed=list(bf.unmassed) if bf else [])
+        cad = None if kit else config_cad_mass(ddir, config)
+        if cad is not None:
+            out = _cad_stated_mass(die, config, mm, cad)
+        else:
+            out = _partial_mass(die, config, mm, why, kit, unmassed=list(bf.unmassed) if bf else [])
     else:
         defs = pm.mechanical_parts()
         keyed: Dict[str, BomLine] = {}
@@ -631,7 +689,7 @@ def mass_summary(die: str, config: str, *, dies_dir: Optional[os.PathLike] = Non
     return {"full_kg": fm.total_kg, "active_kg": fm.active_kg, "rotating_kg": fm.rotating_kg, "partial": fm.partial,
             "partial_reason": fm.partial_reason, "others": list(fm.others), "unmassed": list(fm.unmassed),
             "source": fm.source, "non_active_kg": fm.total_kg - fm.active_kg,
-            "scope": fm.scope, "kit": fm.kit}
+            "scope": fm.scope, "kit": fm.kit, "basis": fm.basis}
 
 
 def run_mass_fields(die: str, config: str, run_active_kg: float, *, dies_dir: Optional[os.PathLike] = None,

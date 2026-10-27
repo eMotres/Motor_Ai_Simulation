@@ -6739,6 +6739,26 @@ def demag_corner_stats(die: str, cfg: str,
     return out
 
 
+def demag_from_this_field(em: Optional[Dict[str, Any]]) -> bool:
+    """Do the demagnetisation numbers of ``em`` come from the duty's stored field map (``demag_from_field``)?
+
+    On the report's EM-run basis (H02) the run's OWN summary block is used, and the stored field is often another
+    solve - the coupled loop's last pass at other temperatures."""
+    dem = _g(em or {}, "demag")
+    return isinstance(dem, dict) and bool(dem.get("recomputed_from_field"))
+
+
+def demag_corner_stats_if_same_solve(die: str, cfg: str, duty: Optional[str],
+                                     em: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """:func:`demag_corner_stats` of the duty's stored map, only when ``em``'s demagnetisation block IS that map's
+    (audit 2026-10-27, claim 4).  The L100 'cruise' paragraph read "the worst single element keeps 30.5 %" off the
+    EM run's own summary and, one sentence later, "no element below 80 %: the worst of the 1302 ... keeps 98.4 %" off
+    the coupled loop's stored field - two solves in one paragraph."""
+    if not demag_from_this_field(em):
+        return None
+    return demag_corner_stats(die, cfg, duty)
+
+
 def br_corner_from_stats(st: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The corner diagnostic rebuilt from a duty's stored map
     (:func:`demag_corner_stats`), in the solver's ``br_corner`` shape."""
@@ -8443,6 +8463,55 @@ def _cooling_kind(t: Optional[Dict[str, Any]]) -> Tuple[Optional[str], str]:
                    "the heat leaves, and air is the tighter band")
 
 
+def cooling_settings_of_record(cp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The cooling fields (``cooling_mode``, ``frame`` …) a coupled record was solved with, or ``None``.
+
+    The loop keeps them in its S1 block (``continuous_rating.cooling``), its limit block (``limited.cooling``) and
+    the time-to-limit block; the first that names a ``cooling_mode`` answers."""
+    if not isinstance(cp, dict):
+        return None
+    for blk in (cp, cp.get("continuous_rating"), cp.get("limited"), cp.get("time_to_limit")):
+        c = (blk or {}).get("cooling") if isinstance(blk, dict) else None
+        if isinstance(c, dict) and str(c.get("cooling_mode") or "").strip():
+            return c
+    return None
+
+
+def cooling_kind_of_settings(c: Optional[Dict[str, Any]]) -> Optional[Tuple[str, str, bool]]:
+    """``(kind, note, frame_open)`` of a cooling-fields dict - the same classes :func:`_cooling_kind` reads off a
+    solved boundary - or ``None`` when the fields name no class (a fixed film, nothing)."""
+    if not isinstance(c, dict):
+        return None
+    mode = str(c.get("cooling_mode") or "").strip().lower()
+    frame_open = str(c.get("frame") or "housed").strip().lower() == "open"
+    if mode.startswith("robot"):
+        return "robotics", "the cooling set for the coupled loop is still air (natural convection + radiation)", False
+    if mode.startswith("liq"):
+        return "liquid", "the cooling set for the coupled loop is a liquid jacket", False
+    if mode.startswith("air") or mode.startswith("prop"):
+        return "air", ("the cooling set for the coupled loop is forced air, %s frame"
+                       % ("open" if frame_open else "closed")), frame_open
+    return None
+
+
+def share_configuration_cooling(ctxs: Dict[str, Dict[str, Any]]) -> None:
+    """A duty with no cooling of its own takes the configuration's (claim 7, in place).
+
+    The cooling is set per configuration, not per duty: a duty with neither a map nor a coupled loop used to read
+    "ASSUMED air-cooled, closed" beside a sibling solved with an open frame.  The first duty whose cooling is solved
+    or set answers for it, and its note says which duty."""
+    src = next(((d, c) for d, c in (ctxs or {}).items()
+                if c and not str(c.get("cooling_note") or "").startswith("ASSUMED")), None)
+    if src is None:
+        return
+    d0, c0 = src
+    for c in ctxs.values():
+        if c and str(c.get("cooling_note") or "").startswith("ASSUMED"):
+            c["cooling_kind"], c["frame_open"] = c0.get("cooling_kind"), c0.get("frame_open")
+            c["cooling_note"] = "%s (this configuration's cooling, as duty '%s' was solved with)" % (
+                str(c0.get("cooling_note") or "").rstrip("."), d0)
+
+
 def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                      batt: Dict[str, Any], brg: Optional[Dict[str, Any]],
                      max_speed_rpm: Optional[float],
@@ -8451,6 +8520,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                      cold_k: float, cold_note: str,
                      slots: Optional[int] = None,
                      carrier_hz: Optional[float] = None,
+                     poles: Optional[int] = None,
                      ins_peak_lim: Optional[float] = None,
                      ins_peak_note: str = "") -> Dict[str, Any]:
     """The flat per-duty view :func:`duty_warnings` judges.
@@ -8487,15 +8557,19 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     ctx: Dict[str, Any] = {"duty": col["duty"], "drive": duty_drive(col)}
 
     # ── temperatures: solved first, settled second, quoted last ─────────────
+    # SOLVED ONLY (audit 2026-10-27, claim 6): the panel's magnet input, the card's own temperature and the EM run's
+    # winding input are what a run was TOLD, not what the machine reaches - judged as results they printed
+    # "ok takeoff Magnet temperature 150 degC" and "the magnets run hottest at 150 degC on 'takeoff'" for a duty
+    # whose thermal answer is "not solved".  They stay on the context under their own names, never judged.
     ctx["magnet_temp_c"] = (_comp("magnet")
-                            or _numf((cp or {}).get("magnet_temp_max_c"))
-                            or _numf((cp or {}).get("magnet_temp_c"))
-                            or _numf(_setting_of(col, "sim.magnetTempC"))
-                            or _magnet_card_temp(mats.get("magnet")))
+                            or coupled_magnet_max_c(cp)
+                            or _numf((cp or {}).get("magnet_temp_c")))
+    ctx["magnet_temp_input_c"] = (_numf(_setting_of(col, "sim.magnetTempC"))
+                                  or _magnet_card_temp(mats.get("magnet")))
     ctx["magnet_limit_c"], ctx["magnet_limit_note"] = mag_lim, mag_note
     ctx["winding_temp_c"] = (_comp("winding")
-                             or _numf((cp or {}).get("coil_temp_c"))
-                             or _numf(em.get("coil_temp_C")))
+                             or _numf((cp or {}).get("coil_temp_c")))
+    ctx["winding_temp_input_c"] = _numf(em.get("coil_temp_C"))
     ctx["winding_limit_c"], ctx["winding_limit_note"] = ins_lim, ins_note
     # the continuous limit stays on the context under its own name (the limits table prints it), and the peak limit
     # beside it; a TRANSIENT record below judges against `ins_pk` / `ins_pk_note`
@@ -8691,6 +8765,15 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     _fr = str((((t or {}).get("cooling") or {}).get("frame") or {})
               .get("mode") or "").strip().lower()
     ctx["frame_open"] = bool(_fr) and not _fr.startswith("hous")
+    # …AND WITHOUT A THERMAL MAP, THE COOLING THE DUTY'S COUPLED LOOP WAS SOLVED WITH (audit 2026-10-27, claim 7):
+    # a duty with no map - or a translated one, which no verdict reads - fell to "ASSUMED air, closed frame" and
+    # judged 10 A/mm2 on a machine whose loop says "forced air 25 m/s + open frame 25 m/s".
+    if t is None:
+        _set = cooling_settings_of_record(cp)
+        _sk = cooling_kind_of_settings(_set)
+        if _sk is not None:
+            ctx["cooling_kind"], ctx["cooling_note"], ctx["frame_open"] = _sk
+            ctx["cooling_from_settings"] = True
     # The two insulation cards travel with the context, because under a JACKET
     # they are what sets the current-density band (20 organic / 25 ceramic,
     # user 2026-09-14).  The cards are the machine's, not the duty's, so any
@@ -8930,7 +9013,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     _fs_eff = effective_carrier_hz(col)
     _modes_rec = res.get("modes") if isinstance(res.get("modes"), dict) else None
     _tight = tightest_ring_mode(_modes_rec, rpm=rpm, slots=slots,
-                                f_switch_hz=_fs, f_switch_eff_hz=_fs_eff)
+                                f_switch_hz=_fs, f_switch_eff_hz=_fs_eff, poles=poles)
     _rebuilt = _tight is not None
     if _tight is None:
         # Nothing stored for this duty — the coupled run's own block, which is
@@ -9343,9 +9426,10 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
             (brg_assign or {}).get("temp_c"), c.get("em") or {}),
         max_speed_rpm=max_speed, mag_lim=mag_lim, mag_note=mag_note,
         ins_lim=ins_lim, ins_note=ins_note, cold_k=cold_k,
-        cold_note=cold_note, slots=_slots_poles(geo)[0],
+        cold_note=cold_note, slots=_slots_poles(geo)[0], poles=_slots_poles(geo)[1],
         carrier_hz=duty_carrier_hz(cfg_doc, c["duty"]),
         ins_peak_lim=ins_peak_lim, ins_peak_note=ins_peak_note) for c in cols}
+    share_configuration_cooling(ctxs)
     # WHETHER THE MACHINE HAS A SLEEVE, once, from the geometry: every sleeve line below asks this (owner 2026-10-26)
     for _c in cols:
         _c["has_sleeve"] = has_sleeve(geo)
@@ -9356,7 +9440,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # is a corner or a pole, and only the field says which.  Read-only, cached,
     # and absent when a duty kept no field — the rule then reads as before.
     for _d, _c in ctxs.items():
-        _c["demag_corner"] = demag_corner_stats(die, cfg, _d)
+        _c["demag_corner"] = demag_corner_stats_if_same_solve(
+            die, cfg, _d, (_col_of(cols, _d) or {}).get("em"))
 
     # ── THE PICTURES ARE ONE DUTY'S, and that duty is the rated one ─────────
     # Read from the per-duty FIELD store, so a map is the map that duty was
@@ -9649,6 +9734,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         # whatever machine the server has loaded.
         # …the DETAIL duty's, like the rest of section 7 (BL-1).
         "slots": _slots_poles(geo)[0],
+        "poles": _slots_poles(geo)[1],
         "detail_duty": detail_duty,
         "modes_duty": (me_map_duty or detail_duty or None),
         "modes_rpm": duty_point(cfg_doc, me_map_duty or detail_duty or "",
@@ -9838,7 +9924,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                         map_from_duty=bool(D.get("me_map_from_duty")),
                         map_rpm=D.get("me_map_rpm"),
                         map_cur=D.get("me_map_cur"),
-                        modes_rpm=D.get("modes_rpm"), slots=D.get("slots"),
+                        modes_rpm=D.get("modes_rpm"), slots=D.get("slots"), poles=D.get("poles"),
                         f_switch_hz=D.get("modes_f_switch_hz"),
                         f_switch_eff_hz=D.get("modes_f_switch_eff_hz"),
                         pair=D.get("pair"), figs=_figs, sec=sec,
@@ -11574,7 +11660,10 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
     if f_el is None and rpm and poles:
         f_el = float(rpm) / 60.0 * poles / 2.0
     t_mag, t_mag_src = _g(em, "magnet_temp_C"), ""
-    if t_mag is None:
+    # ONLY A COUPLED LOOP'S RUN takes the loop's magnet temperature (audit 2026-10-27, claim 5): on the report's
+    # EM-run basis the run carries no `coupling` block and was solved with the magnets at the card's temperature -
+    # the L100 cruise page printed "92.3 degC (coupled loop)" beside a basis of "magnets 150 degC (card)".
+    if t_mag is None and isinstance(em.get("coupling"), dict) and em.get("coupling"):
         # THIS DUTY'S OWN, CURRENT coupled record first (F4) — never a value
         # merely embedded inside a possibly-stale EM summary.
         t_mag = _g(cp or {}, "magnet_temp_c")
@@ -12296,13 +12385,38 @@ def em_constant_rows(em: Dict[str, Any],
               2.0 * _numf(_g(em, "R_phase_ohm")) * 1000.0, 3, "mOhm",
               "half the parallel paths: twice the machine's")
         _ind = _six["inductances"]
-        R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
-          "from the six-phase inductance probe")
-        R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
-        R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
-          "mH", ("%s of the per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
-          if _ind.get("Lxy_pct_of_Ld") is not None else "")
+        if six_phase_inductances_differential(_ind):
+            R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
+              "from the six-phase inductance probe, differential like the machine's")
+            R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
+            R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
+              "mH", ("%s of the per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
+              if _ind.get("Lxy_pct_of_Ld") is not None else "")
+        else:
+            # A PROBE OF BEFORE 2026-10-27 IS THE SECANT (frozen ν) operator (claim 8): its per-set Ld/Lq beside the
+            # machine's differential ones read as a 2.96x ratio where two identical in-phase sets give exactly 2x.
+            # The per-set d/q values are then the machine's own, twice (exact by symmetry); L_xy has no other
+            # source and is printed as the secant value it is.
+            if _has_inc:
+                R("Ld " + SET_CURRENT_LABEL, (2.0 * _numf(_g(em, "Ld_mH")))
+                  if _numf(_g(em, "Ld_mH")) is not None else None, 4, "mH",
+                  "both sets driven alike: twice the machine's")
+                R("Lq " + SET_CURRENT_LABEL, (2.0 * _numf(_g(em, "Lq_mH")))
+                  if _numf(_g(em, "Lq_mH")) is not None else None, 4, "mH", "")
+            else:
+                R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
+                  "frozen-permeability (secant) value of the six-phase probe, not the small-signal one")
+                R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
+            R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
+              "mH", "frozen-permeability (secant) value of the six-phase probe, not the small-signal one"
+              + (("; %s of that probe's own per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
+                 if _ind.get("Lxy_pct_of_Ld") is not None else ""))
     return rows
+
+
+def six_phase_inductances_differential(ind: Optional[Dict[str, Any]]) -> bool:
+    """Was the six-phase probe solved on the differential operator (its ``basis``), like the machine's Ld/Lq?"""
+    return isinstance(ind, dict) and str(ind.get("basis") or "").lower() == "differential"
 
 
 def em_loss_rows(em: Dict[str, Any],
@@ -12480,6 +12594,28 @@ def em_demag_text(em: Dict[str, Any],
                grade, _cc_txt, (" " + _corner) if _corner else "", _recomp))
 
 
+def demag_magnet_temp_c(side: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The magnet temperature the demagnetisation numbers of one pair side were SOLVED at (audit 2026-10-27, claim 5).
+
+    The block recomputed from the stored field belongs to the run that field is - the coupled loop's when the duty
+    has one, so its magnet temperature.  The EM run's own summary (the report's EM basis) belongs to that run: its
+    own ``magnet_temp_C``, else the card's temperature (the run was solved with the card as it is).  The L100 note
+    printed the coupled loop's 56 / 92 degC beside Br losses solved at 150 degC."""
+    side = side or {}
+    em = side.get("em") or {}
+    dem = _g(em, "demag") or {}
+    if isinstance(dem, dict) and dem.get("recomputed_from_field"):
+        t = _numf(_g(side.get("coupled") or {}, "magnet_temp_c"))
+        if t is not None:
+            return t
+    t = _numf(_g(em, "magnet_temp_C"))
+    if t is None and isinstance(em.get("coupling"), dict) and em.get("coupling"):
+        t = _numf(_g(side.get("coupled") or {}, "magnet_temp_c")) or _numf(_g(em, "coupling.magnet_temp_c"))
+    if t is None:
+        t = _magnet_card_temp((dem or {}).get("magnet_name") if isinstance(dem, dict) else None)
+    return t
+
+
 def demag_pair_note(left: Optional[Dict[str, Any]],
                     right: Optional[Dict[str, Any]]) -> str:
     """Under each demag map (item 6, owner review 2026-09-19): magnet
@@ -12497,7 +12633,7 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
         dem = _g((side or {}).get("em") or {}, "demag") or {}
         if not dem:
             return "", None, None
-        t = _numf(_g((side or {}).get("coupled") or {}, "magnet_temp_c"))
+        t = demag_magnet_temp_c(side)
         loss = _numf(dem.get("loss_pct"))
         bh = _numf(dem.get("bh_loss_pct"))
         area = _numf(dem.get("area_derated_pct"))
@@ -12528,8 +12664,10 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
     # A direct explanation when one duty's mean loss is clearly the larger
     # (item 6): a couple of points of Br is not noise on this scale.
     tail = ""
+    # …and only when the magnets really were at different temperatures: two runs at the one card temperature differ
+    # by their current, and "magnets 150 vs 150 degC" explains nothing (claim 5)
     if (l_loss is not None and r_loss is not None and l_t is not None
-            and r_t is not None and abs(l_loss - r_loss) > 0.05):
+            and r_t is not None and abs(l_loss - r_loss) > 0.05 and abs(l_t - r_t) >= 1.0):
         if l_loss > r_loss:
             tail = ("; %s worse: magnets %s vs %s"
                     % (left.get("duty") or "left",
@@ -12564,10 +12702,18 @@ def em_map_numbers(key: str, maps: Dict[str, Any],
     if not other:
         return ""
     if key == "demag":
-        l_worst = _numf((br_corner_of(_g((left_side or {}).get("em") or {},
-                                         "demag")) or {}).get("br_pct"))
-        r_worst = _numf((br_corner_of(_g((right_side or {}).get("em") or {},
-                                         "demag")) or {}).get("br_pct"))
+        def _worst(side: Optional[Dict[str, Any]]) -> Optional[float]:
+            em_s = (side or {}).get("em") or {}
+            # THE PICTURE'S OWN NUMBER when the EM block is another solve (audit 2026-10-27, claim 4): the map is the
+            # stored field, so a summary of a different run cannot caption it
+            if not demag_from_this_field(em_s):
+                st = (side or {}).get("demag")
+                v = _numf((st or {}).get("min_pct")) if isinstance(st, dict) else None
+                if v is not None:
+                    return v
+            return _numf((br_corner_of(_g(em_s, "demag")) or {}).get("br_pct"))
+        l_worst = _worst(left_side)
+        r_worst = _worst(right_side)
         # SAME ROUNDING AS THE TABLE (reference motor audit, 2026-09-20, CS-1): at one
         # decimal place `_fmt` strips a trailing ".0", so 6.95 rounds to
         # "7.0" and then prints as bare "7" — a different-LOOKING number
@@ -13394,7 +13540,12 @@ def thermal_temp_rows(res: Dict[str, Any],
                       inner: Dict[str, Any]) -> List[List[str]]:
     """Per-part max/avg temperatures.  Header row included; one row means the
     solve carried no per-component breakdown."""
+    # A TRANSLATED MAP IS NOT A TEMPERATURE FIELD (audit 2026-10-27, claim 1): its per-part numbers are a level shift
+    # of another state's map - the L100 peak printed an air gap at 40.1 degC under a 45 degC ambient
+    if thermal_is_translated(res) or thermal_is_translated(inner):
+        return [["Part", "max / avg [°C]"]]
     comps = res.get("components") or inner.get("components") or {}
+    floor = thermal_floor_c(res, inner)
     order = thermal_parts({"winding": "Winding (copper)",
                            "enamel": "Wire enamel",
                            "liner": "Slot insulation",
@@ -13407,8 +13558,47 @@ def thermal_temp_rows(res: Dict[str, Any],
         c = comps.get(key)
         if not isinstance(c, dict):
             continue
-        trows.append([label, _pair(_numf(c.get("max")), _numf(c.get("avg")))])
+        mx, av = _numf(c.get("max")), _numf(c.get("avg"))
+        if floor is not None:
+            # never a temperature under the coldest boundary of the solve (claim 1)
+            mx = None if (mx is not None and mx < floor - THERMAL_FLOOR_TOL_K) else mx
+            av = None if (av is not None and av < floor - THERMAL_FLOOR_TOL_K) else av
+        trows.append([label, _pair(mx, av)])
     return trows
+
+
+#: How far under the coldest boundary a node may read before it is not printed (the film's own mesh resolution,
+#: see :func:`thermal_wall_note`, stays well inside it).
+THERMAL_FLOOR_TOL_K = 1.0
+
+#: What the thermal page prints instead of the per-part table and the extremes of a translated map (claim 1).
+TRANSLATED_TEMPS_WORDS = ("Temperatures not shown: the stored map is the last solved map translated part by part onto "
+                          "the limit instant, a level shift and not a solved field; the coupled loop's temperatures "
+                          "are the answer.")
+
+
+def thermal_floor_c(res: Optional[Dict[str, Any]],
+                    inner: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    """The coldest boundary temperature a thermal record was solved against: its ambient and every film's sink.
+
+    No node of a conduction solve heated by losses can sit below it (a transient starts from the ambient), so a value
+    under it is not a temperature of the machine (audit 2026-10-27, claim 1).  ``None`` when the record states none."""
+    res = res if isinstance(res, dict) else {}
+    inner = inner if isinstance(inner, dict) else {}
+    vals: List[float] = []
+    a = ambient_c_of(res) if res else None
+    if a is None and inner:
+        a = ambient_c_of(inner)
+    if a is not None:
+        vals.append(float(a))
+    cool = res.get("cooling") or inner.get("cooling") or {}
+    for k in ("outer", "inner", "bore", "shaft_ends", "mount", "end_faces"):
+        blk = cool.get(k) if isinstance(cool, dict) else None
+        if isinstance(blk, dict):
+            s = _numf(blk.get("t_sink_c"))
+            if s is not None:
+                vals.append(float(s))
+    return min(vals) if vals else None
 
 
 #: The thermal mesh's AIR and coolant domain ids — everything that is not metal
@@ -13477,9 +13667,21 @@ def thermal_solid_min_c(inner: Dict[str, Any]) -> Optional[float]:
 
 
 def thermal_extremes_text(res: Dict[str, Any], inner: Dict[str, Any]) -> str:
+    if thermal_is_translated(res) or thermal_is_translated(inner):
+        return TRANSLATED_TEMPS_WORDS
     t_max = res.get("T_max", inner.get("T_max"))
     t_min = res.get("T_min", inner.get("T_min"))
     solid, solid_hot = _thermal_solid_extremes(inner or {})
+    floor = thermal_floor_c(res, inner)
+    if floor is not None:
+        # NEVER UNDER THE COLDEST BOUNDARY (claim 1): such a node is a numerical undershoot, not the machine
+        _lo = floor - THERMAL_FLOOR_TOL_K
+        _under = [v for v in (_numf(t_min), solid) if v is not None and v < _lo]
+        if _under:
+            return ("Hottest point in the machine %s; the coolest node of the map reads below the coldest boundary "
+                    "of the solve (%s) - a numerical undershoot, not a temperature of the machine, so it is not "
+                    "printed." % (_fmt(t_max, 1, "°C"),
+                                  _fmt(floor, 1, "°C")))
     if solid is None:
         return ("Hottest point in the machine %s, coolest %s (over the whole "
                 "solved mesh, the gap and bore air included)."
@@ -16713,7 +16915,8 @@ def modes_excitation_note(rpm: Any, slots: Any, f_switch_hz: Any,
 
 
 def excitation_lines(rpm: Any, slots: Any, f_switch_hz: Any,
-                     f_switch_eff_hz: Any = None) -> List[Dict[str, Any]]:
+                     f_switch_eff_hz: Any = None,
+                     poles: Any = None) -> List[Dict[str, Any]]:
     """The excitation lines a rotor ring mode is judged against, at THIS duty.
 
     The inverter carrier and its second harmonic (fixed, they do not scale with
@@ -16739,9 +16942,14 @@ def excitation_lines(rpm: Any, slots: Any, f_switch_hz: Any,
     out: List[Dict[str, Any]] = []
     f_rot = (_numf(rpm) or 0.0) / 60.0
     n_sl = _numf(slots) or 0.0
+    # THE SPATIAL ORDERS a slot-passing force has (audit 2026-10-27, claim 9): the radial force waves of the slotted
+    # stator against the rotor field are of orders 0, g, 2g … with g = gcd(slots, poles) - 8 on 48 slots / 56
+    # poles - so a ring mode of any other order is not driven by these lines, whatever its frequency.  ``None``
+    # (no pole count) keeps the frequency-only test.
+    g = slot_force_order_gcd(slots, poles)
     if f_rot > 0 and n_sl > 0:
-        out.append({"name": "slot passing", "hz": n_sl * f_rot})
-        out.append({"name": "slot passing 2×", "hz": 2.0 * n_sl * f_rot})
+        out.append({"name": "slot passing", "hz": n_sl * f_rot, "order_gcd": g})
+        out.append({"name": "slot passing 2×", "hz": 2.0 * n_sl * f_rot, "order_gcd": g})
     req = _numf(f_switch_hz) or 0.0
     eff = _numf(f_switch_eff_hz) or 0.0
     fs = eff if eff > 0 else req
@@ -16773,8 +16981,30 @@ def excitation_label(line: Optional[Dict[str, Any]]) -> str:
     return nm
 
 
+def slot_force_order_gcd(slots: Any, poles: Any) -> Optional[int]:
+    """gcd(slots, poles): the lowest non-zero spatial order of the slot-passing radial force, or ``None``."""
+    try:
+        ns, np_ = int(round(float(slots))), int(round(float(poles)))
+    except (TypeError, ValueError):
+        return None
+    if ns <= 0 or np_ <= 0:
+        return None
+    return math.gcd(ns, np_)
+
+
+def line_drives_order(line: Dict[str, Any], order: Any) -> bool:
+    """Can this excitation line drive a ring mode of circumferential ``order``?  Unknown order or no order rule:
+    yes (the frequency decides alone, as before)."""
+    g = line.get("order_gcd") if isinstance(line, dict) else None
+    n = _numf(order)
+    if not g or n is None:
+        return True
+    return int(round(abs(n))) % int(g) == 0
+
+
 def nearest_excitation(f_hz: Any,
-                       lines: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+                       lines: List[Dict[str, Any]],
+                       order: Any = None) -> Optional[Dict[str, Any]]:
     """``{'name','hz','margin_pct','flag'}`` of the line this mode sits nearest.
 
     The margin is relative to the EXCITATION, signed, exactly as the modal
@@ -16788,6 +17018,8 @@ def nearest_excitation(f_hz: Any,
     for e in lines:
         hz = _numf(e.get("hz"))
         if not hz or hz <= 0:
+            continue
+        if not line_drives_order(e, order):
             continue
         margin = (f - hz) / hz
         if best is None or abs(margin) < abs(best["_m"]):
@@ -16826,7 +17058,7 @@ def mode_frequencies(res: Optional[Dict[str, Any]]) -> List[float]:
 
 def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
                        slots: Any = None, f_switch_hz: Any = None,
-                       f_switch_eff_hz: Any = None
+                       f_switch_eff_hz: Any = None, poles: Any = None
                        ) -> Optional[Dict[str, Any]]:
     """The stored mode that sits closest to one of THIS duty's excitation lines.
 
@@ -16835,12 +17067,15 @@ def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
     the duty's own carrier and speed so the two duties of one machine cannot
     disagree about a frequency that belongs to the rotor.
     """
-    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz, poles)
     if not lines:
         return None
     best: Optional[Dict[str, Any]] = None
-    for f in mode_frequencies(res):
-        near = nearest_excitation(f, lines)
+    _ms = [m for m in ((res or {}).get("modes") or []) if isinstance(m, dict) and _numf(m.get("f_hz"))]
+    pairs = ([(float(_numf(m.get("f_hz"))), m.get("order")) for m in _ms] if _ms
+             else [(f, None) for f in mode_frequencies(res)])
+    for f, n_ord in pairs:
+        near = nearest_excitation(f, lines, n_ord)
         if near is None:
             continue
         if best is None or abs(near["margin_pct"]) < abs(best["margin_pct"]):
@@ -16856,7 +17091,7 @@ def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
 
 def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
               slots: Any = None, f_switch_hz: Any = None,
-              f_switch_eff_hz: Any = None) -> List[List[str]]:
+              f_switch_eff_hz: Any = None, poles: Any = None) -> List[List[str]]:
     """One row per mode: number, frequency, order, the nearest excitation line
     and its margin.  Header included.
 
@@ -16865,13 +17100,21 @@ def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
     is the fallback for a caller that cannot say which duty it is printing.
     """
     rows = [["#", "f [Hz]", "n", "nearest excitation", "margin"]]
-    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz, poles)
+    _g_ord = slot_force_order_gcd(slots, poles)
     for m in ((res or {}).get("modes") or []):
         if not isinstance(m, dict):
             continue
         near = m.get("nearest") if isinstance(m.get("nearest"), dict) else {}
         if lines:
-            near = nearest_excitation(m.get("f_hz"), lines) or {}
+            near = nearest_excitation(m.get("f_hz"), lines, m.get("order")) or {}
+            if not near and _g_ord and not any(line_drives_order(l, m.get("order")) for l in lines):
+                # NOT DRIVEN (claim 9): said so, never a margin to a line that cannot excite this shape
+                rows.append([_fmt(m.get("index"), 0), _fmt(m.get("f_hz"), 0),
+                             _fmt(m.get("order"), 0) if m.get("order") is not None else "—",
+                             "none: slot forces are of orders 0, %d, %d …" % (_g_ord, 2 * _g_ord),
+                             "not excited"])
+                continue
         rows.append([
             _fmt(m.get("index"), 0), _fmt(m.get("f_hz"), 0),
             _fmt(m.get("order"), 0) if m.get("order") is not None else "—",
@@ -17439,7 +17682,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                em: Optional[Dict[str, Any]] = None,
                map_from_duty: bool = False,
                map_rpm: Any = None, map_cur: Any = None,
-               modes_rpm: Any = None, slots: Any = None,
+               modes_rpm: Any = None, slots: Any = None, poles: Any = None,
                f_switch_hz: Any = None, f_switch_eff_hz: Any = None,
                pair: Optional[Dict[str, Any]] = None,
                figs: Optional[List[int]] = None,
@@ -17629,7 +17872,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
     else:
         mrows = mode_rows(mres, rpm=(modes_rpm or mres.get("rpm") or map_rpm),
                           slots=slots, f_switch_hz=f_switch_hz,
-                          f_switch_eff_hz=f_switch_eff_hz)
+                          f_switch_eff_hz=f_switch_eff_hz, poles=poles)
         if len(mrows) > 1:
             out.append(_table(mrows, [30, 60, 30, 170, CONTENT_W - 290],
                               header=True, size=8.6))
@@ -17839,9 +18082,17 @@ COMPARE_INTRO = (
     "One column per operating point, one table per record kind; \"" + NOT_SOLVED
     + "\" means no record of that point is stored. " + TEMP_BASIS_NOTE)
 
+#: What the power-accounting row is (audit 2026-10-27, claim 10): the solved terminal input carries only the losses
+#: inside the 2-D field solve, so iron and end-winding copper - post-processed - make it read about minus their sum
+#: (L100: -1,745 W against 493 W iron + ~1,250 W end-winding copper).  A structural difference, not an error.
+POWER_ACCOUNTING_NOTE = (
+    "Power accounting: the iron loss and the end-winding copper are computed after the 2-D field solve and never "
+    "pass its terminals, so that row reads about minus their sum.")
+
 EM_COMPARE_NOTE = (
     "Each column is the duty's own 2-D EM run (row 'Basis'); torque = energy/flux-linkage average over one "
-    "electrical period; no validated 3-D end-effect correction unless a k_3d row is shown.")
+    "electrical period; no validated 3-D end-effect correction unless a k_3d row is shown. "
+    + POWER_ACCOUNTING_NOTE)
 
 EM_BEARING_NOTE = (
     "Bearing and windage watts are at each duty's own speed and temperature.")
@@ -18662,7 +18913,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     def _eddy_words(c):
         settled = _e(c, "eddy_settled")
         if settled is None or settled is True:
-            return ("settled via accelerator jumps"
+            return ("settled (accelerated warm-up)"
                     if _e(c, "eddy_settled_via_accelerator") else "settled")
         res = _numf(_e(c, "eddy_settle_residual"))
         tol = _numf(_e(c, "eddy_settle_tol"))
@@ -20396,6 +20647,25 @@ def converged_words(rec: Optional[Dict[str, Any]],
     return "no"
 
 
+def coupled_magnet_max_c(rec: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The record's hottest magnet element - ``None`` when it is another solve's map (audit 2026-10-27, claim 2).
+
+    A record the continuous-rating search REPLACED with its verified S1 pass (``record_is_s1``) carries that pass's
+    temperatures; its ``magnet_temp_max_c`` belongs to the same column only when it was read off that pass's own map
+    (``magnet_temp_max_pass == "s1_verify"``).  Records written before 2026-10-27 took it from the setpoint loop's
+    last map (the L100 cruise column: hottest 86.7 degC under a magnet temperature of 92.3 degC) and print none."""
+    if not isinstance(rec, dict):
+        return None
+    v = _numf(rec.get("magnet_temp_max_c"))
+    if v is None:
+        return None
+    cr = rec.get("continuous_rating") if isinstance(rec.get("continuous_rating"), dict) else {}
+    if cr.get("record_is_s1") is True and str(rec.get("magnet_temp_max_pass") or "") not in ("s1_verify",
+                                                                                              "pwm_final"):
+        return None
+    return v
+
+
 def coupled_basis_cell(rec: Optional[Dict[str, Any]]) -> str:
     """'coupled loop · converged' / 'coupled loop · stopped at the limit after 44 s' / 'S1 limit search'."""
     if not isinstance(rec, dict):
@@ -20491,7 +20761,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     T("Winding temperature [°C]", "coil_temp_c", "winding")
     T("Magnet temperature [°C]", "magnet_temp_c", "magnet")
     R("Magnet temperature, hottest [°C]",
-      lambda c: (_c(c) or {}).get("magnet_temp_max_c"), 1)
+      lambda c: coupled_magnet_max_c(_c(c)), 1)
     R("Bearing temperature [°C]", lambda c: (_c(c) or {}).get("bearing_temp_c"), 1)
     # HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).  Only on a duty whose
     # converged state is past a limit — `_drop_empty` takes the row out on a

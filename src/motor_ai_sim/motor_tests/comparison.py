@@ -76,6 +76,36 @@ def _create_duty(die: str, config: str, *, rpm: float, current: float, mode: str
 # parameters
 # ---------------------------------------------------------------------------
 
+def _weight_row(p: Dict[str, Any], model: Dict[str, Any]) -> Dict[str, Any]:
+    """The bench weight against the model's WHOLE-motor mass (owner 2026-10-27).
+
+    The bench weighs the whole motor; ``summary.mass_total_kg`` is the ACTIVE parts only (CIANO20 200_50: 9,400 g on the
+    bench against 7,334 g, -22 % in red).  The model is ``motor_mass.mass_summary``: its full mass when it is complete
+    (the CAD bill of materials, or the configuration's stated CAD mass), compared with a delta; when it is partial the
+    active mass is shown as "active parts only" with the reason, and NO delta - two different things are not compared."""
+    ms = model.get("mass") if isinstance(model.get("mass"), dict) else None
+    what = p.get("what")
+    if ms is not None and not ms.get("partial") and num(ms.get("full_kg")) is not None:
+        src = str(ms.get("source") or "")
+        words = {"cad_stated": "Model: Fusion CAD mass" + (" (%s)" % ms["cad_source"] if ms.get("cad_source") else ""),
+                 "cad_bom": "Model: full motor, CAD bill of materials"}.get(src, "Model: full motor mass")
+        return _row("weight", "Weight: %s" % what, "g", p.get("mass_g"), 1000.0 * float(ms["full_kg"]), tip="weight",
+                    params={"what": what, "model_scope": "full"}, detail=words,
+                    extra={"mass_source": src, "mass_scope": "full"})
+    akg = num((ms or {}).get("active_kg"))
+    if akg is None:
+        akg = num(model.get("mass_kg"))
+    if ms is not None or akg is not None:
+        why = str((ms or {}).get("partial_reason") or "no CAD model mass for this configuration")
+        r = _row("weight", "Weight: %s" % what, "g", p.get("mass_g"), None if akg is None else 1000.0 * akg,
+                 tip="weight", params={"what": what, "model_scope": "active"}, status="info",
+                 detail="Model: active parts only - %s; no delta, the bench weighs the whole motor" % why,
+                 extra={"mass_source": str((ms or {}).get("source") or "active_only"), "mass_scope": "active"})
+        r["delta_pct"] = None
+        return r
+    return _row("weight", "Weight: %s" % what, "g", p.get("mass_g"), None, tip="weight", params={"what": what})
+
+
 def _resistance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     r = rec.get("resistance")
     if not isinstance(r, dict) or not r.get("pairs"):
@@ -197,9 +227,7 @@ def _info_groups(rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, A
         out.append(_group("insulation", "Insulation", rows))
     rows = []
     for p in rec.get("weight") or []:
-        mkg = model.get("mass_kg")
-        rows.append(_row("weight", "Weight: %s" % p.get("what"), "g", p.get("mass_g"),
-                         None if mkg is None else mkg * 1000.0, tip="weight", params={"what": p.get("what")}))
+        rows.append(_weight_row(p, model))
     for p in rec.get("dimensions") or []:
         rows.append(_row("dimension", "%s" % p.get("what"), "mm", p.get("value_mm"), p.get("nominal_mm"),
                          params={"what": p.get("what")}, detail="nominal = the drawing value entered with the record"))

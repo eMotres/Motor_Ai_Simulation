@@ -1172,6 +1172,126 @@
             "zh-CN": "温度检测"
           },
           "presentation_group": "2"
+        },
+        {
+          "id": "2_13",
+          "checklist_id": "2.13",
+          "label": {
+            "en": "Generator output voltage (AC, with its definition)",
+            "zh-CN": "发电机输出电压（交流，含其定义）"
+          },
+          "type": "object",
+          "unit": "V",
+          "required": false,
+          "allow_not_known_yet": true,
+          "help": {
+            "en": "Generators only. The worst-case AC voltage at the generator terminals, separate from the DC bus fields: for a generator feeding a DC bus through the bridge this is the LOWEST voltage, at its speed. Say whether it is line-to-line or phase, RMS or peak.",
+            "zh-CN": "仅用于发电机。发电机端子处最不利的交流电压，与直流母线字段分开：发电机经桥式整流器向直流母线供电时，最不利的是最低电压及其对应转速。请说明是线电压还是相电压、有效值还是峰值。"
+          },
+          "ordered_pairs": [
+            [
+              "ac_min_V",
+              "ac_max_V"
+            ],
+            [
+              "at_rpm_min",
+              "at_rpm_max"
+            ]
+          ],
+          "properties": [
+            {
+              "id": "ac_min_V",
+              "label": {
+                "en": "Lowest AC voltage (worst case)",
+                "zh-CN": "最低交流电压（最不利）"
+              },
+              "short_label": {
+                "en": "Lowest AC voltage",
+                "zh-CN": "最低交流电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "ac_max_V",
+              "label": {
+                "en": "Maximum AC voltage",
+                "zh-CN": "最大交流电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "ui_hidden": true,
+              "min": 0
+            },
+            {
+              "id": "basis",
+              "label": {
+                "en": "Voltage definition",
+                "zh-CN": "电压定义"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "options": [
+                {
+                  "value": "line_line_rms",
+                  "label": {
+                    "en": "Line-to-line, RMS",
+                    "zh-CN": "线电压，有效值"
+                  }
+                },
+                {
+                  "value": "line_line_peak",
+                  "label": {
+                    "en": "Line-to-line, peak",
+                    "zh-CN": "线电压，峰值"
+                  }
+                },
+                {
+                  "value": "phase_rms",
+                  "label": {
+                    "en": "Phase, RMS",
+                    "zh-CN": "相电压，有效值"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "at_rpm_min",
+              "label": {
+                "en": "At speed (of the lowest voltage)",
+                "zh-CN": "对应转速（最低电压时）"
+              },
+              "short_label": {
+                "en": "At speed",
+                "zh-CN": "对应转速"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": false,
+              "min": 0
+            },
+            {
+              "id": "at_rpm_max",
+              "label": {
+                "en": "At speed, maximum",
+                "zh-CN": "对应转速，最高"
+              },
+              "type": "number",
+              "unit": "rpm",
+              "required": false,
+              "ui_hidden": true,
+              "min": 0
+            }
+          ],
+          "short_label": {
+            "en": "Generator output voltage",
+            "zh-CN": "发电机输出电压"
+          },
+          "presentation_group": "2"
         }
       ],
       "presentation_order": 5

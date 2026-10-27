@@ -13,8 +13,10 @@ import {
   SPEC_LABEL_HEIGHT, cardColumnMin, fieldOptionLabels, labelChars, longestOptionChars, optionLabels, optionsMinWidth,
   specFieldLabelSx, specGridSx, specGroupHeaderSx, visibleProperties,
 } from '../specGrid.ts';
+import { readWizard, specViewSource } from './specSources.mjs';
 
-const page = readFileSync(new URL('../components/DevelopmentPage.tsx', import.meta.url), 'utf8');
+const page = specViewSource();
+const ui = readWizard('ui.tsx');
 const schema = JSON.parse(readFileSync(new URL('../../../../../src/motor_ai_sim/development/schema.json', import.meta.url), 'utf8'));
 const field = (id) => schema.sections.flatMap((s) => s.fields ?? []).find((f) => f.id === id);
 const lineOf = (needle) => page.split('\n').find((l) => l.includes(needle)) ?? '';
@@ -47,12 +49,13 @@ test('every group and every input row uses the one grid (equal columns, no ad-ho
   assert.doesNotMatch(page, /repeat\(auto-fill,\s*minmax\(1[24]0px/);
   assert.match(lineOf('const propertyGrid ='), /\.\.\.specGridSx/);
   assert.match(page, /\.\.\.specGridSx/);
-  // each group starts its own row: the requirements fields are stacked in a one-column grid
-  assert.match(lineOf('const grid = {'), /gridTemplateColumns: 'minmax\(0,1fr\)'/);
+  // each group starts its own row: a wizard card stacks its fields in one column
+  assert.match(ui, /<Stack spacing=\{2\} sx=\{\{ minWidth: 0 \}\}>\{children\}<\/Stack>/);
 });
 
 test('every card sets the one column width of the card (--spec-col)', () => {
-  assert.match(page, /'--spec-col': cardColumnMin\(section\.fields\)/);
+  assert.match(ui, /'--spec-col': cardColumn/);
+  assert.match(page, /cardColumn=\{cardColumnMin\(list\)\}/);
   assert.match(specGridSx.gridTemplateColumns, /var\(--spec-col/);
 });
 

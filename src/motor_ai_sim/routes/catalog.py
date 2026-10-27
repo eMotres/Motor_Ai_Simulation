@@ -1549,7 +1549,10 @@ def set_configure_limits(motor_id: str, body: dict,
                     m.pop("configure_limits", None)
                 found["blk"] = blk
                 return
-    _mutate(_m)
+    # Write the catalogue the card actually comes from (the caller's workspace first, then the shared catalogue): a card
+    # of the shared catalogue was not found in the admin's own workspace file and answered 404 (2026-10-28).
+    _card, src = _configure_motor(motor_id, authorization)
+    _mutate_json(Path(str(src)), _m, default={"tiers": [], "diameters_mm": [], "motors": []})
     if not found["ok"]:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
     return {"ok": True, "motor_id": motor_id,

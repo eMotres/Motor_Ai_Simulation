@@ -1,9 +1,10 @@
 /** Activity digests (docs/DIGEST.md): the pure parts of the settings block and the Admin list - node-testable, no React.
  *
- *  Owner rules 2026-10-26: only two modes exist, `approve` (default: the digest waits in Admin until the owner sends it) and
- *  `off`.  There is no automatic mode, so the UI offers none and refuses to build one. */
+ *  Owner decision 2026-10-28 (it reverses the 2026-10-26 "no automatic mode" rule): three modes, `auto` (default: the daily 06:00
+ *  Ljubljana run sends the group's digest by itself, only when something changed), `approve` (the digest waits in Admin until the
+ *  owner sends it) and `off`.  The UI offers exactly these and refuses to build any other. */
 
-export const DIGEST_MODES = ['approve', 'off'] as const;
+export const DIGEST_MODES = ['auto', 'approve', 'off'] as const;
 export const DIGEST_FREQUENCIES = ['daily', 'weekly'] as const;
 export const DIGEST_RECIPIENTS = ['all', 'chosen'] as const;
 export type DigestMode = (typeof DIGEST_MODES)[number];
@@ -28,7 +29,7 @@ export function settingsPath(target: DigestTarget): string {
     : `/api/digest/settings/production/${encodeURIComponent(target.die)}/${encodeURIComponent(target.config)}`;
 }
 
-/** A change the form may send.  Anything that is not one of the two modes is refused here too (the server refuses it as well). */
+/** A change the form may send.  Anything that is not one of the three modes is refused here too (the server refuses it as well). */
 export function settingsChange(view: Pick<DigestSettingsView, 'mode' | 'frequency' | 'recipients' | 'chosen'>,
   change: Partial<{ mode: string; frequency: string; recipients: string; chosen: string[] }>): Record<string, unknown> | null {
   const out: Record<string, unknown> = {};
@@ -59,7 +60,7 @@ export interface DigestSummary {
   status: 'pending' | 'partial' | 'sent' | 'discarded' | 'superseded';
   period: { start: string; end: string }; updated_at: string; items: number; recipients: number; bilingual: boolean; subject: string;
   sent?: { at: string; by: string; sent: number; failed: number }; discarded?: { at: string; by: string };
-  last_error?: { at: string; failed: number };
+  last_error?: { at: string; by?: string; failed?: number; code?: string; message?: string };
   partial?: { at: string; by: string; sent: number; failed: number; outstanding: string[] };
 }
 

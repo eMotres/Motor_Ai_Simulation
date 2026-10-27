@@ -10,14 +10,15 @@ By signed e-mail link (no session; the token is the credential)::
 
     GET/POST /api/digest/unsubscribe/{scope}/{token}   the page / one click (RFC 8058 target)
 
-Admin -> Digests (the ONLY place a digest is sent)::
+Admin -> Digests (the place where a digest is previewed and sent by hand; the daily scheduled run sends the groups in mode
+``auto`` by itself, see approval.run_daily - owner decision 2026-10-28)::
 
     GET  /api/admin/digests                  pending drafts + history
     GET  /api/admin/digests/{id}             the draft: the single text, items, recipients
     GET  /api/admin/digests/{id}/preview     the e-mail exactly as one recipient gets it (?recipient=)
     POST /api/admin/digests/{id}/send        {"approve": true} - the explicit approval
     POST /api/admin/digests/{id}/discard
-    POST /api/admin/digests/run              make the due drafts now ({"dry_run": true} writes nothing); sends nothing
+    POST /api/admin/digests/run              make the due drafts now ({"dry_run": true} writes nothing); never sends
     GET  /api/admin/digests/log              who changed what, who sent what
 """
 from __future__ import annotations
@@ -223,7 +224,8 @@ def admin_log(scope: Optional[str] = None, _admin: dict = Depends(auth.require_a
 
 @admin_router.post("/run")
 async def admin_run(request: Request, _admin: dict = Depends(auth.require_admin)):
-    """Make the due drafts now.  Sends nothing."""
+    """Make the due drafts now.  Sends nothing, also for groups in ``auto`` mode: the automatic send belongs to the daily scheduled
+    run (``approval.run_daily``) alone."""
     try:
         body = await request.json()
     except ValueError:

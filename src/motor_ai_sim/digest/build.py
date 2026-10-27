@@ -1,16 +1,19 @@
 """Working groups, recipients, the ONE text of a digest and the run that makes drafts.
 
-Owner rules 2026-10-26 (they override the first brief):
+Rules (owner 2026-10-26, changed by the owner decision of 2026-10-28):
 
-* **Nothing is sent from here.**  :func:`run` only writes DRAFTS that wait in Admin; the one function that hands mail to SMTP is
-  :func:`motor_ai_sim.digest.approval.send_draft`, reached only from the admin "Send" route.  There is no automatic mode.
+* **Nothing is sent from here.**  :func:`run` only writes DRAFTS; the one module that hands mail to SMTP is
+  :mod:`motor_ai_sim.digest.approval`.  A draft is sent either by an admin (the "Send" route, after a preview) or - since the
+  owner decision 2026-10-28 - automatically by the daily scheduled run (``approval.run_daily``) when the group's mode is ``auto``,
+  which is the default.  ``approve`` keeps the draft waiting in Admin, ``off`` makes none.  The admin "make drafts now" route calls
+  :func:`run` directly, so it never sends.
 * **One text per group per period.**  The draft holds a single subject and body for the whole group.  The body keeps only the
   items EVERY recipient may see (lowest common access: no costs unless shared with the factory, no internal notes, no
   engineers' trial variants).  A group with Chinese-speaking members (the factory) gets both languages in that one e-mail,
   English first.  Links are the same for everybody; the app enforces each person's own access after sign-in.
 * The only per-person part is the footer (their own unsubscribe and preferences links) - the text above it is identical.
-* A period with nothing to report makes NO draft.  One draft per (group, period start): running twice, or after a send, never makes
-  a second digest for the same period.
+* A period with nothing to report makes NO draft (so an automatic run sends nothing for an idle group).  One draft per (group,
+  period start): running twice, or after a send, never makes a second digest for the same period.
 """
 from __future__ import annotations
 
@@ -438,7 +441,7 @@ def motors_visible_to_all(items, emails) -> dict:
     return out
 
 
-# -- the run: drafts, never mail ---------------------------------------------------------------------------------------------------------
+# -- the run: drafts, never mail (sending is approval.run_daily) ----------------------------------------------------------------
 
 def build_draft(group: Group, settings: dict, items: list, recipients: list[dict], skipped: list[dict],
                 start: float, end: float, existing: Optional[dict] = None, *, revision: int = 0) -> Optional[dict]:
@@ -476,7 +479,7 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
 
 def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bool = True,
         results: Callable[[str, str], dict] = C.stored_results) -> list[dict]:
-    """Make the due drafts.  Returns one report row per group looked at.  NEVER sends anything.
+    """Make the due drafts.  Returns one report row per group looked at.  NEVER sends anything (``approval.run_daily`` does that).
 
     A pending draft nobody has opened is refreshed in place.  A draft the owner already opened or previewed is NEVER rewritten
     (what he read is what he may approve): a refresh with different content makes a new draft (next revision) and marks the old
@@ -501,7 +504,7 @@ def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bo
         state = DS.get_state(group.scope)
         current = DS.load_draft(state["draft_id"]) if state.get("draft_id") else None
         if current is not None and current.get("status") == "partial":
-            row["action"], row["reason"] = "skipped", "partial_send_open"
+            row["action"], row["reason"], row["draft_id"] = "skipped", "partial_send_open", current["id"]
             continue
         pending = current if current is not None and current.get("status") == "pending" else None
         cursor = DS.parse_ts(state.get("cursor"))

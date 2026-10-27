@@ -7,13 +7,21 @@ overrides it)::
     state.json             {scope: {cursor, draft_id}}   the end of the last digest period and the draft waiting now
     drafts/<id>.json       one draft = ONE text for the whole group (owner 2026-10-26) + its recipient list
     log.jsonl              append-only: settings changes, drafts made, sent, discarded (who, when)
-    sendlog/<id>.sendlog.jsonl   the mailing send log of one approved draft (idempotent send, see mailing.py)
+    sendlog/<id>.sendlog.jsonl   the mailing send log of one sent draft (idempotent send, see mailing.py)
+    migrations.json        {migration name: when} - one-off data migrations that already ran
 
 A *scope* is ``project:<id>`` (a development project) or ``production:<die>/<config>`` (one production).
 
-Modes (owner 2026-10-26): ``approve`` (default) - the digest is generated and WAITS in Admin until the owner sends or
-discards it; ``off`` - nothing.  There is NO automatic mode: nothing here ever sends.  A value ``auto`` found in an old file
-is read as ``approve``.
+Modes (owner decision 2026-10-28, which reverses the "no automatic mode" rule of 2026-10-26): ``auto`` (default) - the daily
+scheduled run (``approval.run_daily``, at 06:00 Europe/Ljubljana) sends each new draft of the group right after building it,
+through the same send path as the admin Send; ``approve`` - the draft WAITS in Admin until the owner sends or discards it;
+``off`` - nothing.  Only a group with changes during the period gets a draft at all.  Nothing in this module sends.
+
+There is no separate "global default" record: the default of a group with no stored mode is ``DEFAULT_SETTINGS["mode"]``.
+Stored data written before 2026-10-28 says ``approve`` for every group that ever had a record (an opt-out or a frequency change
+stores the whole record, and ``approve`` was the default), so :func:`migrate_auto_default` runs once and turns such a record
+into ``auto``; a record where somebody chose ``approve`` on purpose (the settings log shows a change TO ``approve``) or ``off`` keeps
+it and gets ``mode_chosen: true``.  From then on ``set_settings`` marks every mode it sets as chosen.
 """
 from __future__ import annotations
 
@@ -29,10 +37,10 @@ from typing import Any, Optional
 
 from motor_ai_sim import json_store
 
-MODES = ("approve", "off")
+MODES = ("auto", "approve", "off")
 FREQUENCIES = ("daily", "weekly")
 RECIPIENTS = ("all", "chosen")
-DEFAULT_SETTINGS = {"mode": "approve", "frequency": "daily", "recipients": "all", "chosen": [], "optouts": []}
+DEFAULT_SETTINGS = {"mode": "auto", "frequency": "daily", "recipients": "all", "chosen": [], "optouts": []}
 
 _ID_RE = re.compile(r"^d-[0-9a-f]{16}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s.]+$")
@@ -150,9 +158,9 @@ def _emails(values: Any) -> list[str]:
 
 
 def normalise_settings(raw: Any) -> dict:
-    """Valid settings from anything stored: unknown mode (also an old ``auto``) -> ``approve``."""
+    """Valid settings from anything stored: a missing or unknown mode -> the default (``auto``)."""
     raw = raw if isinstance(raw, dict) else {}
-    mode = raw.get("mode") if raw.get("mode") in MODES else "approve"
+    mode = raw.get("mode") if raw.get("mode") in MODES else DEFAULT_SETTINGS["mode"]
     out = dict(DEFAULT_SETTINGS)
     out.update({
         "mode": mode,
@@ -164,21 +172,72 @@ def normalise_settings(raw: Any) -> dict:
     for k in ("updated_at", "updated_by"):
         if raw.get(k):
             out[k] = str(raw[k])
+    if raw.get("mode_chosen") is True:
+        out["mode_chosen"] = True
     return out
 
 
+# -- the 2026-10-28 migration: the stored default ``approve`` becomes ``auto`` -------------------------------------------------
+
+MIGRATION_AUTO_DEFAULT = "auto_default_2026-10-28"
+
+
+def _migrations_file() -> Path:
+    return root() / "migrations.json"
+
+
+def _chose_approve(scope: str, rows: list) -> bool:
+    """Did somebody set this group to ``approve`` on purpose?  The last logged mode change of the group went TO ``approve``."""
+    last = None
+    for r in rows:
+        ch = r.get("changed") if r.get("event") == "settings" and r.get("scope") == scope else None
+        if isinstance(ch, dict) and isinstance(ch.get("mode"), list) and len(ch["mode"]) == 2:
+            last = ch["mode"][1]
+    return last == "approve"
+
+
+def migrate_auto_default() -> list:
+    """Run once per store: every stored ``approve`` that is only the old default becomes ``auto`` (owner 2026-10-28).  Kept as
+    they are: ``off`` and an ``approve`` that the settings log shows was chosen (both get ``mode_chosen``).  -> the scopes changed.
+    Idempotent and cheap after the first run (one marker file)."""
+    if MIGRATION_AUTO_DEFAULT in (json_store.read_json(_migrations_file(), {}) or {}):
+        return []
+    rows = read_log()
+    changed: list = []
+
+    def mutate(doc):
+        for scope, rec in list(doc.items()):
+            if not isinstance(rec, dict) or rec.get("mode_chosen") is True:
+                continue
+            if rec.get("mode") == "off" or (rec.get("mode") == "approve" and _chose_approve(scope, rows)):
+                rec["mode_chosen"] = True
+            else:                                            # the old default (or a missing / unknown value) -> the new default
+                if rec.get("mode") == "approve":
+                    changed.append(scope)
+                rec["mode"] = "auto"
+
+    json_store.mutate_json(_settings_file(), mutate, default={})
+    json_store.mutate_json(_migrations_file(), lambda m: m.__setitem__(MIGRATION_AUTO_DEFAULT, iso()), default={})
+    if changed:
+        append_log({"event": "migrated", "migration": MIGRATION_AUTO_DEFAULT, "by": "system", "scopes": sorted(changed),
+                    "changed": {"mode": ["approve", "auto"]}})
+    return changed
+
+
 def get_settings(scope: str) -> dict:
+    migrate_auto_default()
     doc = json_store.read_json(_settings_file(), {})
     return normalise_settings(doc.get(scope) if isinstance(doc, dict) else None)
 
 
 def all_settings() -> dict:
+    migrate_auto_default()
     doc = json_store.read_json(_settings_file(), {})
     return {k: normalise_settings(v) for k, v in doc.items()} if isinstance(doc, dict) else {}
 
 
 def validate_settings_update(body: Any) -> dict:
-    """The fields of a settings update, checked.  ValueError (the caller answers 422) on anything unknown - ``auto`` included."""
+    """The fields of a settings update, checked.  ValueError (the caller answers 422) on anything unknown."""
     if not isinstance(body, dict):
         raise ValueError("expected a JSON object")
     out: dict = {}
@@ -212,12 +271,15 @@ def set_settings(scope: str, changes: dict, *, by: str) -> dict:
     if parse_scope(scope) is None:
         raise ValueError("unknown scope")
     changes = validate_settings_update(changes)
+    migrate_auto_default()
     result: dict = {}
 
     def mutate(doc):
         before = normalise_settings(doc.get(scope))
         after = dict(before)
         after.update(changes)
+        if "mode" in changes:
+            after["mode_chosen"] = True                      # a deliberate choice: a later change of the default must not touch it
         after["updated_at"], after["updated_by"] = iso(), str(by or "").lower()
         doc[scope] = after
         result["before"], result["after"] = before, after
@@ -234,6 +296,7 @@ def set_optout(scope: str, email: str, out: bool, *, by: str) -> dict:
     email = str(email or "").strip().lower()
     if not _EMAIL_RE.match(email) or parse_scope(scope) is None:
         raise ValueError("bad address or scope")
+    migrate_auto_default()
     result: dict = {}
 
     def mutate(doc):
@@ -300,6 +363,13 @@ def mark_opened(draft_id: str, by: str) -> Optional[dict]:
             doc["opened"] = {"at": iso(), "by": str(by or "").lower()}
 
     return json_store.mutate_json(draft_file(draft_id), mutate, default={})
+
+
+def update_draft(draft_id: str, mutator) -> Optional[dict]:
+    """Edit a stored draft in place under its lock (``mutator(doc)``); None when there is no such draft."""
+    if not valid_draft_id(draft_id) or not draft_file(draft_id).is_file():
+        return None
+    return json_store.mutate_json(draft_file(draft_id), mutator, default={})
 
 
 def update_skipped(draft_id: str, skipped: list) -> None:

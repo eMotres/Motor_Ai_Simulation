@@ -1,9 +1,11 @@
-"""The daily run: make the digest drafts, build the report, send it once.
+"""The daily run: make the digests (and send the automatic ones), build the report, send it once.
 
-Order at 06:00 (owner 2026-10-27): (1) the digest package's own scheduler function writes the due DRAFTS for every project and
-production - it never sends (``digest.build.run``); (2) the report is built, the drafts that wait for approval are in its last
-section; (3) it is mailed to the owner and the date is marked as sent; (4) when the run made NEW drafts, a second short mail to
-the owner only says "N digests ready to check" with a deep link per draft.  Nothing here sends to a group's recipients.
+Order at 06:00 (owner 2026-10-27, changed by the owner decision 2026-10-28): (1) the digest package's scheduler function
+(``digest.approval.run_daily``) writes the due DRAFTS for every project and production and SENDS the ones of groups in mode ``auto``
+- the default - to the group's own recipients; groups in ``approve`` mode keep their draft waiting; (2) the report is built: the
+digests sent automatically today and the drafts that still wait are in its last section; (3) it is mailed to the owner and the date
+is marked as sent; (4) when the run made NEW drafts that wait for approval, a second short mail to the owner says "N digests ready
+to check" with a deep link per draft (not for the digests that went out by themselves).
 """
 from __future__ import annotations
 
@@ -19,14 +21,15 @@ from motor_ai_sim.owner_report import sources as SRC
 log = logging.getLogger(__name__)
 
 
-def make_digest_drafts(now: float, *, write: bool = True) -> tuple[list, str]:
-    """``(rows, error)``: the digest package's own run - DRAFTS only, nothing is sent.  A failure is reported, never raised."""
+def make_digest_drafts(now: float, *, write: bool = True, send: bool = True) -> tuple[list, str]:
+    """``(rows, error)``: the digest package's daily run - the due drafts, and the automatic send of the groups in mode ``auto``
+    (``send=False`` = drafts only).  A failure is reported, never raised."""
     try:
-        from motor_ai_sim.digest import build as DB
-        return DB.run(now, write=write), ""
+        from motor_ai_sim.digest import approval as AP
+        return AP.run_daily(now, write=write, send=send), ""
     except Exception as exc:                                 # noqa: BLE001
-        log.warning("owner_report: digest draft generation failed (%s: %s)", type(exc).__name__, exc)
-        return [], f"digest drafts could not be made: {type(exc).__name__}: {str(exc)[:160]}"
+        log.warning("owner_report: digest run failed (%s: %s)", type(exc).__name__, exc)
+        return [], f"digests could not be made: {type(exc).__name__}: {str(exc)[:160]}"
 
 
 def build_report(date: Optional[str] = None, *, now: Optional[float] = None, make_drafts: bool = False,
@@ -47,9 +50,13 @@ def build_report(date: Optional[str] = None, *, now: Optional[float] = None, mak
 NOTICE_KEEP = 300                                            # how many already-announced draft ids the state remembers
 
 
-def new_draft_ids(rows: list) -> list:
-    """The drafts this run CREATED (a fresh draft, or a new revision that replaced an opened one) - not the ones refreshed in place."""
-    return [str(r["draft_id"]) for r in rows if r.get("action") in ("drafted", "superseded") and r.get("draft_id")]
+def new_draft_ids(rows: list, *, sent_by_run: bool = True) -> list:
+    """The drafts this run CREATED (a fresh draft, or a new revision that replaced an opened one) and left WAITING for the owner - not
+    the ones refreshed in place, and not the ones the run handled by itself (``auto``: sent, or failed - the report names those).  ``sent_by_run=False`` (a run that
+    sends nothing, the admin "send now" route) also leaves out the drafts of groups in ``auto`` mode: the next scheduled run sends them."""
+    from motor_ai_sim.digest import store as DS
+    return [str(r["draft_id"]) for r in rows if r.get("action") in ("drafted", "superseded") and r.get("draft_id") and not r.get("auto")
+            and (sent_by_run or DS.get_settings(str(r.get("scope")))["mode"] != "auto")]
 
 
 def notice_rows(ids: list) -> list:
@@ -101,8 +108,12 @@ def send_pending_notice(*, deliver: Optional[Callable] = None) -> dict:
 
 
 def run_daily(*, now: Optional[float] = None, date: Optional[str] = None, force: bool = False, dry_run: bool = False,
-              deliver: Optional[Callable] = None, sources: Optional[B.Sources] = None, make_drafts: bool = True) -> dict:
+              deliver: Optional[Callable] = None, sources: Optional[B.Sources] = None, make_drafts: bool = True,
+              send_digests: bool = True) -> dict:
     """One scheduled run.  Idempotent: a date that was already sent is skipped (``force`` sends again).
+
+    ``send_digests=False`` makes the drafts but sends none (the admin "send the owner report now" route: the automatic digest send
+    belongs to the scheduled run alone).
 
     Returns ``{status, date, ...}`` with status ``sent`` | ``already_sent`` | ``busy`` | ``dry_run`` | ``failed``."""
     now = time.time() if now is None else now
@@ -116,8 +127,8 @@ def run_daily(*, now: Optional[float] = None, date: Optional[str] = None, force:
         st = S.get_state()
         if st.get("last_sent_date") == date and not force:
             return {"status": "already_sent", "date": date, "sent_at": st.get("sent_at")}
-        rows, err = (make_digest_drafts(now) if make_drafts else ([], ""))
-        queue_notice(new_draft_ids(rows))
+        rows, err = (make_digest_drafts(now, send=send_digests) if make_drafts else ([], ""))
+        queue_notice(new_draft_ids(rows, sent_by_run=send_digests))
         rep = build_report(date, now=now, make_drafts=False, sources=sources, extra_errors=[err] if err else None)
         res = S.send_report(rep, deliver=deliver)
         if not res["sent"]:

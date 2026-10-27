@@ -1,4 +1,4 @@
-// node --test — the pure parts of the digest settings block and the Admin list (owner 2026-10-26: two modes only, approval to send).
+// node --test — the pure parts of the digest settings block and the Admin list (owner 2026-10-28: auto / approve / off; approval to send by hand).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -6,11 +6,12 @@ let M = null;
 try { M = await import('../digestModel.ts'); } catch { /* old Node */ }
 const t = M ? test : test.skip;
 
-const view = { mode: 'approve', frequency: 'daily', recipients: 'all', chosen: [] };
+const view = { mode: 'auto', frequency: 'daily', recipients: 'all', chosen: [] };
 
-t('only approve and off exist - there is no automatic mode to offer or send', () => {
-  assert.deepEqual([...M.DIGEST_MODES], ['approve', 'off']);
-  assert.equal(M.settingsChange(view, { mode: 'auto' }), null);
+t('three modes exist: auto (default), approve and off - nothing else can be built', () => {
+  assert.deepEqual([...M.DIGEST_MODES], ['auto', 'approve', 'off']);
+  assert.deepEqual(M.settingsChange(view, { mode: 'auto' }), { mode: 'auto' });
+  assert.deepEqual(M.settingsChange(view, { mode: 'approve' }), { mode: 'approve' });
   assert.equal(M.settingsChange(view, { mode: 'automatic' }), null);
   assert.deepEqual(M.settingsChange(view, { mode: 'off' }), { mode: 'off' });
   assert.deepEqual(M.settingsChange(view, { mode: 'approve', frequency: 'weekly' }), { mode: 'approve', frequency: 'weekly' });

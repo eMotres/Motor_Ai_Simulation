@@ -3,8 +3,9 @@
 «Каждое утро в 6 часов присылать мне письмо обо всех изменениях по всем проектам, производствам и моторам за день, а также полную
 информацию о новых пользователях и об активности пользователей.»  Code: `src/motor_ai_sim/owner_report/`.
 
-An INTERNAL e-mail to the owner only. It is NOT a customer digest: the customer digest rules (`docs/DIGEST.md`: drafts, manual
-approval) are untouched and `src/motor_ai_sim/digest/` gained no sending path; the report only READS the digest drafts.
+An INTERNAL e-mail to the owner only. It is NOT a customer digest. Since the owner decision 2026-10-28 the run that precedes the
+report also SENDS the customer digests of every group in mode `auto` (the default; `docs/DIGEST.md`); the report only READS the
+digest stores to list what went out and what still waits.
 
 ## Content (the 24 h before 06:00 Europe/Ljubljana; text + HTML, no images; links open the exact page after sign-in)
 
@@ -17,7 +18,7 @@ Fixed order (also the order of the top summary line; pinned by `tests/test_owner
 | 3 | **Projects** | each project's `audit.jsonl` (spec versions, variants linked/unlinked/status/notes, recommended and report-reviewed flags, members invited/claimed/removed, proposals), `thread.jsonl` (messages), stored results of its motors (digest collector), agreement acceptances |
 | 4 | **Productions** | each production's `audit.jsonl` (revisions with reason, documents, parts/BOM/costs, members, assembly process, schedule, procurement; the digest collector's lines plus every other audit action), motor-test records |
 | 5 | **Motors** | admin audit (`die.*`, `config.*`, `cad.*`, `user.motors`), product revisions (`motor_revisions`), finished and failed runs (job usage), new results with headline numbers (shared `.duty_results.json`) |
-| 6 | **Digests to approve** | the open digest drafts (`digest.store`): group, recipients, the full text exactly as the recipients get it (EN, and the Chinese part), a link to Admin -> Digests for that draft |
+| 6 | **Digests** | (a) **sent automatically** in this run (drafts closed as sent by the system actor `auto (daily 06:00)`): group, recipients count, items count, a link to the history entry in Admin -> Digests, the recipients skipped at send time and any failure; (b) the drafts that **wait** (groups in `approve` mode, or an automatic send that failed, flagged `AUTOMATIC SEND FAILED (<reason>)`): group, recipients, the full text exactly as the recipients get it (EN, and the Chinese part), a link to Admin -> Digests for that draft |
 
 A section with nothing says "no changes" (digests: "no digests today"); the whole e-mail is still sent every day (heartbeat). A source
 that cannot be read is shown as "source unavailable" with the error, never as "no changes". Staff / customer / factory are marked
@@ -43,10 +44,12 @@ Known limits (said in the e-mail where it matters):
 * **Exactly once per date:** `<shared>/owner_report/state.json` holds `last_sent_date`; the run holds `run.lock` (exclusive file,
   stale after 30 min) while it works. A restart, the retry triggers, a second process or `Persistent` catch-up find the date sent and
   do nothing; a failed send leaves the date unmarked so the next trigger retries. `history.jsonl` keeps one line per sent report.
-* **The digest drafts are made first.** At the run, before the report is built, `digest.build.run` (the digest package's own
-  scheduler function) writes the due DRAFTS for every project and production. It never sends. Because of this the separate
-  `motres-digest` timer of `docs/DIGEST.md` is no longer needed: install the owner-report timer INSTEAD of it (running both is
-  harmless, the draft run is idempotent). Admin -> Digests still decides what is sent.
+* **The digests are made (and the automatic ones sent) first.** At the run, before the report is built,
+  `digest.approval.run_daily` (the digest package's scheduler function) writes the due DRAFTS for every project and production and
+  sends those of groups in mode `auto` through the admin send path (owner decision 2026-10-28); groups in `approve` mode keep their
+  draft for Admin -> Digests. Because of this the separate `motres-digest` timer of `docs/DIGEST.md` is no longer needed: install the
+  owner-report timer INSTEAD of it (running both is harmless, the run is idempotent). The admin route below makes the drafts but
+  sends none (`send_digests=False`).
 
 ### Install (orchestrator, on the server; the PR installs nothing)
 
@@ -72,15 +75,17 @@ SMTP must be configured in `/etc/motres/api.env` (`SMTP_USER`, `SMTP_PASSWORD`; 
   never to a customer or factory address.
 * No new draft = no notice. The new ids are queued in `state.json` (`notice_pending`) before the report is sent and moved to `notified`
   once the notice is out, so a failed notice is retried by the next run and never sent twice; a draft the owner already sent or
-  discarded is dropped from the queue unannounced.
-* The report's own subject carries the count while drafts wait: `AeroStator owner report <date> · N digests to approve`.
+  discarded is dropped from the queue unannounced. Digests the run sent by itself (or tried to and failed: the report names those with
+  the reason) are never announced by this notice, which is for the drafts that wait for approval.
+* The report's own subject carries the counts: `AeroStator owner report <date> · 2 digests sent automatically · 1 digest to approve ·
+  1 auto-send problem` (each part only when non-zero).
 
 ## CLI and routes
 
 * `python -m motor_ai_sim.owner_report [--date YYYY-MM-DD] [--dry-run] [--html]` prints the report (default); `--send [--force]`
-  is the daily run (drafts, report, mail once per date).
+  is the daily run (digests incl. the automatic send, report, mail once per date).
 * `GET /api/admin/owner-report/preview?date=` (admin): text + HTML + counts, nothing sent, no drafts made, drafts not marked opened.
-* `POST /api/admin/owner-report/send` `{"date": "YYYY-MM-DD"?}` (admin): the daily run NOW (drafts, report, mail to the owner address
+* `POST /api/admin/owner-report/send` `{"date": "YYYY-MM-DD"?}` (admin): the daily run NOW (drafts but NO automatic digest send, report, mail to the owner address
   only; it marks the date as sent, so the 06:00 timer will not send that date again).
 * Deep links: `/?tab=admin&section=digests&draft=<id>` opens Admin -> Digests with that draft expanded
   (`web/src/lib/adminLink.ts`); project / production lines use the digest deep-link paths (`return_path.py`).

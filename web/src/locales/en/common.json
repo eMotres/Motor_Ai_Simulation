@@ -476,12 +476,13 @@
   },
   "digest": {
     "title": "Updates by e-mail",
-    "tip": "A short e-mail saying what changed. It is only drafted here; nothing is sent until the owner approves the text in Admin, Digests. A period with no activity sends nothing.",
+    "tip": "A short e-mail saying what changed. Auto: sent by itself every day at 06:00 Slovenian time. Approve: drafted, and sent only after the owner approves the text in Admin, Digests. Off: nothing. A day with no changes sends nothing.",
     "change": "Settings",
     "hide": "Hide",
     "loadFailed": "Updates by e-mail: {reason}",
     "mode": {
-      "approve": "Ask me first",
+      "auto": "Auto",
+      "approve": "Approve first",
       "off": "Off"
     },
     "modeLabel": "Updates by e-mail mode",
@@ -495,7 +496,6 @@
       "chosen": "Chosen members"
     },
     "recipientsLabel": "Who gets it",
-    "approvalNote": "Every update waits in Admin, Digests as a draft. Nothing is sent without your approval of the final text.",
     "pendingChip": "Draft waiting",
     "leftByMember": "left this digest",
     "changedBy": "Changed by {who}, {when}",
@@ -529,7 +529,7 @@
     },
     "admin": {
       "title": "Digests",
-      "tip": "One draft per project or production and period. Each draft is ONE text for everybody in the group (only what every member may see; English and Chinese when the factory is in the group). Preview it, then Send or Discard. This is the only place where a digest is sent.",
+      "tip": "One draft per project or production and period. Each draft is ONE text for everybody in the group (only what every member may see; English and Chinese when the factory is in the group). Preview it, then Send or Discard. Groups on Auto are sent by the daily 06:00 run and show here in the history.",
       "refresh": "Make drafts now",
       "refreshed": "Drafts updated: {count}. Nothing was sent.",
       "nonePending": "No digest is waiting. A period with no activity makes none.",
@@ -550,7 +550,7 @@
       "discardedDone": "Digest discarded. Nothing was sent.",
       "lastError": "The last send failed for {failed} recipients; the draft is still waiting.",
       "history": "History",
-      "sentLine": "sent {sent}, failed {failed}, approved by {by}, {at}",
+      "sentLine": "sent {sent}, failed {failed}, by {by}, {at}",
       "discardedLine": "discarded by {by}, {at}",
       "itemsCount": "{count, plural, one {# item} other {# items}}",
       "previewFirst": "Preview the text first, then approve it.",

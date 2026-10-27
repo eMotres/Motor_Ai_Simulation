@@ -1,8 +1,9 @@
-"""Activity digests (motor_ai_sim.digest): collector, ONE text per group, approval-only sending, settings, unsubscribe.
+"""Activity digests (motor_ai_sim.digest): collector, ONE text per group, approved and automatic sending, settings, unsubscribe.
 
-Owner rules 2026-10-26 under test:
+Owner rules under test (2026-10-26, changed by the owner decision 2026-10-28):
 
-* nothing is sent without an explicit approval in Admin (no automatic mode, no code path that sends from the scheduler);
+* three modes: ``auto`` (default: the DAILY scheduled run sends each new draft through the admin send path), ``approve`` (the draft
+  waits for an admin's explicit approval in Admin) and ``off``; build.run and the admin "make drafts now" route never send;
 * ONE text per working group = what EVERY recipient may see (no costs unless shared with the factory, no internal notes);
   the group's Chinese-speaking members make it bilingual (English first);
 * text + HTML only, no images, no attachments; every item links to the exact app page (a path ``return_path`` accepts);
@@ -270,14 +271,16 @@ def test_message_is_text_and_html_only_with_one_body_for_everybody(d):
     assert draft["subject"].startswith("CIANO14 40 build - what changed ") and "CIANO14 40 生产" in draft["subject"]
 
 
-# -- run: drafts only, never mail ------------------------------------------------------------------------------------------------------------
+# -- build.run: drafts only, never mail ------------------------------------------------------------------------------------------------------------
 
-def test_run_makes_drafts_and_sends_nothing(d):
+def test_build_run_makes_drafts_and_sends_nothing_even_in_auto_mode(d):
     def no_smtp(*a, **k):
         raise AssertionError("a run reached SMTP")
     d["mp"].setattr(smtplib, "SMTP", no_smtp)
     d["mp"].setattr(smtplib, "SMTP_SSL", no_smtp)
     d["mp"].setattr(d["E"], "send", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a run mailed")))
+    d["mp"].setattr(d["E"], "deliver", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a run delivered")))
+    assert d["DS"].get_settings(PSCOPE)["mode"] == "auto"                        # the default, and build.run still only drafts
     rows = run(d)
     assert {r["scope"]: r["action"] for r in rows if r["action"] != "skipped"} == {PSCOPE: "drafted", XSCOPE: "drafted"}
     assert d["delivered"] == [] and d["outbox"] == []
@@ -290,19 +293,43 @@ def test_dry_run_writes_nothing(d):
     assert d["DS"].list_drafts() == [] and d["DS"].read_log() == []
 
 
-def test_mode_off_makes_no_draft_and_auto_does_not_exist(d):
+def test_modes_auto_is_the_default_and_unknown_modes_are_refused(d):
     DS = d["DS"]
-    assert DS.MODES == ("approve", "off") and DS.get_settings(PSCOPE)["mode"] == "approve"          # approve is the default
-    with pytest.raises(ValueError):
-        DS.set_settings(PSCOPE, {"mode": "auto"}, by=ADMIN)
+    assert DS.MODES == ("auto", "approve", "off") and DS.get_settings(PSCOPE)["mode"] == "auto"           # auto is the default
     with pytest.raises(ValueError):
         DS.validate_settings_update({"mode": "automatic"})
-    (d["dtmp"] / "digests").mkdir(exist_ok=True)
-    (d["dtmp"] / "digests" / "settings.json").write_text(json.dumps({PSCOPE: {"mode": "auto"}}), encoding="utf-8")
-    assert DS.get_settings(PSCOPE)["mode"] == "approve"                                             # an old value reads as approve
+    assert DS.set_settings(PSCOPE, {"mode": "approve"}, by=ADMIN)["mode"] == "approve"
+    assert DS.set_settings(PSCOPE, {"mode": "auto"}, by=ADMIN)["mode"] == "auto"
     DS.set_settings(PSCOPE, {"mode": "off"}, by=ADMIN)
     rows = {r["scope"]: r for r in run(d)}
     assert rows[PSCOPE]["reason"] == "mode_off" and DS.get_state(PSCOPE).get("draft_id") is None
+
+
+def test_stored_approve_that_is_only_the_old_default_migrates_to_auto_a_deliberate_choice_stays(d):
+    DS = d["DS"]
+    root = d["dtmp"] / "digests"
+    root.mkdir(exist_ok=True)
+    # the shape written before 2026-10-28: every record says approve (the old default), also those made by an opt-out; one group's
+    # approve was chosen on purpose (the settings log says so); one is off; one has no mode at all
+    stored = {PSCOPE: {"mode": "approve", "frequency": "daily", "recipients": "all", "chosen": [], "optouts": [BOB]},
+              XSCOPE: {"mode": "approve", "frequency": "weekly", "recipients": "all", "chosen": [], "optouts": [],
+                       "updated_by": ADMIN, "updated_at": "2026-10-20T10:00:00Z"},
+              "project:off-one": {"mode": "off"}, "project:no-mode": {"frequency": "daily"}}
+    (root / "settings.json").write_text(json.dumps(stored), encoding="utf-8")
+    DS.append_log({"event": "settings", "scope": XSCOPE, "by": ADMIN, "changed": {"mode": ["off", "approve"]}})
+    assert DS.get_settings(PSCOPE)["mode"] == "auto" and DS.get_settings(PSCOPE)["optouts"] == [BOB]          # migrated, opt-out kept
+    assert DS.get_settings(XSCOPE)["mode"] == "approve" and DS.get_settings(XSCOPE)["mode_chosen"] is True    # a deliberate approve
+    assert DS.get_settings(XSCOPE)["frequency"] == "weekly"
+    assert DS.get_settings("project:off-one")["mode"] == "off" and DS.get_settings("project:no-mode")["mode"] == "auto"
+    mig = [r for r in DS.read_log() if r["event"] == "migrated"]
+    assert len(mig) == 1 and mig[0]["scopes"] == [PSCOPE] and DS.MIGRATION_AUTO_DEFAULT in json.loads((root / "migrations.json").read_text())
+    DS.get_settings(PSCOPE)                                                                                    # runs once only
+    assert len([r for r in DS.read_log() if r["event"] == "migrated"]) == 1
+    # after the migration a stored approve is authoritative and a later choice sticks
+    DS.set_settings(PSCOPE, {"mode": "approve"}, by=ADMIN)
+    assert DS.get_settings(PSCOPE)["mode"] == "approve" and DS.get_settings(PSCOPE)["mode_chosen"] is True
+    DS.set_optout(PSCOPE, ANNA, True, by=ANNA)
+    assert DS.get_settings(PSCOPE)["mode"] == "approve"
 
 
 def test_weekly_waits_for_its_week(d):
@@ -367,31 +394,36 @@ def _names(py: Path) -> set:
     return out
 
 
-def test_only_the_approval_module_can_reach_smtp_and_only_one_route_calls_it():
-    """Static guard: the package mails through ONE function; the scheduler path imports no delivery code."""
-    delivery = {"deliver", "smtplib", "send_message", "sendmail", "SMTP", "SMTP_SSL", "send_draft", "approval", "send"}
+def test_only_the_approval_module_can_reach_smtp_and_only_the_daily_jobs_call_the_automatic_send():
+    """Static guard: the package mails through ONE module; only the admin Send route and the CLI run import it."""
+    delivery = {"deliver", "smtplib", "send_message", "sendmail", "SMTP", "SMTP_SSL", "send_draft", "auto_send_draft", "run_daily",
+                "approval", "send"}
     reach = {py.name: _names(py) & delivery for py in sorted(SRC.glob("*.py"))}
-    assert {k for k, v in reach.items() if v} == {"approval.py", "routes.py"}, reach
-    for scheduler in ("build.py", "collect.py", "store.py", "__main__.py", "__init__.py"):
+    assert {k for k, v in reach.items() if v} == {"approval.py", "routes.py", "__main__.py"}, reach
+    for scheduler in ("build.py", "collect.py", "store.py", "__init__.py"):
         assert not reach[scheduler], (scheduler, reach[scheduler])
     assert "mailing" not in _names(SRC / "__main__.py") and "mailing" not in _names(SRC / "store.py")
+    assert reach["__main__.py"] == {"approval", "run_daily"}               # the CLI reaches the automatic send only through run_daily
     tree = ast.parse((SRC / "routes.py").read_text(encoding="utf-8"))
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "send_draft"]
     assert len(calls) == 1                                                  # one call site: the admin "Send" route
     fn = next(f for f in ast.walk(tree) if isinstance(f, ast.AsyncFunctionDef) and f.name == "admin_send")
     assert any(c in ast.walk(fn) for c in calls)
+    assert not {"auto_send_draft", "run_daily"} & _names(SRC / "routes.py")   # no route runs the automatic send
+    run_route = next(f for f in ast.walk(tree) if isinstance(f, ast.AsyncFunctionDef) and f.name == "admin_run")
+    assert any(isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "run" and getattr(c.func.value, "id", "") == "B"
+               for c in ast.walk(run_route))                                 # "make drafts now" is build.run: drafts only
     routes_src = (SRC / "routes.py").read_text(encoding="utf-8")
     admin_send_src = routes_src.split("async def admin_send")[1].split("@admin_router")[0]
     assert 'body.get("approve") is not True' in routes_src and "Depends(auth.require_admin)" in routes_src.split("def admin_send")[0][-200:] + admin_send_src[:200]
     modes_line = (SRC / "store.py").read_text(encoding="utf-8").split("MODES = ")[1].splitlines()[0]
-    assert "auto" not in modes_line
+    assert all(m in modes_line for m in ("auto", "approve", "off"))
 
 
-def test_the_cli_has_no_send_and_never_mails(d, capsys):
+def test_the_cli_run_sends_auto_groups_only_and_drafts_only_does_not(d, capsys):
     from motor_ai_sim.digest.__main__ import main
-    assert main(["run", "--send"]) == 2 and "no --send" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        main(["run", "--send-now"])
+        main(["run", "--send"])                                                           # no such option: the run decides by mode
     assert main(["run", "--dry-run", "--json"]) == 0
     assert d["delivered"] == [] and d["DS"].list_drafts() == []
 
@@ -490,15 +522,15 @@ def test_project_settings_owner_and_admin_only_and_logged(d):
     assert client.put(url, json={"mode": "off"}, headers=_login(BOB)).status_code == 404
     owner = _login(ANNA)
     r = client.get(url, headers=owner)
-    assert r.status_code == 200 and r.json()["mode"] == "approve" and r.json()["frequency"] == "daily"
+    assert r.status_code == 200 and r.json()["mode"] == "auto" and r.json()["frequency"] == "daily"
     assert {m["email"] for m in r.json()["members"]} == {ANNA, BOB}
-    assert client.put(url, json={"mode": "auto"}, headers=owner).status_code == 422
     assert client.put(url, json={"mode": "automatic", "frequency": "hourly"}, headers=owner).status_code == 422
+    assert client.put(url, json={"mode": "bogus"}, headers=owner).status_code == 422
     assert client.put(url, json={"frequency": "hourly"}, headers=owner).status_code == 422
     ok = client.put(url, json={"mode": "off", "frequency": "weekly", "recipients": "chosen", "chosen": [ANNA]}, headers=owner)
     assert ok.status_code == 200 and ok.json()["mode"] == "off" and ok.json()["updated_by"] == ANNA
     log = [x for x in d["DS"].read_log(PSCOPE) if x["event"] == "settings"]
-    assert log[-1]["by"] == ANNA and log[-1]["changed"]["mode"] == ["approve", "off"] and log[-1]["ts"]
+    assert log[-1]["by"] == ANNA and log[-1]["changed"]["mode"] == ["auto", "off"] and log[-1]["ts"]
     assert client.get(f"/api/digest/settings/project/other-job", headers=owner).status_code == 200      # owner of that one too
     assert client.get(f"/api/digest/settings/project/nope", headers=owner).status_code == 404
 
@@ -928,3 +960,131 @@ def test_a_real_project_draft_has_no_repeated_url_and_no_link_on_notices(d):
         assert not lines[lines.index(notice) + 1].startswith("  http"), notice
     stored = {i["kind"]: i["link_policy"] for i in draft["items"]}
     assert stored["motor_removed"] == "none" and stored["member_joined"] == "none" and stored["results"] == "new"
+
+
+# -- the automatic daily send (owner decision 2026-10-28) ---------------------------------------------------------------------------------------------------------
+
+def daily(d, now=T0, **kw):
+    """The scheduled run (build the drafts, send the groups in auto mode) with the fake mailbox."""
+    from motor_ai_sim.digest import approval as AP
+    kw.setdefault("deliver", lambda m: d["delivered"].append(m))
+    kw.setdefault("sleep", lambda s: None)
+    kw.setdefault("delay_s", 0)
+    kw.setdefault("results", d["results"])
+    return AP.run_daily(now, **kw)
+
+
+def test_auto_run_sends_each_new_draft_through_the_send_path_as_the_system_actor(d):
+    from motor_ai_sim import mailing
+    from motor_ai_sim.digest import approval as AP
+    rows = {r["scope"]: r for r in daily(d)}
+    assert {s: r["auto"]["status"] for s, r in rows.items() if "auto" in r} == {PSCOPE: "sent", XSCOPE: "sent"}
+    assert sorted(m["To"] for m in d["delivered"]) == sorted([ANNA, BOB, ANNA, LI])
+    for scope in (PSCOPE, XSCOPE):
+        done = [x for x in d["DS"].list_drafts() if x["scope"] == scope]
+        assert len(done) == 1 and done[0]["status"] == "sent" and done[0]["sent"]["by"] == AP.AUTO_ACTOR == "auto (daily 06:00)"
+        assert done[0]["sent"]["sent"] == len(done[0]["recipients"]) and done[0]["sent"]["failed"] == 0
+        assert d["DS"].get_state(scope)["cursor"] == done[0]["period"]["end"] and d["DS"].get_state(scope).get("draft_id") is None
+        ev = [r for r in d["DS"].read_log(scope) if r["event"] == "sent"]
+        assert len(ev) == 1 and ev[0]["by"] == AP.AUTO_ACTOR                                  # history shows who sent it
+        assert {r["user"] for r in mailing.read_log(d["DS"].sendlog_file(done[0]["id"])) if r["status"] == "sent"}   # the send log
+    # the timer fires again (or the report is forced): the period is closed, nobody is mailed twice
+    again = daily(d, now=T0 + 600)
+    assert not any("auto" in r for r in again) and len(d["delivered"]) == 4
+
+
+def test_auto_send_rechecks_recipients_like_the_admin_send(d):
+    from motor_ai_sim.digest import approval as AP
+    run(d, scopes=[PSCOPE])                                         # a draft (Anna and Bob) exists ...
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+    d["CP"].unsubscribe_all(BOB, source="unsubscribe")              # ... then Bob unsubscribes from all e-mail before it goes out
+    res = AP.auto_send_draft(did, deliver=lambda m: d["delivered"].append(m), delay_s=0, sleep=lambda s: None, now=lambda: T0)
+    assert [m["To"] for m in d["delivered"]] == [ANNA]
+    assert any(x["email"] == BOB for x in res["skipped"])
+    assert d["DS"].load_draft(did)["sent"]["by"] == AP.AUTO_ACTOR
+
+
+def test_an_idle_group_sends_nothing_in_auto_mode(d):
+    rows = daily(d, now=T0 + 40 * 86400, results=lambda die, cfg: {})            # forty quiet days: no item in the period
+    assert d["delivered"] == [] and d["DS"].list_drafts() == []
+    assert all(r["action"] == "skipped" and "auto" not in r for r in rows)
+    assert {r["reason"] for r in rows if r["scope"] in (PSCOPE, XSCOPE)} == {"no_activity"}
+
+
+def test_approve_and_off_groups_are_never_sent_by_the_run_only_auto_ones(d):
+    DS = d["DS"]
+    DS.set_settings(PSCOPE, {"mode": "approve"}, by=ADMIN)                       # an explicit per-group override
+    rows = {r["scope"]: r for r in daily(d)}
+    assert "auto" not in rows[PSCOPE] and rows[XSCOPE]["auto"]["status"] == "sent"
+    assert DS.load_draft(DS.get_state(PSCOPE)["draft_id"])["status"] == "pending"            # still waits for an admin
+    assert sorted(m["To"] for m in d["delivered"]) == sorted([ANNA, LI])
+    DS.set_settings(PSCOPE, {"mode": "off"}, by=ADMIN)
+    daily(d, now=T0 + 600)
+    assert len(d["delivered"]) == 2                                                          # off: nothing, and the waiting draft stays put
+    # the admin still sends the waiting approve-mode draft by hand, through the same path
+    DS.set_settings(PSCOPE, {"mode": "approve"}, by=ADMIN)
+    did = DS.get_state(PSCOPE)["draft_id"]
+    assert go(d, did)["sent"] == 2 and DS.load_draft(did)["sent"]["by"] == ADMIN
+
+
+def test_drafts_only_and_dry_run_send_nothing_in_auto_mode(d):
+    daily(d, send=False)
+    assert d["delivered"] == [] and {x["status"] for x in d["DS"].list_drafts()} == {"pending"}
+    daily(d, write=False)
+    assert d["delivered"] == []
+    rows = daily(d, now=T0 + 600)                                                            # the next real run sends the waiting drafts
+    assert {r["auto"]["status"] for r in rows if "auto" in r} == {"sent"} and len(d["delivered"]) == 4
+
+
+def test_a_failed_automatic_send_keeps_the_draft_and_the_next_run_retries_it(d):
+    from motor_ai_sim.digest import approval as AP
+
+    def down(msg):
+        raise RuntimeError("smtp down")
+    rows = {r["scope"]: r for r in daily(d, deliver=down, scopes=[PSCOPE])}
+    assert rows[PSCOPE]["auto"]["status"] == "failed" and rows[PSCOPE]["auto"]["failed"] == 2
+    cur = d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"])
+    assert cur["status"] == "pending" and cur["last_error"]["by"] == AP.AUTO_ACTOR
+    rows = {r["scope"]: r for r in daily(d, now=T0 + 600, scopes=[PSCOPE])}
+    assert rows[PSCOPE]["auto"]["status"] == "sent" and len(d["delivered"]) == 2
+
+
+def test_a_partly_failed_automatic_send_retries_only_the_failed_ones(d):
+    sent_to: list = []
+    down = {"bob": True}
+
+    def flaky(msg):
+        if msg["To"] == BOB and down["bob"]:
+            raise RuntimeError("mailbox full")
+        sent_to.append(msg["To"])
+    rows = {r["scope"]: r for r in daily(d, deliver=flaky, scopes=[PSCOPE])}
+    assert rows[PSCOPE]["auto"]["status"] == "partial" and sent_to == [ANNA]
+    down["bob"] = False
+    rows = {r["scope"]: r for r in daily(d, now=T0 + 86400, deliver=flaky, scopes=[PSCOPE])}        # next day: Bob only
+    assert rows[PSCOPE]["reason"] == "partial_send_open" and rows[PSCOPE]["auto"]["status"] == "sent"
+    assert sent_to == [ANNA, BOB]
+
+
+def test_a_blocked_automatic_send_is_recorded_not_raised(d):
+    from motor_ai_sim.digest import approval as AP
+    run(d, scopes=[PSCOPE])
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+    d["DS"].update_draft(did, lambda doc: doc.update(subject="Bad" + chr(13) + chr(10) + "Bcc: spy@evil.example"))   # refused by the send path
+    out = AP._auto_one(did, PSCOPE, lambda m: d["delivered"].append(m), now=lambda: T0, sleep=lambda s: None, delay_s=0)
+    assert out["status"] == "blocked" and out["code"] in ("unsafe_subject", "content_changed") and d["delivered"] == []
+    assert d["DS"].load_draft(did)["last_error"]["by"] == AP.AUTO_ACTOR
+
+
+def test_auto_send_refuses_a_group_that_is_not_in_auto_mode_and_smtp_must_be_configured(d):
+    from motor_ai_sim.digest import approval as AP
+    d["DS"].set_settings(PSCOPE, {"mode": "approve"}, by=ADMIN)
+    run(d, scopes=[PSCOPE])
+    did = d["DS"].get_state(PSCOPE)["draft_id"]
+    with pytest.raises(AP.ApprovalError) as e:
+        AP.auto_send_draft(did, deliver=lambda m: d["delivered"].append(m), delay_s=0, now=lambda: T0)
+    assert e.value.code == "not_auto" and d["delivered"] == []
+    d["DS"].set_settings(PSCOPE, {"mode": "auto"}, by=ADMIN)
+    d["mp"].setattr(d["E"], "smtp_configured", lambda: False)
+    rows = {r["scope"]: r for r in AP.run_daily(T0, results=d["results"], scopes=[PSCOPE])}
+    assert rows[PSCOPE]["auto"]["code"] == "smtp_not_configured" and rows[PSCOPE]["auto"]["status"] == "blocked"
+    assert d["delivered"] == [] and d["DS"].load_draft(did)["status"] == "pending"

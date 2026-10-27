@@ -1,9 +1,10 @@
 # The owner's daily report (owner 2026-10-27): one INTERNAL e-mail at 06:00 Europe/Ljubljana to the owner's address only.
 #
 # Runs `python -m motor_ai_sim.owner_report --send` inside the api container.  In this order:
-#   1. the digest package's own scheduler writes the due activity-digest DRAFTS (it never sends: customer digests
-#      wait in Admin -> Digests for the owner's approval);
-#   2. the report is built (new users, user activity, projects, productions, motors, digests to approve);
+#   1. the digest package's scheduler writes the due activity-digest drafts and SENDS those of every group in mode `auto`
+#      (the default; owner decision 2026-10-28: all projects and productions, 06:00 Ljubljana, only groups with changes);
+#      groups in `approve` mode keep their draft waiting in Admin -> Digests;
+#   2. the report is built (new users, user activity, projects, productions, motors, digests sent automatically / waiting);
 #   3. it is mailed to OWNER_REPORT_TO (default: the admin address; only administrator addresses are accepted) ONCE per date.
 # Idempotent: `<shared>/owner_report/state.json` marks the date as sent, so the timer firing again (07:00 / 08:00 retries after
 # a failed send), a restart or a second host run is a no-op.  Exit 1 = the mail failed (the next trigger retries).
@@ -19,7 +20,7 @@
 # Needs SMTP_USER / SMTP_PASSWORD in /etc/motres/api.env (the same as every other mail); OWNER_REPORT_TO is optional.
 
 [Unit]
-Description=AeroStator owner's daily report (digest drafts + one e-mail to the owner)
+Description=AeroStator owner's daily report (automatic digests + one e-mail to the owner)
 After=docker.service
 
 [Service]

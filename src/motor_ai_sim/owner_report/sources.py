@@ -15,7 +15,8 @@ Sources per section (docs/OWNER_REPORT.md):
                records of its configuration.
 * motors       admin audit (die / config / CAD / access actions), product revisions, finished runs (job usage), new results in the
                shared duty-results ledger.  There is no event log for "die created / duplicated / deleted" in the app yet.
-* digests      the open digest drafts (``digest.store``), made by ``digest.build.run`` just before the report is built.
+* digests      the digests the scheduled run SENT by itself in this run (``digest.approval.AUTO_ACTOR``) and the open drafts that
+               wait for the owner (or whose automatic send failed), made by ``digest.approval.run_daily`` just before the report.
 """
 from __future__ import annotations
 
@@ -596,23 +597,53 @@ def _fmt_motors(start: float, end: float) -> list:
 
 # -- 6. digests ----------------------------------------------------------------------------------------------------------------------
 
+def _digest_row(d: dict, state: str) -> dict:
+    period = d.get("period") or {}
+    return {
+        "id": d.get("id"), "scope": d.get("scope"), "kind": d.get("kind"), "title": d.get("title"), "status": d.get("status"),
+        "state": state, "revision": d.get("revision") or 0,
+        "items": len(d.get("items") or []) + int(d.get("more") or 0),
+        "period_start": period.get("start", ""), "period_end": period.get("end", ""),
+        "recipients": [{"email": r.get("email"), "role": r.get("role"), "lang": r.get("lang")} for r in d.get("recipients") or []],
+        "text": d.get("text_body") or "", "bilingual": bool(d.get("bilingual")),
+        "path": B.admin_path("digests", draft=str(d.get("id") or "")),
+    }
+
+
+def _auto_problem(d: dict) -> str:
+    """Why the scheduled run did not (fully) send this open draft, "" when it did not try or nothing went wrong."""
+    from motor_ai_sim.digest import approval as AP
+    err, part = d.get("last_error") or {}, d.get("partial") or {}
+    if err.get("by") == AP.AUTO_ACTOR:
+        return str(err.get("message") or err.get("code") or ("send failed for %s recipients" % err.get("failed", "all")))
+    if part.get("by") == AP.AUTO_ACTOR:
+        return "sent to %s, failed for %s (%s)" % (part.get("sent", 0), part.get("failed", 0), ", ".join(part.get("outstanding") or []))
+    return ""
+
+
 def open_digests(start: float, end: float) -> list:
-    """The digest drafts that wait for the owner (pending / partly sent), newest first.  Reading never marks a draft as opened."""
+    """Section 6.  First the digests the scheduled run SENT by itself in this run (owner 2026-10-28): drafts closed as ``sent`` by
+    ``AUTO_ACTOR`` between this report's ``end`` (06:00 local) and the next one, with who was skipped; then the drafts that still
+    wait for the owner (``approve`` mode, or an automatic send that failed - ``problem`` says why), newest first.  Reading never
+    marks a draft as opened."""
+    from motor_ai_sim.digest import approval as AP
     from motor_ai_sim.digest import store as DS
-    rows = []
+    next_end = B.window_for((_dt.date.fromisoformat(B.report_date_for(end)) + _dt.timedelta(days=1)).isoformat())[1]
+    sent, waiting = [], []
     for d in DS.list_drafts():
-        if d.get("status") not in DS.OPEN_STATUSES:
-            continue
-        created = ts_of(d.get("created_at"))
-        rows.append({
-            "id": d.get("id"), "scope": d.get("scope"), "kind": d.get("kind"), "title": d.get("title"), "status": d.get("status"),
-            "new": _in(created, start, end), "revision": d.get("revision") or 0,
-            "period_start": (d.get("period") or {}).get("start", ""), "period_end": (d.get("period") or {}).get("end", ""),
-            "recipients": [{"email": r.get("email"), "role": r.get("role"), "lang": r.get("lang")} for r in d.get("recipients") or []],
-            "text": d.get("text_body") or "", "bilingual": bool(d.get("bilingual")),
-            "path": B.admin_path("digests", draft=str(d.get("id") or "")),
-        })
-    return rows
+        if d.get("status") == "sent" and (d.get("sent") or {}).get("by") == AP.AUTO_ACTOR:
+            at = ts_of((d.get("sent") or {}).get("at"))
+            if at is not None and end <= at < next_end:
+                info = d["sent"]
+                row = _digest_row(d, "sent_auto")
+                row.update(sent=int(info.get("sent") or 0), failed=int(info.get("failed") or 0), skipped=list(info.get("skipped") or []),
+                           sent_at=info.get("at", ""))
+                sent.append(row)
+        elif d.get("status") in DS.OPEN_STATUSES:
+            row = _digest_row(d, "waiting")
+            row.update(new=_in(ts_of(d.get("created_at")), start, end), problem=_auto_problem(d))
+            waiting.append(row)
+    return sorted(sent, key=lambda r: r["sent_at"]) + waiting
 
 
 def default_sources() -> B.Sources:

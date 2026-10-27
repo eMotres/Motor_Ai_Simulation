@@ -5,9 +5,11 @@ and ONE HTML body.  The window is the 24 hours before 06:00 Europe/Ljubljana of 
 
 Section order is fixed (owner 2026-10-27) and pinned by ``tests/test_owner_report.py``::
 
-    1 New users (full information)   2 User activity   3 Projects   4 Productions   5 Motors   6 Digests to approve
+    1 New users (full information)   2 User activity   3 Projects   4 Productions   5 Motors   6 Digests
 
-The top summary line follows the same order.  A section with nothing says "no changes" (digests: "no digests today"); the whole
+Section 6 (owner decision 2026-10-28) lists the digests the scheduled run SENT automatically in this run (group, recipients, items,
+link to the history entry, skipped recipients) and the drafts that still wait (groups in ``approve`` mode, or an automatic send that
+failed - with the reason).  The top summary line follows the same order.  A section with nothing says "no changes" (digests: "no digests today"); the whole
 e-mail is still produced (a daily heartbeat).  One line per item, no images, staff / customer / factory clearly marked.
 """
 from __future__ import annotations
@@ -30,7 +32,7 @@ TITLES = {
     "projects": "Projects",
     "productions": "Productions",
     "motors": "Motors",
-    "digests": "Digests to approve",
+    "digests": "Digests",
 }
 SHORT = {"digests": "Digests"}
 NO_CHANGES = "no changes"
@@ -157,9 +159,21 @@ def build(date: str, sources: Sources, *, base_url: str = "", extra_errors: Opti
 
 
 def digests_subject_tail(sections: list) -> str:
-    """`` · 3 digests to approve`` when drafts wait for the owner (owner 2026-10-27), else nothing."""
-    n = next((s.count for s in sections if s.id == "digests" and not s.error), 0)
-    return f" · {n} digest{'' if n == 1 else 's'} to approve" if n else ""
+    """`` · 2 digests sent automatically · 1 digest to approve`` (owner 2026-10-27, 2026-10-28), else nothing.  A draft whose
+    automatic send failed counts as to approve and adds `` · 1 auto-send problem``."""
+    sec = next((s for s in sections if s.id == "digests" and not s.error), None)
+    rows = sec.rows if sec else []
+    sent = sum(1 for r in rows if r.get("state") == "sent_auto")
+    wait = [r for r in rows if r.get("state") != "sent_auto"]
+    problems = sum(1 for r in rows if r.get("problem") or (r.get("state") == "sent_auto" and r.get("failed")))
+    parts = []
+    if sent:
+        parts.append(f"{_plural(sent, 'digest')} sent automatically")
+    if wait:
+        parts.append(f"{_plural(len(wait), 'digest')} to approve")
+    if problems:
+        parts.append(f"{_plural(problems, 'auto-send problem')}")
+    return "".join(f" · {p}" for p in parts)
 
 
 def summary_line(sections: list) -> str:
@@ -267,8 +281,7 @@ def render_text(date: str, start: float, end: float, summary: str, sections: lis
             out += [f"- {activity_line(a)}" for a in s.rows]
             out += ["", ACTIVITY_NOTE]
         elif s.id == "digests":
-            for d in s.rows:
-                out += _digest_text(d, base)
+            out += _digests_text(s.rows, base)
         else:
             for b in s.rows:
                 if not b.lines:
@@ -285,10 +298,48 @@ def render_text(date: str, start: float, end: float, summary: str, sections: lis
     return "\n".join(out).rstrip() + "\n"
 
 
+SKIP_REASON = {"left_this_digest": "left this digest", "not_chosen": "not chosen", "no_account": "no account", "disabled": "disabled",
+               "unverified": "e-mail not confirmed", "unsubscribed_all": "unsubscribed from all e-mail", "nda_missing": "NDA missing",
+               "no_longer_a_recipient": "no longer a recipient", "access_changed": "access changed"}
+
+
+def _skipped_text(d: dict) -> str:
+    return "; ".join(f"{x.get('email')} ({SKIP_REASON.get(str(x.get('reason')), str(x.get('reason')))})" for x in d.get("skipped") or [])
+
+
+def _auto_line(d: dict) -> str:
+    """One line per digest the run sent by itself: group, recipients, items, what went wrong."""
+    line = (f"{str(d.get('kind', 'group')).capitalize()}: {d.get('title', '')} - sent automatically to "
+            f"{_plural(int(d.get('sent') or 0), 'recipient')}, {_plural(int(d.get('items') or 0), 'item')}")
+    if d.get("failed"):
+        line += f", FAILED for {d['failed']}"
+    return line
+
+
+def _digests_text(rows: list, base: str) -> list:
+    sent = [d for d in rows if d.get("state") == "sent_auto"]
+    wait = [d for d in rows if d.get("state") != "sent_auto"]
+    out: list = []
+    if sent:
+        out += [f"Sent automatically ({len(sent)}) - history entries open in Admin -> Digests", ""]
+        for d in sent:
+            out += [f"- {_auto_line(d)}", f"    {_url(base, d.get('path', ''))}"]
+            if d.get("skipped"):
+                out.append(f"    Skipped at send time: {_skipped_text(d)}")
+        out.append("")
+    if wait:
+        out += [f"Waiting ({len(wait)}) - to approve in Admin -> Digests", ""]
+        for d in wait:
+            out += _digest_text(d, base)
+    return out
+
+
 def _digest_text(d: dict, base: str) -> list:
     rec = d.get("recipients") or []
     who = ", ".join(f"{r.get('email')} ({r.get('role') or 'member'})" for r in rec) or "no recipients"
     flag = "NEW" if d.get("new") else "waiting"
+    if d.get("problem"):
+        flag = f"AUTOMATIC SEND FAILED ({d['problem']})"
     out = [f"{d.get('kind', 'group').capitalize()}: {d.get('title', '')} - {flag}, status {d.get('status', 'pending')}"
            f", period {d.get('period_start', '')[:16]} .. {d.get('period_end', '')[:16]}",
            f"  Recipients ({len(rec)}): {who}",
@@ -346,8 +397,7 @@ def render_html(date: str, start: float, end: float, summary: str, sections: lis
                 h.append(f'<li style="margin:0 0 4px">{_badge(a.get("side", ""))}{html.escape(activity_line(a))}</li>')
             h.append("</ul>" f'<p style="margin:4px 0 0;font-size:11.5px;color:#9ca3af">{html.escape(ACTIVITY_NOTE)}</p>')
         elif s.id == "digests":
-            for d in s.rows:
-                h += _digest_html(d, base)
+            h += _digests_html(s.rows, base)
         else:
             for b in s.rows:
                 if not b.lines:
@@ -377,10 +427,31 @@ def render_html(date: str, start: float, end: float, summary: str, sections: lis
 """
 
 
+def _digests_html(rows: list, base: str) -> list:
+    sent = [d for d in rows if d.get("state") == "sent_auto"]
+    wait = [d for d in rows if d.get("state") != "sent_auto"]
+    h: list = []
+    if sent:
+        h.append(f'<p style="margin:10px 0 2px;font-size:14px;font-weight:bold">Sent automatically ({len(sent)})</p>'
+                 '<ul style="margin:0;padding-left:20px;font-size:13.5px;line-height:1.5">')
+        for d in sent:
+            bad = ' style="color:#b91c1c"' if d.get("failed") else ""
+            skip = (f'<br><span style="color:#6b7280">Skipped at send time: {html.escape(_skipped_text(d))}</span>' if d.get("skipped") else "")
+            h.append(f'<li style="margin:0 0 4px"{bad}>{html.escape(_auto_line(d))}{_a(base, d.get("path", ""), "History entry")}{skip}</li>')
+        h.append("</ul>")
+    if wait:
+        h.append(f'<p style="margin:14px 0 2px;font-size:14px;font-weight:bold">Waiting ({len(wait)})</p>')
+        for d in wait:
+            h += _digest_html(d, base)
+    return h
+
+
 def _digest_html(d: dict, base: str) -> list:
     rec = d.get("recipients") or []
     who = ", ".join(f"{r.get('email')} ({r.get('role') or 'member'})" for r in rec) or "no recipients"
     flag = "NEW" if d.get("new") else "waiting"
+    if d.get("problem"):
+        flag = f"AUTOMATIC SEND FAILED ({d['problem']})"
     h = [f'<p style="margin:14px 0 2px;font-size:14px"><b>{html.escape(str(d.get("kind", "group")).capitalize())}: '
          f'{html.escape(str(d.get("title", "")))}</b> - {flag}, status {html.escape(str(d.get("status", "pending")))}, period '
          f'{html.escape(str(d.get("period_start", ""))[:16])} .. {html.escape(str(d.get("period_end", ""))[:16])}'

@@ -1,7 +1,8 @@
 /** "Updates by e-mail" - the compact settings block of a development project (owner / admin) and of a production (admin).
  *
- *  Two modes only (owner 2026-10-26): "ask me first" (default - the digest is drafted and waits in Admin -> Digests until the owner
- *  sends or discards it) and "off".  Nothing is ever sent from here. */
+ *  Three modes (owner decision 2026-10-28): "auto" (default - the daily 06:00 run sends the digest by itself, only when something
+ *  changed), "approve" (the digest is drafted and waits in Admin -> Digests until the owner sends or discards it) and "off".
+ *  Nothing is sent from here: this block only stores the setting. */
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Box, Button, Checkbox, Chip, FormControlLabel, MenuItem, Paper, Select, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
@@ -58,6 +59,7 @@ const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
         <Box sx={{ mt: 1.25, display: 'grid', gap: 1.25 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
             <Select size="small" value={view.mode} disabled={busy} onChange={(e) => void save({ mode: String(e.target.value) })} inputProps={{ 'aria-label': t('digest.modeLabel') }}>
+              <MenuItem value="auto">{t('digest.mode.auto')}</MenuItem>
               <MenuItem value="approve">{t('digest.mode.approve')}</MenuItem>
               <MenuItem value="off">{t('digest.mode.off')}</MenuItem>
             </Select>
@@ -70,7 +72,6 @@ const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
               <MenuItem value="chosen">{t('digest.recipients.chosen')}</MenuItem>
             </Select>
           </Box>
-          <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{t('digest.approvalNote')}</Typography>
           {view.mode !== 'off' && (
             <Box sx={{ display: 'grid', gap: 0.25 }}>
               {view.members.map((m) => {

@@ -121,10 +121,10 @@ def test_the_report_date_that_is_due():
 
 def test_section_order_is_pinned_in_the_body_and_the_summary():
     assert B.SECTION_ORDER == ("users", "activity", "projects", "productions", "motors", "digests")
-    assert [B.TITLES[s] for s in B.SECTION_ORDER] == ["New users", "User activity", "Projects", "Productions", "Motors", "Digests to approve"]
+    assert [B.TITLES[s] for s in B.SECTION_ORDER] == ["New users", "User activity", "Projects", "Productions", "Motors", "Digests"]
     rep = B.build(DATE, fixture_sources(), base_url="https://app.example.test")
     assert [s.id for s in rep.sections] == list(B.SECTION_ORDER)
-    heads = ["1. New users", "2. User activity", "3. Projects", "4. Productions", "5. Motors", "6. Digests to approve"]
+    heads = ["1. New users", "2. User activity", "3. Projects", "4. Productions", "5. Motors", "6. Digests"]
     pos = [rep.text.index(h) for h in heads]
     assert pos == sorted(pos)
     hpos = [rep.html.index(h) for h in heads]
@@ -280,6 +280,7 @@ def test_dry_run_sends_nothing_and_writes_nothing(o):
 
 def test_the_run_makes_the_drafts_and_puts_their_text_in_the_report_without_mailing_the_groups(o, monkeypatch):
     from motor_ai_sim.digest import approval as AP
+    approve_mode(o)                                                      # groups on manual approval: the drafts wait
     spy = []
     monkeypatch.setattr(AP, "send_draft", lambda *a, **k: spy.append(a) or {})
     assert o["DS"].list_drafts() == []
@@ -299,7 +300,7 @@ def test_the_run_makes_the_drafts_and_puts_their_text_in_the_report_without_mail
             assert r["email"] in text                                    # the owner's own mail lists who would get it
     xd = next(x for x in drafts if x["scope"] == XSCOPE)
     assert "Revision 1.1 published" in text and "版本 1.1 已发布" in text   # English and the Chinese part
-    assert "Digests to approve" in text and "Preview and Send (Admin -> Digests)" in text
+    assert "6. Digests" in text and "Waiting (" in text and "Preview and Send (Admin -> Digests)" in text
     # nothing went to any group recipient: the report and the "digests ready" notice, both to the owner only
     assert len(got) == 2 and {m["To"] for m in got} == {ADMIN}
     assert got[0]["Subject"] == f"AeroStator owner report {res['date']} · {len(drafts)} digests to approve"
@@ -321,11 +322,11 @@ def test_a_failing_draft_run_does_not_stop_the_report(o, monkeypatch):
 
     def broken(*a, **k):
         raise RuntimeError("store locked")
-    monkeypatch.setattr(DB, "run", broken)
+    monkeypatch.setattr(DB, "run", broken)                              # the scheduled run calls build.run first
     got = []
     res = R.run_daily(now=due(), deliver=got.append, sources=empty_sources())
     assert res["status"] == "sent"
-    assert "digest drafts could not be made" in got[0].get_body(preferencelist=("plain",)).get_content()
+    assert "digests could not be made" in got[0].get_body(preferencelist=("plain",)).get_content()
 
 
 # -- the real readers -----------------------------------------------------------------------------------------------------------
@@ -483,11 +484,18 @@ def test_only_send_py_reaches_smtp_and_the_digest_package_has_no_sending_path_ad
 
 # -- the "N digests ready to check" notice (owner 2026-10-27) -----------------------------------------------------------------------
 
+def approve_mode(o):
+    """Both groups of the digest world on manual approval, so the run leaves their drafts waiting."""
+    for scope in (PSCOPE, XSCOPE):
+        o["DS"].set_settings(scope, {"mode": "approve"}, by=ADMIN)
+
+
 def _notices(got):
     return [m for m in got if m["X-AeroStator-Internal"] == "owner-notice"]
 
 
 def test_new_drafts_make_one_short_notice_to_the_owner_with_a_deep_link_each(o):
+    approve_mode(o)
     got = []
     now = B.window_for(WORLD_DAY)[1]
     res = R.run_daily(now=now + 300, deliver=got.append, make_drafts=True)
@@ -521,6 +529,7 @@ def test_no_new_draft_means_no_notice(o):
 
 
 def test_a_failed_notice_is_retried_once_and_never_duplicated(o):
+    approve_mode(o)
     got = []
     down = [True]
 
@@ -541,6 +550,7 @@ def test_a_failed_notice_is_retried_once_and_never_duplicated(o):
 
 
 def test_a_draft_the_owner_already_handled_is_not_announced(o):
+    approve_mode(o)
     now = B.window_for(WORLD_DAY)[1]
     rows, err = R.make_digest_drafts(now)
     assert not err and R.new_draft_ids(rows)
@@ -559,6 +569,33 @@ def test_the_notice_builder_and_its_lock():
     assert "to" not in inspect.signature(S.send_notice).parameters and "recipients" not in inspect.signature(S.send_notice).parameters
 
 
+def sent_row(**over):
+    row = {"id": "d-aaaaaaaaaaaaaaaa", "scope": "project:demo-x1", "kind": "project", "title": "Demo X1", "status": "sent", "state": "sent_auto",
+           "items": 3, "sent": 2, "failed": 0, "skipped": [{"email": "gone@example.com", "reason": "unsubscribed_all"}],
+           "recipients": [{"email": "a@example.com", "role": "owner", "lang": "en"}, {"email": "b@example.com", "role": "customer", "lang": "en"}],
+           "period_start": "2026-10-27T04:00:00Z", "period_end": "2026-10-28T04:00:00Z", "sent_at": "2026-10-28T04:00:09Z",
+           "path": B.admin_path("digests", draft="d-aaaaaaaaaaaaaaaa")}
+    row.update(over)
+    return row
+
+
+def test_the_report_lists_the_digests_sent_automatically_and_those_still_waiting():
+    waiting = fixture_sources().digests(0, 0)
+    bad = dict(waiting[0], id="d-bbbbbbbbbbbbbbbb", title="Demo Y2", problem="smtp down",
+               path=B.admin_path("digests", draft="d-bbbbbbbbbbbbbbbb"))
+    rep = B.build(DATE, empty_sources(digests=lambda s, e: [sent_row(), bad] + waiting), base_url="https://app.example.test")
+    t = rep.text
+    assert "Sent automatically (1)" in t and "Project: Demo X1 - sent automatically to 2 recipients, 3 items" in t
+    assert "https://app.example.test/?tab=admin&section=digests&draft=d-aaaaaaaaaaaaaaaa" in t       # the history entry
+    assert "Skipped at send time: gone@example.com (unsubscribed from all e-mail)" in t
+    assert "Waiting (2)" in t and "AUTOMATIC SEND FAILED (smtp down)" in t and "NEW" in t
+    assert "Sent automatically (1)" in rep.html and "History entry" in rep.html and "AUTOMATIC SEND FAILED (smtp down)" in rep.html
+    assert rep.subject == f"AeroStator owner report {DATE} · 1 digest sent automatically · 2 digests to approve · 1 auto-send problem"
+    assert rep.counts["digests"] == 3
+    failed = B.build(DATE, empty_sources(digests=lambda s, e: [sent_row(sent=1, failed=1)]), base_url="https://app.example.test")
+    assert "FAILED for 1" in failed.text and failed.subject.endswith("· 1 digest sent automatically · 1 auto-send problem")
+
+
 def test_the_report_subject_counts_the_digests_to_approve():
     one = B.build(DATE, empty_sources(digests=lambda s, e: fixture_sources().digests(s, e)), base_url="https://app.example.test")
     assert one.subject == f"AeroStator owner report {DATE} · 1 digest to approve"
@@ -566,3 +603,63 @@ def test_the_report_subject_counts_the_digests_to_approve():
     assert none.subject == f"AeroStator owner report {DATE}"
     two = B.build(DATE, empty_sources(digests=lambda s, e: fixture_sources().digests(s, e) * 2), base_url="https://app.example.test")
     assert two.subject.endswith("· 2 digests to approve")
+
+
+# -- automatic sending (owner decision 2026-10-28) --------------------------------------------------------------------------------
+
+def test_the_daily_run_sends_the_auto_groups_and_the_report_lists_them_without_a_ready_notice(o):
+    o["mp"].setattr(o["E"], "smtp_configured", lambda: True)
+    got = []
+    now = B.window_for(WORLD_DAY)[1]
+    res = R.run_daily(now=now + 300, deliver=got.append, make_drafts=True, sources=SRC.default_sources())
+    assert res["status"] == "sent" and res["notice"]["status"] == "none"
+    assert len(got) == 1 and got[0]["To"] == ADMIN                       # only the owner report went to the owner; no "ready to check"
+    assert sorted(m["To"] for m in o["delivered"]) == sorted([ANNA, BOB, ANNA, LI])                  # the groups got their digests
+    drafts = o["DS"].list_drafts()
+    assert {x["status"] for x in drafts} == {"sent"} and {x["sent"]["by"] for x in drafts} == {"auto (daily 06:00)"}
+    text = got[0].get_body(preferencelist=("plain",)).get_content()
+    assert "Sent automatically (2)" in text and "Waiting (" not in text
+    assert "Project: Erium X1 - sent automatically to 2 recipients" in text and "Production: CIANO14 40 build - sent automatically to 2 recipients" in text
+    for x in drafts:
+        assert f"section=digests&draft={x['id']}" in text
+    assert got[0]["Subject"] == f"AeroStator owner report {res['date']} · 2 digests sent automatically"
+    assert res["report"].counts["digests"] == 2
+    # a forced second run: nothing new to send, the sent digests belong to this report only once
+    again = R.run_daily(now=now + 600, deliver=got.append, make_drafts=True, force=True, sources=SRC.default_sources())
+    assert again["status"] == "sent" and len(o["delivered"]) == 4
+
+
+def test_a_group_on_manual_approval_stays_in_the_waiting_part_of_the_report(o):
+    o["mp"].setattr(o["E"], "smtp_configured", lambda: True)
+    o["DS"].set_settings(PSCOPE, {"mode": "approve"}, by=ADMIN)
+    got = []
+    res = R.run_daily(now=B.window_for(WORLD_DAY)[1] + 300, deliver=got.append, make_drafts=True, sources=SRC.default_sources())
+    text = got[0].get_body(preferencelist=("plain",)).get_content()
+    assert "Sent automatically (1)" in text and "Waiting (1)" in text and "Production: CIANO14 40 build - sent automatically" in text
+    assert got[0]["Subject"] == f"AeroStator owner report {res['date']} · 1 digest sent automatically · 1 digest to approve"
+    assert res["notice"]["status"] == "sent" and res["notice"]["count"] == 1                           # only the waiting one is announced
+    assert sorted(m["To"] for m in o["delivered"]) == sorted([ANNA, LI])
+
+
+def test_a_failed_automatic_send_is_reported_with_its_reason(o):
+    o["mp"].setattr(o["E"], "smtp_configured", lambda: False)
+    got = []
+    res = R.run_daily(now=B.window_for(WORLD_DAY)[1] + 300, deliver=got.append, make_drafts=True, sources=SRC.default_sources())
+    assert o["delivered"] == [] and {x["status"] for x in o["DS"].list_drafts()} == {"pending"}
+    assert res["notice"]["status"] == "none"                             # auto groups: the report names the problem, no "ready to check"
+    text = got[0].get_body(preferencelist=("plain",)).get_content()
+    assert "Sent automatically" not in text and "Waiting (2)" in text and text.count("AUTOMATIC SEND FAILED (E-mail (SMTP) is not configured") == 2
+    assert got[0]["Subject"].endswith("· 2 digests to approve · 2 auto-send problems")
+
+
+def test_a_run_with_send_digests_off_makes_drafts_but_sends_none_and_the_admin_route_uses_it(o, monkeypatch):
+    o["mp"].setattr(o["E"], "smtp_configured", lambda: True)
+    got = []
+    res = R.run_daily(now=B.window_for(WORLD_DAY)[1] + 300, deliver=got.append, make_drafts=True, send_digests=False,
+                      sources=SRC.default_sources())
+    assert res["status"] == "sent" and o["delivered"] == [] and {x["status"] for x in o["DS"].list_drafts()} == {"pending"}
+    assert res["notice"]["status"] == "none"                             # the auto groups' drafts go out at the next scheduled run
+    seen = {}
+    monkeypatch.setattr(R, "run_daily", lambda **kw: seen.update(kw) or {"status": "sent", "date": "2026-10-28", "to": [ADMIN]})
+    r = client.post("/api/admin/owner-report/send", json={"date": "2026-10-28"}, headers=_login(ADMIN))
+    assert r.status_code == 200 and seen["send_digests"] is False and seen["force"] is True

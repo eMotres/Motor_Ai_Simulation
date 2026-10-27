@@ -38,13 +38,14 @@ def preview(date: Optional[str] = None, _admin: dict = Depends(auth.require_admi
 
 @router.post("/send")
 async def send_now(request: Request, _admin: dict = Depends(auth.require_admin)):
-    """Make the digest drafts, build the report and mail it NOW to the owner address only (never to anyone in the body)."""
+    """Make the digest drafts, build the report and mail it NOW to the owner address only (never to anyone in the body).  The drafts of
+    groups in auto mode are NOT sent from here: the automatic send belongs to the scheduled daily run."""
     try:
         body = await request.json()
     except ValueError:
         body = {}
     body = body if isinstance(body, dict) else {}
-    res = R.run_daily(date=_date(body.get("date")), force=True)
+    res = R.run_daily(date=_date(body.get("date")), force=True, send_digests=False)
     out = {k: v for k, v in res.items() if k != "report"}
     if res.get("report") is not None:
         out.update(summary=res["report"].summary, counts=res["report"].counts)

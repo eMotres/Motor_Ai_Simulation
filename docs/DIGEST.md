@@ -5,16 +5,32 @@ One short e-mail per working group - a development project or a production - say
 
 ## Rules (they override the first brief)
 
-1. **Nothing is sent without the owner's approval of the final text.** There is no automatic mode: a group's mode is
-   `approve` (default) or `off`. The scheduler only writes DRAFTS; a draft waits in Admin -> Digests, where the owner previews it and
-   clicks **Send** (after a confirmation) or **Discard**. `approval.send_draft` is the only function that reaches SMTP, it needs the
-   approving admin's address, and `POST /api/admin/digests/{id}/send` is its only caller (`{"approve": true}` in the body).
-   `tests/test_digest.py` pins this: a run sends nothing, the package has one sending module, the CLI has no `--send`.
-   **The approval is for exactly the text previewed:** the preview returns a SHA-256 content hash (subject + plain text + HTML +
-   recipient list) and the send request must carry it back (`{"approve": true, "content_hash": "..."}`); any other hash is a 409.
-   A draft that was opened or previewed is never rewritten: a refresh makes a new draft (next revision) and marks the old one
-   `superseded`; a draft nobody opened is refreshed in place. A send that partly failed leaves the draft `partial` (the scheduler
-   leaves it alone) and the next approval retries only the recipients that did not get it.
+1. **Automatic daily send (owner decision 2026-10-28, reverses the 2026-10-26 "no automatic mode" rule): "all projects and
+   productions get an automatic mailing at 6 a.m. Slovenian time, but only if something changed during the day".** A group's mode is
+   `auto` (default), `approve` or `off`.
+   * `auto`: the daily scheduled run (`approval.run_daily`: first step of the owner report at 06:00 Europe/Ljubljana, or
+     `python -m motor_ai_sim.digest run`) builds the draft and SENDS it right away, through the same private `approval._send` as the
+     admin Send (recipients re-checked against today's state - left the group, unsubscribed, disabled, lost access -, nobody added, the
+     send log, the unsafe-subject guard, the 14-day max age, partial retry). The approver recorded in the draft and in `log.jsonl` is
+     the system actor `auto (daily 06:00)`. A group where nothing changed in the period has no draft and gets nothing.
+   * `approve`: the draft waits in Admin -> Digests, where the owner previews it and clicks **Send** (after a confirmation) or
+     **Discard**; the send needs the approving admin's address and `POST /api/admin/digests/{id}/send` is its only caller
+     (`{"approve": true, "content_hash": "..."}` - the SHA-256 of subject + plain text + HTML + recipient list that the preview showed;
+     any other hash is a 409).
+   * `off`: no draft.
+   * **Only the scheduled run sends automatically.** Page loads, `POST /api/admin/digests/run` ("Make drafts now") and
+     `build.run` itself only write drafts and never reach SMTP; `python -m motor_ai_sim.digest run --drafts-only` and `--dry-run` send
+     nothing either. `tests/test_digest.py` pins this (static guard: one sending module, the routes never call the automatic send).
+   * A draft that was opened or previewed is never rewritten: a refresh makes a new draft (next revision) and marks the old one
+     `superseded`; a draft nobody opened is refreshed in place. A send that partly failed leaves the draft `partial`; the next
+     scheduled run (auto) or the next approval (approve) retries only the recipients that did not get it. A total failure leaves the
+     draft `pending` with `last_error` (`by: auto (daily 06:00)`), the next run tries again, and the owner report names it.
+   * Settings shape: `settings.json` is `{scope: {mode, frequency, recipients, chosen, optouts, mode_chosen?, updated_at, updated_by}}`.
+     There is no separate global record: the default of a group with no stored mode is `DEFAULT_SETTINGS["mode"]` = `auto`, and a
+     per-group `approve` / `off` is the override. **Migration (once, `store.migrate_auto_default`, marker in `migrations.json`):** before
+     2026-10-28 a stored `approve` was only the old default (any opt-out or frequency change stored the whole record), so such a record
+     becomes `auto`; a record whose settings log shows a change TO `approve` (a deliberate choice) or whose mode is `off` stays and gets
+     `mode_chosen: true`. From then on every mode set through the settings route is marked chosen.
 2. **One text per group per period.** The text contains only what EVERY recipient of the group may see (lowest common access): no cost
    sheet unless costs are shared with the factory, no internal documents or notes, no trial variants for customers. If the group has
    Chinese-speaking members (the factory) the single e-mail carries English first, then Chinese (the existing bilingual fields;
@@ -25,13 +41,13 @@ One short e-mail per working group - a development project or a production - say
    Computed points are read from the layers all members share (the die's and the shared catalog's ledgers, not any one workspace's).
 3. **Text and HTML only** - no images, no attachments. One line per item (at most 20, then "and N more"), each with a link to the exact
    page in the app.
-4. **A period with no activity makes no digest.** One draft per (group, period start); running twice refreshes the same draft; after a
-   send or a discard the next period starts where the last ended.
+4. **A period with no activity makes no digest** (an idle group is never mailed, in any mode). One draft per (group, period start);
+   running twice refreshes the same draft; after a send or a discard the next period starts where the last ended.
 5. **Links open the exact page after sign-in.** See "Deep links" below.
 
 ## Settings (`digest/store.py`)
 
-Per group `{mode: approve|off, frequency: daily|weekly, recipients: all|chosen, chosen: [...], optouts: [...]}`; every change is logged
+Per group `{mode: auto|approve|off, frequency: daily|weekly, recipients: all|chosen, chosen: [...], optouts: [...]}`; every change is logged
 (who, when, what) in `log.jsonl`. A project's owner or an admin changes a project's settings (project page, "Updates by e-mail");
 an admin changes a production's (production page). A member leaves one digest with the link in the e-mail footer (or
 `PUT /api/digest/mine`); "unsubscribe from all e-mail" (communication preferences) also stops it. A factory member without a signed
@@ -53,17 +69,18 @@ documents keep their own `internal` line, so the lowest-common-access filter dro
 
 ## Scheduler
 
-> Since 2026-10-27 the drafts are also made by the owner's daily report run at 06:00 Europe/Ljubljana (`docs/OWNER_REPORT.md`,
-> `deploy/systemd/motres-owner-report.*`), which then lists the waiting drafts in the e-mail to the owner. If that timer is installed
-> the `motres-digest` timer below is not needed. The digest package itself is unchanged: it still never sends.
+> Since 2026-10-27 the digests are run by the owner's daily report run at 06:00 Europe/Ljubljana (`docs/OWNER_REPORT.md`,
+> `deploy/systemd/motres-owner-report.*`); since 2026-10-28 that run also SENDS the groups in `auto` mode and lists what went out and
+> what still waits in the e-mail to the owner. If that timer is installed the `motres-digest` timer below is not needed.
 
-`python -m motor_ai_sim.digest run [--dry-run] [--scope project:<id>]` makes the due drafts and prints what it did; it never
-sends. Install on the server (NOT installed by the PR) as a systemd timer:
+`python -m motor_ai_sim.digest run [--dry-run] [--drafts-only] [--scope project:<id>]` makes the due drafts, sends those of groups in
+`auto` mode and prints what it did (`--drafts-only` and `--dry-run` send nothing). Install on the server (NOT installed by the PR) as
+a systemd timer, only if the owner-report timer is not used:
 
 ```ini
 # /etc/systemd/system/motres-digest.service
 [Unit]
-Description=AeroStator activity digests: make the drafts (sends nothing)
+Description=AeroStator activity digests: make the drafts and send the automatic ones
 After=network-online.target
 
 [Service]
@@ -76,7 +93,7 @@ Nice=10
 
 # /etc/systemd/system/motres-digest.timer
 [Unit]
-Description=Daily activity digest drafts
+Description=Daily activity digests
 
 [Timer]
 OnCalendar=*-*-* 06:00:00 UTC
@@ -89,7 +106,7 @@ WantedBy=timers.target
 
 (The `ExecStart` line must match how the API container is run on the server; the command inside the container is the same.)
 Quiet groups are skipped silently; `--dry-run` shows the plan and writes nothing. Admin -> Digests has a "Make drafts now" button
-that does the same (still sends nothing).
+that only writes drafts (it never sends, whatever the mode).
 
 ## Deep links (`return_path.py`, `web/src/lib/appLink.ts`)
 

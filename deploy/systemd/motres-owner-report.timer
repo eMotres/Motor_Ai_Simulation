@@ -1,0 +1,12 @@
+[Unit]
+Description=Owner's daily report at 06:00 Europe/Ljubljana
+
+[Timer]
+# 06:00 local time (the 24 h before it are reported); 07:00 and 08:00 are retries - the run is a no-op once the date is marked sent.
+OnCalendar=*-*-* 06,07,08:00:00 Europe/Ljubljana
+# a host that was down at 06:00 sends as soon as it is up (the report is still the one for that morning's date)
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

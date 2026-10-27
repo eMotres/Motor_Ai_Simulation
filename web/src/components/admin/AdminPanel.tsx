@@ -7,7 +7,9 @@
  */
 import React, { useState } from 'react';
 import { Box, Typography } from '@mui/material';
-import AdminNav, { useAdminSection } from './AdminNav';
+import AdminNav, { ADMIN_SECTIONS, useAdminSection } from './AdminNav';
+import type { AdminSectionId } from './AdminNav';
+import { parseAdminLink } from '../../lib/adminLink';
 import InviteDialog from './dialogs/InviteDialog';
 import OverviewSection from './sections/OverviewSection';
 import UsersSection from './sections/UsersSection';
@@ -39,6 +41,12 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const AdminPanel: React.FC = () => {
   useTranslation('admin'); // re-render on language change; lazy-loads the namespace
   const [section, setSection] = useAdminSection();
+  // /?tab=admin&section=digests&draft=... (the owner's daily report): open that section once.
+  React.useEffect(() => {
+    const link = parseAdminLink(window.location.search);
+    if (link && ADMIN_SECTIONS.some((s) => s.id === link.section)) setSection(link.section as AdminSectionId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invitePrefill, setInvitePrefill] = useState('');
   const [notice, setNotice] = useState<string | null>(null);

@@ -10,6 +10,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../common/HelpTip';
+import { parseAdminLink } from '../../../lib/adminLink';
 import { digestApi, type DigestDraftDetail, type DigestPreview } from '../../digest/digestApi';
 import { splitDrafts, type DigestSummary } from '../../digest/digestModel';
 
@@ -18,7 +19,8 @@ const when = (iso: string) => iso.slice(0, 16).replace('T', ' ');
 
 const DraftCard: React.FC<{ row: DigestSummary; smtp: boolean; onDone: (msg: string) => void; onChanged: () => void }> = ({ row, smtp, onDone, onChanged }) => {
   const { t } = useTranslation('common');
-  const [open, setOpen] = useState(false);
+  // the owner's daily report links to one draft: /?tab=admin&section=digests&draft=<id> opens it expanded
+  const [open, setOpen] = useState(() => parseAdminLink(window.location.search)?.draft === row.id);
   const [detail, setDetail] = useState<DigestDraftDetail | null>(null);
   const [who, setWho] = useState('');
   const [preview, setPreview] = useState<DigestPreview | null>(null);

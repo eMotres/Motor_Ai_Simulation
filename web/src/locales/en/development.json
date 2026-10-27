@@ -561,6 +561,26 @@
       "emTipPlain": "These electromagnetic values come from the EM run; its winding temperature is not stored. The temperatures and the coupled loop's own torque are in the thermal block.",
       "coupledTip": "No EM run is stored for this point: the electromagnetic values come from the coupled loop."
     },
+    "tempTile": {
+      "magnet": "Magnet temp",
+      "winding": "Winding temp",
+      "coupled": {
+        "magnet": "Magnet temperature (mean) the coupled loop settled at ({day}).",
+        "winding": "Winding temperature (mean) the coupled loop settled at ({day})."
+      },
+      "thermal": {
+        "magnet": "No coupled loop is stored for this point: hottest magnet node of the steady temperature map ({day}).",
+        "winding": "No coupled loop is stored for this point: hottest winding node of the steady temperature map ({day})."
+      },
+      "emInput": {
+        "magnet": "EM input (card / setpoint), not a computed result: the magnet temperature the EM run was solved at. Run the coupled loop for the real value.",
+        "winding": "EM input (card / setpoint), not a computed result: the winding temperature the EM run was solved at. Run the coupled loop for the real value."
+      },
+      "hottestMagnet": "Hottest magnet: {value} °C.",
+      "timeToLimit": "Over a limit: the point may run {time} s before the {part} reaches it (S2).",
+      "s1": "S1 rating: {current} A held continuously, the limit sits in the {part}.",
+      "air": "Cooling air speed: {speed} m/s."
+    },
     "chart": {
       "title": "Change over the steps",
       "switchTip": "Choose the value to follow over the optimization steps, for the selected mode. Only values stored for at least two steps are offered; a step without the value is a gap, never zero."

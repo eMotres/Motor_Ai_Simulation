@@ -454,6 +454,20 @@ def test_e_s1_and_s2_are_their_own_lines_with_provenance():
     assert t["s2"]["time_to_limit_s"] == 90.0 and t["duty_temps"]["winding_c"] == 128.5
 
 
+def test_e_the_cooling_air_speed_of_the_steady_map_rides_with_the_temperatures():
+    """Temperature tiles name the cooling (owner 2026-10-27): the air speed the duty's steady map was solved with."""
+    th = {"computed_at": "2026-10-25T09:00:00", "components": {"winding": {"max": 120.0}},
+          "cooling": {"outer": {"air_speed_mps": 12.34}}}
+    t = motor_view.thermal_block({"thermal": th, "coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00")})
+    assert t["cooling_air_speed_mps"] == 12.3
+    th["cooling_air_source"] = {"propeller_id": "p1", "air_speed_mps": 24.6}              # a propeller's slipstream wins
+    assert motor_view.thermal_block({"thermal": th, "coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00")})["cooling_air_speed_mps"] == 24.6
+    # no stated speed, or a map of another state: nothing is invented
+    assert "cooling_air_speed_mps" not in motor_view.thermal_block({"coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00")})
+    th2 = {"state": "limited", "cooling": {"outer": {"air_speed_mps": 9.0}}}
+    assert "cooling_air_speed_mps" not in motor_view.thermal_block({"thermal": th2, "coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00")})
+
+
 def _rs(at, sf, fp2=None, rpm=23000.0, torque=7.5, solver=None):
     row = {"computed_at": at, "sf_min": sf, "rpm": rpm, "point": {"rpm": rpm, "torque_nm": torque, "loads": "both"}}
     if fp2:

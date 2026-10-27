@@ -146,8 +146,9 @@ def test_project_collector_lists_activity_not_reads(d):
     notes = next(i for i in items if i.kind == "notes")
     assert "Gap" not in notes.en and C.INTERNAL in notes.requires            # internal notes: only THAT they changed
     res = [i for i in items if i.kind == "results"]
-    assert any("T 12.3 N·m" in i.en and "η 95.1 %" in i.en and "winding 128 °C" in i.en for i in res)
-    trial = next(i for i in res if "T9" in i.en)
+    assert any(i.en.startswith("cruise: 12.3 N·m at 4.1 kW, efficiency 95.1 %; steady state: winding 128 °C") for i in res)
+    assert all(i.group and i.group[0].startswith("New results, CIANO28 85 / ") for i in res)       # the variant is the heading, not repeated
+    trial = next(i for i in res if "T9" in i.group[0])
     assert C.INTERNAL in trial.requires                                      # a trial variant is the engineers' scratch work
 
 
@@ -219,7 +220,7 @@ def test_project_with_a_customer_hides_internal_notes_and_trial_variants(d):
     assert "Internal project notes" not in text and "T9" not in text and "Design variant added" not in text
     assert "Specification version 2 submitted" in text and "New message from Bob" in text
     assert "Design step note, CIANO28 85 / L12: Gap 0.8 mm" in text
-    assert "T 12.3 N·m" in text and not draft["bilingual"]
+    assert "12.3 N·m at 4.1 kW" in text and "New results, CIANO28 85 / L12:" in text and not draft["bilingual"]
     assert sorted(r["email"] for r in draft["recipients"]) == sorted([ANNA, BOB])
 
 
@@ -659,7 +660,7 @@ def test_motor_lines_need_every_recipient_to_be_able_to_open_the_motor(d):
     run(d, scopes=[PSCOPE])
     draft = draft_of(d, PSCOPE)
     text = draft["text_body"]
-    assert "New results" not in text and "Design step note" not in text and "T 12.3" not in text and "L12" not in text
+    assert "New results" not in text and "Design step note" not in text and "12.3 N" not in text and "L12" not in text
     assert "New message from Bob" in text and "Specification version 2 submitted" in text          # the rest of the project still goes out
     assert not [i for i in draft["items"] if i.get("motor")]
     # everybody may open it: the lines are back, and carry the motor for the send-time re-check

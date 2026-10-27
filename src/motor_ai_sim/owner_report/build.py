@@ -150,10 +150,16 @@ def build(date: str, sources: Sources, *, base_url: str = "", extra_errors: Opti
             errors.append(f"{TITLES[sid]}: {err}")
         sections.append(Section(sid, TITLES[sid], _count(sid, rows), rows, NO_DIGESTS if sid == "digests" else NO_CHANGES, err))
     summary = summary_line(sections)
-    subject = f"AeroStator owner report {date}"
+    subject = f"AeroStator owner report {date}" + digests_subject_tail(sections)
     text = render_text(date, start, end, summary, sections, base_url, errors)
     body = render_html(date, start, end, summary, sections, base_url, errors, subject)
     return Report(date, start, end, subject, summary, sections, text, body, errors)
+
+
+def digests_subject_tail(sections: list) -> str:
+    """`` · 3 digests to approve`` when drafts wait for the owner (owner 2026-10-27), else nothing."""
+    n = next((s.count for s in sections if s.id == "digests" and not s.error), 0)
+    return f" · {n} digest{'' if n == 1 else 's'} to approve" if n else ""
 
 
 def summary_line(sections: list) -> str:
@@ -385,3 +391,61 @@ def _digest_html(d: dict, base: str) -> list:
          '<p style="margin:0;font-size:11.5px;color:#9ca3af">The text the recipients get; the footer with their own unsubscribe link '
          'is added per person.</p>']
     return h
+
+
+# -- the separate "digests ready to check" notice ------------------------------------------------------------------------------------
+
+@dataclass
+class Notice:
+    """The short e-mail to the owner when the run made NEW digest drafts (owner 2026-10-27: «мне нужно высылать сообщение, что новая
+    рассылка готова»).  Plain text + HTML, one line per draft, a deep link to Admin -> Digests; nothing about customers' data."""
+    subject: str
+    text: str
+    html: str
+    count: int
+
+
+def _plural(n: int, one: str, many: Optional[str] = None) -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def notice_line(row: dict) -> str:
+    kind = str(row.get("kind") or "group").capitalize()
+    return (f"{kind}: {row.get('title', '')} - {_plural(int(row.get('items') or 0), 'item')}, "
+            f"{_plural(int(row.get('recipients') or 0), 'recipient')}")
+
+
+def build_notice(rows: list, base_url: str = "") -> Optional[Notice]:
+    """``rows``: ``{id, kind, title, items, recipients}`` per NEW draft.  ``None`` when there are none (no notice is sent)."""
+    rows = [r for r in rows if r.get("id")]
+    if not rows:
+        return None
+    n = len(rows)
+    subject = f"{_plural(n, 'digest')} ready to check"
+    all_url = _url(base_url, admin_path("digests"))
+    t = [subject, "", "Nothing has been sent: each digest goes to its recipients only after you approve it in Admin -> Digests.", ""]
+    h = [f'<h1 style="margin:0 0 8px;font-size:18px;color:#0f172a">{html.escape(subject)}</h1>',
+         '<p style="margin:0 0 12px;font-size:14px;color:#475569">Nothing has been sent: each digest goes to its recipients only '
+         'after you approve it in Admin -&gt; Digests.</p>',
+         '<ul style="margin:0 0 12px;padding-left:20px;font-size:14.5px;line-height:1.5">']
+    for i, r in enumerate(rows, 1):
+        url = _url(base_url, admin_path("digests", draft=str(r["id"])))
+        line = notice_line(r)
+        t += [f"{i}. {line}", f"   {url}"]
+        h.append(f'<li style="margin:0 0 6px">{html.escape(line)} <a href="{html.escape(url, quote=True)}" style="color:#2563eb">'
+                 'Preview and Send</a></li>')
+    t += ["", f"All digests: {all_url}", "The links open after you sign in."]
+    h.append("</ul>")
+    h.append(f'<p style="margin:0;font-size:13px;color:#475569"><a href="{html.escape(all_url, quote=True)}" style="color:#2563eb">'
+             'All digests</a> - the links open after you sign in.</p>')
+    body = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light"><title>{html.escape(subject)}</title></head>
+<body style="margin:0;padding:0;background:#f4f5f7;color:#1f2937;font-family:Arial,Helvetica,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#f4f5f7"><tr><td align="center" style="padding:20px 10px">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="max-width:560px;width:100%;background:#ffffff;border-radius:8px">
+<tr><td style="padding:22px 24px">
+{chr(10).join(h)}
+</td></tr></table></td></tr></table></body></html>
+"""
+    return Notice(subject, "\n".join(t) + "\n", body, n)

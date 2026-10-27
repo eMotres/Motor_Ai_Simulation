@@ -41,6 +41,16 @@ Store: `<shared root>/digests/` (`MOTRES_DIGEST_ROOT` overrides): `settings.json
 (append-only), `sendlog/<id>.sendlog.jsonl` (the mailing send log: a person with a `sent` line is never mailed again for that draft).
 At send time the recipients are re-checked against today's state (left the group, unsubscribed, lost access -> skipped and named).
 
+## Readable lines (owner 2026-10-27)
+
+The item lines are written for a customer or a factory reader (`digest/readable.py`, one line per item, English source with a Chinese
+mirror where the digest is bilingual): numbers in plain notation with thousands separators (`1 770 N·m`, never `1.77e+03`);
+results say what the run answered - `holds continuously: winding 137 °C, magnets 82 °C`, `reaches the winding limit (200 °C) after
+2 min 17 s from cold, 33 s after cruise`, the torque target held or not reached - and the duties of one variant stand together under one
+heading with one link; production parts are named with what changed (new part, revision `1.0 → 1.1`, material / specification edited,
+removed; capped with `+N more`) and documents are counted per part (`Stator assembly: 2 photos, 5 STEP files added`). Internal
+documents keep their own `internal` line, so the lowest-common-access filter drops them for customers and the factory.
+
 ## Scheduler
 
 > Since 2026-10-27 the drafts are also made by the owner's daily report run at 06:00 Europe/Ljubljana (`docs/OWNER_REPORT.md`,

@@ -300,8 +300,10 @@ def test_the_run_makes_the_drafts_and_puts_their_text_in_the_report_without_mail
     xd = next(x for x in drafts if x["scope"] == XSCOPE)
     assert "Revision 1.1 published" in text and "版本 1.1 已发布" in text   # English and the Chinese part
     assert "Digests to approve" in text and "Preview and Send (Admin -> Digests)" in text
-    # nothing went to any group recipient: one message, to the owner
-    assert len(got) == 1 and got[0]["To"] == ADMIN
+    # nothing went to any group recipient: the report and the "digests ready" notice, both to the owner only
+    assert len(got) == 2 and {m["To"] for m in got} == {ADMIN}
+    assert got[0]["Subject"] == f"AeroStator owner report {res['date']} · {len(drafts)} digests to approve"
+    assert got[1]["Subject"] == f"{len(drafts)} digests ready to check" and got[1]["X-AeroStator-Internal"] == "owner-notice"
     assert not spy and o["delivered"] == []                              # no digest was sent, no auth mail either
     assert all(d_["status"] == "pending" for d_ in o["DS"].list_drafts()) and xd["recipients"]
 
@@ -477,3 +479,90 @@ def test_only_send_py_reaches_smtp_and_the_digest_package_has_no_sending_path_ad
     assert users == ["send.py"]
     for p in (SRC_DIR / "digest").glob("*.py"):                       # the customer digest never imports the owner report
         assert "owner_report" not in p.read_text(encoding="utf-8"), p.name
+
+
+# -- the "N digests ready to check" notice (owner 2026-10-27) -----------------------------------------------------------------------
+
+def _notices(got):
+    return [m for m in got if m["X-AeroStator-Internal"] == "owner-notice"]
+
+
+def test_new_drafts_make_one_short_notice_to_the_owner_with_a_deep_link_each(o):
+    got = []
+    now = B.window_for(WORLD_DAY)[1]
+    res = R.run_daily(now=now + 300, deliver=got.append, make_drafts=True)
+    assert res["status"] == "sent" and res["notice"]["status"] == "sent"
+    drafts = o["DS"].list_drafts()
+    notices = _notices(got)
+    assert len(notices) == 1 and notices[0]["To"] == ADMIN and not notices[0]["Cc"] and not notices[0]["Bcc"]
+    assert notices[0]["Subject"] == f"{len(drafts)} digests ready to check"
+    text = notices[0].get_body(preferencelist=("plain",)).get_content()
+    html_body = notices[0].get_body(preferencelist=("html",)).get_content()
+    assert {p.get_content_type() for p in notices[0].walk()} == {"multipart/alternative", "text/plain", "text/html"}
+    for x in drafts:                                       # one line per draft: title, items, recipients - and the link to open it
+        n_items = len(x["items"]) + x["more"]
+        assert f"{x['kind'].capitalize()}: {x['title']} - {n_items} item" in text and f"{len(x['recipients'])} recipient" in text
+        assert f"https://aerostator.com/?tab=admin&section=digests&draft={x['id']}" in text
+        assert f"section=digests&draft={x['id']}" in html_body.replace("&amp;", "&")
+    assert "https://aerostator.com/?tab=admin&section=digests\n" in text and "Nothing has been sent" in text
+    for x in drafts:                                       # the notice carries no digest text and no customer address
+        assert x["items"][0]["en"] not in text and all(r["email"] not in text for r in x["recipients"] if r["email"] != ADMIN)
+    # the same drafts on a forced second run are not new: no second notice
+    again = R.run_daily(now=now + 600, deliver=got.append, make_drafts=True, force=True)
+    assert again["status"] == "sent" and again["notice"]["status"] == "none" and len(_notices(got)) == 1
+
+
+def test_no_new_draft_means_no_notice(o):
+    got = []
+    res = R.run_daily(now=B.window_for("2026-12-30")[1] + 60, deliver=got.append, make_drafts=True)
+    assert res["status"] == "sent" and res["notice"]["status"] == "none"
+    assert _notices(got) == [] and len(got) == 1
+    assert got[0]["Subject"].endswith("2026-12-30") and "to approve" not in got[0]["Subject"]
+
+
+def test_a_failed_notice_is_retried_once_and_never_duplicated(o):
+    got = []
+    down = [True]
+
+    def flaky(msg):
+        if msg["X-AeroStator-Internal"] == "owner-notice" and down[0]:
+            raise OSError("smtp down")
+        got.append(msg)
+    now = B.window_for(WORLD_DAY)[1]
+    r1 = R.run_daily(now=now + 300, deliver=flaky, make_drafts=True)
+    assert r1["status"] == "sent" and r1["notice"]["status"] == "failed" and _notices(got) == []      # the report went out, the notice did not
+    assert S.get_state()["notice_pending"]                                                           # remembered for the next run
+    down[0] = False
+    r2 = R.run_daily(now=now + 900, deliver=flaky, make_drafts=True, force=True)
+    assert r2["notice"]["status"] == "sent" and len(_notices(got)) == 1
+    assert S.get_state()["notice_pending"] == [] and len(S.get_state()["notified"]) == len(o["DS"].list_drafts())
+    r3 = R.run_daily(now=now + 1200, deliver=flaky, make_drafts=True, force=True)
+    assert r3["notice"]["status"] == "none" and len(_notices(got)) == 1
+
+
+def test_a_draft_the_owner_already_handled_is_not_announced(o):
+    now = B.window_for(WORLD_DAY)[1]
+    rows, err = R.make_digest_drafts(now)
+    assert not err and R.new_draft_ids(rows)
+    for did in R.new_draft_ids(rows):
+        o["DS"].save_draft(dict(o["DS"].load_draft(did), status="discarded"))
+    R.queue_notice(R.new_draft_ids(rows))
+    got = []
+    assert R.send_pending_notice(deliver=got.append)["status"] == "none" and got == []
+
+
+def test_the_notice_builder_and_its_lock():
+    assert B.build_notice([]) is None
+    n = B.build_notice([{"id": "d-1", "kind": "project", "title": "Example X1", "items": 1, "recipients": 1}], "https://app.example.test")
+    assert n.subject == "1 digest ready to check" and "Project: Example X1 - 1 item, 1 recipient" in n.text
+    assert "https://app.example.test/?tab=admin&section=digests&draft=d-1" in n.text
+    assert "to" not in inspect.signature(S.send_notice).parameters and "recipients" not in inspect.signature(S.send_notice).parameters
+
+
+def test_the_report_subject_counts_the_digests_to_approve():
+    one = B.build(DATE, empty_sources(digests=lambda s, e: fixture_sources().digests(s, e)), base_url="https://app.example.test")
+    assert one.subject == f"AeroStator owner report {DATE} · 1 digest to approve"
+    none = B.build(DATE, empty_sources(), base_url="https://app.example.test")
+    assert none.subject == f"AeroStator owner report {DATE}"
+    two = B.build(DATE, empty_sources(digests=lambda s, e: fixture_sources().digests(s, e) * 2), base_url="https://app.example.test")
+    assert two.subject.endswith("· 2 digests to approve")

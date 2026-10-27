@@ -81,8 +81,25 @@ export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { retur
 export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {
   return (field as SpecificationField).storage_namespace ?? (section.id === 'production' || section.production ? 'production' : 'fields');
 }
+/** The `ordered_pairs` (lower, upper) of a structured field whose two stored numbers are inverted (lower > upper).  A pair with a
+ *  blank / non-numeric side is never reported, so partial answers stay valid; the same rule as the backend's `_inverted_pairs`. */
+export function invertedPairs(field: Pick<SchemaField, 'ordered_pairs'>, value: unknown): Array<[string, string]> {
+  if (!field.ordered_pairs?.length || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const record = value as Record<string, unknown>;
+  const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+  return field.ordered_pairs.filter(([low, high]) => num(record[low]) && num(record[high]) && (record[low] as number) > (record[high] as number));
+}
+/** Ids of fields whose answer holds an inverted window, wherever they sit: not a required-field matter, so they are listed apart
+ *  (an unknown answer is skipped).  The submit button reports them like the backend's validation errors. */
+export function invertedWindowFieldIds(sections: SchemaSection[], draft: SpecDraft): string[] {
+  return sections.flatMap((s) => s.fields ?? []).filter((f) => {
+    const answer = fieldAnswer(draft, f.id);
+    return answer.status !== 'not_known_yet' && answer.not_known_yet !== true && invertedPairs(f, answer.value).length > 0;
+  }).map((f) => f.id);
+}
 export function fieldValueValid(field: SchemaField, value: unknown): boolean {
   if (value === undefined || value === null || value === '') return false;
+  if (invertedPairs(field, value).length) return false;
   if (field.allow_range && typeof value === 'object') {
     const bounds = value as Record<string, unknown>, lo = Number(bounds.minimum), hi = Number(bounds.maximum);
     return bounds.minimum !== null && bounds.minimum !== undefined && bounds.minimum !== '' && bounds.maximum !== null && bounds.maximum !== undefined && bounds.maximum !== '' && Number.isFinite(lo) && Number.isFinite(hi) && lo <= hi;

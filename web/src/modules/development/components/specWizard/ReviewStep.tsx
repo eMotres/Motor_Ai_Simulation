@@ -38,7 +38,7 @@ export default function ReviewStep({ env, completeness, submitErrors, submitConf
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px 12px' }}>
           {items.map((item) => <Box key={item.id} sx={{ minWidth: 0, gridColumn: item.wide ? '1 / -1' : undefined }}>
             <Typography sx={{ fontSize: 12, color: 'var(--text-3)', overflowWrap: 'anywhere' }}>{item.label}</Typography>
-            <Typography sx={{ fontSize: item.wide ? 15 : 20, fontWeight: item.wide ? 500 : 700, color: item.unknown ? 'var(--text-3)' : 'var(--text-0)', overflowWrap: 'anywhere', fontVariantNumeric: 'tabular-nums' }}>{item.value}</Typography>
+            <Tooltip title={item.title ? <span style={{ whiteSpace: 'pre-line' }}>{item.title}</span> : ''}><Typography tabIndex={item.title ? 0 : undefined} sx={{ fontSize: item.wide ? 15 : 20, fontWeight: item.wide ? 500 : 700, color: item.unknown ? 'var(--text-3)' : 'var(--text-0)', overflowWrap: 'anywhere', fontVariantNumeric: 'tabular-nums' }}>{item.value}</Typography></Tooltip>
             {item.note && <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>{item.note}</Typography>}
           </Box>)}
         </Box>

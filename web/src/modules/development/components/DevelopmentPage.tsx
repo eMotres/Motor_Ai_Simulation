@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SpecSnapshot, SpecState } from '../types';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { createDraftSaveCoordinator, requiredFieldIds, wizardCompleteness, withSpecDefaults, type SpecDraft } from '../wizardState';
+  import { createDraftSaveCoordinator, invertedWindowFieldIds, requiredFieldIds, wizardCompleteness, withSpecDefaults, type SpecDraft } from '../wizardState';
   import type { CatalogController } from '../controllerCatalog';
   import { submitFailureKind, submitFailureKey } from '../submitFailure';
   import { MotorOpenActions } from '../MotorOpenActions';
@@ -393,7 +393,7 @@ export default function DevelopmentPage() {
   const revealField = (fieldId: string) => setReveal((old) => ({ field: fieldId, n: (old?.n ?? 0) + 1 }));
   const onSubmitSpec = async () => {
     if (!selected || !spec) return;
-    const missing = requiredFieldIds(sections, draftRef.current);    if (missing.length) {      setSubmitError(missing.map((id) => `${label(sections.flatMap((s) => s.fields).find((f) => f.id === id)?.short_label ?? id)}: ${tr('validationError')}`));      setFieldErrors(Object.fromEntries(missing.map((id) => [id, tr('validationError')])));      revealField(missing[0]);      return;    }
+    const missing = [...requiredFieldIds(sections, draftRef.current), ...invertedWindowFieldIds(sections, draftRef.current)];    if (missing.length) {      setSubmitError(missing.map((id) => `${label(sections.flatMap((s) => s.fields).find((f) => f.id === id)?.short_label ?? id)}: ${tr('validationError')}`));      setFieldErrors(Object.fromEntries(missing.map((id) => [id, tr('validationError')])));      revealField(missing[0]);      return;    }
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     setBusy(true); setSubmitError([]); setSubmitConflict(false); setFieldErrors({});
     const token = projectToken.current;

@@ -402,6 +402,33 @@ def _property_complete(item: Any, prop: dict) -> bool:
     return True
 
 
+def _inverted_pairs(field: dict, value: Any) -> list[tuple[str, str]]:
+    """The `ordered_pairs` (lower bound, upper bound) of a structured field whose two stored numbers are inverted.  A pair with a
+    missing / non-numeric side is never reported (partial answers stay allowed); nothing is rewritten."""
+    if not isinstance(value, dict):
+        return []
+    def number(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    return [(low, high) for low, high in field.get("ordered_pairs", [])
+            if number(value.get(low)) and number(value.get(high)) and value[low] > value[high]]
+
+
+def ordered_pair_errors(draft: dict) -> list[dict]:
+    """A field with `ordered_pairs` (the generator output window 2_13) whose lower bound exceeds its upper bound: a validation error
+    on the lower bound's path, whether or not the field is required.  Unknown answers are skipped."""
+    errors = []
+    for section in schema(int(draft.get("schema_version", 1)))["sections"]:
+        area = draft.get("production", {}) if section["id"] == "production" else draft.get("fields", {})
+        for field in section["fields"]:
+            answer = area.get(field["id"])
+            if not field.get("ordered_pairs") or not isinstance(answer, dict) or answer.get("status") == "not_known_yet":
+                continue
+            for low, high in _inverted_pairs(field, answer.get("value")):
+                errors.append({"field": f"{field['id']}.{low}", "section": section["id"],
+                               "message": f"{low} exceeds {high}: enter one value per quantity, the lowest not above the highest"})
+    return errors
+
+
 def _missing_any_groups(field: dict, value: dict) -> list[list[str]]:
     """`required_any` groups of which no property is filled (e.g. torque OR power)."""
     props = {p["id"]: p for p in field.get("properties", [])}
@@ -424,7 +451,7 @@ def _answer_complete(answer: dict, field: dict) -> bool:
         required_props = [p for p in field["properties"] if _property_required(p, value)]
         if not all(_property_complete(value.get(prop["id"]), prop) for prop in required_props):
             return False
-        if _missing_any_groups(field, value):
+        if _missing_any_groups(field, value) or _inverted_pairs(field, value):
             return False
         minimum = int(field.get("min_filled_properties", 0))
         if sum(1 for key, v in value.items() if _value_present(v, next((p for p in field["properties"] if p["id"] == key), {}))) < minimum:
@@ -1092,6 +1119,7 @@ def validation_errors(draft: dict) -> list[dict]:
                     if minimum and sum(1 for k, v in val.items() if _value_present(v, props.get(k, {}))) < minimum:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
     errors.extend(cooling_load_errors(draft))
+    errors.extend(ordered_pair_errors(draft))
     if int(draft.get("schema_version", 1)) >= 2:
         from motor_ai_sim.inverter import controller_catalog
         battery = controller_catalog.battery_vs_controller(draft)  # a pack above the linked controller's supply maximum

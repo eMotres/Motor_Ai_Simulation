@@ -91,6 +91,8 @@
     "optional": "Optional details",
     "answerLater": "Answer later",
     "answerLaterTip": "Marks this as not known yet. It stays listed as open until you answer.",
+    "otherBound": "Also stored: {value}",
+    "windowInverted": "The lowest value is above the highest stored value. Correct it.",
     "answerNow": "Answer now",
     "markedLater": "Marked for later",
     "change": "Change",
@@ -117,7 +119,7 @@
         "title": "Supply & drive",
         "summary": "DC bus, inverter, phase limits",
         "titleGenerator": "Output & controller",
-        "summaryGenerator": "DC bus, AC output window, controller"
+        "summaryGenerator": "DC bus, generator output voltage, controller"
       },
       "cooling": {
         "title": "Cooling & environment",

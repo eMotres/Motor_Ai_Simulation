@@ -6,7 +6,7 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import { BatteryInputs, type Battery } from '../../../../components/compare/BatteryPanel';
 import { SPEC_PACK_PROP, specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView } from '../../specBattery';
 import type { SchemaField, SchemaSuggestion } from '../../types';
-import { localized as localeValue } from './reviewSummary';
+import { hiddenCompanions, localized as localeValue } from './reviewSummary';
 import { COOLING_MEDIA, airflowExcluded, airflowSuggestions, coolingChoices, coolingForLoad, coolingLoadProblems, coolingMedium, coolingPropertyIds, loadGroup, naturalAirflow, loadPropertyIds, loadSwitchChoices, withLoadType, type CoolingMedium } from '../../specChoices';
 import { readLoadDraft, writeLoadDraft } from '../../loadDraftAdapter';
 import type { LoadType } from '../../missionProfileState';
@@ -15,7 +15,7 @@ import { optionsMinWidth, specFieldLabelSx, specGridSx, specGroupHeaderSx, visib
 import { OWN_DESIGN, applyControllerChoice, batteryVsController, catalogBrands, linkedController, powerDevicesUnknown, prefillProvenance, statedPowerDevices, type CatalogController } from '../../controllerCatalog';
 import { storedOverspeedRpm } from '../../speedLimits';
 import { matchesFieldReference, productionFallback } from '../../reviewPresentation';
-import { answerWithUnknown, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, fieldRequired, propertyRequired, setFieldAnswer, rangeWorst, withS1DerivedPower, type SpecDraft } from '../../wizardState';
+import { answerWithUnknown, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, invertedPairs, fieldRequired, propertyRequired, setFieldAnswer, rangeWorst, withS1DerivedPower, type SpecDraft } from '../../wizardState';
 import { keyPointsSlotState } from '../../keyPoints';
 import { NARROW } from '../../../../lib/narrowLayout';
 import type { MissionRow } from '../../missionProfileState';
@@ -124,7 +124,7 @@ export function useSpecFields(c: SpecFieldsContext) {
   const fieldRefFor = (f: SpecificationField, prod: boolean) => `${f.storage_namespace ?? (prod ? 'production' : 'fields')}.${f.id}`;
   /** Label (help text as its tooltip), required mark and open comments; "answer later" sits under the input. */
   const labelRow = (f: SpecificationField, prod: boolean, required: boolean, _unknown: boolean, text?: string, extra: string[] = []) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5, minWidth: 0, flexWrap: 'nowrap', minHeight: 22 }}><Tooltip title={extra.length ? <>{label(f.help ?? f.label)}{extra.map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(f.help ?? f.label)}><Typography tabIndex={0} sx={specGroupHeaderSx}>{text ?? label(f.short_label ?? f.label)}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>{commentIcon(fieldRefFor(f, prod))}</Stack>;
-  const propLabel = (prop: { label: unknown; short_label?: unknown; help?: unknown; required?: boolean }, strong = false, extraTip?: string) => <Tooltip title={extraTip ? <>{label(prop.help ?? prop.label)}<br />{extraTip}</> : label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ ...specFieldLabelSx, mb: 0.4, ...(strong ? { fontWeight: 800, color: 'var(--text-0)' } : {}) }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>;
+  const propLabel = (prop: { label: unknown; short_label?: unknown; help?: unknown; required?: boolean }, strong = false, extraTip?: string) => <Tooltip title={extraTip ? <>{label(prop.help ?? prop.label)}{extraTip.split('\n').map((line) => <Fragment key={line}><br />{line}</Fragment>)}</> : label(prop.help ?? prop.label)}><Typography tabIndex={0} sx={{ ...specFieldLabelSx, mb: 0.4, ...(strong ? { fontWeight: 800, color: 'var(--text-0)' } : {}) }}>{label(prop.short_label ?? prop.label)}{prop.required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography></Tooltip>;
   const storedAnswer = (f: SpecificationField, prod: boolean) => {
     const store = prod ? (draftRef.current.production as Record<string, unknown>) ?? {} : draftRef.current.fields ?? {};
     const raw = store[f.id];
@@ -139,6 +139,7 @@ export function useSpecFields(c: SpecFieldsContext) {
     setAnswer(f, v2 && f.id === '1_4' ? withS1DerivedPower(next) : next, prod);
   };
   const fieldMessages = (f: SpecificationField, answer: { value?: unknown; status?: string }, required: boolean) => <>
+    {answer.status !== 'not_known_yet' && invertedPairs(f, answer.value).length > 0 && <Typography role="alert" data-testid="inverted-window" sx={{ color: 'error.main', fontSize: 11 }}>{tr('wizard.windowInverted')}</Typography>}
     {fieldErrors[f.id] && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('validationError')}</Typography>}
     {required && !fieldAnswerComplete(f, { ...answer, not_known_yet: answer.status === 'not_known_yet' } as FieldAnswer) && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('requiredMissing')}</Typography>}
   </>;
@@ -190,6 +191,8 @@ export function useSpecFields(c: SpecFieldsContext) {
     const properties = f.properties?.length ? visibleProperties(f.properties) : undefined;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
+    // the stored upper bounds the page does not ask (the generator output window shows ONE worst-case value per quantity) are readable in a tooltip
+    const companions = hiddenCompanions(f, objectValue, lang, tr);
     const planField = fallback.length ? sections.flatMap((section) => section.fields).find((item) => item.storage_namespace === 'production' && item.id === (f.id === '6_1' ? 'quantities' : 'timeline')) : undefined;
     return <Box id={`spec-field-${f.id}`} key={`${prod ? 'p' : 'f'}-${f.id}`} sx={{ minWidth: 0, gridColumn: wide ? '1 / -1' : undefined }}>
       {labelRow(f, prod, required, unknown, undefined, [...(f.id === '2_4' && statedPowerDevices(draftRef.current) ? [tr('controller.statedDevices', { devices: statedPowerDevices(draftRef.current) })] : []), ...(f.id === '2_4' && linkedController(draftRef.current, catalog) ? [tr('controller.linked', { name: linkedController(draftRef.current, catalog)!.display_name })] : []), ...(f.id === '1_6' && storedOverspeedRpm(draftRef.current) ? [tr('wizard.storedOverspeed', { value: storedOverspeedRpm(draftRef.current) })] : []), ...(fallback.length ? [tr('wizard.fromProduction', { values: fallback.map(({ key, value }) => { const prop = planField?.properties?.find((item) => item.id === key); return `${prop ? label(prop.short_label ?? prop.label) : key} ${readableRange(value)}`; }).join(' · ') })] : [])])}
@@ -197,7 +200,7 @@ export function useSpecFields(c: SpecFieldsContext) {
         {properties?.length ? (
           <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
             {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? '1 / -1' : undefined }}>
-              {properties.length > 1 && propLabel(prop, false, catalogTip(`${f.id}.${prop.id}`))}
+              {properties.length > 1 && propLabel(prop, false, [catalogTip(`${f.id}.${prop.id}`), ...companions.filter((x) => x.low === prop.id).map((x) => tr('wizard.otherBound', { value: x.text }))].filter(Boolean).join('\n') || undefined)}
               {renderTypedValue(f.id === '2_4' ? controllerShape(prop) : prop, objectValue[prop.id], f.id === '2_4' && prop.id === 'manufacturer_model' ? (value) => pickController(String(value ?? '')) : (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
           </Box>

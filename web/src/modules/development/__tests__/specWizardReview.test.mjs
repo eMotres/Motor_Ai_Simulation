@@ -51,7 +51,9 @@ test('F01: the generator adds one new optional field 2_13; no existing field is 
     assert.equal(items.some((i) => i.id === '2_13'), profile === 'generator');
   }
   const gen = reviewItems(step('supply', g), draft({ '2_13': filled({ ac_min_V: 300, ac_max_V: 480, basis: 'line_line_rms', at_rpm_min: 600 }) }), { lang: 'en', t: tr, profile: 'generator' });
-  assert.match(gen.find((i) => i.id === '2_13').value, /Minimum AC voltage 300 V/); assert.match(gen.find((i) => i.id === '2_13').value, /Line-to-line, RMS/);
+  // ONE worst-case value per quantity (the lowest AC voltage at its speed); the other stored bound is not part of the value (R2-03)
+  assert.match(gen.find((i) => i.id === '2_13').value, /Lowest AC voltage 300 V/); assert.match(gen.find((i) => i.id === '2_13').value, /Line-to-line, RMS/);
+  assert.doesNotMatch(gen.find((i) => i.id === '2_13').value, /480|Maximum|Minimum/);
   const ids = STEP_CARDS.supply.flatMap((c) => c.ids); assert.ok(ids.includes('2_13'));
 });
 

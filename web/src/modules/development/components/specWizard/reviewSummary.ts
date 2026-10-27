@@ -12,7 +12,7 @@ import { answerPresent, type WizardStep } from './steps.ts';
 import type { WizardProfile } from './profile.ts';
 
 export type Translate = (key: string, args?: Record<string, unknown>) => string;
-export interface ReviewItem { id: string; label: string; value: string; note?: string; unknown?: boolean; wide?: boolean }
+export interface ReviewItem { id: string; label: string; value: string; note?: string; /** shown as the value's tooltip */ title?: string; unknown?: boolean; wide?: boolean }
 
 export const localized = (v: Localized | unknown, lang: string): string => {
   if (typeof v === 'string') return v;
@@ -26,7 +26,7 @@ type Shape = Pick<SchemaProperty, 'type' | 'unit' | 'options' | 'suggestions' | 
 
 /** One stored value as a short readable string; '' when it holds nothing.  A range stored before the one-value rule reads
  *  as its maximum. */
-export function formatValue(shape: Shape, value: unknown, lang: string, t: Translate): string {
+export function formatValue(shape: Shape, value: unknown, lang: string, t: Translate, opts: { labelAll?: boolean } = {}): string {
   if (blank(value)) return '';
   if (typeof value === 'boolean') return t(value ? 'yes' : 'no');
   if (Array.isArray(value)) return value.map((x) => formatValue({ ...(shape.items ?? {}) } as Shape, x, lang, t)).filter(Boolean).join(', ');
@@ -41,7 +41,7 @@ export function formatValue(shape: Shape, value: unknown, lang: string, t: Trans
     }
     // a single filled property reads as its value alone (the field's label already names it); in a list only numbers carry
     // their label (menu and text values read for themselves)
-    return parts.map((x) => parts.length > 1 && !x.nested ? `${x.label} ${x.text}` : x.text).join(' · ');
+    return parts.map((x) => (parts.length > 1 || opts.labelAll) && !x.nested ? `${x.label} ${x.text}` : x.text).join(' · ');
 
   }
   const options = (shape.options ?? shape.choices) as Array<string | { value: string; label?: Localized }> | undefined;
@@ -51,6 +51,20 @@ export function formatValue(shape: Shape, value: unknown, lang: string, t: Trans
   const text = typeof value === 'number' ? formatNumber(value) : String(value);
   const unit = shape.unit && shape.unit !== 'date' && shape.unit !== 'units' ? ` ${shape.unit}` : '';
   return shape.type === 'number' || typeof value === 'number' ? `${text}${unit}` : text;
+}
+
+/** The stored upper bounds of a field's `ordered_pairs` that the page does not ask (`ui_hidden`): the generator output window
+ *  keeps its highest voltage and speed in the data, but the page shows ONE worst-case value per quantity (owner 2026-10-27, no
+ *  min-max ranges), so these appear only in a tooltip.  Each line reads "<label> <value>"; nothing is converted or written. */
+export function hiddenCompanions(field: Pick<SpecificationField, 'properties'> & { ordered_pairs?: Array<[string, string]> }, value: unknown, lang: string, t: Translate): Array<{ id: string; low: string; text: string }> {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const out: Array<{ id: string; low: string; text: string }> = [];
+  for (const [low, high] of field.ordered_pairs ?? []) {
+    const prop = field.properties?.find((p) => p.id === high) as (SchemaProperty & { ui_hidden?: boolean }) | undefined;
+    if (!prop?.ui_hidden || !isNum(record[high])) continue;
+    out.push({ id: high, low, text: `${localized(prop.short_label ?? prop.label, lang)} ${formatValue(prop as Shape, record[high], lang, t)}` });
+  }
+  return out;
 }
 
 const answerOf = (draft: SpecDraft, field: SpecificationField): FieldAnswer => {
@@ -97,20 +111,28 @@ export function reviewItems(step: WizardStep, draft: SpecDraft, o: { lang: strin
       if (text) out.push({ id: field.id, label, value: text, wide: text.length > 26 });
       continue;
     }
-    const text = formatValue(field as Shape, answer.value, lang, t);
-    if (text) out.push({ id: field.id, label, value: text, wide: text.length > 26 });
+    // a field with ordered bounds names its quantity even when only one is stored ("Lowest AC voltage 380 V", never a bare number)
+    const text = formatValue(field as Shape, answer.value, lang, t, { labelAll: !!field.ordered_pairs?.length });
+    // a field with ordered bounds shows its ONE worst-case value per quantity; the other stored bounds sit in a tooltip, and
+    // only when nothing else is stored do they read as the value (labelled, never presented as the worst case)
+    const others = hiddenCompanions(field, answer.value, lang, t);
+    if (others.length && text) { out.push({ id: field.id, label, value: text, title: others.map((x) => t('wizard.otherBound', { value: x.text })).join('\n'), wide: text.length > 26 }); continue; }
+    const shown = text || others.map((x) => x.text).join(' · ');
+    if (shown) out.push({ id: field.id, label, value: shown, wide: shown.length > 26 });
   }
   return out;
 }
 
 
 /** The cooling field as the editor shows it: only the medium and the conditions of the ACTIVE medium (liquid: coolant, inlet
- *  temperature ...; air: airflow; underwater: water temperature and speed); the other media's values stay stored, unshown. */
+ *  temperature ...; air: airflow; underwater: water temperature and speed); the other media's values stay stored, unshown.
+ *  An answer without a stored `cooling_medium` (version 1, or version 2 with only the old description) keeps that description
+ *  (`cooling_type`) readable beside the conditions of the medium it implies: the review shows it, nothing is written back. */
 function activeCoolingShape(field: SpecificationField, value: unknown, draft: SpecDraft): Shape {
-  const { medium } = coolingMedium(value);
+  const { medium, inferred } = coolingMedium(value);
   const loadAnswer = draft.fields?.load_type as { value?: unknown } | undefined;
   const loadType = typeof loadAnswer?.value === 'string' ? loadAnswer.value : undefined;
-  const ids = medium ? ['cooling_medium', ...coolingPropertyIds(medium, loadType)] : ['cooling_medium', 'cooling_type'];
+  const ids = medium ? ['cooling_medium', ...(inferred ? ['cooling_type'] : []), ...coolingPropertyIds(medium, loadType)] : ['cooling_medium', 'cooling_type'];
   return { ...(field as Shape), properties: (field.properties ?? []).filter((p) => ids.includes(p.id)) } as Shape;
 }
 

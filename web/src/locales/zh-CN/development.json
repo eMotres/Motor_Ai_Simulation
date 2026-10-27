@@ -91,6 +91,8 @@
     "optional": "可选细节",
     "answerLater": "稍后回答",
     "answerLaterTip": "标记为暂不清楚，回答之前会一直列为待办。",
+    "otherBound": "另存：{value}",
+    "windowInverted": "最低值高于已存的最高值，请更正。",
     "answerNow": "现在回答",
     "markedLater": "已标记为稍后回答",
     "change": "更改",
@@ -117,7 +119,7 @@
         "title": "供电与驱动",
         "summary": "直流母线、逆变器、相电流限值",
         "titleGenerator": "输出与控制器",
-        "summaryGenerator": "直流母线、交流输出范围、控制器"
+        "summaryGenerator": "直流母线、发电机输出电压、控制器"
       },
       "cooling": {
         "title": "冷却与环境",

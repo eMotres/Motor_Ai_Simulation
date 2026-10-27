@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Box, Button, IconButton, Stack, TextField, Tooltip, Typography, useMediaQuery } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -7,12 +8,12 @@ import { fieldRequired } from '../../wizardState';
 import { storedOverspeedRpm } from '../../speedLimits';
 import type { StepEnv } from './env';
 import type { WizardStep } from './steps';
-import { OptionalGroup, StepCard, BigNumber, DurationChips, TOUCH } from './ui';
+import { OptionalGroup, StepCard, DurationChips, LinkedNumber, PowerNumber, TOUCH } from './ui';
 import OperatingChart from './OperatingChart';
-import { buildChartModel, chartMaxSpeed, maxSpeedPlacement, chartPoints, formatPower, missionChartPoints, operatingRows, pointRoles, readableRange, retainedS1Range, shaftPowerOf } from './operatingPoints';
+import { applyPointEdit, buildChartModel, chartMaxSpeed, chartPoints, displayPower, maxSpeedPlacement, missionChartPoints, operatingRows, pointRoles, readableRange, retainedS1Range, type PointEdit, type PowerUnit } from './operatingPoints';
 import { cardColumnMin } from '../../specGrid';
 
-/** Step 2 - Operating points: one card per named point (torque, speed, duration chips, derived power), the maximum speed,
+/** Step 2 - Operating points: one card per named point (torque, speed and power linked by P = T·ω, duration chips), the maximum speed,
  *  the live torque-speed chart, the ripple requirement and the mission profile. */
 export default function OperatingStep({ env, step }: { env: StepEnv; step: WizardStep }) {
   const { tr, draft, profile, fields, updateDraft, canEditSpec, busy, migrationBusy } = env;
@@ -33,6 +34,14 @@ export default function OperatingStep({ env, step }: { env: StepEnv; step: Wizar
   const retained = retainedS1Range(draft);
   const setRows = (next: KeyPoint[]) => updateDraft((d) => withKeyPoints(d, next));
   const patch = (id: string, change: Partial<KeyPoint>) => setRows(rows.map((row) => row.row_id === id ? { ...row, ...change } : row));
+  // UI-only state: a power typed before the speed was known, and the W / kW choice per point (neither is stored)
+  const [pending, setPending] = useState<Record<string, number | null>>({});
+  const [unitPref, setUnitPref] = useState<Record<string, PowerUnit>>({});
+  const edit = (row: KeyPoint, change: PointEdit) => {
+    const result = applyPointEdit(row, change, pending[row.row_id] ?? null);
+    setPending((p) => ({ ...p, [row.row_id]: result.pending }));
+    if (Object.keys(result.change).length) patch(row.row_id, result.change);
+  };
 
   const model = buildChartModel(chartPoints(rows), chartMaxSpeed(draft), missionChartPoints(draft), narrow ? { width: 380, height: 300 } : undefined);
   const legacyTip = retained ? `${tr('migration.retainedRange')}: ${tr('field.torque')} ${readableRange(retained.torque_Nm)} N·m · ${tr('field.speed')} ${readableRange(retained.speed_rpm)} rpm` : '';
@@ -43,11 +52,11 @@ export default function OperatingStep({ env, step }: { env: StepEnv; step: Wizar
   return <Stack spacing={2} sx={{ minWidth: 0 }}>
     {kp && <Box id={`spec-field-${kp.id}`}>
       {fields.labelRow(kp, false, required, unknown, tr('wizard.op.pointsTitle'), legacyTip ? [legacyTip] : [])}
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: 2, alignItems: 'start' }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 400px), 1fr))', gap: 2, alignItems: 'start' }}>
         {rows.map((row) => {
           const bad = (prop: KeyPointProp) => stored && !unknown && keyPointErrors(row).includes(prop);
           const role = roles.get(row.row_id);
-          const power = shaftPowerOf(row.torque_Nm, row.speed_rpm);
+          const power = displayPower(row, pending[row.row_id] ?? null);
           const aria = row.name || tr('keyPoints.name');
           return <StepCard key={row.row_id} id={`spec-point-${row.row_id}`}>
             <Stack direction="row" alignItems="center" spacing={1}>
@@ -59,13 +68,12 @@ export default function OperatingStep({ env, step }: { env: StepEnv; step: Wizar
               {role && tr(`wizard.op.role.${role}`) !== row.name && <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>{tr(`wizard.op.role.${role}`)}</Typography>}
               {canEditSpec && <Tooltip title={tr('keyPoints.remove')}><span><IconButton aria-label={`${tr('keyPoints.remove')}: ${aria}`} disabled={locked} onClick={() => setRows(rows.filter((r) => r.row_id !== row.row_id))} sx={{ width: TOUCH, height: TOUCH }}><DeleteOutlineIcon sx={{ fontSize: 20 }} /></IconButton></span></Tooltip>}
             </Stack>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.5 }}>
-              <BigNumber label={generator ? tr('wizard.op.torqueGenerator') : tr('keyPoints.torque')} unit="N·m" ariaLabel={`${aria}: ${tr('keyPoints.torque')} (N·m)`} value={row.torque_Nm} error={bad('torque_Nm')} disabled={locked} onChange={(n) => patch(row.row_id, { torque_Nm: n })} />
-              <BigNumber label={tr('keyPoints.speed')} unit="rpm" min={0} ariaLabel={`${aria}: ${tr('keyPoints.speed')} (rpm)`} value={row.speed_rpm} error={bad('speed_rpm')} disabled={locked} onChange={(n) => patch(row.row_id, { speed_rpm: n })} />
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1.5 }}>
+              <LinkedNumber label={`${generator ? tr('wizard.op.torqueGenerator') : tr('keyPoints.torque')}, N·m`} ariaLabel={`${aria}: ${tr('keyPoints.torque')} (N·m)`} tip={tr('wizard.op.linkTip')} value={row.torque_Nm} error={bad('torque_Nm')} disabled={locked} onCommit={(n) => edit(row, { kind: 'torque', value: n })} />
+              <LinkedNumber label={`${tr('keyPoints.speed')}, rpm`} ariaLabel={`${aria}: ${tr('keyPoints.speed')} (rpm)`} tip={tr('wizard.op.linkTip')} value={row.speed_rpm} error={bad('speed_rpm')} disabled={locked} onCommit={(n) => edit(row, { kind: 'speed', value: n })} />
+              <PowerNumber label={generator ? tr('wizard.op.powerGenerator') : tr('wizard.op.power')} ariaLabel={`${aria}: ${tr('wizard.op.power')}`} tip={tr('wizard.op.linkTip')} watts={power} pref={unitPref[row.row_id]} onPref={(unit) => setUnitPref((p) => ({ ...p, [row.row_id]: unit }))} disabled={locked} onCommit={(n) => edit(row, { kind: 'power', value: n })} />
             </Box>
-            <Typography aria-live="polite" sx={{ fontSize: 13.5, color: 'var(--text-2)', minHeight: 20, fontVariantNumeric: 'tabular-nums' }}>{power === null ? '' : tr(generator ? 'wizard.op.derivedGenerator' : 'wizard.op.derived', { power: formatPower(power) })}</Typography>
             <DurationChips duration={row.duration_s} onChange={(next) => patch(row.row_id, { duration_s: next })} disabled={locked} error={bad('duration_s')} label={tr('keyPoints.duration')} t={tr} ariaPrefix={aria} />
-            <BigNumber size="normal" label={tr('wizard.op.voltage')} unit="V" min={0} ariaLabel={`${aria}: ${tr('wizard.op.voltage')}`} value={row.voltage_V} disabled={locked} onChange={(n) => patch(row.row_id, { voltage_V: n })} />
           </StepCard>;
         })}
         {maxField && placement === 'card' && renderMaxSpeed()}

@@ -43,6 +43,64 @@ export function shaftPowerOf(torque: unknown, rpm: unknown): number | null {
   const power = Math.abs(torque * 2 * Math.PI * rpm / 60);
   return Number.isFinite(power) ? power : null;          // two finite inputs can still overflow: no power, never "Infinity MW"
 }
+/** A speed the torque-power relation can use: finite and above zero (zero, negative and non-finite speeds never recalculate). */
+export function usableSpeed(rpm: unknown): rpm is number { return isNum(rpm) && rpm > 0 && Number.isFinite(2 * Math.PI * rpm / 60); }
+/** The torque (N·m) that gives `watts` of shaft power at `rpm`, P = T·ω with ω = 2π·rpm/60; `sign` keeps the sign of the stored
+ *  torque (a generator point may be stored negative).  Null when the speed is unusable, the power is negative or not finite, or
+ *  the result overflows - nothing is ever written as NaN or Infinity. */
+export function torqueFromPower(watts: unknown, rpm: unknown, sign: number | null = 1): number | null {
+  if (!isNum(watts) || watts < 0 || !usableSpeed(rpm)) return null;
+  const torque = watts / (2 * Math.PI * rpm / 60);
+  if (!Number.isFinite(torque)) return null;
+  return torque === 0 ? 0 : (sign !== null && sign < 0 ? -torque : torque);
+}
+/** A number to `digits` significant digits without trailing zeros, for display only (the stored value keeps full precision). */
+export function formatSig(n: number | null | undefined, digits = 6): string {
+  if (!isNum(n)) return '';
+  if (n === 0) return '0';
+  const whole = Math.floor(Math.log10(Math.abs(n))) + 1;       // never drop integer digits: 1234567 stays 1234567
+  return String(Number(n.toPrecision(Math.min(21, Math.max(digits, whole)))));
+}
+/** Typed text -> a number, 'empty' (cleared) or 'partial' (a half-typed "-", "." or "1e": nothing is written yet).  A comma
+ *  counts as the decimal point. */
+export function parseDecimal(text: string): number | 'empty' | 'partial' {
+  const s = text.trim().replace(',', '.');
+  if (s === '') return 'empty';
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return 'partial';
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 'partial';
+}
+export type PowerUnit = 'W' | 'kW';
+/** kW from 1000 W up, else W (the box keeps the unit the user picked). */
+export const autoPowerUnit = (watts: number | null): PowerUnit => watts !== null && Math.abs(watts) >= 1000 ? 'kW' : 'W';
+
+export type PointEdit = { kind: 'torque' | 'speed' | 'power'; value: number | null };
+/** What one edit of the torque / speed / power boxes writes.  P = T·ω links them; the stored point holds torque and speed (the
+ *  schema's key point has no power property) and the power is always derived from them, so the three never disagree:
+ *   - torque edited: stored; the power follows.  - speed edited: stored; the power follows, the torque is kept - except a
+ *     point whose torque is still empty and whose power was typed first, which now gets its torque from that power.
+ *   - power edited: the torque follows (sign kept) at a usable speed; without one the power waits in `pending` and nothing else
+ *     changes.  A negative or non-finite power is not applied.
+ *  `pending` is the power typed before the speed was known (UI state, never stored). */
+export function applyPointEdit(row: { torque_Nm: number | null; speed_rpm: number | null }, edit: PointEdit, pending: number | null): { change: { torque_Nm?: number | null; speed_rpm?: number | null }; pending: number | null } {
+  if (edit.kind === 'torque') return { change: { torque_Nm: edit.value }, pending: null };
+  if (edit.kind === 'speed') {
+    const change: { speed_rpm: number | null; torque_Nm?: number | null } = { speed_rpm: edit.value };
+    if (row.torque_Nm === null && pending !== null && usableSpeed(edit.value)) {
+      const torque = torqueFromPower(pending, edit.value);
+      if (torque !== null) { change.torque_Nm = torque; return { change, pending: null }; }
+    }
+    return { change, pending: row.torque_Nm === null ? pending : null };
+  }
+  if (edit.value === null) return { change: usableSpeed(row.speed_rpm) && row.torque_Nm !== null ? { torque_Nm: null } : {}, pending: null };
+  if (!isNum(edit.value) || edit.value < 0) return { change: {}, pending };
+  const torque = torqueFromPower(edit.value, row.speed_rpm, row.torque_Nm !== null && row.torque_Nm < 0 ? -1 : 1);
+  return torque === null ? { change: {}, pending: edit.value } : { change: { torque_Nm: torque }, pending: null };
+}
+/** The power the box shows: derived from torque and speed, else the power typed before the speed was known. */
+export function displayPower(row: { torque_Nm: number | null; speed_rpm: number | null }, pending: number | null): number | null {
+  return shaftPowerOf(row.torque_Nm, row.speed_rpm) ?? pending;
+}
 /** A number to three significant digits without trailing zeros: 89.1, 1250, 0.512. */
 export function formatNumber(n: number): string {
   if (!Number.isFinite(n)) return '';

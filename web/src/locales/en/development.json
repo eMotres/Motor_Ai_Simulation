@@ -165,15 +165,31 @@
       "torqueAxis": "Torque, N·m",
       "torqueAxisGenerator": "Shaft torque, N·m"
     },
+    "supply": {
+      "battery": "Battery",
+      "dc_source": "DC power source",
+      "reviewDc": "DC source {value} V",
+      "legacyPoint": "Earlier per-point voltage: {value}"
+    },
+    "controllerLimits": {
+      "from": "From the controller: {parts}",
+      "continuous": "max {value} A rms continuous",
+      "peak": "{value} A peak",
+      "peakFor": "{value} A peak for {seconds} s",
+      "phases": "{count} phases",
+      "join": ", ",
+      "none": "Phase currents and phase count are set by us in the simulation.",
+      "tip": "{controller}, from the catalogue: {source}."
+    },
     "op": {
       "pointsTitle": "Operating points",
       "continuous": "Continuous",
       "other": "Other",
       "seconds": "Duration",
       "torqueGenerator": "Shaft torque (input)",
-      "voltage": "DC voltage (optional)",
-      "derived": "= {power} at the shaft",
-      "derivedGenerator": "Shaft input |T·ω| = {power}",
+      "power": "Power (shaft)",
+      "powerGenerator": "Shaft power (input)",
+      "linkTip": "P = T·ω. Edit torque or power and the other follows; a new speed keeps the torque.",
       "role": {
         "continuous": "Continuous (S1)",
         "peak": "Peak (S2)"

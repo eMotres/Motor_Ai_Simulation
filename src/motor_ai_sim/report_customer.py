@@ -132,7 +132,11 @@ def requirements_from_draft(draft: Optional[Mapping[str, Any]], source: str = "p
         out["peak"] = {"torque_Nm": _num(peak.get("torque_Nm")), "speed_rpm": _num(peak.get("speed_rpm")),
                        "duration_s": _num(dur)}
     b = val("2_1")
-    if b:
+    if b and b.get("supply_type") == "dc_source":       # a DC power source: its one voltage is the supply window
+        dc = _num(b.get("dc_source_V"))
+        if dc is not None:
+            out["battery"] = {"v_min": dc, "v_nom": dc, "v_max": dc, "cells": None, "chemistry": None}
+    elif b:
         out["battery"] = {"v_min": _num(b.get("voltage_min_V")), "v_nom": _num(b.get("voltage_nominal_V")),
                           "v_max": _num(b.get("voltage_max_V")), "cells": _num(b.get("series_cells")),
                           "chemistry": b.get("chemistry")}

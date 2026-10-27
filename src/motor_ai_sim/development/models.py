@@ -280,6 +280,8 @@ def _normalize_answer(answer: Any, field: dict, field_id: str) -> dict:
                 raise ValueError(f"{field_id}.{key}: value outside allowed range")
             if prop["type"] == "string" and (not isinstance(item, str) or not item.strip()):
                 raise ValueError(f"{field_id}.{key}: non-empty text required")
+            if field_id == "2_1" and key == "supply_type" and item not in ("battery", "dc_source"):
+                raise ValueError("2_1.supply_type: battery or dc_source")
             if prop["type"] == "boolean" and not isinstance(item, bool):
                 raise ValueError(f"{field_id}.{key}: boolean required")
             if prop["type"] == "array":
@@ -712,10 +714,19 @@ def _property_required(prop: dict, value: Any) -> bool:
     """A structured answer's property is required outright, or - the cooling temperatures - when the answer's own
     cooling medium is the one named by `required_when_cooling_medium` (liquid: the coolant inlet temperature,
     underwater: the water temperature).  The same rule as the web's `propertyRequired` (wizardState.ts)."""
-    if prop.get("required"):
+    if _choice_holds(prop.get("required_if_value"), value):
         return True
+    if prop.get("required"):
+        return not _choice_holds(prop.get("required_unless_value"), value)
     medium = prop.get("required_when_cooling_medium")
     return bool(medium) and cooling_medium(value)[0] == medium
+
+
+def _choice_holds(rule: Any, value: Any) -> bool:
+    """Requirements that follow another property of the same answer (the power supply, 2_1): `required_if_value` makes a
+    property required while the named property holds the given choice, `required_unless_value` drops a required property
+    while it does.  The same rule as the web's `propertyRequired` (wizardState.ts)."""
+    return isinstance(rule, dict) and isinstance(value, dict) and value.get(rule.get("property")) == rule.get("equals")
 
 
 def _field_required(field: dict, draft: dict) -> bool:

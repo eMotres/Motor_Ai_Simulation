@@ -41,13 +41,15 @@ test('F01: the generator adds one new optional field 2_13; no existing field is 
   assert.equal(W.wizardCompleteness(g, draft()).total_required, W.wizardCompleteness(m, draft()).total_required);   // never required
   assert.equal(buildWizardSteps(v1).flatMap((s) => s.fields).some((f) => f.id === '2_13'), false);                  // v1 untouched
   // DC wording in every profile; the generator derived value is the shaft input magnitude, not an electrical output
-  assert.match(en.wizard.op.voltage, /DC/); assert.equal(en.wizard.op.voltageGenerator, undefined); assert.equal(en.wizard.gen, undefined); assert.equal(zh.wizard.gen, undefined);
-  assert.match(en.wizard.op.derivedGenerator, /\|T·ω\|/); assert.match(en.wizard.op.derivedGenerator, /[Ss]haft/);
-  for (const k of ['wizard.steps.supply.titleGenerator', 'wizard.steps.supply.summaryGenerator', 'wizard.op.derivedGenerator', 'wizard.op.torqueGenerator', 'wizard.conflict.line']) assert.ok(get(en, k) && get(zh, k), k);
+  // the per-point DC voltage is gone (one power supply block); the generator's power box is the shaft INPUT power
+  assert.equal(en.wizard.op.voltage, undefined); assert.equal(en.wizard.op.voltageGenerator, undefined); assert.equal(en.wizard.gen, undefined); assert.equal(zh.wizard.gen, undefined);
+  assert.match(en.wizard.op.powerGenerator, /[Ss]haft/); assert.match(en.wizard.op.powerGenerator, /input/);
+  for (const k of ['wizard.steps.supply.titleGenerator', 'wizard.steps.supply.summaryGenerator', 'wizard.op.powerGenerator', 'wizard.op.torqueGenerator', 'wizard.conflict.line']) assert.ok(get(en, k) && get(zh, k), k);
   for (const profile of ['generator', 'aviation']) {
     const d = draft({ '2_1': filled({ voltage_min_V: 400, voltage_nominal_V: 480, voltage_max_V: 520 }), '2_13': filled({ ac_min_V: 300, ac_max_V: 480, basis: 'line_line_rms', at_rpm_min: 600 }) });
     const items = reviewItems(step('supply', buildWizardSteps(schema, profile)), d, { lang: 'en', t: tr, profile });
-    assert.equal(items.find((i) => i.id === '2_1').label, 'Battery and voltage');
+    assert.equal(items.find((i) => i.id === '2_1').label, 'Power supply');
+    assert.equal(items.find((i) => i.id === '2_1').value, 'Battery 400 / 480 / 520 V');
     assert.equal(items.some((i) => i.id === '2_13'), profile === 'generator');
   }
   const gen = reviewItems(step('supply', g), draft({ '2_13': filled({ ac_min_V: 300, ac_max_V: 480, basis: 'line_line_rms', at_rpm_min: 600 }) }), { lang: 'en', t: tr, profile: 'generator' });

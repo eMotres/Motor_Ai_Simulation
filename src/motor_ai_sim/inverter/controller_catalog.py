@@ -281,6 +281,8 @@ def _battery_max_V(draft: Dict[str, Any]) -> Optional[float]:
     value = answer.get("value") if isinstance(answer, dict) else None
     if not isinstance(value, dict):
         return None
+    if value.get("supply_type") == "dc_source":        # a DC power source states one voltage
+        return _num(value.get("dc_source_V"))
     top = _num(value.get("voltage_max_V"))
     if top is not None:
         return top

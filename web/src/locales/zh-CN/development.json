@@ -165,15 +165,31 @@
       "torqueAxis": "转矩，N·m",
       "torqueAxisGenerator": "轴转矩，N·m"
     },
+    "supply": {
+      "battery": "电池",
+      "dc_source": "直流电源",
+      "reviewDc": "直流电源 {value} V",
+      "legacyPoint": "此前按工作点填写的电压：{value}"
+    },
+    "controllerLimits": {
+      "from": "来自控制器：{parts}",
+      "continuous": "最大持续 {value} A rms",
+      "peak": "峰值 {value} A",
+      "peakFor": "峰值 {value} A，持续 {seconds} s",
+      "phases": "{count} 相",
+      "join": "，",
+      "none": "相电流和相数由我们在仿真中确定。",
+      "tip": "{controller}，目录来源：{source}。"
+    },
     "op": {
       "pointsTitle": "工作点",
       "continuous": "连续",
       "other": "其他",
       "seconds": "持续时间",
       "torqueGenerator": "轴转矩（输入）",
-      "voltage": "直流电压（可选）",
-      "derived": "= 轴端 {power}",
-      "derivedGenerator": "轴输入功率 |T·ω| = {power}",
+      "power": "功率（轴端）",
+      "powerGenerator": "轴功率（输入）",
+      "linkTip": "P = T·ω。修改转矩或功率，另一项随之计算；修改转速时保持转矩不变。",
       "role": {
         "continuous": "连续 (S1)",
         "peak": "峰值 (S2)"

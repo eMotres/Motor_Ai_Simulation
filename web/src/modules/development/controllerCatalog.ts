@@ -153,10 +153,34 @@ export function prefillProvenance(draft: SpecDraft, catalog: CatalogController[]
   return out;
 }
 
-/** The battery's maximum voltage: the stated pack maximum, else cells x the cell maximum. */
+/** What the linked controller states about the phase output (owner 2026-10-27: not asked from the customer): the continuous
+ *  and peak phase current, the peak duration and the phase count, each only when the catalogue knows it; null when it knows none. */
+export interface ControllerLimits { continuous: number | null; peak: number | null; peakDuration: number | null; phases: number | null; controller: string; source: string }
+export function controllerLimits(entry: CatalogController | undefined): ControllerLimits | null {
+  if (!entry) return null;
+  const n = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : (typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  const pre = (path: string) => n(entry.prefill?.[path]?.value);
+  const phases = n(record(record(entry.phases).phase_count).value);
+  const out = { continuous: pre('2_6.continuous_Arms'), peak: pre('2_6.peak_Arms'), peakDuration: pre('2_6.peak_duration_s'), phases };
+  if (Object.values(out).every((v) => v === null)) return null;
+  const doc = record(entry.source).document;
+  return { ...out, controller: entry.display_name, source: typeof doc === 'string' ? doc : '' };
+}
+/** The one read-only line of the supply step: "From the controller: max 365 A rms continuous, 390 A peak, 3 phases". */
+export function controllerLimitsLine(limits: ControllerLimits, t: (key: string, args?: Record<string, unknown>) => string): string {
+  const parts = [
+    limits.continuous !== null ? t('wizard.controllerLimits.continuous', { value: limits.continuous }) : '',
+    limits.peak !== null ? t(limits.peakDuration !== null ? 'wizard.controllerLimits.peakFor' : 'wizard.controllerLimits.peak', { value: limits.peak, seconds: limits.peakDuration }) : '',
+    limits.phases !== null ? t('wizard.controllerLimits.phases', { count: limits.phases }) : '',
+  ].filter(Boolean);
+  return t('wizard.controllerLimits.from', { parts: parts.join(t('wizard.controllerLimits.join')) });
+}
+
+/** The battery's maximum voltage: the stated pack maximum, else cells x the cell maximum; a DC power source states its voltage. */
 export function batteryMaxV(draft: SpecDraft): number | null {
   const value = record(record((draft.fields as Record<string, unknown> | undefined)?.['2_1']).value);
   const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null);
+  if (value.supply_type === 'dc_source') return num(value.dc_source_V);
   const top = num(value.voltage_max_V);
   if (top !== null) return top;
   const cells = num(value.series_cells), cell = num(value.cell_voltage_max_V);

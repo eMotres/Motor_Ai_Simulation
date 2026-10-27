@@ -9,6 +9,7 @@ import { fieldApplies, type FieldAnswer, type SpecDraft } from '../../wizardStat
 import { deliveryConflicts } from '../../reviewPresentation.ts';
 import { formatNumber, operatingRows, pointRoles, shaftPowerOf, formatPower } from './operatingPoints.ts';
 import { answerPresent, type WizardStep } from './steps.ts';
+import { supplySummary } from './supply.ts';
 import type { WizardProfile } from './profile.ts';
 
 export type Translate = (key: string, args?: Record<string, unknown>) => string;
@@ -106,6 +107,10 @@ export function reviewItems(step: WizardStep, draft: SpecDraft, o: { lang: strin
       continue;
     }
     if (!answerPresent(answer)) continue;
+    if (field.id === '2_1') {            // ONE line: "Battery 192S NMC, 633 / 710 / 806 V" or "DC source 48 V"
+      const text = supplySummary(answer.value, t);
+      if (text) { out.push({ id: field.id, label, value: text, wide: true }); continue; }
+    }
     if (field.id === '3_1') {
       const text = formatValue(activeCoolingShape(field, answer.value, draft), answer.value, lang, t);
       if (text) out.push({ id: field.id, label, value: text, wide: text.length > 26 });

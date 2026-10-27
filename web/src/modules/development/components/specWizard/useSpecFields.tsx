@@ -3,7 +3,7 @@ import { Alert, Box, Button, IconButton, InputAdornment, Menu, MenuItem, Paper, 
 import AddIcon from '@mui/icons-material/Add';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import ScheduleIcon from '@mui/icons-material/Schedule';
-import { BatteryInputs, type Battery } from '../../../../components/compare/BatteryPanel';
+import { BatteryInputs, PackBar, type Battery } from '../../../../components/compare/BatteryPanel';
 import { SPEC_PACK_PROP, specBatteryChemistry, specBatteryFieldEdit, specBatteryPackEdit, specBatteryView } from '../../specBattery';
 import type { SchemaField, SchemaSuggestion } from '../../types';
 import { hiddenCompanions, localized as localeValue } from './reviewSummary';
@@ -12,7 +12,7 @@ import { readLoadDraft, writeLoadDraft } from '../../loadDraftAdapter';
 import type { LoadType } from '../../missionProfileState';
 import type { SpecificationField } from '../../specificationLayout';
 import { optionsMinWidth, specFieldLabelSx, specGridSx, specGroupHeaderSx, visibleProperties } from '../../specGrid';
-import { OWN_DESIGN, applyControllerChoice, batteryVsController, catalogBrands, linkedController, powerDevicesUnknown, prefillProvenance, statedPowerDevices, type CatalogController } from '../../controllerCatalog';
+import { OWN_DESIGN, applyControllerChoice, batteryVsController, catalogBrands, controllerLimits, controllerLimitsLine, linkedController, powerDevicesUnknown, prefillProvenance, statedPowerDevices, type CatalogController } from '../../controllerCatalog';
 import { storedOverspeedRpm } from '../../speedLimits';
 import { matchesFieldReference, productionFallback } from '../../reviewPresentation';
 import { answerWithUnknown, fieldAnswer, fieldAnswerComplete, type FieldAnswer, fieldApplies, invertedPairs, fieldRequired, propertyRequired, setFieldAnswer, rangeWorst, withS1DerivedPower, type SpecDraft } from '../../wizardState';
@@ -23,6 +23,7 @@ import MissionProfileEditor from '../MissionProfileEditor';
 import { MissionProfile, SuggestField } from './SpecInputs';
 import { hiddenAirflowModes, wizardNaturalAirflow, type WizardProfile } from './profile';
 import { answerPresent } from './steps';
+import { legacyPointVoltages, legacyVoltageText, supplyEmpty, supplyType, withDcSourceV, withSupplyType, type SupplyType } from './supply';
 import { missionLocks, readableRange } from './operatingPoints';
 import type { ProjectThreadMessage, SpecState } from '../../types';
 import type { WizardStep } from './steps';
@@ -157,7 +158,16 @@ export function useSpecFields(c: SpecFieldsContext) {
   };
   /** The battery maximum above the linked controller's supply maximum: a loud error, next to the battery and the controller. */
   const batteryError = () => { const hit = batteryVsController(draftRef.current, catalog); return hit ? <Typography role="alert" data-testid="battery-controller-error" sx={{ color: 'error.main', fontSize: 11, fontWeight: 600 }}>{tr('controller.batteryTooHigh', { max: hit.max, limit: hit.limit, controller: hit.controller })}</Typography> : null; };
+  /** The phase currents and the phase count are not asked (owner 2026-10-27): one read-only line, from the linked controller or
+   *  the note that the simulation sets them. */
+  const controllerLimitsNote = () => {
+    const limits = controllerLimits(linkedController(draftRef.current, catalog));
+    return limits
+      ? <Tooltip title={tr('wizard.controllerLimits.tip', { controller: limits.controller, source: limits.source || '-' })}><Typography tabIndex={0} data-testid="controller-limits" sx={{ fontSize: 13, color: 'var(--text-2)', alignSelf: 'flex-start' }}>{controllerLimitsLine(limits, tr)}</Typography></Tooltip>
+      : <Typography data-testid="controller-limits" sx={{ fontSize: 13, color: 'var(--text-3)' }}>{tr('wizard.controllerLimits.none')}</Typography>;
+  };
   const controllerNotes = () => <>
+    {controllerLimitsNote()}
     {powerDevicesUnknown(draftRef.current, catalog) && <Tooltip title={tr('controller.devicesUnknownTip')}><Alert severity="warning" data-testid="controller-devices-warning" sx={{ py: 0, '& .MuiAlert-message': { py: 0.4 } }}>{tr('controller.devicesUnknown')}</Alert></Tooltip>}
     {batteryError()}
   </>;
@@ -217,19 +227,42 @@ export function useSpecFields(c: SpecFieldsContext) {
       </Stack>
     </Box>;
   };
-  /** 2_1 through the app's one battery block; the stated pack voltages stay editable beside it. */
+  /** 2_1, the project's ONE power supply block: a choice of Battery (the app's one battery block, the same as Configure's, with
+   *  its pack bar; the stated pack voltages stay editable beside it) or a DC power source (one voltage).  The choice and the
+   *  source voltage are the only new stored values; nothing stored for the other choice is touched. */
   const renderBattery = (f: SpecificationField) => {
     const allowed = new Set((f.properties ?? []).map((p) => p.id));
     if (!allowed.has('cell_voltage_nominal_V')) return renderField(f);
     const answer = storedAnswer(f, false), unknown = answer.status === 'not_known_yet', obj = objectOf(answer.value), required = fieldRequired(f, draftRef.current);
     const view = specBatteryView(obj);
+    const choice = allowed.has('supply_type') && allowed.has('dc_source_V');
+    const type = supplyType(obj);
+    const locked = !canEditSpec || busy || migrationBusy || unknown;
+    const dcProp = f.properties!.find((p) => p.id === 'dc_source_V');
     const pack = ['voltage_min_V', 'voltage_nominal_V', 'voltage_max_V'].map((id) => f.properties!.find((p) => p.id === id)!).filter(Boolean);
-    const handled = new Set(['chemistry', 'series_cells', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V', ...pack.map((p) => p.id)]);
+    const handled = new Set(['chemistry', 'series_cells', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V', 'supply_type', 'dc_source_V', ...pack.map((p) => p.id)]);
+    // an earlier per-point voltage is shown once, in the tooltip, while the block is still empty
+    const legacy = supplyEmpty(obj) ? legacyVoltageText(legacyPointVoltages(draftRef.current)) : '';
+    const tips = [...(type === 'battery' ? [tr('wizard.packStated')] : []), ...(legacy ? [tr('wizard.supply.legacyPoint', { value: legacy })] : [])];
+    const head = labelRow(f, false, required, unknown, undefined, tips);
+    const stated = view.pack, barOk = [stated.min, stated.nom, stated.max].every((v) => typeof v === 'number' && Number.isFinite(v) && v > 0) && (stated.min as number) <= (stated.max as number);
     return <Box id={`spec-field-${f.id}`} sx={{ minWidth: 0, p: '10px 12px', border: '1px solid var(--line-soft)', borderRadius: '8px', bgcolor: 'var(--panel-2)' }}>
-      <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={!canEditSpec || busy || migrationBusy || unknown} title={labelRow(f, false, required, unknown, undefined, [tr('wizard.packStated')])} onChemistry={(type) => setAnswer(f, specBatteryChemistry(obj, type, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
-      <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
-        {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => { const volt = (Object.keys(SPEC_PACK_PROP) as Array<'min' | 'nom' | 'max'>).find((k) => SPEC_PACK_PROP[k] === p.id); return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p)}{renderTypedValue(p, obj[p.id], (value) => volt ? setAnswer(f, specBatteryPackEdit(obj, volt, value, allowed)) : setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}
-      </Box>
+      {choice && <>
+        {head}
+        <ToggleButtonGroup exclusive size="small" value={type} disabled={locked} aria-label={label(f.short_label ?? f.label)} onChange={(_, v: SupplyType | null) => { if (v) setAnswer(f, withSupplyType(obj, v)); }} sx={{ mb: 1.25 }}>
+          {(['battery', 'dc_source'] as SupplyType[]).map((v) => <ToggleButton key={v} value={v} sx={{ px: 1.75, py: 0.6, minHeight: 36, fontSize: 13, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText', '&:hover': { bgcolor: 'primary.dark' } } }}>{tr(`wizard.supply.${v}`)}</ToggleButton>)}
+        </ToggleButtonGroup>
+      </>}
+      {choice && type === 'dc_source' && dcProp ? <Box sx={{ maxWidth: 260, minWidth: 0 }}>
+        {propLabel(dcProp, false)}
+        {renderTypedValue(dcProp, obj.dc_source_V, (value) => setAnswer(f, withDcSourceV(obj, value)), `${f.id}-dc_source_V`, unknown)}
+      </Box> : <>
+        <BatteryInputs bat={view.bat as Battery} selectedType={view.selected} chemistryNote={view.chemistryNote} statedPack={view.pack} allowEmpty disabled={locked} title={choice ? <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tr('wizard.supply.battery')}</Typography> : head} onChemistry={(t) => setAnswer(f, specBatteryChemistry(obj, t, allowed))} onFieldEdit={(field, raw) => setAnswer(f, specBatteryFieldEdit(obj, field, raw, allowed))} />
+        <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } }}>
+          {[...pack, ...(f.properties ?? []).filter((p) => !handled.has(p.id))].map((p) => { const volt = (Object.keys(SPEC_PACK_PROP) as Array<'min' | 'nom' | 'max'>).find((k) => SPEC_PACK_PROP[k] === p.id); return <Box key={p.id} sx={{ minWidth: 0 }}>{propLabel(p, false)}{renderTypedValue(p, obj[p.id], (value) => volt ? setAnswer(f, specBatteryPackEdit(obj, volt, value, allowed)) : setProperty(f, false, obj, p.id, value), `${f.id}-${p.id}`, unknown)}</Box>; })}
+        </Box>
+        {barOk && <Box sx={{ mt: 1.25, maxWidth: 520 }} data-testid="supply-pack-bar"><PackBar packMin={stated.min as number} packNom={(stated.nom ?? stated.min) as number} packMax={stated.max as number} /></Box>}
+      </>}
       {batteryError()}
       {fieldMessages(f, answer, required)}
       {answerLater(f, unknown, false)}

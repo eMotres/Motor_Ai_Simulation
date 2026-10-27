@@ -131,6 +131,7 @@
                 "unit": "V",
                 "min": 0,
                 "required": false,
+                "ui_hidden": true,
                 "label": {
                   "en": "DC voltage",
                   "zh-CN": "直流电压"
@@ -143,8 +144,8 @@
             "zh-CN": "关键工作点"
           },
           "help": {
-            "en": "Any number of named points (takeoff, cruise, landing, peak ...), each with torque, speed and duration: continuous or seconds. The DC voltage is optional. The longest-running point is the continuous (S1) point and the highest-torque point is the peak point.",
-            "zh-CN": "可添加任意数量的命名工作点（起飞、巡航、着陆、峰值等），每个点包含转矩、转速和持续时间（连续或秒数），直流电压可选。持续时间最长的点为连续（S1）工作点，转矩最高的点为峰值工作点。"
+            "en": "Any number of named points (takeoff, cruise, landing, peak ...), each with torque, speed and duration: continuous or seconds. Torque, speed and power are linked by P = T·ω. The supply voltage is set once, in the power supply block. The longest-running point is the continuous (S1) point and the highest-torque point is the peak point.",
+            "zh-CN": "可添加任意数量的命名工作点（起飞、巡航、着陆、峰值等），每个点包含转矩、转速和持续时间（连续或秒数）；转矩、转速与功率满足 P = T·ω。供电电压在供电块中统一设置。持续时间最长的点为连续（S1）工作点，转矩最高的点为峰值工作点。"
           },
           "presentation_group": "continuous"
         },
@@ -632,8 +633,8 @@
           "id": "2_1",
           "checklist_id": "2.1",
           "label": {
-            "en": "Battery: chemistry, cells in series, V min under load / nominal / max",
-            "zh-CN": "电池：化学体系、串联节数、负载最低／标称／最高电压"
+            "en": "Power supply: battery (chemistry, cells in series, V min under load / nominal / max) or DC source voltage",
+            "zh-CN": "供电：电池（化学体系、串联节数、负载最低／标称／最高电压）或直流电源电压"
           },
           "type": "object",
           "unit": "V",
@@ -681,6 +682,10 @@
               "type": "number",
               "unit": "V",
               "required": true,
+              "required_unless_value": {
+                "property": "supply_type",
+                "equals": "dc_source"
+              },
               "min": 0
             },
             {
@@ -738,11 +743,68 @@
                 "en": "Cell V max",
                 "zh-CN": "单体最高电压"
               }
+            },
+            {
+              "id": "supply_type",
+              "label": {
+                "en": "Supply type",
+                "zh-CN": "供电类型"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "options": [
+                {
+                  "value": "battery",
+                  "label": {
+                    "en": "Battery",
+                    "zh-CN": "电池"
+                  }
+                },
+                {
+                  "value": "dc_source",
+                  "label": {
+                    "en": "DC power source",
+                    "zh-CN": "直流电源"
+                  }
+                }
+              ],
+              "help": {
+                "en": "Battery (chemistry, cells, cell voltages) or a DC power source with one voltage. Nothing stored for the other choice is removed. Not stated = battery.",
+                "zh-CN": "电池（化学体系、串联节数、单体电压）或单一电压的直流电源。另一选项已存的数据不会被删除。未填写即按电池处理。"
+              }
+            },
+            {
+              "id": "dc_source_V",
+              "label": {
+                "en": "DC source voltage",
+                "zh-CN": "直流电源电压"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "required_if_value": {
+                "property": "supply_type",
+                "equals": "dc_source"
+              },
+              "min": 0.1,
+              "short_label": {
+                "en": "DC source voltage",
+                "zh-CN": "直流电源电压"
+              },
+              "help": {
+                "en": "The worst-case (lowest) voltage the DC source holds under load. One value.",
+                "zh-CN": "直流电源带载时的最不利（最低）电压，仅填一个值。"
+              }
             }
           ],
+          "help": {
+            "en": "Choose Battery (chemistry, cells in series, cell voltages; the pack voltages follow) or a DC power source (one voltage). One block for the whole project.",
+            "zh-CN": "选择电池（化学体系、串联节数、单体电压；电池组电压随之计算）或直流电源（单一电压）。整个项目共用一个供电块。"
+          },
           "short_label": {
-            "en": "Battery and voltage",
-            "zh-CN": "电池与电压"
+            "en": "Power supply",
+            "zh-CN": "供电"
           },
           "presentation_group": "2"
         },
@@ -970,7 +1032,7 @@
               "label": {"en": "Max continuous phase current", "zh-CN": "最大持续相电流"},
               "type": "number",
               "unit": "A rms",
-              "required": true,
+              "required": false,
               "min": 0
             },
             {
@@ -978,7 +1040,7 @@
               "label": {"en": "Max peak phase current", "zh-CN": "最大峰值相电流"},
               "type": "number",
               "unit": "A rms",
-              "required": true,
+              "required": false,
               "min": 0
             },
             {
@@ -986,10 +1048,14 @@
               "label": {"en": "Max peak duration", "zh-CN": "最长峰值持续时间"},
               "type": "number",
               "unit": "s",
-              "required": true,
+              "required": false,
               "min": 0
             }
           ],
+          "help": {
+            "en": "Not asked from the customer: a linked controller gives these values, otherwise they are set in the simulation. Kept for staff and for the catalogue pre-fill; never required.",
+            "zh-CN": "不向客户询问：已关联的控制器提供这些数值，否则由仿真确定。仅供工作人员查看，并保留目录预填值；非必填。"
+          },
           "short_label": {
             "en": "Phase current limits",
             "zh-CN": "相电流限制"

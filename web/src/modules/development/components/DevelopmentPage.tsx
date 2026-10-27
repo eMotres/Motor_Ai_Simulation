@@ -1,4 +1,7 @@
 import { matchesFieldReference } from '../reviewPresentation';
+import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadIdsOf, unreadLabel } from '../../../lib/unreadMessages';
+import { useUnreadCounts } from '../../../lib/useUnreadMessages';
+import { pageVisible } from '../../../lib/pageVisible';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -66,6 +69,11 @@ export default function DevelopmentPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [view, setView] = useState<ViewTab>('specification');
+  const unreadCounts = useUnreadCounts();
+  const projectUnread = (p: ProjectSummary) => unreadCounts ? (unreadCounts.projects[p.id] ?? 0) : (p.unread_messages ?? 0);
+  const [shownUnread, setShownUnread] = useState<ReadonlySet<string>>(new Set());   // messages that were unread when the thread was opened
+  const markedUpToRef = useRef('');
+  const [visibleTick, setVisibleTick] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -450,6 +458,19 @@ export default function DevelopmentPage() {
     }
   };
   useEffect(() => { if (selected?.id) { const token = projectToken.current; void loadSpecHistory(selected.id, token); } }, [selected?.id]);
+  useEffect(() => { const on = () => setVisibleTick((n) => n + 1); document.addEventListener('visibilitychange', on); return () => document.removeEventListener('visibilitychange', on); }, []);
+  // Unread messages (owner 2026-10-28): highlighted while the Messages tab is open, marked read on the server once they are shown
+  // (never while the page is hidden); leaving the tab drops the highlight, the next visit shows them as read.
+  useEffect(() => {
+    const id = selected?.id;
+    if (view !== 'messages' || !id) { setShownUnread((s) => (s.size ? new Set() : s)); markedUpToRef.current = ''; return; }
+    const flagged = unreadIdsOf(messages);
+    if (flagged.length) setShownUnread((s) => accumulateHighlight(s, flagged));
+    const last = messages[messages.length - 1]?.id;
+    if (!flagged.length || !last || markedUpToRef.current === `${id}:${last}` || !pageVisible()) return;
+    markedUpToRef.current = `${id}:${last}`;
+    void developmentApi.markThreadRead(id, last).then(() => refreshUnread()).catch(() => { markedUpToRef.current = ''; });
+  }, [view, selected?.id, messages, visibleTick]);
   const openTab = async (tab: ViewTab) => {
     setView(tab); if (!selected) return;
     const id = selected.id; const token = projectToken.current;
@@ -531,7 +552,7 @@ export default function DevelopmentPage() {
     <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}><Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tr('title')}</Typography><HelpTip title={tr('titleTip')} /><Box sx={{ flex: 1 }} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</Box>
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>{projects.map((p) => { const c = completenessNumbers(p.completeness); return <Paper key={p.id} onClick={() => void loadProject(p)} sx={{ p: 1.8, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}><Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}</Typography><Chip size="small" label={tr(`status.${p.status}`)} /></Box><Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography><Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 1 }}><Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{tr('completeness', { filled: c.filled, total: c.total })}</Typography><Box sx={{ flex: 1, height: 5, bgcolor: 'var(--panel)', borderRadius: 2 }}><Box sx={{ width: `${c.total ? Math.min(100, c.filled / c.total * 100) : 0}%`, height: '100%', bgcolor: 'primary.main', borderRadius: 2 }} /></Box></Box>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}><Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}</Typography>{projectUnread(p) > 0 && <Tooltip title={tr('unread.tip', { count: projectUnread(p) })}><Chip size="small" color="primary" label={unreadLabel(projectUnread(p))} aria-label={tr('unread.tip', { count: projectUnread(p) })} /></Tooltip>}<Chip size="small" label={tr(`status.${p.status}`)} /></Box><Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography><Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 1 }}><Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{tr('completeness', { filled: c.filled, total: c.total })}</Typography><Box sx={{ flex: 1, height: 5, bgcolor: 'var(--panel)', borderRadius: 2 }}><Box sx={{ width: `${c.total ? Math.min(100, c.filled / c.total * 100) : 0}%`, height: '100%', bgcolor: 'primary.main', borderRadius: 2 }} /></Box></Box>
     </Paper>; })}</Box>}
     <CreateDialog open={createOpen} busy={busy} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
@@ -541,7 +562,7 @@ export default function DevelopmentPage() {
     
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     <Tabs value={view} onChange={(_, v) => void openTab(v)} sx={{ borderBottom: '1px solid var(--line-soft)', mb: 1.5 }}>
-      <Tab value="specification" label={tr('tabs.specification')} /><Tab value="motors" label={tr('tabs.motors')} /><Tab value="messages" label={tr('tabs.messages')} />{canEditProject && <Tab value="notes" label={tr('tabs.notes')} />}
+      <Tab value="specification" label={tr('tabs.specification')} /><Tab value="motors" label={tr('tabs.motors')} /><Tab value="messages" label={projectUnread(selected) > 0 ? <Tooltip title={tr('unread.tip', { count: projectUnread(selected) })}><span>{tr('tabs.messages')} <Chip size="small" color="primary" label={unreadLabel(projectUnread(selected))} sx={{ height: 16, fontSize: 10, ml: 0.5 }} /></span></Tooltip> : tr('tabs.messages')} />{canEditProject && <Tab value="notes" label={tr('tabs.notes')} />}
     </Tabs>
     {(view === 'specification' || view === 'motors') && selected && <ProjectStatusBar data={activity} t={tr} />}
     {view === 'specification' && <Box sx={{ minWidth: 0 }}>
@@ -605,7 +626,7 @@ export default function DevelopmentPage() {
         {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={() => <span />} labelHeader="" rowAccent={(r) => motorColor(r.motor)} onRowClick={(r) => { if (!r.history) void openProjectMotor({ id: selected.id, title: selected.title }, r.motor, r.result.duty).catch((e) => setError(e instanceof Error ? e.message : String(e))); }} renderGroupHeader={(r, index, _all, colSpan) => { const flags = headerFlags(rowMotors, index); return flags.group || flags.history ? <>{flags.group && groupHeader(r, colSpan)}{flags.history && historyHeader(r, colSpan)}</> : null; }} showAllInputs inputHeaderColor="var(--text-2)" resultHeaderColor="var(--text-2)" enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" onClick={(e) => e.stopPropagation()} sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap', cursor: 'default' }}>{r.history ? null : <MotorOpenActions motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} projectId={selected.id} projectTitle={selected.title} showAll={showAllVersions} />}</Box>} />}
       </Box>; })()}
     </Box>}
-    {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Paper key={`${m.created_at}-${i}`} sx={{ p: 1, bgcolor: 'var(--panel-2)' }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
+    {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Box key={`${m.created_at}-${i}`}>{i === firstUnreadIndex(messages, shownUnread) && <Divider sx={{ mb: 0.8, fontSize: 10.5 }}><Chip size="small" color="primary" label={tr('unread.new')} sx={{ height: 16, fontSize: 10 }} /></Divider>}<Paper sx={{ p: 1, bgcolor: 'var(--panel-2)', ...(m.id && shownUnread.has(m.id) ? { borderLeft: '3px solid', borderLeftColor: 'primary.main' } : {}) }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper></Box>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
     {view === 'notes' && canEditProject && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
     <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
     <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />

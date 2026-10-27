@@ -188,6 +188,9 @@ export const productionApi = {
   },
 
   threads: async (die: string, config: string) => unwrapList<Thread>(await call('GET', `${base(die, config)}/threads`), 'threads'),
+  /** The caller has seen the thread up to message `upTo` (the server never moves the mark back). */
+  markThreadRead: (die: string, config: string, threadId: string, upTo: string) =>
+    call<{ last_read_id: string; unread: number }>('POST', `${base(die, config)}/threads/${enc(threadId)}/read`, { up_to: upTo }),
   createThread: (die: string, config: string, partId: string | null) =>
     call<Thread>('POST', `${base(die, config)}/threads`, { part_id: partId }),
   /** multipart (text JSON + files) when there are attachments, plain JSON otherwise */

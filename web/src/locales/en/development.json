@@ -262,6 +262,10 @@
       "legacy_power_semantics_preserved": "Legacy input/output power values were preserved without reinterpretation."
     }
   },
+  "unread": {
+    "tip": "{count} unread messages",
+    "new": "New"
+  },
   "tabs": {
     "specification": "Specification",
     "motors": "Motors & results",

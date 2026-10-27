@@ -56,6 +56,8 @@ import { useMotorStore, useUIStore } from './stores/motorStore';
 import { installDiag } from './lib/diag';
 import { newRequestCount } from './lib/visitorRequests';
 import { pageVisible } from './lib/pageVisible';
+import { unreadLabel } from './lib/unreadMessages';
+import { useUnreadCounts, useUnreadPolling } from './lib/useUnreadMessages';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import Static3DPanel from './components/static3d/Static3DPanel';
 import MechanicalPanel from './components/mechanical/MechanicalPanel';
@@ -320,6 +322,10 @@ function App() {
     setActiveTab('admin' as never);
   }, [authResolved, signedIn, isAdmin, setActiveTab]);
   const newRequests = useNewRequestCount(isAdmin);
+  // Unread project / production messages (owner 2026-10-28): polled once a minute while the page is visible; the Development and
+  // Production entries show the totals, the lists and pages read the same counts.
+  useUnreadPolling(authResolved && signedIn && (producer || developmentAllowed), user?.email);
+  const unreadMessages = useUnreadCounts();
   const designerAllowed = useDesignerAllowed(signedIn);
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
@@ -803,6 +809,13 @@ function App() {
                     sx={{ '& .MuiBadge-badge': { top: -2, right: -10, height: 15, minWidth: 15, fontSize: 9.5 } }}>
                     {t.label}
                   </Badge>
+                ) : (t.id === 'production' ? (unreadMessages?.totalProductions ?? 0) : t.id === 'development' ? (unreadMessages?.totalProjects ?? 0) : 0) > 0 ? (
+                  <Tooltip title={tr('unreadMessagesTip', { defaultValue: '{count} unread messages', count: t.id === 'production' ? unreadMessages!.totalProductions : unreadMessages!.totalProjects })}>
+                    <Badge badgeContent={unreadLabel(t.id === 'production' ? unreadMessages!.totalProductions : unreadMessages!.totalProjects)} color="error"
+                      sx={{ '& .MuiBadge-badge': { top: -2, right: -12, height: 15, minWidth: 15, fontSize: 9.5 } }}>
+                      {t.label}
+                    </Badge>
+                  </Tooltip>
                 ) : t.label}
                 /* Sentence case and tight padding: "ELECTROMAGNETIC" in caps
                    did not fit a full-width tab and was clipped to "ECTROMAGNE"

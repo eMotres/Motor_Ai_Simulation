@@ -6,6 +6,8 @@ export interface ProjectSummary {
   members: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;
   grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason: string }>;
   can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
+  /** project-thread messages the caller has not read (list and detail answers) */
+  unread_messages?: number;
   created_at?: string; updated_at?: string;
 }
 export type Localized = string | { en?: string; 'zh-CN'?: string };
@@ -20,7 +22,7 @@ export interface DevelopmentSchema { schema_version?: number; sections: SchemaSe
 export interface SpecVersion { version: number; author_display_name?: string; created_at?: string }
 export interface SpecState { draft: Record<string, unknown>; revision: number; schema_version?: number; schema?: DevelopmentSchema; completeness: Completeness; versions?: SpecVersion[]; version?: number }
 export interface SpecSnapshot { version: number; schema_version?: number; schema?: DevelopmentSchema; author_display_name?: string; created_at?: string; spec?: Record<string, unknown>; draft?: Record<string, unknown> }
-export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string }
+export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string; /** not read by the caller yet (server flag) */ unread?: boolean }
 export interface ResultProvenance {
   kind: 'estimate' | 'solve' | 'unknown'; source?: string; run_id?: string;
   revision?: string; input_fingerprint?: string; geometry_fingerprint?: string;

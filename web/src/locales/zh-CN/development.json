@@ -262,6 +262,10 @@
       "legacy_power_semantics_preserved": "旧输入/输出功率已原样保留，未重新解释。"
     }
   },
+  "unread": {
+    "tip": "{count} 条未读消息",
+    "new": "新消息"
+  },
   "tabs": {
     "specification": "规格",
     "motors": "电机与结果",

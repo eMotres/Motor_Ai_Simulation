@@ -232,6 +232,10 @@
     "showAll": "Show all",
     "clear": "Clear"
   },
+  "unread": {
+    "tip": "{count} unread messages",
+    "new": "New"
+  },
   "discussion": {
     "general": "General",
     "newThread": "New thread",

@@ -121,12 +121,16 @@ def mechanical_numbers(kinds: dict) -> dict:
     src = (em, _d(coupled.get("em")), _d(climit.get("em")))
     eta = _first(src, ("efficiency_pct",))
     if eta is None:
-        for rec in (coupled, climit):
-            e2 = num(rec.get("efficiency_shaft"))
+        for rec in (em, coupled, climit):
+            e2 = num(rec.get("efficiency")) if rec is em else num(rec.get("efficiency_shaft"))
             if e2 is not None:
                 eta = e2 * 100.0 if e2 <= 1.5 else e2
                 break
-    return {"T": _first(src, ("T_avg_Nm", "T_em_avg_Nm", "torque_nm")), "P": _first(src, ("P_mech_W",)), "eta": eta}
+    # a generator run states its electrical OUTPUT as a negative electrical input (``P_elec_in_W`` < 0)
+    p_in = _first(src, ("P_elec_in_W", "P_elec_in_solved_W"))
+    p_out = -p_in if p_in is not None and p_in < 0 else None
+    return {"T": _first(src, ("T_avg_Nm", "T_em_avg_Nm", "torque_nm")), "P": _first(src, ("P_mech_W",)), "eta": eta,
+            "P_out": p_out}
 
 
 _RATED_NAME = re.compile(r"""rated duty (['"])(.+?)\1(?:'s| own|\s)""")
@@ -269,7 +273,12 @@ def result_line(duty: str, kinds: dict) -> tuple:
         mech = {**mech, "T": got}
     first: list = []
     first_zh: list = []
-    if mech["T"] is not None:
+    if mech.get("P_out") is not None:
+        # a GENERATOR (owner 2026-10-28): the electrical power it delivers and the shaft torque it takes, never a negative
+        # torque or the shaft power read as an output
+        first.append(f"generator {fmt_power(mech['P_out'])} out" + (f", shaft torque {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
+        first_zh.append(f"发电 {fmt_power(mech['P_out'])}" + (f"，轴转矩 {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
+    elif mech["T"] is not None:
         first.append(f"{fmt_num(mech['T'])} N·m" + (f" at {fmt_power(mech['P'])}" if mech["P"] is not None else ""))
         first_zh.append(f"{fmt_num(mech['T'])} N·m" + (f"，{fmt_power(mech['P'])}" if mech["P"] is not None else ""))
     elif mech["P"] is not None:

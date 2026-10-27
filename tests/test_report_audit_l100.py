@@ -76,3 +76,28 @@ class TestClaim2OneSolvePerCoupledColumn:
         out = dr.compact_coupled({"coupling": {"magnet_temp_max_c": 95.1,
                                                "magnet_temp_max_pass": "s1_verify"}})
         assert out["magnet_temp_max_pass"] == "s1_verify"
+
+
+class TestClaim3PreliminaryTimeInTheRequirements:
+    def _col(self, pct):
+        ttl = {"within_limits": False, "limiting_part": "winding", "limits_c": {"winding": 200.0},
+               "starts": {"cold": {"time_to_limit_s": 47.1}},
+               "network": {"available": True, "worst_residual_W": 5000.0, "worst_residual_pct_of_losses": pct}}
+        return {"duty": "peak", "d": {"rpm": 1000}, "em": {"rpm": 1000, "T_em_avg_Nm": 1587.6, "coil_temp_C": 150},
+                "res": {"coupled": {"time_to_limit": ttl}}}
+
+    def _row(self, pct):
+        from motor_ai_sim import report_customer as rc
+        req = {"peak": {"torque_Nm": 1500.0, "speed_rpm": 1000.0, "duration_s": 60.0}}
+        rows = rc.requirements_rows(req, [self._col(pct)], winding_limit_c=180.0, winding_peak_limit_c=200.0)
+        return [r for r in rows if r[0].startswith("Peak held")][0]
+
+    def test_a_time_the_report_calls_preliminary_is_not_a_firm_verdict(self):
+        row = self._row(51.3)
+        assert row[3] == "not met (preliminary)"
+        assert "preliminary estimate" in row[2] and "51.3" in row[2]
+
+    def test_a_balanced_network_keeps_the_plain_verdict(self):
+        row = self._row(0.4)
+        assert row[3] == "not met"
+        assert "preliminary" not in row[2]

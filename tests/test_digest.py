@@ -788,3 +788,143 @@ def test_results_are_read_from_the_shared_layers_never_the_process_workspace(d, 
     assert set(C.stored_results("CIANO28 85", "L12")) == {"shared_duty"}  # ...and the digest does not read it
     with DR.using_store(shared):
         assert set(C.stored_results("CIANO28 85", "L12")) == {"shared_duty"}           # whoever runs it, same answer
+
+
+# -- link rules (owner 2026-10-28): a link only for something new, one per group of equal targets, never the same URL twice -----------------------------
+
+def _linked_items():
+    """The shape of a real project digest: two variants interleaved, notices in between (newest first)."""
+    from motor_ai_sim.digest import collect as C
+
+    def L(die, cfg):
+        return f"/projects/{PID}/motors?die={die}&config={cfg}"
+
+    def it(kind, en, link, **kw):
+        return C.Item(kind, 0.0, en, en + " [zh]", link, **kw)
+
+    def res(cfg, duty):
+        return it("results", f"{duty}: 12.3 N·m", L("D", cfg), motor=("D", cfg),
+                  group=(f"New results, D / {cfg}", f"新计算结果，D / {cfg}"))
+    return [res("L110", "cruise"), res("L110", "peak"),                                  # one heading, two sub-lines
+            res("L100", "cruise"),
+            it("report_reviewed", "Report checked for D / L100", L("D", "L100")),
+            it("motor_removed", "Design variant removed: D / L110", f"/projects/{PID}/motors"),
+            it("recommended", "Recommended variant: D / L100", L("D", "L100")),
+            it("motor_added", "Design variant added: D / L100", L("D", "L100")),
+            it("member_joined", "A new engineer joined the project: Dan <dan@example.com>", f"/projects/{PID}"),
+            it("spec_version", "Specification version 2 submitted", f"/projects/{PID}/specification")]
+
+
+def _group(path=f"/projects/{PID}"):
+    from motor_ai_sim.digest import build as B
+    return B.Group("project:" + PID, "project", {}, "Demo X1", "Demo X1", [], True, path)
+
+
+def _urls(text):
+    return re.findall(r"https?://\S+", text)
+
+
+def test_link_policy_per_kind_and_notices_have_no_target():
+    from motor_ai_sim.digest import collect as C
+    for kind in ("results", "motor_added", "spec_version", "report_reviewed", "revision", "document", "message"):
+        assert C.Item(kind, 0.0, "x", "x", "/projects/p").target == "/projects/p", kind
+    for kind in ("motor_removed", "member_joined", "motor_status", "notes", "project", "bom", "costs", "proposal_decision"):
+        assert C.Item(kind, 0.0, "x", "x", "/projects/p").target is None, kind
+    assert C.Item("parts", 0.0, "x", "x", "/p", link_policy="none").target is None            # one item may override its kind
+    assert C.Item("unlisted_kind", 0.0, "x", "x", "/p").target == "/p"                       # an unknown kind keeps its link
+    assert C.Item("results", 0.0, "x", "x", None).target is None
+
+
+def test_compose_one_link_per_group_notices_none_and_no_url_twice(d):
+    from motor_ai_sim.digest import build as B
+    text, html_body = B.compose(_group(), _linked_items(), 0, T0 - 3600, T0, False)
+    urls = _urls(text)
+    assert len(urls) == len(set(urls)), urls                                              # no repeated URL
+    lines = text.splitlines()
+    # the heading group: both sub-lines first, its link once at the end (not on the heading)
+    h = lines.index("- New results, D / L110:")
+    assert lines[h + 1:h + 3] == ["    - cruise: 12.3 N·m", "    - peak: 12.3 N·m"] and "motors?die=D&config=L110" in lines[h + 3]
+    # L100: results heading + report are ONE group (same target): one link, after the report line
+    r = lines.index("- Report checked for D / L100")
+    assert "config=L100" in lines[r + 1] and "config=L100" not in "".join(lines[:r])
+    assert lines[r - 1].startswith("    - cruise")
+    # notices: no link under them
+    for notice in ("- Design variant removed: D / L110", "- A new engineer joined the project: Dan <dan@example.com>"):
+        i = lines.index(notice)
+        assert not lines[i + 1].startswith("  http"), notice
+    # the later L100 group (recommended + added) repeats a URL already used: shown, without a second link
+    i = lines.index("- Design variant added: D / L100")
+    assert not lines[i + 1].startswith("  http")
+    assert any(u.endswith("/specification") for u in urls)
+    # HTML follows the same rules: every href once, none on a notice
+    hrefs = re.findall(r'href="([^"]+)"', html_body)
+    assert len(hrefs) == len(set(hrefs)) == len(urls)
+    removed = next(x for x in html_body.splitlines() if "Design variant removed" in x)
+    joined = next(x for x in html_body.splitlines() if "A new engineer joined" in x)
+    assert "href" not in removed and "href" not in joined and "&lt;dan@example.com&gt;" in joined
+
+
+def test_compose_zh_mirrors_en_and_each_language_section_has_its_own_links(d):
+    from motor_ai_sim.digest import build as B
+    text, html_body = B.compose(_group(), _linked_items(), 0, T0 - 3600, T0, True)
+    en, zh = text.split("-" * 40)
+    assert _urls(en) == _urls(zh) and len(_urls(en)) == len(set(_urls(en)))                 # same links, once per section
+    assert "[zh]" in zh and "[zh]" not in en
+    sections = html_body.split("<hr")
+    assert len(sections) == 2
+    for sec in sections:
+        hrefs = re.findall(r'href="([^"]+)"', sec)
+        assert len(hrefs) == len(set(hrefs)) == len(_urls(en))
+    assert "打开" in sections[1] and ">Open<" in sections[0]
+
+
+def test_consecutive_lines_with_the_same_target_share_one_link_at_the_end(d):
+    from motor_ai_sim.digest import build as B, collect as C
+    same = [C.Item("message", 0.0, f"New message {n}", f"留言 {n}", "/projects/p/messages") for n in (1, 2, 3)]
+    other = C.Item("spec_version", 0.0, "Spec 2", "规格 2", "/projects/p/specification")
+    text, _ = B.compose(_group(), same + [other], 0, T0 - 3600, T0, False)
+    lines = text.splitlines()
+    i = lines.index("- New message 3")
+    assert lines[i + 1].endswith("/projects/p/messages") and "http" not in "".join(lines[:i])
+    assert lines[i + 2] == "- Spec 2" and lines[i + 3].endswith("/projects/p/specification")
+
+
+def test_more_link_is_dropped_when_the_page_was_already_linked(d):
+    from motor_ai_sim.digest import build as B, collect as C
+    items = [C.Item("message", 0.0, "New message", "留言", f"/projects/{PID}")]
+    text, html_body = B.compose(_group(), items, 7, T0 - 3600, T0, False)
+    assert "and 7 more" in text and len(_urls(text)) == 1 and html_body.count("<a ") == 1
+    gone = [C.Item("motor_removed", 0.0, "gone", "移除", f"/projects/{PID}")]
+    text, html_body = B.compose(_group(), gone, 7, T0 - 3600, T0, False)
+    assert len(_urls(text)) == 1 and "and 7 more: " in text and html_body.count("<a ") == 1      # no earlier link: the more link stays
+
+
+def test_member_joined_names_the_person_and_has_no_link(d):
+    from motor_ai_sim.digest import collect as C
+    d["PS"].append_jsonl(PID, "audit.jsonl", {"time": at(-600), "actor_email": "dan@example.com", "action": "invite_claimed",
+                                              "entity": "member", "entity_id": "dan@example.com", "details": {"role": "engineer"}})
+    d["PS"].append_jsonl(PID, "audit.jsonl", {"time": at(-500), "actor_email": ANNA, "action": "invite", "entity": "member",
+                                              "entity_id": "nobody@example.com", "details": {"role": "customer", "pending": False}})
+    items = C.collect_project(d["PS"].get_project(PID), T0 - 7200, T0, results=d["results"])
+    joined = {i.key: i for i in items if i.kind == "member_joined"}
+    assert joined["member:dan@example.com"].en == "A new engineer joined the project: Dan <dan@example.com>"
+    assert "Dan <dan@example.com>" in joined["member:dan@example.com"].zh
+    assert joined["member:nobody@example.com"].en.endswith(": nobody@example.com")           # no account name: the address alone
+    assert all(i.target is None for i in joined.values())
+
+
+def test_a_real_project_draft_has_no_repeated_url_and_no_link_on_notices(d):
+    d["PS"].append_jsonl(PID, "audit.jsonl", {"time": at(-600), "actor_email": "dan@example.com", "action": "invite_claimed",
+                                              "entity": "member", "entity_id": "dan@example.com", "details": {"role": "engineer"}})
+    d["PS"].append_jsonl(PID, "audit.jsonl", {"time": at(-700), "actor_email": ANNA, "action": "motor.unlink", "entity": "motor",
+                                              "entity_id": "CIANO28 85/L12", "details": {}})
+    d["PS"].mutate_project(PID, lambda p: p.update({"members": [{"email": ANNA, "role": "owner"}]}))     # engineers only: sees every line
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    urls = [u for u in _urls(draft["text_body"]) if "/api/digest/" not in u]
+    assert urls and len(urls) == len(set(urls))
+    lines = draft["text_body"].splitlines()
+    for notice in ("- Design variant removed: CIANO28 85 / L12", "- A new engineer joined the project: Dan <dan@example.com>"):
+        assert not lines[lines.index(notice) + 1].startswith("  http"), notice
+    stored = {i["kind"]: i["link_policy"] for i in draft["items"]}
+    assert stored["motor_removed"] == "none" and stored["member_joined"] == "none" and stored["results"] == "new"

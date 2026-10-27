@@ -252,6 +252,21 @@ def result_line(duty: str, kinds: dict) -> tuple:
     ``kinds`` maps result kind -> stored record (only the records that are new in the period)."""
     duty = str(duty)
     mech = mechanical_numbers(kinds)
+    rec = None
+    for k in ("coupled", "coupled_limit"):                    # a limit answer is the more telling one: it wins over a steady one
+        r = _d(kinds.get(k))
+        st = thermal_statement(r)
+        if st and (rec is None or (st[0] == "limit" and rec[0] != "limit")):
+            rec = (st[0], st[1], st[2], r)
+    # A coupled run that HELD a torque target answered at the real (warm) magnet temperature: its torque is the one
+    # to state, not the electromagnetic run's (owner 2026-10-28: one torque per line, the held one).  The power
+    # follows at the same speed.
+    held = _d(rec[3].get("hold_torque")) if rec is not None else {}
+    got = num(held.get("torque_nm"))
+    if str(held.get("basis") or "") == "held_torque" and got is not None:
+        if mech["P"] is not None and mech["T"]:
+            mech = {**mech, "P": mech["P"] * got / mech["T"]}
+        mech = {**mech, "T": got}
     first: list = []
     first_zh: list = []
     if mech["T"] is not None:
@@ -266,12 +281,6 @@ def result_line(duty: str, kinds: dict) -> tuple:
     parts_en = [", ".join(first)] if first else []
     parts_zh = ["，".join(first_zh)] if first_zh else []
 
-    rec = None
-    for k in ("coupled", "coupled_limit"):                    # a limit answer is the more telling one: it wins over a steady one
-        r = _d(kinds.get(k))
-        st = thermal_statement(r)
-        if st and (rec is None or (st[0] == "limit" and rec[0] != "limit")):
-            rec = (st[0], st[1], st[2], r)
     if rec is not None:
         parts_en.append(rec[1])
         parts_zh.append(rec[2])

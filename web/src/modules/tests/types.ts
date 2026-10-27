@@ -47,7 +47,15 @@ export interface CompareGroup {
   /** one line saying what the model values are (EN) + the key / params the web translates (tests.basis.<key>) */
   basis?: string | null; basis_key?: string | null; basis_params?: Record<string, unknown>;
 }
-export interface TestCompare { test_id: string; kind: TestKind; model_available: boolean; groups: CompareGroup[] }
+/** A load sweep as one series over rpm (backend `comparison._load_series`): one entry per plottable quantity. */
+export interface LoadSeriesPoint { rpm: number; current?: number | null; measured: number | null; model: number | null; delta_pct?: number | null }
+export interface LoadSeriesQuantity { key: string; label: string; unit: string; tip?: string | null; points: LoadSeriesPoint[] }
+export interface LoadSeries { x: 'rpm'; quantities: LoadSeriesQuantity[] }
+export interface TestCompare {
+  test_id: string; kind: TestKind; model_available: boolean; groups: CompareGroup[];
+  /** load records only: every bench row at once, for the chart beside the per-point tables */
+  series?: LoadSeries | null;
+}
 
 export interface TestsPayload {
   die: string; config: string;

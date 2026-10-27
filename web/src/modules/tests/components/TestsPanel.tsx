@@ -6,8 +6,8 @@
  *  Development (project motor view): read-only, behind the configuration's "visible to customer" flag for customers. */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, FormControlLabel, IconButton, Paper,
-  Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, Tooltip, Typography,
+  Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, FormControlLabel, IconButton, MenuItem,
+  Paper, Select, Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, Tooltip, Typography,
 } from '@mui/material';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -16,7 +16,10 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
-import { columnsFor, summary, tableBlocks, testsOfKind, unitLabel, type TableBlock } from '../tableModel';
+import {
+  blocksHeight, columnsFor, loadSeriesOptions, pickQuantity, quantitySeries, summary, tableBlocks, testsOfKind, unitLabel,
+  type TableBlock,
+} from '../tableModel';
 import { TEST_KINDS, type CompareRow, type TestCompare, type TestKind, type TestRecord, type TestsPayload } from '../types';
 import SeriesChart from './SeriesChart';
 import TestEditor from './TestEditor';
@@ -59,6 +62,37 @@ function useWide(): [React.RefObject<HTMLDivElement | null>, boolean] {
   return [ref, wide];
 }
 
+/** The chart beside a load sweep's per-point tables (owner 2026-10-27): x = rpm, a compact selector above it picks the
+ *  plotted quantity (torque, efficiencies, DC current / power, shaft power, temperatures), measured dots plus the model
+ *  curve where the model has the point.  Full height of the tables beside it (capped), sticky while they scroll. */
+function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; tips: Record<string, string>; height: number }) {
+  const { t } = useTranslation('production');
+  const options = loadSeriesOptions(cmp);
+  const [sel, setSel] = useState<string>('torque');
+  const q = pickQuantity(options, sel);
+  if (!q) return null;
+  const name = (k: string, fallback: string) => t(`tests.series.q.${k}`, { defaultValue: fallback });
+  return (
+    <Box data-testid="tests-load-series">
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, height: 24, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-2)' }}>{t('tests.series.label')}</Typography>
+        <HelpTip title={t('tests.series.tip')} />
+        <Select size="small" value={q.key} onChange={(e) => setSel(String(e.target.value))}
+          sx={{ height: 24, fontSize: 11.5, minWidth: 150, '& .MuiSelect-select': { py: 0, pl: 1 } }}
+          inputProps={{ 'aria-label': t('tests.series.label') }}>
+          {options.map((o) => (
+            <MenuItem key={o.key} value={o.key} sx={{ fontSize: 12, minHeight: 28 }}>
+              {name(o.key, o.label)}, {unitLabel(o.unit)}
+            </MenuItem>
+          ))}
+        </Select>
+        {q.tip && <HelpTip title={t(`tests.tip.${q.tip}`, { defaultValue: tips[q.tip] ?? '' })} />}
+      </Box>
+      <SeriesChart key={q.key} series={quantitySeries(q)} height={height} />
+    </Box>
+  );
+}
+
 function CompareTable({ cmp, tips, canCompute, onComputed }: {
   cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; onComputed: (msg: string) => void;
 }) {
@@ -74,13 +108,15 @@ function CompareTable({ cmp, tips, canCompute, onComputed }: {
     const params = Object.fromEntries(Object.entries(b.basisParams).filter(([, v]) => v !== null && v !== undefined));
     return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
   };
+  const hasLoadChart = loadSeriesOptions(cmp).length > 0;
   const compute = async (row: CompareRow) => {
     if (!row.action) return;
     try { await testsApi.createDuty(row.action); onComputed(t('tests.computeDone')); }
     catch (e) { onComputed(t('tests.errors.save', { reason: e instanceof Error ? e.message : String(e) })); }
   };
   return (
-    <Box ref={boxRef}>
+    <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
+      <Box sx={hasLoadChart ? { flex: wide ? '0 0 48%' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
       {blocks.map((b) => {
         const basis = basisText(b);
         return (
@@ -142,6 +178,14 @@ function CompareTable({ cmp, tips, canCompute, onComputed }: {
           </Box>
         );
       })}
+      </Box>
+      {hasLoadChart && (
+        <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%',
+          position: wide ? 'sticky' : 'static', top: 8 }}>
+          <LoadSeriesChart cmp={cmp} tips={tips}
+            height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />
+        </Box>
+      )}
     </Box>
   );
 }

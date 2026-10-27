@@ -78,6 +78,31 @@ t('a group with a speed per row is a series for the chart; resistance, inductanc
   assert.equal(blocks[1].basis, null);
 });
 
+t('a load sweep series: cleaned, sorted by rpm, gaps stay null, empty quantities dropped, unknown key falls back', () => {
+  const cmp = { test_id: 'l', kind: 'load', model_available: true, groups: [], series: { x: 'rpm', quantities: [
+    { key: 'torque', label: 'Torque', unit: 'N·m', tip: 'load', points: [
+      { rpm: 2700, current: 100, measured: 29, model: 30, delta_pct: 3.4 },
+      { rpm: 1200, current: 50, measured: 10, model: null },
+      { rpm: 1800, current: 70, measured: null, model: null },            // nothing to plot: skipped, never a 0
+      { rpm: NaN, measured: 5, model: 5 },
+    ] },
+    { key: 'i_dc', label: 'DC current', unit: 'A', points: [{ rpm: 1200, measured: 20, model: null }] },       // one point
+    { key: 't_housing', label: 'Housing temperature', unit: 'C', points: [] },
+  ] } };
+  const opts = M.loadSeriesOptions(cmp);
+  assert.deepEqual(opts.map((q) => q.key), ['torque', 'i_dc']);
+  assert.deepEqual(opts[0].points.map((p) => p.rpm), [1200, 2700]);
+  assert.equal(opts[0].points[0].model, null); assert.equal(opts[0].points[0].delta_pct, null);
+  assert.equal(M.pickQuantity(opts, 'i_dc').key, 'i_dc');
+  assert.equal(M.pickQuantity(opts, 'gone').key, 'torque');                    // stale selection -> the first quantity
+  assert.equal(M.pickQuantity([], 'torque'), null);
+  const s = M.quantitySeries(opts[1]);
+  assert.deepEqual(s, { unit: 'A', points: [{ rpm: 1200, measured: 20, model: null, delta: null, current: null }] });
+  assert.deepEqual(M.loadSeriesOptions({ test_id: 'a', kind: 'free_run', model_available: true, groups: [] }), []);   // no series block
+  assert.deepEqual(M.loadSeriesOptions(null), []);
+  assert.equal(M.blocksHeight([{ lines: [1, 2, 3] }, { lines: [1, 2] }]), (3 + 2) * 24 + 8 + (2 + 2) * 24 + 8);
+});
+
 t('row notes: unexplained loss, no model point (with the compute action), frequency flag', () => {
   assert.deepEqual(M.rowNote(row({ key: 'loss', extra: { unexplained_w: 412.4 } })), { key: 'unexplained', params: { w: '412.4' } });
   assert.equal(M.rowNote(row({ status: 'no_model', action: { kind: 'create_duty', body: {} } })).key, 'noModelCompute');

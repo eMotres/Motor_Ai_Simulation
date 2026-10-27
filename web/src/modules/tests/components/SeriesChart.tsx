@@ -17,10 +17,10 @@ function SeriesTooltip({ active, payload, unit }: { active?: boolean; payload?: 
   return (
     <div style={{ background: 'var(--panel)', border: '1px solid var(--line-soft)', borderRadius: 4, padding: '4px 8px',
       fontSize: 11.5, color: 'var(--text-1)', lineHeight: 1.5 }}>
-      <div style={{ fontWeight: 700 }}>{fmtValue(p.rpm)} {t('tests.chart.rpm')}</div>
-      <div><span style={{ color: MEASURED_COLOR }}>●</span> {t('tests.chart.measured')}: {fmtValue(p.measured)} {u}</div>
-      <div><span style={{ color: MODEL_COLOR }}>●</span> {t('tests.chart.model')}: {fmtValue(p.model)} {u}</div>
-      <div>Δ {fmtDelta(p.delta)} %</div>
+      <div style={{ fontWeight: 700 }}>{fmtValue(p.rpm)} {t('tests.chart.rpm')}{p.current != null ? ` · ${fmtValue(p.current)} A` : ''}</div>
+      {p.measured !== null && <div><span style={{ color: MEASURED_COLOR }}>●</span> {t('tests.chart.measured')}: {fmtValue(p.measured)} {u}</div>}
+      {p.model !== null && <div><span style={{ color: MODEL_COLOR }}>●</span> {t('tests.chart.model')}: {fmtValue(p.model)} {u}</div>}
+      {p.model !== null && p.measured !== null && <div>Δ {fmtDelta(p.delta)} %</div>}
     </div>
   );
 }
@@ -28,6 +28,9 @@ function SeriesTooltip({ active, payload, unit }: { active?: boolean; payload?: 
 export const SeriesChart: React.FC<{ series: GroupSeries; height?: number }> = ({ series, height = 190 }) => {
   const { t } = useTranslation('production');
   const u = unitLabel(series.unit);
+  // a series with no model value draws no model curve (no empty legend entry); a lone model point still shows as a dot
+  const modelN = series.points.filter((p) => p.model !== null).length;
+  const measuredN = series.points.filter((p) => p.measured !== null).length;
   return (
     <div style={{ width: '100%', height, minWidth: 0 }} data-testid="tests-series-chart">
       <ResponsiveContainer>
@@ -39,10 +42,14 @@ export const SeriesChart: React.FC<{ series: GroupSeries; height?: number }> = (
             label={{ value: u, angle: -90, position: 'insideLeft', fontSize: 10, offset: 12 }} />
           <RcTooltip content={<SeriesTooltip unit={series.unit} />} />
           <Legend verticalAlign="top" height={20} iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-          <Line type="monotone" dataKey="measured" name={t('tests.chart.measured')} stroke={MEASURED_COLOR} strokeWidth={1.6}
-            dot={{ r: 2.5, fill: MEASURED_COLOR }} connectNulls isAnimationActive={false} />
-          <Line type="monotone" dataKey="model" name={t('tests.chart.model')} stroke={MODEL_COLOR} strokeWidth={1.6}
-            strokeDasharray="5 3" dot={false} connectNulls isAnimationActive={false} />
+          {measuredN > 0 && (
+            <Line type="monotone" dataKey="measured" name={t('tests.chart.measured')} stroke={MEASURED_COLOR} strokeWidth={1.6}
+              dot={{ r: 2.5, fill: MEASURED_COLOR }} connectNulls isAnimationActive={false} />
+          )}
+          {modelN > 0 && (
+            <Line type="monotone" dataKey="model" name={t('tests.chart.model')} stroke={MODEL_COLOR} strokeWidth={1.6}
+              strokeDasharray="5 3" dot={modelN === 1 ? { r: 2.5, fill: MODEL_COLOR } : false} connectNulls isAnimationActive={false} />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

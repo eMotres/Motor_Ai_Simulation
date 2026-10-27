@@ -1684,7 +1684,7 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
         _m_fs_eff = D.get("modes_f_switch_eff_hz")
         _m_slots = D.get("slots")
         mrows = R.mode_rows(mres, rpm=_m_rpm, slots=_m_slots, f_switch_hz=_m_fs,
-                            f_switch_eff_hz=_m_fs_eff)
+                            f_switch_eff_hz=_m_fs_eff, poles=D.get("poles"))
         if len(mrows) > 1:
             # ONE PAGE, AND ITS NOTE WITH IT (MJ-8, audit v5): the last two
             # rows and the note under them had a page to themselves.

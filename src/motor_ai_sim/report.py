@@ -8520,6 +8520,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                      cold_k: float, cold_note: str,
                      slots: Optional[int] = None,
                      carrier_hz: Optional[float] = None,
+                     poles: Optional[int] = None,
                      ins_peak_lim: Optional[float] = None,
                      ins_peak_note: str = "") -> Dict[str, Any]:
     """The flat per-duty view :func:`duty_warnings` judges.
@@ -9012,7 +9013,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     _fs_eff = effective_carrier_hz(col)
     _modes_rec = res.get("modes") if isinstance(res.get("modes"), dict) else None
     _tight = tightest_ring_mode(_modes_rec, rpm=rpm, slots=slots,
-                                f_switch_hz=_fs, f_switch_eff_hz=_fs_eff)
+                                f_switch_hz=_fs, f_switch_eff_hz=_fs_eff, poles=poles)
     _rebuilt = _tight is not None
     if _tight is None:
         # Nothing stored for this duty — the coupled run's own block, which is
@@ -9425,7 +9426,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
             (brg_assign or {}).get("temp_c"), c.get("em") or {}),
         max_speed_rpm=max_speed, mag_lim=mag_lim, mag_note=mag_note,
         ins_lim=ins_lim, ins_note=ins_note, cold_k=cold_k,
-        cold_note=cold_note, slots=_slots_poles(geo)[0],
+        cold_note=cold_note, slots=_slots_poles(geo)[0], poles=_slots_poles(geo)[1],
         carrier_hz=duty_carrier_hz(cfg_doc, c["duty"]),
         ins_peak_lim=ins_peak_lim, ins_peak_note=ins_peak_note) for c in cols}
     share_configuration_cooling(ctxs)
@@ -9733,6 +9734,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         # whatever machine the server has loaded.
         # …the DETAIL duty's, like the rest of section 7 (BL-1).
         "slots": _slots_poles(geo)[0],
+        "poles": _slots_poles(geo)[1],
         "detail_duty": detail_duty,
         "modes_duty": (me_map_duty or detail_duty or None),
         "modes_rpm": duty_point(cfg_doc, me_map_duty or detail_duty or "",
@@ -9922,7 +9924,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                         map_from_duty=bool(D.get("me_map_from_duty")),
                         map_rpm=D.get("me_map_rpm"),
                         map_cur=D.get("me_map_cur"),
-                        modes_rpm=D.get("modes_rpm"), slots=D.get("slots"),
+                        modes_rpm=D.get("modes_rpm"), slots=D.get("slots"), poles=D.get("poles"),
                         f_switch_hz=D.get("modes_f_switch_hz"),
                         f_switch_eff_hz=D.get("modes_f_switch_eff_hz"),
                         pair=D.get("pair"), figs=_figs, sec=sec,
@@ -16913,7 +16915,8 @@ def modes_excitation_note(rpm: Any, slots: Any, f_switch_hz: Any,
 
 
 def excitation_lines(rpm: Any, slots: Any, f_switch_hz: Any,
-                     f_switch_eff_hz: Any = None) -> List[Dict[str, Any]]:
+                     f_switch_eff_hz: Any = None,
+                     poles: Any = None) -> List[Dict[str, Any]]:
     """The excitation lines a rotor ring mode is judged against, at THIS duty.
 
     The inverter carrier and its second harmonic (fixed, they do not scale with
@@ -16939,9 +16942,14 @@ def excitation_lines(rpm: Any, slots: Any, f_switch_hz: Any,
     out: List[Dict[str, Any]] = []
     f_rot = (_numf(rpm) or 0.0) / 60.0
     n_sl = _numf(slots) or 0.0
+    # THE SPATIAL ORDERS a slot-passing force has (audit 2026-10-27, claim 9): the radial force waves of the slotted
+    # stator against the rotor field are of orders 0, g, 2g … with g = gcd(slots, poles) - 8 on 48 slots / 56
+    # poles - so a ring mode of any other order is not driven by these lines, whatever its frequency.  ``None``
+    # (no pole count) keeps the frequency-only test.
+    g = slot_force_order_gcd(slots, poles)
     if f_rot > 0 and n_sl > 0:
-        out.append({"name": "slot passing", "hz": n_sl * f_rot})
-        out.append({"name": "slot passing 2×", "hz": 2.0 * n_sl * f_rot})
+        out.append({"name": "slot passing", "hz": n_sl * f_rot, "order_gcd": g})
+        out.append({"name": "slot passing 2×", "hz": 2.0 * n_sl * f_rot, "order_gcd": g})
     req = _numf(f_switch_hz) or 0.0
     eff = _numf(f_switch_eff_hz) or 0.0
     fs = eff if eff > 0 else req
@@ -16973,8 +16981,30 @@ def excitation_label(line: Optional[Dict[str, Any]]) -> str:
     return nm
 
 
+def slot_force_order_gcd(slots: Any, poles: Any) -> Optional[int]:
+    """gcd(slots, poles): the lowest non-zero spatial order of the slot-passing radial force, or ``None``."""
+    try:
+        ns, np_ = int(round(float(slots))), int(round(float(poles)))
+    except (TypeError, ValueError):
+        return None
+    if ns <= 0 or np_ <= 0:
+        return None
+    return math.gcd(ns, np_)
+
+
+def line_drives_order(line: Dict[str, Any], order: Any) -> bool:
+    """Can this excitation line drive a ring mode of circumferential ``order``?  Unknown order or no order rule:
+    yes (the frequency decides alone, as before)."""
+    g = line.get("order_gcd") if isinstance(line, dict) else None
+    n = _numf(order)
+    if not g or n is None:
+        return True
+    return int(round(abs(n))) % int(g) == 0
+
+
 def nearest_excitation(f_hz: Any,
-                       lines: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+                       lines: List[Dict[str, Any]],
+                       order: Any = None) -> Optional[Dict[str, Any]]:
     """``{'name','hz','margin_pct','flag'}`` of the line this mode sits nearest.
 
     The margin is relative to the EXCITATION, signed, exactly as the modal
@@ -16988,6 +17018,8 @@ def nearest_excitation(f_hz: Any,
     for e in lines:
         hz = _numf(e.get("hz"))
         if not hz or hz <= 0:
+            continue
+        if not line_drives_order(e, order):
             continue
         margin = (f - hz) / hz
         if best is None or abs(margin) < abs(best["_m"]):
@@ -17026,7 +17058,7 @@ def mode_frequencies(res: Optional[Dict[str, Any]]) -> List[float]:
 
 def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
                        slots: Any = None, f_switch_hz: Any = None,
-                       f_switch_eff_hz: Any = None
+                       f_switch_eff_hz: Any = None, poles: Any = None
                        ) -> Optional[Dict[str, Any]]:
     """The stored mode that sits closest to one of THIS duty's excitation lines.
 
@@ -17035,12 +17067,15 @@ def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
     the duty's own carrier and speed so the two duties of one machine cannot
     disagree about a frequency that belongs to the rotor.
     """
-    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz, poles)
     if not lines:
         return None
     best: Optional[Dict[str, Any]] = None
-    for f in mode_frequencies(res):
-        near = nearest_excitation(f, lines)
+    _ms = [m for m in ((res or {}).get("modes") or []) if isinstance(m, dict) and _numf(m.get("f_hz"))]
+    pairs = ([(float(_numf(m.get("f_hz"))), m.get("order")) for m in _ms] if _ms
+             else [(f, None) for f in mode_frequencies(res)])
+    for f, n_ord in pairs:
+        near = nearest_excitation(f, lines, n_ord)
         if near is None:
             continue
         if best is None or abs(near["margin_pct"]) < abs(best["margin_pct"]):
@@ -17056,7 +17091,7 @@ def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
 
 def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
               slots: Any = None, f_switch_hz: Any = None,
-              f_switch_eff_hz: Any = None) -> List[List[str]]:
+              f_switch_eff_hz: Any = None, poles: Any = None) -> List[List[str]]:
     """One row per mode: number, frequency, order, the nearest excitation line
     and its margin.  Header included.
 
@@ -17065,13 +17100,21 @@ def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
     is the fallback for a caller that cannot say which duty it is printing.
     """
     rows = [["#", "f [Hz]", "n", "nearest excitation", "margin"]]
-    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz, poles)
+    _g_ord = slot_force_order_gcd(slots, poles)
     for m in ((res or {}).get("modes") or []):
         if not isinstance(m, dict):
             continue
         near = m.get("nearest") if isinstance(m.get("nearest"), dict) else {}
         if lines:
-            near = nearest_excitation(m.get("f_hz"), lines) or {}
+            near = nearest_excitation(m.get("f_hz"), lines, m.get("order")) or {}
+            if not near and _g_ord and not any(line_drives_order(l, m.get("order")) for l in lines):
+                # NOT DRIVEN (claim 9): said so, never a margin to a line that cannot excite this shape
+                rows.append([_fmt(m.get("index"), 0), _fmt(m.get("f_hz"), 0),
+                             _fmt(m.get("order"), 0) if m.get("order") is not None else "—",
+                             "none: slot forces are of orders 0, %d, %d …" % (_g_ord, 2 * _g_ord),
+                             "not excited"])
+                continue
         rows.append([
             _fmt(m.get("index"), 0), _fmt(m.get("f_hz"), 0),
             _fmt(m.get("order"), 0) if m.get("order") is not None else "—",
@@ -17639,7 +17682,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                em: Optional[Dict[str, Any]] = None,
                map_from_duty: bool = False,
                map_rpm: Any = None, map_cur: Any = None,
-               modes_rpm: Any = None, slots: Any = None,
+               modes_rpm: Any = None, slots: Any = None, poles: Any = None,
                f_switch_hz: Any = None, f_switch_eff_hz: Any = None,
                pair: Optional[Dict[str, Any]] = None,
                figs: Optional[List[int]] = None,
@@ -17829,7 +17872,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
     else:
         mrows = mode_rows(mres, rpm=(modes_rpm or mres.get("rpm") or map_rpm),
                           slots=slots, f_switch_hz=f_switch_hz,
-                          f_switch_eff_hz=f_switch_eff_hz)
+                          f_switch_eff_hz=f_switch_eff_hz, poles=poles)
         if len(mrows) > 1:
             out.append(_table(mrows, [30, 60, 30, 170, CONTENT_W - 290],
                               header=True, size=8.6))

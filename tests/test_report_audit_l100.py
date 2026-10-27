@@ -269,3 +269,29 @@ class TestClaim8PerSetInductancesOnTheMachinesOperator:
                                                                "basis": "differential"}))}
         ld = [v for k, v in rows.items() if k.startswith("Ld per set")][0]
         assert ld[1].startswith("0.3001")
+
+
+class TestClaim9RingModeSpatialOrder:
+    MODES = {"modes": [{"index": 1, "f_hz": 488.0, "order": 2}, {"index": 3, "f_hz": 1362.0, "order": 3},
+                       {"index": 9, "f_hz": 4685.0, "order": 0}, {"index": 13, "f_hz": 1365.0, "order": 8}]}
+
+    def test_gcd(self):
+        assert R.slot_force_order_gcd(48, 56) == 8
+        assert R.slot_force_order_gcd(48, None) is None
+
+    def test_an_order_3_mode_is_not_driven_by_slot_passing(self):
+        res = {"modes": [m for m in self.MODES["modes"] if m["order"] != 8]}
+        t = R.tightest_ring_mode(res, rpm=850, slots=48, poles=56)
+        assert t is None or t["f_hz"] != 1362.0
+        rows = R.mode_rows(res, rpm=850, slots=48, poles=56)
+        r3 = [r for r in rows if r[0] == "3"][0]
+        assert r3[4] == "not excited" and "orders 0, 8" in r3[3]
+
+    def test_an_order_8_mode_on_the_line_is_still_flagged(self):
+        t = R.tightest_ring_mode(self.MODES, rpm=850, slots=48, poles=56)
+        assert t["f_hz"] == 1365.0 and t["excitation"] == "slot passing 2×"
+        assert abs(t["margin_pct"]) < 1.0
+
+    def test_without_a_pole_count_the_frequency_decides_as_before(self):
+        t = R.tightest_ring_mode({"modes": self.MODES["modes"][:2]}, rpm=850, slots=48)
+        assert t["f_hz"] == 1362.0

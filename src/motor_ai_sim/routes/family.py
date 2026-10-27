@@ -5454,6 +5454,45 @@ def set_limits(die: str, cfg: str, req: LimitsPatch,
     return {"ok": True, "limits": lim}
 
 
+class CadMassPut(BaseModel):
+    grams: Optional[float] = None        # the CAD whole-motor mass [g]; null clears it
+    source: Optional[str] = None         # the CAD model it was read from ("Fusion CIANO20 200_50 assembly v12")
+    date: Optional[str] = None           # when it was read (free text, ISO date preferred)
+
+
+@router.put("/config/{die}/{cfg}/cad-mass")
+def set_cad_mass(die: str, cfg: str, req: CadMassPut,
+                 _w: dict = Depends(require_catalog_write)):
+    """Admin: the configuration's STATED CAD whole-motor mass (owner 2026-10-27).  A motor with no server CAD bill of
+    materials has only its active mass; with this block ``motor_mass.full_mass`` takes the CAD mass as the full mass
+    (``source = "cad_stated"``) - the Tests weight row then compares the bench against it.  ``grams: null`` clears it.
+    Validated 1 g .. 1e8 g, a named source required; recorded in the admin audit."""
+    from motor_ai_sim import admin_audit as _AA
+    from motor_ai_sim.modules import motor_mass as _mm
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="only an admin may state a configuration's CAD mass")
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    if req.grams is None:
+        val = None
+    else:
+        try:
+            val = _mm.validate_cad_mass({"grams": req.grams, "source": req.source, "date": req.date})
+        except ValueError as exc:
+            raise HTTPException(422, detail=str(exc))
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    old = c.get(_mm.CAD_MASS_KEY)
+    if val is None:
+        c.pop(_mm.CAD_MASS_KEY, None)
+    else:
+        c[_mm.CAD_MASS_KEY] = val
+    _save_yaml(_cfg_file(die, cfg), c)
+    actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
+    _AA.record(actor, "config.cad_mass", f"{die}/{cfg}", details={"from": old, "to": val})
+    log.info("family: cad_mass on '%s/%s': %s -> %s", die, cfg, old, val)
+    return {"ok": True, "die": die, "config": cfg, "cad_mass": val}
+
+
 class ControllerCoolingSpec(BaseModel):
     """The Controller tab's MOSFET cooling row.
 

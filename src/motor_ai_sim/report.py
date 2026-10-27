@@ -13394,7 +13394,12 @@ def thermal_temp_rows(res: Dict[str, Any],
                       inner: Dict[str, Any]) -> List[List[str]]:
     """Per-part max/avg temperatures.  Header row included; one row means the
     solve carried no per-component breakdown."""
+    # A TRANSLATED MAP IS NOT A TEMPERATURE FIELD (audit 2026-10-27, claim 1): its per-part numbers are a level shift
+    # of another state's map - the L100 peak printed an air gap at 40.1 degC under a 45 degC ambient
+    if thermal_is_translated(res) or thermal_is_translated(inner):
+        return [["Part", "max / avg [°C]"]]
     comps = res.get("components") or inner.get("components") or {}
+    floor = thermal_floor_c(res, inner)
     order = thermal_parts({"winding": "Winding (copper)",
                            "enamel": "Wire enamel",
                            "liner": "Slot insulation",
@@ -13407,8 +13412,47 @@ def thermal_temp_rows(res: Dict[str, Any],
         c = comps.get(key)
         if not isinstance(c, dict):
             continue
-        trows.append([label, _pair(_numf(c.get("max")), _numf(c.get("avg")))])
+        mx, av = _numf(c.get("max")), _numf(c.get("avg"))
+        if floor is not None:
+            # never a temperature under the coldest boundary of the solve (claim 1)
+            mx = None if (mx is not None and mx < floor - THERMAL_FLOOR_TOL_K) else mx
+            av = None if (av is not None and av < floor - THERMAL_FLOOR_TOL_K) else av
+        trows.append([label, _pair(mx, av)])
     return trows
+
+
+#: How far under the coldest boundary a node may read before it is not printed (the film's own mesh resolution,
+#: see :func:`thermal_wall_note`, stays well inside it).
+THERMAL_FLOOR_TOL_K = 1.0
+
+#: What the thermal page prints instead of the per-part table and the extremes of a translated map (claim 1).
+TRANSLATED_TEMPS_WORDS = ("Temperatures not shown: the stored map is the last solved map translated part by part onto "
+                          "the limit instant, a level shift and not a solved field; the coupled loop's temperatures "
+                          "are the answer.")
+
+
+def thermal_floor_c(res: Optional[Dict[str, Any]],
+                    inner: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    """The coldest boundary temperature a thermal record was solved against: its ambient and every film's sink.
+
+    No node of a conduction solve heated by losses can sit below it (a transient starts from the ambient), so a value
+    under it is not a temperature of the machine (audit 2026-10-27, claim 1).  ``None`` when the record states none."""
+    res = res if isinstance(res, dict) else {}
+    inner = inner if isinstance(inner, dict) else {}
+    vals: List[float] = []
+    a = ambient_c_of(res) if res else None
+    if a is None and inner:
+        a = ambient_c_of(inner)
+    if a is not None:
+        vals.append(float(a))
+    cool = res.get("cooling") or inner.get("cooling") or {}
+    for k in ("outer", "inner", "bore", "shaft_ends", "mount", "end_faces"):
+        blk = cool.get(k) if isinstance(cool, dict) else None
+        if isinstance(blk, dict):
+            s = _numf(blk.get("t_sink_c"))
+            if s is not None:
+                vals.append(float(s))
+    return min(vals) if vals else None
 
 
 #: The thermal mesh's AIR and coolant domain ids — everything that is not metal
@@ -13477,9 +13521,21 @@ def thermal_solid_min_c(inner: Dict[str, Any]) -> Optional[float]:
 
 
 def thermal_extremes_text(res: Dict[str, Any], inner: Dict[str, Any]) -> str:
+    if thermal_is_translated(res) or thermal_is_translated(inner):
+        return TRANSLATED_TEMPS_WORDS
     t_max = res.get("T_max", inner.get("T_max"))
     t_min = res.get("T_min", inner.get("T_min"))
     solid, solid_hot = _thermal_solid_extremes(inner or {})
+    floor = thermal_floor_c(res, inner)
+    if floor is not None:
+        # NEVER UNDER THE COLDEST BOUNDARY (claim 1): such a node is a numerical undershoot, not the machine
+        _lo = floor - THERMAL_FLOOR_TOL_K
+        _under = [v for v in (_numf(t_min), solid) if v is not None and v < _lo]
+        if _under:
+            return ("Hottest point in the machine %s; the coolest node of the map reads below the coldest boundary "
+                    "of the solve (%s) - a numerical undershoot, not a temperature of the machine, so it is not "
+                    "printed." % (_fmt(t_max, 1, "°C"),
+                                  _fmt(floor, 1, "°C")))
     if solid is None:
         return ("Hottest point in the machine %s, coolest %s (over the whole "
                 "solved mesh, the gap and bore air included)."

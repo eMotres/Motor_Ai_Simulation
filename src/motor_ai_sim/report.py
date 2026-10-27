@@ -8507,15 +8507,19 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     ctx: Dict[str, Any] = {"duty": col["duty"], "drive": duty_drive(col)}
 
     # ── temperatures: solved first, settled second, quoted last ─────────────
+    # SOLVED ONLY (audit 2026-10-27, claim 6): the panel's magnet input, the card's own temperature and the EM run's
+    # winding input are what a run was TOLD, not what the machine reaches - judged as results they printed
+    # "ok takeoff Magnet temperature 150 degC" and "the magnets run hottest at 150 degC on 'takeoff'" for a duty
+    # whose thermal answer is "not solved".  They stay on the context under their own names, never judged.
     ctx["magnet_temp_c"] = (_comp("magnet")
                             or coupled_magnet_max_c(cp)
-                            or _numf((cp or {}).get("magnet_temp_c"))
-                            or _numf(_setting_of(col, "sim.magnetTempC"))
-                            or _magnet_card_temp(mats.get("magnet")))
+                            or _numf((cp or {}).get("magnet_temp_c")))
+    ctx["magnet_temp_input_c"] = (_numf(_setting_of(col, "sim.magnetTempC"))
+                                  or _magnet_card_temp(mats.get("magnet")))
     ctx["magnet_limit_c"], ctx["magnet_limit_note"] = mag_lim, mag_note
     ctx["winding_temp_c"] = (_comp("winding")
-                             or _numf((cp or {}).get("coil_temp_c"))
-                             or _numf(em.get("coil_temp_C")))
+                             or _numf((cp or {}).get("coil_temp_c")))
+    ctx["winding_temp_input_c"] = _numf(em.get("coil_temp_C"))
     ctx["winding_limit_c"], ctx["winding_limit_note"] = ins_lim, ins_note
     # the continuous limit stays on the context under its own name (the limits table prints it), and the peak limit
     # beside it; a TRANSIENT record below judges against `ins_pk` / `ins_pk_note`

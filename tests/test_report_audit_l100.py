@@ -148,3 +148,34 @@ class TestClaim5DemagAtTheTemperatureItWasSolvedAt:
                                    cp={"magnet_temp_c": 92.3})
         mag = next(r for r in rows if r[2] == "Magnet temperature")
         assert "150" in mag[3] and "coupled loop" not in mag[3]
+
+
+def _ctx(col, mats=None, **kw):
+    return R._warning_context(col, mats=mats or {"magnet": "N52UH_150C"}, batt={}, brg=None, max_speed_rpm=None,
+                              mag_lim=180.0, mag_note="the card", ins_lim=180.0, ins_note="180", cold_k=1.0,
+                              cold_note="", **kw)
+
+
+class TestClaim6InputsAreNotResults:
+    def _unsolved(self):
+        return {"duty": "takeoff", "d": {"rpm": 900, "mesh": {"sim.magnetTempC": 150}},
+                "em": {"coil_temp_C": 150.0, "rpm": 900}, "res": {}}
+
+    def test_an_unsolved_duty_has_no_temperature_to_judge(self):
+        ctx = _ctx(self._unsolved())
+        assert ctx["magnet_temp_c"] is None and ctx["winding_temp_c"] is None
+        assert ctx["magnet_temp_input_c"] == 150.0 and ctx["winding_temp_input_c"] == 150.0
+        rules = {w["rule"] for w in R.duty_warnings(ctx)}
+        assert "magnet_temperature" not in rules and "winding_temperature" not in rules
+
+    def test_the_hottest_magnets_sentence_reads_solved_values_only(self):
+        ctxs = {"takeoff": _ctx(self._unsolved()),
+                "cruise": {"magnet_temp_c": 92.3, "magnet_limit_c": 180.0}}
+        txt = R.magnet_text({"magnet": "N52UH_150C"}, {}, ctxs)
+        assert "hottest at 92.3" in txt and "'cruise'" in txt and "takeoff" not in txt
+
+    def test_a_solved_loop_is_still_judged(self):
+        col = self._unsolved()
+        col["res"] = {"coupled": {"coil_temp_c": 180.0, "magnet_temp_c": 92.3}}
+        ctx = _ctx(col)
+        assert ctx["magnet_temp_c"] == 92.3 and ctx["winding_temp_c"] == 180.0

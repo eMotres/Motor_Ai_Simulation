@@ -106,7 +106,7 @@ __all__ = [
     "queue", "reset_queue", "run_job", "admit", "queued",
     "cancel_run", "is_cancelled", "clear_cancelled", "current_run_id",
     "check_cancelled", "ComputeNotHere", "WorkerDraining", "set_draining", "is_draining",
-    "recover_stale_records", "live_targets",
+    "recover_stale_records", "live_targets", "schedule", "server_load", "recent_failures",
     "current_owner", "current_role", "priority_for",
     "new_run_id", "async_mode", "store_path",
     "HANDLERS", "register_handler", "register_cancel_hook",
@@ -795,6 +795,8 @@ class InProcessQueue(JobQueue):
                 self._finish_locked(rec, state)
                 self._cv.notify_all()
             self._save(rec.ws_id)
+            if state == JobState.DONE:
+                _note_duration(rec)
             w.done.set()
             return w.result
 
@@ -917,6 +919,30 @@ class InProcessQueue(JobQueue):
             running = sorted(self._running.values(), key=lambda r: r.started_at)
             waiting = [w.record for w in sorted(self._waiting, key=self._order_key)]
             return [JobRecord(**{k: v for k, v in asdict(r).items() if k != "seq"}) for r in running + waiting]
+
+    def failed_records(self, since: float) -> "List[JobRecord]":
+        """Copies of the FAILED records of this process that ended after ``since`` (epoch seconds), newest first."""
+        with self._cv:
+            recs = [r for r in self._records.values() if r.state == JobState.FAILED and r.finished_at >= since]
+            recs.sort(key=lambda r: r.finished_at, reverse=True)
+            return [JobRecord(**{k: v for k, v in asdict(r).items() if k != "seq"}) for r in recs]
+
+    def schedule_inputs(self) -> Dict[str, Any]:
+        """Everything :func:`job_eta.simulate` needs to replay this scheduler, as plain data (no ids leave the process).
+
+        ``runs`` are the RUNNING and QUEUED records of every workspace (``ws`` is the workspace id, used only to count the
+        accounts); ``env`` is the scheduler's own knobs and the per-workspace START counters of rule 3.
+        """
+        with self._cv:
+            runs = [{"run_id": r.run_id, "state": "running", "priority": int(r.priority), "ws": r.ws_id, "seq": r.seq,
+                     "kind": r.kind, "started_at": r.started_at, "queued_at": r.queued_at}
+                    for r in sorted(self._running.values(), key=lambda x: x.started_at)]
+            runs += [{"run_id": w.record.run_id, "state": "queued", "priority": int(w.record.priority), "ws": w.record.ws_id,
+                      "seq": w.record.seq, "kind": w.record.kind, "started_at": 0.0, "queued_at": w.record.queued_at}
+                     for w in sorted(self._waiting, key=self._order_key)]
+            env = {"workers": self.workers, "field_limit": self.field_limit, "per_user": self.per_user,
+                   "field_priority": int(Priority.FIELD), "served": dict(self._served)}
+        return {"runs": runs, "env": env}
 
     def snapshot(self) -> Dict[str, Any]:
         """``{running, queued, workers, field_limit, per_user, items}`` — the
@@ -1404,15 +1430,88 @@ def clear_cancelled(run_id: str = "") -> None:
 #  What is running RIGHT NOW, per machine (the project "live activity")
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _note_duration(rec: JobRecord) -> None:
+    """File a DONE run's duration for the ETA statistics (``job_eta``); the run's own step count is its size class."""
+    try:
+        from motor_ai_sim import job_eta, progress as _prog
+        entry = _prog.registry().entry(rec.run_id)
+        total = entry.snapshot().get("total") if entry is not None else None
+        job_eta.note_finished(rec.kind, rec.started_at, rec.finished_at, total)
+    except Exception:                                       # noqa: BLE001 - statistics must never fail a run
+        log.debug("duration of %s not noted", rec.run_id, exc_info=True)
+
+
+def _progress_of(run_id: str):
+    """``(frac | None, total)`` of one run's live bar."""
+    try:
+        from motor_ai_sim import progress as _prog
+        entry = _prog.registry().entry(run_id)
+        if entry is None:
+            return None, 0
+        snap = entry.snapshot()
+        frac = float(snap.get("frac") or 0.0)
+        return (round(min(1.0, max(0.0, frac)), 3) if frac > 0 else None), int(snap.get("total") or 0)
+    except Exception:                                       # noqa: BLE001 - a bar is optional
+        return None, 0
+
+
+def schedule(now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+    """``{run_id: schedule entry}`` for every live run of this process (see :func:`job_eta.simulate`); ``{}`` when the
+    queue cannot say.  Internal: the entries are keyed by run id and must not leave the process as they are."""
+    getter = getattr(queue(), "schedule_inputs", None)
+    if getter is None:
+        return {}
+    try:
+        from motor_ai_sim import job_eta
+        data = getter()
+        for r in data["runs"]:
+            if r["state"] == "running":
+                r["frac"], r["total"] = _progress_of(r["run_id"])
+        return job_eta.simulate(data["runs"], data["env"], time.time() if now is None else float(now), job_eta.stats())
+    except Exception:                                       # noqa: BLE001 - an estimate must never break the page
+        log.debug("queue schedule not computed", exc_info=True)
+        return {}
+
+
+def server_load() -> Dict[str, int]:
+    """How busy this process's queue is: counts only (no identities)."""
+    q = queue()
+    live = getattr(q, "live_records", None)
+    recs = live() if live is not None else []
+    return {"running": sum(1 for r in recs if r.state == JobState.RUNNING),
+            "queued": sum(1 for r in recs if r.state == JobState.QUEUED),
+            "workers": int(getattr(q, "workers", 0) or 0)}
+
+
+def recent_failures(window_s: float = 6 * 3600.0) -> List[Dict[str, Any]]:
+    """Runs of this process that FAILED within ``window_s`` and belong to a catalogued machine (customer-safe: kind, machine,
+    duty, when; never the error text, the run id or the owner)."""
+    getter = getattr(queue(), "failed_records", None)
+    if getter is None:
+        return []
+    out: List[Dict[str, Any]] = []
+    for rec in getter(time.time() - float(window_s)):
+        tgt = rec.target if isinstance(rec.target, dict) else {}
+        if tgt.get("die") and tgt.get("config"):
+            out.append({"kind": rec.kind, "die": tgt["die"], "config": tgt["config"], "duty": tgt.get("duty", ""),
+                        "finished_at": rec.finished_at})
+    return out
+
+
 def live_targets() -> List[Dict[str, Any]]:
     """The running and queued runs of THIS process (every workspace) that belong to a catalogued machine.
 
     Safe to hand to a project page: no run id, no owner, no workspace, no request body - only what the run is (``kind``),
-    which machine it is for, whether it runs or waits, since when and how far it is (``progress`` 0..1, or ``None``).
+    which machine it is for, whether it runs or waits, since when and how far it is (``progress`` 0..1, or ``None``), and
+    where it stands in the queue (``position`` / ``ahead`` among the queued runs of the WHOLE server - a count, never whose
+    - and ``eta``: see :mod:`job_eta`).
     """
     getter = getattr(queue(), "live_records", None)
     if getter is None:
         return []
+    now = time.time()
+    sched = schedule(now)
+    from motor_ai_sim import job_eta
     out: List[Dict[str, Any]] = []
     for rec in getter():
         tgt = rec.target if isinstance(rec.target, dict) else {}
@@ -1422,14 +1521,13 @@ def live_targets() -> List[Dict[str, Any]]:
             continue
         progress: Optional[float] = None
         if rec.state == JobState.RUNNING:
-            try:
-                from motor_ai_sim import progress as _prog
-                entry = _prog.registry().entry(rec.run_id)
-                frac = float(entry.snapshot().get("frac") or 0.0) if entry is not None else 0.0
-                progress = round(min(1.0, max(0.0, frac)), 3) if frac > 0 else None
-            except Exception:                           # noqa: BLE001 - a bar is optional
-                progress = None
-        out.append({"kind": rec.kind, "state": rec.state, "die": tgt["die"], "config": tgt["config"],
-                    "duty": tgt.get("duty", ""),
-                    "queued_at": rec.queued_at, "started_at": rec.started_at or None, "progress": progress})
+            progress, _total = _progress_of(rec.run_id)
+        entry = sched.get(rec.run_id)
+        row = {"kind": rec.kind, "state": rec.state, "die": tgt["die"], "config": tgt["config"],
+               "duty": tgt.get("duty", ""),
+               "queued_at": rec.queued_at, "started_at": rec.started_at or None, "progress": progress,
+               "position": (entry or {}).get("position", 0) if rec.state == JobState.QUEUED else 0,
+               "ahead": (entry or {}).get("ahead") if rec.state == JobState.QUEUED else None,
+               "eta": job_eta.public_eta(entry, now) if entry else None}
+        out.append(row)
     return out

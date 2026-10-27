@@ -10,6 +10,12 @@ Owner 2026-10-27: customers of a project must see in real time which variant is 
   ``/srv/motres/shared/compute/status.json``): ``{"updated": iso, "jobs": [{"id", "state", "started", "title", "targets":
   [{"die", "config", "what"}], "eta_min"}]}``.  Missing, unreadable or malformed = ignored silently.
 
+Queue and stages (owner 2026-10-27): each row also says where it stands in the server queue (``position`` / ``ahead``, counts
+over the WHOLE server and never whose) and when it is expected to start / finish (``eta``, see ``job_eta``); the response adds a
+project ``summary`` (idle | queued | computing | results_ready, run counts, expected_all_done, server load as counts) and the five
+``stages`` of every current variant (``development.stages``: EM points, thermal, mechanics, 3-D end effect, report), derived from
+the stored duty results, the live rows and the recent failures - not a new pipeline.
+
 Customer-safe by construction: a row carries a short English label per run kind, the machine (a linked motor of THIS project),
 the duty, the state, the start and the progress - never a run id, an owner, an internal path or another project's motor.
 """
@@ -99,8 +105,28 @@ def _text(value: Any, limit: int = 80) -> str:
 
 # ── sources ──────────────────────────────────────────────────────────────────
 
-_worker_cache: Dict[str, Any] = {"at": 0.0, "rows": []}
+_worker_cache: Dict[str, Any] = {"at": 0.0, "rows": [], "server": None, "failures": []}
 _worker_lock = threading.Lock()
+
+
+def _worker_state() -> Dict[str, Any]:
+    """The compute worker state, cached for a few seconds (every viewer of every project polls).  A worker that is down
+    (or an older build without a key) is cached as empty for the same few seconds."""
+    with _worker_lock:
+        if time.time() - float(_worker_cache["at"]) < WORKER_TTL_S:
+            return {"activity": list(_worker_cache["rows"]), "queue": _worker_cache.get("server"),
+                    "failures": list(_worker_cache.get("failures") or [])}
+    from motor_ai_sim import worker_client
+    state = worker_client.fetch_state()
+    state = state if isinstance(state, dict) else {}
+    rows = state.get("activity")
+    rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    fails = state.get("failures")
+    fails = [r for r in fails if isinstance(r, dict)] if isinstance(fails, list) else []
+    queue = state.get("queue") if isinstance(state.get("queue"), dict) else None
+    with _worker_lock:
+        _worker_cache.update(at=time.time(), rows=rows, server=queue, failures=fails)
+    return {"activity": list(rows), "queue": queue, "failures": list(fails)}
 
 
 def app_rows() -> List[Dict[str, Any]]:
@@ -110,19 +136,25 @@ def app_rows() -> List[Dict[str, Any]]:
         if not roles.is_api():
             from motor_ai_sim import jobs
             return list(jobs.live_targets())
-        with _worker_lock:
-            if time.time() - float(_worker_cache["at"]) < WORKER_TTL_S:
-                return list(_worker_cache["rows"])
-        from motor_ai_sim import worker_client
-        state = worker_client.fetch_state()
-        rows = state.get("activity") if isinstance(state, dict) else None
-        rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
-        with _worker_lock:
-            _worker_cache["at"], _worker_cache["rows"] = time.time(), rows
-        return list(rows)
+        return list(_worker_state()["activity"])
     except Exception as exc:                                # noqa: BLE001 - a missing bar must never break the page
         log.debug("live activity: app runs not read: %s", exc)
         return []
+
+
+def app_extra() -> Dict[str, Any]:
+    """``{"server": {running, queued, workers} | None, "failures": [...]}`` - the queue totals (counts only) and its
+    recent failures.  Call after :func:`app_rows` (the API process reads both from the one cached worker answer)."""
+    try:
+        from motor_ai_sim import roles
+        if not roles.is_api():
+            from motor_ai_sim import jobs
+            return {"server": jobs.server_load(), "failures": jobs.recent_failures()}
+        state = _worker_state()
+        return {"server": state.get("queue"), "failures": state.get("failures") or []}
+    except Exception as exc:                                # noqa: BLE001
+        log.debug("live activity: queue extras not read: %s", exc)
+        return {"server": None, "failures": []}
 
 
 def host_rows() -> List[Dict[str, Any]]:
@@ -181,27 +213,25 @@ def _alias_names(canonical: str) -> set:
         return set()
 
 
-def project_activity(project: dict, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The ``rows`` that belong to a motor linked to ``project``, in the customer-safe shape."""
+def _link_matcher(project: dict):
+    """``row -> linked motor | None``: a run belongs to a linked motor by (die, configuration), case-insensitive, the
+    canonical die or its ordinary alias.  ``None`` when the project links nothing."""
     links = [m for m in project.get("linked_motors", []) if isinstance(m, dict) and m.get("die") and m.get("config")]
-    if not links or not rows:
-        return []
+    if not links:
+        return None
     names = {i: _die_names(str(m["die"])) for i, m in enumerate(links)}
     alias_done: set = set()
-    out: List[Dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict) or row.get("state") not in ("running", "queued"):
-            continue
+
+    def match(row: Dict[str, Any]) -> Optional[dict]:
         rdie, rcfg = str(row.get("die") or "").casefold(), str(row.get("config") or "").casefold()
         if not rdie or not rcfg:
-            continue
+            return None
         rbare = rdie
         try:
             from motor_ai_sim.workspace import split_published_label
             rbare = split_published_label(str(row.get("die") or ""))[0].casefold()
         except Exception:                                   # noqa: BLE001
             pass
-        hit = None
         for i, link in enumerate(links):
             if str(link["config"]).casefold() != rcfg:
                 continue
@@ -209,8 +239,40 @@ def project_activity(project: dict, rows: List[Dict[str, Any]]) -> List[Dict[str
                 alias_done.add(i)
                 names[i] |= _alias_names(str(link["die"]))
             if {rdie, rbare} & names[i]:
-                hit = link
-                break
+                return link
+        return None
+    return match
+
+
+def _int_or_none(value: Any, minimum: int) -> Optional[int]:
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) and value >= minimum else None
+
+
+def _clean_eta(eta: Any, eta_min: Any = None) -> Optional[Dict[str, Any]]:
+    """The customer-facing estimate of one row (only the four known keys).  A host-file row has just ``eta_min`` (minutes
+    left, from the scheduler itself): turned into a rounded finish time at medium confidence."""
+    if isinstance(eta, dict):
+        conf = eta.get("confidence") if eta.get("confidence") in ("low", "medium", "high") else "low"
+        return {"expected_start": eta.get("expected_start") if isinstance(eta.get("expected_start"), str) else None,
+                "expected_finish": eta.get("expected_finish") if isinstance(eta.get("expected_finish"), str) else None,
+                "confidence": conf, "basis": str(eta.get("basis") or "history")[:20]}
+    if isinstance(eta_min, (int, float)) and not isinstance(eta_min, bool) and eta_min >= 0:
+        from motor_ai_sim import job_eta
+        now = time.time()
+        return job_eta.public_eta({"expected_finish": now + float(eta_min) * 60.0, "confidence": "medium", "basis": "host"}, now)
+    return None
+
+
+def project_activity(project: dict, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The ``rows`` that belong to a motor linked to ``project``, in the customer-safe shape."""
+    match = _link_matcher(project)
+    if match is None or not rows:
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("state") not in ("running", "queued"):
+            continue
+        hit = match(row)
         if hit is None:
             continue
         started = row.get("started_at")
@@ -223,17 +285,69 @@ def project_activity(project: dict, rows: List[Dict[str, Any]]) -> List[Dict[str
                 "kind": str(row.get("kind") or ""),
                 "label": _text(row.get("label")) or label_for(str(row.get("kind") or "")),
                 "state": row["state"], "started_at": started if isinstance(started, str) else None,
-                "progress": progress}
+                "progress": progress,
+                # the queue: the place among the queued runs of the WHOLE server (a count, never whose) and the estimate
+                "position": _int_or_none(row.get("position"), 1) if row["state"] == "queued" else None,
+                "ahead": _int_or_none(row.get("ahead"), 0) if row["state"] == "queued" else None,
+                "eta": _clean_eta(row.get("eta"), row.get("eta_min"))}
         if row.get("eta_min") is not None:
             item["eta_min"] = row["eta_min"]
         out.append(item)
-    out.sort(key=lambda r: (0 if r["state"] == "running" else 1, r["started_at"] or "9999"))
+    out.sort(key=lambda r: (0 if r["state"] == "running" else 1, r["started_at"] or "9999", r["position"] or 0))
     return out
 
 
+def project_failures(project: dict, failures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The recent failures that belong to a linked motor of the project (kind, machine, duty, when - nothing else)."""
+    match = _link_matcher(project)
+    if match is None:
+        return []
+    out = []
+    for f in failures or []:
+        hit = match(f) if isinstance(f, dict) else None
+        if hit is not None:
+            out.append({"die": str(hit["die"]), "config": str(hit["config"]), "duty": _text(f.get("duty"), 60),
+                        "kind": str(f.get("kind") or ""), "finished_at": f.get("finished_at")})
+    return out
+
+
+_stage_cache: Dict[Any, Any] = {}
+_stage_lock = threading.Lock()
+#: the stored side (duty stamps, passport) is read at most this often per (project, viewer): every open page polls
+STAGE_TTL_S = 15.0
+
+
+def _stored_side(project_id: str, project: dict, request: Request, user: dict) -> List[Dict[str, Any]]:
+    key = (project_id, str((user or {}).get("email") or "").lower())
+    with _stage_lock:
+        hit = _stage_cache.get(key)
+        if hit and time.time() - hit[0] < STAGE_TTL_S:
+            return hit[1]
+    try:
+        from motor_ai_sim.development import stages
+        data = stages.collect(project_id, project, request)
+    except Exception as exc:                                # noqa: BLE001 - the stages are optional, the live rows are not
+        log.debug("stages: stored side not read: %s", exc)
+        data = []
+    with _stage_lock:
+        _stage_cache[key] = (time.time(), data)
+        if len(_stage_cache) > 256:
+            _stage_cache.pop(next(iter(_stage_cache)))
+    return data
+
+
 @router.get("")
-def project_activity_route(project_id: str, request: Request) -> Dict[str, Any]:
-    """Live runs on the motors linked to this project (members and engineers; same access as the project's motor list)."""
-    _user, project, _role = access.require_project(request, project_id)
+def project_activity_route(project_id: str, request: Request, since: Optional[str] = None) -> Dict[str, Any]:
+    """Live runs on the motors linked to this project (members and engineers; same access as the project motor list),
+    where they stand in the server queue and when results can be expected, plus the five-stage progress of each variant.
+
+    ``since`` (ISO, optional) = the viewer last visit: results that finished after it are "ready" (default: 24 h)."""
+    user, project, _role = access.require_project(request, project_id)
     rows = project_activity(project, app_rows() + host_rows())
-    return {"project_id": project_id, "at": _iso(time.time()), "activity": rows}
+    extra = app_extra()
+    from motor_ai_sim.development import stages
+    derived = stages.derive(_stored_side(project_id, project, request, user), rows,
+                            project_failures(project, extra.get("failures") or []), time.time(),
+                            server=extra.get("server"), since=_parse_iso(since) if since else None)
+    return {"project_id": project_id, "at": _iso(time.time()), "activity": rows,
+            "summary": derived["summary"], "stages": derived["stages"]}

@@ -412,7 +412,18 @@
     "lineQueued": "Queued: {what}",
     "minutes": "{count} min",
     "underMinute": "<1 min",
-    "more": "+{count}"
+    "more": "+{count}",
+    "ahead": "{count} ahead",
+    "nextInLine": "next in line",
+    "position": "queue place {count}",
+    "starts": "starts {time}",
+    "results": "results {time}",
+    "noEstimate": "estimate after the first runs",
+    "confidence": {
+      "low": "rough estimate",
+      "medium": "fair estimate",
+      "high": "good estimate"
+    }
   },
   "points": {
     "loadingMotor": "Loading {motor}...",
@@ -454,7 +465,7 @@
         "s2": "S2: time to the limit"
       },
       "tileTip": {
-      "torqueActiveMass": "Torque per active mass (EM parts), not the whole motor.",
+        "torqueActiveMass": "Torque per active mass (EM parts), not the whole motor.",
         "emTorque": "Torque the coupled loop ended on, at its own temperatures. The torque tile in the EM block is the EM run's.",
         "winding": "Settled winding temperature of this point (coupled loop).",
         "magnet": "Settled magnet temperature, hottest value.",
@@ -771,8 +782,12 @@
   "coolingInferred": "Read from the stored values; click a medium to confirm it.",
   "addLoadComponent": "Add a load component",
   "coolingReason": {
-    "air_propeller": { "submerged": "An air propeller turns in air; the motor never runs under water." },
-    "wheel": { "submerged": "A wheel drive runs on the ground, not under water." }
+    "air_propeller": {
+      "submerged": "An air propeller turns in air; the motor never runs under water."
+    },
+    "wheel": {
+      "submerged": "A wheel drive runs on the ground, not under water."
+    }
   },
   "airflowReason": {
     "propellerWash": "Propeller wash exists only behind an air propeller.",
@@ -810,5 +825,38 @@
     "create": "Create Rev {to}",
     "cancel": "Cancel",
     "failed": "Could not create the revision"
+  },
+  "stages": {
+    "label": "Simulation stages",
+    "names": {
+      "em": "EM points",
+      "thermal": "Thermal",
+      "mechanics": "Mechanics",
+      "end3d": "3-D end effect",
+      "report": "Report"
+    },
+    "state": {
+      "not_started": "not started",
+      "queued": "queued",
+      "computing": "computing",
+      "partial": "partly done",
+      "done": "done",
+      "failed": "failed, we are looking into it"
+    },
+    "points": "{done} of {total} points",
+    "reviewed": "checked by our engineers",
+    "awaitingReview": "waiting for our engineers' check",
+    "doneOn": "done {date}",
+    "complete": "Complete",
+    "stageOf": "stage {index} of {count}"
+  },
+  "statusLine": {
+    "computing": "Simulation: computing {runs}",
+    "queued": "Simulation: queued {runs}",
+    "runOne": "1 run",
+    "runMany": "{count} runs",
+    "expected": "results expected {time}",
+    "ready": "Results ready",
+    "server": "On the server now: {running} running, {queued} waiting"
   }
 }

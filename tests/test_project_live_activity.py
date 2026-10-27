@@ -79,7 +79,7 @@ def test_a_request_that_names_the_machine_is_attributed_to_it(jobs_env):
     row = rows[0]
     assert (row["die"], row["config"], row["duty"], row["kind"], row["state"]) == ("DieX", "L40", "rated", "coupled.run", "running")
     # nothing that identifies a run, an account or a body leaves the process
-    assert set(row) == {"kind", "state", "die", "config", "duty", "queued_at", "started_at", "progress"}
+    assert set(row) == {"kind", "state", "die", "config", "duty", "queued_at", "started_at", "progress", "position", "ahead", "eta"}
     assert "eng@example.test" not in json.dumps(rows)
 
 

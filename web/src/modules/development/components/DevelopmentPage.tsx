@@ -38,6 +38,7 @@ import { canSubmitSpec, submitFailureKind, submitFailureKey } from '../submitFai
   import SpecAssistantPanel from './SpecAssistantPanel';
   import { ProjectMotorTests } from '../ProjectMotorTests';
   import { ActivityChip } from '../ActivityChip';
+  import { ProjectStatusBar, VariantStageBar } from '../StageBar';
   import { useProjectActivity } from '../useProjectActivity';
   import { isRecommended } from '../projectFlags';
   import { openProjectMotor } from '../../../lib/openProjectMotor';
@@ -150,7 +151,8 @@ export default function DevelopmentPage() {
   const [reloadPreview, setReloadPreview] = useState<{ project: string; token: string; fresh: SpecState } | null>(null);
   const [motors, setMotors] = useState<ProjectMotor[]>([]);
   useProjectStripContext(selected, motors);   // the strip under the tabs names this project and its motors
-  const activityRows = useProjectActivity(view === 'motors' ? selected?.id : null);   // live runs on the project's motors: one poll per project, 30 s, only while the page is visible
+  const activity = useProjectActivity(view === 'motors' || view === 'specification' ? selected?.id : null);   // live runs, queue place + ETA and the five stages of the project's motors: one poll per project, 30 s, only while the page is visible
+  const activityRows = activity.rows;
   useEffect(() => {
     const el = motorsViewRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
@@ -893,6 +895,7 @@ export default function DevelopmentPage() {
     <Tabs value={view} onChange={(_, v) => void openTab(v)} sx={{ borderBottom: '1px solid var(--line-soft)', mb: 1.5 }}>
       <Tab value="specification" label={tr('tabs.specification')} /><Tab value="motors" label={tr('tabs.motors')} /><Tab value="messages" label={tr('tabs.messages')} />{canEditProject && <Tab value="notes" label={tr('tabs.notes')} />}
     </Tabs>
+    {(view === 'specification' || view === 'motors') && selected && <ProjectStatusBar data={activity} t={tr} />}
     {view === 'specification' && selected && spec && <SpecAssistantPanel projectId={selected.id} schema={schema} lang={lang} beforeApply={flushSave} onApplied={() => { void reloadDraft(); }} />}
     {view === 'specification' && <Box sx={{ maxWidth: 1196, minWidth: 0, '& .MuiInputBase-root': { bgcolor: 'var(--input-bg)', borderRadius: '8px', fontSize: 14 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' }, '& .MuiInputBase-input': { boxSizing: 'border-box', px: '9px', py: '7px', height: 'auto' }, '& .MuiSelect-select': { pr: '32px !important' } }}>
       {!schema || !spec ? <CircularProgress size={18} /> : <>
@@ -959,6 +962,7 @@ export default function DevelopmentPage() {
             <Stack spacing={0.1} sx={{ minWidth: 0, flex: '1 1 260px' }}>
               <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}<MotorRevisionText die={r.motor.die} config={r.motor.config} canonicalDie={r.motor.canonical_die} /></Typography>
               {stepNote(note)}
+              {live && <VariantStageBar data={activity} motor={live} t={tr} />}
             </Stack>
             {live && selected && <VariantControls projectId={selected.id} motor={live} staff={canManageGlobally} busy={busy} t={tr} showAll={showAllVersions}
               onChanged={async () => { await loadProjectMotors(selected.id, projectToken.current); }} />}

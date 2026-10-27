@@ -213,13 +213,32 @@ def _subject(group: Group, end: float, bilingual: bool) -> str:
     return s + f" / {group.title_zh} - 更新摘要 {_day(end)}" if bilingual else s
 
 
+def arrange(items: list) -> list:
+    """``[(heading or None, [items])]`` in the order of first appearance: lines that share a heading (the duties of one variant)
+    are shown together under it, every other line stands alone."""
+    out: list = []
+    index: dict = {}
+    for it in items:
+        g = tuple(it.group) if getattr(it, "group", None) else None
+        if g is None:
+            out.append((None, [it]))
+        elif g in index:
+            out[index[g]][1].append(it)
+        else:
+            index[g] = len(out)
+            out.append((g, [it]))
+    return out
+
+
 def compose(group: Group, items: list, more: int, start: float, end: float, bilingual: bool) -> tuple[str, str]:
-    """``(text, html fragment)`` of the one body.  Plain lines, a link per line, no images, no attachments."""
+    """``(text, html fragment)`` of the one body.  Plain lines, a link per line (once per heading for grouped lines), no images,
+    no attachments."""
     t_lines: list[str] = []
     h_parts: list[str] = []
     langs = [("en", group.title_en, f"What changed since {_day(start)}", "Open", f"and {more} more", "en")]
     if bilingual:
         langs.append(("zh", group.title_zh, f"{_day(start)} 以来的更新", "打开", f"另有 {more} 条", "zh"))
+    blocks = arrange(items)
     for i, (lang, title, head, open_label, more_label, attr) in enumerate(langs):
         if i:
             t_lines += ["", "-" * 40, ""]
@@ -228,12 +247,30 @@ def compose(group: Group, items: list, more: int, start: float, end: float, bili
         h_parts.append(f'<h2 style="margin:0 0 4px;font-size:17px;color:#0f172a" lang="{attr}">{html.escape(title)}</h2>'
                        f'<p style="margin:0 0 12px;font-size:14px;color:#475569" lang="{attr}">{html.escape(head)}:</p>'
                        '<ul style="margin:0 0 12px;padding-left:20px;font-size:15px;line-height:1.5">')
-        for it in items:
-            line = it.zh if lang == "zh" else it.en
-            url = _url(it.link)
-            t_lines += [f"- {line}", f"  {url}"]
-            h_parts.append(f'<li style="margin:0 0 8px">{html.escape(line)} '
-                           f'<a href="{html.escape(url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a></li>')
+        for heading, members in blocks:
+            if heading is None:
+                it = members[0]
+                line = it.zh if lang == "zh" else it.en
+                url = _url(it.link)
+                t_lines += [f"- {line}", f"  {url}"]
+                h_parts.append(f'<li style="margin:0 0 8px">{html.escape(line)} '
+                               f'<a href="{html.escape(url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a></li>')
+                continue
+            title_line = heading[1] if lang == "zh" else heading[0]
+            first_url = _url(members[0].link)
+            t_lines += [f"- {title_line}:", f"  {first_url}"]
+            h_parts.append(f'<li style="margin:0 0 8px">{html.escape(title_line)}: '
+                           f'<a href="{html.escape(first_url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a>'
+                           '<ul style="margin:4px 0 0;padding-left:18px;font-size:14.5px;line-height:1.45">')
+            for it in members:
+                line = it.zh if lang == "zh" else it.en
+                url = _url(it.link)
+                same = url == first_url
+                t_lines.append(f"    - {line}" + ("" if same else f" {url}"))
+                h_parts.append(f'<li style="margin:0 0 4px">{html.escape(line)}'
+                               + ("" if same else f' <a href="{html.escape(url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a>')
+                               + "</li>")
+            h_parts.append("</ul></li>")
         h_parts.append("</ul>")
         if more:
             url = _url(group.path)
@@ -399,7 +436,8 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
         "bilingual": bilingual, "caps": sorted(caps), "frequency": settings.get("frequency", "daily"),
         "subject": subject, "text_body": text, "html_body": body_html,
         "items": [{"kind": i.kind, "ts": DS.iso(i.ts), "en": i.en, "zh": i.zh, "link": i.link,
-                   "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {})} for i in shown],
+                   "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
+                   **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
         "more": more, "recipients": recipients, "skipped": skipped,
     }
     draft["content_hash"] = content_hash(draft)

@@ -62,6 +62,19 @@ bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.owner_r
 SMTP must be configured in `/etc/motres/api.env` (`SMTP_USER`, `SMTP_PASSWORD`; the same as every other mail). Optional:
 `OWNER_REPORT_TO=<owner address>`. Check the first morning with `journalctl -u motres-owner-report`.
 
+### "N digests ready to check" notice (owner 2026-10-27)
+
+* When the 06:00 run **creates** digest drafts (a fresh draft, or a new revision that replaces an opened one; a draft only refreshed in
+  place is not new), the owner gets a second, short mail right after the report: subject `N digests ready to check`, one line per
+  draft (`Project|Production: <title> - <items> items, <recipients> recipients`) and a deep link to
+  `/?tab=admin&section=digests&draft=<id>` (opens after sign-in), plus the link to the whole Digests section. It says that nothing was
+  sent. It goes through `send.send_notice` - the same module, the same recipient lock as the report, no recipient argument - and
+  never to a customer or factory address.
+* No new draft = no notice. The new ids are queued in `state.json` (`notice_pending`) before the report is sent and moved to `notified`
+  once the notice is out, so a failed notice is retried by the next run and never sent twice; a draft the owner already sent or
+  discarded is dropped from the queue unannounced.
+* The report's own subject carries the count while drafts wait: `AeroStator owner report <date> · N digests to approve`.
+
 ## CLI and routes
 
 * `python -m motor_ai_sim.owner_report [--date YYYY-MM-DD] [--dry-run] [--html]` prints the report (default); `--send [--force]`

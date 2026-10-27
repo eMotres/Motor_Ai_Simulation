@@ -137,7 +137,8 @@ class RunLock:
 
 # -- the message -----------------------------------------------------------------------------------------------------------------------
 
-def build_message(report, to: list) -> EmailMessage:
+def build_message(report, to: list, marker: str = "owner-report") -> EmailMessage:
+    """Any object with ``subject`` / ``text`` / ``html`` (the report, the "digests ready to check" notice)."""
     from motor_ai_sim import auth_email as E
     sender = E.mail_from() or "noreply@aerostator.com"
     msg = EmailMessage(policy=policy.default.clone(max_line_length=998))
@@ -146,20 +147,19 @@ def build_message(report, to: list) -> EmailMessage:
     msg["Subject"] = report.subject
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = make_msgid(domain=(sender.split("@")[-1].strip("> ") or "aerostator.com"))
-    msg["X-AeroStator-Internal"] = "owner-report"
+    msg["X-AeroStator-Internal"] = marker
     msg.set_content(report.text)
     msg.add_alternative(report.html, subtype="html")          # text + HTML only: no images, no attachments
     return msg
 
 
-def send_report(report, *, deliver: Optional[Callable[[EmailMessage], None]] = None) -> dict:
-    """Mail the report to the owner (``recipients()``) and nobody else.  Returns ``{sent, to, error}``; never raises."""
+def _send(report, marker: str, deliver: Optional[Callable[[EmailMessage], None]]) -> dict:
     from motor_ai_sim import auth_email as E
     to = recipients()
     if deliver is None and not E.smtp_configured():
         return {"sent": False, "to": to, "error": "smtp_not_configured"}
     try:
-        msg = build_message(report, to)
+        msg = build_message(report, to, marker)
         if set(_split(msg["To"])) - allowed_addresses():     # belt and braces: the header is the last word
             return {"sent": False, "to": to, "error": "recipient_not_allowed"}
         (deliver or E.deliver)(msg)
@@ -167,3 +167,14 @@ def send_report(report, *, deliver: Optional[Callable[[EmailMessage], None]] = N
         log.warning("owner_report: send failed (%s: %s)", type(exc).__name__, str(exc)[:160])
         return {"sent": False, "to": to, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     return {"sent": True, "to": to, "error": ""}
+
+
+def send_report(report, *, deliver: Optional[Callable[[EmailMessage], None]] = None) -> dict:
+    """Mail the report to the owner (``recipients()``) and nobody else.  Returns ``{sent, to, error}``; never raises."""
+    return _send(report, "owner-report", deliver)
+
+
+def send_notice(notice, *, deliver: Optional[Callable[[EmailMessage], None]] = None) -> dict:
+    """Mail the "N digests ready to check" notice to the owner (``recipients()``) and nobody else; same lock as the report.
+    Takes no recipient argument.  Returns ``{sent, to, error}``; never raises."""
+    return _send(notice, "owner-notice", deliver)

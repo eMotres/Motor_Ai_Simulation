@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from motor_ai_sim import return_path as RP
+from motor_ai_sim.digest import readable as RD
 from motor_ai_sim.digest import store as DS
 
 #: Capability names (see module docstring).
@@ -41,6 +42,9 @@ class Item:
     key: str = ""
     #: ``(die, config)`` of the motor this line is about: the line may be shown only when EVERY recipient may open that motor
     motor: Optional[tuple] = None
+    #: ``(en, zh)`` heading the line belongs under (e.g. the variant its duty results are about); lines with the same heading are
+    #: shown together under it (:func:`motor_ai_sim.digest.build.compose`)
+    group: Optional[tuple] = None
 
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
@@ -121,7 +125,7 @@ def _merge(items: Iterable[Item]) -> list[Item]:
         it = out[k]
         n = counts[k]
         if n > 1 and it.key:
-            it = Item(it.kind, it.ts, f"{it.en} ({n}x)", f"{it.zh}（{n}次）", it.link, it.requires, it.key, it.motor)
+            it = Item(it.kind, it.ts, f"{it.en} ({n}x)", f"{it.zh}（{n}次）", it.link, it.requires, it.key, it.motor, it.group)
         res.append(it)
     return res
 
@@ -162,59 +166,12 @@ def stored_results(die: str, config: str) -> dict:
     return out
 
 
-def _num(v: Any) -> Optional[float]:
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        return None
-    f = float(v)
-    return f if f == f and abs(f) != float("inf") else None
-
-
-def _first_num(sources: Iterable[dict], keys: Iterable[str]) -> Optional[float]:
-    keys = tuple(keys)
-    for src in sources:
-        for k in keys:
-            v = _num(src.get(k))
-            if v is not None:
-                return v
-    return None
-
-
 def headline(kinds: dict) -> str:
-    """The few numbers worth a line: torque, power, efficiency, hottest winding / magnet, mechanical safety factor."""
-    parts: list[str] = []
-    em = kinds.get("em_run") if isinstance(kinds.get("em_run"), dict) else {}
-    nums = em.get("numbers") if isinstance(em.get("numbers"), dict) else {}
-    coupled = kinds.get("coupled") if isinstance(kinds.get("coupled"), dict) else {}
-    cem = coupled.get("em") if isinstance(coupled.get("em"), dict) else {}
-    src = (nums, cem)
-    t = _first_num(src, ("T_avg_Nm", "T_em_avg_Nm", "torque_nm"))
-    if t is not None:
-        parts.append(f"T {t:.3g} N·m")
-    p = _first_num(src, ("P_mech_W",))
-    if p is not None:
-        parts.append(f"P {p / 1000:.3g} kW")
-    eta = _first_num(src, ("efficiency_pct",))
-    if eta is None:
-        e2 = _num(coupled.get("efficiency_shaft"))
-        eta = e2 * 100 if e2 is not None and e2 <= 1.5 else e2
-    if eta is not None:
-        parts.append(f"η {eta:.3g} %")
-    coil = _num(coupled.get("coil_temp_c"))
-    if coil is not None:
-        parts.append(f"winding {coil:.0f} °C")
-    mag = _num(coupled.get("magnet_temp_c"))
-    if mag is not None:
-        parts.append(f"magnet {mag:.0f} °C")
-    if coil is None:
-        th = kinds.get("thermal") if isinstance(kinds.get("thermal"), dict) else {}
-        hot = [m for c in (th.get("components") or {}).values() if isinstance(c, dict) for m in [_num(c.get("max"))] if m is not None]
-        if hot:
-            parts.append(f"hottest part {max(hot):.0f} °C")
-    rs = kinds.get("rotor_stress") if isinstance(kinds.get("rotor_stress"), dict) else {}
-    sf = _num(rs.get("sf_min"))
-    if sf is not None:
-        parts.append(f"rotor SF {sf:.2g}")
-    return ", ".join(parts)
+    """The few numbers worth a line (the owner report's own lines): torque, power, efficiency, hottest winding / magnet, rotor SF.
+
+    Plain notation (``1 770 N·m``, never ``1.77e+03``); the customer digest writes full sentences with
+    :func:`motor_ai_sim.digest.readable.result_line` instead."""
+    return RD.headline(kinds)
 
 
 def _motor_key(die: Any, config: Any) -> str:
@@ -317,12 +274,175 @@ def collect_project(project: dict, start: float, end: float, *,
             if not fresh:
                 continue
             ts = max(t for _, t in fresh.values())
-            head = headline({k: r for k, (r, _) in fresh.items()})
-            tail = f": {head}" if head else f" ({', '.join(sorted(fresh))})"
-            items.append(Item("results", ts, f"New results, {die} / {config}, duty {duty}{tail}",
-                              f"新计算结果，{die} / {config}，工况 {duty}{tail}", motor_link(die, config),
-                              motor_req(die, config), key=f"res:{die}/{config}/{duty}", motor=(die, config)))
+            en, zh = RD.result_line(duty, {k: r for k, (r, _) in fresh.items()})
+            items.append(Item("results", ts, en, zh, motor_link(die, config), motor_req(die, config),
+                              key=f"res:{die}/{config}/{duty}", motor=(die, config),
+                              group=(f"New results, {die} / {config}", f"新计算结果，{die} / {config}")))
     return _merge(items)
+
+
+# -- production: parts and documents in plain words ----------------------------------------------------------------------------------
+
+def _plain_name(bi: Any, n: int = 40) -> tuple:
+    """``(en, zh)`` of a part name: the canonical text of each language, one filled from the other when it is missing."""
+    if isinstance(bi, dict):
+        en, zh = excerpt(bi.get("en"), n), excerpt(bi.get("zh"), n)
+    else:
+        en = zh = excerpt(bi, n)
+    return (en or zh, zh or en)
+
+
+_FAMILY = {"material": "material", "material_i18n": "material", "spec": "spec", "spec_i18n": "spec"}
+
+
+def _tokens(v: Any) -> set:
+    if v is None:
+        return set()
+    if isinstance(v, dict) and ("en" in v or "zh" in v):
+        return {str(x).strip() for x in (v.get("en"), v.get("zh")) if str(x or "").strip()}
+    if isinstance(v, (str, int, float)):
+        return {str(v).strip()} if str(v).strip() else set()
+    return {json.dumps(v, sort_keys=True, ensure_ascii=False)}
+
+
+def _same(old: Any, new: Any) -> bool:
+    ta, tb = _tokens(old), _tokens(new)
+    return ta == tb or bool(ta & tb and isinstance(old, str) != isinstance(new, str))
+
+
+class _PartTracker:
+    """Reads the part events of the audit trail in time order (also the ones before the period, so a revision bump can say what it
+    was before) and says what changed in the period: new parts, revisions, edited fields, removed parts."""
+
+    def __init__(self) -> None:
+        self.known: dict = {}                    # part id -> {field family: last known value}
+        self.new: dict = {}                      # part id -> ts
+        self.removed: dict = {}
+        self.revised: dict = {}                  # part id -> [old revision, new revision, ts, set(fields)]
+        self.edited: dict = {}                   # part id -> [set(fields), ts]
+
+    def event(self, ts: float, inside: bool, action: str, pid: str, snap: dict, pnames: dict) -> None:
+        if action == "create":
+            part = snap.get("part") if isinstance(snap.get("part"), dict) else {}
+            if part.get("name") and pid not in pnames:
+                pnames[pid] = _plain_name(part.get("name"))
+            k = self.known[pid] = {}
+            for f in ("name", "description", "qty_per_motor", "kind", "parent_id", "revision", "drawing_files", "optional_step"):
+                if f in part:
+                    k[f] = part[f]
+            for f in ("material", "spec"):
+                if f in part or f + "_i18n" in part:
+                    k[f] = part.get(f + "_i18n") or part.get(f)
+            if inside:
+                self.new[pid] = ts
+        elif action == "delete":
+            if inside:
+                if pid in self.new:
+                    del self.new[pid]            # made and removed inside the period: nothing to tell
+                else:
+                    self.removed[pid] = ts
+                self.revised.pop(pid, None)
+                self.edited.pop(pid, None)
+        else:
+            patch = snap.get("patch") if isinstance(snap.get("patch"), dict) else {}
+            k = self.known.setdefault(pid, {})
+            changed: set = set()
+            rev: Optional[list] = None
+            for key, val in patch.items():
+                fam = _FAMILY.get(key, key)
+                if fam not in RD.PART_FIELD_WORDS and fam != "revision":
+                    continue
+                if key in ("material", "spec") and (key + "_i18n") in patch:
+                    continue                      # the structured twin carries the same value
+                if fam in k and _same(k[fam], val):
+                    continue
+                if fam == "revision":
+                    rev = [str(k[fam]) if fam in k else None, str(val)]
+                else:
+                    changed.add(fam)
+                k[fam] = val
+            if not inside or pid in self.new:
+                return
+            if rev is not None:
+                cur = self.revised.get(pid)
+                self.revised[pid] = [cur[0] if cur else rev[0], rev[1], ts, (cur[3] if cur else set()) | changed]
+                old_edit = self.edited.pop(pid, None)
+                if old_edit:
+                    self.revised[pid][3] |= old_edit[0]
+            elif changed:
+                if pid in self.revised:
+                    self.revised[pid][3] |= changed
+                    self.revised[pid][2] = max(self.revised[pid][2], ts)
+                else:
+                    cur = self.edited.get(pid)
+                    self.edited[pid] = [(cur[0] if cur else set()) | changed, max(ts, cur[1]) if cur else ts]
+
+    def items(self, pnames: dict, bom_link: Optional[str]) -> list:
+        def label(pid: str) -> tuple:
+            return pnames.get(pid) or ("a part", "某零件")
+
+        def fields(fs: set) -> tuple:
+            order = list(RD.PART_FIELD_WORDS)
+            fs = sorted(fs, key=lambda f: order.index(f) if f in order else 99)
+            return ", ".join(RD.PART_FIELD_WORDS[f][0] for f in fs), "、".join(RD.PART_FIELD_WORDS[f][1] for f in fs)
+
+        def make(kind: str, head: tuple, rows: list, ts: float) -> Item:
+            n = len(rows)
+            names_en, names_zh = RD.name_list(rows)
+            en = f"{head[0] if n == 1 else head[1] + f' ({n})'}: {names_en}"
+            zh = f"{head[2]}{'' if n == 1 else f'（{n}）'}：{names_zh}"
+            return Item("parts", ts, en, zh, bom_link, frozenset(), key=f"parts:{kind}")
+
+        out: list = []
+        if self.new:
+            out.append(make("new", ("New part", "New parts", "新增零件"),
+                            [label(p) for p in sorted(self.new, key=self.new.get)], max(self.new.values())))
+        if self.revised:
+            rows = []
+            for pid, (old, new, _ts, fs) in sorted(self.revised.items(), key=lambda kv: kv[1][2]):
+                en, zh = label(pid)
+                f_en, f_zh = fields(fs)
+                moved = bool(old and old != new)
+                rows.append((f"{en} {f'{old} → {new}' if moved else f'revision {new}'}" + (f" ({f_en})" if f_en else ""),
+                             f"{zh} {f'{old} → {new}' if moved else f'版本 {new}'}" + (f"（{f_zh}）" if f_zh else "")))
+            out.append(make("revised", ("Part revised", "Parts revised", "零件已改版"), rows, max(v[2] for v in self.revised.values())))
+        if self.edited:
+            rows = []
+            for pid, (fs, _ts) in sorted(self.edited.items(), key=lambda kv: kv[1][1]):
+                en, zh = label(pid)
+                f_en, f_zh = fields(fs)
+                rows.append((f"{en} ({f_en})", f"{zh}（{f_zh}）"))
+            out.append(make("edited", ("Part edited", "Parts edited", "零件已修改"), rows, max(v[1] for v in self.edited.values())))
+        if self.removed:
+            out.append(make("removed", ("Part removed", "Parts removed", "零件已删除"),
+                            [label(p) for p in sorted(self.removed, key=self.removed.get)], max(self.removed.values())))
+        return out
+
+
+def _document_item(g: dict, part_id: str, internal: bool, pnames: dict, link: Callable) -> Item:
+    """One line for the documents added to ONE part (or to no part): ``Stator assembly: 2 photos, 5 STEP files added``."""
+    n = len(g["ids"])
+    part = pnames.get(part_id) if part_id else None
+    tag_en, tag_zh = (" (internal)", "（内部）") if internal else ("", "")
+    ids = [i for i in g["ids"] if i]
+    url = None
+    for cap in dict.fromkeys((len(ids), 8, 4, 1)):          # the app path is length-limited: fewer ids, then the documents page
+        url = link("documents", ids=ids[:cap]) if ids[:cap] else None
+        if url:
+            break
+    url = url or link("documents")
+    req = frozenset({INTERNAL}) if internal else frozenset()
+    first = ids[0] if ids else ""
+    if n == 1 and not part:
+        name = g["names"][0]
+        return Item("document", g["ts"], f"New document{tag_en}: {name}", f"新文档{tag_zh}：{name}", url, req, key=f"doc:{first}")
+    p_en, p_zh = part or ("General documents", "通用文件")
+    if n == 1:
+        name = g["names"][0]
+        return Item("document", g["ts"], f"{p_en}: {name} added{tag_en}", f"{p_zh}：新增 {name}{tag_zh}", url, req, key=f"doc:{first}")
+    c_en, c_zh = RD.doc_counts(g["counts"])
+    return Item("document", g["ts"], f"{p_en}: {c_en} added{tag_en}", f"{p_zh}：新增 {c_zh}{tag_zh}", url, req,
+                key=f"docs:{part_id or '-'}:{int(internal)}")
 
 
 # -- productions ------------------------------------------------------------------------------------------------------------------
@@ -337,13 +457,22 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
     docs = {d.get("id"): d for d in (PR.load_file(die, config, "documents.json") or {}).get("documents", []) if isinstance(d, dict)}
     threads = {t.get("id"): t for t in (PR.load_file(die, config, "threads.json") or {}).get("threads", []) if isinstance(t, dict)}
     proposals = {p.get("id"): p for p in (PR.load_file(die, config, "proposals.json") or {}).get("proposals", []) if isinstance(p, dict)}
+    parts_now = {p.get("id"): p for p in (PR.load_file(die, config, "parts.json") or {}).get("parts", []) if isinstance(p, dict)}
+    pnames: dict = {pid: _plain_name(p.get("name")) for pid, p in parts_now.items()}
+    tracker = _PartTracker()
+    doc_groups: dict = {}
     items: list[Item] = []
-    for ev in _read_jsonl(PR.audit_path(die, config)):
-        ts = DS.parse_ts(ev.get("time"))
-        if not _in(ts, start, end):
+    events = [(DS.parse_ts(ev.get("time")), ev) for ev in _read_jsonl(PR.audit_path(die, config))]
+    for ts, ev in sorted((e for e in events if e[0] is not None), key=lambda e: e[0]):
+        if ts >= end:
             continue
         action, entity, eid = str(ev.get("action") or ""), str(ev.get("entity") or ""), str(ev.get("entity_id") or "")
         snap = ev.get("snapshot") if isinstance(ev.get("snapshot"), dict) else {}
+        if entity == "part" and action in ("create", "update", "delete"):
+            tracker.event(ts, ts >= start, action, eid, snap, pnames)       # also before the period: what a revision was before
+            continue
+        if ts < start:
+            continue
         if action == "publish_revision" and entity == "revision":
             rev = snap.get("revision") if isinstance(snap.get("revision"), dict) else {}
             s_en, s_zh = bilingual(rev.get("summary"))
@@ -353,11 +482,13 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
                               link("changes", item=eid), frozenset(), key=f"rev:{eid}"))
         elif action == "create" and entity == "document":
             d = docs.get(eid) or (snap.get("doc") if isinstance(snap.get("doc"), dict) else {})
-            internal = bool(d.get("internal"))
-            name = excerpt(d.get("name") or "file", 70)
-            items.append(Item("document", ts, f"New document: {name}", f"新文档：{name}",
-                              link("documents", ids=[eid]) if eid else link("documents"),
-                              frozenset({INTERNAL}) if internal else frozenset(), key=f"doc:{eid}"))
+            g = doc_groups.setdefault((str(d.get("part_id") or ""), bool(d.get("internal"))),
+                                      {"ids": [], "names": [], "counts": {}, "ts": ts})
+            g["ids"].append(eid)
+            g["names"].append(excerpt(d.get("name") or "file", 70))
+            cat = RD.doc_category(d.get("name"))
+            g["counts"][cat] = g["counts"].get(cat, 0) + 1
+            g["ts"] = max(g["ts"], ts)
         elif action == "create" and entity == "thread_message":
             tid = str(snap.get("thread_id") or "")
             msg = next((m for m in (threads.get(tid) or {}).get("messages", []) if isinstance(m, dict) and m.get("id") == eid), {})
@@ -382,8 +513,6 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
                               frozenset(), key="bom:tooling" if tooling else "bom"))
         elif action == "update" and entity == "costs":
             items.append(Item("costs", ts, "Cost sheet updated", "成本表已更新", link("bom"), frozenset({COSTS}), key="costs"))
-        elif entity == "part" and action in ("create", "update", "delete"):
-            items.append(Item("parts", ts, "Parts changed", "零件已变更", link("bom"), frozenset(), key="parts"))
         elif action == "update" and entity == "procurement":
             items.append(Item("procurement", ts, "Ordering status updated", "订购状态已更新", link("timeline"), frozenset(), key="procurement"))
         elif entity == "schedule" and action in ("update", "freeze_baseline", "create"):
@@ -393,4 +522,7 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
             items.append(Item("process", ts, "Assembly process updated", "装配工艺已更新", link("assembly"), frozenset(), key="process"))
         elif action == "update" and entity == "members":
             items.append(Item("members", ts, "The team changed", "团队成员已变更", link(), frozenset(), key="members"))
+    items += tracker.items(pnames, link("bom"))
+    for (part_id, internal), g in doc_groups.items():
+        items.append(_document_item(g, part_id, internal, pnames, link))
     return _merge(items)

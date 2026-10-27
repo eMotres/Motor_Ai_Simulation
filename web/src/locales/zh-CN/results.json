@@ -1,6 +1,10 @@
 {
   "coupledEmThermal": "电磁 ↔ 热耦合",
   "continuousRating": "连续额定",
+  "torqueHeld": "保持转矩",
+  "torqueHeldLine": "{{i}} A 输出 {{t}} N·m，磁钢 {{m}} °C（工况 {{iReq}} A）",
+  "torqueNotHeldLine": "{{i}} A，转矩偏离 {{t}} N·m {{err}} %，磁钢 {{m}} °C — 未保持",
+  "torqueHeldTip": "耦合循环在每次电磁计算后修正相电流，使轴转矩在该次计算自身的磁钢与线圈温度下达到工况的 {{t}} N·m（负载角不变）。最终电流 {{i}} A，转矩偏差 {{err}} %（允差 ±{{tol}} %），磁钢 {{m}} °C；工况按 {{iReq}} A 设定。本卡上的所有损耗、温度和到达极限的时间都对应 {{i}} A。",
   "mechPower": "机械功率",
   "elecPower": "电功率",
   "mass": "质量",

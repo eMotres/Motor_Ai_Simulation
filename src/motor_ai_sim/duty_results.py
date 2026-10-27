@@ -1667,6 +1667,14 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         # record to its point by
         **({"point": _pick(c.get("point"), ("rpm", "I_phase_rms", "gamma_deg"))}
            if isinstance(c.get("point"), dict) and c["point"] else {}),
+        # WHICH BASIS (owner 2026-10-27): the duty's torque held at the
+        # temperatures the loop found — the current it ended at, the torque and
+        # the magnet temperature — or the fixed current.  Kept whole minus the
+        # pass list; absent on every record from before the hold existed, which
+        # were all fixed-current records.
+        **({"hold_torque": {k: v for k, v in c["hold_torque"].items()
+                            if k != "passes"}}
+           if isinstance(c.get("hold_torque"), dict) else {}),
         # WHICH EXCITATION these temperatures were reached on, and — when it is
         # the inverter — the bridge that reached them.  A record with no
         # `drive` predates the PWM loop and is a sinusoid (see `_entry_drive`).

@@ -389,9 +389,13 @@ def test_user_activity_from_the_real_stores(o):
 def test_projects_productions_and_digests_from_the_real_stores(o):
     s, e = B.window_for(WORLD_DAY)               # the day that holds the world's events
     assert s < T0 - 3600 and T0 < e
+    from motor_ai_sim.development import store as PS
+    PS.append_jsonl(PID, "audit.jsonl", {"time": T0 - 1800, "actor_email": ANNA, "action": "post",   # the real API's audit
+                                         "entity": "thread_message", "entity_id": "msg_x"})          # row of a posted message
     blocks = SRC._fmt_projects(s, e)
     proj = next(b for b in blocks if b.title.startswith("Project: Erium X1"))
     texts = [ln.text for ln in proj.lines]
+    assert all(isinstance(t, str) and t for t in texts)                 # the post row is skipped, never a line without text
     assert any("specification version 2 submitted" in t for t in texts) and any("variant linked: CIANO28 85/T9" in t for t in texts)
     assert any(t.startswith("New message from") for t in texts)
     assert not any(" read " in f" {t} " for t in texts)                  # reading is not activity

@@ -436,7 +436,7 @@ def _fmt_projects(start: float, end: float) -> list:
                 if not _in(ts, start, end):
                     continue
                 got = _project_audit_text(ev)
-                if got is None:
+                if got is None or got[0] is None:            # a posted message comes from thread.jsonl, not its audit row
                     continue
                 text, view = got
                 who = _who(ev.get("actor_email"))

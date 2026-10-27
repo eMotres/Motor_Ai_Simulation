@@ -18,7 +18,8 @@ import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
-         continuousRatingTip, s1ResultsAtLine } from './coupledApi';
+         continuousRatingTip, s1ResultsAtLine,
+         heldTorqueValues } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
 import SaveContinuousPointButton from './SaveContinuousPointButton';
@@ -1133,6 +1134,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             tooltip={couplingTooltip(s.coupling)}/>
         </Box>
       )}
+      {/* …AND THE CURRENT THE DUTY'S TORQUE WAS HELD AT (owner 2026-10-27):
+          one line, the basis in the tooltip; nothing on a fixed-current record. */}
+      {s.coupling && heldTorqueValues(s.coupling) && (() => {
+        const h = heldTorqueValues(s.coupling) as NonNullable<ReturnType<typeof heldTorqueValues>>;
+        return (
+          <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
+            <Cell label={tx('torqueHeld')}
+              value={tx(h.held ? 'torqueHeldLine' : 'torqueNotHeldLine', h)}
+              accent={h.held ? 'green' : 'amber'}
+              tooltip={tx('torqueHeldTip', h)}/>
+          </Box>
+        );
+      })()}
       {/* …AND HOW LONG IT MAY RUN (owner 2026-09-17).  Directly under the
           temperatures it qualifies: a winding past its class is half an
           answer, and this is the other half.  One short line, the model

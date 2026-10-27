@@ -20253,6 +20253,27 @@ def ttl_residual_words(blk: Optional[Dict[str, Any]],
             % (_fmt(w, 1, "W"), _fmt(pct, 1, "%")))
 
 
+def held_torque_words(rec: Optional[Dict[str, Any]]) -> str:
+    """The coupled table's "Current held for the torque" cell (owner 2026-10-27).
+
+    ``270.4 A for 1500.0 N·m at magnet 83 °C (duty 308.1 A)`` — the current the
+    loop corrected so the duty's torque is made at the magnet temperature it
+    found.  ``""`` on a fixed-current record (and on every record from before
+    the hold existed), so the row drops out of a report that has none.
+    """
+    blk = (rec or {}).get("hold_torque") if isinstance(rec, dict) else None
+    if not isinstance(blk, dict) or blk.get("basis") != "held_torque":
+        return ""
+    i, t = _numf(blk.get("I_phase_rms_A")), _numf(blk.get("target_nm"))
+    if i is None or t is None:
+        return ""
+    m, ir = _numf(blk.get("magnet_temp_c")), _numf(blk.get("I_requested_A"))
+    return "%.1f A for %.1f N·m at magnet %s%s%s" % (
+        i, t, "—" if m is None else "%.0f °C" % m,
+        "" if ir is None else " (duty %.1f A)" % ir,
+        "" if blk.get("held") else " — not held")
+
+
 def time_to_limit_words(rec: Optional[Dict[str, Any]]) -> str:
     """The coupled table's cell: both starts, then what ends the pull.
 
@@ -20730,6 +20751,9 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     R("Torque at these temperatures [N·m]",
       lambda c: (abs(_numf(_g(_c(c) or {}, "em.T_em_avg_Nm")))
                  if _numf(_g(_c(c) or {}, "em.T_em_avg_Nm")) is not None else None), 1)
+    # THE CURRENT THE DUTY'S TORQUE WAS HELD AT (owner 2026-10-27): absent
+    # (`_drop_empty`) on every fixed-current record.
+    S("Current held for the torque", lambda c: held_torque_words(_c(c)) or None)
     R("Electromagnetic runs", lambda c: (_c(c) or {}).get("em_runs")
       or (_c(c) or {}).get("iterations"), 0)
     S("Converged", lambda c: converged_words(

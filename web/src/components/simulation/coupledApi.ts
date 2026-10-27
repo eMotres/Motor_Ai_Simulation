@@ -80,6 +80,43 @@ export interface CoupledIteration {
 }
 
 /** The block the backend writes into the last run's SUMMARY, and returns here. */
+/** `coupling.hold_torque` — see `routes/coupled.py::_hold_record`. */
+export interface HoldTorqueBlock {
+  basis: 'held_torque' | 'fixed_current';
+  target_nm?: number | null;
+  target_source?: string | null;
+  I_phase_rms_A?: number | null;
+  I_requested_A?: number | null;
+  torque_nm?: number | null;
+  torque_error_pct?: number | null;
+  tol_pct?: number;
+  held?: boolean;
+  magnet_temp_c?: number | null;
+  coil_temp_c?: number | null;
+  unreachable?: string;
+  unreachable_code?: string;
+  record_is_held_point?: boolean;
+  note?: string | null;
+}
+
+/** The numbers of the "current held for N·m at magnet X °C" line, or `null`
+ *  on a fixed-current record (which prints no line at all). */
+export function heldTorqueValues(c: CouplingBlock | null | undefined):
+    { i: string; t: string; m: string; iReq: string; held: boolean;
+      err: string; tol: string } | null {
+  const h = c?.hold_torque;
+  if (!h || h.basis !== 'held_torque') return null;
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const i = n(h.I_phase_rms_A); const t = n(h.target_nm);
+  if (i == null || t == null) return null;
+  const m = n(h.magnet_temp_c); const ir = n(h.I_requested_A);
+  const e = n(h.torque_error_pct);
+  return { i: i.toFixed(1), t: t.toFixed(1), m: m == null ? '—' : m.toFixed(0),
+           iReq: ir == null ? '—' : ir.toFixed(1), held: h.held === true,
+           err: e == null ? '—' : `${e >= 0 ? '+' : ''}${e.toFixed(2)}`,
+           tol: String(n(h.tol_pct) ?? 0.5) };
+}
+
 export interface CouplingBlock {
   /** the pair the LAST electromagnetic run was solved at — i.e. the machine the
    *  cards on this tab describe */
@@ -130,6 +167,11 @@ export interface CouplingBlock {
    *  algorithm `inverter_corrected` = the PWM state after its own losses were
    *  fed back (present only when that moved the temperatures). */
   sine_comparison?: SineComparison | null;
+  /** WHICH BASIS (owner 2026-10-27): the duty's torque HELD at the
+   *  temperatures the loop found — the current it ended at, the torque and the
+   *  magnet temperature — or the fixed current (and why).  Absent on records
+   *  from before the hold existed, which were all fixed-current. */
+  hold_torque?: HoldTorqueBlock | null;
   /** How a drive=inverter run was coupled: `final_pass` (the loop on the sine,
    *  then the controller's PWM on the converged state — the default) or
    *  `full` (every pass on the PWM, kept for validation). */

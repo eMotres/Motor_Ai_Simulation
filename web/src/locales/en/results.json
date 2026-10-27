@@ -1,6 +1,10 @@
 {
   "coupledEmThermal": "Coupled EM ↔ thermal",
   "continuousRating": "Continuous rating",
+  "torqueHeld": "Torque held",
+  "torqueHeldLine": "{{i}} A for {{t}} N·m at magnet {{m}} °C (duty {{iReq}} A)",
+  "torqueNotHeldLine": "{{i}} A, torque {{err}} % off {{t}} N·m at magnet {{m}} °C — not held",
+  "torqueHeldTip": "The coupled loop corrected the phase current after each electromagnetic pass so the shaft torque meets the duty's {{t}} N·m at that pass's own magnet and coil temperatures (load angle unchanged). Ended at {{i}} A, torque {{err}} % (band ±{{tol}} %), magnets {{m}} °C; the duty is sized at {{iReq}} A. Every loss, temperature and time to the limit on this card belongs to {{i}} A.",
   "mechPower": "Mech power",
   "elecPower": "Elec power",
   "mass": "Mass",

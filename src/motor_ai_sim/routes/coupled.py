@@ -1141,8 +1141,8 @@ def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
     try:
         from motor_ai_sim import duty_results as _dr
         from motor_ai_sim.thermal_capacities import NODES as _NODES
-        comps = ((_dr.get(die, cfg).get(rated) or {}).get("thermal")
-                 or {}).get("components") or {}
+        _rrec = _dr.get(die, cfg).get(rated) or {}
+        comps = (_rrec.get("thermal") or {}).get("components") or {}
         out: Dict[str, float] = {}
         for n in _NODES:
             v = (comps.get(n) or {}).get("avg")
@@ -1154,7 +1154,20 @@ def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
     except Exception:  # noqa: BLE001 — a store read never fails a solve
         log.debug("coupled: could not read the rated duty's map", exc_info=True)
         return {}, "", "the rated duty's stored map could not be read"
-    return out, rated, ("the rated duty %r's own stored thermal map" % rated)
+    # WHICH CURRENT's losses that warm map carries (2026-10-27): the rated
+    # duty's coupled record says whether its torque was held.
+    _ht = ((_rrec.get("coupled") or {}).get("hold_torque")
+           if isinstance(_rrec.get("coupled"), dict) else None)
+    if isinstance(_ht, dict) and _ht.get("basis") == "held_torque":
+        _basis = (" (its current held at %.1f A for %.1f N·m)"
+                  % (float(_ht.get("I_phase_rms_A") or 0.0),
+                     float(_ht.get("target_nm") or 0.0)))
+    elif isinstance(_rrec.get("coupled"), dict) and _rrec["coupled"]:
+        _basis = " (its current fixed — a record without a held torque)"
+    else:
+        _basis = ""
+    return out, rated, ("the rated duty %r's own stored thermal map%s"
+                        % (rated, _basis))
 
 
 def _cycle_inputs(body: Dict[str, Any],
@@ -4142,6 +4155,347 @@ def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
     return t, None
 
 
+# ---------------------------------------------------------------------------
+# HOLD THE DUTY'S TORQUE at the temperatures the loop finds (owner 2026-10-27)
+# ---------------------------------------------------------------------------
+# Owner: the real magnet temperature has to be known and used in every
+# calculation.  A duty's current is SIZED at a card temperature (a 400 mm
+# eVTOL peak: 308.1 A for 1500 N·m with the magnets at 150 °C).  A loop
+# that keeps that current fixed while its thermal passes move the magnets to
+# their real temperature (≈ 83 °C there) answers for a machine making 1767 N·m:
+# its copper loss, its time to the limit and every temperature belong to a
+# current the duty does not need.  So when the duty states a torque, each pass
+# corrects the phase current so the SHAFT torque (`_shaft_torque_nm`) meets it
+# at that pass's own magnet and coil temperatures; the load angle is the
+# duty's and is never moved.  `hold_torque: false` in the body keeps the old
+# fixed-current loop, and every record says which basis it is.
+
+#: The torque band the held current must land in [%] (body ``hold_tol_pct``).
+HOLD_TORQUE_TOL_PCT = 0.5
+#: The largest change of the current one correction may make (a fraction).
+HOLD_STEP_MAX_FRACTION = 0.25
+#: The bounds the measured exponent of T ∝ I^alpha is clamped to: below 0.3
+#: the machine is so saturated that one step would double the current, above
+#: 1.5 the two points are polluted by the temperature change between them.
+HOLD_ALPHA_BOUNDS = (0.3, 1.5)
+#: Under this measured exponent the torque no longer grows with the current.
+HOLD_ALPHA_SATURATED = 0.05
+#: The current ceiling, as a multiple of the duty's own current, when the body
+#: names none (``hold_i_max_a``).
+HOLD_I_CAP_FACTOR = 1.5
+#: A pass that already lost this much remanence [% Br] may not be pushed harder.
+HOLD_DEMAG_LOSS_PCT = 1.0
+#: Corrections the one pass AT the limit may still make.
+HOLD_LIMIT_MAX_PASSES = 2
+#: How close the body's point must sit to the duty's own (current, speed) [%]
+#: for the duty's torque target to apply to it.
+HOLD_POINT_MATCH_PCT = 1.0
+
+
+def _hold_flag(body: Dict[str, Any]) -> Optional[bool]:
+    """The body's ``hold_torque``: ``None`` absent, else a boolean."""
+    v = body.get("hold_torque")
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "0", "no", "off")
+    return bool(v)
+
+
+def _hold_num(v: Any) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _hold_off(plan: Dict[str, Any], note: str) -> Dict[str, Any]:
+    plan.update(active=False, note=note)
+    return plan
+
+
+def _hold_torque_plan(body: Dict[str, Any], *, rpm: float, max_iter: int,
+                      suppressed: bool, voltage_fed: bool) -> Dict[str, Any]:
+    """WHETHER this run holds a torque, and which one — resolved before any solve.
+
+    The target is the body's ``torque_nm`` when it states one, else the loaded
+    duty's own ``torque_nm`` — but only when the body IS that duty's point
+    (current and speed within :data:`HOLD_POINT_MATCH_PCT`): a current typed by
+    hand is a question about that current.  An explicit ``hold_torque: true``
+    takes the duty's target whatever current the body carries, and is refused
+    when the loop cannot hold anything (no target, one pass, a voltage-fed
+    loop) — never silently dropped.
+    """
+    flag = _hold_flag(body)
+    i_req = _f(body, "I_phase_rms", 0.0)
+    tol = abs(_hold_num(body.get("hold_tol_pct")) or HOLD_TORQUE_TOL_PCT)
+    plan: Dict[str, Any] = {
+        "active": False, "requested": flag, "target_nm": None,
+        "target_source": None, "tol_pct": float(tol),
+        "i_requested_a": float(i_req), "i_cap_a": None, "note": None}
+
+    def _refuse_hold(why: str):
+        raise _refuse("hold_torque: true cannot be honoured: %s." % why,
+                      ["hold_torque"], code="hold_torque_impossible")
+
+    if flag is False:
+        return _hold_off(plan, "hold_torque: false — the current was kept "
+                               "fixed at the request's value")
+    target = _hold_num(body.get("torque_nm"))
+    if target is not None:
+        plan["target_source"] = "request"
+    else:
+        try:
+            from motor_ai_sim.duty_results import active_context
+            from motor_ai_sim.routes.family import duty_entry
+            ctx = None if suppressed else active_context()
+            d = None
+            if ctx:
+                name = str(body.get("duty") or ctx[2])
+                d = duty_entry(ctx[0], ctx[1], name) or None
+        except Exception:  # noqa: BLE001 — a catalog read never fails a solve
+            log.debug("coupled: the duty's torque target could not be read",
+                      exc_info=True)
+            d = None
+        t_d = _hold_num((d or {}).get("torque_nm"))
+        if t_d is not None and t_d != 0.0:
+            i_d = _hold_num(d.get("current_arms"))
+            n_d = _hold_num(d.get("rpm"))
+
+            def _off_pct(a, b):
+                return (None if (a is None or b is None or b == 0.0)
+                        else 100.0 * abs(a - b) / abs(b))
+            off_i, off_n = _off_pct(i_req, i_d), _off_pct(float(rpm), n_d)
+            same = ((off_i is None or off_i <= HOLD_POINT_MATCH_PCT)
+                    and (off_n is None or off_n <= HOLD_POINT_MATCH_PCT))
+            if same or flag is True:
+                target = t_d
+                plan["target_source"] = "duty %r" % str(d.get("name") or "")
+            else:
+                return _hold_off(plan, (
+                    "the request's point (%.1f A, %.0f rpm) is not the duty's "
+                    "(%s A, %s rpm), so the duty's %.1f N·m does not apply to "
+                    "it — the current was kept fixed"
+                    % (i_req, float(rpm),
+                       "—" if i_d is None else "%.1f" % i_d,
+                       "—" if n_d is None else "%.0f" % n_d, abs(t_d))))
+    if target is None or target == 0.0:
+        if flag is True:
+            _refuse_hold("no torque target — send torque_nm or save one on the "
+                         "duty")
+        return _hold_off(plan, "no torque target on this request or duty — "
+                               "the current was kept fixed")
+    plan["target_nm"] = abs(float(target))
+    if suppressed or max_iter < 2:
+        why = ("a single pass (record: false or max_iter = 1) cannot correct "
+               "its own current")
+        if flag is True:
+            _refuse_hold(why)
+        return _hold_off(plan, why + " — the current was kept fixed")
+    if voltage_fed:
+        why = ("on a voltage-fed loop (drive pwm, or inverter_coupling full) "
+               "the inverter already regulates the current to the duty's")
+        if flag is True:
+            _refuse_hold(why)
+        return _hold_off(plan, why + " — the current target was kept")
+    if not (i_req > 0.0):
+        if flag is True:
+            _refuse_hold("the request carries no phase current to start from")
+        return _hold_off(plan, "no phase current to start the hold from")
+    cap = _hold_num(body.get("hold_i_max_a"))
+    plan["i_cap_a"] = float(cap) if (cap and cap > 0.0) else (
+        HOLD_I_CAP_FACTOR * float(i_req))
+    plan["i_cap_source"] = ("request (hold_i_max_a)" if (cap and cap > 0.0)
+                            else "%.1f × the duty's current" % HOLD_I_CAP_FACTOR)
+    plan["active"] = True
+    return plan
+
+
+def _hold_br_ratio(alpha_br_pct: Optional[float], t_from: Optional[float],
+                   t_to: Optional[float]) -> float:
+    """Br(t_to) / Br(t_from) on the card's linear model — 1 when either
+    temperature or the coefficient is unknown."""
+    if alpha_br_pct is None or t_from is None or t_to is None:
+        return 1.0
+    a = float(alpha_br_pct) / 100.0
+    den = 1.0 + a * (float(t_from) - 20.0)
+    num = 1.0 + a * (float(t_to) - 20.0)
+    return num / den if (den > 0.0 and num > 0.0) else 1.0
+
+
+def _hold_alpha_br() -> Optional[float]:
+    """The assigned magnet card's dBr/dT [%/K] — ``None`` when unknown."""
+    try:
+        from motor_ai_sim.materials import get_magnet
+        from motor_ai_sim.routes.thermal import _assignments
+        name = (_assignments() or {}).get("magnet")
+        if not name:
+            return None
+        a = get_magnet(str(name)).alpha_br_pct_per_k
+        return None if a is None else float(a)
+    except Exception:  # noqa: BLE001 — an unknown card is not a reason to crash
+        return None
+
+
+def _hold_next_current(pts: List[tuple], target: float, *, i_cap: float,
+                       i_floor: float, damp: float = 1.0,
+                       alpha_br_pct: Optional[float] = None,
+                       t_mag_next: Optional[float] = None
+                       ) -> Tuple[float, Dict[str, Any]]:
+    """The NEXT pass's current, from the (current, |shaft torque|, magnet
+    temperature) passes so far.
+
+    Every pass's torque is first carried to the magnet temperature the NEXT
+    pass will be solved at, with the card's own Br coefficient (torque ∝ Br to
+    first order) — otherwise the first correction, made at the card's
+    temperature, would aim at a machine the next pass is not.  Then
+    ``T ∝ I^alpha`` locally: one point gives alpha = 1 (a proportional step,
+    exact for an unsaturated machine); two points at different currents give a
+    SECANT in log space.  The exponent is clamped (:data:`HOLD_ALPHA_BOUNDS`),
+    the step is bounded to ±:data:`HOLD_STEP_MAX_FRACTION` and damped by
+    ``damp`` once the error has flipped sign, and the result is kept inside
+    ``[i_floor, i_cap]``.
+    """
+    def _at_next(p):
+        tm = p[2] if len(p) > 2 else None
+        return float(p[1]) * _hold_br_ratio(alpha_br_pct, tm, t_mag_next)
+
+    i_now, t_now = float(pts[-1][0]), _at_next(pts[-1])
+    alpha, alpha_raw, method = 1.0, None, "proportional"
+    for p in reversed(pts[:-1]):
+        i_prev, t_prev = float(p[0]), _at_next(p)
+        if (i_prev > 0.0 and t_prev > 0.0
+                and abs(math.log(i_now / i_prev)) > 1e-4):
+            alpha_raw = math.log(t_now / t_prev) / math.log(i_now / i_prev)
+            alpha = min(max(alpha_raw, HOLD_ALPHA_BOUNDS[0]),
+                        HOLD_ALPHA_BOUNDS[1])
+            method = "secant"
+            break
+    step = float(damp) * math.log(float(target) / t_now) / alpha
+    lo = math.log(1.0 - HOLD_STEP_MAX_FRACTION)
+    hi = math.log(1.0 + HOLD_STEP_MAX_FRACTION)
+    bounded = not (lo <= step <= hi)
+    step = min(max(step, lo), hi)
+    i_next = i_now * math.exp(step)
+    capped = i_next > float(i_cap)
+    i_next = max(min(i_next, float(i_cap)), float(i_floor))
+    return round(i_next, 3), {"alpha": round(alpha, 4),
+                              "alpha_measured": (None if alpha_raw is None
+                                                 else round(alpha_raw, 4)),
+                              "method": method, "step_bounded": bounded,
+                              "capped": capped, "damping": float(damp),
+                              "torque_at_next_magnet_nm": round(t_now, 4),
+                              "magnet_next_c": t_mag_next}
+
+
+def _hold_unreachable(err_pct: float, i_now: float, info: Dict[str, Any],
+                      summary: Dict[str, Any], *, i_cap: float,
+                      v_link: Optional[float]) -> Optional[Tuple[str, str]]:
+    """``(code, why)`` when the torque target cannot be reached from this pass
+    — only ever when MORE torque is needed (a machine above its target can
+    always be given less current)."""
+    if err_pct >= 0.0:
+        return None
+    if i_now >= float(i_cap) * (1.0 - 1e-6):
+        return ("torque_unreachable_current",
+                "the current is at its ceiling of %.1f A" % float(i_cap))
+    v_ll = _hold_num(summary.get("V_line_peak_V"))
+    if v_link and v_ll is not None and v_ll > float(v_link):
+        return ("torque_unreachable_voltage",
+                "the line voltage is already %.1f V peak, over the %.1f V link"
+                % (v_ll, float(v_link)))
+    dm = summary.get("demag")
+    loss = _hold_num((dm or {}).get("loss_pct")) if isinstance(dm, dict) else None
+    if loss is not None and loss > HOLD_DEMAG_LOSS_PCT:
+        return ("torque_unreachable_demag",
+                "the magnets already lose %.2f %% of their remanence "
+                "(irreversible demagnetisation)" % loss)
+    a = info.get("alpha_measured")
+    if a is not None and float(a) < HOLD_ALPHA_SATURATED:
+        return ("torque_unreachable_saturation",
+                "the torque no longer grows with the current (measured "
+                "exponent %.3f)" % float(a))
+    return None
+
+
+def _hold_v_link(body: Dict[str, Any]) -> Optional[float]:
+    """The DC link the line voltage of a held point is judged against — the
+    body's inverter block, else the configuration's pack; ``None`` (no voltage
+    judgement) when neither names one."""
+    inv = body.get("inverter") if isinstance(body.get("inverter"), dict) else {}
+    v = _hold_num(inv.get("v_dc_V")) or _hold_num(body.get("v_dc_V"))
+    if v and v > 0.0:
+        return float(v)
+    return _pack_nominal_v()
+
+
+def _hold_line(blk: Dict[str, Any]) -> Optional[str]:
+    """"current held for 1500 N·m at magnet 83 °C: 270.4 A (duty 308.1 A)"."""
+    if not blk or blk.get("basis") != "held_torque":
+        return None
+    i, t = _hold_num(blk.get("I_phase_rms_A")), _hold_num(blk.get("target_nm"))
+    if i is None or t is None:
+        return None
+    m = _hold_num(blk.get("magnet_temp_c"))
+    ir = _hold_num(blk.get("I_requested_A"))
+    return ("current held for %.1f N·m at magnet %s: %.1f A%s%s"
+            % (t, "—" if m is None else "%.0f °C" % m, i,
+               "" if ir is None else " (duty %.1f A)" % ir,
+               "" if blk.get("held") else " — not held"))
+
+
+def _hold_record(plan: Dict[str, Any], *, i_now: float,
+                 pts: List[tuple], err_pct: Optional[float],
+                 at: Tuple[Optional[float], Optional[float]],
+                 gamma_deg: Optional[float], stop: Optional[Tuple[str, str]],
+                 limit_passes: int, record_is_held_point: bool
+                 ) -> Dict[str, Any]:
+    """The ``hold_torque`` block every coupled record carries."""
+    if not plan.get("active"):
+        return {"basis": "fixed_current",
+                "requested": plan.get("requested"),
+                "I_phase_rms_A": plan.get("i_requested_a"),
+                **({"target_nm": plan["target_nm"]}
+                   if plan.get("target_nm") is not None else {}),
+                "note": plan.get("note")}
+    t_last = None if not pts else float(pts[-1][1])
+    held = err_pct is not None and abs(float(err_pct)) <= float(plan["tol_pct"])
+    blk: Dict[str, Any] = {
+        "basis": "held_torque",
+        "requested": plan.get("requested"),
+        "target_nm": round(float(plan["target_nm"]), 4),
+        "target_source": plan.get("target_source"),
+        "torque_basis": "shaft (2-D mean × 3-D end-effect when the run has one)",
+        "tol_pct": float(plan["tol_pct"]),
+        "I_requested_A": round(float(plan["i_requested_a"]), 3),
+        "I_phase_rms_A": round(float(i_now), 3),
+        "I_cap_A": round(float(plan["i_cap_a"]), 3),
+        "I_cap_source": plan.get("i_cap_source"),
+        "torque_nm": None if t_last is None else round(t_last, 4),
+        "torque_error_pct": (None if err_pct is None
+                             else round(float(err_pct), 3)),
+        "held": bool(held),
+        "coil_temp_c": None if at[0] is None else round(float(at[0]), 2),
+        "magnet_temp_c": None if at[1] is None else round(float(at[1]), 2),
+        "gamma_deg": gamma_deg,
+        "gamma_rule": "the duty's own load angle, not moved by the hold",
+        "passes": [{"I_A": round(float(p[0]), 3),
+                    "T_Nm": round(float(p[1]), 4),
+                    "T_magnet_c": (None if len(p) < 3 or p[2] is None
+                                   else round(float(p[2]), 2))}
+                   for p in pts],
+        "limit_pass_corrections": int(limit_passes),
+        # A verified S1 rating REPLACES the record's machine with the S1
+        # current; the held point is then the duty's setpoint, not the record.
+        "record_is_held_point": bool(record_is_held_point),
+    }
+    if stop:
+        blk["unreachable_code"], blk["unreachable"] = stop
+    blk["line"] = _hold_line(blk)
+    return blk
+
+
 def _detail_text(exc: HTTPException) -> str:
     """A refusal's message as one line — the route's own words, whatever shape
     it packed them in (a string, or the ``{"error": …}`` dict the validators
@@ -4746,6 +5100,11 @@ def _coupled_summary(block: Dict[str, Any], solve_to: str) -> str:
             bits.append("AT THE LIMIT")
         elif not block.get("converged"):
             bits.append("not converged")
+        ht = block.get("hold_torque") or {}
+        if ht.get("basis") == "held_torque" and ht.get("I_phase_rms_A"):
+            bits.append("%.1f A held for %.1f N·m"
+                        % (float(ht["I_phase_rms_A"]),
+                           float(ht.get("target_nm") or 0.0)))
         return ", ".join(bits)
     except Exception:                                       # noqa: BLE001
         return "coupled run"
@@ -5056,6 +5415,32 @@ def _run(body: Dict[str, Any],
             ["thermal_settings"], code="no_thermal_boundary")
     cooling = cooling_fields(settings)
 
+    # ── HOLD THE DUTY'S TORQUE (owner 2026-10-27) ───────────────────────────
+    # Resolved before the history key and before any solve: an impossible
+    # `hold_torque: true` is a 422 in milliseconds, and the resolved basis and
+    # target are written into the body the keys are made of, so a held answer
+    # and a fixed-current answer of one point are two entries, never one.
+    # `body_key` is that body — the duty's own point, the one the record is
+    # stamped with and filed under; `body` below follows the HELD current, so
+    # every solve and every step after the loop is made at the current the
+    # machine really ran.
+    _drv0 = _coupled_drive(body)
+    hold = _hold_torque_plan(
+        body, rpm=_effective_rpm(body.get("rpm")), max_iter=max_iter,
+        suppressed=_rr.suppressed(),
+        voltage_fed=(_drv0 == "pwm" or (
+            _drv0 == "inverter"
+            and _inverter_coupling_mode(body) != "final_pass")))
+    body = dict(body, hold_torque=bool(hold["active"]))
+    if hold["active"]:
+        body["torque_nm"] = hold["target_nm"]
+        log.info("coupled: holding %.2f N·m (%s) from %.2f A — the current "
+                 "follows the magnet temperature", hold["target_nm"],
+                 hold["target_source"], hold["i_requested_a"])
+    elif hold.get("note"):
+        log.info("coupled: current fixed — %s", hold["note"])
+    body_key = body
+
     # ── persistent history (2026-09-22) ─────────────────────────────────────
     # The earliest point every field the key needs is resolved (solve_to,
     # max_iter, thermal settings validated, cooling resolved) — and BEFORE
@@ -5251,6 +5636,22 @@ def _run(body: Dict[str, Any],
     #: tab (`em_passes` in the record).
     last_pass: Optional[Dict[str, Any]] = None
     em_passes: List[Dict[str, Any]] = []
+    # THE HELD CURRENT (owner 2026-10-27).  `hold_i` is the current the NEXT
+    # electromagnetic run is solved at — `body["I_phase_rms"]` always equals
+    # it; `hold_pts` every solved (current, |shaft torque|) pair; `hold_err`
+    # the last pass's signed miss [%].
+    hold_on = bool(hold["active"])
+    hold_i = float(hold["i_requested_a"])
+    hold_pts: List[tuple] = []
+    hold_err: Optional[float] = None
+    hold_prev_err: Optional[float] = None
+    hold_damp = 1.0
+    hold_next: Optional[float] = None
+    hold_stop: Optional[Tuple[str, str]] = None
+    hold_limit_passes = 0
+    hold_at: Tuple[Optional[float], Optional[float]] = (None, None)
+    hold_v_link = _hold_v_link(body) if hold_on else None
+    hold_alpha_br = _hold_alpha_br() if hold_on else None
     try:
         _progress.start(
             total=max_iter * 2, kind="coupled",
@@ -5282,6 +5683,15 @@ def _run(body: Dict[str, Any],
                 magnet_note = str(_sp.get("magnet_note") or "")
                 history.extend([dict(r, sine_reused=True)
                                 for r in (_sp.get("history") or [])])
+                # …and the CURRENT that state was held at: the PWM pass
+                # below starts from it, not from the duty's sized current.
+                _hs = _sp.get("hold") if isinstance(_sp.get("hold"), dict) else {}
+                if hold_on and _hold_num(_hs.get("i")) is not None:
+                    hold_i = float(_hs["i"])
+                    body = dict(body, I_phase_rms=hold_i)
+                    hold_pts = [tuple(p) for p in (_hs.get("pts") or [])]
+                    hold_err = _hold_num(_hs.get("err"))
+                    hold_at = (t_coil, t_mag)
                 log.info("coupled: sine state reused from %s (%s) — going "
                          "straight to the controller's PWM",
                          sine_reused["source"], sine_reused["computed_at"])
@@ -5619,6 +6029,65 @@ def _run(body: Dict[str, Any],
             d_coil = float(t_coil_out) - float(t_coil)
             d_mag = (0.0 if (t_mag is None or t_mag_out is None)
                      else float(t_mag_out) - float(t_mag))
+            # ── THE TORQUE THIS PASS MADE, against the duty's (2026-10-27) ──
+            # Judged at THIS pass's own temperatures (the ones it was solved
+            # at); the correction is applied with the temperatures', below,
+            # only when another pass will use it.
+            held_now = True
+            hold_next = None
+            if hold_on:
+                _t_sh = _shaft_torque_nm(summary)[0]
+                history[-1]["I_phase_rms_A"] = round(float(hold_i), 3)
+                if _t_sh is None or abs(_t_sh) <= 0.0:
+                    hold_on = False
+                    hold["active"] = False
+                    hold["note"] = ("pass %d reported no torque, so there was "
+                                    "nothing to hold — the current was kept at "
+                                    "%.1f A" % (it, hold_i))
+                    log.warning("coupled: %s", hold["note"])
+                else:
+                    hold_err = 100.0 * (abs(_t_sh) / hold["target_nm"] - 1.0)
+                    hold_pts.append((float(hold_i), abs(float(_t_sh)),
+                                     None if t_mag is None else float(t_mag)))
+                    hold_at = (t_coil, t_mag)
+                    history[-1]["T_shaft_Nm"] = round(float(_t_sh), 4)
+                    history[-1]["torque_error_pct"] = round(hold_err, 3)
+                    # A correction that overshot into the other sign and did
+                    # not at least halve the error is an iteration with gain
+                    # near 1: from then on the step is halved.
+                    if (hold_prev_err is not None
+                            and hold_err * hold_prev_err < 0.0
+                            and abs(hold_err) > 0.5 * abs(hold_prev_err)):
+                        hold_damp = 0.5
+                    hold_prev_err = hold_err
+                    held_now = abs(hold_err) <= hold["tol_pct"]
+                    if not held_now:
+                        # Provisional, at THIS pass's temperatures: what the
+                        # reachability is judged on.  Re-aimed at the next
+                        # pass's magnet temperature once that is known (below).
+                        hold_next, _hinfo = _hold_next_current(
+                            hold_pts, hold["target_nm"], i_cap=hold["i_cap_a"],
+                            i_floor=0.05 * hold["i_requested_a"],
+                            damp=hold_damp)
+                        history[-1]["I_phase_rms_next_A"] = hold_next
+                        history[-1]["hold_step"] = _hinfo
+                        hold_stop = _hold_unreachable(
+                            hold_err, hold_i, _hinfo, summary,
+                            i_cap=hold["i_cap_a"], v_link=hold_v_link)
+                        if hold_stop is not None:
+                            # STOPPED AND SAID: the pass is a solved state and
+                            # is kept; it is not the duty's torque.
+                            refusal_code = hold_stop[0]
+                            refusal = (
+                                "the duty's %.1f N·m cannot be held: %s — this "
+                                "pass makes %.1f N·m at %.1f A with the magnets "
+                                "at %s (%+.2f %%)"
+                                % (hold["target_nm"], hold_stop[1],
+                                   abs(_t_sh), hold_i,
+                                   "—" if t_mag is None
+                                   else "%.1f °C" % float(t_mag), hold_err))
+                            log.warning("coupled: %s", refusal)
+                            break
             # ── THE LIMITS, WHEN THAT IS THE QUESTION (owner 2026-09-18) ────
             # *"either solve until the temperature fully stabilizes, or solve
             # to the limits"*.  In `limits` mode the loop must NOT keep iterating
@@ -5653,6 +6122,58 @@ def _run(body: Dict[str, Any],
                               exc_info=True)
                 if (_ttl_now and not _ttl_now.get("within_limits", True)
                         and _ttl.limiting(_ttl_now)):
+                    # HELD TORQUE: the crossing quoted must be the crossing of
+                    # the machine making the DUTY's torque at the temperatures
+                    # of that instant.  So while the torque is off, or the
+                    # instant's coil / magnet temperatures sit more than `tol`
+                    # from the ones this pass was solved at, the loop does not
+                    # stop: the next pass is solved AT the instant's
+                    # temperatures with the corrected current, and its own map
+                    # gives the next crossing.  Bounded by `max_iter`; out of
+                    # budget it stops here as before and the pass at the limit
+                    # corrects the current itself.
+                    if hold_on and it < max_iter:
+                        _lb = _limited_block(
+                            _ttl_now, cooling=cooling, field=field, passes=it,
+                            steady_converged=False, steady_runaway=False) or {}
+                        _ep0 = _lb.get("em_pass_at") or {}
+                        _ec = _hold_num(_ep0.get("coil_c"))
+                        _emg = _hold_num(_ep0.get("magnet_c"))
+                        _off = ((_ec is not None
+                                 and abs(_ec - float(t_coil)) >= tol)
+                                or (_emg is not None and t_mag is not None
+                                    and abs(_emg - float(t_mag)) >= tol))
+                        if not held_now or _off:
+                            history[-1]["limit_chase"] = True
+                            log.info(
+                                "coupled: pass %d is past a limit with the "
+                                "torque %s — next pass at the instant's coil "
+                                "%s / magnet %s and %.2f A", it,
+                                ("held" if held_now else "%+.2f %% off"
+                                 % float(hold_err or 0.0)),
+                                _ec, _emg,
+                                hold_next if hold_next is not None else hold_i)
+                            if _ec is not None:
+                                t_coil = round(_ec, 1)
+                            if _emg is not None and t_mag is not None:
+                                t_mag = round(_emg, 1)
+                            _bs = _hold_num(_lb.get("bearing_seat_at_limit_c"))
+                            if _bs is not None:
+                                t_brg = _bs
+                            prev_d = None
+                            prev_regime = regime
+                            if not held_now:
+                                hold_next, _hinfo = _hold_next_current(
+                                    hold_pts, hold["target_nm"],
+                                    i_cap=hold["i_cap_a"],
+                                    i_floor=0.05 * hold["i_requested_a"],
+                                    damp=hold_damp, alpha_br_pct=hold_alpha_br,
+                                    t_mag_next=t_mag)
+                                history[-1]["I_phase_rms_next_A"] = hold_next
+                                history[-1]["hold_step"] = _hinfo
+                                hold_i = float(hold_next)
+                                body = dict(body, I_phase_rms=hold_i)
+                            continue
                     time_to_limit = _ttl_now
                     limited_stop = True
                     log.info("coupled: solve_to=limits — pass %d is already "
@@ -5702,6 +6223,10 @@ def _run(body: Dict[str, Any],
                     and (d_brg is None or abs(d_brg) < BEARING_TOL_K)
                     and (d_tj is None or abs(d_tj) < CONTROLLER_TJ_TOL_K)
                     and not point_off
+                    # …and with a duty torque, the TORQUE is the seventh
+                    # (2026-10-27): temperatures that settled at a current
+                    # making the wrong torque are another duty's temperatures.
+                    and held_now
                     and (regime is None
                          or _cdc.regime_settled(prev_regime, regime))):
                 converged = True
@@ -5751,6 +6276,17 @@ def _run(body: Dict[str, Any],
             t_coil = round(float(t_coil) + damping_eff * d_coil, 1)
             if t_mag is not None and t_mag_out is not None:
                 t_mag = round(float(t_mag) + damping_eff * d_mag, 1)
+            # …and THE HELD CURRENT moves with them: the next pass is solved at
+            # the current this pass's torque asked for.
+            if hold_on and hold_next is not None:
+                hold_next, _hinfo = _hold_next_current(
+                    hold_pts, hold["target_nm"], i_cap=hold["i_cap_a"],
+                    i_floor=0.05 * hold["i_requested_a"], damp=hold_damp,
+                    alpha_br_pct=hold_alpha_br, t_mag_next=t_mag)
+                history[-1]["I_phase_rms_next_A"] = hold_next
+                history[-1]["hold_step"] = _hinfo
+                hold_i = float(hold_next)
+                body = dict(body, I_phase_rms=hold_i)
         # THE BUDGET RAN OUT WITH THE POINT STILL OFF.  The last pass is a solved
         # state and is KEPT — the temperatures, the map and the mechanics all
         # belong to it — but it is not the duty's operating point, and a reader
@@ -5937,6 +6473,22 @@ def _run(body: Dict[str, Any],
                      _ep["magnet_basis"], float(_t_at["winding"]),
                      "n/a" if _t_at.get("magnet") is None
                      else "%.1f" % float(_t_at["magnet"]), limited["line"])
+            # A HELD LOOP MAY ALREADY HAVE SOLVED THIS VERY PASS (2026-10-27):
+            # its last pass was made AT the instant's temperatures (the chase
+            # above), at the held current and the same bearing seat.  Then that
+            # run IS the pass at the limit — the same inputs, the newest field
+            # snapshot — and it is not paid for twice.
+            _brg_last = (history[-1].get("bearing_temp_c") if history
+                         else None)
+            _reuse_lim = bool(
+                hold_on and em and history and not history[-1].get("phase")
+                and em_at[0] is not None and float(em_at[0]) == _t_c
+                and ((em_at[1] is None and _t_m is None)
+                     or (em_at[1] is not None and _t_m is not None
+                         and float(em_at[1]) == _t_m))
+                and ((_brg_last is None and _t_b is None)
+                     or (_brg_last is not None and _t_b is not None
+                         and abs(float(_brg_last) - float(_t_b)) <= 0.05)))
             _tok = _ml.BEARING_TEMP_C.set(None if _t_b is None else float(_t_b))
             # THE CONTROLLER'S BRIDGE, on this pass too (2026-09-25).  Without
             # `controller=` `_em_run` falls back to the IDEAL two-level bridge,
@@ -5944,8 +6496,15 @@ def _run(body: Dict[str, Any],
             # device drops and no dead time while its record still printed the
             # loop's T_j beside it.  The drop is the one the loop converged on.
             try:
-                _em_lim = _em_run(body, coil_temp_c=_t_c, magnet_temp_c=_t_m,
-                                  inverter=inverter, controller=ctl)
+                if _reuse_lim:
+                    _em_lim = em
+                    log.info("coupled: the loop's last pass was already solved "
+                             "at the limit's temperatures and the held current "
+                             "— it is the pass at the limit")
+                else:
+                    _em_lim = _em_run(body, coil_temp_c=_t_c,
+                                      magnet_temp_c=_t_m, inverter=inverter,
+                                      controller=ctl)
             except HTTPException as exc:
                 # The machine could not be solved AT its limit.  The steady
                 # answer above is a solved state and stays — said loudly, with
@@ -5962,6 +6521,73 @@ def _run(body: Dict[str, Any],
                 _em_lim = None
             finally:
                 _ml.BEARING_TEMP_C.reset(_tok)
+            # THE TORQUE IS HELD ON THIS PASS TOO (2026-10-27): the magnets of
+            # the instant are not the loop's, so the pass is judged on its own
+            # torque and, when it misses, re-solved at the SAME temperatures
+            # with the corrected current — at most HOLD_LIMIT_MAX_PASSES
+            # times.  A re-solve that is refused keeps the pass before it.
+            _i_loop = hold_i
+            _pt_known = _reuse_lim      # the reused pass is already in the list
+            while hold_on and limited and _em_lim:
+                _t_l = _shaft_torque_nm(_em_lim.get("summary") or {})[0]
+                if _t_l is None or abs(_t_l) <= 0.0:
+                    break
+                hold_err = 100.0 * (abs(_t_l) / hold["target_nm"] - 1.0)
+                if not _pt_known:
+                    hold_pts.append((float(hold_i), abs(float(_t_l)), _t_m))
+                _pt_known = False
+                hold_at = (_t_c, _t_m)
+                if (abs(hold_err) <= hold["tol_pct"]
+                        or hold_limit_passes >= HOLD_LIMIT_MAX_PASSES):
+                    break
+                _i_n, _hinfo = _hold_next_current(
+                    hold_pts, hold["target_nm"], i_cap=hold["i_cap_a"],
+                    i_floor=0.05 * hold["i_requested_a"], damp=hold_damp,
+                    alpha_br_pct=hold_alpha_br, t_mag_next=_t_m)
+                _st = _hold_unreachable(
+                    hold_err, hold_i, _hinfo, _em_lim.get("summary") or {},
+                    i_cap=hold["i_cap_a"], v_link=hold_v_link)
+                if _st is not None:
+                    hold_stop = _st
+                    break
+                if abs(_i_n - hold_i) < 1e-3:
+                    break
+                _i_prev, _body_prev = hold_i, body
+                hold_i = float(_i_n)
+                body = dict(body, I_phase_rms=hold_i)
+                hold_limit_passes += 1
+                _progress.update(
+                    phase="final pass at the limit — holding the torque at "
+                          "%.1f A (%d/%d)" % (hold_i, hold_limit_passes,
+                                               HOLD_LIMIT_MAX_PASSES))
+                _tok = _ml.BEARING_TEMP_C.set(
+                    None if _t_b is None else float(_t_b))
+                try:
+                    _em_lim = _em_run(body, coil_temp_c=_t_c,
+                                      magnet_temp_c=_t_m, inverter=inverter,
+                                      controller=ctl)
+                except HTTPException as exc:
+                    # Nothing was solved: `_em_lim` (and the newest field
+                    # snapshot) are still the previous pass's, at `_i_prev`.
+                    hold_i, body = _i_prev, _body_prev
+                    hold_limit_passes -= 1
+                    hold["note"] = ("the torque correction at the limit was "
+                                    "refused at %.1f A (%s) — the pass at "
+                                    "%.1f A stands"
+                                    % (float(_i_n), _detail_text(exc), hold_i))
+                    log.warning("coupled: %s", hold["note"])
+                    break
+                finally:
+                    _ml.BEARING_TEMP_C.reset(_tok)
+            if (hold_on and limited and _em_lim
+                    and abs(hold_i - _i_loop) > 1e-3):
+                # The crossing above was found on the loop's own map, solved
+                # at `_i_loop`; say so beside the current this pass holds.
+                limited["hold_current_shift_pct"] = round(
+                    100.0 * (hold_i / _i_loop - 1.0), 3)
+                limited["hold_note"] = (
+                    "the time to the limit was found at %.1f A; the pass at the "
+                    "limit holds the torque at %.1f A" % (_i_loop, hold_i))
             if limited and _em_lim:
                 # FILED FOR THE THERMAL TAB before anything else runs: its
                 # snapshot is the newest one right now (Task 6).
@@ -6026,6 +6652,21 @@ def _run(body: Dict[str, Any],
                     "bearing_temp_source": _s_lim.get("bearing_temp_source"),
                     "P_mech_extra_W": _s_lim.get("P_mech_extra_W"),
                 })
+                if hold_on:
+                    _t_lr = _shaft_torque_nm(_s_lim)[0]
+                    history[-1].update({
+                        "I_phase_rms_A": round(float(hold_i), 3),
+                        "T_shaft_Nm": (None if _t_lr is None
+                                       else round(float(_t_lr), 4)),
+                        "torque_error_pct": (None if hold_err is None
+                                             else round(float(hold_err), 3)),
+                        # electromagnetic re-solves this row stands for
+                        # beyond its own (the torque corrections at the limit)
+                        "hold_resolves": int(hold_limit_passes),
+                        # …and whether its own run was the loop's last pass,
+                        # already solved at these temperatures (not re-paid)
+                        "reused_loop_pass": bool(_reuse_lim),
+                    })
                 if inverter is not None:
                     # THE POINT IS HELD FOR THIS PASS TOO: the same inverter the
                     # regulator had aimed at this duty's current drives it, and
@@ -6077,6 +6718,31 @@ def _run(body: Dict[str, Any],
                 else:
                     limited["drive_held"] = "sine"
                 limited["em_run"] = True
+        # ── THE TORQUE THAT WAS NOT HELD, said (2026-10-27) ─────────────────
+        # Out of budget with the torque still off: the last pass is a solved
+        # state and is KEPT, but it is not the duty's torque, and the record
+        # says so with its own code — never over a harder stop.
+        if (hold_on and hold_err is not None and refusal is None
+                and not runaway
+                and abs(float(hold_err)) > float(hold["tol_pct"])):
+            _mh = hold_at[1]
+            if hold_stop is not None:
+                refusal_code = hold_stop[0]
+                refusal = ("the duty's %.1f N·m cannot be held: %s — the pass "
+                           "at %.1f A makes %+.2f %%"
+                           % (hold["target_nm"], hold_stop[1], hold_i,
+                              float(hold_err)))
+            else:
+                refusal_code = "torque_not_held"
+                refusal = (
+                    "the torque was not held: after %d electromagnetic run(s) "
+                    "the machine makes %+.2f %% off the duty's %.1f N·m at "
+                    "%.1f A with the magnets at %s (tolerance ±%g %%) — raise "
+                    "max_iter" % (len(history) + hold_limit_passes,
+                                  float(hold_err), hold["target_nm"], hold_i,
+                                  "—" if _mh is None else "%.1f °C" % float(_mh),
+                                  hold["tol_pct"]))
+            log.warning("coupled: %s", refusal)
         # ── THE CONTINUOUS (S1) RATING, when that is the question ───────────
         # Owner 2026-09-21: a third option on the ``solve_to`` selector, beside
         # ``steady`` and ``limits``.  This is not a second loop: it is one more
@@ -6420,7 +7086,7 @@ def _run(body: Dict[str, Any],
             try:
                 _SINE_STATE_HISTORY.put(
                     sine_key,
-                    params=_sine_state_canonical(body, cooling, solve_to,
+                    params=_sine_state_canonical(body_key, cooling, solve_to,
                                                  max_iter),
                     summary=("sine state: coil %.1f °C, %s" % (
                         float(em_at[0]), solve_to)),
@@ -6433,7 +7099,11 @@ def _run(body: Dict[str, Any],
                              "limited": limited, "time_to_limit": time_to_limit,
                              "continuous_rating": continuous_rating,
                              "magnet_note": magnet_note,
-                             "history": list(history)})
+                             "history": list(history),
+                             # the current this state was HELD at (2026-10-27)
+                             "hold": ({"i": hold_i, "err": hold_err,
+                                       "pts": [list(p) for p in hold_pts]}
+                                      if hold_on else None)})
             except Exception:                               # noqa: BLE001
                 log.warning("coupled: the sine state was not filed for reuse",
                             exc_info=True)
@@ -6456,6 +7126,13 @@ def _run(body: Dict[str, Any],
             _i_body_set = _f(body, "I_phase_rms", 0.0)
             _i_tgt_set = (float(inv_final.get("target_I_phase_rms_A") or 0.0)
                           or _i_body_set)
+            # THE HELD CURRENT (2026-10-27): the inverter block was aimed at the
+            # duty's sized current before the loop; it follows the held one in
+            # the same proportion the S1 branch below uses.
+            _i_req0 = _f(body_key, "I_phase_rms", 0.0)
+            if (hold_on and inv_final.get("target_I_phase_rms_A")
+                    and _i_req0 > 0.0 and abs(_i_body_set - _i_req0) > 1e-9):
+                _i_tgt_set = _i_tgt_set * (_i_body_set / _i_req0)
             if _cr_s1:
                 _i_s1 = float(continuous_rating["I_cont_A_rms"])
                 _ratio = (_i_s1 / _i_body_set) if _i_body_set > 0 else 1.0
@@ -6745,8 +7422,16 @@ def _run(body: Dict[str, Any],
     # two keys because they answer two questions (what it cost, and how far it
     # got) and a reader should not have to know they are the same number.
     # Rows restored from a REUSED sine state were not solved by this run.
-    n_em = len([r for r in history if not r.get("sine_reused")])
+    n_em = len([r for r in history if not r.get("sine_reused")
+                and not r.get("reused_loop_pass")])
     last_row = history[-1] if history else {}
+    hold_block = _hold_record(
+        hold, i_now=hold_i, pts=hold_pts, err_pct=hold_err, at=hold_at,
+        gamma_deg=(_f(body_key, "gamma_deg", 0.0)
+                   if body_key.get("gamma_deg") not in (None, "") else None),
+        stop=hold_stop, limit_passes=hold_limit_passes,
+        record_is_held_point=not bool(
+            (continuous_rating or {}).get("record_is_s1")))
     # THE MECHANICAL HALF, at the top: the numbers the LAST run carries, so the
     # block and the cards beside it are one answer.  All four are absent — never
     # zero — on a machine that names no bearings: an unknown mechanical loss
@@ -6799,11 +7484,17 @@ def _run(body: Dict[str, Any],
         # THE OPERATING POINT this loop was asked about (owner 2026-10-26): the points view shows a stored record only under
         # the point whose speed and current it was solved at, and a record with no stamp cannot be tied to any point.
         # a component the body did not state is left OUT (unknown), never stamped as 0
+        # THE DUTY'S point, not the held current (`hold_torque` below says
+        # where the current ended): the record is found under the point asked.
         "point": {"rpm": float(rpm_eff),
-                  **({"I_phase_rms": _f(body, "I_phase_rms", 0.0)}
-                     if _f(body, "I_phase_rms", 0.0) > 0.0 else {}),
-                  **({"gamma_deg": _f(body, "gamma_deg", 0.0)}
-                     if body.get("gamma_deg") not in (None, "") else {})},
+                  **({"I_phase_rms": _f(body_key, "I_phase_rms", 0.0)}
+                     if _f(body_key, "I_phase_rms", 0.0) > 0.0 else {}),
+                  **({"gamma_deg": _f(body_key, "gamma_deg", 0.0)}
+                     if body_key.get("gamma_deg") not in (None, "") else {})},
+        # WHICH BASIS this record is (owner 2026-10-27): the duty's torque held
+        # at the temperatures found, with the current it ended at, the torque
+        # and the magnet temperature — or the fixed current, and why.
+        "hold_torque": hold_block,
         # WHICH EXCITATION these temperatures belong to.  Always written — a
         # report that finds no `drive` is reading a record from before the
         # inverter existed, and that is a sinusoid; a record that says "pwm"
@@ -6904,7 +7595,7 @@ def _run(body: Dict[str, Any],
             (r.get("phase") or "loop" for r in reversed(history)
              if r.get("T_magnet_max") is not None), None),
         "iterations": n_em,
-        "em_runs": n_em,
+        "em_runs": n_em + int(hold_limit_passes),
         # …and in a LIMITED record it is false by construction: the reported
         # state is an instant of a transient, not a fixed point the loop settled
         # on, and a `true` here would tell every consumer the opposite.
@@ -6996,7 +7687,8 @@ def _run(body: Dict[str, Any],
         try:
             _COUPLED_HISTORY.put(
                 history_key,
-                params=_coupled_canonical(body, cooling, solve_to, max_iter),
+                params=_coupled_canonical(body_key, cooling, solve_to,
+                                          max_iter),
                 summary=_coupled_summary(block, solve_to),
                 payload=out,
                 extra={"alt_carrier": bool(inverter and
@@ -7014,7 +7706,7 @@ def _run(body: Dict[str, Any],
         try:
             from motor_ai_sim import duty_results as _dr
             _params = {
-                "rpm": rpm_eff, "I_phase_rms": _f(body, "I_phase_rms", 0.0),
+                "rpm": rpm_eff, "I_phase_rms": _f(body_key, "I_phase_rms", 0.0),
                 "gamma_deg": _f(body, "gamma_deg", 0.0),
                 "coil_temp_c": block["coil_temp_c"],
                 "magnet_temp_c": block["magnet_temp_c"],

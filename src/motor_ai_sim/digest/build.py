@@ -230,15 +230,44 @@ def arrange(items: list) -> list:
     return out
 
 
+def entry_target(members: list) -> Optional[str]:
+    """The app path an arranged entry links to: the first member that may link at all (:attr:`collect.Item.target`).  The lines
+    under one heading are about the same variant, so they share that one link."""
+    return next((m.target for m in members if m.target), None)
+
+
+def link_plan(blocks: list, seen: set, base: str) -> list:
+    """``[(heading, members, url or None)]``: where the links of one language section go.
+
+    * Only a line whose policy says ``new`` has a target at all (:data:`collect.LINK_POLICY`); notices and warnings get none.
+    * Consecutive entries with the same target are ONE group and carry ONE link, at the end of the group (its last entry).
+    * No URL appears twice in a section: ``seen`` (the URLs already used, the "and N more" link included) drops a repeat - the
+      group whose link was dropped is still shown, just without it.  ``seen`` is updated."""
+    targets = [entry_target(members) for _heading, members in blocks]
+    plan: list = []
+    for i, (heading, members) in enumerate(blocks):
+        url = None
+        t = targets[i]
+        if t and (i + 1 >= len(blocks) or targets[i + 1] != t):          # the last entry of its run of equal targets
+            full = base + t
+            if full not in seen:
+                seen.add(full)
+                url = full
+        plan.append((heading, members, url))
+    return plan
+
+
 def compose(group: Group, items: list, more: int, start: float, end: float, bilingual: bool) -> tuple[str, str]:
-    """``(text, html fragment)`` of the one body.  Plain lines, a link per line (once per heading for grouped lines), no images,
-    no attachments."""
+    """``(text, html fragment)`` of the one body.  Plain lines, no images, no attachments.  Links (see :func:`link_plan`): only
+    on lines that announce something new, one per group of consecutive lines with the same target (at the group's end), and no URL
+    twice in a language section."""
     t_lines: list[str] = []
     h_parts: list[str] = []
     langs = [("en", group.title_en, f"What changed since {_day(start)}", "Open", f"and {more} more", "en")]
     if bilingual:
         langs.append(("zh", group.title_zh, f"{_day(start)} 以来的更新", "打开", f"另有 {more} 条", "zh"))
     blocks = arrange(items)
+    base = E.app_url()
     for i, (lang, title, head, open_label, more_label, attr) in enumerate(langs):
         if i:
             t_lines += ["", "-" * 40, ""]
@@ -247,36 +276,37 @@ def compose(group: Group, items: list, more: int, start: float, end: float, bili
         h_parts.append(f'<h2 style="margin:0 0 4px;font-size:17px;color:#0f172a" lang="{attr}">{html.escape(title)}</h2>'
                        f'<p style="margin:0 0 12px;font-size:14px;color:#475569" lang="{attr}">{html.escape(head)}:</p>'
                        '<ul style="margin:0 0 12px;padding-left:20px;font-size:15px;line-height:1.5">')
-        for heading, members in blocks:
+        seen: set = set()
+        for heading, members, url in link_plan(blocks, seen, base):
+            a_open = (f'<a href="{html.escape(url, quote=True)}" style="color:#2563eb;text-decoration:underline">'
+                      f'{html.escape(open_label)}</a>') if url else ""
             if heading is None:
                 it = members[0]
                 line = it.zh if lang == "zh" else it.en
-                url = _url(it.link)
-                t_lines += [f"- {line}", f"  {url}"]
-                h_parts.append(f'<li style="margin:0 0 8px">{html.escape(line)} '
-                               f'<a href="{html.escape(url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a></li>')
+                t_lines += [f"- {line}"] + ([f"  {url}"] if url else [])
+                h_parts.append(f'<li style="margin:0 0 8px">{html.escape(line)}' + (f" {a_open}" if url else "") + "</li>")
                 continue
             title_line = heading[1] if lang == "zh" else heading[0]
-            first_url = _url(members[0].link)
-            t_lines += [f"- {title_line}:", f"  {first_url}"]
-            h_parts.append(f'<li style="margin:0 0 8px">{html.escape(title_line)}: '
-                           f'<a href="{html.escape(first_url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a>'
+            t_lines.append(f"- {title_line}:")
+            h_parts.append(f'<li style="margin:0 0 8px">{html.escape(title_line)}:'
                            '<ul style="margin:4px 0 0;padding-left:18px;font-size:14.5px;line-height:1.45">')
             for it in members:
                 line = it.zh if lang == "zh" else it.en
-                url = _url(it.link)
-                same = url == first_url
-                t_lines.append(f"    - {line}" + ("" if same else f" {url}"))
-                h_parts.append(f'<li style="margin:0 0 4px">{html.escape(line)}'
-                               + ("" if same else f' <a href="{html.escape(url, quote=True)}" style="color:#2563eb;text-decoration:underline">{html.escape(open_label)}</a>')
-                               + "</li>")
-            h_parts.append("</ul></li>")
+                t_lines.append(f"    - {line}")
+                h_parts.append(f'<li style="margin:0 0 4px">{html.escape(line)}</li>')
+            h_parts.append("</ul>" + (f'<div style="margin:4px 0 0">{a_open}</div>' if url else "") + "</li>")
+            if url:
+                t_lines.append(f"  {url}")
         h_parts.append("</ul>")
         if more:
             url = _url(group.path)
-            t_lines += ["", f"{more_label}: {url}"]
-            h_parts.append(f'<p style="margin:0 0 12px;font-size:14px" lang="{attr}">'
-                           f'<a href="{html.escape(url, quote=True)}" style="color:#2563eb">{html.escape(more_label)}</a></p>')
+            if url in seen:                                   # the group's page was already linked above: say it, without a repeat
+                t_lines += ["", more_label]
+                h_parts.append(f'<p style="margin:0 0 12px;font-size:14px" lang="{attr}">{html.escape(more_label)}</p>')
+            else:
+                t_lines += ["", f"{more_label}: {url}"]
+                h_parts.append(f'<p style="margin:0 0 12px;font-size:14px" lang="{attr}">'
+                               f'<a href="{html.escape(url, quote=True)}" style="color:#2563eb">{html.escape(more_label)}</a></p>')
     return "\n".join(t_lines).rstrip() + "\n", "\n".join(h_parts)
 
 
@@ -435,7 +465,7 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
         "created_at": (existing or {}).get("created_at") or now, "updated_at": now,
         "bilingual": bilingual, "caps": sorted(caps), "frequency": settings.get("frequency", "daily"),
         "subject": subject, "text_body": text, "html_body": body_html,
-        "items": [{"kind": i.kind, "ts": DS.iso(i.ts), "en": i.en, "zh": i.zh, "link": i.link,
+        "items": [{"kind": i.kind, "ts": DS.iso(i.ts), "en": i.en, "zh": i.zh, "link": i.link, "link_policy": i.policy,
                    "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
         "more": more, "recipients": recipients, "skipped": skipped,

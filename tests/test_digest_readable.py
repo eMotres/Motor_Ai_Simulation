@@ -59,7 +59,8 @@ def test_a_continuous_duty_says_it_holds_and_the_torque_target_is_judged():
                "em": {"T_em_avg_Nm": 1066.0, "P_mech_W": 95200.0},
                "hold_torque": {"basis": "held_torque", "target_nm": 1070.0, "torque_nm": 1069.5, "I_phase_rms_A": 270.4, "held": True}}
     en, zh = RD.result_line("cruise", {"coupled": coupled})
-    assert en == (f"cruise: 1{NB}066 N·m at 95.2 kW; holds continuously: winding 137 °C, magnets 82 °C; "
+    # the HELD torque (the coupled run's, at the real magnet temperature) is the one stated, the power scaled with it
+    assert en == (f"cruise: 1{NB}070 N·m at 95.5 kW; holds continuously: winding 137 °C, magnets 82 °C; "
                   f"torque target 1{NB}070 N·m held at 270 A")
     assert "可连续运行：绕组 137 °C，磁钢 82 °C" in zh and "转矩目标" in zh and "已保持" in zh
     coupled["hold_torque"].update(held=False, torque_nm=990.0)
@@ -199,3 +200,11 @@ def test_the_factory_text_never_shows_an_internal_document_group(d):
     text = draft_of(d, XSCOPE)["text_body"]
     assert "Stator assembly: 2 photos added" in text and "定子总成：新增 2 张照片" in text
     assert "internal" not in text.lower() and "margin" not in text and "xlsx" not in text and "内部" not in text
+
+def test_a_held_peak_states_one_torque_the_held_one():
+    rec = _limit_record()
+    rec["hold_torque"] = {"basis": "held_torque", "target_nm": 1500.0, "torque_nm": 1496.5, "I_phase_rms_A": 265.8, "held": True}
+    kinds = {"em_run": {"numbers": {"T_avg_Nm": 1546.1, "P_mech_W": 161905.6}}, "coupled_limit": rec}
+    en, _zh = RD.result_line("peak", kinds)
+    assert en.startswith(f"peak: 1{NB}496 N·m at 157 kW; ") and f"1{NB}546" not in en
+    assert en.endswith(f"torque target 1{NB}500 N·m held at 266 A")

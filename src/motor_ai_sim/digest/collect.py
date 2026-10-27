@@ -5,6 +5,10 @@ Pure reading (nothing is written).  Every item carries
 * ``en`` / ``zh``  one line in each language (the Chinese line is the existing Chinese field when there is one, else the
   English text marked as such; machine-translated text is marked as machine-translated in both languages);
 * ``link``         the app path of the exact page (``return_path.project_path`` / ``production_path``) or None;
+* ``link_policy``  whether the line may carry that link at all (:data:`LINK_POLICY`): ``new`` = something genuinely new to read or
+  open, ``none`` = a notice / warning that never gets a link (owner 2026-10-28).  :attr:`Item.target` is the link the renderer may
+  actually use; :func:`motor_ai_sim.digest.build.compose` puts ONE link at the end of each run of lines with the same target and
+  never repeats a URL;
 * ``requires``     the capabilities a reader needs to be allowed to see it: ``internal`` (our own side: engineers and owners,
   not customers and not the factory) and ``costs`` (the cost sheet).  The digest is ONE text for the whole group, so
   :mod:`motor_ai_sim.digest.build` keeps only the items every recipient may see.
@@ -30,6 +34,22 @@ COSTS = "costs"
 
 EXCERPT = 90
 
+#: Link policy per item kind (owner 2026-10-28): ``"new"`` = the line announces something new to open (results, a variant, a
+#: specification version, a report, a message, a document ...), ``"none"`` = a notice or warning, no link.  A kind that is not
+#: listed here keeps its link.  A single item may override its kind with ``Item.link_policy`` (the part lines: new / revised parts
+#: are new, edited / removed parts are notices).
+LINK_POLICY: dict = {
+    # development projects
+    "results": "new", "motor_added": "new", "motor_note": "new", "recommended": "new", "report_reviewed": "new",
+    "spec_version": "new", "message": "new",
+    "motor_removed": "none", "motor_status": "none", "member_joined": "none", "notes": "none", "project": "none",
+    # productions
+    "revision": "new", "document": "new", "proposal": "new", "parts": "new",
+    "proposal_decision": "none", "bom": "none", "costs": "none", "procurement": "none", "schedule": "none",
+    "process": "none", "members": "none",
+}
+DEFAULT_LINK_POLICY = "new"
+
 
 @dataclass
 class Item:
@@ -45,6 +65,17 @@ class Item:
     #: ``(en, zh)`` heading the line belongs under (e.g. the variant its duty results are about); lines with the same heading are
     #: shown together under it (:func:`motor_ai_sim.digest.build.compose`)
     group: Optional[tuple] = None
+    #: ``"new"`` / ``"none"`` overriding :data:`LINK_POLICY` for this one line (None = the policy of its kind)
+    link_policy: Optional[str] = None
+
+    @property
+    def policy(self) -> str:
+        return self.link_policy or LINK_POLICY.get(self.kind, DEFAULT_LINK_POLICY)
+
+    @property
+    def target(self) -> Optional[str]:
+        """The app path a rendered line may link to: ``link`` when the policy says ``new``, else None (a notice has no link)."""
+        return self.link if self.policy == "new" and self.link else None
 
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
@@ -104,6 +135,17 @@ def _name(email: str, fallback_en: str, fallback_zh: str) -> tuple[str, str]:
     return fallback_en, fallback_zh
 
 
+def _person(email: str) -> str:
+    """``Name <email>`` of a member (the account name when there is one), else just the address."""
+    email = str(email or "").strip()
+    try:
+        from motor_ai_sim import users
+        name = str((users.get_user(email) or {}).get("name") or "").strip()
+    except Exception:                                        # noqa: BLE001
+        name = ""
+    return f"{name} <{email}>" if name and "@" not in name and email else email
+
+
 def _merge(items: Iterable[Item]) -> list[Item]:
     """Items with the same ``key`` become one line with a count (e.g. five BOM saves -> "Bill of materials updated (5x)")."""
     out: dict[str, Item] = {}
@@ -125,7 +167,7 @@ def _merge(items: Iterable[Item]) -> list[Item]:
         it = out[k]
         n = counts[k]
         if n > 1 and it.key:
-            it = Item(it.kind, it.ts, f"{it.en} ({n}x)", f"{it.zh}（{n}次）", it.link, it.requires, it.key, it.motor, it.group)
+            it = Item(it.kind, it.ts, f"{it.en} ({n}x)", f"{it.zh}（{n}次）", it.link, it.requires, it.key, it.motor, it.group, it.link_policy)
         res.append(it)
     return res
 
@@ -231,7 +273,9 @@ def collect_project(project: dict, start: float, end: float, *,
                               RP.project_path(pid, "specification"), frozenset(), key=f"spec:{eid}"))
         elif action == "invite_claimed" or (action == "invite" and not det.get("pending")):
             role = str(det.get("role") or "")
-            items.append(Item("member_joined", ts, f"A new {role or 'member'} joined the project", f"新成员加入项目（{role or '成员'}）",
+            who = _person(eid)                               # the stored member record carries only e-mail + role: the name is the account's
+            items.append(Item("member_joined", ts, f"A new {role or 'member'} joined the project" + (f": {who}" if who else ""),
+                              f"新成员加入项目（{role or '成员'}）" + (f"：{who}" if who else ""),
                               RP.project_path(pid), frozenset(), key=f"member:{eid}"))
         elif action == "update" and entity == "project":
             fields = [str(f) for f in det.get("fields") or []]
@@ -391,7 +435,8 @@ class _PartTracker:
             names_en, names_zh = RD.name_list(rows)
             en = f"{head[0] if n == 1 else head[1] + f' ({n})'}: {names_en}"
             zh = f"{head[2]}{'' if n == 1 else f'（{n}）'}：{names_zh}"
-            return Item("parts", ts, en, zh, bom_link, frozenset(), key=f"parts:{kind}")
+            return Item("parts", ts, en, zh, bom_link, frozenset(), key=f"parts:{kind}",
+                        link_policy="new" if kind in ("new", "revised") else "none")
 
         out: list = []
         if self.new:

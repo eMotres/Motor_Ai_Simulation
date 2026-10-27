@@ -6739,6 +6739,26 @@ def demag_corner_stats(die: str, cfg: str,
     return out
 
 
+def demag_from_this_field(em: Optional[Dict[str, Any]]) -> bool:
+    """Do the demagnetisation numbers of ``em`` come from the duty's stored field map (``demag_from_field``)?
+
+    On the report's EM-run basis (H02) the run's OWN summary block is used, and the stored field is often another
+    solve - the coupled loop's last pass at other temperatures."""
+    dem = _g(em or {}, "demag")
+    return isinstance(dem, dict) and bool(dem.get("recomputed_from_field"))
+
+
+def demag_corner_stats_if_same_solve(die: str, cfg: str, duty: Optional[str],
+                                     em: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """:func:`demag_corner_stats` of the duty's stored map, only when ``em``'s demagnetisation block IS that map's
+    (audit 2026-10-27, claim 4).  The L100 'cruise' paragraph read "the worst single element keeps 30.5 %" off the
+    EM run's own summary and, one sentence later, "no element below 80 %: the worst of the 1302 ... keeps 98.4 %" off
+    the coupled loop's stored field - two solves in one paragraph."""
+    if not demag_from_this_field(em):
+        return None
+    return demag_corner_stats(die, cfg, duty)
+
+
 def br_corner_from_stats(st: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The corner diagnostic rebuilt from a duty's stored map
     (:func:`demag_corner_stats`), in the solver's ``br_corner`` shape."""
@@ -9356,7 +9376,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # is a corner or a pole, and only the field says which.  Read-only, cached,
     # and absent when a duty kept no field — the rule then reads as before.
     for _d, _c in ctxs.items():
-        _c["demag_corner"] = demag_corner_stats(die, cfg, _d)
+        _c["demag_corner"] = demag_corner_stats_if_same_solve(
+            die, cfg, _d, (_col_of(cols, _d) or {}).get("em"))
 
     # ── THE PICTURES ARE ONE DUTY'S, and that duty is the rated one ─────────
     # Read from the per-duty FIELD store, so a map is the map that duty was
@@ -12564,10 +12585,18 @@ def em_map_numbers(key: str, maps: Dict[str, Any],
     if not other:
         return ""
     if key == "demag":
-        l_worst = _numf((br_corner_of(_g((left_side or {}).get("em") or {},
-                                         "demag")) or {}).get("br_pct"))
-        r_worst = _numf((br_corner_of(_g((right_side or {}).get("em") or {},
-                                         "demag")) or {}).get("br_pct"))
+        def _worst(side: Optional[Dict[str, Any]]) -> Optional[float]:
+            em_s = (side or {}).get("em") or {}
+            # THE PICTURE'S OWN NUMBER when the EM block is another solve (audit 2026-10-27, claim 4): the map is the
+            # stored field, so a summary of a different run cannot caption it
+            if not demag_from_this_field(em_s):
+                st = (side or {}).get("demag")
+                v = _numf((st or {}).get("min_pct")) if isinstance(st, dict) else None
+                if v is not None:
+                    return v
+            return _numf((br_corner_of(_g(em_s, "demag")) or {}).get("br_pct"))
+        l_worst = _worst(left_side)
+        r_worst = _worst(right_side)
         # SAME ROUNDING AS THE TABLE (reference motor audit, 2026-09-20, CS-1): at one
         # decimal place `_fmt` strips a trailing ".0", so 6.95 rounds to
         # "7.0" and then prints as bare "7" — a different-LOOKING number

@@ -101,3 +101,25 @@ class TestClaim3PreliminaryTimeInTheRequirements:
         row = self._row(0.4)
         assert row[3] == "not met"
         assert "preliminary" not in row[2]
+
+
+class TestClaim4DemagSentencesFromOneSolve:
+    RUN = {"demag": {"br_kept_vol_pct": 98.884, "bh_loss_pct": 2.122,
+                     "br_corner": {"flag": "corner", "br_pct": 30.5}}}
+    MAP = {"n_elements": 1302, "n_below_80": 0, "min_pct": 98.4}
+
+    def test_no_field_statistics_beside_another_solves_summary(self, monkeypatch):
+        monkeypatch.setattr(R, "demag_corner_stats", lambda *a, **k: dict(self.MAP))
+        assert R.demag_corner_stats_if_same_solve("d", "c", "cruise", self.RUN) is None
+        rec = {"demag": dict(self.RUN["demag"], recomputed_from_field=True)}
+        assert R.demag_corner_stats_if_same_solve("d", "c", "cruise", rec) == self.MAP
+
+    def test_the_paragraph_then_has_one_worst_element(self):
+        txt = R.em_demag_text(self.RUN, None)
+        assert "30.5" in txt and "98.4" not in txt
+
+    def test_the_map_caption_reads_the_map_it_captions(self):
+        left = {"em": self.RUN, "demag": dict(self.MAP)}
+        right = {"em": self.RUN, "demag": dict(self.MAP, min_pct=97.9)}
+        cap = R.em_map_numbers("demag", {"demag_min_pct": 98.4}, {"demag_min_pct": 97.9}, left, right)
+        assert "98.4" in cap and "97.9" in cap and "30.5" not in cap

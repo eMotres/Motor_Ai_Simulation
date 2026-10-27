@@ -295,3 +295,14 @@ class TestClaim9RingModeSpatialOrder:
     def test_without_a_pole_count_the_frequency_decides_as_before(self):
         t = R.tightest_ring_mode({"modes": self.MODES["modes"][:2]}, rpm=850, slots=48)
         assert t["f_hz"] == 1362.0
+
+
+class TestClaim10PowerAccountingWords:
+    def test_the_em_note_says_what_the_accounting_row_is(self):
+        assert "end-winding copper" in R.EM_COMPARE_NOTE and "terminals" in R.EM_COMPARE_NOTE
+
+    def test_no_solver_jargon_in_the_eddy_row(self):
+        col = {"duty": "cruise", "d": {}, "em": {"eddy_settled": True, "eddy_settled_via_accelerator": True}}
+        _h, rows = R.em_compare_rows([col], {})
+        row = [r for r in rows if r[0] == "…eddy currents"][0]
+        assert row[1] == "settled (accelerated warm-up)"

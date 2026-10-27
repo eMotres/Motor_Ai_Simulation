@@ -18082,9 +18082,17 @@ COMPARE_INTRO = (
     "One column per operating point, one table per record kind; \"" + NOT_SOLVED
     + "\" means no record of that point is stored. " + TEMP_BASIS_NOTE)
 
+#: What the power-accounting row is (audit 2026-10-27, claim 10): the solved terminal input carries only the losses
+#: inside the 2-D field solve, so iron and end-winding copper - post-processed - make it read about minus their sum
+#: (L100: -1,745 W against 493 W iron + ~1,250 W end-winding copper).  A structural difference, not an error.
+POWER_ACCOUNTING_NOTE = (
+    "Power accounting: the iron loss and the end-winding copper are computed after the 2-D field solve and never "
+    "pass its terminals, so that row reads about minus their sum.")
+
 EM_COMPARE_NOTE = (
     "Each column is the duty's own 2-D EM run (row 'Basis'); torque = energy/flux-linkage average over one "
-    "electrical period; no validated 3-D end-effect correction unless a k_3d row is shown.")
+    "electrical period; no validated 3-D end-effect correction unless a k_3d row is shown. "
+    + POWER_ACCOUNTING_NOTE)
 
 EM_BEARING_NOTE = (
     "Bearing and windage watts are at each duty's own speed and temperature.")
@@ -18905,7 +18913,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     def _eddy_words(c):
         settled = _e(c, "eddy_settled")
         if settled is None or settled is True:
-            return ("settled via accelerator jumps"
+            return ("settled (accelerated warm-up)"
                     if _e(c, "eddy_settled_via_accelerator") else "settled")
         res = _numf(_e(c, "eddy_settle_residual"))
         tol = _numf(_e(c, "eddy_settle_tol"))

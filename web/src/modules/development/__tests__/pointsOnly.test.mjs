@@ -110,7 +110,7 @@ test('wiring: ONE display system - Configure decides points-limited from the loa
   assert.match(open, /applyCatalogDuty\(motor\.die, motor\.config, duty/);               // the Motors tab's own load
   assert.match(open, /setActiveTab\('compare'/);
   const actions = src('../MotorOpenActions.tsx');
-  assert.match(actions, /openProjectMotor\(\{ id: projectId/);
+  assert.match(src('../components/DevelopmentPage.tsx'), /openProjectMotor\(\{ id: selected\.id/);   // the row click is the one Configure path
   assert.doesNotMatch(actions, /PointsConfigure|pointsConfigureStore/);
   const page = src('../components/DevelopmentPage.tsx');
   assert.doesNotMatch(page, /MotorNoteField/);                                           // no note editor in the variant header (owner 2026-10-27)

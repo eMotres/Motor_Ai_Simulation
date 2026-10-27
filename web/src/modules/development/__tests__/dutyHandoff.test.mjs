@@ -23,9 +23,9 @@ test('catalog and Development enter the same catalog duty handoff', async () => 
   const { motorLinkAvailability } = await import('../motorAvailability.ts');
   assert.equal(motorLinkAvailability({ die: 'D', config: 'C', can_open_configure: true, configure_duty: 'server-selected' }, 'different-row').configureDuty, null);
   assert.match(actions, /setActiveTab\('simulation' as never\)/);
-  assert.match(actions, /setActiveTab\('compare' as never\)/);
+  assert.doesNotMatch(actions, /setActiveTab\('compare' as never\)/);   // no Configure button: the row click opens it (owner 2026-10-28)
   // a project motor opened for Configure takes the very same handoff (no second path)
-  assert.match(actions, /openProjectMotor\(\{ id: projectId/);
+  assert.match(source('../components/DevelopmentPage.tsx'), /openProjectMotor\(\{ id: selected\.id/);
   assert.match(source('../../../lib/openProjectMotor.ts'), /applyCatalogDuty\(motor\.die, motor\.config, duty, canWriteServer\(\),/);
   assert.doesNotMatch(source('../../../App.tsx'), /motres:open-project-motor|applyDutyLocal\(/);
 });

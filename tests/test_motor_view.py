@@ -594,8 +594,8 @@ def test_e_a_missing_current_stamp_is_unknown_not_zero():
     import inspect
     from motor_ai_sim.routes import coupled as coupled_route
     src = inspect.getsource(coupled_route._run)
-    assert 'if _f(body, "I_phase_rms", 0.0) > 0.0 else {}' in src
-    assert 'if body.get("gamma_deg") not in (None, "") else {}' in src
+    assert 'if _f(body_key, "I_phase_rms", 0.0) > 0.0 else {}' in src   # #471 renamed the loop's request to body_key
+    assert 'if body_key.get("gamma_deg") not in (None, "") else {}' in src
 
 
 def test_e_records_before_the_contact_repair_are_hidden():
@@ -760,3 +760,97 @@ def test_h_the_em_tiles_name_their_run_and_the_coupled_loop_keeps_its_own_torque
     # no EM torque stored: the tiles say they come from the coupled loop
     rows[0]["electromagnetic"] = {}
     assert motor_view.build_view(DIE, CFG, rows, stored, {}, set())["duties"][0]["sources"]["em"]["kind"] == "coupled"
+
+
+# ---------------------------------------------------------------------------
+# (i) every stored field of the duty's run is offered (owner 2026-10-27, CIANO56 400_80 vadim 3 / L110-2x3ph / cruise)
+# ---------------------------------------------------------------------------
+
+def _unstamped_em():
+    snap = em_snap()
+    snap["scalars"] = {k: v for k, v in snap["scalars"].items() if k != "rpm"}      # a map that states no speed
+    return snap
+
+
+def test_i_a_real_run_folder_with_em_thermal_and_stress_offers_all_three(sandbox):
+    """The duty's run folder holds em / thermal / stress / modes files: the viewer offers the three it draws."""
+    file_everything()
+    df.save_active("modes", {"field": {"vertices": VERTS_MM, "triangles": TRIS, "modes": [[[0, 0]] * 4]},
+                             "rpm": 3000.0, "modes": [{"index": 1, "f_hz": 100.0}]})
+    d = motor_view.build_view(DIE, CFG, _rows([DUTY]), dr.get(DIE, CFG), df.have(DIE, CFG), set())["duties"][0]
+    assert set(d["fields"]) == {"em", "thermal", "rotor_stress"}
+    assert not [h for h in d["hidden_records"] if h["kind"].startswith("field:")]    # the mode shapes are not judged here
+
+
+def test_i_a_map_with_no_stamped_speed_is_offered_not_hidden(sandbox):
+    df.save_active("em", _unstamped_em(), computed_at="2026-10-26T09:00:00", geometry_fingerprint="fp-mesh-4-layers")
+    rows = df.have(DIE, CFG)
+    assert rows[DUTY][0]["kind"] == "em" and not (rows[DUTY][0]["point"] or {}).get("rpm")
+    d = motor_view.build_view(DIE, CFG, _rows([DUTY]), {}, rows, set())["duties"][0]
+    assert set(d["fields"]) == {"em"} and d["fields"]["em"]["unstamped"] is True
+    assert d["hidden_records"] == []
+    # the map carries its own mesh provenance (a gap-layer edit is a mesh setting, never a reason to hide it)
+    assert d["fields"]["em"]["provenance"]["geometry_fingerprint"] == "fp-mesh-4-layers"
+    assert d["fields"]["em"]["provenance"]["n_triangles"] == 2
+
+
+def test_i_a_map_of_another_speed_stays_out_and_says_which_speeds(sandbox):
+    snap = em_snap()
+    snap["scalars"]["rpm"] = 1000.0
+    df.save_active("em", snap, computed_at="2026-10-26T09:00:00")
+    d = motor_view.build_view(DIE, CFG, _rows([DUTY]), {}, df.have(DIE, CFG), set())["duties"][0]       # the duty runs at 3000 rpm
+    assert d["fields"] == {}
+    assert d["hidden_records"] == [{"kind": "field:em", "reason": "other_point", "field_rpm": 1000.0, "point_rpm": 3000.0}]
+
+
+def test_i_a_stamped_map_of_the_point_has_no_unstamped_flag(sandbox):
+    df.save_active("em", em_snap(), computed_at="2026-10-26T09:00:00")
+    d = motor_view.build_view(DIE, CFG, _rows([DUTY]), {}, df.have(DIE, CFG), set())["duties"][0]
+    assert "unstamped" not in d["fields"]["em"]
+
+
+# ---------------------------------------------------------------------------
+# (j) a run to the limits that ended inside every limit is a steady state (owner 2026-10-27, same cruise record)
+# ---------------------------------------------------------------------------
+
+def _within_limits_run(**extra):
+    return {"computed_at": "2026-10-27T03:15:58", "recorded_at": "2026-10-27T03:22:52", "solve_to": "limits", "mode": "steady",
+            "coil_temp_c": 137.3, "magnet_temp_c": 82.4, "point": {"rpm": 850.0},
+            "time_to_limit": {"within_limits": True, "limits_c": {"winding": 200.0, "magnet": 180.0},
+                              "at_point_c": {"winding": 141.4, "magnet": 84.1}, "reported_state": "steady", "solve_to": "limits"},
+            **extra}
+
+
+def test_j_a_within_limits_limit_run_is_the_duty_steady_state():
+    t = motor_view.thermal_block({"coupled_limit": _within_limits_run()})
+    d = t["duty_temps"]
+    assert d["kind"] == "coupled" and d["from_limit_run"] is True
+    assert (d["winding_c"], d["magnet_c"]) == (137.3, 82.4)                      # the means
+    assert (d["winding_max_c"], d["magnet_max_c"]) == (141.4, 84.1)               # the hottest elements
+    assert t["limit_search"]["reached_limit"] is False
+    assert t["s2"]["within_limits"] is True
+    assert motor_view.limit_run_is_steady(_within_limits_run())
+
+
+def test_j_a_run_that_reached_a_limit_stays_a_limit_state():
+    reached = _within_limits_run(mode="limited")
+    reached["time_to_limit"] = {**reached["time_to_limit"], "within_limits": False, "time_to_limit_s": 67.9,
+                                "reported_state": "limited"}
+    for row in (reached, _within_limits_run(mode="limited"),
+                {**_within_limits_run(), "time_to_limit": {"within_limits": False, "reported_state": "limited"}},
+                {**_within_limits_run(), "time_to_limit": {"time_to_limit_s": 90.0}}):
+        t = motor_view.thermal_block({"coupled_limit": row})
+        assert "duty_temps" not in t and t["limit_search"]["reached_limit"] is True
+    assert not motor_view.limit_run_is_steady({"solve_to": "continuous", "mode": "limited"})
+
+
+def test_j_a_plain_coupled_row_still_wins_over_a_within_limits_limit_run():
+    stored = {"coupled": _cp(128.5, 70.0, "2026-10-25T10:00:00"), "coupled_limit": _within_limits_run()}
+    d = motor_view.thermal_block(stored)["duty_temps"]
+    assert (d["winding_c"], d["magnet_c"]) == (128.5, 70.0) and "from_limit_run" not in d
+
+
+def test_j_the_view_serves_the_cruise_record_as_a_steady_state():
+    rows = [{"duty": "cruise", "operating_point": {"rpm": 850, "current_arms": 181.5}}]
+    d = motor_view.build_view(DIE, CFG, rows, {"cruise": {"coupled_limit": _within_limits_run()}}, {}, set())["duties"][0]
+    assert d["thermal"]["duty_temps"]["winding_c"] == 137.3 and d["thermal"]["limit_search"]["reached_limit"] is False

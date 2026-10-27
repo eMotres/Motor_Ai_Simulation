@@ -8,7 +8,8 @@
  * (operating point, mesh, solver, date).
  */
 import React, { useMemo, useState } from 'react';
-import { Box } from '@mui/material';
+import { Box, Button, Tooltip } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import FieldViewer from '../common/FieldViewer';
 import { outputStub } from '../common/fieldOutput';
 import type { FieldOutput } from '../common/fieldOutput';
@@ -16,7 +17,7 @@ import { EM_MENU, classOf, emOutputs } from '../simulation/fieldView';
 import { THERMAL_MENU, thermalOutputs } from '../thermal/fieldAdapters';
 import { MECH_MENU, mechOutputs } from '../mechanical/fieldAdapters';
 import type { MechView } from '../mechanical/fieldAdapters';
-import { outlineEntries, outlineLoops } from '../../modules/development/storedFieldPayload';
+import { drawnExtent, isCropped, mapExtent, outlineEntries, outlineLoops } from '../../modules/development/storedFieldPayload';
 import type { StoredField } from '../../modules/development/types';
 
 interface Props {
@@ -29,12 +30,16 @@ interface Props {
 type Anyish = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
 
 const StoredFieldViewer: React.FC<Props> = ({ field, contextLabel, height = 420 }) => {
+  const { t } = useTranslation('development');
   const views = field.payload.views;
   const first = field.kind === 'rotor_stress' && views.includes('vm') ? 'vm' : views[0];
   const [chosen, setChosen] = useState<string>(first);
   const selected = views.includes(chosen) ? chosen : first;
 
-  const outputs = useMemo<FieldOutput[]>(() => {
+  // the map is framed to the solved (coloured) part; one switch shows the whole motor (zoom and Fit work as everywhere)
+  const [whole, setWhole] = useState(false);
+
+  const built = useMemo<FieldOutput[]>(() => {
     const p = field.payload as Anyish;
     if (field.kind === 'em') {
       // air / gap / band borders are not outlines (same rule as fieldView.outlinesFromMesh), welded so a seam is not a border
@@ -58,6 +63,16 @@ const StoredFieldViewer: React.FC<Props> = ({ field, contextLabel, height = 420 
       : outputStub(m.id, m.menuLabel, m.label, 'Mechanical', { unit: m.unit, tip: m.tip })));
   }, [field, selected, views]);
 
+  const crop = useMemo(() => {
+    const out = built.find((o) => o.id === selected);
+    const positions = (out?.geometry?.getAttribute('position') as { array?: ArrayLike<number> } | undefined)?.array;
+    return drawnExtent(positions, out?.vertexValues);
+  }, [built, selected]);
+  const cropped = useMemo(() => isCropped(built.find((o) => o.id === selected)?.extent, crop), [built, selected, crop]);
+  const outputs = useMemo<FieldOutput[]>(
+    () => built.map((o) => (o.id === selected && o.geometry ? { ...o, extent: mapExtent(o.extent, crop, whole || !cropped) ?? o.extent } : o)),
+    [built, selected, crop, whole, cropped]);
+
   return (
     <Box data-testid={`stored-field-${field.kind}`}>
       <FieldViewer
@@ -66,7 +81,15 @@ const StoredFieldViewer: React.FC<Props> = ({ field, contextLabel, height = 420 
         onSelect={setChosen}
         height={height}
         contextLabel={contextLabel}
-        fitKey={`${field.kind}:${field.duty}:${field.provenance.geometry_fingerprint ?? ''}`}
+        fitKey={`${field.kind}:${field.duty}:${field.provenance.geometry_fingerprint ?? ''}:${whole && cropped ? 'whole' : 'part'}`}
+        actions={cropped ? (
+          <Tooltip title={t('points.fields.wholeTip')}>
+            <Button size="small" aria-pressed={whole} onClick={() => setWhole((v) => !v)} data-testid="stored-field-whole"
+              sx={{ color: whole ? 'var(--text-0)' : '#93c5fd', fontSize: 10, textTransform: 'none', minWidth: 0, px: 1,
+                border: `1px solid ${whole ? '#93c5fd' : 'var(--line-soft)'}` }}>
+              {t('points.fields.whole')}
+            </Button>
+          </Tooltip>) : undefined}
       />
     </Box>
   );

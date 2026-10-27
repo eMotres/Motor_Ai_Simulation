@@ -146,6 +146,20 @@ def _is_limit_search(cp: Dict[str, Any]) -> bool:
     return is_limit_search(cp)
 
 
+def limit_run_is_steady(row: Any) -> bool:
+    """A run to the limits (``solve_to`` limits / continuous) that ended INSIDE every limit: its state is a steady one.
+
+    Only a run that actually reached a limit (``mode`` ``limited``, or ``time_to_limit.within_limits`` false) is a limit
+    state; a within-limits run settled (``reported_state`` steady) and its temperatures are the point's own.
+    """
+    if not isinstance(row, dict):
+        return False
+    tl = row.get("time_to_limit") if isinstance(row.get("time_to_limit"), dict) else {}
+    if str(row.get("mode") or "").lower() == "limited" or tl.get("within_limits") is not True:
+        return False
+    return str(tl.get("reported_state") or row.get("mode") or "steady").lower() == "steady"
+
+
 def _newest(*rows: Any) -> Optional[Dict[str, Any]]:
     """The newest of the given rows (None entries skipped); an undated row loses to a dated one."""
     from datetime import datetime, timezone
@@ -336,29 +350,43 @@ def own_records(stored_duty: Any, op: Dict[str, Optional[float]]) -> Tuple[Dict[
     return kept, hidden
 
 
-def own_fields(rows: Any, op: Dict[str, Optional[float]], kept: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+def own_fields(rows: Any, op: Dict[str, Optional[float]], kept: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """The stored field maps of one duty that belong to it.
 
-    A map belongs when its own stamped speed is the point's (a map with no stamp cannot be tied to the point and is left out),
-    except the stress map, which also belongs when the duty's own stress RECORD was kept (the record and the map are one run).
-    A temperature map with a physically impossible range is never offered.
+    The maps sit in the duty's OWN run folder (``runs/<configuration>/<duty>/fields``), so they are the duty's.  One is left
+    out only when it states a speed (or current) that is not the point's - then ``hidden`` names the speeds, so the viewer can
+    say WHY a tab is empty - or when its temperature range is impossible.  A map that states no speed at all is offered (it
+    cannot be tied to the point, but nothing says it is another one); the stress map also belongs when the duty's own stress
+    RECORD was kept (the record and the map are one run).  Nothing here looks at the mesh: the mesh size, the gap layers and
+    the element count are mesh settings, not geometry, and they ride on each map as its own provenance.
+    Only the kinds the viewer draws are judged (``FIELD_KINDS``; the mode shapes have their own gallery).
     """
     out: List[Dict[str, Any]] = []
-    hidden: List[Dict[str, str]] = []
+    hidden: List[Dict[str, Any]] = []
     for r in rows or []:
         kind = r.get("kind")
+        if kind not in FIELD_KINDS:
+            continue
         pt = r.get("point") if isinstance(r.get("point"), dict) else {}
-        ok = belongs_to_point("em_run" if kind == "em" else kind, {"point": pt}, op) or (
+        stamp_kind = "em_run" if kind == "em" else kind
+        stamp = record_stamp(stamp_kind, {"point": pt})
+        stamped = bool(stamp["rpm"] or stamp["current"])
+        ok = (not stamped) or belongs_to_point(stamp_kind, {"point": pt}, op) or (
             kind == "rotor_stress" and isinstance(kept.get("rotor_stress"), dict) and bool(kept.get("rotor_stress")))
         if not ok:
-            hidden.append({"kind": f"field:{kind}", "reason": "other_point"})
+            why: Dict[str, Any] = {"kind": f"field:{kind}", "reason": "other_point"}
+            if stamp["rpm"]:
+                why["field_rpm"] = round(stamp["rpm"][0], 1)
+            if (op or {}).get("rpm") is not None:
+                why["point_rpm"] = round(float(op["rpm"]), 1)
+            hidden.append(why)
             continue
         if kind == "thermal":
             low = _num(pt.get("T_min"))
             if low is not None and low < T_FLOOR_C:
                 hidden.append({"kind": "field:thermal", "reason": "impossible_temperature", "value": f"{low:.1f}"})
                 continue
-        out.append(r)
+        out.append(r if stamped else {**r, "unstamped": True})
     return out, hidden
 
 
@@ -412,6 +440,19 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if em:
             duty_temps["em"] = em
         # the housing of the same loop's map, when that map states it
+    elif limit_row is not None and limit_run_is_steady(limit_row):
+        # a run to the limits that ended INSIDE every limit is a steady state, not a limit (owner 2026-10-27): the machine
+        # holds this point for ever, and these are its settled temperatures (mean; the hottest ones ride along)
+        at = (limit_row.get("time_to_limit") or {}).get("at_point_c") if isinstance(limit_row.get("time_to_limit"), dict) else None
+        at = at if isinstance(at, dict) else {}
+        duty_temps = {"kind": "coupled", "from_limit_run": True,
+                      "winding_c": _num(limit_row.get("coil_temp_c")), "magnet_c": _num(limit_row.get("magnet_temp_c")),
+                      "winding_max_c": _num(at.get("winding")), "magnet_max_c": _num(at.get("magnet")),
+                      "bearing_c": _num(limit_row.get("bearing_temp_c")), "drive": limit_row.get("drive"),
+                      "provenance": provenance(limit_row)}
+        em = _coupled_em(limit_row)
+        if em:
+            duty_temps["em"] = em
     elif cp is None and th and str(th.get("state") or "steady").lower() == "steady":
         comps = th.get("components") if isinstance(th.get("components"), dict) else {}
         duty_temps = {"kind": "thermal", "winding_c": _num((comps.get("winding") or {}).get("max")),
@@ -432,6 +473,8 @@ def thermal_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if limit_row:
         out["limit_search"] = {"kind": "coupled_limit" if limit_row is cl else "coupled", "solve_to": limit_row.get("solve_to"),
                                "mode": limit_row.get("mode"),
+                               # False = the run settled inside every limit (a steady state); only True is a limit state
+                               "reached_limit": not limit_run_is_steady(limit_row),
                                "winding_c": _num(limit_row.get("coil_temp_c")), "magnet_c": _num(limit_row.get("magnet_temp_c")),
                                "provenance": provenance(limit_row)}
         out["limit_search"] = {k: v for k, v in out["limit_search"].items() if v is not None}
@@ -590,7 +633,8 @@ def fields_block(rows: Any) -> Dict[str, Any]:
         kind = r.get("kind")
         if kind in FIELD_KINDS:
             out[kind] = {"provenance": provenance({}, {**r, "saved_at": r.get("saved_at")}),
-                         "point": plain(r.get("point"), 1) or {}}
+                         "point": plain(r.get("point"), 1) or {},
+                         **({"unstamped": True} if r.get("unstamped") else {})}
     return out
 
 

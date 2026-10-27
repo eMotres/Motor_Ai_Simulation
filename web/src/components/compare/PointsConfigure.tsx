@@ -33,7 +33,7 @@ import type { FieldKind, MotorPointVariant, MotorView, MotorViewDuty, StoredFiel
 import {
   POINT_TILES, findVariantIndex, pointOperating, tileValue,
 } from '../../modules/development/pointsOnly';
-import { FIELD_KIND_ORDER, configureTileKey, isNotComputed, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
+import { FIELD_KIND_ORDER, configureTileKey, isNotComputed, otherPointFields, pickPointDuty, pointDuties, provenanceLine, storedFieldKinds } from '../../modules/development/pointsLimited';
 import { parametersLine } from '../../modules/development/storedFieldPayload';
 import { motorColor } from '../../modules/development/motorGroups';
 import { fetchMotorField } from '../../lib/motorViewApi';
@@ -117,6 +117,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const points = useMemo(() => pointDuties(view), [view]);
   const current: MotorViewDuty | null = points.find((d) => d.duty === duty) ?? null;
   const kinds = storedFieldKinds(current);
+  const otherPoint = otherPointFields(current);
   const activeKind: FieldKind | null = kind && kinds.includes(kind) ? kind : (kinds[0] ?? null);
 
   // the stored map of the chosen kind (cached per motor / duty / kind; project route when the motor is a project step)
@@ -171,8 +172,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
     { id: 'current', value: operating.currentA, unit: 'A' },
     { id: 'gamma', value: operating.gammaDeg, unit: '°' },
   ];
+  // a map that states no speed of its own is not described with the point's operating values (they would claim more than is known)
   const fieldLabel = field?.value
-    ? parametersLine({ rpm: operating.rpm, currentA: operating.currentA, gammaDeg: operating.gammaDeg, provenance: provenanceLine(field.value.provenance) })
+    ? (current?.fields?.[field.value.kind]?.unstamped === true
+      ? provenanceLine(field.value.provenance)
+      : parametersLine({ rpm: operating.rpm, currentA: operating.currentA, gammaDeg: operating.gammaDeg, provenance: provenanceLine(field.value.provenance) }))
     : '';
 
   return (
@@ -284,8 +288,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
             <ToggleButtonGroup exclusive size="small" value={activeKind} aria-label={t('points.fields.title')}
               onChange={(_, value) => { if (value) setKind(value as FieldKind); }}>
               {FIELD_KIND_ORDER.map((k) => (
-                <ToggleButton key={k} value={k} disabled={!kinds.includes(k)} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12 }}>
-                  <Tooltip title={kinds.includes(k) ? t(`points.fields.tip.${k}`) : t('points.notComputed')}><span>{t(`points.fields.kind.${k}`)}</span></Tooltip>
+                <ToggleButton key={k} value={k} disabled={!kinds.includes(k)} sx={{ textTransform: 'none', px: 1.2, py: 0.3, fontSize: 12, '&.Mui-disabled': { pointerEvents: 'auto' } }}>
+                  <Tooltip title={kinds.includes(k) ? t(`points.fields.tip.${k}`) : otherPoint[k] ? t('points.fields.otherPoint', otherPoint[k]) : t('points.notComputed')}><span>{t(`points.fields.kind.${k}`)}</span></Tooltip>
                 </ToggleButton>
               ))}
             </ToggleButtonGroup>

@@ -100,8 +100,25 @@ export function storedFieldKinds(duty: MotorViewDuty | null | undefined): FieldK
   });
 }
 
-/** What a limit-search line is: the S1 continuous limit, the run to the first limit (time to the limit), or a plain search. */
-export function limitKind(limit: StoredThermal['limit_search'] | null | undefined): 'continuous' | 'time' | 'search' {
+/** Maps the server left out because they were solved at another speed than the point's, by kind: the two speeds, so the empty
+ *  tab can say why (owner 2026-10-27: "why is the electromagnetic simulation not visible?"). */
+export function otherPointFields(duty: MotorViewDuty | null | undefined): Partial<Record<FieldKind, { field: number; point: number }>> {
+  const out: Partial<Record<FieldKind, { field: number; point: number }>> = {};
+  for (const h of duty?.hidden_records ?? []) {
+    const m = /^field:(.+)$/.exec(h.kind);
+    const kind = m ? (m[1] as FieldKind) : null;
+    if (!kind || !FIELD_KIND_ORDER.includes(kind) || h.reason !== 'other_point') continue;
+    const field = num(h.field_rpm);
+    const point = num(h.point_rpm);
+    if (field !== null && point !== null) out[kind] = { field: Math.round(field), point: Math.round(point) };
+  }
+  return out;
+}
+
+/** What a limit-search line is: the S1 continuous limit, the run to the first limit (time to the limit), a plain search - or,
+ *  when the run ended INSIDE every limit (`reached_limit` false), a steady state that merely used the limit machinery. */
+export function limitKind(limit: StoredThermal['limit_search'] | null | undefined): 'continuous' | 'time' | 'search' | 'steady' {
+  if (limit?.reached_limit === false) return 'steady';
   const to = String(limit?.solve_to ?? '').toLowerCase();
   return to === 'continuous' ? 'continuous' : to === 'limits' ? 'time' : 'search';
 }

@@ -115,3 +115,51 @@ export function parametersLine(parts: { rpm?: number | null; currentA?: number |
   if (parts.provenance) bits.push(parts.provenance);
   return bits.join(' · ');
 }
+
+// ── crop to the solved part (owner 2026-10-27: "show only the coloured part") ───────────────────────────────────────────
+
+export type Extent = [number, number, number, number];
+
+/** Bounding box [xmin, xmax, ymin, ymax] of the DRAWN triangles that carry a value, grown by `margin` x the larger span on every
+ *  side (default 4 %).  `positions` are the geometry's xyz triplets (3 vertices per triangle, display units); `values` the raw
+ *  value per drawn vertex (same order) - a triangle with a non-finite vertex value carries none and does not count.  `null` when
+ *  nothing is drawn, so the caller keeps the output's own (whole) extent. */
+export function drawnExtent(positions: ArrayLike<number> | null | undefined, values?: ArrayLike<number> | null, margin = 0.04): Extent | null {
+  if (!positions || positions.length < 9) return null;
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  const nTri = Math.floor(positions.length / 9);
+  for (let t = 0; t < nTri; t++) {
+    const tri = t * 3;
+    let ok = true;
+    for (let k = 0; k < 3 && ok; k++) {
+      const s = (tri + k) * 3;
+      if (!Number.isFinite(positions[s]) || !Number.isFinite(positions[s + 1])) ok = false;
+      if (values && tri + k < values.length && !Number.isFinite(values[tri + k])) ok = false;
+    }
+    if (!ok) continue;
+    for (let k = 0; k < 3; k++) {
+      const s = (tri + k) * 3;
+      const x = positions[s], y = positions[s + 1];
+      if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    }
+  }
+  if (!Number.isFinite(xmin) || !(xmax > xmin) || !(ymax > ymin)) return null;
+  const pad = Math.max(xmax - xmin, ymax - ymin) * margin;
+  return [xmin - pad, xmax + pad, ymin - pad, ymax + pad];
+}
+
+/** True when `crop` is clearly smaller than `whole` (under 90 % of its area): only then is there something to switch between. */
+export function isCropped(whole: Extent | null | undefined, crop: Extent | null | undefined): boolean {
+  if (!whole || !crop) return false;
+  const area = (e: Extent) => Math.max(0, e[1] - e[0]) * Math.max(0, e[3] - e[2]);
+  const w = area(whole);
+  return w > 0 && area(crop) < 0.9 * w;
+}
+
+/** The extent a map is framed to: the solved part by default, the output's own (whole-model) extent on request or when there is
+ *  nothing to crop to. */
+export function mapExtent(whole: Extent | null | undefined, crop: Extent | null | undefined, showWhole: boolean): Extent | null {
+  if (showWhole || !crop) return whole ?? crop ?? null;
+  return crop;
+}

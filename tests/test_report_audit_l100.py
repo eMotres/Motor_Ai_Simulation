@@ -179,3 +179,38 @@ class TestClaim6InputsAreNotResults:
         col["res"] = {"coupled": {"coil_temp_c": 180.0, "magnet_temp_c": 92.3}}
         ctx = _ctx(col)
         assert ctx["magnet_temp_c"] == 92.3 and ctx["winding_temp_c"] == 180.0
+
+
+class TestClaim7CurrentDensityLimitFromTheCoolingSet:
+    COOL = {"cooling_mode": "air", "air_speed_mps": 25.0, "frame": "open", "open_air_speed_mps": 25.0,
+            "ambient_temp": 45.0}
+
+    def _col(self, duty, res):
+        return {"duty": duty, "d": {"rpm": 850}, "em": {"J_coil_A_per_mm2": 15.8, "rpm": 850}, "res": res}
+
+    def test_the_coupled_loops_cooling_decides_the_band(self):
+        ctx = _ctx(self._col("cruise", {"coupled": {"continuous_rating": {"cooling": dict(self.COOL)}}}))
+        assert ctx["cooling_kind"] == "air" and ctx["frame_open"] is True
+        j = [w for w in R.duty_warnings(ctx) if w["rule"] == "current_density"][0]
+        assert j["limit"] == 15.0
+
+    def test_a_translated_map_does_not_hide_the_cooling(self):
+        res = {"thermal": {"state": "limited", "cooling": {"outer": {"mode": "air"}}},
+               "coupled": {"limited": {"cooling": dict(self.COOL)}}}
+        ctx = _ctx(self._col("peak", res))
+        assert ctx["frame_open"] is True
+
+    def test_an_unsolved_duty_takes_the_configurations_cooling(self):
+        ctxs = {"cruise": _ctx(self._col("cruise", {"coupled": {"continuous_rating": {"cooling": dict(self.COOL)}}})),
+                "takeoff": _ctx(self._col("takeoff", {}))}
+        assert ctxs["takeoff"]["cooling_note"].startswith("ASSUMED")
+        R.share_configuration_cooling(ctxs)
+        assert ctxs["takeoff"]["frame_open"] is True and "cruise" in ctxs["takeoff"]["cooling_note"]
+        rows = R._limit_rules_rows_full(ctxs["takeoff"])
+        jrow = [r for r in rows if r[0] == "Current density"][0]
+        assert "15" in jrow[1] and "open" in jrow[2]
+
+    def test_nothing_set_anywhere_stays_the_assumed_closed_band(self):
+        ctx = _ctx(self._col("takeoff", {}))
+        R.share_configuration_cooling({"takeoff": ctx})
+        assert ctx["cooling_note"].startswith("ASSUMED") and not ctx["frame_open"]

@@ -8463,6 +8463,55 @@ def _cooling_kind(t: Optional[Dict[str, Any]]) -> Tuple[Optional[str], str]:
                    "the heat leaves, and air is the tighter band")
 
 
+def cooling_settings_of_record(cp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The cooling fields (``cooling_mode``, ``frame`` …) a coupled record was solved with, or ``None``.
+
+    The loop keeps them in its S1 block (``continuous_rating.cooling``), its limit block (``limited.cooling``) and
+    the time-to-limit block; the first that names a ``cooling_mode`` answers."""
+    if not isinstance(cp, dict):
+        return None
+    for blk in (cp, cp.get("continuous_rating"), cp.get("limited"), cp.get("time_to_limit")):
+        c = (blk or {}).get("cooling") if isinstance(blk, dict) else None
+        if isinstance(c, dict) and str(c.get("cooling_mode") or "").strip():
+            return c
+    return None
+
+
+def cooling_kind_of_settings(c: Optional[Dict[str, Any]]) -> Optional[Tuple[str, str, bool]]:
+    """``(kind, note, frame_open)`` of a cooling-fields dict - the same classes :func:`_cooling_kind` reads off a
+    solved boundary - or ``None`` when the fields name no class (a fixed film, nothing)."""
+    if not isinstance(c, dict):
+        return None
+    mode = str(c.get("cooling_mode") or "").strip().lower()
+    frame_open = str(c.get("frame") or "housed").strip().lower() == "open"
+    if mode.startswith("robot"):
+        return "robotics", "the cooling set for the coupled loop is still air (natural convection + radiation)", False
+    if mode.startswith("liq"):
+        return "liquid", "the cooling set for the coupled loop is a liquid jacket", False
+    if mode.startswith("air") or mode.startswith("prop"):
+        return "air", ("the cooling set for the coupled loop is forced air, %s frame"
+                       % ("open" if frame_open else "closed")), frame_open
+    return None
+
+
+def share_configuration_cooling(ctxs: Dict[str, Dict[str, Any]]) -> None:
+    """A duty with no cooling of its own takes the configuration's (claim 7, in place).
+
+    The cooling is set per configuration, not per duty: a duty with neither a map nor a coupled loop used to read
+    "ASSUMED air-cooled, closed" beside a sibling solved with an open frame.  The first duty whose cooling is solved
+    or set answers for it, and its note says which duty."""
+    src = next(((d, c) for d, c in (ctxs or {}).items()
+                if c and not str(c.get("cooling_note") or "").startswith("ASSUMED")), None)
+    if src is None:
+        return
+    d0, c0 = src
+    for c in ctxs.values():
+        if c and str(c.get("cooling_note") or "").startswith("ASSUMED"):
+            c["cooling_kind"], c["frame_open"] = c0.get("cooling_kind"), c0.get("frame_open")
+            c["cooling_note"] = "%s (this configuration's cooling, as duty '%s' was solved with)" % (
+                str(c0.get("cooling_note") or "").rstrip("."), d0)
+
+
 def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                      batt: Dict[str, Any], brg: Optional[Dict[str, Any]],
                      max_speed_rpm: Optional[float],
@@ -8715,6 +8764,15 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     _fr = str((((t or {}).get("cooling") or {}).get("frame") or {})
               .get("mode") or "").strip().lower()
     ctx["frame_open"] = bool(_fr) and not _fr.startswith("hous")
+    # …AND WITHOUT A THERMAL MAP, THE COOLING THE DUTY'S COUPLED LOOP WAS SOLVED WITH (audit 2026-10-27, claim 7):
+    # a duty with no map - or a translated one, which no verdict reads - fell to "ASSUMED air, closed frame" and
+    # judged 10 A/mm2 on a machine whose loop says "forced air 25 m/s + open frame 25 m/s".
+    if t is None:
+        _set = cooling_settings_of_record(cp)
+        _sk = cooling_kind_of_settings(_set)
+        if _sk is not None:
+            ctx["cooling_kind"], ctx["cooling_note"], ctx["frame_open"] = _sk
+            ctx["cooling_from_settings"] = True
     # The two insulation cards travel with the context, because under a JACKET
     # they are what sets the current-density band (20 organic / 25 ceramic,
     # user 2026-09-14).  The cards are the machine's, not the duty's, so any
@@ -9370,6 +9428,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         cold_note=cold_note, slots=_slots_poles(geo)[0],
         carrier_hz=duty_carrier_hz(cfg_doc, c["duty"]),
         ins_peak_lim=ins_peak_lim, ins_peak_note=ins_peak_note) for c in cols}
+    share_configuration_cooling(ctxs)
     # WHETHER THE MACHINE HAS A SLEEVE, once, from the geometry: every sleeve line below asks this (owner 2026-10-26)
     for _c in cols:
         _c["has_sleeve"] = has_sleeve(geo)

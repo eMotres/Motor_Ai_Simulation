@@ -208,3 +208,11 @@ def test_a_held_peak_states_one_torque_the_held_one():
     en, _zh = RD.result_line("peak", kinds)
     assert en.startswith(f"peak: 1{NB}496 N·m at 157 kW; ") and f"1{NB}546" not in en
     assert en.endswith(f"torque target 1{NB}500 N·m held at 266 A")
+
+def test_a_generator_states_its_output_and_efficiency_never_a_negative_torque():
+    kinds = {"em_run": {"numbers": {"T_avg_Nm": -0.292, "P_mech_W": 23.9, "efficiency": 0.8741, "P_elec_in_W": -21.89}}}
+    en, zh = RD.result_line("generator_780", kinds)
+    assert en == "generator_780: generator 22 W out, shaft torque 0.29 N·m, efficiency 87.4 %"
+    assert "-0" not in en and "发电 22 W" in zh
+    motor = {"em_run": {"numbers": {"T_avg_Nm": 1021.1, "P_mech_W": 90894.2, "efficiency": 0.961}}}
+    assert RD.result_line("cruise", motor)[0] == f"cruise: 1{NB}021 N·m at 90.9 kW, efficiency 96.1 %"

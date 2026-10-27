@@ -92,6 +92,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
       if (cancelled) return;
       const raw = ((sp.draft?.fields ?? {}) as Record<string, unknown>)['2_1'];
       const value = raw && typeof raw === 'object' && !Array.isArray(raw) && 'value' in raw ? (raw as { value?: unknown }).value : raw;
+      if (value && typeof value === 'object' && (value as Record<string, unknown>).supply_type === 'dc_source') return;      // a DC power source is not a battery: Configure keeps its own default
       const bat = specBatteryView(value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}).bat as Battery;
       if ([bat.cells, bat.min, bat.nom, bat.max].every((n) => Number.isFinite(n))) { setSpecBattery(bat); setBattery(bat); }
     }).catch(() => { /* no specification battery: Configure's default stays */ });

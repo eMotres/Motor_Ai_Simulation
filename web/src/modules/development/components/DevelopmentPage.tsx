@@ -130,7 +130,7 @@ export default function DevelopmentPage() {
   const canEditProject = !!selected && (canManageGlobally || selected.can_edit === true);
   const canManageProjectMotors = canManageGlobally && canEditProject;
   const profile = spec ? wizardProfile(spec.draft as SpecDraft) : 'industrial';
-  const sections = useMemo(() => schema ? buildWizardSteps(schema, profile) : [], [schema, profile]);
+  const sections = useMemo(() => schema ? buildWizardSteps(schema, profile, { staff: canManageGlobally }) : [], [schema, profile, canManageGlobally]);
   // the catalogue of complete controllers (read-only reference data); the picker degrades to free text without it
   useEffect(() => {
     if (!user?.email) return;

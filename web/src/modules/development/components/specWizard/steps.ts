@@ -18,7 +18,7 @@ export interface StepDef { id: WizardStepId; core: string[]; optional: string[];
 export const STEP_DEFS: StepDef[] = [
   { id: 'application', core: ['1_1', 'load_type', '1_2'], optional: ['load_inertia_kg_m2', 'startup_mode'], legacy: ['application', 'key'] },
   { id: 'operating', core: ['key_points', '1_6', '1_8', 'mission_profile'], optional: ['1_7'], legacy: ['continuous', 'mission'] },
-  { id: 'supply', core: ['2_1', '2_4', '2_6', '2_9'], optional: ['2_7', '2_8', '2_11', '2_12'], legacy: ['electrical'] },
+  { id: 'supply', core: ['2_1', '2_4'], optional: ['2_7', '2_8', '2_11', '2_12'], legacy: ['electrical'] },
   { id: 'cooling', core: ['3_1', '3_2', '3_3', '3_6'], optional: ['3_4', '3_5'], legacy: ['cooling'] },
   { id: 'mechanical', core: ['4_1', '4_2', '4_3', '4_4', '4_8', '4_6'], optional: ['4_5', '4_7', '4_9'], legacy: ['mechanical', 'construction', 'load'] },
   { id: 'safety', core: ['5_1', '5_4', '5_2', '5_3', '1_10', '1_9'], optional: ['tests', 'certification'], legacy: [] },
@@ -31,7 +31,7 @@ export interface CardDef { id: string; ids: string[]; /** no title even with sev
 export const STEP_CARDS: Record<WizardStepId, CardDef[]> = {
   application: [{ id: 'application', ids: ['1_1', 'load_type', '1_2'] }],
   operating: [{ id: 'points', ids: ['key_points'] }, { id: 'maxSpeed', ids: ['1_6'] }, { id: 'ripple', ids: ['1_8'] }, { id: 'mission', ids: ['mission_profile'] }],
-  supply: [{ id: 'dcBus', ids: ['2_1'] }, { id: 'genOutput', ids: ['2_13'] }, { id: 'controller', ids: ['2_4'] }, { id: 'phases', ids: ['2_6', '2_9'] }],
+  supply: [{ id: 'dcBus', ids: ['2_1'] }, { id: 'genOutput', ids: ['2_13'] }, { id: 'controller', ids: ['2_4'] }],
   cooling: [{ id: 'cooling', ids: ['3_1', '3_2'] }, { id: 'housing', ids: ['3_3', '3_6'], untitled: true }],
   mechanical: [{ id: 'envelope', ids: ['4_1', '4_2'] }, { id: 'interface', ids: ['4_3', '4_4', '4_8'] }, { id: 'loads', ids: ['4_6'] }],
   safety: [{ id: 'standards', ids: ['5_1', '5_4', '5_2', '5_3'] }, { id: 'life', ids: ['1_10', '1_9'] }],
@@ -41,6 +41,11 @@ export const STEP_CARDS: Record<WizardStepId, CardDef[]> = {
 /** Fields a step asks only for one project profile: the generator's AC output window (2_13) sits in the supply step of a
  *  generator project and nowhere else; no existing answer is touched. */
 export const PROFILE_FIELDS: Record<string, Partial<Record<WizardStepId, string[]>>> = { generator: { supply: ['2_13'] } };
+
+/** Fields only staff (admins and engineers) see, in the collapsed "Optional details" group of their step (owner 2026-10-27: the
+ *  phase current limits and the phase count are not asked from the customer - the controller gives them or the simulation sets
+ *  them).  Their stored answers (the catalogue controller pre-fills them) are kept for every viewer; they never count as required. */
+export const STAFF_FIELDS: Partial<Record<WizardStepId, string[]>> = { supply: ['2_6', '2_9'] };
 
 /** Fields the schema has that the wizard never asks (see the header). */
 export const NOT_ASKED = ['1_3', '2_2', '2_3', '2_5', '2_10', '6_3', '6_5', 'target_price', 'load_source', 'load_characteristic', 'quantities', 'timeline'];
@@ -62,7 +67,7 @@ export const stepTitleKey = (id: string, profile?: string) => `wizard.steps.${id
 export const stepSummaryKey = (id: string, profile?: string) => `wizard.steps.${id}.summary${variant(id, profile)}`;
 
 /** The steps of one schema (the review step last).  A field the schema does not have is skipped. */
-export function buildWizardSteps(schema: DevelopmentSchema, profile?: string): WizardStep[] {
+export function buildWizardSteps(schema: DevelopmentSchema, profile?: string, opts: { staff?: boolean } = {}): WizardStep[] {
   const byId = new Map<string, SpecificationField>();
   for (const section of schema.sections) {
     const namespace = section.id === 'production' ? 'production' : 'fields';
@@ -72,7 +77,7 @@ export function buildWizardSteps(schema: DevelopmentSchema, profile?: string): W
   }
   const pick = (ids: string[]) => ids.map((id) => byId.get(id)).filter((f): f is SpecificationField => !!f);
   const steps: WizardStep[] = STEP_DEFS.map((def) => {
-    const core = pick([...def.core, ...(PROFILE_FIELDS[profile ?? '']?.[def.id] ?? [])]), optional = pick(def.optional);
+    const core = pick([...def.core, ...(PROFILE_FIELDS[profile ?? '']?.[def.id] ?? [])]), optional = pick([...def.optional, ...(opts.staff ? STAFF_FIELDS[def.id] ?? [] : [])]);
     return {
       id: def.id, title: stepTitleKey(def.id, profile), summary: stepSummaryKey(def.id, profile),
       fields: [...core, ...optional], coreIds: core.map((f) => f.id), optionalIds: optional.map((f) => f.id), legacy_ids: def.legacy,

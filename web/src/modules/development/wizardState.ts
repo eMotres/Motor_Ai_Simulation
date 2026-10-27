@@ -73,9 +73,18 @@ export function fieldApplies(f: SchemaField, draft: SpecDraft): boolean {
 /** A property of a structured answer is required outright, or - the cooling temperatures - when the answer's own cooling
  *  medium is the one in `required_when_cooling_medium` (liquid: the coolant inlet temperature, underwater: the water
  *  temperature).  The same rule as the backend's `_property_required`. */
-export function propertyRequired(prop: { required?: boolean; required_flag?: string; required_when_cooling_medium?: string }, value: unknown): boolean {
-  if (prop.required === true || prop.required_flag === 'E') return true;
+export function propertyRequired(prop: RuleProperty, value: unknown): boolean {
+  if (choiceHolds(prop.required_if_value, value)) return true;
+  if (prop.required === true || prop.required_flag === 'E') return !choiceHolds(prop.required_unless_value, value);
   return !!prop.required_when_cooling_medium && coolingMedium(value).medium === prop.required_when_cooling_medium;
+}
+/** A requirement that follows another property of the same answer (the power supply, 2_1): `required_if_value` makes a property
+ *  required while the named property holds the choice, `required_unless_value` drops a required property while it does.  The
+ *  same rule as the backend's `_property_required`. */
+export interface ChoiceRule { property: string; equals: unknown }
+export type RuleProperty = { required?: boolean; required_flag?: string; required_when_cooling_medium?: string; required_if_value?: ChoiceRule; required_unless_value?: ChoiceRule };
+export function choiceHolds(rule: ChoiceRule | undefined, value: unknown): boolean {
+  return !!rule && !!value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>)[rule.property] === rule.equals;
 }
 export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return fieldApplies(f, draft) && (isRequired(f) || isConditionallyRequired(f, draft)); }
 export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {
@@ -127,7 +136,7 @@ export function missingAnyGroups(field: { required_any?: string[][]; properties?
   return (field.required_any ?? []).filter((group) => !group.some((id) => { const property = field.properties?.find((p) => p.id === id); return !!property && schemaValueComplete(property, record[id]); }));
 }
 
-export function schemaValueComplete(schema: { type?: string; min?: number; max?: number; required?: boolean; allow_range?: boolean; required_any?: string[][]; properties?: Array<{ id: string; required?: boolean; required_flag?: string; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {
+export function schemaValueComplete(schema: { type?: string; min?: number; max?: number; required?: boolean; allow_range?: boolean; required_any?: string[][]; properties?: Array<{ id: string; required?: boolean; required_flag?: string; required_if_value?: ChoiceRule; required_unless_value?: ChoiceRule; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {
   if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return false;
   if (schema.allow_range && typeof value === 'object') {
     const bounds = value as Record<string, unknown>;
@@ -145,7 +154,7 @@ export function schemaValueComplete(schema: { type?: string; min?: number; max?:
   if ((schema.type === 'object' || schema.properties?.length) && schema.properties?.length) {
     if (typeof value !== 'object' || Array.isArray(value)) return false;
     const record = value as Record<string, unknown>;
-    const required = schema.properties.filter((p) => p.required === true || p.required_flag === 'E');
+    const required = schema.properties.filter((p) => choiceHolds(p.required_if_value, record) || ((p.required === true || p.required_flag === 'E') && !choiceHolds(p.required_unless_value, record)));
     return required.every((p) => schemaValueComplete(p, record[p.id])) && missingAnyGroups(schema, record).length === 0;
   }
   if (schema.type === 'number') return typeof value !== 'boolean' && (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isFinite(Number(value)) && (schema.min === undefined || Number(value) >= schema.min) && (schema.max === undefined || Number(value) <= schema.max);

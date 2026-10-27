@@ -59,7 +59,12 @@ test('field to step: the schema sections map onto the seven steps', () => {
   const where = (id) => steps[stepIndexForField(steps, id)]?.id;
   assert.deepEqual(['1_1', 'load_type', '1_2'].map(where), ['application', 'application', 'application']);
   assert.deepEqual(['key_points', '1_6', '1_8', 'mission_profile', '1_7'].map(where), Array(5).fill('operating'));
-  assert.deepEqual(['2_1', '2_4', '2_6', '2_9', '2_7'].map(where), Array(5).fill('supply'));
+  assert.deepEqual(['2_1', '2_4', '2_7'].map(where), Array(3).fill('supply'));
+  // the phase current limits and the phase count are not asked from the customer (owner 2026-10-27); staff still see them, collapsed
+  assert.deepEqual(['2_6', '2_9'].map(where), [undefined, undefined]);
+  const staffSteps = buildWizardSteps(schema, undefined, { staff: true });
+  assert.deepEqual(['2_6', '2_9'].map((id) => staffSteps[stepIndexForField(staffSteps, id)]?.id), ['supply', 'supply']);
+  assert.ok(isOptionalField(staffSteps, '2_6') && isOptionalField(staffSteps, '2_9'));
   assert.deepEqual(['3_1', '3_2', '3_3', '3_6', '3_4', '3_5'].map(where), Array(6).fill('cooling'));
   assert.deepEqual(['4_1', '4_2', '4_3', '4_4', '4_8', '4_6', '4_5', '4_7', '4_9'].map(where), Array(9).fill('mechanical'));
   assert.deepEqual(['5_1', '5_2', '5_3', '5_4', '1_9', '1_10', 'tests', 'certification'].map(where), Array(8).fill('safety'));

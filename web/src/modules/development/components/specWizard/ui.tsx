@@ -1,10 +1,10 @@
 /** Small presentational pieces of the specification wizard: the card, the optional-details group, a large number input with
  *  a unit and the duration chips.  Touch targets are at least 44 px; colours come from the app's CSS variables. */
 import { useEffect, useState } from 'react';
-import { Box, ButtonBase, Collapse, InputAdornment, Paper, Stack, TextField, Typography } from '@mui/material';
+import { Box, ButtonBase, Collapse, InputAdornment, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HelpTip from '../../../../components/common/HelpTip';
-import { DURATION_PRESETS, durationMode } from './operatingPoints';
+import { DURATION_PRESETS, autoPowerUnit, durationMode, formatSig, parseDecimal, type PowerUnit } from './operatingPoints';
 import { CONTINUOUS, type KeyPointDuration } from '../../keyPoints';
 
 export const TOUCH = 44;
@@ -48,6 +48,41 @@ export function BigNumber({ label, unit, value, onChange, disabled, error, ariaL
       }}
       sx={{ '& .MuiInputBase-root': { minHeight: big ? 52 : TOUCH, borderRadius: '10px' }, '& .MuiInputBase-input': { fontSize: big ? 20 : 16, fontWeight: 600, fontVariantNumeric: 'tabular-nums', pr: '4px' } }} />
   </Box>;
+}
+
+/** One of the linked boxes of an operating point (torque, speed, power).  A plain text input so a half-typed "-" or "1." is
+ *  never rewritten: while it has focus it shows what is typed, otherwise the value to six significant digits (the stored
+ *  value keeps full precision).  A cleared box commits null; a half-typed text commits nothing. */
+export function LinkedNumber({ label, unitSlot, value, onCommit, disabled, error, ariaLabel, tip, onFocusChange }: { label: string; unitSlot?: React.ReactNode; value: number | null | undefined; onCommit: (next: number | null) => void; disabled?: boolean; error?: boolean; ariaLabel: string; tip?: string; onFocusChange?: (focused: boolean) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const shown = text ?? formatSig(value ?? null);
+  const head = <Typography component="span" tabIndex={tip ? 0 : undefined} sx={{ fontSize: 12.5, color: error ? 'error.main' : 'var(--text-2)', whiteSpace: 'nowrap' }}>{label}</Typography>;
+  return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, minWidth: 0 }}>
+    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minHeight: 24 }}>{tip ? <Tooltip title={tip}>{head}</Tooltip> : head}{unitSlot}</Stack>
+    <TextField size="small" fullWidth value={shown} error={error} disabled={disabled}
+      onFocus={() => onFocusChange?.(true)}
+      onBlur={() => { setText(null); onFocusChange?.(false); }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const parsed = parseDecimal(e.target.value);
+        if (parsed === 'empty') onCommit(null);
+        else if (parsed !== 'partial') onCommit(parsed);
+      }}
+      slotProps={{ htmlInput: { 'aria-label': ariaLabel, inputMode: 'decimal', autoComplete: 'off' } }}
+      sx={{ '& .MuiInputBase-root': { minHeight: 48, borderRadius: '10px' }, '& .MuiInputBase-input': { fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums', px: 1.25 } }} />
+  </Box>;
+}
+
+/** The power box: watts stored in the model, shown in W or kW (the unit button beside the label; the auto unit is frozen while
+ *  the box has focus so typing "5" stays 5 of the unit on screen). */
+export function PowerNumber({ label, watts, pref, onPref, onCommit, disabled, error, ariaLabel, tip }: { label: string; watts: number | null; pref: PowerUnit | undefined; onPref: (unit: PowerUnit) => void; onCommit: (watts: number | null) => void; disabled?: boolean; error?: boolean; ariaLabel: string; tip?: string }) {
+  const [frozen, setFrozen] = useState<PowerUnit | null>(null);
+  const unit = pref ?? frozen ?? autoPowerUnit(watts);
+  const other: PowerUnit = unit === 'W' ? 'kW' : 'W';
+  return <LinkedNumber label={label} ariaLabel={`${ariaLabel} (${unit})`} tip={tip} disabled={disabled} error={error}
+    unitSlot={<ButtonBase disabled={disabled} aria-label={`${ariaLabel}: ${other}`} onClick={() => onPref(other)} sx={{ fontSize: 12.5, fontWeight: 600, color: 'primary.main', px: 0.75, minHeight: 24, borderRadius: '6px', border: '1px solid var(--line)', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main' } }}>{unit}</ButtonBase>}
+    value={watts === null ? null : unit === 'kW' ? watts / 1000 : watts} onFocusChange={(on) => setFrozen(on ? (pref ?? autoPowerUnit(watts)) : null)}
+    onCommit={(n) => onCommit(n === null ? null : unit === 'kW' ? n * 1000 : n)} />;
 }
 
 const chipSx = (selected: boolean) => ({

@@ -136,40 +136,24 @@ export const BatteryInputs: React.FC<{
   </>;
 };
 
-const BatteryPanel: React.FC<{
-  vDc: number; bat: Battery; onChange: (b: Battery) => void;
-  /** the pack the machine was saved with; with `onReset` it adds a "reset to machine pack" control */
-  machinePack?: Battery | null; onReset?: () => void;
-  /** no pack is saved for this machine: the block shows the stock default and SAYS so */
-  stockNote?: boolean;
-  /** hover text of the motor-voltage marker (which operating point it is for) */
-  vDcTip?: string;
-}> = ({ vDc, bat, onChange, machinePack, onReset, stockNote, vDcTip }) => {
-  const nums = validBatteryNumbers(bat);
-  const packMin = nums ? nums.cells * nums.min : NaN;
-  const packNom = nums ? nums.cells * nums.nom : NaN;
-  const packMax = nums ? nums.cells * nums.max : NaN;
-  const valid = batteryInputIssues(bat).length === 0;
-
+/**
+ * The pack window as a bar: empty -> full with the nominal tick; with `vDc` the motor's required DC-bus voltage is marked on
+ * it (Configure).  Without `vDc` (the Development specification has no motor voltage yet) only the pack window shows.
+ */
+export const PackBar: React.FC<{ packMin: number; packNom: number; packMax: number; vDc?: number; vDcTip?: string }> = ({ packMin, packNom, packMax, vDc, vDcTip }) => {
   const color = useMemo(() => {
+    if (vDc === undefined) return '#4ade80';
     if (vDc > packMax) return '#f87171';   // can't drive
     if (vDc > packNom) return '#fbbf24';   // only near full charge
     return '#4ade80';                      // within range
   }, [vDc, packNom, packMax]);
-
-  // ── voltage bar ───────────────────────────────────────────────────────────
   const W = 360, padX = 14;   // the viewBox is about the column it sits in, so its labels read at their own size
-  const lo = 0, hi = Math.max(packMax, vDc) * 1.05;   // axis from 0 → whole range visible
+  const lo = 0, hi = Math.max(packMax, vDc ?? 0) * 1.05;   // axis from 0 -> whole range visible
   const X = (v: number) => padX + ((v - lo) / (hi - lo)) * (W - 2 * padX);
   const barY = 30, barH = 22;
-  const mX = X(vDc);
-
+  const mX = vDc === undefined ? 0 : X(vDc);
   return (
-    <Box sx={PANEL}>
-      <BatteryInputs bat={bat} onChange={onChange} machinePack={machinePack} onReset={onReset} stockNote={stockNote} />
-
-      {/* voltage-match bar */}
-      {valid ? <svg viewBox={`0 0 ${W} 84`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+    <svg viewBox={`0 ${vDc === undefined ? 20 : 0} ${W} ${vDc === undefined ? 64 : 84}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
         {/* baseline track */}
         <line x1={padX} y1={barY + barH / 2} x2={W - padX} y2={barY + barH / 2} stroke="var(--panel)" strokeWidth={1.25} />
         {/* battery window (empty → full) */}
@@ -192,10 +176,36 @@ const BatteryPanel: React.FC<{
         <text x={X(packMin) + 4} y={barY + barH - 7} fill="var(--text-0)" fontSize={11} textAnchor="start">{tx('configure.barEmpty')}</text>
         <text x={X(packMax) - 4} y={barY + barH - 7} fill="var(--text-0)" fontSize={11} textAnchor="end">{tx('configure.barFull')}</text>
         {/* motor DC-voltage marker */}
+        {vDc !== undefined && <>
         <line x1={mX} y1={barY - 14} x2={mX} y2={barY + barH + 8} stroke={color} strokeWidth={1} />
         <polygon points={`${mX - 5},${barY - 14} ${mX + 5},${barY - 14} ${mX},${barY - 6}`} fill={color} />
         <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">{vDcTip ? <title>{vDcTip}</title> : null}{tx('configure.motorV', { v: fmt(vDc) })}</text>
-      </svg> : <Typography sx={{ fontSize: 11, color: '#f87171', py: 1 }}>{tx('configure.invalidPackTip')}</Typography>}
+        </>}
+      </svg>
+  );
+};
+
+const BatteryPanel: React.FC<{
+  vDc: number; bat: Battery; onChange: (b: Battery) => void;
+  /** the pack the machine was saved with; with `onReset` it adds a "reset to machine pack" control */
+  machinePack?: Battery | null; onReset?: () => void;
+  /** no pack is saved for this machine: the block shows the stock default and SAYS so */
+  stockNote?: boolean;
+  /** hover text of the motor-voltage marker (which operating point it is for) */
+  vDcTip?: string;
+}> = ({ vDc, bat, onChange, machinePack, onReset, stockNote, vDcTip }) => {
+  const nums = validBatteryNumbers(bat);
+  const packMin = nums ? nums.cells * nums.min : NaN;
+  const packNom = nums ? nums.cells * nums.nom : NaN;
+  const packMax = nums ? nums.cells * nums.max : NaN;
+  const valid = batteryInputIssues(bat).length === 0;
+
+  return (
+    <Box sx={PANEL}>
+      <BatteryInputs bat={bat} onChange={onChange} machinePack={machinePack} onReset={onReset} stockNote={stockNote} />
+
+      {/* voltage-match bar */}
+      {valid ? <PackBar packMin={packMin} packNom={packNom} packMax={packMax} vDc={vDc} vDcTip={vDcTip} /> : <Typography sx={{ fontSize: 11, color: '#f87171', py: 1 }}>{tx('configure.invalidPackTip')}</Typography>}
     </Box>
   );
 };

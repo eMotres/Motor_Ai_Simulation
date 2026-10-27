@@ -214,3 +214,58 @@ class TestClaim7CurrentDensityLimitFromTheCoolingSet:
         ctx = _ctx(self._col("takeoff", {}))
         R.share_configuration_cooling({"takeoff": ctx})
         assert ctx["cooling_note"].startswith("ASSUMED") and not ctx["frame_open"]
+
+
+class TestClaim8PerSetInductancesOnTheMachinesOperator:
+    def test_the_six_phase_probe_is_differential_with_the_secant_beside_it(self):
+        import numpy as np
+        import scipy.sparse as sp
+        from motor_ai_sim.simulation import fem_solver_2d as F
+        from motor_ai_sim.winding_sets import vsd_basis
+
+        rng = np.random.default_rng(3)
+        M = rng.normal(size=(6, 6))
+        Kd = M @ M.T + 6.0 * np.eye(6)          # secant operator (SPD)
+        Td = 0.8 * Kd                            # tangent addition: J = 1.8 K -> L_diff = L_fp / 1.8
+
+        class P2:
+            last_dhdb_min_rel = 0.5
+
+            def Kpw(self, A2):
+                return sp.csr_matrix(Kd), "info"
+
+            def tangent2(self, info, clamp=False):
+                return sp.csr_matrix(Td)
+
+            def solve_ff(self, A, F_, spd=True):
+                return np.linalg.solve(A.toarray(), F_)
+
+            def pad2(self, Pro, free, x):
+                return np.asarray(x).ravel()
+
+        f = {s: {ph: np.eye(6)[3 * (s - 1) + "ABC".index(ph)] for ph in "ABC"} for s in (1, 2)}
+        out = F.frozen_permeability_vsd(P2(), sp.identity(6, format="csr"), np.arange(6), None, f, 1.0, 0.3, 1)
+        ed = vsd_basis(0.3, F._ipark_dq)["d"]
+        assert out["basis"] == "differential"
+        assert abs(out["Ld_set_H"] - ed @ np.linalg.inv(Kd + Td) @ ed) < 1e-12
+        assert abs(out["Ld_set_fp_H"] - ed @ np.linalg.inv(Kd) @ ed) < 1e-12
+        assert abs(out["Ld_set_fp_H"] / out["Ld_set_H"] - 1.8) < 1e-9
+
+    def _em(self, ind):
+        return {"Ld_mH": 0.1499, "Lq_mH": 0.1618, "Ld_inc_mH": 0.1499, "Lq_inc_mH": 0.1618, "rpm": 850.0,
+                "six_phase": {"phases": 6, "n_parallel": 2, "inductances": ind}}
+
+    def test_a_legacy_secant_probe_prints_twice_the_machines_values(self):
+        rows = {r[0]: r for r in R.em_constant_rows(self._em({"Ld_set_mH": 0.4442, "Lq_set_mH": 0.4745,
+                                                               "Lxy_mH": 0.4615, "Lxy_pct_of_Ld": 103.9}))}
+        ld = [v for k, v in rows.items() if k.startswith("Ld per set")][0]
+        assert ld[1].startswith("0.2998") and "twice the machine" in ld[2]
+        lxy = [v for k, v in rows.items() if k.startswith("L_xy")][0]
+        assert "secant" in lxy[2]
+
+    def test_a_differential_probe_prints_its_own_values(self):
+        rows = {r[0]: r for r in R.em_constant_rows(self._em({"Ld_set_mH": 0.3001, "Lq_set_mH": 0.3240,
+                                                               "Lxy_mH": 0.2, "Lxy_pct_of_Ld": 66.6,
+                                                               "basis": "differential"}))}
+        ld = [v for k, v in rows.items() if k.startswith("Ld per set")][0]
+        assert ld[1].startswith("0.3001")

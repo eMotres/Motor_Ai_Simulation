@@ -12383,13 +12383,38 @@ def em_constant_rows(em: Dict[str, Any],
               2.0 * _numf(_g(em, "R_phase_ohm")) * 1000.0, 3, "mOhm",
               "half the parallel paths: twice the machine's")
         _ind = _six["inductances"]
-        R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
-          "from the six-phase inductance probe")
-        R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
-        R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
-          "mH", ("%s of the per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
-          if _ind.get("Lxy_pct_of_Ld") is not None else "")
+        if six_phase_inductances_differential(_ind):
+            R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
+              "from the six-phase inductance probe, differential like the machine's")
+            R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
+            R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
+              "mH", ("%s of the per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
+              if _ind.get("Lxy_pct_of_Ld") is not None else "")
+        else:
+            # A PROBE OF BEFORE 2026-10-27 IS THE SECANT (frozen ν) operator (claim 8): its per-set Ld/Lq beside the
+            # machine's differential ones read as a 2.96x ratio where two identical in-phase sets give exactly 2x.
+            # The per-set d/q values are then the machine's own, twice (exact by symmetry); L_xy has no other
+            # source and is printed as the secant value it is.
+            if _has_inc:
+                R("Ld " + SET_CURRENT_LABEL, (2.0 * _numf(_g(em, "Ld_mH")))
+                  if _numf(_g(em, "Ld_mH")) is not None else None, 4, "mH",
+                  "both sets driven alike: twice the machine's")
+                R("Lq " + SET_CURRENT_LABEL, (2.0 * _numf(_g(em, "Lq_mH")))
+                  if _numf(_g(em, "Lq_mH")) is not None else None, 4, "mH", "")
+            else:
+                R("Ld " + SET_CURRENT_LABEL, _ind.get("Ld_set_mH"), 4, "mH",
+                  "frozen-permeability (secant) value of the six-phase probe, not the small-signal one")
+                R("Lq " + SET_CURRENT_LABEL, _ind.get("Lq_set_mH"), 4, "mH", "")
+            R("L_xy (the sets driven against each other)", _ind.get("Lxy_mH"), 4,
+              "mH", "frozen-permeability (secant) value of the six-phase probe, not the small-signal one"
+              + (("; %s of that probe's own per-set Ld" % _fmt(_ind.get("Lxy_pct_of_Ld"), 1, "%"))
+                 if _ind.get("Lxy_pct_of_Ld") is not None else ""))
     return rows
+
+
+def six_phase_inductances_differential(ind: Optional[Dict[str, Any]]) -> bool:
+    """Was the six-phase probe solved on the differential operator (its ``basis``), like the machine's Ld/Lq?"""
+    return isinstance(ind, dict) and str(ind.get("basis") or "").lower() == "differential"
 
 
 def em_loss_rows(em: Dict[str, Any],

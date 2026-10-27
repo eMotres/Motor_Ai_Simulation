@@ -8097,9 +8097,11 @@ class TestL13Review20260919:
         peak_dem = {"br_kept_vol_pct": 99.934, "loss_pct": 0.066,
                    "bh_loss_pct": 0.095, "br_worst_pct": 11.7,
                    "area_derated_pct": 0.32}
-        left = {"duty": "rated", "em": {"demag": rated_dem},
+        # each side's EM block IS its coupled loop's run (it carries `coupling`), so the loop's magnet temperature
+        # is the one its demag numbers were solved at (audit 2026-10-27, claim 5)
+        left = {"duty": "rated", "em": {"demag": rated_dem, "coupling": {"magnet_temp_c": 109.0}},
                "coupled": {"magnet_temp_c": 109.0}}
-        right = {"duty": "peak", "em": {"demag": peak_dem},
+        right = {"duty": "peak", "em": {"demag": peak_dem, "coupling": {"magnet_temp_c": 45.2}},
                 "coupled": {"magnet_temp_c": 45.2}}
         note = R.demag_pair_note(left, right)
         assert "duty 'rated': magnets 109" in note
@@ -9282,7 +9284,7 @@ class TestN1DemagRecomputeReachesBothDutiesInThePairCaption:
         from motor_ai_sim import report as R
 
         left = {"duty": "rated", "coupled": {"magnet_temp_c": 108.0},
-               "em": {"demag": self._dem()}}
+               "em": {"demag": self._dem(), "coupling": {"magnet_temp_c": 108.0}}}
         note = R.demag_pair_note(left, None)
         assert "duty 'rated': magnets 108" in note
         assert "recomputed" not in note

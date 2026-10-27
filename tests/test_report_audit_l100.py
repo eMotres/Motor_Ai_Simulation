@@ -123,3 +123,28 @@ class TestClaim4DemagSentencesFromOneSolve:
         right = {"em": self.RUN, "demag": dict(self.MAP, min_pct=97.9)}
         cap = R.em_map_numbers("demag", {"demag_min_pct": 98.4}, {"demag_min_pct": 97.9}, left, right)
         assert "98.4" in cap and "97.9" in cap and "30.5" not in cap
+
+
+class TestClaim5DemagAtTheTemperatureItWasSolvedAt:
+    DEM = {"br_kept_vol_pct": 97.842, "loss_pct": 2.158, "bh_loss_pct": 3.62, "area_derated_pct": 100.0,
+           "magnet_name": "N52UH_150C", "br_corner": {"flag": "corner", "br_pct": 4.8}}
+
+    def test_an_em_run_at_the_card_is_stated_at_the_card(self):
+        left = {"duty": "peak", "em": {"demag": dict(self.DEM)}, "coupled": {"magnet_temp_c": 55.6}}
+        right = {"duty": "cruise", "em": {"demag": dict(self.DEM, loss_pct=1.116)},
+                 "coupled": {"magnet_temp_c": 92.3}}
+        note = R.demag_pair_note(left, right)
+        assert "duty 'peak': magnets 150" in note and "duty 'cruise': magnets 150" in note
+        assert "56" not in note and "92" not in note
+        assert "worse" not in note            # one card temperature: no temperature explanation
+
+    def test_a_field_recomputed_block_keeps_the_loops_temperature(self):
+        side = {"duty": "peak", "em": {"demag": dict(self.DEM, recomputed_from_field=True)},
+                "coupled": {"magnet_temp_c": 55.6}}
+        assert R.demag_magnet_temp_c(side) == 55.6
+
+    def test_section_4_does_not_label_the_loops_magnets_as_the_em_runs(self):
+        rows = R.em_operating_rows({"rpm": 850}, {}, {}, None, {"magnet": "N52UH_150C"},
+                                   cp={"magnet_temp_c": 92.3})
+        mag = next(r for r in rows if r[2] == "Magnet temperature")
+        assert "150" in mag[3] and "coupled loop" not in mag[3]

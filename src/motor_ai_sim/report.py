@@ -11595,7 +11595,10 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
     if f_el is None and rpm and poles:
         f_el = float(rpm) / 60.0 * poles / 2.0
     t_mag, t_mag_src = _g(em, "magnet_temp_C"), ""
-    if t_mag is None:
+    # ONLY A COUPLED LOOP'S RUN takes the loop's magnet temperature (audit 2026-10-27, claim 5): on the report's
+    # EM-run basis the run carries no `coupling` block and was solved with the magnets at the card's temperature -
+    # the L100 cruise page printed "92.3 degC (coupled loop)" beside a basis of "magnets 150 degC (card)".
+    if t_mag is None and isinstance(em.get("coupling"), dict) and em.get("coupling"):
         # THIS DUTY'S OWN, CURRENT coupled record first (F4) — never a value
         # merely embedded inside a possibly-stale EM summary.
         t_mag = _g(cp or {}, "magnet_temp_c")
@@ -12501,6 +12504,28 @@ def em_demag_text(em: Dict[str, Any],
                grade, _cc_txt, (" " + _corner) if _corner else "", _recomp))
 
 
+def demag_magnet_temp_c(side: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The magnet temperature the demagnetisation numbers of one pair side were SOLVED at (audit 2026-10-27, claim 5).
+
+    The block recomputed from the stored field belongs to the run that field is - the coupled loop's when the duty
+    has one, so its magnet temperature.  The EM run's own summary (the report's EM basis) belongs to that run: its
+    own ``magnet_temp_C``, else the card's temperature (the run was solved with the card as it is).  The L100 note
+    printed the coupled loop's 56 / 92 degC beside Br losses solved at 150 degC."""
+    side = side or {}
+    em = side.get("em") or {}
+    dem = _g(em, "demag") or {}
+    if isinstance(dem, dict) and dem.get("recomputed_from_field"):
+        t = _numf(_g(side.get("coupled") or {}, "magnet_temp_c"))
+        if t is not None:
+            return t
+    t = _numf(_g(em, "magnet_temp_C"))
+    if t is None and isinstance(em.get("coupling"), dict) and em.get("coupling"):
+        t = _numf(_g(side.get("coupled") or {}, "magnet_temp_c")) or _numf(_g(em, "coupling.magnet_temp_c"))
+    if t is None:
+        t = _magnet_card_temp((dem or {}).get("magnet_name") if isinstance(dem, dict) else None)
+    return t
+
+
 def demag_pair_note(left: Optional[Dict[str, Any]],
                     right: Optional[Dict[str, Any]]) -> str:
     """Under each demag map (item 6, owner review 2026-09-19): magnet
@@ -12518,7 +12543,7 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
         dem = _g((side or {}).get("em") or {}, "demag") or {}
         if not dem:
             return "", None, None
-        t = _numf(_g((side or {}).get("coupled") or {}, "magnet_temp_c"))
+        t = demag_magnet_temp_c(side)
         loss = _numf(dem.get("loss_pct"))
         bh = _numf(dem.get("bh_loss_pct"))
         area = _numf(dem.get("area_derated_pct"))
@@ -12549,8 +12574,10 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
     # A direct explanation when one duty's mean loss is clearly the larger
     # (item 6): a couple of points of Br is not noise on this scale.
     tail = ""
+    # …and only when the magnets really were at different temperatures: two runs at the one card temperature differ
+    # by their current, and "magnets 150 vs 150 degC" explains nothing (claim 5)
     if (l_loss is not None and r_loss is not None and l_t is not None
-            and r_t is not None and abs(l_loss - r_loss) > 0.05):
+            and r_t is not None and abs(l_loss - r_loss) > 0.05 and abs(l_t - r_t) >= 1.0):
         if l_loss > r_loss:
             tail = ("; %s worse: magnets %s vs %s"
                     % (left.get("duty") or "left",

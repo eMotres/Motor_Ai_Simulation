@@ -37,8 +37,9 @@ const StoredPointResults: React.FC<{ duty: MotorViewDuty }> = ({ duty }) => {
   const mechProv = provenanceLine(rs?.provenance);
   const s2 = thermalRecord?.s2;
   const s1Part = thermalRecord?.s1?.limiting_part;
+  const lk = limitKind(limit);
   const limitLine = limit && limit.winding_c !== undefined && plausibleC(limit.winding_c)
-    ? t(`points.thermal.${limitKind(limit) === 'continuous' ? 'limitLine' : limitKind(limit) === 'time' ? 'timeLine' : 'searchLine'}`,
+    ? t(`points.thermal.${lk === 'continuous' ? 'limitLine' : lk === 'time' ? 'timeLine' : lk === 'steady' ? 'steadyLine' : 'searchLine'}`,
       { winding: Math.round(limit.winding_c), day: (limit.provenance?.computed_at ?? '').replace('T', ' ').slice(0, 16) })
     : '';
 
@@ -54,7 +55,7 @@ const StoredPointResults: React.FC<{ duty: MotorViewDuty }> = ({ duty }) => {
           ))}
         </TileRow>}
         {limitLine && (
-          <Tooltip title={`${t('points.thermal.limitTip')} ${provenanceLine(limit?.provenance)}`}>
+          <Tooltip title={`${t(lk === 'steady' ? 'points.thermal.steadyTip' : 'points.thermal.limitTip')} ${provenanceLine(limit?.provenance)}`}>
             <Typography data-testid="stored-limit-search" sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 0.5 }}>{limitLine}</Typography>
           </Tooltip>)}
       </Box>}

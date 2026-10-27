@@ -6,7 +6,9 @@
  *    2. no coupled record but a steady temperature map: that map's hottest node (named so in the tooltip);
  *    3. neither: the temperature the EM run was SOLVED at (`sources.em`).  That is an INPUT (the card / setpoint), not a
  *       computed result, so the tile is muted and the tooltip says so.
- *  A limit-search state (S1 / time to the limit) is never the duty's temperature; it is not read here.  Pure functions:
+ *  A limit-search state (S1 / time to the limit) is never the duty's temperature; it is not read here.  A run to the limits that
+ *  ended INSIDE every limit is not a limit state but a steady one: the server hands its settled mean / hottest temperatures over
+ *  as `duty_temps` (`from_limit_run`), and they are shown like the coupled loop's.  Pure functions:
  *  `node --test` imports this file; the component turns the tooltip keys into text (EN source, ZH mirror). */
 import { plausibleC } from './pointsLimited.ts';
 import type { MotorViewDuty } from './types.ts';
@@ -59,10 +61,11 @@ export function temperatureTiles(duty: MotorViewDuty | null | undefined): TempTi
   for (const s of spec) {
     const isMagnet = s.what === 'magnet';
     const loop = isMagnet ? real(d?.magnet_c) : real(d?.winding_c);
-    const hottest = isMagnet ? real(d?.magnet_max_c) : null;
+    const hottest = real(isMagnet ? d?.magnet_max_c : d?.winding_max_c);
     if (d && d.kind === 'coupled' && loop !== null) {
-      const tip: Tip = [{ key: `points.tempTile.coupled.${s.what}`, args: { day: day(d.provenance) } }];
-      if (hottest !== null && hottest !== loop) tip.push({ key: 'points.tempTile.hottestMagnet', args: { value: Math.round(hottest) } });
+      // a run to the limits that ended inside every limit is a steady state (not a limit): named so, never muted
+      const tip: Tip = [{ key: `points.tempTile.${d.from_limit_run ? 'steady' : 'coupled'}.${s.what}`, args: { day: day(d.provenance) } }];
+      if (hottest !== null && hottest !== loop) tip.push({ key: isMagnet ? 'points.tempTile.hottestMagnet' : 'points.tempTile.hottestWinding', args: { value: Math.round(hottest) } });
       tip.push(...basisLines(duty.thermal!));
       tiles.push({ id: s.id, labelKey: s.labelKey, value: loop, unit: '°C', d: 0, basis: 'coupled', muted: false, tip });
       continue;

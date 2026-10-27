@@ -592,7 +592,12 @@
         "magnet": "EM input (card / setpoint), not a computed result: the magnet temperature the EM run was solved at. Run the coupled loop for the real value.",
         "winding": "EM input (card / setpoint), not a computed result: the winding temperature the EM run was solved at. Run the coupled loop for the real value."
       },
+      "steady": {
+        "magnet": "Magnet temperature (mean) at the steady state, inside every limit ({day}).",
+        "winding": "Winding temperature (mean) at the steady state, inside every limit ({day})."
+      },
       "hottestMagnet": "Hottest magnet: {value} °C.",
+      "hottestWinding": "Hottest winding: {value} °C.",
       "timeToLimit": "Over a limit: the point may run {time} s before the {part} reaches it (S2).",
       "s1": "S1 rating: {current} A held continuously, the limit sits in the {part}.",
       "air": "Cooling air speed: {speed} m/s."
@@ -615,6 +620,8 @@
       "limitLine": "S1 continuous limit ({day}): winding {winding} °C at the limit",
       "timeLine": "Time-to-limit run ({day}): winding {winding} °C when the first limit is reached",
       "searchLine": "Limit search ({day}): winding {winding} °C",
+      "steadyLine": "Run to the limits ({day}): steady (inside every limit)",
+      "steadyTip": "The run settled inside every limit: this is the point's steady state, not a limit.",
       "limitTip": "State of the limit search (S1), not the temperature of this duty.",
       "tile": {
         "emTorque": "Torque (coupled loop)",
@@ -680,6 +687,9 @@
         "thermal": "Temperature map of this point.",
         "rotor_stress": "Stress and displacement map of this point."
       },
+      "whole": "Whole motor",
+      "wholeTip": "Frame the whole motor, not only the solved part. Zoom and Fit work as everywhere.",
+      "otherPoint": "The stored map was solved at {field} rpm, not at this point's {point} rpm.",
       "loadFailed": "Could not load the map"
     },
     "drawer": {

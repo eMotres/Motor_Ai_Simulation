@@ -302,6 +302,31 @@ def test_a_dc_side_efficiency_is_the_system_efficiency_never_compared_with_the_m
     assert r2["eff"]["model"] == pytest.approx(95.0) and r2["eff_system"]["status"] == "info"
 
 
+def test_a_load_sweep_carries_every_row_as_a_series_for_the_chart():
+    # rows given out of order; the 3030 rpm / 101 A row matches the stored duty (30 N*m, 95 %), the others have no model
+    rows = [{"rpm": 1000, "i_phase_a": 50, "torque_nm": 10.0, "v_dc_v": 48.0, "i_dc_a": 20.0, "temp_housing_c": 31.0},
+            {"rpm": 3030, "i_phase_a": 101, "torque_nm": 29.0, "eff_pct": 94.0, "temp_housing_c": 45.0},
+            {"rpm": 2000, "i_phase_a": 70, "torque_nm": 20.0}]
+    out = comparison.compare_record(_record("load", rows=rows), _model(), "D", "C")
+    q = {x["key"]: x for x in out["series"]["quantities"]}
+    assert out["series"]["x"] == "rpm" and len(out["groups"]) == 3                 # the per-point tables are unchanged
+    assert [p["rpm"] for p in q["torque"]["points"]] == [1000, 2000, 3030]       # sorted by rpm
+    last = q["torque"]["points"][-1]
+    assert last["measured"] == 29.0 and last["model"] == 30.0 and last["delta_pct"] == pytest.approx((30 - 29) / 29 * 100)
+    assert q["torque"]["points"][0]["model"] is None                             # no model point: no model value
+    assert [p["rpm"] for p in q["eff"]["points"]] == [3030] and q["eff"]["points"][0]["model"] == pytest.approx(95.0)
+    assert [p["measured"] for p in q["i_dc"]["points"]] == [20.0]                # only the row that has it
+    assert q["p_dc"]["points"][0]["measured"] == pytest.approx(960.0)
+    assert q["p_shaft"]["points"][0]["measured"] == pytest.approx(10.0 * 1000 * math.pi / 30.0)
+    assert q["p_shaft"]["points"][-1]["model"] == pytest.approx(30.0 * 3030 * math.pi / 30.0)
+    assert [(p["rpm"], p["measured"]) for p in q["t_housing"]["points"]] == [(1000, 31.0), (3030, 45.0)]
+    assert "t_winding" not in q and "t_magnet" not in q                           # nothing measured or modelled: dropped
+    assert all(p["measured"] is not None or p["model"] is not None for x in q.values() for p in x["points"])
+    # no rows with anything to plot -> no series at all; the other kinds do not carry one
+    assert comparison.compare_record(_record("load", rows=[{"rpm": 1000}]), _model(), "D", "C")["series"] is None
+    assert "series" not in comparison.compare_record(_free_run_rec(), _model(), "D", "C")
+
+
 # ── 3-D end effect on the model ──────────────────────────────────────────────────────────────
 
 def _free_run_rec():

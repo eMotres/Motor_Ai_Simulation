@@ -415,6 +415,21 @@
       "model": "Model",
       "rpm": "rpm"
     },
+    "series": {
+      "label": "Plot",
+      "tip": "x = rpm. Dots = measured, dashed line = model where the model has that point. Pick the quantity to plot.",
+      "q": {
+        "torque": "Torque",
+        "eff": "Efficiency",
+        "eff_system": "System efficiency",
+        "i_dc": "DC current",
+        "p_dc": "DC power",
+        "p_shaft": "Shaft power",
+        "t_winding": "Winding temperature",
+        "t_magnet": "Magnet temperature",
+        "t_housing": "Housing temperature"
+      }
+    },
     "basis": {
       "emf_3d": "magnets at {mag} °C, 3-D ×{k} ({src})",
       "emf_2d": "magnets at {mag} °C, 2-D (no 3-D passport)",

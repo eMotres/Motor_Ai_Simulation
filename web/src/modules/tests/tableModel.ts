@@ -1,6 +1,6 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
-import type { CompareGroup, CompareRow, TestCompare, TestKind, TestRecord } from './types';
+import type { CompareGroup, CompareRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord } from './types';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
 export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c'] as const;
@@ -78,7 +78,7 @@ export function tableLines(cmp: TestCompare | undefined | null): TableLine[] {
   return out;
 }
 
-export interface SeriesPoint { rpm: number; measured: number | null; model: number | null; delta: number | null }
+export interface SeriesPoint { rpm: number; measured: number | null; model: number | null; delta: number | null; current?: number | null }
 export interface GroupSeries { unit: string; points: SeriesPoint[] }
 
 /** The rows of a group that form a series over speed (>= 2 distinct rpm, each with a measured or a model value), as the
@@ -97,6 +97,40 @@ export function seriesOf(g: CompareGroup): GroupSeries | null {
   pts.sort((a, b) => a.rpm - b.rpm);
   if (new Set(pts.map((p) => p.rpm)).size < 2) return null;
   return { unit: g.rows.find((r) => r.unit)?.unit ?? '', points: pts };
+}
+
+const finite = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** The quantities a load sweep can be plotted as (x = rpm), cleaned: a point needs a finite rpm and a measured or a model
+ *  value (a missing value stays null - the chart never draws it as 0), points sorted by rpm, a quantity with no point
+ *  dropped.  Empty array when the record has no series (other kinds, old payloads). */
+export function loadSeriesOptions(cmp: TestCompare | undefined | null): LoadSeriesQuantity[] {
+  const out: LoadSeriesQuantity[] = [];
+  for (const q of cmp?.series?.quantities ?? []) {
+    const points = (q.points ?? []).flatMap((p) => {
+      const rpm = finite(p.rpm); const measured = finite(p.measured); const model = finite(p.model);
+      return rpm === null || (measured === null && model === null)
+        ? [] : [{ rpm, current: finite(p.current), measured, model, delta_pct: finite(p.delta_pct) }];
+    }).sort((a, b) => a.rpm - b.rpm);
+    if (points.length) out.push({ ...q, points });
+  }
+  return out;
+}
+
+/** The selected quantity, else the first one (a stale or unknown key never leaves the chart empty). */
+export function pickQuantity(options: LoadSeriesQuantity[], key: string | null | undefined): LoadSeriesQuantity | null {
+  return options.find((q) => q.key === key) ?? options[0] ?? null;
+}
+
+/** One quantity as the chart's points (same shape as a table group's series; one point = a dot, no line). */
+export function quantitySeries(q: LoadSeriesQuantity): GroupSeries {
+  return { unit: q.unit, points: q.points.map((p) => ({ rpm: p.rpm, measured: p.measured, model: p.model,
+    delta: p.delta_pct ?? null, current: p.current ?? null })) };
+}
+
+/** px height of the stacked tables (24 px per line + header, 8 px between): the full-height chart beside them. */
+export function blocksHeight(blocks: Array<{ lines: unknown[] }>): number {
+  return blocks.reduce((h, b) => h + (b.lines.length + 2) * 24 + 8, 0);
 }
 
 export interface TableBlock {

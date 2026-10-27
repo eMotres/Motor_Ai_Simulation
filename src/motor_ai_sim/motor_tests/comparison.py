@@ -6,7 +6,9 @@ Shape (what the web and the report read)::
         {"key", "label", "params", "tip", "rows": [
             {"key", "label", "params", "unit", "measured", "model", "delta_pct", "tip",
              "status": "ok" | "no_model" | "info", "extra": {...}, "action": {...} | None}]}],
-     "fit": {...} | None}
+     "fit": {...} | None,
+     "series": {"x": "rpm", "quantities": [{"key", "label", "unit", "tip", "points": [
+         {"rpm", "current", "measured", "model", "delta_pct"}]}]} | None}     # load records only: every row at once
 
 ``key`` / ``params`` are what the web translates (EN + zh); ``label`` is the EN text the report prints.  ``tip`` names a
 ``compare.TIPS`` entry; ``detail`` (EN) says which duty / temperature the model value came from.
@@ -366,8 +368,49 @@ def _eff_system_row(measured: float, model: Optional[float], det: str) -> Dict[s
                 detail=det + ", controller wall-to-shaft")
 
 
+# the quantities a load sweep can be plotted against rpm: (key, EN label, unit, tip); the web translates
+# ``tests.series.q.<key>`` and reads the tooltip from ``tests.tip.<tip>``
+_SERIES_QUANTITIES = (
+    ("torque", "Torque", "N·m", "load"),
+    ("eff", "Efficiency", "%", "load"),
+    ("eff_system", "System efficiency (DC in, shaft out)", "%", "eff_system"),
+    ("i_dc", "DC current", "A", "load"),
+    ("p_dc", "DC power", "W", "load"),
+    ("p_shaft", "Shaft power", "W", "load"),
+    ("t_winding", "Winding temperature", "C", "load"),
+    ("t_magnet", "Magnet temperature", "C", "load"),
+    ("t_housing", "Housing temperature", "C", "load"),
+)
+
+
+def _load_series(points: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """All rows of a load record at once, for the chart beside the per-point tables (read-only, additive).
+
+    ``points`` = one dict per bench row: ``{"rpm", "current", "<quantity key>": (measured, model)}``.  A quantity that no
+    row has (neither measured nor modelled) is dropped; inside a quantity a row with neither value is skipped, a
+    missing value stays ``None`` (the chart never draws it as 0).  Rows are sorted by rpm."""
+    quantities = []
+    for key, label, unit, tip in _SERIES_QUANTITIES:
+        pts = []
+        for p in points:
+            meas, mod = p.get(key, (None, None))
+            meas, mod = num(meas), num(mod)
+            if meas is None and mod is None:
+                continue
+            pts.append({"rpm": p["rpm"], "current": p.get("current"), "measured": meas, "model": mod,
+                        "delta_pct": C.delta_pct(mod, meas)})
+        if not pts:
+            continue
+        pts.sort(key=lambda q: q["rpm"])
+        quantities.append({"key": key, "label": label, "unit": unit, "tip": tip, "points": pts})
+    if not quantities:
+        return None
+    return {"x": "rpm", "quantities": quantities}
+
+
 def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     groups = []
+    series_pts: List[Dict[str, Any]] = []
     duties = model.get("duties") or []
     for r in rec.get("rows") or []:
         n, i = num(r.get("rpm")), num(r.get("i_phase_a"))
@@ -384,6 +427,19 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             p_in = float(r["v_dc_v"]) * float(r["i_dc_a"])
             if p_in > 0:
                 eff_sys = 100.0 * float(r["torque_nm"]) * n * 3.141592653589793 / 30.0 / p_in
+        omega = None if not n else n * 3.141592653589793 / 30.0
+        t_meas = num(r.get("torque_nm"))
+        v_dc, i_dc = num(r.get("v_dc_v")), num(r.get("i_dc_a"))
+        sp: Dict[str, Any] = {
+            "rpm": n, "current": i,
+            "torque": (t_meas, None), "eff": (eff_meas, None), "eff_system": (eff_sys, None),
+            "i_dc": (i_dc, None),
+            "p_dc": (None if (v_dc is None or i_dc is None) else v_dc * i_dc, None),
+            "p_shaft": (None if (t_meas is None or omega is None) else t_meas * omega, None),
+            "t_winding": (r.get("temp_winding_c"), None), "t_magnet": (r.get("temp_magnet_c"), None),
+            "t_housing": (r.get("temp_housing_c"), None)}
+        if n is not None:
+            series_pts.append(sp)
         if d is None:
             act = (_create_duty(die, config, rpm=n, current=i) if (n and i) else None)
             rows = [_row("torque", "Torque", "N·m", r.get("torque_nm"), None, tip="load", status="no_model", action=act)]
@@ -414,7 +470,15 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
                              basis="torque " + kt_clause + ", efficiency and temperatures 2-D",
                              basis_key="load_3d" if kt is not None else "load_2d",
                              basis_params={"k": None if kt is None else "%.3f" % kt, "src": kt_src or ""}))
-    return {"groups": groups, "fit": None}
+        # the model side of the same row, for the chart (the very numbers of the table rows above)
+        t_mod = _scaled(d.get("torque_nm"), kt)
+        sp["torque"] = (t_meas, t_mod)
+        sp["eff"] = (eff_meas, d.get("eff_pct"))
+        sp["eff_system"] = (eff_sys, d.get("eff_system_pct"))
+        sp["p_shaft"] = (sp["p_shaft"][0], None if (t_mod is None or omega is None) else t_mod * omega)
+        sp["t_winding"] = (r.get("temp_winding_c"), d.get("winding_c"))
+        sp["t_magnet"] = (r.get("temp_magnet_c"), d.get("magnet_c"))
+    return {"groups": groups, "fit": None, "series": _load_series(series_pts)}
 
 
 # ---------------------------------------------------------------------------

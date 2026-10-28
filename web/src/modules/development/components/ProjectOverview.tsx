@@ -2,6 +2,8 @@
 import React from 'react';
 import { Box, Chip, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
 import UnreadBadge from '../../../components/common/UnreadBadge';
+import CardMotorThumb, { useDieIndex } from '../../../components/common/CardMotorThumb';
+import { projectCardMotor } from '../../../lib/cardMotor';
 import { NARROW } from '../../../lib/narrowLayout';
 import type { ProjectSummary } from '../types';
 import type { ViewMode } from '../../../lib/viewMode';
@@ -44,6 +46,7 @@ const Bar: React.FC<{ filled: number; total: number }> = ({ filled, total }) => 
 );
 
 const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unread, email, language, onOpen, t }) => {
+  const dieIndex = useDieIndex(mode === 'cards');   // the catalog's dies, for the motor picture of each card
   if (mode === 'list') {
     return (
       <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
@@ -88,19 +91,22 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>
       {projects.map((p) => {
-        const c = numbers(p), n = unread(p);
+        const c = numbers(p), n = unread(p), motor = projectCardMotor(p.linked_motors, dieIndex);
         return (
           <Paper key={p.id} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={keyOpen(() => onOpen(p))}
-            sx={{ p: 1.8, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
+            sx={{ position: 'relative', p: 1.8, minHeight: motor ? 108 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}>
               <Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}<UnreadBadge count={n} /></Typography>
               <Chip size="small" label={t(`status.${p.status}`)} />
             </Box>
-            <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>
-            <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>
-              <Bar filled={c.filled} total={c.total} />
+            <Box sx={{ pr: motor ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
+              <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>
+              <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>
+                <Bar filled={c.filled} total={c.total} />
+              </Box>
             </Box>
+            {motor && <CardMotorThumb motor={motor} />}
           </Paper>
         );
       })}

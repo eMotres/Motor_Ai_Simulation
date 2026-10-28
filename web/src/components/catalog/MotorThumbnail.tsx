@@ -8,7 +8,13 @@
  */
 import React, { useState } from 'react';
 
-interface Props { slots: number; poles: number; size?: number; motorId?: string; thumbSvg?: string; }
+interface Props {
+  slots: number; poles: number; size?: number; motorId?: string; thumbSvg?: string;
+  /** alt text / aria-label (default: the slot / pole description) */
+  alt?: string;
+  /** lazy-load the hosted image */
+  lazy?: boolean;
+}
 
 const C = 60;            // centre
 const R_STATOR = 57;     // stator outer
@@ -22,7 +28,7 @@ const bar = (deg: number, rIn: number, rOut: number, w: number, key: string, fil
     transform={`rotate(${deg} ${C} ${C})`} fill={fill} {...extra} />
 );
 
-const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thumbSvg }) => {
+const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thumbSvg, alt, lazy }) => {
   const [failed, setFailed] = useState(false);
 
   // Inline real-geometry SVG (stored on the card at save time) — the true
@@ -31,7 +37,7 @@ const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thu
   if (thumbSvg) {
     return (
       <img src={`data:image/svg+xml;utf8,${encodeURIComponent(thumbSvg)}`}
-        width={size} height={size} alt={`${slots}-slot / ${poles}-pole cross-section`}
+        width={size} height={size} alt={alt ?? `${slots}-slot / ${poles}-pole cross-section`} loading={lazy ? 'lazy' : undefined}
         style={{ display: 'block' }} />
     );
   }
@@ -40,7 +46,7 @@ const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thu
   if (motorId && !failed) {
     return (
       <img src={`${import.meta.env.BASE_URL}motor-thumbs/${motorId}.svg`}
-        width={size} height={size} alt={`${slots}-slot / ${poles}-pole cross-section`}
+        width={size} height={size} alt={alt ?? `${slots}-slot / ${poles}-pole cross-section`} loading={lazy ? 'lazy' : undefined}
         onError={() => setFailed(true)} style={{ display: 'block' }} />
     );
   }
@@ -62,7 +68,7 @@ const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thu
 
   return (
     <svg width={size} height={size} viewBox="0 0 120 120" role="img"
-      aria-label={`${s}-slot / ${p}-pole cross-section`}>
+      aria-label={alt ?? `${s}-slot / ${p}-pole cross-section`}>
       <defs>
         <radialGradient id="tn-copper" cx="50%" cy="35%" r="70%">
           <stop offset="0%" stopColor="#f0b259" /><stop offset="100%" stopColor="#a8631d" />

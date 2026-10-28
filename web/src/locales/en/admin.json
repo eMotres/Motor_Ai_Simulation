@@ -208,6 +208,8 @@
     "closed": "closed",
     "actions": "Actions",
     "actionsHelp": "Approve opens the 3-D tools and the STEP download. Ask for more sends your text to the applicant as a templated mail. Deny closes the request. Re-run repeats every check. A reason is required; every action is audited.",
+    "publicNote": "Sentence for the applicant in a denial mail (optional)",
+    "publicNoteTip": "Sent to the applicant with a denial, e.g. 'You are welcome to apply again with the company registration documents.' The reason above stays internal.",
     "reasonPlaceholder": "Reason, or the question for the applicant",
     "approve": "Approve",
     "requestInfo": "Ask for more",

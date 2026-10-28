@@ -496,20 +496,24 @@ def admin_approve(case_id: str, admin_email: str, reason: str) -> dict:
     return ST.get(case_id)
 
 
-def admin_deny(case_id: str, admin_email: str, reason: str) -> dict:
+def admin_deny(case_id: str, admin_email: str, reason: str, public_note: str = "") -> dict:
+    """``reason`` stays in the journal; ``public_note`` (optional, owner 2026-10-28) is the one sentence the applicant reads in
+    the denial mail, e.g. "You are welcome to apply again with the company registration documents"."""
     reason = _need_reason(reason)
+    public_note = " ".join(str(public_note or "").split())[:500]
     actor = _admin_actor(admin_email)
     with _lock_for(case_id):
         case = ST.get(case_id)
         if case is None:
             raise ActionError("no such case")
-        ST.append(case_id, "admin_action", {"action": "deny", "reason": reason}, actor=actor)
+        ST.append(case_id, "admin_action", {"action": "deny", "reason": reason, **({"public_note": public_note} if public_note else {})},
+                  actor=actor)
         ST.append(case_id, "status_changed", {"status": ENG.DENIED, "reason": "denied by an administrator: " + reason,
                                               "reasons": [{"code": "admin_denied", "text": reason}], "requests": []}, actor=actor)
         if case["access"]["granted"]:
             ST.append(case_id, "access_revoked", {"reason": reason}, actor=actor)
         case = ST.get(case_id)
-    s, b = TX.denied_mail("", _zh(case))
+    s, b = TX.denied_mail(public_note, _zh(case))
     _send(case, s, b, actor=actor)
     return ST.get(case_id)
 

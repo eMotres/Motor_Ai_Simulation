@@ -13,6 +13,8 @@ import { productionApi } from '../api';
 import { callerRole } from '../helpers';
 import { productionUnreadKey, unreadFor } from '../../../lib/unreadMessages';
 import UnreadBadge from '../../../components/common/UnreadBadge';
+import CardMotorThumb, { useDieIndex } from '../../../components/common/CardMotorThumb';
+import { productionCardMotor } from '../../../lib/cardMotor';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type { Production } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
@@ -23,6 +25,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
   const [items, setItems] = useState<Production[] | null>(null);
   const unreadCounts = useUnreadCounts();
   const [viewMode, setViewMode] = useViewMode(VIEW_MODE_KEYS.production, 'list');
+  const dieIndex = useDieIndex(viewMode === 'cards');   // the catalog's dies, for the motor picture of each card
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -58,17 +61,21 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
           {items.map((p) => {
             const role = callerRole(p.members, user?.email ?? '', isAdmin);
             const unread = unreadOf(p);
+            const motor = productionCardMotor(p, dieIndex);
             return (
               <Paper key={`${p.die}/${p.config}`} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(p); } }}
-                sx={{ p: 1.8, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
+                sx={{ position: 'relative', p: 1.8, minHeight: motor ? 118 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
                 <Typography sx={{ fontWeight: 700, color: 'var(--text-0)' }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /><UnreadBadge count={unread} /></Typography>
-                <Box sx={{ mt: 0.5 }}><BilingualText value={p.title} size={12} /></Box>
-                <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
-                  <Chip size="small" label={t(`status.${p.status}`)} />
-                  <Chip size="small" variant="outlined" label={`${t('col.revision')} ${p.current_revision}`} />
+                <Box sx={{ pr: motor ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
+                  <Box sx={{ mt: 0.5 }}><BilingualText value={p.title} size={12} /></Box>
+                  <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                    <Chip size="small" label={t(`status.${p.status}`)} />
+                    <Chip size="small" variant="outlined" label={`${t('col.revision')} ${p.current_revision}`} />
+                  </Box>
+                  <Typography sx={{ mt: 1.2, fontSize: 11, color: 'var(--text-2)' }}>{t('col.orderQty')}: {p.order_quantity}</Typography>
+                  {role && <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('col.role')}: {t(`role.${role}`)}</Typography>}
                 </Box>
-                <Typography sx={{ mt: 1.2, fontSize: 11, color: 'var(--text-2)' }}>{t('col.orderQty')}: {p.order_quantity}</Typography>
-                {role && <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('col.role')}: {t(`role.${role}`)}</Typography>}
+                {motor && <CardMotorThumb motor={motor} />}
               </Paper>
             );
           })}

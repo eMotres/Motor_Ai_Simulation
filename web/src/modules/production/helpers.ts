@@ -708,3 +708,20 @@ export function stepModelFamilies(steps: readonly AssemblyStep[], stepId: string
   }
   return { own, context: [...earlier].filter((f) => !own.includes(f)) };
 }
+
+/** The Discussion threads that HAVE messages, for the strip above the thread (owner 2026-10-28: a part thread hidden in a
+ *  36-part dropdown was invisible).  Unread first, then the newest last message first; `key` = '' for the general thread,
+ *  else the part id (the Discussion selector's value). */
+export interface ActiveThread { key: string; count: number; unread: number; last: string }
+export function activeThreads(threads: readonly { part_id: string | null; messages: readonly { created_at: string }[]; unread?: number }[]): ActiveThread[] {
+  const out: ActiveThread[] = [];
+  for (const th of threads) {
+    if (!th.messages.length) continue;
+    const last = th.messages.reduce((m, x) => (x.created_at > m ? x.created_at : m), '');
+    out.push({ key: th.part_id ?? '', count: th.messages.length, unread: Math.max(0, th.unread ?? 0), last });
+  }
+  return out.sort((a, b) => (b.unread > 0 ? 1 : 0) - (a.unread > 0 ? 1 : 0) || b.last.localeCompare(a.last));
+}
+
+/** The thread the Discussion tab opens on: one with unread messages, else the newest active one, else the general thread. */
+export const initialThreadKey = (threads: Parameters<typeof activeThreads>[0]): string => activeThreads(threads)[0]?.key ?? '';

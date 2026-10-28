@@ -237,6 +237,7 @@
     "new": "New"
   },
   "discussion": {
+    "active": "With messages",
     "general": "General",
     "newThread": "New thread",
     "none": "No messages yet.",

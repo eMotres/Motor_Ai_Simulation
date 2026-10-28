@@ -438,3 +438,16 @@ t('formatReceiptTime: formats ISO timestamp or returns date/dash', () => {
   assert.equal(H.formatReceiptTime(null), '—');
 });
 
+
+t('discussion: active threads list only threads with messages, unread first, then newest; initial key follows', () => {
+  const th = (part_id, times, unread = 0) => ({ part_id, unread, messages: times.map((c) => ({ created_at: c })) });
+  const threads = [th(null, ['2026-10-20T10:00:00Z']), th('pt_a', []), th('pt_b', ['2026-10-28T06:07:07Z']),
+    th('pt_c', ['2026-10-21T08:00:00Z', '2026-10-22T08:00:00Z'], 1)];
+  const a = H.activeThreads(threads);
+  assert.deepEqual(a.map((x) => x.key), ['pt_c', 'pt_b', '']);
+  assert.deepEqual(a[0], { key: 'pt_c', count: 2, unread: 1, last: '2026-10-22T08:00:00Z' });
+  assert.equal(H.initialThreadKey(threads), 'pt_c');
+  assert.equal(H.initialThreadKey([th('pt_b', ['2026-10-28T06:07:07Z'])]), 'pt_b');
+  assert.equal(H.initialThreadKey([th('pt_a', [])]), '');
+  assert.equal(H.initialThreadKey([]), '');
+});

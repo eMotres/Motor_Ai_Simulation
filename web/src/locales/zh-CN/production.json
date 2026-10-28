@@ -237,6 +237,7 @@
     "new": "新消息"
   },
   "discussion": {
+    "active": "有消息的话题",
     "general": "综合",
     "newThread": "新话题",
     "none": "暂无消息。",

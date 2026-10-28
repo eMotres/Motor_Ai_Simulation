@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import HelpTip from '../../../components/common/HelpTip';
 import { downloadFile, productionApi } from '../api';
-import { makeBilingual } from '../helpers';
+import { activeThreads, initialThreadKey, makeBilingual } from '../helpers';
 import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadLabel } from '../../../lib/unreadMessages';
 import { pageVisible } from '../../../lib/pageVisible';
 import type { Lang, Part, ProdCtx, Thread } from '../types';
@@ -17,7 +17,8 @@ const badge = (n: number) => (n > 0 ? <Chip size="small" color="primary" label={
 const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx }> = ({ threads, parts, ctx }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
-  const [sel, setSel] = useState<string>('');           // '' = general, else part id
+  // '' = general, else part id; opens on the thread with unread messages, else the newest one (owner 2026-10-28)
+  const [sel, setSel] = useState<string>(() => initialThreadKey(threads));
   const [text, setText] = useState('');
   const [lang, setLang] = useState<Lang>(ui);
   const [files, setFiles] = useState<File[]>([]);
@@ -31,6 +32,8 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
   const [visibleTick, setVisibleTick] = useState(0);
 
   const thread = useMemo(() => threads.find((x) => (x.part_id ?? '') === sel) ?? null, [threads, sel]);
+  const active = useMemo(() => activeThreads(threads), [threads]);
+  const partName = (id: string) => { const p = parts.find((x) => x.id === id); return p ? (p.name.en || p.name.zh) : id; };
   const sorted = useMemo(() => [...(thread?.messages ?? [])].sort((a, b) => a.created_at.localeCompare(b.created_at)), [thread]);
 
   useEffect(() => { const on = () => setVisibleTick((n) => n + 1); document.addEventListener('visibilitychange', on); return () => document.removeEventListener('visibilitychange', on); }, []);
@@ -70,6 +73,20 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
         </TextField>
         <HelpTip title={t('discussion.tip')} />
       </Box>
+      {active.length > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+          <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{t('discussion.active')}</Typography>
+          {active.map((a) => {
+            const unread = unreadOf(threads.find((x) => (x.part_id ?? '') === a.key)).length;
+            return (
+              <Chip key={a.key || 'general'} size="small" clickable onClick={() => setSel(a.key)}
+                variant={a.key === sel ? 'filled' : 'outlined'} color={unread > 0 ? 'error' : a.key === sel ? 'primary' : 'default'}
+                title={a.last.slice(0, 16).replace('T', ' ')}
+                label={`${a.key ? partName(a.key) : t('discussion.general')} · ${a.count}${unread > 0 ? ` · ${unreadLabel(unread)}` : ''}`} />
+            );
+          })}
+        </Box>
+      )}
       {sorted.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('discussion.none')}</Typography>}
       {sorted.map((m, i) => (
         <React.Fragment key={m.id}>

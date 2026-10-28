@@ -33,7 +33,9 @@ __all__ = [
 BASES = ("stated", "derived", "figure", "inferred")
 
 _REPO_PATH = Path(__file__).resolve().parents[3] / "config" / "controllers" / "catalog.yaml"
-#: Overridden by tests (a fixture file).
+#: the API image keeps config/ as a read-only SEED at <app>/config-seed (deploy/Dockerfile.api), never at <app>/config
+_SEED_PATH = Path(__file__).resolve().parents[3] / "config-seed" / "controllers" / "catalog.yaml"
+#: Overridden by tests (a fixture file); a moved path wins outright (the devices rule).
 _PATH: Path = _REPO_PATH
 
 _lock = threading.Lock()
@@ -56,7 +58,21 @@ class CatalogError(ValueError):
 
 
 def catalog_path() -> Path:
-    return _PATH
+    """The catalogue file: a moved ``_PATH`` (a test fixture) wins outright; else ``shared/controllers/catalog.yaml``
+    when it exists (the machine-wide libraries, as devices_dir), else the repository's ``config/``, else the image seed."""
+    if _PATH != _REPO_PATH:
+        return _PATH
+    candidates = []
+    try:
+        from motor_ai_sim.workspace import shared_root
+        candidates.append(Path(str(shared_root())) / "controllers" / "catalog.yaml")
+    except Exception:                                    # noqa: BLE001
+        pass
+    candidates += [_REPO_PATH, _SEED_PATH]
+    for p in candidates:
+        if p.is_file():
+            return p
+    return _REPO_PATH
 
 
 def _num(v: Any) -> Optional[float]:

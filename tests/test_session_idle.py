@@ -157,6 +157,20 @@ def test_env_override_changes_the_limit_and_zero_disables_it(env, monkeypatch):
     assert _rec(env, sid)["revoked_reason"] == "idle_timeout"
 
 
+def test_an_exempt_account_never_idles_out_and_others_still_do(env, monkeypatch):
+    """MOTRES_SESSION_IDLE_EXEMPT (owner 2026-10-28): the listed accounts stay signed in however long they idle."""
+    SA = env["SA"]
+    j = _login()
+    sid = _sid(env, j["token"])
+    _age(env, sid, activity_ago=5 * 3600)
+    monkeypatch.setenv(SA.ENV_IDLE_EXEMPT, " Someone@Example.com , " + CLIENT.upper())
+    assert client.get("/api/me", headers=_bearer(j["token"])).json()["email"] == CLIENT
+    assert env["S"].sweep_idle() == 0
+    assert not _rec(env, sid)["revoked"]
+    monkeypatch.setenv(SA.ENV_IDLE_EXEMPT, "someone@example.com")      # no longer listed: the rule applies again
+    assert client.get("/api/me", headers=_bearer(j["token"])).json()["authError"] == "idle_timeout"
+
+
 # ── what counts as activity ──────────────────────────────────────────────────
 
 def test_the_heartbeat_extends_the_session_but_a_get_poll_does_not(env):

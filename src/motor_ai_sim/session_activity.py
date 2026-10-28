@@ -63,6 +63,9 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 ENV_IDLE = "MOTRES_SESSION_IDLE_S"
+#: Comma-separated accounts whose web sessions never close for idling (owner 2026-10-28: the owner's own
+#: accounts; the list lives in the server env file, not in the repository).  The 30-day token TTL still applies.
+ENV_IDLE_EXEMPT = "MOTRES_SESSION_IDLE_EXEMPT"
 #: 30 minutes of no use closes a web session (owner 2026-10-20).
 SESSION_IDLE_TIMEOUT_S = 1800.0
 #: "Active now" in Admin = user activity within this many seconds.
@@ -90,6 +93,14 @@ def idle_timeout_s() -> float:
     except ValueError:
         return SESSION_IDLE_TIMEOUT_S
     return max(0.0, v)
+
+
+def idle_exempt(email: object) -> bool:
+    """True when ``email`` is listed in ``MOTRES_SESSION_IDLE_EXEMPT`` (read per call, case-insensitive)."""
+    raw = os.environ.get(ENV_IDLE_EXEMPT, "")
+    if not raw.strip() or not isinstance(email, str):
+        return False
+    return email.strip().lower() in {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
 # ── what counts as activity ──────────────────────────────────────────────────

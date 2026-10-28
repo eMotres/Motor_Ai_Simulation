@@ -390,7 +390,7 @@ def check_idle(sid: str, rec: dict, *, activity: bool = False, now: Optional[flo
     closed for idling.  `activity` = this request is user activity (it refreshes `last_activity`)."""
     from motor_ai_sim import session_activity as SA
     limit = SA.idle_timeout_s()
-    if limit <= 0 or not isinstance(rec, dict):
+    if limit <= 0 or not isinstance(rec, dict) or SA.idle_exempt(rec.get("email")):
         return False
     now = time.time() if now is None else float(now)
     if "last_activity" not in rec and now - effective_activity(rec) <= limit:
@@ -422,6 +422,8 @@ def sweep_idle(now: Optional[float] = None) -> int:
     n = 0
     for sid, rec in list(d.items()):
         if not isinstance(rec, dict) or rec.get("revoked") or float(rec.get("expires") or 0) <= now:
+            continue
+        if SA.idle_exempt(rec.get("email")):
             continue
         idle, job_end = is_idle(rec, now, limit, cache)
         if idle and close_idle(sid, now, limit, job_end):

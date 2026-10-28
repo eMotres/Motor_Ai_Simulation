@@ -40,7 +40,7 @@ const dateOf = (iso: string | undefined, language: string) => {
 };
 
 const Bar: React.FC<{ filled: number; total: number }> = ({ filled, total }) => (
-  <Box sx={{ flex: 1, minWidth: 40, height: 5, bgcolor: 'var(--panel)', borderRadius: 2 }}>
+  <Box sx={{ flex: '1 1 auto', minWidth: 40, height: 5, bgcolor: 'var(--panel)', borderRadius: 2 }}>
     <Box sx={{ width: `${total ? Math.min(100, filled / total * 100) : 0}%`, height: '100%', bgcolor: 'primary.main', borderRadius: 2 }} />
   </Box>
 );
@@ -101,8 +101,9 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
             </Box>
             <Box sx={{ pr: motor ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
               <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>
-              <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>
+              {/* with a picture in the corner the label and the bar stack (owner 2026-10-28: side by side the bar shrank to a stub) */}
+              <Box sx={{ mt: 1.2, display: 'flex', flexDirection: motor ? 'column' : 'row', alignItems: motor ? 'stretch' : 'center', gap: motor ? 0.5 : 1 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>
                 <Bar filled={c.filled} total={c.total} />
               </Box>
             </Box>

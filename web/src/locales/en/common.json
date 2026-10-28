@@ -1,4 +1,5 @@
 {
+  "unreadMessagesTip": "{count} unread messages",
   "tabs": {
     "motors": "Motors",
     "geometry": "Geometry",

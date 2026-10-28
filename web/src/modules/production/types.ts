@@ -24,6 +24,8 @@ export interface Production {
   order_quantity: number;
   status: 'active' | 'paused' | 'archived';
   current_revision: string;
+  /** unread discussion messages of the caller, all threads (list answer only) */
+  unread_messages?: number;
   /** the PRODUCT revision of the motor (Rev A, Rev B ...; the level above this production's own revisions); absent when none */
   product_revision?: { rev: string; label?: string; lineage?: string; latest?: boolean; frozen?: boolean } | null;
   share_costs_with_oem?: boolean;
@@ -324,6 +326,9 @@ export interface Thread {
   part_id: string | null;
   created_at: string;
   messages: Message[];
+  /** the caller's unread messages in this thread: their number and ids (list answer only; owner 2026-10-28) */
+  unread?: number;
+  unread_ids?: string[];
 }
 
 export type ProposalStatus = 'open' | 'accepted' | 'rejected' | 'implemented';

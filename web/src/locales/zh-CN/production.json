@@ -232,6 +232,10 @@
     "showAll": "显示全部",
     "clear": "清除"
   },
+  "unread": {
+    "tip": "{count} 条未读消息",
+    "new": "新消息"
+  },
   "discussion": {
     "general": "综合",
     "newThread": "新话题",

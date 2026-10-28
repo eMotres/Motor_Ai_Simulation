@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from motor_ai_sim import platform_agreement, users
-from motor_ai_sim.development import access, models, store
+from motor_ai_sim.development import access, models, store, unread
 from motor_ai_sim.development.motors import _metric_projection
 
 log = logging.getLogger(__name__)
@@ -131,6 +131,16 @@ def _summary(project: dict, user: dict) -> dict:
     if not access.is_engineer(user):
         projection["members"] = [m for m in project.get("members", []) if m.get("email", "").lower() == _email(user)]
     return projection
+
+
+def _with_unread(summary: dict, user: dict, started) -> dict:
+    """Add ``unread_messages``: the project-thread messages this user has not read yet."""
+    try:
+        summary["unread_messages"] = len(unread.unread_ids(str(summary.get("id") or ""), _email(user), started=started))
+    except Exception:                                       # noqa: BLE001 - a badge never breaks the list
+        log.warning("unread count failed for %s", summary.get("id"), exc_info=True)
+        summary["unread_messages"] = 0
+    return summary
 
 
 def _find_project_id(project_id: str):
@@ -444,7 +454,8 @@ def get_schema(request: Request):
 def list_projects(request: Request):
     user = access.require_signed_in(request)
     visible = [p for p in store.list_projects() if access.can_view(user, p)]
-    return {"projects": [_summary(p, user) for p in visible]}
+    started = unread.since()
+    return {"projects": [_with_unread(_summary(p, user), user, started) for p in visible]}
 
 
 @router.get("/membership")
@@ -483,7 +494,7 @@ def get_project(request: Request, project_id: str):
     _, project, _ = _readable_project(request, project_id)
     user = access.require_signed_in(request)
     store.append_audit(project_id, _email(user), "read", "project", project_id, {})
-    return _summary(project, user)
+    return _with_unread(_summary(project, user), user, unread.since())
 
 
 @router.patch("/{project_id}")
@@ -817,6 +828,7 @@ def get_thread(request: Request, project_id: str):
     user, _, _ = _readable_project(request, project_id)
     messages = _read_jsonl(project_id, "thread.jsonl")
     store.append_audit(project_id, _email(user), "read", "thread", "", {})
+    unread_set = set(unread.unread_ids(project_id, _email(user), messages=unread.thread_messages(project_id)))
     resolutions = {}
     for event in messages:
         if event.get("kind") == "resolution" and event.get("resolves_id"):
@@ -828,11 +840,31 @@ def get_thread(request: Request, project_id: str):
         item = dict(message)
         resolution = resolutions.get(str(item.get("id")))
         item["resolved"] = bool(resolution.get("resolved", True)) if resolution is not None else False
+        item["unread"] = str(item.get("id")) in unread_set
         if resolution:
             item["resolved_at"] = resolution.get("created_at")
             item["resolved_by"] = resolution.get("resolved_by")
         projected.append(_customer_spec(item))
-    return {"messages": projected}
+    return {"messages": projected, "unread": len(unread_set)}
+
+
+@router.post("/{project_id}/thread/read")
+async def mark_thread_read(request: Request, project_id: str):
+    """The user has seen the thread up to message ``up_to`` (the newest when omitted).  Called by the page when the thread is
+    shown - never by the list or the counts endpoints."""
+    user, _, _ = _readable_project(request, project_id)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    up_to = body.get("up_to") if isinstance(body, dict) else None
+    if up_to is not None and not isinstance(up_to, str):
+        raise HTTPException(status_code=422, detail="up_to must be a message id")
+    try:
+        last = unread.mark_read(project_id, _email(user), up_to)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Thread message not found")
+    return {"last_read_id": last, "unread": len(unread.unread_ids(project_id, _email(user)))}
 
 
 @router.post("/{project_id}/thread")

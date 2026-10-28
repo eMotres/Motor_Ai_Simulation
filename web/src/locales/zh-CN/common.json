@@ -1,4 +1,5 @@
 {
+  "unreadMessagesTip": "{count} 条未读消息",
   "tabs": {
     "motors": "电机",
     "geometry": "几何",

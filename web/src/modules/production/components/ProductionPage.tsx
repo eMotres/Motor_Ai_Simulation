@@ -21,6 +21,8 @@ import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
 import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
 import DigestSettings from '../../../components/digest/DigestSettings';
+import { productionUnreadKey } from '../../../lib/unreadMessages';
+import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
@@ -64,6 +66,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const ui = useContentLang();
   const { user, isAdmin } = useAuth();
   const email = user?.email ?? '';
+  const unreadCounts = useUnreadCounts();
+  const unreadDiscussion = unreadCounts?.productions[productionUnreadKey(die, config)] ?? 0;
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
   const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
@@ -167,7 +171,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           <Tabs value={tab} onChange={(_, v) => setTab(v as TabId)} variant="scrollable" scrollButtons="auto"
             sx={{ minHeight: 32, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontSize: 12.5, py: 0.5 } }}>
             {visibleTabs.map((id) => (
-              <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : t(`tabs.${id}`)} />
+              <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : id === 'discussion' && unreadDiscussion > 0 ? `${t('tabs.discussion')} (${unreadDiscussion})` : t(`tabs.${id}`)} />
             ))}
           </Tabs>
         </Box>

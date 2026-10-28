@@ -1,14 +1,18 @@
 /** Discussion: a general thread and one thread per part; messages carry attachments and the original/translation toggle. */
-import React, { useMemo, useRef, useState } from 'react';
-import { Box, Button, MenuItem, Paper, TextField, Typography } from '@mui/material';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Button, Chip, Divider, MenuItem, Paper, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import HelpTip from '../../../components/common/HelpTip';
 import { downloadFile, productionApi } from '../api';
 import { makeBilingual } from '../helpers';
+import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadLabel } from '../../../lib/unreadMessages';
+import { pageVisible } from '../../../lib/pageVisible';
 import type { Lang, Part, ProdCtx, Thread } from '../types';
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
+
+const badge = (n: number) => (n > 0 ? <Chip size="small" color="primary" label={unreadLabel(n)} sx={{ ml: 1, height: 16, fontSize: 10 }} /> : null);
 
 const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx }> = ({ threads, parts, ctx }) => {
   const { t } = useTranslation('production');
@@ -20,9 +24,30 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Unread messages (owner 2026-10-28): `markedIds` = ones already reported read, `shown` = the highlight of the open thread
+  const [markedIds, setMarkedIds] = useState<ReadonlySet<string>>(new Set());
+  const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
+  const shownThread = useRef('');
+  const [visibleTick, setVisibleTick] = useState(0);
 
   const thread = useMemo(() => threads.find((x) => (x.part_id ?? '') === sel) ?? null, [threads, sel]);
   const sorted = useMemo(() => [...(thread?.messages ?? [])].sort((a, b) => a.created_at.localeCompare(b.created_at)), [thread]);
+
+  useEffect(() => { const on = () => setVisibleTick((n) => n + 1); document.addEventListener('visibilitychange', on); return () => document.removeEventListener('visibilitychange', on); }, []);
+  const unreadOf = (th?: Thread | null) => (th?.unread_ids ?? []).filter((id) => !markedIds.has(id));
+  // Showing a thread marks it read on the server (never while the page is hidden); the highlight stays until the thread is left.
+  useEffect(() => {
+    if (!thread) { shownThread.current = ''; setShown((s) => (s.size ? new Set() : s)); return; }
+    const pending = unreadOf(thread);
+    if (shownThread.current !== thread.id) { shownThread.current = thread.id; setShown(new Set(pending)); }
+    else if (pending.length) setShown((s) => accumulateHighlight(s, pending));
+    const last = thread.messages[thread.messages.length - 1]?.id;
+    if (!pending.length || !last || !pageVisible()) return;
+    void productionApi.markThreadRead(ctx.die, ctx.config, thread.id, last)
+      .then(() => { setMarkedIds((m) => accumulateHighlight(m, pending)); return refreshUnread(); })
+      .catch(() => { /* the next visit marks it */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread, markedIds, visibleTick, ctx.die, ctx.config]);
 
   const send = async () => {
     if (!text.trim()) return;
@@ -40,14 +65,16 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField select size="small" label={t('discussion.thread')} value={sel} onChange={(e) => setSel(e.target.value)} sx={{ minWidth: 240 }}>
-          <MenuItem value="">{t('discussion.general')}</MenuItem>
-          {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
+          <MenuItem value="">{t('discussion.general')}{badge(unreadOf(threads.find((x) => !x.part_id)).length)}</MenuItem>
+          {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}{badge(unreadOf(threads.find((x) => x.part_id === p.id)).length)}</MenuItem>)}
         </TextField>
         <HelpTip title={t('discussion.tip')} />
       </Box>
       {sorted.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('discussion.none')}</Typography>}
-      {sorted.map((m) => (
-        <Paper key={m.id} sx={{ ...PANEL, p: 1.25, borderLeft: m.author_email.toLowerCase() === ctx.email.toLowerCase() ? '3px solid #2563eb' : undefined }}>
+      {sorted.map((m, i) => (
+        <React.Fragment key={m.id}>
+        {i === firstUnreadIndex(sorted, shown) && <Divider sx={{ fontSize: 10.5 }}><Chip size="small" color="primary" label={t('unread.new')} sx={{ height: 16, fontSize: 10 }} /></Divider>}
+        <Paper sx={{ ...PANEL, p: 1.25, borderLeft: shown.has(m.id) ? '3px solid var(--mui-palette-primary-main, #1976d2)' : m.author_email.toLowerCase() === ctx.email.toLowerCase() ? '3px solid #2563eb' : undefined }}>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.25 }}>{m.author_email} · {m.created_at.slice(0, 16).replace('T', ' ')}</Typography>
           <BilingualText chat value={m.text} canConfirm={ctx.canEdit} die={ctx.die} config={ctx.config}
             tref={{ entity: 'thread', entity_id: thread!.id, field: 'text', message_id: m.id }} onChanged={ctx.reload} />
@@ -60,6 +87,7 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
             </Box>
           )}
         </Paper>
+        </React.Fragment>
       ))}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
         <BilingualInput label={t('discussion.write')} value={text} lang={lang} multiline onChange={(v, l) => { setText(v); setLang(l); }} />

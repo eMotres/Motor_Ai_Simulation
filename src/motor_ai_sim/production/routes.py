@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from motor_ai_sim import auth, model3d, users
-from motor_ai_sim.production import store, models, access
+from motor_ai_sim.production import store, models, access, unread
 from motor_ai_sim.production.access import (
     require_member, require_member_with_full_view,
     require_editor, require_editor_with_full_view,
@@ -139,7 +139,18 @@ def list_productions(request: Request):
     user = auth.resolve_user(request.headers.get("authorization"))
     if user is None:
         raise HTTPException(status_code=401, detail="Sign in required.")
-    return {"productions": _production_list_for(_email(user), _is_admin(user))}
+    email = _email(user)
+    rows = _production_list_for(email, _is_admin(user))
+    started = unread.since()
+    for rec in rows:
+        # a badge never breaks the list; an OEM member without the NDA cannot open the threads, so sees no count either
+        try:
+            can_open = access.full_view_denial(request, user, rec) is None
+            rec["unread_messages"] = unread.production_count(rec["die"], rec["config"], email, started) if can_open else 0
+        except Exception:                                   # noqa: BLE001
+            log.warning("unread count failed for %s/%s", rec.get("die"), rec.get("config"), exc_info=True)
+            rec["unread_messages"] = 0
+    return {"productions": rows}
 
 
 # ── procurement & project schedule helpers ───────────────────────────────────
@@ -1484,8 +1495,30 @@ def download_documents_zip(request: Request, die: str, config: str, lang: str = 
 
 @router.get("/{die}/{config}/threads")
 def list_threads(request: Request, die: str, config: str):
-    require_member_with_full_view(request, die, config)
-    return store.load_file(die, config, "threads.json")
+    user, _production = require_member_with_full_view(request, die, config)
+    # each thread carries ``unread`` (count) and ``unread_ids`` (the messages to highlight) for the caller
+    return {"threads": unread.threads_with_unread(die, config, _email(user))}
+
+
+@router.post("/{die}/{config}/threads/{thread_id}/read")
+async def mark_thread_read(request: Request, die: str, config: str, thread_id: str):
+    """The user has seen the thread up to message ``up_to`` (the newest when omitted).  Called by the page when the thread is
+    shown - never by the list or the counts endpoints."""
+    user, _production = require_member_with_full_view(request, die, config)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    up_to = body.get("up_to") if isinstance(body, dict) else None
+    if up_to is not None and not isinstance(up_to, str):
+        raise HTTPException(status_code=422, detail="up_to must be a message id")
+    try:
+        last = unread.mark_read(die, config, thread_id, _email(user), up_to)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Thread message not found")
+    if last is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return {"last_read_id": last, "unread": unread.production_count(die, config, _email(user))}
 
 
 @router.post("/{die}/{config}/threads")

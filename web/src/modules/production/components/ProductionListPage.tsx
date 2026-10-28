@@ -1,6 +1,6 @@
 /** The productions the caller may see (members; admins see all). Click a row to open it. */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Box, Button, Chip, CircularProgress, Paper, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
@@ -9,6 +9,8 @@ import { useAuth } from '../../../contexts/AuthContext';
 import BilingualText from './BilingualText';
 import { productionApi } from '../api';
 import { callerRole } from '../helpers';
+import { productionUnreadKey, unreadLabel } from '../../../lib/unreadMessages';
+import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type { Production } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
 
@@ -16,6 +18,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
   const { t } = useTranslation('production');
   const { user, isAdmin } = useAuth();
   const [items, setItems] = useState<Production[] | null>(null);
+  const unreadCounts = useUnreadCounts();
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -62,9 +65,10 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
             <TableBody>
               {items.map((p) => {
                 const role = callerRole(p.members, user?.email ?? '', isAdmin);
+                const unread = unreadCounts ? (unreadCounts.productions[productionUnreadKey(p.die, p.config)] ?? 0) : (p.unread_messages ?? 0);
                 return (
                   <TableRow key={`${p.die}/${p.config}`} hover sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)}>
-                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /></TableCell>
+                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} />{unread > 0 && <Tooltip title={t('unread.tip', { count: unread })}><Chip size="small" color="primary" label={unreadLabel(unread)} aria-label={t('unread.tip', { count: unread })} sx={{ ml: 1, height: 18, fontSize: 10.5, fontWeight: 700 }} /></Tooltip>}</TableCell>
                     <TableCell><BilingualText value={p.title} size={12.5} /></TableCell>
                     <TableCell align="right">{p.order_quantity}</TableCell>
                     <TableCell align="center">{p.current_revision}</TableCell>

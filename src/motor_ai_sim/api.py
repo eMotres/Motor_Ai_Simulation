@@ -144,6 +144,7 @@ from motor_ai_sim.routes.compute_nodes import (
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.public_motors import router as public_motors_router
 from motor_ai_sim.routes.modules import router as modules_router
+from motor_ai_sim.routes.messages import router as messages_router
 from motor_ai_sim.routes.system_graph import router as system_graph_router
 from motor_ai_sim.routes.components import router as components_router
 from motor_ai_sim.routes.kernel import router as kernel_router
@@ -413,6 +414,7 @@ app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)
 app.include_router(public_motors_router)   # GET /api/public/motors: the landing page's motor preview (anonymous)
 app.include_router(modules_router)
+app.include_router(messages_router)   # GET /api/messages/unread: unread-message counts for the main menu (owner 2026-10-28)
 # /api/system/graph - the Simulations > System view (engineer + admin, read-only)
 app.include_router(system_graph_router)
 app.include_router(components_router)

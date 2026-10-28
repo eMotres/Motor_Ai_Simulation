@@ -92,21 +92,23 @@ def require_member(request: Request, die: str, config: str) -> tuple[dict, dict]
     return user, production
 
 
-def require_member_with_full_view(request: Request, die: str, config: str) -> tuple[dict, dict]:
-    user, production = require_member(request, die, config)
+def full_view_denial(request: Request, user: dict, production: dict) -> Optional[dict]:
+    """``None`` when ``user`` may open the production's content, else the 403 detail.  OEM members must have a signed NDA."""
     role = is_member(user["email"], production)
-    is_adm = is_admin(user)
-    # OEM members must have a signed NDA to open a production
-    if role == "oem" and not is_adm:
+    if role == "oem" and not is_admin(user):
         identity = auth.caller_identity(request.headers.get("authorization"))
         rec = _user_rec(identity.get("id") or "")
         if not model3d.can_download(identity, rec):
             detail = model3d.denial_detail(identity, rec)
-            raise HTTPException(
-                status_code=403,
-                detail={"code": "nda_required", "message": str(detail)},
-                headers={"code": "nda_required"},
-            )
+            return {"code": "nda_required", "message": str(detail)}
+    return None
+
+
+def require_member_with_full_view(request: Request, die: str, config: str) -> tuple[dict, dict]:
+    user, production = require_member(request, die, config)
+    denial = full_view_denial(request, user, production)
+    if denial is not None:
+        raise HTTPException(status_code=403, detail=denial, headers={"code": "nda_required"})
     return user, production
 
 

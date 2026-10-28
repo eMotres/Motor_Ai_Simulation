@@ -48,6 +48,7 @@ const CaseView: React.FC<{ id: string; onBack: () => void; onChanged: () => void
   const [d, setD] = useState<Detail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [text, setText] = useState('');
+  const [note, setNote] = useState('');          // the applicant-facing sentence of a denial mail (optional)
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -117,10 +118,16 @@ const CaseView: React.FC<{ id: string; onBack: () => void; onChanged: () => void
           <HelpTip title={t('verification.actionsHelp')} />
         </Box>
         <TextField size="small" fullWidth multiline minRows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('verification.reasonPlaceholder')} />
+        {acts.includes('deny') && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 1 }}>
+            <TextField size="small" fullWidth value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('verification.publicNote')} inputProps={{ maxLength: 500 }} />
+            <HelpTip title={t('verification.publicNoteTip')} />
+          </Box>
+        )}
         <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
           {acts.includes('approve') && <Button size="small" variant="contained" color="success" disabled={busy || !ok} onClick={() => void act('approve', { reason: text })} sx={{ textTransform: 'none' }}>{t('verification.approve')}</Button>}
           {acts.includes('requestInfo') && <Button size="small" variant="outlined" disabled={busy || !ok} onClick={() => void act('request-info', { text })} sx={{ textTransform: 'none' }}>{t('verification.requestInfo')}</Button>}
-          {acts.includes('deny') && <Button size="small" variant="outlined" color="error" disabled={busy || !ok} onClick={() => void act('deny', { reason: text })} sx={{ textTransform: 'none' }}>{t('verification.deny')}</Button>}
+          {acts.includes('deny') && <Button size="small" variant="outlined" color="error" disabled={busy || !ok} onClick={() => void act('deny', { reason: text, public_note: note })} sx={{ textTransform: 'none' }}>{t('verification.deny')}</Button>}
           {acts.includes('rerun') && <Button size="small" disabled={busy} onClick={() => void act('rerun')} sx={{ textTransform: 'none' }}>{t('verification.rerun')}</Button>}
           <Link href={d.reply_url} target="_blank" rel="noopener noreferrer" sx={{ fontSize: 12, alignSelf: 'center' }}>{t('verification.replyPage')}</Link>
         </Box>

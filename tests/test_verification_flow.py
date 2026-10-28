@@ -615,3 +615,17 @@ def test_send_with_nothing_new_asks_for_the_email_and_no_repeat_mail(env):
     assert case_of(GMAIL)["status"] == ENG.MORE_INFORMATION_REQUIRED
     assert "Your details are saved" in r.text and 'class="err"' not in r.text
     assert "Already received" in client.get(url).text and "links: 1" in client.get(url).text
+
+
+def test_a_denial_can_carry_one_public_sentence_and_the_reason_stays_internal(env):
+    """Owner 2026-10-28: the administrator may add one sentence for the applicant to the denial mail; the reason stays internal."""
+    sign(env, who="gmail")
+    c = case_of(GMAIL)
+    note = "You are welcome to apply again with the company registration documents."
+    r = client.post(f"/api/admin/verification/{c['id']}/deny",
+                    json={"reason": "company not in any register", "public_note": "  " + note + chr(10)}, headers=env["admin"])
+    assert r.status_code == 200 and r.json()["case"]["status"] == ENG.DENIED
+    mail = [m for m in env["mail"] if m["to"] == GMAIL][-1]
+    assert note in mail["body"] and "company not in any register" not in mail["body"]
+    ev = [e for e in ST.events_of(c["id"]) if e["type"] == "admin_action"][-1]
+    assert ev["data"]["public_note"] == note and ev["data"]["reason"] == "company not in any register"

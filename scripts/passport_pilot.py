@@ -206,9 +206,12 @@ class Runner:
             from concurrent.futures import ProcessPoolExecutor
             from motor_ai_sim.passport_v1.jobs import worker_init
             mats = {k: v["name"] for k, v in self.snap["materials"].items()}
+            # One job per worker process (2026-10-28): a worker kept the memory of its finished FEM job - three 80 mm demag
+            # workers held 9-13 GB each, pinned the 30 GB lane and swapped 15 GB while only one job was still running.  A fresh
+            # process per job returns that memory; the re-spawn + worker_init costs seconds against minutes of FEM.
             self._pool = ProcessPoolExecutor(
                 max_workers=self.workers, mp_context=mp.get_context("spawn"),
-                initializer=worker_init, initargs=(mats,))
+                initializer=worker_init, initargs=(mats,), max_tasks_per_child=1)
         return self._pool
 
     def close(self):

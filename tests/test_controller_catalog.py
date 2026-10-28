@@ -169,3 +169,26 @@ def test_malformed_catalog_is_refused(tmp_path, monkeypatch):
     with pytest.raises(cat.CatalogError):
         cat.load_catalog()
     assert _client().get("/api/controllers/catalog").status_code == 500
+
+
+def test_catalog_path_falls_back_to_shared_then_image_seed(tmp_path, monkeypatch):
+    """The API image has no <app>/config (only config-seed/): the route answered 500 all day 2026-10-27."""
+    import motor_ai_sim.workspace as ws
+    missing = tmp_path / "repo" / "config" / "controllers" / "catalog.yaml"
+    seed = tmp_path / "config-seed" / "controllers" / "catalog.yaml"
+    seed.parent.mkdir(parents=True)
+    seed.write_text("controllers: []\n", encoding="utf-8")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    monkeypatch.setattr(cat, "_REPO_PATH", missing)
+    monkeypatch.setattr(cat, "_PATH", missing)
+    monkeypatch.setattr(cat, "_SEED_PATH", seed)
+    monkeypatch.setattr(ws, "shared_root", lambda: shared)
+    assert cat.catalog_path() == seed
+    own = shared / "controllers" / "catalog.yaml"
+    own.parent.mkdir()
+    own.write_text("controllers: []\n", encoding="utf-8")
+    assert cat.catalog_path() == own
+    fixture = tmp_path / "fixture.yaml"
+    monkeypatch.setattr(cat, "_PATH", fixture)
+    assert cat.catalog_path() == fixture

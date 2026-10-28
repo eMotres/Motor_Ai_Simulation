@@ -52,3 +52,14 @@ test('the menu shows the totals for Development and Production and nothing is po
   const store = readFileSync(new URL('../unreadMessages.ts', import.meta.url), 'utf8');
   assert.match(store, /\/api\/messages\/unread/);
 });
+
+test('the count of an overview row comes from the shared store once read, else from the list answer', async () => {
+  const { unreadFor } = await import('../unreadMessages.ts');
+  const counts = parseUnreadCounts({ projects: { a: 2 }, productions: { 'Demo X1/L10': 3 } });
+  assert.equal(unreadFor(counts, 'projects', 'a', 9), 2);
+  assert.equal(unreadFor(counts, 'projects', 'b', 9), 0);          // store read: absent means nothing unread
+  assert.equal(unreadFor(counts, 'productions', productionUnreadKey('Demo X1', 'L10'), 0), 3);
+  assert.equal(unreadFor(null, 'projects', 'a', 4), 4);             // store not read yet: the per-item field
+  assert.equal(unreadFor(null, 'projects', 'a', undefined), 0);
+  assert.equal(unreadFor(null, 'projects', 'a', -2), 0);
+});

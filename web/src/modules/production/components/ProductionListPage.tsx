@@ -1,15 +1,18 @@
 /** The productions the caller may see (members; admins see all). Click a row to open it. */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Box, Button, Chip, CircularProgress, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, Paper, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
+import ViewModeToggle, { useViewMode } from '../../../components/common/ViewModeToggle';
+import { VIEW_MODE_KEYS } from '../../../lib/viewMode';
 import { RevisionLabel } from '../../../components/common/MotorRevisionText';
 import { useAuth } from '../../../contexts/AuthContext';
 import BilingualText from './BilingualText';
 import { productionApi } from '../api';
 import { callerRole } from '../helpers';
-import { productionUnreadKey, unreadLabel } from '../../../lib/unreadMessages';
+import { productionUnreadKey, unreadFor } from '../../../lib/unreadMessages';
+import UnreadBadge from '../../../components/common/UnreadBadge';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type { Production } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
@@ -19,6 +22,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
   const { user, isAdmin } = useAuth();
   const [items, setItems] = useState<Production[] | null>(null);
   const unreadCounts = useUnreadCounts();
+  const [viewMode, setViewMode] = useViewMode(VIEW_MODE_KEYS.production, 'list');
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -29,6 +33,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
     finally { setLoading(false); }
   }, [t]);
   useEffect(() => { void load(); }, [load]);
+  const unreadOf = (p: Production) => unreadFor(unreadCounts, 'productions', productionUnreadKey(p.die, p.config), p.unread_messages);
 
   return (
     <Box>
@@ -36,6 +41,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
         <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{t('title')}</Typography>
         <HelpTip title={t('titleTip')} />
         <Box sx={{ flex: 1 }} />
+        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
         <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} disabled={loading} onClick={() => void load()}
           sx={{ color: 'var(--text-2)', textTransform: 'none', fontSize: 12 }}>{t('refresh')}</Button>
       </Box>
@@ -47,7 +53,28 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
           <HelpTip title={t('noneTip')} />
         </Box>
       )}
-      {!loading && !err && items && items.length > 0 && (
+      {!loading && !err && items && items.length > 0 && viewMode === 'cards' && (
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>
+          {items.map((p) => {
+            const role = callerRole(p.members, user?.email ?? '', isAdmin);
+            const unread = unreadOf(p);
+            return (
+              <Paper key={`${p.die}/${p.config}`} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(p); } }}
+                sx={{ p: 1.8, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
+                <Typography sx={{ fontWeight: 700, color: 'var(--text-0)' }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /><UnreadBadge count={unread} /></Typography>
+                <Box sx={{ mt: 0.5 }}><BilingualText value={p.title} size={12} /></Box>
+                <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                  <Chip size="small" label={t(`status.${p.status}`)} />
+                  <Chip size="small" variant="outlined" label={`${t('col.revision')} ${p.current_revision}`} />
+                </Box>
+                <Typography sx={{ mt: 1.2, fontSize: 11, color: 'var(--text-2)' }}>{t('col.orderQty')}: {p.order_quantity}</Typography>
+                {role && <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{t('col.role')}: {t(`role.${role}`)}</Typography>}
+              </Paper>
+            );
+          })}
+        </Box>
+      )}
+      {!loading && !err && items && items.length > 0 && viewMode === 'list' && (
         <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
           <Table size="small" sx={{
             /* Phone: keep the columns readable and scroll the table sideways (the Paper scrolls). */
@@ -65,10 +92,10 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
             <TableBody>
               {items.map((p) => {
                 const role = callerRole(p.members, user?.email ?? '', isAdmin);
-                const unread = unreadCounts ? (unreadCounts.productions[productionUnreadKey(p.die, p.config)] ?? 0) : (p.unread_messages ?? 0);
+                const unread = unreadOf(p);
                 return (
-                  <TableRow key={`${p.die}/${p.config}`} hover sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)}>
-                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} />{unread > 0 && <Tooltip title={t('unread.tip', { count: unread })}><Chip size="small" color="primary" label={unreadLabel(unread)} aria-label={t('unread.tip', { count: unread })} sx={{ ml: 1, height: 18, fontSize: 10.5, fontWeight: 700 }} /></Tooltip>}</TableCell>
+                  <TableRow key={`${p.die}/${p.config}`} hover tabIndex={0} sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(p); } }}>
+                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /><UnreadBadge count={unread} /></TableCell>
                     <TableCell><BilingualText value={p.title} size={12.5} /></TableCell>
                     <TableCell align="right">{p.order_quantity}</TableCell>
                     <TableCell align="center">{p.current_revision}</TableCell>

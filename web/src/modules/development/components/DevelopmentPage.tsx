@@ -1,5 +1,5 @@
 import { matchesFieldReference } from '../reviewPresentation';
-import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadIdsOf, unreadLabel } from '../../../lib/unreadMessages';
+import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadFor, unreadIdsOf, unreadLabel } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import { pageVisible } from '../../../lib/pageVisible';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -12,6 +12,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import ArrowBackIcon from '@mui/icons-material/ArrowBack';
   import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
   import HelpTip from '../../../components/common/HelpTip';
+  import ViewModeToggle, { useViewMode } from '../../../components/common/ViewModeToggle';
+  import { VIEW_MODE_KEYS } from '../../../lib/viewMode';
+  import ProjectOverview from './ProjectOverview';
   import MotorRevisionText from '../../../components/common/MotorRevisionText';
   import { useAuth } from '../../../contexts/AuthContext';
   import { useTranslation } from 'react-i18next';
@@ -69,8 +72,9 @@ export default function DevelopmentPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [view, setView] = useState<ViewTab>('specification');
+  const [viewMode, setViewMode] = useViewMode(VIEW_MODE_KEYS.development, 'cards');
   const unreadCounts = useUnreadCounts();
-  const projectUnread = (p: ProjectSummary) => unreadCounts ? (unreadCounts.projects[p.id] ?? 0) : (p.unread_messages ?? 0);
+  const projectUnread = (p: ProjectSummary) => unreadFor(unreadCounts, 'projects', p.id, p.unread_messages);
   const [shownUnread, setShownUnread] = useState<ReadonlySet<string>>(new Set());   // messages that were unread when the thread was opened
   const markedUpToRef = useRef('');
   const [visibleTick, setVisibleTick] = useState(0);
@@ -549,11 +553,9 @@ export default function DevelopmentPage() {
   const { label, sectionTitle } = fields;
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}><Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tr('title')}</Typography><HelpTip title={tr('titleTip')} /><Box sx={{ flex: 1 }} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}><Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tr('title')}</Typography><HelpTip title={tr('titleTip')} /><Box sx={{ flex: 1 }} /><ViewModeToggle mode={viewMode} onChange={setViewMode} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</Box>
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-    {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>{projects.map((p) => { const c = completenessNumbers(p.completeness); return <Paper key={p.id} onClick={() => void loadProject(p)} sx={{ p: 1.8, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}><Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}</Typography>{projectUnread(p) > 0 && <Tooltip title={tr('unread.tip', { count: projectUnread(p) })}><Chip size="small" color="primary" label={unreadLabel(projectUnread(p))} aria-label={tr('unread.tip', { count: projectUnread(p) })} /></Tooltip>}<Chip size="small" label={tr(`status.${p.status}`)} /></Box><Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography><Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 1 }}><Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{tr('completeness', { filled: c.filled, total: c.total })}</Typography><Box sx={{ flex: 1, height: 5, bgcolor: 'var(--panel)', borderRadius: 2 }}><Box sx={{ width: `${c.total ? Math.min(100, c.filled / c.total * 100) : 0}%`, height: '100%', bgcolor: 'primary.main', borderRadius: 2 }} /></Box></Box>
-    </Paper>; })}</Box>}
+    {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <ProjectOverview projects={projects} mode={viewMode} unread={projectUnread} email={user?.email ?? ''} language={lang} onOpen={(p) => void loadProject(p)} t={tr} />}
     <CreateDialog open={createOpen} busy={busy} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>

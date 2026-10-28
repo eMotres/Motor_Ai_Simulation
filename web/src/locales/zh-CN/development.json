@@ -53,6 +53,14 @@
     "closed": "已关闭"
   },
   "completeness": "必填完成：{filled}/{total}",
+  "col": {
+    "project": "项目",
+    "customer": "客户",
+    "stage": "阶段",
+    "required": "必填项",
+    "role": "您的角色",
+    "updated": "更新时间"
+  },
   "requiredTip": "请填写必填项，或标记为“尚不清楚”。",
   "wizard": {
     "sections": "规格分区",

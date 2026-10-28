@@ -53,6 +53,14 @@
     "closed": "Closed"
   },
   "completeness": "Required complete: {filled}/{total}",
+  "col": {
+    "project": "Project",
+    "customer": "Customer",
+    "stage": "Stage",
+    "required": "Required",
+    "role": "Your role",
+    "updated": "Updated"
+  },
   "requiredTip": "Complete required fields or mark them as not known yet.",
   "wizard": {
     "sections": "Specification sections",

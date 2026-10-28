@@ -597,5 +597,10 @@
       "authority": "请确认您的授权",
       "mode": "请选择 FREE 或 PRIVATE"
     }
+  },
+  "viewMode": {
+    "label": "视图",
+    "list": "列表",
+    "cards": "卡片"
   }
 }

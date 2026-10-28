@@ -233,6 +233,21 @@ def test_outside_app_subtracts_job_cpu_and_clamps_at_zero(monkeypatch, caplog):
     assert any("clamped to 0" in r.message for r in caplog.records)
 
 
+def test_outside_app_subtracts_job_cpu_from_whichever_app_container_ran_it():
+    """A job run through the API burns CPU in the api colour, not in the worker: the job share is subtracted from the
+    app containers together, so it is not counted a second time as app-overhead (owner 2026-10-28)."""
+    m0 = _minute()
+    nid, _ = CM.create_node("eu1")
+    U._USER_ACC[(m0, nid, "alice", "web")] = 210.0          # 350 % of one core over the minute
+    assert U.flush_user_attribution(now=m0) == 1
+    CM.ingest(nid, _sample(containers=[{"name": "deploy-api-blue-1", "cpu": 360.0, "mem": 1e8},
+                                       {"name": "deploy-worker-1", "cpu": 2.0, "mem": 1e8},
+                                       {"name": "deploy-web-1", "cpu": 1.0, "mem": 1e8}]), now=m0 + 5)
+    out = CM.outside_app_series(m0 - 60, m0 + 60, top_n=8)
+    row = next(p for p in out["series"] if p["ts"] == m0)
+    assert row[CM.APP_OVERHEAD_KEY] == pytest.approx(13.0, abs=0.05)   # 363 - 350, not 360 + 3
+
+
 def test_outside_app_series_ranks_containers_and_buckets_the_rest_as_other():
     m0 = _minute()
     nid, _ = CM.create_node("eu1")

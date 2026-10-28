@@ -452,28 +452,33 @@ def outside_app_series(start: float, end: float, top_n: int = 8) -> Dict[str, An
 
     totals: Dict[str, float] = {}
     buckets: Dict[int, Dict[str, float]] = {}
-    for ts, node, name, cpu in rows:
-        ts = int(ts)
-        if name in APP_CONTAINERS:
-            key = APP_OVERHEAD_KEY
-            if name == JOB_CONTAINER:
-                job_pct = 100.0 * job_cpu_s.get((node, ts), 0.0) / width
-                overhead = cpu - job_pct
-                if overhead < -1e-6:
-                    _LOG.warning(
-                        "outside_app_series: %s job CPU (%.1f%%) exceeds container "
-                        "%s CPU (%.1f%%) at node=%s ts=%s -- clamped to 0 "
-                        "(sampling skew between docker stats and the job meter)",
-                        JOB_CONTAINER, job_pct, name, cpu, node, ts)
-                val = max(0.0, overhead)
-            else:
-                val = cpu   # this app container never runs jobs: all of it is overhead
-        else:
-            key = name      # a real "outside app" container, or HOST_KEY
-            val = cpu
+    # The job CPU is subtracted from ALL the app's containers on a node, not only from JOB_CONTAINER: a job submitted
+    # through the API (coupled runs, sweeps started from a script inside the api container) runs in the api colour
+    # (deploy-api-blue/green-1), and subtracting it from the worker only counted it twice (owner 2026-10-28: the chart
+    # showed ~7.5 cores while the server graph showed 4 threads busy).
+    app_cpu: Dict[Tuple[str, int], float] = {}
+
+    def _add(ts: int, key: str, val: float) -> None:
         b = buckets.setdefault(ts, {})
         b[key] = b.get(key, 0.0) + val
         totals[key] = totals.get(key, 0.0) + val
+
+    for ts, node, name, cpu in rows:
+        ts = int(ts)
+        if name in APP_CONTAINERS:
+            app_cpu[(node, ts)] = app_cpu.get((node, ts), 0.0) + cpu
+        else:
+            _add(ts, name, cpu)   # a real "outside app" container, or HOST_KEY
+    for (node, ts), cpu in app_cpu.items():
+        job_pct = 100.0 * job_cpu_s.get((node, ts), 0.0) / width
+        overhead = cpu - job_pct
+        if overhead < -1e-6:
+            _LOG.warning(
+                "outside_app_series: job CPU (%.1f%%) exceeds the app containers' "
+                "CPU (%.1f%%) at node=%s ts=%s -- clamped to 0 "
+                "(sampling skew between docker stats and the job meter)",
+                job_pct, cpu, node, ts)
+        _add(ts, APP_OVERHEAD_KEY, max(0.0, overhead))
 
     top = sorted((k for k in totals if k != APP_OVERHEAD_KEY), key=lambda k: -totals[k])
     top = top[:max(0, int(top_n))]

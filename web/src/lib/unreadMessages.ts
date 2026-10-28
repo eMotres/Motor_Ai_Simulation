@@ -41,6 +41,11 @@ export function parseUnreadCounts(j: unknown): UnreadCounts {
 
 export const productionUnreadKey = (die: string, config: string) => `${die}/${config}`;
 
+/** The unread count of one overview row: the shared store once it has been read, else the per-item field of the list answer. */
+export function unreadFor(counts: UnreadCounts | null, kind: 'projects' | 'productions', key: string, fallback?: number): number {
+  return counts ? count(counts[kind][key]) : count(fallback);
+}
+
 /** A badge text: nothing for 0, "99+" beyond two digits. */
 export function unreadLabel(n: number): string {
   const c = count(n);

@@ -597,5 +597,10 @@
       "authority": "Confirm your authority",
       "mode": "Choose FREE or PRIVATE"
     }
+  },
+  "viewMode": {
+    "label": "View",
+    "list": "List",
+    "cards": "Cards"
   }
 }

@@ -227,7 +227,15 @@ test('the first-load bundle: main.tsx imports only Root; App and the heavy tabs 
   assert.match(main, /from '\.\/Root'/);
   assert.doesNotMatch(main, /from '\.\/App/);
   const root = fs.readFileSync(path.join(WEB, 'src', 'Root.tsx'), 'utf8');
-  assert.match(root, /lazy\(\(\) => import\('\.\/App'\)\)/);
+  assert.match(root, /lazy\((watchChunkImport\()?\(\) => import\('\.\/App'\)\)/);
+  // the workspace itself: Motors and Configure are static, every other tab body is its own chunk
+  const app = fs.readFileSync(path.join(WEB, 'src', 'App.tsx'), 'utf8');
+  const appStatic = [...app.matchAll(/^import[^;]*from '([^']+)'/gm)].map((m) => m[1]);
+  for (const heavy of ['three', 'recharts', 'firebase', 'viewer3d/', 'simulation/', 'static3d/', 'model3d/', 'mechanical/', 'thermal/',
+    'controller/', 'system/', 'sweep/', 'cost/', 'mesh/', 'admin/', 'geometry/', 'production/', 'development/', 'designer/']) {
+    assert.ok(!appStatic.some((p) => p.includes(heavy)), `App.tsx must not import ${heavy} statically`);
+  }
+  assert.ok(appStatic.includes('./components/catalog/MotorsCatalog') && appStatic.includes('./components/compare/CompareTab'));
   const shell = fs.readFileSync(path.join(WEB, 'src', 'components', 'landing', 'LandingShell.tsx'), 'utf8');
   const imports = [...shell.matchAll(/^import[^;]*from '([^']+)'/gm)].map((m) => m[1]).join(' ');
   for (const heavy of ['three', 'recharts', '@xyflow', 'motorStore', 'AdminPanel', 'MotorScene']) {

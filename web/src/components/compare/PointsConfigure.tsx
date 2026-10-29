@@ -14,12 +14,14 @@
  *
  * Nothing is interpolated or invented; a missing value stays "-", a missing kind says "not computed".
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Chip, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { MetricTile, PANEL, LABEL, TileRow, fmt } from '../common/ResultTiles';
-import StoredFieldViewer from './StoredFieldViewer';
+import { watchChunkImport } from '../../lib/chunkReload';
+// the field viewer is three.js: fetched when a stored field map is opened, not with the Configure tab
+const StoredFieldViewer = lazy(watchChunkImport(() => import('./StoredFieldViewer')));
 import StoredPointResults from './StoredPointResults';
 import StepsChart from './StepsChart';
 import StarIcon from '@mui/icons-material/Star';
@@ -296,7 +298,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
           {field?.error && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.fields.loadFailed')}: {field.error}</Typography>}
           {field && !field.value && !field.error && !field.missing && <Typography role="status" sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.loading')}</Typography>}
-          {field?.value && <StoredFieldViewer key={field.key} field={field.value} contextLabel={fieldLabel} />}
+          {field?.value && (
+            <Suspense fallback={<Typography role="status" sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('points.loading')}</Typography>}>
+              <StoredFieldViewer key={field.key} field={field.value} contextLabel={fieldLabel} />
+            </Suspense>
+          )}
         </Box>}
 
       </>}

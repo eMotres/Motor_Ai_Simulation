@@ -38,4 +38,28 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(appVersion()),
     __APP_GIT_SHA__: JSON.stringify(gitSha()),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Vendor groups that change rarely get their own files, so a deploy of app code does not make a
+        // returning browser fetch React or MUI again.  three.js and recharts are only reached from lazy tabs
+        // (App.tsx), so their chunks load when a 3-D view or a chart first opens.
+        manualChunks(id) {
+          // Rollup's helpers (lazy-import preloader, CommonJS interop) go with React: left alone they are pulled
+          // into the first vendor group that needs them - three.js - and every page would import that chunk.
+          if (id.includes('vite/preload-helper') || id.includes('commonjsHelpers')) return 'vendor-react'
+          if (!id.includes('/node_modules/')) return undefined
+          const pkg = id.split('/node_modules/').pop()!
+          // use-sync-external-store is shared by zustand and recharts' redux store: with React, or the two chunks import each other
+          if (/^(react|react-dom|scheduler|use-sync-external-store|zustand|i18next[^/]*|react-i18next)\//.test(pkg)) return 'vendor-react'
+          // MUI's styling core only: the @mui/material components stay with the chunks that use them, so the signed-out
+          // landing does not download every component of the workspace (all of MUI in one chunk: +35 KiB gzip there)
+          if (/^(@emotion\/[^/]+|@mui\/(system|utils|styled-engine|private-theming)|stylis)\//.test(pkg)) return 'vendor-mui'
+          if (/^(three|three-stdlib|@react-three|postprocessing|maath|troika-[^/]+|camera-controls|meshline|stats-gl|@monogrid)\//.test(pkg)) return 'vendor-three'
+          if (/^(recharts|d3-[^/]+|victory-vendor)\//.test(pkg)) return 'vendor-charts'
+          return undefined
+        },
+      },
+    },
+  },
 })

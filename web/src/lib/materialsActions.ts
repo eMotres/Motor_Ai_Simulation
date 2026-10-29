@@ -9,8 +9,15 @@
 //
 // Built-in materials are read-only; an admin "edit" of a built-in creates a
 // global override (same name), and "delete" hides it.
-import { doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from './firebase';
+import { firebaseEnabled } from './firebaseConfig';
+
+// The Firebase SDK is its own chunk: fetched on the first per-user write, and never when it is not configured.
+async function firestore() {
+  if (!firebaseEnabled) throw new Error('Firestore unavailable');
+  const [{ db }, fs] = await Promise.all([import('./firebase'), import('firebase/firestore')]);
+  if (!db) throw new Error('Firestore unavailable');
+  return { db, ...fs };
+}
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -54,7 +61,7 @@ export function blankMaterial(category: Cat): Record<string, unknown> {
 // ── Per-user (client Firestore) ──────────────────────────────────────────────
 
 export async function saveMine(uid: string, category: Cat, name: string, props: Record<string, unknown>): Promise<void> {
-  if (!db) throw new Error('Firestore unavailable');
+  const { db, doc, setDoc, serverTimestamp } = await firestore();
   await setDoc(
     doc(db, 'users', uid, 'materials', docId(category, name)),
     { ...stripMeta(props), category, name, updatedAt: serverTimestamp() },
@@ -63,7 +70,7 @@ export async function saveMine(uid: string, category: Cat, name: string, props: 
 }
 
 export async function deleteMine(uid: string, category: Cat, name: string): Promise<void> {
-  if (!db) throw new Error('Firestore unavailable');
+  const { db, doc, deleteDoc } = await firestore();
   await deleteDoc(doc(db, 'users', uid, 'materials', docId(category, name)));
 }
 

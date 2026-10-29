@@ -12,9 +12,8 @@
  * by name, so a personal copy shadows the shared one in the tree.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
 import { useAuth, useApiReady } from '../../contexts/AuthContext';
+import { firebaseEnabled } from '../../lib/firebaseConfig';
 
 // ─── Types (mirror Python dataclasses) ───────────────────────────────────────
 
@@ -135,7 +134,10 @@ type MineLayer = Partial<Record<MaterialCategory, Record<string, Record<string, 
 /** Read users/{uid}/materials → {category: {name: props (tagged 'mine')}}. */
 async function readMine(uid: string): Promise<MineLayer> {
   const out: MineLayer = {};
+  // the Firebase SDK is its own chunk, fetched here and only when it is configured (reloadMine asks first)
+  const { db } = await import('../../lib/firebase');
   if (!db) return out;
+  const { collection, getDocs } = await import('firebase/firestore');
   const snap = await getDocs(collection(db, 'users', uid, 'materials'));
   snap.forEach(d => {
     const data = d.data() as Record<string, unknown>;
@@ -238,7 +240,7 @@ export function useMaterialsLibrary() {
 
   // per-user "my materials" (client Firestore) — reloadable after copy/edit/delete
   const reloadMine = useCallback(async () => {
-    if (!db || !uid) { setMine({}); return; }
+    if (!firebaseEnabled || !uid) { setMine({}); return; }
     try { setMine(await readMine(uid)); } catch { setMine({}); }
   }, [uid]);
 

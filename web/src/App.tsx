@@ -25,9 +25,7 @@ import {
   DarkMode as DarkModeIcon,
 } from '@mui/icons-material';
 import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './theme';
-import UnifiedActiveMotorScene from './components/viewer3d/UnifiedActiveMotorScene';
 import BrandLogo from './components/common/BrandLogo';
-import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
@@ -37,17 +35,11 @@ import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
 import { backendReachable } from './lib/version';
 import { useAuth } from './contexts/AuthContext';
-import AdminPanel from './components/admin/AdminPanel';
 import SupportWidget from './components/support/SupportWidget';
 import AnalyticsConsent from './components/common/AnalyticsConsent';
 import ActivityBeat from './components/common/ActivityBeat';
 import MaterialOverrideSync from './components/materials/MaterialOverrideSync';
 import SaveToMotorButton from './components/common/SaveToMotorButton';
-import SweepConfigPanel from './components/sweep/SweepConfigPanel';
-import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
-import MaterialDetailView from './components/materials/MaterialDetailView';
-import WireStockTable from './components/materials/WireStockTable';
-import MaterialsCatalogPanel from './components/materials/MaterialsCatalogPanel';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
@@ -58,25 +50,9 @@ import { newRequestCount } from './lib/visitorRequests';
 import { pageVisible } from './lib/pageVisible';
 import { unreadLabel } from './lib/unreadMessages';
 import { useUnreadCounts, useUnreadPolling } from './lib/useUnreadMessages';
-import SimulationPanel from './components/simulation/SimulationPanel';
-import Static3DPanel from './components/static3d/Static3DPanel';
-import MechanicalPanel from './components/mechanical/MechanicalPanel';
-const SystemPanel = lazy(watchChunkImport(() => import('./components/system/SystemPanel')));
-import ThermalPanel from './components/thermal/ThermalPanel';
-import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
-import Model3DPanel from './components/model3d/Model3DPanel';
-// Production is its own chunk (owner 2026-10-18): its updates never touch the Configure / Motors bundle
-const ProductionTab = lazy(watchChunkImport(() => import('./modules/production/components/ProductionPage').then((m) => ({ default: m.ProductionTab }))));
-// Development is a customer-facing project area; keep the wizard out of the initial engineering bundle.
-const DevelopmentTab = lazy(watchChunkImport(() => import('./modules/development/components/DevelopmentPage')));
 import UpdateBanner from './components/common/UpdateBanner';
-const DesignerTab = lazy(() => import('./modules/designer/DesignerTab'));
-import GeometryTab from './components/geometry/GeometryTab';
-import ComparePanel from './components/compare/ComparePanel';
-import MeshPanel from './components/mesh/MeshPanel';
-import CostPanel from './components/cost/CostPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
@@ -93,6 +69,36 @@ import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
 import { watchChunkImport } from './lib/chunkReload';
 import { narrowSplitColumn, narrowSplitOuter } from './lib/narrowLayout';
+
+// Every tab except Motors and Configure (the two a standard account has) is its own chunk: three.js, recharts, the
+// FEM viewers and the admin tools are fetched when their tab is first opened, not with the workspace.
+const UnifiedActiveMotorScene = lazy(watchChunkImport(() => import('./components/viewer3d/UnifiedActiveMotorScene')));
+const ParameterVariationTable = lazy(watchChunkImport(() => import('./components/sweep/ParameterVariationTable')));
+const GeometryTab = lazy(watchChunkImport(() => import('./components/geometry/GeometryTab')));
+const MaterialsCatalogPanel = lazy(watchChunkImport(() => import('./components/materials/MaterialsCatalogPanel')));
+const MaterialsLibraryTree = lazy(watchChunkImport(() => import('./components/materials/MaterialsLibraryTree')));
+const MaterialDetailView = lazy(watchChunkImport(() => import('./components/materials/MaterialDetailView')));
+const WireStockTable = lazy(watchChunkImport(() => import('./components/materials/WireStockTable')));
+const MeshPanel = lazy(watchChunkImport(() => import('./components/mesh/MeshPanel')));
+const SimulationPanel = lazy(watchChunkImport(() => import('./components/simulation/SimulationPanel')));
+const Static3DPanel = lazy(watchChunkImport(() => import('./components/static3d/Static3DPanel')));
+const MechanicalPanel = lazy(watchChunkImport(() => import('./components/mechanical/MechanicalPanel')));
+const ThermalPanel = lazy(watchChunkImport(() => import('./components/thermal/ThermalPanel')));
+const ControllerPanel = lazy(watchChunkImport(() => import('./components/controller/ControllerPanel')));
+const SystemPanel = lazy(watchChunkImport(() => import('./components/system/SystemPanel')));
+const SweepConfigPanel = lazy(watchChunkImport(() => import('./components/sweep/SweepConfigPanel')));
+const ComparePanel = lazy(watchChunkImport(() => import('./components/compare/ComparePanel')));
+const CostPanel = lazy(watchChunkImport(() => import('./components/cost/CostPanel')));
+const Model3DPanel = lazy(watchChunkImport(() => import('./components/model3d/Model3DPanel')));
+// Production is its own chunk (owner 2026-10-18): its updates never touch the Configure / Motors bundle
+const ProductionTab = lazy(watchChunkImport(() => import('./modules/production/components/ProductionPage').then((m) => ({ default: m.ProductionTab }))));
+// Development is a customer-facing project area; keep the wizard out of the initial engineering bundle.
+const DevelopmentTab = lazy(watchChunkImport(() => import('./modules/development/components/DevelopmentPage')));
+const DesignerTab = lazy(watchChunkImport(() => import('./modules/designer/DesignerTab')));
+const AdminPanel = lazy(watchChunkImport(() => import('./components/admin/AdminPanel')));
+
+/** What a tab shows while its chunk is on the way. */
+const TabLoading: React.FC = () => <CircularProgress size={18} sx={{ m: 2 }} />;
 
 // The signed-in account menu is its own chunk (AuthButton lazy-loads it); start fetching it
 // together with the workspace so the avatar does not pop in late.
@@ -567,7 +573,8 @@ function App() {
     <Box sx={{ mb:1.5 }}><SaveToMotorButton /></Box>
     <ParameterVariationTable />
   </>;
-  const geometryActiveViewer = <><UnifiedActiveMotorScene /><GeometryBuildTimer /></>;
+  // own Suspense: the panel beside it draws while the three.js chunk is still on the way
+  const geometryActiveViewer = <><Suspense fallback={<TabLoading />}><UnifiedActiveMotorScene /></Suspense><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
     gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer' | 'development'; showViewer: boolean;
@@ -603,7 +610,7 @@ function App() {
           <Box data-split-workspace sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ height: '50%', overflow: 'hidden', position: 'relative',
               borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'var(--panel-2)' }}>
-              <UnifiedActiveMotorScene force3d />
+              <Suspense fallback={<TabLoading />}><UnifiedActiveMotorScene force3d /></Suspense>
             </Box>
             <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
               <MaterialDetailView library={matLibrary} selected={selectedMaterial}
@@ -647,7 +654,7 @@ function App() {
     // coupling loops; the propeller S1 chain).  Engineer + admin, in the Simulations dropdown; lazy, the graph
     // libraries are only fetched when the tab is opened.
     { id: 'schemas', label: 'Schemas', order: 61, gate: TAB_GATES.schemas, showViewer: false,
-      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><SystemPanel /></Suspense> },
+      render: () => <SystemPanel /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,
       render: () => <SweepConfigPanel /> },
     // Compare writes the SHARED saved-sims store and Cost studies run on the
@@ -668,13 +675,13 @@ function App() {
     // Production (stage 1): parts, BOM, process, documents, discussion, proposals and revisions of one motor; admin, engineer and OEM producer.
     // kept mounted once opened (owner 2026-10-18): coming back shows the same motor, sub-tab and scroll, no reload
     { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false, keepMounted: 'visited',
-      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><ProductionTab /></Suspense> },
+      render: () => <ProductionTab /> },
     // Development projects and the customer specification wizard.
     { id: 'development', label: 'Development', order: 78, gate: TAB_GATES.development, showViewer: false, keepMounted: 'visited',
-      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DevelopmentTab /></Suspense> },
+      render: () => <DevelopmentTab /> },
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
     { id: 'designer', label: 'Designer', order: 95, gate: TAB_GATES.designer, showViewer: false,
-      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DesignerTab /></Suspense> },
+      render: () => <DesignerTab /> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: TAB_GATES.admin, showViewer: false,
       render: () => <AdminPanel /> },
   ];
@@ -850,13 +857,14 @@ function App() {
           {/* Tabs are GENERATED from the registry (manifest-driven). Each tab's
               content is rendered when active; keep-mounted tabs (Simulation) stay
               mounted and are just display-toggled so the computed dashboard +
-              field animation survive navigating away and back. */}
+              field animation survive navigating away and back.  Each body has its
+              own Suspense: a lazy tab still loading never blanks the others. */}
           {tabs.map((t) => (
             t.keepMounted && (t.keepMounted === true || visitedTabs.has(t.id)) ? (
               <Box key={t.id} sx={{ height: '100%', display: activeTab === t.id ? 'block' : 'none' }}>
-                <ErrorBoundary label={t.label}>{t.render()}</ErrorBoundary>
+                <ErrorBoundary label={t.label}><Suspense fallback={<TabLoading />}>{t.render()}</Suspense></ErrorBoundary>
               </Box>
-            ) : (activeTab === t.id ? <ErrorBoundary key={t.id} label={t.label}>{t.render()}</ErrorBoundary> : null)
+            ) : (activeTab === t.id ? <ErrorBoundary key={t.id} label={t.label}><Suspense fallback={<TabLoading />}>{t.render()}</Suspense></ErrorBoundary> : null)
           ))}
         </Box>
         </>

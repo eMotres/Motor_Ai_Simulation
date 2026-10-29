@@ -17,6 +17,8 @@
   "asQuoted": "按给定值",
   "coilTempC": "线圈温度 (°C)",
   "magnetTempC": "磁钢温度 (°C)",
+  "coilTempLoopC": "线圈温度 (°C) · 回路",
+  "magnetTempLoopC": "磁钢温度 (°C) · 回路",
   "magnetTempInvalid": "{why}：请输入 °C 或留空",
   "magnetTempTip": "磁钢求解所用的温度。所分配的磁钢卡片按其自身温度系数修正到该温度：Br、矫顽力以及包括拐点在内的整条退磁曲线。留空 = 完全按卡片给定值（卡片自身温度）。随工况保存。结果卡片会注明所用温度。",
   "magnetTempLoopTip": "来自耦合回路：上一次收敛运行得到的磁钢平均温度（最热单元见汇总卡片）。关闭耦合回路即可手动输入温度。",

@@ -2534,7 +2534,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 converged values — adopted from the run's answer and, on
                 mount / switch-on, from the server's last coupled run. */}
             <TextField
-              label={tx('coilTempC')}
+              label={coupled ? tx('coilTempLoopC') : tx('coilTempC')}
               type="number" size="small" fullWidth
               value={coilTemp}
               onChange={e => setCoilTemp(+e.target.value)}
@@ -2553,7 +2553,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 refused HERE, loudly — it used to be dropped from the run without
                 a word, which looked like "the field does nothing". */}
             <TextField
-              label={tx('magnetTempC')}
+              label={coupled ? tx('magnetTempLoopC') : tx('magnetTempC')}
               type="text" size="small" fullWidth
               value={magnetTempC}
               placeholder={tx('asQuoted')}

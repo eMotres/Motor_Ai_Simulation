@@ -20,6 +20,7 @@
  * was, so a payload built from the same browser is byte-identical to the one
  * this app has always sent.
  */
+import { parseMagnetTempC } from './magnetTemp';
 import { currentGeoJson, currentMatJson } from './apiAuth';
 import { EDDY_DEFAULT_STEPS } from './eddySteps';
 import { storedMeshFields } from './meshSettings';
@@ -220,9 +221,8 @@ export function buildEmRunPayload(inp: EmRunInputs): Record<string, unknown> {
     // before this field existed — and sending a 0 for blank would demagnetise
     // the machine instead, the same trap the d-axis field below avoids.
     ...(() => {
-      const s = String(readSimSetting<string>('magnetTempC', '') ?? '').trim();
-      const v = Number(s);
-      return s === '' || !Number.isFinite(v) ? {} : { magnet_temp_c: v };
+      const v = parseMagnetTempC(readSimSetting<string>('magnetTempC', ''));
+      return v == null ? {} : { magnet_temp_c: v };
     })(),
     // Operating mode — generator shifts the drive 180 deg el server-side.
     mode: readSimSetting<string>('opMode', 'motor'),

@@ -37,6 +37,7 @@ import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
 import { currentText, perSetFromTotal, setsOf, totalFromPerSet } from '../../lib/perSetCurrent';
+import { magnetTempError } from '../../lib/magnetTemp';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
   rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
@@ -2533,13 +2534,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 converged values — adopted from the run's answer and, on
                 mount / switch-on, from the server's last coupled run. */}
             <TextField
-              label={coupled ? 'Coil temperature (°C) — from the coupled loop' : 'Coil temperature (°C)'}
+              label={tx('coilTempC')}
               type="number" size="small" fullWidth
               value={coilTemp}
               onChange={e => setCoilTemp(+e.target.value)}
               inputProps={{ step: 10, min: -40, max: 220, readOnly: coupled }}
               InputProps={{ endAdornment: <HelpTip title={coupled
-                ? 'Computed by the coupled EM ↔ thermal loop: the winding AVERAGE the last converged run settled on. Switch the loop off to type a temperature.'
+                ? 'From the coupled loop: the winding AVERAGE the last converged run settled on. Switch the loop off to type a temperature.'
                 : `ρ_Cu(T): +0.393 %/°C from 20 °C → higher copper loss`} /> }}
               disabled={isRunning}
               sx={coupled ? { '& input': { color: '#34d399' } } : undefined}
@@ -2547,19 +2548,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             {/* MAGNET temperature.  Empty = the assigned card as the library
                 quotes it — the only behaviour this app had before 2026-09-08 —
                 so nothing moves for anyone who leaves it alone. */}
+            {/* One short label (owner 2026-10-29: the old one ran under its ⓘ);
+                what it does is in the tooltip.  A value that is not a number is
+                refused HERE, loudly — it used to be dropped from the run without
+                a word, which looked like "the field does nothing". */}
             <TextField
-              label={coupled ? 'Magnet temperature (°C) — from the coupled loop' : 'Magnet temperature (°C) — empty = card'}
+              label={tx('magnetTempC')}
               type="text" size="small" fullWidth
               value={magnetTempC}
               placeholder={tx('asQuoted')}
               onChange={e => setMagnetTempC(e.target.value)}
-              inputProps={{ readOnly: coupled }}
+              error={!coupled && !!magnetTempError(magnetTempC)}
+              helperText={!coupled && magnetTempError(magnetTempC)
+                ? tx('magnetTempInvalid', { why: magnetTempError(magnetTempC) }) : undefined}
+              inputProps={{ readOnly: coupled, inputMode: 'decimal' }}
               InputProps={{ endAdornment: <HelpTip title={coupled
-                ? 'Computed by the coupled EM ↔ thermal loop: the magnet AVERAGE the last converged run settled on (the hottest element is on the summary card). Switch the loop off to type a temperature.'
-                : 'Corrects the assigned magnet to this temperature: Br, the coercivity '
-                + 'and the whole demagnetisation curve including the knee. Empty = the '
-                + "card as the library quotes it (every run before this field existed). "
-                + 'The Coupled thermal switch below writes its converged value here.'} /> }}
+                ? tx('magnetTempLoopTip') : tx('magnetTempTip')} /> }}
               disabled={isRunning}
               sx={coupled ? { '& input': { color: '#34d399' } } : undefined}
             />
@@ -2947,7 +2951,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Button
               fullWidth
               variant="contained"
-              disabled={fitBusy}
+              disabled={fitBusy || (!coupled && !!magnetTempError(magnetTempC))}
               onClick={() => {
                 if (cancelledRun) { setAskResume(true); return; }
                 if (drive === 'current' && targetKind !== 'off') { void fitAndRun(); return; }

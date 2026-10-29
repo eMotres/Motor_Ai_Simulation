@@ -44,6 +44,10 @@ const SEP = '\u001f';        // unit separator — cannot occur in a catalog nam
 export const DUTY_OP_KEYS: readonly string[] = [
   'sim.current', 'sim.rpm', 'sim.frequency', 'sim.gamma',
   'sim.coilTemp', 'sim.opMode',
+  // The MAGNET temperature typed for this duty (owner 2026-10-29): a duty is a
+  // thermal scenario, so it is the duty's — kept per duty, saved with it.
+  // Blank = the magnet card as quoted.
+  'sim.magnetTempC',
   'sim.targetKind', 'sim.targetValue',
   'sim.drive', 'sim.vPeak', 'sim.vDelta',
   // LEGACY (2026-09-24): no panel writes these four any more — the PWM drive

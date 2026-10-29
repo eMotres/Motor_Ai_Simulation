@@ -6098,6 +6098,10 @@ def get_fem_transient(
                 coil_temp_c=coil_temp_c, geo_override=_geo_ov,
                 mode_requested=_mode_eff,
                 skip_psi_pm_probe=bool(_opt_cand() and not _is_live_machine))
+            # WHICH MAGNET TEMPERATURE this run solved at, and why (owner
+            # 2026-10-29: a typed 90 °C looked like it "did nothing" because
+            # nothing on the result said what was used).
+            _sbres["summary"].update(_magnet_temperature_stamp(magnet_temp_c))
             # The exact build args, stashed WITH the cached result: a cache hit
             # re-serves the summary as stored, so a summary-shape change (a new
             # derived quantity like Km or the rotor inertia) never reached any
@@ -7073,6 +7077,45 @@ def _machine_desc(geo: Optional[dict] = None) -> Optional[str]:
         return None
 
 
+def _magnet_temperature_stamp(magnet_temp_c: Optional[float]) -> dict:
+    """``{magnet_temp_used_c, magnet_temp_source, magnet_card, magnet_card_temp_c,
+    magnet_Br_used_T, magnet_knee_used_kA_m}`` for the run summary.
+
+    ``magnet_temp_source`` is ``"typed"`` when the request named a temperature
+    (the Simulation tab's field, or the coupled loop through it) and ``"card"``
+    when it did not — the magnet is then solved exactly as its card is quoted.
+    The card is the one the solve resolved: the machine's assignment with the
+    request's own material override on top (fem_solver_2d.build_materials).
+    Never raises: a stamp must not fail a run."""
+    out: dict = {"magnet_temp_source": "typed" if magnet_temp_c is not None else "card"}
+    if magnet_temp_c is not None:
+        out["magnet_temp_used_c"] = round(float(magnet_temp_c), 1)
+    try:
+        from motor_ai_sim import materials as _ml
+        from motor_ai_sim.config import get_material_assignments
+        from motor_ai_sim.material_context import get_request_materials
+        asg = dict(get_material_assignments() or {})
+        ov = get_request_materials() or {}
+        asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+        name = asg.get("magnet")
+        if not name:
+            return out
+        props = (ov.get("materials") or {}).get(name)
+        card = (_ml.material_from_dict("magnet", name, props) if props
+                else _ml.get_material("magnet", name))
+        used = card.at_temperature(magnet_temp_c) if magnet_temp_c is not None else card
+        out["magnet_card"] = str(name)
+        if card.temperature_c is not None:
+            out["magnet_card_temp_c"] = float(card.temperature_c)
+            out.setdefault("magnet_temp_used_c", float(card.temperature_c))
+        out["magnet_Br_used_T"] = round(float(used.Br), 4)
+        if used.h_knee is not None:
+            out["magnet_knee_used_kA_m"] = round(float(used.h_knee) / 1e3, 0)
+    except Exception:   # noqa: BLE001 — a stamp, never a failure
+        log.debug("magnet temperature stamp skipped", exc_info=True)
+    return out
+
+
 def _demag_with_grade(dsum):
     """Attach the nominal/effective GRADE to the demag aggregate.
 
@@ -7201,6 +7244,10 @@ def _refresh_summary_shape(res: dict) -> dict:
             for _k, _v in s.items():
                 if _k in _FULL_STAMP_KEYS:
                     out["summary"][_k] = _v
+        # the magnet-temperature stamp is the RUN's, not something to re-derive
+        for _k, _v in s.items():
+            if str(_k).startswith("magnet_temp_") or str(_k).startswith("magnet_card")                     or _k in ("magnet_Br_used_T", "magnet_knee_used_kA_m"):
+                out["summary"][_k] = _v
         return out
     except Exception as _e:   # noqa: BLE001 — a refresh failure must not eat the hit
         log.warning("summary shape refresh failed: %s", _e)

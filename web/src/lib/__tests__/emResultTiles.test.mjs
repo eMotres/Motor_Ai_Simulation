@@ -501,3 +501,21 @@ t('a ripple whose ring check failed is marked; the refined one replaces it', () 
   assert.equal(tile.tipKey, 'emTiles.tRippleTip');
   assert.equal(tile.display, undefined);
 });
+
+// ── the magnet temperature a plain run used (owner 2026-10-29) ─────────────
+t('a plain run shows the magnet temperature it was solved at, typed or card', () => {
+  const base = { ...RUN };
+  delete base.coupling;
+  const typed = one(E.emTileRows({ ...base, magnet_temp_used_c: 90, magnet_temp_source: 'typed',
+    magnet_card: 'N52UH_150C', magnet_card_temp_c: 150, magnet_Br_used_T: 1.3099,
+    magnet_knee_used_kA_m: -1280 }, VIEW), 'tMagnet');
+  assert.equal(typed.value, 90);
+  assert.equal(typed.labelKey, 'emTiles.tMagnetTyped');
+  assert.equal(typed.tipKey, 'emTiles.tMagnetUsedTip');
+  assert.deepEqual([typed.tipVars.card, typed.tipVars.cardT, typed.tipVars.br, typed.tipVars.knee],
+    ['N52UH_150C', '150', '1.310', '-1280']);
+  const card = one(E.emTileRows({ ...base, magnet_temp_used_c: 150, magnet_temp_source: 'card' }, VIEW), 'tMagnet');
+  assert.equal(card.labelKey, 'emTiles.tMagnetCard');
+  // a run that says nothing about it shows no tile (omission rule)
+  assert.equal(one(E.emTileRows(base, VIEW), 'tMagnet'), undefined);
+});

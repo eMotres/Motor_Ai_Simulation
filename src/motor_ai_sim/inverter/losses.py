@@ -1781,17 +1781,33 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                                     "P_ac / (P_ac + P_loss) — motor: DC in, AC out"),
             "shaft": None if eta_shaft is None else round(eta_shaft, 5),
             "wall_to_shaft": None if eta_wall is None else round(eta_wall, 5),
+            # THE SAME PRODUCT, READ THE OTHER WAY ON A GENERATOR (2026-10-30):
+            # the shaft efficiency is P_ac / P_shaft and the inverter's
+            # P_dc / P_ac, so their product is shaft -> DC link.  The key keeps
+            # its name for every reader; the direction is stated beside it.
+            "wall_to_shaft_direction": ("shaft -> DC link" if direction
+                                        == "generator" else
+                                        "DC link -> shaft"),
+            **({"shaft_to_dc": None if eta_wall is None else round(eta_wall, 5)}
+               if direction == "generator" else {}),
             # WHY it is absent, when it is: never a silent blank — the route
             # (``routes/controller.py::_duty_defaults``) hands back the one
             # reason it could not form even the electromagnetic shaft
             # efficiency (no bearings AND no rotor power/loss on this
             # record); a caller that skipped the route (a raw API call with
             # no ``efficiency_shaft``) gets the generic sentence instead.
-            "note": ("wall-to-shaft = inverter efficiency x the ONE shaft "
-                     "efficiency of this duty's record (report.shaft_view: "
-                     "bearings + windage off the shaft where a bearing model "
-                     "is assigned, the electromagnetic shaft efficiency "
-                     "otherwise)" if eta_shaft is not None else
+            "note": (("shaft-to-DC (generator) = the ONE shaft efficiency of "
+                      "this duty's record (P_ac / P_shaft; report.shaft_view: "
+                      "bearings + windage onto the shaft where a bearing model "
+                      "is assigned, the electromagnetic shaft efficiency "
+                      "otherwise) x inverter efficiency (P_dc / P_ac); "
+                      "reported under wall_to_shaft and shaft_to_dc"
+                      if direction == "generator" else
+                      "wall-to-shaft = inverter efficiency x the ONE shaft "
+                      "efficiency of this duty's record (report.shaft_view: "
+                      "bearings + windage off the shaft where a bearing model "
+                      "is assigned, the electromagnetic shaft efficiency "
+                      "otherwise)") if eta_shaft is not None else
                      (req.get("_efficiency_shaft_note")
                       or "no shaft efficiency is known for this point — "
                          "wall-to-shaft could not be computed")),

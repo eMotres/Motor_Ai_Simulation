@@ -92,6 +92,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import coupled_continuous_rating as _ccr
 from motor_ai_sim import coupled_duty_cycle as _cdc
+from motor_ai_sim import coupled_pwm_final as _pwmf
 from motor_ai_sim import coupled_time_to_limit as _ttl
 from motor_ai_sim import run_recording as _rr
 from motor_ai_sim import run_history as _RH
@@ -2135,6 +2136,24 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                     raise _refuse("the controller PWM pass left no loss map "
                                   "(%s)" % _nm.reason, ["drive"],
                                   code="pwm_no_loss_map")
+            # THE ROTOR IRON FROM A SETTLED WINDOW (2026-10-30, G1-L170): the
+            # voltage-fed march can leave the rotor's commensurate window
+            # open, and its raw DFT then reads 639 W where the settled
+            # readings say ~120 W.  The open raw window never reaches the
+            # thermal solve — see `coupled_pwm_final.rotor_iron_selection`.
+            _sel = _pwmf.rotor_iron_selection(em_k.get("summary") or {}, s0)
+            if _sel.get("refuse"):
+                raise _refuse("the controller PWM pass %d: %s"
+                              % (k, _sel.get("reason")), ["drive"],
+                              code="pwm_rotor_window_open")
+            em_k = dict(em_k, summary=_pwmf.apply_to_summary(
+                em_k.get("summary") or {}, _sel))
+            if (_sel.get("factor") or 1.0) != 1.0:
+                from motor_ai_sim.simulation.sb_domains import DOM_ROTOR
+                _map = _pwmf.scale_map_rotor_iron(_map, _sel,
+                                                  rotor_tag=DOM_ROTOR)
+                _src = dict(_src, rotor_iron=_map.get("rotor_iron_selection"))
+                log.warning("coupled: PWM pass %d — %s", k, _sel.get("reason"))
         except HTTPException as exc:
             ctl.restore(st)
             _ml.BEARING_TEMP_C.reset(tok)
@@ -2174,13 +2193,19 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                "point_error_pct": None if pe is None else round(pe, 3),
                "T_em_Nm": s_k.get("T_em_avg_Nm"),
                "P_loss_W": s_k.get("P_loss_total_W"),
+               # which rotor iron this pass's thermal map was solved on
+               "P_core_rotor_W": _sel.get("selected_W"),
+               "P_core_rotor_raw_W": _sel.get("raw_W"),
+               "rotor_iron_candidate": _sel.get("candidate"),
+               "rotor_window_closed": _sel.get("window_closed"),
+               "demag_settled": _sel.get("demag_settled"),
                "T_junction_c": round(float(ctl.t_j_c), 2),
                "d_T_junction_K": None if d_tj is None else round(float(d_tj), 3),
                "P_inverter_W": ((ctl.solve or {}).get("losses") or {}).get(
                    "total_W")}
         out["passes"].append(row)
         out.update(em=em_k, field=field_k, coil_c=c_in, magnet_c=m_in,
-                   bearing_c=b_in, inverter=inv,
+                   bearing_c=b_in, inverter=inv, rotor_iron=_sel,
                    register=dict(body=body_k, em=em_k, coil_temp_c=c_in,
                                  magnet_temp_c=m_in,
                                  n_steps_per_period=inv["n_steps_per_period"],
@@ -2265,6 +2290,11 @@ def _pwm_final_block(fin: Dict[str, Any], *, sine_coil_c: float,
             "magnet": _d(last.get("T_magnet_out"), last.get("T_magnet_in")),
             "bearing": _d(last.get("T_bearing_out"), last.get("T_bearing_in")),
         },
+        # WHICH ROTOR IRON the reported PWM state and its thermal map carry —
+        # the candidate, the raw open-window value it replaced, and the rotor's
+        # demag / eddy settling (`coupled_pwm_final.rotor_iron_selection`).
+        **({"rotor_iron": dict(fin["rotor_iron"])}
+           if fin.get("rotor_iron") else {}),
         "wall_s": round(float(t_wall_s), 1),
         **({"refusal": fin["refusal"], "refusal_code": fin["refusal_code"]}
            if fin.get("refusal") else {}),
@@ -3202,6 +3232,10 @@ class _ControllerLoop:
         self.solve: Dict[str, Any] = {}
         self.passes: List[Dict[str, Any]] = []
         self.warnings: List[str] = list(cfg.get("notes") or [])
+        # The duty's mode (set by the route) and the bridge's direction the
+        # last request was solved in, with its source.
+        self.body_mode: Optional[str] = None
+        self.power_direction: Optional[Tuple[str, str]] = None
         # The first pass has no solved current yet, so the body-diode fit is
         # placed at the current the duty is AIMED at — the regulator's target
         # where there is one, and otherwise the panel's own terminal current,
@@ -3388,6 +3422,14 @@ class _ControllerLoop:
             p_loss = float(p_loss)
         except (TypeError, ValueError):
             return None
+        # WHICH WAY THE BRIDGE'S POWER FLOWS (2026-10-30, G1-L170): from the
+        # machine's own terminal power, not assumed.  A generator point solved
+        # without it was billed as a motor — conduction / third quadrant /
+        # switching on the motor's current angle, the motor's efficiency
+        # definition, `dc_link.power_flow: link -> machine`.
+        direction, dir_src = _pwmf.bridge_power_direction(
+            s, getattr(self, "body_mode", None))
+        self.power_direction = (direction, dir_src)
         eta_f = None
         p_ac = None
         if eta is not None and 0.0 < float(eta) < 1.0:
@@ -3401,8 +3443,7 @@ class _ControllerLoop:
             # MECHANICAL power of a generator and quietly over-read its
             # efficiency.
             _other = p_loss * eta_f / (1.0 - eta_f)
-            _gen = str((em.get("summary") or {}).get("op_mode")
-                       or "motor").strip().lower().startswith("gen")
+            _gen = direction == "generator"
             p_ac = _other if _gen else (_other + p_loss)
         if p_ac is None or not (p_ac > 0.0):
             return None
@@ -3449,6 +3490,7 @@ class _ControllerLoop:
             "rpm": self.rpm,
             "efficiency_shaft": eta_f,
             "t_j_start_c": self.t_j_c,
+            "power_direction": direction,
         }
         if not m:
             # NO INVENTED POWER FACTOR.  The bridge's duty cycle cannot be got
@@ -3542,6 +3584,9 @@ class _ControllerLoop:
                  "r_g_ext_ohm", "e_oss_policy", "set_split", "r_tim_k_w")},
             "sources": dict(self.cfg.get("sources") or {}),
             "t_j_c": round(float(self.t_j_c), 2),
+            **({"power_direction_source":
+                    getattr(self, "power_direction")[1]}
+               if getattr(self, "power_direction", None) else {}),
             "t_j_tol_K": CONTROLLER_TJ_TOL_K,
             "t_j_residual_K": (round(float(self.passes[-1]["d_t_j_K"]), 3)
                                if self.passes else None),
@@ -5551,6 +5596,9 @@ def _run(body: Dict[str, Any],
         ctl = _ControllerLoop(_ctl_cfg, inverter=inverter, star_delta=_ctl_sd,
                               rpm=rpm_eff, pole_pairs=_pole_pairs(body),
                               i_leg_seed_A=_f(body, "I_phase_rms", 0.0))
+        # the duty's mode: the bridge's direction only when a pass carries
+        # no power flow of its own (`_pwmf.bridge_power_direction`)
+        ctl.body_mode = body.get("mode")
     # …and the carrier, resolved WITH the run and before anything else can move
     # the shared configuration under it (2026-09-14).  It reaches the modal and
     # rotordynamic steps explicitly and is stored in their records.
@@ -7266,6 +7314,41 @@ def _run(body: Dict[str, Any],
                             "estimate, not re-searched"
                             % (_part, _act, _act - _lim_c))
                     continuous_rating["pwm"] = _pwm_cr
+                if _state_phase != "limit":
+                    # THE VERDICT ON THE PASS REPORTED LAST (2026-10-30, G1-L170:
+                    # magnets at 240 °C after the PWM pass, limit 180, while
+                    # the block formed on the sine state said "may be held for
+                    # ever").  The record's temperatures are the PWM pass's, so
+                    # its limits are judged on that pass's own map; the sine
+                    # verdict rides beside it.  (At the limit instant the PWM
+                    # map re-reads the time instead — `limited.pwm` above.)
+                    _brg_f = _bearing_temp(field)
+                    _brg_c = None if _brg_f is None else float(_brg_f[0])
+                    try:
+                        _ttl_f = (_s1_time_to_limit(
+                                      body, cooling, em, field, i_s1=_i_body,
+                                      bearing_temp_c=_brg_c)
+                                  if _cr_s1 else
+                                  _ttl_step(body, cooling,
+                                            (em.get("summary") or {}), field,
+                                            bearing_temp_c=_brg_c,
+                                            runaway=bool(runaway)))
+                    except Exception:                       # noqa: BLE001
+                        log.debug("coupled: no time to the limit on the PWM "
+                                  "pass", exc_info=True)
+                        _ttl_f = None
+                    time_to_limit = _pwmf.judge_final_state(
+                        _ttl_f, time_to_limit, final_pass="pwm_final",
+                        final_field=field)
+                    _over = list(_pwmf.over_limit_parts(time_to_limit))
+                    pwm_final_blk["within_limits"] = (
+                        None if time_to_limit is None
+                        else bool(time_to_limit.get("within_limits", True)))
+                    pwm_final_blk["over_limit_parts"] = _over
+                    if _over:
+                        log.warning("coupled: after the PWM pass %s over the "
+                                    "limit — %s", ", ".join(_over),
+                                    (time_to_limit or {}).get("note") or "")
                 for r in fin["passes"]:
                     history.append({
                         "iter": len(history) + 1, "phase": "pwm_final",

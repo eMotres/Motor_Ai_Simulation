@@ -31,6 +31,7 @@ import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import LoadGuardDialog from './components/common/LoadGuardDialog';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import ComputeNodesHint from './components/common/ComputeNodesHint';
+import SubTabs from './components/common/SubTabs';
 import AuthButton, { preloadAuthMenu } from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
@@ -61,7 +62,7 @@ import { useApiReady } from './contexts/AuthContext';
 import { parseAdminLink } from './lib/adminLink';
 import { parseAppLink } from './lib/appLink';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
-import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
+import { barEntries, isSimulationTab, barValue, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
@@ -799,7 +800,8 @@ function App() {
           >
             {entries.map((e) => e.kind === 'simulations' ? (
               <Tab key={e.id} value={e.id}
-                label={`${simulationsLabel(tr('tabs.simulations', { defaultValue: 'Simulations' }), activeTab, e.members)} ▾`}
+                /* the open member is named in the Simulations header row below the bar, not in this tab */
+                label={`${tr('tabs.simulations', { defaultValue: 'Simulations' })} ▾`}
                 onClick={(ev) => setSimAnchor(ev.currentTarget)}
                 aria-haspopup="menu" aria-expanded={!!simAnchor}
                 sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
@@ -853,6 +855,21 @@ function App() {
         <FamilyLoadBanner />
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
         {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
+
+        {/* ── Simulations header row (owner 2026-10-30): the dropdown's members as sub-tabs in the main menu's style,
+            on top of every panel of the group, so Electromagnetic / Thermal / Mechanical / Schemas switch in one click ── */}
+        {(() => {
+          const sim = entries.find((e) => e.kind === 'simulations') as { members: { id: string; label: string }[] } | undefined;
+          if (!sim || !isSimulationTab(activeTab)) return null;
+          return (
+            <Box data-testid="simulations-header" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 3, py: 0.25,
+              bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+              <Typography variant="subtitle2">{tr('tabs.simulations', { defaultValue: 'Simulations' })}</Typography>
+              <SubTabs value={activeTab} items={sim.members} onChange={(id) => setActiveTab(id as never)}
+                ariaLabel={tr('tabs.simulations', { defaultValue: 'Simulations' })} testId="simulations-tabs" />
+            </Box>
+          );
+        })()}
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>

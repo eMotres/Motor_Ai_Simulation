@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, Link, MenuItem, Paper, Stack, Switch, TextField,
-  ThemeProvider, ToggleButton, ToggleButtonGroup, Tooltip, Typography, createTheme,
+  ThemeProvider, Tooltip, Typography, createTheme,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
@@ -33,6 +33,7 @@ import type { Layout } from '../../lib/systemGraphLayout';
 import { buildWiring, roundedPath, summarize, validateWiring } from '../../lib/systemGraphRoute';
 import type { Pt, Route, Violation } from '../../lib/systemGraphRoute';
 import SystemComposer from './SystemComposer';
+import SubTabs from '../common/SubTabs';
 import { NARROW } from '../../lib/narrowLayout';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -318,16 +319,12 @@ export default function SystemPanel() {
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap', rowGap: 1 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{tr('tabs.schemas')}</Typography>
-        <ToggleButtonGroup size="small" exclusive value={mode} onChange={onMode}>
-          <ToggleButton value="view">{tr('system.mode.view')}</ToggleButton>
-          <ToggleButton value="compose">{tr('system.mode.compose')}</ToggleButton>
-        </ToggleButtonGroup>
+        <SubTabs value={mode} ariaLabel={tr('tabs.schemas')} testId="schemas-mode-tabs" onChange={(m) => onMode(null, m)}
+          items={[{ id: 'view', label: tr('system.mode.view') }, { id: 'compose', label: tr('system.mode.compose') }]} />
         {mode === 'view' && (
           <>
-            <ToggleButtonGroup size="small" exclusive value={view} onChange={onView}>
-              <ToggleButton value="modules">{tr('system.view.modules')}</ToggleButton>
-              <ToggleButton value="propeller_s1">{tr('system.view.propellerS1')}</ToggleButton>
-            </ToggleButtonGroup>
+            <SubTabs value={view} ariaLabel={tr('system.mode.view')} testId="schemas-view-tabs" onChange={(v) => onView(null, v)}
+              items={[{ id: 'modules', label: tr('system.view.modules') }, { id: 'propeller_s1', label: tr('system.view.propellerS1') }]} />
             <Tooltip title={tr('system.hintTip')}>
               <Typography variant="body2" sx={{ color: 'text.secondary', cursor: 'help' }}>{tr('system.hint')}</Typography>
             </Tooltip>

@@ -13,7 +13,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Chip, Button, CircularProgress,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Dialog,
-  DialogTitle, DialogContent, DialogActions, Tabs, Tab, IconButton,
+  DialogTitle, DialogContent, DialogActions, IconButton,
   Drawer, Select, MenuItem, FormControl, InputLabel, Alert,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { getStoredToken } from '../../../lib/localAuth';
 import { oneOf } from '../../../lib/viewMemory';
 import { useRememberedView } from '../../../lib/useRememberedView';
+import SubTabs from '../../common/SubTabs';
 import { companyAgreementText } from '../../../lib/platformAgreement';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
@@ -541,34 +542,22 @@ const DirectorySection: React.FC = () => {
 
       {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'var(--line-soft)', mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Tabs value={tab} onChange={(_, val) => setTab(val)}>
-          <Tab
-            value="companies"
-            label={`${t('directory.companiesTab', { defaultValue: 'Companies' })} (${companies.length})`}
-            sx={{ textTransform: 'none', fontWeight: 700 }}
-          />
-          <Tab
-            value="people"
-            label={`${t('directory.peopleTab', { defaultValue: 'People' })} (${people.length})`}
-            sx={{ textTransform: 'none', fontWeight: 700 }}
-          />
-          <Tab
-            value="proposed"
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                <span>{t('directory.proposedTab', { defaultValue: 'Proposed Affiliations' })}</span>
-                {proposed.length > 0 && (
-                  <Chip
-                    label={proposed.length}
-                    size="small"
-                    sx={{ height: 18, fontSize: 10, fontWeight: 700, bgcolor: '#ef4444', color: '#fff' }}
-                  />
-                )}
-              </Box>
-            }
-            sx={{ textTransform: 'none', fontWeight: 700 }}
-          />
-        </Tabs>
+        <SubTabs value={tab} onChange={setTab} ariaLabel={t('directory.companiesTab', { defaultValue: 'Companies' })} items={[
+          { id: 'companies', label: `${t('directory.companiesTab', { defaultValue: 'Companies' })} (${companies.length})` },
+          { id: 'people', label: `${t('directory.peopleTab', { defaultValue: 'People' })} (${people.length})` },
+          { id: 'proposed', label: (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <span>{t('directory.proposedTab', { defaultValue: 'Proposed Affiliations' })}</span>
+              {proposed.length > 0 && (
+                <Chip
+                  label={proposed.length}
+                  size="small"
+                  sx={{ height: 18, fontSize: 10, fontWeight: 700, bgcolor: '#ef4444', color: '#fff' }}
+                />
+              )}
+            </Box>
+          ) },
+        ]} />
         <TextField
           size="small"
           placeholder={t('directory.searchPlaceholder', { defaultValue: 'Search…' })}

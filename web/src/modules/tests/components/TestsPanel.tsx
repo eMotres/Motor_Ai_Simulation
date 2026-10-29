@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, FormControlLabel, IconButton, MenuItem,
-  Paper, Select, Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, Tooltip, Typography,
+  Paper, Select, Switch, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography,
 } from '@mui/material';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -21,6 +21,7 @@ import {
   type TableBlock,
 } from '../tableModel';
 import { TEST_KINDS, type CompareRow, type TestCompare, type TestKind, type TestRecord, type TestsPayload } from '../types';
+import SubTabs from '../../../components/common/SubTabs';
 import SeriesChart from './SeriesChart';
 import TestEditor from './TestEditor';
 
@@ -265,13 +266,8 @@ export const TestsPanel: React.FC<{
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Tabs value={sub} onChange={(_, v) => setSub(v as TestKind)}
-          sx={{ minHeight: 30, '& .MuiTab-root': { minHeight: 30, textTransform: 'none', fontSize: 12.5, py: 0.3 } }}>
-          {TEST_KINDS.map((k) => (
-            <Tab key={k} value={k} label={<Tooltip title={t(`tests.subTip.${k}`)}><span>
-              {t(`tests.sub.${k}`)} ({testsOfKind(data.tests, k).length})</span></Tooltip>} />
-          ))}
-        </Tabs>
+        <SubTabs value={sub} onChange={setSub} ariaLabel={t('tests.tab')}
+          items={TEST_KINDS.map((k) => ({ id: k, tip: t(`tests.subTip.${k}`), label: `${t(`tests.sub.${k}`)} (${testsOfKind(data.tests, k).length})` }))} />
         <Box sx={{ flex: 1 }} />
         {!data.model.available && (
           <Tooltip title={t('tests.modelMissingTip')}><Chip size="small" label={t('tests.modelMissing')} sx={{ fontSize: 11 }} /></Tooltip>

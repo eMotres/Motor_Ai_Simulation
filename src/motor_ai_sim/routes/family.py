@@ -3448,6 +3448,12 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             entry[k] = dict(v)
         elif prev and prev.get(k):
             entry[k] = prev[k]
+    # The build the duty was last solved on (note_duty_solved_build) survives
+    # a save, unless this save brings a new primary summary — that summary's
+    # own `_geoSig` is then the newest statement.
+    if (prev and isinstance(prev.get("solved_on"), dict)
+            and not (d.summary is not None and _is_primary)):
+        entry["solved_on"] = prev["solved_on"]
     if d.duty_cycle is not None:
         if d.duty_cycle:
             # WHEN the machine's job was last redefined — the entry's own stamp,
@@ -4577,7 +4583,7 @@ def sync_active_die_geometry(saved_geo: dict,
 
 #: The winding keys of a configuration — FREE_GEO_KEYS minus the stack length.
 #: A duty whose saved machine differs from the die in one of these (or in any
-#: die key) was solved on a different winding: loading it must ask first.
+#: die key) was solved on a different winding: its saved results are stale.
 WINDING_GEO_KEYS = tuple(k for k in FREE_GEO_KEYS if k != "motor_length")
 
 
@@ -4604,15 +4610,22 @@ def _find_geo_sig(node: Any, depth: int = 0) -> Optional[str]:
 
 
 def duty_saved_geometry(duty: Optional[dict]) -> Dict[str, float]:
-    """The machine a duty says it was solved on: its own ``geometry`` dict, or
-    the parsed ``_geoSig`` stamp of its records.  ``{}`` when it says nothing."""
+    """The machine a duty says it was LAST solved on: the ``solved_on`` stamp
+    of its latest run (``note_duty_solved_build``), else its own ``geometry``
+    dict, else the parsed ``_geoSig`` stamp of its records.  ``{}`` when it
+    says nothing."""
     if not isinstance(duty, dict):
         return {}
-    g = duty.get("geometry")
-    if isinstance(g, dict) and g:
-        return {k: v for k, v in g.items()
-                if isinstance(v, (int, float)) and not isinstance(v, bool)}
-    sig = _find_geo_sig({k: v for k, v in duty.items() if k != "geometry"})
+    so = duty.get("solved_on")
+    sig = so.get("_geoSig") if isinstance(so, dict) else None
+    if not (isinstance(sig, str) and sig.strip()):
+        sig = None
+        g = duty.get("geometry")
+        if isinstance(g, dict) and g:
+            return {k: v for k, v in g.items()
+                    if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        sig = _find_geo_sig({k: v for k, v in duty.items()
+                             if k not in ("geometry", "solved_on")})
     if not sig:
         return {}
     try:
@@ -4673,15 +4686,6 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     return out
 
 
-def _die_config_count(die: str) -> int:
-    """Number of configurations of `die` (its ``*.yaml`` files but ``die.yaml``)."""
-    try:
-        return len([p for p in _die_dir(die).glob("*.yaml")
-                    if p.name != "die.yaml" and ".bak" not in p.name])
-    except Exception:   # noqa: BLE001 - informational only
-        return 0
-
-
 def _blocking(diffs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [x for x in diffs if x["scope"] != "free"]
 
@@ -4690,11 +4694,13 @@ class Activate(BaseModel):
     die: str
     config: str
     duty: Optional[str] = None
-    #: The explicit answer when the duty's saved machine differs from the die:
-    #: ``"keep_die"`` loads the die's geometry (nothing written),
-    #: ``"apply_duty"`` writes the duty's geometry into die.yaml (die keys) and
-    #: the configuration's overrides (winding/stack keys), history-snapshotted.
-    #: Absent while a difference exists → 409 with the structured diff.
+    #: What to do when the duty's saved machine differs from the die + config.
+    #: Absent or ``"keep_die"``: load the configuration's CURRENT build, write
+    #: nothing, and answer ``geometry_stale: true`` with the diff (owner
+    #: 2026-10-29: the configuration is the design truth, a duty always opens
+    #: on it).  ``"apply_duty"`` — an explicit API request only, never offered
+    #: by default — writes the duty's geometry into die.yaml (die keys) and the
+    #: configuration's overrides (winding/stack keys), history-snapshotted.
     geometry_choice: Optional[str] = None
 
 
@@ -4735,6 +4741,50 @@ def _apply_duty_geometry(die: str, cfg: str, d: dict, c: dict,
     return {"die_keys": sorted(die_part), "config_keys": sorted(cfg_part)}
 
 
+def note_duty_solved_build(geometry: Dict[str, Any], source: str) -> bool:
+    """Stamp the loaded duty with the build a recorded run was JUST solved on.
+
+    The duty's ``_geoSig`` used to come only from its saved EM summary, which
+    only a duty Save rewrites.  A coupled run solved on the current build filed
+    its own record but left that older stamp in place, so the duty kept
+    reading "saved on a different geometry" (2026-10-29).  The stamp goes into
+    ``solved_on`` on the duty entry; ``duty_saved_geometry`` reads it first.
+    The EM summary itself is NOT replaced — if it is older, the panel still
+    shows it as stale against the live machine, which is true.
+
+    Written only when the stamp changes (each write snapshots the file into
+    .history).  Never raises: bookkeeping must not fail a solve.
+    """
+    try:
+        from motor_ai_sim.routes.presets import _geo_sig
+        ctx = _read_ctx() or {}
+        die, cfg, duty = ctx.get("die"), ctx.get("config"), ctx.get("duty")
+        sig = _geo_sig(geometry or {})
+        if not (die and cfg and duty and sig):
+            return False
+        p = _cfg_file(die, cfg)
+        c = _load_yaml(p, "configuration")
+        entry = next((x for x in (c.get("duties") or [])
+                      if isinstance(x, dict) and x.get("name") == duty), None)
+        if entry is None:
+            return False
+        if (entry.get("solved_on") or {}).get("_geoSig") == sig:
+            return False
+        entry["solved_on"] = {
+            "_geoSig": sig,
+            "build_sig": _build_sig(_die_doc_for_sig(die), c),
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "source": str(source),
+        }
+        _save_yaml(p, c)
+        log.info("family: duty '%s/%s/%s' stamped as solved on the current "
+                 "build (%s run)", die, cfg, duty, source)
+        return True
+    except Exception:   # noqa: BLE001 — never fails the run that called it
+        log.debug("family: solved-build stamp not written", exc_info=True)
+        return False
+
+
 @router.post("/activate")
 def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     """Mark die/config/duty as the machine now loaded in the editor.  Admin
@@ -4745,8 +4795,13 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     No silent die write (incident 2026-09-27 20:20: loading
     "CIANO14 12_40 Ø12 12s10p / L10 / rated" rewrote the die's winding and
     stack): when the duty's saved machine differs from the die + config in a
-    die or winding key, this answers 409 with the diff and changes NOTHING
-    until the caller says ``geometry_choice`` = keep_die | apply_duty."""
+    die or winding key, the duty still loads on the configuration's CURRENT
+    build, nothing is written, and the answer says ``geometry_stale: true``
+    with the diff, so the saved results are shown as stale.  This used to be
+    a 409 and a blocking dialog whose default button reverted the
+    configuration to the duty's older build (owner 2026-10-29: "a duty must
+    always open on the current geometry").  Only an explicit
+    ``geometry_choice=apply_duty`` writes the duty's geometry."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w, cfg)
@@ -4761,32 +4816,16 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
         _duty = next((x for x in (c.get("duties") or [])
                       if isinstance(x, dict) and x.get("name") == req.duty), None)
         diffs = duty_geometry_diff(d, c, _duty)
-        if _blocking(diffs):
-            if choice is None:
-                keys = ", ".join(f"{x['key']} {x['live']}→{x['duty']}"
-                                 for x in _blocking(diffs)[:6])
-                # Applying would touch die.yaml only when a "die"-scope key
-                # differs (winding/free diffs land in the configuration,
-                # which is never locked) — so the frontend can disable the
-                # "apply duty geometry" choice up front instead of letting
-                # the owner pick it and hit a second, confusing 423 (incident
-                # 2026-09-29: "die is locked ... sign in again and retry" on
-                # a plain lock, not an auth failure).
-                die_locked = bool(d.get("locked", True)) and any(
-                    x["scope"] == "die" for x in _blocking(diffs))
-                raise HTTPException(409, detail={
-                    "code": "duty_geometry_differs",
-                    "message": f"duty '{req.duty}' was saved on a different "
-                               f"geometry ({keys}) — apply the duty geometry "
-                               "or keep the die geometry?",
-                    "diffs": diffs,
-                    "choices": ["apply_duty", "keep_die"],
-                    "die_locked": die_locked,
-                    # how many configurations an "apply_duty" on a die key
-                    # would rewrite (the dialog names the number)
-                    "config_count": _die_config_count(die)})
-            if choice == "apply_duty":
-                geometry_applied = _apply_duty_geometry(die, cfg, d, c, diffs)
+        if _blocking(diffs) and choice == "apply_duty":
+            geometry_applied = _apply_duty_geometry(die, cfg, d, c, diffs)
+    # The duty's saved results were computed on another build than the one
+    # this load puts live — the caller shows them as stale, never as valid.
+    geometry_stale = bool(_blocking(diffs)) and geometry_applied is None
+    if geometry_stale:
+        log.info("family: duty '%s/%s/%s' opened on the configuration's current "
+                 "build; its saved results are stale (%s)", die, cfg, req.duty,
+                 ", ".join(f"{x['key']} {x['duty']}→{x['live']}"
+                           for x in _blocking(diffs)[:6]))
     import json
     _ctx_file().write_text(
         json.dumps({"die": die, "config": cfg, "duty": req.duty,
@@ -4805,6 +4844,7 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
             "config_locked": bool(c.get("locked", False)),
             "mesh_synced": mesh_synced,
             "geometry_diffs": diffs, "geometry_choice": choice,
+            "geometry_stale": geometry_stale,
             "geometry_applied": geometry_applied}
 
 

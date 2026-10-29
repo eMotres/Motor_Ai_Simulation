@@ -11,8 +11,9 @@ machine.
 Pinned here:
   * a refresh gives the radii of the inputs, and is byte-identical on a
     consistent document (so no hash taken over one moves);
-  * the guard compares INPUTS: no false 409, a real input change still 409s,
-    and slot_hs (never read by the builder) is not a difference;
+  * the guard compares INPUTS: no false stale flag, a real input change is
+    still flagged stale (the duty opens on the current build; 2026-10-29 it
+    was a 409), and slot_hs (never read by the builder) is not a difference;
   * the lock check does not refuse a derived key;
   * the payload / save refresh is ON by default (MOTOR_AI_SIM_FRESH_DERIVED=0
     turns it off, and then nothing the fingerprints hash changes);
@@ -30,7 +31,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fastapi import HTTPException
 
 from motor_ai_sim.geometry import motor_geometry as mg
 from motor_ai_sim.routes import family as fam
@@ -131,10 +131,11 @@ def dies(monkeypatch, tmp_path):
     return root
 
 
-def test_equal_inputs_stale_die_copies_no_409(dies):
+def test_equal_inputs_stale_die_copies_not_stale(dies):
     before = (dies / DIE / "die.yaml").read_bytes()
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="peak"), _w={})
     assert out["ok"] and out["geometry_diffs"] == []
+    assert out["geometry_stale"] is False
     assert (dies / DIE / "die.yaml").read_bytes() == before
 
 
@@ -143,11 +144,10 @@ def test_slot_hs_is_never_a_difference(dies):
     assert out["ok"] and out["geometry_diffs"] == []
 
 
-def test_a_real_input_difference_still_409s(dies):
-    with pytest.raises(HTTPException) as ei:
-        fam.activate(fam.Activate(die=DIE, config=CFG, duty="moved"), _w={})
-    assert ei.value.status_code == 409
-    keys = {x["key"]: x for x in ei.value.detail["diffs"]}
+def test_a_real_input_difference_is_still_flagged_stale(dies):
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="moved"), _w={})
+    assert out["ok"] and out["geometry_stale"] is True
+    keys = {x["key"]: x for x in out["geometry_diffs"]}
     assert set(keys) == {"slot_height"}        # its derived radii are not listed
     assert keys["slot_height"]["scope"] == "die"
     assert keys["slot_height"]["live"] == 6.1 and keys["slot_height"]["duty"] == 6.3

@@ -1,13 +1,17 @@
 /**
- * Pure formatting for the "duty saved on a different geometry" dialog
- * (web/src/lib/dutyApply.ts, family.py `duty_geometry_diff`).
+ * Pure formatting for "these saved results were computed on another build":
+ * the summary card's stale chip (components/simulation/SummaryTable.tsx)
+ * compares a result's `_geoSig` stamp with the live geometry and names what
+ * moved.  The rows are the same `{key, scope, live, duty}` shape family.py's
+ * `duty_geometry_diff` answers in `/api/family/activate`.
  *
- * The raw diff off the wire is `{key, scope, live, duty}` with UNROUNDED
- * floats — the old `window.confirm()` this replaced printed
- * "rotor_inner_radius 4.800000000000002 → 5.000000000000002" and the owner
- * could not tell what actually differs (incident 2026-09-29). Round for
- * DISPLAY only, never for what is sent back to the server: the dialog's
- * answer is always the `geometry_choice` string, never a rounded number.
+ * Until 2026-10-29 these rows fed a blocking "This duty was saved on a
+ * different geometry" dialog whose default button reverted the configuration
+ * to the duty's older build.  The dialog is gone: a duty always opens on the
+ * configuration's current build and its older results are shown stale.
+ *
+ * Round for DISPLAY only (incident 2026-09-29: "rotor_inner_radius
+ * 4.800000000000002 → 5.000000000000002" was unreadable).
  *
  * Dependency-free (no `import.meta.env`) so node imports the SHIPPED file —
  * same convention as lib/timeToLimitChip.ts.
@@ -78,41 +82,6 @@ export function formatDutyGeometryDiffRow(row: DutyGeometryDiffRow): string {
     + ` → duty ${formatDutyGeometryValue(row.key, row.duty)}`;
 }
 
-/** Why "apply duty geometry" cannot be offered, or null when it can.  Mirrors
- *  the two ways family.py's `activate` refuses geometry_choice=apply_duty: a
- *  foreign lamination (422 duty_geometry_foreign_lamination) and a locked die
- *  (423 die_locked) — surfaced HERE, before the owner picks the choice and
- *  hits a second, confusing failure (incident 2026-09-29: "die is locked ...
- *  sign in again and retry" appended to a plain lock, not an auth problem).
- *
- *  `dieLocked` is trusted AS GIVEN — it is the 409 payload's own
- *  `die_locked` field, which the backend already scopes to "the lock would
- *  actually block this apply" (a winding-only diff never touches die.yaml,
- *  so a locked die does not block it, and the backend's own flag says so).
- *  This function does not re-derive that scoping from `scope: 'die'` rows —
- *  one place decides it, see `activate()`'s `die_locked` computation. */
-export function dutyGeometryApplyDisabledReason(
-  diffs: DutyGeometryDiffRow[], dieLocked: boolean,
-): string | null {
-  if (diffs.some((d) => d.scope === 'identity')) {
-    return 'different lamination (Ø / slots / poles) — save the duty as a new die instead';
-  }
-  if (dieLocked) {
-    return 'die is released/locked — unlock it in the Motors catalog first';
-  }
-  return null;
-}
-
-/** Why "apply" is unavailable, as a code the dialog translates (the English
- *  sentence above stays for logs and the older callers). */
-export function dutyGeometryApplyDisabledCode(
-  diffs: DutyGeometryDiffRow[], dieLocked: boolean,
-): 'identity' | 'locked' | null {
-  if (diffs.some((d) => d.scope === 'identity')) return 'identity';
-  if (dieLocked) return 'locked';
-  return null;
-}
-
 /** One side of the diff as a plain list: "magnet_up_gap 0.200 mm, rotor_hole
  *  0.900 mm".  `live` = the die as it is now, `duty` = what the duty was
  *  computed on.  Rounded for display only (formatDutyGeometryValue). */
@@ -122,47 +91,47 @@ export function formatDutyGeometryKeyList(
   return diffs.map((d) => `${d.key} ${formatDutyGeometryValue(d.key, d[side])}`).join(', ');
 }
 
-/** True when applying the duty rewrites the DIE file (a die-scope key differs),
- *  which is shared by every configuration of the die and their 3-D models; a
- *  winding / stack-only difference lands in this configuration alone. */
-export function dutyGeometryRewritesDie(diffs: DutyGeometryDiffRow[]): boolean {
-  return diffs.some((d) => d.scope === 'die');
+/** Parse a `_geoSig` stamp ("key:value|key:value", components/common/geoSig.ts)
+ *  into numbers.  Unreadable pairs are skipped; '' or null gives {}. */
+export function parseGeoSig(stamp: string | null | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const pair of String(stamp ?? '').split('|')) {
+    const i = pair.indexOf(':');
+    if (i <= 0) continue;
+    const v = Number(pair.slice(i + 1));
+    if (Number.isFinite(v)) out[pair.slice(0, i)] = v;
+  }
+  return out;
 }
 
-/** What the two choice buttons say (locale keys in `motors` + their values), so
- *  the wording is built from the real diff and is testable without React. */
-export interface DutyGeometryButtonPlan {
-  /** Button 1 - "Use the current die": the die's values now. */
-  keepValues: string;
-  /** Button 2 - the duty's values the apply would write. */
-  applyValues: string;
-  /** `motors` locale key for the apply button (and its confirmation). */
-  applyKey: 'dutyGeoApplyDie' | 'dutyGeoApplyDieNoCount' | 'dutyGeoApplyConfig';
-  /** Configurations of the die, when the server said (die-wide apply only). */
-  configCount?: number;
+/** Where a result's stamp differs from the live geometry: keys BOTH sides carry
+ *  as numbers, relative tolerance 1e-6 (family.py `duty_geometry_diff`).
+ *  `live` = the build now, `duty` = what the result was computed on. */
+export function geoSigDiffRows(stamp: string | null | undefined,
+                               live: Record<string, unknown> | null | undefined,
+): DutyGeometryDiffRow[] {
+  const saved = parseGeoSig(stamp);
+  const rows: DutyGeometryDiffRow[] = [];
+  for (const key of Object.keys(saved).sort()) {
+    const lv = (live ?? {})[key];
+    if (typeof lv !== 'number' || !Number.isFinite(lv)) continue;
+    const sv = saved[key];
+    if (Math.abs(lv - sv) <= 1e-6 * Math.max(1, Math.abs(lv))) continue;
+    rows.push({ key, scope: '', live: lv, duty: sv });
+  }
+  return rows;
 }
 
-export function dutyGeometryButtonPlan(
-  diffs: DutyGeometryDiffRow[], configCount?: number,
-): DutyGeometryButtonPlan {
-  const dieWide = dutyGeometryRewritesDie(diffs);
-  const known = typeof configCount === 'number' && configCount > 0;
-  return {
-    keepValues: formatDutyGeometryKeyList(diffs, 'live'),
-    applyValues: formatDutyGeometryKeyList(diffs, 'duty'),
-    applyKey: !dieWide ? 'dutyGeoApplyConfig' : known ? 'dutyGeoApplyDie' : 'dutyGeoApplyDieNoCount',
-    configCount: dieWide && known ? configCount : undefined,
-  };
-}
-
-/** The three choices the dialog can resolve to.  `null` only when no dialog
- *  could be shown at all (e.g. the render tree that owns it never mounted) —
- *  the load stops rather than silently picking one side. */
-export type DutyGeometryChoice = 'apply_duty' | 'keep_die' | null;
-
-/** The load-cancelled reason `applyDutyEverywhere` throws for every non-choice
- *  outcome (Cancel, or no dialog at all) — one string, so a test can pin it
- *  and a caller never has to special-case "which kind of cancel was this". */
-export function dutyGeometryCancelledMessage(): string {
-  return 'load cancelled — die geometry differs from the duty';
+/** "insulation_thickness 0.200 → 0.250 mm, wire_spacing_x 0.100 → 0.120 mm
+ *  (+2 more)": saved → now, at most `max` keys, for the stale tooltip. */
+export function staleBuildKeysText(rows: DutyGeometryDiffRow[], max = 4): string {
+  const shown = rows.slice(0, max).map((r) => {
+    const now = formatDutyGeometryValue(r.key, r.live);
+    const was = formatDutyGeometryValue(r.key, r.duty);
+    // one unit per pair: "0.200 → 0.250 mm", not "0.200 mm → 0.250 mm"
+    const unit = now.endsWith(' mm') && was.endsWith(' mm') ? ' mm' : '';
+    return `${r.key} ${unit ? was.slice(0, -3) : was} → ${unit ? now.slice(0, -3) : now}${unit}`;
+  });
+  const more = rows.length - shown.length;
+  return shown.join(', ') + (more > 0 ? ` (+${more} more)` : '');
 }

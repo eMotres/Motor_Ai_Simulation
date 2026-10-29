@@ -19,8 +19,6 @@ import {
   applyDutyLocal, fetchDutyPayload, leaveForDuty, type LocalApplyResult,
 } from './dutyLocalApply';
 import { beginDutyApply, endDutyApply } from './familyFollow';
-import { dutyGeometryCancelledMessage, type DutyGeometryDiffRow } from './dutyGeometryDiff';
-import { askDutyGeometryChoice } from './dutyGeometryDialogService';
 import { canWriteServer, getStoredUser } from './localAuth';
 import { loadStopReason } from './geometryApplyOutcome';
 import { uiCanWrite } from './accessUi';
@@ -29,27 +27,12 @@ import { beginLastMotorSelection,isCurrentLastMotorOperation, rememberLoadedMoto
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
-/**
- * Ask the owner which geometry wins when the duty's saved machine differs
- * from the die: a real modal (DutyGeometryDialog, via
- * lib/dutyGeometryDialogService) with the rounded diff table and three
- * explicit buttons — "load with die geometry" (nothing written), "apply duty
- * geometry" (writes the die / configuration, history-snapshotted, disabled
- * when the die is locked or the lamination itself differs) and Cancel.
- * Replaces a raw `window.confirm()` (incident 2026-09-29: unrounded floats,
- * an ambiguous OK/Cancel the owner read backwards).  Returns null only when
- * no dialog could be shown, or it was dismissed without an answer — the load
- * then stops exactly as a Cancel would.
- */
-export async function chooseDutyGeometry(message: string, diffs: DutyGeometryDiffRow[],
-                                         dieLocked: boolean, configCount?: number,
-                                         config?: string): Promise<'apply_duty' | 'keep_die' | null> {
-  try {
-    return await askDutyGeometryChoice({ message, diffs, dieLocked, configCount, config });
-  } catch {
-    return null;
-  }
-}
+/** Appended to the load message when the duty's saved results were computed
+ *  on another build than the configuration's current one (activate's
+ *  `geometry_stale`).  The duty still opens on the CURRENT build — the
+ *  configuration is the design truth (owner 2026-10-29); the summary card
+ *  marks the old numbers stale and offers Recompute. */
+export const STALE_BUILD_NOTICE = ' — saved results are from an older build; Recompute';
 
 /**
  * Apply `die / cfg / duty` everywhere.  Throws with a one-line reason when a
@@ -100,10 +83,10 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     // magnet and the steel the PREVIOUS duty chose.  lib/dutySettings.ts.
     try { clearDutyMaterialsKeys(); } catch { /* nothing to clear */ }
     const { updateGeometryViaApi } = useMotorStore.getState();
-    // Set inside the 409 branch below when the owner picks "keep die
-    // geometry" — appended to the local half's message once the load lands,
-    // so the panel says the dashboard is stale before the owner wonders why
-    // Run gives different numbers than the catalog just showed.
+    // Set when activate says the duty's saved results were computed on another
+    // build — appended to the local half's message once the load lands, so the
+    // panel says the dashboard is stale before the owner wonders why Run gives
+    // different numbers than the catalog just showed.
     let staleGeometryNotice = '';
     if (canWrite) {
       // ── OWNER: load the duty into the SHARED server config ─────────────
@@ -116,40 +99,23 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
       // 0) mark WHICH die/config/duty the editor is about to become — the
       //    geometry route enforces the locks against this context, and
       //    applying the configuration's own canonical values passes.
-      const activate = (geometry_choice?: string) => fetch(`${API}/api/family/activate`, {
+      //    A duty ALWAYS opens on the configuration's current build (owner
+      //    2026-10-29): there is no choice to make and nothing is written.
+      //    Results saved on another build come back as `geometry_stale` and
+      //    are shown stale, never as valid.  `keep_die` is sent so a server
+      //    that still asks (the old 409 dialog) takes the same path.
+      const ar = await fetch(`${API}/api/family/activate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die, config: cfg, duty, geometry_choice }),
+        body: JSON.stringify({ die, config: cfg, duty, geometry_choice: 'keep_die' }),
       });
-      let ar = await activate();
-      // 409 = the duty was saved on a different geometry than the die (+config).
-      // The server wrote NOTHING; the owner chooses, explicitly (incident
-      // 2026-09-27: a load silently rewrote the die's winding and stack).
-      // "keep_die" leaves the results the panel will show STALE — the
-      // dashboard was computed on the duty's own (different) geometry — so
-      // the local half's message says so once the load lands (below).
-      if (ar.status === 409) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let det: any = {};
-        try { det = (await ar.json()).detail ?? {}; } catch { /* no body */ }
-        if (det?.code !== 'duty_geometry_differs') {
-          throw new Error(String(det?.message ?? det ?? `HTTP ${ar.status}`));
-        }
-        const choice = await chooseDutyGeometry(String(det.message ?? ''),
-          det.diffs ?? [], det.die_locked === true,
-          typeof det.config_count === 'number' ? det.config_count : undefined, cfg);
-        if (!choice) throw new Error(dutyGeometryCancelledMessage());
-        if (choice === 'keep_die') {
-          staleGeometryNotice = ` — saved results of ${duty} were computed on `
-            + 'a different geometry — re-run to refresh them';
-        }
-        ar = await activate(choice);
-      }
-      // with apply_duty the files changed — reread what the load will PUT
       if (ar.ok) {
         try {
           const aj = await ar.clone().json();
-          if (aj?.geometry_applied) Object.assign(p, await fetchDutyPayload(die, cfg, duty));
-        } catch { /* keep the payload read before */ }
+          if (aj?.geometry_stale || (aj?.geometry_diffs ?? []).some(
+            (x: { scope?: string }) => x?.scope && x.scope !== 'free')) {
+            staleGeometryNotice = STALE_BUILD_NOTICE;
+          }
+        } catch { /* no body — nothing to say */ }
       }
       // A failed activate used to be SILENT and the geometry PUT below still
       // ran — the live editor then held this machine while the server

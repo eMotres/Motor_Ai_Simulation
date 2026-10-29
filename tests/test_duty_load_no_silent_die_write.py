@@ -59,45 +59,36 @@ def _hist(root):
     return sorted(h.glob("*.yaml")) if h.is_dir() else []
 
 
-def test_differing_duty_is_refused_with_a_diff_and_nothing_is_written(dies, tmp_path):
+def test_differing_duty_opens_on_the_current_build_and_is_stale(dies, tmp_path):
+    """Owner 2026-10-29: a duty ALWAYS opens on the configuration's current
+    build.  No 409, no dialog, nothing written: the answer flags the saved
+    results as stale and names the diff."""
     before = (dies / DIE / "die.yaml").read_bytes()
-    with pytest.raises(HTTPException) as ei:
-        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
-    assert ei.value.status_code == 409
-    det = ei.value.detail
-    assert det["code"] == "duty_geometry_differs"
-    by = {x["key"]: x for x in det["diffs"]}
+    cfg_before = (dies / DIE / f"{CFG}.yaml").read_bytes()
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    assert out["ok"] and out["geometry_stale"] is True
+    assert out["geometry_applied"] is None
+    by = {x["key"]: x for x in out["geometry_diffs"]}
     assert by["wire_width"]["scope"] == "winding" and by["wire_width"]["duty"] == 2
     assert by["num_wires_per_slot"]["duty"] == 6
     assert by["tooth_width"]["scope"] == "die"
     assert "motor_length" not in by            # config says 10 too — no diff
     assert (dies / DIE / "die.yaml").read_bytes() == before
-    assert not (tmp_path / ".family_context.json").exists()
+    assert (dies / DIE / f"{CFG}.yaml").read_bytes() == cfg_before
+    assert json.loads((tmp_path / ".family_context.json").read_text(
+        encoding="utf-8"))["duty"] == "rated"
     assert _hist(dies) == []
-    # unlocked die (fixture default) — the frontend may offer "apply duty
-    # geometry" straight away, nothing will refuse it downstream
-    assert det["die_locked"] is False
-    # the dialog names how many configurations an apply on a die key rewrites
-    assert det["config_count"] == 1
 
 
-def test_differing_duty_on_a_locked_die_flags_die_locked_in_the_409(dies):
-    """incident 2026-09-29: the owner picked "apply duty geometry" from the
-    raw confirm() dialog, and the SECOND activate (geometry_choice=apply_duty)
-    failed with 423 "die is locked" — a plain lock, not the auth problem the
-    generic `!ar.ok` branch appended "sign in again and retry" to.  The first
-    409 now says up front whether applying is even possible, so the dialog
-    can disable that choice instead of letting the owner hit the 423."""
+def test_differing_duty_on_a_locked_die_still_opens(dies):
+    """A locked die changes nothing about opening a stale duty; only the
+    explicit apply_duty is refused (423), never silently."""
     d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
     d["locked"] = True
     (dies / DIE / "die.yaml").write_text(yaml.safe_dump(d, sort_keys=False),
                                          encoding="utf-8")
-    with pytest.raises(HTTPException) as ei:
-        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
-    assert ei.value.status_code == 409
-    det = ei.value.detail
-    assert det["die_locked"] is True
-    # apply_duty must still be refused explicitly (423), never silently
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    assert out["geometry_stale"] is True
     with pytest.raises(HTTPException) as ei2:
         fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
                                   geometry_choice="apply_duty"), _w={})
@@ -105,24 +96,31 @@ def test_differing_duty_on_a_locked_die_flags_die_locked_in_the_409(dies):
     assert ei2.value.detail["code"] == "die_locked"
 
 
-def test_winding_only_diff_on_a_locked_die_is_not_die_locked(dies):
-    """A duty that differs only in winding/free keys never touches die.yaml,
-    so a locked die must not block it — die_locked stays False."""
-    d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
-    d["locked"] = True
-    (dies / DIE / "die.yaml").write_text(yaml.safe_dump(d, sort_keys=False),
-                                         encoding="utf-8")
+def test_solved_on_stamp_makes_the_duty_current(dies, tmp_path):
+    """Root cause 2026-10-29: a coupled run solved on the current build left
+    the duty's older EM `_geoSig` in place.  `note_duty_solved_build` stamps
+    the duty with the build the run solved; the duty then opens clean."""
+    (tmp_path / ".family_context.json").write_text(
+        json.dumps({"die": DIE, "config": CFG, "duty": "rated"}), encoding="utf-8")
+    live = dict(DIE_GEO, motor_length=10)
+    assert fam.note_duty_solved_build(live, "coupled") is True
     c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
-    c["duties"][0]["summary"]["_geoSig"] = SIG.replace("tooth_width:1.7",
-                                                        "tooth_width:1.5")
-    (dies / DIE / f"{CFG}.yaml").write_text(yaml.safe_dump(c, sort_keys=False),
-                                            encoding="utf-8")
-    with pytest.raises(HTTPException) as ei:
-        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
-    det = ei.value.detail
-    by = {x["key"]: x for x in det["diffs"]}
-    assert "tooth_width" not in by             # die scope now matches
-    assert det["die_locked"] is False
+    so = c["duties"][0]["solved_on"]
+    assert so["source"] == "coupled" and so["build_sig"]
+    assert c["duties"][0]["summary"]["_geoSig"] == SIG   # EM summary untouched
+    # same build again -> no second write (no .history churn)
+    n_hist = len(_hist(dies))
+    assert fam.note_duty_solved_build(live, "coupled") is False
+    assert len(_hist(dies)) == n_hist
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    assert out["geometry_stale"] is False and out["geometry_diffs"] == []
+
+
+def test_solved_on_needs_a_loaded_duty(dies, tmp_path):
+    assert fam.note_duty_solved_build(dict(DIE_GEO), "coupled") is False
+    (tmp_path / ".family_context.json").write_text(
+        json.dumps({"die": DIE, "config": CFG, "duty": "nope"}), encoding="utf-8")
+    assert fam.note_duty_solved_build(dict(DIE_GEO), "coupled") is False
 
 
 def test_keep_die_loads_without_writing(dies):
@@ -130,6 +128,7 @@ def test_keep_die_loads_without_writing(dies):
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
                                     geometry_choice="keep_die"), _w={})
     assert out["ok"] and out["geometry_applied"] is None
+    assert out["geometry_stale"] is True
     assert (dies / DIE / "die.yaml").read_bytes() == before
     assert _hist(dies) == []
 
@@ -138,6 +137,7 @@ def test_explicit_apply_writes_with_history_snapshot(dies):
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
                                     geometry_choice="apply_duty"), _w={})
     assert out["geometry_applied"]["die_keys"] == ["tooth_width"]
+    assert out["geometry_stale"] is False
     g = _die(dies)["geometry"]
     assert g["tooth_width"] == 1.7
     # winding keys go to the CONFIGURATION, never into die.yaml
@@ -154,6 +154,7 @@ def test_explicit_apply_writes_with_history_snapshot(dies):
 def test_duty_without_stamp_loads_as_before(dies):
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="clean"), _w={})
     assert out["ok"] and out["geometry_diffs"] == []
+    assert out["geometry_stale"] is False
 
 
 def test_foreign_lamination_cannot_be_applied(dies):
@@ -184,3 +185,34 @@ def test_geometry_put_sync_never_writes_config_keys_into_die(dies, tmp_path):
     g = _die(dies)["geometry"]
     assert g["tooth_width"] == 1.6 and g["wire_height"] == 0.2
     assert g["motor_length"] == 40 and g["num_wires_per_slot"] == 5
+
+
+def test_coupled_run_stamps_the_build_it_solved(dies, tmp_path, monkeypatch):
+    """The coupled route's hook: live config geometry (+ the request's `geo`
+    override) is what gets stamped on the loaded duty."""
+    import motor_ai_sim.config as mcfg
+    from motor_ai_sim.routes import coupled
+    (tmp_path / ".family_context.json").write_text(
+        json.dumps({"die": DIE, "config": CFG, "duty": "rated"}), encoding="utf-8")
+    monkeypatch.setattr(mcfg, "get_config",
+                        lambda *a, **k: {"geometry": dict(DIE_GEO, motor_length=10)})
+    assert coupled._note_solved_build({}) is True
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    assert out["geometry_stale"] is False
+
+
+def test_solved_on_survives_an_operating_point_resave(dies, tmp_path):
+    """A duty re-save that brings no new primary summary keeps the stamp; one
+    that brings a summary replaces it (that summary is the newest statement)."""
+    (tmp_path / ".family_context.json").write_text(
+        json.dumps({"die": DIE, "config": CFG, "duty": "rated"}), encoding="utf-8")
+    assert fam.note_duty_solved_build(dict(DIE_GEO, motor_length=10), "coupled")
+    spec = dict(name="rated", mode="motor", current_arms=10.0, rpm=15000.0,
+                gamma_deg=0.0)
+    fam.upsert_duty(fam.DutyCreate(die=DIE, config=CFG, duty=spec), _w={})
+    c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert c["duties"][-1]["solved_on"]["source"] == "coupled"
+    fam.upsert_duty(fam.DutyCreate(die=DIE, config=CFG, duty=dict(
+        spec, summary={"_geoSig": SIG})), _w={})
+    c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert "solved_on" not in c["duties"][-1]

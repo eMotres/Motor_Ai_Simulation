@@ -1,42 +1,37 @@
 /**
  * node --test — lib/dutyGeometryDiff.ts: the rounding/formatting behind the
- * "duty saved on a different geometry" modal (lib/dutyApply.ts,
- * components/catalog/DutyGeometryDialog.tsx) and the choice-mapping helpers
- * it shares with them.
+ * summary card's "⚠ older build" chip (components/simulation/SummaryTable.tsx),
+ * which names what moved between a result's `_geoSig` stamp and the live
+ * geometry.
  *
  * The module is dependency-free (no `import.meta.env`), so node imports the
  * SHIPPED file — same convention as lib/timeToLimitChip.ts.
  *
- * What this pins (incident 2026-09-29: the old window.confirm() printed
- * "rotor_inner_radius 4.800000000000002 → 5.000000000000002" — the owner
- * could not tell what actually differs, and picked the wrong button):
+ * What this pins:
  *
  *   1. a count key (segments/slots/poles/wires/strands) rounds to a plain
- *      integer, no unit;
+ *      integer, no unit (incident 2026-09-29: unrounded floats);
  *   2. a physical dimension rounds to 0.001 mm and carries the "mm" unit;
  *   3. an angle key rounds to 4 significant digits and carries "°";
- *   4. apply is disabled with a reason on a locked die OR a foreign
- *      lamination, and offered with no reason otherwise;
- *   5. the cancelled-load message is one fixed string both the dialog's
- *      Cancel button and "no dialog could be shown" resolve to.
+ *   4. a `_geoSig` stamp parses, and only keys that really moved are listed;
+ *   5. the blocking "saved on a different geometry" dialog is gone for good
+ *      (owner 2026-10-29): no module, no locale key, no import of it.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
   isCountKey, toSignificantDigits, roundDutyGeometryValue, formatDutyGeometryValue,
-  formatDutyGeometryDiffRow, dutyGeometryApplyDisabledReason, dutyGeometryCancelledMessage,
-  formatDutyGeometryKeyList, dutyGeometryButtonPlan, dutyGeometryApplyDisabledCode,
-  dutyGeometryRewritesDie,
+  formatDutyGeometryDiffRow, formatDutyGeometryKeyList, parseGeoSig, geoSigDiffRows,
+  staleBuildKeysText,
 } from '../dutyGeometryDiff.ts';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import IntlMessageFormat from 'intl-messageformat';
 
-const LOCALES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'locales');
-const motors = (lng) => JSON.parse(readFileSync(join(LOCALES, lng, 'motors.json'), 'utf8'));
-const say = (lng, key, vars) => new IntlMessageFormat(motors(lng)[key], lng).format(vars);
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LOCALES = join(SRC, 'locales');
+const json = (lng, ns) => JSON.parse(readFileSync(join(LOCALES, lng, `${ns}.json`), 'utf8'));
 
 /* ── the owner's own example, rounded ────────────────────────────────────── */
 
@@ -109,115 +104,86 @@ test('a winding-scope count row carries no unit', () => {
     'num_wires_per_slot (winding): die 5 → duty 6');
 });
 
-/* ── apply disabled reason: locked die, foreign lamination, or neither ──── */
-
-test('an unlocked die with only winding/die diffs offers apply', () => {
-  const diffs = [{ key: 'tooth_width', scope: 'die', live: 1.5, duty: 1.7 }];
-  assert.equal(dutyGeometryApplyDisabledReason(diffs, false), null);
-});
-
-test('a locked die with a die-scope diff disables apply, with a reason', () => {
-  const diffs = [{ key: 'tooth_width', scope: 'die', live: 1.5, duty: 1.7 }];
-  const why = dutyGeometryApplyDisabledReason(diffs, true);
-  assert.match(why, /locked/);
-  assert.match(why, /unlock it/);
-});
-
-test('an identity (foreign-lamination) diff disables apply regardless of the lock', () => {
-  const diffs = [{ key: 'stator_diameter', scope: 'identity', live: 12, duty: 30 }];
-  const why = dutyGeometryApplyDisabledReason(diffs, false);
-  assert.match(why, /lamination/);
-  assert.match(why, /new die/);
-});
-
-test('dieLocked is trusted as given — the backend already scopes it to '
-  + '"the lock would block THIS apply" (see family.py activate())', () => {
-  // A winding-only diff never touches die.yaml, so the 409 payload's own
-  // die_locked would be false for it (pinned server-side in
-  // tests/test_duty_load_no_silent_die_write.py); the helper does not
-  // second-guess that — it disables whenever the caller says dieLocked=true.
-  const diffs = [{ key: 'num_wires_per_slot', scope: 'winding', live: 5, duty: 6 }];
-  assert.equal(dutyGeometryApplyDisabledReason(diffs, false), null);
-  assert.match(dutyGeometryApplyDisabledReason(diffs, true), /locked/);
-});
-
-/* ── the cancelled-load message: one string, everywhere ─────────────────── */
-
-test('the cancelled message is fixed, not composed per-call', () => {
-  assert.equal(dutyGeometryCancelledMessage(),
-    'load cancelled — die geometry differs from the duty');
-});
-
-/* ── the choice buttons say exactly what happens, with the values ────────── */
+/* ── the key list (one side of a diff) ─────────────────────────────────── */
 
 const DIE_DIFFS = [
   { key: 'magnet_up_gap', scope: 'die', live: 0.2, duty: 0.1 },
   { key: 'rotor_hole', scope: 'die', live: 0.9000000000000001, duty: 1.0 },
 ];
 
-test('the key list shows the die values on one side and the duty values on the other', () => {
+test('the key list shows the live values on one side and the saved values on the other', () => {
   assert.equal(formatDutyGeometryKeyList(DIE_DIFFS, 'live'),
     'magnet_up_gap 0.200 mm, rotor_hole 0.900 mm');
   assert.equal(formatDutyGeometryKeyList(DIE_DIFFS, 'duty'),
     'magnet_up_gap 0.100 mm, rotor_hole 1.000 mm');
 });
 
-test('a die-key difference rewrites the die for all configurations; a winding-only one does not', () => {
-  assert.equal(dutyGeometryRewritesDie(DIE_DIFFS), true);
-  const winding = [{ key: 'wire_width', scope: 'winding', live: 0.8, duty: 2 }];
-  assert.equal(dutyGeometryRewritesDie(winding), false);
-  assert.equal(dutyGeometryButtonPlan(winding, 7).applyKey, 'dutyGeoApplyConfig');
-  assert.equal(dutyGeometryButtonPlan(DIE_DIFFS, 7).applyKey, 'dutyGeoApplyDie');
-  assert.equal(dutyGeometryButtonPlan(DIE_DIFFS, 7).configCount, 7);
-  // an older server that does not send the count: wording without the number
-  assert.equal(dutyGeometryButtonPlan(DIE_DIFFS, undefined).applyKey, 'dutyGeoApplyDieNoCount');
+/* ── a result's stamp against the live build ─────────────────────────────── */
+
+// The owner's 2026-10-29 case: the configuration moved, the duty's EM
+// summary still carries the stamp of the build it was solved on.
+const STAMP = 'insulation_thickness:0.2|motor_length:100|num_seg:2|'
+  + 'wire_spacing_x:0.1|wire_spacing_y:0.13';
+const LIVE = { insulation_thickness: 0.25, motor_length: 100, num_seg: 2,
+               wire_spacing_x: 0.12, wire_spacing_y: 0.1, label: 'L100' };
+
+test('a _geoSig stamp parses into numbers; junk pairs are skipped', () => {
+  assert.deepEqual(parseGeoSig('a:1|b:0.25|c:x|:3|d'), { a: 1, b: 0.25 });
+  assert.deepEqual(parseGeoSig(''), {});
+  assert.deepEqual(parseGeoSig(null), {});
 });
 
-test('English button 1 names the die values and says nothing is written', () => {
-  const plan = dutyGeometryButtonPlan(DIE_DIFFS, 7);
-  assert.equal(say('en', 'dutyGeoKeepDie', { values: plan.keepValues }),
-    'Use the current die: magnet_up_gap 0.200 mm, rotor_hole 0.900 mm — the saved results '
-    + 'of this duty do not apply and will be recomputed when you run. Nothing is written.');
+test('only the keys that moved are listed, saved → now', () => {
+  const rows = geoSigDiffRows(STAMP, LIVE);
+  assert.deepEqual(rows.map((r) => r.key),
+    ['insulation_thickness', 'wire_spacing_x', 'wire_spacing_y']);
+  assert.equal(staleBuildKeysText(rows),
+    'insulation_thickness 0.200 → 0.250 mm, wire_spacing_x 0.100 → 0.120 mm, '
+    + 'wire_spacing_y 0.130 → 0.100 mm');
 });
 
-test('English button 2 names the duty values, ALL configurations and their count', () => {
-  const plan = dutyGeometryButtonPlan(DIE_DIFFS, 7);
-  assert.equal(say('en', plan.applyKey, { values: plan.applyValues, n: plan.configCount }),
-    'Change the die back to the duty’s lamination: magnet_up_gap 0.100 mm, rotor_hole 1.000 mm '
-    + '— this rewrites the die for ALL its configurations (7 configs) and their 3-D models');
-  assert.match(say('en', 'dutyGeoApplyDie', { values: 'x 1', n: 1 }), /\(1 config\)/);
+test('the same build gives no rows, float noise included', () => {
+  assert.deepEqual(geoSigDiffRows(STAMP, { ...LIVE, insulation_thickness: 0.2,
+    wire_spacing_x: 0.1 + 1e-12, wire_spacing_y: 0.13 }), []);
+  assert.deepEqual(geoSigDiffRows('', LIVE), []);
 });
 
-test('the winding-only apply names the configuration and says the die stays', () => {
-  const winding = [{ key: 'wire_width', scope: 'winding', live: 0.8, duty: 2 }];
-  const plan = dutyGeometryButtonPlan(winding, 7);
-  const s = say('en', plan.applyKey, { values: plan.applyValues, config: 'L10' });
-  assert.match(s, /configuration L10/);
-  assert.match(s, /wire_width 2\.000 mm/);
-  assert.match(s, /only this configuration/);
+test('a long diff is cut to `max` keys with a count of the rest', () => {
+  const rows = geoSigDiffRows(STAMP, LIVE);
+  assert.equal(staleBuildKeysText(rows, 1),
+    'insulation_thickness 0.200 → 0.250 mm (+2 more)');
+  assert.equal(staleBuildKeysText([{ key: 'num_wires_per_slot', scope: '', live: 6, duty: 5 }]),
+    'num_wires_per_slot 5 → 6');
 });
 
-test('zh-CN carries the same buttons as a real translation (values and count intact)', () => {
-  const plan = dutyGeometryButtonPlan(DIE_DIFFS, 7);
-  const keep = say('zh-CN', 'dutyGeoKeepDie', { values: plan.keepValues });
-  const apply = say('zh-CN', plan.applyKey, { values: plan.applyValues, n: plan.configCount });
-  assert.match(keep, /magnet_up_gap 0\.200 mm, rotor_hole 0\.900 mm/);
-  assert.match(apply, /magnet_up_gap 0\.100 mm, rotor_hole 1\.000 mm/);
-  assert.match(apply, /7 /);
-  for (const s of [keep, apply]) assert.match(s, /[一-鿿]/);
-  // every new key exists in both locales and the Chinese is not the English
-  const en = motors('en'); const zh = motors('zh-CN');
-  const keys = Object.keys(en).filter((k) => k.startsWith('dutyGeo'));
-  assert.ok(keys.length >= 20);
-  for (const k of keys) {
-    assert.ok(zh[k], `zh-CN is missing ${k}`);
-    assert.notEqual(zh[k], en[k], `${k} is untranslated`);
+/* ── the chip's strings, and the dialog that must not come back ─────────── */
+
+test('the stale chip strings exist in EN and a real zh-CN translation', () => {
+  const en = json('en', 'results'); const zh = json('zh-CN', 'results');
+  for (const k of ['staleBuild', 'staleBuildTip', 'recompute']) {
+    assert.ok(en[k] && zh[k], k);
+    assert.notEqual(en[k], zh[k], `${k} is untranslated`);
   }
+  assert.match(en.staleBuildTip, /\{\{keys\}\}/);
+  assert.match(zh.staleBuildTip, /\{\{keys\}\}/);
 });
 
-test('the apply-unavailable code mirrors the reason helper', () => {
-  assert.equal(dutyGeometryApplyDisabledCode(
-    [{ key: 'stator_diameter', scope: 'identity', live: 12, duty: 30 }], false), 'identity');
-  assert.equal(dutyGeometryApplyDisabledCode(DIE_DIFFS, true), 'locked');
-  assert.equal(dutyGeometryApplyDisabledCode(DIE_DIFFS, false), null);
+test('the blocking "different geometry" dialog is gone (owner 2026-10-29)', () => {
+  assert.equal(existsSync(join(SRC, 'components', 'catalog', 'DutyGeometryDialog.tsx')), false);
+  assert.equal(existsSync(join(SRC, 'lib', 'dutyGeometryDialogService.ts')), false);
+  for (const lng of ['en', 'zh-CN']) {
+    assert.deepEqual(Object.keys(json(lng, 'motors')).filter((k) => k.startsWith('dutyGeo')), []);
+  }
+  const walk = (dir) => readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    if (statSync(p).isDirectory()) return n === '__tests__' ? [] : walk(p);
+    return /\.tsx?$/.test(n) ? [p] : [];
+  });
+  for (const f of walk(SRC)) {
+    assert.doesNotMatch(readFileSync(f, 'utf8'), /DutyGeometryDialog|askDutyGeometryChoice/, f);
+  }
+  // the load never asks: it opens on the current build, keep_die always
+  const apply = readFileSync(join(SRC, 'lib', 'dutyApply.ts'), 'utf8');
+  assert.match(apply, /geometry_choice: 'keep_die'/);
+  assert.doesNotMatch(apply, /apply_duty/);
 });

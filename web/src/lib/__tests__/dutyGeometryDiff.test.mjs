@@ -28,6 +28,7 @@ import {
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import IntlMessageFormat from 'intl-messageformat';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LOCALES = join(SRC, 'locales');
@@ -164,8 +165,13 @@ test('the stale chip strings exist in EN and a real zh-CN translation', () => {
     assert.ok(en[k] && zh[k], k);
     assert.notEqual(en[k], zh[k], `${k} is untranslated`);
   }
-  assert.match(en.staleBuildTip, /\{\{keys\}\}/);
-  assert.match(zh.staleBuildTip, /\{\{keys\}\}/);
+  assert.match(en.staleBuildTip, /\{keys\}/);
+  assert.match(zh.staleBuildTip, /\{keys\}/);
+  // ICU MessageFormat (i18n/core.ts): the keys really land in the sentence
+  for (const [lng, msg] of [['en', en.staleBuildTip], ['zh-CN', zh.staleBuildTip]]) {
+    assert.match(new IntlMessageFormat(msg, lng).format({ keys: 'wire_spacing_x 0.100 → 0.120 mm' }),
+      /wire_spacing_x 0\.100 → 0\.120 mm/);
+  }
 });
 
 test('the blocking "different geometry" dialog is gone (owner 2026-10-29)', () => {

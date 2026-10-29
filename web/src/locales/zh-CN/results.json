@@ -55,6 +55,6 @@
   "modelled": "已建模",
   "rippleMeshLimited": "脉动：气隙网格过粗",
   "staleBuild": "⚠ 旧版构型",
-  "staleBuildTip": "这些结果是在该配置的另一版构型上计算的（{{keys}}）。工况已按当前构型打开；请重新计算以更新这些数值。",
+  "staleBuildTip": "这些结果是在该配置的另一版构型上计算的（{keys}）。工况已按当前构型打开；请重新计算以更新这些数值。",
   "recompute": "重新计算"
 }

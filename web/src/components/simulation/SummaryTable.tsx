@@ -1048,7 +1048,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               on the configuration's current build, so its older saved numbers
               say so here — one short chip, what moved in the tooltip, and the
               one click that refreshes them (`sim-rerun`, SimulationPanel). */}
-          {geoStale && !matStale && (
+          {geoStale && (
             <>
               <Tooltip title={tx('staleBuildTip', { keys: staleBuildKeysText(
                 geoSigDiffRows(s._geoSig, geometry as Record<string, unknown>)) || '…' })}
@@ -1063,7 +1063,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               </Button>
             </>
           )}
-          {stale && !(geoStale && !matStale) && (
+          {(matStale || (opStale && !geoStale)) && (
             <Tooltip title={(matStale
                 ? `Solved with OTHER MATERIALS than now assigned (${matDiffs.join('; ')}). `
                 : `Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°, ${fmt(Number(s.rpm), 0)} rpm — the panel is now set to `

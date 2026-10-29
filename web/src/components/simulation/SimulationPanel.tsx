@@ -280,9 +280,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
   const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
   const [windErr, setWindErr]       = useState<string | null>(null);  // refused winding change
-  // The backend RE-PICKED a connection that the live slot count no longer
-  // allows (a geometry change, a die/config copy) — one line saying so.
-  const [windNote, setWindNote]     = useState<string | null>(null);
+  // The stored connection the live slot count does not allow (the server's
+  // one-line reason, GET /api/winding/config `connection_error`).  Shown as a
+  // refusal; the panel never changes the connection on its own - a machine
+  // load writes geometry and winding together, so this only shows for a real
+  // edit that left the winding behind.
+  const windStoredErr = windCfg?.connection_valid === false && windCfg?.connection_error
+    ? String(windCfg.connection_error) : null;
   // connection options + the selected connection's parallel-path count come from
   // the backend (slot-derived). I_coil = I_phase / n_parallel.
   // Prefer the backend's slot-derived options; fall back to deriving them locally
@@ -305,7 +309,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         // config.yaml is the persistent, cross-browser source for the connection;
         // adopt it on load so a fresh browser / other tab reflects the real value.
         if (d.connection) setConnection(d.connection);
-        if (d.connection_note) setWindNote(String(d.connection_note));
         // The geometry counts ride on the same answer: they used to be read
         // ONCE on mount, so the period / cogging labels kept the previous
         // machine's slot count after a die switch.
@@ -358,8 +361,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, [loadWinding]);
 
   // Phase → colour for the slot map (A=red, B=green, C=blue); +full, −faded.
-  // self-heal: if the persisted connection isn't valid for THIS motor's slot count
-  // (e.g. a 4-coil connection inherited on a 12-slot motor), switch to the first valid one.
+  // The persisted connection may not be valid for THIS motor's slot count (e.g. a
+  // 4-coil connection inherited on a 12-slot motor).  It used to be switched to the
+  // first valid option (all series) on the spot - a silent change that doubled the
+  // voltage of a 4S-2P (owner 2026-10-30).  Now the panel adopts what the backend
+  // holds and, when that is itself invalid, SHOWS why (`windStoredErr`) and leaves
+  // the choice to the user.
   //
   // ONLY against the BACKEND's option list (windCfg loaded).  It used to run on
   // the local fallback too, and on first mount that fallback is derived from
@@ -370,13 +377,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ONE parallel path while the buttons — re-adopted from the backend a moment
   // later — showed 4P.  That is the "I change the connection and nothing
   // changes" report: 4x the coil MMF, under the wrong name.
-  useEffect(() => {
-    if (!windCfg || !Array.isArray(windCfg.connections) || !windCfg.connections.length) return;
-    if (!windConns.some((c) => c.label === connection)) {
-      setConnection(windConns[0].label);
-      applyWinding({ connection: windConns[0].label });
-    }
-  }, [windCfg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const PHASE_COLOR: Record<string, string> = { A: '#ef4444', B: '#22c55e', C: '#3b82f6' };
 
@@ -808,8 +808,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // buttons and its label in `connection`, which the next Run sent: a `10P`
   // on a 48-slot machine (8 coils/phase), solved with a tenth of the coil MMF
   // (owner 2026-10-20).  Re-read it on every geometry change and every load
-  // of another machine; the backend re-picks a connection the new slot count
-  // does not allow and says so (`connection_note`).
+  // of another machine.  A stored connection the new slot count does not allow
+  // is REPORTED by the backend (`connection_valid` / `connection_error`), not
+  // changed.
   useEffect(() => {
     loadWinding();
     try {
@@ -824,17 +825,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, [geomSig, loadWinding]);
   useEffect(() => {
     const on = () => loadWinding();
-    const onNote = (e: Event) => {
-      const m = (e as CustomEvent<{ message?: string | null }>).detail?.message;
-      if (m) setWindNote(String(m));
-    };
     window.addEventListener('family-changed', on);
     window.addEventListener('sim-design-applied', on);
-    window.addEventListener('winding-note', onNote);
     return () => {
       window.removeEventListener('family-changed', on);
       window.removeEventListener('sim-design-applied', on);
-      window.removeEventListener('winding-note', onNote);
     };
   }, [loadWinding]);
 
@@ -1808,7 +1803,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button
                   size="small"
                   variant={connection === c.label ? 'contained' : 'outlined'}
-                  onClick={() => { setWindNote(null); setConnection(c.label); applyWinding({ connection: c.label }); }}
+                  onClick={() => { setConnection(c.label); applyWinding({ connection: c.label }); }}
                   disabled={isRunning}
                   sx={{ flex: 1, minWidth: 52, fontSize: 11, fontWeight: 700, py: 0.5,
                     textTransform: 'none',
@@ -1917,10 +1912,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Typography>
           )}
 
-          {/* The connection was re-picked for this slot count — one line. */}
-          {windNote && !windErr && (
-            <Typography sx={{ fontSize: 10.5, color: '#fbbf24', mt: -0.75, mb: 1 }}>
-              {windNote}
+          {/* The stored connection is not possible on this slot count — the
+              server's reason, one line.  Nothing was changed for the user. */}
+          {windStoredErr && !windErr && (
+            <Typography sx={{ fontSize: 10.5, color: '#f87171', mt: -0.75, mb: 1 }}>
+              ⚠ {windStoredErr}
             </Typography>
           )}
 

@@ -92,6 +92,12 @@ export function loadStopReason(
   outcome: { ok: boolean; refused?: ReadonlyArray<{ field: string; reason: string }> } | null | undefined,
 ): string | null {
   if (!outcome || outcome.ok !== false) return null;
-  const why = (outcome.refused ?? []).map((r) => `${r.field}: ${r.reason}`).join('; ');
+  const refused = outcome.refused ?? [];
+  // A machine load carries the winding with the geometry: when that is what the
+  // server refused, say so in its own words (no "geometry ... refused" prefix).
+  if (refused.length && refused.every((r) => r.field === 'winding')) {
+    return `winding of ${die} / ${cfg} was refused - ${refused.map((r) => r.reason).join('; ')}`;
+  }
+  const why = refused.map((r) => `${r.field}: ${r.reason}`).join('; ');
   return `geometry of ${die} / ${cfg} was refused${why ? ` - ${why}` : ''}`;
 }

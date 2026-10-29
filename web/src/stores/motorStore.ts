@@ -201,7 +201,13 @@ interface MotorState {
   // rejected fields in the resolved value's absence — so a caller that acts
   // on "did this apply?" must read this, not just await the call. See
   // lib/geometryApplyOutcome.ts.
-  updateGeometryViaApi: (params: Partial<MotorGeometryParams>) => Promise<GeometryApplyOutcome>;
+  //
+  // `opts.winding` makes the write a whole-MACHINE LOAD: the winding travels
+  // with the geometry (PUT /api/geometry/load) and the server writes both as
+  // one change, so the previous machine's winding is never validated against
+  // the incoming slot count.
+  updateGeometryViaApi: (params: Partial<MotorGeometryParams>,
+                         opts?: { winding?: Record<string, unknown> }) => Promise<GeometryApplyOutcome>;
   resetGeometryViaApi: () => Promise<void>;
   fetchFullConfigFromApi: () => Promise<void>;
   
@@ -463,7 +469,7 @@ export const useMotorStore = create<MotorState>()(
         }
       },
       
-      updateGeometryViaApi: async (params) => {
+      updateGeometryViaApi: async (params, opts) => {
         // Ordinary user on an enforced backend: the shared config is the
         // owner's — edits land on THIS CLIENT'S COPY only.  Every compute
         // request already carries the copy (?geo= via the fetch interceptor),
@@ -483,12 +489,30 @@ export const useMotorStore = create<MotorState>()(
         }
         set({ isLoading: true, isGeometryUpdating: true, error: null });
         try {
-          const response = await fetch(`${API_BASE_URL}/api/geometry`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params),
-          });
-          // 422 = the VALUE itself is unusable (negative dimension, a bore
+          const response = await fetch(
+            `${API_BASE_URL}/api/geometry${opts?.winding ? '/load' : ''}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(opts?.winding
+                ? { geometry: params, winding: opts.winding } : params),
+            });
+          // A machine LOAD refused for its WINDING (400: a connection the
+          // incoming slot count does not have; 422: the six-phase split does
+          // not wire).  Nothing is re-picked and nothing queued for replay: the
+          // reason is the one line the server gave.
+          if (opts?.winding && (response.status === 400
+              || (response.status === 422 && !(await response.clone().json().then(
+                  (b) => typeof b?.detail === 'object', () => true))))) {
+            let why = `HTTP ${response.status}`;
+            try { why = String((await response.json())?.detail ?? why); } catch { /* non-JSON */ }
+            set({
+              isLoading: false, isGeometryUpdating: false, connectedToApi: true,
+              pendingGeometryEdits: null, error: why,
+              geometryParamErrors: [{ field: 'winding', value: null, kind: 'field', message: why }],
+            });
+            return { ok: false, refused: [{ field: 'winding', reason: why }] };
+          }
+          // 422 = the VALUE itself (negative dimension, a bore
           // radius that works out negative, …).  Nothing was written; surface
           // the named fields instead of the generic "HTTP error" so the user
           // knows which box to fix.

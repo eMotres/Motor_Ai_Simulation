@@ -126,6 +126,51 @@ def get_geometry():
 
 @router.put("")
 def update_geometry(update: GeometryUpdateModel, request: Request = None):
+    """A user's own geometry edit (and the Fusion / FreeCAD imports)."""
+    return _update_geometry(update, request, reconcile_winding=True)
+
+
+class MachineLoadModel(BaseModel):
+    """A whole-machine load: the geometry AND the winding that belongs to it."""
+    geometry: dict
+    winding: dict
+
+
+@router.put("/load")
+def load_machine(body: MachineLoadModel, request: Request = None):
+    """Load a machine - geometry and winding - as ONE consistent change.
+
+    The web load used to PUT the geometry and then PATCH the winding.  Between
+    the two the PREVIOUS machine's winding met the NEW slot count and was
+    validated, re-picked ("winding connection '4S' is not valid for 48 slots -
+    set to 8S") and announced, although the winding about to be written was
+    right (owner 2026-10-30: CILN28 3-phase 4S -> Erium 6-phase 4S-2P).  Here
+    the incoming connection is checked against the INCOMING slot count BEFORE
+    anything is written, then both are written under one lock; the geometry
+    write does not re-pick, so no intermediate combination exists.
+
+    Refuses (400, nothing written) a connection the incoming machine does not
+    have; the winding PATCH's own six-phase validation still answers 4xx."""
+    from motor_ai_sim.api import (WINDING_LOCK, WindingConfigPatch,
+                                  _apply_winding_patch)
+    from motor_ai_sim.winding import connection_error, slot_pole_counts
+    upd = GeometryUpdateModel(**body.geometry)
+    w = dict(body.winding)
+    conn = w.get("connection")
+    if conn:
+        incoming = dict(get_config().get("geometry", {}) or {})
+        incoming.update({k: v for k, v in upd.model_dump().items() if v is not None})
+        err = connection_error(str(conn), slot_pole_counts(incoming)[0])
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+    with WINDING_LOCK:
+        result = _update_geometry(upd, request, reconcile_winding=False)
+        _apply_winding_patch(WindingConfigPatch(**w))
+    return result
+
+
+def _update_geometry(update: GeometryUpdateModel, request: Request = None, *,
+                     reconcile_winding: bool = True):
     # ── Input guard 1: the NAME has to be a parameter this server knows ──────
     # An unknown key was accepted twice over and applied zero times: the live
     # geometry object got the attribute, the YAML writer (`if key in
@@ -343,17 +388,17 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
             log.warning("geometry PUT: active-die snapshot sync failed: %s", _se)
 
         # ── The winding connection follows the slot count ───────────────────
-        # A segment / slots-per-segment change moves the coils per phase; a
-        # stored connection that no longer factors them (2S on 48 slots) is
-        # re-picked HERE, at the change, and the one line saying so travels
-        # with the response (and is shown once by the Simulation panel).
-        try:
-            from motor_ai_sim.api import reconcile_live_winding
-            _wn = reconcile_live_winding()
-            if _wn:
-                result["winding_note"] = _wn
-        except Exception as _we:   # noqa: BLE001
-            log.warning("geometry PUT: winding connection re-pick failed: %s", _we)
+        # A user's segment / slots-per-segment edit moves the coils per phase;
+        # a stored connection that no longer factors them (2S on 48 slots) is
+        # re-picked HERE, at the change - logged, never announced.  A machine
+        # LOAD skips this (PUT /api/geometry/load writes the winding with the
+        # geometry), so a load never snaps a winding.
+        if reconcile_winding:
+            try:
+                from motor_ai_sim.api import reconcile_live_winding
+                reconcile_live_winding()
+            except Exception as _we:   # noqa: BLE001
+                log.warning("geometry PUT: winding connection re-pick failed: %s", _we)
 
         # ── Real geometry validation, AFTER the clamp ───────────────────────
         # The clamp fixes ONE knob at a time against an analytic bound; it can

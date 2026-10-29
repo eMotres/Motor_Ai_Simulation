@@ -26,6 +26,12 @@ import type { SweepResumeInfo } from '../../lib/sweepResumeNotice';
 import { readCurrentUnit, formatCurrent } from '../../lib/sweepCurrentUnit';
 import { readAllowNewLamination } from '../../lib/releasedContext';
 import { storedGapLayers } from '../../lib/meshSettings';
+import {
+  judgeResult, previousRunLabel, notShownText, partialFromProgress,
+  isPersistable, packForStore, unpackFromStore, STORE_KEY,
+} from '../../lib/sweepRestore';
+import type { RestoreVerdict } from '../../lib/sweepRestore';
+import SavedSweeps from './SavedSweeps';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -394,11 +400,19 @@ const SweepStudyPanel: React.FC = () => {
   const nGeom = geomVars.reduce((p, [, v]) => p * buildGrid(Number(v.min), Number(v.max), Number(v.step)).length, 1);
   const nPts = currents.length * gammas.length * nGeom;
 
-  // Persist the result (partial OR final) to localStorage so the chart survives a
-  // web reload even if the backend never finished / was restarted (client-side copy).
-  const saveResult = (r: any) => {
+  // What the chart is: the run this panel started (null = current) or history
+  // ("Previous run of <machine>").  See lib/sweepRestore.ts for the rule.
+  const [resultView, setResultView] = useState<Extract<RestoreVerdict, { show: true }> | null>(null);
+  // Show a result.  Only a FINISHED, machine-stamped, identified result is kept
+  // in the browser (owner 2026-10-29: the half-run `{ points }` batches that used
+  // to be stored here came back after the next reload as "the last sweep").
+  const saveResult = (r: any, v?: Extract<RestoreVerdict, { show: true }> | null) => {
     setResult(r);
-    try { localStorage.setItem('sweepStudy.lastResult', JSON.stringify(r)); } catch { /* quota */ }
+    setResultView(v && v.kind === 'previous' ? v : null);
+    try {
+      if (isPersistable(r)) localStorage.setItem(STORE_KEY, packForStore(r));
+      else if (!r?.partial) localStorage.removeItem(STORE_KEY);
+    } catch { /* quota */ }
   };
 
   // The run this panel is waiting for.  ONE endpoint answers both "is my run
@@ -410,29 +424,6 @@ const SweepStudyPanel: React.FC = () => {
   // Every result now names its run; anything else is not an answer to us.
   const runIdRef = useRef<string>('');
 
-  /** Does a stored result belong to the machine that is loaded RIGHT NOW?
-   *
-   *  User 2026-09-10: "glitch again, I ran a sweep of one set of parameters, and
-   *  got back an old sweep from a different motor".  `.last_scan.json` is
-   *  reloaded into the backend's scan state on every restart, and this panel
-   *  adopted it on mount as its chart — variable cards and all — with nothing
-   *  saying it was computed on a different motor.  The result now carries the
-   *  fingerprint of the machine it was solved on (the SAME one the eval cache
-   *  is keyed by), and `machine_now` says what is loaded; a mismatch is a
-   *  foreign chart and is not shown.
-   *
-   *  Unstamped (a result from before this existed) is treated as foreign: a
-   *  chart nobody can attribute is worth less than an empty one. */
-  const sameMachine = (res: any, now: any): boolean => {
-    const a = res?.machine?.fingerprint;
-    const b = now?.fingerprint;
-    return !!a && !!b && String(a) === String(b);
-  };
-  const machineLabel = (m: any): string => {
-    const parts = [m?.die, m?.config, m?.duty].filter(Boolean);
-    return parts.length ? parts.join(' / ') : 'another machine';
-  };
-
   // shared poll loop — used by both run() and the resume-on-mount effect.
   const poll = async (myRunId?: string) => {
     const want = myRunId ?? runIdRef.current;
@@ -443,18 +434,23 @@ const SweepStudyPanel: React.FC = () => {
       try { st = await (await fetch(`${API}/api/optimization/scan/progress`)).json(); } catch { continue; }
       const mine = !want || String(st.run_id ?? '') === want;
       if (mine) adoptProgress(st);
-      if (mine && Array.isArray(st.points) && st.points.length) saveResult({ points: st.points });
+      if (mine && Array.isArray(st.points) && st.points.length) {
+        // In-flight points: they name their run and machine, are shown while
+        // the run lasts and are never written to the browser.
+        const part = partialFromProgress(st);
+        if (judgeResult(part, { wantRunId: want, machineNow: st.machine_now }).show) saveResult(part);
+      }
       if (st.running) { waitedForStart = 0; continue; }
       if (st.error && mine) { setErr(st.error); break; }
       const res = st.result;
       const resMine = res && (!want || String(res.run_id ?? '') === want);
       if (resMine && Array.isArray(res.points)) {
-        if (!sameMachine(res, st.machine_now)) {
-          setErr(`the result on the backend was computed on ${machineLabel(res.machine)}`
-               + ' — not this machine, so it is not shown.');
+        const verdict = judgeResult(res, { wantRunId: want, machineNow: st.machine_now });
+        if (!verdict.show) {
+          setErr(notShownText(verdict.why, res) + '.');
           break;
         }
-        saveResult(res); break;
+        saveResult(res, verdict); break;
       }
       // Not running, and what is on the server is somebody else's run (or the
       // one restored from disk).  Do NOT display it — wait for ours to appear.
@@ -522,19 +518,28 @@ const SweepStudyPanel: React.FC = () => {
     } catch { /* a restore is a convenience, never a blocker */ }
   };
 
+  // Judge a result the server (or the browser) holds against the machine on
+  // screen, draw it as the PREVIOUS run if it passes, say why not if it does not.
+  const adoptStored = (res: any, machineNow: any, userChose = false): boolean => {
+    const verdict = judgeResult(res, { wantRunId: '', machineNow, userChose });
+    if (verdict.show) {
+      setErr(null);
+      runIdRef.current = String(res.run_id ?? '');
+      saveResult(res, verdict);
+      restoreVarsFromResult(res);
+      return true;
+    }
+    setResult(null); setResultView(null);
+    try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
+    if (verdict.why !== 'empty') setErr(notShownText(verdict.why, res) + '. Run the sweep to get one.');
+    return false;
+  };
+
   // On mount (page reload): resume a running scan live, or restore the LAST
-  // completed sweep so the chart survives a reload (the backend keeps it in
-  // memory + persisted to .last_scan.json, loaded on startup).
+  // completed sweep as history (the backend keeps it in memory + persisted to
+  // .last_scan.json, loaded on startup).  NOTHING is drawn before the server has
+  // answered: the browser's own copy cannot say which machine is loaded now.
   useEffect(() => {
-    // 1) instant: restore the last chart from localStorage (survives ANY reload).
-    // (the backend's `machine_now` arrives in step 2 and re-checks this — a
-    //  cached chart from another motor is dropped there.)
-    try {
-      const c = localStorage.getItem('sweepStudy.lastResult');
-      if (c) { const r = JSON.parse(c); setResult(r); restoreVarsFromResult(r); }
-    } catch { /* ignore */ }
-    // 2) reconcile with the backend: resume a running scan live, or adopt its
-    //    persisted result (.last_scan.json, loaded on startup).
     (async () => {
       try {
         const st = await (await fetch(`${API}/api/optimization/scan/progress`)).json();
@@ -543,22 +548,21 @@ const SweepStudyPanel: React.FC = () => {
           // start it, but it is the one whose points belong on this chart.
           runIdRef.current = String(st.run_id ?? '');
           stopRef.current = false; setRunning(true);
-          if (Array.isArray(st.points)) saveResult({ points: st.points });
+          const part = partialFromProgress(st);
+          if (judgeResult(part, { wantRunId: runIdRef.current, machineNow: st.machine_now }).show) saveResult(part);
           adoptProgress(st);
           await poll(runIdRef.current); setRunning(false);
         } else if (st.result && Array.isArray(st.result.points)) {
-          // History, not the answer to anything this session asked for — and
-          // only ever THIS machine's history (see `sameMachine`).
-          if (sameMachine(st.result, st.machine_now)) {
-            runIdRef.current = String(st.result.run_id ?? '');
-            saveResult(st.result);
-            restoreVarsFromResult(st.result);
-          } else {
-            setResult(null);
-            try { localStorage.removeItem('sweepStudy.lastResult'); } catch { /* ignore */ }
-            setErr(`the stored sweep was computed on ${machineLabel(st.result.machine)}`
-                 + ' — not this machine, so it is not shown. Run the sweep to get one.');
-          }
+          // History, not the answer to anything this session asked for.
+          adoptStored(st.result, st.machine_now, !!st.result.reopened_from_saved);
+        } else {
+          // The server holds nothing; the browser's own finished copy, judged
+          // by exactly the same rule.
+          let raw: string | null = null;
+          try { raw = localStorage.getItem(STORE_KEY); } catch { /* ignore */ }
+          const c = unpackFromStore(raw);
+          if (c) adoptStored(c, st.machine_now);
+          else { try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ } }
         }
       } catch { /* ignore */ }
     })();
@@ -566,7 +570,7 @@ const SweepStudyPanel: React.FC = () => {
   }, []);
 
   const run = async () => {
-    setErr(null); setResult(null); setRunning(true); setProgress(null); stopRef.current = false;
+    setErr(null); setResult(null); setResultView(null); setRunning(true); setProgress(null); stopRef.current = false;
     // A user-started run is never a resume — the backend clears its own
     // `resumed_from_restart` on a fresh /scan POST, and the panel must not go
     // on showing last run's resume notice over this one.
@@ -635,8 +639,8 @@ const SweepStudyPanel: React.FC = () => {
   // returns the cached points instantly — which reads as "Run took the old values
   // and didn't recompute".  Clear result = explicit "start fresh".
   const clearResult = async () => {
-    setResult(null); setSelected(null); setProgress(null); setZoom(null);
-    try { localStorage.removeItem('sweepStudy.lastResult'); } catch { /* ignore */ }
+    setResult(null); setResultView(null); setSelected(null); setProgress(null); setZoom(null);
+    try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
     try { await fetch(`${API}/api/optimization/scan/clear_cache`, { method: 'POST' }); }
     catch { /* ignore — display is already cleared */ }
   };
@@ -881,6 +885,9 @@ const SweepStudyPanel: React.FC = () => {
       if (!result?.run_id || !Number.isInteger(p.geom_id) || !Number.isInteger(p.op_index)) {
         throw new Error('Sweep lacks point/run provenance; run the Sweep again');
       }
+      if (resultView?.foreign) {
+        throw new Error(`this sweep belongs to ${resultView.machine}, not the machine loaded now — load that machine to apply one of its points`);
+      }
       // The server re-reads the stored point from the CURRENT sweep result and
       // refuses it if the machine it was solved on no longer matches the
       // machine as it is now (fingerprint with the swept keys excluded) — no
@@ -1117,6 +1124,24 @@ const SweepStudyPanel: React.FC = () => {
             sx={{ textTransform: 'none', fontSize: 11, color: 'var(--text-2)', minWidth: 0 }}>
             Clear result
           </Button>
+        )}
+        <SavedSweeps
+          canSave={!!result && !result.partial && !!result.run_id && !resultView?.foreign}
+          running={running}
+          onError={setErr}
+          onOpened={async () => {
+            // The server made the saved sweep its scan: read it back and show it,
+            // labelled with the machine it belongs to.
+            try {
+              const st = await (await fetch(`${API}/api/optimization/scan/progress`)).json();
+              if (st.result) adoptStored(st.result, st.machine_now, true);
+            } catch (e: any) { setErr(String(e?.message ?? e)); }
+          }} />
+        {resultView && !running && (
+          <Typography component="span" sx={{ fontSize: 11, color: resultView.foreign ? '#fbbf24' : 'var(--text-2)', fontWeight: 600 }}
+            title="This is not the result of a run you just made. A point can be applied only while its machine is the one loaded.">
+            {previousRunLabel(resultView)}
+          </Typography>
         )}
         {restoredNote && !running && (
           <Typography component="span" sx={{ fontSize: 11, color: '#34d399' }}

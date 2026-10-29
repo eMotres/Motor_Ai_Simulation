@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import sweep_journal as _sweep_journal
+from motor_ai_sim import sweep_saves as _sweep_saves
 from motor_ai_sim import machine_binding as _MB
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
@@ -2128,6 +2129,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             _machine0 = {**_bind.stamp(),
                          "fingerprint": _bind.fingerprint_for(_swept_names),
                          "swept": sorted(_swept_names)}
+    if _machine0 is not None:
+        # The progress payload names the machine the RUNNING sweep was started
+        # on, so the points it streams before the result exists are attributed
+        # (the Sweep tab no longer has to guess from the machine loaded now).
+        with _scan_lock:
+            if _scan_owns(run_id):
+                _scan_state["machine"] = _machine0
     if _bind_why:
         # Another machine was loaded between "Run" and the first point.
         with _scan_lock:
@@ -2744,7 +2752,7 @@ def scan_designs(req: ScanRequest):
             pass
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
-                            "cached": 0, "source_changed": None,
+                            "cached": 0, "source_changed": None, "machine": None,
                             "ts_start": _t_scan.time(),
                             # the share this job gets beside the optimizer
                             # jobs already running (item 4)
@@ -2804,6 +2812,9 @@ def scan_progress():
     # value typed in from the sweep itself does not make it "another motor".
     _res = out.get("result") if isinstance(out.get("result"), dict) else None
     _sw = tuple(((_res or {}).get("machine") or {}).get("swept") or ()) or _swept_geo_keys(_res)
+    if not _sw and isinstance(out.get("machine"), dict):
+        # a RUNNING sweep: blank the keys it was started with, like its stamp did
+        _sw = tuple(out["machine"].get("swept") or ())
     out["machine_now"] = _machine_stamp(_sw)
     # Include resume info from journal if present
     if out.get("resumed_from_restart"):
@@ -5588,23 +5599,53 @@ def surrogate_report(suggest: int = 5, ripple_max: float = 5.0):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SAVED RESULTS — persist a scan result to disk so it survives restarts; list,
-# load and delete them.  Stored as plain JSON files under optimization_saves/.
+# SAVED RESULTS - a scan result kept on disk so it survives restarts AND deploys;
+# list, save, reopen, import, delete.  Stored per WORKSPACE under
+# ``<workspace root>/optimization_saves/`` (``sweep_saves``): the old
+# ``<repo>/optimization_saves`` sat inside the server image and was lost on every
+# deploy (2026-10-29).  Every save carries the machine it belongs to.
 # ─────────────────────────────────────────────────────────────────────────────
-_SAVE_DIR = Path(__file__).resolve().parents[3] / "optimization_saves"
-_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
-
 class SaveRequest(BaseModel):
     name: str = ""
     result: Dict[str, Any] = Field(default_factory=dict)
     config: Dict[str, Any] = Field(default_factory=dict)   # variables/operating/steps
 
 
-def _safe(sid: str) -> Path:
-    if not _ID_RE.match(sid or ""):
-        raise HTTPException(status_code=400, detail="bad id")
-    return _SAVE_DIR / f"{sid}.json"
+class SaveLastRequest(BaseModel):
+    name: str = ""
+
+
+class ImportRequest(BaseModel):
+    """A scan result produced elsewhere (a sandbox, another server).
+
+    ``result`` is the scan result object itself (the content of a
+    ``.last_scan.json``) or a saved-sweep document ``{"result": {...}}``.
+    ``machine`` names the machine for a file that carries no stamp of its own."""
+    result: Dict[str, Any]
+    name: str = ""
+    source: str = ""
+    machine: Dict[str, Any] = Field(default_factory=dict)
+    make_current: bool = False
+
+
+def _saved_http(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400 if str(exc) == "bad id" else 422, detail=str(exc))
+
+
+def _saved_row_with_match(row: Dict[str, Any], cache: Dict[tuple, str]) -> Dict[str, Any]:
+    """Add ``matches_loaded_machine``: does this save belong to the machine on
+    screen?  The same test the Sweep tab applies to a restored chart - the
+    save's fingerprint against the loaded machine's, swept keys blanked."""
+    m = row.get("machine") or {}
+    fp = str(m.get("fingerprint") or "")
+    swept = tuple(sorted(str(k) for k in (m.get("swept") or ())))
+    if not fp:
+        row["matches_loaded_machine"] = False
+        return row
+    if swept not in cache:
+        cache[swept] = str(_machine_stamp(swept).get("fingerprint") or "")
+    row["matches_loaded_machine"] = bool(cache[swept]) and cache[swept] == fp
+    return row
 
 
 @router.post("/saved")
@@ -5612,55 +5653,148 @@ def save_result(req: SaveRequest):
     """Persist a scan result to disk; returns its id."""
     if not req.result:
         raise HTTPException(status_code=400, detail="no result to save")
-    _SAVE_DIR.mkdir(exist_ok=True)
-    ts = datetime.now()
-    sid = ts.strftime("%Y%m%d_%H%M%S_%f")
-    name = (req.name or "").strip() or f"scan {ts.strftime('%Y-%m-%d %H:%M')}"
-    entry = {"id": sid, "name": name, "created_at": ts.isoformat(timespec="seconds"),
-             "config": req.config, "result": req.result}
-    _safe(sid).write_text(json.dumps(entry), encoding="utf-8")
-    return {"id": sid, "name": name, "created_at": entry["created_at"]}
+    try:
+        entry = _sweep_saves.build_entry(req.result, name=req.name, config=req.config)
+        _sweep_saves.write_entry(entry)
+    except ValueError as e:
+        raise _saved_http(e)
+    return {"id": entry["id"], "name": entry["name"], "created_at": entry["created_at"],
+            "machine": entry["machine"]}
+
+
+@router.post("/saved/last")
+def save_last_scan_as_saved(req: SaveLastRequest):
+    """Save the finished last scan WITH ITS MACHINE STAMP, so it can be reopened.
+
+    Takes the scan the server holds (never a client copy), refuses while a scan
+    is running, and files a run once: saving the same run again answers with the
+    existing save."""
+    with _scan_lock:
+        if _scan_state.get("running"):
+            raise HTTPException(status_code=409, detail="Wait for the Sweep to finish before saving it")
+        result = _scan_state.get("result")
+        result = dict(result) if isinstance(result, dict) else None
+    if not result or not result.get("points"):
+        raise HTTPException(status_code=404, detail="there is no finished sweep to save")
+    existing = _sweep_saves.find_by_run_id(str(result.get("run_id") or ""))
+    if existing is not None:
+        return {"id": existing["id"], "name": existing["name"], "created_at": existing["created_at"],
+                "machine": existing["machine"], "already_saved": True}
+    try:
+        entry = _sweep_saves.build_entry(result, name=req.name)
+        _sweep_saves.write_entry(entry)
+    except ValueError as e:
+        raise _saved_http(e)
+    return {"id": entry["id"], "name": entry["name"], "created_at": entry["created_at"],
+            "machine": entry["machine"], "already_saved": False}
+
+
+@router.post("/saved/import")
+def import_scan_result(req: ImportRequest):
+    """Admin: file a scan result produced elsewhere as a saved sweep.
+
+    The orchestrator finishes a sweep in a sandbox; this puts it back into the
+    app.  The file's own machine stamp is kept; a file without one is filed as
+    ``unattributed`` unless ``machine`` names it (marked ``declared``).  With
+    ``make_current`` it also becomes the scan the Sweep tab shows (see
+    ``/saved/{id}/open``)."""
+    body = req.result
+    if isinstance(body.get("result"), dict) and "points" not in body:
+        body = body["result"]                      # a saved-sweep document
+    try:
+        entry = _sweep_saves.build_entry(body, name=req.name, declared_machine=req.machine,
+                                         imported=True, source=req.source)
+        _sweep_saves.write_entry(entry)
+    except ValueError as e:
+        raise _saved_http(e)
+    out = {"id": entry["id"], "name": entry["name"], "created_at": entry["created_at"],
+           "machine": entry["machine"], "n_points": len(entry["result"].get("points") or []),
+           "n_points_without_id": entry["n_points_without_id"],
+           "run_id": entry["result"].get("run_id")}
+    if req.make_current:
+        out["opened"] = _open_saved_entry(entry)
+    return out
 
 
 @router.get("/saved")
 def list_saved():
-    """List saved results (metadata only), newest first."""
-    _SAVE_DIR.mkdir(exist_ok=True)
-    out = []
-    for f in sorted(_SAVE_DIR.glob("*.json"), reverse=True):
-        try:
-            d = json.loads(f.read_text(encoding="utf-8"))
-            r = d.get("result", {})
-            cfg = d.get("config", {})
-            out.append({
-                "id": d["id"], "name": d.get("name", d["id"]),
-                "created_at": d.get("created_at", ""),
-                "n_geometries": r.get("n_geometries"),
-                "n_points": r.get("n_total_points"),
-                "n_built": r.get("n_built"),
-                "n_front": len(r.get("pareto_indices", [])),
-                "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
-                "variables": [v.get("name") for v in (r.get("variables") or [])],
-            })
-        except Exception:  # noqa: BLE001
-            continue
-    return {"saved": out}
+    """List saved results (metadata only, machine included), newest first."""
+    cache: Dict[tuple, str] = {}
+    return {"saved": [_saved_row_with_match(r, cache) for r in _sweep_saves.list_entries()]}
 
 
 @router.get("/saved/{sid}")
 def get_saved(sid: str):
     """Load a saved result (full data)."""
-    f = _safe(sid)
-    if not f.exists():
+    try:
+        d = _sweep_saves.read_entry(sid)
+    except ValueError as e:
+        raise _saved_http(e)
+    if d is None:
         raise HTTPException(status_code=404, detail="not found")
-    return json.loads(f.read_text(encoding="utf-8"))
+    return d
+
+
+def _open_saved_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Make a saved sweep the scan the Sweep tab shows (and Apply reads).
+
+    Refused while a scan runs.  The scan being replaced is saved first when it is
+    a finished, unsaved one, so reopening an old sweep can never lose the last."""
+    with _scan_lock:
+        if _scan_state.get("running"):
+            raise HTTPException(status_code=409, detail="Wait for the running Sweep to finish before opening a saved one")
+        prev = _scan_state.get("result")
+        prev = dict(prev) if isinstance(prev, dict) else None
+    archived = None
+    if prev and prev.get("points") and str(prev.get("run_id") or "") != str(
+            (entry.get("result") or {}).get("run_id") or ""):
+        try:
+            if _sweep_saves.find_by_run_id(str(prev.get("run_id") or "")) is None:
+                _sweep_saves.validate_result(prev)
+                keep = _sweep_saves.build_entry(
+                    prev, name="auto-saved before opening " + str(entry.get("name") or entry["id"]))
+                _sweep_saves.write_entry(keep)
+                archived = keep["id"]
+        except ValueError:
+            pass                                    # nothing usable to keep
+    result = dict(entry["result"])
+    result["restored_from_disk"] = True
+    result["reopened_from_saved"] = entry["id"]
+    result["machine"] = (_sweep_saves.clean_machine(entry.get("machine"))
+                         if entry.get("machine") else _sweep_saves.unattributed())
+    with _scan_lock:
+        if _scan_state.get("running"):
+            raise HTTPException(status_code=409, detail="A Sweep started meanwhile; try again when it finishes")
+        n = len(result.get("points") or [])
+        _scan_state.update({"result": result, "run_id": str(result.get("run_id") or ""),
+                            "points": [], "error": None, "cancel": False,
+                            "done": n, "total": n, "source_changed": None,
+                            "resumed_from_restart": None})
+    _save_last_scan(result)
+    return {"id": entry["id"], "run_id": result.get("run_id"), "machine": result["machine"],
+            "archived_previous": archived}
+
+
+@router.post("/saved/{sid}/open")
+def open_saved(sid: str):
+    """Reopen a saved sweep as the scan on screen.  Its machine stamp comes with
+    it, so the tab shows which machine it belongs to and Apply is refused unless
+    that machine is the one loaded."""
+    try:
+        d = _sweep_saves.read_entry(sid)
+    except ValueError as e:
+        raise _saved_http(e)
+    if d is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _open_saved_entry(d)
 
 
 @router.delete("/saved/{sid}")
 def delete_saved(sid: str):
-    f = _safe(sid)
-    if f.exists():
-        f.unlink()
+    try:
+        _sweep_saves.delete_entry(sid)
+    except ValueError as e:
+        raise _saved_http(e)
     return {"deleted": sid}
 
 

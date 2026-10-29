@@ -18,6 +18,7 @@ import {
   ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
 } from './PromptDialogs';
 import { applyDutyEverywhere } from '../../lib/dutyApply';
+import { quotedRipple } from '../../lib/rippleAccuracy';
 import { releasedOffers, diffText, type DieDiff, type ReleasedCtxLike } from '../../lib/releasedContext';
 import HelpTip from './HelpTip';
 import { rememberDieSettings } from '../../lib/dieSettings';
@@ -641,7 +642,8 @@ const ActiveFamilyStrip: React.FC = () => {
           body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
             result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
-                      ripple_pct: s.T_ripple_pct,
+                      // the refined ripple when there is one (lib/rippleAccuracy)
+                      ripple_pct: quotedRipple(s).value ?? s.T_ripple_pct,
                       v_ll_peak_v: Number(s.V_line_peak_V) * (k3d ?? 1),
                       loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg,
                       // …and the mechanical watts that η above already carries,

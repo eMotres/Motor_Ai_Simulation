@@ -667,6 +667,59 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     attempt();
   };
 
+  // ── "Refine ripple" (owner 2026-10-29, option 1) ────────────────────────
+  // The SAME point the card shows, solved again at >= 3 air-gap layers/side
+  // for the ripple only (`ripple_refine`, routes/simulation): the backend
+  // keeps it out of the last transient, the mesh config and the duty, and
+  // this panel keeps the base run — the refined block rides on its summary
+  // (`ripple_refined`), so the card, the duty save and the report quote it.
+  const refineRipple = async () => {
+    const say = (detail: { busy: boolean; error?: string | null }) => {
+      try { window.dispatchEvent(new CustomEvent('sim-ripple-refine-state', { detail })); } catch { /* SSR */ }
+    };
+    say({ busy: true });
+    try {
+      const p: Record<string, unknown> = {
+        ...buildEmRunPayload({
+          restore: false, steps, gamma_deg, I_phase_rms,
+          drive, vPeak, vDelta, iBlock, waveform,
+          battery, busCouple, chargeMax,
+          fieldLosses, eddyCoupled, demag, torqueFilter: false,
+          fresh: false, run_id: `${runNonce}-ripple`,
+        }),
+        ripple_refine: true,
+      };
+      const r = await fetch(`${API}/api/kernel/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capability: 'solver.em_transient', payload: p }) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'refine failed');
+      if (j.result && j.result.ok === false) {
+        throw new Error(String(j.result.error || 'refine refused').replace(/^HTTPException: \d+: /, ''));
+      }
+      const blk = (j.result?.raw as { ripple_refined?: unknown } | undefined)?.ripple_refined;
+      if (!blk) throw new Error('no refined ripple in the answer');
+      setData((prev) => {
+        if (!prev?.summary) return prev;
+        const next = { ...prev, summary: { ...prev.summary, ripple_refined: blk } } as TransientPayload;
+        persistLastTransient(next);
+        return next;
+      });
+      try { window.dispatchEvent(new CustomEvent('sim-ripple-refined', { detail: { block: blk } })); } catch { /* SSR */ }
+      say({ busy: false });
+    } catch (e: unknown) {
+      say({ busy: false, error: String((e as Error)?.message ?? e) });
+    }
+  };
+  const refineRef = useRef(refineRipple);
+  refineRef.current = refineRipple;
+  useEffect(() => {
+    const on = () => { void refineRef.current(); };
+    window.addEventListener('sim-refine-ripple', on);
+    return () => window.removeEventListener('sim-refine-ripple', on);
+  }, []);
+
   // ── History popover: EM ledger (2026-09-22) ─────────────────────────────
   // Lists/loads/deletes rows of the SAME `.run_ledger` store the "Loaded from
   // history" notice above already reads (`served_from_history`/`computed_at`

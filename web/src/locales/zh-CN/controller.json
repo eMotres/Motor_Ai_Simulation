@@ -744,6 +744,8 @@
     "kmPerMassFullTip": "每 kg 整机质量的 Km。",
     "efficiencyTip": "轴端效率：轴功率与电功率之比（发电机取倒数），即测功机读数。全部损耗都在其中，含轴承与风摩。仅计电磁损耗时为 {em} %。",
     "tRippleTip": "本次求解的转矩脉动：求解窗口内（最大 − 最小）/ |平均|。",
+    "tRippleNotAccurateTip": "不准确：在每侧 {layers} 层气隙网格下，转子侧与定子侧环的转矩相差脉动量程的 {err} %。转矩、损耗和温升不受影响；脉动至少需要每侧 3 层——请使用“细化脉动”。",
+    "tRippleRefinedTip": "已细化：同一工况，每侧 {layers} 层气隙网格。基础运行（每侧 {baseLayers} 层）为 {base} %。",
     "tPerMassTip": "转矩除以本次运行的有效质量。",
     "pPerMassTip": "转子功率除以本次运行的有效质量。",
     "totalLossTip": "整机全部损耗：电磁损耗 {em} W + 轴承与风摩损耗 {mech} W。电动机的效率 = 功率 /（功率 + 总损耗）。",

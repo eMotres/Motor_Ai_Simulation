@@ -53,8 +53,13 @@
   "maxCharge": "最大充电",
   "simulationSummaryRealFemResults": "仿真汇总——真实有限元结果",
   "modelled": "已建模",
-  "rippleMeshLimited": "脉动：气隙网格过粗",
   "staleBuild": "⚠ 旧版构型",
   "staleBuildTip": "这些结果是在该配置的另一版构型上计算的（{keys}）。工况已按当前构型打开；请重新计算以更新这些数值。",
-  "recompute": "重新计算"
+  "recompute": "重新计算",
+  "rippleNotAccurate": "脉动不准确",
+  "rippleNotAccurateTip": "在每侧 {layers} 层气隙网格下，转子侧与定子侧环的转矩相差脉动量程的 {err} %：决定脉动的是网格而不是电机。转矩、损耗和温升不受影响。“细化脉动”以每侧至少 3 层重新求解此工况，仅用于脉动；网格设置和工况保持不变。",
+  "refineRipple": "细化脉动",
+  "refiningRipple": "细化中…",
+  "rippleRefined": "脉动 · 每侧 {layers} 层",
+  "rippleRefinedTip": "脉动已按每侧 {layers} 层气隙网格细化；基础运行（每侧 {baseLayers} 层）为 {base} %。卡片上的其他数值均来自基础运行。"
 }

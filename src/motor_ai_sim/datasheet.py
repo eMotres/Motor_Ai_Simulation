@@ -1320,9 +1320,19 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "given cooling", 1)
     row("Load angle γ (°)", [_g(d, "gamma_deg") for d in duties],
         "current vector relative to the q-axis", 1)
-    row("Torque ripple (%)",
-        [_g(d, "result.ripple_pct", "summary.T_ripple_pct") for d in duties],
-        "peak-to-peak over mean, cogging included", 1)
+    # The refined ripple when the duty has one, else the run's own, marked
+    # "not accurate" when its air-gap ring check failed (owner 2026-10-29).
+    from motor_ai_sim.ripple_accuracy import NOT_ACCURATE_MARK, quoted_ripple
+
+    def _ripple_cell(d):
+        q = quoted_ripple(d.get("summary"), _g(d, "result.ripple_pct"))
+        if q["value"] is None:
+            return None
+        return (f"{q['value']:.1f} ({NOT_ACCURATE_MARK})" if q["accurate"] is False
+                else q["value"])
+    row("Torque ripple (%)", [_ripple_cell(d) for d in duties],
+        "peak-to-peak over mean, cogging included; \"" + NOT_ACCURATE_MARK
+        + "\" = the air-gap ring check failed, refine the ripple", 1)
     # NO-LOAD COGGING TORQUE (owner 2026-10-26): a property of the machine, one value for every duty (a grey band row),
     # next to the ripple.  Absent when none is saved; the note says what a reader needs and flags an older build.
     try:
@@ -2308,7 +2318,9 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
          "limits; for those, solve the variant properly."),
         ("Torque ripple",
          "Peak-to-peak over mean of the torque waveform, at the step count shown "
-         "on the Details sheet. Cogging is included."),
+         "on the Details sheet. Cogging is included. Where the air-gap mesh was "
+         "too coarse for the ripple, the refined value (3 or more layers per side) "
+         "is quoted, or the cell says it is not accurate."),
         ("Temperature",
          "Copper resistance and losses are quoted at the coil temperature on the "
          "card; the magnet grade name carries the temperature the magnets were "

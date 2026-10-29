@@ -4543,6 +4543,12 @@ def get_fem_transient(
                                           #   summary and the series; the field-animation viewer
                                           #   sends false because it needs the per-frame fields,
                                           #   which the ledger deliberately never stores.
+    ripple_refine:       bool  = False,   # ← "Refine ripple" (owner 2026-10-29): solve THIS point at
+                                          #   >= RIPPLE_REFINE_LAYERS gap layers/side, stepping one
+                                          #   more while the ring check fails (cap 4), for the
+                                          #   ripple only.  Never the machine's last transient,
+                                          #   never its mesh config, never a duty record: the
+                                          #   base run stays the card's result.
     ledger_probe:        bool  = False,   # ← ask only: return {match, computed_at} for this exact
                                           #   request and solve NOTHING.  Exists so
                                           #   GET .../fem_transient/ledger_match can reuse THIS
@@ -4751,6 +4757,9 @@ def get_fem_transient(
     outer_air_factor = _mesh_vals["outer_air_factor"]
     gap_layers = _mesh_vals["gap_layers"]
     n_sectors = int(_mesh_vals["n_sectors"])
+    _ripple_base_layers = float(gap_layers)
+    if ripple_refine:
+        gap_layers = max(float(gap_layers), RIPPLE_REFINE_LAYERS)
     _mesh_note = _mesh_fallback_note(_mesh_src, _mesh_vals)
     if _mesh_note:
         log.warning("transient: %s", _mesh_note)
@@ -5283,6 +5292,8 @@ def get_fem_transient(
                                      round(float(_batt.i_charge_max_a), 4))
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
+    if ripple_refine:   # may step past the requested layers: never a plain entry
+        _sb_key_fields["ripple_refine"] = ("ripple_refine", 1)
     _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit
@@ -5471,7 +5482,10 @@ def get_fem_transient(
             # it whole — the numbers would change under the user with no word
             # said, which is the exact failure this whole area keeps fighting.
             # The run JOURNAL is skipped — see `_save_last_transient`.
-            _save_last_transient(_sb_key, _out, journal=False)
+            if ripple_refine:
+                _out["ripple_refined"] = _ripple_refined_block(_out, _ripple_base_layers)
+            else:
+                _save_last_transient(_sb_key, _out, journal=False)
             log.info("run ledger HIT (%s) — identical parameters, loaded "
                      "instead of solved", _led.get("computed_at"))
             return _out
@@ -5636,6 +5650,7 @@ def get_fem_transient(
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 torque_method=_torque_method_eff,
+                gap_refine=bool(ripple_refine),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
                 magnet_temp_c=(None if magnet_temp_c is None else float(magnet_temp_c)),
@@ -6003,7 +6018,7 @@ def get_fem_transient(
                              _sbres.get("geo_fingerprint")
                              == _geometry_fingerprint(None))
                             and not _BACKGROUND_RUN.get())
-        if not _is_live_machine:
+        if not _is_live_machine or ripple_refine:
             _fld_snap = None
         if _fld_snap is not None:
             _store_transient_field_snapshot(
@@ -6106,6 +6121,14 @@ def get_fem_transient(
         # readers above need it there; a candidate eval that never refreshes
         # still gets its own memo entry for the optimizer's inner loops).
         _fem_transient_cache[_sb_key] = _sbres
+        if ripple_refine:
+            # The refined RIPPLE of this point, beside the base run: no last
+            # transient, no cache/field refresh, no per-duty record.  Kept in
+            # the ledger (its own key) so a second click loads it.
+            _sbres["ripple_refined"] = _ripple_refined_block(_sbres, _ripple_base_layers)
+            if _is_live_machine:
+                _ledger_write(_sb_key, _sbres, _sb_key_fields)
+            return _sbres
         # Persist for "restore last simulation" on reload — but ONLY the user's
         # MAIN motor. Per-candidate evals (optimizer / kernel runs with a geo
         # override) must never clobber the saved simulation, and parallel
@@ -7098,6 +7121,40 @@ def _demag_with_grade(dsum):
     except Exception:   # noqa: BLE001 — garnish, never fatal
         pass
     return out
+
+
+#: "Refine ripple" starts here (owner 2026-10-29): on the 2x3ph L100 cruise point
+#: the ring check failed at 1/side (0.52 of the ripple scale), passed at 2
+#: (0.049) and the owner's own run settled at 3; 3/side is the first level with
+#: a margin, and the solver steps one more while it still fails (cap 4).
+RIPPLE_REFINE_LAYERS = 3.0
+
+
+def _ripple_refined_block(sbres: dict, base_layers: float) -> dict:
+    """The refined ripple of a ``ripple_refine`` run, compact: what the card,
+    the duty save and the report keep next to the base result."""
+    summ = sbres.get("summary") if isinstance(sbres.get("summary"), dict) else {}
+    gr = sbres.get("gap_refinement") if isinstance(sbres.get("gap_refinement"), dict) else {}
+    chk = _ripple_self_check(sbres)
+    eps = chk.get("rel_to_ripple_scale")
+
+    def _f(v):
+        try:
+            v = float(v)
+            return v if math.isfinite(v) else None
+        except (TypeError, ValueError):
+            return None
+    layers = _f(gr.get("gap_layers_per_side")) or _f(sbres.get("gap_layers_effective"))
+    return {
+        "T_ripple_pct": _f(summ.get("T_ripple_pct")),
+        "T_ripple_pp_Nm": _f(sbres.get("T_ripple_pp_Nm")),
+        "T_avg_Nm": _f(sbres.get("T_avg_Nm")),
+        "gap_layers_per_side": layers,
+        "base_gap_layers_per_side": _f(base_layers),
+        "self_check_rel_to_ripple_scale": _f(eps),
+        "passed": bool(chk.get("ripple_mesh_limited") is False),
+        "computed_at": sbres.get("computed_at"),
+    }
 
 
 def _ripple_self_check(sbres: dict) -> dict:

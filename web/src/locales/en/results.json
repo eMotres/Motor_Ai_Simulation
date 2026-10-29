@@ -53,8 +53,13 @@
   "maxCharge": "Max charge",
   "simulationSummaryRealFemResults": "Simulation summary — real FEM results",
   "modelled": "modelled",
-  "rippleMeshLimited": "Ripple: gap mesh too coarse",
   "staleBuild": "⚠ older build",
   "staleBuildTip": "Computed on another build of this configuration ({keys}). The duty is open on the current build; recompute to refresh these numbers.",
-  "recompute": "Recompute"
+  "recompute": "Recompute",
+  "rippleNotAccurate": "Ripple not accurate",
+  "rippleNotAccurateTip": "At {layers} air-gap layer(s)/side the rotor- and stator-side rings disagree by {err} % of the ripple scale: the mesh, not the machine, sets the ripple. Torque, losses and heat are fine. Refine ripple solves this point at 3 layers/side or more, for the ripple only; the mesh settings and the duty stay as they are.",
+  "refineRipple": "Refine ripple",
+  "refiningRipple": "Refining…",
+  "rippleRefined": "Ripple · {layers}/side",
+  "rippleRefinedTip": "Ripple refined at {layers} air-gap layers/side; the base run ({baseLayers}/side) read {base} %. Everything else on the card is the base run."
 }

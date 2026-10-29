@@ -1309,20 +1309,44 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     row("Minimum bus voltage (V)",
         [_g(d, "result.v_ll_peak_v", "summary.V_line_peak_V") for d in duties],
         "line-to-line peak of the solved waveform — the DC bus must stay above it", 1)
-    row("Phase current (A rms)",
-        [_g(d, "current_arms", "summary.I_phase_rms_A") for d in duties], "", 1, bold=True)
-    row("Phase current (A peak)",
-        [(float(_g(d, "current_arms", "summary.I_phase_rms_A") or 0) * math.sqrt(2)) or None
-         for d in duties], "what the controller has to switch", 1)
+    # TWO IN-PHASE SETS (winding.phases 6, owner 2026-10-29): each set's
+    # controller switches HALF the stored current; the stored value is both
+    # sets together.  Said in the label, and the per-set rows come first —
+    # that is what the engineer entered and what each controller sees.
+    _six = str(wind.get("phases") or "3").strip() == "6"
+    _I = [_g(d, "current_arms", "summary.I_phase_rms_A") for d in duties]
+    if _six:
+        row("Phase current per set (A rms)",
+            [(float(i) / 2.0) if i is not None else None for i in _I],
+            "one of the two in-phase sets — one controller", 1, bold=True)
+        row("Phase current per set (A peak)",
+            [(float(i) / 2.0 * math.sqrt(2)) if i is not None else None for i in _I],
+            "what each controller has to switch", 1)
+    row("Phase current, both sets (A rms)" if _six else "Phase current (A rms)",
+        _I, "equivalent 3-phase current, the two sets together" if _six else "", 1,
+        bold=not _six)
+    row("Phase current, both sets (A peak)" if _six else "Phase current (A peak)",
+        [(float(i or 0) * math.sqrt(2)) or None for i in _I],
+        "" if _six else "what the controller has to switch", 1)
     row("Current density (A/mm²)",
         [_g(d, "result.j_coil_a_mm2", "summary.J_coil_A_per_mm2") for d in duties],
         "rms current per mm² of copper — sets the coil temperature rise for a "
         "given cooling", 1)
     row("Load angle γ (°)", [_g(d, "gamma_deg") for d in duties],
         "current vector relative to the q-axis", 1)
-    row("Torque ripple (%)",
-        [_g(d, "result.ripple_pct", "summary.T_ripple_pct") for d in duties],
-        "peak-to-peak over mean, cogging included", 1)
+    # The refined ripple when the duty has one, else the run's own, marked
+    # "not accurate" when its air-gap ring check failed (owner 2026-10-29).
+    from motor_ai_sim.ripple_accuracy import NOT_ACCURATE_MARK, quoted_ripple
+
+    def _ripple_cell(d):
+        q = quoted_ripple(d.get("summary"), _g(d, "result.ripple_pct"))
+        if q["value"] is None:
+            return None
+        return (f"{q['value']:.1f} ({NOT_ACCURATE_MARK})" if q["accurate"] is False
+                else q["value"])
+    row("Torque ripple (%)", [_ripple_cell(d) for d in duties],
+        "peak-to-peak over mean, cogging included; \"" + NOT_ACCURATE_MARK
+        + "\" = the air-gap ring check failed, refine the ripple", 1)
     # NO-LOAD COGGING TORQUE (owner 2026-10-26): a property of the machine, one value for every duty (a grey band row),
     # next to the ripple.  Absent when none is saved; the note says what a reader needs and flags an older build.
     try:
@@ -2308,7 +2332,9 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
          "limits; for those, solve the variant properly."),
         ("Torque ripple",
          "Peak-to-peak over mean of the torque waveform, at the step count shown "
-         "on the Details sheet. Cogging is included."),
+         "on the Details sheet. Cogging is included. Where the air-gap mesh was "
+         "too coarse for the ripple, the refined value (3 or more layers per side) "
+         "is quoted, or the cell says it is not accurate."),
         ("Temperature",
          "Copper resistance and losses are quoted at the coil temperature on the "
          "card; the magnet grade name carries the temperature the magnets were "

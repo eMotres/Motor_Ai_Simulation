@@ -8709,10 +8709,11 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                     and isinstance(col.get("em_sine"), dict)) else em)
     _sine_cp = ((cp or {}).get("reference_sine")
                 if isinstance((cp or {}).get("reference_sine"), dict) else None)
+    from motor_ai_sim.ripple_accuracy import quoted_ripple as _qr
     ctx["ripple_pct"] = _numf(
         ((_sine_cp or {}).get("em") or {}).get("T_ripple_pct")
         if _sine_cp else None) or _numf(
-        _sine_em.get("T_ripple_pct") or rr.get("ripple_pct"))
+        _qr(_sine_em, rr.get("ripple_pct"))["value"])
     if ctx["drive"] == "pwm":
         _inv = duty_inverter(col)
         ctx["carrier_ripple_pct"] = _numf(em.get("T_ripple_pct")
@@ -11943,11 +11944,15 @@ def em_torque_rows(em: Dict[str, Any],
     # table printed only the first and explained the second in prose, so a
     # reader comparing the two pages met 28.7 % under one label and 1.4 % under
     # another and could not tell they were two different quantities.
-    tp.append(["Torque ripple [%]", _fmt(_g(em, "T_ripple_pct"), 1),
+    from motor_ai_sim.ripple_accuracy import ripple_note, ripple_text
+    tp.append(["Torque ripple [%]",
+               (_fmt(_g(em, "T_ripple_pct"), 1) if _pwm_drive
+                else ripple_text(em, lambda v: _fmt(v, 1))),
                ("peak-to-peak over mean; on this supply it is dominated by the "
                 "CARRIER — the low-order ripple the 5 % limit is on is the row "
                 "below" if _pwm_drive else
-                "peak-to-peak over mean, cogging included")])
+                "; ".join(x for x in ("peak-to-peak over mean, cogging included",
+                                      ripple_note(em)) if x))])
     if cogging and cogging.get("pkpk_Nm"):
         tp.append(["Cogging torque, peak-to-peak [N·m]", _fmt(cogging["pkpk_Nm"], 4),
                    cogging_words(cogging)])
@@ -15074,10 +15079,11 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
                         else (r or {}).get("magnet_temp_max_c"), 1))
     _row("Bearing seat temperature [°C]",
          lambda r: _fmt((r or {}).get("bearing_temp_c"), 1))
+    from motor_ai_sim.ripple_accuracy import ripple_text as _rt
     _row("Torque ripple [%]",
-         lambda r: _fmt(_em(r).get("T_ripple_pct")
-                        if _em(r).get("T_ripple_pct") is not None
-                        else _cpl_inv(r).get("ripple_pct"), 1))
+         lambda r: (_rt(_em(r), lambda v: _fmt(v, 1))
+                    if _em(r).get("T_ripple_pct") is not None
+                    else _fmt(_cpl_inv(r).get("ripple_pct"), 1)))
     _row("Current THD [%]",
          lambda r: (PWM_THD_BY_CONSTRUCTION if r is sine and r is not None
                     else _fmt(_em(r).get("THD_I_pct")

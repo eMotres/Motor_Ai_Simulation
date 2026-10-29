@@ -12,6 +12,7 @@ import { Box, Button, Chip, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
 import { geoSignature } from '../common/geoSig';
 import { geoSigDiffRows, staleBuildKeysText } from '../../lib/dutyGeometryDiff';
+import { canRefineRipple, quotedRipple, type RippleRefined } from '../../lib/rippleAccuracy';
 import { currentMatJson } from '../../lib/apiAuth';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { fetchBearingLosses } from '../../lib/machineBearings';
@@ -109,6 +110,9 @@ export interface TransientSummary {
   ripple_mesh_limited?: boolean | null;
   ripple_self_check_rel?: number | null;
   gap_layers_note?:    string | null;
+  gap_layers_effective?: number | null;
+  // "Refine ripple": the same point at >= 3 gap layers/side (lib/rippleAccuracy).
+  ripple_refined?:     RippleRefined | null;
   // Set only when a Mesh setting fell back to the last-resort default
   // because the machine has no saved Mesh setting for it.
   mesh_settings_note?: string | null;
@@ -542,6 +546,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                 'mat-assign-local-changed', 'sim-settings-restored'];
     for (const ev of EV) window.addEventListener(ev, on);
     return () => { for (const ev of EV) window.removeEventListener(ev, on); };
+  }, []);
+  // "Refine ripple" runs in TransientCharts (it owns the request); this card
+  // only asks for it and shows its state.
+  const [refine, setRefine] = React.useState<{ busy: boolean; error?: string | null }>({ busy: false });
+  React.useEffect(() => {
+    const on = (e: Event) => setRefine((e as CustomEvent).detail || { busy: false });
+    window.addEventListener('sim-ripple-refine-state', on);
+    return () => window.removeEventListener('sim-ripple-refine-state', on);
   }, []);
   // "3D corrections" toggle (user's design, 2026-08-24): ON → every
   // flux-proportional tile is rescaled by the machine's Stage-A k_flux;
@@ -1016,18 +1028,35 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Typography>
           </Tooltip>
         )}
-        {s.ripple_mesh_limited && (
-          <Tooltip title={'The torque on the rotor-side and on the stator-side air-gap ring '
-            + 'differs by '
-            + (s.ripple_self_check_rel != null
-              ? `${fmt(s.ripple_self_check_rel * 100, 0)} % of the ripple`
-              : 'more than 5 % of the ripple')
-            + ': the air-gap mesh, not the machine, sets the ripple. '
-            + 'Raise Air-gap layers/side on the Mesh tab and re-run.'
-            + (s.gap_layers_note ? ` ${s.gap_layers_note}.` : '')}>
-            <Chip size="small" color="warning" variant="outlined"
-              label={tx('rippleMeshLimited')}
-              sx={{ fontSize: 10, height: 18 }}/>
+        {/* RIPPLE ACCURACY (owner 2026-10-29, option 1): the configured gap
+            layers run; a ripple whose ring check failed is marked and refined
+            only on request — the same point at >= 3 layers/side, nothing about
+            the machine's mesh or the duty changes. */}
+        {canRefineRipple(s) && (
+          <>
+            <Tooltip title={tx('rippleNotAccurateTip', {
+              err: s.ripple_self_check_rel != null ? fmt(s.ripple_self_check_rel * 100, 0) : '>5',
+              layers: s.gap_layers_effective != null ? fmt(s.gap_layers_effective, 0) : '?' })
+              + (refine.error ? ` — ${refine.error}` : '')}>
+              <Chip size="small" color={refine.error ? 'error' : 'warning'} variant="outlined"
+                label={tx('rippleNotAccurate')} sx={{ fontSize: 10, height: 18 }}/>
+            </Tooltip>
+            <Button size="small" variant="outlined" color="warning"
+              disabled={refine.busy || stale}
+              onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-refine-ripple')); } catch { /* SSR */ } }}
+              sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6, textTransform: 'none' }}>
+              {refine.busy ? tx('refiningRipple') : tx('refineRipple')}
+            </Button>
+          </>
+        )}
+        {quotedRipple(s).refined && (
+          <Tooltip title={tx('rippleRefinedTip', {
+            base: fmt(quotedRipple(s).baseValue ?? NaN, 1),
+            baseLayers: fmt(quotedRipple(s).baseLayers ?? NaN, 0),
+            layers: fmt(quotedRipple(s).layers ?? NaN, 0) })}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
+              {tx('rippleRefined', { layers: fmt(quotedRipple(s).layers ?? NaN, 0) })}
+            </Typography>
           </Tooltip>
         )}
         {/* Snapshot THIS design as a comparison point (Compare tab). Sits next to

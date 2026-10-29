@@ -106,6 +106,23 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
     window.addEventListener('sim-apply-summary', onApply as EventListener);
     return () => window.removeEventListener('sim-apply-summary', onApply as EventListener);
   }, []);
+  // A refined ripple of the point on the card (TransientCharts "Refine
+  // ripple") belongs on an APPLIED summary too — a duty's saved run is the
+  // card the engineer refined.
+  React.useEffect(() => {
+    const onRefined = (e: Event) => {
+      const block = (e as CustomEvent).detail?.block;
+      if (!block) return;
+      setAppliedSummary((a) => {
+        if (!a) return a;
+        const next = { ...a, ripple_refined: block } as TransientSummary;
+        appliedRef.current = next;
+        return next;
+      });
+    };
+    window.addEventListener('sim-ripple-refined', onRefined as EventListener);
+    return () => window.removeEventListener('sim-ripple-refined', onRefined as EventListener);
+  }, []);
   // An applied design REPLACES the geometry, so everything on the card belongs to the
   // previous one.  Drop it instead of presenting it as current while the recompute
   // this apply kicked off is still running.

@@ -2421,6 +2421,9 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 "wire_width_mm": ov.get("wire_width"),
                 "turns": ov.get("num_wires_per_slot"),
                 "connection": w.get("connection"),
+                # 6 = two in-phase 3-phase sets: the duty table quotes the
+                # current PER SET (owner 2026-10-29); stored values stay both sets
+                "phases": 6 if str(w.get("phases") or "3").strip() == "6" else 3,
                 "star_delta": w.get("star_delta") or "star",
                 "magnet": (c.get("materials") or {}).get("magnet"),
                 "steel": (c.get("materials") or {}).get("stator_core"),

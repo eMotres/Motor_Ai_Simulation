@@ -13,11 +13,18 @@ import { shaftBalance } from './shaftBalance';
 import { hasSleeve } from './hasSleeve.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
+import { quotedRipple, type RippleRefined } from './rippleAccuracy.ts';
 
 /** The run summary, as far as these tiles read it: every field optional, nothing invented. */
 export interface EmTileSummary {
   T_em_avg_Nm?: number | null;
   T_ripple_pct?: number | null;
+  /** the air-gap ring check of the run (routes.simulation summary) */
+  ripple_mesh_limited?: boolean | null;
+  ripple_self_check_rel?: number | null;
+  gap_layers_effective?: number | null;
+  /** "Refine ripple": the same point at >= 3 gap layers/side (lib/rippleAccuracy) */
+  ripple_refined?: RippleRefined | null;
   torque_method?: string | null;
   /** 'motor' | 'generator' — the direction of the power balance (generator numbers are positive) */
   op_mode?: string | null;
@@ -258,7 +265,18 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   const etaPct = bal?.eta != null ? 100 * bal.eta : null;
   const partial = s.solid_loss_not_solved === true;       // magnet / shaft eddy not solved → optimistic
   const etaFlag = etaPct != null && (partial || !mechKnown);
-  const ripple = num(s.T_ripple_pct);
+  // The refined ripple wins; a ripple whose ring check failed is NOT ACCURATE
+  // (owner 2026-10-29) — marked, amber, the why in the tooltip.
+  const rq = quotedRipple(s);
+  const ripple = rq.value;
+  const rippleTipKey = rq.refined ? 'emTiles.tRippleRefinedTip'
+    : rq.accurate === false ? 'emTiles.tRippleNotAccurateTip' : 'emTiles.tRippleTip';
+  const rippleVars = {
+    layers: rq.layers != null ? _n(rq.layers) : '?',
+    err: rq.ringError != null ? _n(100 * rq.ringError) : '>5',
+    base: rq.baseValue != null ? rq.baseValue.toFixed(1) : '—',
+    baseLayers: rq.baseLayers != null ? _n(rq.baseLayers) : '?',
+  };
   // THE MASS IS THE FULL MOTOR MASS (owner 2026-10-20): the server's full mass of the loaded configuration; a geometry that
   // belongs to no configuration with a CAD build shows its active mass, labelled so, never an unlabelled "Mass".
   const ms = shownMass(s as MassSummary);
@@ -289,9 +307,11 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       tipExtraKeys: partial ? ['emTiles.partial'] : undefined, unit: '%', d: 2,
       value: etaPct, display: etaPct != null && etaFlag ? `${etaPct.toFixed(2)}*` : undefined,
       level: etaPct == null ? undefined : etaFlag ? 'warn' : etaPct >= 92 ? 'ok' : etaPct >= 85 ? 'warn' : 'bad' }),
-    tile({ id: 'tRipple', labelKey: 'configure.tRipple', tipKey: 'emTiles.tRippleTip',
+    tile({ id: 'tRipple', labelKey: 'configure.tRipple', tipKey: rippleTipKey, tipVars: rippleVars,
       tipExtraKeys: torqueMethod ? [torqueMethod] : undefined, unit: '%', d: 1, value: ripple,
-      level: ripple == null ? undefined : ripple <= 5 ? 'ok' : ripple <= 15 ? 'warn' : 'bad' }),
+      display: ripple != null && rq.accurate === false ? `${ripple.toFixed(1)}*` : undefined,
+      level: ripple == null ? undefined : rq.accurate === false ? 'warn'
+        : ripple <= 5 ? 'ok' : ripple <= 15 ? 'warn' : 'bad' }),
     tile({ id: 'tPerMass', labelKey: pm('torque').full ? 'configure.tPerMass' : 'configure.tPerMassActive',
       tipKey: pm('torque').full ? 'emTiles.tPerMassFullTip' : 'emTiles.tPerMassTip', unit: 'N·m/kg', d: 2,
       value: pm('torque').value }),

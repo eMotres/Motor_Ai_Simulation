@@ -247,5 +247,7 @@
     "configTip": "Belongs to the selected project."
   },
   "pointsOnly": "Points only",
-  "pointsOnlyTip": "Computed points only: this motor has no operating map (passport) yet. It opens in Configure with its stored points, thermal and mechanical results and maps."
+  "pointsOnlyTip": "Computed points only: this motor has no operating map (passport) yet. It opens in Configure with its stored points, thermal and mechanical results and maps.",
+  "currentPerSetHead": "Phase current RMS PER SET: two in-phase sets, each on its own controller. Both sets together carry twice this.",
+  "currentBothSets": "both sets: {a} A"
 }

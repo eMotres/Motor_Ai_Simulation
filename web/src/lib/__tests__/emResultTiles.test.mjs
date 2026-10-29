@@ -473,3 +473,31 @@ t('the shared balance is a pure lib that SummaryTable no longer duplicates', () 
   assert.match(read('lib/emResultTiles.ts'), /shaftBalance\(/);
   assert.match(read('lib/shaftBalance.ts'), /report\.py/);                       // says which formula it mirrors
 });
+
+// ── ripple accuracy (owner 2026-10-29, option 1) ───────────────────────────
+// The configured gap layers run.  A ripple whose air-gap ring check failed is
+// marked NOT ACCURATE (amber, "*", the ring error in the tooltip) until the
+// engineer refines it; the refined value then IS the tile.
+t('a ripple whose ring check failed is marked; the refined one replaces it', () => {
+  const bad = { ...RUN, T_ripple_pct: 3.3, ripple_mesh_limited: true,
+                ripple_self_check_rel: 0.52, gap_layers_effective: 1 };
+  let tile = one(E.emTileRows(bad, VIEW), 'tRipple');
+  assert.equal(tile.value, 3.3);
+  assert.equal(tile.display, '3.3*');
+  assert.equal(tile.level, 'warn');
+  assert.equal(tile.tipKey, 'emTiles.tRippleNotAccurateTip');
+  assert.equal(tile.tipVars.err, '52');
+  assert.equal(tile.tipVars.layers, '1');
+  const refined = { ...bad, ripple_refined: { T_ripple_pct: 1.9, passed: true,
+    gap_layers_per_side: 3, base_gap_layers_per_side: 1, self_check_rel_to_ripple_scale: 0.03 } };
+  tile = one(E.emTileRows(refined, VIEW), 'tRipple');
+  assert.equal(tile.value, 1.9);
+  assert.equal(tile.display, undefined);
+  assert.equal(tile.level, 'ok');
+  assert.equal(tile.tipKey, 'emTiles.tRippleRefinedTip');
+  assert.deepEqual([tile.tipVars.layers, tile.tipVars.base, tile.tipVars.baseLayers], ['3', '3.3', '1']);
+  // a passing run is quoted as it always was
+  tile = one(E.emTileRows({ ...RUN, T_ripple_pct: 2, ripple_mesh_limited: false }, VIEW), 'tRipple');
+  assert.equal(tile.tipKey, 'emTiles.tRippleTip');
+  assert.equal(tile.display, undefined);
+});

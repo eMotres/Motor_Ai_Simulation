@@ -602,5 +602,27 @@
     "label": "View",
     "list": "List",
     "cards": "Cards"
+  },
+  "loadGuard": {
+    "title": "Load {target}?",
+    "lineJobs": "A job is running on this motor — loading stops it.",
+    "lineWork": "This motor has unsaved work.",
+    "save": "Save and load",
+    "discard": "Load without saving",
+    "cancel": "Cancel",
+    "tipSave": "Saves the last run to the duty and the geometry edits as a new configuration, then loads. A running job is stopped first.",
+    "tipDiscard": "Loads now and drops the unsaved work. A running job is stopped first.",
+    "failed": "Not loaded — {why}",
+    "job": {
+      "sweep": "sweep",
+      "optimization": "optimization",
+      "simulation": "simulation",
+      "job": "job"
+    },
+    "item": {
+      "running": "Running: {what} — stopped before the load",
+      "run": "The last run is not saved to duty {duty}",
+      "edits": "Geometry edited, not saved: {what}"
+    }
   }
 }

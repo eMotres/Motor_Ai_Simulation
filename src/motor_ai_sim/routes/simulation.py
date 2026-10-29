@@ -4735,6 +4735,18 @@ def get_fem_transient(
     if type(sampling_purpose) is not str or sampling_purpose not in (
             "standard", "optimization", "cogging_quality"):
         raise HTTPException(status_code=422, detail="invalid sampling_purpose")
+    # THE MACHINE THIS RUN STARTED ON (machine_binding, incident 2026-10-29).  A
+    # solve takes minutes to hours; if another motor is loaded meanwhile, its
+    # post-processing would read THAT machine (masses, passport, bearings) and
+    # file a mixed state as this run's answer.  Captured here, tested before the
+    # result is stamped and persisted.  Cheap paths (restore / ledger probe) and
+    # candidate evals that carry their own geometry have nothing to protect.
+    _run_bind = None
+    if not (restore or ledger_probe):
+        from motor_ai_sim import machine_binding as _MB
+        _run_bind = _MB.MachineBinding(
+            None if geo else (lambda _k: _geometry_fingerprint(None)),
+            what="the transient run")
     # The torque method and the gap layers the SOLVER will use (it applies the
     # same two rules itself): the cache / ledger key must describe the run that
     # is actually solved, so a gap_layers=1 request and a pre-2026-09-30
@@ -5993,6 +6005,14 @@ def get_fem_transient(
         # the cache AND onto disk (.last_transient.json), so a restore after a
         # preset switch / a YAML edit / a back-end restart can be compared
         # against the live machine instead of being served as if it were current.
+        if _run_bind is not None:
+            _why_moved = _run_bind.changed(())
+            if _why_moved:
+                # Not published, not cached, not filed under any duty: the
+                # answer is a mixture of two machines.
+                log.warning("transient discarded: %s", _why_moved)
+                raise HTTPException(status_code=409, detail={
+                    "code": "source_machine_changed", "message": _why_moved})
         _sbres["geo_fingerprint"] = _geometry_fingerprint(_geo_ov)
         # ── Park the last frame's field for the J⟳ / Loss views ───────────────
         # It leaves the HTTP payload here (megabytes of per-node arrays the
@@ -8454,8 +8474,11 @@ def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, 
     import math as _m
     try:
         from motor_ai_sim.modules import motor_mass as _mm
+        from motor_ai_sim import run_target as _rt
         from motor_ai_sim.routes import family as _fam
-        ctx = _fam._read_ctx() or {}
+        ctx = _rt.job_machine()      # the run's own machine, not the one loaded at its end
+        if ctx is None:
+            ctx = _fam._read_ctx() or {}
         die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
         if die and cfg:
             _mm.stamp_run_summary(

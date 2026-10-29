@@ -181,6 +181,8 @@ export interface LocalApplyResult {
   message: string;
   /** the die or the configuration changed with this load */
   machineChanged: boolean;
+  /** the person answered Cancel to the "unsaved work" question: nothing was loaded or touched */
+  declined?: boolean;
 }
 
 /**

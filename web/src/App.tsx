@@ -28,6 +28,7 @@ import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './the
 import BrandLogo from './components/common/BrandLogo';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
+import LoadGuardDialog from './components/common/LoadGuardDialog';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import ComputeNodesHint from './components/common/ComputeNodesHint';
 import AuthButton, { preloadAuthMenu } from './components/auth/AuthButton';
@@ -846,6 +847,8 @@ function App() {
 
         {/* ── What is loaded: die / configuration / duty + save-back ── */}
         <ActiveFamilyStrip />
+        {/* The one question before another machine replaces this one (lib/loadGuard) */}
+        <LoadGuardDialog />
         {/* A motor loading in the background (its tab is already open) / why it failed */}
         <FamilyLoadBanner />
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}

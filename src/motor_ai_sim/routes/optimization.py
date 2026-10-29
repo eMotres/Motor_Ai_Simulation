@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import sweep_journal as _sweep_journal
+from motor_ai_sim import machine_binding as _MB
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
 from motor_ai_sim.optimization import pareto as _pareto
@@ -544,7 +545,8 @@ def _store_eval(key: str, res: Dict[str, Any]) -> None:
 
 def _log_eval_failure_cache(key: str, out: Optional[Dict[str, Any]], *,
                             overrides=None, current_a=None, gamma_deg=None,
-                            pre_solve: bool = False) -> None:
+                            pre_solve: bool = False,
+                            cfg_fp: Optional[str] = None) -> None:
     """Append a failed / infeasible sweep point to ``.scan_cache.jsonl`` as a
     LOG line ``{"k", "m", "inputs"}`` -- no ``"v"``, so the cache loader skips it
     and it can never be served as a hit.  Never enters ``_EVAL_CACHE``."""
@@ -557,7 +559,7 @@ def _log_eval_failure_cache(key: str, out: Optional[Dict[str, Any]], *,
             status=status, camp=(camp.snapshot() if camp else None),
             error=(out or {}).get("error"), error_class=eclass,
             pre_solve=pre_solve)
-        m["cfg_fp"] = _config_fingerprint()
+        m["cfg_fp"] = cfg_fp or _config_fingerprint()
         line = {"k": key, "m": m,
                 "inputs": {"overrides": overrides, "current_a": current_a,
                            "gamma_deg": gamma_deg}}
@@ -728,12 +730,14 @@ class _OptimizerJob:
     """Register the calling thread's optimizer job for the lifetime of a
     ``with`` block.  ``workers`` = the share at start (pool size / quotes)."""
 
-    def __init__(self, kind: str):
+    def __init__(self, kind: str, binding: "Optional[_MB.MachineBinding]" = None):
         self.kind = str(kind or "")
         self.token: Optional[int] = None
         self.workers = 1
         self._ctx_tok = None
         self._camp_cm = None
+        self._binding = binding
+        self._bind_tok = None
 
     def __enter__(self) -> "_OptimizerJob":
         with _opt_jobs_cond:
@@ -743,6 +747,15 @@ class _OptimizerJob:
             n = len(_opt_jobs_inflight)
         self.workers = _optimizer_share(n)
         self._ctx_tok = _OPT_JOB.set(self.token)
+        # THE MACHINE THIS RUN STARTED ON (incident 2026-10-29, see
+        # machine_binding): every eval of the campaign - pool workers included,
+        # they run in a copy of this context - is checked against it.  A caller
+        # that knows the moment the run was REQUESTED (the scan route; the
+        # campaign may wait in the job queue) hands its own capture in.
+        if _MB.current() is None:
+            self._bind_tok = _MB.CURRENT.set(self._binding or _MB.MachineBinding(
+                lambda keys: _config_fingerprint(keys),
+                what={"scan": "FEM scan"}.get(self.kind, "the %s run" % self.kind)))
         # One campaign id per optimisation / sweep run, visible to every pool
         # worker (WorkspaceThreadPoolExecutor copies the whole context) so
         # every eval row of the run carries it (eval_log, schema 2).
@@ -768,6 +781,12 @@ class _OptimizerJob:
             _OPT_JOB.reset(self._ctx_tok)
         except (ValueError, RuntimeError):    # reset from another context
             pass
+        if self._bind_tok is not None:
+            try:
+                _MB.CURRENT.reset(self._bind_tok)
+            except (ValueError, RuntimeError):
+                pass
+            self._bind_tok = None
         with _opt_jobs_cond:
             _opt_jobs_inflight.pop(self.token, None)
             _opt_jobs_kind.pop(self.token, None)
@@ -806,7 +825,7 @@ def _optimizer_job(kind: str):
 
         @_ft.wraps(fn)
         def _wrapped(*a, **kw):
-            with _OptimizerJob(kind):
+            with _OptimizerJob(kind, binding=kw.pop("binding", None)):
                 return fn(*a, **kw)
         return _wrapped
     return deco
@@ -1424,6 +1443,18 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     import subprocess, sys, json, os as _os
     if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
+    # THE RUN'S OWN MACHINE (machine_binding, incident 2026-10-29).  Inside a
+    # campaign the live config is read by the eval subprocess when it STARTS, so
+    # a point that starts after another machine was loaded would be solved on
+    # that machine and filed under this run.  Refuse it before it costs a core;
+    # nothing is logged - it was never computed.
+    _mb = _MB.current()
+    _bkeys = tuple(k for k in (overrides or {}) if k != "gamma_deg")
+    _bound_fp = (_mb.fingerprint_full or None) if _mb is not None else None
+    if _mb is not None:
+        _why0 = _mb.changed(_bkeys)
+        if _why0:
+            return {"ok": False, "error": _why0, "source_changed": True}
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
                        "sampling_purpose": sampling_purpose,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
@@ -1486,6 +1517,10 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     _slot = _optimizer_slot_acquire()
     _t0_eval = _t_eval.monotonic()
     try:
+        if _mb is not None:
+            _why1 = _mb.changed(_bkeys)
+            if _why1:
+                return {"ok": False, "error": _why1, "source_changed": True}
         # Adaptive hang cap: 4x the MEASURED median eval, floored at 300 s and
         # capped at 30 min.  A fixed 300 s assumed "healthy = 1-2 min", but with
         # 10 concurrent evals the same solve stretches to a 231 s median (CPU
@@ -1646,10 +1681,20 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                 log.warning("eval REJECTED (nonlinear solve): %s | I=%.3g A "
                             "gamma=%.3g deg overrides=%s",
                             _res.get("error"), current_a, gamma_deg, overrides)
+            # The machine may have been swapped WHILE this eval ran (the
+            # subprocess read the live config when it started, or part-way
+            # through).  Such an answer is not data for this run: a failed row
+            # with the reason, stamped with the machine the run was meant for.
+            if _mb is not None:
+                _why2 = _mb.changed(_bkeys)
+                if _why2:
+                    _res = {"ok": False, "error": _why2, "source_changed": True,
+                            "computed": True}
             if _log:
                 _log_eval(overrides, current_a, gamma_deg, _res,   # accumulate surrogate dataset
                           solve=_solve_meta, sampling_purpose=sampling_purpose,
-                          elapsed_s=_t_eval.monotonic() - _t0_eval)
+                          elapsed_s=_t_eval.monotonic() - _t0_eval,
+                          cfg_fp=_bound_fp)
             return _res
         # No @@RESULT@@: say HOW the worker ended.  The last stderr line used
         # to be reported alone, and on 2026-09-06 that was a geometry-sanitiser
@@ -1665,7 +1710,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         if _log:
             _log_eval(overrides, current_a, gamma_deg, _fail, solve=_solve_meta,
                       sampling_purpose=sampling_purpose,
-                      elapsed_s=_t_eval.monotonic() - _t0_eval)
+                      elapsed_s=_t_eval.monotonic() - _t0_eval,
+                      cfg_fp=_bound_fp)
         return _fail
     except subprocess.TimeoutExpired:
         _fail = {"ok": False, "error": "timeout"}
@@ -1673,7 +1719,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
             _log_eval(overrides, current_a, gamma_deg, _fail, solve=_solve_meta,
                       sampling_purpose=sampling_purpose,
                       elapsed_s=_t_eval.monotonic() - _t0_eval,
-                      error_class="TimeoutExpired")
+                      error_class="TimeoutExpired",
+                      cfg_fp=_bound_fp)
         return _fail
     except Exception as e:  # noqa: BLE001
         _fail = {"ok": False, "error": str(e)}
@@ -1681,7 +1728,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
             _log_eval(overrides, current_a, gamma_deg, _fail, solve=_solve_meta,
                       sampling_purpose=sampling_purpose,
                       elapsed_s=_t_eval.monotonic() - _t0_eval,
-                      error_class=type(e).__name__)
+                      error_class=type(e).__name__,
+                      cfg_fp=_bound_fp)
         return _fail
     finally:
         _optimizer_slot_release(_slot)
@@ -2057,6 +2105,38 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                         as ThreadPoolExecutor)
     from motor_ai_sim.optimization.optimizer import _pareto_front
 
+    # THE MACHINE THIS SWEEP WAS STARTED ON (machine_binding).  Captured by the
+    # route when the sweep was requested - the campaign may have waited in the
+    # job queue - and completed here with the baselines of the override key sets
+    # the grid uses.  Everything below compares against it, never against its
+    # own start, and the record is stamped from it, never from the machine that
+    # happens to be loaded when the sweep ends.
+    _bind = _MB.current()
+    _swept_names = tuple(str(v["name"]) for v in variables
+                         if v.get("name") not in ("current_a", "rpm", "gamma_deg"))
+    _machine0: Optional[Dict[str, Any]] = None
+    _bind_why: Optional[str] = None
+    if _bind is not None:
+        try:
+            _geos0 = _enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)
+            _bind_why = _bind.prime(
+                [tuple(k for k in ov if k != "gamma_deg") for ov in _geos0]
+                + [_swept_names])
+        except Exception as _e_prime:   # noqa: BLE001 - cannot decide = not a refusal
+            log.debug("sweep: machine binding not primed (%s)", _e_prime)
+        if not _bind_why:
+            _machine0 = {**_bind.stamp(),
+                         "fingerprint": _bind.fingerprint_for(_swept_names),
+                         "swept": sorted(_swept_names)}
+    if _bind_why:
+        # Another machine was loaded between "Run" and the first point.
+        with _scan_lock:
+            if _scan_owns(run_id):
+                _scan_state["error"] = _bind_why
+                _scan_state["source_changed"] = _bind_why
+                _scan_state["running"] = False
+        return
+
     # SWEEP JOURNAL: create and update as we progress
     _sweep_journal_record = None
     _resumed_info = None
@@ -2192,7 +2272,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             i, (gi, oi, ov, I, opg, oprpm) = i_t
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
-            fp_before = _config_fingerprint(tuple(geo_ov))
+            # The fingerprint the sweep STARTED with, not this point's start:
+            # a point that starts after another machine was loaded must not
+            # compare the new machine with itself (incident 2026-10-29).
+            fp_before = (_bind.fingerprint_for(tuple(geo_ov)) if _bind is not None
+                         else _config_fingerprint(tuple(geo_ov)))
             out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
                                    n_periods=_NPER, gamma_deg=g,
                                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
@@ -2207,8 +2291,22 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                     threads=_solo_ctx["threads"],
                                     sampling_purpose="optimization")
             if _config_fingerprint(tuple(geo_ov)) != fp_before:
-                out = {"ok": False, "error": "source config changed during FEM scan"}
-            if out and out.get("ok"):
+                out = {"ok": False, "error": "source config changed during FEM scan",
+                       "source_changed": True, "computed": True}
+            if isinstance(out, dict) and out.get("source_changed"):
+                # The machine is no longer the one this sweep started on: the
+                # sweep stops here (the supervising loop sees ``tripped``).
+                with _scan_lock:
+                    if _scan_owns(run_id):
+                        _scan_state["source_changed"] = out.get("error")
+                if out.get("computed"):
+                    # Solved, then discarded: kept as a LOG line (no value, can
+                    # never be served as a hit) under the machine it was meant for.
+                    _log_eval_failure_cache(_cache_key(geo_ov, I, g, oprpm), out,
+                                            overrides=geo_ov, current_a=I,
+                                            gamma_deg=g,
+                                            cfg_fp=(_bind.fingerprint_full if _bind else None))
+            elif out and out.get("ok"):
                 _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
             else:
                 # The negative result goes to the LOG, never to the cache.
@@ -2343,6 +2441,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             while pending:
                 if _scan_state["cancel"]:
                     break
+                if _bind is not None and _bind.poll():
+                    # Another machine was loaded: stop dispatching and kill the
+                    # evals in flight - they would be discarded anyway.
+                    _kill_live_evals("scan")
+                    break
                 just_done, pending = wait(pending, timeout=1.0,
                                           return_when=FIRST_COMPLETED)
                 for fut in just_done:
@@ -2364,6 +2467,24 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                         _scan_state["points"] = [p for p in points if p is not None]
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
+        _src_changed = (_bind.tripped if _bind is not None else None)
+        if _src_changed:
+            # THE SWEEP STOPPED BECAUSE ITS MACHINE CHANGED.  Every point that
+            # was not finished is a failed point carrying the reason - on the
+            # chart and in the table - instead of vanishing from the count.
+            with _scan_lock:
+                if _scan_owns(run_id):
+                    _scan_state["source_changed"] = _src_changed
+            for _i, (_gi, _oi, _ov, _I, _opg, _orpm) in enumerate(tasks):
+                if points[_i] is None:
+                    points[_i] = {"overrides": _ov, "current_a": _I, "geom_id": _gi,
+                                  "op_index": _oi,
+                                  "gamma_deg": float(_ov.get("gamma_deg", _opg)),
+                                  "fem": False, "feasible": False, "eligible": False,
+                                  "final_validation_status": "failed",
+                                  "apply_eligible": False, "source_changed": True,
+                                  "error": _src_changed}
+            log.warning("sweep %s stopped: %s", run_id, _src_changed)
         points = [p for p in points if p is not None]
 
         # segments: the two operating points of one geometry
@@ -2386,7 +2507,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # request asked for it (with_baseline; a cached eval is still attached).
         _bck0 = _cache_key({}, float(operating_points[0].get("current_a", 85.0)),
                            float(operating_points[0].get("gamma_deg", 0.0)))
-        if _scan_state["cancel"] or (not with_baseline and _EVAL_CACHE.get(_bck0) is None):
+        if (_scan_state["cancel"] or _src_changed
+                or (not with_baseline and _EVAL_CACHE.get(_bck0) is None)):
             baseline = {"feasible": False, "fem": True, "overrides": {}}
         else:
             _bI = float(operating_points[0].get("current_a", 85.0))
@@ -2458,10 +2580,22 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                             "hi_fidelity": bool(hi_fidelity), "structured_gap": bool(structured_gap),
                             "airgap_macro": bool(airgap_macro), "iron_template": bool(iron_template),
                             "geo_mesh": bool(geo_mesh), "element_order": int(element_order),
-                             "demag": bool(demag), "cfg_fp": _config_fingerprint(),
+                             # the machine the sweep STARTED on, not the one
+                             # loaded when it ends (incident 2026-10-29)
+                             "demag": bool(demag),
+                             "cfg_fp": (_bind.fingerprint_full if _bind is not None
+                                        else _config_fingerprint()),
                              "validation_provenance_version": 1,
                              "sampling_purpose": "optimization"},
         }
+        if _src_changed:
+            result["source_changed"] = _src_changed
+        # WHICH MACHINE: the start-of-run stamp (die / config / duty +
+        # fingerprint).  The client compares it with the machine on screen and
+        # refuses a chart that belongs to another motor - with the end-of-run
+        # stamp a stopped sweep of machine A would have read as machine B's.
+        if _machine0 is not None:
+            result["machine"] = _machine0
         with _scan_lock:
             if _scan_owns(run_id):
                 result.setdefault("machine", _machine_stamp(_swept_geo_keys(result)))
@@ -2479,7 +2613,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # SWEEP JOURNAL: cancel if user stopped the sweep
         if _sweep_journal_record:
             with _scan_lock:
-                if _scan_state.get("cancel"):
+                # A sweep that stopped because its machine changed must not be
+                # auto-resumed after a restart onto whatever is loaded then.
+                if _scan_state.get("cancel") or (_bind is not None and _bind.tripped):
                     _sweep_journal.cancel_sweep_journal(_config_dir_o(), str(run_id))
         with _scan_lock:
             # ONLY if we are still the current run — otherwise this clears the
@@ -2608,7 +2744,7 @@ def scan_designs(req: ScanRequest):
             pass
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
-                            "cached": 0,
+                            "cached": 0, "source_changed": None,
                             "ts_start": _t_scan.time(),
                             # the share this job gets beside the optimizer
                             # jobs already running (item 4)
@@ -2631,6 +2767,11 @@ def scan_designs(req: ScanRequest):
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
                            structured_gap, airgap_macro, iron_template, geo_mesh,
                            element_order, demag, bool(req.with_baseline)),
+                     # The machine the sweep is requested ON: the worker may
+                     # wait in the job queue and must not adopt whatever is
+                     # loaded when it finally starts (machine_binding).
+                     kwargs={"binding": _MB.MachineBinding(
+                         lambda keys: _config_fingerprint(keys), what="FEM scan")},
                      daemon=True)
     _scan_thread_set(_new_scan_thread)
     _new_scan_thread.start()
@@ -3154,7 +3295,7 @@ def _dataset_path() -> str:
 
 def _log_eval(overrides, current_a, gamma_deg, result, *, solve=None,
               sampling_purpose=None, elapsed_s=None, error_class=None,
-              pre_solve=False) -> None:
+              pre_solve=False, cfg_fp=None) -> None:
     """Append one evaluation to the optimization dataset.  Thread-safe,
     append-only (one atomic line), best-effort (never breaks an eval).  Called
     for every _subprocess_eval.
@@ -3197,7 +3338,11 @@ def _log_eval(overrides, current_a, gamma_deg, result, *, solve=None,
         # fingerprint the FEM eval cache is keyed by (geometry + winding +
         # materials + magnet + speed; operating point deliberately excluded,
         # it travels next to it as current_a / gamma_deg).
-        rec["cfg_fp"] = _config_fingerprint()
+        # ``cfg_fp``: the machine the RUN was started on, when the caller knows
+        # it (machine_binding) - a point that failed because the machine changed
+        # mid-run belongs to the machine it was meant for, not to the one loaded
+        # when it failed.
+        rec["cfg_fp"] = cfg_fp or _config_fingerprint()
         rec.update(meta)
         _eval_log.append_line(_dataset_path(), _eval_log.clean(rec),
                               lock=_dataset_lock)

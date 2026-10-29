@@ -24,6 +24,7 @@ import { loadStopReason } from './geometryApplyOutcome';
 import { uiCanWrite } from './accessUi';
 import { clearFamilyTarget } from './familyLoad';
 import { beginLastMotorSelection,isCurrentLastMotorOperation, rememberLoadedMotor, restoreLastMotor } from './lastMotor';
+import { guardLoad, loadFinished, type LoadPermit } from './loadGuard';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -38,9 +39,23 @@ export const STALE_BUILD_NOTICE = ' — saved results are from an older build; R
  * Apply `die / cfg / duty` everywhere.  Throws with a one-line reason when a
  * server step refuses; the caller shows it.  Resolves to the local half's
  * message ("point 60 A @ 20000 rpm …").
+ *
+ * FIRST it asks (lib/loadGuard): a running job, a run not saved to its duty or
+ * geometry edits not saved all stand to be lost by this load, and nothing is
+ * lost silently (owner 2026-10-29).  `permit` = the caller already asked (the
+ * Motors tab asks before it switches the view); a person who answers Cancel
+ * gets `{ declined: true }` and nothing has been touched.  `released`: the
+ * caller's own confirmation already covered the unsaved work (the strip's
+ * "discard and reload"), only a running job is still asked about.
  */
 export async function applyDutyEverywhere(die: string, cfg: string, duty: string,
-                                          canWrite: boolean): Promise<LocalApplyResult> {
+                                          canWrite: boolean,
+                                          permit?: LoadPermit | null,
+                                          opts: { released?: boolean } = {}): Promise<LocalApplyResult> {
+  if (!permit) {
+    const asked = await guardLoad({ die, config: cfg, duty }, { released: opts.released });
+    if (!asked) return { message: '', machineChanged: false, declined: true };
+  }
   const rememberedEmail = getStoredUser()?.email ?? null;
   const selectionEpoch = beginLastMotorSelection(rememberedEmail);
   let completed = false;
@@ -244,6 +259,7 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     });
     else clearFamilyTarget({ die, config: cfg });
     if (staleGeometryNotice) result.message += staleGeometryNotice;
+    loadFinished();
     return result;
   } finally {
     endDutyApply();

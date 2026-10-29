@@ -12,6 +12,7 @@ import { MiniMarkdown } from './miniMarkdown';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUIStore } from '../../stores/motorStore';
 import { applyDutyEverywhere } from '../../lib/dutyApply';
+import { guardLoad } from '../../lib/loadGuard';
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad } from '../../lib/familyLoad';
 import { loadTargetTab } from '../../lib/catalogRows';
 import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
@@ -80,9 +81,12 @@ function MotorCard({ c }: { c: Card }) {
     if (!c.duty) return;
     setBusy(true); setErr(null);
     const canWrite = uiCanWrite(isAdmin, canWriteServer());
+    // Ask before the view switches (lib/loadGuard): a Cancel leaves the screen as it was.
+    const permit = await guardLoad({ die: c.die, config: c.config, duty: c.duty });
+    if (!permit) { setBusy(false); return; }
     const token = beginFamilyLoad(c.die, c.config, c.duty);
     setActiveTab(loadTargetTab(canWrite, isStandardUser(enforced, isAdmin, role)) as never);
-    try { await applyDutyEverywhere(c.die, c.config, c.duty, canWrite); finishFamilyLoad(token); }
+    try { await applyDutyEverywhere(c.die, c.config, c.duty, canWrite, permit); finishFamilyLoad(token); }
     catch (e: any) { const why = String(e?.message ?? e); setErr(why); failFamilyLoad(token, why); }
     setBusy(false);
   };

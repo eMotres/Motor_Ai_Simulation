@@ -87,7 +87,12 @@ def machine_bearings(die: Optional[str] = None, cfg: Optional[str] = None
         except HTTPException:
             return None, d, c
         return (doc.get("bearings") or None), d, c
-    ctx = _read_ctx()
+    # The machine the RUN was registered for, not the one loaded when it ends
+    # (run_target.run_machine); outside a job this is the loaded context.
+    from motor_ai_sim import run_target as _rt
+    ctx = _rt.job_machine()
+    if ctx is None:
+        ctx = _read_ctx()
     if not ctx:
         return None, None, None
     d, c = str(ctx.get("die") or ""), str(ctx.get("config") or "")

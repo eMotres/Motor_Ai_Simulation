@@ -18,6 +18,8 @@ import {
   ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
 } from './PromptDialogs';
 import { applyDutyEverywhere } from '../../lib/dutyApply';
+import { registerSavers } from '../../lib/loadGuard';
+import { markRunsSaved } from '../../lib/unsavedWork';
 import { quotedRipple } from '../../lib/rippleAccuracy';
 import { releasedOffers, diffText, type DieDiff, type ReleasedCtxLike } from '../../lib/releasedContext';
 import HelpTip from './HelpTip';
@@ -273,6 +275,7 @@ const ActiveFamilyStrip: React.FC = () => {
       setBusy(true); setMsg(null);
       try {
         const done = await applyDutyEverywhere(String(ctx.die), String(ctx.config), name, !!ctx.can_write);
+        if (done.declined) { setBusy(false); return; }
         setMsg(`✓ ${name} — ${done.message}`);
         window.dispatchEvent(new CustomEvent('family-changed'));
       } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
@@ -323,8 +326,10 @@ const ActiveFamilyStrip: React.FC = () => {
     const tDie = String(target?.die || ctx?.die || '');
     const tDuty = String(target?.duty || ctx?.duty || '');
     const targetConfig = String(target?.config || ctx?.config || '');
-    if (!tDie || !tDuty || !targetConfig) return;
+    if (!tDie || !tDuty || !targetConfig) return 'no duty is loaded';
     setBusy(true); setMsg(null);
+    // null = saved; text = why not (the load guard's "Save and load" reads it)
+    let outcome: string | null = null;
     try {
       // Does the LAST finished run sit on the point being saved?  Then its
       // MEASURED torque/power replace the duty's stored kW/Nm (an old target
@@ -718,9 +723,13 @@ const ActiveFamilyStrip: React.FC = () => {
         : '';
       setMsg(`✓ saved to ${tDie} / ${cfgName} / ${tDuty}${extra}${where}`);
       setBuildClash(false);
+      // The run is in the duty now: nothing finished on screen is unsaved any more
+      // (lib/unsavedWork - what the load guard asks about).
+      if (runMatches) markRunsSaved();
       window.dispatchEvent(new CustomEvent('family-changed'));
     } catch (e: any) {
       const m = String(e?.message ?? e);
+      outcome = m;
       setMsg(`✗ ${m}`);
       // A BUILD clash is not a dead end — it means "this is a different
       // product".  Offer the one legal way forward right here (user
@@ -731,6 +740,7 @@ const ActiveFamilyStrip: React.FC = () => {
                     || m.includes('build differs from configuration'));
     }
     setBusy(false);
+    return outcome;
   };
 
   /** Save the ON-SCREEN build as a NEW configuration of the same die, then
@@ -738,8 +748,9 @@ const ActiveFamilyStrip: React.FC = () => {
   const saveAsNewConfig = async (name: string, target?: { die: string; duty: string }) => {
     const die = String(target?.die || ctx?.die || '');
     const duty = String(target?.duty || ctx?.duty || '');
-    if (!die || !duty) return;
+    if (!die || !duty) return 'no duty is loaded';
     setBusy(true); setMsg(null);
+    let outcome: string | null = null;
     try {
       // A fresh configuration has NO stored build, so the duty save below
       // DEFINES it from the live machine (family.py's `_defined_build` path).
@@ -776,9 +787,10 @@ const ActiveFamilyStrip: React.FC = () => {
       // Save with the server's canonical names.  Updating React state alone is
       // insufficient here because this function still closes over the old ctx.
       setCtx((c) => (c ? { ...c, active: true, die, config: created, duty } : c));
-      await save({ die, config: created, duty });
-    } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
+      outcome = await save({ die, config: created, duty });
+    } catch (e: any) { outcome = String(e?.message ?? e); setMsg(`✗ ${outcome}`); }
     setBusy(false);
+    return outcome;
   };
 
   /** RELEASED context, the machine on screen is a NEW lamination: keep it as
@@ -835,12 +847,31 @@ const ActiveFamilyStrip: React.FC = () => {
   const reloadReleased = async (die: string, config: string, duty: string) => {
     setBusy(true); setMsg(null);
     try {
-      const done = await applyDutyEverywhere(die, config, duty, true);
+      // The "discard and reload" confirmation already covered the unsaved work: only a running job is asked about.
+      const done = await applyDutyEverywhere(die, config, duty, true, null, { released: true });
+      if (done.declined) { setBusy(false); return; }
       setMsg(`✓ reloaded ${die} / ${config} / ${duty} — ${done.message}`);
       window.dispatchEvent(new CustomEvent('family-changed'));
     } catch (e: any) { setMsg(`✗ reload: ${e?.message ?? e}`); }
     setBusy(false);
   };
+
+  // What the load guard's "Save and load" calls (lib/loadGuard): the strip owns the save flows
+  // and their state, the guard only asks.  Re-registered every render so it holds the live closures.
+  useEffect(() => {
+    const writer = !!(ctx?.active && ctx.can_write && ctx.duty);
+    registerSavers({
+      canSaveResults: writer,
+      canSaveEdits: writer,
+      saveResults: () => save(),
+      saveEditsAsNewConfig: (name) => saveAsNewConfig(name),
+      defaultConfigName: () => {
+        const L = Number((useMotorStore.getState().geometry as any)?.motor_length);
+        return Number.isFinite(L) ? `L${Math.round(L)}` : 'L-new';
+      },
+    });
+    return () => registerSavers(null);
+  });
 
   if (stripCtx.kind !== 'live') {
     return <TabContextStrip ctx={stripCtx} />;

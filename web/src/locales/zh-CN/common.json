@@ -602,5 +602,27 @@
     "label": "视图",
     "list": "列表",
     "cards": "卡片"
+  },
+  "loadGuard": {
+    "title": "加载 {target}？",
+    "lineJobs": "此电机上有任务正在运行——加载将停止它。",
+    "lineWork": "此电机有未保存的工作。",
+    "save": "保存并加载",
+    "discard": "不保存直接加载",
+    "cancel": "取消",
+    "tipSave": "先把最近一次运行保存到工况，把几何修改保存为新配置，然后加载。正在运行的任务会先停止。",
+    "tipDiscard": "立即加载并丢弃未保存的工作。正在运行的任务会先停止。",
+    "failed": "未加载——{why}",
+    "job": {
+      "sweep": "扫描",
+      "optimization": "优化",
+      "simulation": "仿真",
+      "job": "任务"
+    },
+    "item": {
+      "running": "运行中：{what}——加载前将停止",
+      "run": "最近一次运行未保存到工况{duty}",
+      "edits": "几何已修改但未保存：{what}"
+    }
   }
 }

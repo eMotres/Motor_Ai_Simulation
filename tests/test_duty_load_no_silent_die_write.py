@@ -67,7 +67,7 @@ def test_differing_duty_opens_on_the_current_build_and_is_stale(dies, tmp_path):
     cfg_before = (dies / DIE / f"{CFG}.yaml").read_bytes()
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
     assert out["ok"] and out["geometry_stale"] is True
-    assert out["geometry_applied"] is None
+    assert "geometry_applied" not in out
     by = {x["key"]: x for x in out["geometry_diffs"]}
     assert by["wire_width"]["scope"] == "winding" and by["wire_width"]["duty"] == 2
     assert by["num_wires_per_slot"]["duty"] == 6
@@ -81,19 +81,30 @@ def test_differing_duty_opens_on_the_current_build_and_is_stale(dies, tmp_path):
 
 
 def test_differing_duty_on_a_locked_die_still_opens(dies):
-    """A locked die changes nothing about opening a stale duty; only the
-    explicit apply_duty is refused (423), never silently."""
+    """A locked die changes nothing about opening a stale duty."""
     d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
     d["locked"] = True
     (dies / DIE / "die.yaml").write_text(yaml.safe_dump(d, sort_keys=False),
                                          encoding="utf-8")
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
     assert out["geometry_stale"] is True
-    with pytest.raises(HTTPException) as ei2:
+    assert _hist(dies) == []
+
+
+def test_revert_to_the_duty_build_is_refused_and_writes_nothing(dies):
+    """Owner 2026-10-29 «и никаких вопросов не задавалось»: loading never
+    reverts the configuration or the die to a duty's older build."""
+    before = (dies / DIE / "die.yaml").read_bytes()
+    cfg_before = (dies / DIE / f"{CFG}.yaml").read_bytes()
+    with pytest.raises(HTTPException) as ei:
         fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
                                   geometry_choice="apply_duty"), _w={})
-    assert ei2.value.status_code == 423
-    assert ei2.value.detail["code"] == "die_locked"
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == "geometry_choice_removed"
+    assert (dies / DIE / "die.yaml").read_bytes() == before
+    assert (dies / DIE / f"{CFG}.yaml").read_bytes() == cfg_before
+    assert _hist(dies) == []
+    assert not hasattr(fam, "_apply_duty_geometry")
 
 
 def test_solved_on_stamp_makes_the_duty_current(dies, tmp_path):
@@ -127,28 +138,9 @@ def test_keep_die_loads_without_writing(dies):
     before = (dies / DIE / "die.yaml").read_bytes()
     out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
                                     geometry_choice="keep_die"), _w={})
-    assert out["ok"] and out["geometry_applied"] is None
-    assert out["geometry_stale"] is True
+    assert out["ok"] and out["geometry_stale"] is True
     assert (dies / DIE / "die.yaml").read_bytes() == before
     assert _hist(dies) == []
-
-
-def test_explicit_apply_writes_with_history_snapshot(dies):
-    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
-                                    geometry_choice="apply_duty"), _w={})
-    assert out["geometry_applied"]["die_keys"] == ["tooth_width"]
-    assert out["geometry_stale"] is False
-    g = _die(dies)["geometry"]
-    assert g["tooth_width"] == 1.7
-    # winding keys go to the CONFIGURATION, never into die.yaml
-    assert g["wire_width"] == 0.8 and g["num_wires_per_slot"] == 5
-    assert g["motor_length"] == 40
-    c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
-    assert c["geometry_overrides"]["wire_width"] == 2
-    assert c["geometry_overrides"]["num_wires_per_slot"] == 6
-    names = [p.name for p in _hist(dies)]
-    assert any(n.startswith("die.") for n in names)
-    assert any(n.startswith(f"{CFG}.") for n in names)
 
 
 def test_duty_without_stamp_loads_as_before(dies):
@@ -157,15 +149,14 @@ def test_duty_without_stamp_loads_as_before(dies):
     assert out["geometry_stale"] is False
 
 
-def test_foreign_lamination_cannot_be_applied(dies):
+def test_foreign_lamination_duty_opens_on_the_die_and_is_stale(dies):
     c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
     c["duties"][0]["summary"]["_geoSig"] = SIG.replace("stator_diameter:12",
                                                        "stator_diameter:30")
     (dies / DIE / f"{CFG}.yaml").write_text(yaml.safe_dump(c), encoding="utf-8")
-    with pytest.raises(HTTPException) as ei:
-        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
-                                  geometry_choice="apply_duty"), _w={})
-    assert ei.value.status_code == 422
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    assert out["geometry_stale"] is True
+    assert any(x["scope"] == "identity" for x in out["geometry_diffs"])
     assert _die(dies)["geometry"]["stator_diameter"] == 12.0
 
 

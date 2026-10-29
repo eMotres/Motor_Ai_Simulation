@@ -19,6 +19,13 @@ import { quotedRipple, type RippleRefined } from './rippleAccuracy.ts';
 export interface EmTileSummary {
   T_em_avg_Nm?: number | null;
   T_ripple_pct?: number | null;
+  /** the magnet temperature the run solved at (routes.simulation._magnet_temperature_stamp) */
+  magnet_temp_used_c?: number | null;
+  magnet_temp_source?: string | null;
+  magnet_card?: string | null;
+  magnet_card_temp_c?: number | null;
+  magnet_Br_used_T?: number | null;
+  magnet_knee_used_kA_m?: number | null;
   /** the air-gap ring check of the run (routes.simulation summary) */
   ripple_mesh_limited?: boolean | null;
   ripple_self_check_rel?: number | null;
@@ -409,8 +416,19 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   const r3 = row(
     tile(tempEmTile('tWinding', 'configurePropeller.tWinding', 'configurePropeller.tWindingTip',
       num(s.coupling?.coil_temp_c), lim.winding_C)),
-    tile(tempEmTile('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip',
-      num(s.coupling?.magnet_temp_c), lim.magnet_C)),
+    // A coupled run shows the loop's magnet temperature; a plain run the one it
+    // was SOLVED at, typed or the card's own (owner 2026-10-29: a typed 90 °C
+    // looked like it did nothing because nothing said what was used).
+    num(s.coupling?.magnet_temp_c) != null
+      ? tile(tempEmTile('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip',
+          num(s.coupling?.magnet_temp_c), lim.magnet_C))
+      : tile({ ...tempEmTile('tMagnet',
+          s.magnet_temp_source === 'typed' ? 'emTiles.tMagnetTyped' : 'emTiles.tMagnetCard',
+          'emTiles.tMagnetUsedTip', num(s.magnet_temp_used_c), lim.magnet_C),
+          tipVars: { limit: _n(lim.magnet_C), card: s.magnet_card ?? '—',
+            cardT: num(s.magnet_card_temp_c) != null ? _n(num(s.magnet_card_temp_c) as number) : '—',
+            br: num(s.magnet_Br_used_T) != null ? (num(s.magnet_Br_used_T) as number).toFixed(3) : '—',
+            knee: num(s.magnet_knee_used_kA_m) != null ? _n(num(s.magnet_knee_used_kA_m) as number) : '—' } }),
   );
 
   // ── 4 voltages + current density ──────────────────────────────────────────

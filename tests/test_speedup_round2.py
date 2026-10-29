@@ -327,6 +327,6 @@ def test_probe_failure_reports_final_ring_verdict_too(monkeypatch, final_eps, ex
     monkeypatch.setattr(solver, "fem_transient_sliding_band", fake)
     _enable_probe(monkeypatch)
     out = solver._solve_with_gap_refinement(
-        {"gap_layers": 1.0, "sampling_purpose": "standard"})
+        {"gap_layers": 1.0, "sampling_purpose": "standard"}, gap_refine=True)
     assert "probe failed" in out["gap_layers_note"]
     assert expected in out["gap_layers_note"]

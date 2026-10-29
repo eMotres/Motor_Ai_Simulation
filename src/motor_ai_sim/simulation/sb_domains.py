@@ -163,13 +163,12 @@ _SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
 # ``gap_layers`` is the number of element rows on EACH side of the slip circle
 # (the rotor half r_ro→mid and the stator half mid→r_si each get that many; the
 # mesher's structured-gap spec calls it K and builds 2K rings).  Owner: the
-# default is 1 per side, and 1 for optimization.  The resolution is then
-# decided by MEASUREMENT: when the rotor- and stator-side Coulomb rings
-# disagree by more than 5 % of the ripple scale, em_transient_eval re-solves
-# with one more layer per side until they agree (cap 4), and the passing level
-# becomes the machine's default (fem_solver_2d._solve_with_gap_refinement,
-# routes.simulation._persist_gap_layers_default).  Optimization candidates are
-# never refined, only flagged.  GAP_LAYERS_MIN is therefore 1 (no floor);
+# default is 1 per side, and 1 for optimization.  The CONFIGURED value is what
+# runs (owner 2026-10-29): when the rotor- and stator-side Coulomb rings
+# disagree by more than 5 % of the ripple scale the run is flagged
+# (ripple_mesh_limited), never re-solved at more layers and never given a new
+# default (fem_solver_2d._solve_with_gap_refinement; the stepping loop there is
+# an explicit gap_refine=True opt-in only).  GAP_LAYERS_MIN is therefore 1 (no floor);
 # SB_GAP_LAYERS_MIN=3 restores a flat floor as a fallback switch.  Internal
 # probes (sampling_purpose "internal_probe") are never lifted.
 GAP_LAYERS_MIN = float(_os_sb.environ.get("SB_GAP_LAYERS_MIN", "1") or 1)

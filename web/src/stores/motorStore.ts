@@ -29,7 +29,6 @@ import {
   defaultMaterialAssignments,
   defaultMeshSettings,
 } from '../types/motor';
-import { adoptGapLayers } from '../lib/gapLayersAdopt';
 import { storedGapLayers } from '../lib/meshSettings';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -1228,9 +1227,6 @@ export const useMotorStore = create<MotorState>()(
             return { ok: false, error: 'Standard 6× convergence or angular-quality stamp is missing' };
           }
           await get().applyDescentPoint(v);
-          // The champion's final re-solve applies the gap rule: a level that
-          // passed the ring check becomes the applied machine's default.
-          adoptGapLayers(d?.res, { patchServer: true });
           return { ok: true, provenance: d?.provenance };
         } catch (e: any) {
           return { ok: false, error: String(e?.message ?? e) };

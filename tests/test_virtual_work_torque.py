@@ -436,11 +436,11 @@ def test_gap_refinement_steps_up_until_the_rings_agree(monkeypatch):
         return _fake_result(eps_at[kw["gap_layers"]], kw["gap_layers"])
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     monkeypatch.delenv("SB_GAP_REFINE", raising=False)
-    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"}, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [1.0, 2.0, 3.0]
     assert all(c.get("slip_per_period") == 144 for c in calls[1:])
     gr = out["gap_refinement"]
-    assert gr["applied"] and gr["passed"] and gr["persist_gap_layers"] == 3.0
+    assert gr["applied"] and gr["passed"] and gr["persist_gap_layers"] is None
     assert [a["gap_layers_per_side"] for a in gr["attempts"]] == [1.0, 2.0, 3.0]
     assert gr["first"]["gap_layers_per_side"] == 1.0
     assert out["gap_layers_note"] == "gap layers 1→3 after ring mismatch"
@@ -448,7 +448,7 @@ def test_gap_refinement_steps_up_until_the_rings_agree(monkeypatch):
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band",
                         lambda **kw: calls.append(kw) or _fake_result(0.2, kw["gap_layers"]))
-    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"}, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [1.0, 2.0, 3.0, 4.0]
     assert out["gap_refinement"]["persist_gap_layers"] is None
     assert "cap" in out["gap_layers_note"]
@@ -456,7 +456,7 @@ def test_gap_refinement_steps_up_until_the_rings_agree(monkeypatch):
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band",
                         lambda **kw: calls.append(kw) or _fake_result(0.02, 1.0))
-    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"}, gap_refine=True)
     assert len(calls) == 1 and out["gap_refinement"]["applied"] is False
     assert out["gap_refinement"]["persist_gap_layers"] is None
     # an UNSETTLED eddy run is refined too (TDM showed the L155 2/side self-check
@@ -468,7 +468,7 @@ def test_gap_refinement_steps_up_until_the_rings_agree(monkeypatch):
         return dict(_fake_result(0.18 if len(calls) == 1 else 0.03, kw["gap_layers"]),
                     eddy_settled=(len(calls) != 1))
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake_unsettled)
-    out = fs._solve_with_gap_refinement({"gap_layers": 2.0, "sampling_purpose": "standard"})
+    out = fs._solve_with_gap_refinement({"gap_layers": 2.0, "sampling_purpose": "standard"}, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [2.0, 3.0]
     assert out["gap_refinement"]["eddy_unsettled"] is True
     assert "had not settled" in out["gap_layers_note"]
@@ -476,44 +476,50 @@ def test_gap_refinement_steps_up_until_the_rings_agree(monkeypatch):
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band",
                         lambda **kw: calls.append(kw) or _fake_result(0.5, 1.0))
-    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "optimization"})
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "optimization"}, gap_refine=True)
     assert "optimization candidate" in out["gap_refinement"]["skipped_reason"]
     assert out["gap_refinement"]["persist_gap_layers"] is None
-    fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "internal_probe"})
+    fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "internal_probe"}, gap_refine=True)
     monkeypatch.setenv("SB_GAP_REFINE", "0")
-    fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"}, gap_refine=True)
     monkeypatch.delenv("SB_GAP_REFINE")
     assert len(calls) == 3
-    # the winner's final re-solve ("cogging_quality") does use the rule
+    # an explicit opt-in on the winner's final re-solve refines, never persists
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                         "sampling_purpose": "cogging_quality"})
-    assert out["gap_refinement"]["persist_gap_layers"] == 3.0
+                                         "sampling_purpose": "cogging_quality"}, gap_refine=True)
+    assert out["gap_refinement"]["persist_gap_layers"] is None
 
 
-def test_passing_level_persists_only_for_the_live_machine(monkeypatch):
+def test_default_run_keeps_the_configured_gap_layers_and_reports(monkeypatch):
+    """Owner 2026-10-29: the configured gap layers open and run.  A failing
+    ring check is reported (and flags the ripple) but never re-solves at more
+    layers and never names a new default."""
+    from motor_ai_sim.simulation import fem_solver_2d as fs
+    calls = []
+    monkeypatch.setattr(fs, "fem_transient_sliding_band",
+                        lambda **kw: calls.append(kw) or _fake_result(0.194, kw["gap_layers"]))
+    monkeypatch.delenv("SB_GAP_REFINE", raising=False)
+    monkeypatch.setenv("SB_GAP_PROBE", "1")       # the probe path is opt-in too
+    for purpose in ("standard", "cogging_quality"):
+        calls.clear()
+        out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": purpose})
+        assert [c["gap_layers"] for c in calls] == [1.0]
+        gr = out["gap_refinement"]
+        assert gr["applied"] is False and gr["persist_gap_layers"] is None
+        assert gr["self_check_rel_to_ripple_scale"] == 0.194
+        assert "report only" in gr["skipped_reason"]
+    import inspect
+    sig = inspect.signature(fs.em_transient_eval)
+    assert sig.parameters["gap_refine"].default is False
+
+
+def test_no_route_writes_a_gap_layer_default():
+    """The Simulation route used to write a passing level into the live mesh
+    config (`_persist_gap_layers_default`, 2026-09-30).  Gone for good."""
     from motor_ai_sim.routes import simulation as sim
-    import motor_ai_sim.api as api
-    written = []
-    monkeypatch.setattr(api, "update_mesh_config", lambda patch: written.append(patch.gap_layers))
-
-    def sb(level=2.0):
-        return {"gap_layers_note": "gap layers 1→2 after ring mismatch",
-                "gap_refinement": {"persist_gap_layers": level}}
-    r = sb()
-    sim._persist_gap_layers_default(r, geo_ov=None, sampling_purpose="standard")
-    assert written == [2.0] and r["gap_refinement"]["persisted_to"]
-    r = sb()                                   # champion re-check / candidate: override
-    sim._persist_gap_layers_default(r, geo_ov={"air_gap": 0.3},
-                                    sampling_purpose="cogging_quality")
-    assert written == [2.0] and "override" in r["gap_refinement"]["persist_skipped"]
-    r = sb()                                   # an optimization candidate
-    sim._persist_gap_layers_default(r, geo_ov=None, sampling_purpose="optimization")
-    assert written == [2.0] and "optimization" in r["gap_refinement"]["persist_skipped"]
-    r = {"gap_refinement": {"persist_gap_layers": None}}
-    sim._persist_gap_layers_default(r, geo_ov=None, sampling_purpose="standard")
-    assert written == [2.0]
+    assert not hasattr(sim, "_persist_gap_layers_default")
 
 
 def test_coupled_probe_uses_the_runs_mesh_resolution():

@@ -5249,10 +5249,11 @@ def get_fem_transient(
         # The REPORTED torque method (Coulomb default since 2026-09-30): the
         # same field, a different T_em / ripple — never one entry.
         ("torque_method", _torque_method_eff),
-        # The measured gap rule (Coulomb self-check gate + one refined
-        # re-solve, fem_solver_2d._solve_with_gap_refinement): a run solved
-        # before it existed may carry a mesh-limited ripple, never served here.
-        ("gap_rule", "coulomb_selfcheck_5pct_step1_v3"),
+        # The gap rule: the CONFIGURED layers run and the Coulomb ring check is
+        # only reported (owner 2026-10-29, fem_solver_2d._solve_with_gap_refinement).
+        # v3 entries may have been silently re-solved at more layers than the
+        # request named — never served for it.
+        ("gap_rule", "configured_layers_report_only_v4"),
     ))
     # The pack does not change the FIELD, but it changes the summary's charging
     # block (R_pack sets the bus rise, the capacity sets the C-rate), and the
@@ -5674,10 +5675,6 @@ def get_fem_transient(
                 # Keep the last frame's field for the J⟳ / Loss views.  Free:
                 # the frame is already solved; this stops it being discarded.
                 return_field=bool(field_snapshot))
-            # Gap rule (owner 2026-09-30): a refined level that PASSED becomes
-            # this machine's default gap layers from now on.
-            _persist_gap_layers_default(_sbres, geo_ov=_geo_ov,
-                                        sampling_purpose=sampling_purpose)
             _sbres["mesh_settings_source"] = dict(_mesh_src)
             _sbres["mesh_settings_note"] = _mesh_note
             # ── SIX PHASES: L_xy on the full ring, at THIS operating point ──
@@ -7101,42 +7098,6 @@ def _demag_with_grade(dsum):
     except Exception:   # noqa: BLE001 — garnish, never fatal
         pass
     return out
-
-
-def _persist_gap_layers_default(sbres: dict, *, geo_ov, sampling_purpose: str) -> None:
-    """Make a gap-layer level that PASSED the ring check the machine's default.
-
-    Owner 2026-09-30: when the rotor- and stator-side Coulomb rings disagree
-    the solver steps the gap layers up one per side until they agree
-    (``fem_solver_2d._solve_with_gap_refinement``); the passing level is then
-    written to the live machine's mesh config (``mesh.gap_layers``, the value
-    the Mesh tab and every default run read), and the browser carries it into
-    the active duty's ``mesh.gapLayers`` with the note through the normal duty
-    save.  Only for the LIVE machine (no geometry override: an optimizer
-    candidate, a champion re-check or an agent draft is not the machine the
-    config describes) and only for a reported run — never an optimization
-    candidate (those are never refined anyway).  Recorded in
-    ``gap_refinement.persisted_to`` / ``persist_skipped``; never fails the run.
-    """
-    gr = sbres.get("gap_refinement") if isinstance(sbres, dict) else None
-    if not isinstance(gr, dict) or not gr.get("persist_gap_layers"):
-        return
-    lvl = float(gr["persist_gap_layers"])
-    if geo_ov:
-        gr["persist_skipped"] = "not the live machine (geometry override)"
-        return
-    if sampling_purpose not in ("standard", "cogging_quality"):
-        gr["persist_skipped"] = "sampling purpose %s" % sampling_purpose
-        return
-    try:
-        from motor_ai_sim.api import MeshConfigPatch, update_mesh_config
-        update_mesh_config(MeshConfigPatch(gap_layers=lvl))
-        gr["persisted_to"] = ["mesh config: mesh.gap_layers = %g" % lvl]
-        log.warning("gap rule: %s — mesh.gap_layers = %g is this machine's "
-                    "default from now on", sbres.get("gap_layers_note") or "", lvl)
-    except Exception as exc:     # noqa: BLE001 — bookkeeping never fails a run
-        gr["persist_error"] = "%s: %s" % (type(exc).__name__, exc)
-        log.warning("gap rule: could not persist gap layers %g: %s", lvl, exc)
 
 
 def _ripple_self_check(sbres: dict) -> dict:

@@ -21,12 +21,18 @@
 // (current, rpm, γ, mode) always come from the duty — they define the point.
 
 const KEY = 'family.dieSettings';
+
+/** Written next to `mesh.gapLayers` ONLY by the retired gap-rule auto-adopt
+ *  (2026-09-30 → 2026-10-29: a run that stepped the air-gap layers up made the
+ *  passing level this browser's default).  A remembered block carrying it holds
+ *  a level nobody configured, so its gap layers are not restored. */
+export const AUTO_GAP_NOTE = 'mesh.gapLayersNote';
 const MAX_DIES = 24;
 
 // Run triggers and result caches are NOT settings (writing runNonce back once
 // auto-started a solve — 2026-08-25).
 const SKIP = new Set(['sim.runNonce', 'sim.lastTransient', 'sim.lastSummary',
-                      'sim.viewSummary']);
+                      'sim.viewSummary', AUTO_GAP_NOTE]);
 
 type Block = Record<string, unknown>;
 type Store = Record<string, { at: number; settings: Block }>;
@@ -78,8 +84,13 @@ function apply(block: Block, filter: (k: string) => boolean): number {
  *  gap layers…) — the keys the user complained about losing. */
 export function restoreDieMeshSettings(die: string): boolean {
   const e = readStore()[die];
+  try { localStorage.removeItem(AUTO_GAP_NOTE); } catch { /* storage off */ }
   if (!e) return false;
-  return apply(e.settings, (k) => k.startsWith('mesh.')) > 0;
+  // Owner 2026-10-29: the configured gap layers open and run.  A level the
+  // auto-adopt wrote into this memory must not override the duty's own.
+  const autoGap = AUTO_GAP_NOTE in (e.settings || {});
+  return apply(e.settings, (k) => k.startsWith('mesh.')
+    && !(autoGap && k === 'mesh.gapLayers')) > 0;
 }
 
 /** The die's full remembered block — for loads where nothing else says what

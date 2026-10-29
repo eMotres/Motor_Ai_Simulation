@@ -4281,6 +4281,13 @@ def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional
     if note:
         c["winding"] = fixed
         log.warning("family: %s: %s", where, note)
+    elif fixed != w:
+        # same machine, label normalised (a two-set winding's per-set "4S" is
+        # 4S-2P): no re-pick to announce, but the payload must carry a label
+        # PATCH /api/winding/config accepts
+        c["winding"] = fixed
+        log.info("family: %s: connection label %r normalised to %r", where,
+                 w.get("connection"), fixed.get("connection"))
     return note
 
 

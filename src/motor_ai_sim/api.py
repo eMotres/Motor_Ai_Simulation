@@ -1185,6 +1185,14 @@ def reconcile_live_winding() -> Optional[str]:
         num_slots, _ = _live_slot_pole_counts(cfg.get("geometry", {}) or {})
         fixed, note = repick_connection(w, num_slots)
         if note is None:
+            # Same machine, label normalised (a two-set winding's per-set
+            # "4S" with two paths is 4S-2P): the counts are kept, only the
+            # label that the panel and the solve read is made to match them.
+            if fixed.get("connection") and fixed.get("connection") != w.get("connection"):
+                _write_winding_updates({"connection": f'"{fixed["connection"]}"'})
+                logging.getLogger("motor_ai_sim.winding").info(
+                    "winding: connection label %r normalised to %r (same machine)",
+                    w.get("connection"), fixed["connection"])
             return None
         _write_winding_updates({
             "connection": f'"{fixed["connection"]}"',

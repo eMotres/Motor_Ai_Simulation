@@ -71,8 +71,11 @@ strip, not the bar.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Mapping, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 __all__ = ["parse_connection", "n_parallel_from_connection", "connection_label",
            "wire_parallel_from_geo", "wire_split_from_geo", "turns_per_coil",
@@ -373,12 +376,52 @@ def repick_connection(winding: Optional[Mapping[str, Any]],
     reads (I_coil = I_phase / n_parallel), so the ampere-turns the user had stay
     the ampere-turns he gets.  Otherwise it takes the all-series option.
     n_series and n_coils_per_phase are rewritten to match.
+
+    It is NOT a re-pick (owner 2026-10-29: a stored connection is never
+    silently rewritten into another machine; 8S for a 4S-2P doubles the series
+    turns) when the label only disagrees with the machine it describes:
+
+    * the stored ``n_series`` x ``n_parallel`` still factor the coils per phase
+      (they are what GET /api/winding/config shows and what the solve reads) -
+      the label is normalised from them;
+    * a SIX-PHASE winding stored with its per-set label ("4S" = 4 series in
+      each of the two sets) is two sets of that: ``4S-2P`` on 48 slots;
+    * a six-phase winding that resolves neither way is returned unchanged
+      (logged): all-series is not a two-set winding at all, and the six-phase
+      validation refuses the solve loudly instead.
+    Those return ``note = None``: the machine did not change.
     """
     w = dict(winding or {})
     conn = w.get("connection")
     if conn and connection_error(str(conn), num_slots) is None:
         return w, None
     c = coils_per_phase(num_slots)
+
+    def _int(v):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+    six = _int(w.get("phases")) == 6
+    np_s, ns_s = _int(w.get("n_parallel")), _int(w.get("n_series"))
+    same = None
+    if np_s >= 1 and ns_s >= 1 and np_s * ns_s == c:
+        same = (ns_s, np_s)
+    elif six and conn:
+        try:
+            p_set, s_set = parse_connection(str(conn))
+            if p_set >= 1 and s_set >= 1 and 2 * p_set * s_set == c:
+                same = (s_set, 2 * p_set)
+        except ValueError:
+            pass
+    if same is not None:
+        w.update({"connection": connection_label(*same), "n_parallel": same[1],
+                  "n_series": same[0], "n_coils_per_phase": c})
+        return w, None
+    if six:
+        log.warning("winding: six-phase connection %r is not valid for %d slots "
+                    "(%d coils/phase); left as stored", conn, int(num_slots), c)
+        return w, None
     keep = None
     try:
         keep = parse_connection(str(conn or ""))[0]

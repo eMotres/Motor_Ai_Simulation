@@ -14610,8 +14610,10 @@ def em_transient_eval(
                                      # away, so the field views can render the run's own
                                      # field instead of re-solving it.
     torque_method: Optional[str] = None,  # "coulomb" (default) | "hybrid_maxwell_ac" | None
-    gap_refine: bool = True,         # re-solve ONCE with more gap layers per side when the
-                                     # Coulomb self-check fails its 5 % gate (see below)
+    gap_refine: bool = False,        # EXPLICIT opt-in only: re-solve with more gap layers per
+                                     # side when the Coulomb self-check fails its 5 % gate.
+                                     # Default: the configured layers run and the verdict is
+                                     # only reported (owner 2026-10-29, see below)
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -14822,15 +14824,27 @@ def _solve_with_gap_probes(kw: dict) -> Dict:
         "probe_converged": converged, "selection_reason": reason,
         "probe_fallback_reason": probe_failure,
         "passed": bool(passed),
-        "persist_gap_layers": final_layer if changed and passed else None,
+        # never a new default (owner 2026-10-29): the configured layers stand
+        "persist_gap_layers": None,
         "attempts": attempts, "first": probes[0] if probes else None}
     result["gap_layers_requested"] = kw.get("gap_layers")
     result["gap_layers_note"] = note
     return result
 
 
-def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
-    """Solve, then apply the MEASURED air-gap rule (owner 2026-09-30).
+def _solve_with_gap_refinement(kw: dict, gap_refine: bool = False) -> Dict:
+    """Solve at the CONFIGURED gap layers and report the ring check.
+
+    Owner 2026-10-29: the configured value is what opens and what runs (default
+    1 layer/side).  The rotor-/stator-side ring check below is still computed
+    and REPORTED (``gap_refinement.passed``, ``ripple_mesh_limited`` and the
+    note flag the ripple uncertainty), but a normal run is never re-solved at
+    more layers and no level ever becomes a new default
+    (``persist_gap_layers`` is always None).  Higher fidelity is the engineer's
+    explicit choice: the Mesh tab's layers, or ``gap_refine=True`` from a
+    caller that asks for the refinement below on purpose.
+
+    The refinement, when explicitly asked for (owner 2026-09-30 rule):
 
     The Coulomb torque is computed on the rotor-side and on the stator-side
     gap ring; their difference, over max(p-p, 0.5 % of |mean|), is the gap
@@ -14840,13 +14854,8 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     the SAME slip ring (so the rotor angles and the step snap do not move;
     measured: the ring density does not move torque or ripple, the gap layers
     do — docs/COULOMB_TORQUE_2026-09-30.md §3.3, §6).  The last solve is
-    returned; ``gap_refinement`` lists every attempt.  When a refined level
-    passes, ``gap_refinement.persist_gap_layers`` names it: the Simulation
-    route makes it the machine's default (the mesh config) and the browser
-    carries it into the duty's ``mesh.gapLayers`` through the normal duty
-    save, so the machine's next runs start there instead of failing again.
-    A run that still fails at the cap keeps ``ripple_mesh_limited`` set and
-    persists nothing.
+    returned; ``gap_refinement`` lists every attempt.  A run that still fails
+    at the cap keeps ``ripple_mesh_limited`` set.
 
     Never refined: internal probes, OPTIMIZATION CANDIDATES
     (``sampling_purpose="optimization"``; owner: 1 layer/side for
@@ -14886,7 +14895,8 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     if nxt is not None:
         _why = None
         if not gap_refine:
-            _why = "refinement switched off by the caller"
+            _why = ("report only: the configured gap layers run; the ring "
+                    "check flags the ripple, it never raises the layers")
         elif purpose == "internal_probe":
             _why = "internal probe (reports no torque)"
         elif purpose == "optimization":
@@ -14934,7 +14944,7 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     cur["gap_refinement"] = dict(
         info, applied=True, gap_layers_per_side=gl,
         self_check_rel_to_ripple_scale=eps, passed=bool(passed),
-        persist_gap_layers=(gl if passed else None), attempts=attempts,
+        persist_gap_layers=None, attempts=attempts,
         first=attempts[0])
     cur["gap_layers_requested"] = res.get("gap_layers_requested")
     cur["gap_layers_note"] = note

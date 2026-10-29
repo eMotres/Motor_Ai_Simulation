@@ -18,7 +18,6 @@ import {
   ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
 } from './PromptDialogs';
 import { applyDutyEverywhere } from '../../lib/dutyApply';
-import DutyGeometryDialog from '../catalog/DutyGeometryDialog';
 import { releasedOffers, diffText, type DieDiff, type ReleasedCtxLike } from '../../lib/releasedContext';
 import HelpTip from './HelpTip';
 import { rememberDieSettings } from '../../lib/dieSettings';
@@ -842,13 +841,7 @@ const ActiveFamilyStrip: React.FC = () => {
   };
 
   if (stripCtx.kind !== 'live') {
-    return (
-      <>
-        <TabContextStrip ctx={stripCtx} />
-        {/* mounted once here: lib/dutyApply's applyDutyEverywhere awaits it from any tab */}
-        <DutyGeometryDialog />
-      </>
-    );
+    return <TabContextStrip ctx={stripCtx} />;
   }
 
   if (viewedModel) {
@@ -938,9 +931,6 @@ const ActiveFamilyStrip: React.FC = () => {
         <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />
         <TextPromptDialog state={askCfg} onClose={() => setAskCfg(null)} />
         <ConfirmDialog state={askReload} onClose={() => setAskReload(null)} />
-        {/* The reload offer above runs applyDutyEverywhere too (lib/dutyApply) —
-            same dialog, same choice. */}
-        <DutyGeometryDialog />
       </Box>
     );
   }
@@ -1103,10 +1093,6 @@ const ActiveFamilyStrip: React.FC = () => {
       )}
       <TextPromptDialog state={askCfg} onClose={() => setAskCfg(null)} />
       <ConfirmDialog state={askSwitch} onClose={() => setAskSwitch(null)} />
-      {/* Mounted once here (this strip is on screen whenever a duty could be
-          loaded); lib/dutyApply's applyDutyEverywhere — the Motors catalog's
-          ▶ included — awaits it through lib/dutyGeometryDialogService. */}
-      <DutyGeometryDialog />
     </Box>
   );
 };

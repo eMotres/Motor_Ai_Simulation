@@ -11,6 +11,7 @@ import React from 'react';
 import { Box, Button, Chip, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
 import { geoSignature } from '../common/geoSig';
+import { geoSigDiffRows, staleBuildKeysText } from '../../lib/dutyGeometryDiff';
 import { currentMatJson } from '../../lib/apiAuth';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { fetchBearingLosses } from '../../lib/machineBearings';
@@ -1009,8 +1010,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           </Tooltip>
         )}
         {s.gap_refinement?.applied && (
-          <Tooltip title={(s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.')
-            + (s.gap_refinement?.persist_gap_layers ? " — now this machine's default." : '')}>
+          <Tooltip title={s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.'}>
             <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
               {`Gap ${s.gap_refinement.first?.gap_layers_per_side ?? '?'}→${s.gap_refinement.gap_layers_per_side ?? '?'}/side`}
             </Typography>
@@ -1043,7 +1043,26 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           {s.op_mode === 'generator' && (
             <span style={{ color: '#fbbf24', fontWeight: 700 }}> · GENERATOR</span>
           )}
-          {stale && (
+          {/* Computed on ANOTHER BUILD (owner 2026-10-29): a duty always opens
+              on the configuration's current build, so its older saved numbers
+              say so here — one short chip, what moved in the tooltip, and the
+              one click that refreshes them (`sim-rerun`, SimulationPanel). */}
+          {geoStale && (
+            <>
+              <Tooltip title={tx('staleBuildTip', { keys: staleBuildKeysText(
+                geoSigDiffRows(s._geoSig, geometry as Record<string, unknown>)) || '…' })}
+                placement="top">
+                <span style={{ marginLeft: 6, cursor: 'help' }}>{tx('staleBuild')}</span>
+              </Tooltip>
+              <Button size="small" variant="outlined" color="warning"
+                onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-rerun')); } catch { /* SSR */ } }}
+                sx={{ ml: 0.75, fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6,
+                      textTransform: 'none' }}>
+                {tx('recompute')}
+              </Button>
+            </>
+          )}
+          {(matStale || (opStale && !geoStale)) && (
             <Tooltip title={(matStale
                 ? `Solved with OTHER MATERIALS than now assigned (${matDiffs.join('; ')}). `
                 : `Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°, ${fmt(Number(s.rpm), 0)} rpm — the panel is now set to `

@@ -70,6 +70,43 @@ def test_repick_keeps_the_parallel_paths_when_it_can():
     assert note is None and w == src
 
 
+def test_two_set_48_slot_4s_2p_is_never_repicked():
+    """Owner 2026-10-29 (Winding panel, 48 slots, 2x3ph, stored 4S-2P,
+    n_parallel 2, one path per set): the panel said "'4S' is not valid for 48
+    slots - set to 8S".  The per-set label "4S" reached the 3-phase re-pick;
+    8S would double the series turns.  The label is normalised, the machine
+    is not touched, and nothing is announced."""
+    six = {"connection": "4S", "n_parallel": 2, "n_series": 4, "phases": 6,
+           "set1_paths": "1", "set_neutrals": "isolated", "layers": 1}
+    w, note = W.repick_connection(six, 48)
+    assert note is None
+    assert (w["connection"], w["n_parallel"], w["n_series"]) == ("4S-2P", 2, 4)
+    assert (w["phases"], w["set1_paths"], w["set_neutrals"]) == (6, "1", "isolated")
+    # the per-set label alone (no counts stored) reads as two sets of it
+    w, note = W.repick_connection({"connection": "4S", "phases": 6}, 48)
+    assert note is None and (w["connection"], w["n_parallel"]) == ("4S-2P", 2)
+    # the canonical two-set label is left alone, byte for byte
+    src = {"connection": "4S-2P", "n_parallel": 2, "n_series": 4, "phases": 6}
+    assert W.repick_connection(src, 48) == (src, None)
+    # a two-set winding that resolves neither way is never re-picked to all series
+    bad = {"connection": "3S", "n_parallel": 1, "n_series": 3, "phases": 6}
+    assert W.repick_connection(bad, 48) == (bad, None)
+    # a 3-phase label that only disagrees with valid stored counts: relabel only
+    w, note = W.repick_connection({"connection": "4S", "n_parallel": 2, "n_series": 4}, 48)
+    assert note is None and (w["connection"], w["n_parallel"], w["n_series"]) == ("4S-2P", 2, 4)
+
+
+def test_two_set_configuration_payload_keeps_its_connection():
+    """The duty payload's re-pick (family._repick_config_winding) is the one
+    that raised the note on load: it must hand the frontend 4S-2P."""
+    from motor_ai_sim.routes.family import _repick_config_winding
+    c = {"winding": {"connection": "4S", "n_parallel": 2, "n_series": 4, "phases": 6,
+                     "set1_paths": "1", "set_neutrals": "isolated"}}
+    assert _repick_config_winding(c, {"num_seg": 8, "num_slots_per_segment": 6,
+                                      "num_poles_per_segment": 7}, "test") is None
+    assert c["winding"]["connection"] == "4S-2P" and c["winding"]["n_series"] == 4
+
+
 def test_slot_count_comes_from_the_segment_form():
     # the stored num_slots is a derived copy that may lag the segment count
     assert W.slot_pole_counts({"num_seg": 8, "num_slots_per_segment": 6,

@@ -609,6 +609,22 @@ def _solve_to(body: Dict[str, Any]) -> str:
     return out
 
 
+def _note_solved_build(body: Dict[str, Any]) -> bool:
+    """Stamp the loaded duty with the geometry this run solved (the live config
+    plus the request's ``geo`` override) — ``family.note_duty_solved_build``.
+    Never raises."""
+    try:
+        from motor_ai_sim.config import get_config
+        from motor_ai_sim.routes import family as _fam
+        from motor_ai_sim.routes._validation import parse_geo_override
+        g = dict((get_config().get("geometry") or {}))
+        g.update(parse_geo_override(body.get("geo")) or {})
+        return _fam.note_duty_solved_build(g, "coupled")
+    except Exception:  # noqa: BLE001 — bookkeeping never fails a solve
+        log.debug("coupled: solved-build stamp not written", exc_info=True)
+        return False
+
+
 def _pole_pairs(body: Dict[str, Any]) -> int:
     """The machine's pole pairs, honouring this request's geometry override."""
     from motor_ai_sim.config import get_config
@@ -7679,6 +7695,12 @@ def _run(body: Dict[str, Any],
                     if k not in ("transient", "thermal")},
                    alt_carrier=bool(inverter
                                     and inverter.get("record_as") == "alt_carrier"))
+    # ── and the duty's own stamp of the build it was last solved on ─────────
+    # (2026-10-29) The record above is filed under the loaded duty, but the
+    # duty's `_geoSig` lived only on its saved EM summary, so a duty solved
+    # here on the current build still read "saved on a different geometry".
+    if em and not _rr.suppressed():
+        _note_solved_build(body)
     # ── and file the WHOLE coupling block in the persistent history ────────
     # ``history_key`` is the one computed before anything was solved — the
     # inputs it was built from (body, cooling, solve_to, max_iter) are fixed

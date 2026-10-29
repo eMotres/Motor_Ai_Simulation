@@ -1,4 +1,7 @@
-"""Unit coverage for opt-in, magnetostatic sliding-band gap probes."""
+"""Unit coverage for opt-in, magnetostatic sliding-band gap probes.
+
+The refinement runs only on an explicit ``gap_refine=True`` (owner 2026-10-29:
+the configured gap layers run by default) and never persists a level."""
 from __future__ import annotations
 
 import ast
@@ -51,7 +54,7 @@ def test_probe_convergence_runs_one_full_transient_and_flags_final_mismatch(monk
         "n_steps_per_period": 40, "n_periods": 1.0,
         "eddy": True, "demag": True, "rotor_eddy": True,
         "progress_cb": lambda done, total, stage, detail: stages.append(stage),
-    })
+    }, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [1.0, 2.0, 2.0]
     assert all(c["n_steps_per_period"] == 40 and c["n_periods"] == 1.0 for c in calls)
     assert all(c["rotor_eddy"] is True for c in calls)
@@ -70,7 +73,7 @@ def test_probe_convergence_runs_one_full_transient_and_flags_final_mismatch(monk
     assert "ripple flagged" in out["gap_layers_note"]
 
 
-def test_probe_pass_persists_only_after_final_full_ring_check(monkeypatch):
+def test_probe_pass_never_persists_a_new_default(monkeypatch):
     calls = []
 
     def fake(**kw):
@@ -83,10 +86,10 @@ def test_probe_pass_persists_only_after_final_full_ring_check(monkeypatch):
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     _enable_probe(monkeypatch)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                         "sampling_purpose": "standard"})
+                                         "sampling_purpose": "standard"}, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [1.0, 2.0, 2.0]
     assert out["gap_refinement"]["passed"] is True
-    assert out["gap_refinement"]["persist_gap_layers"] == 2.0
+    assert out["gap_refinement"]["persist_gap_layers"] is None   # owner 2026-10-29
 
 
 def test_probe_thresholds_require_both_mean_and_ripple():
@@ -139,14 +142,14 @@ def test_probe_off_or_legacy_refine_switch_keeps_legacy_path(monkeypatch):
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     monkeypatch.delenv("SB_GAP_PROBE", raising=False)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                         "sampling_purpose": "standard"})
+                                         "sampling_purpose": "standard"}, gap_refine=True)
     assert len(calls) == 1 and not out["gap_refinement"].get("used_probe", False)
 
     calls.clear()
     monkeypatch.setenv("SB_GAP_PROBE", "1")
     monkeypatch.setenv("SB_GAP_REFINE", "0")
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                         "sampling_purpose": "standard"})
+                                         "sampling_purpose": "standard"}, gap_refine=True)
     assert len(calls) == 1
     assert out["gap_refinement"]["skipped_reason"] == "SB_GAP_REFINE=0"
 
@@ -163,7 +166,7 @@ def test_optimization_and_stateful_excitations_never_probe(monkeypatch):
     ):
         calls.clear()
         out = fs._solve_with_gap_refinement({
-            "gap_layers": 1.0, "sampling_purpose": purpose, **options})
+            "gap_layers": 1.0, "sampling_purpose": purpose, **options}, gap_refine=True)
         assert len(calls) == 1
         assert not out["gap_refinement"].get("used_probe", False)
 
@@ -180,7 +183,7 @@ def test_probe_error_falls_back_to_one_full_solve_at_requested_gap(monkeypatch):
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     _enable_probe(monkeypatch)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                         "sampling_purpose": "standard"})
+                                         "sampling_purpose": "standard"}, gap_refine=True)
     assert len(calls) == 2 and [c["gap_layers"] for c in calls] == [1.0, 1.0]
     gr = out["gap_refinement"]
     assert gr["selection_reason"] == "probe_failed"
@@ -201,7 +204,7 @@ def test_probe_cancellation_propagates_without_full_fallback(monkeypatch):
     _enable_probe(monkeypatch)
     with pytest.raises(Cancel):
         fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                       "sampling_purpose": "standard"})
+                                       "sampling_purpose": "standard"}, gap_refine=True)
     assert len(calls) == 1 and not fs._GAP_PROBE_CTX.get()
 
 
@@ -217,7 +220,7 @@ def test_missing_or_invalid_probe_check_stops_without_refining(monkeypatch, prob
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     _enable_probe(monkeypatch)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
-                                         "sampling_purpose": "standard"})
+                                         "sampling_purpose": "standard"}, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [1.0, 1.0]
     assert out["gap_refinement"]["selection_reason"] == "probe_check_unavailable"
     assert out["gap_refinement"]["passed"] is False
@@ -235,7 +238,7 @@ def test_hi_fidelity_floor_is_not_counted_as_a_gap_refinement(monkeypatch):
     _enable_probe(monkeypatch)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
                                          "sampling_purpose": "standard",
-                                         "hi_fidelity": True})
+                                         "hi_fidelity": True}, gap_refine=True)
     assert [c["gap_layers"] for c in calls] == [1.0, 4.0]
     assert out["gap_refinement"]["applied"] is False
     assert out["gap_refinement"]["persist_gap_layers"] is None

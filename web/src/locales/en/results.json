@@ -53,5 +53,8 @@
   "maxCharge": "Max charge",
   "simulationSummaryRealFemResults": "Simulation summary — real FEM results",
   "modelled": "modelled",
-  "rippleMeshLimited": "Ripple: gap mesh too coarse"
+  "rippleMeshLimited": "Ripple: gap mesh too coarse",
+  "staleBuild": "⚠ older build",
+  "staleBuildTip": "Computed on another build of this configuration ({keys}). The duty is open on the current build; recompute to refresh these numbers.",
+  "recompute": "Recompute"
 }

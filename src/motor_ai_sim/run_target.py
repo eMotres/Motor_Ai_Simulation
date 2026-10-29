@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-__all__ = ["clean", "from_call", "active", "resolve", "EMPTY"]
+__all__ = ["clean", "from_call", "active", "resolve", "job_machine", "run_machine", "EMPTY"]
 
 EMPTY: Dict[str, str] = {}
 
@@ -84,6 +84,35 @@ def active() -> Dict[str, str]:
         return clean(json.loads(path.read_text(encoding="utf-8")))
     except Exception:                                       # noqa: BLE001 - no context is the ordinary case
         return {}
+
+
+def job_machine() -> Optional[Dict[str, str]]:
+    """The machine THE RUN WE ARE INSIDE was registered for - not the one loaded now.
+    ``None`` outside a job (the caller then reads the loaded context itself).
+
+    A run's post-processing (mechanical losses, full mass, passport labels) runs
+    at the END of a solve that may have taken hours, and the workspace's loaded
+    context can have changed since (incident 2026-10-29: an L100 point was
+    labelled with the G2-L40 that was loaded when it finished).  Inside a job the
+    answer is the record's ``target``, written once at registration; outside a
+    job it is the loaded context, as before.  A job registered with no machine
+    answers ``{}`` - never the context loaded later."""
+    try:
+        from motor_ai_sim import jobs
+        rid = jobs.current_run_id()
+        if rid:
+            rec = jobs.queue().status(rid)
+            if rec is not None:
+                return clean(rec.target)
+    except Exception:                                       # noqa: BLE001 - attribution never fails a run
+        pass
+    return None
+
+
+def run_machine() -> Dict[str, str]:
+    """:func:`job_machine` inside a job, else the loaded context (:func:`active`)."""
+    found = job_machine()
+    return active() if found is None else found
 
 
 def resolve(explicit: Any = None) -> Dict[str, str]:

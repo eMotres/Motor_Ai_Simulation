@@ -4711,6 +4711,77 @@ class Activate(BaseModel):
     #: older build is not part of loading at all any more — ``"apply_duty"`` is
     #: refused (422).
     geometry_choice: Optional[str] = None
+    #: The caller's answer to the "a job is running" 409 (owner 2026-10-29: loading
+    #: another motor while a sweep ran lost the sweep).  ``True`` = stop what is
+    #: running in this workspace, then load; absent/``False`` = refuse with 409
+    #: ``job_running`` and let the person decide.
+    cancel_running: bool = False
+
+
+#: The job states that mean "this workspace is busy".
+_BUSY_STATES = ("running", "queued")
+
+
+def _jobs_running_here() -> List[Dict[str, Any]]:
+    """The running / queued jobs of the CALLER's workspace, as small plain dicts.
+
+    Every kind counts - transient, coupled, thermal, mechanical, static3d and the
+    optimizer's sweep / descent / refine / auto campaigns: all of them read the
+    loaded machine while they run.  Never raises: a queue that cannot list is
+    read as "nothing running" (the scan's own machine binding is the second net).
+    """
+    try:
+        from motor_ai_sim import jobs as _JOBS
+        live = getattr(_JOBS.queue(), "live_records", None)
+        if live is None:
+            return []
+        import time as _time
+        ws = _WS.workspace().id
+        out = []
+        for r in live():
+            if r.ws_id != ws or r.state not in _BUSY_STATES:
+                continue
+            out.append({"run_id": r.run_id, "kind": r.kind, "state": r.state,
+                        "target": dict(r.target or {}),
+                        "elapsed_s": round(max(0.0, _time.time()
+                                           - (r.started_at or r.queued_at or 0.0)), 1)})
+        return out
+    except Exception:                                   # noqa: BLE001
+        log.debug("family: running jobs could not be listed", exc_info=True)
+        return []
+
+
+def _cancel_jobs_here(jobs: List[Dict[str, Any]], wait_s: float = 10.0) -> List[Dict[str, Any]]:
+    """Stop ``jobs`` (the dialog's "Load without saving") and give them a moment to leave.
+
+    The optimizer campaigns watch their own state flag, not the queue's cancel set,
+    so they are stopped through their own Stop routes; everything else through
+    ``jobs.cancel_run``.  Returns the jobs that were still running after
+    ``wait_s`` - the load goes ahead anyway (each campaign also refuses to
+    continue on another machine, see ``machine_binding``)."""
+    import time as _time
+    from motor_ai_sim import jobs as _JOBS
+    for j in jobs:
+        try:
+            kind, rid = str(j.get("kind") or ""), str(j.get("run_id") or "")
+            if kind.startswith("optimizer."):
+                from motor_ai_sim.routes import optimization as _opt
+                fn = {"optimizer.scan": _opt.scan_cancel,
+                      "optimizer.descent": _opt.descent_cancel,
+                      "optimizer.refine": _opt.refine_cancel}.get(kind)
+                if fn is not None:
+                    fn(rid)
+            _JOBS.cancel_run(rid)
+        except Exception as exc:                        # noqa: BLE001
+            log.warning("family: could not cancel %s %s before the load: %s",
+                        j.get("kind"), j.get("run_id"), exc)
+    deadline = _time.time() + max(0.0, wait_s)
+    while _time.time() < deadline:
+        left = [j for j in _jobs_running_here() if j["run_id"] in {x["run_id"] for x in jobs}]
+        if not left:
+            return []
+        _time.sleep(0.25)
+    return [j for j in _jobs_running_here() if j["run_id"] in {x["run_id"] for x in jobs}]
 
 
 def note_duty_solved_build(geometry: Dict[str, Any], source: str) -> bool:
@@ -4785,6 +4856,30 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
             "code": "geometry_choice_removed",
             "message": "a duty always opens on the configuration's current "
                        "build; reverting to the duty's build is not supported"})
+    # A RUNNING JOB IS NOT SILENTLY LOST (owner 2026-10-29: a 16-point sweep of one
+    # machine was running when another was loaded; the rest of the sweep was solved
+    # on the new machine).  Loading the SAME die / configuration / duty again moves
+    # nothing and is always fine; anything else, with work running in this
+    # workspace, is refused with a code the UI turns into its one short dialog -
+    # unless the request already carries the person's answer.
+    _cur = _read_ctx() or {}
+    _same = (str(_cur.get("die") or "") == die and str(_cur.get("config") or "") == cfg
+             and (_cur.get("duty") or None) == (req.duty or None))
+    _cancelled: List[Dict[str, Any]] = []
+    if not _same:
+        _busy = _jobs_running_here()
+        if _busy and not req.cancel_running:
+            raise HTTPException(409, detail={
+                "code": "job_running",
+                "message": "a job is running in this workspace; loading another "
+                           "machine would lose it",
+                "jobs": _busy})
+        if _busy:
+            _cancelled = _busy
+            _still = _cancel_jobs_here(_busy)
+            if _still:
+                log.warning("family: %d job(s) were still running when %s/%s was "
+                            "loaded", len(_still), die, cfg)
     diffs: List[Dict[str, Any]] = []
     if req.duty:
         _duty = next((x for x in (c.get("duties") or [])
@@ -4816,7 +4911,9 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
             "config_locked": bool(c.get("locked", False)),
             "mesh_synced": mesh_synced,
             "geometry_diffs": diffs, "geometry_choice": choice,
-            "geometry_stale": geometry_stale}
+            "geometry_stale": geometry_stale,
+            "cancelled_jobs": [{"run_id": j["run_id"], "kind": j["kind"]}
+                               for j in _cancelled]}
 
 
 #: The duty block's panel keys → the server mesh config's keys, and their types.

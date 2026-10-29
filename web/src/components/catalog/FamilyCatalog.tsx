@@ -59,6 +59,7 @@ import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
+import { perSetFromTotal, setsOf } from '../../lib/perSetCurrent';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -166,6 +167,8 @@ interface Cfg {
   stack_mm: number | null;
   wire_height_mm: number | null; wire_width_mm: number | null;
   turns: number | null; connection: string | null; star_delta?: string | null;
+  /** 6 = two in-phase 3-phase sets: currents are shown PER SET (lib/perSetCurrent) */
+  phases?: number | null;
   magnet?: string | null; steel?: string | null;
   duties: Duty[];
   /** date of this configuration's FULL passport card (v1 record), null = none */
@@ -1303,7 +1306,9 @@ const FamilyCatalog: React.FC<{
                   <thead>
                     <tr>
                       <th>{tx('duty')}</th><th>kW</th><th>Nm</th><th>rpm</th>
-                      <th>A</th><th>V L-L</th><th>η %</th><th>{tx('ripple')}</th>
+                      <th title={setsOf(c) === 2 ? tx('currentPerSetHead') : undefined}>
+                        {setsOf(c) === 2 ? 'A/set' : 'A'}</th>
+                      <th>V L-L</th><th>η %</th><th>{tx('ripple')}</th>
                       <th>{tx('lossW')}</th><th>kg</th><th>KV</th>
                       <th style={{ textAlign: 'center' }} />
                     </tr>
@@ -1404,12 +1409,14 @@ const FamilyCatalog: React.FC<{
                           {/* The current is the LINE current; Δ / Y says which
                               connection the duty was solved with (winding
                               current = ÷√3 in delta). */}
-                          <td title={d.star_delta
+                          <td title={[setsOf(c) === 2
+                              ? tx('currentBothSets', { a: fmt(d.current_arms) }) : '',
+                            d.star_delta
                             ? (String(d.star_delta).startsWith('d')
                                 ? 'delta (Δ): line current — the winding carries ÷√3'
                                 : 'star (Y): line = winding current')
-                            : undefined}>
-                            {fmt(d.current_arms)}
+                            : ''].filter(Boolean).join(' · ') || undefined}>
+                            {fmt(perSetFromTotal(Number(d.current_arms), setsOf(c)))}
                             {d.star_delta && (
                               <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 700,
                                              color: String(d.star_delta).startsWith('d') ? '#fbbf24' : '#94a3b8' }}>

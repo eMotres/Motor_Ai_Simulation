@@ -36,6 +36,7 @@ import CommonProgressStrip from '../common/SolveProgressStrip';
 import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
+import { currentText, perSetFromTotal, setsOf, totalFromPerSet } from '../../lib/perSetCurrent';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
   rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
@@ -286,6 +287,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Prefer the backend's slot-derived options; fall back to deriving them locally
   // from the slot count so the UI still works against an older backend that
   // doesn't yet return `connections`.
+  // Two in-phase sets (phases: 6) — the Operating point then takes the PER-SET
+  // current and shows both sets read-only (lib/perSetCurrent).  The parallel
+  // paths of a 3-phase winding are never sets.
+  const nSets = setsOf(windCfg);
   const windConns: WindConn[] = windCfg?.connections
     ?? windingConnections(windCfg?.num_slots ?? 0).map((c) => ({ label: c.label, n_parallel: c.nP, n_series: c.nS }));
   const connDef = windConns.find((c) => c.label === connection);
@@ -1036,7 +1041,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         fitCorrRef.current += 1;
         const If = Il * (targetValue / Tl);
         setCurrent(+If.toFixed(2));
-        setFitMsg(`full run ${Tl.toFixed(1)} Nm (${err >= 0 ? '+' : ''}${(100 * err).toFixed(1)} %) — correcting to ${If.toFixed(1)} A, re-running`);
+        setFitMsg(`full run ${Tl.toFixed(1)} Nm (${err >= 0 ? '+' : ''}${(100 * err).toFixed(1)} %) — correcting to ${currentText(If, nSets)}, re-running`);
         setTimeout(() => launchRun(true), 400);
       } catch { /* no summary — nothing to correct against */ }
     };
@@ -1129,10 +1134,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       } catch { /* fall through to the probes */ }
       let prev: { I: number; T: number } | null = null;
       for (let k = 0; k < 4; k++) {
-        setFitMsg(`fitting: probe ${k + 1} @ ${I.toFixed(1)} A…`);
+        setFitMsg(`fitting: probe ${k + 1} @ ${currentText(I, nSets)}…`);
         const T = await probe(I);
         const err = (T - Ttar) / Ttar;
-        setFitMsg(`probe ${k + 1}: ${T.toFixed(1)} Nm @ ${I.toFixed(1)} A (${err >= 0 ? '+' : ''}${(100 * err).toFixed(1)} %)`);
+        setFitMsg(`probe ${k + 1}: ${T.toFixed(1)} Nm @ ${currentText(I, nSets)} (${err >= 0 ? '+' : ''}${(100 * err).toFixed(1)} %)`);
         if (Math.abs(err) < 0.005) { prev = { I, T }; break; }
         let In: number;
         if (prev && Math.abs(T - prev.T) > 1e-9) {
@@ -1146,7 +1151,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         I = In;
       }
       setCurrent(+I.toFixed(2));
-      setFitMsg(`fitted ${I.toFixed(1)} A → full run`);
+      setFitMsg(`fitted ${currentText(I, nSets)} → full run`);
       // launchRun PATCHes the shared config with the panel state, which now
       // carries the fitted current.
       setTimeout(() => launchRun(true), 0);
@@ -2437,14 +2442,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                PEAK comes FIRST (user's standing choice, 2026-08-22): the
                inverter and commercial FEM both speak amplitude, so peak is the primary
                field everywhere current is entered. */
+            <>
             <Box sx={{ display: 'flex', gap: 1 }}>
-              <TextField label={tx('iPhasePeakA')} type="number" size="small" fullWidth
-                value={Number((current * Math.SQRT2).toFixed(2))}
-                onChange={e => setCurrent(+e.target.value / Math.SQRT2)}
+              <TextField label={nSets === 2 ? tx('iPhasePeakPerSetA') : tx('iPhasePeakA')} type="number" size="small" fullWidth
+                value={Number((perSetFromTotal(current, nSets) * Math.SQRT2).toFixed(2))}
+                onChange={e => setCurrent(totalFromPerSet(+e.target.value / Math.SQRT2, nSets))}
                 inputProps={{ step: 5, min: 0, max: 707 }} disabled={isRunning}
                 InputProps={{ endAdornment: <HelpTip title={'Peak of the sinusoidal phase current = RMS·√2. Editing this recomputes the RMS — the solver always receives RMS.'} /> }}/>
-              <TextField label={starDelta === 'delta' ? 'I line RMS (Arms) — winding ÷√3' : 'I phase RMS (Arms)'} type="number" size="small" fullWidth
-                value={Number(current.toFixed(2))} onChange={e => setCurrent(+e.target.value)}
+              <TextField label={nSets === 2 ? tx('iPhaseRmsPerSetA')
+                  : starDelta === 'delta' ? 'I line RMS (Arms) — winding ÷√3' : 'I phase RMS (Arms)'} type="number" size="small" fullWidth
+                value={Number(perSetFromTotal(current, nSets).toFixed(2))}
+                onChange={e => setCurrent(totalFromPerSet(+e.target.value, nSets))}
                 inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
                 InputProps={{ endAdornment: <HelpTip title={
                   `TERMINAL phase current. With ${connection} (${nParallel} parallel `
@@ -2454,6 +2462,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   + `Branches = ${nParallel}, else Maxwell drives every coil at the full `
                   + `phase current and reports ~${nParallel}x the torque for the same input.`} /> }}/>
             </Box>
+            {nSets === 2 && (
+              <TextField label={tx('iBothSetsA')} size="small" fullWidth
+                value={`${Number((current * Math.SQRT2).toFixed(2))} A pk · ${Number(current.toFixed(2))} Arms`}
+                InputProps={{ readOnly: true, endAdornment: <HelpTip title={tx('iBothSetsTip')} /> }}
+                sx={{ '& input': { color: 'var(--text-3)' } }} />
+            )}
+            </>
             )}
             {/* The current field above does NOT drive the block or the imposed
                 waveform — say so once, rather than let it look like it does. */}

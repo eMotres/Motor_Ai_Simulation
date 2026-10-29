@@ -1309,11 +1309,25 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     row("Minimum bus voltage (V)",
         [_g(d, "result.v_ll_peak_v", "summary.V_line_peak_V") for d in duties],
         "line-to-line peak of the solved waveform — the DC bus must stay above it", 1)
-    row("Phase current (A rms)",
-        [_g(d, "current_arms", "summary.I_phase_rms_A") for d in duties], "", 1, bold=True)
-    row("Phase current (A peak)",
-        [(float(_g(d, "current_arms", "summary.I_phase_rms_A") or 0) * math.sqrt(2)) or None
-         for d in duties], "what the controller has to switch", 1)
+    # TWO IN-PHASE SETS (winding.phases 6, owner 2026-10-29): each set's
+    # controller switches HALF the stored current; the stored value is both
+    # sets together.  Said in the label, and the per-set rows come first —
+    # that is what the engineer entered and what each controller sees.
+    _six = str(wind.get("phases") or "3").strip() == "6"
+    _I = [_g(d, "current_arms", "summary.I_phase_rms_A") for d in duties]
+    if _six:
+        row("Phase current per set (A rms)",
+            [(float(i) / 2.0) if i is not None else None for i in _I],
+            "one of the two in-phase sets — one controller", 1, bold=True)
+        row("Phase current per set (A peak)",
+            [(float(i) / 2.0 * math.sqrt(2)) if i is not None else None for i in _I],
+            "what each controller has to switch", 1)
+    row("Phase current, both sets (A rms)" if _six else "Phase current (A rms)",
+        _I, "equivalent 3-phase current, the two sets together" if _six else "", 1,
+        bold=not _six)
+    row("Phase current, both sets (A peak)" if _six else "Phase current (A peak)",
+        [(float(i or 0) * math.sqrt(2)) or None for i in _I],
+        "" if _six else "what the controller has to switch", 1)
     row("Current density (A/mm²)",
         [_g(d, "result.j_coil_a_mm2", "summary.J_coil_A_per_mm2") for d in duties],
         "rms current per mm² of copper — sets the coil temperature rise for a "

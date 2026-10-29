@@ -4916,6 +4916,22 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
                                for j in _cancelled]}
 
 
+@router.post("/cancel_running")
+def cancel_running(_w: dict = Depends(require_catalog_write)):
+    """Stop every job running in THIS workspace - the dialog's "Load without saving".
+
+    The web asks before it loads another machine; when the person says to go on
+    without keeping the running work, it stops that work FIRST (so the save steps
+    that may come before the load, which also touch the context, are not refused
+    by the ``job_running`` guard).  Same code path as ``activate``'s
+    ``cancel_running``; owner / admin only, like activate."""
+    jobs = _jobs_running_here()
+    still = _cancel_jobs_here(jobs) if jobs else []
+    return {"ok": True,
+            "cancelled": [{"run_id": j["run_id"], "kind": j["kind"]} for j in jobs],
+            "still_running": [{"run_id": j["run_id"], "kind": j["kind"]} for j in still]}
+
+
 #: The duty block's panel keys → the server mesh config's keys, and their types.
 _DUTY_MESH_TO_CONFIG = (("mesh.meshSize", "mesh_size_mm", float),
                         ("mesh.minSize", "min_size_mm", float),

@@ -174,6 +174,19 @@ def test_the_dialogs_load_without_saving_cancels_first_then_loads(dies, monkeypa
     assert json.loads(fam._ctx_file().read_text(encoding="utf-8"))["die"] == DIE_B
 
 
+def test_cancel_running_is_what_the_dialog_calls_before_it_saves(dies, monkeypatch):
+    monkeypatch.setattr(fam, "_jobs_running_here", lambda: list(_BUSY))
+    seen = []
+    monkeypatch.setattr(fam, "_cancel_jobs_here",
+                        lambda jobs, wait_s=10.0: seen.extend(jobs) or [])
+    out = fam.cancel_running(_w={})
+    assert out == {"ok": True, "still_running": [],
+                   "cancelled": [{"run_id": "scan-1", "kind": "optimizer.scan"}]}
+    assert [j["run_id"] for j in seen] == ["scan-1"]
+    monkeypatch.setattr(fam, "_jobs_running_here", lambda: [])
+    assert fam.cancel_running(_w={})["cancelled"] == []
+
+
 def test_nothing_running_or_the_same_machine_asks_nothing(dies, monkeypatch):
     monkeypatch.setattr(fam, "_jobs_running_here", lambda: [])
     assert fam.activate(fam.Activate(die=DIE_B, config="L12"), _w={})["ok"] is True

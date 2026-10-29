@@ -821,7 +821,7 @@ const FamilyCatalog: React.FC<{
     // progress line - and the failure, which this panel (unmounted by the switch) cannot.
     try {
       const done = await applyCatalogDuty(die, cfg, duty, canWrite, () => setActiveTab(loadTargetTab(canWrite, standardUser)));
-      setMsg(`✓ applied ${label} — ${done.message}`);
+      setMsg(done.declined ? null : `✓ applied ${label} — ${done.message}`);
     } catch (e: any) {
       const why = String(e?.message ?? e);
       setMsg(`✗ apply ${label}: ${why}`);

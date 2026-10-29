@@ -855,6 +855,55 @@ def rename_die(old: str, new: str) -> bool:
         return True
 
 
+def config_rows(die: str, cfg: str) -> Dict[str, Any]:
+    """:func:`die_rows` for ONE configuration: ``{"path", "exists", "results", "history"}``."""
+    p = store_path()
+    out: Dict[str, Any] = {"path": str(p), "exists": p.is_file(), "results": 0, "history": 0}
+    try:
+        doc = read_all()
+        duties = ((doc.get("results") or {}).get(str(die)) or {}).get(str(cfg)) or {}
+        out["results"] = sum(len(k) for k in duties.values() if isinstance(k, dict))
+        hduties = ((doc.get("history") or {}).get(str(die)) or {}).get(str(cfg)) or {}
+        out["history"] = sum(len(rows) for kinds in hduties.values() if isinstance(kinds, dict)
+                             for rows in kinds.values() if isinstance(rows, list))
+    except Exception:                                       # noqa: BLE001
+        pass
+    return out
+
+
+def move_config(die: str, cfg: str, new_die: str, *, copy: bool = False) -> bool:
+    """Carry (or ``copy``) one configuration's rows - results and per-kind history - from
+    ``die`` to ``new_die``, same configuration name (``config_move.py``).
+
+    Returns True when a row moved.  Refuses (``ValueError``) to merge into a configuration
+    that already has rows under ``new_die``; a write failure raises ``OSError``."""
+    import copy as _copy
+    die, cfg, new_die = str(die), str(cfg), str(new_die)
+    if die == new_die:
+        return False
+    with _store_write_lock():
+        doc = read_all()
+        moved = False
+        for block in ("results", "history"):
+            node = doc.get(block)
+            src = ((node or {}).get(die) or {}).get(cfg) if isinstance(node, dict) else None
+            if not src:
+                continue
+            if (node.get(new_die) or {}).get(cfg):
+                raise ValueError(f"{block} already has rows for '{new_die}/{cfg}'")
+            node.setdefault(new_die, {})[cfg] = _copy.deepcopy(src) if copy else src
+            if not copy:
+                del node[die][cfg]
+                if not node[die]:
+                    del node[die]
+            moved = True
+        if not moved:
+            return False
+        if not _write_all(doc):
+            raise OSError("could not persist the moved duty results")
+        return True
+
+
 def forget(die: str, cfg: str, duty: Optional[str] = None) -> bool:
     """Drop a duty's results (or a whole configuration's) — used when the
     catalogue DELETES the duty they describe.  A rename carries them instead

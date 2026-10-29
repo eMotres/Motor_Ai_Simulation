@@ -222,6 +222,17 @@ def motor_history(project_id: str, project: dict | None = None) -> list[dict]:
                             if prior["die"].casefold() == old_die:
                                 prior["die"] = new_die
                     continue
+                if event.get("action") == "motor.move":
+                    # A configuration was moved to another die (config_move.py): its earlier
+                    # link / unlink events belong to the die it lives in now.
+                    old_die, _s1, old_cfg = str(event.get("entity_id") or "").partition("/")
+                    new_die, _s2, _new_cfg = str((event.get("details") or {}).get("to") or "").partition("/")
+                    if old_die and old_cfg and new_die:
+                        for prior in ordered:
+                            if (prior["die"].casefold(), prior["config"].casefold()) == (
+                                    old_die.casefold(), old_cfg.casefold()):
+                                prior["die"] = new_die
+                    continue
                 die, sep, config = str(event.get("entity_id") or "").partition("/")
                 if not sep or not die or not config or event.get("action") not in ("motor.link", "motor.unlink"):
                     continue

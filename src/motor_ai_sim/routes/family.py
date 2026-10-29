@@ -3142,6 +3142,108 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
             "duties": [d.get("name") for d in (c.get("duties") or [])]}
 
 
+class ConfigMove(BaseModel):
+    target_die: str                 # the die the configuration goes to (it must exist)
+    mode: str = "move"              # "move" | "copy"
+    dry_run: bool = False           # list every change, write nothing (also ``?dry_run=1``)
+
+
+def _config_build_check(src_dir: Path, dst_dir: Path, cfg_doc: dict) -> Dict[str, Any]:
+    """What the configuration's build looks like on the target die - read-only, for the dry run.
+
+    ``target_vs_source``: die-level differences between the two laminations (the configuration's own
+    wire keys on both sides).  ``config_vs_target``: where the configuration is not the target die
+    (non-empty = a duty save there answers 409 "build differs", e.g. its slot width).  ``stale_duties``:
+    duties whose saved build differs from what loading them on the target would build."""
+    sd = _load_yaml(src_dir / "die.yaml", "die")
+    td = _load_yaml(dst_dir / "die.yaml", "die")
+    ov = {k: v for k, v in (cfg_doc.get("geometry_overrides") or {}).items() if v is not None}
+    src_eff = dict(sd.get("geometry") or {}, **ov)
+    dst_eff = dict(td.get("geometry") or {}, **ov)
+    stale = {}
+    for d in (cfg_doc.get("duties") or []):
+        if isinstance(d, dict) and d.get("name"):
+            diffs = _blocking(duty_geometry_diff(td, cfg_doc, d))
+            if diffs:
+                stale[str(d["name"])] = [f"{x['key']} {x['duty']} → {x['live']}" for x in diffs]
+    return {"target_vs_source": die_shape_diffs(src_eff, dst_eff),
+            "config_vs_target": die_shape_diffs(td.get("geometry") or {}, dst_eff),
+            "stale_duties": stale}
+
+
+@router.post("/config/{die}/{cfg}/move")
+def move_config(die: str, cfg: str, req: ConfigMove, dry_run: bool = False,
+                _w: dict = Depends(require_catalog_write)):
+    """MOVE (or COPY) a configuration to another die - and everything keyed by ``"<die>/<cfg>"``.
+
+    Admin only.  One transaction (``motor_ai_sim.config_move``): the file and its ``runs/``,
+    the result ledgers (shared, every workspace, the legacy per-die one: ``results`` and
+    ``history``), the active contexts, the workspace memories, the catalog cards, and for a
+    shared-catalog die the account grants (access through the old die is kept as a
+    configuration grant), the development projects (links, history, grant ledger, snapshots,
+    ``index.json``), production, tests and CAD folders.  Every rewritten file is backed up
+    under ``.config_moves/`` first; a failure undoes the steps already done.
+
+    ``dry_run`` (body or ``?dry_run=1``) writes nothing and answers the same document:
+    ``changes`` (every store and place), ``manual`` (deploy-managed files to move by hand),
+    ``build_check`` (how the build reads on the target die).  Refused with 409 when the target
+    already has a configuration of that name, the dies are in different catalog layers, the
+    configuration holds a product revision (move), or a job is running on it."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    dst = _check_name(req.target_die, "die")
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="moving a configuration to another die is an admin action")
+    mode = str(req.mode or "move").strip().lower()
+    if mode not in ("move", "copy"):
+        raise HTTPException(422, detail="mode must be 'move' or 'copy'")
+    if dst == die:
+        raise HTTPException(422, detail="the target die is the configuration's own die")
+    dry = bool(dry_run or req.dry_run)
+    src_dir, dst_dir = _die_dir(die), _die_dir(dst)
+    if not (src_dir / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"die '{die}' not found")
+    if not (dst_dir / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"target die '{dst}' not found - create it first")
+    if not (src_dir / f"{cfg}.yaml").is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    if (dst_dir / f"{cfg}.yaml").exists():
+        raise HTTPException(409, detail=f"die '{dst}' already has a configuration '{cfg}'")
+    glob_scope = True
+    if _ws_layering():
+        if not _WS.is_verified_admin_request():
+            raise HTTPException(403, detail="only a verified signed-in admin may move a configuration")
+        lay_s, lay_d = _classify_die_dir(src_dir)[0], _classify_die_dir(dst_dir)[0]
+        if lay_s != lay_d or _WS.LAYER_PUBLISHED in (lay_s, lay_d):
+            raise HTTPException(409, detail=(
+                f"'{die}' is in the {lay_s} catalog and '{dst}' in the {lay_d} catalog - a configuration "
+                "moves between dies of the same catalog layer (shared or one workspace) only"))
+        glob_scope = lay_s == _WS.LAYER_SHARED
+    cfg_doc = _load_yaml(src_dir / f"{cfg}.yaml", "configuration")
+    import sys as _sys
+    from motor_ai_sim import config_move as _cm
+    from motor_ai_sim.admin_audit import actor_of
+    try:
+        out = _cm.run(_sys.modules[__name__], die, cfg, dst, src_dir=src_dir, dst_dir=dst_dir,
+                      dry_run=dry, copy=(mode == "copy"), glob_scope=glob_scope,
+                      actor=actor_of(_w.get("user")))
+    except _cm.MoveBlocked as exc:
+        raise HTTPException(409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("family: %s of '%s/%s' -> '%s' failed; rolled back", mode, die, cfg, dst)
+        bad = getattr(exc, "rollback_failures", None)
+        raise HTTPException(500, detail=(
+            f"the {mode} of '{die}/{cfg}' to '{dst}' failed ({type(exc).__name__}: {exc}) and "
+            + (f"the rollback was INCOMPLETE ({'; '.join(bad)}) - see the backup folder under .config_moves"
+               if bad else "was rolled back; nothing was changed")))
+    try:
+        out["build_check"] = _config_build_check(src_dir, dst_dir, cfg_doc)
+    except Exception:                                       # noqa: BLE001 - information only
+        log.debug("family: build check of the move failed", exc_info=True)
+    return out
+
+
 @router.delete("/config/{die}/{cfg}")
 def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")

@@ -5605,13 +5605,20 @@ def get_fem_transient(
             if run_id and _JOBS.is_cancelled(run_id):
                 raise _RunCancelled(run_id)
 
-        def _sb_progress(_done, _total, _phase=None, _composition=None):
+        def _sb_progress(_done, _total, _phase=None, _composition=None,
+                         _warm=None):
             # Cooperative cancel: this callback is the one hook that fires at
             # the top of EVERY frame (settling, warm-up and demag pre-pass
             # included), so it is where the Stop button takes effect.
             if run_id and _JOBS.is_cancelled(run_id):
                 raise _RunCancelled(run_id)
             _cur = _fem_transient_progress["current"]
+            # The warm-start record (fifth argument, solver's `_progress_warm`):
+            # seed source and the warm-up / pre-pass counts so far.  Only that —
+            # the bar and the stage label are left exactly as they are.
+            if _warm is not None:
+                _cur["warm_start"] = dict(_warm)
+                return
             # done/total None = a SET-UP checkpoint (mesh, projections, phasor
             # initialiser, static start field): it exists so the cancel check
             # above runs before frame 0, and it keeps what the bar shows.
@@ -8295,13 +8302,17 @@ def _build_transient_summary(
         "eddy_settled_via_accelerator": bool(sbres.get("eddy_settled_via_accelerator",
                                                        False)),
         # Did this run CONTINUE a previous one's state instead of solving it?
-        # Both are False on every interactive Run by construction — the flag
-        # that allows it (SB_SEED_FROM_PREVIOUS) is set only in the optimizer's
-        # eval environment (user 2026-09-06, "each next calculation is seeded
-        # from the previous one", which is a rule about sweeps).  Carried anyway, so a
-        # saved simulation states it rather than leaving it to be assumed.
+        # Sweeps continue their previous point (SB_SEED_FROM_PREVIOUS); an
+        # interactive Run continues a stored state of the SAME geometry from
+        # the warm library (owner 2026-10-30) — its eddy history at any
+        # operating point, its Br map only at this one, verified by a pre-pass
+        # period.  `warm_start` is the record: seed source, parent, the
+        # warm-up / pre-pass frame counts, and a one-line note ("cold start:
+        # no stored state for this geometry").
         "warm_seeded": bool(sbres.get("warm_seeded", False)),
         "demag_seeded": bool(sbres.get("demag_seeded", False)),
+        "demag_seed_from": sbres.get("demag_seed_from"),
+        "warm_start": sbres.get("warm_start"),
         "efficiency":   round(_eff, 4),
         # Energy-balance diagnostics: the solved terminal power and the solver's
         # balanced mech power.  P_elec_in_solved − P_mech_balance = the losses

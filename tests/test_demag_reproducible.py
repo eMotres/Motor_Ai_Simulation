@@ -189,3 +189,57 @@ def test_the_prepass_ran_and_is_reported(legs):
             "not a whole number of electrical periods")
         assert int(d.get("eddy_warmup_frames") or 0) >= npre, (
             f"{name}: the discarded-frame total does not include the pre-pass")
+
+
+# ── the WARM LIBRARY keeps the guarantee (owner 2026-10-30) ─────────────────
+# "We set 40 frames and it is already 280 steps — why is the warm-up not kept?"
+# An interactive run now continues a stored state of the SAME geometry + mesh
+# (simulation/warm_library.py): its eddy history at any operating point and,
+# at the SAME operating point, the Br map a full pre-pass built — verified by
+# one pre-pass period of its own instead of re-running the whole image history.
+# These two legs are the pair the brief pins: a library-seeded interactive run
+# agrees with a cold one to the tolerances above, for fewer solved frames.
+@pytest.fixture(scope="module")
+def lib_legs() -> Dict[str, Dict[str, Any]]:
+    from motor_ai_sim.simulation import warm_library as W
+    os.environ["SB_WARM_LIB"] = "1"
+    try:
+        _clear_warm_cache(); W.clear()
+        cold = _run()
+        seeded = _run()
+    finally:
+        os.environ.pop("SB_WARM_LIB", None)
+        _clear_warm_cache(); W.clear()
+    return {"cold": cold, "seeded": seeded}
+
+
+def test_library_cold_run_says_it_was_cold(lib_legs):
+    ws = lib_legs["cold"].get("warm_start") or {}
+    assert ws.get("seed_source") == "cold"
+    assert ws.get("note") == "cold start: no stored state for this geometry", ws
+    assert lib_legs["cold"]["demag_seeded"] is False
+
+
+def test_library_seeded_run_is_the_same_machine_for_fewer_frames(lib_legs):
+    cold, seed = lib_legs["cold"], lib_legs["seeded"]
+    ws = seed.get("warm_start") or {}
+    assert ws.get("seed_source") == "library", ws
+    assert ws.get("br_map_seeded") is True and ws.get("eddy_history_seeded") is True
+    src = seed.get("demag_seed_from") or {}
+    assert src.get("source") == "library" and src.get("same_operating_point") is True
+    t0, t1 = _t(cold), _t(seed)
+    assert abs(t1 - t0) <= RTOL_T * abs(t0), (
+        f"T_avg moved {100.0 * (t1 - t0) / t0:+.3f} % between a cold run and a "
+        f"library-seeded one ({t0:.6g} -> {t1:.6g} N·m)")
+    b0, b1 = _br(cold), _br(seed)
+    assert abs(b1 - b0) <= ATOL_BR_PP, (
+        f"Br kept moved {b1 - b0:+.3f} pp ({b0:.3f} -> {b1:.3f} %)")
+    # the pre-pass is VERIFIED, not skipped: at least one whole period, and the
+    # reported window is still judged settled by the unchanged rule
+    nrep = len(seed.get("T_em_Nm") or [])
+    npre = int(seed["demag_prepass_frames"])
+    assert npre >= nrep > 0, "the library-seeded run skipped the verification period"
+    assert int(cold["demag_prepass_frames"]) > npre, (
+        "the library-seeded run solved as many pre-pass frames as the cold one")
+    assert seed.get("demag_settled") is True, seed.get("steady_state_note")
+    assert ws.get("prepass_frames") == npre

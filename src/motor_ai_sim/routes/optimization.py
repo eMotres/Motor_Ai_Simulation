@@ -347,6 +347,20 @@ def _machine_mesh(cfg) -> Dict[str, float]:
     return resolve_mesh_settings({}, cfg)[0]
 
 
+def end_winding_pin(sim: Dict[str, Any]) -> float:
+    """The k_end an optimization pins on EVERY candidate, from the saved
+    Simulation block: the typed value when ``end_winding_typed`` says the user
+    typed it, else 0.0 = each candidate's own built coil.  A block saved before
+    the flag existed holds an auto-filled number, so it is not a pin."""
+    if sim.get("end_winding_typed") is not True:
+        return 0.0
+    try:
+        k = float(sim.get("end_winding_factor") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return k if math.isfinite(k) and k > 0.0 else 0.0
+
+
 def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     coil_temp_c: float, n_periods: float, gamma_deg: float,
                     mesh_size_mm: float, min_size_mm: float, n_sectors: int,
@@ -382,7 +396,10 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # v6 (2026-09-30, owner): 1 gap layer per side by default and NO gap
         # refinement for optimization candidates — a v5 entry may hold a
         # candidate re-solved at more layers.
-        "v": 6,
+        # v7 (2026-10-30): ew = 0 (auto) is the BUILT COIL's k_end per
+        # candidate (#507), not the semicircle — a v6 auto entry holds the
+        # semicircle's end-turn copper, loss and mass.
+        "v": 7,
         "sampling_purpose": sampling_purpose,
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no
@@ -531,7 +548,10 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "cogging_sampling_auto_raised", "cogging_sampling_reason",
              # The candidate's Coulomb gap self-check (never refined; flagged).
              "torque_method", "gap_layers_per_side", "ripple_self_check_rel",
-             "ripple_mesh_limited", "gap_layers_persist", "gap_layers_note")
+             "ripple_mesh_limited", "gap_layers_persist", "gap_layers_note",
+             # The end-winding factor the point was billed at and whose it was
+             # (typed pin / the point's own coil), owner 2026-10-30.
+             "k_end_used", "k_end_source")
 
 
 def _store_eval(key: str, res: Dict[str, Any]) -> None:
@@ -6611,7 +6631,13 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         # candidates whose end-turn length changes with the geometry — that is
         # the engineer's call, made in the panel, not ours to make here.
         "rotor_eddy": bool(sim.get("rotor_eddy", True)),
-        "end_winding_factor": float(sim.get("end_winding_factor", 0.0) or 0.0),
+        # …but only a TYPED k_end is that call (owner 2026-10-30).  Since #507
+        # the field holds the built coil's k_end for the CURRENT geometry, and
+        # pinning that number on a candidate with another stack length or
+        # tooth billed its end turns at the wrong length: a length sweep gave
+        # 90 mm and 95 mm the same efficiency.  Untyped → 0 = each candidate's
+        # own coil (refine_proc / masses.end_winding_factor).
+        "end_winding_factor": end_winding_pin(sim),
         "torque_filter": bool(sim.get("torque_filter", False)),
         # The coupled sigma*dA/dt solve and the demag de-rate are read by the
         # candidate subprocess from this same block (refine_proc.run_one), so

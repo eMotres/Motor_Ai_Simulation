@@ -75,6 +75,7 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { storedGapLayers, storedMeshFields } from '../../lib/meshSettings';
 import { narrowSplitColumn, narrowSplitOuter } from '../../lib/narrowLayout';
+import { geoKeyHash } from '../../lib/endWindingPin';
 
 // UI strings: locales/<lng>/simulation.json (docs/I18N.md).
 const tx = nsT('simulation');
@@ -193,12 +194,6 @@ interface EndWindingCoil {
   source?: string | null; profile?: string | null; typed_keys?: string[];
   wire_beng_r_mm?: number; coil_straight_extra_mm?: number; coil_lead_total_mm?: number;
   turns_per_coil?: number; mean_turn_length_mm?: number; k_end_semicircle?: number;
-}
-/** Short, stable key of a geometry signature: a typed k_end belongs to the geometry it was typed on. */
-function geoKeyHash(sig: string): string {
-  let h = 5381;
-  for (let i = 0; i < sig.length; i++) h = ((h * 33) ^ sig.charCodeAt(i)) >>> 0;
-  return `${sig.length}:${h.toString(36)}`;
 }
 const fmtMm = (v: unknown): string => (Number.isFinite(Number(v)) ? `${(+Number(v).toFixed(2))} mm` : '—');
 /** One line under the k_end field: the built coil's shape, or nothing before the first answer. */
@@ -1376,7 +1371,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
     coil_temp_c: coilTemp, steps_per_period: steps,
     ...(stepsSource ? { steps_per_period_source: stepsSource } : {}),
-    end_winding_factor: endWinding, connection, star_delta: starDelta,
+    // end_winding_typed: the optimizer pins k_end on every candidate only when
+    // it was typed; the coil's own number belongs to this geometry alone.
+    end_winding_factor: endWinding, end_winding_typed: endWindingTyped,
+    connection, star_delta: starDelta,
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
     // The BLDC block amplitude is PHYSICS, so it goes where every other
@@ -1403,7 +1401,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
-      coilTemp, steps, stepsSource, endWinding, connection, starDelta, drive, opMode, vPeak,
+      coilTemp, steps, stepsSource, endWinding, endWindingTyped, connection, starDelta, drive, opMode, vPeak,
       vDelta, iBlock]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").

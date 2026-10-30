@@ -316,6 +316,12 @@ class SimConfigPatch(BaseModel):
     # its own count when the tab holds only the default (routes/optimization.py).
     steps_per_period_source: Optional[Literal["eddy_default", "user"]] = None
     end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
+    # WHO set end_winding_factor: True = TYPED in the Simulation field (an
+    # override the optimizer keeps for every candidate); False = the built
+    # coil's own number for the CURRENT geometry, which a candidate with
+    # another geometry must not inherit (owner 2026-10-30: a length sweep at
+    # one pinned k_end gave 90 mm and 95 mm the same efficiency).
+    end_winding_typed:  Optional[bool]  = None
     connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
     # TERMINAL connection of the three phases — orthogonal to `connection`,
     # which groups a phase's own coils.  Delta puts the full line voltage on
@@ -705,10 +711,10 @@ def update_sim_config(patch: SimConfigPatch):
             return a == b
         except Exception:  # noqa: BLE001
             return False
-    # steps_per_period_source is bookkeeping (who set the count), not physics:
-    # flipping it must not throw away a solved field.
+    # steps_per_period_source / end_winding_typed are bookkeeping (who set the
+    # value), not physics: flipping one must not throw away a solved field.
     _changed = sorted(k for k, v in updates.items()
-                      if k != "steps_per_period_source"
+                      if k not in ("steps_per_period_source", "end_winding_typed")
                       and not _same(_before_sim.get(k), v))
     if _changed:
         try:

@@ -12,8 +12,6 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  ToggleButton,
-  ToggleButtonGroup,
   Accordion,
   AccordionSummary,
   AccordionDetails,
@@ -34,6 +32,7 @@ import SweepStudyPanel from './SweepStudyPanel';
 import DOEPanel from './DOEPanel';
 import HelpTip from '../common/HelpTip';
 import SectionLabel from '../common/SectionLabel';
+import SubTabs, { type SubTabItem } from '../common/SubTabs';
 import { useDieContext } from '../common/useDieContext';
 import { dieDefiningSelected, dieKeyLabel } from '../../lib/releasedContext';
 import { nsT } from '../../i18n/nsT';
@@ -265,6 +264,12 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
 };
 
 // ── Main panel ────────────────────────────────────────────────────────────────
+
+const ALGO_TABS: readonly SubTabItem<'optimize' | 'sweep' | 'doe'>[] = [
+  { id: 'optimize', label: 'Optimize' },
+  { id: 'sweep', label: 'Sweep study' },
+  { id: 'doe', label: 'DOE / Importance' },
+];
 
 const SweepConfigPanel: React.FC = () => {
   const {
@@ -533,13 +538,18 @@ const SweepConfigPanel: React.FC = () => {
 
       {/* ── Header ── */}
       <Box sx={{
-        px: 3, py: 1.25,
+        px: 3, py: 0.25,
         borderBottom: '1px solid', borderColor: 'divider',
-        display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0,
+        display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flexShrink: 0,
       }}>
         <ShowChartIcon sx={{ fontSize: 16 }} />
-        <Typography variant="subtitle2" sx={{ flex: 1 }}>Optimize</Typography>
-        <Typography variant="caption" color="text.disabled">
+        <Typography variant="subtitle2">Optimize</Typography>
+        {/* Algorithm sub-menu: the main menu's tab style, in the header row (owner 2026-10-30) */}
+        {/* phone width: the tabs take their own full-width line under label + count */}
+        <SubTabs value={algoTab} items={ALGO_TABS} onChange={pickAlgo} ariaLabel="Optimization method" testId="opt-algo-tabs"
+          sx={{ order: { xs: 3, sm: 0 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }} />
+        <Box sx={{ flex: 1, order: { xs: 1, sm: 0 } }} />
+        <Typography variant="caption" color="text.disabled" sx={{ order: { xs: 2, sm: 0 } }}>
           {sweepEntries.length} variable{sweepEntries.length === 1 ? '' : 's'}
         </Typography>
       </Box>
@@ -554,13 +564,6 @@ const SweepConfigPanel: React.FC = () => {
 
       {/* ── Body: config (two columns) + the optimizer ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
-        {/* ── Algorithm sub-menu — at the very top; switches the panel below ── */}
-        <ToggleButtonGroup value={algoTab} exclusive size="small" fullWidth
-          onChange={(_, v) => v && pickAlgo(v)} sx={{ mb: 2 }}>
-          <ToggleButton value="optimize" sx={{ textTransform: 'none', fontSize: 12 }}>Optimize</ToggleButton>
-          <ToggleButton value="sweep" sx={{ textTransform: 'none', fontSize: 12 }}>Sweep study</ToggleButton>
-          <ToggleButton value="doe" sx={{ textTransform: 'none', fontSize: 12 }}>DOE / Importance</ToggleButton>
-        </ToggleButtonGroup>
         {/* One-click card FIRST — the user opens Optimize to run it, not to
             scroll past 18 variable cards looking for it ("I don't see the chart").
             The variables block below belongs to the manual flow. */}

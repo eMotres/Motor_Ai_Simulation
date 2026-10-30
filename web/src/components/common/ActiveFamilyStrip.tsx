@@ -46,6 +46,7 @@ import { modeNames, type RowDie } from '../../lib/catalogRows';
 import { dutyEfficiencyPct } from '../../lib/dutyEfficiency';
 import { dutyLabel, isShortTime, type DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
+import { buildClashOf, movedLine, movedSave, type BuildClash } from '../../lib/buildClash';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -89,7 +90,8 @@ interface Ctx {
   // Set once by the auto-transition that landed this die/config (2026-09-20):
   // a die-defining edit moved here from `die`, at `at`, for these reasons.
   // reason 'shared_die' (2026-10-30): the edit was not written into a die that
-  // other configurations (`others`) are built on.
+  // other configurations (`others`) are built on; 'build_differs': a duty save
+  // from another lamination (a wider slot) was saved on the die it is.
   transitioned_from?: { die: string; at?: string | null; diffs?: DieDiff[] | null;
                         reason?: string | null; others?: string[] | null } | null;
 }
@@ -128,8 +130,11 @@ const ActiveFamilyStrip: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   // A refused save because the on-screen BUILD differs from the configuration
-  // — offers "save as new configuration" instead of leaving a dead end.
-  const [buildClash, setBuildClash] = useState(false);
+  // — offers the way out instead of leaving a dead end: 'config' = a new
+  // configuration of the same die; 'die' = the refusal names the DIE's
+  // cross-section (another lamination, e.g. a wider slot), which no
+  // configuration of this die can carry (lib/buildClash).
+  const [buildClash, setBuildClash] = useState<BuildClash>(null);
   const [askCfg, setAskCfg] = useState<TextPromptState | null>(null);
   // The RELEASED-context offers (2026-09-20): a new die's name, a new
   // configuration's name, or the "discard and reload" confirmation.
@@ -326,7 +331,9 @@ const ActiveFamilyStrip: React.FC = () => {
     // new die" flows must therefore pass the freshly-created canonical names
     // explicitly; otherwise this closure still writes to the triple that was
     // active before (or to none at all, on a released context).
-    const tDie = String(target?.die || ctx?.die || '');
+    // `let`: a save from another lamination lands on the die the machine IS
+    // (backend `transitioned`, owner 2026-10-30) and the result recording follows it.
+    let tDie = String(target?.die || ctx?.die || '');
     const tDuty = String(target?.duty || ctx?.duty || '');
     const targetConfig = String(target?.config || ctx?.config || '');
     if (!tDie || !tDuty || !targetConfig) return 'no duty is loaded';
@@ -551,8 +558,14 @@ const ActiveFamilyStrip: React.FC = () => {
       // A successful save is the strongest possible statement that the panel's
       // settings ARE this die's settings — remember them, so loading any duty
       // of this die later restores the user's own mesh, not a stray snapshot.
+      // ANOTHER LAMINATION (owner 2026-10-30): the backend moved the
+      // configuration to the die the machine on screen is and saved there.
+      const srcDie = tDie;
+      const moved = movedSave(rj);
+      if (moved) tDie = moved.die;
       try { rememberDieSettings(tDie); } catch { /* convenience */ }
       const cfgName = (rj && rj.config) ? String(rj.config) : targetConfig;
+      const refiled = cfgName !== targetConfig || tDie !== srcDie;
       // The duty's SNAPSHOT now states this point, so the local per-duty
       // overlay has nothing left to say — dropping it is what makes a save
       // stick: otherwise the pre-save edit would keep winning on every later
@@ -566,17 +579,17 @@ const ActiveFamilyStrip: React.FC = () => {
       // back to whatever its sibling last left on the panel.
       try {
         if (runMatches) {
-          clearDutyOp(dutyKey(tDie, targetConfig, tDuty));
-          if (cfgName !== targetConfig) clearDutyOp(dutyKey(tDie, cfgName, tDuty));
+          clearDutyOp(dutyKey(srcDie, targetConfig, tDuty));
+          if (refiled) clearDutyOp(dutyKey(tDie, cfgName, tDuty));
         }
         // An auto-rename (M1-L200 → M1-L220) moves the duty to a new
         // configuration, and its per-duty memory has to move with it — the
         // point on the panel IS that memory, so re-filing it under the new
         // name is the whole migration.
-        if (cfgName !== targetConfig) {
+        if (refiled) {
           setActiveDuty(tDie, cfgName, tDuty);
           if (!runMatches) rememberDutyOp(dutyKey(tDie, cfgName, tDuty));
-          clearDutyOp(dutyKey(tDie, targetConfig, tDuty));
+          clearDutyOp(dutyKey(srcDie, targetConfig, tDuty));
         }
         // The DUTY CYCLE overlay, on the same rule as the point's but WITHOUT
         // the matching-run condition: the block was sent on this save whatever
@@ -584,14 +597,18 @@ const ActiveFamilyStrip: React.FC = () => {
         // nothing left to add.  It becomes this duty's snapshot layer in the
         // same breath, so the editor keeps showing what was just saved.
         if (dcSent) {
-          clearDutyCycle(dutyKey(tDie, targetConfig, tDuty),
-                         cfgName === targetConfig ? dcSent : null);
-          if (cfgName !== targetConfig) {
+          clearDutyCycle(dutyKey(srcDie, targetConfig, tDuty),
+                         refiled ? null : dcSent);
+          if (refiled) {
             clearDutyCycle(dutyKey(tDie, cfgName, tDuty), dcSent);
           }
         }
       } catch { /* memory is a convenience, never a blocker */ }
       let extra = rj && rj.renamed_to ? ` · renamed to ${rj.renamed_to}` : '';
+      if (moved) {
+        extra += ` · ${movedLine(moved)}`;
+        setCtx((c) => (c ? { ...c, die: tDie, config: cfgName, duty: tDuty } : c));
+      }
       // ── THE CONTROLLER TAB'S OWN SETTINGS ride THIS save too ───────────────
       // Owner 2026-09-22: *"when saving the motor, the current controller
       // should also be saved with all its settings"* — not only the Controller
@@ -725,7 +742,7 @@ const ActiveFamilyStrip: React.FC = () => {
             : ` (${driveLabel(drive)} run stored; primary sine result kept)`)
         : '';
       setMsg(`✓ saved to ${tDie} / ${cfgName} / ${tDuty}${extra}${where}`);
-      setBuildClash(false);
+      setBuildClash(null);
       // The run is in the duty now: nothing finished on screen is unsaved any more
       // (lib/unsavedWork - what the load guard asks about).
       if (runMatches) markRunsSaved();
@@ -739,8 +756,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // 2026-08-25, third time hitting the wall: "this problem happened before,
       // it needs to be solved"): a new configuration under the same die, built
       // from the machine on screen.
-      setBuildClash(m.includes('cannot carry its own geometry')
-                    || m.includes('build differs from configuration'));
+      setBuildClash(buildClashOf(m));
     }
     setBusy(false);
     return outcome;
@@ -779,7 +795,7 @@ const ActiveFamilyStrip: React.FC = () => {
       if (!activated.ok) {
         throw new Error((await activated.json()).detail ?? `HTTP ${activated.status}`);
       }
-      setBuildClash(false);
+      setBuildClash(null);
       // The duty moved to a new configuration: its per-duty operating-point
       // memory has to follow, or the panel keeps filing edits under the
       // configuration the duty no longer lives in.
@@ -801,12 +817,15 @@ const ActiveFamilyStrip: React.FC = () => {
    *  the live build + one duty at the live point, context made active), then
    *  record the last run's results into that duty exactly as "Save to duty"
    *  does.  The released die is untouched. */
-  const saveAsNewDie = async (name: string) => {
+  const saveAsNewDie = async (name: string, keep?: { config?: string; duty?: string }) => {
     setBusy(true); setMsg(null);
     try {
+      // `keep`: an ACTIVE context's refused save keeps its configuration and duty names
+      // (a released one takes them from the released record, server side).
       const r = await fetch(`${API}/api/family/save_as_new_die`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, ...(keep?.config ? { config: keep.config } : {}),
+                               ...(keep?.duty ? { duty: keep.duty } : {}) }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       const rj = await r.json();
@@ -816,6 +835,7 @@ const ActiveFamilyStrip: React.FC = () => {
       setMsg(`✓ new die '${die}' saved (${config} / ${duty}) — recording the last run…`);
       setCtx((c) => ({ ...(c ?? { active: true }), active: true, die, config, duty,
                        can_write: true, die_locked: false, config_locked: false }));
+      setBuildClash(null);
       await save({ die, config, duty });
     } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
     setBusy(false);
@@ -1060,7 +1080,8 @@ const ActiveFamilyStrip: React.FC = () => {
       {ctx.transitioned_from?.die && (
         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25 }}>
           <Typography component="span" sx={{ fontSize: 11, color: '#38bdf8' }}>
-            {ctx.transitioned_from.reason === 'shared_die' ? '↷ moved to its own die' : '↷ moved'}
+            {ctx.transitioned_from.reason === 'shared_die' || ctx.transitioned_from.reason === 'build_differs'
+              ? '↷ moved to its own die' : '↷ moved'}
           </Typography>
           <HelpTip title={`Moved to '${ctx.die}'`
             + (ctx.transitioned_from.diffs?.length
@@ -1069,7 +1090,10 @@ const ActiveFamilyStrip: React.FC = () => {
                 ? `: '${ctx.transitioned_from.die}' also carries `
                   + `${(ctx.transitioned_from.others || []).join(', ') || 'other configurations'}`
                   + `, so your edit got its own die`
-                : '')
+                : ctx.transitioned_from.reason === 'build_differs'
+                  ? `: the build you saved is another lamination than '${ctx.transitioned_from.die}' `
+                    + `(its die keeps its own cross-section), so the duty was saved on the die it is`
+                  : '')
             + `; the original die '${ctx.transitioned_from.die}' is untouched.`} />
         </Box>
       )}
@@ -1100,14 +1124,45 @@ const ActiveFamilyStrip: React.FC = () => {
         </Tooltip>
       )}
       <Box sx={{ flex: 1 }} />
-      {msg && (
+      {/* A refused save stays ON the Save button (owner 2026-10-30: three
+          refused "Save to peak" read as saved): one short red line, the
+          server's whole refusal in the tooltip, and the one action that
+          resolves it right beside it. */}
+      {msg && !buildClash && (
         <Typography sx={{ fontSize: 11,
           color: msg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{msg}</Typography>
       )}
+      {buildClash && (
+        <Tooltip title={buildClash.full}>
+          <Typography noWrap sx={{ fontSize: 11, color: '#fca5a5', cursor: 'help', maxWidth: 420 }}>
+            {buildClash.short}
+          </Typography>
+        </Tooltip>
+      )}
       {/* Build clash → the way out, right where the refusal is (user
           2026-08-25): one click creates a new configuration of the SAME die
-          from the machine on screen and saves this duty into it. */}
-      {buildClash && ctx.can_write && ctx.duty && (
+          from the machine on screen and saves this duty into it.  A DIE-level
+          difference (another lamination - a wider slot) cannot live on this
+          die at all: then the machine on screen becomes a new die with this
+          configuration and duty (owner 2026-10-30). */}
+      {buildClash?.kind === 'die' && ctx.can_write && ctx.duty && (
+        <Button size="small" variant="contained" disabled={busy}
+          onClick={async () => {
+            const initial = (await suggestDieName(String(ctx.die || ''))) || `${ctx.die} new`;
+            setAskDie({
+              title: 'Save as a new configuration on a NEW die',
+              label: 'Die name',
+              initial,
+              hint: `The machine on screen is another lamination than '${ctx.die}'. A new die is made from it, with configuration '${ctx.config}' and duty '${ctx.duty}'; '${ctx.die}' is untouched`,
+              onSubmit: (n) => { void saveAsNewDie(n.trim(), { config: String(ctx.config || ''), duty: String(ctx.duty || '') }); },
+            });
+          }}
+          sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 22,
+                bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
+          ＋ Save as new configuration on a new die
+        </Button>
+      )}
+      {buildClash?.kind === 'config' && ctx.can_write && ctx.duty && (
         <Button size="small" variant="contained" disabled={busy}
           onClick={() => setAskCfg({
             title: 'Save the machine on screen as a NEW configuration',
@@ -1128,11 +1183,14 @@ const ActiveFamilyStrip: React.FC = () => {
       )}
       {ctx.can_write && ctx.duty && (
         <Button size="small" variant="outlined" disabled={busy} onClick={() => void save()}
+          color={buildClash ? 'error' : 'primary'}
           sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 22 }}>
-          {busy ? <CircularProgress size={11} /> : `💾 Save to ${ctx.duty}`}
+          {busy ? <CircularProgress size={11} />
+            : buildClash ? `✗ Save to ${ctx.duty} — not saved` : `💾 Save to ${ctx.duty}`}
         </Button>
       )}
       <TextPromptDialog state={askCfg} onClose={() => setAskCfg(null)} />
+      <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />
       <ConfirmDialog state={askSwitch} onClose={() => setAskSwitch(null)} />
     </Box>
   );

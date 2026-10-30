@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from motor_ai_sim.modules.kernel import Kernel
@@ -56,6 +56,15 @@ def capabilities() -> Dict[str, Any]:
 
 @router.post("/run")
 def run(req: KernelRunRequest) -> Dict[str, Any]:
+    # A TYPED magnet temperature above the grade's limit is refused here too:
+    # this is the route the Simulation tab's Run posts to (owner 2026-10-30).
+    p = req.payload or {}
+    if (req.capability == "solver.em_transient" and p.get("magnet_temp_c") is not None
+            and not (p.get("restore") or p.get("ledger_probe"))):
+        from motor_ai_sim.routes.simulation import typed_magnet_temp_refusal
+        why = typed_magnet_temp_refusal(p.get("magnet_temp_c"), p.get("mat"))
+        if why:
+            raise HTTPException(status_code=422, detail=why)
     out = _get_kernel().run(req.capability, req.payload)
     if "result" in out:
         out["result"] = _serialize(out["result"])

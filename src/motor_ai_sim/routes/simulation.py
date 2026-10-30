@@ -316,6 +316,12 @@ class SimConfigPatch(BaseModel):
     # its own count when the tab holds only the default (routes/optimization.py).
     steps_per_period_source: Optional[Literal["eddy_default", "user"]] = None
     end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
+    # WHO set end_winding_factor: True = TYPED in the Simulation field (an
+    # override the optimizer keeps for every candidate); False = the built
+    # coil's own number for the CURRENT geometry, which a candidate with
+    # another geometry must not inherit (owner 2026-10-30: a length sweep at
+    # one pinned k_end gave 90 mm and 95 mm the same efficiency).
+    end_winding_typed:  Optional[bool]  = None
     connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
     # TERMINAL connection of the three phases — orthogonal to `connection`,
     # which groups a phase's own coils.  Delta puts the full line voltage on
@@ -705,10 +711,10 @@ def update_sim_config(patch: SimConfigPatch):
             return a == b
         except Exception:  # noqa: BLE001
             return False
-    # steps_per_period_source is bookkeeping (who set the count), not physics:
-    # flipping it must not throw away a solved field.
+    # steps_per_period_source / end_winding_typed are bookkeeping (who set the
+    # value), not physics: flipping one must not throw away a solved field.
     _changed = sorted(k for k, v in updates.items()
-                      if k != "steps_per_period_source"
+                      if k not in ("steps_per_period_source", "end_winding_typed")
                       and not _same(_before_sim.get(k), v))
     if _changed:
         try:
@@ -4463,15 +4469,17 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
                        % float(v_bus_real))
 
 
-def _assigned_magnet_card():
+def _assigned_magnet_card(ov: Optional[dict] = None):
     """``(name, card)`` of the magnet this request solves with — the machine's
     assignment with the request's own material override on top, the same
-    precedence ``fem_solver_2d.build_materials`` applies — or ``(None, None)``."""
+    precedence ``fem_solver_2d.build_materials`` applies — or ``(None, None)``.
+    ``ov``: an override parsed from a body (the kernel route) instead of the
+    request context the GET routes' dependency sets."""
     from motor_ai_sim import materials as _ml
     from motor_ai_sim.config import get_material_assignments
     from motor_ai_sim.material_context import get_request_materials
     asg = dict(get_material_assignments() or {})
-    ov = get_request_materials() or {}
+    ov = ov if ov is not None else (get_request_materials() or {})
     asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
     name = asg.get("magnet")
     if not name:
@@ -4490,17 +4498,37 @@ def _typed_magnet_temp_guard(magnet_temp_c: Optional[float] = None,
     coupled loop calls ``get_fem_transient`` in-process with the temperature it
     COMPUTED, which is flagged in the result (``magnet_over_limit``), never
     refused.  ``restore`` / ``ledger_probe`` solve nothing and pass."""
-    if magnet_temp_c is None or restore or ledger_probe:
+    if restore or ledger_probe:
         return
+    why = typed_magnet_temp_refusal(magnet_temp_c)
+    if why:
+        raise HTTPException(status_code=422, detail=why)
+
+
+def typed_magnet_temp_refusal(magnet_temp_c: Any,
+                              mat: Optional[str] = None) -> Optional[str]:
+    """The one sentence a typed magnet temperature is refused with, or None.
+
+    Shared by the GET route's dependency and ``POST /api/kernel/run`` — the
+    path the Simulation tab's Run actually takes (2026-10-30: the guard sat on
+    the GET route only, so a Run from the panel was never checked server-side).
+    ``mat``: the request's own material override JSON, when it came in a body."""
+    if magnet_temp_c is None or str(magnet_temp_c).strip() == "":
+        return None
     from motor_ai_sim.materials import magnet_temp_limit_error
     try:
-        _name, card = _assigned_magnet_card()
+        ov = _parse_mat_override(mat) if mat else None
+        _name, card = _assigned_magnet_card(ov)
     except Exception:   # noqa: BLE001 — the solve itself reports a bad card
-        return
+        return None
     why = magnet_temp_limit_error(card, magnet_temp_c) if card is not None else None
-    if why:
-        raise HTTPException(status_code=422,
-                            detail=f"Magnet temperature {float(magnet_temp_c):g} °C: {why}")
+    if not why:
+        return None
+    try:
+        t = "%g" % float(magnet_temp_c)
+    except (TypeError, ValueError):
+        t = str(magnet_temp_c)
+    return f"Magnet temperature {t} °C: {why}"
 
 
 @router.get("/physics/fem_transient",

@@ -151,6 +151,9 @@ def compute(die: str, cfg: str, die_doc: dict, cfg_doc: dict) -> Dict[str, Any]:
     return {
         "k_end": round(float(k), NDIG),
         "k_end_semicircle": round(float(d["k_end_semicircle"]), NDIG),
+        # what a die without its own CAD profile was billed at until 2026-10-30 (comparison only)
+        "k_end_template": round(float(d["k_end_template"]), NDIG),
+        "kind": d.get("coil_kind"),
         "stack_mm": round(float(d["stack_length_mm"]), 3),
         "turns": int(d["turns_per_coil"]),
         "wire_beng_r_mm": round(float(d["wire_beng_r_mm"]), 4),
@@ -267,7 +270,8 @@ def print_report(rep: Dict[str, Any]) -> None:
         print(f"\n{e['die']} / {e['config']}{'   [FROZEN revision: left as is]' if e.get('frozen') else ''}   ({e['file']})")
         print(f"   coil: L {c['stack_mm']:g} mm, {c['turns']} turns, bend R {c['wire_beng_r_mm']:g}, overhang "
               f"{c['coil_straight_extra_mm']:g}, leads {c['coil_lead_total_mm']:g} mm, mean turn {c['mean_turn_mm']:g} mm"
-              f" -> k_end {c['k_end']:.3f} (semicircle {c['k_end_semicircle']:.3f}); {c['source']}")
+              f" -> k_end {c['k_end']:.3f} (CIANO14 40 template rules {c['k_end_template']:.3f}, semicircle "
+              f"{c['k_end_semicircle']:.3f}); {c['source']}")
         for r in e["rows"]:
             where = "config" if r["level"] == "config" else f"duty {r['duty']}"
             line = f"   {where:<28} {r['key']:<20} {_fmt(r['old'])} -> {_fmt(r['new'])}"

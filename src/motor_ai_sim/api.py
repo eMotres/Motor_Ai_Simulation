@@ -1106,6 +1106,8 @@ def get_full_config(geo: Optional[str] = None):
                 _kcoil = {
                     "source": _cd.get("coil_source"),
                     "profile": _cd.get("coil_profile"),
+                    # "cad" = the die's own CAD profile, "estimate" = none (size-aware rules)
+                    "kind": _cd.get("coil_kind"),
                     "typed_keys": _cd.get("coil_typed") or [],
                     "wire_beng_r_mm": round(float(_cd["wire_beng_r_mm"]), 4),
                     "coil_straight_extra_mm": round(float(_cd["coil_straight_extra_mm"]), 4),
@@ -1113,6 +1115,7 @@ def get_full_config(geo: Optional[str] = None):
                     "turns_per_coil": int(_cd["turns_per_coil"]),
                     "mean_turn_length_mm": round(float(_cd["mean_turn_length_mm"]), 3),
                     "k_end_semicircle": round(float(_cd["k_end_semicircle"]), 3),
+                    "k_end_template": round(float(_cd["k_end_template"]), 3),
                 }
             except Exception:                   # noqa: BLE001 — the details never block the number
                 _kcoil = None

@@ -135,8 +135,9 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = 
       "auto" / "cad_coil" (default; owner 2026-10-30): mean turn of the coil the CAD build
       actually draws for THIS geometry (``cad/motor_templates/segmented_flatwire/coil.py``,
       the coil of the 3-D view and the CAD export), k_end = mean turn / (2·L).  Its bend
-      radius, straight overhang and leads come from the die's CAD reference profile
-      evaluated on the live geometry (``coil_build.coil_parameters``); explicit
+      radius, straight overhang and leads come from the die's OWN CAD reference profile
+      evaluated on the live geometry (``coil_build.coil_parameters``), or - for a die
+      without one - from the size-aware estimate ``coil_build.estimate_coil``; explicit
       ``wire_beng_r`` / ``coil_straight_extra`` / ``coil_lead_total`` in the geometry are
       per-die overrides.  Every geometry edit moves it.  Agrees with the 3-D conductor
       length within ±3 % across families (CIANO14 40 L12 +2.2 %, L20 +1.6 % against the
@@ -164,16 +165,20 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = 
 
 def cad_coil_dimensions(p: Any, geo: Dict[str, Any] | None = None, *, die: Optional[str] = None,
                         config: Optional[str] = None, cad_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Breakdown of the built tooth coil (``cad_coil_length``) with its parameters' source and the semicircle beside it."""
-    from motor_ai_sim.coil_build import coil_parameters
+    """Breakdown of the built tooth coil (``cad_coil_length``) with its parameters' source, and two comparisons beside it: the
+    semicircle and the CIANO14 40 template rules (what a die without its own CAD profile was billed at until 2026-10-30)."""
+    from motor_ai_sim.coil_build import coil_parameters, template_coil_parameters
     coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides)
     d: Dict[str, Any] = dict(cad_coil_length(p, geo, coil))
     L_mm = d["stack_length_mm"]
     k_cad = d["mean_turn_length_mm"] / (2.0 * L_mm) if L_mm > 0 else 1.0
     k_semi = end_winding_factor(p, geo, method="semicircle")
-    d.update(k_end_cad=k_cad, k_end_semicircle=k_semi,
+    tmpl = template_coil_parameters(geo, cad_overrides)
+    k_tmpl = (cad_coil_length(p, geo, tmpl)["mean_turn_length_mm"] / (2.0 * L_mm)) if L_mm > 0 else 1.0
+    d.update(k_end_cad=k_cad, k_end_semicircle=k_semi, k_end_template=k_tmpl,
              delta_k_end_pct=(k_cad - k_semi) / k_semi * 100.0 if k_semi > 0 else 0.0,
-             coil_source=coil.get("source"), coil_profile=coil.get("profile"), coil_typed=list(coil.get("typed") or []))
+             coil_source=coil.get("source"), coil_profile=coil.get("profile"), coil_kind=coil.get("kind"),
+             coil_typed=list(coil.get("typed") or []))
     return d
 
 

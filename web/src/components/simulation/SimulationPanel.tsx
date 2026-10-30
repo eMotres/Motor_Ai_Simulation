@@ -13,7 +13,7 @@ import {
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
   Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem,
-  InputAdornment, Switch, Link,
+  InputAdornment, Switch,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
@@ -26,6 +26,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CheckCircleIcon  from '@mui/icons-material/CheckCircle';
 import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
+import RestartAltIcon   from '@mui/icons-material/RestartAlt';
 import PhysicsDashboard from './PhysicsDashboard';
 import SolveProgressStrip from './SolveProgressStrip';
 // The SAME bar, pointed at the orchestrator's own counter: the transient's strip
@@ -37,7 +38,7 @@ import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
 import { currentText, perSetFromTotal, setsOf, totalFromPerSet } from '../../lib/perSetCurrent';
-import { magnetTempError, magnetTempOverLimit, parseMagnetTempC } from '../../lib/magnetTemp';
+import { magnetTempError, magnetTempOverLimit, magnetTempShown, parseMagnetTempC } from '../../lib/magnetTemp';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
   rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
@@ -75,6 +76,7 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { storedGapLayers, storedMeshFields } from '../../lib/meshSettings';
 import { narrowSplitColumn, narrowSplitOuter } from '../../lib/narrowLayout';
+import { geoKeyHash } from '../../lib/endWindingPin';
 
 // UI strings: locales/<lng>/simulation.json (docs/I18N.md).
 const tx = nsT('simulation');
@@ -193,19 +195,14 @@ interface EndWindingCoil {
   source?: string | null; profile?: string | null; typed_keys?: string[];
   wire_beng_r_mm?: number; coil_straight_extra_mm?: number; coil_lead_total_mm?: number;
   turns_per_coil?: number; mean_turn_length_mm?: number; k_end_semicircle?: number;
-}
-/** Short, stable key of a geometry signature: a typed k_end belongs to the geometry it was typed on. */
-function geoKeyHash(sig: string): string {
-  let h = 5381;
-  for (let i = 0; i < sig.length; i++) h = ((h * 33) ^ sig.charCodeAt(i)) >>> 0;
-  return `${sig.length}:${h.toString(36)}`;
+  kind?: 'cad' | 'estimate' | null; k_end_template?: number;
 }
 const fmtMm = (v: unknown): string => (Number.isFinite(Number(v)) ? `${(+Number(v).toFixed(2))} mm` : '—');
-/** One line under the k_end field: the built coil's shape, or nothing before the first answer. */
-function endWindingCoilLine(c: EndWindingCoil | null): string | undefined {
-  if (!c) return undefined;
-  return `from coil: bend R ${fmtMm(c.wire_beng_r_mm)} · overhang ${fmtMm(c.coil_straight_extra_mm)} · leads ${fmtMm(c.coil_lead_total_mm)}`
-    + (c.typed_keys && c.typed_keys.length ? ' (die keys)' : c.profile ? '' : ' (template rules)');
+/** Where the k_end in the field comes from, for its label. */
+function endWindingSourceLabel(typed: boolean, c: EndWindingCoil | null): string {
+  if (typed) return 'typed';
+  if (c?.kind === 'estimate') return 'estimated (no CAD profile)';
+  return 'from CAD coil';
 }
 
 // Winding connection options come from the backend (/api/winding/config), which
@@ -920,7 +917,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the BH-curve knee sets how much demagnetising field it survives.  Refreshed on
   // the same event a material change fires, so it never lags the assignment.
   const [magInfo, setMagInfo] = useState<{ name: string; Br?: number; knee?: number;
-    tmax?: number; atC?: number | null } | null>(null);
+    tmax?: number; atC?: number | null; cardC?: number } | null>(null);
   // The SAME hook that feeds ?mat= to the solver (via MaterialOverrideSync) is
   // this badge's source of truth: overlay-merged, optimistic on assign, and it
   // refreshes itself on every mat-assign event.  Two earlier versions of this
@@ -975,6 +972,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     let gone = false;
     (async () => {
       let Br: number | undefined, knee: number | undefined, tmax: number | undefined;
+      let cardC: number | undefined;   // the card's OWN temperature: what a blank field solves at
       let atC: number | null = null;
       const kneeOf = (bh: unknown) => (Array.isArray(bh) && bh.length > 1)
         ? Number((bh[0] as any)?.[1] <= 0 ? (bh[1] as any)?.[0] : (bh[0] as any)?.[0])
@@ -982,23 +980,34 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       try {   // a user material's props travel with the request, not the library
         const ov = JSON.parse(currentMatJson() || 'null');
         const p = ov?.materials?.[liveMagnet];
-        if (p) { Br = Number(p.Br); knee = kneeOf(p.bh_curve); tmax = Number(p.max_working_temp_c); }
+        if (p) { Br = Number(p.Br); knee = kneeOf(p.bh_curve); tmax = Number(p.max_working_temp_c);
+                 cardC = p.temperature_c != null ? Number(p.temperature_c) : undefined; }
       } catch { /* no override props — library below */ }
       if (!Number.isFinite(Br as number)) try {
-        const q = magTypedC != null ? `?temp_c=${encodeURIComponent(String(magTypedC))}` : '';
-        let r = await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}${q}`);
-        // a temperature the card cannot be moved to: the card as quoted, the field says why
-        if (!r.ok && q) r = await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}`);
-        else if (q) atC = magTypedC;
-        const mm = await r.json();
+        const url = `${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}`;
+        // the card as quoted: its own temperature and limit (a former `N52UH_150C` is 150 °C)
+        const mm = await (await fetch(url)).json();
         Br = Number(mm?.Br);
         knee = kneeOf(mm?.bh_curve);
         tmax = Number(mm?.max_working_temp_c);
+        cardC = mm?.temperature_c != null ? Number(mm.temperature_c) : undefined;
+        // …and at the typed temperature, for the badge (a temperature the card
+        // cannot be moved to keeps the card's numbers; the field says why)
+        if (magTypedC != null && magTypedC !== cardC) {
+          const r = await fetch(`${url}?temp_c=${encodeURIComponent(String(magTypedC))}`);
+          if (r.ok) {
+            const md = await r.json();
+            Br = Number(md?.Br);
+            knee = kneeOf(md?.bh_curve);
+            atC = magTypedC;
+          }
+        }
       } catch { /* library lookup is optional */ }
       if (!gone) setMagInfo({ name: liveMagnet,
                               Br: Number.isFinite(Br as number) ? Br : undefined,
                               knee: Number.isFinite(knee as number) ? knee : undefined,
-                              tmax: Number.isFinite(tmax as number) ? tmax : undefined, atC });
+                              tmax: Number.isFinite(tmax as number) ? tmax : undefined, atC,
+                              cardC: Number.isFinite(cardC as number) ? cardC : undefined });
     })();
     return () => { gone = true; };
   }, [liveMagnet, magTypedC]);
@@ -1022,6 +1031,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     : magnetTempError(magnetTempC)
       ? tx('magnetTempInvalid', { why: magnetTempError(magnetTempC) })
       : magOverC != null ? tx('magnetTempOverLimit', { max: magOverC }) : null;
+  // What the field SHOWS: the typed text, else the card's own temperature in
+  // grey — the number a blank field solves at, like the coil temperature beside
+  // it (owner 2026-10-30: an empty field read as «не работает»).
+  const magShown = magnetTempShown(magnetTempC, coupled ? null : magInfo?.cardC);
   // A design load can swap the shared config's materials without firing a
   // mat-assign event — bridge that one event to the hook's refresh.
   useEffect(() => {
@@ -1376,7 +1389,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
     coil_temp_c: coilTemp, steps_per_period: steps,
     ...(stepsSource ? { steps_per_period_source: stepsSource } : {}),
-    end_winding_factor: endWinding, connection, star_delta: starDelta,
+    // end_winding_typed: the optimizer pins k_end on every candidate only when
+    // it was typed; the coil's own number belongs to this geometry alone.
+    end_winding_factor: endWinding, end_winding_typed: endWindingTyped,
+    connection, star_delta: starDelta,
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
     // The BLDC block amplitude is PHYSICS, so it goes where every other
@@ -1403,7 +1419,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
-      coilTemp, steps, stepsSource, endWinding, connection, starDelta, drive, opMode, vPeak,
+      coilTemp, steps, stepsSource, endWinding, endWindingTyped, connection, starDelta, drive, opMode, vPeak,
       vDelta, iBlock]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
@@ -2625,19 +2641,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <TextField
               label={coupled ? tx('magnetTempLoopC') : tx('magnetTempC')}
               type="text" size="small" fullWidth
-              value={magnetTempC}
+              value={magShown.text}
               placeholder={tx('asQuoted')}
               onChange={e => setMagnetTempC(e.target.value)}
+              // the card's number is a default, not an entry: one click selects
+              // it, so typing replaces it instead of appending to it
+              onFocus={e => { if (magShown.isCard) e.target.select(); }}
               error={!!magTempWhy}
               helperText={magTempWhy ?? undefined}
               inputProps={{ readOnly: coupled, inputMode: 'decimal' }}
               InputProps={{ endAdornment: <HelpTip title={coupled
-                ? tx('magnetTempLoopTip') : tx('magnetTempTip')} /> }}
+                ? tx('magnetTempLoopTip')
+                : tx('magnetTempTip', { card: magInfo?.name ?? '—',
+                                        cardC: magInfo?.cardC ?? '—',
+                                        max: magInfo?.tmax ?? '—' })} /> }}
               disabled={isRunning}
-              sx={coupled ? { '& input': { color: '#34d399' } } : undefined}
+              sx={coupled ? { '& input': { color: '#34d399' } }
+                : magShown.isCard ? { '& input': { color: 'var(--text-3)' } } : undefined}
             />
             <TextField
-              label={`End-winding factor k_end — ${endWindingTyped ? 'typed' : 'from coil'}`}
+              label={`End-winding factor k_end — ${endWindingSourceLabel(endWindingTyped, endWindingCoil)}`}
               type="number" size="small" fullWidth
               value={endWinding}
               onChange={e => {
@@ -2650,20 +2673,27 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 setEndWinding(+raw);
                 setEndWindingTypedOn(geomKey);
               }}
-              helperText={endWindingTyped
-                ? <span>typed · coil {endWindingGeo ? endWindingGeo.toFixed(3) : '—'}{' '}
-                    <Link component="button" type="button" variant="caption" underline="always"
-                          onClick={() => { setEndWindingTypedOn(''); if (endWindingGeo > 0) setEndWinding(endWindingGeo); }}>
-                      use coil value
-                    </Link></span>
-                : endWindingCoilLine(endWindingCoil)}
               inputProps={{ step: 0.05, min: 0, max: 6 }}
-              InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance, copper loss and copper mass by the end-turn length a 2-D solve can't see.` +
-                          ` k_end = mean turn / (2·L_stack) of the coil the CAD build draws for THIS geometry (the coil of the 3-D view): ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}.` +
-                          (endWindingCoil ? ` ${endWindingCoil.source ?? ''}: edgewise bend radius ${fmtMm(endWindingCoil.wire_beng_r_mm)}, straight overhang ${fmtMm(endWindingCoil.coil_straight_extra_mm)}, leads ${fmtMm(endWindingCoil.coil_lead_total_mm)}, mean turn ${fmtMm(endWindingCoil.mean_turn_length_mm)} (${endWindingCoil.turns_per_coil ?? '—'} turns).` +
-                            ` For comparison only, the idealised semicircle end turn would give ${endWindingCoil.k_end_semicircle ?? '—'}.` : '') +
+              // No helper line under the field (UI rule): the coil's numbers live in the tooltip,
+              // the way back from a typed value is the reset button.
+              InputProps={{ endAdornment: <InputAdornment position="end" sx={{ gap: 0.25 }}>
+                {endWindingTyped && (
+                  <Tooltip title={`Use the coil value ${endWindingGeo ? endWindingGeo.toFixed(3) : ''}`}>
+                    <IconButton size="small" aria-label="use the coil value"
+                      onClick={() => { setEndWindingTypedOn(''); if (endWindingGeo > 0) setEndWinding(endWindingGeo); }}>
+                      <RestartAltIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                <HelpTip title={`End-winding copper: scales the coil resistance, copper loss and copper mass by the end-turn length a 2-D solve can't see.` +
+                          ` k_end = mean turn / (2·L_stack) of the tooth coil for THIS geometry: ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
+                          (endWindingTyped ? ` (you typed ${endWinding}).` : '.') +
+                          (endWindingCoil ? ` ${endWindingCoil.source ?? ''}. Bend radius ${fmtMm(endWindingCoil.wire_beng_r_mm)}, straight overhang ${fmtMm(endWindingCoil.coil_straight_extra_mm)}, leads ${fmtMm(endWindingCoil.coil_lead_total_mm)}, mean turn ${fmtMm(endWindingCoil.mean_turn_length_mm)} (${endWindingCoil.turns_per_coil ?? '—'} turns)` +
+                            ((endWindingCoil.typed_keys?.length ?? 0) > 0 ? ` - ${endWindingCoil.typed_keys!.join(', ')} typed in the die.` : '.') +
+                            ` For comparison only: the idealised semicircle end turn ${endWindingCoil.k_end_semicircle ?? '—'}, the CIANO14 40 template coil ${endWindingCoil.k_end_template ?? '—'}.` : '') +
                           ` Re-derived on EVERY geometry change and used in all simulations AND optimizations.` +
-                          ` A typed value overrides it until you clear it or the geometry changes.`} /> }}
+                          ` A typed value overrides it until you clear it or the geometry changes.`} />
+              </InputAdornment> }}
               disabled={isRunning}
             />
             <TextField

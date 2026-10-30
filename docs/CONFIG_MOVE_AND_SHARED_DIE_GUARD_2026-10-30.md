@@ -80,4 +80,29 @@ propeller-S1 folders of the configuration.
 configuration is not the target die (non-empty: duty saves there answer 409); `stale_duties` = duties whose saved
 build differs from the target build.
 
-Tests: `tests/test_die_shared_snapshot_guard.py`, `tests/test_config_move.py`.
+## 3. A duty save from another lamination saves on the die it is
+
+2026-10-30 04:24-04:40 the owner changed wire_width 7 → 7.5 (stack 90, 15 turns, wire_height 1.0) on
+`CIANO56 400_80 vadim 5 / L100-2x3ph-Al2O3-14t` and pressed "Save to peak" three times; `POST /duty` answered 409
+"build differs (die slot_width 7.74 → 8.24)" each time and the long red text read as saved.  `vadim 5` holds only that
+configuration, so section 1 did not apply; the die keeps its own wire keys (the 2026-09-27 rule), so its slot never
+follows; and the strip's only offer, a new configuration of the SAME die, hit the same 409.
+
+Now (`_upsert_duty` → `_move_duty_save`, `routes/family.py`): when every difference the save would refuse on is
+die-level and `die_shape_diffs` names a real lamination change, the configuration moves to a die that IS the live
+lamination — an existing one of the caller's layer (`_matching_lamination`), else a minted `<family base> <user> <n>` —
+and the duty is saved there in the same request (one more pass, which never moves again).  When the matching die already
+holds a configuration of this very build (free keys, connection, no contradicting material: `_config_with_build`), the
+duty goes into it instead of a second copy — e.g. the hand-built `vadim 6 / L90-2x3ph-Al2O3-15t`.  The source die is
+not written.  The answer carries `die` and `transitioned: {die, config, created, from_die, from_config, diffs}`; the
+context `transitioned_from.reason == "build_differs"`; the strip says "↷ moved to its own die" and the save line names
+the slot change.
+
+Still refused (409, nothing written): a locked configuration's own differences, materials on a locked configuration, a
+die difference that is only a stale derived copy.  The refusal stays on the Save button ("✗ Save to <duty> — not saved",
+one red line, the server's text in the tooltip) with the one action that resolves it: "＋ Save as new configuration" when
+only configuration keys differ, "＋ Save as new configuration on a new die" (`POST /save_as_new_die` with the active
+configuration and duty names) when the refusal names the die (`web/src/lib/buildClash.ts`).
+
+Tests: `tests/test_die_shared_snapshot_guard.py`, `tests/test_config_move.py`, `tests/test_duty_save_lamination_move.py`,
+`web/src/lib/__tests__/buildClash.test.mjs`.

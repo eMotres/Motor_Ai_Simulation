@@ -494,9 +494,17 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         op_mode = "motor"
     # Same k_end as the loss/R path above — a pinned end-winding factor must
     # bill the copper mass too, exactly as the Simulation summary does (it
-    # passes the solver's k_end_used into compute_masses).
+    # passes the solver's k_end_used into compute_masses).  Unpinned, that is
+    # THIS candidate's built coil (owner 2026-10-30): a shorter stack keeps
+    # the same end turns, so its copper mass and loss do not scale with L.
+    try:
+        k_end_used = float(d.get("end_winding_factor") or 0.0)
+    except (TypeError, ValueError):
+        k_end_used = 0.0
+    if not (math.isfinite(k_end_used) and k_end_used > 0.0):
+        k_end_used = float(end_winding_factor)
     mass = float(_masses(build_params(geo), geo,
-                         k_end=end_winding_factor)["total"])
+                         k_end=k_end_used)["total"])
     # Voltage waveform quality — SAME helper as the Simulation summary, so the
     # optimizer's THD is byte-identical to the Simulation tab's.
     from motor_ai_sim.simulation.postproc import voltage_harmonics
@@ -583,6 +591,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "power_per_mass_W_kg": round(pmech / mass, 1) if mass > 0 else 0.0,
         "loss_density_W_kg": round(ploss / mass, 1) if mass > 0 else 0.0,
         "mass_total_kg": round(mass, 3), "V_peak": round(float(d["V_peak"]), 1),
+        # The end-winding factor this point was billed at (loss, R and mass),
+        # and whose it was: "typed" = the Simulation pin, "coil" = this
+        # candidate's own built coil.
+        "k_end_used": round(k_end_used, 4) if k_end_used > 0.0 else None,
+        "k_end_source": "typed" if float(end_winding_factor) > 0.0 else "coil",
         "V_line_peak_V": round(v_line_peak, 1),
         "I_phase_rms_A": round(float(current_a), 2),     # TERMINAL, as set
         "I_winding_rms_A": round(_i_wind, 2),

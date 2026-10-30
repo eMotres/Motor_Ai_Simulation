@@ -480,9 +480,10 @@ async def create_project(request: Request):
         # a customer cannot choose the members, the status or the engineer in charge
         body = {"title": body.get("title"), "customer_org": body.get("customer_org")}
         if self_service.limit_reached(user):
+            limit = self_service.limit_of(user)          # this account's own limit (default or admin override)
             raise HTTPException(status_code=429, detail={
-                "code": self_service.LIMIT_CODE, "limit": self_service.MAX_OPEN_OWNED_PROJECTS,
-                "message": f"You can have up to {self_service.MAX_OPEN_OWNED_PROJECTS} open projects; close one to open another."})
+                "code": self_service.LIMIT_CODE, "limit": limit,
+                "message": f"You can have up to {limit} open projects; close one to open another."})
     requested_id = str(body.get("id") or "").strip().lower()
     if requested_id and not store.valid_id(requested_id):
         raise HTTPException(status_code=422, detail="id must be a lowercase slug")

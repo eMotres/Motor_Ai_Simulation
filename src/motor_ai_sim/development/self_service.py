@@ -13,10 +13,11 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from motor_ai_sim.development import access, store
+from motor_ai_sim.development import access, project_limits, store
 
-#: Open (not closed) projects one account may own.  Staff are not limited: they create projects for customers.
-MAX_OPEN_OWNED_PROJECTS = 5
+#: Open (not closed) projects one account may own unless an admin set an override (project_limits.py).  Staff are not limited:
+#: they create projects for customers.
+MAX_OPEN_OWNED_PROJECTS = project_limits.DEFAULT_OPEN_LIMIT
 LIMIT_CODE = "project_limit"
 _MAX_SLUG = 48
 
@@ -48,8 +49,14 @@ def open_owned_count(email: str) -> int:
     return count
 
 
-def limit_reached(user: dict) -> bool:
-    """True for a non-staff account that already owns ``MAX_OPEN_OWNED_PROJECTS`` open projects."""
+def limit_of(user: dict) -> int | None:
+    """The open projects this account may own: its admin override, else the default; ``None`` = unlimited (staff, or "unlimited")."""
     if access.is_engineer(user):
-        return False
-    return open_owned_count(str(user.get("email") or "")) >= MAX_OPEN_OWNED_PROJECTS
+        return None
+    return project_limits.limit_for(str(user.get("email") or ""))
+
+
+def limit_reached(user: dict) -> bool:
+    """True for a non-staff account that already owns as many open projects as its limit allows."""
+    limit = limit_of(user)
+    return limit is not None and open_owned_count(str(user.get("email") or "")) >= limit

@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -786,10 +786,38 @@ def users_list(_admin: dict = Depends(require_admin)):
     cannot be read)."""
     from motor_ai_sim import usage_stats as US
     used = US.month_cpu_h_by_user()
+    from motor_ai_sim.development import project_limits as PL
+    limits = PL.overrides()
     rows = U.list_users()
     for r in rows:
         r["cpu_h_month"] = None if used is None else used.get(r["email"], 0.0)
-    return {"users": rows}
+        r["project_limit"] = limits.get(r["email"])       # None = the default; an int or "unlimited" = the admin's override
+    return {"users": rows, "project_limit_default": PL.DEFAULT_OPEN_LIMIT}
+
+
+@router.get("/project-limits")
+def project_limits_list(_admin: dict = Depends(require_admin)):
+    """Every open-projects override, also those of an address with no account yet (it applies on sign-up)."""
+    from motor_ai_sim.development import project_limits as PL
+    have = {u["email"] for u in U.list_users()}
+    return {"default": PL.DEFAULT_OPEN_LIMIT,
+            "limits": [{"email": e, "limit": v, "account": e in have} for e, v in sorted(PL.overrides().items())]}
+
+
+class ProjectLimitReq(BaseModel):
+    limit: Any = None     # raw JSON on purpose (pydantic would turn true into 1): a whole number, "unlimited", or null / "" for the default
+
+
+@router.put("/project-limits/{email}")
+def project_limit_set(email: str, req: ProjectLimitReq, _admin: dict = Depends(require_admin)):
+    """Set the open-projects limit of one e-mail (an account or a not-yet-registered address)."""
+    from motor_ai_sim.development import project_limits as PL
+    try:
+        stored = PL.set_override(email, req.limit)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    _AA.record(_AA.actor_of(_admin), "user.project_limit", str(email), subject=str(email), details={"limit": stored})
+    return {"ok": True, "email": U._norm(email), "limit": stored, "default": PL.DEFAULT_OPEN_LIMIT}
 
 
 @router.post("/users")

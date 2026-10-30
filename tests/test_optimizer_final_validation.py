@@ -157,4 +157,5 @@ def test_scan_points_are_preliminary_and_apply_is_direct():
     assert "v?.apply_eligible" not in apply_body
     assert "v?.cogging_sampling_final_quality_sufficient" not in apply_body
     assert "v?.nonlinear_converged" not in apply_body
-    assert "disabled={applying || running}" in panel
+    # Apply stays live while a sweep runs (owner 2026-10-30; tests/test_sweep_apply_after_reload.py)
+    assert "disabled={applying}" in panel

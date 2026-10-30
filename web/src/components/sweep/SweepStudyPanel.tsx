@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Button, LinearProgress, Divider, TextField,
-  FormControl, InputLabel, Select, MenuItem, Chip,
+  FormControl, InputLabel, Select, MenuItem, Chip, Tooltip as MuiTooltip,
 } from '@mui/material';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -741,18 +741,20 @@ const SweepStudyPanel: React.FC = () => {
   }, [result, sentOps, connectBy, k3dChart]);
 
   // Which k_end the points were billed at: a typed pin (one number for every
-  // point) or each point's own coil (a range).  Points from before the field
-  // existed carry none, and the line is then left out.
+  // point) or each point's own coil.  Points from before the field existed
+  // carry none, and the chip is then left out.  One value on screen (the
+  // largest = the most end-turn copper); the spread goes in the tooltip.
   const kEndNote = useMemo(() => {
     const rows = series.flatMap(s => s.rows).filter(r => Number(r.kEnd) > 0);
     if (!rows.length) return null;
     const ks = rows.map(r => Number(r.kEnd));
     const lo = Math.min(...ks), hi = Math.max(...ks);
     if (rows.every(r => r.kEndSource === 'typed'))
-      return `k_end ${lo.toFixed(3)} typed in Simulation — the same on every point`;
-    const range = hi - lo < 5e-4 ? lo.toFixed(3) : `${lo.toFixed(3)}–${hi.toFixed(3)}`;
-    return `k_end from each point's own coil: ${range}`
-      + (rows.some(r => r.kEndSource === 'typed') ? ' (some points typed)' : '');
+      return { label: `k_end ${hi.toFixed(3)} typed`,
+               tip: `k_end ${hi.toFixed(3)} typed in Simulation - the same on every point.` };
+    return { label: `k_end per point ≤ ${hi.toFixed(3)}`,
+             tip: `Each point's end turns are billed at its own coil: k_end ${lo.toFixed(3)} to ${hi.toFixed(3)}.`
+               + (rows.some(r => r.kEndSource === 'typed') ? ' Some points used a typed k_end.' : '') };
   }, [series]);
 
   // A stale zoom window survives into the NEXT result set and shows a sliver
@@ -1290,6 +1292,14 @@ const SweepStudyPanel: React.FC = () => {
                   ? `no point survived — ${result?.points?.length ?? 0} evaluated, none usable (see below)`
                   : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
             </Typography>
+            {/* Which k_end the points were billed at: a label + tooltip, no caption line (UI rule). */}
+            {kEndNote && (
+              <MuiTooltip title={kEndNote.tip}>
+                <Chip size="small" label={kEndNote.label}
+                  sx={{ height: 20, fontSize: 10, color: 'var(--text-3)',
+                        border: '1px solid var(--panel)', bgcolor: 'transparent' }} />
+              </MuiTooltip>
+            )}
             {/* A zoomed view MUST say so and offer the way back — double-click
                 was the only reset and nothing on screen mentioned it. */}
             {zoom && (
@@ -1314,11 +1324,6 @@ const SweepStudyPanel: React.FC = () => {
                       border: '1px solid var(--panel)', bgcolor: 'transparent' }} />
             )}
           </Box>
-          {kEndNote && (
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.5, lineHeight: 1.4 }}>
-              {kEndNote}
-            </Typography>
-          )}
           {buildFails && (
             <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
               ⚠ {buildFails.n} of {buildFails.total} design{buildFails.n === 1 ? '' : 's'}{' '}

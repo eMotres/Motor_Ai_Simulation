@@ -9,16 +9,19 @@ most dies typed nothing, so most machines got the semicircle.
 
 Where the built coil's parameters come from - exactly the path of the CAD build (``motor_ai_sim.cad.store.make_profile``):
 
-1. the die's CAD REFERENCE PROFILE (``store.reference_for(die)``: ``cad/reference/<die slug>.json`` when the die has its own, else
-   the CIANO14 40 reference every other die is built from), with the simulation geometry laid on top of it row by row (the mapping
-   of ``config/fusion_param_map.yaml``), the die's documented deviations, and the configuration's ``cad_overrides`` (Geometry >
-   Full: lead extension / stub length are CAD-only edits), then every expression evaluated.  The coil rows are formulas of the
-   geometry - e.g. the base profile's bend radius is ``tooth_width/2 + insulation_thickness + wire_spacing_x/2 - 0.05 mm`` and its
-   straight length ``motor_length + 1 mm`` - so a geometry edit moves them the way it moves the built coil;
-2. without the reference files on this host (they are private data, ``store.find_reference_dir``): the template's own base rules,
-   the ones ``cad/motor_templates/segmented_flatwire/coil.py`` documents (bend axis 0.05 mm off the leg's inner side, straight legs
-   1 mm longer than the stack, leads 4.1 + 5 mm).  The answer says so (``source``), it is never silent;
+1. the die's OWN CAD REFERENCE PROFILE (``store.reference_for(die)``: ``cad/reference/<die slug>.json``; the CIANO14 40 base profile
+   is the own profile of the CIANO14 40 dies only), with the simulation geometry laid on top of it row by row (the mapping of
+   ``config/fusion_param_map.yaml``), the die's documented deviations, and the configuration's ``cad_overrides`` (Geometry > Full:
+   lead extension / stub length are CAD-only edits), then every expression evaluated.  The coil rows are formulas of the geometry -
+   e.g. the base profile's bend radius is ``tooth_width/2 + insulation_thickness + wire_spacing_x/2 - 0.05 mm`` and its straight
+   length ``motor_length + 1 mm`` - so a geometry edit moves them the way it moves the built coil;
+2. a die WITHOUT its own profile (or a host without the private reference files): an ESTIMATE from the machine's own size
+   (:func:`estimate_coil`, owner 2026-10-30: the CIANO14 40 constants - 1 mm overhang, 4.1 + 5 mm leads, a bend radius that makes
+   every end a semicircle - are meaningless on a 400 mm machine).  ``kind`` is ``"estimate"`` and the UI says "estimated (no CAD
+   profile)", never "from coil";
 3. explicit ``wire_beng_r`` / ``coil_straight_extra`` / ``coil_lead_total`` in the geometry stay as per-die OVERRIDES of either.
+
+The template's base rules (``TEMPLATE_BASE_RULES``) remain only as a named comparison (:func:`template_coil_parameters`).
 
 Wire: flat wire wound ON EDGE around the tooth end.  The builder draws each layer as a ``wire_width x wire_height`` rectangle whose
 ``wire_width`` side lies across the slot (x) and bends it about axes parallel to the radial (y) direction - an edgewise bend, whose
@@ -31,13 +34,15 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 import threading
 import time
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-__all__ = ["COIL_KEYS", "TEMPLATE_BASE_RULES", "coil_parameters", "context_machine", "clear_cache"]
+__all__ = ["COIL_KEYS", "TEMPLATE_BASE_RULES", "K_BEND", "coil_parameters", "estimate_coil", "template_coil_parameters",
+           "context_machine", "clear_cache"]
 
 #: geometry keys of the coil shape (mm) - also the names of the CAD profile rows
 COIL_KEYS = ("wire_beng_r", "coil_straight_extra", "coil_lead_total")
@@ -55,6 +60,30 @@ TEMPLATE_BASE_RULES = {
 }
 #: geometry inputs of the base rules and their template defaults (mm), the defaults of the template's own Params
 _BASE_INPUTS = {"tooth_width": 3.3, "insulation_thickness": 0.07, "wire_spacing_x": 0.1, "motor_length": 20.0}
+#: dies whose own CAD profile IS the base profile (it was drawn from the CIANO14 40 Fusion model); every other die on the base
+#: profile only borrows it, so its coil is estimated instead
+_BASE_PROFILE_OWNERS = ("CIANO14_40",)
+
+# ── the estimate for a die without its own CAD profile (owner 2026-10-30) ───────────────────────────────────────────────────
+#: smallest inner bend radius / wire dimension in the bend plane.  The end turn bends the wire about a radial axis, so the
+#: dimension in the bend plane is ``wire_width`` (edgewise when wire_width > wire_height, flatwise otherwise; for a round wire it
+#: reads r >= k d).  The radius never exceeds the leg's inner side x1 (that is the semicircle end).  k = 0.7 is CALIBRATED on
+#: the five coils drawn in Fusion (the private reference profiles, 2026-10-30): their bends run from 0.5·w to the semicircle
+#: at 0.68-0.84·w.  With 0.7 the estimated k_end of their seven configurations is within 2.6 % (mean 1.0 %) of the CAD coil;
+#: 0.5 gives up to -3.8 %, 1.0 up to +5.4 %, the old CIANO14 40 template rules up to +3.5 %.  An estimate, not a supplier
+#: figure: a die's CAD profile or a typed ``wire_beng_r`` replaces it.
+K_BEND = 0.7
+#: axial overhang of the straight leg PER END = coil former / end insulation + clearance, scaled with the machine: 0.5 mm (rule W2,
+#: legs = stack + 1 mm, decided on the 40 mm and 85 mm machines) up to Ø100, then 0.5 % of the stator diameter (Ø200 -> 1 mm,
+#: Ø400 -> 2 mm per end) - end plates, slot-liner cuffs and creepage grow with the machine and its voltage.  On the five Fusion
+#: coils (Ø40 to Ø200) the rule is within 0.5 mm of the drawn overhang
+OVERHANG_MIN_MM = 0.5
+OVERHANG_PER_D = 0.005
+#: a lead per coil end = the circumferential run to the connection point, half a slot pitch at the coil's mean radius, plus the
+#: axial stub to the phase board: 5 mm (the template's stub) or two wire widths, whichever is longer (a wide strip needs the room
+#: to be bent up and soldered).  On the five Fusion coils the rule is within 13 % of the drawn leads (2 to 8 % on four of them).
+LEAD_STUB_MIN_MM = 5.0
+LEAD_STUB_PER_WIDTH = 2.0
 
 _lock = threading.Lock()
 _profiles: Dict[str, Tuple[float, Dict[str, Dict[str, Any]], dict]] = {}     # path|die -> (mtime, rows, deviations)
@@ -135,14 +164,22 @@ def _store():
     return store
 
 
+def _owns_base_profile(die: Optional[str]) -> bool:
+    sl = _store().slug(die or "")
+    return any(sl == o or sl.startswith(o + "_") for o in _BASE_PROFILE_OWNERS)
+
+
 def _reference(die: Optional[str]) -> Optional[Tuple[str, Dict[str, Dict[str, Any]], dict]]:
-    """(path, {row name: row}, deviations) of the die's CAD reference profile, or None without the reference files."""
+    """(path, {row name: row}, deviations) of the die's OWN CAD reference profile; None without the reference files or when the
+    die only borrows the base profile."""
     st = _store()
     try:
         path = st.reference_for(die or "")[0]
     except Exception:                                   # noqa: BLE001
         return None
     if not path or not os.path.exists(path):
+        return None
+    if os.path.abspath(path) == os.path.abspath(st.BASE_PROFILE) and not _owns_base_profile(die):
         return None
     try:
         mtime = os.path.getmtime(path)
@@ -217,6 +254,7 @@ def _from_reference(ref, die: str, config: str, geo: Dict[str, float], overrides
     vals = st.evaluate(_closure(exprs, COIL_KEYS))
     out = {k: float(vals[k]) for k in COIL_KEYS}
     out["profile"] = os.path.basename(path)
+    out["kind"] = "cad"
     out["source"] = "CAD coil of %s (reference profile %s%s)" % (
         die or "the template", os.path.basename(path), ("; cad_overrides " + ", ".join(applied)) if applied else "")
     if applied:
@@ -237,21 +275,73 @@ def _from_template(geo: Dict[str, float], overrides: dict) -> Dict[str, Any]:
     vals = st.evaluate(exprs)
     out = {k: float(vals[k]) for k in COIL_KEYS}
     out["profile"] = None
-    out["source"] = ("CAD template base coil rules (the CAD reference files are not on this host%s)"
+    out["kind"] = "template"
+    out["source"] = ("CIANO14 40 template base coil rules%s"
                      % ("; cad_overrides " + ", ".join(sorted(applied)) if applied else ""))
     if applied:
         out["cad_overrides"] = sorted(applied)
     return out
 
 
+def template_coil_parameters(geo: Optional[Mapping[str, Any]],
+                             cad_overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """The CIANO14 40 template's base coil rules on this geometry - a named COMPARISON only (what every die without its own
+    profile was billed at until 2026-10-30), never the answer for a machine."""
+    return _from_template(_numeric_geo(geo), dict(cad_overrides or {}))
+
+
+def _g(geo: Mapping[str, float], key: str, default: float) -> float:
+    v = geo.get(key)
+    return float(v) if v is not None and v > 0 else float(default)
+
+
+def estimate_coil(geo: Optional[Mapping[str, Any]], cad_overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """Bend radius, straight overhang and leads [mm] of a tooth coil ESTIMATED from the machine's own size, for a die without its
+    own CAD profile (see ``K_BEND``, ``OVERHANG_*``, ``LEAD_STUB_*``).  A lead extension / stub length set in the configuration's
+    ``cad_overrides`` (Geometry > Full) replaces its part of the lead."""
+    g = _numeric_geo(geo)
+    tw = _g(g, "tooth_width", _BASE_INPUTS["tooth_width"])
+    ins = g.get("insulation_thickness", _BASE_INPUTS["insulation_thickness"])
+    sx = g.get("wire_spacing_x", _BASE_INPUTS["wire_spacing_x"])
+    ww = _g(g, "wire_width", 2.5)
+    D = _g(g, "stator_diameter", 40.0)
+    x1 = tw / 2.0 + ins + sx / 2.0                     # inner side of a straight leg (masses.cad_coil_length)
+    rb = min(x1, K_BEND * ww)
+    per_end = max(OVERHANG_MIN_MM, OVERHANG_PER_D * D)
+    # coil's mean radius: the middle of the slot of an inner-rotor stator (design_eval.build_params radii)
+    r_mid = D / 2.0 - _g(g, "core_thickness", 0.06 * D) - _g(g, "slot_height", 0.1 * D) / 2.0
+    q = g.get("num_slots") or (g.get("num_seg", 0.0) * g.get("num_slots_per_segment", 0.0)) or 12.0
+    ext = math.pi * max(r_mid, 0.25 * D) / float(q)     # half a slot pitch = 2·pi·r / Q / 2
+    stub = max(LEAD_STUB_MIN_MM, LEAD_STUB_PER_WIDTH * ww)
+    applied = []
+    for k, v in _store().clean_cad_overrides(dict(cad_overrides or {})).items():
+        if k == "coil_lead_ext":
+            ext = float(v)
+            applied.append(k)
+        elif k == "coil_lead_len":
+            stub = float(v)
+            applied.append(k)
+    edge = "edgewise" if ww > g.get("wire_height", 0.0) else "flatwise"
+    return {
+        "wire_beng_r": rb, "coil_straight_extra": 2.0 * per_end, "coil_lead_total": ext + stub,
+        "profile": None, "kind": "estimate",
+        "source": ("estimated (no CAD profile): %s bend R = min(%g x wire width, leg side %.2f mm); overhang 2 x %.2f mm "
+                   "(max(%g mm, %g %% of the stator diameter)); leads = half a slot pitch %.2f + stub %.2f mm%s"
+                   % (edge, K_BEND, x1, per_end, OVERHANG_MIN_MM, OVERHANG_PER_D * 100.0, ext, stub,
+                      ("; cad_overrides " + ", ".join(sorted(applied))) if applied else "")),
+        **({"cad_overrides": sorted(applied)} if applied else {}),
+    }
+
+
 def coil_parameters(geo: Optional[Mapping[str, Any]], die: Optional[str] = None, config: Optional[str] = None,
                     cad_overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """``{"wire_beng_r", "coil_straight_extra", "coil_lead_total"}`` [mm] of the coil the CAD build draws for this geometry, plus
-    ``source`` (where they came from, in words), ``profile`` (the reference file, or None) and ``typed`` (the keys the geometry
-    itself carries - per-die overrides that win over the built coil's).
+    ``source`` (where they came from, in words), ``profile`` (the reference file, or None), ``kind`` (``"cad"`` = the die's own
+    CAD profile, ``"estimate"`` = no CAD profile, :func:`estimate_coil`) and ``typed`` (the keys the geometry itself carries -
+    per-die overrides that win over either).
 
     ``die`` / ``config`` default to the machine of the caller (:func:`context_machine`); ``cad_overrides`` defaults to that
-    configuration's stored block.  Never raises: the worst case is the template's base rules, named as such."""
+    configuration's stored block.  Never raises: the worst case is the estimate, named as such."""
     g = _numeric_geo(geo)
     if die is None:
         ctx = context_machine()
@@ -268,10 +358,10 @@ def coil_parameters(geo: Optional[Mapping[str, Any]], die: Optional[str] = None,
         hit = _memo.get(memo_key)
     if hit is None:
         try:
-            hit = _from_reference(ref, die, config, g, ovr) if ref else _from_template(g, ovr)
-        except Exception as exc:                        # noqa: BLE001 - a profile that does not evaluate falls to the template
-            hit = _from_template(g, ovr)
-            hit["source"] += "; the reference profile did not evaluate: %s" % exc
+            hit = _from_reference(ref, die, config, g, ovr) if ref else estimate_coil(g, ovr)
+        except Exception as exc:                        # noqa: BLE001 - a profile that does not evaluate falls to the estimate
+            hit = estimate_coil(g, ovr)
+            hit["source"] += "; the reference profile %s did not evaluate: %s" % (os.path.basename(ref[0]) if ref else "-", exc)
         with _lock:
             if len(_memo) >= _MEMO_MAX:
                 _memo.clear()

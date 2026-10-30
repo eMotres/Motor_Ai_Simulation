@@ -13,7 +13,7 @@ import {
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
   Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem,
-  InputAdornment, Switch, Link,
+  InputAdornment, Switch,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
@@ -26,6 +26,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CheckCircleIcon  from '@mui/icons-material/CheckCircle';
 import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
+import RestartAltIcon   from '@mui/icons-material/RestartAlt';
 import PhysicsDashboard from './PhysicsDashboard';
 import SolveProgressStrip from './SolveProgressStrip';
 // The SAME bar, pointed at the orchestrator's own counter: the transient's strip
@@ -194,13 +195,14 @@ interface EndWindingCoil {
   source?: string | null; profile?: string | null; typed_keys?: string[];
   wire_beng_r_mm?: number; coil_straight_extra_mm?: number; coil_lead_total_mm?: number;
   turns_per_coil?: number; mean_turn_length_mm?: number; k_end_semicircle?: number;
+  kind?: 'cad' | 'estimate' | null; k_end_template?: number;
 }
 const fmtMm = (v: unknown): string => (Number.isFinite(Number(v)) ? `${(+Number(v).toFixed(2))} mm` : '—');
-/** One line under the k_end field: the built coil's shape, or nothing before the first answer. */
-function endWindingCoilLine(c: EndWindingCoil | null): string | undefined {
-  if (!c) return undefined;
-  return `from coil: bend R ${fmtMm(c.wire_beng_r_mm)} · overhang ${fmtMm(c.coil_straight_extra_mm)} · leads ${fmtMm(c.coil_lead_total_mm)}`
-    + (c.typed_keys && c.typed_keys.length ? ' (die keys)' : c.profile ? '' : ' (template rules)');
+/** Where the k_end in the field comes from, for its label. */
+function endWindingSourceLabel(typed: boolean, c: EndWindingCoil | null): string {
+  if (typed) return 'typed';
+  if (c?.kind === 'estimate') return 'estimated (no CAD profile)';
+  return 'from CAD coil';
 }
 
 // Winding connection options come from the backend (/api/winding/config), which
@@ -2635,7 +2637,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               sx={coupled ? { '& input': { color: '#34d399' } } : undefined}
             />
             <TextField
-              label={`End-winding factor k_end — ${endWindingTyped ? 'typed' : 'from coil'}`}
+              label={`End-winding factor k_end — ${endWindingSourceLabel(endWindingTyped, endWindingCoil)}`}
               type="number" size="small" fullWidth
               value={endWinding}
               onChange={e => {
@@ -2648,20 +2650,27 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 setEndWinding(+raw);
                 setEndWindingTypedOn(geomKey);
               }}
-              helperText={endWindingTyped
-                ? <span>typed · coil {endWindingGeo ? endWindingGeo.toFixed(3) : '—'}{' '}
-                    <Link component="button" type="button" variant="caption" underline="always"
-                          onClick={() => { setEndWindingTypedOn(''); if (endWindingGeo > 0) setEndWinding(endWindingGeo); }}>
-                      use coil value
-                    </Link></span>
-                : endWindingCoilLine(endWindingCoil)}
               inputProps={{ step: 0.05, min: 0, max: 6 }}
-              InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance, copper loss and copper mass by the end-turn length a 2-D solve can't see.` +
-                          ` k_end = mean turn / (2·L_stack) of the coil the CAD build draws for THIS geometry (the coil of the 3-D view): ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}.` +
-                          (endWindingCoil ? ` ${endWindingCoil.source ?? ''}: edgewise bend radius ${fmtMm(endWindingCoil.wire_beng_r_mm)}, straight overhang ${fmtMm(endWindingCoil.coil_straight_extra_mm)}, leads ${fmtMm(endWindingCoil.coil_lead_total_mm)}, mean turn ${fmtMm(endWindingCoil.mean_turn_length_mm)} (${endWindingCoil.turns_per_coil ?? '—'} turns).` +
-                            ` For comparison only, the idealised semicircle end turn would give ${endWindingCoil.k_end_semicircle ?? '—'}.` : '') +
+              // No helper line under the field (UI rule): the coil's numbers live in the tooltip,
+              // the way back from a typed value is the reset button.
+              InputProps={{ endAdornment: <InputAdornment position="end" sx={{ gap: 0.25 }}>
+                {endWindingTyped && (
+                  <Tooltip title={`Use the coil value ${endWindingGeo ? endWindingGeo.toFixed(3) : ''}`}>
+                    <IconButton size="small" aria-label="use the coil value"
+                      onClick={() => { setEndWindingTypedOn(''); if (endWindingGeo > 0) setEndWinding(endWindingGeo); }}>
+                      <RestartAltIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                <HelpTip title={`End-winding copper: scales the coil resistance, copper loss and copper mass by the end-turn length a 2-D solve can't see.` +
+                          ` k_end = mean turn / (2·L_stack) of the tooth coil for THIS geometry: ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
+                          (endWindingTyped ? ` (you typed ${endWinding}).` : '.') +
+                          (endWindingCoil ? ` ${endWindingCoil.source ?? ''}. Bend radius ${fmtMm(endWindingCoil.wire_beng_r_mm)}, straight overhang ${fmtMm(endWindingCoil.coil_straight_extra_mm)}, leads ${fmtMm(endWindingCoil.coil_lead_total_mm)}, mean turn ${fmtMm(endWindingCoil.mean_turn_length_mm)} (${endWindingCoil.turns_per_coil ?? '—'} turns)` +
+                            ((endWindingCoil.typed_keys?.length ?? 0) > 0 ? ` - ${endWindingCoil.typed_keys!.join(', ')} typed in the die.` : '.') +
+                            ` For comparison only: the idealised semicircle end turn ${endWindingCoil.k_end_semicircle ?? '—'}, the CIANO14 40 template coil ${endWindingCoil.k_end_template ?? '—'}.` : '') +
                           ` Re-derived on EVERY geometry change and used in all simulations AND optimizations.` +
-                          ` A typed value overrides it until you clear it or the geometry changes.`} /> }}
+                          ` A typed value overrides it until you clear it or the geometry changes.`} />
+              </InputAdornment> }}
               disabled={isRunning}
             />
             <TextField

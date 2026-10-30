@@ -144,14 +144,29 @@ def m40():
 #            cu     0.0234260 -> 0.0256238
 #            active 0.0878199 -> 0.0900177
 #            total  0.0893669 -> 0.0915647
+#
+# PINS MOVED again 2026-10-30 (owner: the CIANO14 40 template constants mean
+# nothing on other machines) - a die without its own CAD profile gets the
+# size-aware ESTIMATE (coil_build.estimate_coil: bend R = min(0.7·w, x1), legs
+# L + 2·max(0.5 mm, 0.5 % D), leads half a slot pitch + max(5 mm, 2·w)), and these
+# fixtures name no die.  Only the copper (and the sums) moved:
+#
+#   150 mm   k_end  1.6776    -> 1.6714     (-0.37 %; +1.0 % on the reference half-loop)
+#            cu     0.529111  -> 0.527175
+#            active 2.999148  -> 2.997211
+#            total  3.066117  -> 3.064181
+#   40 mm    k_end  1.8956    -> 1.8983     (+0.14 %)
+#            cu     0.0256238 -> 0.0256598
+#            active 0.0900177 -> 0.0900537
+#            total  0.0915647 -> 0.0916007
 @pytest.mark.parametrize("part,kg", [
     ("stator", 1.20755),   # 4934.4 mm² CAD section × 35 mm × k_f 0.92 × 7600
     ("rotor",  0.536741),  # 2193.3 mm² — the holder AND the ribs between magnets
-    ("cu",     0.529111),  # 1008 mm² measured copper × 35 mm × k_end 1.6776 (built coil) × 8940 (pure Cu; was 8890 until 2026-10-15, 8933 until 2026-09-29)
+    ("cu",     0.527175),  # 1008 mm² measured copper × 35 mm × k_end 1.6714 (estimated coil) × 8940 (pure Cu; was 8890 until 2026-10-15, 8933 until 2026-09-29)
     ("mag",    0.725752),  # 2764.8 mm² of CAD magnet polygons (28 × 98.7 mm²)
     ("shaft",  0.0670),    # hollow 3 mm tube, 708.7 mm² — not a solid disc
-    ("active", 2.999148),  # iron + copper + magnets: the reference basis
-    ("total",  3.066117),  # active + shaft: the torque-per-mass divisor
+    ("active", 2.997211),  # iron + copper + magnets: the reference basis
+    ("total",  3.064181),  # active + shaft: the torque-per-mass divisor
 ])
 def test_150mm_component_masses(m150, part, kg):
     assert m150[part] == pytest.approx(kg, abs=5e-4)
@@ -160,11 +175,11 @@ def test_150mm_component_masses(m150, part, kg):
 @pytest.mark.parametrize("part,kg", [
     ("stator", 0.0323544),
     ("rotor",  0.0144683),
-    ("cu",     0.0256238),
+    ("cu",     0.0256598),
     ("mag",    0.0175712),
     ("shaft",  0.001547),
-    ("active", 0.0900177),
-    ("total",  0.0915647),
+    ("active", 0.0900537),
+    ("total",  0.0916007),
 ])
 def test_40mm_component_masses(m40, part, kg):
     assert m40[part] == pytest.approx(kg, abs=5e-6)
@@ -240,7 +255,7 @@ def test_k_end_is_the_built_coil_close_to_the_reference_half_loop():
     k = end_winding_factor(p, G150)
     assert end_winding_factor(p, G150, method="semicircle") == pytest.approx(
         (math.pi * (9.2 + 5.0) * 1e-3 / 2 + 0.035) / 0.035)
-    assert k == pytest.approx(1.6775695, abs=1e-6)
+    assert k == pytest.approx(1.6714309, abs=1e-6)
     ref_res_add = (math.pi * (9.2 / 2 + 5.4 / 2) * 1e-3 + 0.035) / 0.035
     assert k == pytest.approx(ref_res_add, rel=0.02)
 

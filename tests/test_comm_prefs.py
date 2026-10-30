@@ -536,6 +536,45 @@ def test_language_choice_ui_language_then_last_prefs_language_then_english(mail)
     assert {r.email: r.lang for r in rcpt}[LI] == "en"
 
 
+def test_topic_sends_only_to_accounts_that_currently_have_it_ticked(mail, capsys):
+    M, CP = mail["M"], mail["CP"]
+    CP.set_topics(ANNA, {"new_motors": True, "product_updates": True}, source="prefs_page")
+    CP.set_topics(LI, {"product_updates": True}, source="prefs_page")
+    CP.set_topics(ADMIN, {"new_motors": True}, source="prefs_page")
+    CP.set_topics(ADMIN, {"new_motors": False}, source="prefs_page")             # ticked, then unticked: not chosen now
+    rcpt, skipped = M.collect_audience(M.load_users(), locales={}, topic="new_motors")
+    assert [r.email for r in rcpt] == [ANNA]
+    assert (LI, "topic_not_chosen") in skipped and (ADMIN, "topic_not_chosen") in skipped
+    assert (BOB, "disabled") in skipped and ("unver@example.com", "unverified") in skipped      # the other reasons keep their names
+    # without --topic nothing changes: everybody eligible is a recipient
+    rcpt, skipped = M.collect_audience(M.load_users(), locales={})
+    assert sorted(r.email for r in rcpt) == sorted([ADMIN, ANNA, LI]) and all(why != "topic_not_chosen" for _, why in skipped)
+    with pytest.raises(ValueError):
+        M.collect_audience(M.load_users(), locales={}, topic="spam")
+    # the tool: dry run and a real send with --topic
+    out = mail["tmp"] / "topic_out"
+    code, _ = run(mail, "--topic", "product_updates", "--out-dir", str(out))
+    assert code == 0 and sorted(p.name.split(".")[0] for p in out.glob("*.eml")) != [] and len(list(out.glob("*.eml"))) == 2
+    text = capsys.readouterr().out
+    assert "would send 2" in text and "skipped 1: topic_not_chosen" in text
+    assert run(mail, "--topic", "product_updates", "--send", "--confirm", "2")[0] == 0
+    assert sorted(m["To"] for m in mail["delivered"]) == [ANNA, LI]
+    # an unsubscribed account is skipped as unsubscribed even if the topic was ticked before
+    CP.unsubscribe_all(ANNA)
+    _, skipped = M.collect_audience(M.load_users(), locales={}, topic="new_motors")
+    assert (ANNA, "unsubscribed") in skipped
+    with pytest.raises(SystemExit):
+        run(mail, "--topic", "nonsense")
+
+
+def test_the_mail_privacy_link_is_the_in_app_policy_in_the_language_of_the_message(mail):
+    M = mail["M"]
+    en = M.render("launch_2026-10-19", "en", email=ANNA, name="Anna")
+    zh = M.render("launch_2026-10-19", "zh-CN", email=LI, name="Li")
+    assert "https://aerostator.com/privacy" in en.text and "emotres.com/privacy-policy" not in en.text
+    assert "https://aerostator.com/zh-cn/privacy" in zh.text and "emotres.com/privacy-policy" not in zh.text
+
+
 def test_template_errors_are_loud(mail, tmp_path, monkeypatch):
     M = mail["M"]
     monkeypatch.setenv("MAIL_TEMPLATE_DIR", str(tmp_path / "t"))

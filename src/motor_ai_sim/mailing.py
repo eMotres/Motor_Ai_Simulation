@@ -35,7 +35,8 @@ log = logging.getLogger(__name__)
 DEFAULT_CAMPAIGN = "launch_2026-10-19"
 DEFAULT_BASE_URL = "https://aerostator.com"
 OPEN_URL = {"en": "https://aerostator.com", "zh-CN": "https://aerostator.com/zh-cn/"}
-PRIVACY_URL = "https://emotres.com/privacy-policy"
+#: The in-app Privacy Policy (legal_texts.py), in the language of the message.
+PRIVACY_URL = {"en": "https://aerostator.com/privacy", "zh-CN": "https://aerostator.com/zh-cn/privacy"}
 BRAND = "AeroStator"
 COMPANY_FOOTER = "MOTRES d.o.o., Kotnikova 34, 1000 Ljubljana, Slovenia"
 _CAMPAIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -175,7 +176,7 @@ def render(campaign: str, lang: str, *, email: str, name: str, base_url: str = D
     subject, body, footer = load_template(campaign, lang)
     values = {"hello": hello(name, lang), "email": email, "open_url": OPEN_URL[lang],
               "prefs_url": CP.prefs_url(base_url, email, lang),
-              "unsubscribe_url": CP.prefs_url(base_url, email, lang, action="unsubscribe"), "privacy_url": PRIVACY_URL}
+              "unsubscribe_url": CP.prefs_url(base_url, email, lang, action="unsubscribe"), "privacy_url": PRIVACY_URL[lang]}
     body, footer = _fill(body, values), _fill(footer, values)
     text = f"{_to_text(body)}\n\n--\n{_to_text(footer)}\n" if footer else _to_text(body) + "\n"
     html_doc = f"""<!doctype html>
@@ -250,8 +251,14 @@ def load_users(users_file: Optional[Path] = None) -> dict:
     return d if isinstance(d, dict) else {}
 
 
-def collect_audience(users: dict, *, locales: Optional[dict] = None, default_lang: str = "en") -> tuple[list[Recipient], list[tuple[str, str]]]:
-    """-> (recipients sorted by address, [(address, reason it is skipped)])."""
+def collect_audience(users: dict, *, locales: Optional[dict] = None, default_lang: str = "en",
+                     topic: Optional[str] = None) -> tuple[list[Recipient], list[tuple[str, str]]]:
+    """-> (recipients sorted by address, [(address, reason it is skipped)]).
+
+    ``topic`` (one of ``comm_prefs.TOPICS``): only accounts that CURRENTLY have that topic ticked are recipients; the others are
+    skipped as ``topic_not_chosen``.  Without it every verified, enabled, not-unsubscribed account is a recipient (the launch mailing)."""
+    if topic is not None and topic not in CP.TOPICS:
+        raise ValueError("unknown topic: %r (one of %s)" % (topic, ", ".join(CP.TOPICS)))
     from motor_ai_sim import newsletter as N
     from motor_ai_sim import users as U
     locales = stored_locales() if locales is None else locales
@@ -272,6 +279,8 @@ def collect_audience(users: dict, *, locales: Optional[dict] = None, default_lan
             skipped.append((e, "unsubscribed"))
         elif N.status(e)["status"] == "unsubscribed":
             skipped.append((e, "newsletter_unsubscribed"))
+        elif topic is not None and not CP.opted_in(e, topic):
+            skipped.append((e, "topic_not_chosen"))
         else:
             lang = locales.get(e) or CP.last_lang(e) or default_lang
             ok.append(Recipient(e, str(rec.get("name") or ""), CP.norm_lang(lang)))

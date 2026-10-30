@@ -12,10 +12,13 @@ DRY-RUN IS THE DEFAULT.  Nothing is sent unless you pass ``--send --confirm <cou
     # 3. the real send; --confirm must equal the "would send" count printed by step 1
     PYTHONPATH=src python scripts/send_announcement.py --send --confirm 14
 
+    # only accounts that ticked one topic of the communication preferences (the others are skipped as topic_not_chosen)
+    PYTHONPATH=src python scripts/send_announcement.py --topic new_motors
+
 On the server run it inside the API container (or with the API's environment: MOTOR_AI_SIM_CONFIG, SMTP_*, PUBLIC_APP_URL,
 AUTH_SECRET / COMM_PREFS_SECRET) so it reads the real users and signs links with the real key.
 
-Rules: only verified, enabled accounts; never an account that unsubscribed (communication preferences or the legacy newsletter);
+Rules: only verified, enabled accounts (with --topic: only those that ticked that topic); never an account that unsubscribed (communication preferences or the legacy newsletter);
 one message per account per campaign id (``<identity root>/mailing/<campaign>.sendlog.jsonl`` is the record: user, time,
 message-id); ``--delay`` seconds between messages (default 3); stops after 5 failures in a row.  Language: the account's stored
 UI language, else the language of its last preference change, else English (``--default-lang``).
@@ -48,6 +51,9 @@ def _args(argv=None):
     ap.add_argument("--delay", type=float, default=3.0, help="seconds between messages (default 3)")
     ap.add_argument("--limit", type=int, default=None, help="mail at most N accounts in this run")
     ap.add_argument("--retry-failed", action="store_true", help="also retry accounts whose earlier attempt FAILED")
+    ap.add_argument("--topic", choices=M.CP.TOPICS, default=None,
+                    help="send only to accounts that currently have this communication-preferences topic ticked "
+                         "(others are skipped as topic_not_chosen); default: every eligible account")
     ap.add_argument("--default-lang", default="en", choices=("en", "zh-CN"))
     ap.add_argument("--base-url", default=None, help="site base for the links (default: PUBLIC_APP_URL or https://aerostator.com)")
     ap.add_argument("--users-file", help="read a copy of users.json instead of the live registry")
@@ -83,7 +89,7 @@ def main(argv=None, *, deliver=None, sleep=None) -> int:
     if a.test_to:
         return _test(a, users, base, api_base, sender, deliver)
 
-    recipients, skipped = M.collect_audience(users, locales=locales, default_lang=a.default_lang)
+    recipients, skipped = M.collect_audience(users, locales=locales, default_lang=a.default_lang, topic=a.topic)
     log_file = Path(a.log) if a.log else M.log_path(a.campaign)
     p = M.plan(a.campaign, recipients, skipped, M.read_log(log_file), retry_failed=a.retry_failed, limit=a.limit)
     langs = Counter(r.lang for r in p.to_send)

@@ -62,9 +62,9 @@ x-app-common: &app-common
     # from MOTOR_AI_SIM_CONFIG's folder.
     - /srv/motres/identity:/srv/motres/identity
     - /srv/motres/logs:/app/logs
-    # The private data checkout (eMotres/motor-ai-sim-private), READ-ONLY.  k_end is the mean turn of the die's own CAD
-    # coil (coil_build.py): its reference profile is found at /srv/motres/private_assets/cad/reference
-    # (cad/store.py, candidate 5).  Without this mount every die's coil is the "estimated (no CAD profile)" one.
+    # The private data checkout (eMotres/motor-ai-sim-private), READ-ONLY: the CAD reference profiles at
+    # /srv/motres/private_assets/cad/reference (cad/store.py, candidate 5) for the CAD export / profile views.  k_end does
+    # NOT read them - it is one coil rule for every machine (coil_build.py, owner 2026-10-30).
     - /srv/motres/private_assets:/srv/motres/private_assets:ro
   # gmsh/OCP are happy with the default; PARDISO likes a real /dev/shm.
   shm_size: 2g

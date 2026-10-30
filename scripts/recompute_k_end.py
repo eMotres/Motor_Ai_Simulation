@@ -1,4 +1,4 @@
-"""Stored k_end INPUTS of every configuration -> the k_end of the coil the CAD build draws.
+"""Stored k_end INPUTS of every configuration -> the k_end of the one coil rule (``coil_build.coil_rule``).
 
 Owner 2026-10-30: k_end is the mean turn of the BUILT coil (``masses.end_winding_factor``, ``coil_build``), recomputed on every
 geometry change - "пересчитай теперь везде по всем моторам", "карточки не меняй только".  The code change makes every NEW solve use

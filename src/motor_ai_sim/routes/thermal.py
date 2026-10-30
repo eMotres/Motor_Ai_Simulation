@@ -7001,6 +7001,9 @@ def solve_thermal_field(
         "slot_k_eff": round(float(slot_k_eff), 3),         # winding + liner series k
         "k_liner": round(float(k_liner), 3),               # slot-liner material conductivity
         "liner_material": mats.get("slot_insulation"),
+        # …and the enamel's, beside it: the two insulators the winding
+        # temperature hangs on, both named at the top of every record.
+        "enamel_material": mats.get("wire_insulation"),
         "k_steel": round(k_steel, 1), "k_magnet": round(k_mag, 1), "k_shaft": round(k_shaft, 1),
         # The parts, by the SAME tag table the Part tree colours from — so a row
         # the tree shows always has a temperature beside it and vice versa.  The

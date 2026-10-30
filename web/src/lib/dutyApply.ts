@@ -252,6 +252,10 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     });
     else clearFamilyTarget({ die, config: cfg });
     if (staleGeometryNotice) result.message += staleGeometryNotice;
+    // A material the configuration's file does not name (a liner, an enamel —
+    // the L90's Al2O3 was lost this way, 2026-10-30) is said once, on the same
+    // line, never silently filled.
+    if (p.material_note) result.message += ` — ${p.material_note}`;
     loadFinished();
     return result;
   } finally {

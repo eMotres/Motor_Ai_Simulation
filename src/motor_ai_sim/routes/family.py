@@ -156,9 +156,25 @@ def refuse_die_defining_variables(names, allow_new_lamination: bool) -> None:
 #: loaded machine's picks in the shared config (2026-09-09: the large-format machine's Al2O3
 #: ceramic liner, tried on 2026-09-07/08, sat on every motor loaded after it —
 #: user: "why did the insulation material change on all motors, it was always Nomex").
+#:
+#: The conductor joined the table on 2026-10-30: a configuration saved before the
+#: create path kept the full assignment names no ``slot``, and the load left the
+#: previous machine's conductor in the shared assignment.  Copper is the project's
+#: only production conductor.  The parts with NO project standard — the magnet
+#: grade, the two lamination steels, the shaft and the sleeve — are never
+#: invented: a load that cannot name one says so (``payload``'s
+#: ``material_note``) rather than quietly running the previous machine's.
 _ABSENT_MATERIALS: Dict[str, str] = {
     "slot_insulation": "Nomex",
     "wire_insulation": "polyimide",
+    "slot": "copper",
+}
+
+#: Short part names for the one-line load note.
+_MATERIAL_NOTE_LABEL: Dict[str, str] = {
+    "slot_insulation": "liner", "wire_insulation": "enamel", "slot": "conductor",
+    "magnet": "magnet", "stator_core": "stator steel", "rotor_core": "rotor steel",
+    "shaft": "shaft", "sleeve": "sleeve",
 }
 
 #: The parts a configuration SAVES its material choice for.  Everything solid
@@ -180,6 +196,13 @@ _SAVED_MATERIAL_KEYS: tuple = (
     "magnet", "stator_core", "rotor_core", "shaft", "sleeve",
     "slot", "slot_insulation", "wire_insulation",
 )
+
+def _live_saved_materials(live: dict) -> Dict[str, str]:
+    """The live assignment restricted to ``_SAVED_MATERIAL_KEYS`` — what every
+    configuration writer (create, save-as-new-die, duty save) stores."""
+    mat = _plain(live.get("materials")) or {}
+    return {k: mat.get(k) for k in _SAVED_MATERIAL_KEYS if mat.get(k)}
+
 
 _ABSENT_MEANS: Dict[str, Any] = {
     "sleeve_thickness": 0.0,   # no retaining ring
@@ -2922,7 +2945,6 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
     different shape."""
     geo = _plain(live.get("geometry")) or {}
     sim = _sim_of(live)
-    mat = _plain(live.get("materials")) or {}
     # The name must tell the truth about the build it is being given RIGHT NOW:
     # creating "L15" while the live stack is 13 mm mints a lie the catalog then
     # repeats forever.  The L-number follows the actual stack; the response
@@ -2948,11 +2970,13 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "geometry_overrides": {k: geo.get(k) for k in FREE_GEO_KEYS
                                if geo.get(k) is not None},
         "winding": _plain(live.get("winding")) or {},
-        # The build's ACTIVE materials — a configuration is a physical product,
-        # and its magnet grade / core steel are part of what was built.
-        "materials": {k: mat.get(k)
-                      for k in ("magnet", "stator_core", "rotor_core")
-                      if mat.get(k)},
+        # The build's materials — a configuration is a physical product, and
+        # what it is made of is part of what was built.  EVERY saved part, the
+        # same set the duty save keeps (2026-10-30: this writer still kept the
+        # magnet and the two steels only, so "CIANO56 400_90 vadim 11 /
+        # L90-2x3ph-Al2O3-15t", created from a machine lined with Al2O3, stored
+        # no liner and every L90 thermal result ran on Nomex).
+        "materials": _live_saved_materials(live),
         # Per-part ACCOUNTING (included / reference / excluded) is a property
         # of the product too: a frameless configuration ships without a shaft,
         # and that is not an operating condition the Simulation tab owns.
@@ -3315,8 +3339,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
         _live_build = {k: geo.get(k) for k in FREE_GEO_KEYS
                        if geo.get(k) is not None}
         _live_wind = _plain(live.get("winding")) or {}
-        mat = _plain(live.get("materials")) or {}
-        _live_mats = {k: mat.get(k) for k in _SAVED_MATERIAL_KEYS if mat.get(k)}
+        _live_mats = _live_saved_materials(live)
         _live_pstates = _live_parts()
         _stored = c.get("geometry_overrides") or None
         if not _stored:
@@ -6781,9 +6804,38 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
                 mats[_k] = _v
                 log.info("family: '%s/%s' does not name %s — taken from duty "
                          "'%s' (%s)", die, cfg, _k, duty, _v)
+    # What is STILL unnamed takes the project standard where there is one, and
+    # the load says so in one line (2026-10-30: the L90's liner was absent from
+    # its file, the load filled Nomex without a word, and every winding
+    # temperature of that machine was solved with k 0.14 instead of Al2O3's 24).
+    # A part with no project standard is not invented — it is named in the same
+    # line, because the load then leaves the previous machine's choice in place.
+    # Refusing the load instead was rejected: most catalog files written before
+    # 2026-10-30 lack a liner, and a load is how the engineer gets to the
+    # Materials tab to fix one.  scripts/list_configs_missing_materials.py
+    # lists the files that need it.
+    _defaulted: Dict[str, str] = {}
     for _k, _v in _ABSENT_MATERIALS.items():
         if not mats.get(_k):
             mats[_k] = _v
+            _defaulted[_k] = _v
+    try:
+        _sleeved = float(geo.get("sleeve_thickness") or 0.0) > 0.0
+    except (TypeError, ValueError):
+        _sleeved = False
+    _unnamed = [k for k in _SAVED_MATERIAL_KEYS
+                if not mats.get(k) and (k != "sleeve" or _sleeved)]
+    _note_parts = []
+    if _defaulted:
+        _note_parts.append("not saved in this configuration: " + ", ".join(
+            "%s %s" % (_MATERIAL_NOTE_LABEL.get(k, k), v)
+            for k, v in _defaulted.items()) + " (project default)")
+    if _unnamed:
+        _note_parts.append(", ".join(_MATERIAL_NOTE_LABEL.get(k, k)
+                                     for k in _unnamed) + " not named, kept as loaded")
+    _material_note = "; ".join(_note_parts)
+    if _material_note:
+        log.info("family: apply '%s/%s' — %s", die, cfg, _material_note)
     poles = int(geo.get("num_poles") or 0)
     # The winding the frontend PATCHes must be one THIS lamination has: a
     # configuration copied from a 24-slot die still saying `2S` on 48 slots was
@@ -6799,6 +6851,11 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
         "geometry": geo,
         "winding": _wc["winding"],
         "materials": mats,
+        # {part: default} for the parts filled from _ABSENT_MATERIALS, and the
+        # one-line statement of it (plus any part left as loaded) — the load
+        # appends it to its "applied" line.  Absent when the file names all.
+        **({"material_defaults": _defaulted} if _defaulted else {}),
+        **({"material_note": _material_note} if _material_note else {}),
         # Per-part accounting the configuration was built and characterised
         # under — applied the same way its materials are, so a frameless
         # configuration loads frameless instead of silently regrowing a shaft.

@@ -256,6 +256,15 @@ def test_free_run_emf_and_loss_with_bearings_windage_and_unexplained_remainder()
     assert out["fit"]["model"] is not None
 
 
+def test_free_run_without_voltages_shows_no_emf_groups():
+    # owner 2026-10-30: a free-run logged as torque / speed / power only must not show empty EMF tables
+    rec = _record("free_run", conditions={"magnet_temp_c": 55.0},
+                  rows=[{"rpm": n, "shaft_power_w": p} for n, p in FREE_RUN])
+    keys = [g["key"] for g in comparison.compare_record(rec, _model(), "D", "C")["groups"]]
+    assert "emf_peak" not in keys and "emf_rms" not in keys
+    assert "loss" in keys
+
+
 def test_free_run_without_a_noload_duty_offers_to_create_one():
     doc = _cfg_doc()
     doc["duties"] = doc["duties"][:1]

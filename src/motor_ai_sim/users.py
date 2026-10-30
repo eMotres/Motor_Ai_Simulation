@@ -1197,6 +1197,72 @@ def rename_die_in_grants(old: str, new: str, *, dry_run: bool = False):
     return hits, undo
 
 
+def move_config_in_grants(die: str, cfg: str, new_die: str, *, add_for=(), dry_run: bool = False):
+    """A configuration moved to another die (``config_move.py``): every account's grants follow.
+
+    In each stored ``motors`` record: the ``"<die>/<cfg>"`` entry of ``configs`` and its
+    ``sources`` key become ``"<new_die>/<cfg>"``; a ``default`` motor on it follows when the
+    new die is still covered by the grant (else it is left out and reported).  ``add_for``:
+    accounts that saw the configuration through the OLD die (its grant, or its selected-client
+    list) and would not see it on the new one - they get the ``"<new_die>/<cfg>"`` grant, so a
+    move never takes a customer's access away.  One load, one atomic save under the registry
+    lock.  Returns ``(hits, undo)`` like :func:`rename_die_in_grants`."""
+    import copy
+    die, cfg, new_die = str(die), str(cfg), str(new_die)
+    old_key, new_key = f"{die}/{cfg}", f"{new_die}/{cfg}"
+    add_for = {_norm(e) for e in (add_for or ())}
+    with _LOCK:
+        users = _load()
+        before: dict = {}
+        hits: list = []
+        for email, rec in users.items():
+            if not isinstance(rec, dict):
+                continue
+            m = rec.get("motors") if isinstance(rec.get("motors"), dict) else {}
+            nm = copy.deepcopy(m)
+            what = []
+            cfgs = [str(k) for k in (nm.get("configs") or [])]
+            if old_key in cfgs:
+                cfgs = [new_key if k == old_key else k for k in cfgs]
+                what.append(f"configuration grant {old_key} -> {new_key}")
+                if isinstance(nm.get("sources"), dict) and old_key in nm["sources"]:
+                    nm["sources"][new_key] = nm["sources"].pop(old_key)
+            if _norm(email) in add_for and new_key not in cfgs:
+                cfgs.append(new_key)
+                what.append(f"configuration grant {new_key} added (saw it through die '{die}')")
+            if cfgs != [str(k) for k in (nm.get("configs") or [])]:
+                nm["configs"] = sorted(set(cfgs))
+            default = nm.get("default")
+            if isinstance(default, dict) and default.get("die") == die and default.get("config") == cfg:
+                if bool(nm.get("all")) or new_die in (nm.get("dies") or []):
+                    default["die"] = new_die
+                    what.append("default motor")
+                else:
+                    # a default must be covered by a WHOLE-die grant (_default_allowed); a dangling one would point at
+                    # a configuration that is no longer there
+                    nm.pop("default", None)
+                    what.append(f"default motor {old_key} cleared: '{new_die}' is not granted as a whole")
+            if what:
+                before[email] = copy.deepcopy(rec.get("motors"))
+                hits.append((email, "; ".join(what)))
+                rec["motors"] = nm
+        if dry_run or not hits:
+            return hits, None
+        _save(users)
+
+    def undo() -> None:
+        with _LOCK:
+            cur = _load()
+            for email, motors in before.items():
+                if isinstance(cur.get(email), dict):
+                    if motors is None:
+                        cur[email].pop("motors", None)
+                    else:
+                        cur[email]["motors"] = motors
+            _save(cur)
+    return hits, undo
+
+
 def config_grant_index() -> dict:
     """``{"<die>/<config>": [emails]}`` over every account's STORED grants (one
     registry read) - the "selected clients" of each private configuration.

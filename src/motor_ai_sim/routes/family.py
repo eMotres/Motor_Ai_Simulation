@@ -3142,6 +3142,108 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
             "duties": [d.get("name") for d in (c.get("duties") or [])]}
 
 
+class ConfigMove(BaseModel):
+    target_die: str                 # the die the configuration goes to (it must exist)
+    mode: str = "move"              # "move" | "copy"
+    dry_run: bool = False           # list every change, write nothing (also ``?dry_run=1``)
+
+
+def _config_build_check(src_dir: Path, dst_dir: Path, cfg_doc: dict) -> Dict[str, Any]:
+    """What the configuration's build looks like on the target die - read-only, for the dry run.
+
+    ``target_vs_source``: die-level differences between the two laminations (the configuration's own
+    wire keys on both sides).  ``config_vs_target``: where the configuration is not the target die
+    (non-empty = a duty save there answers 409 "build differs", e.g. its slot width).  ``stale_duties``:
+    duties whose saved build differs from what loading them on the target would build."""
+    sd = _load_yaml(src_dir / "die.yaml", "die")
+    td = _load_yaml(dst_dir / "die.yaml", "die")
+    ov = {k: v for k, v in (cfg_doc.get("geometry_overrides") or {}).items() if v is not None}
+    src_eff = dict(sd.get("geometry") or {}, **ov)
+    dst_eff = dict(td.get("geometry") or {}, **ov)
+    stale = {}
+    for d in (cfg_doc.get("duties") or []):
+        if isinstance(d, dict) and d.get("name"):
+            diffs = _blocking(duty_geometry_diff(td, cfg_doc, d))
+            if diffs:
+                stale[str(d["name"])] = [f"{x['key']} {x['duty']} → {x['live']}" for x in diffs]
+    return {"target_vs_source": die_shape_diffs(src_eff, dst_eff),
+            "config_vs_target": die_shape_diffs(td.get("geometry") or {}, dst_eff),
+            "stale_duties": stale}
+
+
+@router.post("/config/{die}/{cfg}/move")
+def move_config(die: str, cfg: str, req: ConfigMove, dry_run: bool = False,
+                _w: dict = Depends(require_catalog_write)):
+    """MOVE (or COPY) a configuration to another die - and everything keyed by ``"<die>/<cfg>"``.
+
+    Admin only.  One transaction (``motor_ai_sim.config_move``): the file and its ``runs/``,
+    the result ledgers (shared, every workspace, the legacy per-die one: ``results`` and
+    ``history``), the active contexts, the workspace memories, the catalog cards, and for a
+    shared-catalog die the account grants (access through the old die is kept as a
+    configuration grant), the development projects (links, history, grant ledger, snapshots,
+    ``index.json``), production, tests and CAD folders.  Every rewritten file is backed up
+    under ``.config_moves/`` first; a failure undoes the steps already done.
+
+    ``dry_run`` (body or ``?dry_run=1``) writes nothing and answers the same document:
+    ``changes`` (every store and place), ``manual`` (deploy-managed files to move by hand),
+    ``build_check`` (how the build reads on the target die).  Refused with 409 when the target
+    already has a configuration of that name, the dies are in different catalog layers, the
+    configuration holds a product revision (move), or a job is running on it."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    dst = _check_name(req.target_die, "die")
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="moving a configuration to another die is an admin action")
+    mode = str(req.mode or "move").strip().lower()
+    if mode not in ("move", "copy"):
+        raise HTTPException(422, detail="mode must be 'move' or 'copy'")
+    if dst == die:
+        raise HTTPException(422, detail="the target die is the configuration's own die")
+    dry = bool(dry_run or req.dry_run)
+    src_dir, dst_dir = _die_dir(die), _die_dir(dst)
+    if not (src_dir / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"die '{die}' not found")
+    if not (dst_dir / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"target die '{dst}' not found - create it first")
+    if not (src_dir / f"{cfg}.yaml").is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    if (dst_dir / f"{cfg}.yaml").exists():
+        raise HTTPException(409, detail=f"die '{dst}' already has a configuration '{cfg}'")
+    glob_scope = True
+    if _ws_layering():
+        if not _WS.is_verified_admin_request():
+            raise HTTPException(403, detail="only a verified signed-in admin may move a configuration")
+        lay_s, lay_d = _classify_die_dir(src_dir)[0], _classify_die_dir(dst_dir)[0]
+        if lay_s != lay_d or _WS.LAYER_PUBLISHED in (lay_s, lay_d):
+            raise HTTPException(409, detail=(
+                f"'{die}' is in the {lay_s} catalog and '{dst}' in the {lay_d} catalog - a configuration "
+                "moves between dies of the same catalog layer (shared or one workspace) only"))
+        glob_scope = lay_s == _WS.LAYER_SHARED
+    cfg_doc = _load_yaml(src_dir / f"{cfg}.yaml", "configuration")
+    import sys as _sys
+    from motor_ai_sim import config_move as _cm
+    from motor_ai_sim.admin_audit import actor_of
+    try:
+        out = _cm.run(_sys.modules[__name__], die, cfg, dst, src_dir=src_dir, dst_dir=dst_dir,
+                      dry_run=dry, copy=(mode == "copy"), glob_scope=glob_scope,
+                      actor=actor_of(_w.get("user")))
+    except _cm.MoveBlocked as exc:
+        raise HTTPException(409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("family: %s of '%s/%s' -> '%s' failed; rolled back", mode, die, cfg, dst)
+        bad = getattr(exc, "rollback_failures", None)
+        raise HTTPException(500, detail=(
+            f"the {mode} of '{die}/{cfg}' to '{dst}' failed ({type(exc).__name__}: {exc}) and "
+            + (f"the rollback was INCOMPLETE ({'; '.join(bad)}) - see the backup folder under .config_moves"
+               if bad else "was rolled back; nothing was changed")))
+    try:
+        out["build_check"] = _config_build_check(src_dir, dst_dir, cfg_doc)
+    except Exception:                                       # noqa: BLE001 - information only
+        log.debug("family: build check of the move failed", exc_info=True)
+    return out
+
+
 @router.delete("/config/{die}/{cfg}")
 def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
@@ -4458,6 +4560,159 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
     return {"die": target, "config": target_cfg, "duty": duty, "created": created}
 
 
+# ── a SHARED die never adopts one configuration's edit (owner 2026-10-30) ────
+# 2026-10-29 07:03-10:09 UTC: the owner edited his live L100 on the unlocked die
+# 'CIANO56 400_80 vadim 3' (magnet_height 18.8 -> 23, slot_height 19.3 -> 22,
+# magnet_down 2 -> 2.5, stator_inner_radius 174.2 -> 171.5).  Every save went
+# into die.yaml, so the die's five OTHER configurations started building the new
+# lamination while their stored results were computed on the old one - a silent
+# state mutation.  Rules: "die change = automatic transition" and "no silent state
+# mutation".  So a die-level change on a die that carries configurations other
+# than the active one moves the ACTIVE configuration to its own die (reused when
+# one already is this lamination, else minted as "<family base> <user> <n>"); the
+# source die and its other configurations are not written.  A die that holds only
+# the active configuration keeps adopting the edit as before.
+
+#: Labels of the die-level shape keys a transition names (the identity keys have theirs above).
+_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)"}
+
+
+def _derived_slot_width(geo: dict) -> Optional[float]:
+    """The slot width ``geo`` DERIVES (wire column + 2 spacings + 2 liner), or None when it lacks an input."""
+    try:
+        from motor_ai_sim.geometry.motor_geometry import derived_geometry
+        v = derived_geometry(dict(geo or {})).get("slot_width")
+        return float(v) if isinstance(v, (int, float)) else None
+    except Exception:                                       # noqa: BLE001 - cannot tell = no difference
+        return None
+
+
+def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
+    """``[{key, label, die, live}]`` - where ``live_geo`` is another LAMINATION than ``die_geo``.
+
+    Every die-level INPUT key (not a configuration key, not a derived copy, not an
+    unused knob: ``is_compared_geometry_input``), plus the DERIVED slot width: it is a
+    function of configuration keys (wire width / split / spacing, liner thickness),
+    but the slot is cut into the lamination, so a configuration whose slot is wider
+    than its die's is not on that die (the duty save refuses it: "build differs",
+    die slot_width 7.6 -> 7.74).  The identity keys are inputs too, so this list is
+    a superset of :func:`die_identity_diffs`.  Pure."""
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    die_geo, live_geo = dict(die_geo or {}), dict(live_geo or {})
+    out = []
+    for k in sorted(die_geo):
+        dv, lv = die_geo.get(k), live_geo.get(k)
+        if (k in FREE_GEO_KEYS or not is_compared_geometry_input(k, die_geo, live_geo)
+                or not isinstance(dv, (int, float)) or isinstance(dv, bool)
+                or not isinstance(lv, (int, float)) or isinstance(lv, bool)):
+            continue
+        if abs(float(dv) - float(lv)) > 1e-6 * max(1.0, abs(float(dv))):
+            out.append({"key": k, "label": _DIE_KEY_LABELS.get(k, k.replace("_", " ")),
+                        "die": dv, "live": lv})
+    dsw, lsw = _derived_slot_width(die_geo), _derived_slot_width(live_geo)
+    if dsw is not None and lsw is not None and abs(dsw - lsw) > 1e-6:
+        out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
+                    "die": round(dsw, 6), "live": round(lsw, 6)})
+    return out
+
+
+def _other_configs(die: str, active_cfg: Optional[str]) -> List[str]:
+    """The configurations of ``die`` other than ``active_cfg`` (file stems, sorted)."""
+    try:
+        files = sorted(_die_dir(die).glob("*.yaml"))
+    except OSError:
+        return []
+    return [p.stem for p in files if p.name != "die.yaml" and p.stem != str(active_cfg or "")]
+
+
+def _new_die_dir(name: str) -> Path:
+    """Where a die minted for this caller is created: a verified admin's in the shared
+    catalog (as ``duplicate_die`` does), anybody else's in their own workspace."""
+    if _ws_layering() and _WS.is_verified_admin_request():
+        return _admin_shared_die_dir(name)
+    return _dies_dir() / name
+
+
+def _matching_lamination(live_geo: dict, exclude: str) -> Optional[str]:
+    """An existing die, in the layer a transition would mint into, that already IS the
+    live lamination on every die-level key (:func:`die_shape_diffs` empty) - so loading
+    the same configuration twice lands on one die, never on "vadim 6", "vadim 7"..."""
+    want = None
+    if _ws_layering():
+        want = _WS.LAYER_SHARED if _WS.is_verified_admin_request() else _WS.LAYER_WORKSPACE
+    for e in _iter_die_entries():
+        name = str(e["name"])
+        if name == exclude or (want is not None and e.get("layer") != want):
+            continue
+        try:
+            dd = _load_yaml(Path(str(e["dir"])) / "die.yaml", "die")
+        except HTTPException:
+            continue
+        g = dd.get("geometry") or {}
+        if g and not die_identity_diffs(g, live_geo) and not die_shape_diffs(g, live_geo):
+            return name
+    return None
+
+
+def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[str],
+                                  die_doc: dict, live_geo: dict, diffs: list,
+                                  others: List[str]) -> dict:
+    """Move the ACTIVE configuration/duty off a die it shares with ``others`` onto a
+    die that is the live lamination.  The source die and every configuration in it are
+    left exactly as they are (the active one too: its stored results belong to the old
+    lamination).  The new die carries ONLY this configuration, so its next edits are
+    adopted the ordinary way."""
+    target = _matching_lamination(live_geo, exclude=die)
+    created = False
+    if target is None:
+        name = _unique_die_name(_check_name(
+            _die_transition_name(die, die_doc.get("geometry") or {}, live_geo, diffs), "die"))
+        at = datetime.now().isoformat(timespec="seconds")
+        nd = {k: v for k, v in dict(die_doc).items()
+              if k not in ("thumb_svg", "derived_from", "locked", "created", "name")}
+        nd.update({"name": name, "locked": False, "created": at,
+                   "geometry": dict(live_geo),
+                   "derived_from": {
+                       "die": die, "config": cfg, "duty": duty, "at": at,
+                       "reason": "edit of one configuration on a die shared with others",
+                       "changed": [f"{x['key']} {x['die']} → {x['live']}" for x in diffs]}})
+        try:
+            from motor_ai_sim.routes.presets import _gen_thumb_svg
+            thumb = _gen_thumb_svg(dict(live_geo))
+            if thumb:
+                nd["thumb_svg"] = thumb
+        except Exception:                                   # noqa: BLE001 - thumbnail is cosmetic
+            pass
+        dst = _new_die_dir(name)
+        dst.mkdir(parents=True, exist_ok=True)
+        _save_yaml(dst / "die.yaml", nd)
+        target, created = name, True
+    target_cfg = cfg
+    copied = False
+    if cfg:
+        have = _cfg_file(target, cfg).is_file()
+        if have and duty:
+            c = _load_yaml(_cfg_file(target, cfg), "configuration")
+            have = any(isinstance(x, dict) and x.get("name") == duty for x in (c.get("duties") or []))
+        if not have:
+            target_cfg = _copy_config_into(die, target, cfg)
+            copied = True
+    if copied and target_cfg:
+        _autolink_new_config(target, target_cfg, None, copied_from=die)
+    import json as _json
+    at = datetime.now().isoformat(timespec="seconds")
+    _ctx_file().write_text(_json.dumps({
+        "die": target, "config": target_cfg, "duty": duty, "at": at,
+        "transitioned_from": {"die": die, "at": at, "diffs": diffs,
+                              "reason": "shared_die", "others": list(others)},
+    }), encoding="utf-8")
+    log.warning("family: '%s/%s' edited on die '%s', which also carries %s - moved to %s die '%s' "
+                "(%s); '%s' and its other configurations are untouched", die, cfg, die,
+                ", ".join(others), "new" if created else "existing", target,
+                "; ".join(f"{x['key']} {x['die']} → {x['live']}" for x in diffs), die)
+    return {"die": target, "config": target_cfg, "duty": duty, "created": created}
+
+
 def sync_active_die_geometry(saved_geo: dict,
                              prev_geo: Optional[dict] = None) -> Optional[str]:
     """Refresh the ACTIVE die's geometry snapshot after a geometry save.
@@ -4475,9 +4730,15 @@ def sync_active_die_geometry(saved_geo: dict,
       • no active context, or the die is LOCKED → do nothing (a locked die's
         geometry is canon by decree; the lock check already refused non-
         canonical edits, so there is nothing to sync).
-      • unlocked → overwrite the full geometry snapshot with the saved config's
-        and refresh the card thumbnail (the card must show the machine the die
-        IS, not the one it was duplicated from).
+      • unlocked, and the die holds only the active configuration → overwrite
+        the full geometry snapshot with the saved config's and refresh the card
+        thumbnail (the card must show the machine the die IS, not the one it was
+        duplicated from).
+      • unlocked, but the die also holds OTHER configurations and the save is
+        another lamination (``die_shape_diffs``: a die-level input, or the
+        derived slot width) → the snapshot is NOT written; the active
+        configuration moves to its own die (``_transition_config_to_own_die``,
+        owner 2026-10-30).
     Returns the die name when a sync happened (for the caller's log), else None.
     """
     ctx = _read_ctx()
@@ -4574,6 +4835,23 @@ def sync_active_die_geometry(saved_geo: dict,
             new_geo[k] = _die_prev[k]
         else:
             new_geo.pop(k, None)
+    # ── A die shared with other configurations is not this edit's to rewrite ──
+    # (owner 2026-10-30, see `_transition_config_to_own_die`).  Compared on the
+    # live machine itself (`geo`, wire keys included) so a configuration whose
+    # derived slot width is not its die's moves too.  A refresh of stale derived
+    # copies is not a change of lamination and is still written below.
+    _shape = die_shape_diffs(_die_prev, geo)
+    if _shape:
+        _others = _other_configs(die, ctx.get("config"))
+        if _others:
+            try:
+                out = _transition_config_to_own_die(die, ctx.get("config"), ctx.get("duty"),
+                                                    d, geo, _shape, _others)
+            except Exception:                  # noqa: BLE001 - the save already happened
+                log.exception("family: moving '%s/%s' off the shared die failed - the die "
+                              "snapshot is left as it was", die, ctx.get("config"))
+                return None
+            return (out or {}).get("die")
     if new_geo == _die_prev:
         return None                        # nothing die-level changed
     geo = new_geo

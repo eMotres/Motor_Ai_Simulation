@@ -88,7 +88,10 @@ interface Ctx {
             turns?: number | null } | null;
   // Set once by the auto-transition that landed this die/config (2026-09-20):
   // a die-defining edit moved here from `die`, at `at`, for these reasons.
-  transitioned_from?: { die: string; at?: string | null; diffs?: DieDiff[] | null } | null;
+  // reason 'shared_die' (2026-10-30): the edit was not written into a die that
+  // other configurations (`others`) are built on.
+  transitioned_from?: { die: string; at?: string | null; diffs?: DieDiff[] | null;
+                        reason?: string | null; others?: string[] | null } | null;
 }
 
 const readLS = (k: string, d: any) => {
@@ -1057,11 +1060,16 @@ const ActiveFamilyStrip: React.FC = () => {
       {ctx.transitioned_from?.die && (
         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25 }}>
           <Typography component="span" sx={{ fontSize: 11, color: '#38bdf8' }}>
-            ↷ moved
+            {ctx.transitioned_from.reason === 'shared_die' ? '↷ moved to its own die' : '↷ moved'}
           </Typography>
           <HelpTip title={`Moved to '${ctx.die}'`
             + (ctx.transitioned_from.diffs?.length
                 ? ` (${diffText(ctx.transitioned_from.diffs)})` : '')
+            + (ctx.transitioned_from.reason === 'shared_die'
+                ? `: '${ctx.transitioned_from.die}' also carries `
+                  + `${(ctx.transitioned_from.others || []).join(', ') || 'other configurations'}`
+                  + `, so your edit got its own die`
+                : '')
             + `; the original die '${ctx.transitioned_from.die}' is untouched.`} />
         </Box>
       )}

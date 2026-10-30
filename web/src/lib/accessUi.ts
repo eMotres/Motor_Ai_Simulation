@@ -47,9 +47,12 @@ export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   production: 'producer',
   // Designer (pilot 2026-10-18): whoever the server opens it for (/api/design-agent/status, DESIGN_AGENT_ACCESS).
   designer: 'designer',
-  // Development: global engineers/admins, or signed-in members (resolved from /api/projects).
+  // Development (menu name "Projects"): every signed-in account (owner 2026-10-30) - a customer opens its own project there; the
+  // server lists only the projects the account is a member of (staff see all).
   development: 'development',
 };
+/** Does this session get the Projects tab?  Any signed-in account, and an unenforced (local) backend. */
+export const developmentVisible = (enforced: boolean, signedIn: boolean): boolean => !enforced || signedIn;
 export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean; producer?: boolean; designer?: boolean; development?: boolean }
 export const gateOpen = (gate: TabGate, c: GateCtx): boolean =>
   gate === 'always' || (gate === 'signedIn' && c.signedIn) || (gate === 'standard' && c.signedIn && !c.fullUI) || (gate === 'fullUI' && c.fullUI) || (gate === 'admin' && c.isAdmin) || (gate === 'producer' && c.signedIn && c.producer === true) || (gate === 'designer' && c.signedIn && c.designer === true) || (gate === 'development' && c.signedIn && (c.isAdmin || c.fullUI || c.development === true));

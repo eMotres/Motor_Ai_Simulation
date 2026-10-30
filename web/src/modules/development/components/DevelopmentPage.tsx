@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import type { CatalogController } from '../controllerCatalog';
   import { submitFailureKind, submitFailureKey } from '../submitFailure';
   import { MotorOpenActions } from '../MotorOpenActions';
+import { createErrorText, createPayload, createReady } from '../createProject';
   import { VariantControls } from './VariantControls';
   import SpecAssistantPanel from './SpecAssistantPanel';
   import SpecWizard from './specWizard/SpecWizard';
@@ -525,8 +526,12 @@ export default function DevelopmentPage() {
   };
   const submitCreate = async () => {
     setBusy(true); setError('');
-    try { const p = await developmentApi.create({ id: projectId.trim(), title: title.trim(), customer_org: org.trim() }); setCreateOpen(false); setTitle(''); setOrg(''); setProjectId(''); await refreshProjects(); await loadProject(p); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    try {
+      // a customer sends only the title and company: the server makes the id and the account becomes the project owner
+      const p = await developmentApi.create(createPayload(canManageGlobally, { title, org, id: projectId }));
+      setCreateOpen(false); setTitle(''); setOrg(''); setProjectId(''); await refreshProjects(); await loadProject(p);
+    }
+    catch (e) { setError(createErrorText(e, tr)); } finally { setBusy(false); }
   };
   const submitInvite = async () => {
     if (!selected) return;
@@ -555,10 +560,10 @@ export default function DevelopmentPage() {
   const { label, sectionTitle } = fields;
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
-    <HeaderRight tab="development"><HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</HeaderRight>
+    <HeaderRight tab="development"><HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} /><Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button></HeaderRight>
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <ProjectOverview projects={projects} mode={viewMode} unread={projectUnread} email={user?.email ?? ''} language={lang} onOpen={(p) => void loadProject(p)} t={tr} />}
-    <CreateDialog open={createOpen} busy={busy} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
+    <CreateDialog open={createOpen} busy={busy} staff={canManageGlobally} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)', [NARROW]: { flex: '1 1 100%' } }}>{selected.title}</Typography></Tooltip>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr('projectStatusTip')} />{canEditProject ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{STATUSES.map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {tr(`status.${selected.status}`)}</Typography>}</Box>
@@ -665,7 +670,8 @@ export default function DevelopmentPage() {
     </Dialog>
   </Box>;
 }
-function CreateDialog({ open, busy, title, org, id, onTitle, onOrg, onId, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle>{t('newProject')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('projectTitle')} value={title} onChange={(e) => onTitle(e.target.value)} /><TextField label={t('customerOrg')} value={org} onChange={(e) => onOrg(e.target.value)} /><TextField label={t('projectId')} value={id} onChange={(e) => onId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} /></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !title.trim() || !org.trim() || !id.trim()} onClick={onSubmit}>{t('create')}</Button></DialogActions></Dialog>; }
+/** Staff name the customer organisation and the id; a customer gives a title and (optionally) its company - the server generates the id. */
+function CreateDialog({ open, busy, staff, title, org, id, onTitle, onOrg, onId, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{t('newProject')}<HelpTip title={t('newProjectTip')} /></DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('projectTitle')} value={title} onChange={(e) => onTitle(e.target.value)} autoFocus inputProps={{ maxLength: 120 }} /><TextField label={staff ? t('customerOrg') : t('yourCompany')} value={org} onChange={(e) => onOrg(e.target.value)} inputProps={{ maxLength: 120 }} />{staff && <TextField label={t('projectId')} value={id} onChange={(e) => onId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} />}</Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !createReady(staff, { title, org, id })} onClick={onSubmit}>{t('create')}</Button></DialogActions></Dialog>; }
 function InviteDialog({ open, busy, email, role, onEmail, onRole, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
 function snapshotSourceLabel(source: string, t: (key: string) => string): string { return t(snapshotSourceKey(source) ?? 'snapshots.sourceOther'); }
 function LinkDialog({ open, busy, picker, onClose, onSubmit, onRestore, t }: { open: boolean; busy: boolean; picker: { this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }; onClose: () => void; onSubmit: (item: ProjectMotorPickerItem) => void; onRestore: (item: ProjectMotorPickerItem) => void; t: (key: string, args?: Record<string, unknown>) => string }) {

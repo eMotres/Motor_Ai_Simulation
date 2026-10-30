@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from motor_ai_sim import platform_agreement, users
-from motor_ai_sim.development import access, models, store, unread
+from motor_ai_sim.development import access, models, self_service, store, unread
 from motor_ai_sim.development.motors import _metric_projection
 
 log = logging.getLogger(__name__)
@@ -467,25 +467,44 @@ def project_membership(request: Request):
 
 @router.post("")
 async def create_project(request: Request):
+    """Any signed-in account opens a project (owner 2026-10-30).  Staff (admin / engineer) may name the id, the status and the
+    members; every other account gets a project of its own: it is the project OWNER, the id comes from the title, the status is
+    "spec", and the number of open projects it owns is limited (``self_service``)."""
     user = access.require_signed_in(request)
-    if not access.is_engineer(user):
-        raise HTTPException(status_code=403, detail="Engineer access required")
+    staff = access.is_engineer(user)
     platform_agreement.require_accepted(user)       # starting a development (428 until the company accepted; staff exempt)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
-    project_id = str(body.get("id") or "").strip().lower()
-    if not store.valid_id(project_id):
+    if not staff:
+        # a customer cannot choose the members, the status or the engineer in charge
+        body = {"title": body.get("title"), "customer_org": body.get("customer_org")}
+        if self_service.limit_reached(user):
+            raise HTTPException(status_code=429, detail={
+                "code": self_service.LIMIT_CODE, "limit": self_service.MAX_OPEN_OWNED_PROJECTS,
+                "message": f"You can have up to {self_service.MAX_OPEN_OWNED_PROJECTS} open projects; close one to open another."})
+    requested_id = str(body.get("id") or "").strip().lower()
+    if requested_id and not store.valid_id(requested_id):
         raise HTTPException(status_code=422, detail="id must be a lowercase slug")
-    try:
-        project = models.project_record(project_id, body, _email(user))
-        store.create_project(project)
-    except FileExistsError:
+    ids = iter([requested_id]) if requested_id else self_service.candidate_ids(str(body.get("title") or ""))
+    project = None
+    for project_id in ids:
+        try:
+            project = models.project_record(project_id, body, _email(user))
+            if not staff:
+                project["owner_engineer"] = ""           # nobody is in charge yet; Motres staff see every project and pick it up
+            store.create_project(project)
+            break
+        except FileExistsError:
+            project = None                              # taken (or lost a race): the next suffix, or 409 for a named id
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if project is None:
         raise HTTPException(status_code=409, detail="Project already exists")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    project_id = project["id"]
     store.save_json(project_id, "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "schema_version": 2, "revision": 0, "version": None, "updated_at": project["created_at"]})
-    store.append_audit(project_id, _email(user), "create", "project", project_id, {})
+    # the audit row is what the owner's daily report lists ("project created by the customer")
+    store.append_audit(project_id, _email(user), "create", "project", project_id, {} if staff else {"self_service": True})
     return _summary(project, user)
 
 

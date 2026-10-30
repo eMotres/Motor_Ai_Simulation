@@ -36,7 +36,7 @@ export const developmentApi = {
     return Array.isArray(data?.controllers) ? data!.controllers! : [];
   },
   schema: (version?: number) => call<DevelopmentSchema>('GET', `/api/projects/schema${version ? `?version=${version}` : ''}`),
-  create: (v: { id: string; title: string; customer_org: string; owner_engineer?: string }) => call<ProjectSummary>('POST', '/api/projects', v),
+  create: (v: { id?: string; title: string; customer_org: string; owner_engineer?: string }) => call<ProjectSummary>('POST', '/api/projects', v),
   get: (id: string) => call<ProjectSummary>('GET', p(id)),
   update: (id: string, v: Partial<Pick<ProjectSummary, 'title' | 'customer_org' | 'owner_engineer' | 'status' | 'notes'>>) => call<ProjectSummary>('PATCH', p(id), v),
   spec: (id: string) => call<SpecState>('GET', `${p(id)}/spec`),

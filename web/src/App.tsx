@@ -60,7 +60,7 @@ import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
 import { parseAdminLink } from './lib/adminLink';
 import { parseAppLink } from './lib/appLink';
-import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
+import { computeHintApplies, developmentVisible, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, isSimulationTab, barValue, simulationsTarget, SIMULATIONS_BAR_ID, SIMULATION_TAB_IDS } from './lib/simulationsMenu';
 import { oneOf } from './lib/viewMemory';
 import { useRememberedView } from './lib/useRememberedView';
@@ -169,22 +169,6 @@ function useDesignerAllowed(signedIn: boolean): boolean {
     return () => { alive = false; };
   }, [signedIn]);
   return ok;
-}
-
-/** Customer Development visibility comes from the cheap membership index; reset when auth identity changes. */
-function useDevelopmentMember(check: boolean, identity?: string): boolean {
-  const [member, setMember] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    setMember(false);
-    if (!check) return () => { alive = false; };
-    fetch(`${API_BASE}/api/projects/membership`, { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => { if (alive) setMember(j?.has_projects === true); })
-      .catch(() => { /* no membership grant on a failed request */ });
-    return () => { alive = false; };
-  }, [check, identity]);
-  return member;
 }
 
 // ─── Geometry build timer ───────────────────────────────────────────────────
@@ -309,8 +293,7 @@ function App() {
   // account added to a production as engineer saw nothing - the server grants by membership, the tab gated by role).
   const productionMember = useProductionMember(authResolved && signedIn && !productionVisible(enforced, isAdmin, role));
   const producer = authResolved && (productionVisible(enforced, isAdmin, role) || productionMember);
-  const developmentMember = useDevelopmentMember(authResolved && signedIn && !isAdmin && role !== 'engineer', user?.email);
-  const developmentAllowed = authResolved && (isAdmin || role === 'engineer' || developmentMember || !enforced);
+  const developmentAllowed = authResolved && developmentVisible(enforced, signedIn);      // every signed-in account may open its own project (owner 2026-10-30)
   // A link to a page of the app (activity e-mails, shared documents links): once the account is known to reach the tab it names -
   // Production for /production/..., Development for /projects/... - open that tab; the page itself reads the link from the address
   // bar (ProductionTab, DevelopmentPage).  Root has already checked on the server that the caller is a production member.
@@ -680,7 +663,7 @@ function App() {
     { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false, keepMounted: 'visited',
       render: () => <ProductionTab /> },
     // Development projects and the customer specification wizard.
-    { id: 'development', label: 'Development', order: 78, gate: TAB_GATES.development, showViewer: false, keepMounted: 'visited',
+    { id: 'development', label: 'Projects', order: 78, gate: TAB_GATES.development, showViewer: false, keepMounted: 'visited',
       render: () => <DevelopmentTab /> },
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
     { id: 'designer', label: 'Designer', order: 95, gate: TAB_GATES.designer, showViewer: false,

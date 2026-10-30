@@ -1606,11 +1606,12 @@ def test_h_the_limits_come_off_the_machines_own_cards():
     assert lim == 150.0 and "SH" in note
     assert _magnet_limit("") == (None, "")
 
-    # N52UH_20C is in the library, so the cold factor is a ratio of two measured
-    # remanences, not an extrapolation.
+    # The grade's 20 °C card is in the library (since 2026-10-30 the ONLY N52UH
+    # card; 'N52UH_150C' is it derived at 150 °C), so the cold factor is a ratio
+    # of two of its remanences, not an extrapolation.
     k, why = _cold_br_factor("N52UH_150C")
     assert k > 1.0, "cold magnets must be STRONGER than the 150 degC card"
-    assert "N52UH_20C" in why
+    assert "the N52UH card" in why
     assert _cold_br_factor("") == (1.0, "")
 
     # The project's own build standard, not the IEC ladder's H (user

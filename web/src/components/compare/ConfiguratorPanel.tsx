@@ -21,9 +21,9 @@ import {
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import BoltIcon from '@mui/icons-material/Bolt';
 import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
+import { HeaderRight } from '../common/PanelHeader';
 import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile, Tip } from '../common/ResultTiles';
 import {
   scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs, type ScaledResult, type PwmVariant,
@@ -2257,10 +2257,7 @@ ${s1Text.text}` : '';
           the Configurator always mirrors ONE machine — the opened draft when
           one is showing, otherwise the loaded/open machine — and never a
           passport borrowed from some OTHER machine (owner 2026-09-29). */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid var(--line-soft)' }}>
-        <BoltIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
-        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }} title={tx('configure.instant')}>{tx('configure.title')}</Typography>
-        <Box sx={{ flex: 1 }} />
+      <HeaderRight tab="compare">
         {/* a load in flight: the numbers below are held (hidden, layout kept) until the point has settled */}
         {settling && !blocked && !loadingModel && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }} role="status">
@@ -2288,7 +2285,7 @@ ${s1Text.text}` : '';
             {tuned ? tx('configureLimits.resetShort') : tx('configureLimits.referenceDesign')}
           </Button>
         )}
-      </Box>
+      </HeaderRight>
       {loadingModel && (
         <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={14} sx={{ color: '#60a5fa' }} />

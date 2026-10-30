@@ -37,7 +37,7 @@ import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
 import { currentText, perSetFromTotal, setsOf, totalFromPerSet } from '../../lib/perSetCurrent';
-import { magnetTempError } from '../../lib/magnetTemp';
+import { magnetTempError, magnetTempOverLimit, parseMagnetTempC } from '../../lib/magnetTemp';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
   rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
@@ -66,7 +66,7 @@ import {
 } from '../../lib/dutySettings';
 import { MACHINE_CHANGED_EVENT } from '../../lib/dutyLocalApply';
 import { setSolveBusy } from '../../lib/familyFollow';
-import { magnetVariants } from '../../lib/magnetVariants';
+import { magnetVariants, legacyMagnetPick, magnetFamily } from '../../lib/magnetVariants';
 import { effectiveAssignment } from '../../lib/dutyMaterials';
 import { runNoticeFor, type RunNotice } from '../../lib/runNotice';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
@@ -280,9 +280,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
   const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
   const [windErr, setWindErr]       = useState<string | null>(null);  // refused winding change
-  // The backend RE-PICKED a connection that the live slot count no longer
-  // allows (a geometry change, a die/config copy) — one line saying so.
-  const [windNote, setWindNote]     = useState<string | null>(null);
+  // The stored connection the live slot count does not allow (the server's
+  // one-line reason, GET /api/winding/config `connection_error`).  Shown as a
+  // refusal; the panel never changes the connection on its own - a machine
+  // load writes geometry and winding together, so this only shows for a real
+  // edit that left the winding behind.
+  const windStoredErr = windCfg?.connection_valid === false && windCfg?.connection_error
+    ? String(windCfg.connection_error) : null;
   // connection options + the selected connection's parallel-path count come from
   // the backend (slot-derived). I_coil = I_phase / n_parallel.
   // Prefer the backend's slot-derived options; fall back to deriving them locally
@@ -305,7 +309,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         // config.yaml is the persistent, cross-browser source for the connection;
         // adopt it on load so a fresh browser / other tab reflects the real value.
         if (d.connection) setConnection(d.connection);
-        if (d.connection_note) setWindNote(String(d.connection_note));
         // The geometry counts ride on the same answer: they used to be read
         // ONCE on mount, so the period / cogging labels kept the previous
         // machine's slot count after a die switch.
@@ -358,8 +361,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, [loadWinding]);
 
   // Phase → colour for the slot map (A=red, B=green, C=blue); +full, −faded.
-  // self-heal: if the persisted connection isn't valid for THIS motor's slot count
-  // (e.g. a 4-coil connection inherited on a 12-slot motor), switch to the first valid one.
+  // The persisted connection may not be valid for THIS motor's slot count (e.g. a
+  // 4-coil connection inherited on a 12-slot motor).  It used to be switched to the
+  // first valid option (all series) on the spot - a silent change that doubled the
+  // voltage of a 4S-2P (owner 2026-10-30).  Now the panel adopts what the backend
+  // holds and, when that is itself invalid, SHOWS why (`windStoredErr`) and leaves
+  // the choice to the user.
   //
   // ONLY against the BACKEND's option list (windCfg loaded).  It used to run on
   // the local fallback too, and on first mount that fallback is derived from
@@ -370,13 +377,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ONE parallel path while the buttons — re-adopted from the backend a moment
   // later — showed 4P.  That is the "I change the connection and nothing
   // changes" report: 4x the coil MMF, under the wrong name.
-  useEffect(() => {
-    if (!windCfg || !Array.isArray(windCfg.connections) || !windCfg.connections.length) return;
-    if (!windConns.some((c) => c.label === connection)) {
-      setConnection(windConns[0].label);
-      applyWinding({ connection: windConns[0].label });
-    }
-  }, [windCfg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const PHASE_COLOR: Record<string, string> = { A: '#ef4444', B: '#22c55e', C: '#3b82f6' };
 
@@ -808,8 +808,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // buttons and its label in `connection`, which the next Run sent: a `10P`
   // on a 48-slot machine (8 coils/phase), solved with a tenth of the coil MMF
   // (owner 2026-10-20).  Re-read it on every geometry change and every load
-  // of another machine; the backend re-picks a connection the new slot count
-  // does not allow and says so (`connection_note`).
+  // of another machine.  A stored connection the new slot count does not allow
+  // is REPORTED by the backend (`connection_valid` / `connection_error`), not
+  // changed.
   useEffect(() => {
     loadWinding();
     try {
@@ -824,17 +825,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, [geomSig, loadWinding]);
   useEffect(() => {
     const on = () => loadWinding();
-    const onNote = (e: Event) => {
-      const m = (e as CustomEvent<{ message?: string | null }>).detail?.message;
-      if (m) setWindNote(String(m));
-    };
     window.addEventListener('family-changed', on);
     window.addEventListener('sim-design-applied', on);
-    window.addEventListener('winding-note', onNote);
     return () => {
       window.removeEventListener('family-changed', on);
       window.removeEventListener('sim-design-applied', on);
-      window.removeEventListener('winding-note', onNote);
     };
   }, [loadWinding]);
 
@@ -896,7 +891,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Active magnet + the two numbers that decide how it behaves: Br sets the flux,
   // the BH-curve knee sets how much demagnetising field it survives.  Refreshed on
   // the same event a material change fires, so it never lags the assignment.
-  const [magInfo, setMagInfo] = useState<{ name: string; Br?: number; knee?: number } | null>(null);
+  const [magInfo, setMagInfo] = useState<{ name: string; Br?: number; knee?: number;
+    tmax?: number; atC?: number | null } | null>(null);
   // The SAME hook that feeds ?mat= to the solver (via MaterialOverrideSync) is
   // this badge's source of truth: overlay-merged, optimistic on assign, and it
   // refreshes itself on every mat-assign event.  Two earlier versions of this
@@ -910,10 +906,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── the ACTIVE DUTY's magnet TEMPERATURE ──────────────────────────────────
   // The machine's magnet is a machine property (Materials tab).  Its operating
   // TEMPERATURE is a property of the duty — a continuous duty runs the rotor at
-  // 80 °C where the peak duty of the same motor sits at 120–150 — and in this
-  // library a temperature IS a record of the grade (`F52SH_80C`, `F52SH_120C`).
-  // The pick is stored per duty and rides ?mat= only; nothing here rewrites the
-  // assignment (lib/dutySettings.ts, lib/magnetVariants.ts).
+  // 80 °C where the peak duty of the same motor sits at 120–150.  Since
+  // 2026-10-30 every library card is the grade at 20 °C and the temperature is
+  // the Magnet temp. field below (saved with the duty), like copper's coil
+  // temperature; a duty's former per-temperature pick (`F52SH_80C`) is turned
+  // into grade + temperature below (lib/dutySettings.ts, lib/magnetVariants.ts).
   const { library: matLib } = useMaterialsLibrary();
   const magNames = React.useMemo(
     () => Object.keys(matLib?.magnet ?? {}), [matLib]);
@@ -942,31 +939,61 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // (a single-record grade, or a name that carries no `_<T>C` suffix at all).
   const magVariants = React.useMemo(
     () => magnetVariants(machineMagnet, magNames), [machineMagnet, magNames]);
+  // The badge shows the card AT the typed temperature (every card is quoted at
+  // 20 °C since 2026-10-30) — a blank or invalid field shows the card as quoted.
+  const magTypedC = magnetTempError(magnetTempC) ? null : parseMagnetTempC(magnetTempC);
   useEffect(() => {
     if (!liveMagnet) return;
     let gone = false;
     (async () => {
-      let Br: number | undefined, knee: number | undefined;
+      let Br: number | undefined, knee: number | undefined, tmax: number | undefined;
+      let atC: number | null = null;
       const kneeOf = (bh: unknown) => (Array.isArray(bh) && bh.length > 1)
         ? Number((bh[0] as any)?.[1] <= 0 ? (bh[1] as any)?.[0] : (bh[0] as any)?.[0])
         : undefined;
       try {   // a user material's props travel with the request, not the library
         const ov = JSON.parse(currentMatJson() || 'null');
         const p = ov?.materials?.[liveMagnet];
-        if (p) { Br = Number(p.Br); knee = kneeOf(p.bh_curve); }
+        if (p) { Br = Number(p.Br); knee = kneeOf(p.bh_curve); tmax = Number(p.max_working_temp_c); }
       } catch { /* no override props — library below */ }
       if (!Number.isFinite(Br as number)) try {
-        const m = await (await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}`)).json();
-        const mm = m?.material ?? m;
+        const q = magTypedC != null ? `?temp_c=${encodeURIComponent(String(magTypedC))}` : '';
+        let r = await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}${q}`);
+        // a temperature the card cannot be moved to: the card as quoted, the field says why
+        if (!r.ok && q) r = await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}`);
+        else if (q) atC = magTypedC;
+        const mm = await r.json();
         Br = Number(mm?.Br);
         knee = kneeOf(mm?.bh_curve);
+        tmax = Number(mm?.max_working_temp_c);
       } catch { /* library lookup is optional */ }
       if (!gone) setMagInfo({ name: liveMagnet,
                               Br: Number.isFinite(Br as number) ? Br : undefined,
-                              knee: Number.isFinite(knee as number) ? knee : undefined });
+                              knee: Number.isFinite(knee as number) ? knee : undefined,
+                              tmax: Number.isFinite(tmax as number) ? tmax : undefined, atC });
     })();
     return () => { gone = true; };
-  }, [liveMagnet]);
+  }, [liveMagnet, magTypedC]);
+  // A FORMER per-temperature pick remembered for this duty in this browser
+  // (`F52SH_80C`, before 2026-10-30) is no longer a library card: the solve
+  // would quietly fall back to the grade at 20 °C.  It becomes what it meant —
+  // the grade, at that temperature (unless a temperature is already typed).
+  useEffect(() => {
+    const old = legacyMagnetPick(dutyMats?.magnet, magNames);
+    if (!old || magnetFamily(machineMagnet) !== old.grade) return;
+    if (!String(magnetTempC ?? '').trim()) setMagnetTempC(String(old.tempC));
+    setDutyMagnet(null);
+    setDutyMats(activeDutyMaterials());
+  }, [dutyMats, machineMagnet, magNames]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // THE GRADE'S LIMIT (owner 2026-10-30): a typed temperature above the card's
+  // maximum working temperature is refused here, red, and Run waits; the API
+  // refuses it too.  The coupled loop's own (read-only) value is never judged
+  // here — the result flags it.
+  const magOverC = magnetTempOverLimit(magnetTempC, magInfo?.tmax);
+  const magTempWhy = coupled ? null
+    : magnetTempError(magnetTempC)
+      ? tx('magnetTempInvalid', { why: magnetTempError(magnetTempC) })
+      : magOverC != null ? tx('magnetTempOverLimit', { max: magOverC }) : null;
   // A design load can swap the shared config's materials without firing a
   // mat-assign event — bridge that one event to the hook's refresh.
   useEffect(() => {
@@ -1808,7 +1835,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button
                   size="small"
                   variant={connection === c.label ? 'contained' : 'outlined'}
-                  onClick={() => { setWindNote(null); setConnection(c.label); applyWinding({ connection: c.label }); }}
+                  onClick={() => { setConnection(c.label); applyWinding({ connection: c.label }); }}
                   disabled={isRunning}
                   sx={{ flex: 1, minWidth: 52, fontSize: 11, fontWeight: 700, py: 0.5,
                     textTransform: 'none',
@@ -1917,10 +1944,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Typography>
           )}
 
-          {/* The connection was re-picked for this slot count — one line. */}
-          {windNote && !windErr && (
-            <Typography sx={{ fontSize: 10.5, color: '#fbbf24', mt: -0.75, mb: 1 }}>
-              {windNote}
+          {/* The stored connection is not possible on this slot count — the
+              server's reason, one line.  Nothing was changed for the user. */}
+          {windStoredErr && !windErr && (
+            <Typography sx={{ fontSize: 10.5, color: '#f87171', mt: -0.75, mb: 1 }}>
+              ⚠ {windStoredErr}
             </Typography>
           )}
 
@@ -2036,7 +2064,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 {/* second row: the numbers */}
                 <Box sx={{ flexBasis: '100%', display: 'flex', gap: 1.25, alignItems: 'baseline' }}>
                   {magInfo.Br != null && (
-                    <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>Br {magInfo.Br.toFixed(2)} T</Typography>
+                    <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>
+                      Br {magInfo.Br.toFixed(2)} T{magInfo.atC != null ? ` @ ${magInfo.atC} °C` : ''}
+                    </Typography>
                   )}
                   {magInfo.knee != null && (
                     <Typography sx={{ fontSize: 10, color: demag ? 'var(--text-3)' : 'var(--text-4)' }}>
@@ -2558,9 +2588,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               value={magnetTempC}
               placeholder={tx('asQuoted')}
               onChange={e => setMagnetTempC(e.target.value)}
-              error={!coupled && !!magnetTempError(magnetTempC)}
-              helperText={!coupled && magnetTempError(magnetTempC)
-                ? tx('magnetTempInvalid', { why: magnetTempError(magnetTempC) }) : undefined}
+              error={!!magTempWhy}
+              helperText={magTempWhy ?? undefined}
               inputProps={{ readOnly: coupled, inputMode: 'decimal' }}
               InputProps={{ endAdornment: <HelpTip title={coupled
                 ? tx('magnetTempLoopTip') : tx('magnetTempTip')} /> }}
@@ -2951,7 +2980,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Button
               fullWidth
               variant="contained"
-              disabled={fitBusy || (!coupled && !!magnetTempError(magnetTempC))}
+              disabled={fitBusy || !!magTempWhy}
               onClick={() => {
                 if (cancelledRun) { setAskResume(true); return; }
                 if (drive === 'current' && targetKind !== 'off') { void fitAndRun(); return; }

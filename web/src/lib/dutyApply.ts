@@ -152,35 +152,28 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
           ? ' — sign in again and retry' : '';
         throw new Error(`cannot activate ${die} / ${cfg}: ${why}${authHint}`);
       }
-      // 1) geometry — the die's stamped section + this configuration's stack/wire
-      // The winding below is validated against the geometry the server NOW holds,
-      // so a refused geometry write (die/configuration lock, bad value) must stop
-      // the load here - not surface three steps later as a misleading winding error.
-      const stop = loadStopReason(die, cfg, await updateGeometryViaApi(p.geometry));
+      // 1+2) geometry AND winding connection, as ONE change.  The winding is
+      // validated against the incoming slot count before anything is written
+      // and both land together (PUT /api/geometry/load), so the previous
+      // machine's winding never meets the new geometry - the "winding
+      // connection '4S' is not valid for 48 slots" snap of a 3-phase 24-slot ->
+      // six-phase 48-slot switch (owner 2026-10-30).  A refused geometry write
+      // (die/configuration lock, bad value) or winding stops the load here.
+      // phases is always sent, so a 3-phase load also clears a previous
+      // 6-phase one; the six-phase split travels with the connection.
+      const six = Number(p.winding?.phases) === 6;
+      const windingForLoad = p.sim.connection ? {
+        connection: p.sim.connection,
+        layers: p.winding?.layers,
+        phases: six ? 6 : 3,
+        ...(six ? {
+          set1_paths: String(p.winding?.set1_paths ?? ''),
+          set_neutrals: String(p.winding?.set_neutrals || 'isolated'),
+        } : {}),
+      } : undefined;
+      const stop = loadStopReason(die, cfg,
+        await updateGeometryViaApi(p.geometry, { winding: windingForLoad }));
       if (stop) throw new Error(stop);
-      // 2) winding connection (authoritative endpoint; validates against layout)
-      if (p.sim.connection) {
-        const wr = await fetch(`${API}/api/winding/config`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          // The six-phase split travels with the connection (owner 2026-10-25: a two-winding configuration loaded
-          // as a plain 3-phase machine).  phases is always sent, so a 3-phase load also clears a previous 6-phase one.
-          body: JSON.stringify({ connection: p.sim.connection,
-                                 layers: p.winding?.layers,
-                                 phases: Number(p.winding?.phases) === 6 ? 6 : 3,
-                                 ...(Number(p.winding?.phases) === 6 ? {
-                                   set1_paths: String(p.winding?.set1_paths ?? ''),
-                                   set_neutrals: String(p.winding?.set_neutrals || 'isolated'),
-                                 } : {}) }),
-        });
-        if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
-      }
-      // The payload re-picked a connection this lamination does not allow
-      // (a die grown from 24 to 48 slots still saying 2S): one visible line.
-      if (p.winding_note) {
-        try {
-          window.dispatchEvent(new CustomEvent('winding-note', { detail: { message: p.winding_note } }));
-        } catch { /* SSR */ }
-      }
       // 2b) the build's materials — a configuration is a physical product;
       //     loading it must load what it is made of.  EVERY part the payload
       //     names (2026-09-09): it now spells out the liner and the enamel

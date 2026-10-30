@@ -36,10 +36,10 @@ const NO_MOTOR_TABS = new Set(['admin', 'designer']);
 /** Which kind of context a tab owns by default.  Every machine-bound tab (Configure, 3-D model, Simulation, Thermal,
  *  Mechanical, Controller, Geometry, Optimization, ...) and every tab not listed here keeps the live machine. */
 export function stripKindForTab(tab: string): StripKind {
-  // Development shows no strip for now (owner 2026-10-26: «убери пока, только вводит в заблуждение»).  Production shows the
-  // motor of the production being viewed, in the Configure strip's style (owner 2026-10-26: «нужно подсвечивать мотор,
-  // который загружен в производстве, в том же стиле, как и для Configure, между этими меню»).
-  if (tab === 'development') return 'none';
+  // Development shows its open project and the project's motors, Production the motor of the production being viewed,
+  // both in the Configure strip's style (owner 2026-10-26 for Production; 2026-10-30: "the same pattern on every tab",
+  // which brings the Development strip back).
+  if (tab === 'development') return 'project';
   if (tab === 'production') return 'production';
   if (NO_MOTOR_TABS.has(tab)) return 'none';
   return 'live';

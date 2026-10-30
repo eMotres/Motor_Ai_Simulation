@@ -15,12 +15,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Divider, FormControlLabel,
-  LinearProgress, MenuItem, Select, Slider, Switch, ToggleButton,
-  ToggleButtonGroup, Typography,
+  LinearProgress, MenuItem, Select, Slider, Switch, Typography,
 } from '@mui/material';
 import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
 import HelpTip from '../common/HelpTip';
+import SubTabs, { type SubTabItem } from '../common/SubTabs';
+import { HeaderTabs } from '../common/PanelHeader';
 import { N_BANDS, bandColor } from '../simulation/fieldView';
 import Viewcube from '../viewer3d/Viewcube';
 import Static3DScene from './Static3DScene';
@@ -34,6 +35,11 @@ import type {
 } from './api';
 
 type Panel = 'geometry' | 'mesh' | 'fields';
+const PANEL_TABS: readonly SubTabItem<Panel>[] = [
+  { id: 'geometry', label: 'Geometry' },
+  { id: 'mesh', label: 'Mesh' },
+  { id: 'fields', label: 'Fields' },
+];
 
 // 'live' = the machine currently loaded in the app (backend snapshots the
 // active config per request); a preset name from motor_presets.json pins a
@@ -230,12 +236,9 @@ const Static3DPanel: React.FC = () => {
 
       {/* ── selector row ─────────────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <ToggleButtonGroup size="small" exclusive value={panel}
-          onChange={(_, v) => v && setPanel(v)}>
-          <ToggleButton value="geometry" sx={{ fontSize: 11, px: 1.5, py: 0.25 }}>Geometry</ToggleButton>
-          <ToggleButton value="mesh" sx={{ fontSize: 11, px: 1.5, py: 0.25 }}>Mesh</ToggleButton>
-          <ToggleButton value="fields" sx={{ fontSize: 11, px: 1.5, py: 0.25 }}>Fields</ToggleButton>
-        </ToggleButtonGroup>
+        <HeaderTabs tab="static3d">
+          <SubTabs value={panel} items={PANEL_TABS} onChange={setPanel} ariaLabel="3D view" testId="static3d-tabs" />
+        </HeaderTabs>
 
         {panel !== 'geometry' && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

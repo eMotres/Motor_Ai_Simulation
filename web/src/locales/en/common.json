@@ -624,5 +624,43 @@
       "run": "The last run is not saved to duty {duty}",
       "edits": "Geometry edited, not saved: {what}"
     }
+  },
+  "progress": {
+    "label": "Solve stages",
+    "elapsed": "elapsed",
+    "eta": "ETA",
+    "adaptiveHint": "Adaptive: the total grows until the stage settles.",
+    "count": "{done} / {planned} {unit, select, steps {steps} other {frames}}",
+    "countGrowing": "{done} / {planned}+ {unit, select, steps {steps} other {frames}}",
+    "countOpen": "{done} {unit, select, steps {steps} other {frames}}",
+    "state": {
+      "pending": "waiting",
+      "running": "running",
+      "done": "done",
+      "skipped": "skipped, not needed in this run",
+      "stopped": "stopped"
+    },
+    "name": {
+      "calibration": "d-axis cal.",
+      "gap_probe": "Gap probe",
+      "warm_up": "Eddy warm-up",
+      "demag_prepass": "Demag pre-pass",
+      "final": "Final periods",
+      "extra": "Reference solve",
+      "post": "Post-processing",
+      "loop": "Iterations",
+      "pwm_final": "PWM passes"
+    },
+    "tip": {
+      "calibration": "Once per geometry: a short no-load solve that finds the d-axis position.",
+      "gap_probe": "Cheap probe solves that choose how many mesh rows the air gap needs.",
+      "warm_up": "Settles the eddy-current start-up transient before anything is reported.",
+      "demag_prepass": "One settled period solved only to lower the magnets' remanence where they demagnetise; its frames are discarded.",
+      "final": "The solve whose frames you get: the settling periods plus the reported window.",
+      "extra": "A second full solve made for the answer (harmonic reference or six-phase probe); it has no frame count.",
+      "post": "Animation frames, masses and the summary are built after the last frame.",
+      "loop": "Coupled loop: each iteration is an electromagnetic run plus a thermal solve; it stops when the temperatures converge.",
+      "pwm_final": "The controller's PWM passes on the converged sine state, each an electromagnetic run plus a thermal solve."
+    }
   }
 }

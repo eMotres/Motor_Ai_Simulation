@@ -94,6 +94,7 @@ from motor_ai_sim import coupled_continuous_rating as _ccr
 from motor_ai_sim import coupled_duty_cycle as _cdc
 from motor_ai_sim import coupled_pwm_final as _pwmf
 from motor_ai_sim import coupled_time_to_limit as _ttl
+from motor_ai_sim import progress_stages as _pstg
 from motor_ai_sim import run_recording as _rr
 from motor_ai_sim import run_history as _RH
 from motor_ai_sim import workspace as _WSP
@@ -1539,7 +1540,8 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
     try:
         from motor_ai_sim.report import kv_at_magnet_temp
         kv_walked, _why = kv_at_magnet_temp(
-            s.get("KV_noload_rpm_per_V_line"), _grade, COLD_CONSTANTS_C)
+            s.get("KV_noload_rpm_per_V_line"), _grade, COLD_CONSTANTS_C,
+            s.get("psi_pm_magnet_temp_c"))
         if kv_walked is not None:
             kv_note = "walked to %g °C — %s" % (COLD_CONSTANTS_C, _why)
     except Exception:  # noqa: BLE001 — a note is not worth losing a block over
@@ -5289,6 +5291,31 @@ def _record_wanted(body: Dict[str, Any]) -> bool:
     return bool(v)
 
 
+def _magnet_over_limit_block(t_solved: Optional[float],
+                             t_max_map: Optional[float]) -> Dict[str, Any]:
+    """``{"magnet_over_limit": {...}}`` when the loop's magnet temperature — the
+    one the last EM pass solved at, or the hottest element of its thermal map —
+    is past the assigned grade's maximum working temperature; ``{}`` otherwise
+    (and on any lookup failure: a flag must not fail a run)."""
+    try:
+        from motor_ai_sim.materials import magnet_over_limit
+        from motor_ai_sim.routes.simulation import _assigned_magnet_card
+        _n, card = _assigned_magnet_card()
+        if card is None:
+            return {}
+        temps = [float(t) for t in (t_solved, t_max_map) if t is not None]
+        flag = magnet_over_limit(card, max(temps)) if temps else None
+        if not flag:
+            return {}
+        flag["basis"] = ("hottest magnet element" if t_max_map is not None
+                         and float(t_max_map) >= float(t_solved or -1e9)
+                         else "solved magnet temperature")
+        return {"magnet_over_limit": flag}
+    except Exception:   # noqa: BLE001
+        log.debug("magnet limit flag skipped", exc_info=True)
+        return {}
+
+
 @router.post("/run")
 @_JOBS.queued("coupled.run", priority=_JOBS.Priority.DUTY,
               run_id_from=_JOBS.body_run_id("coupled"))
@@ -5717,10 +5744,17 @@ def _run(body: Dict[str, Any],
     hold_v_link = _hold_v_link(body) if hold_on else None
     hold_alpha_br = _hold_alpha_br() if hold_on else None
     try:
+        # The stage row (owner 2026-10-30): the iterations, then — on an
+        # inverter run that puts the PWM aside — the controller's PWM passes.
+        # Both are adaptive (the loop stops when it converges), so their
+        # planned counts are the budget, not a promise.
         _progress.start(
             total=max_iter * 2, kind="coupled",
             phase="iteration 1/%d — electromagnetic" % max_iter,
-            composition="up to %d x (electromagnetic run + thermal solve)" % max_iter)
+            composition="up to %d x (electromagnetic run + thermal solve)" % max_iter,
+            stages=_pstg.plan_coupled(max_iter=max_iter, pwm=bool(final_pass),
+                                      max_passes=PWM_FINAL_MAX_PASSES),
+            stage_kind="coupled")
         # THE SINE STATE, REUSED — the loop below is skipped entirely and the
         # state it would have reached is the stored one (same machine, point,
         # cooling, question and build; only the drive differs).
@@ -7688,6 +7722,12 @@ def _run(body: Dict[str, Any],
         "magnet_temp_max_c": next(
             (r["T_magnet_max"] for r in reversed(history)
              if r.get("T_magnet_max") is not None), None),
+        # OVER THE GRADE'S LIMIT (owner 2026-10-30): the loop solves at the
+        # temperature it computed — never clamped to the card's maximum working
+        # temperature — and says so here.  Absent when inside the limit.
+        **_magnet_over_limit_block(
+            em_at[1], next((r["T_magnet_max"] for r in reversed(history)
+                            if r.get("T_magnet_max") is not None), None)),
         # …and WHICH PASS that map was (audit 2026-10-27, claim 2), so a reader
         # can tell it belongs to the pass the temperatures above were solved in.
         "magnet_temp_max_pass": next(

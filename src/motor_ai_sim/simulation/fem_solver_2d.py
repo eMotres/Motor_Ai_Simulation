@@ -863,7 +863,8 @@ def frozen_permeability_vsd(p2, Pro, free, A2, f_set, sc_psi, th_dq,
 
 
 def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
-                 geo_override=None, progress_cb=None, connection=None):
+                 geo_override=None, progress_cb=None, connection=None,
+                 magnet_temp_c=None):
     """Magnet flux linkage ψ_PM [Wb, phase] — the d-axis flux at I = 0.
 
     One cheap no-load transient (6 frames on the calibration mesh), parked into
@@ -875,10 +876,18 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
     result — magnet flux lives entirely on d, so a ψq0 that is not small next
     to ψ_PM means the transform angle is wrong, and the caller must refuse to
     turn it into an inductance.
+
+    ``magnet_temp_c`` (2026-10-30): the LOADED run's magnet temperature.  Every
+    magnet card is quoted at 20 °C now and the temperature is a run input, so a
+    probe at the card's own temperature would subtract a 20 °C ψ_PM from a hot
+    ψd (Ld, the droop row and the no-load KV all read this number).  ``None`` =
+    the card as quoted, the key it has always had.
     """
     import math as _m, json as _j, os as _os
     key = psipm_cache_key(geo, wind, connection,
                           materials=_noload_material_fingerprint())
+    if magnet_temp_c is not None:
+        key = "%s_M%g" % (key, round(float(magnet_temp_c), 2))
     _dp = _daxis_disk_path()
     if _dp and _os.path.exists(_dp):
         try:
@@ -907,6 +916,7 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
         # ψ sampler, not a cogging run: 6 frames, never raised (8997bb3 made
         # this probe 96/120 frames — +50–70 s per new geometry).
         sampling_purpose="internal_probe",
+        magnet_temp_c=(None if magnet_temp_c is None else float(magnet_temp_c)),
         # The same connection the LOADED run used — psi scales with n_series.
         **({} if not _conn_pm else {"connection": _conn_pm}))
     if not cal.get("picard_converged", False):

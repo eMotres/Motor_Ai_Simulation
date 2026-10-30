@@ -214,20 +214,27 @@ def material_ref(name: str) -> Dict[str, Any]:
     from motor_ai_sim import materials as M
     lib = M._load() or {}
     src_file = "shared" if M._lib_path() != M._DEFAULT_LIB_PATH else "public"
+    # A former per-temperature magnet name rests on its grade's 20 °C card: the
+    # ref keeps the name it was asked for, the revision is the grade card's.
+    key = name
+    _old = M.legacy_magnet(name)
+    _mags = lib.get("magnet") or {}
+    if _old is not None and name not in _mags and _old[0] in _mags:
+        key = _old[0]
     for cat, group in lib.items():
-        if not isinstance(group, dict) or name not in group:
+        if not isinstance(group, dict) or key not in group:
             continue
         ident = f"{cat}/{name}"
         try:
             from motor_ai_sim import materials_store
-            g = materials_store.global_material(cat, name)
+            g = materials_store.global_material(cat, key)
         except Exception:                                    # noqa: BLE001
             g = None
         if g is not None:
             # An admin edit of a built-in in the global layer IS the explicit
             # override record (made by an admin, stored with updatedBy).
             return CatalogRef(KIND_MATERIALS, ident, "global", object_revision(g), True).as_dict()
-        return CatalogRef(KIND_MATERIALS, ident, src_file, object_revision(group[name])).as_dict()
+        return CatalogRef(KIND_MATERIALS, ident, src_file, object_revision(group[key])).as_dict()
     return {"kind": KIND_MATERIALS, "id": name, "source": None, "revision": None,
             "error": "not in the materials library"}
 

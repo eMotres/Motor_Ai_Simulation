@@ -35,6 +35,7 @@ import { driveLabel } from '../../lib/dutyRuns';
 // lib/dutyApply so the strip's "reload ▶" and this ▶ can never drift.
 import { applyCatalogDuty } from '../../lib/catalogDutyApply';
 import { downloadExport } from '../../lib/exportDownload';
+import { configMoveSummary, type MovePlan } from '../../lib/configMove';
 import {
   IDLE as RING_IDLE, newRunId, ringBusy, ringDone, ringFail, ringPoll,
   ringStart, ringTip, type ReportProgressInfo, type ReportRing,
@@ -740,6 +741,36 @@ const FamilyCatalog: React.FC<{
       () => post(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/duplicate`,
                  { name })),
   });
+  // Admin: move (or copy) a configuration to ANOTHER die.  The server carries every store that names
+  // "<die>/<cfg>" (results + history, projects, customer grants, production, tests, CAD) in one
+  // transaction; the dry run is shown first and nothing is written until it is confirmed.
+  const moveCfg = (die: string, cfg: string, mode: 'move' | 'copy') => setAskText({
+    title: `${mode === 'move' ? 'Move' : 'Copy'} '${die} / ${cfg}' to another die`,
+    label: 'Target die (it must exist)', initial: '',
+    hint: mode === 'move'
+      ? 'Runs, results, history, project links, customer access, production, tests and CAD follow; you see every change first'
+      : 'The source stays; the copy takes the runs, results and history and joins the projects of the source',
+    okLabel: 'Check',
+    onSubmit: (target) => { void (async () => {
+      const url = `${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/move`;
+      const init = { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ target_die: target.trim(), mode }) };
+      let plan: MovePlan = {};
+      try {
+        const r = await fetch(`${url}?dry_run=1`, init);
+        plan = await r.json().catch(() => ({}));
+        if (!r.ok) { setMsg(`✗ ${(plan as { detail?: string }).detail ?? `HTTP ${r.status}`}`); return; }
+      } catch (e) { setMsg(`✗ checking the ${mode}: ${e}`); return; }
+      setAskConfirm({
+        title: `${mode === 'move' ? 'Move' : 'Copy'} '${cfg}' to '${target.trim()}'?`,
+        body: configMoveSummary(plan),
+        confirmLabel: mode === 'move' ? 'Move' : 'Copy',
+        onConfirm: () => mutate((d) => `'${cfg}' ${mode === 'move' ? 'moved' : 'copied'} to '${target.trim()}'`
+          + (d?.manual?.length ? ` - ${d.manual.length} deploy file(s) to move by hand` : ''),
+          () => fetch(url, init)),
+      });
+    })(); },
+  });
   // Client path: snapshot the machine into the caller's PRIVATE "My motors"
   // space (server-side per-user store; nothing shared changes).
   const duplicateToMySpace = (die: string, cfg: string) => setAskText({
@@ -1116,6 +1147,30 @@ const FamilyCatalog: React.FC<{
                         sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
                               textTransform: 'none', color: '#60a5fa' }}>
                         ⧉ duplicate
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )}
+                {canWrite && isAdmin && (
+                  <Tooltip title="Move this configuration to another die, with its results, project links and customer access (a dry run is shown first)">
+                    <span>
+                      <Button size="small" disabled={!!busy}
+                        onClick={() => moveCfg(die.name, c.name, 'move')}
+                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
+                              textTransform: 'none', color: 'var(--text-3)' }}>
+                        ⇄ move
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )}
+                {canWrite && isAdmin && (
+                  <Tooltip title="Copy this configuration into another die, with its runs, results and history; the source stays">
+                    <span>
+                      <Button size="small" disabled={!!busy}
+                        onClick={() => moveCfg(die.name, c.name, 'copy')}
+                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
+                              textTransform: 'none', color: 'var(--text-3)' }}>
+                        ⇉ copy to die
                       </Button>
                     </span>
                   </Tooltip>

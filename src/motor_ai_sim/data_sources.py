@@ -266,6 +266,10 @@ def open_material_names() -> set:
     for group in lib.values():
         if isinstance(group, dict):
             out.update(str(k) for k in group)
+    # A former per-temperature magnet name (before 2026-10-30) is public when
+    # its grade's 20 °C card is: it resolves to that card (materials.LEGACY_MAGNET_CARDS).
+    from motor_ai_sim.materials import LEGACY_MAGNET_CARDS
+    out.update(n for n, (g, _t) in LEGACY_MAGNET_CARDS.items() if g in out)
     return out
 
 

@@ -464,6 +464,11 @@ def _raw_material(category_hint: Sequence[str], name: str) -> Tuple[str, dict]:
         raw = (lib.get(cat) or {}).get(name)
         if raw is not None:
             return cat, dict(raw)
+    # A former per-temperature magnet name ('F52SH_120C', before 2026-10-30):
+    # its grade's 20 °C card — the mechanical record is the grade's.
+    _old = _mats.legacy_magnet(name)
+    if _old is not None and _old[0] in (lib.get("magnet") or {}):
+        return "magnet", dict(lib["magnet"][_old[0]])
     raise MissingMechanicalProperty(
         cats[0] if cats else "?", name, "record",
         "material not found in config/materials_library.yaml")

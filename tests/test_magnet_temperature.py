@@ -149,9 +149,13 @@ def test_the_measured_consistency_numbers_are_the_documented_ones():
     assert n52.Br == pytest.approx(1.2069, abs=5e-4)
     assert n52.h_knee == pytest.approx(-670_600.0, rel=1e-4)
 
+    # 2026-10-30: one 20 C card per grade - both N45EH temperatures are now
+    # GENERATED from it, so 150 -> 180 C lands on the 180 C derivation (the
+    # former hand-made N45EH_180C said -619.0 kA/m; the old intrinsic stretch of
+    # the 150 C card gave -606.4).
     n45 = get_magnet("N45EH_150C").at_temperature(180.0)
-    assert n45.Br == pytest.approx(1.1014, abs=5e-4)
-    assert n45.h_knee == pytest.approx(-606_400.0, rel=2e-3)
+    assert n45.Br == pytest.approx(1.1016, abs=5e-4)
+    assert n45.h_knee == pytest.approx(-618_900.0, rel=2e-3)
 
 
 # ── (c) direction ──────────────────────────────────────────────────────────
@@ -249,7 +253,9 @@ def test_the_intrinsic_polarisation_is_what_gets_scaled():
     the algebra rather than against another number, so this test still means
     something if the coefficients are ever re-derived.
     """
-    card = get_magnet("N45EH_150C")
+    # Fe16N2 is the one family left on the intrinsic stretch (a fixed table, no
+    # demag_model); the graded NdFeB cards regenerate their curve instead.
+    card = get_magnet("Fe16N2_optimistic")
     dt = 25.0
     a = 1.0 + card.alpha_br_pct_per_k / 100.0 * dt
     b = 1.0 + card.beta_hcj_pct_per_k / 100.0 * dt
@@ -272,7 +278,9 @@ def test_hc_follows_the_card_s_own_identity():
     identity would triple a number that means something else.
     """
     nd = get_magnet("N52UH_150C").at_temperature(170.0)
-    assert nd.Hc == pytest.approx(nd.Br / (MU0 * nd.mu_rec), rel=1e-9)
+    # Derived cards store Hc to the ampere (from the unrounded Br) and Br to
+    # 0.1 mT, like every card in the library.
+    assert nd.Hc == pytest.approx(nd.Br / (MU0 * nd.mu_rec), rel=1e-4)
     assert nd.mu_rec == get_magnet("N52UH_150C").mu_rec, "mu_rec must not scale"
 
     fe0 = get_magnet("Fe16N2_optimistic")
@@ -297,7 +305,7 @@ def test_a_second_call_lands_where_one_call_would():
 # ── refusals: a request the card cannot answer must say so ─────────────────
 
 def test_a_card_without_coefficients_refuses_instead_of_guessing():
-    card = dc.replace(get_magnet("N52UH_150C"),
+    card = dc.replace(get_magnet("N52UH_150C"), demag_model=None,
                       alpha_br_pct_per_k=None, beta_hcj_pct_per_k=None)
     # Its own temperature is still fine — nothing has to be corrected.
     assert card.at_temperature(150.0).Br == card.Br
@@ -307,7 +315,8 @@ def test_a_card_without_coefficients_refuses_instead_of_guessing():
 
 
 def test_a_card_without_a_reference_temperature_refuses():
-    card = dc.replace(get_magnet("N52UH_150C"), temperature_c=None)
+    card = dc.replace(get_magnet("N52UH_150C"), temperature_c=None,
+                      demag_model=None)
     with pytest.raises(MagnetTemperatureError):
         card.at_temperature(163.0)
 
@@ -319,7 +328,7 @@ def test_a_temperature_past_total_demagnetisation_refuses():
     question nobody asked — the failure mode this project refuses everywhere
     else (UnknownMaterialError, the F6 fallback).
     """
-    card = get_magnet("F45SH_120C")     # beta -1.0 %/K -> Hcj = 0 at 220 degC
+    card = get_magnet("F45SH_120C")     # beta -0.535 %/K at 20 C -> Hcj = 0 at 207 degC
     with pytest.raises(MagnetTemperatureError) as e:
         card.at_temperature(400.0)
     assert "Hcj" in str(e.value) or "Br" in str(e.value)

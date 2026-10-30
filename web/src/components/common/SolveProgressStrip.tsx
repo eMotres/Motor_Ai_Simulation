@@ -20,9 +20,12 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, CircularProgress } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 
 import { formatProgressLine, formatQueueLine } from './progressLine';
 import type { ProgressInfo } from './progressLine';
+import ProgressStageRow from './ProgressStageRow';
+import { etaIsLowerBound, hasStages } from './progressStages';
 import { whenVisible } from '../../lib/pageVisible';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -60,6 +63,7 @@ const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
   endpoint, unit = 'points', kindLabels, label, pwmFallback = false, runId,
   onActiveChange,
 }) => {
+  const { t } = useTranslation('common');
   const [p, setP] = useState<ProgressInfo | null>(null);
   // Local ticking clock between polls so "elapsed" advances smoothly.
   const [, force] = useState(0);
@@ -87,7 +91,8 @@ const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
             && prev.running === j.running && prev.step === j.step
             && prev.total === j.total && prev.phase === j.phase
             && prev.elapsed_s === j.elapsed_s && prev.eta_s === j.eta_s
-            && prev.queued === j.queued && prev.position === j.position)
+            && prev.queued === j.queued && prev.position === j.position
+            && JSON.stringify(prev.stages) === JSON.stringify(j.stages))
             ? prev : j);
         }
       } catch { /* polling errors are not user-facing */ }
@@ -142,6 +147,35 @@ const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
   const tip = p.kind
     ? [line.prefix.replace(/\s·$/, ''), p.phase, p.composition].filter(Boolean).join(' · ')
     : undefined;
+
+  // ONE ROW OF STAGES (owner 2026-10-30).  When the backend reports the run's
+  // stages, the single counter (whose total grows as the adaptive warm-up
+  // extends, so its ETA jumps) gives way to one segment per stage in execution
+  // order, each with its own bar and frame count.  The total elapsed and ETA
+  // stay at the right; while an adaptive stage runs the ETA is a lower bound.
+  if (hasStages(p.stages)) {
+    const lower = etaIsLowerBound(p.stages);
+    return (
+      <Box title={tip}
+        sx={{ position: 'sticky', top: 0, zIndex: 20,
+        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1,
+        px: 1.25, py: 0.75, mb: 1,
+        bgcolor: 'var(--panel-2)', border: '1px solid var(--line-accent)',
+        borderRadius: 1, fontFamily: 'monospace',
+        boxShadow: '0 2px 12px rgba(37,99,235,0.25)' }}>
+        <CircularProgress size={11} thickness={6}
+          sx={{ color: 'var(--brand)', flex: '0 0 auto' }} />
+        <ProgressStageRow stages={p.stages} />
+        <Box sx={{ flex: '0 0 auto', marginLeft: 'auto', fontSize: 12,
+          color: 'var(--text-3)', whiteSpace: 'nowrap' }}
+          title={lower ? t('progress.adaptiveHint') : undefined}>
+          {t('progress.elapsed')}&nbsp;
+          <b style={{ color: 'var(--text-0)' }}>{(p.elapsed_s ?? 0).toFixed(1)} s</b>
+          {eta ? `   ·   ${t('progress.eta')} ${lower ? '≥ ' : ''}${eta.toFixed(0)} s` : ''}
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box title={tip}

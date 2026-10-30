@@ -44,3 +44,28 @@ test('the payload sends it through the same parser; the duty keeps it', () => {
   const duty = readFileSync(join(LIB, 'dutySettings.ts'), 'utf8');
   assert.match(duty, /'sim\.magnetTempC'/);
 });
+
+// ── the grade's limit (owner 2026-10-30: «не больше той, для которой они предназначены») ──
+import { magnetTempOverLimit } from '../magnetTemp.ts';
+import { legacyMagnetPick, magnetFamily, magnetVariants, effectiveMagnet } from '../magnetVariants.ts';
+
+test('a typed temperature above the grade limit is caught; at the limit it is not', () => {
+  assert.equal(magnetTempOverLimit('181', 180), 180);
+  assert.equal(magnetTempOverLimit('180', 180), null);
+  assert.equal(magnetTempOverLimit('150,5', 150), 150);
+  assert.equal(magnetTempOverLimit('', 180), null, 'blank = the 20 °C card, never over');
+  assert.equal(magnetTempOverLimit('abc', 180), null, 'not a number is magnetTempError, not this');
+  assert.equal(magnetTempOverLimit('500', undefined), null, 'no limit known, nothing judged here');
+});
+
+test('one 20 °C card per grade: a former <grade>_<T>C pick becomes grade + temperature', () => {
+  const lib = ['N52UH', 'F52SH', 'Fe16N2_lab_best'];
+  assert.deepEqual(legacyMagnetPick('F52SH_80C', lib), { grade: 'F52SH', tempC: 80 });
+  assert.equal(legacyMagnetPick('F52SH', lib), null, 'a current card is not a former pick');
+  assert.equal(legacyMagnetPick('N42SH_120C', lib), null, 'unknown grade: left alone');
+  assert.equal(magnetFamily('N52UH_150C'), 'N52UH');
+  assert.equal(magnetFamily('N52UH'), 'N52UH');
+  assert.deepEqual(magnetVariants('N52UH', lib), ['N52UH'], 'one card: no temperature picker');
+  // a former pick that left the library is never sent to the solver
+  assert.equal(effectiveMagnet('F52SH', 'F52SH_80C', lib), 'F52SH');
+});

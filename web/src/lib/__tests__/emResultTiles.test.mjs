@@ -519,3 +519,17 @@ t('a plain run shows the magnet temperature it was solved at, typed or card', ()
   // a run that says nothing about it shows no tile (omission rule)
   assert.equal(one(E.emTileRows(base, VIEW), 'tMagnet'), undefined);
 });
+
+// ── the grade's limit judges the magnet tile (owner 2026-10-30) ────────────
+t('a plain run past the grade limit shows the magnet tile over its limit', () => {
+  const base = { ...RUN };
+  delete base.coupling;
+  const over = one(E.emTileRows({ ...base, magnet_temp_used_c: 195, magnet_temp_source: 'typed',
+    magnet_card: 'N52UH', magnet_card_temp_c: 20, magnet_limit_c: 180,
+    magnet_over_limit: { temp_c: 195, limit_c: 180, card: 'N52UH' } }, VIEW), 'tMagnet');
+  assert.equal(over.level, 'bad');
+  assert.equal(over.tipVars.limit, '180');
+  const ok = one(E.emTileRows({ ...base, magnet_temp_used_c: 150, magnet_temp_source: 'typed',
+    magnet_card: 'N52UH', magnet_card_temp_c: 20, magnet_limit_c: 180 }, VIEW), 'tMagnet');
+  assert.notEqual(ok.level, 'bad');
+});

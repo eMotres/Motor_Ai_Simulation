@@ -12,8 +12,6 @@ import {
   Tooltip,
   Chip,
   Badge,
-  Menu,
-  MenuItem,
   CircularProgress,
   useMediaQuery,
 } from '@mui/material';
@@ -31,6 +29,8 @@ import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import LoadGuardDialog from './components/common/LoadGuardDialog';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import ComputeNodesHint from './components/common/ComputeNodesHint';
+import SubTabs from './components/common/SubTabs';
+import { PanelHeader, PanelHeaderProvider } from './components/common/PanelHeader';
 import AuthButton, { preloadAuthMenu } from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
@@ -61,7 +61,9 @@ import { useApiReady } from './contexts/AuthContext';
 import { parseAdminLink } from './lib/adminLink';
 import { parseAppLink } from './lib/appLink';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
-import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
+import { barEntries, isSimulationTab, barValue, simulationsTarget, SIMULATIONS_BAR_ID, SIMULATION_TAB_IDS } from './lib/simulationsMenu';
+import { oneOf } from './lib/viewMemory';
+import { useRememberedView } from './lib/useRememberedView';
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
@@ -712,10 +714,14 @@ function App() {
   // dropdown (owner 2026-10-13).  Every panel keeps its own tab id, gate and mount
   // rule above; only the bar is drawn differently (lib/simulationsMenu).
   const entries = barEntries(tabs);
-  const [simAnchor, setSimAnchor] = useState<HTMLElement | null>(null);
+  // The plain "Simulations" tab opens the member the user looked at last (remembered across reloads, lib/viewMemory).
+  const [lastSim, setLastSim] = useRememberedView<string>('simulations.lastTab', 'simulation', oneOf(SIMULATION_TAB_IDS));
+  useEffect(() => { if (isSimulationTab(activeTab) && activeTab !== lastSim) setLastSim(activeTab); }, [activeTab, lastSim, setLastSim]);
+  const simMembers = (entries.find((e) => e.kind === 'simulations') as { members: { id: string; label: string }[] } | undefined)?.members ?? [];
 
   return (
     <ThemeProvider theme={appTheme}>
+      <PanelHeaderProvider>
       <CssBaseline />
       <UpdateBanner />
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -790,7 +796,11 @@ function App() {
         <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Tabs
             value={barValue(activeTab)}
-            onChange={(_, v) => { if (v !== SIMULATIONS_BAR_ID) setActiveTab(v); }}
+            onChange={(_, v) => {
+              if (v !== SIMULATIONS_BAR_ID) { setActiveTab(v); return; }
+              const to = simulationsTarget(lastSim, simMembers);
+              if (to) setActiveTab(to as never);
+            }}
             /* Thirteen tabs do not fit a phone: below md they scroll sideways instead of squeezing to unreadable widths. */
             variant={narrow ? 'scrollable' : 'fullWidth'}
             scrollButtons={narrow ? 'auto' : false}
@@ -799,9 +809,8 @@ function App() {
           >
             {entries.map((e) => e.kind === 'simulations' ? (
               <Tab key={e.id} value={e.id}
-                label={`${simulationsLabel(tr('tabs.simulations', { defaultValue: 'Simulations' }), activeTab, e.members)} ▾`}
-                onClick={(ev) => setSimAnchor(ev.currentTarget)}
-                aria-haspopup="menu" aria-expanded={!!simAnchor}
+                /* a plain tab like the others; the members are sub-tabs in the Simulations header row below the bar */
+                label={tr('tabs.simulations', { defaultValue: 'Simulations' })}
                 sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
                   px: 0.75, minWidth: 0, letterSpacing: 0 }} />
             ) : (() => { const t = tabs.find((x) => x.id === e.id)!; return (
@@ -834,15 +843,6 @@ function App() {
                   ...(t.id === 'admin' ? { fontWeight: 700, color: '#fbbf24' } : {}) }} />
             ); })())}
           </Tabs>
-          <Menu anchorEl={simAnchor} open={!!simAnchor} onClose={() => setSimAnchor(null)}>
-            {(entries.find((e) => e.kind === 'simulations') as
-              { members: { id: string; label: string }[] } | undefined)?.members.map((m) => (
-              <MenuItem key={m.id} selected={activeTab === m.id} sx={{ fontSize: '0.85rem' }}
-                onClick={() => { setSimAnchor(null); setActiveTab(m.id as never); }}>
-                {m.label}
-              </MenuItem>
-            ))}
-          </Menu>
         </Box>
 
         {/* ── What is loaded: die / configuration / duty + save-back ── */}
@@ -853,6 +853,15 @@ function App() {
         <FamilyLoadBanner />
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
         {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
+
+        {/* ── The panel header row (owner 2026-10-30): the same row on EVERY tab - the panel's label, its sub-tabs
+            (the Simulations members here; a panel's own sections come in through <HeaderTabs>) and its actions ── */}
+        <PanelHeader
+          label={isSimulationTab(activeTab) ? tr('tabs.simulations', { defaultValue: 'Simulations' }) : (tabs.find((x) => x.id === activeTab)?.label ?? '')}
+          tabs={simMembers.length > 0 && isSimulationTab(activeTab) ? (
+            <SubTabs value={activeTab} items={simMembers} onChange={(id) => setActiveTab(id as never)}
+              ariaLabel={tr('tabs.simulations', { defaultValue: 'Simulations' })} testId="simulations-tabs" />
+          ) : undefined} />
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>
@@ -882,6 +891,7 @@ function App() {
       {user && <ActivityBeat />}
       {/* Publishes the per-user material override to the fetch interceptor (Stage 2b) */}
       <MaterialOverrideSync />
+      </PanelHeaderProvider>
     </ThemeProvider>
   );
 }

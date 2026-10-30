@@ -7,6 +7,7 @@ Usage:
 
 import logging
 import re
+import threading
 from pathlib import Path
 
 # ── the solver's own log has to REACH the backend log ─────────────────────
@@ -883,6 +884,12 @@ def get_materials_library():
                 # not state one; the report's coercivity-class fallback stays
                 # where it is, in the report.
                 "max_working_temp_c": getattr(m, "max_working_temp_c", None),
+                # HOW THE CURVE IS DERIVED at another temperature (2026-10-30):
+                # every card is quoted at 20 C and a ?mat= copy of it must
+                # regenerate the same curve the library card does.  `ref` is
+                # left out — it is re-attached from the copy's own fields.
+                "demag_model": ({k: v for k, v in m.demag_model.items() if k != "ref"}
+                                if getattr(m, "demag_model", None) else None),
             }
 
         # Conductors
@@ -978,12 +985,21 @@ def get_materials_library_category(category: str):
 
 
 @app.get("/api/materials/library/{category}/{name}")
-def get_material_detail(category: str, name: str):
-    """Return full detail for a single material."""
+def get_material_detail(category: str, name: str, temp_c: Optional[float] = None):
+    """Return full detail for a single material.
+
+    ``temp_c`` (magnets, 2026-10-30): the card DERIVED at that temperature —
+    what the Simulation badge shows beside a typed magnet temperature.  Every
+    magnet card is quoted at 20 °C, so without it the badge would show the cold
+    card's Br and knee for a hot run."""
     try:
         m = mat_lib.get_material(category, name)  # type: ignore[arg-type]
+        if category == "magnet" and temp_c is not None:
+            m = m.at_temperature(float(temp_c))  # type: ignore[union-attr]
         import dataclasses
         return dataclasses.asdict(m)
+    except mat_lib.MagnetTemperatureError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -1160,49 +1176,53 @@ def _current_winding_layout():
     return num_slots, lay
 
 
-#: The last connection re-pick per config file, shown ONCE by the next
-#: GET /api/winding/config (the PUT /api/geometry that re-picked it may have
-#: come from another tab).
-_WINDING_NOTES: dict = {}
+#: Serialises every write of the live winding block against the geometry it
+#: belongs to: a machine LOAD holds it across the geometry write and the winding
+#: write (``PUT /api/geometry/load``), so a concurrent geometry edit's
+#: ``reconcile_live_winding`` can never run on the half-loaded machine.
+#: Re-entrant: the load calls the winding PATCH from inside its own hold.
+WINDING_LOCK = threading.RLock()
 
 
 def reconcile_live_winding() -> Optional[str]:
-    """Make the LIVE winding connection valid for the live slot count.
+    """Make the LIVE winding connection valid for the live slot count after a
+    user's own geometry edit (segments, slots per segment).
 
-    A geometry change (segments, slots per segment) changes the coils per
-    phase; a stored connection that no longer factors them (``2S`` on 48
-    slots, a stale ``10P``) is re-picked by ``winding.repick_connection`` and
-    written back, and the one-line note it returns is logged and kept for the
-    panel.  Returns that note, or None when the stored connection was valid.
-    Never raises: a config the writer cannot touch leaves the solve's own
-    validation to refuse it loudly."""
+    A stored connection that no longer factors the new coils per phase (``2S``
+    on 48 slots, a stale ``10P``) is re-picked by ``winding.repick_connection``
+    and written back.  The note it returns is LOGGED and returned to the caller
+    for the log only - no response and no panel shows it (owner 2026-10-30: the
+    "set to 8S" captions are gone).  A machine LOAD never reaches this: it
+    writes geometry and winding together (``PUT /api/geometry/load``), so no
+    half-loaded combination is ever validated.  Never raises: a config the
+    writer cannot touch leaves the solve's own validation to refuse it loudly."""
     try:
         from motor_ai_sim.winding import repick_connection
-        cfg = get_config()
-        w = dict(cfg.get("winding") or {})
-        if not w:
-            return None
-        num_slots, _ = _live_slot_pole_counts(cfg.get("geometry", {}) or {})
-        fixed, note = repick_connection(w, num_slots)
-        if note is None:
-            # Same machine, label normalised (a two-set winding's per-set
-            # "4S" with two paths is 4S-2P): the counts are kept, only the
-            # label that the panel and the solve read is made to match them.
-            if fixed.get("connection") and fixed.get("connection") != w.get("connection"):
-                _write_winding_updates({"connection": f'"{fixed["connection"]}"'})
-                logging.getLogger("motor_ai_sim.winding").info(
-                    "winding: connection label %r normalised to %r (same machine)",
-                    w.get("connection"), fixed["connection"])
-            return None
-        _write_winding_updates({
-            "connection": f'"{fixed["connection"]}"',
-            "n_parallel": str(int(fixed["n_parallel"])),
-            "n_series": str(int(fixed["n_series"])),
-            "n_coils_per_phase": str(int(fixed["n_coils_per_phase"])),
-        })
-        logging.getLogger("motor_ai_sim.winding").warning("winding: %s", note)
-        _WINDING_NOTES[str(_config_path())] = note
-        return note
+        with WINDING_LOCK:
+            cfg = get_config()
+            w = dict(cfg.get("winding") or {})
+            if not w:
+                return None
+            num_slots, _ = _live_slot_pole_counts(cfg.get("geometry", {}) or {})
+            fixed, note = repick_connection(w, num_slots)
+            if note is None:
+                # Same machine, label normalised (a two-set winding's per-set
+                # "4S" with two paths is 4S-2P): the counts are kept, only the
+                # label that the panel and the solve read is made to match them.
+                if fixed.get("connection") and fixed.get("connection") != w.get("connection"):
+                    _write_winding_updates({"connection": f'"{fixed["connection"]}"'})
+                    logging.getLogger("motor_ai_sim.winding").info(
+                        "winding: connection label %r normalised to %r (same machine)",
+                        w.get("connection"), fixed["connection"])
+                return None
+            _write_winding_updates({
+                "connection": f'"{fixed["connection"]}"',
+                "n_parallel": str(int(fixed["n_parallel"])),
+                "n_series": str(int(fixed["n_series"])),
+                "n_coils_per_phase": str(int(fixed["n_coils_per_phase"])),
+            })
+            logging.getLogger("motor_ai_sim.winding").warning("winding: %s", note)
+            return note
     except Exception as e:   # noqa: BLE001
         logging.getLogger("motor_ai_sim.winding").warning("winding: connection re-pick skipped (%s)", e)
         return None
@@ -1212,12 +1232,12 @@ def reconcile_live_winding() -> Optional[str]:
 def get_winding_config():
     """Return current winding connection + per-slot layout (phase, direction).
 
-    The options, the coils per phase and the stored connection all follow the
-    LIVE slot count: an invalid stored connection is re-picked here
-    (``reconcile_live_winding``) and ``connection_note`` says so."""
-    _note = reconcile_live_winding()
-    # shown ONCE: this answer carries it, so the kept copy goes either way
-    _note = _WINDING_NOTES.pop(str(_config_path()), None) or _note
+    The options and the coils per phase follow the LIVE slot count.  This READ
+    never changes the winding (a read that rewrites the machine raced the
+    machine load and re-picked the previous machine's connection): a stored
+    connection the slot count does not allow is reported as
+    ``connection_valid: false`` with the one-line reason in ``connection_error``,
+    and the panel shows it as a refusal, never as a silent change."""
     cfg = get_config()
     w = cfg.get("winding", {})
     n_parallel = w.get("n_parallel", 1)
@@ -1254,7 +1274,7 @@ def get_winding_config():
         "n_coils_per_phase_stored": n_coils,
         "connection_valid":   _conn_error(_conn_label(n_series, n_parallel),
                                           num_slots) is None,
-        "connection_note":    _note,
+        "connection_error":   _conn_error(_conn_label(n_series, n_parallel), num_slots),
         "n_parallel":         n_parallel,
         "n_series":           n_series,
         "I_phase_Arms":       I_phase,
@@ -1386,7 +1406,16 @@ def _write_winding_updates(updates: dict) -> None:
 
 @app.patch("/api/winding/config")
 def update_winding_config(patch: WindingConfigPatch):
-    """Update winding connection in motor_config.yaml."""
+    """Update winding connection in motor_config.yaml.
+
+    A user's own edit that the slot count does not allow is REFUSED with a
+    one-line reason naming the valid connections (400) - never re-picked into
+    another connection (8S would double the voltage of a 4S-2P)."""
+    with WINDING_LOCK:
+        return _apply_winding_patch(patch)
+
+
+def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
     updates: dict = {}
     if patch.connection is not None:
         try:

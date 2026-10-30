@@ -26,6 +26,8 @@ from pydantic import BaseModel, Field
 # say out loud what is running (see motor_ai_sim/field_jobs.py).
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import progress as _PROG
+from motor_ai_sim import progress_stages as _PSTG
+from sys import exc_info as _sys_exc_info
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.field_jobs import field_busy, run_field_job
 from motor_ai_sim.simulation.sb_domains import (
@@ -4291,6 +4293,9 @@ async def get_fem_transient_progress(run_id: str = ""):
     ``position``; it carries neither at any other time.
     """
     p, _rid = _PROG.transient_dict("transient", run_id)
+    # The stage list (progress_stages) is bookkeeping while the solve writes it;
+    # what goes on the wire is its public shape, beside the flat fields below.
+    p = {**p, "stages": _PSTG.public(p.get("stages"))}
     if p.get("running") and p.get("ts_start", 0) > 0:
         import time as _t
         elapsed  = _t.time() - p["ts_start"]
@@ -4458,7 +4463,48 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
                        % float(v_bus_real))
 
 
-@router.get("/physics/fem_transient")
+def _assigned_magnet_card():
+    """``(name, card)`` of the magnet this request solves with — the machine's
+    assignment with the request's own material override on top, the same
+    precedence ``fem_solver_2d.build_materials`` applies — or ``(None, None)``."""
+    from motor_ai_sim import materials as _ml
+    from motor_ai_sim.config import get_material_assignments
+    from motor_ai_sim.material_context import get_request_materials
+    asg = dict(get_material_assignments() or {})
+    ov = get_request_materials() or {}
+    asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+    name = asg.get("magnet")
+    if not name:
+        return None, None
+    props = (ov.get("materials") or {}).get(name)
+    return name, (_ml.material_from_dict("magnet", name, props) if props
+                  else _ml.get_material("magnet", name))
+
+
+def _typed_magnet_temp_guard(magnet_temp_c: Optional[float] = None,
+                             restore: bool = False,
+                             ledger_probe: bool = False) -> None:
+    """Refuse a TYPED magnet temperature above the grade's maximum working
+    temperature (owner 2026-10-30: «не больше той, для которой они
+    предназначены»).  A route dependency, so it guards the HTTP input only: the
+    coupled loop calls ``get_fem_transient`` in-process with the temperature it
+    COMPUTED, which is flagged in the result (``magnet_over_limit``), never
+    refused.  ``restore`` / ``ledger_probe`` solve nothing and pass."""
+    if magnet_temp_c is None or restore or ledger_probe:
+        return
+    from motor_ai_sim.materials import magnet_temp_limit_error
+    try:
+        _name, card = _assigned_magnet_card()
+    except Exception:   # noqa: BLE001 — the solve itself reports a bad card
+        return
+    why = magnet_temp_limit_error(card, magnet_temp_c) if card is not None else None
+    if why:
+        raise HTTPException(status_code=422,
+                            detail=f"Magnet temperature {float(magnet_temp_c):g} °C: {why}")
+
+
+@router.get("/physics/fem_transient",
+            dependencies=[Depends(_typed_magnet_temp_guard)])
 # Migration Stage 4: the ADMISSION point for the heaviest thing this server
 # does.  One line, and it serves both modes (blocking by default; 202 with
 # QUEUE_ASYNC=1) because the decorator has the whole body as a callable.
@@ -5600,6 +5646,16 @@ def get_fem_transient(
             "phase": ("fem-solve (sliding-band, demag)" if demag
                       else "fem-solve (sliding-band)"),
             "composition": "",
+            # The ordered stages of THIS run (owner 2026-10-30): what is known
+            # now — the reported window, the warm-up if the eddy solve is on,
+            # the demag pre-pass — and the post-processing that follows.  The
+            # solver's own callback fills in the rest (gap probes, calibration)
+            # and the counts; see progress_stages.
+            "stages": _PSTG.plan_em(
+                eddy=bool(eddy), demag=bool(demag),
+                planned_final=max(1, int(round(float(n_steps_per_period)
+                                               * float(n_periods)))),
+                planned_prepass=(int(n_steps_per_period) if demag else 0)),
         }
         def _sb_cancel_only(*_a, **_k):
             if run_id and _JOBS.is_cancelled(run_id):
@@ -5641,6 +5697,11 @@ def get_fem_transient(
             elif _cur.get("phase", "").startswith("eddy warm-up"):
                 _cur["phase"] = ("fem-solve (sliding-band, coupled eddy)"
                                  if eddy else "fem-solve (sliding-band)")
+            try:                       # the stage row; never breaks a solve
+                _PSTG.observe(_cur.setdefault("stages", []), _done, _total,
+                              _phase, _composition)
+            except Exception:              # noqa: BLE001
+                pass
         try:
             # ONE canonical solve — shared with the optimizer (refine_proc) and
             # the solver.em_transient module via em_transient_eval, so they can
@@ -5722,6 +5783,8 @@ def get_fem_transient(
                 try:
                     _fem_transient_progress["current"]["phase"] = \
                         "fem-solve (six-phase L_xy probe, full ring)"
+                    _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                                  None, None, "fem-solve (six-phase L_xy probe, full ring)")
                     from motor_ai_sim.simulation.fem_solver_2d import \
                         measure_six_phase_inductances as _msi
                     _i1 = _I_wind
@@ -5777,6 +5840,8 @@ def get_fem_transient(
                     if _fc["I1_phase_rms_A"] > 1e-3:
                         _fem_transient_progress["current"]["phase"] = \
                             "fem-solve (harm-ref, sinusoidal current)"
+                        _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                                      None, None, "fem-solve (harm-ref, sinusoidal current)")
                         _ref = em_transient_eval(
                             n_steps_per_period=int(n_steps_per_period),
                             sampling_purpose=sampling_purpose,
@@ -5913,6 +5978,12 @@ def get_fem_transient(
             # cleared in the route's own finally, so no error path can hang it.
             _fem_transient_progress["current"]["phase"] = \
                 "post-processing (frames, masses, summary)"
+            # Only a solve that SUCCEEDED enters the post-processing stage: on
+            # a Stop or an error this finally still runs, and "post-processing"
+            # must not be shown for a run that never got there.
+            if _sys_exc_info()[0] is None:
+                _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                              None, None, "post-processing (frames, masses, summary)")
         # ── Animation keyframes → the viewer's payload shape ──────────────────
         # The solver hands back ONE mesh topology plus, per keyframe, the
         # rotor-rotated node coordinates and that frame's field.  This replaces
@@ -6124,7 +6195,8 @@ def get_fem_transient(
                 _sbres, I_phase_rms=_I_wind, gamma_deg=_gamma_panel,
                 coil_temp_c=coil_temp_c, geo_override=_geo_ov,
                 mode_requested=_mode_eff,
-                skip_psi_pm_probe=bool(_opt_cand() and not _is_live_machine))
+                skip_psi_pm_probe=bool(_opt_cand() and not _is_live_machine),
+                magnet_temp_c=magnet_temp_c)
             # WHICH MAGNET TEMPERATURE this run solved at, and why (owner
             # 2026-10-29: a typed 90 °C looked like it "did nothing" because
             # nothing on the result said what was used).
@@ -6136,6 +6208,8 @@ def get_fem_transient(
             # the args recorded, the hit path can rebuild the summary with the
             # CURRENT code (see _refresh_summary_shape).
             _sbres["_summary_args"] = {
+                "magnet_temp_c": (None if magnet_temp_c is None
+                                  else float(magnet_temp_c)),
                 "I_phase_rms": _I_wind,
                 "gamma_deg": float(_gamma_panel),
                 "coil_temp_c": float(coil_temp_c),
@@ -6204,7 +6278,14 @@ def get_fem_transient(
         # The run is over HERE — after the post-processing, not after the last
         # frame (see the phase note above).  Unconditional: an exception on any
         # path must not leave the progress endpoint reporting a live solve.
-        _fem_transient_progress["current"]["running"] = False
+        _cur_end = _fem_transient_progress["current"]
+        # A run that reached its post-processing completed; one that did not
+        # (error, Stop) leaves its running stage "stopped", not "done".
+        _post_end = next((s for s in (_cur_end.get("stages") or [])
+                          if s.get("key") == "post"), None)
+        _PSTG.finalize(_cur_end.get("stages"),
+                       ok=bool(_post_end and _post_end.get("state") == "running"))
+        _cur_end["running"] = False
         _tlock.release()
 
 
@@ -7119,17 +7200,9 @@ def _magnet_temperature_stamp(magnet_temp_c: Optional[float]) -> dict:
         out["magnet_temp_used_c"] = round(float(magnet_temp_c), 1)
     try:
         from motor_ai_sim import materials as _ml
-        from motor_ai_sim.config import get_material_assignments
-        from motor_ai_sim.material_context import get_request_materials
-        asg = dict(get_material_assignments() or {})
-        ov = get_request_materials() or {}
-        asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
-        name = asg.get("magnet")
+        name, card = _assigned_magnet_card()
         if not name:
             return out
-        props = (ov.get("materials") or {}).get(name)
-        card = (_ml.material_from_dict("magnet", name, props) if props
-                else _ml.get_material("magnet", name))
         used = card.at_temperature(magnet_temp_c) if magnet_temp_c is not None else card
         out["magnet_card"] = str(name)
         if card.temperature_c is not None:
@@ -7138,6 +7211,14 @@ def _magnet_temperature_stamp(magnet_temp_c: Optional[float]) -> dict:
         out["magnet_Br_used_T"] = round(float(used.Br), 4)
         if used.h_knee is not None:
             out["magnet_knee_used_kA_m"] = round(float(used.h_knee) / 1e3, 0)
+        # THE GRADE'S LIMIT (owner 2026-10-30): a typed temperature above it is
+        # refused at the route; one the coupled loop computed is solved as asked
+        # and FLAGGED here — never clamped.
+        if card.max_working_temp_c is not None:
+            out["magnet_limit_c"] = float(card.max_working_temp_c)
+        _over = _ml.magnet_over_limit(card, out.get("magnet_temp_used_c"))
+        if _over:
+            out["magnet_over_limit"] = _over
     except Exception:   # noqa: BLE001 — a stamp, never a failure
         log.debug("magnet temperature stamp skipped", exc_info=True)
     return out
@@ -7263,7 +7344,8 @@ def _refresh_summary_shape(res: dict) -> dict:
             gamma_deg=float(args["gamma_deg"]),
             coil_temp_c=float(args["coil_temp_c"]),
             geo_override=args.get("geo_override"),
-            mode_requested=args.get("mode_requested"))
+            mode_requested=args.get("mode_requested"),
+            magnet_temp_c=args.get("magnet_temp_c"))
         if s.get("mass_basis"):
             # a rebuild must not move the run onto whatever configuration is loaded NOW: the full-mass stamp it already
             # carries names the configuration it was taken from
@@ -7273,7 +7355,10 @@ def _refresh_summary_shape(res: dict) -> dict:
                     out["summary"][_k] = _v
         # the magnet-temperature stamp is the RUN's, not something to re-derive
         for _k, _v in s.items():
-            if str(_k).startswith("magnet_temp_") or str(_k).startswith("magnet_card")                     or _k in ("magnet_Br_used_T", "magnet_knee_used_kA_m"):
+            if (str(_k).startswith("magnet_temp_") or str(_k).startswith("magnet_card")
+                    or _k in ("magnet_Br_used_T", "magnet_knee_used_kA_m",
+                              "magnet_limit_c", "magnet_over_limit",
+                              "psi_pm_magnet_temp_c")):
                 out["summary"][_k] = _v
         return out
     except Exception as _e:   # noqa: BLE001 — a refresh failure must not eat the hit
@@ -7431,6 +7516,20 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
     }
 
 
+def _psi_pm_temp_c(magnet_temp_c: Optional[float]) -> Optional[float]:
+    """The magnet temperature the ψ_PM probe solved at: the run's typed or
+    loop temperature, else the assigned card's own.  Never raises."""
+    if magnet_temp_c is not None:
+        return round(float(magnet_temp_c), 1)
+    try:
+        _n, card = _assigned_magnet_card()
+        if card is None or card.temperature_c is None:
+            return None
+        return float(card.temperature_c)
+    except Exception:   # noqa: BLE001
+        return None
+
+
 def _build_transient_summary(
     sbres: dict,
     *,
@@ -7447,6 +7546,8 @@ def _build_transient_summary(
                                             # solve — it only feeds chord Ld/Lq
                                             # and the droop row, which
                                             # refine_proc never reads
+    magnet_temp_c: Optional[float] = None,  # the run's magnet temperature: the
+                                            # ψ_PM probe runs at it (2026-10-30)
 ) -> dict:
     """Build the Simulation summary block (masses, loss split, KV, efficiency,
     specific torque/power) from a finished transient result dict.
@@ -7764,7 +7865,9 @@ def _build_transient_summary(
                 0, float(sbres.get("daxis_deg", 0.0)),
                 geo_override=geo_override,
                 # ψ_PM at the RUN's own connection (n_series scales it).
-                connection=(str(sbres.get("connection")) or None))
+                connection=(str(sbres.get("connection")) or None),
+                # …and at the RUN's own magnet temperature (2026-10-30).
+                magnet_temp_c=magnet_temp_c)
             if abs(_pm) > 1e-9 and abs(_q0) > 0.05 * abs(_pm):
                 _dq_note = ("no-load ψq is %.1f%% of ψ_PM — frame suspect, "
                             "Ld/Lq withheld" % (100 * abs(_q0 / _pm)))
@@ -8046,6 +8149,10 @@ def _build_transient_summary(
         **({"inc_ldq": _inc_blk} if isinstance(_inc_blk, dict) and _inc_blk
            else {}),
         "psi_pm_Wb": (None if _psi_pm is None else round(_psi_pm, 6)),
+        # …the magnet temperature that probe ran at (the run's own, else the
+        # card's): the no-load KV below is at THIS temperature (2026-10-30).
+        "psi_pm_magnet_temp_c": (None if _psi_pm is None
+                                 else _psi_pm_temp_c(magnet_temp_c)),
         "saliency_Lq_over_Ld": (round(_Lq_mH / _Ld_mH, 3)
                                 if _Ld_mH not in (None, 0) and _Lq_mH is not None
                                 else None),

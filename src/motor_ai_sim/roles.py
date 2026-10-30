@@ -112,8 +112,11 @@ WORKER_EXACT = ("/api/materials",)
 #: worker's too: it moves the shared catalog's folders and ledgers, and ``/srv/motres/shared`` is mounted READ-ONLY in
 #: the API containers while the worker mounts it read-write.  nginx forwards the ``Authorization`` header unchanged, so
 #: the worker resolves the same verified-admin identity (``workspace.is_verified_admin_request()``).  The sub-paths
-#: (``/die/{die}/duplicate``, ``/lock``, ``/audience`` ...) stay on the API.
-WORKER_PATTERNS = (r"^/api/catalog/[^/]+/passport$", r"^/api/family/die/[^/]+$")
+#: (``/die/{die}/duplicate``, ``/lock``, ``/audience`` ...) stay on the API.  The configuration move / copy
+#: (``POST /api/family/config/{die}/{cfg}/move``, ``config_move.py``) moves folders and ledgers of the shared catalog
+#: the same way, so it is the worker's too.
+WORKER_PATTERNS = (r"^/api/catalog/[^/]+/passport$", r"^/api/family/die/[^/]+$",
+                   r"^/api/family/config/[^/]+/[^/]+/move$")
 #: Prefixes that stay on the API although they sit under a worker prefix (none today; the hook is here so a future
 #: carve-out is one line and a test, not an nginx regex edit).
 API_CARVE_OUTS: tuple = ()

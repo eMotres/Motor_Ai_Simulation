@@ -29,7 +29,7 @@ from motor_ai_sim.progress import ProgressTracker, StepLedger
 #: The response contract.  Named here rather than inline so the route tests in
 #: tests/test_progress_routes.py can import the ONE list.
 KEYS = {"running", "step", "total", "elapsed_s", "eta_s", "per_step_s", "frac",
-        "phase", "composition", "ts_start"}
+        "phase", "composition", "ts_start", "stages"}
 
 
 # ---------------------------------------------------------------------------

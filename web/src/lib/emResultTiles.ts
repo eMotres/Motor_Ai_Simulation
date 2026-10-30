@@ -26,6 +26,10 @@ export interface EmTileSummary {
   magnet_card_temp_c?: number | null;
   magnet_Br_used_T?: number | null;
   magnet_knee_used_kA_m?: number | null;
+  /** the assigned grade's maximum working temperature, and the flag a run solved above it carries
+   *  (a coupled loop's computed temperature is never clamped - owner 2026-10-30) */
+  magnet_limit_c?: number | null;
+  magnet_over_limit?: { temp_c: number; limit_c: number; card: string } | null;
   /** the air-gap ring check of the run (routes.simulation summary) */
   ripple_mesh_limited?: boolean | null;
   ripple_self_check_rel?: number | null;
@@ -229,10 +233,11 @@ export function torqueMethodKey(s: EmTileSummary): string | null {
 }
 
 /** The temperatures a coupled run's tiles are judged against: the limits the run itself used
- *  (`time_to_limit` / the S1 rating), else the project's — winding 200 °C, magnet = card. */
+ *  (`time_to_limit` / the S1 rating), else the project's — winding 200 °C, magnet = the assigned
+ *  grade's maximum working temperature the run stamped (`magnet_limit_c`). */
 export function emTempLimits(s: EmTileSummary): TempLimits {
   const lim = s.coupling?.time_to_limit?.limits_c ?? s.coupling?.continuous_rating?.limits_c ?? null;
-  return tempLimits({ winding_C: lim?.winding, magnet_C: lim?.magnet });
+  return tempLimits({ winding_C: lim?.winding, magnet_C: lim?.magnet ?? num(s.magnet_limit_c) });
 }
 
 /** The one warning line above the tiles: present only when a temperature is over its limit. */

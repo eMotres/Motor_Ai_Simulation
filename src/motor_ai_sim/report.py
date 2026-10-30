@@ -501,12 +501,23 @@ def _slots_poles(geo: Dict[str, Any]) -> Tuple[int, int]:
 
 
 def _magnet_card_temp(grade: Any) -> Optional[float]:
-    """The temperature a magnet card was measured at, off its own name.
+    """The temperature a magnet card is quoted at.
 
-    'F52SH_120C' is a measurement at 120 °C — the same parse the datasheet makes
-    (``datasheet._magnet_temp``).  It is the LAST resort for the report's magnet
+    The card's own ``temperature_c`` first: every library card is quoted at
+    20 °C since 2026-10-30, and a former per-temperature name ('F52SH_120C')
+    resolves to the grade derived at 120 °C.  The name parse — the same one the
+    datasheet makes (``datasheet._magnet_temp``) — is left for a name the
+    library no longer knows.  It is the LAST resort for the report's magnet
     temperature line and is labelled as the card's own, never as a solve input.
     """
+    try:
+        from motor_ai_sim.materials import get_material
+        t = getattr(get_material("magnet", str(grade or "").strip()),
+                    "temperature_c", None)
+        if t is not None:
+            return float(t)
+    except Exception:                                       # noqa: BLE001
+        pass
     try:
         import re
         m = re.search(r"(\d{2,3})\s*C\b", str(grade or ""))
@@ -6389,6 +6400,18 @@ def _cold_br_card(grade: Any) -> Optional[Tuple[str, float, float]]:
         br_ref = _numf(getattr(card, "Br", None))
         if not br_ref:
             return None
+        # A card quoted at room temperature IS the cold card (every library card
+        # since 2026-10-30): no second card to borrow, nothing to list.
+        t_own = _numf(getattr(card, "temperature_c", None))
+        if t_own is not None and t_own <= 25.0:
+            return None
+        # A former per-temperature name: its grade's 20 °C card.
+        g = getattr(card, "grade_card", None)
+        if g:
+            c2 = get_material("magnet", str(g))
+            br2 = _numf(getattr(c2, "Br", None))
+            if br2:
+                return str(g), float(br2), float(br_ref)
         base = str(getattr(card, "name", name)).split("_")[0]
         for cold in (f"{base}_20C", f"{base}_25C", f"{base}_30C"):
             try:
@@ -6429,6 +6452,8 @@ def _cold_br_factor(grade: Any) -> Tuple[float, str]:
         t_ref = _numf(getattr(card, "temperature_c", None))
         if not br_ref:
             return 1.0, ""
+        if t_ref is not None and abs(t_ref - 20.0) < 1e-9:
+            return 1.0, f"the {name} card is quoted at 20 °C"
         a = _numf(getattr(card, "alpha_br_pct_per_k", None))
         if a is not None and t_ref is not None:
             k = 1.0 + a / 100.0 * (20.0 - t_ref)
@@ -6438,6 +6463,28 @@ def _cold_br_factor(grade: Any) -> Tuple[float, str]:
     except Exception:                                       # noqa: BLE001
         pass
     return 1.0, ""
+
+
+def _cold_factor_at(grade: Any, t_c: Any) -> Tuple[Optional[float], str]:
+    """Br(20 °C) / Br(``t_c``) of the assigned magnet, off its own card — the
+    cold-magnet EMF factor for a number that was solved at ``t_c`` (a run's
+    magnet temperature, or the temperature its ψ_PM probe ran at).  ``(None,
+    "")`` when the card cannot be moved there."""
+    t = _numf(t_c)
+    name = str(grade or "").strip()
+    if t is None or not name:
+        return None, ""
+    try:
+        from motor_ai_sim.materials import get_material
+        card = get_material("magnet", name)
+        br20 = float(card.at_temperature(20.0).Br)
+        brt = float(card.at_temperature(t).Br)
+        if br20 > 0 and brt > 0:
+            return br20 / brt, (f"Br of {name} at 20 °C ({br20:.4g} T) against "
+                                f"{t:g} °C ({brt:.4g} T)")
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None, ""
 
 
 def _magnet_alpha_br(grade: Any) -> Tuple[Optional[float], Optional[float]]:
@@ -6455,8 +6502,8 @@ def _magnet_alpha_br(grade: Any) -> Tuple[Optional[float], Optional[float]]:
         return None, _magnet_card_temp(name)
 
 
-def kv_at_magnet_temp(kv_card: Any, grade: Any, t_c: Any
-                      ) -> Tuple[Optional[float], str]:
+def kv_at_magnet_temp(kv_card: Any, grade: Any, t_c: Any,
+                      t_probe: Any = None) -> Tuple[Optional[float], str]:
     """The no-load KV walked from the magnet CARD's temperature to ``t_c``.
 
     The solver's ``KV_noload_rpm_per_V_line`` is a ψ_PM probe taken at the
@@ -6467,9 +6514,25 @@ def kv_at_magnet_temp(kv_card: Any, grade: Any, t_c: Any
     LINEARLY on the card's reversible coefficient.  ``(None, reason)`` when the
     card carries no dBr/dT: a KV at a temperature nothing was measured at would
     be an invention.
+
+    ``t_probe`` (2026-10-30): the temperature the probe actually ran at, which a
+    run stamps as ``psi_pm_magnet_temp_c`` since the probe follows the run's
+    magnet temperature.  Given, the walk starts THERE (and is no walk at all
+    when the duty's temperature is the probe's); absent — a run older than the
+    stamp — it starts at the card's own temperature, as it always did.
     """
     kv = _numf(kv_card)
     t = _numf(t_c)
+    tp = _numf(t_probe)
+    if kv is not None and t is not None and tp is not None:
+        if abs(t - tp) < 0.05:
+            return kv, "the no-load probe ran at this duty's %s" % _fmt(t, 1, "°C")
+        k_from, _n1 = _cold_factor_at(grade, tp)
+        k_to, _n2 = _cold_factor_at(grade, t)
+        if k_from and k_to:
+            # Br(t)/Br(tp) = k_from/k_to (both are Br(20)/Br(.)).
+            return kv * k_to / k_from, ("Br walked from the probe's %s to %s on the card"
+                                        % (_fmt(tp, 1, "°C"), _fmt(t, 1, "°C")))
     a, t_ref = _magnet_alpha_br(grade)
     if kv is None or t is None:
         return None, "no magnet temperature for this duty"
@@ -8818,12 +8881,26 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # number for every duty of the machine.
     kv_nl = _numf(em.get("KV_noload_rpm_per_V_line"))
     t_card = _magnet_card_temp(mats.get("magnet")) or 150.0
+    # Since 2026-10-30 the probe runs at the RUN's magnet temperature and the
+    # summary says which (`psi_pm_magnet_temp_c`); the cold factor is then taken
+    # at that temperature, not at the card's (every card is 20 °C now).
+    # A run older than that stamp probed at ITS card's temperature — the run's
+    # own magnet name, which a migrated configuration no longer carries.
+    t_probe = _numf(em.get("psi_pm_magnet_temp_c"))
+    if t_probe is None:
+        _run_mag = _g(em, "magnet_card") or _g(em, "demag.magnet_name")
+        if _run_mag:
+            t_probe = _magnet_card_temp(_run_mag)
+    if t_probe is not None:
+        _kp, _kp_note = _cold_factor_at(mats.get("magnet"), t_probe)
+        if _kp is not None:
+            t_card, cold_k, cold_note = t_probe, _kp, _kp_note
     # The probe is 2-D; the EMF a real stack makes is the 2-D one × k_3d, so
     # the speed per volt is ÷ k_3d — the same correction every other
     # flux-proportional number of this document carries (2026-09-13).
     if kv_nl and _k3 and 0.5 < _k3 <= 1.0:
         kv_nl = float(kv_nl) / float(_k3)
-    if kv_nl and v_min and cold_k and cold_k > 1.0:
+    if kv_nl and v_min and cold_k and cold_k >= 1.0 and cold_note:
         ctx["runaway_rpm"] = float(kv_nl) * float(v_min) / float(cold_k)
         ctx["runaway_note"] = (cold_note + ", from the no-load KV at the card's "
                                "%s °C%s scaled to 20 °C"
@@ -8833,6 +8910,12 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     elif v_peak and v_min and rpm and v_peak > 0:
         # V_line_peak is proportional to speed; on COLD magnets it is higher by
         # the Br ratio, so the speed at which it reaches the pack floor is lower.
+        # The loaded run was solved at THIS duty's magnet temperature (a typed
+        # or loop value; the card's own when none) — the factor is taken there.
+        _kr, _kr_note = _cold_factor_at(mats.get("magnet"), _duty_magnet_temp(em)
+                                        or _magnet_card_temp(mats.get("magnet")))
+        if _kr is not None:
+            cold_k, cold_note = _kr, _kr_note
         ctx["runaway_rpm"] = float(rpm) * float(v_min) / (float(v_peak) * cold_k)
         ctx["runaway_note"] = cold_note + " (from this duty's loaded line voltage)"
     ctx["max_speed_rpm"] = max_speed_rpm
@@ -10815,19 +10898,14 @@ def material_rows(mats: Dict[str, Any],
     _ins_note = ("%s thick, as drawn in the slot" % _fmt(_ins_t, 2, "mm")
                  if _ins_t is not None else "")
     mag = str(mats.get("magnet") or "—")
-    mag_t = None
-    try:
-        import re as _re
-        m = _re.search(r"(\d{2,3})\s*C\b", mag)
-        mag_t = float(m.group(1)) if m else None
-    except Exception:                                       # noqa: BLE001
-        mag_t = None
+    # the card's own quoted temperature (20 °C for every card since 2026-10-30)
+    mag_t = _magnet_card_temp(mag) if mag != "—" else None
     mrows = [["Part", "Card", "Note"]]
     for label, key, note in (
             ("Stator core", "stator_core", "laminated, P(B,f) surface from the card"),
             ("Rotor core", "rotor_core", ""),
             ("Magnet", "magnet",
-             ((f"card measured at {mag_t:g} °C" if mag_t else
+             ((f"card quoted at {mag_t:g} °C" if mag_t else
                "temperature as the library quotes it")
               + _magnet_lamination_words(em))),
             ("Slot insulation", "slot_insulation", _ins_note),
@@ -11678,7 +11756,12 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
         t_mag = _g(em_run or {}, "key_fields.magnet_temp_c",
                    "sb_key_fields.magnet_temp_c")
     if t_mag is None:
-        t_mag = _magnet_card_temp(mats.get("magnet"))
+        # the temperature the run itself stamped (2026-10-29), else ITS card's —
+        # the run's own magnet name first, which a migrated configuration
+        # (grade + typed temperature, 2026-10-30) no longer carries
+        t_mag = (_numf(_g(em, "magnet_temp_used_c"))
+                 or _magnet_card_temp(_g(em, "magnet_card", "demag.magnet_name")
+                                      or mats.get("magnet")))
         t_mag_src = " (card as quoted)" if t_mag is not None else ""
     _dl_op = str(_g(em, "star_delta") or "star").lower().startswith("d")
     _six = six_phase_block(em)
@@ -11911,20 +11994,23 @@ def em_torque_rows(em: Dict[str, Any],
     # a machine figure and reads the same under every duty — said in the label,
     # with the duty's own KV walked underneath it (reviewer 2026-09-14).
     _grade = _g(em, "demag.magnet_name")
-    _tcard = _magnet_card_temp(_grade) or 150.0
+    _tprobe = _numf(_g(em, "psi_pm_magnet_temp_c"))
+    _tcard = (_tprobe if _tprobe is not None
+              else _magnet_card_temp(_grade) or 150.0)
     # …LABELLED AS THE SINUSOID'S on a PWM document (BL-2): a voltage-fed run
     # probes no flux linkage and measures no KV, and section 3 already says so
     # on the same four quantities.
     _sine_tail = SINE_ROW_TAIL if _pwm_drive else ""
-    tp.append(["KV, no load (magnets at the card's %s) [rpm/V]%s"
-               % (_fmt(_tcard, 0, "°C"), _sine_tail),
+    tp.append(["KV, no load (magnets at %s%s) [rpm/V]%s"
+               % ("" if _tprobe is not None else "the card's ",
+                  _fmt(_tcard, 0, "°C"), _sine_tail),
                _fmt(_g(em, "KV_noload_rpm_per_V_line"), 2),
                _fmt(_kd(_g(em, "KV_noload_rpm_per_V_line")), 2) if k3d else "—"])
     _t_mag = _duty_magnet_temp(em)
     _kv2, _kv_why = kv_at_magnet_temp(_g(em, "KV_noload_rpm_per_V_line"),
-                                      _grade, _t_mag)
+                                      _grade, _t_mag, _tprobe)
     _kv3 = kv_at_magnet_temp(_kd(_g(em, "KV_noload_rpm_per_V_line")),
-                             _grade, _t_mag)[0] if k3d else None
+                             _grade, _t_mag, _tprobe)[0] if k3d else None
     tp.append(["KV, no load at this duty's magnet temperature [rpm/V]"
                + _sine_tail,
                _fmt(_kv2, 2) if _kv2 is not None else "—",
@@ -18426,6 +18512,19 @@ def glossary_rows(em: Dict[str, Any],
     ]
 
 
+def _kv_probe_words(cols: List[Dict[str, Any]]) -> str:
+    """Where the no-load KV row's magnets were: the card's temperature (a run
+    older than the ``psi_pm_magnet_temp_c`` stamp), one stamped temperature, or
+    each duty's own when the duties' probes ran at different ones."""
+    ts = {round(float(t), 1) for t in (_numf(_g(c.get("em") or {}, "psi_pm_magnet_temp_c"))
+                                       for c in cols) if t is not None}
+    if not ts:
+        return "the card's %s" % _fmt(_magnet_card_temp(_mag_grade(cols)) or 150.0, 0, "°C")
+    if len(ts) == 1:
+        return _fmt(next(iter(ts)), 0, "°C")
+    return "each duty's magnet temperature"
+
+
 def _mag_grade(cols: List[Dict[str, Any]]) -> Optional[str]:
     """The magnet card these runs were solved with, off the first run that
     names one (the assignment is the machine's, not the duty's)."""
@@ -18438,7 +18537,9 @@ def _mag_grade(cols: List[Dict[str, Any]]) -> Optional[str]:
 
 def _kv_duty_cell(c: Dict[str, Any], kv_card: Any, grade: Optional[str]) -> str:
     """One cell of the "KV at this duty's magnet temperature" row."""
-    v, why = kv_at_magnet_temp(kv_card, grade, _duty_magnet_temp(c.get("em") or {}))
+    em = c.get("em") or {}
+    v, why = kv_at_magnet_temp(kv_card, grade, _duty_magnet_temp(em),
+                               _g(em, "psi_pm_magnet_temp_c"))
     return _fmt(v, 2) if v is not None else "— %s" % why
 
 
@@ -18870,8 +18971,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # on a PWM document the label says so rather than letting the reader take
     # them for numbers the bridge produced.
     _sine_tail = SINE_ROW_TAIL if any_pwm(cols) else ""
-    R("KV, no load (magnets at the card's %s) [rpm/V]%s"
-      % (_fmt(_magnet_card_temp(_mag_grade(cols)) or 150.0, 0, "°C"), _sine_tail),
+    R("KV, no load (magnets at %s) [rpm/V]%s"
+      % (_kv_probe_words(cols), _sine_tail),
       lambda c: _kdiv(c, "KV_noload_rpm_per_V_line"), 2)
     rows.append(["KV, no load at this duty's magnet temperature [rpm/V]"
                  + _sine_tail]

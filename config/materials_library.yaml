@@ -2682,61 +2682,51 @@ steel:
 
 # ── PERMANENT MAGNETS ────────────────────────────────────────
 #
-# TEMPERATURE (added 2026-09-08, phase 1 of the EM-thermal coupling).
-# Every magnet card is a MEASUREMENT AT ONE TEMPERATURE.  `temperature_c` is
-# that temperature — the card's REFERENCE T_ref, no longer just metadata — and
-# the two coefficients below are what let the solver ask the same card for its
-# properties at any other temperature:
+# TEMPERATURE.  ONE CARD PER GRADE, QUOTED AT 20 C (owner 2026-10-30: «в
+# каталоге магниты все с одинаковой температурой 20 °C, а в моделировании просто
+# вводить нужную температуру, но не больше той, для которой они предназначены»).
 #
-#   alpha_br_pct_per_k   %/K, reversible temperature coefficient of Br
-#   beta_hcj_pct_per_k   %/K, ditto of the intrinsic coercivity Hcj
+# Until 2026-10-30 the library held one card per grade AND temperature
+# (N52UH_150C, F52SH_120C ...).  Now every card is the grade at 20 C and the
+# magnet temperature is a Simulation input (or the coupled loop's answer); the
+# card is DERIVED there (materials.MagnetMaterial.at_temperature):
 #
-#   Br(T)      = Br_ref      * (1 + alpha/100 * (T - T_ref))
-#   H_knee(T)  = H_knee_ref  * (1 + beta /100 * (T - T_ref))
+#   alpha_br_pct_per_k   %/K, reversible coefficient of Br, referred to 20 C
+#   beta_hcj_pct_per_k   %/K, ditto of the intrinsic coercivity HcJ
 #
-# and the 2nd-quadrant bh_curve is carried across through the INTRINSIC curve:
-# J = B - mu0*H per point, J scaled by alpha, H scaled by beta, B' = J' + mu0*H'
-# (materials.MagnetMaterial.at_temperature).  mu_rec is temperature-independent
-# for sintered NdFeB and is NOT scaled; the normal coercivity Hc follows the
-# card's own identity Hc = Br/(mu0*mu_rec) where the card obeys it.
+#   Br(T)   = Br_20  * (1 + alpha/100 * (T - 20))
+#   HcJ(T)  = HcJ_20 * (1 + beta /100 * (T - 20))
 #
-# WHY THE NUMBERS ARE NOT THE DATASHEET'S.  A datasheet quotes alpha/beta
-# relative to 20 C.  These fields are relative to the CARD's OWN T_ref, and the
-# two are different numbers for the same physics:
+# and the 2nd-quadrant curve is REGENERATED at T by the card's `demag_model`
+# (not stretched): `knee_quadratic` (linear recoil with mu_rec to the knee at
+# knee_frac*HcJ, quadratic collapse to J = 0 at HcJ; point[1] = HcJ is the
+# solver's knee) or `tanh_knee` (truncated at its B = 0 crossing, which is
+# point[1]).  mu_rec is temperature-independent for sintered NdFeB.  Derived
+# values are quantised to the precision cards are stored at (Br 0.1 mT, H 1 A/m,
+# B 0.1 mT).  A card without a model (Fe16N2) still moves by the intrinsic
+# scaling: J = B - mu0*H scaled by alpha, H by beta.
 #
-#   coeff(T_ref) = coeff(20) / (1 + coeff(20)/100 * (T_ref - 20))
+# THE TEMPERATURE LIMIT.  `max_working_temp_c` is the grade's class maximum
+# (SH 150, UH 180, EH 200, AH 220 C).  A typed magnet temperature above it is
+# refused (Simulation field and the API); a temperature the coupled loop
+# computes above it is never clamped - the result carries `magnet_over_limit`.
 #
-# Using the 20 C number at a 150 C reference is the mistake this comment exists
-# to prevent: for N45EH it would put Hcj(180 C) at 861 kA/m where the library's
-# own N45EH_180C card says 672 — a 28 % error in the demagnetisation margin.
-# Each card therefore carries its own re-referenced pair, and the comment on
-# each card gives the 20 C-referenced value it was derived from so it can still
-# be checked against a datasheet.
+# THE FORMER NAMES.  `<grade>_<T>C` keeps resolving
+# (materials.LEGACY_MAGNET_CARDS) to the grade derived at T, under the old name,
+# and equals the old card - checked for every one of them in
+# tests/test_magnet_cards_20c.py (N52UH, F52SH, F45SH: point for point;
+# N45EH: knee within 0.02 %, curve within 2.3 mT, Br within 0.04 %).
+# scripts/migrate_magnet_cards_20c.py rewrites stored inputs to grade + the
+# duty's magnet temperature.
 #
-# CONSISTENCY, ENFORCED BY tests/test_magnet_temperature.py: where the library
-# holds two cards of one grade, rescaling one to the other's temperature must
-# reproduce it — Br within 1 %, knee field within 5 %.  Measured 2026-09-29:
-#   N52UH_100C -> 150 C : Br 1.2069 vs 1.2069 (0.00 %), knee -670.6 vs
-#                         -670.6 kA/m (0.00 %)
-#   N45EH_150C -> 180 C : Br 1.1014 vs 1.1020 (-0.05 %),  knee -606.4 vs
-#                         -619.0 kA/m (-2.04 %)
-# Since 2026-09-29 the N52UH / F52SH / F45SH cards are GENERATED from one
-# manufacturer sheet each (Br20, HcJ20 min, alpha, beta), so their pairs agree
-# by construction; each card's knee (point[1]) is its datasheet HcJ(T).
-#
-# LIMIT.  This is the REVERSIBLE model only — it says where the card's curve
-# sits at temperature T, not what an excursion has permanently taken away
-# (that is simulation/demag.py, which runs on the curve this model hands it).
-# It is linear, so it is trustworthy over the grade's service range and no
-# further; extrapolated far below T_ref on a card whose curve is truncated just
-# past its B = 0 crossing (the F45SH/F52SH records, 8 points) the collapse
-# detail is lost and the knee disagrees with the library's own sibling card by
-# up to 12 % at dT = -90 K.  Interpolating between cards of one grade is the
-# right move when the library has them.
+# LIMIT OF THE MODEL.  Reversible only - where the curve sits at T, not what an
+# excursion has permanently taken away (simulation/demag.py does that on the
+# curve handed to it).  Linear in T, so trustworthy over the grade's service
+# range and no further.
 
 magnet:
 
-  N52UH_150C:
+  N52UH:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
@@ -2744,31 +2734,42 @@ magnet:
       - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
       - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
     prov:
-      Br: {"type": "derived", "src": "arnold_g52uh", "note": "nominal Br20 1.43 T moved to 150 C with the datasheet alpha"}
+      Br: {"type": "datasheet", "src": "arnold_g52uh", "note": "nominal Br at 20 C"}
       Hc: {"type": "derived", "src": "arnold_g52uh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      alpha_br_pct_per_k: {"type": "datasheet", "src": "arnold_g52uh", "note": "20 C-referenced reversible coefficient of Br"}
+      beta_hcj_pct_per_k: {"type": "datasheet", "src": "arnold_g52uh", "note": "20 C-referenced reversible coefficient of HcJ"}
       mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.048 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      demag_model: {"type": "derived", "src": "arnold_g52uh", "note": "hcj_a_m = datasheet HcJ MINIMUM at 20 C; knee at 0.97 HcJ is an ESTIMATE (the sheets plot but do not tabulate squareness)", "verify": true}
+      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated by demag_model at 20 C (materials._curve_knee_quadratic)", "verify": true}
       max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
       youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
       tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
       compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
       poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
     source_note: "Independent same-grade reference: Arnold G52UH. The magnets are bought from Ningbo Permanent Magnetics (N52UH) - replace with NPM's own sheet when obtained."
-    description: "Sintered NdFeB N52UH - operating point 150 C"
-    # Every number is the manufacturer's 20 C data sheet value (G52UH (Arnold, Rev. 210607))
-    # moved to 150 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
+    description: "Sintered NdFeB N52UH (UH class, Tmax 180 C) - 20 C card"
+    # ONE CARD PER GRADE, quoted at 20 C (owner 2026-10-30).  Every number is
+    # the manufacturer's 20 C sheet value (Arnold G52UH, Rev. 210607); the temperature is set in
+    # Simulation and the card is DERIVED there (section header): Br and HcJ
+    # walk on alpha/beta, the curve is regenerated by demag_model.
+    # Per-temperature check: the library's pre-2026-09-29 N52UH pair (Ansys
+    # PersonalLib, Br 1.30 / 1.22 T and knees -1155 / -730 kA/m at 100 / 150 C)
+    # implies alpha -0.112 and beta -0.46 %/K referred to 20 C - inside the
+    # HGT band and within 10 % of the sheet's -0.12 / -0.51, which are kept.
+    # Replaces N52UH_20C / _100C / _150C: derived at those temperatures this card
+    # reproduces them point for point (materials.LEGACY_MAGNET_CARDS).
     grade: N52UH
-    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I)
-    temperature_c: 150   # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.1422   # %/K  = -0.12/(1-0.12/100*(150-20))
-    beta_hcj_pct_per_k: -1.5134   # %/K  = -0.51/(1-0.51/100*(150-20))
-    Br: 1.2069   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 914701   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I) - the Simulation input is capped here
+    temperature_c: 20    # every magnet card is quoted at 20 C
+    alpha_br_pct_per_k: -0.12   # %/K at 20 C
+    beta_hcj_pct_per_k: -0.51   # %/K at 20 C
+    Br: 1.43   # T  nominal at 20 C
+    Hc: 1083769   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
     mu_rec: 1.05   # HGT Table IV
+    demag_model:
+      kind: knee_quadratic   # linear recoil to the knee, quadratic collapse to J = 0 at HcJ
+      hcj_a_m: 1990000   # A/m  intrinsic coercivity at 20 C (datasheet minimum)
+      knee_frac: 0.97      # knee at 0.97 HcJ (estimate)
     sigma: 666666.7   # S/m
     density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
@@ -2779,68 +2780,8 @@ magnet:
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
     thermal_conductivity: 6.16
     specific_heat: 460
-    bh_curve:
-      - [-690749, -1.4715]
-      - [-670630, -0.8427]
-      - [-665600, -0.3263]
-      - [-660571, 0.0444]
-      - [-655541, 0.2694]
-      - [-650511, 0.3486]
-      - [-617986, 0.3915]
-      - [-585460, 0.4344]
-      - [-520409, 0.5203]
-      - [-455358, 0.6061]
-      - [-390307, 0.6919]
-      - [-325256, 0.7778]
-      - [-260204, 0.8636]
-      - [-195153, 0.9494]
-      - [-130102, 1.0353]
-      - [-65051, 1.1211]
-      - [0, 1.2069]
-
-  N52UH_20C:
-    # -- provenance (independent-source audit 2026-09-29; envelope rule:
-    # a field with no prov entry is `datasheet` from sources[0]) --
-    sources:
-      - {"id": "arnold_g52uh", "doc": "Arnold Magnetic Technologies, G52UH (grain-boundary-diffused N52UH) data sheet Rev. 210607: Br 1410/1430/1450 mT, HcB 1086 kA/m nom, HcJ >= 1990 kA/m, alpha(Br) -0.12 %/C, alpha(HcJ) -0.51 %/C (20-180 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp e-6/C", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52UH_GBDD_181031.pdf", "file": "Downloads/N52UH.pdf", "rev": "210607", "read": "2026-09-29"}
-      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
-      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
-    prov:
-      Br: {"type": "derived", "src": "arnold_g52uh", "note": "nominal Br20 1.43 T moved to 20 C with the datasheet alpha"}
-      Hc: {"type": "derived", "src": "arnold_g52uh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.048 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
-      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
-      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
-      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
-      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
-      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
-    source_note: "Independent same-grade reference: Arnold G52UH. The magnets are bought from Ningbo Permanent Magnetics (N52UH) - replace with NPM's own sheet when obtained."
-    description: "Sintered NdFeB N52UH - operating point 20 C (cold magnets)"
-    # Every number is the manufacturer's 20 C data sheet value (G52UH (Arnold, Rev. 210607))
-    # moved to 20 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
-    grade: N52UH
-    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I)
-    temperature_c: 20    # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.12   # %/K  = -0.12/(1-0.12/100*(20-20))
-    beta_hcj_pct_per_k: -0.51   # %/K  = -0.51/(1-0.51/100*(20-20))
-    Br: 1.43   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 1083769   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
-    mu_rec: 1.05   # HGT Table IV
-    sigma: 666666.7   # S/m
-    density: 7600
-    youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
-    poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
-    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
-    tensile_strength_mpa: 80       # MPa
-    compressive_strength_mpa: 1000 # MPa
-    thermal_conductivity: 6.16
-    specific_heat: 460
+    # 2nd-quadrant B(H) at 20 C, most negative H first; point[1] is HcJ, the
+    # solver's knee.  Equal to demag_model at 20 C (tests/test_magnet_cards_20c.py).
     bh_curve:
       - [-2049700, -3.2907]
       - [-1990000, -2.5007]
@@ -2860,79 +2801,18 @@ magnet:
       - [-193030, 1.1753]
       - [0, 1.43]
 
-  N52UH_100C:
-    # -- provenance (independent-source audit 2026-09-29; envelope rule:
-    # a field with no prov entry is `datasheet` from sources[0]) --
-    sources:
-      - {"id": "arnold_g52uh", "doc": "Arnold Magnetic Technologies, G52UH (grain-boundary-diffused N52UH) data sheet Rev. 210607: Br 1410/1430/1450 mT, HcB 1086 kA/m nom, HcJ >= 1990 kA/m, alpha(Br) -0.12 %/C, alpha(HcJ) -0.51 %/C (20-180 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp e-6/C", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52UH_GBDD_181031.pdf", "file": "Downloads/N52UH.pdf", "rev": "210607", "read": "2026-09-29"}
-      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
-      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
-    prov:
-      Br: {"type": "derived", "src": "arnold_g52uh", "note": "nominal Br20 1.43 T moved to 100 C with the datasheet alpha"}
-      Hc: {"type": "derived", "src": "arnold_g52uh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.048 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
-      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
-      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
-      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
-      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
-      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
-    source_note: "Independent same-grade reference: Arnold G52UH. The magnets are bought from Ningbo Permanent Magnetics (N52UH) - replace with NPM's own sheet when obtained."
-    description: "Sintered NdFeB N52UH - operating point 100 C"
-    # Every number is the manufacturer's 20 C data sheet value (G52UH (Arnold, Rev. 210607))
-    # moved to 100 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
-    grade: N52UH
-    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I)
-    temperature_c: 100   # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.1327   # %/K  = -0.12/(1-0.12/100*(100-20))
-    beta_hcj_pct_per_k: -0.8615   # %/K  = -0.51/(1-0.51/100*(100-20))
-    Br: 1.2927   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 979728   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
-    mu_rec: 1.05   # HGT Table IV
-    sigma: 666666.7
-    density: 7600
-    youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
-    poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
-    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
-    tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
-    compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    thermal_conductivity: 6.16
-    specific_heat: 460
-    bh_curve:
-      - [-1213422, -2.1712]
-      - [-1178080, -1.4804]
-      - [-1169244, -0.9352]
-      - [-1160409, -0.5425]
-      - [-1151573, -0.3025]
-      - [-1142738, -0.2151]
-      - [-1085601, -0.1397]
-      - [-1028464, -0.0643]
-      - [-914190, 0.0865]
-      - [-799916, 0.2373]
-      - [-685643, 0.388]
-      - [-571369, 0.5388]
-      - [-457095, 0.6896]
-      - [-342821, 0.8404]
-      - [-228548, 0.9912]
-      - [-114274, 1.1419]
-      - [0, 1.2927]
-
-  N45EH_150C:
+  N45EH:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
       - {"id": "courage_n45eh", "doc": "Courage Magnet, 'NdFeB N45EH Grade Performance Data and BH Curves' (2024-11-15): BHmax 45 MGOe, Br 13.5-14.1 kGs, Tw 200 C", "url": "https://www.couragemagnet.com/magnet-blog/3036.html", "read": "2026-09-29"}
       - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
     prov:
-      Br: {"type": "derived", "src": "courage_n45eh", "note": "Br20 1.35 T = lower end of the published 1.35-1.41 T range, moved with alpha", "verify": true}
+      Br: {"type": "datasheet", "src": "courage_n45eh", "note": "Br20 1.35 T = lower end of the published 1.35-1.41 T range", "verify": true}
       alpha_br_pct_per_k: {"type": "estimate", "note": "-0.115 %/K at 20 C: inside the HGT band -0.09..-0.12, no grade-specific value found", "verify": true, "source": "none"}
       beta_hcj_pct_per_k: {"type": "estimate", "note": "-0.45 %/K at 20 C: inside the HGT band -0.40..-0.60; Arnold's nearest EH grades quote -0.41 (N42EH) and -0.472 (N28-N38EH)", "verify": true, "source": "none"}
-      bh_curve: {"type": "estimate", "note": "HcJ20 2400 kA/m vs EH class minimum 2388 (HGT Table I) - consistent; knee shape estimated", "verify": true, "source": "none"}
+      demag_model: {"type": "estimate", "note": "HcJ20 2400 kA/m vs EH class minimum 2388 (HGT Table I) - consistent; tanh knee (x0 0.941, w 0.04) FITTED to the two hand-made cards it replaces, shape not measured", "verify": true, "source": "none"}
+      bh_curve: {"type": "derived", "note": "generated by demag_model at 20 C (materials._curve_tanh_knee)", "verify": true, "source": "none"}
       mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05"}
       sigma: {"type": "datasheet", "src": "hgt_ndfeb", "note": "1.6 uOhm m = 6.25e5 S/m, Table IV upper bound"}
       thermal_conductivity: {"type": "estimate", "note": "7.6 W/mK is below HGT's 8-10 range; Arnold's N45SH value", "verify": true, "source": "none"}
@@ -2941,35 +2821,33 @@ magnet:
       poisson_ratio: {"type": "estimate", "note": "handbook 0.24", "verify": true, "source": "none"}
       density: {"type": "datasheet", "src": "hgt_ndfeb", "note": "7.4-7.7 range"}
     source_note: "No manufacturer sheet for N45EH found (Arnold lists up to N42EH). Values are the library's generic card, checked against class ranges only."
-    description: "Sintered NdFeB N45EH (EH grade, Tmax 200 °C, Hcj >= 30 kOe at 20 °C) — operating point 150 °C"
+    description: "Sintered NdFeB N45EH (EH class, Tmax 200 C, Hcj >= 30 kOe at 20 C) - 20 C card"
+    # ONE CARD PER GRADE, quoted at 20 C (owner 2026-10-30).  Generic N45EH
+    # values: Br 1.35 T and Hcj 2400 kA/m at 20 C, alpha(Br) -0.115 %/K,
+    # beta(Hcj) -0.45 %/K, both linear from 20 C.  The curve is a tanh knee,
+    # J = J_recoil(H) * 1/2 (1 - tanh((|H|/Hcj - 0.941)/0.04)), truncated at its
+    # B = 0 crossing (point[1], the solver's knee) with point[0] at 1.02 Hcj.
+    # The shape was FITTED to the former hand-made N45EH_150C / _180C cards
+    # (they share one J/J_recoil(|H|/Hcj) curve): derived at 150 / 180 C this
+    # card puts the knee at -856.2 / -618.9 kA/m against their -856.3 / -619.0,
+    # curve points within 2.3 mT.  Both former cards are measured against it in
+    # tests/test_magnet_cards_20c.py.
     grade: N45EH
-    # Maximum working temperature of the EH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 200   # degC
-    temperature_c: 150   # T_ref of this card — see the section header
-    # Generic N45EH datasheet values (added 2026-09-08 on request, to compare with the
-    # N52UH the machine is drawn with): Br 1.35 T and Hcj 2400 kA/m at 20 °C,
-    # alpha(Br) = -0.115 %/K, beta(Hcj) = -0.45 %/K, both linear from 20 °C.
-    # At 150 °C: Br = 1.148 T, Hcj = 996 kA/m (12.5 kOe); the
-    # intrinsic curve collapses over ~4 % of Hcj around 0.88*Hcj (tanh knee).
-    # The FIELDS below are those same two coefficients RE-REFERENCED to this
-    # card's 150 C (see the section header): alpha = -0.115/0.8505 = -0.1352,
-    # beta = -0.45/0.415 = -1.0843 %/K.  Handing the raw 20 C numbers to a
-    # 150 C card is the error the header warns about — it would put Hcj(180 C)
-    # at 861 kA/m against this library's own N45EH_180C value of 672.
-    alpha_br_pct_per_k: -0.1352    # %/K  (Br)
-    beta_hcj_pct_per_k: -1.0843    # %/K  (Hcj / knee field)
-    Br: 1.148          # T — remanence at H=0, 150 °C
-    # Recoil permeability of sintered NdFeB ~1.05; the FEM magnet region uses it as
-    # mu_r, and the normal coercivity follows as Hc = Br/(mu0*mu_rec) (same convention
-    # as F45SH_120C).  The demag knee lives in bh_curve below.
-    Hc: 870180         # A/m — normal coercivity = Br / (mu0 * mu_rec)
+    max_working_temp_c: 200   # degC  EH class (HGT Table I) - the Simulation input is capped here
+    temperature_c: 20    # every magnet card is quoted at 20 C
+    alpha_br_pct_per_k: -0.115   # %/K at 20 C (estimate)
+    beta_hcj_pct_per_k: -0.45    # %/K at 20 C (estimate)
+    Br: 1.35          # T at 20 C
+    Hc: 1023139         # A/m - normal coercivity = Br / (mu0 * mu_rec)
     mu_rec: 1.050      # relative recoil permeability (sintered NdFeB)
-    sigma: 6.25e5      # S/m — sintered NdFeB, rho ~1.6 uOhm*m (EH grades 1.4–1.6)
-    density: 7550      # kg/m3 — Dy-rich EH grade (7.5–7.6)
-    # --- mechanical (same handbook values as the other sintered NdFeB cards) ---
+    demag_model:
+      kind: tanh_knee     # intrinsic collapse centred at x0*Hcj over w*Hcj
+      hcj_a_m: 2400000    # A/m  intrinsic coercivity at 20 C
+      x0: 0.941
+      w: 0.04
+      x_end: 1.02
+    sigma: 6.25e5      # S/m - sintered NdFeB, rho ~1.6 uOhm*m (EH grades 1.4-1.6)
+    density: 7550      # kg/m3 - Dy-rich EH grade (7.5-7.6)
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
     cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation
@@ -2978,127 +2856,23 @@ magnet:
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
     thermal_conductivity: 7.6
     specific_heat: 460
-    # 2nd-quadrant B(H) at 150 °C, most negative H first; point[1] = the B~0 crossing
-    # of the collapse = the solver's H_knee, then the knee, then the linear recoil to Br.
+    # 2nd-quadrant B(H) at 20 C, generated by demag_model.
     bh_curve:
-      - [-1015000, -1.2538]
-      - [ -856300,  0.0000]
-      - [ -845000,  0.0235]
-      - [ -833000,  0.0438]
-      - [ -821000,  0.0622]
-      - [ -809000,  0.0793]
-      - [ -797000,  0.0959]
-      - [ -770000,  0.1319]
-      - [ -735000,  0.1783]
-      - [ -700000,  0.2245]
-      - [ -665000,  0.2707]
-      - [ -630000,  0.3169]
-      - [ -595000,  0.3631]
-      - [ -560000,  0.4093]
-      - [ -525000,  0.4555]
-      - [ -490000,  0.5016]
-      - [ -455000,  0.5478]
-      - [ -420000,  0.5940]
-      - [ -385000,  0.6402]
-      - [ -350000,  0.6864]
-      - [ -315000,  0.7325]
-      - [ -280000,  0.7787]
-      - [ -245000,  0.8249]
-      - [ -210000,  0.8711]
-      - [ -175000,  0.9173]
-      - [ -140000,  0.9634]
-      - [ -105000,  1.0096]
-      - [  -70000,  1.0558]
-      - [  -35000,  1.1020]
-      - [       0,  1.1482]
-
-  N45EH_180C:
-    # -- provenance (independent-source audit 2026-09-29; envelope rule:
-    # a field with no prov entry is `datasheet` from sources[0]) --
-    sources:
-      - {"id": "courage_n45eh", "doc": "Courage Magnet, 'NdFeB N45EH Grade Performance Data and BH Curves' (2024-11-15): BHmax 45 MGOe, Br 13.5-14.1 kGs, Tw 200 C", "url": "https://www.couragemagnet.com/magnet-blog/3036.html", "read": "2026-09-29"}
-      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
-    prov:
-      Br: {"type": "derived", "src": "courage_n45eh", "note": "Br20 1.35 T = lower end of the published 1.35-1.41 T range, moved with alpha", "verify": true}
-      alpha_br_pct_per_k: {"type": "estimate", "note": "-0.115 %/K at 20 C: inside the HGT band -0.09..-0.12, no grade-specific value found", "verify": true, "source": "none"}
-      beta_hcj_pct_per_k: {"type": "estimate", "note": "-0.45 %/K at 20 C: inside the HGT band -0.40..-0.60; Arnold's nearest EH grades quote -0.41 (N42EH) and -0.472 (N28-N38EH)", "verify": true, "source": "none"}
-      bh_curve: {"type": "estimate", "note": "HcJ20 2400 kA/m vs EH class minimum 2388 (HGT Table I) - consistent; knee shape estimated", "verify": true, "source": "none"}
-      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05"}
-      sigma: {"type": "datasheet", "src": "hgt_ndfeb", "note": "1.6 uOhm m = 6.25e5 S/m, Table IV upper bound"}
-      thermal_conductivity: {"type": "estimate", "note": "7.6 W/mK is below HGT's 8-10 range; Arnold's N45SH value", "verify": true, "source": "none"}
-      cte_ppm_k_1: {"type": "estimate", "note": "5.0 (user 2026-09-07); Arnold sheets give 7-7.5, HGT 3-4", "verify": true, "source": "none"}
-      cte_ppm_k_2: {"type": "estimate", "note": "-1.5 (user); Arnold -0.1..-1, HGT +1..+3 - sources disagree", "verify": true, "source": "none"}
-      poisson_ratio: {"type": "estimate", "note": "handbook 0.24", "verify": true, "source": "none"}
-      density: {"type": "datasheet", "src": "hgt_ndfeb", "note": "7.4-7.7 range"}
-    source_note: "No manufacturer sheet for N45EH found (Arnold lists up to N42EH). Values are the library's generic card, checked against class ranges only."
-    description: "Sintered NdFeB N45EH (EH grade, Tmax 200 °C, Hcj >= 30 kOe at 20 °C) — operating point 180 °C"
-    grade: N45EH
-    # Maximum working temperature of the EH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 200   # degC
-    temperature_c: 180   # T_ref of this card — see the section header
-    # Generic N45EH datasheet values (added 2026-09-08 on request, to compare with the
-    # N52UH the machine is drawn with): Br 1.35 T and Hcj 2400 kA/m at 20 °C,
-    # alpha(Br) = -0.115 %/K, beta(Hcj) = -0.45 %/K, both linear from 20 °C.
-    # At 180 °C: Br = 1.102 T, Hcj = 672 kA/m (8.4 kOe); the
-    # intrinsic curve collapses over ~4 % of Hcj around 0.88*Hcj (tanh knee).
-    # The FIELDS below are those same two coefficients RE-REFERENCED to this
-    # card's 180 C (see the section header): alpha = -0.115/0.816 = -0.1409,
-    # beta = -0.45/0.28 = -1.6071 %/K.  Rescaling this card back to 150 C
-    # returns Br 1.1486 (card: 1.148) and knee -862.5 kA/m (card: -856.3).
-    alpha_br_pct_per_k: -0.1409    # %/K  (Br)
-    beta_hcj_pct_per_k: -1.6071    # %/K  (Hcj / knee field)
-    Br: 1.102          # T — remanence at H=0, 180 °C
-    # Recoil permeability of sintered NdFeB ~1.05; the FEM magnet region uses it as
-    # mu_r, and the normal coercivity follows as Hc = Br/(mu0*mu_rec) (same convention
-    # as F45SH_120C).  The demag knee lives in bh_curve below.
-    Hc: 834881         # A/m — normal coercivity = Br / (mu0 * mu_rec)
-    mu_rec: 1.050      # relative recoil permeability (sintered NdFeB)
-    sigma: 6.25e5      # S/m — sintered NdFeB, rho ~1.6 uOhm*m (EH grades 1.4–1.6)
-    density: 7550      # kg/m3 — Dy-rich EH grade (7.5–7.6)
-    # --- mechanical (same handbook values as the other sintered NdFeB cards) ---
-    youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
-    poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
-    tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
-    compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    thermal_conductivity: 7.6
-    specific_heat: 460
-    # 2nd-quadrant B(H) at 180 °C, most negative H first; point[1] = the B~0 crossing
-    # of the collapse = the solver's H_knee, then the knee, then the linear recoil to Br.
-    bh_curve:
-      - [ -685000, -0.8399]
-      - [ -619000,  0.0000]
-      - [ -618000,  0.0124]
-      - [ -610000,  0.1266]
-      - [ -602000,  0.2066]
-      - [ -594000,  0.2601]
-      - [ -586000,  0.2960]
-      - [ -578000,  0.3210]
-      - [ -570000,  0.3397]
-      - [ -562000,  0.3548]
-      - [ -554000,  0.3679]
-      - [ -546000,  0.3799]
-      - [ -538000,  0.3913]
-      - [ -525000,  0.4085]
-      - [ -490000,  0.4550]
-      - [ -455000,  0.5012]
-      - [ -420000,  0.5474]
-      - [ -385000,  0.5936]
-      - [ -350000,  0.6398]
-      - [ -315000,  0.6860]
-      - [ -280000,  0.7321]
-      - [ -245000,  0.7783]
-      - [ -210000,  0.8245]
-      - [ -175000,  0.8707]
-      - [ -140000,  0.9169]
-      - [ -105000,  0.9631]
-      - [  -70000,  1.0092]
-      - [  -35000,  1.0554]
-      - [       0,  1.1016]
+      - [-2448000, -3.0537]
+      - [-1023139, 0.0]
+      - [-1008000, 0.02]
+      - [-924000, 0.1308]
+      - [-840000, 0.2416]
+      - [-756000, 0.3525]
+      - [-672000, 0.4633]
+      - [-588000, 0.5742]
+      - [-504000, 0.685]
+      - [-420000, 0.7958]
+      - [-336000, 0.9067]
+      - [-252000, 1.0175]
+      - [-168000, 1.1283]
+      - [-84000, 1.2392]
+      - [0, 1.35]
 
   # ── Fe16N2 (iron nitride) — RESEARCH MATERIAL, literature estimate ─────────
   # Not a datasheet: bracketed from published work, since no qualified bulk
@@ -3109,10 +2883,9 @@ magnet:
   # built as linear recoil to the knee at 0.79*Hcj, then the collapse to J = 0
   # at Hcj -- the low-anisotropy behaviour that decides this material's fate.
   #
-  # TEMPERATURE: quoted at 20 C, while F45SH_120C is quoted hot (120 C).  Since
-  # 2026-09-08 the solver CAN temperature-correct a magnet (section header), so
-  # the two can be compared at one temperature instead of by caveat -- but the
-  # caveat still holds for anything that reads the cards as-is.  Fe16N2 is the
+  # TEMPERATURE: quoted at 20 C like every card (section header).  No curve
+  # model: a fixed table, moved by the intrinsic stretch, and no grade class,
+  # so no max_working_temp_c (it decomposes above 214 C).  Fe16N2 is the
   # one material here whose coercivity RISES with temperature: +0.4 Oe/K over
   # 27-152 C (Acta Mater. 2020), against NdFeB's -81.9 Oe/K.  As a percentage
   # that is beta = +0.4 Oe/K divided by the card's own Hcj, so it differs per
@@ -3223,7 +2996,7 @@ magnet:
     - [-60040, 1.117]
     - [-30020, 1.159]
     - [0, 1.2]
-  F45SH_120C:
+  F45SH:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
@@ -3231,32 +3004,40 @@ magnet:
       - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
       - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
     prov:
-      Br: {"type": "derived", "src": "arnold_n45sh", "note": "nominal Br20 1.35 T moved to 120 C with the datasheet alpha"}
+      Br: {"type": "datasheet", "src": "arnold_n45sh", "note": "nominal Br at 20 C"}
       Hc: {"type": "derived", "src": "arnold_n45sh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_n45sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_n45sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      alpha_br_pct_per_k: {"type": "datasheet", "src": "arnold_n45sh", "note": "20 C-referenced reversible coefficient of Br"}
+      beta_hcj_pct_per_k: {"type": "datasheet", "src": "arnold_n45sh", "note": "20 C-referenced reversible coefficient of HcJ"}
       mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.058 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_n45sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      demag_model: {"type": "derived", "src": "arnold_n45sh", "note": "hcj_a_m = datasheet HcJ MINIMUM at 20 C; knee at 0.97 HcJ is an ESTIMATE (the sheets plot but do not tabulate squareness)", "verify": true}
+      bh_curve: {"type": "derived", "src": "arnold_n45sh", "note": "generated by demag_model at 20 C (materials._curve_knee_quadratic)", "verify": true}
       max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
       youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
       tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
       compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
       poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
     source_note: "F45SH = Ningbo Permanent Magnetics '45SH-F'; independent same-grade reference Arnold N45SH. Replace with NPM's sheet when obtained."
-    description: "Sintered NdFeB 45SH (supplier grade 45SH-F) - operating point 120 C"
-    # Every number is the manufacturer's 20 C data sheet value (N45SH (Arnold, Rev. 151021a))
-    # moved to 120 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
+    description: "Sintered NdFeB 45SH (supplier grade 45SH-F; SH class, Tmax 150 C) - 20 C card"
+    # ONE CARD PER GRADE, quoted at 20 C (owner 2026-10-30).  Every number is
+    # the manufacturer's 20 C sheet value (Arnold N45SH, Rev. 151021a); the temperature is set in
+    # Simulation and the card is DERIVED there (section header): Br and HcJ
+    # walk on alpha/beta, the curve is regenerated by demag_model.
+    # The pre-2026-09-29 F45SH_120C card (Ansys PersonalLib, Br 1.19 T at 120 C)
+    # sits 0.2 % above this card derived at 120 C (1.188 T) - consistent.  The
+    # former F45SH_120C is reproduced point for point at 120 C.
     grade: F45SH
-    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
-    temperature_c: 120   # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.1364   # %/K  = -0.12/(1-0.12/100*(120-20))
-    beta_hcj_pct_per_k: -1.1505   # %/K  = -0.535/(1-0.535/100*(120-20))
-    Br: 1.188   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 900362   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I) - the Simulation input is capped here
+    temperature_c: 20    # every magnet card is quoted at 20 C
+    alpha_br_pct_per_k: -0.12   # %/K at 20 C
+    beta_hcj_pct_per_k: -0.535   # %/K at 20 C
+    Br: 1.35   # T  nominal at 20 C
+    Hc: 1023139   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
     mu_rec: 1.05   # HGT Table IV
-    sigma: 555555.6   # S/m  — sintered NdFeB at ~120 °C
+    demag_model:
+      kind: knee_quadratic   # linear recoil to the knee, quadratic collapse to J = 0 at HcJ
+      hcj_a_m: 1592000   # A/m  intrinsic coercivity at 20 C (datasheet minimum)
+      knee_frac: 0.97      # knee at 0.97 HcJ (estimate)
+    sigma: 555555.6   # S/m
     density: 7500
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
@@ -3266,87 +3047,28 @@ magnet:
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
     thermal_conductivity: 7.6
     specific_heat: 460
+    # 2nd-quadrant B(H) at 20 C, most negative H first; point[1] is HcJ, the
+    # solver's knee.  Equal to demag_model at 20 C (tests/test_magnet_cards_20c.py).
     bh_curve:
-      - [-762488, -1.5522]
-      - [-740280, -0.9303]
-      - [-734728, -0.4233]
-      - [-729176, -0.0591]
-      - [-723624, 0.1621]
-      - [-718072, 0.2405]
-      - [-682168, 0.2879]
-      - [-646264, 0.3353]
-      - [-574457, 0.43]
-      - [-502650, 0.5248]
-      - [-430843, 0.6195]
-      - [-359036, 0.7143]
-      - [-287229, 0.809]
-      - [-215421, 0.9038]
-      - [-143614, 0.9985]
-      - [-71807, 1.0933]
-      - [0, 1.188]
-  F52SH_120C:
-    # -- provenance (independent-source audit 2026-09-29; envelope rule:
-    # a field with no prov entry is `datasheet` from sources[0]) --
-    sources:
-      - {"id": "arnold_g52sh", "doc": "Arnold Magnetic Technologies, G52SH (grain-boundary-diffused N52SH) data sheet Rev. 210607: Br 1420/1440/1460 mT, HcB 1090 kA/m nom, HcJ >= 1592 kA/m, alpha(Br) -0.12, alpha(HcJ) -0.55 %/C (20-150 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52SH_GBDD_181031.pdf", "rev": "210607", "read": "2026-09-29"}
-      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
-      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
-    prov:
-      Br: {"type": "derived", "src": "arnold_g52sh", "note": "nominal Br20 1.44 T moved to 120 C with the datasheet alpha"}
-      Hc: {"type": "derived", "src": "arnold_g52sh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.051 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
-      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
-      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
-      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
-      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
-      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
-    source_note: "F52SH = the supplier's N52SH-class grade; independent same-grade reference Arnold G52SH. Replace with the supplier sheet when obtained."
-    Br: 1.2672   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 960386   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
-    bh_curve:
-      - [-737892, -1.5609]
-      - [-716400, -0.9003]
-      - [-711027, -0.3582]
-      - [-705654, 0.0309]
-      - [-700281, 0.2671]
-      - [-694908, 0.3503]
-      - [-660163, 0.3961]
-      - [-625417, 0.442]
-      - [-555926, 0.5337]
-      - [-486436, 0.6254]
-      - [-416945, 0.7171]
-      - [-347454, 0.8087]
-      - [-277963, 0.9004]
-      - [-208472, 0.9921]
-      - [-138982, 1.0838]
-      - [-69491, 1.1755]
-      - [0, 1.2672]
-    density: 7600
-    youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
-    poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
-    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
-    tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
-    compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    description: "Sintered NdFeB 52SH (supplier grade F52SH) - operating point 120 C"
-    # Every number is the manufacturer's 20 C data sheet value (G52SH (Arnold, Rev. 210607))
-    # moved to 120 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
-    grade: F52SH
-    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
-    mu_rec: 1.05   # HGT Table IV
-    sigma: 666666.7
-    specific_heat: 460
-    temperature_c: 120   # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.1364   # %/K  = -0.12/(1-0.12/100*(120-20))
-    beta_hcj_pct_per_k: -1.2222   # %/K  = -0.55/(1-0.55/100*(120-20))
-    thermal_conductivity: 6.16
+      - [-1639760, -2.7356]
+      - [-1592000, -2.0006]
+      - [-1580060, -1.4374]
+      - [-1568120, -1.0308]
+      - [-1556180, -0.7809]
+      - [-1544240, -0.6876]
+      - [-1467028, -0.5857]
+      - [-1389816, -0.4838]
+      - [-1235392, -0.2801]
+      - [-1080968, -0.0763]
+      - [-926544, 0.1275]
+      - [-772120, 0.3312]
+      - [-617696, 0.535]
+      - [-463272, 0.7387]
+      - [-308848, 0.9425]
+      - [-154424, 1.1462]
+      - [0, 1.35]
 
-  F52SH_30C:
+  F52SH:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
@@ -3354,38 +3076,40 @@ magnet:
       - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
       - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
     prov:
-      Br: {"type": "derived", "src": "arnold_g52sh", "note": "nominal Br20 1.44 T moved to 30 C with the datasheet alpha"}
+      Br: {"type": "datasheet", "src": "arnold_g52sh", "note": "nominal Br at 20 C"}
       Hc: {"type": "derived", "src": "arnold_g52sh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      alpha_br_pct_per_k: {"type": "datasheet", "src": "arnold_g52sh", "note": "20 C-referenced reversible coefficient of Br"}
+      beta_hcj_pct_per_k: {"type": "datasheet", "src": "arnold_g52sh", "note": "20 C-referenced reversible coefficient of HcJ"}
       mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.051 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      demag_model: {"type": "derived", "src": "arnold_g52sh", "note": "hcj_a_m = datasheet HcJ MINIMUM at 20 C; knee at 0.97 HcJ is an ESTIMATE (the sheets plot but do not tabulate squareness)", "verify": true}
+      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated by demag_model at 20 C (materials._curve_knee_quadratic)", "verify": true}
       max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
       youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
       tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
       compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
       poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
     source_note: "F52SH = the supplier's N52SH-class grade; independent same-grade reference Arnold G52SH. Replace with the supplier sheet when obtained."
-    Br: 1.4227   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 1078252   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
-    bh_curve:
-      - [-1549573, -2.6586]
-      - [-1504440, -1.8905]
-      - [-1493157, -1.294]
-      - [-1481873, -0.8639]
-      - [-1470590, -0.6002]
-      - [-1459307, -0.5028]
-      - [-1386341, -0.4065]
-      - [-1313376, -0.3102]
-      - [-1167445, -0.1177]
-      - [-1021515, 0.0749]
-      - [-875584, 0.2674]
-      - [-729653, 0.46]
-      - [-583723, 0.6525]
-      - [-437792, 0.8451]
-      - [-291861, 1.0376]
-      - [-145931, 1.2302]
-      - [0, 1.4227]
+    description: "Sintered NdFeB 52SH (supplier grade F52SH; SH class, Tmax 150 C) - 20 C card"
+    # ONE CARD PER GRADE, quoted at 20 C (owner 2026-10-30).  Every number is
+    # the manufacturer's 20 C sheet value (Arnold G52SH, Rev. 210607); the temperature is set in
+    # Simulation and the card is DERIVED there (section header): Br and HcJ
+    # walk on alpha/beta, the curve is regenerated by demag_model.
+    # No measured per-temperature data for this grade: the former F52SH_30C /
+    # _80C / _120C cards were generated from the same sheet, and derived at those
+    # temperatures this card reproduces them point for point.
+    grade: F52SH
+    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I) - the Simulation input is capped here
+    temperature_c: 20    # every magnet card is quoted at 20 C
+    alpha_br_pct_per_k: -0.12   # %/K at 20 C
+    beta_hcj_pct_per_k: -0.55   # %/K at 20 C
+    Br: 1.44   # T  nominal at 20 C
+    Hc: 1091348   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    mu_rec: 1.05   # HGT Table IV
+    demag_model:
+      kind: knee_quadratic   # linear recoil to the knee, quadratic collapse to J = 0 at HcJ
+      hcj_a_m: 1592000   # A/m  intrinsic coercivity at 20 C (datasheet minimum)
+      knee_frac: 0.97      # knee at 0.97 HcJ (estimate)
+    sigma: 666666.7   # S/m
     density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
@@ -3393,82 +3117,28 @@ magnet:
     cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    description: "Sintered NdFeB 52SH (supplier grade F52SH) - operating point 30 C"
-    # Every number is the manufacturer's 20 C data sheet value (G52SH (Arnold, Rev. 210607))
-    # moved to 30 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
-    grade: F52SH
-    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
-    mu_rec: 1.05   # HGT Table IV
-    sigma: 666666.7
-    specific_heat: 460
-    temperature_c: 30    # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.1215   # %/K  = -0.12/(1-0.12/100*(30-20))
-    beta_hcj_pct_per_k: -0.582   # %/K  = -0.55/(1-0.55/100*(30-20))
     thermal_conductivity: 6.16
-
-  F52SH_80C:
-    # -- provenance (independent-source audit 2026-09-29; envelope rule:
-    # a field with no prov entry is `datasheet` from sources[0]) --
-    sources:
-      - {"id": "arnold_g52sh", "doc": "Arnold Magnetic Technologies, G52SH (grain-boundary-diffused N52SH) data sheet Rev. 210607: Br 1420/1440/1460 mT, HcB 1090 kA/m nom, HcJ >= 1592 kA/m, alpha(Br) -0.12, alpha(HcJ) -0.55 %/C (20-150 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52SH_GBDD_181031.pdf", "rev": "210607", "read": "2026-09-29"}
-      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
-      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
-    prov:
-      Br: {"type": "derived", "src": "arnold_g52sh", "note": "nominal Br20 1.44 T moved to 80 C with the datasheet alpha"}
-      Hc: {"type": "derived", "src": "arnold_g52sh", "note": "Br/(mu0*mu_rec)"}
-      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
-      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.051 (Br/(mu0 HcB))"}
-      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
-      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
-      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
-      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
-      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
-      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
-    source_note: "F52SH = the supplier's N52SH-class grade; independent same-grade reference Arnold G52SH. Replace with the supplier sheet when obtained."
-    Br: 1.3363   # T  (datasheet Br20 moved by datasheet alpha)
-    Hc: 1012771   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    specific_heat: 460
+    # 2nd-quadrant B(H) at 20 C, most negative H first; point[1] is HcJ, the
+    # solver's knee.  Equal to demag_model at 20 C (tests/test_magnet_cards_20c.py).
     bh_curve:
-      - [-1098639, -2.0488]
-      - [-1066640, -1.3404]
-      - [-1058640, -0.7741]
-      - [-1050640, -0.3668]
-      - [-1042641, -0.1184]
-      - [-1034641, -0.0289]
-      - [-982909, 0.0394]
-      - [-931177, 0.1077]
-      - [-827713, 0.2442]
-      - [-724249, 0.3807]
-      - [-620784, 0.5172]
-      - [-517320, 0.6537]
-      - [-413856, 0.7902]
-      - [-310392, 0.9268]
-      - [-206928, 1.0633]
-      - [-103464, 1.1998]
-      - [0, 1.3363]
-    density: 7600
-    youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
-    poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
-    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
-    tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
-    compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    description: "Sintered NdFeB 52SH (supplier grade F52SH) - operating point 80 C"
-    # Every number is the manufacturer's 20 C data sheet value (G52SH (Arnold, Rev. 210607))
-    # moved to 80 C with that sheet's own alpha/beta; the reversible
-    # coefficients below are re-referenced to this card's T_ref (section
-    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
-    grade: F52SH
-    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
-    mu_rec: 1.05   # HGT Table IV
-    sigma: 666666.7
-    specific_heat: 460
-    temperature_c: 80    # T_ref of this card — see the section header
-    alpha_br_pct_per_k: -0.1293   # %/K  = -0.12/(1-0.12/100*(80-20))
-    beta_hcj_pct_per_k: -0.8209   # %/K  = -0.55/(1-0.55/100*(80-20))
-    thermal_conductivity: 6.16
+      - [-1639760, -2.7806]
+      - [-1592000, -2.0006]
+      - [-1580060, -1.398]
+      - [-1568120, -0.9633]
+      - [-1556180, -0.6965]
+      - [-1544240, -0.5976]
+      - [-1467028, -0.4957]
+      - [-1389816, -0.3938]
+      - [-1235392, -0.1901]
+      - [-1080968, 0.0137]
+      - [-926544, 0.2175]
+      - [-772120, 0.4212]
+      - [-617696, 0.625]
+      - [-463272, 0.8287]
+      - [-308848, 1.0325]
+      - [-154424, 1.2362]
+      - [0, 1.44]
 
 
 # ── CONDUCTORS (windings) ────────────────────────────────────

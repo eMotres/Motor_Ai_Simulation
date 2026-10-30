@@ -369,6 +369,18 @@ RPM = 15000.0
 # calibration key.
 CONNECTION = "2S"
 
+# The END-WINDING FACTOR every pin was generated at, passed as the solver's
+# ``end_winding_factor=`` argument (2026-10-30).  It was the one input this suite
+# left implicit (0 = auto: masses.end_winding_factor on the geometry).  When
+# k_end became the mean turn of the coil the CAD build draws (owner 2026-10-30:
+# 1.7226 half-loop -> 1.9386 built coil on this machine), every P_cu_W, the
+# voltage cases' currents (R_phase sits in the circuit) and the current cases'
+# V_peak (R·I) would have moved with nothing changed in the field solve.  The
+# k_end model is pinned by its own tests (test_end_winding_coil_shape,
+# test_masses, test_optimizer_honesty); this suite pins the FIELD at the value
+# its baseline was made at: the half-loop (π·(tooth + wire)/2 + L)/L of GEO_30MM.
+K_END = (math.pi * (2.6 + 2.0) * 1e-3 / 2.0 + 10e-3) / 10e-3      # 1.7225663
+
 
 def _scalar(v: Any) -> float:
     """T_em_Nm comes back as a per-frame series; the pinned value is its mean."""
@@ -471,7 +483,8 @@ def _run(case: str) -> Dict[str, float]:
         # be pinned by patching the cached config dict; passing it removes the
         # last shared-config read this suite depended on.
         d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
-                                       connection=CONNECTION, **kw)
+                                       connection=CONNECTION,
+                                       end_winding_factor=K_END, **kw)
     finally:
         set_request_materials(None)
     return _metrics(d)
@@ -626,7 +639,8 @@ def _eddy_run(**over: Any) -> Dict[str, Any]:
     set_request_materials(OVERRIDE)
     try:
         return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
-                                          connection=CONNECTION, **kw)
+                                          connection=CONNECTION,
+                                          end_winding_factor=K_END, **kw)
     finally:
         set_request_materials(None)
 
@@ -759,7 +773,8 @@ def test_axial_slices_cut_the_magnet_eddy_loss_by_the_modelled_factor(
     set_request_materials(OVERRIDE)
     try:
         d = fem_transient_sliding_band(geo_override=geo, rpm=RPM,
-                                       connection=CONNECTION, **kw)
+                                       connection=CONNECTION,
+                                       end_winding_factor=K_END, **kw)
     finally:
         set_request_materials(None)
 
@@ -832,6 +847,7 @@ class TestDqStampSelfChecks:
         from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
         d = fem_transient_sliding_band(
             geo_override=dict(GEO_30MM), rpm=RPM, connection=CONNECTION,
+            end_winding_factor=K_END,
             daxis_deg=60.0,   # any fixed frame works: the identity is per-frame
             **dict(COMMON, element_order=2, demag=False,
                    I_phase_rms=60.0, gamma_deg=10.0))

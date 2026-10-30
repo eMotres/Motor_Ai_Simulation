@@ -158,8 +158,11 @@ def test_mech_power_is_torque_times_speed_and_the_balance_stays_as_a_diagnostic(
     # the row reproduces its own efficiency (to the rounding it is stored at)
     assert res["efficiency"] == pytest.approx(
         res["P_mech_W"] / (res["P_mech_W"] + res["P_loss_total_W"]), rel=5e-3)
+    # mass_total_kg is stored to the gram: on this ~0.09 kg fixture that rounding
+    # alone is up to ±0.55 %, so the check allows it on top of the 0.5 %.
     assert res["power_per_mass_W_kg"] == pytest.approx(
-        res["P_mech_W"] / res["mass_total_kg"], rel=5e-3)
+        res["P_mech_W"] / res["mass_total_kg"],
+        rel=5e-3 + 0.0005 / res["mass_total_kg"])
 
 
 def test_kv_divides_by_the_line_voltage_PEAK_the_row_shows(fake_solver):
@@ -251,9 +254,12 @@ def test_surrogate_reproduces_its_anchor():
     # end-turn half-loop includes the wire, validated against commercial FEM on this
     # very machine (auto 1.733 vs 1.76) — evaluates the anchor at
     # k_end = 1.7226, and P_cu is linear in k_end:
-    # 91.135 × 1.7226/1.4641 = 107.23 W.  Anything OUTSIDE the tolerance
-    # around that is a real physics change, exactly what this line is for.
-    assert m.P_cu_W == pytest.approx(107.23, rel=0.05)
+    # 91.135 × 1.7226/1.4641 = 107.23 W.  It moved again 2026-10-30, again only
+    # through k_end: k_end is now the mean turn of the coil the CAD build draws
+    # (bends, overhang and leads; the template's base coil on this anchor),
+    # 1.9386 here, so 91.135 × 1.9386/1.4641 = 120.67 W.  Anything OUTSIDE the
+    # tolerance around that is a real physics change, exactly what this line is for.
+    assert m.P_cu_W == pytest.approx(120.67, rel=0.05)
 
 
 def test_surrogate_reads_topology_and_materials_from_the_design():
@@ -334,13 +340,18 @@ def test_surrogate_copper_uses_the_copper_the_cad_builds():
     assert a12 == pytest.approx(a6, rel=1e-9)
     assert a12 == pytest.approx(0.5 * nom(packed), rel=1e-9)
 
-    # P = N^2 rho L k_end I^2 / A_cu: same A_cu, twice the turns → 4x the loss.
-    # The nominal rectangle would have reported 2x, i.e. half the real number.
+    # P = N^2 rho L k_end I^2 / A_cu: same A_cu, twice the turns → 4x the loss,
+    # times the change of k_end: the built coil's two leads are shared by twice
+    # the turns (and one more layer transition), so its mean turn is a little
+    # shorter.  The nominal rectangle would have reported 2x, i.e. half the real number.
     m6 = de.evaluate_design(anchor, dict(de._ANCHOR_WIND), {}, 0.0, 60.0, 15000.0,
                             coil_temp_c=120.0)
     m12 = de.evaluate_design(packed, dict(de._ANCHOR_WIND), {}, 0.0, 60.0, 15000.0,
                              coil_temp_c=120.0)
-    assert m12.P_cu_W == pytest.approx(4.0 * m6.P_cu_W, rel=1e-9)
+    k6 = de._end_winding_factor(de.build_params(anchor), anchor)
+    k12 = de._end_winding_factor(de.build_params(packed), packed)
+    assert k12 < k6
+    assert m12.P_cu_W == pytest.approx(4.0 * m6.P_cu_W * k12 / k6, rel=1e-9)
 
     # Provenance travels with the number, and into the API payload.
     assert "CAD polygons" in m12.copper_area_source

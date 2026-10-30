@@ -3371,8 +3371,8 @@ def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
         _g = _mgo(dict((_gc().get("geometry") or {})), geo_ov)
         k = float(_ewf(_pfc(geo_override=geo_ov), _g))
         if k > 1.0:
-            return k, ("the geometry (k_end = (π·(tooth_w + wire column)/2 + "
-                       "L)/L, the same estimator the solver uses for auto)")
+            return k, ("the geometry (the mean turn of the coil the CAD build "
+                       "draws, the same estimator the solver uses for auto)")
     except Exception as exc:  # noqa: BLE001 — a missing k_end is not a 500
         log.warning("thermal: the end-winding factor could not be derived (%s)",
                     exc)
@@ -4869,8 +4869,8 @@ def solve_thermal_field(
                        error="no winding elements in this cross-section")
         _k_end, _k_end_src = _end_winding_factor(em, _geo_ov)
         # ONE coil per tooth — these are fractional-slot concentrated windings,
-        # the same assumption `masses.end_winding_factor` makes when it models
-        # the end turn as a half-loop over ONE tooth — so the machine has as many
+        # the same assumption `masses.end_winding_factor` makes when it measures
+        # the built tooth coil around ONE tooth — so the machine has as many
         # coils as it has slots.  `num_slots`, and NOT the config's
         # `winding.n_coils_per_phase × 3` (which is the same 12 on the live
         # machine): the slot count follows this request's `?geo=` override and

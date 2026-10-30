@@ -30,6 +30,7 @@ import {
   defaultMeshSettings,
 } from '../types/motor';
 import { storedGapLayers } from '../lib/meshSettings';
+import { endWindingPin } from '../lib/endWindingPin';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 const storedIdentity = () => (getStoredUser()?.email ?? '').trim().toLowerCase();
@@ -1014,7 +1015,9 @@ export const useMotorStore = create<MotorState>()(
         // field magnet/shaft eddy + end-winding copper → η reads several points high.
         let rotor_eddy = true, end_winding_factor = 0;
         try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default true */ }
-        try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default 0 */ }
+        // k_end: only a TYPED value is pinned on every candidate; 0 = each
+        // candidate's own built coil (a stack-length step moves its k_end).
+        end_winding_factor = endWindingPin(get().geometry).k;
         // Air-gap mesh layers + coil temperature — SINGLE SOURCE: Mesh/Simulation tabs,
         // so the optimizer meshes the air gap (dominant torque/ripple driver) and sets
         // copper resistance EXACTLY like Simulation, else a selected design won't
@@ -1103,7 +1106,7 @@ export const useMotorStore = create<MotorState>()(
         try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
         let rotor_eddy = true, end_winding_factor = 0;
         try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
-        try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default */ }
+        end_winding_factor = endWindingPin(get().geometry).k;   // typed, or 0 = per-candidate coil
         // gap layers: the Mesh tab's, or undefined = the machine's saved setting
         const gap_layers = storedGapLayers();
         let coil_temp_c = 120, structured_gap = false;

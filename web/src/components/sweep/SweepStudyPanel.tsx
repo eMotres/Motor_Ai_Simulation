@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Button, LinearProgress, Divider, TextField,
-  FormControl, InputLabel, Select, MenuItem, Chip,
+  FormControl, InputLabel, Select, MenuItem, Chip, Tooltip as MuiTooltip,
 } from '@mui/material';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -26,6 +26,8 @@ import type { SweepResumeInfo } from '../../lib/sweepResumeNotice';
 import { readCurrentUnit, formatCurrent } from '../../lib/sweepCurrentUnit';
 import { readAllowNewLamination } from '../../lib/releasedContext';
 import { storedGapLayers } from '../../lib/meshSettings';
+import { endWindingPin } from '../../lib/endWindingPin';
+import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
 import {
   judgeResult, previousRunLabel, notShownText, partialFromProgress,
   isPersistable, packForStore, unpackFromStore, STORE_KEY,
@@ -289,6 +291,19 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
       <div style={{ color: '#a855f7', marginTop: 3 }}>η = {d.y.toFixed(2)} %</div>
       <div style={{ color: '#3b82f6' }}>{d.x.toFixed(2)} N·m/kg</div>
       <div style={{ color: 'var(--text-2)' }}>T = {d.T?.toFixed?.(1)} N·m · ripple {d.ripple?.toFixed?.(1)} %</div>
+      {d.kEnd != null && (
+        <div style={{ color: 'var(--text-3)' }}>
+          k_end {Number(d.kEnd).toFixed(3)} — {d.kEndSource === 'typed' ? 'typed in Simulation' : "this point's coil"}
+        </div>
+      )}
+      {d._dup && (
+        <div style={{ color: '#fbbf24', marginTop: 2 }}>
+          {d._dup.n} points at this spot (drawn side by side):
+          {(d._twins as string[] | undefined)?.map((t, j) => (
+            <div key={j} style={{ color: 'var(--text-3)', fontSize: 10 }}>· {t}</div>
+          ))}
+        </div>
+      )}
       {/* The hollow marker, named (2026-09-07). */}
       {d.settled === false && (
         <div style={{ color: '#fbbf24', marginTop: 2 }}>
@@ -608,7 +623,10 @@ const SweepStudyPanel: React.FC = () => {
           element_order: 2,
           iron_template: readBool('mesh.ironTemplate', true), // Mesh tab "Template iron" — deterministic iron mesh
           geo_mesh: readBool('mesh.geoMesh', true),   // Mesh tab "Geometry-driven mesh" — SAME build as Simulation (cell-tiled iron)
-          end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry
+          // k_end: a value TYPED in Simulation is pinned on every point; otherwise 0 =
+          // each point's own built coil (owner 2026-10-30: the panel's coil number for
+          // the current stack, pinned, gave 90 mm and 95 mm the same η and N·m/kg).
+          end_winding_factor: endWindingPin(useMotorStore.getState().geometry).k,
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           // Irreversible demagnetisation — single source: Simulation. It de-rates
           // Br, so a sweep without it ranks machines the Simulation tab is not
@@ -697,15 +715,47 @@ const SweepStudyPanel: React.FC = () => {
                     // it comes from are then start-up values.
                     settled: typeof p.eddy_settled === 'boolean' ? p.eddy_settled : undefined,
                     settleResid: p.eddy_settle_residual ?? null,
+                    kEnd: p.k_end_used ?? null, kEndSource: p.k_end_source ?? null,
                     // SAME stable key as the table row (geometry, operating-point)
                     // so point↔row selection cross-highlights reliably.
                     pk: `g${gi}_o${p.op_index ?? 0}` };
       if (!groups.has(key)) groups.set(key, { label, rows: [] });
       groups.get(key)!.rows.push(row);
     }
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    const out = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
       .map(([key, g]) => ({ key, label: g.label, rows: g.rows.sort((a, b) => a._c - b._c) }));
+    // Points at the same (N·m/kg, η) — across curves too — are drawn side by side
+    // and the tooltip names them all, so none hides under its twin (2026-10-30).
+    const all = out.flatMap(s => s.rows);
+    const dup = coincidentGroups(all);
+    const spot = (r: any) => `${r.x.toFixed(2)}|${r.y.toFixed(2)}`;
+    all.forEach((r, j) => {
+      r._dup = dup[j];
+      // plain strings, not row objects: a picked row is serialised
+      r._twins = dup[j] ? all.filter((o, m) => m !== j && spot(o) === spot(r))
+        .map(o => `I ${o.I} · γ ${o.g}° · ` + (Object.entries(o.overrides || {})
+          .filter(([k]) => k !== 'gamma_deg' && k !== 'current_a')
+          .map(([k, v]) => `${k}=${_fmtVar(v)}`).join(' · ') || 'base')) : [];
+    });
+    return out;
   }, [result, sentOps, connectBy, k3dChart]);
+
+  // Which k_end the points were billed at: a typed pin (one number for every
+  // point) or each point's own coil.  Points from before the field existed
+  // carry none, and the chip is then left out.  One value on screen (the
+  // largest = the most end-turn copper); the spread goes in the tooltip.
+  const kEndNote = useMemo(() => {
+    const rows = series.flatMap(s => s.rows).filter(r => Number(r.kEnd) > 0);
+    if (!rows.length) return null;
+    const ks = rows.map(r => Number(r.kEnd));
+    const lo = Math.min(...ks), hi = Math.max(...ks);
+    if (rows.every(r => r.kEndSource === 'typed'))
+      return { label: `k_end ${hi.toFixed(3)} typed`,
+               tip: `k_end ${hi.toFixed(3)} typed in Simulation - the same on every point.` };
+    return { label: `k_end per point ≤ ${hi.toFixed(3)}`,
+             tip: `Each point's end turns are billed at its own coil: k_end ${lo.toFixed(3)} to ${hi.toFixed(3)}.`
+               + (rows.some(r => r.kEndSource === 'typed') ? ' Some points used a typed k_end.' : '') };
+  }, [series]);
 
   // A stale zoom window survives into the NEXT result set and shows a sliver
   // of the new data ("where's the chart?" — the curves ran off the clipped view).
@@ -1242,6 +1292,14 @@ const SweepStudyPanel: React.FC = () => {
                   ? `no point survived — ${result?.points?.length ?? 0} evaluated, none usable (see below)`
                   : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
             </Typography>
+            {/* Which k_end the points were billed at: a label + tooltip, no caption line (UI rule). */}
+            {kEndNote && (
+              <MuiTooltip title={kEndNote.tip}>
+                <Chip size="small" label={kEndNote.label}
+                  sx={{ height: 20, fontSize: 10, color: 'var(--text-3)',
+                        border: '1px solid var(--panel)', bgcolor: 'transparent' }} />
+              </MuiTooltip>
+            )}
             {/* A zoomed view MUST say so and offer the way back — double-click
                 was the only reset and nothing on screen mentioned it. */}
             {zoom && (
@@ -1353,11 +1411,20 @@ const SweepStudyPanel: React.FC = () => {
                       // else ("can't select the hollow points", 2026-09-07).  A
                       // transparent fill is still painted, so the whole disc
                       // takes the click.
-                      return <circle cx={p.cx} cy={p.cy} r={sel ? 5.5 : 3.5}
+                      // Points at one spot are spread side by side; a thin tick
+                      // ties each back to the true position (2026-10-30).
+                      const dx = coincidentOffsetPx(p.payload?._dup);
+                      const dot = <circle cx={p.cx + dx} cy={p.cy} r={sel ? 5.5 : 3.5}
                         fill={bad ? 'transparent' : col}
                         pointerEvents="all"
                         stroke={bad ? col : (sel ? '#fff' : 'none')}
                         strokeWidth={bad ? 1.4 : (sel ? 1.5 : 0)} />;
+                      if (!dx) return dot;
+                      return <g>
+                        <line x1={p.cx} y1={p.cy} x2={p.cx + dx} y2={p.cy}
+                          stroke={col} strokeWidth={1} strokeOpacity={0.5} pointerEvents="none" />
+                        {dot}
+                      </g>;
                     }}
                     onClick={(d: any) => { setSelected(d?.payload ?? d); setApplyMsg(null); }} />
                 ))}

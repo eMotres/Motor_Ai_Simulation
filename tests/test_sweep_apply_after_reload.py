@@ -150,3 +150,27 @@ def test_the_panel_does_not_switch_apply_off_while_a_sweep_runs():
     i = src.index("⤵ Apply")
     button = src[src.rindex("<Button", 0, i):i]
     assert "disabled={applying}" in button and "running" not in button
+
+
+def test_a_locked_configuration_sends_the_point_to_a_new_die_not_to_silence():
+    """Owner 2026-10-30: PUT /api/geometry answered 423 (locked die) twice and
+    Apply 'did nothing'.  The panel now plans the refusal (new die / blocked with
+    the reason) and keeps the point through save_as_new_die."""
+    src = PANEL.read_text(encoding="utf-8")
+    body = src.split("const applyPoint = async", 1)[1].split("// kU converts", 1)[0]
+    assert "planLockedApply(" in body and "releaseFamilyContext(" in body
+    assert "/api/family/save_as_new_die" in body
+    # the point is written BEFORE the new die is minted from the machine on screen
+    assert body.index("updateGeometryViaApi(p.overrides)") < body.index("/api/family/save_as_new_die")
+    assert body.index("/api/optimization/scan/apply_point") < body.index("updateGeometryViaApi")
+    # a refusal is shown with its reason, never swallowed
+    assert "if (plan.kind === 'blocked') throw new Error(plan.text)" in body
+
+
+def test_apply_visibility_does_not_depend_on_the_validation_flag():
+    """Every restored point is apply_eligible=false / 'preliminary' - and so is
+    every fresh one.  The button must look the same before and after a reload."""
+    src = PANEL.read_text(encoding="utf-8")
+    i = src.index("⤵ Apply")
+    block = src[src.rindex("{selected && (", 0, i):i]
+    assert "apply_eligible" not in block and "final_validation_status" not in block

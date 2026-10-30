@@ -25,6 +25,10 @@ import { sweepResumeNoticeText } from '../../lib/sweepResumeNotice';
 import type { SweepResumeInfo } from '../../lib/sweepResumeNotice';
 import { readCurrentUnit, formatCurrent } from '../../lib/sweepCurrentUnit';
 import { readAllowNewLamination } from '../../lib/releasedContext';
+import { planLockedApply, refusedText, newDieNotice } from '../../lib/sweepApplyLocked';
+import { releaseFamilyContext } from '../../lib/familyContext';
+import { setActiveDuty } from '../../lib/dutySettings';
+import { canWriteServer } from '../../lib/localAuth';
 import { storedGapLayers } from '../../lib/meshSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
@@ -988,8 +992,23 @@ const SweepStudyPanel: React.FC = () => {
       // operating point (the PATCH below, which no lock touches) had moved.
       let geomOutcome: { ok: boolean; refused: { field: string; reason: string }[] } | null = null;
       if (p.overrides && Object.keys(p.overrides).length) geomOutcome = await updateGeometryViaApi(p.overrides);
+      // A LOCKED die/configuration (423) refuses lamination keys: a different
+      // lamination is a different die.  Keep the point as a NEW die (the road a
+      // duty save takes since #514) and say so - never a silent no-op (owner
+      // 2026-10-30: PUT /api/geometry 423 twice, "Apply does nothing").
+      let newDie: { from: string; config: string; duty: string } | null = null;
       if (geomOutcome && !geomOutcome.ok) {
-        throw new Error('Validated geometry was refused by the active die/configuration lock');
+        let ctx: any = null;
+        try { ctx = await (await fetch(`${API}/api/family/context`)).json(); } catch { /* judged below */ }
+        const plan = planLockedApply(ctx, geomOutcome.refused,
+                                     { sweepRunning: running, canWrite: canWriteServer() });
+        if (plan.kind === 'blocked') throw new Error(plan.text);
+        await releaseFamilyContext('sweep point applied on a new die');
+        geomOutcome = await updateGeometryViaApi(p.overrides);
+        if (!geomOutcome.ok) {
+          throw new Error(`the point was refused even with no die loaded - ${refusedText(geomOutcome.refused)}`);
+        }
+        newDie = plan;
       }
       const opResponse = await fetch(`${API}/api/simulation/config`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -997,6 +1016,24 @@ const SweepStudyPanel: React.FC = () => {
       });
       if (!opResponse.ok) throw new Error(`Operating-point update failed (HTTP ${opResponse.status})`);
       window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: p.I, gamma: p.g } }));
+      // The new die is minted from the machine on screen, so only now: geometry
+      // and operating point are both in.
+      let newDieMsg = '';
+      if (newDie) {
+        try {
+          const nr = await fetch(`${API}/api/family/save_as_new_die`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: newDie.config || undefined, duty: newDie.duty || undefined }),
+          });
+          const nj = await nr.json().catch(() => null);
+          if (!nr.ok) throw new Error(String(nj?.detail ?? `HTTP ${nr.status}`));
+          try { setActiveDuty(String(nj.die), String(nj.config), String(nj.duty)); } catch { /* convenience */ }
+          window.dispatchEvent(new CustomEvent('family-changed'));
+          newDieMsg = newDieNotice(newDie.from, String(nj.die), String(nj.config), String(nj.duty));
+        } catch (e: any) {
+          newDieMsg = `${newDie.from} is locked: the point is applied to the machine on screen but could not be kept as a new die (${String(e?.message ?? e)}) - use "Save as new die" in the header strip.`;
+        }
+      }
       // Show the re-solved standard-quality numbers in Simulation.
       try {
         // The validated result carries the pinned speed from the original Sweep.
@@ -1061,7 +1098,8 @@ const SweepStudyPanel: React.FC = () => {
           + `catalog (admin) or load another configuration, then apply again.`);
       } else {
         setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${iShown} · γ=${p.g}° `
-          + `— its own sweep-resolution numbers are shown in Simulation; Run there for the standard result`);
+          + `— its own sweep-resolution numbers are shown in Simulation; Run there for the standard result`
+          + (newDieMsg ? `. ${newDieMsg}` : ''));
       }
       // ARCHIVE IT — a picked sweep design is applied into the editor and would
       // otherwise live only there until someone remembered to save it.  New

@@ -54,6 +54,44 @@ class SignedUF:
         self.par[ra] = rb; self.sgn[ra] = sign * sa * sb
 
 
+class SparseSignedUF:
+    """:class:`SignedUF` over the dofs that are actually welded.
+
+    Same ``find``/``union`` statements, so the same root and the same sign for
+    every dof, but the parent table is a dict: a dof that no union touched is
+    its own root with sign +1 and costs nothing.  A frame welds a few thousand
+    ring and cut dofs out of tens of thousands (hundreds of thousands on a full
+    ring), and the dense version paid one Python call per dof per frame to
+    find that out."""
+    __slots__ = ("par", "sgn")
+
+    def __init__(self):
+        self.par = {}; self.sgn = {}
+
+    def find(self, x):
+        p = self.par.get(x, x)
+        if p == x:
+            return x, 1
+        r, s = self.find(p)
+        self.par[x] = r; self.sgn[x] = self.sgn.get(x, 1) * s
+        return r, self.sgn[x]
+
+    def union(self, a, b, sign):
+        ra, sa = self.find(a); rb, sb = self.find(b)
+        if ra == rb:
+            return
+        self.par[ra] = rb; self.sgn[ra] = sign * sa * sb
+
+
+def free_columns(n_cols: int, outer) -> np.ndarray:
+    """``np.setdiff1d(np.arange(n_cols), outer)`` without the sort: the
+    columns of a frame's ``Pro`` that are not on the Dirichlet boundary,
+    ascending, same dtype (it was a full sort of ~10⁵ ids per frame)."""
+    keep = np.ones(int(n_cols), dtype=bool)
+    keep[np.asarray(outer, dtype=np.int64)] = False
+    return np.flatnonzero(keep)
+
+
 class SlipProjection:
     """Builds the P2 projection ``Pro`` at any rotor shift.
 
@@ -155,7 +193,7 @@ class SlipProjection:
         N2 = self.N
         Nring, nsn = self.Nring, self.nsn
         vdof, rring, sring = self.vdof, self.rring, self.sring
-        suf = SignedUF(N2)
+        suf = SparseSignedUF()
         # radial-cut anti-periodic welds (sector) — m-independent
         for sd, md, sgn in self._cut_v:
             suf.union(sd, md, sgn)
@@ -186,12 +224,20 @@ class SlipProjection:
                 edge_sign = float(self.bc_sign if wraps % 2 else 1.0)
             if se is not None:
                 suf.union(int(re), int(se), edge_sign)
-        roots = [suf.find(i) for i in range(N2)]
-        rid = np.array([r for r, _ in roots])
-        rsg = np.array([s for _, s in roots], float)
-        uniq, inv = np.unique(rid, return_inverse=True)
+        # Every dof no union touched is its own root, sign +1; only the welded
+        # ones are looked up.  ``inv`` is the rank of each dof's root among
+        # the roots — exactly np.unique(rid, return_inverse=True)'s inverse,
+        # since a root is its own root and the roots are sorted by id.
+        rid = np.arange(N2)
+        rsg = np.ones(N2)
+        for x in list(suf.par):
+            r, sx = suf.find(x)
+            rid[x] = r; rsg[x] = sx
+        is_root = rid == np.arange(N2)
+        rank = np.cumsum(is_root) - 1
+        inv = rank[rid]
         Pro = _coo((rsg, (np.arange(N2), inv)),
-                   shape=(N2, uniq.size)).tocsr()
+                   shape=(N2, int(is_root.sum()))).tocsr()
         return Pro, np.unique(inv[self.D_ids])
 
 

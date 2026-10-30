@@ -44,6 +44,16 @@ from scipy.sparse import bmat as _bmat, diags as _diags
 # mirroring SB_NO_PARDISO_REUSE.
 _SB_FAST_LA = _os.environ.get("SB_NO_FAST_LA") != "1"
 
+
+def _reduce(p2, M, Pro, free):
+    """The frame's reduced system ``(Pro.T @ M @ Pro)[free][:, free]`` (CSC):
+    ``P2Nonlinear.reduce`` (bit-identical, cheaper) when the field object has
+    it, the expression itself for any other object with the solver surface."""
+    f = getattr(p2, "reduce", None)
+    if f is not None:
+        return f(M, Pro, free)
+    return (Pro.T @ M @ Pro).tocsr()[free][:, free].tocsc()
+
 from motor_ai_sim.simulation.drive import (
     circuit_residual_ll, circuit_jacobian_ll,
 )
@@ -218,7 +228,7 @@ class P2Drive:
                 return True, A2, iA, iB, rrel, nit, rc
             T = self.p2.tangent2(info)
             J = (K + T).tocsr() if T is not None else K
-            Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
+            Jff = _reduce(self.p2, J, Pro, free)
             try:
                 X = self.p2.solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]),
                                      spd=True)
@@ -268,7 +278,7 @@ class P2Drive:
         for it in range(max(1, npic)):
             nit = it + 1
             K = self.p2.asmK(nu)
-            Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+            Kff = _reduce(self.p2, K, Pro, free)
             X = self.p2.solve_ff(Kff, np.column_stack(
                 [_Pt(self.f_mag), _Pt(self.Pa), _Pt(self.Pb)]), spd=True)
             A_pm = self.p2.pad2(Pro, free, X[:, 0])
@@ -377,7 +387,7 @@ class P2Drive:
                 T = self.p2.tangent2(info)
                 if T is not None:
                     J = K + T
-            Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
+            Jff = _reduce(self.p2, J, Pro, free)
             dA = self.p2.pad2(Pro, free, self.p2.solve_ff(Jff, -r, spd=True))
             if nu_fix is not None:
                 A = A + dA

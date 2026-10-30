@@ -722,7 +722,7 @@ def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
     """
     import numpy as _np
     K, info = p2.Kpw(A2)       # pointwise secant ν of THIS converged field
-    Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+    Kff = p2.reduce(K, Pro, free)
     _npf = float(max(1, int(n_parallel)))
     _iA_d, _iB_d, _ = _ipark_dq(1.0 / _npf, 0.0, th_dq)
     _iA_q, _iB_q, _ = _ipark_dq(0.0, 1.0 / _npf, th_dq)
@@ -760,7 +760,7 @@ def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
     if T is None:                               # no saturable iron: J = K
         _Ld, _Lq, _Ldq, _rec = _Ld_fp, _Lq_fp, _Ldq_fp, _rec_fp
     else:
-        Jff = (Pro.T @ (K + T).tocsr() @ Pro).tocsr()[free][:, free].tocsc()
+        Jff = p2.reduce((K + T).tocsr(), Pro, free)
         XJ = p2.solve_ff(Jff, _np.column_stack([_rd, _rq]), spd=True)
         _Ld, _Lq, _Ldq, _rec = _lmat(XJ, 0, 1)
     return {
@@ -803,7 +803,7 @@ def frozen_permeability_vsd(p2, Pro, free, A2, f_set, sc_psi, th_dq,
     import numpy as _np
     from motor_ai_sim.winding_sets import vsd_basis as _vb
     K, info = p2.Kpw(A2)
-    Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+    Kff = p2.reduce(K, Pro, free)
     _keys = [(s, ph) for s in (1, 2) for ph in 'ABC']
     _nb = float(max(1.0, n_branch_per_set))
 
@@ -837,7 +837,7 @@ def frozen_permeability_vsd(p2, Pro, free, A2, f_set, sc_psi, th_dq,
     if T is None:                               # no saturable iron: J = K
         L6 = L6_fp
     else:
-        Jff = (Pro.T @ (K + T).tocsr() @ Pro).tocsr()[free][:, free].tocsc()
+        Jff = p2.reduce((K + T).tocsr(), Pro, free)
         L6 = _l6(p2.solve_ff(Jff, _F, spd=True))
     B = _vb(th_dq, _ipark_dq)
     ed, eq, XY = B["d"], B["q"], B["xy"]
@@ -6844,6 +6844,7 @@ def _fem_transient_sliding_band_once(
     from motor_ai_sim.simulation.p2_projection import (
         SlipProjection as _SlipProjection,
         SlipMortarDerivativeAction as _SlipMortarDerivativeAction,
+        free_columns as _free_columns,
     )
     # ONE persistent MKL PARDISO solver for the whole run: it caches the
     # symbolic factorization and reuses it across the same-pattern Picard
@@ -7645,7 +7646,7 @@ def _fem_transient_sliding_band_once(
         # i=0 estimate would leave a large DC for the settling to grind off.
         import math as _m
         _Pro0v, _out0v = _proj.build(0)
-        _free0v = np.setdiff1d(np.arange(_Pro0v.shape[1]), _out0v)
+        _free0v = _free_columns(_Pro0v.shape[1], _out0v)
         _Pt0 = lambda v: np.asarray(_Pro0v.T @ v).ravel()[_free0v]  # noqa: E731
         _RHS0 = np.column_stack([_Pt0(f_mag2), _Pt0(_Pa2), _Pt0(_Pb2)])
         _nu_ph = nu_base2.copy()
@@ -8667,7 +8668,7 @@ def _fem_transient_sliding_band_once(
                                 else 0.0 for c in _ed_con], float)
                 if _m not in _td_geometry_cache:
                     _P, _o = _proj.build(_m)
-                    _free = np.setdiff1d(np.arange(_P.shape[1]), _o)
+                    _free = _free_columns(_P.shape[1], _o)
                     _td_geometry_cache[_m] = (_P, _free)
                 _P, _free = _td_geometry_cache[_m]
                 return (_P, _free, _Iv, _Is, _m)
@@ -10053,7 +10054,7 @@ def _fem_transient_sliding_band_once(
                               i_abc=None, psi_abc=None, v_bus=_fb_v_bus)
             _Ist_s = _src.mean_over(_fb_s)
             _Pro_s, _out_s = _proj.build(_ms_s)
-            _free_s = np.setdiff1d(np.arange(_Pro_s.shape[1]), _out_s)
+            _free_s = _free_columns(_Pro_s.shape[1], _out_s)
             _f_s = (f_mag2 + _Ist_s['A'] * f_coil2['A']
                     + _Ist_s['B'] * f_coil2['B'] + _Ist_s['C'] * f_coil2['C'])
             _nu_s = nu_base2.copy()
@@ -10312,7 +10313,7 @@ def _fem_transient_sliding_band_once(
         _Ptf = np.asarray(Pro.T @ f).ravel()
         # free (non-Dirichlet) reduced DOFs — CONSTANT within a frame (Pro and
         # the outer Dirichlet set are fixed), so precompute the slice once.
-        _free2 = np.setdiff1d(np.arange(Pro.shape[1]), outer_red)
+        _free2 = _free_columns(Pro.shape[1], outer_red)
         _bff2 = _Ptf[_free2]
         # cross-frame warm starts (previous converged field + ν).  The slip
         # pairing (Pro) changes every frame, so the previous field A_prev lives
@@ -10562,7 +10563,7 @@ def _fem_transient_sliding_band_once(
                     # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
                     T = _p2.tangent2(_info)
                     J = (K + T).tocsr() if T is not None else K
-                    Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                    Jff = _p2.reduce(J, Pro, _free2)
                     try:
                         _du = _p2.solve_ff(Jff, -r_free, spd=True)
                     except Exception as _je:
@@ -11222,7 +11223,7 @@ def _fem_transient_sliding_band_once(
                                 _q_e, _s_e, _ = _acc_cycles(_pm_e, _sg_e)
                                 _Te = float(_eddy_cap) * float(dt)
                                 _Jb = (_eec_J * (1.0 / float(_eec_nJ))).tocsr()
-                                _Jbf = (Pro.T @ _Jb @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                                _Jbf = _p2.reduce(_Jb, Pro, _free2)
                                 _Mbb = _Mb_e[_bi][:, _bi].tocsr()
                                 _PtM = (Pro.T @ _Mb_e[:, _bi]).tocsr()[_free2]
 
@@ -13745,7 +13746,7 @@ def _fem_transient_sliding_band_once(
             _L0s = []
             for _kz in sorted({0, int(n_total) // 3, (2 * int(n_total)) // 3}):
                 _Pro_z, _out_z = _proj.build(int(_kz))
-                _free_z = np.setdiff1d(np.arange(_Pro_z.shape[1]), _out_z)
+                _free_z = _free_columns(_Pro_z.shape[1], _out_z)
                 _Kz = _Kz_diff
                 _Kffz = (_Pro_z.T @ _Kz @ _Pro_z).tocsr()[_free_z][:, _free_z].tocsc()
                 _Xz = _p2.solve_ff(
@@ -14603,6 +14604,9 @@ def _fem_transient_sliding_band_once(
                           "lu_analyses": int(_p2.pardiso_analyses),
                           "cholesky_solves": int(_p2.spd_solves),
                           "cholesky_analyses": int(_p2.spd_analyses),
+                          # of those, how many reused the METIS ordering of a
+                          # pattern already seen (pardiso_perm_cache.py)
+                          "cholesky_perm_hits": int(_p2.spd_perm_hits),
                           "cholesky_declined": int(_p2.spd_declined),
                           "cholesky_failures": int(_p2.spd_failures)},
         "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)

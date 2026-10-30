@@ -6,7 +6,7 @@ import pytest
 from scipy.sparse import coo_matrix
 from skfem import Basis, ElementTriP2, MeshTri
 
-from motor_ai_sim.simulation.p2_projection import SignedUF, SlipProjection
+from motor_ai_sim.simulation.p2_projection import SignedUF, SlipProjection, free_columns
 
 
 def annular_projection(segments, full_ring, sign):
@@ -170,3 +170,67 @@ def test_quadratic_trace_matches_at_interior_samples_after_multiple_wraps(sign):
                 stator_trace = weights(fraction) @ stator_values
                 expected = (sign if sector % 2 else 1)*stator_trace
                 np.testing.assert_allclose(rotor_trace, expected, rtol=0., atol=2e-14)
+
+
+def dense_build(proj, shift):
+    """``SlipProjection.build`` as it was before the sparse union-find: the
+    same unions on a dense SignedUF, then one find per dof and np.unique."""
+    union = SignedUF(proj.N)
+    for slave, master, sign in proj._cut_v+proj._cut_e:
+        union.union(slave, master, sign)
+    nodes, signs = proj.ring_map(shift)
+    for k in range(proj.Nring):
+        union.union(int(proj.vdof[int(proj.rring[k])+proj.nsn]),
+                    int(proj.vdof[int(proj.sring[nodes[k]])]), float(signs[k]))
+    for e, (a, b) in enumerate(proj._re_pairs):
+        rotor_edge = proj._re_dofs[e]
+        if rotor_edge is None:
+            continue
+        if proj.full_ring:
+            stator_edge = proj.edge_dof(int(proj.sring[nodes[a]]), int(proj.sring[nodes[b]]))
+            edge_sign = float(signs[a])
+        else:
+            wraps, start = divmod(a+int(shift), proj.Nring-1)
+            stator_edge = proj.edge_dof(int(proj.sring[start]), int(proj.sring[start+1]))
+            edge_sign = float(proj.bc_sign if wraps % 2 else 1.0)
+        if stator_edge is not None:
+            union.union(int(rotor_edge), int(stator_edge), edge_sign)
+    roots = [union.find(k) for k in range(proj.N)]
+    rid = np.array([r for r, _ in roots])
+    rsg = np.array([s for _, s in roots], float)
+    ids, inverse = np.unique(rid, return_inverse=True)
+    matrix = coo_matrix((rsg, (np.arange(proj.N), inverse)),
+                        shape=(proj.N, ids.size)).tocsr()
+    return matrix, np.unique(inverse[proj.D_ids])
+
+
+@pytest.mark.parametrize("full_ring", [False, True], ids=["sector", "full"])
+@pytest.mark.parametrize("sign", [-1, 1], ids=["antiperiodic", "periodic"])
+@pytest.mark.parametrize("segments", [3, 5, 8])
+def test_sparse_union_find_build_is_array_identical_to_the_dense_one(full_ring, sign, segments):
+    """The per-frame build only looks up the welded dofs now; the projection
+    it returns must be the dense build's, array for array (indptr, indices,
+    data, dtypes) — every downstream value is a function of it."""
+    if full_ring and sign == -1:
+        pytest.skip("a full ring has no radial cut")
+    proj = annular_projection(segments, full_ring, sign)
+    for shift in list(range(-2*segments, 2*segments+1))+[-101*segments-1, 100*segments+1]:
+        actual, actual_boundary = proj.build(shift)
+        expected, expected_boundary = dense_build(proj, shift)
+        assert actual.shape == expected.shape
+        for name in ("indptr", "indices", "data"):
+            a, e = getattr(actual, name), getattr(expected, name)
+            assert a.dtype == e.dtype, name
+            np.testing.assert_array_equal(a, e)
+        assert actual_boundary.dtype == expected_boundary.dtype
+        np.testing.assert_array_equal(actual_boundary, expected_boundary)
+
+
+def test_free_columns_is_setdiff1d():
+    rng = np.random.default_rng(7)
+    for n in (1, 5, 1000):
+        for k in (0, 1, n // 3):
+            outer = np.unique(rng.integers(0, n, k)) if k else np.array([], np.int64)
+            got, want = free_columns(n, outer), np.setdiff1d(np.arange(n), outer)
+            assert got.dtype == want.dtype
+            np.testing.assert_array_equal(got, want)

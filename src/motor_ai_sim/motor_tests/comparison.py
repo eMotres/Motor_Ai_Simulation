@@ -332,10 +332,15 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     basis_emf = mag_txt + ", " + k_clause
     emf_key = "emf_3d" if k_flux is not None else "emf_2d"
     emf_bp = {"mag": mag_p or "?", "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or ""}
-    groups = [_group("emf_peak", "EMF line-line peak (Vpp / 2)", emf_rows, tip="emf_peak", basis=basis_emf,
-                     basis_key=emf_key, basis_params=emf_bp),
-              _group("emf_rms", "EMF line-line rms", rms_rows, tip="emf_rms", basis=basis_emf,
-                     basis_key=emf_key, basis_params=emf_bp)]
+    groups = []
+    # a voltage group only when the test measured that voltage (owner 2026-10-30: a free-run logged as torque /
+    # speed / power only must not show empty EMF tables)
+    if any(r.get("measured") is not None for r in emf_rows):
+        groups.append(_group("emf_peak", "EMF line-line peak (Vpp / 2)", emf_rows, tip="emf_peak", basis=basis_emf,
+                             basis_key=emf_key, basis_params=emf_bp))
+    if any(r.get("measured") is not None for r in rms_rows):
+        groups.append(_group("emf_rms", "EMF line-line rms", rms_rows, tip="emf_rms", basis=basis_emf,
+                             basis_key=emf_key, basis_params=emf_bp))
     if loss_rows:
         groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss",
                              basis=mag_txt + ", losses 2-D (no flux factor)", basis_key="loss",

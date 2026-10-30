@@ -581,6 +581,104 @@ def _weld_group_geoms(items, scale_mm: float, node_map: Optional[Dict] = None,
     return out, der, nm
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  Parameter DEFINITIONS shared with Fusion 360 (owner 2026-10-30: Fusion is
+#  the design truth, "the same algorithm must give the same outline")
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Fusion's segmented-stator / spoke-rotor sketches (and the FreeCAD template
+# cad/motor_templates/segmented_flatwire, which reproduces them) measure three
+# keys differently from what this builder did until 2026-10-30.  CIANO20
+# 200_50 needed tooth2_width 5.697 / magnet_fill_up 0.473 / magnet_fill_down
+# 0.903 here to draw Fusion's 5.8 / 0.45 / 0.9.  The builders below now use
+# Fusion's construction; docs/GEOMETRY_DEFINITIONS_FUSION.md has the sketch.
+
+
+def _stator_leg_outer_x(tooth_w: float, slot_w: float, tooth2_w: float) -> float:
+    """x of the half leg's OUTER side (the V-notch wall), sector frame with the
+    wound tooth on +Y.
+
+    Fusion (core sketch, ``tooth2_w`` dimension): the leg's inner side is the
+    slot wall at ``tooth_width/2 + coil_w`` and ``tooth2_width`` is the leg's
+    own width from there — ``coil_w = wire_width + 2·insulation +
+    wire_spacing_x`` is exactly this builder's slot width ``slot_w`` (the wire
+    COLUMN when wire_split > 1).  The old expression added one more
+    ``wire_spacing_x`` (``… + 2·ins + column + 2·dx + tooth2``), so every leg
+    was ``wire_spacing_x`` wider than the number said."""
+    return tooth_w / 2.0 + slot_w + tooth2_w
+
+
+def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
+                       fill_down: float, fill_up: float, down_h: float,
+                       up_gap: float):
+    """The magnet's +x side in the pole frame (magnet axis on +Y), bottom to
+    top: ``(P4, K, C)`` — bottom corner, knee, top corner on r = rotor_or −
+    magnet_up_gap.  Fusion's rotor/magnet sketch, constraint for constraint:
+
+    * ``P4`` on r = magnet_r (Fusion ``rotor_down_r``) at the half angle
+      ``magnet_fill_down · pitch / 2`` from the magnet axis;
+    * ``K = P4 + magnet_down_height · (sin a, cos a)`` with a = pitch / 2 —
+      the lower side is PARALLEL TO THE HALF-POLE LINE, not radial;
+    * the upper side runs from ``K`` toward ``U``, the point of the rotor OD
+      (Fusion ``rotor_up_r``) at the half angle ``magnet_fill_up · pitch / 2``,
+      and the magnet ends where it crosses the top arc r = rotor_or − up_gap
+      (``C``; = ``U`` when magnet_up_gap = 0).
+
+    When the lower side already reaches the top arc (magnet_down_height at or
+    past it — the owner's Fusion Ø12, ``mag_down_h`` = the whole 2 mm magnet)
+    Fusion's magnet is the plain trapezoid P4 → (lower side ∩ top arc): there
+    is no upper side.  ``K`` is then returned as the midpoint of that side, a
+    collinear vertex, so every caller keeps its six-corner outline.
+
+    The old builder put the knee on the radial line of P4 and the top corner
+    itself at the fill_up angle on the TOP arc, which is why the same numbers
+    drew a different magnet.  Raises ValueError when even the bottom corner is
+    not below the top arc."""
+    pitch = 2.0 * pi / int(num_poles)
+    a_dn = pitch * float(fill_down) / 2.0
+    a_up = pitch * float(fill_up) / 2.0
+    half = pitch / 2.0
+    r_top = rotor_or - up_gap
+    if not (0.0 <= magnet_r < r_top):
+        raise ValueError(
+            "magnet: its bottom r = %.4f mm is not below its top r = %.4f mm "
+            "(rotor OD %.4f - magnet_up_gap %.4g)"
+            % (magnet_r, r_top, rotor_or, up_gap))
+    p4 = (magnet_r * sin(a_dn), magnet_r * cos(a_dn))
+    k = (p4[0] + down_h * sin(half), p4[1] + down_h * cos(half))
+
+    def _to_top(a, b):              # a + t·(b − a) on r = r_top, t > 0, |a| < r_top
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        aa = dx * dx + dy * dy
+        bb = 2.0 * (a[0] * dx + a[1] * dy)
+        cc = a[0] * a[0] + a[1] * a[1] - r_top * r_top
+        t = (-bb + sqrt(bb * bb - 4.0 * aa * cc)) / (2.0 * aa)
+        return (a[0] + t * dx, a[1] + t * dy)
+
+    if k[0] * k[0] + k[1] * k[1] >= r_top * r_top:
+        c = _to_top(p4, (p4[0] + sin(half), p4[1] + cos(half)))
+        return p4, (0.5 * (p4[0] + c[0]), 0.5 * (p4[1] + c[1])), c
+    u = (rotor_or * sin(a_up), rotor_or * cos(a_up))
+    return p4, k, _to_top(k, u)
+
+
+def _magnet_local_from_params(p: Dict):
+    """``(mag_local, angle_top)`` — the six corners mp1..mp6 of the magnet in
+    the pole frame (+x side bottom→top, then its mirror top→bottom; the shape
+    every builder here extrudes, fillets and cuts pockets from) and the half
+    angle of the top corners, which is where the top arc starts.  See
+    `_magnet_side_local`."""
+    p4, k, c = _magnet_side_local(
+        float(p['rotor_outer_radius']),
+        float(p['rotor_inner_radius']) + float(p['rotor_house_height']),
+        int(p['num_poles']), float(p['magnet_fill_down']),
+        float(p['magnet_fill_up']),
+        float(p.get('magnet_down_height', 0.0) or 0.0),
+        float(p.get('magnet_up_gap', 0.0) or 0.0))
+    mag_local = [p4, k, c, (-c[0], c[1]), (-k[0], k[1]), (-p4[0], p4[1])]
+    return mag_local, atan2(c[0], c[1])
+
+
 def _pocket_cut_depth(p: Dict) -> float:
     """Radial depth of the rectangular pocket-opening cut above each magnet.
 
@@ -629,8 +727,8 @@ def _pocket_cut_depth_limit(p: Dict) -> Optional[float]:
     leaving the magnet outline.
 
     Pole-local frame (pole on +y), the same one `rect_local` and `mag_local`
-    are built in: the magnet's +x side is the polyline mp1 → mp2 → mp3 (radial
-    foot of magnet_down_height, then the slanted face to the top corner).  The
+    are built in: the magnet's +x side is the polyline mp1 → mp2 → mp3 (foot of
+    magnet_down_height, then the slanted face to the top corner).  The
     opening's half-width is w = rotor_or·sin(pole·fill_up·rotor_hole/2).  The
     cut is safe down to the lowest y from which the side stays at x ≥ w all
     the way up to mp3; below that the rectangle's corner is in rotor iron.
@@ -642,25 +740,17 @@ def _pocket_cut_depth_limit(p: Dict) -> Optional[float]:
     corners are then zero-thickness, which `rotor_hole_gap_error` owns)."""
     try:
         rotor_or = float(p['rotor_outer_radius'])
-        magnet_r = float(p['rotor_inner_radius']) + float(p['rotor_house_height'])
         n_poles = int(p['num_poles'])
-        fd = float(p['magnet_fill_down'])
         fu = float(p['magnet_fill_up'])
         hole = float(p['rotor_hole'])
-        down_h = float(p.get('magnet_down_height', 0.0) or 0.0)
-        gap = float(p.get('magnet_up_gap', 0.0) or 0.0)
+        if n_poles <= 0 or rotor_or <= 0.0:
+            return None
+        # the +x side, bottom to top — the SAME corners as mag_local
+        side = _magnet_local_from_params(p)[0][:3]
     except (KeyError, TypeError, ValueError):
         return None
-    if n_poles <= 0 or rotor_or <= 0.0:
-        return None
     pole = 2.0 * pi / n_poles
-    a_dn = pole * fd / 2.0
-    a_up = pole * fu / 2.0
     w = rotor_or * sin(pole * fu * hole / 2.0)
-    # the +x side, bottom to top — the SAME expressions as mag_local
-    side = [(magnet_r * sin(a_dn), magnet_r * cos(a_dn)),
-            ((magnet_r + down_h) * sin(a_dn), (magnet_r + down_h) * cos(a_dn)),
-            ((rotor_or - gap) * sin(a_up), (rotor_or - gap) * cos(a_up))]
     if side[2][0] < w:
         return None
     # walk down from the top corner; the first segment whose lower end is
@@ -1889,7 +1979,7 @@ class CadQueryMotor:
         # ── Compound-cutter geometry ──────────────────────────────────────────
         # All cuts are unioned into one solid then cut in a single boolean.
         # This is ~70× faster than sequential cuts.
-        cut_x  = tooth_width/2 + ins_w*2 + wire_col_w + wire_d_x*2 + tooth2_width
+        cut_x  = _stator_leg_outer_x(tooth_width, slot_w, tooth2_width)
         fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) \
                  / (1 - sin(radians(slot_angle/2)))
         rr   = inner_r + cut_width + fill_r
@@ -2095,16 +2185,8 @@ class CadQueryMotor:
         
         magnets = []
 
-        # Calculate angles in radians for math functions
-        angle_down = radians(pole_angle * mag_fill_down / 2)
-        angle_up = radians(pole_angle * mag_fill_up / 2)
-
-        p1 = (magnet_r * sin(angle_down), magnet_r * cos(angle_down))
-        p2 = ((magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))
-        p3 = ((rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))
-        p4 = (-(rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))
-        p5 = (-(magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))
-        p6 = (-magnet_r * sin(angle_down), magnet_r * cos(angle_down))
+        # Fusion's construction (see _magnet_side_local)
+        (p1, p2, p3, p4, p5, p6), angle_up = _magnet_local_from_params(p)
 
         # The magnet top is the ARC on r = rotor_or − magnet_up_gap (user
         # 2026-09-06: the magnets must press straight on the carbon sleeve, and
@@ -2215,22 +2297,7 @@ class CadQueryMotor:
         # the same shape the mesher solves.  User 2026-09-06: "the rotor face
         # needs to be made straight".
         if _extended_pocket(p):
-            rotor_house_h = p['rotor_house_height']
-            mag_down_h = p['magnet_down_height']
-            mag_fill_down = p['magnet_fill_down']
-            mag_up_gap = p['magnet_up_gap']
-            magnet_r = rotor_inner_r + rotor_house_h
-            a_dn = radians(pole_angle * mag_fill_down / 2)
-            a_up = radians(pole_angle * mag_fill_up / 2)
-            r_top = rotor_outer_r - mag_up_gap
-            mag_local = [
-                ( magnet_r * sin(a_dn),                 magnet_r * cos(a_dn)),
-                ((magnet_r + mag_down_h) * sin(a_dn),  (magnet_r + mag_down_h) * cos(a_dn)),
-                ( r_top * sin(a_up),                    r_top * cos(a_up)),
-                (-r_top * sin(a_up),                    r_top * cos(a_up)),
-                (-(magnet_r + mag_down_h) * sin(a_dn), (magnet_r + mag_down_h) * cos(a_dn)),
-                (-magnet_r * sin(a_dn),                 magnet_r * cos(a_dn)),
-            ]
+            mag_local = _magnet_local_from_params(p)[0]
             for i in range(num_poles):
                 pts = _extended_pocket_pts(mag_local, rotor_outer_r,
                                            radians(i * pole_angle))
@@ -2626,15 +2693,8 @@ class CadQueryMotor:
         half_slots   = num_slots // 2
         slot_angle_r = 2*pi / half_slots
         pole_angle_r = 2*pi / num_poles
-        angle_down   = pole_angle_r * mag_fd / 2
-        angle_up_m   = pole_angle_r * mag_fu / 2
-        mp1 = ( magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
-        mp2 = ((magnet_r + mag_down_h) * sin(angle_down),   (magnet_r + mag_down_h) * cos(angle_down))
-        mp3 = ((rotor_or - mag_up_gap) * sin(angle_up_m),   (rotor_or - mag_up_gap) * cos(angle_up_m))
-        mp4 = (-(rotor_or - mag_up_gap) * sin(angle_up_m),  (rotor_or - mag_up_gap) * cos(angle_up_m))
-        mp5 = (-(magnet_r + mag_down_h) * sin(angle_down),  (magnet_r + mag_down_h) * cos(angle_down))
-        mp6 = (-magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
-        mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
+        # Fusion's construction (see _magnet_side_local)
+        mag_local, angle_up_m = _magnet_local_from_params(p)
         # The magnet's top edge is the ARC on r = rotor_or − magnet_up_gap, and
         # nothing else (user 2026-09-06 — "drop the straight chord entirely").
         mag_r_top = rotor_or - mag_up_gap
@@ -2795,7 +2855,7 @@ class CadQueryMotor:
         slot_angle_deg = 360.0 / half_slots
         # `wire_col_w` (see get_2d_polygons): N strips plus their (N−1) gaps of
         # 2·wire_spacing_x widen the column, and the slot widens with it.
-        cut_x  = tooth_w/2 + ins_w*2 + wire_col_w + wire_dx*2 + tooth2_w
+        cut_x  = _stator_leg_outer_x(tooth_w, wire_col_w + ins_w*2 + wire_dx, tooth2_w)
         fill_r = ((inner_r + cut_w) * sin(radians(slot_angle_deg/2)) - cut_x) \
                  / (1 - sin(radians(slot_angle_deg/2)))
         rr  = inner_r + cut_w + fill_r
@@ -3224,15 +3284,8 @@ class CadQueryMotor:
 
         # ── Magnet local polygon ──────────────────────────────────────────────
         pole_angle_r = 2*pi / num_poles
-        angle_down   = pole_angle_r * mag_fd / 2
-        angle_up_m   = pole_angle_r * mag_fu / 2
-        mp1 = ( magnet_r*sin(angle_down),               magnet_r*cos(angle_down))
-        mp2 = ((magnet_r+mag_down_h)*sin(angle_down),  (magnet_r+mag_down_h)*cos(angle_down))
-        mp3 = ((rotor_or-mag_up_gap)*sin(angle_up_m),  (rotor_or-mag_up_gap)*cos(angle_up_m))
-        mp4 = (-(rotor_or-mag_up_gap)*sin(angle_up_m), (rotor_or-mag_up_gap)*cos(angle_up_m))
-        mp5 = (-(magnet_r+mag_down_h)*sin(angle_down), (magnet_r+mag_down_h)*cos(angle_down))
-        mp6 = (-magnet_r*sin(angle_down),               magnet_r*cos(angle_down))
-        mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
+        # Fusion's construction (see _magnet_side_local)
+        mag_local, angle_up_m = _magnet_local_from_params(p)
         # The magnet's top edge is the ARC on r = rotor_or − magnet_up_gap and
         # nothing else (user 2026-09-06 — "drop the straight chord entirely").  This is THE
         # build the mesher and the validator read, so it is the one that decides
@@ -3417,7 +3470,8 @@ class CadQueryMotor:
         # `wire_col_w`, not `wire_w`: with wire_split = N the column is N strips
         # plus (N−1) gaps of 2·wire_spacing_x wide, and a slot cut on ONE
         # strip's width would run the outermost strip into the tooth.
-        cut_x  = tooth_w/2 + ins_w*2 + wire_col_w + wire_dx*2 + p.get('tooth2_width', 4.5)
+        cut_x  = _stator_leg_outer_x(tooth_w, wire_col_w + ins_w*2 + wire_dx,
+                                     p.get('tooth2_width', 4.5))
         # The slot's outer wall has to stay INSIDE the half-sector wedge at the
         # slot-bottom radius, or two neighbouring cutters meet and the tooth
         # between them is gone (fill_r2 turns negative and the stator polygon

@@ -117,10 +117,14 @@ ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
 
 # A 30 mm 12s14p spoke machine, pinned field by field so the suite does not
 # inherit whatever is in the working config.
+# tooth2_width / magnet_fill_* / rotor_hole: the stored values translated to
+# Fusion's definitions (geometry.fusion_definitions, 2026-10-30) - stator leg
+# and magnet top corners/lips unchanged, magnet foot and knee within 0.030 mm
+# (magnet area -0.57 %).
 GEO_30MM: Dict[str, float] = {
     "stator_diameter": 30.0, "slot_height": 4.3, "core_thickness": 1.5,
     "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
-    "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
+    "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.5, "cut_width": 1.5,
     "insulation_thickness": 0.05, "wire_width": 2.0, "wire_height": 0.5,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
     # wire_parallel was the ONE key SOLVER_REQUIRED_PARAMS lists that this dict
@@ -134,9 +138,9 @@ GEO_30MM: Dict[str, float] = {
     # cuts the dependence, exactly as pinning the steel did.
     "wire_parallel": 1,
     "wire_split": 1, "slot_hs": 0.267, "magnet_height": 4.5,
-    "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.9,
-    "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
-    "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,
+    "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.870074,
+    "magnet_fill_up": 0.287146, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
+    "rotor_hole": 0.731335, "magnet_down_height": 1.4, "magnet_lamination": 0,
     "stator_fillet_r": 1.2, "stator_fillet_r1": 0.0, "rotor_fill_r": 0.2,
     "motor_length": 10.0,
     # Pinned explicitly (2026-09-06): this fixture has NO retaining sleeve.  The

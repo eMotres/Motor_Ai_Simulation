@@ -136,17 +136,21 @@ B_SAT     = 2.2           # tooth/back flux density above which a design is reje
 #
 # If a pin is regenerated, the scalars follow automatically — there is nothing to
 # edit here.  That is the whole point of deriving instead of hard-coding.
+# tooth2_width / magnet_fill_* / rotor_hole: the stored values translated to
+# Fusion's definitions (geometry.fusion_definitions, 2026-10-30) - stator leg
+# and magnet top corners/lips unchanged, magnet foot and knee within 0.030 mm
+# (magnet area -0.57 %).
 _ANCHOR_GEO: Dict[str, float] = {
     "stator_diameter": 30.0, "slot_height": 4.3, "core_thickness": 1.5,
     "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
-    "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
+    "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.5, "cut_width": 1.5,
     "insulation_thickness": 0.05, "wire_width": 2.0, "wire_height": 0.5,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
     "wire_split": 1,
     "wire_parallel": 1, "slot_hs": 0.267, "magnet_height": 4.5,
-    "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.9,
-    "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
-    "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,
+    "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.870074,
+    "magnet_fill_up": 0.287146, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
+    "rotor_hole": 0.731335, "magnet_down_height": 1.4, "magnet_lamination": 0,
     "stator_fillet_r": 1.2, "stator_fillet_r1": 0.0, "rotor_fill_r": 0.2,
     "motor_length": 10.0,
 }

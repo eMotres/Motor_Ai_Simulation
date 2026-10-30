@@ -47,7 +47,9 @@ _BASE = {
     "shaft_diameter": 5, "shaft_height": 2, "slot_height": 4.2,
     "slot_hs": 0.267, "stator_diameter": 30, "stator_fillet_r": 1.6,
     "stator_fillet_r1": 0, "stator_inner_radius": 8.9,
-    "stator_outer_radius": 15, "tooth2_width": 1.6, "tooth_width": 2.3,
+    # tooth2_width 1.7 = the die's stored 1.6 in the Fusion definition (leg
+    # width without the extra wire_spacing_x, 2026-10-30) - the same outline.
+    "stator_outer_radius": 15, "tooth2_width": 1.7, "tooth_width": 2.3,
     "wire_height": 0.5, "wire_spacing_x": 0.1, "wire_spacing_y": 0.1,
     "wire_split": 1, "wire_width": 2,
 }

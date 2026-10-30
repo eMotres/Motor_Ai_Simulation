@@ -159,7 +159,7 @@ def stator_unit_frame(p: Dict) -> Dict:
     x_tooth = tooth_w / 2.0                            # wound-tooth wall
     x_coil0 = x_tooth + ins_w + wire_dx / 2.0          # coil column left (right_x)
     x_coil1 = x_coil0 + wire_col                       # coil column right
-    x_cut   = (tooth_w / 2.0 + ins_w * 2.0 + wire_col + wire_dx * 2.0 + tooth2_w)
+    x_cut   = (tooth_w / 2.0 + ins_w * 2.0 + wire_col + wire_dx + tooth2_w)   # Fusion: + coil_w + tooth2
     half_ang = math.radians(unit_deg / 2.0)
     # slot-opening ledge (fill_r2 circle centre) — same algebra as the cutter
     fill_r2 = ((inner_r + cut_w) * math.sin(half_ang) - x_cut) / (1.0 - math.sin(half_ang))
@@ -1225,9 +1225,10 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     """Blocks for ONE rotor pole unit (spoke-PM), half [magnet axis..+pitch/2]
     mirrored about the magnet axis.  Local frame: magnet axis along +Y.
 
-    Measured topology (polar scans): yoke ring → magnet lower bar (radial
-    walls at ±pole·fill_down/2) → magnet trapezoid narrowing to
-    ±pole·fill_up/2 at r_top = OD−up_gap → bridge band [r_top..OD] with the
+    Measured topology (polar scans): yoke ring → magnet lower bar (walls from
+    ±pole·fill_down/2 parallel to the half-pole lines) → magnet trapezoid
+    narrowing toward the OD point at ±pole·fill_up/2, cut at r_top = OD−up_gap
+    (Fusion's construction, cadquery_geometry._magnet_side_local) → bridge band [r_top..OD] with the
     rectangular vent (air) of half-angle fu·hole/2 on the axis; inter-pole
     iron is the hourglass between neighbouring magnet walls.  The magnet
     corner fillet (magnet_fill_radius) and rotor_fill_r are deferred (v2).
@@ -1245,10 +1246,18 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     R_o = float(p["rotor_outer_radius"]); R_i = float(p["rotor_inner_radius"])
     house = float(p["rotor_house_height"]); pole = 360.0 / int(p["num_poles"])
     r_mag0 = R_i + house                       # magnet bottom radius
-    dn_h = float(p["magnet_down_height"]); r_mag1 = r_mag0 + dn_h
+    dn_h = float(p["magnet_down_height"])
     up_gap = float(p["magnet_up_gap"]); r_top = R_o - up_gap
-    a_dn = math.radians(pole * float(p["magnet_fill_down"]) / 2.0)
-    a_up = math.radians(pole * float(p["magnet_fill_up"]) / 2.0)
+    # Fusion's magnet corners (cadquery_geometry._magnet_side_local): bottom
+    # corner P4 at fill_down, knee K = P4 + down_height along the half-pole
+    # line, top corner C where the K→(OD at fill_up) side meets r_top.
+    from motor_ai_sim.cadquery_geometry import _magnet_side_local
+    _P4, _K, _C = _magnet_side_local(R_o, r_mag0, int(p["num_poles"]),
+                                     float(p["magnet_fill_down"]),
+                                     float(p["magnet_fill_up"]), dn_h, up_gap)
+    a_dn = math.atan2(_P4[0], _P4[1])
+    r_mag1 = math.hypot(*_K)                   # knee radius
+    a_up = math.atan2(_C[0], _C[1])
     # landmarks measured from the REAL CadQuery magnet override the
     # parametric guesses (the CQ boolean chain shifts the magnet top by
     # ~0.1 mm vs R_o-up_gap — a systematic wall offset otherwise)
@@ -1290,22 +1299,31 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     # the poly re-tag no longer flips cells across it (that mismatch produced a
     # sawtooth on the magnet flank).  wall_ang(r) = angle where the segment
     # crosses radius r.
-    _a_dn_wall = float(p.get("_mag_a_dn", a_dn))   # measured wall foot angle
+    # The foot P4→K is a straight segment too (parallel to the half-pole line,
+    # Fusion), so below the knee the wall follows it the same way.
+    _a_dn_wall = float(p.get("_mag_a_dn", math.atan2(_K[0], _K[1])))   # measured knee angle
     _Ax, _Ay = r_mag1 * math.sin(_a_dn_wall), r_mag1 * math.cos(_a_dn_wall)
     _Bx, _By = r_top * math.sin(a_up), r_top * math.cos(a_up)
-    _Dx, _Dy = _Bx - _Ax, _By - _Ay
-    _AA = _Dx * _Dx + _Dy * _Dy
-    _BB = 2.0 * (_Ax * _Dx + _Ay * _Dy)
+
+    def _seg_ang(x0, y0, x1, y1, r):            # angle where segment 0→1 crosses r
+        dx, dy = x1 - x0, y1 - y0
+        aa = dx * dx + dy * dy
+        if aa <= 0.0:
+            return math.atan2(x0, y0)
+        bb = 2.0 * (x0 * dx + y0 * dy)
+        cc = x0 * x0 + y0 * y0 - r * r
+        disc = max(bb * bb - 4.0 * aa * cc, 0.0)
+        t = (-bb + math.sqrt(disc)) / (2.0 * aa)
+        return math.atan2(x0 + t * dx, y0 + t * dy)
 
     def wall_ang(r):                                # magnet wall angle at r
-        if r <= r_mag1:
+        if r <= r_mag0:
             return a_dn
+        if r <= r_mag1:
+            return _seg_ang(_P4[0], _P4[1], _Ax, _Ay, r)
         if r >= r_top:
             return a_up
-        cc = _Ax * _Ax + _Ay * _Ay - r * r
-        disc = max(_BB * _BB - 4.0 * _AA * cc, 0.0)
-        t = (-_BB + math.sqrt(disc)) / (2.0 * _AA)
-        return math.atan2(_Ax + t * _Dx, _Ay + t * _Dy)
+        return _seg_ang(_Ax, _Ay, _Bx, _By, r)
 
     def theta_row(r):
         w = wall_ang(r)
@@ -1340,7 +1358,7 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     i_bot = int(np.argmin(np.abs(rows_A - r_mag0)))
     if abs(rows_A[i_bot] - r_mag0) < 1e-6:
         th_b = theta_row(r_mag0)
-        y0 = r_mag0 * math.cos(_a_dn_wall)
+        y0 = _P4[1]                                 # the bottom chord through P4
         magc = th_b <= wall_ang(r_mag0) + 1e-9
         sl = slice(i_bot * ncol, (i_bot + 1) * ncol)
         xb = V_A[sl, 0].copy(); yb = V_A[sl, 1].copy()

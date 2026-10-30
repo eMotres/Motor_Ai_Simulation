@@ -505,9 +505,10 @@ def rotor_hole_gap_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
 def slot_cut_limits(geo: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
     """``(cut_x, cut_x_max, wire_split)`` [mm] for this geometry, or ``None``.
 
-    ``cut_x`` is where ``cadquery_geometry`` puts the slot's OUTER wall —
-    ``tooth_width/2 + 2·insulation + wire_column + 2·wire_spacing_x +
-    tooth2_width``, with ``wire_column = wire_split·wire_width +
+    ``cut_x`` is where ``cadquery_geometry`` puts the half leg's OUTER side —
+    ``tooth_width/2 + 2·insulation + wire_column + wire_spacing_x +
+    tooth2_width`` (Fusion's ``tooth_width/2 + coil_w + tooth2_width``, see
+    ``cadquery_geometry._stator_leg_outer_x``), with ``wire_column = wire_split·wire_width +
     (wire_split−1)·2·wire_spacing_x`` — and
     ``cut_x_max = (stator_inner_radius + cut_width)·
     sin(slot_angle/2)`` is where the half-sector wedge is at the slot-bottom
@@ -544,7 +545,7 @@ def slot_cut_limits(geo: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
     # SAME arithmetic as cadquery_geometry._strip_span — N strips of wire_width
     # with STRIP_GAP_FACTOR·wire_spacing_x between them.
     column = ww if n_split <= 1 else n_split * ww + (n_split - 1) * _GAP_F * dx
-    cut_x = tw / 2.0 + 2.0 * ins + column + 2.0 * dx + t2w
+    cut_x = tw / 2.0 + 2.0 * ins + column + dx + t2w
     half_slots = max(1, int(round(ns)) // 2)
     cut_x_max = (inner_r + cw) * math.sin(math.radians(360.0 / half_slots / 2.0))
     return float(cut_x), float(cut_x_max), n_split

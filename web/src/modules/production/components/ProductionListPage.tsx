@@ -4,6 +4,7 @@ import { Box, Button, Chip, CircularProgress, Paper, Table, TableBody, TableCell
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
+import { HeaderRight } from '../../../components/common/PanelHeader';
 import ViewModeToggle, { useViewMode } from '../../../components/common/ViewModeToggle';
 import { VIEW_MODE_KEYS } from '../../../lib/viewMode';
 import { RevisionLabel } from '../../../components/common/MotorRevisionText';
@@ -40,14 +41,12 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
-        <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{t('title')}</Typography>
+      <HeaderRight tab="production">
         <HelpTip title={t('titleTip')} />
-        <Box sx={{ flex: 1 }} />
         <ViewModeToggle mode={viewMode} onChange={setViewMode} />
         <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} disabled={loading} onClick={() => void load()}
           sx={{ color: 'var(--text-2)', textTransform: 'none', fontSize: 12 }}>{t('refresh')}</Button>
-      </Box>
+      </HeaderRight>
       {loading && <Box sx={{ display: 'flex', gap: 1.5, color: 'var(--text-3)', py: 3 }}><CircularProgress size={18} /><Typography sx={{ fontSize: 13 }}>{t('loading')}</Typography></Box>}
       {err && <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>}
       {!loading && !err && items && items.length === 0 && (

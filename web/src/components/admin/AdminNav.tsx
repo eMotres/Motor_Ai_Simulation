@@ -1,11 +1,13 @@
-// Admin · left sub-navigation — compact top tabs on narrow screens. Remembers
+// Admin · sub-navigation — sub-tabs in the panel header row. Remembers
 // the last section the owner looked at (localStorage; a private browser or a
 // blocked store just falls back to Overview, never a broken panel).
 import React from 'react';
-import { Box, Typography } from '@mui/material';
+import { Box } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
+import SubTabs from '../common/SubTabs';
+import { HeaderTabs } from '../common/PanelHeader';
 
 export type AdminSectionId =
   | 'overview' | 'users' | 'directory' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'productionAccess' | 'projects' | 'digests' | 'mailing' | 'logs' | 'downloads3d' | 'verification' | 'analytics' | 'activity';
@@ -38,61 +40,33 @@ export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
 export const useAdminSection = (): [AdminSectionId, (s: AdminSectionId) => void] =>
   useRememberedView<AdminSectionId>('admin.section', 'overview', oneOf(ADMIN_SECTIONS.map((s) => s.id)));
 
-/** Left rail ≥900 px, horizontal scroll-tabs below that — one component, CSS
- *  decides the layout so there is nothing to keep in sync. */
+/** The sections as sub-tabs in the shared panel header row (owner 2026-10-30: one menu style on every tab; it was a left
+ *  rail).  Scrolls sideways when the row is too narrow. */
 const AdminNav: React.FC<{
   section: AdminSectionId; onSelect: (s: AdminSectionId) => void; badges?: Partial<Record<AdminSectionId, number>>;
 }> = ({ section, onSelect, badges }) => {
   const { t } = useTranslation('admin');
   return (
-  <Box
-    sx={{
-      display: 'flex',
-      flexDirection: { xs: 'row', md: 'column' },
-      overflowX: { xs: 'auto', md: 'visible' },
-      gap: 0.5,
-      flexShrink: 0,
-      width: { xs: '100%', md: 168 },
-      borderRight: { md: '1px solid var(--line-soft)' },
-      borderBottom: { xs: '1px solid var(--line-soft)', md: 'none' },
-      pr: { md: 1.5 },
-      pb: { xs: 0.75, md: 0 },
-      mb: { xs: 1.5, md: 0 },
-    }}
-  >
-    {ADMIN_SECTIONS.map((s) => {
-      const active = s.id === section;
-      const badge = badges?.[s.id];
-      return (
-        <Box
-          key={s.id}
-          onClick={() => onSelect(s.id)}
-          sx={{
-            display: 'flex', alignItems: 'center', gap: 0.75,
-            px: 1.25, py: 0.75, borderRadius: 1, cursor: 'pointer',
-            whiteSpace: 'nowrap', flexShrink: 0,
-            bgcolor: active ? 'var(--panel-2)' : 'transparent',
-            border: active ? '1px solid var(--line-soft)' : '1px solid transparent',
-            '&:hover': { bgcolor: 'var(--panel-2)' },
-          }}
-        >
-          <Typography sx={{ fontSize: 12.5, fontWeight: active ? 700 : 500, color: active ? 'var(--text-0)' : 'var(--text-2)' }}>
-            {t(`nav.${s.id}`, { defaultValue: s.label })}
-          </Typography>
-          {!!badge && (
-            <Box sx={{
-              fontSize: 10, fontWeight: 700,
-              color: (s.id === 'verification' || s.id === 'directory') ? '#ffffff' : '#fbbf24',
-              bgcolor: (s.id === 'verification' || s.id === 'directory') ? '#ef4444' : 'var(--panel)',
-              borderRadius: 4, px: 0.6, lineHeight: '15px', minWidth: 15, textAlign: 'center',
-            }}>
-              {badge}
-            </Box>
-          )}
-        </Box>
-      );
-    })}
-  </Box>
+    <HeaderTabs tab="admin">
+      <SubTabs value={section} onChange={onSelect} ariaLabel={t('admin', { defaultValue: 'Admin' })} testId="admin-sections"
+        items={ADMIN_SECTIONS.map((s) => {
+          const badge = badges?.[s.id];
+          const urgent = s.id === 'verification' || s.id === 'directory';
+          const name = t(`nav.${s.id}`, { defaultValue: s.label });
+          return {
+            id: s.id,
+            label: badge ? (
+              <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6 }}>
+                {name}
+                <Box component="span" sx={{
+                  fontSize: 10, fontWeight: 700, color: urgent ? '#ffffff' : '#fbbf24', bgcolor: urgent ? '#ef4444' : 'var(--panel)',
+                  borderRadius: 4, px: 0.6, lineHeight: '15px', minWidth: 15, textAlign: 'center',
+                }}>{badge}</Box>
+              </Box>
+            ) : name,
+          };
+        })} />
+    </HeaderTabs>
   );
 };
 

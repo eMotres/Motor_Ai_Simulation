@@ -18,7 +18,6 @@ import {
   Snackbar,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -33,6 +32,7 @@ import DOEPanel from './DOEPanel';
 import HelpTip from '../common/HelpTip';
 import SectionLabel from '../common/SectionLabel';
 import SubTabs, { type SubTabItem } from '../common/SubTabs';
+import { HeaderRight, HeaderTabs } from '../common/PanelHeader';
 import { useDieContext } from '../common/useDieContext';
 import { dieDefiningSelected, dieKeyLabel } from '../../lib/releasedContext';
 import { nsT } from '../../i18n/nsT';
@@ -536,23 +536,15 @@ const SweepConfigPanel: React.FC = () => {
     <Box onKeyDown={onPanelKeyDown} tabIndex={-1}
       sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', outline: 'none' }}>
 
-      {/* ── Header ── */}
-      <Box sx={{
-        px: 3, py: 0.25,
-        borderBottom: '1px solid', borderColor: 'divider',
-        display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flexShrink: 0,
-      }}>
-        <ShowChartIcon sx={{ fontSize: 16 }} />
-        <Typography variant="subtitle2">Optimize</Typography>
-        {/* Algorithm sub-menu: the main menu's tab style, in the header row (owner 2026-10-30) */}
-        {/* phone width: the tabs take their own full-width line under label + count */}
-        <SubTabs value={algoTab} items={ALGO_TABS} onChange={pickAlgo} ariaLabel="Optimization method" testId="opt-algo-tabs"
-          sx={{ order: { xs: 3, sm: 0 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }} />
-        <Box sx={{ flex: 1, order: { xs: 1, sm: 0 } }} />
-        <Typography variant="caption" color="text.disabled" sx={{ order: { xs: 2, sm: 0 } }}>
+      {/* The algorithm sub-menu and the variable count live in the shared panel header row (components/common/PanelHeader) */}
+      <HeaderTabs tab="sweep">
+        <SubTabs value={algoTab} items={ALGO_TABS} onChange={pickAlgo} ariaLabel="Optimization method" testId="opt-algo-tabs" />
+      </HeaderTabs>
+      <HeaderRight tab="sweep">
+        <Typography variant="caption" color="text.disabled">
           {sweepEntries.length} variable{sweepEntries.length === 1 ? '' : 's'}
         </Typography>
-      </Box>
+      </HeaderRight>
       {dieHits.length > 0 && (
         <Box sx={{ px: 3, py: 0.5, display: 'flex', alignItems: 'center', gap: 1,
                    borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0,

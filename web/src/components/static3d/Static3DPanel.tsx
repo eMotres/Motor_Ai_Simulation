@@ -21,6 +21,7 @@ import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
 import HelpTip from '../common/HelpTip';
 import SubTabs, { type SubTabItem } from '../common/SubTabs';
+import { HeaderTabs } from '../common/PanelHeader';
 import { N_BANDS, bandColor } from '../simulation/fieldView';
 import Viewcube from '../viewer3d/Viewcube';
 import Static3DScene from './Static3DScene';
@@ -235,7 +236,9 @@ const Static3DPanel: React.FC = () => {
 
       {/* ── selector row ─────────────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <SubTabs value={panel} items={PANEL_TABS} onChange={setPanel} ariaLabel="3D view" testId="static3d-tabs" />
+        <HeaderTabs tab="static3d">
+          <SubTabs value={panel} items={PANEL_TABS} onChange={setPanel} ariaLabel="3D view" testId="static3d-tabs" />
+        </HeaderTabs>
 
         {panel !== 'geometry' && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

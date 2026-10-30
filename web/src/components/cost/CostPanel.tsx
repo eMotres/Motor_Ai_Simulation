@@ -12,6 +12,7 @@ import { Box, Paper, Typography, Button, TextField, CircularProgress, Divider } 
 import { useMotorStore } from '../../stores/motorStore';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
+import { HeaderRight } from '../common/PanelHeader';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -73,15 +74,12 @@ const CostPanel: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: 'var(--panel-2)' }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 0.5, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>Material Cost</Typography>
-        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>via modules: geometry.2d → cost</Typography>
+      <HeaderRight tab="cost">
         <HelpTip title="Active-material cost of the configured motor: component mass × unit price, plus the insulation and a flat labor line. The masses are the SAME ones the Simulation card and torque-per-mass use — CAD sections × stack × lamination k_f × the density of the material each part is assigned, with the copper billed at its end-winding factor k_end. Computed through the modular kernel (no FEM) — it re-estimates as the geometry or prices change." />
-        <Box sx={{ flex: 1 }} />
         <Button size="small" variant="contained" onClick={run} disabled={busy} sx={{ textTransform: 'none' }}>
           {busy ? 'Computing…' : 'Re-estimate'}
         </Button>
-      </Box>
+      </HeaderRight>
       {err &&<Typography sx={{ fontSize: 12.5, color: '#fca5a5', mb: 1 }}>Cost pipeline failed: {err}</Typography>}
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>

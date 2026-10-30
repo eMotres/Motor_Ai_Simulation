@@ -31,8 +31,6 @@
   "scopeActiveTip": "有效:电磁构造,即仿真使用的零件与参数。",
   "scopeFull": "完整",
   "scopeFullTip": "完整:整台电机,包括CAD模型、所有零件和构造参数。与材料页中的开关相同。",
-  "scopeActiveHint": "电磁构造:仿真所用的内容。",
-  "scopeFullHint": "完整构造:左侧共用电磁参数、CAD模型与仅CAD参数。",
   "paramCount": "{n} 个参数",
   "helpDimensions": "帮助:尺寸",
   "helpDimensionsTip": "在新窗口中打开电机示意图,每个参数名称指向它所控制的尺寸。",

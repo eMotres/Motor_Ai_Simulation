@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
 import { nsT } from '../../i18n/nsT';
 import { scopeStore, SCOPES, type ConstructionScope } from '../../lib/constructionScope';
+import SubTabs from './SubTabs';
 
 const tx = nsT('geometry');
 
@@ -35,6 +36,16 @@ const ConstructionScopeSwitch: React.FC<{ testIdPrefix?: string }> = ({ testIdPr
         </Tooltip>
       ))}
     </ToggleButtonGroup>
+  );
+};
+
+/** The same Active | Full choice and state as sub-tabs, for the Geometry panel's header row. */
+export const ConstructionScopeTabs: React.FC<{ testIdPrefix?: string }> = ({ testIdPrefix = 'scope' }) => {
+  useTranslation('geometry');
+  const [scope, setScope] = useConstructionScope();
+  return (
+    <SubTabs value={scope} onChange={setScope} ariaLabel={tx('scopeMenu')}
+      items={SCOPES.map((m) => ({ id: m.id, label: tx(m.labelKey), tip: tx(m.tipKey), testId: `${testIdPrefix}-${m.id}` }))} />
   );
 };
 

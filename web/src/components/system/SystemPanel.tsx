@@ -318,7 +318,6 @@ export default function SystemPanel() {
     <ThemeProvider theme={LIGHT}>
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap', rowGap: 1 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{tr('tabs.schemas')}</Typography>
         <SubTabs value={mode} ariaLabel={tr('tabs.schemas')} testId="schemas-mode-tabs" onChange={(m) => onMode(null, m)}
           items={[{ id: 'view', label: tr('system.mode.view') }, { id: 'compose', label: tr('system.mode.compose') }]} />
         {mode === 'view' && (

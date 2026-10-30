@@ -386,7 +386,7 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
     if action == "read" or action.endswith(".read") or "view" in action.split(".")[-1:]:
         return None
     if action == "create" and entity == "project":
-        return "project created", None
+        return ("project created by the customer (self-service)" if det.get("self_service") else "project created"), None
     if action == "update" and entity == "project":
         return "project updated (" + ", ".join(str(f) for f in det.get("fields") or []) + ")", None
     if action == "motor.link":

@@ -28,6 +28,10 @@ t('Development is hidden without membership and available to signed-in members a
   assert.equal(A.gateOpen('development', { signedIn: true, fullUI: false, isAdmin: false, development: true }), true);
   assert.equal(A.gateOpen('development', { signedIn: true, fullUI: true, isAdmin: false }), true);
   assert.equal(A.gateOpen('development', { signedIn: true, fullUI: false, isAdmin: true }), true);
+  // owner 2026-10-30: every signed-in account gets Projects (its own, plus New project); a visitor does not
+  assert.equal(A.developmentVisible(true, true), true);
+  assert.equal(A.developmentVisible(true, false), false);
+  assert.equal(A.developmentVisible(false, false), true);        // the unenforced local backend
 });
 
 t('landing: Configure when something is selected there, else Motors', () => {

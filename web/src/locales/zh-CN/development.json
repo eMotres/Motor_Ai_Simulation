@@ -6,8 +6,8 @@
   "reloadLocal": "本地草稿",
   "reloadServer": "已保存草稿",
   "retrySave": "重试保存",
-  "title": "开发项目",
-  "titleTip": "客户电机项目、规格草稿、设计结果和消息。",
+  "title": "项目",
+  "titleTip": "您的电机项目：填写需求、查看结果，并与 Motres 工程师沟通。",
   "specAssistant": {
     "title": "助手",
     "tip": "询问缺失的规格字段，并附理由给出建议值。项目负责人点击“应用”之前不会保存任何内容。",
@@ -33,8 +33,11 @@
     "applyFailed": "无法应用该建议。"
   },
   "loading": "正在加载项目…",
-  "noProjects": "此帐户尚未关联项目。",
+  "noProjects": "还没有项目。请点击“新建项目”开始。",
   "newProject": "新建项目",
+  "newProjectTip": "给您需要的电机起个名字。下一步填写其需求，随后由 Motres 工程师为您仿真。",
+  "yourCompany": "您的公司（可选）",
+  "projectLimit": "最多可同时有 {count} 个进行中的项目。请先关闭一个再新建。",
   "projectTitle": "项目标题",
   "customerOrg": "客户组织",
   "projectId": "项目 ID（短标识）",

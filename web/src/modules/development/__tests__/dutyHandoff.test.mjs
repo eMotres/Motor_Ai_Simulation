@@ -84,13 +84,13 @@ test('project duty selection uses the same first-saved-then-default helper as it
   assert.equal(firstProjectMotorDuty([], null), null);
 });
 
-test('membership visibility uses the cheap index endpoint, and grant candidates are advisory only', () => {
+test('every signed-in account gets Projects (owner 2026-10-30), and grant candidates are advisory only', () => {
   const app = source('../../../App.tsx');
   const page = source('../components/DevelopmentPage.tsx');
   const en = JSON.parse(source('../../../locales/en/development.json'));
   const zh = JSON.parse(source('../../../locales/zh-CN/development.json'));
-  assert.match(app, /\/api\/projects\/membership/);
-  assert.match(app, /j\?\.has_projects === true/);
+  assert.match(app, /developmentVisible\(enforced, signedIn\)/);
+  assert.doesNotMatch(app, /useDevelopmentMember/);
   assert.match(page, /selected\.grant_removal_candidates/);
   assert.match(page, /grantReason\.\$\{candidate\.reason\}/);
   const candidateStart = page.indexOf('{canEditProject && !!selected.grant_removal_candidates');

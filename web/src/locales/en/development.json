@@ -6,8 +6,8 @@
   "reloadLocal": "Local draft",
   "reloadServer": "Saved draft",
   "retrySave": "Retry save",
-  "title": "Development",
-  "titleTip": "Customer motor projects, specification drafts, design results and messages.",
+  "title": "Projects",
+  "titleTip": "Your motor projects: enter the requirements, follow the results and write to the Motres engineers.",
   "specAssistant": {
     "title": "Assistant",
     "tip": "Asks about the missing specification fields and proposes values with a reason. Nothing is saved until the project owner presses Apply.",
@@ -33,8 +33,11 @@
     "applyFailed": "Could not apply the proposal."
   },
   "loading": "Loading projects…",
-  "noProjects": "No projects are linked to this account yet.",
+  "noProjects": "No projects yet. Start one with New project.",
   "newProject": "New project",
+  "newProjectTip": "Name the motor you need. Next you enter its requirements; Motres engineers then simulate it for you.",
+  "yourCompany": "Your company (optional)",
+  "projectLimit": "You can have up to {count} open projects. Close one to start another.",
   "projectTitle": "Project title",
   "customerOrg": "Customer organisation",
   "projectId": "Project ID (slug)",

@@ -30,6 +30,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, uiCanWrite } from '../../lib/accessUi';
 import { useAuth } from '../../contexts/AuthContext';
 import { suggestDieName } from '../../lib/dieNames';
+import { HeaderRight } from '../common/PanelHeader';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -147,11 +148,8 @@ const MotorsCatalog: React.FC = () => {
 
   return (
     <Box ref={rootRef}>
+      <HeaderRight tab="motors"><HelpTip title={tx('everythingGroupedByStatorDiameterA')} /></HeaderRight>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
-          {tx('catalog')}
-        </Typography>
-        <HelpTip title={tx('everythingGroupedByStatorDiameterA')} />
         <Box sx={{ flex: 1 }} />
         <ProjectHighlightSelect />
         <Tooltip title={tx('applications.filterTip')}>

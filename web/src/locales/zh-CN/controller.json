@@ -258,8 +258,6 @@
     "referenceDesign": "参考设计"
   },
   "configure": {
-    "title": "配置器",
-    "instant": "即时计算，无需仿真。基准点来自有限元性能档案，所有数值由它解析缩放得到。",
     "loadedMotor": "已加载的电机",
     "loadedMotorDetail": "已加载的电机（{slots} 槽 / {poles} 极{od}）",
     "loadedOd": "，外径 {od} mm",

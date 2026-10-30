@@ -3,6 +3,7 @@ import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadFor, unread
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import { pageVisible } from '../../../lib/pageVisible';
 import SubTabs from '../../../components/common/SubTabs';
+import { HeaderRight, HeaderTabs } from '../../../components/common/PanelHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -554,7 +555,7 @@ export default function DevelopmentPage() {
   const { label, sectionTitle } = fields;
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}><Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tr('title')}</Typography><HelpTip title={tr('titleTip')} /><Box sx={{ flex: 1 }} /><ViewModeToggle mode={viewMode} onChange={setViewMode} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</Box>
+    <HeaderRight tab="development"><HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} />{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button>}</HeaderRight>
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <ProjectOverview projects={projects} mode={viewMode} unread={projectUnread} email={user?.email ?? ''} language={lang} onOpen={(p) => void loadProject(p)} t={tr} />}
     <CreateDialog open={createOpen} busy={busy} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
@@ -564,14 +565,14 @@ export default function DevelopmentPage() {
     {canEditSpec && <DigestSettings target={{ kind: 'project', id: selected.id }} />}
     
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-    <Box sx={{ borderBottom: '1px solid var(--line-soft)', mb: 1.5 }}>
+    <HeaderTabs tab="development">
       <SubTabs value={view} onChange={(v) => void openTab(v)} ariaLabel={selected.title} items={[
         { id: 'specification', label: tr('tabs.specification') },
         { id: 'motors', label: tr('tabs.motors') },
         { id: 'messages', label: projectUnread(selected) > 0 ? <Tooltip title={tr('unread.tip', { count: projectUnread(selected) })}><span>{tr('tabs.messages')} <Chip size="small" color="primary" label={unreadLabel(projectUnread(selected))} sx={{ height: 16, fontSize: 10, ml: 0.5 }} /></span></Tooltip> : tr('tabs.messages') },
         ...(canEditProject ? [{ id: 'notes' as const, label: tr('tabs.notes') }] : []),
       ]} />
-    </Box>
+    </HeaderTabs>
     {(view === 'specification' || view === 'motors') && selected && <ProjectStatusBar data={activity} t={tr} />}
     {view === 'specification' && <Box sx={{ minWidth: 0 }}>
       {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecWizard key={selected.id} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}

@@ -20,6 +20,7 @@ import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
          CircularProgress, Alert, Chip, Tooltip, IconButton } from '@mui/material';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SectionLabel from '../common/SectionLabel';
+import { HeaderRight } from '../common/PanelHeader';
 import HelpTip from '../common/HelpTip';
 import DeviceCatalog from './DeviceCatalog';
 import ControllerProducts from './ControllerProducts';
@@ -511,15 +512,14 @@ const ControllerPanel: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: 'var(--panel-2)' }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>{tx('controller')}</Typography>
+      {/* the title is the shared header row's label; the actions ride at its right end */}
+      <HeaderRight tab="controller">
         <HelpTip i18nKey="controller.theInverterThatDrivesThis" />
         {res?.context && (
           <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>
             {res.context.die} · {res.context.config} · {res.context.duty}
           </Typography>
         )}
-        <Box sx={{ flex: 1 }} />
         {res?.served_from_history && (
           <Tooltip title={`Loaded from history — computed ${res.computed_at || ''}`}>
             <Chip size="small" label={tx('fromHistory')} sx={{ fontSize: 10, height: 20 }} />
@@ -549,7 +549,7 @@ const ControllerPanel: React.FC = () => {
         {settingsSavedAt && !settingsErr && (
           <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>
             saved {settingsSavedAt}</Typography>)}
-      </Box>
+      </HeaderRight>
 
       {settingsErr && <Alert severity="error" sx={{ mb: 1, fontSize: 12.5 }}
         onClose={() => setSettingsErr(null)}>{settingsErr}</Alert>}

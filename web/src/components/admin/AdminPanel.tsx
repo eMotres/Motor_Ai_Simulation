@@ -6,7 +6,7 @@
  * the Invite dialog, which two sections (Users, Sign-ups) both trigger.
  */
 import React, { useState } from 'react';
-import { Box, Typography } from '@mui/material';
+import { Box } from '@mui/material';
 import AdminNav, { ADMIN_SECTIONS, useAdminSection } from './AdminNav';
 import type { AdminSectionId } from './AdminNav';
 import { parseAdminLink } from '../../lib/adminLink';
@@ -32,10 +32,8 @@ import DirectorySection from './sections/DirectorySection';
 import MailingCard from './MailingCard';
 import NoticesPanel from './NoticesPanel';
 import { useTranslation } from 'react-i18next';
-import { nsT } from '../../i18n/nsT';
 
 // UI strings: locales/<lng>/admin.json (docs/I18N.md).
-const tx = nsT('admin');
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 const AdminPanel: React.FC = () => {
@@ -114,10 +112,7 @@ const AdminPanel: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ px: 2, pt: 2, pb: 0 }}>
-        <Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tx('admin')}</Typography>
-      </Box>
-      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, p: 2, gap: 2, overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', p: 2, gap: 2, overflow: 'hidden' }}>
         <AdminNav
           section={section}
           onSelect={setSection}

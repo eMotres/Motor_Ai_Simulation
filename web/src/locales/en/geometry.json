@@ -31,8 +31,6 @@
   "scopeActiveTip": "Active: the electromagnetic construction - the parts and parameters the simulation uses.",
   "scopeFull": "Full",
   "scopeFullTip": "Full: the whole motor - the CAD model, every part, the construction parameters. The same switch as in Materials.",
-  "scopeActiveHint": "Electromagnetic construction - what the simulation uses.",
-  "scopeFullHint": "Full construction - shared EM parameters, CAD model and CAD-only parameters.",
   "paramCount": "{n} parameters",
   "helpDimensions": "Help: dimensions",
   "helpDimensionsTip": "Opens a picture of the machine with every parameter name pointing at the dimension it controls, in a new window.",

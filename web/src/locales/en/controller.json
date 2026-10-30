@@ -258,8 +258,6 @@
     "referenceDesign": "reference design"
   },
   "configure": {
-    "title": "Configurator",
-    "instant": "Instant, no simulation. Reference point from the FEM passport; every value is scaled from it analytically.",
     "loadedMotor": "the loaded motor",
     "loadedMotorDetail": "the loaded motor ({slots}-slot / {poles}-pole{od})",
     "loadedOd": ", {od} mm OD",

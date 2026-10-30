@@ -20,10 +20,13 @@ test('an unknown tab id falls back to the live machine, never to another motor',
   assert.equal(stripKindForTab('something-new'), 'live');
 });
 
-test('Development shows no strip for now (owner 2026-10-26)', () => {
-  assert.equal(stripKindForTab('development'), 'none');
-  assert.deepEqual(at('development'), { kind: 'none' });
-  assert.deepEqual(at('development', { project, production: { die: 'D', config: 'c' } }), { kind: 'none' });
+test('Development shows its OPEN PROJECT and the project motors, never the live machine (owner 2026-10-30: same pattern on every tab)', () => {
+  assert.equal(stripKindForTab('development'), 'project');
+  assert.deepEqual(at('development'), { kind: 'none' });                                   // no project open: nothing shown
+  const ctx = at('development', { project, production: { die: 'D', config: 'c' } });
+  assert.equal(ctx.kind, 'project');
+  assert.equal(ctx.projectId, 'p1');
+  assert.deepEqual(ctx.selected, { die: 'DIE', config: 'opt2' });                          // the latest non-trial motor
 });
 
 test('Production shows the own motor of the PRODUCTION, never the live machine or a project (owner 2026-10-26)', () => {
@@ -55,7 +58,7 @@ test('wiring: the production strip is in the Configure strip style, sits above t
   assert.ok(app.indexOf('<ActiveFamilyStrip />') > 0 && app.indexOf('<ActiveFamilyStrip />') < app.indexOf("<Box sx={{ flex: 1, overflow: 'hidden' }}>"));
   const page = src('../../modules/production/components/ProductionPage.tsx');
   assert.match(page, /setProduction\(\{ die, config, \.\.\.\(stripTitle/);
-  assert.match(page, /position: 'sticky', top: 0, zIndex: 20/);                           // the sub-menu keeps its own sticky bar below the strip
+  assert.match(page, /<HeaderTabs tab="production">/);                                    // the sub-menu is in the shared header row, which does not scroll away
 });
 
 test('Admin and Designer have no motor context', () => {

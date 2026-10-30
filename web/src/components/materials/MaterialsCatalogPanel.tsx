@@ -8,6 +8,7 @@ import WireStockTable from './WireStockTable';
 import PropellersCatalogPanel from './PropellersCatalogPanel';
 import FullPartsPanel from './FullPartsPanel';
 import SubTabs from '../common/SubTabs';
+import { HeaderTabs } from '../common/PanelHeader';
 import ConstructionScopeSwitch, { useConstructionScope } from '../common/ConstructionScopeSwitch';
 import {
   catalogKindForMaterialsView,
@@ -35,15 +36,15 @@ const MaterialsCatalogPanel: React.FC<Props> = ({ materialView }) => {
 
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* header row: the sub-menu in the main menu's tab style (shared SubTabs) */}
-      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
+      {/* the sub-menu is in the shared panel header row (components/common/PanelHeader) */}
+      <HeaderTabs tab="materials">
         <SubTabs
           value={view}
           onChange={setView}
           ariaLabel={tx('materialsViewMenu')}
           items={MATERIALS_CATALOG_VIEWS.map((item) => ({ id: item.id, label: tx(item.labelKey), testId: `materials-view-${item.id}` }))}
         />
-      </Box>
+      </HeaderTabs>
 
       {view === 'materials' && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, flexShrink: 0,

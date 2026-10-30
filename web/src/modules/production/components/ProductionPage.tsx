@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Paper, Typography } from '@mui/material';
 import SubTabs from '../../../components/common/SubTabs';
+import { HeaderTabs } from '../../../components/common/PanelHeader';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { RevisionLabel } from '../../../components/common/MotorRevisionText';
@@ -167,13 +168,11 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
       </Box>
 
       {prod && !loading && (
-        // owner 2026-10-17: the tab menu at the very top, fixed while the page scrolls
-        <Box sx={{ position: 'sticky', top: 0, zIndex: 20, bgcolor: 'var(--app-bg)', mb: 1.5 }}>
-          <Box sx={{ borderBottom: '1px solid var(--line-soft)' }}>
-            <SubTabs value={tab} onChange={setTab} ariaLabel={t('title')}
-              items={visibleTabs.map((id) => ({ id, label: id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : id === 'discussion' && unreadDiscussion > 0 ? `${t('tabs.discussion')} (${unreadDiscussion})` : t(`tabs.${id}`) }))} />
-          </Box>
-        </Box>
+        // owner 2026-10-17: the tab menu stays fixed while the page scrolls; since 2026-10-30 it is in the shared header row
+        <HeaderTabs tab="production">
+          <SubTabs value={tab} onChange={setTab} ariaLabel={t('title')}
+            items={visibleTabs.map((id) => ({ id, label: id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : id === 'discussion' && unreadDiscussion > 0 ? `${t('tabs.discussion')} (${unreadDiscussion})` : t(`tabs.${id}`) }))} />
+        </HeaderTabs>
       )}
 
       {/* Top Readiness Summary Bar */}

@@ -30,6 +30,7 @@ import LoadGuardDialog from './components/common/LoadGuardDialog';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import ComputeNodesHint from './components/common/ComputeNodesHint';
 import SubTabs from './components/common/SubTabs';
+import { PanelHeader, PanelHeaderProvider } from './components/common/PanelHeader';
 import AuthButton, { preloadAuthMenu } from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
@@ -703,6 +704,7 @@ function App() {
 
   return (
     <ThemeProvider theme={appTheme}>
+      <PanelHeaderProvider>
       <CssBaseline />
       <UpdateBanner />
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -835,16 +837,14 @@ function App() {
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
         {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
 
-        {/* ── Simulations header row (owner 2026-10-30): the dropdown's members as sub-tabs in the main menu's style,
-            on top of every panel of the group, so Electromagnetic / Thermal / Mechanical / Schemas switch in one click ── */}
-        {simMembers.length > 0 && isSimulationTab(activeTab) && (
-          <Box data-testid="simulations-header" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 3, py: 0.25,
-            bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
-            <Typography variant="subtitle2">{tr('tabs.simulations', { defaultValue: 'Simulations' })}</Typography>
+        {/* ── The panel header row (owner 2026-10-30): the same row on EVERY tab - the panel's label, its sub-tabs
+            (the Simulations members here; a panel's own sections come in through <HeaderTabs>) and its actions ── */}
+        <PanelHeader
+          label={isSimulationTab(activeTab) ? tr('tabs.simulations', { defaultValue: 'Simulations' }) : (tabs.find((x) => x.id === activeTab)?.label ?? '')}
+          tabs={simMembers.length > 0 && isSimulationTab(activeTab) ? (
             <SubTabs value={activeTab} items={simMembers} onChange={(id) => setActiveTab(id as never)}
               ariaLabel={tr('tabs.simulations', { defaultValue: 'Simulations' })} testId="simulations-tabs" />
-          </Box>
-        )}
+          ) : undefined} />
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>
@@ -874,6 +874,7 @@ function App() {
       {user && <ActivityBeat />}
       {/* Publishes the per-user material override to the fetch interceptor (Stage 2b) */}
       <MaterialOverrideSync />
+      </PanelHeaderProvider>
     </ThemeProvider>
   );
 }

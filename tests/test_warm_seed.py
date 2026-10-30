@@ -25,6 +25,7 @@ The INTERACTIVE path is unchanged by construction — it never sets the flag —
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any, Dict
@@ -378,3 +379,128 @@ def test_interactive_still_runs_the_full_prepass(legs):
     t0, t1 = _t(legs["cold"]), _t(d)
     assert abs(t1 - t0) <= 3e-3 * abs(t0), (
         f"two interactive runs disagree by {100.0 * (t1 - t0) / t0:+.3f} %")
+
+
+# ── (e) the warm LIBRARY: many settled states, interactive reuse ────────────
+# Owner, 2026-10-30: "we set 40 frames and it is already 280 steps — why is the
+# warm-up not kept?  It could have been taken from the sweep or from earlier
+# runs."  The library (simulation/warm_library.py) keeps one settled state per
+# (machine discretisation, operating point); an interactive run picks the best
+# one of its OWN geometry + mesh.  These are the unit checks; the real solves
+# that pin "seeded == cold" are in tests/test_demag_reproducible.py.
+from motor_ai_sim.simulation import warm_library as W
+
+
+@pytest.fixture()
+def lib_on(monkeypatch):
+    monkeypatch.setenv("SB_WARM_LIB", "1")
+    W.clear()
+    yield
+    W.clear()
+
+
+def _state(rng, I, gam, rpm=15000.0, br=True):
+    wc = {"doflocs": rng.random((30, 2)).astype(np.float32), "A": rng.random(30),
+          "A2": rng.random(30), "Ued": rng.random(4), "solid": rng.random(12),
+          "solid_grp": {"mag": rng.random(12)},
+          "meta": {"nspp": 12, "npd": 1.0, "conn": "np2", "temp": 120.0,
+                   "mscale": 1.0, "ts": "bdf2"},
+          "I": float(I), "rpm": float(rpm), "gam": float(gam), "geo_fp": "g1",
+          "nspp_req": 12, "nsect": 2, "br_val": None, "br_cen": None, "br_tag": None}
+    if br:
+        wc.update(br_val=np.clip(rng.random(9), 0.0, 1.0), br_cen=rng.random((9, 2)),
+                  br_tag=np.full(9, 300, int))
+    return wc
+
+
+def test_library_is_off_unless_switched_on(monkeypatch):
+    """Default OFF like every FEM speed-up switch: the suite's cold runs clear
+    the legacy slot only, and must not be seeded by a library behind it."""
+    monkeypatch.delenv("SB_WARM_LIB", raising=False)
+    assert W.enabled() is False
+    assert W.candidates("anything") == []
+
+
+def test_library_round_trip_and_pick(lib_on):
+    rng = np.random.default_rng(11)
+    key = W.machine_key("g1", "mesh1", {"nspp": 12}, 2)
+    op60 = W.op_digest({"I": 60.0, "gam": 0.0, "rpm": 15000.0})
+    op80 = W.op_digest({"I": 80.0, "gam": 20.0, "rpm": 15000.0})
+    s60, s80 = _state(rng, 60.0, 0.0), _state(rng, 80.0, 20.0)
+    W.store(s60, key=key, op=op60, origin="interactive", br_repro_op=op60,
+            demag_history={"prepass_periods": 7,
+                           "last_torque": {"T_mean": 1.0, "ripple_pct": 2.0}})
+    W.store(s80, key=key, op=op80, origin="sweep", br_repro_op="")
+    # another machine's state is never a candidate of this one
+    W.store(_state(rng, 60.0, 0.0), key=W.machine_key("g2", "mesh2", {"nspp": 12}, 2),
+            op=op60, origin="interactive")
+    cands = W.candidates(key)
+    assert len(cands) == 2
+    # SAME operating point, reproducible Br -> that one, Br and all
+    m = W.pick(cands, I=60.0, gam=0.0, rpm=15000.0, op=op60, want_br=True)
+    assert m["op"] == op60 and m["br_repro_op"] == op60
+    wc = W.load(m)
+    assert np.allclose(wc["A"], s60["A"]) and np.allclose(wc["A2"], s60["A2"])
+    assert np.allclose(wc["br_val"], s60["br_val"])
+    assert wc["demag_history"]["prepass_periods"] == 7
+    assert wc["meta"] == s60["meta"] and wc["nsect"] == 2
+    assert np.allclose(wc["solid_grp"]["mag"], s60["solid_grp"]["mag"])
+    # another operating point -> the NEAREST state, for its eddy history only
+    op78 = W.op_digest({"I": 78.0, "gam": 18.0, "rpm": 15000.0})
+    m = W.pick(cands, I=78.0, gam=18.0, rpm=15000.0, op=op78, want_br=True)
+    assert m["op"] == op80
+    # a sweep lineage's map is never offered as THIS point's magnet
+    assert m.get("br_repro_op") != op78
+    # outside the 5 % speed band: nothing
+    assert W.pick(cands, I=60.0, gam=0.0, rpm=17000.0, op=op60, want_br=True) is None
+
+
+def test_op_digest_survives_a_json_round_trip():
+    a = W.op_digest({"I": 0.1 + 0.2, "gam": 12.5, "rpm": 15000.0})
+    b = W.op_digest({"I": float(json.loads(json.dumps(0.1 + 0.2))), "gam": 12.5,
+                     "rpm": 15000.0})
+    assert a == b
+    assert a != W.op_digest({"I": 0.3001, "gam": 12.5, "rpm": 15000.0})
+
+
+def test_sweep_lineage_never_replaces_a_reproducible_map(lib_on):
+    rng = np.random.default_rng(5)
+    key = W.machine_key("g1", "mesh1", {"nspp": 12}, 2)
+    op = W.op_digest({"I": 60.0, "gam": 0.0, "rpm": 15000.0})
+    good = _state(rng, 60.0, 0.0)
+    W.store(good, key=key, op=op, origin="interactive", br_repro_op=op,
+            demag_history={"prepass_periods": 7,
+                           "last_torque": {"T_mean": 1.0, "ripple_pct": 2.0}})
+    W.store(_state(rng, 60.0, 0.0), key=key, op=op, origin="sweep", br_repro_op="")
+    (m,) = W.candidates(key)
+    assert m["br_repro_op"] == op and m["origin"] == "interactive"
+    assert np.allclose(W.load(m)["br_val"], good["br_val"])
+
+
+def test_library_trims_to_its_budget_sweep_entries_first(lib_on, monkeypatch):
+    rng = np.random.default_rng(9)
+    key = W.machine_key("g1", "mesh1", {"nspp": 12}, 2)
+    big = lambda I: dict(_state(rng, I, 0.0), A=rng.random(60000))   # ~0.5 MB
+    W.store(big(1.0), key=key, op="i1", origin="interactive")
+    one = W.candidates(key)[0]["_bytes"]
+    monkeypatch.setenv("SB_WARM_LIB_MB", "%.6f" % (4.5 * one / 1024 / 1024))
+    for i in range(6):
+        W.store(big(10.0 + i), key=key, op="s%d" % i, origin="sweep")
+    left = W.candidates(key)
+    # sweep entries were held to half the budget, the interactive one stayed
+    assert any(m["op"] == "i1" for m in left)
+    assert sum(1 for m in left if m["origin"] == "sweep") <= 2
+    assert sum(m["_bytes"] for m in left) <= 4.5 * one
+
+
+def test_relax_op_drops_current_and_gamma_but_nothing_else():
+    """The library's gate: any current / γ of the SAME machine — the settle
+    test decides — but never another speed, schedule or symmetry."""
+    meta = {"nspp": 12, "npd": 1.0, "conn": "np2", "temp": 120.0, "mscale": 1.0}
+    wc = {"meta": dict(meta), "I": 60.0, "rpm": 15000.0, "gam": 0.0, "nsect": 2}
+    A = F._warm_seed_accept
+    assert A(wc, meta, 200.0, 15000.0, 40.0, n_sectors=2)[0] is False
+    assert A(wc, meta, 200.0, 15000.0, 40.0, n_sectors=2, relax_op=True)[0] is True
+    assert A(wc, meta, 60.0, 20000.0, 0.0, n_sectors=2, relax_op=True)[0] is False
+    assert A(wc, dict(meta, nspp=36), 60.0, 15000.0, 0.0, relax_op=True)[0] is False
+    assert A(wc, meta, 60.0, 15000.0, 0.0, n_sectors=4, relax_op=True)[0] is False

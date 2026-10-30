@@ -119,3 +119,68 @@ start the API. A die the new code wrote and then translated again would be wrong
 JSON stores that carry these keys (catalog cards, presets, drafts, sweep records) are listed, not
 rewritten. Optimizer bounds for `magnet_fill_up` / `magnet_fill_down` keep their numbers; their
 meaning moved by the same few percent.
+
+## G2 (CILN28 / G2-L40) against Fusion v41, part by part (2026-10-30)
+
+Owner: «давай разберёмся с G2 и в каких местах у нас расхождения, чтобы синхронизировать алгоритмы
+построения и у нас, и во Fusion». The Fusion model was built from our numbers, and its steel and
+magnets are identical in v35, v38, v39 and v41 (same exported masses; v41 changed only the
+aluminium holders). We compared Fusion v41 per-part STEP sections at mid-stack (FreeCAD 1.1.3)
+with our G2-L40 polygons.
+
+| part | before this change | now | area now | what is left, and why |
+|---|---|---|---|---|
+| stator lamination (teeth, slot, leg, yoke, segment notch) | 0.063 mm | **0.024 mm** | −0.008 % | sagitta of the notch arc's chords |
+| conductors (24 rows per slot side) | 0 | 0 | identical (168.0 mm² per coil) | — |
+| slot liner | 0.2 mm clearance | same | — | Fusion's alumina liner is the same 0.2 mm on the walls and the slot top |
+| magnet (each of the 8 axial 5 mm segments) | 0.068 mm | 0.068 mm | −0.08 % | Fusion rounds the bottom and knee corners (0.2 mm); see below |
+| rotor poles / pocket | 0.064 mm | 0.066 mm | — | Fusion's 0.045 mm glue clearance (`offset_rotor`) plus chord sagitta; see below |
+| rotor pole tips | 0.053 mm outside Fusion's arc | **on Fusion's arc** | — | — |
+| rotor bore | 1.98 mm | 1.98 mm | rotor −0.6 % | 8 keys at the bore (62.4 mm², 19 g); see below |
+| air gap / sleeve | 0.65 mm, no sleeve | same | — | — |
+
+**Fixed in the generator: the corner fillet.** A fillet between a straight edge and a circle
+about the axis is now built Fusion's way: tangent to the line and to the circle, at the nominal
+radius. This covers the stator bore and OD corners, the rotor pole tips, and a closed magnet top.
+The old boundary walk had two faults:
+- it drew those fillets flatter than their radius;
+- it capped them at 49 % of a run even when the run's far corner is never rounded;
+- its single pass also left the vertex just before a corner standing behind the arc. On G2 that
+  was a 0.063 mm spike into the 0.65 mm air gap at every tooth tip.
+
+Both faults sit at the air gap, where cogging is decided. No stored value changes, so nothing
+needs migrating. `scripts/report_fillet_change.py` (dry run, writes nothing) replays the old
+fillet next to the new one for every die and configuration, and lists how far each outline moves.
+
+One case needs the owner: a fillet the old code capped is now drawn at its nominal radius.
+`CIANO20 150_35 new` has `rotor_fill_r` 2.0, which was drawn at about 1.1 mm until now. Its rotor
+outline moves 0.43 mm and its rotor area changes by −1.36 %. Fusion would draw 2.0. The choice is
+either a rerun at the nominal radius, or lowering the stored value to what was actually simulated.
+
+**Not modelled, deliberately:**
+- *Glue clearance, 0.045 mm per pocket side.* This is real physics. The spoke magnets are
+  magnetised through those sides, so 2 × 0.045 mm of non-magnetic film sits in series with a
+  magnet about 9 mm wide. Estimate: about 0.9 % less magnet flux, so about 0.9 % less back-EMF and
+  torque (an estimate, not a solve). As geometry it is below the polygon weld (diameter / 4000 =
+  0.05 mm at Ø200) and would mesh as needle elements. The right model is an equivalent magnet
+  (remanence times w/(w + 2 g·μr)) in the solver. That is a follow-up which must be verified on
+  the server.
+- *Magnet bottom and knee fillets, 0.2 mm.* These make air corners of about 0.006 mm² with a
+  0.06 mm feature size, at the hub, below mesh resolution. Magnetically nothing.
+- *Rotor keys:* 8 keys of 4 × 2 mm at the bore. They are mechanics: mass +19 g, and they carry no
+  working flux. Modelling them would also break the pole periodicity that the pole-copy template
+  mesher relies on (8 keys for 28 poles).
+
+**Fusion side:** no error found; nothing to change in Fusion.
+
+**G2 before #515 vs the real part** (old builder, same values, against Fusion v41):
+
+| | magnet section | stator iron | pocket air | max deviation |
+|---|---|---|---|---|
+| before #515 | **−2.7 %** (165.27 vs 169.87 mm²) | +0.72 % (legs 0.1 mm wider) | −3.3 % | magnet sides 0.24 mm inside Fusion's |
+| now | −0.08 % | −0.008 % | −0.9 % (glue film) | 0.068 mm (magnet bottom corner) |
+
+The slot opening at the bore (`coil_w`) and the lip width (`fill_up·rotor_hole`) were the same
+before and after #515. Results simulated on G2 before #515 used a magnet 2.7 % smaller than the
+real one, so they need a rerun. Other machines stored before #515 (G1, M1) differ in the same
+way; their own numbers come from the #515 migration's dry-run report.

@@ -194,27 +194,42 @@ def m40():
 #            cu     0.0256598 -> 0.0254690
 #            active 0.0900489 -> 0.0898581
 #            total  0.0915960 -> 0.0914052
+#
+# PINS MOVED 2026-10-30 (G2 vs Fusion) — a fillet between a straight edge and a
+# circle about the axis (stator OD / bore corners, rotor pole tips, the magnet's
+# closed top) is now Fusion's exact one, tangent to the line and the circle at
+# the NOMINAL radius; the old walk drew a flatter arc and capped it at 49 % of
+# a run whose far corner is never rounded (magnet top fillet 2.36 instead of
+# 2.50 mm on these fixtures).  Fuller fillets: less stator iron, a smaller
+# magnet, the rotor gains what the magnet loses.
+#
+#   (on top of the coil-rule pins above)
+#   150 mm   stator 1.20755  -> 1.205984 (-0.13 %)   rotor 0.536741 -> 0.537774
+#            mag    0.725752 -> 0.724598 (-0.16 %)   active 2.992226 -> 2.990572
+#            total  3.059196 -> 3.057542
+#   40 mm    stator 0.0323544 -> 0.0323262 (-0.09 %), mag 0.0175011 -> 0.0175013,
+#            active 0.0898581 -> 0.0898300, total 0.0914052 -> 0.0913770
 @pytest.mark.parametrize("part,kg", [
-    ("stator", 1.20755),   # 4934.4 mm² CAD section × 35 mm × k_f 0.92 × 7600
-    ("rotor",  0.536741),  # 2193.3 mm² — the holder AND the ribs between magnets
+    ("stator", 1.205984),   # CAD section × 35 mm × k_f 0.92 × 7600
+    ("rotor",  0.537774),  # the holder AND the ribs between magnets
     ("cu",     0.522216),  # 1008 mm² measured copper × 35 mm × k_end 1.6557 (coil rule) × 8940 (pure Cu; was 8890 until 2026-10-15, 8933 until 2026-09-29)
-    ("mag",    0.725752),  # 2764.8 mm² of CAD magnet polygons (28 × 98.7 mm²)
+    ("mag",    0.724598),  # CAD magnet polygons (28 magnets)
     ("shaft",  0.0670),    # hollow 3 mm tube, 708.7 mm² — not a solid disc
-    ("active", 2.992226),  # iron + copper + magnets: the reference basis
-    ("total",  3.059196),  # active + shaft: the torque-per-mass divisor
+    ("active", 2.990572),  # iron + copper + magnets: the reference basis
+    ("total",  3.057542),  # active + shaft: the torque-per-mass divisor
 ])
 def test_150mm_component_masses(m150, part, kg):
     assert m150[part] == pytest.approx(kg, abs=5e-4)
 
 
 @pytest.mark.parametrize("part,kg", [
-    ("stator", 0.0323544),
-    ("rotor",  0.0145336),
+    ("stator", 0.0323262),
+    ("rotor",  0.0145335),
     ("cu",     0.0254690),
-    ("mag",    0.0175011),
+    ("mag",    0.0175013),
     ("shaft",  0.001547),
-    ("active", 0.0898581),
-    ("total",  0.0914052),
+    ("active", 0.0898300),
+    ("total",  0.0913770),
 ])
 def test_40mm_component_masses(m40, part, kg):
     assert m40[part] == pytest.approx(kg, abs=5e-6)

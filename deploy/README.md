@@ -464,11 +464,10 @@ docker build -f deploy/Dockerfile.cad --build-context private=/srv/motres/privat
 * First time, with no access from the server to GitHub: BEFORE the deploy of this change removes `cad/reference/` from `/opt/motres/app`, run
   `mkdir -p /srv/motres/private_assets/cad && cp -a /opt/motres/app/cad/reference /srv/motres/private_assets/cad/ && rm -f /srv/motres/private_assets/cad/reference/*.py`.
   Later: `git clone` the private repository there (read-only deploy key) and `git pull` on every private-data change.
-* The API and the worker read `cad/reference/` for k_end (2026-10-30): the end-winding factor is the mean turn of the die's OWN CAD
-  coil (`motor_ai_sim/coil_build.py`), found at `/srv/motres/private_assets/cad/reference`, which `docker-compose.yml` mounts
-  read-only into api-blue / api-green / worker. Without the files a die's coil is "estimated (no CAD profile)" (size-aware rules),
-  and the Simulation field says so. Check from inside the API container:
-  `python -c "from motor_ai_sim.cad import store; print(store.find_reference_dir())"` must print that folder.
+* `docker-compose.yml` mounts `/srv/motres/private_assets` read-only into api-blue / api-green / worker, so the API finds the CAD
+  reference profiles (`cad/reference`) for the CAD export and the profile views. Check from inside the API container:
+  `python -c "from motor_ai_sim.cad import store; print(store.find_reference_dir())"` must print that folder. k_end does NOT read
+  them: the end-winding factor is one coil rule for every machine (`motor_ai_sim/coil_build.py`, owner 2026-10-30).
 * The CAD builds themselves run in the CAD image. To read the passports / S1 models of the closed motors from the checkout
   instead of `/srv/motres/shared/{passports,propeller_s1}`, set `MOTOR_AI_SIM_PRIVATE_DATA=/srv/motres/private_assets` in
   `/etc/motres/api.env` (the shared folders win when present, so this is optional).

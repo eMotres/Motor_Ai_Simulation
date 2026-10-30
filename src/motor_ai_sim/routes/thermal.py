@@ -3371,8 +3371,8 @@ def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
         _g = _mgo(dict((_gc().get("geometry") or {})), geo_ov)
         k = float(_ewf(_pfc(geo_override=geo_ov), _g))
         if k > 1.0:
-            return k, ("the geometry (the mean turn of the coil the CAD build "
-                       "draws, the same estimator the solver uses for auto)")
+            return k, ("the geometry (the mean turn of the tooth coil by the "
+                       "one coil rule, the same estimator the solver uses for auto)")
     except Exception as exc:  # noqa: BLE001 — a missing k_end is not a 500
         log.warning("thermal: the end-winding factor could not be derived (%s)",
                     exc)

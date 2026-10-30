@@ -1084,8 +1084,8 @@ def get_full_config(geo: Optional[str] = None):
                     geo_dict = {**geo_dict, **_o}
             except Exception:
                 pass
-        # Geometry-derived end-winding factor: the mean turn of the coil the CAD build
-        # draws for THIS geometry (masses.end_winding_factor, owner 2026-10-30),
+        # Geometry-derived end-winding factor: the mean turn of the tooth coil built by
+        # the one coil rule for THIS geometry (masses.end_winding_factor, owner 2026-10-30),
         # recomputed from the (possibly overridden) geometry so the UI cell stays in sync.
         _kcoil = None
         try:
@@ -1106,7 +1106,7 @@ def get_full_config(geo: Optional[str] = None):
                 _kcoil = {
                     "source": _cd.get("coil_source"),
                     "profile": _cd.get("coil_profile"),
-                    # "cad" = the die's own CAD profile, "estimate" = none (size-aware rules)
+                    # "rule" = the one coil rule (coil_build.coil_rule) - no CAD profile on this path
                     "kind": _cd.get("coil_kind"),
                     "typed_keys": _cd.get("coil_typed") or [],
                     "wire_beng_r_mm": round(float(_cd["wire_beng_r_mm"]), 4),

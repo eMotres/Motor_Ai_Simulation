@@ -82,7 +82,7 @@ def test_dry_run_reports_and_writes_nothing(rk, tmp_path):
     shared = next(e for e in rep["configs"] if "shared" in e["file"] and e["die"] == "D40")
     k = shared["coil"]["k_end"]
     assert k > 1.456                                       # the built coil is longer than the semicircle (1.456 at L20)
-    assert shared["coil"]["source"].startswith("estimated (no CAD profile)")
+    assert shared["coil"]["source"].startswith("coil rule: ") and shared["coil"]["kind"] == "rule"
     assert shared["coil"]["k_end_template"] > 1.0                  # the old rules, printed beside it for comparison
     cfg_row = shared["rows"][0]
     assert (cfg_row["old"], cfg_row["new"]) == (1.456, k) and cfg_row["ratio"] == pytest.approx(k / 1.456, abs=1e-4)

@@ -155,7 +155,7 @@ const r3 = (v: number | null | undefined, nd = 3): number | null =>
 /** DRAWING-ONLY fallback when a payload carries no k_end: the idealised
  *  semicircle end turn round the tooth plus the whole wire COLUMN,
  *  k_end = (π·span/2 + L)/L (masses.end_winding_factor method "semicircle").
- *  The solver's k_end is the built CAD coil's mean turn; every thermal
+ *  The solver's k_end is the coil rule's mean turn; every thermal
  *  payload carries that number (`end_faces.k_end`), which wins above. */
 export function kEndFromGeometry(geo: Dict): number {
   const L = f0(geo.motor_length);

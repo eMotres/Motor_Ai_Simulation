@@ -132,22 +132,19 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = 
     solver's loss/R use the exact same number.
 
     Methods:
-      "auto" / "cad_coil" (default; owner 2026-10-30): mean turn of the coil the CAD build
-      actually draws for THIS geometry (``cad/motor_templates/segmented_flatwire/coil.py``,
-      the coil of the 3-D view and the CAD export), k_end = mean turn / (2·L).  Its bend
-      radius, straight overhang and leads come from the die's OWN CAD reference profile
-      evaluated on the live geometry (``coil_build.coil_parameters``), or - for a die
-      without one - from the size-aware estimate ``coil_build.estimate_coil``; explicit
-      ``wire_beng_r`` / ``coil_straight_extra`` / ``coil_lead_total`` in the geometry are
-      per-die overrides.  Every geometry edit moves it.  Agrees with the 3-D conductor
-      length within ±3 % across families (CIANO14 40 L12 +2.2 %, L20 +1.6 % against the
-      Fusion coil; tests/test_end_winding_coil_shape.py).
+      "auto" / "cad_coil" (default; owner 2026-10-30): mean turn of a tooth coil built by
+      ONE rule for every machine (``coil_build.coil_rule``: rectangular end, edgewise bend
+      R = 0.6 x wire width, size-aware overhang and leads; no CAD profile is read), with the
+      same layer geometry as ``cad/motor_templates/segmented_flatwire/coil.py``,
+      k_end = mean turn / (2·L).  Explicit ``wire_beng_r`` / ``coil_straight_extra`` /
+      ``coil_lead_total`` in the geometry are per-die overrides.  Every geometry edit moves
+      it (tests/test_end_winding_coil_shape.py).
       "semicircle" / "legacy": the idealised flat semicircle around the wound tooth,
           k_end = (π·(bundle_width/2 + tooth_width/2) + L_stack) / L_stack,
       a named comparison only — never a fallback.
 
-    ``die`` / ``config`` / ``cad_overrides`` name the machine whose CAD profile applies;
-    default: the caller's machine (``coil_build.context_machine``)."""
+    ``die`` / ``config`` / ``cad_overrides`` name the machine whose lead edits (Geometry >
+    Full) apply; default: the caller's machine (``coil_build.context_machine``)."""
     L = float(getattr(p, "stack_length", 0.0))
     if L <= 0:
         return 1.0

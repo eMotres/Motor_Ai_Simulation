@@ -26,6 +26,7 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
     monkeypatch.setenv("MOTRES_LEGAL_ROOT", str(tmp_path / "legal"))
     monkeypatch.setenv("MOTRES_DIRECTORY_ROOT", str(tmp_path / "directory"))
+    monkeypatch.setattr(users, "_USERS_FILE", tmp_path / "users.json")      # the limit overrides live next to it
     monkeypatch.delenv("PLATFORM_AGREEMENT_DISABLED", raising=False)
     PA._CACHE.update(sig=None, rows=[])
     people = {
@@ -75,6 +76,8 @@ def test_a_customer_cannot_choose_members_status_or_engineer(api):
 
 
 def test_ids_are_unique_slugs_and_survive_a_non_latin_title(api):
+    from motor_ai_sim.development import project_limits
+    project_limits.set_override(CUSTOMER, "unlimited")                # the default of 2 would stop the third
     ids = [_create(api, title="Gonzalo motor!").json()["id"] for _ in range(3)]
     assert ids == ["gonzalo-motor", "gonzalo-motor-2", "gonzalo-motor-3"]
     zh = _create(api, who="t-other", title="七寸高螺距电机").json()["id"]
@@ -94,6 +97,7 @@ def test_unsigned_request_is_refused(api):
 
 
 def test_per_account_limit_of_open_projects(api):
+    assert self_service.MAX_OPEN_OWNED_PROJECTS == 2                  # the owner's default 2026-10-30
     for n in range(self_service.MAX_OPEN_OWNED_PROJECTS):
         assert _create(api, title=f"Motor {n}").status_code == 200
     blocked = _create(api, title="One too many")

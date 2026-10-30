@@ -14,6 +14,7 @@ import { ROLES } from './dialogs/InviteDialog';
 import { roleLabel } from '../../lib/accessUi';
 import type { RegistryUser } from './dialogs/MotorsDialog';
 import { canEditEmail, lastMailText } from './userMail';
+import { parseProjectLimit, projectLimitChanged, projectLimitText, type ProjectLimit } from './projectLimit';
 
 const ROLE_COLOR: Record<string, string> = {
   anon: 'var(--text-4)', user: 'var(--text-3)', engineer: '#60a5fa', admin: '#fbbf24',
@@ -40,6 +41,8 @@ const UserDrawer: React.FC<{
   busy: boolean;
   onRole: (role: string) => void;
   onQuota: (hours: number | null) => void;
+  projectLimitDefault: number;
+  onProjectLimit: (limit: ProjectLimit) => void;
   onToggleDisabled: () => void;
   onDelete: () => void;
   onResetPassword: () => void;
@@ -49,14 +52,21 @@ const UserDrawer: React.FC<{
   onRevokeAllSessions: () => void;
 }> = ({
   user, liveSessions, lastLogin, cpuH30d, jobs30d, onClose, busy,
-  onRole, onQuota, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions, onChangeEmail,
+  onRole, onQuota, projectLimitDefault, onProjectLimit, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions, onChangeEmail,
 }) => {
   const [revoking, setRevoking] = useState(false);
   const [quota, setQuota] = useState('');
+  const [projLimit, setProjLimit] = useState('');
   const [newEmail, setNewEmail] = useState('');
   useEffect(() => setNewEmail(''), [user?.email]);
   useEffect(() => { setRevoking(false); setQuota(user?.sim_quota_cpu_h_month != null ? String(user.sim_quota_cpu_h_month) : ''); },
     [user?.email, user?.sim_quota_cpu_h_month]);
+  useEffect(() => setProjLimit(projectLimitText(user?.project_limit)), [user?.email, user?.project_limit]);
+  const saveProjLimit = () => {
+    const parsed = parseProjectLimit(projLimit);
+    if (parsed.ok && projectLimitChanged(projLimit, user?.project_limit)) onProjectLimit(parsed.value);
+    else if (!parsed.ok) setProjLimit(projectLimitText(user?.project_limit));      // not a limit: back to what is stored
+  };
   const saveQuota = () => {
     const t = quota.trim();
     if (t === '') { if (user?.sim_quota_cpu_h_month != null) onQuota(null); return; }
@@ -116,6 +126,20 @@ const UserDrawer: React.FC<{
               used this month: {user.cpu_h_month != null ? `${user.cpu_h_month.toFixed(2)} h` : '—'}
             </Typography>
           </Box>
+
+          {user.role !== 'admin' && user.role !== 'engineer' && (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Open projects</Typography>
+                <HelpTip title={`How many open projects this account may own. Empty = the default (${projectLimitDefault}). Type a number or "unlimited"; it applies to the next New project. Staff are never limited.`} />
+              </Box>
+              <TextField size="small" value={projLimit} disabled={busy} placeholder={`default (${projectLimitDefault})`}
+                onChange={(e) => setProjLimit(e.target.value)} onBlur={saveProjLimit}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveProjLimit(); }}
+                inputProps={{ 'aria-label': 'open projects limit' }}
+                sx={{ width: 160, '& input': { fontSize: 12.5, py: 0.5 } }} />
+            </>
+          )}
 
           <Box sx={{ mt: 2 }}>
             <InfoRow label="Created" value={fmt(user.created)} />

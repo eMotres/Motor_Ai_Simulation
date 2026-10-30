@@ -25,6 +25,7 @@ oauth_grants.json           grants, codes and pending requests removed
 newsletter.json             subscriber record + notice reads removed
 comm_prefs.json             communication-preference state removed; the consent
                             history (comm_prefs_history.jsonl) is pseudonymised (proof of consent kept)
+project_limits.json         the admin's open-project limit override of the address removed
 support access requests     removed (contact data the person gave us)
 mcp_audit.jsonl             e-mail -> subject hash (security log, kept)
 auth_events.jsonl           e-mail -> subject hash, IP re-hashed (kept)
@@ -485,9 +486,13 @@ def purge(email: str, *, actor: str, reason: str = "") -> Dict[str, Any]:
             _mutate_requests(_fn)
         return hit["n"]
 
+    def _project_limit():
+        from motor_ai_sim.development import project_limits as PL
+        return PL.clear(email)
+
     for name, fn in (("deletion_request", _request), ("sessions", _sessions), ("agent_keys", _agent_keys),
                      ("oauth", _oauth), ("newsletter", _newsletter),
-                     ("comm_prefs", _comm_prefs),
+                     ("comm_prefs", _comm_prefs), ("project_limit", _project_limit),
                      ("support_requests", _support), ("mcp_audit", _mcp_audit),
                      ("auth_events", _auth_events), ("usage", _usage),
                      ("admin_audit", _admin_audit), ("workspace", _workspace),

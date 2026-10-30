@@ -18,6 +18,8 @@ export interface RegistryUser {
   motors?: MotorGrants;
   /** Optional CPU-hour allowance per month (null = not set; stored only, nothing is blocked by it) and the hours used this UTC month (null = unknown). */
   sim_quota_cpu_h_month?: number | null; cpu_h_month?: number | null;
+  /** Open-projects override of this account (null/absent = the default); an admin sets it, see projectLimit.ts. */
+  project_limit?: number | 'unlimited' | null;
   /** False for a password account whose confirmation link was never opened; `last_mail` = the last auth mail handed to SMTP
    *  (ok = the server accepted it; a later bounce is not knowable). */
   email_verified?: boolean; last_mail?: { kind: string; ts: string; ok: boolean; error?: string } | null;

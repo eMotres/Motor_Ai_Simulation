@@ -11,9 +11,12 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import { ConfirmDialog, type ConfirmState } from '../../common/PromptDialogs';
 import { CreateUserDialog, ResetPasswordDialog } from '../dialogs/AccountDialogs';
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
+import ProjectLimitsDialog from '../dialogs/ProjectLimitsDialog';
+import type { ProjectLimit } from '../projectLimit';
 import { ROLES } from '../dialogs/InviteDialog';
 import { roleLabel } from '../../../lib/accessUi';
 import UserDrawer from '../UserDrawer';
@@ -45,6 +48,8 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [limitsOpen, setLimitsOpen] = useState(false);
+  const [projectLimitDefault, setProjectLimitDefault] = useState(2);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [motorsFor, setMotorsFor] = useState<RegistryUser | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -63,6 +68,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         fetch(`${API}/api/admin/usage?by=user&days=30`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })),
       ]);
       setUsers(u.users || []); setSessions(s.sessions ?? []); setUsage(us.rows ?? []);
+      if (typeof u.project_limit_default === 'number') setProjectLimitDefault(u.project_limit_default);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load');
     } finally {
@@ -88,6 +94,24 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         const j = await r.json();
         setUsers((us) => us.map((u) => (u.email === email ? { ...u, ...j.user } : u)));
         if (j.user?.email && j.user.email !== email) setSelected(j.user.email);      // an unverified account's address was corrected
+        setError(null);
+      } else {
+        let why = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (typeof j?.detail === 'string') why = j.detail; } catch { /* keep the status */ }
+        setError(why);
+      }
+    } catch { /* keep prior state */ } finally { setBusy(null); }
+  };
+
+  const setProjectLimit = async (email: string, limit: ProjectLimit) => {
+    setBusy(email);
+    try {
+      const r = await fetch(`${API}/api/auth/project-limits/${encodeURIComponent(email)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        setUsers((us) => us.map((u) => (u.email === email ? { ...u, project_limit: j.limit ?? null } : u)));
         setError(null);
       } else {
         let why = `HTTP ${r.status}`;
@@ -174,6 +198,10 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         </Select>
         <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => onInvite()}
           variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>Invite</Button>
+        <Tooltip title="How many open projects an account may own - also for an address with no account yet">
+          <Button size="small" startIcon={<FolderOpenIcon sx={{ fontSize: 16 }} />} onClick={() => setLimitsOpen(true)}
+            variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>Project limits</Button>
+        </Tooltip>
         <Button size="small" startIcon={<PersonAddIcon sx={{ fontSize: 16 }} />} onClick={() => setCreateOpen(true)}
           variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>Add account</Button>
         <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} onClick={() => void load()} disabled={loading}
@@ -273,6 +301,8 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         onClose={() => setSelected(null)}
         onRole={(role) => void patchUser(selected!, { role })}
         onQuota={(q) => void patchUser(selected!, { sim_quota_cpu_h_month: q })}
+        projectLimitDefault={projectLimitDefault}
+        onProjectLimit={(limit) => void setProjectLimit(selected!, limit)}
         onToggleDisabled={() => void patchUser(selected!, { disabled: !selectedUser?.disabled })}
         onDelete={() => selected && deleteUser(selected)}
         onResetPassword={() => selected && setResetFor(selected)}
@@ -282,6 +312,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         onRevokeAllSessions={() => selected && void revokeAllSessions(selected)}
       />
 
+      <ProjectLimitsDialog open={limitsOpen} onClose={() => setLimitsOpen(false)} onChanged={() => void load()} />
       <CreateUserDialog open={createOpen} onClose={() => setCreateOpen(false)}
         onCreated={() => { setNotice('account created'); void load(); }} />
       <ResetPasswordDialog email={resetFor} onClose={() => setResetFor(null)}

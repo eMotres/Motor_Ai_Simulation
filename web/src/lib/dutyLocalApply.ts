@@ -85,6 +85,9 @@ export interface DutyPayload {
   winding?: any;
   materials?: any;
   /* eslint-enable @typescript-eslint/no-explicit-any */
+  /** One line: the parts the configuration's file does not name and what the
+   *  load used for them (project default, or the loaded machine's). */
+  material_note?: string;
 }
 
 /** What the panel held BEFORE this apply — the answer to "did the machine

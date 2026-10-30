@@ -38,7 +38,8 @@ DUTY_MESH_BUILD_KEYS = ("mesh.componentMesh", "mesh.ironTemplate", "mesh.geoMesh
 
 #: Parts a configuration does not name fall back to these (routes.family
 #: _ABSENT_MATERIALS) — the rule a duty load applies today.
-ABSENT_MATERIALS = {"slot_insulation": "Nomex", "wire_insulation": "polyimide"}
+ABSENT_MATERIALS = {"slot_insulation": "Nomex", "wire_insulation": "polyimide",
+                    "slot": "copper"}
 
 AIR_PARTS = ("air_gap", "in_band", "out_band")
 
@@ -164,7 +165,7 @@ def resolve_materials(cfg: Mapping[str, Any], *, fallback_parts: Mapping[str, st
                       fallback_source: str) -> Dict[str, Dict[str, str]]:
     """{part: {"name", "source"}} for every part a solve reads.
 
-    A part the configuration names wins; a liner / enamel it does not name
+    A part the configuration names wins; a liner / enamel / conductor it does not name
     takes the project default (routes.family._ABSENT_MATERIALS); any other
     part it does not name is taken from ``fallback_parts`` with its source
     recorded (fail closed if not there either)."""

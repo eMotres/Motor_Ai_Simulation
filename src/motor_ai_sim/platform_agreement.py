@@ -23,7 +23,8 @@ version (and keeps deciding the mode until the new one is given).
 
 The gate: :func:`require_accepted` (HTTP 428 ``agreement_required``) is called by the actions that START a development; staff
 (admin / engineer accounts) and MOTRES's own company are never gated.  :func:`training_allowed` is the helper the dataset export
-calls: FREE -> True, PRIVATE -> False, no acceptance -> False (fail-closed), MOTRES's own data -> True.
+calls: company acceptance, else account acceptance (FREE -> True, PRIVATE -> False), else the ticked Terms of Use box of v0.3 or later
+(``legal_texts``) -> True, else False (fail-closed); MOTRES's own data -> True.
 """
 from __future__ import annotations
 
@@ -257,21 +258,31 @@ def company_summary(company_id: str) -> Optional[dict]:
 
 def training_allowed(company_or_email: str) -> bool:
     """May MOTRES's internal AI train on this client's engineering data?  ``company_or_email`` is an account e-mail, a directory
-    company id or a stored key (``company:<id>`` / ``user:<email>``).  FREE -> True; PRIVATE -> False; no acceptance -> False
-    (fail-closed); MOTRES's own company and domains -> True (its own data).  The acceptance in force is the newest one of any
-    version (a later version replaces it when it is given)."""
+    company id or a stored key (``company:<id>`` / ``user:<email>``).  Precedence, first match decides:
+
+    (a) a COMPANY acceptance of this agreement decides for the company's confirmed users: FREE -> True, PRIVATE -> False;
+    (b) else an ACCOUNT-level acceptance of this agreement decides the same way;
+    (c) else True only if the e-mail has accepted the Terms of Use at ``legal_texts.MIN_TRAINING_VERSION`` (v0.3) or later - the box
+        of the sign-up form / the existing-user dialog, ``terms_acceptances.jsonl``;
+    (d) else False (fail-closed): nothing accepted, a bare company id without an acceptance, an unknown key.
+
+    MOTRES's own company and domains -> True (its own data).  The acceptance in force is the newest one of any version of this
+    agreement (a later version replaces it when it is given); a PRIVATE choice is never overridden by the Terms line of (c)."""
     s = str(company_or_email or "").strip()
     if not s:
         return False
+    email = ""
     if "@" in s and not s.startswith(("company:", "user:")):
-        sc = scope_of(s)
+        email = _norm_email(s)
+        sc = scope_of(email)
         if sc["exempt"] == "motres":
             return True
-        r = _latest((sc["key"], sc["account_key"]))
+        r = _latest((sc["key"], sc["account_key"]))                              # (a), then (b)
     else:
         key = s if s.startswith(("company:", "user:")) else "company:" + s
         if key.startswith("user:"):
-            if key[5:].rsplit("@", 1)[-1].lower() in _own_domains():
+            email = _norm_email(key[5:])
+            if email.rsplit("@", 1)[-1] in _own_domains():
                 return True
         else:
             try:
@@ -282,7 +293,12 @@ def training_allowed(company_or_email: str) -> bool:
             if c and _is_own_company(dict(id=c.get("id"), name=c.get("legal_name"), reg_no=c.get("reg_no"))):
                 return True
         r = _latest((key,))
-    return bool(r and r.get("mode") == "FREE")
+    if r:
+        return r.get("mode") == "FREE"
+    if email:                                                          # (c)
+        from motor_ai_sim import legal_texts as LT
+        return LT.accepted_version(email, LT.MIN_TRAINING_VERSION)
+    return False                                                       # (d)
 
 
 # -- status and the gate ------------------------------------------------------

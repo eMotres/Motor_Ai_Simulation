@@ -123,6 +123,9 @@ def public_exhibit() -> bool:
 #: contents and customer designs, and the route hands the model no app state.
 _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version", "/api/notice",
                             "/api/support/chat",
+                            # the legal texts are public (the sign-up box links to them); /api/legal/status and /accept need a session
+                            "/api/legal/terms", "/api/legal/privacy", "/api/legal/platform-agreement", "/api/legal/schedules",
+                            "/api/legal/countries",
                             # the landing page's motor preview: allow-listed datasheet numbers of the public
                             # motors, cached 5 min and rate-limited per IP (routes/public_motors.py)
                             "/api/public/motors",
@@ -963,6 +966,13 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         "authError": None if reason in ("ok", "no_token") else reason,
         "sid": det["sid"] or None,
     }
+    # Which provider answers the in-app help chat (gemini | anthropic | none): the chat shows a notice above its input when it is
+    # Gemini (free tier: Google may use the messages).  The kind only - never a key, model or override.
+    try:
+        from motor_ai_sim.routes import support as _support
+        out["supportProvider"] = _support.effective_provider()
+    except Exception:  # noqa: BLE001 - the help chat is optional; /api/me must never fail for it
+        out["supportProvider"] = "none"
     # The motor Configure opens on for this account (admin-chosen, validated
     # against the grants by users.normalize_grants); null when none is set.
     out["defaultMotor"] = None

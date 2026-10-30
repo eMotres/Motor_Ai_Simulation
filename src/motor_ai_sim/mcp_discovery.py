@@ -86,8 +86,8 @@ def links() -> Dict[str, str]:
                          "pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md"),
         "source_code_url": _env("PUBLIC_SOURCE_URL",
                                 "https://github.com/eMotres/Motor_Ai_Simulation"),
-        "terms_url": _env("PUBLIC_TERMS_URL", "https://emotres.com/terms-conditions"),
-        "privacy_url": _env("PUBLIC_PRIVACY_URL", "https://emotres.com/privacy-policy"),
+        "terms_url": _env("PUBLIC_TERMS_URL", "https://aerostator.com/terms"),
+        "privacy_url": _env("PUBLIC_PRIVACY_URL", "https://aerostator.com/privacy"),
     }
 
 

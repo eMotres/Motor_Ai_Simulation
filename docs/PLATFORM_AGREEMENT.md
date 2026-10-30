@@ -5,6 +5,7 @@ Owner 2026-10-27: B2B only. A company accepts the agreement before it starts a d
 client's data; no payment integration yet - the record says `private_pending_payment: true` and the UI says "our team will contact you
 about the fee", no price). Modelled on the online NDA (`docs/NDA_ONLINE.md`). Code: `src/motor_ai_sim/platform_agreement.py`,
 `src/motor_ai_sim/routes/platform_agreement.py`, web `web/src/components/agreement/`, `web/src/lib/platformAgreement.ts`.
+The public texts, the account acceptance of the Terms of Use and the existing-user dialog: `docs/LEGAL_TEXTS.md`.
 
 ## Off until an approved text is installed
 
@@ -59,6 +60,21 @@ name "MOTRES d.o.o.", ids in `MOTRES_OWN_COMPANY_IDS`) and accounts on `motresre
 
 ## For the dataset export
 
-`platform_agreement.training_allowed(company_or_email)` -> bool: FREE True, PRIVATE False, no acceptance False (fail-closed), MOTRES's
-own accounts/company True. It accepts an e-mail, a directory company id or a stored key. The acceptance in force is the newest one of any
-version. The dataset code does not call it yet.
+`platform_agreement.training_allowed(company_or_email)` -> bool. It accepts an e-mail, a directory company id or a stored key. First match
+decides:
+
+1. a COMPANY acceptance of this agreement decides for the company's confirmed users (FREE True, PRIVATE False);
+2. else an ACCOUNT-level acceptance of this agreement decides the same way;
+3. else True only if the e-mail has accepted the Terms of Use at v0.3 or later (the sign-up box / the existing-user dialog, see
+   `docs/LEGAL_TEXTS.md`, `terms_acceptances.jsonl`);
+4. else False (fail-closed).
+
+MOTRES's own accounts/company are always True. The acceptance of the agreement in force is the newest one of any version; a PRIVATE choice is
+never overridden by the Terms line of step 3. The dataset code does not call it yet.
+
+## Account acceptance and the public texts
+
+Accepting the Terms of Use when an account is created (or once, after sign-in, for an existing account) accepts this agreement in FREE
+mode for the account (agreement section 2.3). The texts, the acceptance record and how a new version is published are in
+`docs/LEGAL_TEXTS.md`. The click-through above is unchanged: it still reads the INSTALLED version from `<shared>/legal`; the public copy in
+`config/legal/platform_agreement_public/` is only what `/platform-agreement` shows.

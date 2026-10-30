@@ -244,7 +244,10 @@ export function renderBody(L, loc, webDir = WEB) {
   out.push(`<section aria-labelledby="cta-h"><h2 id="cta-h">${t('cta.title')}</h2>`);
   out.push(`${authLinks(L, loc)}</section>`);
   out.push('</main>');
-  out.push(`<footer><p>${t('footer.licence')}</p><p>${esc(COMPANY)} · <a href="${SITE}">aerostator.com</a></p></footer>`);
+  const legal = loc.path.replace(/\/$/, '');          // '' or '/zh-cn': the in-app legal pages live under the same prefix
+  out.push(`<footer><p>${t('footer.licence')}</p><p>${esc(COMPANY)} · <a href="${SITE}">aerostator.com</a>`
+    + ` · <a href="${legal}/terms">${t('footer.terms')}</a> · <a href="${legal}/platform-agreement">${t('footer.agreement')}</a>`
+    + ` · <a href="${legal}/privacy">${t('footer.privacy')}</a></p></footer>`);
   out.push('</div>');
   return out.join('\n');
 }

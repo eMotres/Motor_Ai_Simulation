@@ -47,5 +47,8 @@
   },
   "die": {
     "retire_required": "‘{die}’ is a shared die: deleting it would hide it for every user. Use Retire for all users."
-  }
+  },
+  "terms_required": "Tick the box to accept the Terms of Use, the Platform Agreement and the Privacy Policy.",
+  "country_required": "Choose the country where your business is established.",
+  "business_name_too_long": "The business name is too long."
 }

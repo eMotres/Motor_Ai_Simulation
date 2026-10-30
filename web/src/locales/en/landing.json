@@ -101,6 +101,9 @@
   "cta": { "title": "Ready to try it?" },
   "footer": {
     "licence": "Software Apache-2.0. AeroStator Core motor technology is patent pending; manufacturing requires a licence from MOTRES.",
-    "company": "MOTRES d.o.o."
+    "company": "MOTRES d.o.o.",
+    "terms": "Terms of Use",
+    "agreement": "Platform Agreement",
+    "privacy": "Privacy Policy"
   }
 }

@@ -5,6 +5,7 @@
  * page posts the message and polls the conversation while the assistant works, showing each tool step.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Button, Chip, CircularProgress, IconButton, TextField, Tooltip, Typography } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SendIcon from '@mui/icons-material/Send';
@@ -114,6 +115,7 @@ const EXAMPLES = [
 ];
 
 export default function DesignerTab() {
+  const { t: tc } = useTranslation('common');
   const [status, setStatus] = useState<Status | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [conv, setConv] = useState<Conversation | null>(null);
@@ -225,6 +227,7 @@ export default function DesignerTab() {
         <Box sx={{ borderTop: '1px solid', borderColor: 'divider', px: { xs: 2, md: 4 }, py: 1.5 }}>
           <Box sx={{ maxWidth: 860, mx: 'auto' }}>
             {err && <Typography sx={{ fontSize: 12, color: '#fca5a5', mb: 0.5 }}>{err}</Typography>}
+            <Typography sx={{ fontSize: 12, color: 'text.secondary', mb: 0.5 }} data-testid="ai-disclosure">{tc('legal.aiDisclosure')}</Typography>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
               <TextField fullWidth multiline maxRows={6} size="small" value={text} disabled={running}
                 placeholder="Describe your drone or robot: mass, number of motors, battery, propeller size…"

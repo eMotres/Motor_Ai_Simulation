@@ -5,6 +5,8 @@
 // 30-day HS256 token (POST /api/auth/google | /api/auth/login), which is what
 // every API call carries. Rights (role/admin) always live server-side in
 // config/users.json + ADMIN_EMAILS — nothing here is trusted for authorization.
+import { acceptancePayload, emptyAcceptance, resolveLegalUrl, type LegalLang } from './legalLogic';
+
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
 export const GOOGLE_CLIENT_ID =
@@ -156,7 +158,12 @@ async function post(path: string, body: unknown): Promise<{ token: string; user:
     body: JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j as { detail?: string }).detail || `login failed (${r.status})`);
+  if (!r.ok) {
+    const e = new ApiErr((j as { detail?: string }).detail || `login failed (${r.status})`);
+    e.code = (j as { code?: string }).code;
+    e.params = (j as { params?: Record<string, unknown> }).params;
+    throw e;
+  }
   return j as { token: string; user: SessionUser };
 }
 
@@ -193,9 +200,9 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
  *  sign-up started inside an AI app's authorization window — the mailed link
  *  then opens that page again and the pending authorization is kept alive. */
 export function registerAccount(email: string, password: string, name: string, commPrefs: Partial<Record<string, boolean>> = {},
-  lang = 'en', returnTo?: string, next?: string) {
+  lang = 'en', returnTo?: string, next?: string, terms: TermsAcceptance = acceptancePayload(emptyAcceptance(), '')) {
   return postPlain('/api/auth/register', {
-    email, password, name, comm_prefs: commPrefs, lang, ...(returnTo ? { return_to: returnTo } : {}),
+    email, password, name, comm_prefs: commPrefs, lang, ...terms, ...(returnTo ? { return_to: returnTo } : {}),
     // a shared link the visitor opened before registering (lib/productionLink.ts): the confirmation page leads on to it
     ...(next ? { next } : {}),
   });
@@ -238,10 +245,14 @@ export function requestedAuthMode(): 'register' | 'signin' | null {
   return null;
 }
 
-/** Public legal / source links shown under the sign-up form (build-time
- *  overridable; the MCP discovery tools quote the same pages). */
-export const TERMS_URL = (import.meta.env.VITE_TERMS_URL as string | undefined) ?? 'https://emotres.com/terms-conditions';
-export const PRIVACY_URL = (import.meta.env.VITE_PRIVACY_URL as string | undefined) ?? 'https://emotres.com/privacy-policy';
+/** The acceptance part of a sign-up request (legalLogic.acceptancePayload): `{accept_terms, terms_version, country, business_name}`. */
+export type TermsAcceptance = ReturnType<typeof acceptancePayload>;
+
+/** Public legal / source links shown under the sign-up form.  They default to the in-app pages (/terms, /privacy and the agreement,
+ *  with the /zh-cn/ prefix in Chinese); VITE_TERMS_URL / VITE_PRIVACY_URL still override at build time. */
+export const termsUrl = (lang: LegalLang = 'en') => resolveLegalUrl(import.meta.env.VITE_TERMS_URL, 'terms', lang);
+export const privacyUrl = (lang: LegalLang = 'en') => resolveLegalUrl(import.meta.env.VITE_PRIVACY_URL, 'privacy', lang);
+export const agreementUrl = (lang: LegalLang = 'en') => resolveLegalUrl(import.meta.env.VITE_AGREEMENT_URL, 'platform-agreement', lang);
 export const SOURCE_URL = (import.meta.env.VITE_SOURCE_URL as string | undefined) ?? 'https://github.com/eMotres/Motor_Ai_Simulation';
 
 /** Ask for a reset link (also how a Google-only account gets a password). */
@@ -281,9 +292,11 @@ export function clearEmailLink(): void {
 
 /** GIS ID token (1-hour life) → our 30-day token. */
 /** `commPrefs` = the e-mail opt-in boxes under the button (only the ticked ones); the server applies them on the FIRST
- *  sign-in only and records them with the wording shown in `lang` (comm_prefs.py). */
-export function googleExchange(credential: string, commPrefs: Partial<Record<string, boolean>> = {}, lang = 'en') {
-  return post('/api/auth/google', { credential, comm_prefs: commPrefs, lang });
+ *  sign-in only and records them with the wording shown in `lang` (comm_prefs.py).  `terms` = the sign-up box: the server needs it
+ *  for a brand-new account only (422 `terms_required` otherwise); an existing account signs in without it. */
+export function googleExchange(credential: string, commPrefs: Partial<Record<string, boolean>> = {}, lang = 'en',
+  terms: TermsAcceptance = acceptancePayload(emptyAcceptance(), '')) {
+  return post('/api/auth/google', { credential, comm_prefs: commPrefs, lang, ...terms });
 }
 
 /** Best-effort decode of a JWT payload (display-only fields like name/picture). */

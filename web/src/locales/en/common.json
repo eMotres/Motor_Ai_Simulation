@@ -202,9 +202,6 @@
       "passwordChanged": "Password changed — sign in with the new one."
     },
     "terms": {
-      "prefix": "By creating an account you accept the",
-      "terms": "Terms",
-      "privacy": "Privacy Policy",
       "license": "AeroStator is open source under the Apache License 2.0:",
       "source": "source code"
     },
@@ -658,5 +655,35 @@
       "loop": "Coupled loop: each iteration is an electromagnetic run plus a thermal solve; it stops when the temperatures converge.",
       "pwm_final": "The controller's PWM passes on the converged sine state, each an electromagnetic run plus a thermal solve."
     }
+  },
+  "legal": {
+    "accept": {
+      "lead": "I use AeroStator for my own business or am authorised by the business I name. I accept the ",
+      "terms": "Terms of Use",
+      "sep1": " and the ",
+      "agreement": "Platform Agreement",
+      "privacy": "Privacy Policy",
+      "tail": ".",
+      "hint": "Choose the country and tick the box to continue.",
+      "needBox": "This is a new account: choose the country, tick the box, then continue with Google.",
+      "country": "Country where your business is established",
+      "business": "Business name (leave empty if you work as a sole trader / self-employed)",
+      "mid": " (FREE mode): in exchange for free simulation, MOTRES may use the engineering data of my account, including data entered earlier, to train its own AI models, with no further obligations and keeping models already trained. Personal data is not used. I have read the "
+    },
+    "update": {
+      "title": "Updated terms: free simulation",
+      "accept": "Accept",
+      "later": "Later",
+      "error": "Could not save your acceptance: {message}"
+    },
+    "page": {
+      "terms": "Terms of Use",
+      "privacy": "Privacy Policy",
+      "platform-agreement": "Platform Agreement",
+      "nav": "Legal texts",
+      "loadError": "The text could not be loaded. Please try again later.",
+      "version": "Version {version}"
+    },
+    "aiDisclosure": "AI assistant — answers can be wrong."
   }
 }

@@ -40,5 +40,6 @@
   "tickets": {
     "empty": "No tickets yet. Tell me about a problem or an idea and I will prepare one.",
     "loadFailed": "Could not load your tickets."
-  }
+  },
+  "geminiNotice": "Runs on Google Gemini. Google may use help-chat messages to improve its services. Do not enter confidential information."
 }

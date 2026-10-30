@@ -202,9 +202,6 @@
       "passwordChanged": "密码已修改——请使用新密码登录。"
     },
     "terms": {
-      "prefix": "创建账户即表示您接受",
-      "terms": "服务条款",
-      "privacy": "隐私政策",
       "license": "AeroStator 以 Apache License 2.0 许可开源：",
       "source": "源代码"
     },
@@ -658,5 +655,35 @@
       "loop": "耦合回路：每次迭代是一次电磁运行加一次热求解，温度收敛后停止。",
       "pwm_final": "控制器的 PWM 轮次，基于已收敛的正弦状态，每轮是一次电磁运行加一次热求解。"
     }
+  },
+  "legal": {
+    "accept": {
+      "lead": "我为本人业务使用 AeroStator，或已获我所指明企业的授权。我接受《",
+      "terms": "使用条款",
+      "sep1": "》及《",
+      "agreement": "平台协议",
+      "privacy": "隐私政策",
+      "tail": "》。",
+      "hint": "请选择国家或地区并勾选选项后继续。",
+      "needBox": "这是新账户：请选择国家或地区并勾选选项，然后继续使用 Google 登录。",
+      "country": "企业注册所在国家或地区",
+      "business": "企业名称（个体经营者或自雇人士请留空）",
+      "mid": "》（免费模式）：作为免费仿真的交换，MOTRES 可使用我账户中的工程数据（包括此前输入的数据）训练其自有的人工智能模型，且不承担其他义务，已训练的模型予以保留。个人数据不用于训练。我已阅读《"
+    },
+    "update": {
+      "title": "条款更新：仿真免费",
+      "accept": "接受",
+      "later": "稍后",
+      "error": "无法保存您的接受记录：{message}"
+    },
+    "page": {
+      "terms": "使用条款",
+      "privacy": "隐私政策",
+      "platform-agreement": "平台协议",
+      "nav": "法律文本",
+      "loadError": "无法加载文本，请稍后再试。",
+      "version": "版本 {version}"
+    },
+    "aiDisclosure": "人工智能助手——回答可能有误。"
   }
 }

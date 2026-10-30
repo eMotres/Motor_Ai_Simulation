@@ -242,6 +242,58 @@ def test_the_seed_gate_refuses_a_state_from_another_symmetry():
         import importlib; importlib.reload(O)
 
 
+def test_a_simulation_state_at_another_coil_temperature_seeds_the_sweep():
+    """Owner 2026-10-30: a 150 C Simulation, then a sweep sent at 120 C (no
+    panel sent the field) — "sweep seeding: FIRST POINT SOLO ... cached state is
+    at 150.0 C coil, this run 120.0 C", and the warm-up ran again.  On the
+    current-drive eddy path the copper temperature is the winding resistance,
+    not the field state: neither gate refuses it, both still refuse a real
+    difference (steps, winding, magnet scale)."""
+    sim = {"nspp": 12, "npd": 1.0, "conn": "np2", "temp": 150.0, "mscale": 1.0}
+    run = dict(sim, temp=120.0)
+    wc = {"meta": dict(sim), "I": 60.0, "rpm": 15000.0, "gam": 0.0, "nsect": 1}
+    assert F._warm_seed_accept(wc, run, 60.0, 15000.0, 0.0, n_sectors=1)[0] is True
+    for k, v in (("conn", "np1"), ("mscale", 0.9), ("nspp", 36)):
+        assert F._warm_seed_accept(wc, dict(run, **{k: v}), 60.0, 15000.0, 0.0,
+                                   n_sectors=1)[0] is False, k
+    from motor_ai_sim.routes import optimization as O
+    O._warm_seed_state = lambda: {"meta": dict(sim), "I": 60.0, "rpm": 15000.0,
+                                  "gam": 0.0, "geo_fp": "", "nspp_req": 12,
+                                  "nsect": 1, "has_br": True}
+    try:
+        assert O._seed_usable_for(12, 120.0, 15000.0, 1.0, n_sectors=1) == (True, "")
+        assert O._seed_usable_for(24, 150.0, 15000.0, 1.0, n_sectors=1)[0] is False
+    finally:
+        import importlib; importlib.reload(O)
+
+
+def test_a_sweep_runs_at_the_simulation_tabs_coil_temperature(monkeypatch):
+    """No sweep / optimizer panel sends coil_temp_c: an unset request takes the
+    Simulation tab's saved value, an explicit one is kept, and only a config
+    without one falls back to 120 C."""
+    from motor_ai_sim.routes import optimization as O
+    monkeypatch.setattr(O, "get_config",
+                        lambda: {"simulation": {"coil_temp_c": 150.0}})
+    assert O.ScanRequest().coil_temp_c is None
+    assert O.OptRequest().coil_temp_c is None
+    assert O.RefineRequest().coil_temp_c is None
+    assert O._sim_coil_temp_c(None) == 150.0
+    assert O._sim_coil_temp_c(90.0) == 90.0
+    monkeypatch.setattr(O, "get_config", lambda: {"simulation": {}})
+    assert O._sim_coil_temp_c(None) == 120.0
+
+
+def test_the_library_key_does_not_name_the_coil_temperature():
+    """A state stored by a 120 C sweep point and one by a 150 C Simulation are
+    the same machine discretisation for the warm library."""
+    from motor_ai_sim.simulation import warm_library as W
+    a = {"nspp": 12, "npd": 1.0, "conn": "np2", "temp": 120.0, "mscale": 1.0}
+    b = dict(a, temp=150.0)
+    k = lambda m: W.machine_key("g", "m", F._seed_field_identity(m), 1)
+    assert k(a) == k(b)
+    assert k(a) != k(dict(a, conn="np1"))
+
+
 def test_the_warm_cache_gate_is_per_call_as_well_as_per_process():
     """The Thermal route disables the seed for ITS solve without touching the
     process-wide env var another request's transient may be relying on."""

@@ -319,6 +319,34 @@ def _effective_demag(demag: Optional[bool]) -> bool:
         return False
 
 
+def _sim_coil_temp_c(coil_temp_c: Optional[float]) -> float:
+    """The copper temperature an eval runs at: the caller's when it pinned one,
+    else the SIMULATION TAB's (`simulation.coil_temp_c`, which the panel saves
+    on every Run and auto-save), else the labelled 120 C fallback.
+
+    Owner 2026-10-30: «я запустил всё то же самое, на чём делал моделирование;
+    я не мог поменять температуру в свипе».  The Sweep, the optimizer, the
+    descent and the refine requests all defaulted to 120 C and no panel sent
+    the field, so a sweep after a 150 C Simulation solved every point at
+    another copper resistance than the run the owner was comparing against —
+    and refused that run's warm state as "another coil temperature" on top.
+    """
+    if coil_temp_c is not None:
+        try:
+            v = float(coil_temp_c)
+            if math.isfinite(v):
+                return v
+        except (TypeError, ValueError):
+            pass
+    try:
+        v = float((get_config().get("simulation") or {}).get("coil_temp_c"))
+        if math.isfinite(v):
+            return v
+    except Exception:  # noqa: BLE001 — a config hiccup falls back, labelled
+        pass
+    return 120.0
+
+
 def _override_is_noop(key: str, value: Any) -> bool:
     """True when `key: value` equals the live geometry's own value for that
     parameter (within 1e-9 relative), i.e. the override does not change the
@@ -1242,7 +1270,7 @@ def _seed_usable_for(steps: int, coil_temp_c: float, rpm: Optional[float],
     """Would a queued eval find a state it can continue?  ``(ok, why_not)``.
 
     Deliberately checks only the terms this layer can KNOW without building a
-    machine — steps/period, n_periods, coil temperature, speed, and (when the
+    machine — steps/period, n_periods, symmetry, speed, and (when the
     run is a demag one) whether a Br map is there at all.  The winding and the
     magnet scale are resolved inside the eval, so a mismatch there shows up as
     a refused seed in the subprocess and simply makes that point a cold one.
@@ -1270,9 +1298,11 @@ def _seed_usable_for(steps: int, coil_temp_c: float, rpm: Optional[float],
         if int(wc["nsect"]) != _ns_run:
             return False, "cached state was solved on %d sector(s), this run %d" % (
                 int(wc["nsect"]), _ns_run)
-    if abs(float(m.get("temp", -1e9)) - round(float(coil_temp_c), 1)) > 0.05:
-        return False, "cached state is at %s C coil, this run %.1f C" % (
-            m.get("temp"), float(coil_temp_c))
+    # The COIL TEMPERATURE is not a seed term any more (owner 2026-10-30; the
+    # solver's own gate, fem_solver_2d._SEED_FIELD_FREE_META): on the current-
+    # drive eddy path it changes the winding resistance, not the field state
+    # the seed carries.  A 120 C sweep used to refuse a 150 C Simulation's
+    # state here and pay the whole warm-up and pre-pass on its first point.
     if rpm:
         if abs(float(wc.get("rpm", 0.0)) - float(rpm)) > 0.05 * abs(float(rpm)):
             return False, "cached state is %.6g rpm, this run %.6g" % (
@@ -1795,7 +1825,7 @@ class OptRequest(BaseModel):
     operating_points: List[OptOperating] = Field(default_factory=lambda: [OptOperating()])
     ripple_max_pct: float = 100.0          # cogging-ripple selection gate [%]
     n_samples: int = 600                   # number of GEOMETRY samples
-    coil_temp_c: float = 120.0
+    coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     seed: int = 12345
     # A die-defining variable (stator Ø, segments, slots/poles per segment —
     # routes/family.DIE_IDENTITY_KEYS) is refused while a die is active unless
@@ -1834,7 +1864,7 @@ def run_optimization(req: OptRequest):
         res = run_pareto_search(
             geo, wind, sim, variables, ops,
             n_samples=n, ripple_max_pct=float(req.ripple_max_pct),
-            coil_temp_c=float(req.coil_temp_c), seed=int(req.seed))
+            coil_temp_c=_sim_coil_temp_c(req.coil_temp_c), seed=int(req.seed))
         return res
     except Exception as e:  # noqa: BLE001
         log.exception("optimization run failed")
@@ -1898,7 +1928,7 @@ class RefineDesign(BaseModel):
 class RefineRequest(BaseModel):
     designs: List[RefineDesign] = Field(default_factory=list)
     steps_per_period: int = 40
-    coil_temp_c: float = 120.0
+    coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     run_id: str = ""
 
 
@@ -1950,7 +1980,7 @@ def refine_designs(req: RefineRequest):
                              "optimizer.refine",
                              priority=_JOBS.Priority.CAMPAIGN,
                              run_id=req.run_id)(_refine_worker)),
-                         args=(designs, steps, float(req.coil_temp_c), req.run_id),
+                         args=(designs, steps, _sim_coil_temp_c(req.coil_temp_c), req.run_id),
                          daemon=True)
     t.start()
     return {"started": True, "total": len(designs), "steps_per_period": steps}
@@ -1984,7 +2014,7 @@ class ScanRequest(BaseModel):
     steps_per_period: int = 6              # FEM frames per electrical period
     ripple_max_pct: float = 100.0
     max_geometries: int = 24               # cap on enumerated geometries
-    coil_temp_c: float = 120.0
+    coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     mesh_size_mm: float = 4.0              # mesh resolution (set from Mesh tab) — coarser = faster scan
     min_size_mm: float = 0.3
     pole_copy: Optional[bool] = None       # mesh mode (Mesh tab "Periodic")
@@ -2826,7 +2856,7 @@ def scan_designs(req: ScanRequest):
     _new_scan_thread = threading.Thread(target=_WSP.bind(_JOBS.as_job(
                          "optimizer.scan", priority=_JOBS.Priority.CAMPAIGN,
                          run_id=req.run_id)(_scan_worker)),
-                     args=(variables, ops, steps, float(req.coil_temp_c),
+                     args=(variables, ops, steps, _sim_coil_temp_c(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
@@ -3135,7 +3165,7 @@ def scan_cancel(run_id: str = ""):
 class SeedCacheRequest(BaseModel):
     # Only used for OLD results that predate scan_params storage; new results carry
     # their own params (which take precedence) so the keys match exactly.
-    coil_temp_c: float = 120.0
+    coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
     pole_copy: Optional[bool] = None
@@ -3172,7 +3202,7 @@ def seed_cache(req: SeedCacheRequest):
                          "— its exact solver settings are unknown, so seeding "
                          "it would file the points under the wrong key. Re-run "
                          "the sweep once; new results seed fine."}
-    coil = float(sp.get("coil_temp_c", req.coil_temp_c))
+    coil = float(sp.get("coil_temp_c", _sim_coil_temp_c(req.coil_temp_c)))
     mesh = float(sp.get("mesh_size_mm", req.mesh_size_mm))
     mn = float(sp.get("min_size_mm", req.min_size_mm))
     pc = sp.get("pole_copy", req.pole_copy)
@@ -3700,7 +3730,7 @@ class DescentRequest(BaseModel):
     penalty_lambda: float = 1.0       # ripple-violation penalty
     max_iters: int = 8
     steps_per_period: int = 24        # FEM frames/period (higher → cleaner ripple gradient)
-    coil_temp_c: float = 120.0
+    coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
     # Air-gap mesh layers — SINGLE SOURCE: the Mesh tab. The dominant driver of the
@@ -3793,7 +3823,7 @@ class BaselineRequest(BaseModel):
     operating_point: OptOperating = Field(default_factory=OptOperating)
     current_bump_pct: float = 10.0
     steps_per_period: int = 24
-    coil_temp_c: float = 120.0
+    coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
     gap_layers: Optional[float] = None     # layers/side; None = the machine's saved Mesh setting
@@ -5331,7 +5361,7 @@ def descent_start(req: DescentRequest):
                                # the Sim at toggled settings won't reproduce the picked design).
                                "eval_params": {
                                    "steps_per_period": steps, "n_sectors": n_sectors,
-                                   "gap_layers": _resolve_gap_layers(req.gap_layers)[0], "coil_temp_c": float(req.coil_temp_c),
+                                   "gap_layers": _resolve_gap_layers(req.gap_layers)[0], "coil_temp_c": _sim_coil_temp_c(req.coil_temp_c),
                                    "pole_copy": req.pole_copy, "torque_filter": bool(req.torque_filter),
                                    "rotor_eddy": bool(req.rotor_eddy),
                                    "end_winding_factor": float(req.end_winding_factor),
@@ -5351,7 +5381,7 @@ def descent_start(req: DescentRequest):
             run_id=req.run_id)(worker)),
         args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
               float(req.w_td), float(req.penalty_lambda), steps,
-              float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
+              _sim_coil_temp_c(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
               n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
               auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed),
               req.pole_copy, bool(req.torque_filter),
@@ -5387,7 +5417,7 @@ def descent_baseline(req: BaselineRequest):
     n_sectors = int(req.n_sectors)
 
     def _ev(cur: float):
-        return _subprocess_eval({}, cur, steps, float(req.coil_temp_c), n_periods=1.0,
+        return _subprocess_eval({}, cur, steps, _sim_coil_temp_c(req.coil_temp_c), n_periods=1.0,
                                 gamma_deg=g, mesh_size_mm=mesh_size, min_size_mm=min_size,
                                 n_sectors=n_sectors, pole_copy=req.pole_copy,
                                 torque_filter=bool(req.torque_filter),

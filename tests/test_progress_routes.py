@@ -34,7 +34,7 @@ import pytest
 
 #: The invariant response shape, as pinned in tests/test_progress_tracker.py.
 KEYS = {"running", "step", "total", "elapsed_s", "eta_s", "per_step_s", "frac",
-        "phase", "composition", "ts_start", "kind"}
+        "phase", "composition", "ts_start", "stages", "kind"}
 
 # The 30 mm 12s/14p spoke machine the thermal suite runs on
 # (tests/test_thermal_routes.py::GEO_30MM), passed per-request so nothing on

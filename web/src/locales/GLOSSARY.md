@@ -44,6 +44,8 @@ translated (`Phase current` → `相电流`, `R phase` → `相电阻 R`).
 | torque density / power density | 转矩密度 / 功率密度 | |
 | flux linkage | 磁链 | |
 | demagnetisation | 退磁 | |
+| warm-up (eddy start-up settling) | 预热 | the stage before anything is reported |
+| pre-pass (demagnetisation) | 预扫 | one settled period, frames discarded |
 | remanence Br, coercivity HcJ | 剩磁 Br, 内禀矫顽力 HcJ | |
 | saturation | 饱和 | |
 | operating point | 工作点 | |

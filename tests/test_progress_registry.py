@@ -162,7 +162,7 @@ def test_the_no_arg_form_answers_before_anything_has_run(client):
         out = client.get(path).json()
         assert set(out) == {"running", "step", "total", "elapsed_s", "eta_s",
                             "per_step_s", "frac", "phase", "composition",
-                            "ts_start", "kind"}, path
+                            "ts_start", "stages", "kind"}, path
         assert out["running"] is False
 
 

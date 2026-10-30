@@ -26,6 +26,8 @@ from pydantic import BaseModel, Field
 # say out loud what is running (see motor_ai_sim/field_jobs.py).
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import progress as _PROG
+from motor_ai_sim import progress_stages as _PSTG
+from sys import exc_info as _sys_exc_info
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.field_jobs import field_busy, run_field_job
 from motor_ai_sim.simulation.sb_domains import (
@@ -4291,6 +4293,9 @@ async def get_fem_transient_progress(run_id: str = ""):
     ``position``; it carries neither at any other time.
     """
     p, _rid = _PROG.transient_dict("transient", run_id)
+    # The stage list (progress_stages) is bookkeeping while the solve writes it;
+    # what goes on the wire is its public shape, beside the flat fields below.
+    p = {**p, "stages": _PSTG.public(p.get("stages"))}
     if p.get("running") and p.get("ts_start", 0) > 0:
         import time as _t
         elapsed  = _t.time() - p["ts_start"]
@@ -5600,6 +5605,16 @@ def get_fem_transient(
             "phase": ("fem-solve (sliding-band, demag)" if demag
                       else "fem-solve (sliding-band)"),
             "composition": "",
+            # The ordered stages of THIS run (owner 2026-10-30): what is known
+            # now — the reported window, the warm-up if the eddy solve is on,
+            # the demag pre-pass — and the post-processing that follows.  The
+            # solver's own callback fills in the rest (gap probes, calibration)
+            # and the counts; see progress_stages.
+            "stages": _PSTG.plan_em(
+                eddy=bool(eddy), demag=bool(demag),
+                planned_final=max(1, int(round(float(n_steps_per_period)
+                                               * float(n_periods)))),
+                planned_prepass=(int(n_steps_per_period) if demag else 0)),
         }
         def _sb_cancel_only(*_a, **_k):
             if run_id and _JOBS.is_cancelled(run_id):
@@ -5634,6 +5649,11 @@ def get_fem_transient(
             elif _cur.get("phase", "").startswith("eddy warm-up"):
                 _cur["phase"] = ("fem-solve (sliding-band, coupled eddy)"
                                  if eddy else "fem-solve (sliding-band)")
+            try:                       # the stage row; never breaks a solve
+                _PSTG.observe(_cur.setdefault("stages", []), _done, _total,
+                              _phase, _composition)
+            except Exception:              # noqa: BLE001
+                pass
         try:
             # ONE canonical solve — shared with the optimizer (refine_proc) and
             # the solver.em_transient module via em_transient_eval, so they can
@@ -5715,6 +5735,8 @@ def get_fem_transient(
                 try:
                     _fem_transient_progress["current"]["phase"] = \
                         "fem-solve (six-phase L_xy probe, full ring)"
+                    _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                                  None, None, "fem-solve (six-phase L_xy probe, full ring)")
                     from motor_ai_sim.simulation.fem_solver_2d import \
                         measure_six_phase_inductances as _msi
                     _i1 = _I_wind
@@ -5770,6 +5792,8 @@ def get_fem_transient(
                     if _fc["I1_phase_rms_A"] > 1e-3:
                         _fem_transient_progress["current"]["phase"] = \
                             "fem-solve (harm-ref, sinusoidal current)"
+                        _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                                      None, None, "fem-solve (harm-ref, sinusoidal current)")
                         _ref = em_transient_eval(
                             n_steps_per_period=int(n_steps_per_period),
                             sampling_purpose=sampling_purpose,
@@ -5906,6 +5930,12 @@ def get_fem_transient(
             # cleared in the route's own finally, so no error path can hang it.
             _fem_transient_progress["current"]["phase"] = \
                 "post-processing (frames, masses, summary)"
+            # Only a solve that SUCCEEDED enters the post-processing stage: on
+            # a Stop or an error this finally still runs, and "post-processing"
+            # must not be shown for a run that never got there.
+            if _sys_exc_info()[0] is None:
+                _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                              None, None, "post-processing (frames, masses, summary)")
         # ── Animation keyframes → the viewer's payload shape ──────────────────
         # The solver hands back ONE mesh topology plus, per keyframe, the
         # rotor-rotated node coordinates and that frame's field.  This replaces
@@ -6197,7 +6227,14 @@ def get_fem_transient(
         # The run is over HERE — after the post-processing, not after the last
         # frame (see the phase note above).  Unconditional: an exception on any
         # path must not leave the progress endpoint reporting a live solve.
-        _fem_transient_progress["current"]["running"] = False
+        _cur_end = _fem_transient_progress["current"]
+        # A run that reached its post-processing completed; one that did not
+        # (error, Stop) leaves its running stage "stopped", not "done".
+        _post_end = next((s for s in (_cur_end.get("stages") or [])
+                          if s.get("key") == "post"), None)
+        _PSTG.finalize(_cur_end.get("stages"),
+                       ok=bool(_post_end and _post_end.get("state") == "running"))
+        _cur_end["running"] = False
         _tlock.release()
 
 

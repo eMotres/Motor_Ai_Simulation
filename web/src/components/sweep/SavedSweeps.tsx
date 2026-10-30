@@ -1,9 +1,11 @@
-// Saved sweeps: keep the finished last scan with its machine stamp, and reopen
-// one later.  The store is the caller's WORKSPACE on the server
+// Saved sweeps: every sweep that ends with a computed point is filed by the
+// server itself (finished or Stopped - owner 2026-10-30), a new Run files what
+// the tab still held, and any of them can be reopened here with its machine
+// stamp.  "Save sweep" stays for a sweep reopened/imported by hand.  The store is the caller's WORKSPACE on the server
 // (`<workspace>/optimization_saves/`, see sweep_saves.py) - it survives restarts
 // and deploys.  Reopening makes a save the scan the tab shows; the tab then
 // labels it "Previous run of <machine>" (lib/sweepRestore.ts).
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { machineLabel } from '../../lib/sweepRestore';
 import type { MachineStamp } from '../../lib/sweepRestore';
@@ -20,7 +22,25 @@ interface SavedRow {
   machine: MachineStamp;
   matches_loaded_machine: boolean;
   imported: boolean;
+  /** Filed by the server when the run ended / rebuilt from the eval logs. */
+  auto?: boolean;
+  rebuilt?: boolean;
+  state?: string;
+  n_done?: number | null;
+  n_planned?: number | null;
 }
+
+/** "7/8 · stopped" - how far the run got, when the save knows. */
+export const progressLabel = (row: Pick<SavedRow, 'n_points' | 'n_done' | 'n_planned' | 'state' | 'rebuilt'>): string => {
+  const done = row.n_done ?? row.n_points;
+  const planned = row.n_planned;
+  const what = planned ? `${done ?? '?'}/${planned}` : `${row.n_points ?? '?'} pts`;
+  const how = row.state === 'cancelled' ? ' · stopped'
+    : row.state === 'machine-changed' ? ' · machine changed'
+    : row.state === 'previous' ? ' · replaced by a new run'
+    : row.rebuilt ? ' · rebuilt from the logs' : '';
+  return what + how;
+};
 
 interface Props {
   /** A finished, identified result is on screen (Save has something to save). */
@@ -48,6 +68,13 @@ const SavedSweeps: React.FC<Props> = ({ canSave, running, onOpened, onError }) =
       setRows((await r.json()).saved ?? []);
     } catch (e: any) { onError(`could not list saved sweeps: ${String(e?.message ?? e)}`); }
   };
+
+  // The list is cheap (no points): keep its count fresh - on mount, and each
+  // time a run ends, when the server has just filed it.
+  useEffect(() => {
+    if (!running) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
 
   const toggle = async () => {
     const next = !open;
@@ -100,8 +127,8 @@ const SavedSweeps: React.FC<Props> = ({ canSave, running, onOpened, onError }) =
       </Button>
       <Button size="small" variant="text" disabled={running} onClick={toggle}
         sx={{ ...btn, color: 'var(--text-2)' }}
-        title="Sweeps saved in your workspace. Open one to see it again, with the machine it was computed on.">
-        Saved sweeps{open ? ' ▴' : ' ▾'}
+        title="Every sweep that computed a point is saved here automatically, finished or stopped. Open one to see it again, with the machine it was computed on.">
+        Saved sweeps{rows ? ` (${rows.length})` : ''}{open ? ' ▴' : ' ▾'}
       </Button>
       {note && <Typography component="span" sx={{ fontSize: 11, color: '#34d399' }}>{note}</Typography>}
       {open && (
@@ -113,7 +140,7 @@ const SavedSweeps: React.FC<Props> = ({ canSave, running, onOpened, onError }) =
           {(rows ?? []).map(row => (
             <Box key={row.id} sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 0.25, fontSize: 11 }}>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                title={`${row.name} — ${row.created_at}${row.imported ? ' (imported)' : ''}`}>
+                title={`${row.name} — ${row.created_at}${row.imported ? ' (imported)' : ''}${row.rebuilt ? ' (rebuilt from the eval logs: operating-point rpm unknown, some points carry only their headline metrics)' : ''}`}>
                 {row.name}
               </span>
               <span style={{ color: row.matches_loaded_machine ? '#34d399' : 'var(--text-3)', whiteSpace: 'nowrap' }}
@@ -123,7 +150,7 @@ const SavedSweeps: React.FC<Props> = ({ canSave, running, onOpened, onError }) =
                 {machineLabel(row.machine)}
               </span>
               <span style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
-                {row.n_points ?? '?'} pts{row.variables.length ? ` · ${row.variables.join(', ')}` : ''}
+                {progressLabel(row)}
               </span>
               <Button size="small" disabled={busy || running} onClick={() => reopen(row.id)} sx={btn}>Open</Button>
               <Button size="small" disabled={busy || running} onClick={() => remove(row.id)}

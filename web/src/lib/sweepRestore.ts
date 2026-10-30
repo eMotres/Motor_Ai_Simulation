@@ -126,6 +126,7 @@ export function notShownText(why: RestoreWhy, res: any): string {
     case 'unstamped': return 'the stored sweep does not name its machine — not shown';
     case 'foreign-machine': return `the stored sweep was computed on ${m} — not this machine, so it is not shown`;
     case 'other-run': return 'the result on the server belongs to another run — not shown';
+    case 'empty': return 'the sweep stopped before any point finished — earlier sweeps are under Saved sweeps';
     default: return 'nothing to show';
   }
 }

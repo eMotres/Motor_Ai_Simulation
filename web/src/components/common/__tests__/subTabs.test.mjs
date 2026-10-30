@@ -34,8 +34,10 @@ test('every navigation switch is a SubTabs; the Optimization one sits in the hea
   }
 });
 
-test('the Simulations group gets a header row with its members as sub-tabs', () => {
+test('Simulations is a plain top tab (no dropdown); its members are sub-tabs in a header row', () => {
   const app = src('App.tsx');
   assert.match(app, /data-testid="simulations-header"/);
-  assert.match(app, /<SubTabs value=\{activeTab\} items=\{sim\.members\}/);
+  assert.match(app, /<SubTabs value=\{activeTab\} items=\{simMembers\}/);
+  assert.doesNotMatch(app, /aria-haspopup|<Menu|<MenuItem|▾/, 'the top bar has no dropdown any more');
+  assert.match(app, /useRememberedView<string>\('simulations\.lastTab'/);
 });

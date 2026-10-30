@@ -58,3 +58,11 @@ t('the bar value and the label follow the open panel', () => {
   assert.equal(M.simulationsLabel('Simulations', 'simulation', members), 'Simulations · Electromagnetic');
   assert.equal(M.simulationsLabel('Simulations', 'mesh', members), 'Simulations');
 });
+
+t('the plain Simulations tab opens the last member this account still has, else the first', () => {
+  const members = [{ id: 'simulation' }, { id: 'thermal' }, { id: 'schemas' }];
+  assert.equal(M.simulationsTarget('thermal', members), 'thermal');
+  assert.equal(M.simulationsTarget('mechanical', members), 'simulation');   // remembered one is not visible to this role
+  assert.equal(M.simulationsTarget(null, members), 'simulation');
+  assert.equal(M.simulationsTarget('thermal', []), null);
+});

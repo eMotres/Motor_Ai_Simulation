@@ -12,8 +12,6 @@ import {
   Tooltip,
   Chip,
   Badge,
-  Menu,
-  MenuItem,
   CircularProgress,
   useMediaQuery,
 } from '@mui/material';
@@ -62,7 +60,9 @@ import { useApiReady } from './contexts/AuthContext';
 import { parseAdminLink } from './lib/adminLink';
 import { parseAppLink } from './lib/appLink';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
-import { barEntries, isSimulationTab, barValue, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
+import { barEntries, isSimulationTab, barValue, simulationsTarget, SIMULATIONS_BAR_ID, SIMULATION_TAB_IDS } from './lib/simulationsMenu';
+import { oneOf } from './lib/viewMemory';
+import { useRememberedView } from './lib/useRememberedView';
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
@@ -713,7 +713,10 @@ function App() {
   // dropdown (owner 2026-10-13).  Every panel keeps its own tab id, gate and mount
   // rule above; only the bar is drawn differently (lib/simulationsMenu).
   const entries = barEntries(tabs);
-  const [simAnchor, setSimAnchor] = useState<HTMLElement | null>(null);
+  // The plain "Simulations" tab opens the member the user looked at last (remembered across reloads, lib/viewMemory).
+  const [lastSim, setLastSim] = useRememberedView<string>('simulations.lastTab', 'simulation', oneOf(SIMULATION_TAB_IDS));
+  useEffect(() => { if (isSimulationTab(activeTab) && activeTab !== lastSim) setLastSim(activeTab); }, [activeTab, lastSim, setLastSim]);
+  const simMembers = (entries.find((e) => e.kind === 'simulations') as { members: { id: string; label: string }[] } | undefined)?.members ?? [];
 
   return (
     <ThemeProvider theme={appTheme}>
@@ -791,7 +794,11 @@ function App() {
         <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Tabs
             value={barValue(activeTab)}
-            onChange={(_, v) => { if (v !== SIMULATIONS_BAR_ID) setActiveTab(v); }}
+            onChange={(_, v) => {
+              if (v !== SIMULATIONS_BAR_ID) { setActiveTab(v); return; }
+              const to = simulationsTarget(lastSim, simMembers);
+              if (to) setActiveTab(to as never);
+            }}
             /* Thirteen tabs do not fit a phone: below md they scroll sideways instead of squeezing to unreadable widths. */
             variant={narrow ? 'scrollable' : 'fullWidth'}
             scrollButtons={narrow ? 'auto' : false}
@@ -800,10 +807,8 @@ function App() {
           >
             {entries.map((e) => e.kind === 'simulations' ? (
               <Tab key={e.id} value={e.id}
-                /* the open member is named in the Simulations header row below the bar, not in this tab */
-                label={`${tr('tabs.simulations', { defaultValue: 'Simulations' })} ▾`}
-                onClick={(ev) => setSimAnchor(ev.currentTarget)}
-                aria-haspopup="menu" aria-expanded={!!simAnchor}
+                /* a plain tab like the others; the members are sub-tabs in the Simulations header row below the bar */
+                label={tr('tabs.simulations', { defaultValue: 'Simulations' })}
                 sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
                   px: 0.75, minWidth: 0, letterSpacing: 0 }} />
             ) : (() => { const t = tabs.find((x) => x.id === e.id)!; return (
@@ -836,15 +841,6 @@ function App() {
                   ...(t.id === 'admin' ? { fontWeight: 700, color: '#fbbf24' } : {}) }} />
             ); })())}
           </Tabs>
-          <Menu anchorEl={simAnchor} open={!!simAnchor} onClose={() => setSimAnchor(null)}>
-            {(entries.find((e) => e.kind === 'simulations') as
-              { members: { id: string; label: string }[] } | undefined)?.members.map((m) => (
-              <MenuItem key={m.id} selected={activeTab === m.id} sx={{ fontSize: '0.85rem' }}
-                onClick={() => { setSimAnchor(null); setActiveTab(m.id as never); }}>
-                {m.label}
-              </MenuItem>
-            ))}
-          </Menu>
         </Box>
 
         {/* ── What is loaded: die / configuration / duty + save-back ── */}
@@ -858,18 +854,14 @@ function App() {
 
         {/* ── Simulations header row (owner 2026-10-30): the dropdown's members as sub-tabs in the main menu's style,
             on top of every panel of the group, so Electromagnetic / Thermal / Mechanical / Schemas switch in one click ── */}
-        {(() => {
-          const sim = entries.find((e) => e.kind === 'simulations') as { members: { id: string; label: string }[] } | undefined;
-          if (!sim || !isSimulationTab(activeTab)) return null;
-          return (
-            <Box data-testid="simulations-header" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 3, py: 0.25,
-              bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
-              <Typography variant="subtitle2">{tr('tabs.simulations', { defaultValue: 'Simulations' })}</Typography>
-              <SubTabs value={activeTab} items={sim.members} onChange={(id) => setActiveTab(id as never)}
-                ariaLabel={tr('tabs.simulations', { defaultValue: 'Simulations' })} testId="simulations-tabs" />
-            </Box>
-          );
-        })()}
+        {simMembers.length > 0 && isSimulationTab(activeTab) && (
+          <Box data-testid="simulations-header" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 3, py: 0.25,
+            bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+            <Typography variant="subtitle2">{tr('tabs.simulations', { defaultValue: 'Simulations' })}</Typography>
+            <SubTabs value={activeTab} items={simMembers} onChange={(id) => setActiveTab(id as never)}
+              ariaLabel={tr('tabs.simulations', { defaultValue: 'Simulations' })} testId="simulations-tabs" />
+          </Box>
+        )}
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>

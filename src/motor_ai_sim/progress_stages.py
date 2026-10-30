@@ -15,7 +15,17 @@ The solver already says everything needed — every frame calls
 stage-local counter — so this module only READS that stream and keeps an ordered
 list, one entry per stage: ``pending → running → done`` (or ``skipped`` when a
 later stage began without it ever running — a warm-up served from the cache).
-No solver line changes; the old flat fields stay in every payload.
+The old flat fields stay in every payload.
+
+ONE PREPARATION STAGE (owner 2026-10-30: "merge the first three processes into
+one, let everything be done together").  The d-axis calibration, the eddy
+warm-up and the demag pre-pass are all discarded work that brings the solve to
+its steady state, and the solver now runs the last two as one march (the Br
+ratchet switches on inside the eddy verification).  They are ONE stage here,
+``prepare``: one bar, one monotonic frame count (calibration frames + the
+march's own negative-frame counter), the breakdown in ``note``.  The solver's
+labels keep their prefixes ("calibrating...", "eddy warm-up...", "demag
+pre-pass..."), so a payload from an older solver folds into the same stage.
 
 THE SHAPE (one dict per stage, ``public()``)
 --------------------------------------------
@@ -46,23 +56,22 @@ import time
 from typing import Any, Dict, List, Optional
 
 __all__ = ["EM", "COUPLED", "plan_em", "plan_coupled", "observe", "finalize",
-           "public", "classify_em", "classify_coupled"]
+           "public", "classify_em", "classify_coupled", "eta_s"]
 
-#: Execution order of the electromagnetic transient's stages.  ``calibration``
-#: is the once-per-geometry d-axis reference; ``extra`` is a second whole solve
-#: made for the answer (harm-ref, six-phase L_xy) — it counts nothing, so it is
-#: shown as running without a bar.
-EM = ("calibration", "gap_probe", "warm_up", "demag_prepass", "final",
-      "extra", "post")
+#: Execution order of the electromagnetic transient's stages.  ``prepare`` is
+#: the d-axis calibration (once per geometry) + eddy warm-up + demag pre-pass,
+#: in that order, as one stage; ``extra`` is a second whole solve made for the
+#: answer (harm-ref, six-phase L_xy) — it counts nothing, so it is shown as
+#: running without a bar.  Gap probes are whole solves of their own (each with
+#: its own preparation inside) and come first.
+EM = ("gap_probe", "prepare", "final", "extra", "post")
 #: The coupled thermal loop: the sine/current iterations, then the controller's
 #: PWM passes.
 COUPLED = ("loop", "pwm_final")
 
 _NAMES = {
-    "calibration": "d-axis calibration",
     "gap_probe": "gap probe",
-    "warm_up": "eddy warm-up",
-    "demag_prepass": "demag pre-pass",
+    "prepare": "preparation",
     "final": "final periods",
     "extra": "reference solve",
     "post": "post-processing",
@@ -90,16 +99,14 @@ def plan_em(*, eddy: bool, demag: bool, planned_final: int,
     """The stages an EM transient is KNOWN to have before it starts.
 
     ``final`` (the reported window and its settling periods) and ``post`` always
-    exist.  The warm-up exists for a coupled-eddy solve and is adaptive; the demag
-    pre-pass exists when demag is on.  Gap probes and the calibration are not in
-    the plan — whether they run depends on the geometry and the cache, so they
-    appear (in order) the moment the solver reports them.
+    exist.  ``prepare`` exists for a coupled-eddy or a demag solve and is
+    adaptive (``planned_prepass`` is its first guess; the solver's own count
+    replaces it).  A calibration on a solve with neither still appears as
+    ``prepare`` the moment the solver reports it; gap probes likewise.
     """
     out: List[Dict[str, Any]] = []
-    if eddy:
-        out.append(_new("em", "warm_up", adaptive=True))
-    if demag:
-        out.append(_new("em", "demag_prepass", planned=planned_prepass))
+    if eddy or demag:
+        out.append(_new("em", "prepare", planned=planned_prepass, adaptive=True))
     out.append(_new("em", "final", planned=planned_final))
     out.append(_new("em", "post", planned=0))
     return out
@@ -128,12 +135,9 @@ def classify_em(phase: Optional[str]) -> Optional[str]:
         return None
     if p.startswith("gap probe"):
         return "gap_probe"          # BEFORE warm-up: a probe has its own warm-up
-    if p.startswith("calibrating"):
-        return "calibration"
-    if p.startswith("eddy warm-up"):
-        return "warm_up"
-    if p.startswith("demag pre-pass"):
-        return "demag_prepass"
+    if (p.startswith("calibrating") or p.startswith("eddy warm-up")
+            or p.startswith("demag pre-pass")):
+        return "prepare"
     if p.startswith("post-processing"):
         return "post"
     if "harm-ref" in p or "six-phase" in p:
@@ -185,7 +189,7 @@ def _enter(stages: List[Dict[str, Any]], kind: str, key: str, now: float
     ran.  Inserts the stage, in execution order, if the plan did not have it."""
     st = _find(stages, key)
     if st is None:
-        st = _new(kind, key, adaptive=(key in ("warm_up", "gap_probe")))
+        st = _new(kind, key, adaptive=(key in ("prepare", "gap_probe")))
         at = len(stages)
         for i, other in enumerate(stages):
             if other["_ord"] > st["_ord"]:
@@ -196,11 +200,11 @@ def _enter(stages: List[Dict[str, Any]], kind: str, key: str, now: float
         return st
     first = st["state"] == "pending"
     for other in stages:
-        if other is st or other["_ord"] >= st["_ord"]:
+        if other is st:
             continue
         if other["state"] == "running":
-            _close(other, now)
-        elif other["state"] == "pending":
+            _close(other, now)          # one stage runs at a time, whatever order
+        elif other["state"] == "pending" and other["_ord"] < st["_ord"]:
             other["state"] = "skipped"
     st["state"] = "running"
     if first or not st["_t0"]:
@@ -263,16 +267,9 @@ def _counts(stages, st, done, total, phase, composition, now) -> None:
         st["planned"] = st["_base_planned"] + max(st["_last_planned"],
                                                   st["_last_done"])
         return
-    if key == "demag_prepass":
-        # Spliced in behind the warm-up in ONE negative-frame counter: the
-        # frames before this stage's first report belong to the warm-up.
-        if st.pop("_first", False):
-            st["_off"] = d or 0
-            wu = _find(stages, "warm_up")
-            if wu is not None and wu["state"] == "done":
-                wu["done"] = wu["planned"] = max(st["_off"], 0)
-        d = None if d is None else max(d - st["_off"], 0)
-        t = None if t is None else max(t - st["_off"], 0)
+    if key == "prepare":
+        _prepare_counts(st, d, t, phase, now)
+        return
     st.pop("_first", None)
     if d is not None:
         st["done"] = d
@@ -282,6 +279,98 @@ def _counts(stages, st, done, total, phase, composition, now) -> None:
         st["planned"] = st["done"]
     if composition and key == "final":
         st["note"] = str(composition)
+
+
+#: The preparation's sub-steps, in order, as the note names them.
+_PREP_PARTS = (("cal", "d-axis cal."), ("eddy", "eddy warm-up"),
+               ("both", "eddy + demag"), ("demag", "demag pre-pass"))
+
+
+def _prep_part(phase: Optional[str]) -> str:
+    p = str(phase or "").strip().lower()
+    if p.startswith("calibrating"):
+        return "cal"
+    if p.startswith("demag pre-pass"):
+        return "demag"
+    if p.startswith("eddy warm-up") and "demag" in p:
+        return "both"                # the ratchet on inside the eddy verification
+    return "eddy"
+
+
+def _prepare_counts(st, d, t, phase, now) -> None:
+    """``prepare`` = the calibration's own 0..24 counter, then the march's one
+    negative-frame counter (warm-up and pre-pass spliced into one list, so it
+    is already monotonic).  The stage reads calibration + march; the frames of
+    each sub-step are kept for the note."""
+    st.pop("_first", None)
+    part = _prep_part(phase)
+    if part == "cal":
+        if d is not None:
+            st["_cal_done"] = max(int(st.get("_cal_done") or 0), d)
+        if t is not None:
+            st["_cal_planned"] = t
+        cal = max(int(st.get("_cal_done") or 0), 0)
+        st["done"] = max(int(st.get("done") or 0), cal)
+        # keep the plan's guess for what follows the calibration
+        st["planned"] = max(int(st.get("planned") or 0),
+                            int(st.get("_cal_planned") or 0), st["done"])
+    else:
+        # the march: the calibration (if any) is over and counts in full
+        cal = max(int(st.get("_cal_done") or 0), int(st.get("_cal_planned") or 0))
+        if st.get("_cal_done") is not None:
+            st["_cal_done"] = cal
+        if not st.get("_march"):
+            st["_march"] = True
+            st["_rate_t0"], st["_rate_n0"] = now, cal
+        # the solver reports at the TOP of a frame: the frames since the last
+        # report were solved under the LAST label, not this one
+        prev = int(st.get("_march_done", 0))
+        if d is not None and d > prev:
+            parts = st.setdefault("_parts", {})
+            last = st.get("_part_last") or part
+            parts[last] = parts.get(last, 0) + (d - prev)
+            st["_march_done"] = d
+        st["_part_last"] = part
+        if t is not None:
+            st["_march_planned"] = t
+        march = int(st.get("_march_done", 0))
+        st["done"] = max(int(st.get("done") or 0), cal + march)
+        st["planned"] = max(cal + max(int(st.get("_march_planned", 0)), march),
+                            st["done"])
+    parts = dict(st.get("_parts") or {})
+    if st.get("_cal_done"):
+        parts["cal"] = int(st["_cal_done"])
+    st["note"] = " + ".join("%s %d" % (name, parts[k]) for k, name in _PREP_PARTS
+                            if parts.get(k))
+
+
+def eta_s(stages: Optional[List[Dict[str, Any]]], *,
+          now: Optional[float] = None) -> Optional[float]:
+    """Seconds left for the WHOLE run, from the stages: the frames every
+    running or pending frame-counted stage still has to solve, at the rate the
+    running stage solves them now (the preparation's march only, not its
+    cheaper no-load calibration frames).  ``None`` when there is no rate yet.
+    While an adaptive stage runs it is a lower bound (the UI says so)."""
+    if not stages:
+        return None
+    now = time.time() if now is None else float(now)
+    run = next((s for s in stages if s["state"] == "running"), None)
+    if run is None or run.get("unit", "frames") != "frames":
+        return None
+    rate = None
+    if run.get("_rate_t0"):
+        n = int(run.get("done") or 0) - int(run.get("_rate_n0") or 0)
+        if n > 0:
+            rate = (now - float(run["_rate_t0"])) / n
+    elif int(run.get("done") or 0) > 0 and run.get("_t0"):
+        rate = (now - float(run["_t0"])) / int(run["done"])
+    if rate is None:
+        return None
+    left = sum(max(int(s.get("planned") or 0) - int(s.get("done") or 0), 0)
+               for s in stages
+               if s["state"] in ("running", "pending")
+               and s.get("unit", "frames") == "frames")
+    return max(rate * left, 0.0)
 
 
 def _observe_coupled(stages, phase, now) -> None:

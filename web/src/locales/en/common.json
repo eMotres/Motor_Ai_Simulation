@@ -641,10 +641,8 @@
       "stopped": "stopped"
     },
     "name": {
-      "calibration": "d-axis cal.",
+      "prepare": "Preparation",
       "gap_probe": "Gap probe",
-      "warm_up": "Eddy warm-up",
-      "demag_prepass": "Demag pre-pass",
       "final": "Final periods",
       "extra": "Reference solve",
       "post": "Post-processing",
@@ -652,10 +650,8 @@
       "pwm_final": "PWM passes"
     },
     "tip": {
-      "calibration": "Once per geometry: a short no-load solve that finds the d-axis position.",
+      "prepare": "Discarded frames that bring the solve to its steady state: the d-axis calibration (once per geometry), the eddy-current warm-up and the demagnetisation pre-pass, run as one march. The counts of each part are in this tooltip.",
       "gap_probe": "Cheap probe solves that choose how many mesh rows the air gap needs.",
-      "warm_up": "Settles the eddy-current start-up transient before anything is reported.",
-      "demag_prepass": "One settled period solved only to lower the magnets' remanence where they demagnetise; its frames are discarded.",
       "final": "The solve whose frames you get: the settling periods plus the reported window.",
       "extra": "A second full solve made for the answer (harmonic reference or six-phase probe); it has no frame count.",
       "post": "Animation frames, masses and the summary are built after the last frame.",

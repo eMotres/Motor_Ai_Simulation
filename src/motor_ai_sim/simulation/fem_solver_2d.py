@@ -3676,7 +3676,11 @@ def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
                     return False, "parent rotor-image cycle count is malformed"
                 else:
                     _cycle = int(_cycle_raw)
-                if _cycle < 1 or _nprev < _cycle or not isinstance(_passes, list):
+                # the history is L periods marched, or fewer whose image
+                # history was TRANSFERRED (`cycle_min_br`) and then verified
+                _transferred = (_ih.get("transfer") is True and _nprev >= 2)
+                if (_cycle < 1 or (_nprev < _cycle and not _transferred)
+                        or not isinstance(_passes, list)):
                     return False, "parent rotor-image history has invalid period counts"
                 if len(_passes) != _nprev or not _passes:
                     return False, "parent pre-pass history is incomplete"
@@ -8299,6 +8303,22 @@ def _fem_transient_sliding_band_once(
     _dm_prepass = False             # the pre-pass has been spliced in
     _dm_pre_logged = False          # its one summary line has been emitted
     _n_dmpre = 0                    # pre-pass frames solved (ratchet active)
+    # ── ONE PREPARATION STAGE (owner 2026-10-30: «объединять первые три
+    # процесса в один … а то не дождёшься»).  The ratchet stays frozen through
+    # the eddy START-UP transient (the 2026-09-05 rule), but no longer through
+    # the eddy VERIFICATION: as soon as the eddy gauge itself passes (whole-
+    # period means per conductor group within _EDDY_SETTLE_TOL) and the march
+    # extends only to verify it (the accelerator's MIN_VERIFY periods, its
+    # slow-mode checks), the ratchet is switched on and those periods ARE the
+    # first demag pre-pass periods — eddy and Br judged together, each period
+    # one record of each.  Measured on the owner's 48s56p (120 steps): the
+    # gauge passed at 482 frames (1.04 % of the shaft loss), the handoff came at
+    # 722 — two whole periods solved only to watch it stay settled.  What the
+    # ratchet then sees is the settled field to within the gauge tolerance on
+    # both a cold and a warm start, which is what made the 09-05 runs agree.
+    # SB_PREP_OVERLAP=0 restores the separate pre-pass behind the handoff.
+    _prep_overlap = (_os_sb.environ.get("SB_PREP_OVERLAP", "1") != "0")
+    _n_overlap = 0                  # ratchet-active frames inside the eddy warm-up
     # ── DEMAG FIXED POINT (shared by the march and TDM; Codex review and owner
     # 2026-09-30).  The ratchet is irreversible, so one pre-pass period does not
     # make the reported period steady: on the L13 at 210.7 °C its first reported
@@ -8336,6 +8356,8 @@ def _fem_transient_sliding_band_once(
     _dm_passes: List[Dict[str, Any]] = []   # one record per pre-pass period
     _dm_pass_br0 = None             # Br at the start of the current pre-pass period
     _dm_pass_done = False           # the march's pre-pass iteration has ended
+    _dm_rec_taken = False           # this k = -1 period record was taken at the
+                                    # eddy decision (an overlapped period)
     _dm_rep_br0 = None              # Br when the reported window opened
     _dm_shared: Dict[str, Any] = {}
 
@@ -8478,19 +8500,73 @@ def _fem_transient_sliding_band_once(
             _rec["inherited_pre_pass_periods"] = _inherited_periods
         if _maps is None:
             _rec["error"] = "no pole image map of the magnets (%s)" % (_minfo,)
-            _rec["complete"] = bool(_L is not None and _n_history >= _L)
-            return _rec, _rec["complete"]
-        _gap = _brc(_dmst.mags, _imb(_dmst.mags, _br_glob, _maps), _br_glob,
-                    _dm_areas())
-        _rec["image_gap"] = {"per_magnet_mean_max": _gap["per_magnet_mean_max"],
-                             "element_max": _gap["element_max"]}
+        else:
+            _gap = _brc(_dmst.mags, _imb(_dmst.mags, _br_glob, _maps), _br_glob,
+                        _dm_areas())
+            _rec["image_gap"] = {"per_magnet_mean_max": _gap["per_magnet_mean_max"],
+                                 "element_max": _gap["element_max"]}
         # complete ONLY after L pre-pass periods — every magnet has met the
         # dangerous instant at every rotor image (fourth Codex review: a small
         # area-mean image gap after a few quiet periods is not that history;
-        # the gap is recorded, not a shortcut)
+        # the gap is recorded, not a shortcut) — OR once that history has been
+        # TRANSFERRED (`_dm_transfer`: each element takes the minimum over its
+        # relabelling cycle, which is what the L periods would burn in without
+        # feedback) and at least one further period has run on it, so the
+        # feedback is measured by the shared Br-change and drift rules
         _ok = bool(_L is not None and _n_history >= _L)
+        _ntr = int(_dm_shared.get("transfer_n", 0))
+        if _ntr:
+            _rec["transfer"] = {"periods": _ntr,
+                                "last": _dm_shared.get("transfer_last")}
+            if not _ok and _n_history >= 2:
+                _ok = True
+                _rec["complete_by"] = "image transfer"
         _rec["complete"] = _ok
         return _rec, _ok
+
+    _dm_transfer_on = (_os_sb.environ.get("SB_DEMAG_IMAGE_TRANSFER", "1") != "0")
+
+    def _dm_transfer(rec):
+        """At the end of a pre-pass period: carry the rotor-image history to
+        every magnet (`time_periodic.cycle_min_br`).  Returns True when Br
+        moved (the caller rebuilds the magnet source).  Records the move in
+        ``rec["image_transfer"]``; a move above the settle tolerance keeps the
+        period unsettled (`_dm_pass_ok`), because the next window would open
+        on a magnet no measured period had."""
+        if not _dm_transfer_on or _dmst is None:
+            return False
+        _dm_relabel(_br_glob)                # builds the relabel map
+        _rl = _dm_shared.get("relabel")
+        if _rl is None:
+            rec["image_transfer"] = {"applied": False,
+                                     "why": "magnets not pole-pair periodic"}
+            return False
+        from motor_ai_sim.simulation.time_periodic import cycle_min_br as _cmb
+        _b_before = _br_glob.copy()
+        _br_glob[:] = _cmb(_br_glob, _rl[0], _rl[1])
+        _chg_t = _dm_change(_b_before, _br_glob)
+        _dm_shared["transfer_n"] = int(_dm_shared.get("transfer_n", 0)) + 1
+        _dm_shared["transfer_last"] = {
+            _kk: float("%.4g" % _vv) for _kk, _vv in _chg_t.items()}
+        rec["image_transfer"] = dict(_dm_shared["transfer_last"], applied=True)
+        return bool(np.any(_br_glob != _b_before))
+
+    def _dm_march_period_end(n_frames):
+        """The march's end of one ratchet-active period (k = −1): the period's
+        Br change and torque, the image transfer, appended to `_dm_passes`;
+        the magnet source rebuilt when the transfer moved Br."""
+        nonlocal f_mag2
+        _c = _dm_change(_dm_pass_br0, _br_glob)
+        _c["frames"] = int(n_frames)
+        _c["torque"] = _dm_take_torque()
+        if _dm_transfer(_c):
+            _mx_all[nst:] = _Mx_glob * _br_glob
+            _my_all[nst:] = _My_glob * _br_glob
+            f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                         my=b2_0.interpolate(_my_all))
+            _drv.f_mag = f_mag2
+        _dm_passes.append(_c)
+        return _c
 
     def _dm_drift(passes):
         """The observable drift between the last two pre-pass periods."""
@@ -8518,7 +8594,10 @@ def _fem_transient_sliding_band_once(
         rec["image_history"] = _img
         rec["drift"] = _dr
         rec["element_warning"] = _demag_element_warning(rec, _dm_settle_etol)
-        return bool(_dm_is_settled(rec) and _img_ok and _dr["ok"])
+        _tr = rec.get("image_transfer") or {}
+        _tr_ok = (not _tr.get("applied")
+                  or _dm_is_settled(_tr))   # the transfer itself moved Br <= tol
+        return bool(_dm_is_settled(rec) and _img_ok and _dr["ok"] and _tr_ok)
 
     def _dm_cap():
         """The pre-pass cap: SB_DEMAG_PREPASS_MAX when set, else enough
@@ -9367,6 +9446,11 @@ def _fem_transient_sliding_band_once(
                             _td_dm["passes"].append(dict(_mres, **_chg))
                             _rec_p = dict(_chg, frames=int(_mres["frames"]),
                                           torque=_dm_take_torque())
+                            # the rotor-image history, transferred (as the
+                            # march does; the orbit is re-solved on it below
+                            # or before the next period)
+                            if _dm_transfer(_rec_p):
+                                _td_rebuild_fmag()
                             _dm_passes.append(_rec_p)
                             _ok_p = _dm_pass_ok(_rec_p, _dm_passes)
                             _progress_warm()
@@ -10205,12 +10289,27 @@ def _fem_transient_sliding_band_once(
             # itself here for free — but it gets its OWN phase label, because
             # "warm-up" would misname the one stage where the magnet is
             # deliberately being ratcheted (user's bug, 2026-09-05).
+            # ONE PREPARATION STAGE (owner 2026-10-30): warm-up and pre-pass
+            # are one negative-frame counter here, and its total adds the
+            # pre-pass periods that are certain to come but not yet queued
+            # (two with the image transfer: one to burn in, one to verify),
+            # so the bar does not promise an end it cannot have.
             _warm_n = sum(1 for _x in _fseq if _x < 0)
+            _prep_more = 0
+            if (_dm_freeze_warm and int(_dm_pre_len) > 0 and not _dm_pass_done
+                    and k < 0):
+                _prep_more = int(_dm_pre_len) * max(
+                    0, (2 if _dm_transfer_on else 1)
+                    - int(_n_dmpre) // max(int(_dm_pre_len), 1))
             _done, _tot, _ph = (
-                (_warm_n + k, _warm_n,
-                 ("demag pre-pass — one settled period, Br ratchet active"
-                  if _dm_prepass else
-                  "eddy warm-up (adaptive) — settling the start-up transient"))
+                (_warm_n + k, _warm_n + _prep_more,
+                 ("eddy warm-up + demag pre-pass (preparation) — eddy "
+                  "verification with the Br ratchet active"
+                  if (_dm_prepass and not _warm_done) else
+                  "demag pre-pass (preparation) — settled eddy field, Br "
+                  "ratchet active" if _dm_prepass else
+                  "eddy warm-up (preparation, adaptive) — settling the "
+                  "start-up transient"))
                 if k < 0 else (k, n_total, None))
             # FOUR arguments, then three, then two.  The composition string
             # ("2×36 settle + 8 pre-roll + 144 reported") has to come from
@@ -10715,7 +10814,7 @@ def _fem_transient_sliding_band_once(
                 _bxe_d = (_bxq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
                 _bye_d = (_byq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
                 _dm_hit = _dmst.update(_bxe_d[nst:], _bye_d[nst:])
-                if _dm_hit and not _warm_done:
+                if _dm_hit and not _warm_done and not _dm_prepass:
                     _dm_moved_in_warm = True     # the quiet test must see this
                 if _dm_hit and _dm_pass < 11:
                     _mx_all[nst:] = _Mx_glob * _br_glob
@@ -10766,7 +10865,9 @@ def _fem_transient_sliding_band_once(
                     # torque and losses may not be billed on a magnet that no
                     # longer exists.  After a settled warm-up such trips are
                     # rare, so the honest path costs almost nothing.
-                    if not _warm_done:
+                    # (a ratchet-active warm-up frame — the overlap — is a
+                    # pre-pass frame and re-solves like one)
+                    if not _warm_done and not _dm_prepass:
                         break                    # carry into the NEXT frame
                     # a re-solve is a whole Newton; up to 11 per frame
                     _cancel_point("demag re-solve of frame %d" % k)
@@ -10851,6 +10952,13 @@ def _fem_transient_sliding_band_once(
             # which settles inside one step — is all there is to watch.
             # This sits BEFORE every per-frame append below, so the abort path
             # can throw this frame away without un-recording anything.
+            if (_dm_prepass and _dm_pre_len > 0 and k < 0 and not _dm_pass_done
+                    and _dm_pass_br0 is not None and _dmst is not None):
+                # this ratchet-active frame's torque, for the drift check —
+                # BEFORE the warm-up block, whose decision frame ends an
+                # overlapped period with a `continue`
+                _dm_tq_cur[int(k)] = _dm_frame_torque(
+                    A2, Ist, math.radians(float(theta_eff)))
             if _ve_warm and not _warm_done:
                 # COMBINED MODE: the voltage settling prefix IS the warm-up.
                 # Every prefix frame counts (they are all solved and all
@@ -10966,8 +11074,9 @@ def _fem_transient_sliding_band_once(
                     _Jc = _Kc if _Tc is None else (_Kc + _Tc)
                     _eec_J = _Jc if _eec_J is None else (_eec_J + _Jc)
                     _eec_nJ += 1
-                if k < 0:
-                    _n_warm += 1          # every frame at θ<0 is warm-up
+                if k < 0 and not _dm_prepass:
+                    _n_warm += 1          # θ<0, ratchet frozen: warm-up
+                                          # (an overlapped one is a pre-pass frame)
                 _warm_solid.append(
                     (_pg.get("mag", 0.0) + _pg.get("shaft", 0.0)
                      if ("mag" in _Msig_grp or "shaft" in _Msig_grp)
@@ -10981,6 +11090,20 @@ def _fem_transient_sliding_band_once(
                 # extension march decides at its own last frame (θ = −dθ),
                 # where it already has a whole period of samples.
                 if (k == -1) if _warm_extended else (k >= 0):
+                    if (_dm_prepass and not _dm_pass_done and k == -1
+                            and _dm_pass_br0 is not None and _dmst is not None):
+                        # an OVERLAPPED period ends here: its demag record is
+                        # taken before the eddy verdict (which may `continue`)
+                        _dm_c_ov = _dm_march_period_end(_eddy_cap)
+                        _dm_rec_taken = True
+                        log.info("P2 preparation: overlapped period %d (eddy "
+                                 "verification + demag pre-pass) moved Br by %.3g "
+                                 "(worst magnet, area mean; tol %.1g), image "
+                                 "transfer %s; demag %s",
+                                 len(_dm_passes), _dm_c_ov["per_magnet_mean_max"],
+                                 _dm_settle_tol, _dm_c_ov.get("image_transfer"),
+                                 "settled" if _dm_pass_ok(_dm_c_ov, _dm_passes)
+                                 else "not yet settled")
                     # WHOLE-PERIOD means per group — never three samples: on a
                     # cold probe this is "not yet measurable" (inf) and the
                     # march extends; only a seed's same-angle reference can
@@ -11527,6 +11650,39 @@ def _fem_transient_sliding_band_once(
                                  "one electrical period (%d frames, extension "
                                  "%d of at most %d)", _eddy_cap,
                                  _warm_ext_periods, _eddy_cap_periods)
+                        # ── ONE PREPARATION STAGE (see `_prep_overlap`) ──────
+                        if _dm_prepass and not _dm_pass_done:
+                            # overlapped: the next eddy period is also the next
+                            # pre-pass period — Br goes one period back by the
+                            # same pole-pair map as the eddy state above
+                            _dm_rec_taken = False
+                            _br_glob[:] = _dm_relabel(_br_glob)
+                            _mx_all[nst:] = _Mx_glob * _br_glob
+                            _my_all[nst:] = _My_glob * _br_glob
+                            f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                                         my=b2_0.interpolate(_my_all))
+                            _drv.f_mag = f_mag2
+                            _dm_pass_br0 = _br_glob.copy()
+                            _n_dmpre += _eddy_cap
+                            _n_overlap += _eddy_cap
+                        elif (_prep_overlap and _dm_freeze_warm and not _dm_prepass
+                              and k < 0 and int(_dm_pre_len) == int(_eddy_cap)
+                              and math.isfinite(_warm_resid)
+                              and _warm_resid <= _EDDY_SETTLE_TOL):
+                            # the eddy GAUGE passes; the march extends only to
+                            # verify it — the ratchet may look from here on
+                            _dm_prepass = True
+                            _dm_ratchet = True
+                            _dm_pass_br0 = _br_glob.copy()
+                            _n_dmpre += _eddy_cap
+                            _n_overlap += _eddy_cap
+                            log.info("P2 preparation: eddy gauge passed (%.3g %% <= "
+                                     "%.1f %%) after %d warm-up frame(s) — the Br "
+                                     "ratchet is ON from the next period, which is "
+                                     "both eddy verification and demag pre-pass",
+                                     100.0 * _warm_resid, 100.0 * _EDDY_SETTLE_TOL,
+                                     _n_warm)
+                        _progress_warm()
                         continue
                     _warm_done = True
                     if not _quiet:
@@ -11623,26 +11779,30 @@ def _fem_transient_sliding_band_once(
             # tolerance, splice ANOTHER period in, continuous in time — the eddy
             # state one period back (`_period_shift`) and the Br map relabelled
             # by the same pole-pair map, so every magnet goes on to the rotor
-            # positions it meets next.
-            if (_dm_prepass and _dm_pre_len > 0 and k < 0 and not _dm_pass_done
-                    and _dm_pass_br0 is not None and _dmst is not None):
-                # this pre-pass frame's torque, for the drift check
-                _dm_tq_cur[int(k)] = _dm_frame_torque(
-                    A2, Ist, math.radians(float(theta_eff)))
+            # positions it meets next.  Each period ends with the image
+            # transfer (`_dm_transfer`), so the rotor-image history no longer
+            # costs L whole periods (7 on a 12s14p sector, 961 frames on the
+            # owner's 48s56p of 2026-10-30, whose Br had stopped moving after
+            # the second).  (The frame-torque record moved above the warm-up
+            # block: a period that overlaps the eddy verification ends there.)
             if (_dm_prepass and _dm_pre_len > 0 and k == -1 and not _dm_pass_done
                     and _dm_pass_br0 is not None and _dmst is not None):
-                _dm_c = _dm_change(_dm_pass_br0, _br_glob)
-                _dm_c["frames"] = int(_dm_pre_len)
-                _dm_c["torque"] = _dm_take_torque()
-                _dm_passes.append(_dm_c)
+                if _dm_rec_taken:
+                    # recorded at this frame's eddy decision (the period
+                    # overlapped the eddy verification), transfer included
+                    _dm_c = _dm_passes[-1]
+                    _dm_rec_taken = False
+                else:
+                    _dm_c = _dm_march_period_end(_dm_pre_len)
                 if (not _dm_pass_ok(_dm_c, _dm_passes)
                         and len(_dm_passes) < _dm_cap()):
                     log.info("P2 demag pre-pass period %d moved Br by %.3g (worst "
                              "magnet, area mean; tol %.1g), %.3g at one element "
-                             "(tol %.1g); image history %s; drift %s — one more "
-                             "period",
+                             "(tol %.1g); image transfer %s; image history %s; "
+                             "drift %s — one more period",
                              len(_dm_passes), _dm_c["per_magnet_mean_max"],
                              _dm_settle_tol, _dm_c["element_max"], _dm_settle_etol,
+                             _dm_c.get("image_transfer"),
                              _dm_c.get("image_history"), _dm_c.get("drift"))
                     _br_glob[:] = _dm_relabel(_br_glob)
                     _mx_all[nst:] = _Mx_glob * _br_glob
@@ -11662,6 +11822,13 @@ def _fem_transient_sliding_band_once(
                     _progress_warm()
                     continue
                 _dm_pass_done = True
+                log.info("P2 preparation done: %d warm-up frame(s) with the ratchet "
+                         "frozen, %d ratchet-active frame(s) in %d period(s) (%d of "
+                         "them also eddy verification); last period moved Br by "
+                         "%.3g, image transfer %s, drift %s",
+                         _n_warm, _n_dmpre, len(_dm_passes), _n_overlap,
+                         _dm_c["per_magnet_mean_max"], _dm_c.get("image_transfer"),
+                         _dm_c.get("drift"))
             # ── the SAME integrand, kept per element (Loss map) ───────────
             # E = −∂A/∂t + U_b at this element's quadrature points; σE²
             # integrated over the element and divided by its area is the
@@ -13034,6 +13201,7 @@ def _fem_transient_sliding_band_once(
                         "prepass_periods": int(len(_pass_rows)),
                         "image_history": {
                             "complete": True,
+                            "transfer": bool(_image_pub.get("transfer")),
                             "cycle_periods": (None if _image_pub.get("cycle_periods") is None
                                               else int(_image_pub["cycle_periods"])),
                             "inherited_pre_pass_periods": int(
@@ -14412,6 +14580,10 @@ def _fem_transient_sliding_band_once(
         # the pre-pass, i.e. how many ran with the Br ratchet active.
         "eddy_warmup_frames": int(_n_warm) + int(_n_dmpre),
         "demag_prepass_frames": int(_n_dmpre),
+        # ratchet-active frames that were ALSO the eddy verification (one
+        # preparation stage, `_prep_overlap`): inside demag_prepass_frames, not
+        # added to the warm-up count a second time
+        "prep_overlap_frames": int(_n_overlap),
         # how the eddy steady state was reached (coupled-eddy runs): "tdm"
         # (the periodic orbit solved directly; `tdm` is its record) or
         # "march"; `eddy_method_note` says in one line why a TDM request

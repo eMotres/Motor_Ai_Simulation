@@ -653,6 +653,43 @@ def test_br_change_and_the_period_relabelling():
     assert out.tolist() == [5.0, 0.3, 0.4, 0.1, 0.2]
 
 
+def test_the_image_transfer_is_the_l_period_march_without_feedback():
+    """``cycle_min_br`` after ONE ratchet period gives exactly what L marched
+    periods give when the field does not respond to Br (one preparation stage,
+    owner 2026-10-30): each period every rotor POSITION burns in the same worst
+    value, and the relabelling moves each element on to the next position of
+    its cycle."""
+    rng = np.random.default_rng(7)
+    elems = np.arange(3, 3 + 14)                       # magnet elements
+    # two cycles: lengths 7 and 7 (a 12s14p-like sector, L = 7)
+    image = np.array([1, 2, 3, 4, 5, 6, 0, 8, 9, 10, 11, 12, 13, 7])
+    worst = rng.uniform(0.8, 1.0, elems.size)          # per POSITION, per period
+    br0 = np.ones(3 + elems.size)
+    br0[:3] = 5.0                                      # not magnets: untouched
+
+    def period(br):
+        out = br.copy()
+        out[elems] = np.minimum(out[elems], worst)
+        return out
+
+    march = period(br0)
+    for _ in range(6):                                 # periods 2..7
+        march = period(tp.relabel_br(march, elems, image))
+    one = tp.cycle_min_br(period(br0), elems, image)
+    # the transferred state is constant on each cycle, so the march's own
+    # relabelling no longer changes it, and one more period changes nothing
+    assert np.allclose(one[elems], march[elems])
+    assert np.allclose(tp.relabel_br(one, elems, image), one)
+    assert np.allclose(period(one), one)
+    assert one[:3].tolist() == [5.0, 5.0, 5.0]
+    assert np.all(one <= period(br0) + 0.0)            # Br never rises
+    # each cycle holds its own minimum, not the other cycle's
+    assert one[elems[:7]].min() == pytest.approx(worst[:7].min())
+    assert one[elems[7:]].min() == pytest.approx(worst[7:].min())
+    with pytest.raises(ValueError):
+        tp.cycle_min_br(br0, elems, np.zeros(elems.size, int))
+
+
 def test_frame_factor_falls_back_to_lu_and_releases_its_handle():
     """A matrix Cholesky must decline (indefinite, or unsymmetric) is factorised
     by LU, loudly (lu_used), and solves correctly; close() releases it."""

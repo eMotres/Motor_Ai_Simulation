@@ -64,7 +64,66 @@ RHO_AL    = 2700.0
 RHO_CFRP  = 1580.0
 
 
-def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = "auto") -> float:
+def _wire_footprint_m(geo: Dict[str, Any] | None) -> float:
+    try:
+        from motor_ai_sim.winding import winding_footprint_mm as _fp
+        return float(_fp(geo or {})) * 1e-3                         # 0 if unknown
+    except (ValueError, TypeError):        # unusable wire_split → the bare width
+        return float((geo or {}).get("wire_width", 0.0)) * 1e-3
+
+
+def _tooth_width_m(p: Any, geo: Dict[str, Any] | None) -> float:
+    tooth_w = float((geo or {}).get("tooth_width", 0.0)) * 1e-3      # geo is in mm
+    if tooth_w <= 0.0:                                               # no geo → derive
+        slot_w = float(getattr(p, "slot_width_m", 0.0))
+        r_mid = float(getattr(p, "r_stator_in", 0.012)) + float(getattr(p, "slot_height_m", 0.0061)) * 0.5
+        tau = 2.0 * math.pi * r_mid / max(int(getattr(p, "num_slots", 12)), 1)
+        tooth_w = max(tau - slot_w, 0.3 * tau)
+    return tooth_w
+
+
+def cad_coil_length(p: Any, geo: Dict[str, Any] | None, coil: Dict[str, Any]) -> Dict[str, float]:
+    """Conductor length of ONE tooth coil as ``cad/motor_templates/segmented_flatwire/coil.py`` builds it [mm].
+
+    ``coil`` = the coil's shape rows (``wire_beng_r``, ``coil_straight_extra``, ``coil_lead_total``, mm): the built coil's
+    (``coil_build.coil_parameters``) or explicit ones.  Per layer: two straight legs ``L + coil_straight_extra`` beside the tooth
+    at x1 = tooth_width/2 + insulation_thickness + wire_spacing_x/2, a +z end turn of two 90° EDGEWISE bends (the wire's
+    ``wire_width`` side lies across the slot; centre-line radius ``wire_beng_r + wire_width/2``) joined by the straight bridge
+    2·(x1 − wire_beng_r), a −z transition to the next layer (the same plan length, one layer pitch lower), and the two leads."""
+    L_mm = float(getattr(p, "stack_length", 0.0)) * 1e3
+    g = geo or {}
+    tw_mm = _tooth_width_m(p, geo) * 1e3
+    wire_w = _wire_footprint_m(geo)
+    ww_mm = wire_w * 1e3 if wire_w > 0 else float(g.get("wire_width", 2.5))
+    wh_mm = float(g.get("wire_height", 0.6))
+    N = max(int(round(float(g.get("num_wires_per_slot", 7)))), 1)
+    ins_mm = float(g.get("insulation_thickness", 0.07))
+    sx_mm = float(g.get("wire_spacing_x", 0.1))
+    sy_mm = float(g.get("wire_spacing_y", 0.1))
+    x1 = tw_mm / 2.0 + ins_mm + sx_mm / 2.0            # inner side of a straight leg
+    rb = float(coil["wire_beng_r"])                    # inner bend radius of the flat wire
+    bridge = 2.0 * max(x1 - rb, 0.0)                   # straight bridge between the two bend axes
+    rc = rb + ww_mm / 2.0                              # centre-line radius of an edgewise 90° bend
+    l_end_plus = bridge + math.pi * rc                 # +z end turn: two 90° bends + the bridge
+    pitch = wh_mm + sy_mm                              # −z transition drops one layer pitch
+    l_end_minus = math.sqrt(l_end_plus ** 2 + pitch ** 2)
+    extra = float(coil["coil_straight_extra"])
+    l_leg = L_mm + extra                               # leg with its axial overhang beyond the core
+    lead = float(coil["coil_lead_total"])
+    # 2·N straight legs + N (+z) end turns + (N−1) (−z) transitions + 2 leads
+    total = 2.0 * N * l_leg + N * l_end_plus + (N - 1) * l_end_minus + 2.0 * lead
+    return {
+        "stack_length_mm": L_mm, "turns_per_coil": float(N), "total_coil_length_mm": total,
+        "mean_turn_length_mm": total / N, "active_turn_length_mm": 2.0 * L_mm,
+        "end_turn_plus_mm": l_end_plus, "end_turn_minus_mm": l_end_minus,
+        "bend_centre_radius_mm": rc, "bridge_mm": bridge,
+        "wire_beng_r_mm": rb, "coil_straight_extra_mm": extra, "coil_lead_total_mm": lead,
+    }
+
+
+def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = "auto", *,
+                       die: Optional[str] = None, config: Optional[str] = None,
+                       cad_overrides: Optional[Dict[str, Any]] = None) -> float:
     """Canonical end-winding length factor  k_end = (active + end-turns) / active.
 
     SINGLE SOURCE — the copper MASS, phase RESISTANCE and copper LOSS must all scale
@@ -73,133 +132,49 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = 
     solver's loss/R use the exact same number.
 
     Methods:
-      "auto" (default): "cad_coil" when the geometry carries the CAD coil parameters (``wire_beng_r``,
-      ``coil_straight_extra``, ``coil_lead_total``, all mm - the values of the motor's CAD profile), otherwise
-      "semicircle".  Review 2026-10-17: no guessed coil parameters - a motor without them keeps the old factor.
-      "cad_coil" (owner decision 2026-10-17): Mean turn length of the
-      rectangular tooth-coil shape the CAD builder actually creates (FreeCAD /
-      Fusion 360 template ``cad/motor_templates/segmented_flatwire/coil.py``).
-      Accounts for rectangular tooth footprint, corner bend radii, slot liner
-      insulation, wire spacing, axial straight overhangs, and coil lead extensions.
-      Agrees with the 3D CAD model conductor length by construction (within ±3 %
-      across families, <0.1 % on CIANO14 40 L12/L20).
+      "auto" / "cad_coil" (default; owner 2026-10-30): mean turn of the coil the CAD build
+      actually draws for THIS geometry (``cad/motor_templates/segmented_flatwire/coil.py``,
+      the coil of the 3-D view and the CAD export), k_end = mean turn / (2·L).  Its bend
+      radius, straight overhang and leads come from the die's CAD reference profile
+      evaluated on the live geometry (``coil_build.coil_parameters``); explicit
+      ``wire_beng_r`` / ``coil_straight_extra`` / ``coil_lead_total`` in the geometry are
+      per-die overrides.  Every geometry edit moves it.  Agrees with the 3-D conductor
+      length within ±3 % across families (CIANO14 40 L12 +2.2 %, L20 +1.6 % against the
+      Fusion coil; tests/test_end_winding_coil_shape.py).
+      "semicircle" / "legacy": the idealised flat semicircle around the wound tooth,
+          k_end = (π·(bundle_width/2 + tooth_width/2) + L_stack) / L_stack,
+      a named comparison only — never a fallback.
 
-      "semicircle" / "legacy": The original idealized flat semicircle around the
-      wound tooth centreline:
-          k_end = (π·(bundle_width/2 + tooth_width/2) + L_stack) / L_stack.
-      Kept for comparisons and regression testing.
-    """
+    ``die`` / ``config`` / ``cad_overrides`` name the machine whose CAD profile applies;
+    default: the caller's machine (``coil_build.context_machine``)."""
     L = float(getattr(p, "stack_length", 0.0))
     if L <= 0:
         return 1.0
-    slot_w  = float(getattr(p, "slot_width_m", 0.0))
-    tooth_w = float((geo or {}).get("tooth_width", 0.0)) * 1e-3      # geo is in mm
-    if tooth_w <= 0.0:                                               # no geo → derive
-        r_mid = float(getattr(p, "r_stator_in", 0.012)) + float(getattr(p, "slot_height_m", 0.0061)) * 0.5
-        tau   = 2.0 * math.pi * r_mid / max(int(getattr(p, "num_slots", 12)), 1)
-        tooth_w = max(tau - slot_w, 0.3 * tau)
-    try:
-        from motor_ai_sim.winding import winding_footprint_mm as _fp
-        wire_w = float(_fp(geo or {})) * 1e-3                        # 0 if unknown
-    except (ValueError, TypeError):        # unusable wire_split → the bare width
-        wire_w = float((geo or {}).get("wire_width", 0.0)) * 1e-3
-
-    _cad_keys = ("wire_beng_r", "coil_straight_extra", "coil_lead_total")
-    if method == "auto":
-        method = "cad_coil" if all((geo or {}).get(k) is not None for k in _cad_keys) else "semicircle"
-    if method == "cad_coil" and not all((geo or {}).get(k) is not None for k in _cad_keys):
-        raise ValueError("cad_coil end-winding factor needs %s in the geometry" % ", ".join(_cad_keys))
     if method in ("semicircle", "legacy"):
         # half-loop centreline diameter = tooth + one wire column (half each side)
-        span = tooth_w + max(wire_w, 0.0)
+        span = _tooth_width_m(p, geo) + max(_wire_footprint_m(geo), 0.0)
         return (math.pi * span / 2.0 + L) / L
-
-    # CAD coil method: matches cad/motor_templates/segmented_flatwire/coil.py
-    L_mm = L * 1e3
-    tw_mm = tooth_w * 1e3
-    ww_mm = max(wire_w * 1e3, 0.1) if wire_w > 0 else float((geo or {}).get("wire_width", 2.5))
-    wh_mm = float((geo or {}).get("wire_height", 0.6))
-    N = max(int(round(float((geo or {}).get("num_wires_per_slot", 7)))), 1)
-    ins_mm = float((geo or {}).get("insulation_thickness", 0.07))
-    sx_mm = float((geo or {}).get("wire_spacing_x", 0.1))
-    sy_mm = float((geo or {}).get("wire_spacing_y", 0.1))
-
-    # Inner side of straight leg: x1 = tooth_width/2 + insulation_thickness + wire_spacing_x/2
-    x1 = tw_mm / 2.0 + ins_mm + sx_mm / 2.0
-
-    # Inner bend radius of flat wire at corner
-    rb = float(geo["wire_beng_r"])
-
-    # Bend axis offset and straight bridge between bends: 2 * (x1 - rb)
-    ax = max(x1 - rb, 0.0)
-    bridge = 2.0 * ax
-
-    # Two 90-deg bends of centerline radius rc = rb + ww/2
-    rc = rb + ww_mm / 2.0
-    l_end_plus = bridge + math.pi * rc
-
-    # -z transition between layers drops 1 layer pitch (wh + sy)
-    pitch = wh_mm + sy_mm
-    l_end_minus = math.sqrt(l_end_plus**2 + pitch**2)
-
-    # Leg length with axial overhang beyond core
-    extra = float(geo["coil_straight_extra"])
-    l_leg = L_mm + extra
-
-    # Two leads extending at -z
-    lead = float(geo["coil_lead_total"])
-
-    # Total conductor length for 1 coil of N turns:
-    # 2*N straight legs + N (+z) end turns + (N-1) (-z) transitions + 2 leads
-    total_coil_len = 2.0 * N * l_leg + N * l_end_plus + (N - 1) * l_end_minus + 2.0 * lead
-    mean_turn_len = total_coil_len / N
-
-    # k_end = mean_turn_len / (2 * active_stack_length)
-    return mean_turn_len / (2.0 * L_mm)
+    if method not in ("auto", "cad_coil"):
+        raise ValueError("unknown end-winding method %r (auto | cad_coil | semicircle)" % method)
+    from motor_ai_sim.coil_build import coil_parameters
+    coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides)
+    d = cad_coil_length(p, geo, coil)
+    return d["mean_turn_length_mm"] / (2.0 * L * 1e3)
 
 
-def cad_coil_dimensions(p: Any, geo: Dict[str, Any] | None = None) -> Dict[str, float]:
-    """Detailed geometric breakdown of the CAD tooth coil matching FreeCAD / Fusion."""
-    L = float(getattr(p, "stack_length", 0.0))
-    L_mm = L * 1e3
-    tw_mm = float((geo or {}).get("tooth_width", 3.3))
-    ww_mm = float((geo or {}).get("wire_width", 2.5))
-    wh_mm = float((geo or {}).get("wire_height", 0.6))
-    N = max(int(round(float((geo or {}).get("num_wires_per_slot", 7)))), 1)
-    ins_mm = float((geo or {}).get("insulation_thickness", 0.07))
-    sx_mm = float((geo or {}).get("wire_spacing_x", 0.1))
-    sy_mm = float((geo or {}).get("wire_spacing_y", 0.1))
-
-    x1 = tw_mm / 2.0 + ins_mm + sx_mm / 2.0
-    rb = float((geo or {})["wire_beng_r"])
-    ax = max(x1 - rb, 0.0)
-    bridge = 2.0 * ax
-    rc = rb + ww_mm / 2.0
-    l_end_plus = bridge + math.pi * rc
-    pitch = wh_mm + sy_mm
-    l_end_minus = math.sqrt(l_end_plus**2 + pitch**2)
-    extra = float((geo or {})["coil_straight_extra"])
-    l_leg = L_mm + extra
-    lead = float((geo or {})["coil_lead_total"])
-    total_coil_len = 2.0 * N * l_leg + N * l_end_plus + (N - 1) * l_end_minus + 2.0 * lead
-    mean_turn = total_coil_len / N
-    k_cad = mean_turn / (2.0 * L_mm) if L_mm > 0 else 1.0
+def cad_coil_dimensions(p: Any, geo: Dict[str, Any] | None = None, *, die: Optional[str] = None,
+                        config: Optional[str] = None, cad_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Breakdown of the built tooth coil (``cad_coil_length``) with its parameters' source and the semicircle beside it."""
+    from motor_ai_sim.coil_build import coil_parameters
+    coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides)
+    d: Dict[str, Any] = dict(cad_coil_length(p, geo, coil))
+    L_mm = d["stack_length_mm"]
+    k_cad = d["mean_turn_length_mm"] / (2.0 * L_mm) if L_mm > 0 else 1.0
     k_semi = end_winding_factor(p, geo, method="semicircle")
-
-    return {
-        "stack_length_mm": L_mm,
-        "turns_per_coil": float(N),
-        "total_coil_length_mm": total_coil_len,
-        "mean_turn_length_mm": mean_turn,
-        "active_turn_length_mm": 2.0 * L_mm,
-        "end_turn_plus_mm": l_end_plus,
-        "end_turn_minus_mm": l_end_minus,
-        "coil_straight_extra_mm": extra,
-        "coil_lead_total_mm": lead,
-        "k_end_cad": k_cad,
-        "k_end_semicircle": k_semi,
-        "delta_k_end_pct": (k_cad - k_semi) / k_semi * 100.0 if k_semi > 0 else 0.0,
-    }
+    d.update(k_end_cad=k_cad, k_end_semicircle=k_semi,
+             delta_k_end_pct=(k_cad - k_semi) / k_semi * 100.0 if k_semi > 0 else 0.0,
+             coil_source=coil.get("source"), coil_profile=coil.get("profile"), coil_typed=list(coil.get("typed") or []))
+    return d
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ import {
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
   Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem,
-  InputAdornment, Switch,
+  InputAdornment, Switch, Link,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
@@ -187,6 +187,26 @@ const Row: React.FC<{ label: string; value: string; unit?: string; highlight?: b
 // ── helpers ───────────────────────────────────────────────────────────────────
 function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
 function lcm(a: number, b: number): number { return (a * b) / gcd(a, b); }
+
+/** The built coil k_end came from (GET /api/config `end_winding_coil`). */
+interface EndWindingCoil {
+  source?: string | null; profile?: string | null; typed_keys?: string[];
+  wire_beng_r_mm?: number; coil_straight_extra_mm?: number; coil_lead_total_mm?: number;
+  turns_per_coil?: number; mean_turn_length_mm?: number; k_end_semicircle?: number;
+}
+/** Short, stable key of a geometry signature: a typed k_end belongs to the geometry it was typed on. */
+function geoKeyHash(sig: string): string {
+  let h = 5381;
+  for (let i = 0; i < sig.length; i++) h = ((h * 33) ^ sig.charCodeAt(i)) >>> 0;
+  return `${sig.length}:${h.toString(36)}`;
+}
+const fmtMm = (v: unknown): string => (Number.isFinite(Number(v)) ? `${(+Number(v).toFixed(2))} mm` : '—');
+/** One line under the k_end field: the built coil's shape, or nothing before the first answer. */
+function endWindingCoilLine(c: EndWindingCoil | null): string | undefined {
+  if (!c) return undefined;
+  return `from coil: bend R ${fmtMm(c.wire_beng_r_mm)} · overhang ${fmtMm(c.coil_straight_extra_mm)} · leads ${fmtMm(c.coil_lead_total_mm)}`
+    + (c.typed_keys && c.typed_keys.length ? ' (die keys)' : c.profile ? '' : ' (template rules)');
+}
 
 // Winding connection options come from the backend (/api/winding/config), which
 // derives them from the slot count: coils/phase C = slots/6, every factor pair
@@ -796,11 +816,19 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const daxisPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last geometry-derived k_end we seeded the cell with — shown in the tooltip.
   const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
-  // k_end = (π·(wire_w/2 + tooth_w/2) + L_stack)/L_stack, so it moves with every tooth/wire /
-  // stack-length edit.  Re-seeding is keyed on this signature instead of running
-  // once on mount, which used to leave a stale (or bare 0) factor behind in every
-  // consumer that reads `sim.endWinding` (TransientCharts, motorStore, sweep).
+  // k_end is the mean turn of the coil the CAD build draws for THIS geometry
+  // (masses.end_winding_factor, owner 2026-10-30), so it moves with every tooth /
+  // wire / stack-length edit.  Re-seeding is keyed on this signature instead of
+  // running once on mount, which used to leave a stale (or bare 0) factor behind
+  // in every consumer that reads `sim.endWinding` (TransientCharts, motorStore, sweep).
   const geomSig = useMotorStore(s => JSON.stringify(s.geometry ?? {}));
+  const geomKey = geoKeyHash(geomSig);
+  // A TYPED k_end is an override for the geometry it was typed on: the key of that
+  // geometry, '' = not typed.  Any geometry change ends it (the coil changed).
+  const [endWindingTypedOn, setEndWindingTypedOn] = usePersisted<string>('endWindingTypedOn', '');
+  const endWindingTyped = endWindingTypedOn !== '' && endWindingTypedOn === geomKey;
+  // The built coil the number came from (GET /api/config end_winding_coil) — not persisted.
+  const [endWindingCoil, setEndWindingCoil] = useState<EndWindingCoil | null>(null);
 
   // ── the winding options FOLLOW THE GEOMETRY ───────────────────────────────
   // /api/winding/config used to be read once, on mount.  Switching to another
@@ -1754,11 +1782,23 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         if (!Number.isFinite(kAuto) || kAuto <= 0) return;
         const k = +kAuto.toFixed(3);
         setEndWindingGeo(k);
-        setEndWinding(k);
+        setEndWindingCoil(d.end_winding_coil && typeof d.end_winding_coil === 'object' ? d.end_winding_coil : null);
+        // A value typed on ANOTHER geometry is not an override of this one.
+        if (endWindingTypedOn !== '' && endWindingTypedOn !== geomKey) setEndWindingTypedOn('');
+        if (endWindingTypedOn !== geomKey) setEndWinding(k);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [geomSig]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geomSig, machineEpoch]);
+  // Not typed → the field IS the coil's number.  A duty / preset restore writes its
+  // stored sim.endWinding (often computed on an older coil model); without a typed
+  // override that stored number is not this geometry's, so the coil's wins.
+  useEffect(() => {
+    if (endWindingTyped || !(endWindingGeo > 0)) return;
+    if (Math.abs(Number(endWinding) - endWindingGeo) > 5e-4) setEndWinding(endWindingGeo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endWinding, endWindingGeo, endWindingTyped]);
 
   // ── polling ───────────────────────────────────────────────────────────────
   const stopPolling = useCallback(() => {
@@ -2597,16 +2637,33 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               sx={coupled ? { '& input': { color: '#34d399' } } : undefined}
             />
             <TextField
-              label="End-winding factor k_end (editable)"
+              label={`End-winding factor k_end — ${endWindingTyped ? 'typed' : 'from coil'}`}
               type="number" size="small" fullWidth
               value={endWinding}
-              onChange={e => setEndWinding(+e.target.value)}
+              onChange={e => {
+                const raw = e.target.value;
+                if (raw.trim() === '') {                 // cleared → back to the coil's number
+                  setEndWindingTypedOn('');
+                  if (endWindingGeo > 0) setEndWinding(endWindingGeo);
+                  return;
+                }
+                setEndWinding(+raw);
+                setEndWindingTypedOn(geomKey);
+              }}
+              helperText={endWindingTyped
+                ? <span>typed · coil {endWindingGeo ? endWindingGeo.toFixed(3) : '—'}{' '}
+                    <Link component="button" type="button" variant="caption" underline="always"
+                          onClick={() => { setEndWindingTypedOn(''); if (endWindingGeo > 0) setEndWinding(endWindingGeo); }}>
+                      use coil value
+                    </Link></span>
+                : endWindingCoilLine(endWindingCoil)}
               inputProps={{ step: 0.05, min: 0, max: 6 }}
-              InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance/loss by the end-turn length.` +
-                          ` k_end = (π·(wire_w/2 + tooth_w/2) + L_stack)/L_stack = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'} for THIS geometry.` +
-                          ` Re-derived on EVERY geometry change and used in all simulations AND optimizations —` +
-                          ` it scales the copper loss and phase resistance for the end-turns a 2-D solve can't see.` +
-                          ` Type a value to override it until the geometry changes again.`} /> }}
+              InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance, copper loss and copper mass by the end-turn length a 2-D solve can't see.` +
+                          ` k_end = mean turn / (2·L_stack) of the coil the CAD build draws for THIS geometry (the coil of the 3-D view): ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}.` +
+                          (endWindingCoil ? ` ${endWindingCoil.source ?? ''}: edgewise bend radius ${fmtMm(endWindingCoil.wire_beng_r_mm)}, straight overhang ${fmtMm(endWindingCoil.coil_straight_extra_mm)}, leads ${fmtMm(endWindingCoil.coil_lead_total_mm)}, mean turn ${fmtMm(endWindingCoil.mean_turn_length_mm)} (${endWindingCoil.turns_per_coil ?? '—'} turns).` +
+                            ` For comparison only, the idealised semicircle end turn would give ${endWindingCoil.k_end_semicircle ?? '—'}.` : '') +
+                          ` Re-derived on EVERY geometry change and used in all simulations AND optimizations.` +
+                          ` A typed value overrides it until you clear it or the geometry changes.`} /> }}
               disabled={isRunning}
             />
             <TextField

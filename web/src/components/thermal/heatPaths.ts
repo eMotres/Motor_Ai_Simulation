@@ -152,9 +152,11 @@ const r3 = (v: number | null | undefined, nd = 3): number | null =>
 
 /* ── 1. the machine, as primitives ───────────────────────────────────────── */
 
-/** `masses.end_winding_factor` on a bare geometry dict: the half-loop
- *  centreline runs round the tooth plus the whole wire COLUMN, so
- *  k_end = (π·span/2 + L)/L.  The same estimator the solver uses for auto. */
+/** DRAWING-ONLY fallback when a payload carries no k_end: the idealised
+ *  semicircle end turn round the tooth plus the whole wire COLUMN,
+ *  k_end = (π·span/2 + L)/L (masses.end_winding_factor method "semicircle").
+ *  The solver's k_end is the built CAD coil's mean turn; every thermal
+ *  payload carries that number (`end_faces.k_end`), which wins above. */
 export function kEndFromGeometry(geo: Dict): number {
   const L = f0(geo.motor_length);
   if (L <= 0) return 1;

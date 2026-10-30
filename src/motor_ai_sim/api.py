@@ -1084,8 +1084,10 @@ def get_full_config(geo: Optional[str] = None):
                     geo_dict = {**geo_dict, **_o}
             except Exception:
                 pass
-        # Geometry-derived end-winding factor k_end = (π·(wire_w/2+tooth_w/2) + L)/L,
+        # Geometry-derived end-winding factor: the mean turn of the coil the CAD build
+        # draws for THIS geometry (masses.end_winding_factor, owner 2026-10-30),
         # recomputed from the (possibly overridden) geometry so the UI cell stays in sync.
+        _kcoil = None
         try:
             from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
             from motor_ai_sim.simulation.fem_solver_2d import end_winding_factor_geom as _ewf
@@ -1094,7 +1096,26 @@ def get_full_config(geo: Optional[str] = None):
             # else the two tiers meet: the config's DERIVED fields must not
             # survive next to the override's primaries.
             _kgeo = _mgo(dict(config.get("geometry", {})), _ov)
-            _kend = round(float(_ewf(_pfc(geo_override=_ov), _kgeo)), 3)
+            _kp = _pfc(geo_override=_ov)
+            _kend = round(float(_ewf(_kp, _kgeo)), 3)
+            try:
+                from motor_ai_sim.masses import cad_coil_dimensions as _ccd
+                _cd = _ccd(_kp, _kgeo)
+                # What the Simulation tab shows beside the number: where the coil came
+                # from and its shape, plus the semicircle as a named comparison only.
+                _kcoil = {
+                    "source": _cd.get("coil_source"),
+                    "profile": _cd.get("coil_profile"),
+                    "typed_keys": _cd.get("coil_typed") or [],
+                    "wire_beng_r_mm": round(float(_cd["wire_beng_r_mm"]), 4),
+                    "coil_straight_extra_mm": round(float(_cd["coil_straight_extra_mm"]), 4),
+                    "coil_lead_total_mm": round(float(_cd["coil_lead_total_mm"]), 4),
+                    "turns_per_coil": int(_cd["turns_per_coil"]),
+                    "mean_turn_length_mm": round(float(_cd["mean_turn_length_mm"]), 3),
+                    "k_end_semicircle": round(float(_cd["k_end_semicircle"]), 3),
+                }
+            except Exception:                   # noqa: BLE001 — the details never block the number
+                _kcoil = None
         except Exception:
             _kend = 0.0
         return {
@@ -1114,6 +1135,7 @@ def get_full_config(geo: Optional[str] = None):
                 "rpm": sim_cfg.get("rpm", 2000),
             },
             "end_winding_factor": _kend,
+            "end_winding_coil": _kcoil,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

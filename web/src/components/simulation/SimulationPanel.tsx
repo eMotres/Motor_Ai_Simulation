@@ -195,14 +195,12 @@ interface EndWindingCoil {
   source?: string | null; profile?: string | null; typed_keys?: string[];
   wire_beng_r_mm?: number; coil_straight_extra_mm?: number; coil_lead_total_mm?: number;
   turns_per_coil?: number; mean_turn_length_mm?: number; k_end_semicircle?: number;
-  kind?: 'cad' | 'estimate' | null; k_end_template?: number;
+  kind?: 'rule' | null; k_end_template?: number;
 }
 const fmtMm = (v: unknown): string => (Number.isFinite(Number(v)) ? `${(+Number(v).toFixed(2))} mm` : '—');
 /** Where the k_end in the field comes from, for its label. */
-function endWindingSourceLabel(typed: boolean, c: EndWindingCoil | null): string {
-  if (typed) return 'typed';
-  if (c?.kind === 'estimate') return 'estimated (no CAD profile)';
-  return 'from CAD coil';
+function endWindingSourceLabel(typed: boolean): string {
+  return typed ? 'typed' : 'from coil rule';
 }
 
 // Winding connection options come from the backend (/api/winding/config), which
@@ -813,7 +811,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const daxisPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last geometry-derived k_end we seeded the cell with — shown in the tooltip.
   const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
-  // k_end is the mean turn of the coil the CAD build draws for THIS geometry
+  // k_end is the mean turn of the tooth coil built by the one coil rule for THIS geometry
   // (masses.end_winding_factor, owner 2026-10-30), so it moves with every tooth /
   // wire / stack-length edit.  Re-seeding is keyed on this signature instead of
   // running once on mount, which used to leave a stale (or bare 0) factor behind
@@ -2660,7 +2658,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 : magShown.isCard ? { '& input': { color: 'var(--text-3)' } } : undefined}
             />
             <TextField
-              label={`End-winding factor k_end — ${endWindingSourceLabel(endWindingTyped, endWindingCoil)}`}
+              label={`End-winding factor k_end — ${endWindingSourceLabel(endWindingTyped)}`}
               type="number" size="small" fullWidth
               value={endWinding}
               onChange={e => {
@@ -2686,7 +2684,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   </Tooltip>
                 )}
                 <HelpTip title={`End-winding copper: scales the coil resistance, copper loss and copper mass by the end-turn length a 2-D solve can't see.` +
-                          ` k_end = mean turn / (2·L_stack) of the tooth coil for THIS geometry: ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
+                          ` k_end = mean turn / (2·L_stack) of the tooth coil built by ONE rule for every machine (rectangular end, edgewise bend R = 0.6 x wire width, overhang and leads from the machine size): ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
                           (endWindingTyped ? ` (you typed ${endWinding}).` : '.') +
                           (endWindingCoil ? ` ${endWindingCoil.source ?? ''}. Bend radius ${fmtMm(endWindingCoil.wire_beng_r_mm)}, straight overhang ${fmtMm(endWindingCoil.coil_straight_extra_mm)}, leads ${fmtMm(endWindingCoil.coil_lead_total_mm)}, mean turn ${fmtMm(endWindingCoil.mean_turn_length_mm)} (${endWindingCoil.turns_per_coil ?? '—'} turns)` +
                             ((endWindingCoil.typed_keys?.length ?? 0) > 0 ? ` - ${endWindingCoil.typed_keys!.join(', ')} typed in the die.` : '.') +

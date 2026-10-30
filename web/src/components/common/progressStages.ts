@@ -95,7 +95,7 @@ export function stageUnit(s: Pick<ProgressStage, 'unit'>): 'steps' | 'frames' {
 /** Keys with their own tooltip text in the locale files; anything else the
  *  backend might add later falls back to its English `name`. */
 export const KNOWN_STAGE_KEYS = [
-  'prepare', 'calibration', 'gap_probe', 'warm_up', 'demag_prepass', 'final', 'extra', 'post',
+  'gap_probe', 'prepare', 'final', 'extra', 'post',
   'loop', 'pwm_final',
 ] as const;
 

@@ -1754,7 +1754,12 @@ def cycle_min_br(br: np.ndarray, elems: np.ndarray, image: np.ndarray) -> np.nda
     same Br-change and observable-drift rules as before.  Both iterations are
     deflationary, and where the period map is monotone (a weaker magnet never
     makes another one's demagnetising field milder) they stop at the same
-    fixed point, the greatest one below the start
+    fixed point, the greatest one below the start.  Where it is not (a heavily
+    demagnetised magnet meeting a position late, beside weaker neighbours, sees
+    a milder field), the march keeps that order-of-visit memory as a
+    magnet-to-magnet spread and the transfer lands on the conservative side:
+    measured on the pinned 30 mm case, 0.13 pp Br / 0.16 % torque below the
+    march's own 11-period fixed point, with identical magnets
     (docs/ONE_PREPARATION_STAGE_2026-10-30.md).  Br never rises: the result is
     <= ``br`` element-wise.
     """

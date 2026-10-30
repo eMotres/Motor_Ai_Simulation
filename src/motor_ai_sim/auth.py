@@ -310,6 +310,11 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     # ledger's exact-path GET/DELETE and .../ledger/recent right next to them.
     ("POST",   "/api/simulation/ledger/", "admin"),
     ("DELETE", "/api/simulation/ledger/", "admin"),
+    # Which parameters Sweep / Optimize / DOE may vary (the workspace's sweep_whitelist).  Listed BEFORE
+    # "/api/geometry" because the first matching prefix wins: reading is a simulation-account matter, writing is the
+    # owner's on the one shared config and the caller's own once the per-user workspaces are on (below).
+    ("GET",    "/api/geometry/optimizable", "engineer"),
+    ("PUT",    "/api/geometry/optimizable", "admin"),
     # shared-config / shared-store mutations → owner only
     ("PUT",    "/api/geometry", "admin"),
     ("POST",   "/api/geometry/parameter", "admin"),
@@ -369,6 +374,8 @@ WORKSPACE_STORE_MIN_ROLE = "user"
 _ENGINEER_WORKSPACE_GATES = frozenset({
     ("GET", "/api/simulation/ledger"), ("DELETE", "/api/simulation/ledger"), ("GET", "/api/simulation/ledger/recent"),
     ("POST", "/api/simulation/ledger/"), ("DELETE", "/api/simulation/ledger/"),
+    # the optimizable set is a key of the caller's OWN workspace config once layering is on
+    ("PUT", "/api/geometry/optimizable"),
 })
 ENGINEER_WORKSPACE_MIN_ROLE = "engineer"
 

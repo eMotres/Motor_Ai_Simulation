@@ -86,5 +86,7 @@
   "optVarsSnackAdded": "{count, plural, one {Added # variable} other {Added # variables}}",
   "optVarsSnackRemoved": "{count, plural, one {Removed # variable} other {Removed # variables}}",
   "optVarsResetButton": "Reset {count, plural, one {# out-of-range variable} other {# out-of-range variables}} to current ±10 %",
-  "optVarsResetTip": "These ranges do not contain the current value of the loaded motor (they may have been set for another motor). One click re-centres them on the current value ±10 %. Undo brings them back."
+  "optVarsResetTip": "These ranges do not contain the current value of the loaded motor (they may have been set for another motor). One click re-centres them on the current value ±10 %. Undo brings them back.",
+  "optVarsManage": "Manage",
+  "optVarsManageTip": "Choose which parameters can be varied: the Optimizable switch on each row of the Geometry tab."
 }

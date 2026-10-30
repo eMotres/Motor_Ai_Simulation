@@ -187,5 +187,10 @@
     "shaftAlways": "The shaft is always included and cannot be changed.",
     "excludedRisk": "Warning: this part is magnetically active; excluding it changes the result.",
     "nextExcludedRisk": "Warning: excluding this magnetically active part changes the result."
-  }
+  },
+  "optimizableOnTip": "Optimizable: Sweep and Optimize may vary this parameter. Switch off to keep it fixed.",
+  "optimizableOffTip": "Fixed: Sweep and Optimize leave this parameter alone. Switch on to let them vary it.",
+  "optimizableLast": "At least one parameter must stay optimizable.",
+  "optimizableReadOnly": "Which parameters can be varied is set by an admin on this server.",
+  "optimizableAria": "{name}: optimizable"
 }

@@ -716,6 +716,98 @@ def get_geometry_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Which parameters Sweep / Optimize / DOE may vary ─────────────────────────
+# The workspace's ``sweep_whitelist`` (see motor_ai_sim/optimizable_set.py).  Engineer / admin only — the
+# Geometry tab's per-row switch and Optimization > variables > "manage" call these.
+def _optimizable_gate(request: Request, method: str):
+    """``(allowed, status, caller_id)`` for ``method`` on this route, by the table the role gate uses
+    (``auth._GATED_PREFIX``) — so the route refuses even where the middleware is not in front of it."""
+    from motor_ai_sim import auth as _auth
+    authz = request.headers.get("authorization")
+    ident = _auth.caller_identity(authz)["id"]
+    if not _auth.AUTH_ENFORCE and not _auth._ADMIN_EMAILS:
+        return True, 200, ident                              # local / unconfigured: the developer is the admin
+    is_admin, user = _auth._is_admin_caller(authz)
+    if user is None and not is_admin:
+        return False, 401, ident
+    role = "admin" if is_admin else str(user.get("role") or "anon")
+    need = _auth.required_role(method, request.url.path) or "engineer"
+    if _auth._ROLE_RANK.get(role, -1) < _auth._ROLE_RANK.get(need, 2):
+        return False, 403, ident
+    return True, 200, ident
+
+
+def _require_optimizable_access(request: Request) -> str:
+    """The caller's id for the audit line, or 401 / 403."""
+    ok, status, ident = _optimizable_gate(request, request.method)
+    if not ok:
+        raise HTTPException(status_code=status, detail=(
+            "Sign in to use this feature." if status == 401
+            else "This feature requires a simulation (engineer) account."))
+    return ident
+
+
+def _optimizable_answer(path: Path, schema: dict) -> dict:
+    from motor_ai_sim import optimizable_set as _opt
+    return _opt.describe(_opt.read_stored(path), schema)
+
+
+@router.get("/optimizable")
+def get_optimizable(request: Request):
+    """The set of parameters Sweep / Optimize / DOE may vary in THIS workspace.
+
+    ``all_allowed`` is true when the stored list is empty or missing — nothing is restricted and ``optimizable`` then
+    lists every numeric parameter.  ``gamma_deg`` (the load angle) is always allowed and listed in ``always_allowed``."""
+    _require_optimizable_access(request)
+    from motor_ai_sim.routes._validation import geometry_schema_meta
+    try:
+        out = _optimizable_answer(Path(str(_resolve_cfg_path())), geometry_schema_meta())
+        # may THIS caller change it?  (an engineer reads on the one shared config; the UI greys the switches)
+        out["can_edit"] = _optimizable_gate(request, "PUT")[0]
+        return out
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"workspace config unreadable: {exc}")
+
+
+@router.put("/optimizable")
+def put_optimizable(body: dict, request: Request):
+    """Change the set.  Body: ``{"names": [...]}`` (replace; ``[]`` = every parameter allowed) or
+    ``{"enable": [...], "disable": [...]}`` (change a few; a result with nothing enabled is refused).
+
+    Writes ONLY ``sweep_whitelist`` of the workspace config (text edit, verified, previous file kept in
+    ``.config_backups/``).  A sweep / optimization that is already running keeps the list it started with."""
+    actor = _require_optimizable_access(request)
+    from motor_ai_sim import optimizable_set as _opt
+    from motor_ai_sim.file_lock import store_lock
+    from motor_ai_sim.routes._validation import geometry_schema_meta
+    path = Path(str(_resolve_cfg_path()))
+    schema = geometry_schema_meta()
+    try:
+        with store_lock(lambda: path):
+            names = _opt.compute(body, _opt.read_stored(path), schema)
+            res = _opt.write(path, names)
+    except _opt.OptimizableError as exc:
+        if exc.kind in ("config_unreadable", "write_refused", "backup_failed"):
+            raise HTTPException(status_code=500, detail=exc.message)
+        raise reject("optimizable set refused", [param_error(
+            n, None, exc.kind, exc.message) for n in (exc.names or [""])])
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"workspace config not written: {exc}")
+    if not res["unchanged"]:
+        clear_config_cache()
+        try:
+            _client = "%s:%s" % (request.client.host, request.client.port) if request.client else ""
+        except Exception:                                   # noqa: BLE001
+            _client = ""
+        _opt.audit(actor, path, res["before"], res["after"], _client)
+    out = _opt.describe(res["after"], schema)
+    out["can_edit"] = True
+    out["changed"] = {"added": sorted(set(res["after"]) - set(res["before"])),
+                      "removed": sorted(set(res["before"]) - set(res["after"]))}
+    out["backup"] = res["backup"]
+    return out
+
+
 #: Dimension-sheet render cache — one slot per (workspace, format), same
 #: shape as the mesh slots below (a params-hash tag and the last payload, so a
 #: Help click on an unchanged machine is a cache hit instead of a re-render) —

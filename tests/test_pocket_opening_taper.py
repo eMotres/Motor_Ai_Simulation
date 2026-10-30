@@ -121,17 +121,19 @@ def test_every_pocket_is_the_same_shape():
 
 
 def test_as_imported_foot_keeps_spokes_on_the_hub():
-    """With the literal Fusion value (foot 2 mm = the whole magnet) the
-    magnet's radial side reaches the OD, so the iron above its slanted top
-    face is cut off — 20 lip islands, which is a PARAMETER consequence.  But
-    the spokes must stay on the hub: the core's big body carries hub + all
-    ten spokes (it was hub alone before the clamp)."""
+    """With the literal Fusion value (foot 2 mm = the whole magnet).  Until
+    2026-10-30 the builder ran that foot RADIALLY to the OD and cut the iron
+    above the slanted top face off (20 lip islands).  In Fusion's definition the
+    foot runs along the half-pole line and the magnet is the plain trapezoid it
+    cuts from the top arc (`_magnet_side_local`), which is the owner's picture:
+    the core is ONE body carrying hub + all ten spokes."""
     motor, polys = _build(dict(GEO_12, magnet_down_height=2.0))
     p = motor.parameters
     r_or = float(p["rotor_outer_radius"])
     rp = sorted(_parts(polys["rotor"]), key=lambda q: -q.area)
+    assert len([q for q in rp if q.area > 1e-6]) == 1, [round(q.area, 5) for q in rp]
     # one body carrying hub + all ten spokes (mid-spoke points between the
-    # magnet centroids); everything else is a lip at the OD
+    # magnet centroids)
     from shapely.geometry import Point
     body = rp[0]
     angs = sorted(math.atan2(m.centroid.y, m.centroid.x) for m, _ in polys["magnets"])
@@ -176,11 +178,9 @@ def test_depth_clamp_on_the_owner_rotor():
     # the corner of the cut sits exactly on the magnet's slanted side
     n = int(p["num_poles"]); pole = 2 * math.pi / n
     w = p["rotor_outer_radius"] * math.sin(pole * p["magnet_fill_up"] * p["rotor_hole"] / 2)
-    r0 = p["rotor_inner_radius"] + p["rotor_house_height"]
-    a_dn = pole * p["magnet_fill_down"] / 2; a_up = pole * p["magnet_fill_up"] / 2
-    x0, y0 = r0 * math.sin(a_dn), r0 * math.cos(a_dn)
-    rt = p["rotor_outer_radius"] - p["magnet_up_gap"]
-    x1, y1 = rt * math.sin(a_up), rt * math.cos(a_up)
+    # the slanted side: knee -> top corner (Fusion's corners; foot 0 here, so
+    # the knee is the bottom corner)
+    (_p4, (x0, y0), (x1, y1)) = cg._magnet_local_from_params(p)[0][:3]
     y_corner = p["rotor_outer_radius"] - d
     x_side = x0 + (y_corner - y0) * (x1 - x0) / (y1 - y0)
     assert x_side == pytest.approx(w, abs=1e-12)

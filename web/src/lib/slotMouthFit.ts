@@ -6,8 +6,8 @@
  * refuses the same geometry with a 422 on /api/geometry/mesh2d and at the solver
  * gate; this lets the panel say so BEFORE asking).
  *
- * The slot's outer wall lands at
- *   cut_x = tooth/2 + 2·ins + column + 2·dx + tooth2,
+ * The half leg's outer side lands at (Fusion: tooth/2 + coil_w + tooth2)
+ *   cut_x = tooth/2 + 2·ins + column + dx + tooth2,
  *   column = w                    (no split)
  *          = N·w + (N−1)·2·dx     (wire_split = N)
  * and the half-sector wedge leaves cut_x_max = (r_in + cut)·sin(slot_angle/2).
@@ -53,7 +53,7 @@ export function slotMouthLimit(geo: Record<string, unknown> | null | undefined):
   if (split < 1) split = 1;
   const gap = STRIP_GAP_FACTOR * dx;
   const column = split <= 1 ? ww : split * ww + (split - 1) * gap;
-  const cutX = tw / 2 + 2 * ins + column + 2 * dx + t2w;
+  const cutX = tw / 2 + 2 * ins + column + dx + t2w;
   const half = Math.max(1, Math.floor(Math.round(ns) / 2));
   const cutXMax = (innerR + cw) * Math.sin((Math.PI / 180) * (360 / half / 2));
   const turns = Math.round(num(geo.num_wires_per_slot) ?? 0);

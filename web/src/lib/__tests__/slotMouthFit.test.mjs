@@ -7,10 +7,10 @@ let S = null;
 try { S = await import('../slotMouthFit.ts'); } catch { /* old Node */ }
 const t = S ? test : test.skip;
 
-// CIANO14 30_10 / L10
+// CIANO14 30_10 / L10 (tooth2_width 1.7 = the stored 1.6 in the Fusion definition, 2026-10-30)
 const GEO = {
   num_seg: 2, num_slots_per_segment: 6, num_slots: 12, stator_diameter: 30, stator_outer_radius: 15,
-  core_thickness: 1.9, slot_height: 4.2, tooth_width: 2.3, tooth2_width: 1.6, cut_width: 1.8,
+  core_thickness: 1.9, slot_height: 4.2, tooth_width: 2.3, tooth2_width: 1.7, cut_width: 1.8,
   wire_width: 2, wire_spacing_x: 0.1, insulation_thickness: 0.05, wire_split: 1, num_wires_per_slot: 6,
 };
 

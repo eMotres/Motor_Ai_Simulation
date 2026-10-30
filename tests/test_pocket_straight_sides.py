@@ -99,14 +99,19 @@ def _pole_geometry(motor, gap, angle):
     magnet_r = rotor_ir + float(p["rotor_house_height"])
     dn = float(p["magnet_down_height"])
     r_top = rotor_or - gap
-    mag_local = [
-        (magnet_r * math.sin(a_dn), magnet_r * math.cos(a_dn)),                  # mp1
-        ((magnet_r + dn) * math.sin(a_dn), (magnet_r + dn) * math.cos(a_dn)),    # mp2
-        (r_top * math.sin(a_up), r_top * math.cos(a_up)),                        # mp3
-        (-r_top * math.sin(a_up), r_top * math.cos(a_up)),                       # mp4
-        (-(magnet_r + dn) * math.sin(a_dn), (magnet_r + dn) * math.cos(a_dn)),   # mp5
-        (-magnet_r * math.sin(a_dn), magnet_r * math.cos(a_dn)),                 # mp6
-    ]
+    # Fusion's definition (2026-10-30): the foot runs magnet_down_height along
+    # the half-pole line, the upper side aims at the OD point at fill_up and
+    # the magnet ends where it crosses the top arc.
+    mp1 = (magnet_r * math.sin(a_dn), magnet_r * math.cos(a_dn))
+    mp2 = (mp1[0] + dn * math.sin(pole / 2), mp1[1] + dn * math.cos(pole / 2))
+    ux, uy = rotor_or * math.sin(a_up), rotor_or * math.cos(a_up)
+    dx, dy = ux - mp2[0], uy - mp2[1]
+    qa, qb = dx * dx + dy * dy, 2 * (mp2[0] * dx + mp2[1] * dy)
+    qc = mp2[0] ** 2 + mp2[1] ** 2 - r_top ** 2
+    t = (-qb + math.sqrt(qb * qb - 4 * qa * qc)) / (2 * qa)
+    mp3 = (mp2[0] + t * dx, mp2[1] + t * dy)
+    mag_local = [mp1, mp2, mp3,
+                 (-mp3[0], mp3[1]), (-mp2[0], mp2[1]), (-mp1[0], mp1[1])]
     # get_2d_polygons' own zero-position convention (ZERO_OFFSET_DEG + the
     # requested rotor angle).
     theta0 = math.radians(-(90.0 - (360.0 / n) * 0.5) + angle)
@@ -404,7 +409,7 @@ def test_the_pocket_top_is_the_od_ring_and_skips_no_station(gap):
 def _hole_and_magnets(motor, polys, gap, angle=0.0):
     mag_local, rotor_or, n, pole, theta0 = _pole_geometry(motor, gap, angle)
     holes, unfilleted = [], []
-    a_up = pole * float(motor.parameters["magnet_fill_up"]) / 2.0
+    a_up = math.atan2(mag_local[2][0], mag_local[2][1])      # the top corner
     for i in range(n):
         a = i * pole + theta0
         holes.append(Polygon(cg._extended_pocket_pts(mag_local, rotor_or, a)))

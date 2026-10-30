@@ -255,24 +255,14 @@ def test_the_magnet_top_adds_exactly_the_circular_segment_over_the_chord():
     motor, polys = _build(base)
     rotor_or = float(motor.parameters["rotor_outer_radius"])
     n_poles = int(motor.parameters["num_poles"])
-    a_up = math.radians(360.0 / n_poles * base["magnet_fill_up"] / 2.0)
-    theta = 2.0 * a_up
-    want = n_poles * rotor_or ** 2 / 2.0 * (theta - math.sin(theta))
-
     # the chord-topped reference, built from the same landmarks the CAD uses
-    p = motor.parameters
-    magnet_r = float(p["rotor_inner_radius"]) + float(p["rotor_house_height"])
-    dn = float(p["magnet_down_height"])
-    a_dn = math.radians(360.0 / n_poles * base["magnet_fill_down"] / 2.0)
+    # (Fusion's corners, cadquery_geometry._magnet_local_from_params)
+    from motor_ai_sim.cadquery_geometry import _magnet_local_from_params
+    mag_local, a_up = _magnet_local_from_params(motor.parameters)
     r_top = rotor_or - float(base["magnet_up_gap"])
-    hexa = Polygon([
-        (magnet_r * math.sin(a_dn), magnet_r * math.cos(a_dn)),
-        ((magnet_r + dn) * math.sin(a_dn), (magnet_r + dn) * math.cos(a_dn)),
-        (r_top * math.sin(a_up), r_top * math.cos(a_up)),
-        (-r_top * math.sin(a_up), r_top * math.cos(a_up)),
-        (-(magnet_r + dn) * math.sin(a_dn), (magnet_r + dn) * math.cos(a_dn)),
-        (-magnet_r * math.sin(a_dn), magnet_r * math.cos(a_dn)),
-    ])
+    theta = 2.0 * a_up
+    want = n_poles * r_top ** 2 / 2.0 * (theta - math.sin(theta))
+    hexa = Polygon(mag_local)
     got = sum(mp.area for mp, _ in polys["magnets"]) - n_poles * hexa.area
     assert got == pytest.approx(want, rel=0.01), (
         f"the magnet top carries {got:.4f} mm² more than the chord, the "

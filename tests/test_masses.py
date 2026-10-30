@@ -32,16 +32,20 @@ MATS = {"stator_core": "B15AHV950M", "rotor_core": "B15AHV950M",
         "magnet": "F45SH_120C", "slot": "copper", "shaft": "Aluminium_6061"}
 
 #: 150 mm 24s/28p, 35 mm stack — the machine the reference cross-check was run on.
+# tooth2_width / magnet_fill_* / rotor_hole: the stored values translated to
+# Fusion's definitions (geometry.fusion_definitions, 2026-10-30) - stator leg
+# and magnet top corners/lips unchanged, magnet foot and knee within 0.020 mm
+# (magnet area -0.05 %).
 G150 = {
     "stator_diameter": 150, "slot_height": 14, "core_thickness": 4.2,
     "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
-    "air_gap": 0.5, "tooth_width": 9.2, "tooth2_width": 5.5, "cut_width": 6,
+    "air_gap": 0.5, "tooth_width": 9.2, "tooth2_width": 5.6, "cut_width": 6,
     "insulation_thickness": 0.15, "wire_width": 5, "wire_height": 0.6,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 14,
     "wire_split": 1, "slot_hs": 0.2, "magnet_height": 16,
-    "rotor_house_height": 1.2, "shaft_height": 3, "magnet_fill_down": 0.9,
-    "magnet_fill_up": 0.44, "magnet_fill_radius": 2.5, "magnet_up_gap": 2,
-    "rotor_hole": 0.6, "magnet_down_height": 1.8, "magnet_lamination": 0,
+    "rotor_house_height": 1.2, "shaft_height": 3, "magnet_fill_down": 0.89554,
+    "magnet_fill_up": 0.383924, "magnet_fill_radius": 2.5, "magnet_up_gap": 2,
+    "rotor_hole": 0.687636, "magnet_down_height": 1.8, "magnet_lamination": 0,
     "stator_fillet_r": 3.5, "stator_fillet_r1": 1.2, "rotor_fill_r": 0.5,
     "motor_length": 35, "stator_outer_radius": 75,
     "stator_inner_radius": 56.8, "num_slots": 24, "num_poles": 28,
@@ -52,16 +56,20 @@ G150 = {
 }
 
 #: 12s/14p 40 mm, 12 mm stack — preset ``my_40mm_last``.
+# tooth2_width / magnet_fill_* / rotor_hole: the stored values translated to
+# Fusion's definitions (geometry.fusion_definitions, 2026-10-30) - stator leg
+# and magnet top corners/lips unchanged, magnet foot and knee within 0.037 mm
+# (magnet area -0.40 %).
 G40 = {
     "stator_diameter": 40, "slot_height": 6, "core_thickness": 1.9,
     "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
-    "air_gap": 0.2, "tooth_width": 3.1, "tooth2_width": 1.7, "cut_width": 1,
+    "air_gap": 0.2, "tooth_width": 3.1, "tooth2_width": 1.8, "cut_width": 1,
     "insulation_thickness": 0.06, "wire_width": 2.5, "wire_height": 0.6,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 7,
     "wire_split": 1, "slot_hs": 0.267, "magnet_height": 5.9,
-    "rotor_house_height": 1.2, "shaft_height": 2, "magnet_fill_down": 0.85,
-    "magnet_fill_up": 0.4, "magnet_fill_radius": 0.2, "magnet_up_gap": 0.2,
-    "rotor_hole": 0.8, "magnet_down_height": 1.1, "magnet_lamination": 0,
+    "rotor_house_height": 1.2, "shaft_height": 2, "magnet_fill_down": 0.822647,
+    "magnet_fill_up": 0.38844, "magnet_fill_radius": 0.2, "magnet_up_gap": 0.2,
+    "rotor_hole": 0.823809, "magnet_down_height": 1.1, "magnet_lamination": 0,
     "stator_fillet_r": 1, "stator_fillet_r1": 0.15, "rotor_fill_r": 0,
     "motor_length": 12, "stator_outer_radius": 20,
     "stator_inner_radius": 12.1, "num_slots": 12, "num_poles": 14,
@@ -144,6 +152,18 @@ def m40():
 #            cu     0.0234260 -> 0.0256238
 #            active 0.0878199 -> 0.0900177
 #            total  0.0893669 -> 0.0915647
+#
+# PINS MOVED 2026-10-30 — the builder takes Fusion's definitions of tooth2_width,
+# magnet_fill_down / _up (geometry.fusion_definitions).  G150 / G40 carry the
+# translated values: stator unchanged to the bit, the magnet's top corners and
+# pocket lips unchanged; only the foot and knee move (<= 0.037 mm) - Fusion runs
+# the foot along the half-pole line, the old builder radially, and no value
+# reproduces that exactly.
+#
+#   150 mm   within the 5e-4 kg pins (magnet -0.05 %)
+#   40 mm    rotor  0.0144683  -> 0.0145336  (+0.45 %)
+#            mag    0.0175712  -> 0.0175011  (-0.40 %)
+#            active 0.0900177  -> 0.0900129, total 0.0915647 -> 0.0915600
 @pytest.mark.parametrize("part,kg", [
     ("stator", 1.20755),   # 4934.4 mm² CAD section × 35 mm × k_f 0.92 × 7600
     ("rotor",  0.536741),  # 2193.3 mm² — the holder AND the ribs between magnets
@@ -159,12 +179,12 @@ def test_150mm_component_masses(m150, part, kg):
 
 @pytest.mark.parametrize("part,kg", [
     ("stator", 0.0323544),
-    ("rotor",  0.0144683),
+    ("rotor",  0.0145336),
     ("cu",     0.0256238),
-    ("mag",    0.0175712),
+    ("mag",    0.0175011),
     ("shaft",  0.001547),
-    ("active", 0.0900177),
-    ("total",  0.0915647),
+    ("active", 0.0900129),
+    ("total",  0.0915600),
 ])
 def test_40mm_component_masses(m40, part, kg):
     assert m40[part] == pytest.approx(kg, abs=5e-6)

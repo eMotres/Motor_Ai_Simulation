@@ -7,9 +7,11 @@ previous machine's option list, and a `10P` the panel still held was solved on
 a 48-slot machine (8 coils/phase) with a tenth of the coil MMF.  Pins:
 
   * the options, the error text and the re-pick rule (``motor_ai_sim.winding``);
-  * GET /api/winding/config re-picks an invalid stored connection for the LIVE
-    slot count (24 -> 60 -> 48), returns the matching options and coils/phase,
-    and says so in ``connection_note``;
+  * GET /api/winding/config returns the options and coils/phase of the LIVE
+    slot count (24 -> 60 -> 48) and REPORTS (never rewrites) a stored
+    connection that slot count does not have: ``connection_valid`` false and
+    the reason in ``connection_error`` (owner 2026-10-30: a read that re-picked
+    the machine raced the machine load; the "set to 8S" notes are gone);
   * PATCH /api/simulation/config and the solver REFUSE a connection the
     machine does not have (never solve an impossible winding);
   * a configuration copied onto another lamination is re-picked
@@ -174,30 +176,91 @@ def client():
     clear_config_cache()
 
 
-def test_get_follows_24_60_48_and_repicks(client):
+def test_get_follows_24_60_48_and_reports_without_rewriting(client):
     _set_machine(4, "2S-2P", 2, 2)                       # 24 slots, valid
     g = client.get("/api/winding/config").json()
     assert [c["label"] for c in g["connections"]] == ["4S", "2S-2P", "4P"]
-    assert g["connection"] == "2S-2P" and g["connection_valid"] and not g["connection_note"]
+    assert g["connection"] == "2S-2P" and g["connection_valid"] and not g["connection_error"]
     assert g["n_coils_per_phase"] == 4
+    assert "connection_note" not in g
 
     _set_machine(10, "2S-2P", 2, 2)                      # 60 slots: 2S-2P is not one
     g = client.get("/api/winding/config").json()
     assert [c["label"] for c in g["connections"]] == ["10S", "5S-2P", "2S-5P", "10P"]
-    assert g["connection"] == "5S-2P" and g["n_parallel"] == 2 and g["connection_valid"]
-    assert g["n_coils_per_phase"] == 10 and "5S-2P" in g["connection_note"]
+    assert g["n_coils_per_phase"] == 10
+    # reported, not re-picked: the stored winding is exactly what it was
+    assert g["connection"] == "2S-2P" and g["connection_valid"] is False
+    assert "60 slots" in g["connection_error"] and "5S-2P" in g["connection_error"]
     w = yaml.safe_load(_cfg_path().read_text(encoding="utf-8"))["winding"]
-    assert (w["connection"], w["n_parallel"], w["n_series"], w["n_coils_per_phase"]) == ("5S-2P", 2, 5, 10)
+    assert (w["connection"], w["n_parallel"], w["n_series"]) == ("2S-2P", 2, 2)
 
     _set_machine(8, "2S", 1, 2)                          # 48 slots, the owner's L80
     g = client.get("/api/winding/config").json()
     assert [c["label"] for c in g["connections"]] == ["8S", "4S-2P", "2S-4P", "8P"]
-    assert g["connection"] == "8S" and g["n_parallel"] == 1 and "8S" in g["connection_note"]
-    # shown once, then quiet
-    assert not client.get("/api/winding/config").json()["connection_note"]
-    # an option of ANOTHER slot count is refused by the winding route
+    assert g["connection"] == "2S" and g["connection_valid"] is False
+    # an option of ANOTHER slot count is refused by the winding route, with the
+    # one-line reason - the stored winding is untouched
     r = client.patch("/api/winding/config", json={"connection": "10P"})
     assert r.status_code == 400 and "8S" in r.json()["detail"]
+    w = yaml.safe_load(_cfg_path().read_text(encoding="utf-8"))["winding"]
+    assert w["connection"] == "2S"
+
+
+# ── a machine LOAD is one change: no snap, no note (owner 2026-10-30) ───────
+
+def _geo_48() -> dict:
+    return {"num_seg": 8, "num_slots_per_segment": 6, "num_poles_per_segment": 7}
+
+
+def test_machine_load_writes_geometry_and_winding_together(client):
+    """CILN28 (24 slots, 3-phase 4S) -> Erium (48 slots, six-phase 4S-2P): the
+    old winding must never be validated against the 48-slot geometry."""
+    _set_machine(4, "4S", 1, 4)
+    r = client.put("/api/geometry/load", json={
+        "geometry": _geo_48(),
+        "winding": {"connection": "4S-2P", "phases": 6, "set1_paths": "1",
+                    "set_neutrals": "isolated"}})
+    assert r.status_code == 200, r.text
+    assert "winding_note" not in r.json()
+    w = yaml.safe_load(_cfg_path().read_text(encoding="utf-8"))["winding"]
+    assert (w["connection"], w["n_parallel"], w["n_series"], w["phases"]) == ("4S-2P", 2, 4, 6)
+    g = client.get("/api/winding/config").json()
+    assert g["connection"] == "4S-2P" and g["connection_valid"] and g["phases"] == 6
+    assert "connection_note" not in g and g["num_slots"] == 48
+
+
+def test_machine_load_never_snaps_the_incoming_winding(monkeypatch, client):
+    """The geometry write of a load does not re-pick - not even internally."""
+    import motor_ai_sim.api as api
+    calls = []
+    real = api.reconcile_live_winding
+    monkeypatch.setattr(api, "reconcile_live_winding",
+                        lambda: calls.append(1) or real())
+    _set_machine(4, "4S", 1, 4)
+    r = client.put("/api/geometry/load", json={
+        "geometry": _geo_48(), "winding": {"connection": "8S", "phases": 3}})
+    assert r.status_code == 200, r.text
+    assert calls == []
+
+
+def test_machine_load_refuses_a_winding_the_incoming_machine_lacks(client):
+    """Refused with a one-line reason, NOTHING written (geometry included)."""
+    _set_machine(4, "4S", 1, 4)
+    before = _cfg_path().read_text(encoding="utf-8")
+    r = client.put("/api/geometry/load", json={
+        "geometry": _geo_48(), "winding": {"connection": "10P", "phases": 3}})
+    assert r.status_code == 400
+    d = r.json()["detail"]
+    assert "10P" in d and "48 slots" in d and "8S" in d
+    assert _cfg_path().read_text(encoding="utf-8") == before
+
+
+def test_a_users_own_geometry_edit_still_repicks_but_announces_nothing(client):
+    _set_machine(4, "2S-2P", 2, 2)
+    r = client.put("/api/geometry", json=_geo_48())
+    assert r.status_code == 200, r.text
+    assert "winding_note" not in r.json()
+    assert "connection_note" not in client.get("/api/winding/config").json()
 
 
 def test_simulation_config_refuses_a_connection_the_machine_has_not(client):
@@ -226,7 +289,7 @@ def test_a_copied_configuration_is_repicked_for_its_lamination():
     c = {"winding": {"connection": "2S", "n_parallel": 1, "n_series": 2,
                      "n_coils_per_phase": 4, "layers": 1}}
     note = _repick_config_winding(c, {"num_seg": 8, "num_slots_per_segment": 6,
-                                      "num_poles_per_segment": 7}, "test")
+                                      "num_poles_per_segment": 7}, "test")   # logged, not shown
     assert note and c["winding"]["connection"] == "8S" and c["winding"]["n_coils_per_phase"] == 8
     c2 = {"winding": {"connection": "4S", "n_parallel": 1, "n_series": 4}}
     assert _repick_config_winding(c2, {"num_slots": 24, "num_poles": 28}, "test") is None

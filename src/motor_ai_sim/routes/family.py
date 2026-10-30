@@ -6675,14 +6675,15 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     # configuration copied from a 24-slot die still saying `2S` on 48 slots was
     # refused by PATCH /api/winding/config ("Connection '2S' invalid") and the
     # previous machine's connection stayed live.  Re-pick it for the apply
-    # (the file itself is fixed by the copy / transition paths) and say so.
+    # (the file itself is fixed by the copy / transition paths).  The re-pick
+    # is logged by _repick_config_winding and never sent to the panel: a load
+    # announces nothing (owner 2026-10-30).
     _wc = {"winding": dict(c.get("winding") or {})}
-    _wnote = _repick_config_winding(_wc, geo, f"apply '{die}/{cfg}'")
+    _repick_config_winding(_wc, geo, f"apply '{die}/{cfg}'")
     out = {
         "die": die, "config": cfg,
         "geometry": geo,
         "winding": _wc["winding"],
-        **({"winding_note": _wnote} if _wnote else {}),
         "materials": mats,
         # Per-part accounting the configuration was built and characterised
         # under — applied the same way its materials are, so a frameless

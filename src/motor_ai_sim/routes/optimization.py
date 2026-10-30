@@ -19,7 +19,7 @@ import math
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Literal, Callable
 
@@ -170,6 +170,25 @@ def _save_last_scan(result: Dict[str, Any]) -> None:
         os.replace(tmp, _scan_store_path())
     except Exception as _e:  # noqa: BLE001
         log.warning("could not persist last scan: %s", _e)
+
+
+def _archive_previous_scan() -> None:
+    """File the sweep the scan slot holds (if it is not filed yet) before a new
+    run replaces it.  Dated by when it ended (the mtime of ``.last_scan.json``).
+    Best effort: never blocks a Run."""
+    try:
+        with _scan_lock:
+            prev = _scan_state.get("result")
+            prev = dict(prev) if isinstance(prev, dict) else None
+        if not prev or _sweep_saves.computed_points(prev) < 1:
+            return
+        try:
+            when = datetime.fromtimestamp(os.path.getmtime(_scan_store_path()), tz=timezone.utc)
+        except OSError:
+            when = None
+        _sweep_saves.autosave(prev, state="previous", when=when)
+    except Exception as _e:  # noqa: BLE001
+        log.warning("previous sweep not filed before the new run: %s", _e)
 
 
 def _warm_scan_state() -> None:
@@ -2571,6 +2590,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # magnet_height/rotor_hole showed a table of slot_height points.
             # Stamped here so the client can refuse a result it did not ask for.
             "run_id": str(run_id or ""),
+            # The eval-log campaign of this run: every row it wrote to
+            # ``.opt_dataset.jsonl`` / ``.scan_cache.jsonl`` carries this id, so
+            # a saved sweep can be tied back to (and rebuilt from) those rows.
+            "campaign_id": str(getattr(_eval_log.current(), "id", "") or ""),
             # solver params for this scan → lets the cache be re-seeded from this
             # result later with the exact same key inputs (see /scan/seed_cache).
             # The list must be COMPLETE: seed_cache once rebuilt keys from just
@@ -2608,7 +2631,17 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             if _scan_owns(run_id):
                 result.setdefault("machine", _machine_stamp(_swept_geo_keys(result)))
                 _scan_state["result"] = result
-        _save_last_scan(result)   # persist so it survives reload / restart
+        # A run that computed NOTHING (Stopped at 0/N) must not replace the last
+        # sweep on disk - the owner lost a 7/8-point sweep that way (2026-10-30).
+        if _sweep_saves.computed_points(result) >= 1:
+            _save_last_scan(result)   # persist so it survives reload / restart
+        # File the run in the workspace's saved sweeps (it ended with computed
+        # points, finished or Stopped) so the next Run cannot destroy it.
+        _sweep_saves.autosave(
+            result,
+            state=("machine-changed" if _src_changed
+                   else "cancelled" if _scan_state.get("cancel") else "finished"),
+            n_planned=len(tasks))
         # SWEEP JOURNAL: mark as finished
         if _sweep_journal_record:
             _sweep_journal.finish_sweep_journal(_config_dir_o(), str(run_id))
@@ -2664,6 +2697,10 @@ def scan_designs(req: ScanRequest):
                 _scan_state["running"] = False           # took too long → force clear
             break
         _time.sleep(0.15)
+    # A new Run replaces the scan slot (and, when it ends, `.last_scan.json`):
+    # file whatever the tab still holds first, so an earlier sweep is never lost
+    # to a later one (owner 2026-10-30).
+    _archive_previous_scan()
     with _scan_lock:
         # Whitelist gate: only sweep_whitelist params (plus the load-angle
         # gamma_deg, which is not a geometry knob) may be scanned.  Empty/missing
@@ -5796,6 +5833,104 @@ def delete_saved(sid: str):
     except ValueError as e:
         raise _saved_http(e)
     return {"deleted": sid}
+
+
+class RebuildRequest(BaseModel):
+    """``machine`` names (die / config / duty) are used only for a campaign whose
+    machine cannot be proven to be the loaded one; they are marked ``declared``."""
+    dry_run: bool = False
+    force: bool = False
+    machine: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/saved/rebuild")
+def rebuild_saved(req: RebuildRequest):
+    """Admin, one time per workspace: file the past sweeps that were never saved.
+
+    Reads this workspace's ``.opt_dataset.jsonl`` (+ ``.scan_cache.jsonl`` for the
+    full results) and rebuilds one saved sweep per sweep campaign: its points,
+    overrides, operating points and machine.  Skips a campaign that is already
+    saved (by campaign id, or because a saved sweep already holds all its designs)
+    and rows that are ``rejected`` or were refused before a FEM started.  Safe to
+    repeat with ``force``: a rebuilt save has a fixed id per campaign.  ``dry_run``
+    reports what it would file and writes nothing."""
+    from motor_ai_sim import sweep_rebuild as _rb
+    d = _sweep_saves.saves_dir()
+    if (d / _sweep_saves.REBUILD_MARKER).exists() and not (req.force or req.dry_run):
+        raise HTTPException(status_code=409, detail=(
+            "this workspace's past sweeps were already rebuilt; pass force=true to run it again"))
+    groups = _rb.group_campaigns(_eval_log.iter_rows(_dataset_path()))
+    cache = _rb._index_cache(_eval_log.iter_rows(_eval_cache_path()), set(groups))
+    saved_rows = _sweep_saves.list_entries()
+    have_cid = {r.get("campaign_id") for r in saved_rows if r.get("campaign_id")}
+    held: Optional[List[frozenset]] = None
+    loaded_fp = _config_fingerprint()
+    report: List[Dict[str, Any]] = []
+    created = 0
+    for cid, rows in sorted(groups.items(), key=lambda kv: str(kv[1][0].get("ts") or "")):
+        res = _rb.build_result(cid, rows, cache.get(cid))
+        item: Dict[str, Any] = {"campaign_id": cid, "n_rows": len(rows),
+                                "started": str(rows[0].get("ts") or ""), "saved_id": None,
+                                "skipped": None}
+        report.append(item)
+        if res is None:
+            item["skipped"] = "no computed point"
+            continue
+        info = res["rebuilt"]
+        item.update(n_points=res["n_total_points"], n_built=res["n_built"],
+                    with_full_result=info["points_with_full_result"],
+                    variables=[v["name"] for v in res["variables"]])
+        if cid in have_cid:
+            item["skipped"] = "already saved (campaign id)"
+            continue
+        if held is None:
+            held = []
+            for row in saved_rows:
+                try:
+                    full = _sweep_saves.read_entry(row["id"]) or {}
+                    held.append(_rb.points_key_set((full.get("result") or {}).get("points")))
+                except Exception:                      # noqa: BLE001
+                    continue
+        mine = _rb.points_key_set(res["points"])
+        if any(mine <= h for h in held):
+            item["skipped"] = "already saved (a saved sweep holds all its designs)"
+            continue
+        swept = [v["name"] for v in res["variables"]]
+        if info["cfg_fp"] and info["cfg_fp"] == loaded_fp:
+            # Same full fingerprint as the loaded machine -> the same machine, so
+            # it gets the loaded machine's real stamp (swept keys blanked).
+            res["machine"] = {**_machine_stamp(swept), "rebuilt": True}
+        else:
+            res["machine"] = {"unattributed": True, "rebuilt": True,
+                              "source_fp": info["cfg_fp"]}
+        started = _rb.parse_ts(info["started"]) or datetime.now(timezone.utc)
+        item["name"] = _sweep_saves.auto_name(res, started, _sweep_saves.clean_machine(res["machine"]))
+        item["machine_verified"] = bool(res["machine"].get("fingerprint"))
+        if req.dry_run:
+            item["skipped"] = "dry run"
+            continue
+        try:
+            entry = _sweep_saves.build_entry(
+                res, declared_machine=req.machine, sid="rebuilt_" + _sweep_saves.auto_id(cid)[5:],
+                created_at=started,
+                name="",
+                extra={"rebuilt": True, "state": "rebuilt", "n_done": res["n_built"],
+                       "n_planned": None, "campaign_id": cid})
+            entry["name"] = _sweep_saves.auto_name(entry["result"], started, entry["machine"])
+            _sweep_saves.write_entry(entry)
+        except ValueError as e:
+            item["skipped"] = str(e)
+            continue
+        item["saved_id"] = entry["id"]
+        item["name"] = entry["name"]
+        created += 1
+    if not req.dry_run:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / _sweep_saves.REBUILD_MARKER).write_text(json.dumps(
+            {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+             "created": created}), encoding="utf-8")
+    return {"dry_run": req.dry_run, "created": created,
+            "skipped": sum(1 for r in report if r["skipped"]), "campaigns": report}
 
 
 # ═════════════════════════════════════════════════════════════════════════════

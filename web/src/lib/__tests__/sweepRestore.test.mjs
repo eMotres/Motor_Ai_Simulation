@@ -103,7 +103,7 @@ test('the browser copy: only a finished, stamped, identified result is kept; old
 });
 
 test('every refusal has a sentence', () => {
-  for (const why of ['no-ids', 'no-run-id', 'unstamped', 'foreign-machine', 'other-run']) {
+  for (const why of ['empty', 'no-ids', 'no-run-id', 'unstamped', 'foreign-machine', 'other-run']) {
     assert.ok(notShownText(why, res({ machine: M_B })).length > 10, why);
   }
   assert.ok(notShownText('foreign-machine', res({ machine: M_B })).includes('G2 / L40'));

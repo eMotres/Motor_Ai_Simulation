@@ -2910,6 +2910,44 @@ _SCAN_VALIDATION_PARAMS = _SCAN_SOLVE_PARAMS + (
 )
 
 
+def _machine_label(m: Optional[Dict[str, Any]]) -> str:
+    parts = [str((m or {}).get(k)) for k in ("die", "config", "duty") if (m or {}).get(k)]
+    return " / ".join(parts)
+
+
+def _machine_changed_detail(then: Optional[Dict[str, Any]], swept: tuple = ()) -> str:
+    """The 409 text when a Sweep point's machine is not the machine loaded now.
+
+    Owner 2026-10-30: after a reload the Apply of a sweep point answered only
+    "Machine/configuration changed" - he could not tell whether another motor
+    was loaded or the same motor had been edited.  Two different situations,
+    two different sentences."""
+    was = _machine_label(then)
+    now = _machine_label(_machine_stamp(swept))
+    if was and now and was != now:
+        return (f"This sweep was computed on {was}; the machine loaded now is {now}. "
+                f"Load {was} to apply one of its points, or rerun the sweep on {now}.")
+    name = was or now or "the loaded machine"
+    return (f"{name} was edited after this sweep ran (geometry other than the swept "
+            "variables, winding, materials, magnet, rotor, stator, speed or mesh), so "
+            "its points no longer describe the machine as it is now. Undo the edit or rerun the sweep.")
+
+
+def _running_scan_view(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The still-RUNNING sweep as a result a point can be applied from.
+
+    While a sweep runs ``_scan_state["result"]`` is empty and the computed
+    points are streamed in ``_scan_state["points"]`` - so Apply of one of those
+    answered "Sweep run changed" and the panel had to keep the button off
+    (owner 2026-10-30: a reload mid-sweep left Apply dead).  Every streamed
+    point carries its own ``source_cfg_fp``, so the same machine check holds."""
+    if not state.get("running") or not state.get("run_id"):
+        return None
+    return {"run_id": str(state["run_id"]), "machine": state.get("machine"),
+            "points": list(state.get("points") or []),
+            "scan_params": {"validation_provenance_version": 1}, "running": True}
+
+
 def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
                             ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """Read the exact finished scan point and pinned solve settings, or refuse.
@@ -2979,7 +3017,7 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
         machine_ok = machine_ok and source_fp != "nofp" and \
             point["source_cfg_fp"] == source_fp
     if not machine_ok:
-        raise HTTPException(status_code=409, detail="Machine/configuration changed since this Sweep; rerun it")
+        raise HTTPException(status_code=409, detail=_machine_changed_detail(machine, swept))
     args = {"overrides": geo_ov, "current_a": current, "steps": steps,
             "coil_temp_c": sp["coil_temp_c"], "n_periods": 1.0,
             "gamma_deg": gamma, "rpm": rpm,
@@ -3034,7 +3072,7 @@ def _scan_point_for_apply(result: Dict[str, Any], req: ScanValidateRequest) -> D
         source_fp = _config_fingerprint(tuple(geo_ov))
         machine_ok = machine_ok and source_fp != "nofp" and point["source_cfg_fp"] == source_fp
     if not machine_ok:
-        raise HTTPException(status_code=409, detail="Machine/configuration changed since this Sweep; rerun it")
+        raise HTTPException(status_code=409, detail=_machine_changed_detail(machine, swept))
     point["_provenance"] = "pinned" if pinned else "legacy_machine_stamp"
     # γ, when swept, rides as its own top-level `gamma_deg` (stamped by the
     # scan worker) — strip it back out of `overrides` so Apply never sends it
@@ -3056,6 +3094,9 @@ def scan_apply_point(req: ScanValidateRequest):
     Descent/Auto on-demand re-check, unchanged by this)."""
     with _scan_lock:
         result = _scan_state.get("result")
+        live = _running_scan_view(_scan_state)
+        if live is not None and live["run_id"] == req.run_id:
+            result = live          # a point of the sweep still running
         point = _scan_point_for_apply(result, req)
     return _json_sane({"point": point, "run_id": req.run_id,
                         "provenance": point.get("_provenance")})

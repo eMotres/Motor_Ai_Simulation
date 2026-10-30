@@ -935,9 +935,9 @@ const SweepStudyPanel: React.FC = () => {
       if (!result?.run_id || !Number.isInteger(p.geom_id) || !Number.isInteger(p.op_index)) {
         throw new Error('Sweep lacks point/run provenance; run the Sweep again');
       }
-      if (resultView?.foreign) {
-        throw new Error(`this sweep belongs to ${resultView.machine}, not the machine loaded now — load that machine to apply one of its points`);
-      }
+      // No client-side guess about the machine here: the server holds the sweep's
+      // own stamp and answers a mismatch with a sentence that names both machines
+      // (another motor loaded, or the same one edited) - see _machine_changed_detail.
       // The server re-reads the stored point from the CURRENT sweep result and
       // refuses it if the machine it was solved on no longer matches the
       // machine as it is now (fingerprint with the swept keys excluded) — no
@@ -1446,9 +1446,9 @@ const SweepStudyPanel: React.FC = () => {
                   : '(base — no swept variables)'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                <span title="Apply this point's geometry and operating point immediately — its own sweep-resolution numbers, no re-solve.">
+                <span title="Apply this point's geometry and operating point immediately — its own sweep-resolution numbers, no re-solve. Works on a point of a sweep that is still running, too: the remaining points keep their own values.">
                   <Button size="small" variant="outlined" color="success"
-                    disabled={applying || running}
+                    disabled={applying}
                     onClick={() => applyPoint(selected)}>
                     {applying ? 'Applying…' : '⤵ Apply'}
                   </Button>

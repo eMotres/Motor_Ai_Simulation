@@ -77,11 +77,28 @@ def _magnet_card(cfg_doc: Dict[str, Any], duty: Optional[Dict[str, Any]]) -> Opt
 
 
 def grade_points(card: Optional[str], library: Dict[str, Any]) -> Dict[str, Any]:
-    """``{"card", "grade", "temp_c", "points": [(T, Br), ...]}`` for the card's grade (every card of the same grade)."""
+    """``{"card", "grade", "temp_c", "points": [(T, Br), ...]}`` for the card's grade (every card of the same grade).
+
+    Since 2026-10-30 a grade is ONE 20 C card and its Br at any temperature is derived (materials.at_temperature): the
+    points are that derivation every 10 K from 20 C to the grade's maximum working temperature.  A former
+    per-temperature name ('N52UH_150C') stands for its grade card, quoted at that temperature."""
+    from motor_ai_sim import materials as _M
     mags = (library or {}).get("magnet") or {}
-    raw = mags.get(card) if card else None
+    _old = _M.legacy_magnet(card) if card and card not in mags else None
+    key = _old[0] if _old else card
+    raw = mags.get(key) if key else None
     if not isinstance(raw, dict):
         return {"card": card, "grade": None, "temp_c": None, "points": []}
+    try:
+        m = _M._parse_magnet(str(key), raw)
+        t_hi = float(m.max_working_temp_c or 180.0)
+        derived = [(float(t), round(float(m.at_temperature(float(t)).Br), 4))
+                   for t in range(20, int(t_hi) + 1, 10)] if m.temperature_c is not None else []
+    except Exception:   # noqa: BLE001 - a card the model cannot move keeps the per-card points below
+        derived = []
+    if derived:
+        return {"card": card, "grade": str(raw.get("grade") or key),
+                "temp_c": _old[1] if _old else num(raw.get("temperature_c")), "points": derived}
 
     def _grade(name: str, r: Dict[str, Any]) -> str:
         g = r.get("grade")

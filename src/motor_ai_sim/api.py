@@ -884,6 +884,12 @@ def get_materials_library():
                 # not state one; the report's coercivity-class fallback stays
                 # where it is, in the report.
                 "max_working_temp_c": getattr(m, "max_working_temp_c", None),
+                # HOW THE CURVE IS DERIVED at another temperature (2026-10-30):
+                # every card is quoted at 20 C and a ?mat= copy of it must
+                # regenerate the same curve the library card does.  `ref` is
+                # left out — it is re-attached from the copy's own fields.
+                "demag_model": ({k: v for k, v in m.demag_model.items() if k != "ref"}
+                                if getattr(m, "demag_model", None) else None),
             }
 
         # Conductors
@@ -979,12 +985,21 @@ def get_materials_library_category(category: str):
 
 
 @app.get("/api/materials/library/{category}/{name}")
-def get_material_detail(category: str, name: str):
-    """Return full detail for a single material."""
+def get_material_detail(category: str, name: str, temp_c: Optional[float] = None):
+    """Return full detail for a single material.
+
+    ``temp_c`` (magnets, 2026-10-30): the card DERIVED at that temperature —
+    what the Simulation badge shows beside a typed magnet temperature.  Every
+    magnet card is quoted at 20 °C, so without it the badge would show the cold
+    card's Br and knee for a hot run."""
     try:
         m = mat_lib.get_material(category, name)  # type: ignore[arg-type]
+        if category == "magnet" and temp_c is not None:
+            m = m.at_temperature(float(temp_c))  # type: ignore[union-attr]
         import dataclasses
         return dataclasses.asdict(m)
+    except mat_lib.MagnetTemperatureError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

@@ -151,8 +151,28 @@ def _k_end_geom(geo: Dict[str, Any]) -> Optional[float]:
 
 
 def _magnet_temp(grade: str) -> Optional[float]:
+    """The temperature a magnet card is quoted at — the card's own (20 °C for
+    every library card since 2026-10-30; a former per-temperature name resolves
+    to its grade derived at that temperature), else the name parse."""
+    try:
+        from motor_ai_sim.materials import get_material
+        t = getattr(get_material("magnet", str(grade or "").strip()), "temperature_c", None)
+        if t is not None:
+            return float(t)
+    except Exception:                                       # noqa: BLE001
+        pass
     m = re.search(r"(\d{2,3})\s*C\b", str(grade or ""))
     return float(m.group(1)) if m else None
+
+
+def _magnet_limit_c(grade: str) -> Optional[float]:
+    """The grade's maximum working temperature off its card, or None."""
+    try:
+        from motor_ai_sim.materials import get_material
+        v = getattr(get_material("magnet", str(grade or "").strip()), "max_working_temp_c", None)
+        return None if v is None else float(v)
+    except Exception:                                       # noqa: BLE001
+        return None
 
 
 # ── drawing ─────────────────────────────────────────────────────────────────
@@ -1846,11 +1866,16 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     blank()
 
     one("Magnet grade", mats.get("magnet"),
-        "the grade name carries the temperature the magnets were modelled at")
+        "one 20 °C card per grade; each duty's magnet temperature is set in Simulation")
     mt = _magnet_temp(str(mats.get("magnet") or ""))
-    if mt:
+    if mt and abs(mt - 20.0) > 1e-9:
+        # a former per-temperature card name: the temperature it stands for
         one("Magnet temperature (°C)", mt,
             "above it the demagnetisation margin in this sheet no longer holds", 0)
+    mlim = _magnet_limit_c(str(mats.get("magnet") or ""))
+    if mlim:
+        one("Magnet max. working temperature (°C)", mlim,
+            "the grade's class limit; a typed magnet temperature may not exceed it", 0)
     one("Stator core steel", mats.get("stator_core"))
     one("Rotor core steel", mats.get("rotor_core"))
     k3 = next((_g(d, "result.end3d_k") for d in duties if _g(d, "result.end3d_k")), None)

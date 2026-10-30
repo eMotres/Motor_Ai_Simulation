@@ -148,6 +148,7 @@ from motor_ai_sim.simulation.safe_warm_cache import (
     rewind_rotor_dofs as _safe_rewind_rotor_dofs,
     restore_br_bundle as _safe_restore_br_bundle,
 )
+from motor_ai_sim.simulation import warm_library as _wlib
 from motor_ai_sim.simulation.periodic_accel import (
     rre_extrapolate as _acc_rre,
     extrapolate_by_sector as _acc_rre_sec,
@@ -3536,8 +3537,14 @@ def _seed_across_steps_ok(cached_meta, wmeta) -> bool:
 
 def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
                       rpm: float, gamma_deg: float, n_sectors: Optional[int] = None,
-                      need_br: bool = False, safe_identity: Optional[str] = None):
+                      need_br: bool = False, safe_identity: Optional[str] = None,
+                      relax_op: bool = False):
     """May this cached state seed THIS run?  ``(ok, why_not)``.
+
+    ``relax_op`` drops the current / γ terms exactly as SB_SEED_FROM_PREVIOUS
+    does.  The warm LIBRARY passes it for a state of the SAME machine
+    discretisation (``warm_library``: identical geometry and mesh), where the
+    settle test at the handoff is what decides, as it does for a sweep.
 
     ONE gate for both halves of the seed (the eddy history and the Br map), so
     the two can never disagree about which parent state a run is continuing.
@@ -3687,7 +3694,7 @@ def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
                 int(wc["nsect"]), _ns_run)
     if abs(float(wc["rpm"]) - float(rpm)) > 0.05 * max(abs(float(rpm)), 1e-9):
         return False, "speed differs by more than 5 %"
-    if _seed_from_previous():
+    if _seed_from_previous() or relax_op:
         return True, ""
     if abs(float(wc["I"]) - float(I_phase_rms)) > 0.05 * max(
             abs(float(I_phase_rms)), 1e-9):
@@ -6211,7 +6218,66 @@ def _fem_transient_sliding_band_once(
                       and str(star_delta or "star").lower() == "star")
     if (_safe_warm_cache_enabled() and not _safe_drive_ok):
         log.info("P2 safe warm cache: COLD start (only built-in sinusoidal current drive is supported)")
-    if (eddy and not _vdrive and not _warm_cache_disabled()
+    # ── THE WARM LIBRARY (owner 2026-10-30, `warm_library`) ──────────────────
+    # Every settled state of THIS machine discretisation (geometry + exact mesh
+    # + sectors + schedule), any operating point.  Written by every accepted
+    # coupled-eddy sinusoidal current-drive run — Runs and sweep points alike —
+    # and READ here by every run that is not a sweep eval (the sweep keeps
+    # continuing its previous point through the "last" slot below).  Br is
+    # offered only by a state at THIS operating point whose map came from a full
+    # pre-pass (`_lib_br_ok`); otherwise only the eddy history is.  No state for
+    # this machine → the legacy slot, unchanged; nothing there either → cold,
+    # and the result says which (`warm_start`).
+    _lib_key = _lib_op = None
+    _lib_meta = None          # the picked library entry (metadata)
+    _lib_br_ok = False        # …and it may seed the Br map too
+    _lib_n_same_machine = 0   # stored states of this machine discretisation
+    _seed_source = "cold"
+    _lib_on = bool(eddy and not _vdrive and _safe_drive_ok
+                   and not _warm_cache_disabled()
+                   and not _safe_warm_cache_enabled() and _wlib.enabled())
+    if _lib_on:
+        try:
+            _lib_key = _wlib.machine_key(
+                _geo_fp, _wlib.mesh_digest([half["s"]["mesh"], half["r"]["mesh"]]),
+                _wmeta, (1 if int(n_sectors) <= 1 else int(n_sectors)),
+                extra={"element_order": int(element_order),
+                       "rotor_eddy": bool(rotor_eddy)})
+            _lib_op = _wlib.op_digest({
+                "I": float(I_phase_rms), "gam": float(gamma_deg), "rpm": float(rpm),
+                "daxis": float(daxis_eff), "rotor_angle0": float(rotor_angle0_deg),
+                "magnet_temp_C": (None if magnet_temp_c is None
+                                  else float(magnet_temp_c)),
+                "materials": _noload_material_fingerprint(),
+                "demag": bool(demag), "frozen_nu": bool(frozen_nu),
+                "eddy_method": str(_eddy_method), "tdm_demag": str(_tdm_demag)})
+            if not _seed_from_previous():
+                _lib_cands = _wlib.candidates(_lib_key)
+                _lib_n_same_machine = len(_lib_cands)
+                _lib_meta = _wlib.pick(_lib_cands, I=float(I_phase_rms),
+                                       gam=float(gamma_deg), rpm=float(rpm),
+                                       op=_lib_op, want_br=bool(demag))
+        except Exception as _e_lib:          # noqa: BLE001 — an accelerator only
+            log.info("P2 warm library: lookup failed (%s)", _e_lib)
+            _lib_key = _lib_op = _lib_meta = None
+    if _lib_meta is not None:
+        _wc_seed = _wlib.load(_lib_meta)
+        _wc_ok, _wc_why = _warm_seed_accept(_wc_seed, _wmeta, I_phase_rms, rpm,
+                                            gamma_deg, n_sectors=int(n_sectors),
+                                            relax_op=True)
+        if _wc_ok:
+            _seed_source = "library"
+            _lib_br_ok = bool(demag and _lib_meta.get("br_repro_op") == _lib_op
+                              and _wc_seed.get("br_val") is not None)
+            log.info("P2 warm library: seed from a stored state of THIS machine "
+                     "(%d stored; parent %.4g A / %.4g deg / %.0f rpm, %s; %s)",
+                     _lib_n_same_machine, float(_wc_seed["I"]), float(_wc_seed["gam"]),
+                     float(_wc_seed["rpm"]), _lib_meta.get("origin"),
+                     "eddy history + Br map (same operating point)" if _lib_br_ok
+                     else "eddy history only")
+        else:
+            _wc_seed = None
+    if (_wc_seed is None and eddy and not _vdrive and not _warm_cache_disabled()
             and (not _safe_warm_cache_enabled() or _safe_drive_ok)):
         _wc_seed = _warm_cache_load()
         _wc_ok, _wc_why = _warm_seed_accept(_wc_seed, _wmeta, I_phase_rms, rpm,
@@ -6221,11 +6287,134 @@ def _fem_transient_sliding_band_once(
                                                 _safe_warm_cache_enabled() else None))
         if not _wc_ok:
             _wc_seed = None
+        else:
+            _seed_source = "last_run"
     _Ib_seed_restore = None
     _safe_br_pending = None
     _dm_seeded = False        # the Br ratchet continues a previous point's magnet
     _dm_seed_from = None      # …and this is whose (honesty fields in the result)
     _dm_inherited_history = None
+    _dm_lib_verify = False    # library Br seed: ONE verification pre-pass period
+    _lib_br_pending = None    # …its Br map, installed by `_install_lib_br`
+    # ── LIBRARY Br SEED: same machine, same operating point (owner 2026-10-30) ─
+    # The map a cold run at THIS operating point ended on, built from a pristine
+    # magnet by its own full pre-pass (`br_repro_op`), on the identical mesh —
+    # so the element order matches and nothing is projected.  It is the fixed
+    # point a cold run of this request converges to, so the pre-pass is not
+    # skipped but VERIFIED: one period with the ratchet active, judged by the
+    # unchanged rule (Br change, rotor-image history incl. the parent's
+    # periods, observable drift against the parent's last pre-pass torque); a
+    # period that is not quiet goes on period by period exactly like a cold run.
+    if (_lib_br_ok and _seed_source == "library" and demag and _dmst is not None
+            and _dmst.active and _mag_idx.size and _wc_seed is not None):
+        try:
+            _br_lib = np.asarray(_wc_seed["br_val"], float)
+            _dh_lib = _wc_seed.get("demag_history") or {}
+            if (_br_lib.shape != (int(_mag_idx.size),)
+                    or not np.all(np.isfinite(_br_lib))
+                    or int(_dh_lib.get("prepass_periods") or 0) < 1
+                    or not isinstance(_dh_lib.get("last_torque"), Mapping)):
+                raise ValueError("stored Br map or its pre-pass history is malformed")
+            # STAGED, not installed: the magnet stays pristine through the
+            # set-up exactly as on a cold run (the TDM checks that the magnet
+            # source is pole-pair periodic, and a ratcheted map is that only to
+            # its image gap — measured 0.018 > 1e-4, TDM refused).  It goes in
+            # where a cold run's ratchet starts: `_install_lib_br`.
+            _lib_br_pending = float(magnet_scale) * np.clip(_br_lib, 0.0, 1.0)
+            _dm_seeded = True
+            _dm_lib_verify = True
+            _dm_inherited_history = dict(_dh_lib)
+            _dm_seed_from = {
+                "I": float(_wc_seed["I"]), "gam": float(_wc_seed["gam"]),
+                "rpm": float(_wc_seed["rpm"]),
+                "geometry_fingerprint": str(_wc_seed.get("geo_fp") or ""),
+                "same_geometry": bool(_wc_seed.get("geo_fp") == _geo_fp),
+                "source": "library", "same_operating_point": True,
+                "inherited_prepass_periods": int(_dh_lib["prepass_periods"]),
+            }
+            log.info("P2 warm library: Br map of THIS operating point continued "
+                     "(%d magnet elements, %.2f %% .. %.2f %% kept, parent ran %d "
+                     "pre-pass period(s)); one verification pre-pass period follows",
+                     int(_mag_idx.size), 100.0 * float(np.min(_br_lib)),
+                     100.0 * float(np.max(_br_lib)), int(_dh_lib["prepass_periods"]))
+        except Exception as _e_lbr:          # noqa: BLE001 — a bad seed never fails a run
+            _lib_br_pending = None
+            _dm_seeded = False; _dm_lib_verify = False
+            _dm_seed_from = None; _dm_inherited_history = None
+            _lib_br_ok = False
+            log.info("P2 warm library: Br seed skipped (%s) - full pre-pass", _e_lbr)
+
+    def _install_lib_br() -> None:
+        """Put the staged library Br map into the magnet (the caller rebuilds
+        the magnet source from `_br_glob`, which `_dmst` shares)."""
+        nonlocal _lib_br_pending
+        if _lib_br_pending is not None:
+            _br_glob[_mag_idx] = _lib_br_pending
+            _lib_br_pending = None
+
+    def _warm_start_info() -> Dict[str, Any]:
+        """WHERE this run's warm-up started from, in one dict — for the result
+        (`warm_start`) and the progress payload.  `seed_source` names what was
+        actually CONSUMED: a stored state that only a march could have used,
+        on a run the TDM solved, is a cold start and says why."""
+        try:
+            _eddy_used = bool(_warm_seeded)
+        except NameError:                    # before the seed was applied
+            _eddy_used = bool(_wc_seed is not None and _eddy_method != "tdm")
+        _br_used = bool(_dm_seeded)
+        _src = _seed_source if (_eddy_used or _br_used) else "cold"
+        _par = None
+        if _src != "cold" and _wc_seed is not None:
+            _par = {"I": float(_wc_seed["I"]), "gam": float(_wc_seed["gam"]),
+                    "rpm": float(_wc_seed["rpm"]),
+                    "origin": ((_wc_seed.get("lib") or {}).get("origin")
+                               if _src == "library" else "last_run")}
+        if _src == "library":
+            _note = ("warm start from a stored state of this geometry (%s, %.4g A / "
+                     "%.4g deg / %.0f rpm): %s" % (
+                         _par["origin"], _par["I"], _par["gam"], _par["rpm"],
+                         " + ".join(_x for _x in (
+                             "eddy history" if _eddy_used else None,
+                             "Br map of this operating point, verified by a "
+                             "pre-pass period" if _br_used else None) if _x)))
+        elif _src == "last_run":
+            _note = ("warm start from the previous run's eddy state (%.4g A / "
+                     "%.4g deg)" % (_par["I"], _par["gam"]))
+        elif _lib_on and _seed_source == "library":
+            _note = ("cold start: a stored state of this geometry exists, but the "
+                     "TDM solves its own eddy orbit and the Br map belongs to "
+                     "another operating point")
+        elif _lib_on and not _seed_from_previous() and not _lib_n_same_machine:
+            _note = "cold start: no stored state for this geometry"
+        elif _lib_on and not _seed_from_previous() and _lib_meta is None:
+            _note = ("cold start: no stored state of this geometry within 5 %% of "
+                     "%.0f rpm" % float(rpm))
+        elif not eddy:
+            _note = None
+        else:
+            _note = "cold start: %s" % (_wc_why or "no seed")
+        try:
+            _nw, _npre, _nper = int(_n_warm), int(_n_dmpre), int(len(_dm_passes))
+        except NameError:
+            _nw = _npre = _nper = 0
+        return {"seed_source": _src, "eddy_history_seeded": _eddy_used,
+                "br_map_seeded": _br_used,
+                "stored_states_this_geometry": int(_lib_n_same_machine),
+                "parent": _par, "note": _note,
+                "warmup_frames": _nw, "prepass_frames": _npre,
+                "prepass_periods": _nper}
+
+    def _progress_warm() -> None:
+        """The warm-start record into the progress payload (a fifth argument;
+        a callback written for four ignores it)."""
+        if progress_cb is None or not eddy:
+            return
+        try:
+            progress_cb(None, None, None, None, _warm_start_info())
+        except TypeError:
+            return
+        except Exception:                    # noqa: BLE001 — not a cancel
+            return
     # SWEEP MODE ONLY, and only on the path that publishes such a state: the
     # coupled-eddy current drive.  A magnetostatic or voltage run has a
     # different settling scheme (`_dmskip` / the voltage prefix) and never
@@ -8063,7 +8252,10 @@ def _fem_transient_sliding_band_once(
     # demagnetization has settled.
     _dm_freeze_warm = bool(demag and _dmst is not None and eddy and not _vdrive)
     _dm_ratchet = not _dm_freeze_warm   # may `_dmst.update` be applied at all?
-    _dm_pre_len = (0 if (_dm_seeded and not _safe_warm_cache_enabled())
+    # (a library Br seed of the same operating point is VERIFIED, not skipped:
+    # `_dm_lib_verify`, see the library block above)
+    _dm_pre_len = (0 if (_dm_seeded and not _safe_warm_cache_enabled()
+                         and not _dm_lib_verify)
                    else (int(n_steps_per_period) if _dm_freeze_warm else 0))
     _dm_prepass = False             # the pre-pass has been spliced in
     _dm_pre_logged = False          # its one summary line has been emitted
@@ -8905,7 +9097,8 @@ def _fem_transient_sliding_band_once(
                     / max(float(np.sqrt(max(float(_td_v0 @ (_Msig2 @ _td_v0)), 0.0))),
                           1e-300))
                 # ── demag: the ratchet ON the orbit, then the orbit re-solved ────
-                if demag and _dmst is not None and _dmst.active and not _dm_seeded:
+                if (demag and _dmst is not None and _dmst.active
+                        and (not _dm_seeded or _dm_lib_verify)):
                     _td_mark("demag", "TDM demag pre-pass")
                     _t_s = _t.time()
                     _td_dmode = _tdm_demag
@@ -8958,7 +9151,9 @@ def _fem_transient_sliding_band_once(
                     def _td_orbit_start(k):
                         return _td_orbit(k, _td_As)
 
-                    _br_pristine = _br_glob.copy()
+                    # pristine = before any seed (a library-seeded run starts
+                    # from its parent's map, and `br_kept_area_pct` is vs new)
+                    _br_pristine = _br_seed_original.copy()
                     _ar_r = _triangle_areas(half["r"]["mesh"])
                     _td_mapinfo = None
                     _td_maps = None
@@ -9016,6 +9211,16 @@ def _fem_transient_sliding_band_once(
                                                "converge" % why)
                         _td_As = [np.array(_fr_.A, float) for _fr_ in _td_frames]
                         _td_Us = [np.array(_fr_.U, float) for _fr_ in _td_frames]
+
+                    # the warm library's Br map (same operating point) goes in
+                    # HERE, where a cold run's ratchet starts: on the orbit, the
+                    # orbit then re-solved on it, exactly as after a pre-pass
+                    # period of a cold run
+                    if _lib_br_pending is not None:
+                        _install_lib_br()
+                        _td_rebuild_fmag()
+                        _td_resolve_orbit("on the warm library's Br map")
+                        _td_mark("demag")
 
                     if _td_dmode == "shortcut" and _td_maps is not None:
                         # ADAPTIVE TWO WINDOWS (owner 2026-10-04; Codex docs
@@ -9124,7 +9329,9 @@ def _fem_transient_sliding_band_once(
                             _rec_p = dict(_chg, frames=int(_mres["frames"]),
                                           torque=_dm_take_torque())
                             _dm_passes.append(_rec_p)
-                            if _dm_pass_ok(_rec_p, _dm_passes):
+                            _ok_p = _dm_pass_ok(_rec_p, _dm_passes)
+                            _progress_warm()
+                            if _ok_p:
                                 break
                             log.info("TDM demag pre-pass period %d moved Br by %.3g "
                                      "(worst magnet, area mean; tol %.1g), %.3g at "
@@ -9807,6 +10014,16 @@ def _fem_transient_sliding_band_once(
     _fseq = list(range(-_eddy_probe, 0)) + list(range(n_total))
     if _eddy_method == "tdm":           # the orbit replaced the warm-up
         _fseq = list(range(n_total))
+    # The warm library's Br map on the MARCH (the TDM installed it on its
+    # orbit): before the warm-up, so the static start field and the frozen-
+    # ratchet warm-up see the magnet whose eddy state the seed carries.
+    if _lib_br_pending is not None and _eddy_method != "tdm":
+        _install_lib_br()
+        _mx_all[nst:] = _Mx_glob * _br_glob
+        _my_all[nst:] = _My_glob * _br_glob
+        f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                     my=b2_0.interpolate(_my_all))
+        _drv.f_mag = f_mag2
     # ── COLD START FROM THE STATIC FIELD, NOT FROM ZERO (2026-09-24) ─────────
     # See p2_drive.eddy_static_state: the history handed to the first march
     # frame is the ∂A/∂t = 0 field one step before it, so the rotor-frame DC
@@ -9920,9 +10137,14 @@ def _fem_transient_sliding_band_once(
                      "fallback did not converge)")
         _warm_seed_pending = None
     _cancel_point("first time step")
+    _progress_warm()
+    _warm_progress_rep = False      # the record re-sent at the first reported frame
     _fi = 0
     while _fi < len(_fseq):
         k = _fseq[_fi]; _fi += 1
+        if k >= 0 and not _warm_progress_rep:
+            _warm_progress_rep = True
+            _progress_warm()
         # Br when the REPORTED window opens (the demag settle measure, both
         # methods): the first reported frame solved with the ratchet active
         if (_dm_rep_br0 is None and demag and _dmst is not None and _dm_ratchet
@@ -11349,9 +11571,12 @@ def _fem_transient_sliding_band_once(
                             ("ratchet unfrozen at handoff (inherited Br image history "
                              "accepted; fresh verification pre-pass)"
                              if _dm_seeded and _safe_warm_cache_enabled()
+                             else "verification pre-pass (Br map of this operating "
+                             "point from the warm library)" if _dm_lib_verify
                              else "ratchet unfrozen at the handoff (pre-pass "
                              "SKIPPED — seeded magnet)" if _dm_seeded
                              else "pre-pass"), _dm_pre_len, _n_warm)
+                        _progress_warm()
                         continue
             # ── DEMAG FIXED POINT (march side; see `_dm_settle_tol`) ──────
             # The end of a pre-pass period (k = −1, the handoff frame itself
@@ -11395,6 +11620,7 @@ def _fem_transient_sliding_band_once(
                     _A2_prev = _period_shift(A2)
                     _n_dmpre += _dm_pre_len
                     _dm_pass_br0 = _br_glob.copy()
+                    _progress_warm()
                     continue
                 _dm_pass_done = True
             # ── the SAME integrand, kept per element (Loss map) ───────────
@@ -13149,6 +13375,41 @@ def _fem_transient_sliding_band_once(
             _warm_cache_store(_wcp)
         except Exception as _e_wcp:          # noqa: BLE001 — an accelerator only
             log.warning("P2 eddy warm cache not published (%s)", _e_wcp)
+        # …and into the warm LIBRARY, when the eddy state is affirmatively
+        # settled (a capped or unjudged march is not a state worth continuing).
+        # The Br map is marked reproducible for THIS operating point only when
+        # it was built here from a pristine magnet by the full pre-pass, or
+        # continued from such a map of the same operating point; a sweep
+        # lineage's map (continued across geometries / currents) never is.
+        if _lib_key is not None and _lib_op is not None and _eddy_verdict is True:
+            try:
+                _br_repro = ""
+                _dh_pub = None
+                if (demag and _wcp.get("br_val") is not None and _dm_settle
+                        and _dm_settle.get("settled") is True
+                        and not _dm_shortcut_used
+                        and (not _dm_seeded or _dm_lib_verify)):
+                    _br_repro = _lib_op
+                    _n_inh = (int((_dm_inherited_history or {}).get("prepass_periods", 0))
+                              if _dm_seeded else 0)
+                    _last_tq = ((_dm_passes[-1].get("torque") if _dm_passes else None)
+                                or (_dm_inherited_history or {}).get("last_torque"))
+                    if _last_tq and len(_dm_passes) + _n_inh >= 1:
+                        _dh_pub = {"prepass_periods": int(len(_dm_passes) + _n_inh),
+                                   "last_torque": {
+                                       "T_mean": float(_last_tq["T_mean"]),
+                                       "ripple_pct": float(_last_tq["ripple_pct"]),
+                                       "torque_method": str(_last_tq.get(
+                                           "torque_method", ""))}}
+                    else:
+                        _br_repro = ""
+                _wlib.store(_wcp, key=_lib_key, op=_lib_op,
+                            origin=("sweep" if _seed_from_previous() else "interactive"),
+                            br_repro_op=_br_repro, demag_history=_dh_pub,
+                            extra_meta={"eddy_method": str(_eddy_method),
+                                        "demag_seeded": bool(_dm_seeded)})
+            except Exception as _e_lst:      # noqa: BLE001 — an accelerator only
+                log.info("P2 warm library: not stored (%s)", _e_lst)
     _wc_pending = []
 
     # ── Per-element loss DENSITY (W/m³) for the Loss map ──────────────────
@@ -14138,12 +14399,16 @@ def _fem_transient_sliding_band_once(
         # told apart from one that solved everything itself.  `warm_seeded` is
         # the eddy history, `demag_seeded` the irreversible Br map, and
         # `demag_seed_from` names the parent operating point and geometry.
-        # Both are False on every interactive Simulation run: SB_SEED_FROM_
-        # PREVIOUS is set by the sweep/optimizer coordinator only, and without
-        # it no Br map is ever consumed.
+        # An interactive run consumes a Br map only from the warm LIBRARY, and
+        # only one of THIS geometry, mesh and operating point that a full
+        # pre-pass built (`demag_seed_from.source == "library"`), verified by a
+        # pre-pass period of its own (owner 2026-10-30).  `warm_start` says in
+        # one record where the warm-up started from — "cold start: no stored
+        # state for this geometry" included — and what it cost.
         "warm_seeded": bool(_warm_seeded),
         "demag_seeded": bool(_dm_seeded),
         "demag_seed_from": (dict(_dm_seed_from) if _dm_seed_from else None),
+        "warm_start": (_warm_start_info() if eddy else None),
         # None (not inf/NaN — this dict is serialised to JSON) when the march
         # was too short to say anything, which only happens if SB_EDDY_WARM
         # pinned it below the probe length.

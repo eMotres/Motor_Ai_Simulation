@@ -1,5 +1,6 @@
 // The "Simulations" top tab (owner 2026-10-13): Electromagnetic, Thermal and Mechanical
-// share ONE tab with a dropdown, in that order; "Schemas" (owner 2026-10-14: the view-only graph of how the
+// share ONE top tab, in that order (owner 2026-10-30: a plain tab like the others - no dropdown;
+// the members are sub-tabs in the panel header row, see App.tsx and components/common/SubTabs); "Schemas" (owner 2026-10-14: the view-only graph of how the
 // simulations are chained) is the last entry.  Geometry, Mesh and Controller stay
 // separate tabs, with the same gates and order as before.  The individual panels keep their
 // own tab ids and gates - this only decides how the bar is DRAWN, so every
@@ -48,6 +49,14 @@ export function barEntries(tabs: readonly BarTab[]): BarEntry[] {
 /** Which bar entry is selected for the active panel. */
 export const barValue = (activeTab: string): string =>
   isSimulationTab(activeTab) ? SIMULATIONS_BAR_ID : activeTab;
+
+/** Which panel the plain "Simulations" tab opens: the member the user looked at last when this account still has
+ *  it, else the first member it has; null when no member is visible. */
+export function simulationsTarget(last: string | null | undefined,
+                                  members: readonly { id: string }[]): string | null {
+  if (last && members.some((m) => m.id === last)) return last;
+  return members[0]?.id ?? null;
+}
 
 /** "Simulations" or, while one is open, "Simulations · Electromagnetic". */
 export function simulationsLabel(base: string, activeTab: string,

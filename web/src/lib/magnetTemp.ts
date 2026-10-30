@@ -26,6 +26,23 @@ export function magnetTempOverLimit(raw: unknown, maxC: number | null | undefine
   return v > m + 1e-9 ? m : null;
 }
 
+/** What the field SHOWS (owner 2026-10-30: «меню так и не работает» — an empty
+ *  field read as broken).  Like the coil temperature, it always carries the
+ *  number the run will use: the typed text when there is one, else the
+ *  assigned card's own temperature (20 °C for a library card, 150 for a former
+ *  `N52UH_150C`), marked `isCard` so it is drawn grey.  Showing the card's
+ *  number writes nothing: blank still sends no magnet_temp_c (the card as
+ *  quoted, the same solve and the same cache key as before). */
+export function magnetTempShown(raw: unknown, cardC: number | null | undefined,
+                                ): { text: string; isCard: boolean } {
+  const s = String(raw ?? '');
+  if (s.trim() !== '') return { text: s, isCard: false };
+  const c = Number(cardC);
+  return cardC != null && Number.isFinite(c)
+    ? { text: String(Math.round(c * 10) / 10), isCard: true }
+    : { text: '', isCard: false };
+}
+
 /** Why the field's text cannot be used, or null when it can (blank included). */
 export function magnetTempError(raw: unknown): string | null {
   const s = String(raw ?? '').trim();
@@ -34,4 +51,14 @@ export function magnetTempError(raw: unknown): string | null {
   if (v == null) return 'not a number';
   if (v < -60 || v > 350) return 'outside -60 … 350 °C';
   return null;
+}
+
+/** The magnet temperature a duty's saved snapshot states (`sim.magnetTempC`,
+ *  the panel's text), or '' — "the card as quoted" — when it states none.  A
+ *  duty load writes this into the field BEFORE the duty's own local overlay, so
+ *  a duty never inherits the previous duty's temperature (lib/dutyLocalApply). */
+export function dutyMagnetTempC(duty: { mesh?: unknown } | null | undefined): string {
+  const m = (duty?.mesh ?? null) as Record<string, unknown> | null;
+  const v = m && typeof m === 'object' ? m['sim.magnetTempC'] : undefined;
+  return v == null ? '' : String(v).trim();
 }

@@ -143,7 +143,8 @@ def test_a_typed_temperature_above_the_grade_limit_is_refused_with_a_reason():
 def test_the_route_guard_refuses_only_a_typed_solve(monkeypatch):
     from fastapi import HTTPException
     from motor_ai_sim.routes import simulation as S
-    monkeypatch.setattr(S, "_assigned_magnet_card", lambda: ("F52SH", M.get_magnet("F52SH")))
+    monkeypatch.setattr(S, "_assigned_magnet_card",
+                        lambda ov=None: ("F52SH", M.get_magnet("F52SH")))
     S._typed_magnet_temp_guard(magnet_temp_c=150.0)
     S._typed_magnet_temp_guard(magnet_temp_c=None)
     S._typed_magnet_temp_guard(magnet_temp_c=170.0, restore=True)        # solves nothing
@@ -250,3 +251,43 @@ def test_a_saved_motor_payload_is_migrated_like_a_configuration():
     assert out["materials"]["magnet"] == "F45SH"
     assert out["duty"]["mesh"]["sim.magnetTempC"] == "120"
     assert temp_text(87.5) == "87.5" and temp_text(150.0) == "150"
+
+
+# ── the Run path and the summary (owner 2026-10-30, after #503 went live) ──
+
+def test_the_kernel_run_refuses_a_typed_temperature_above_the_limit(monkeypatch):
+    """POST /api/kernel/run is the route the Simulation tab's Run posts to; the
+    guard on the GET route alone never saw it."""
+    from fastapi import HTTPException
+    from motor_ai_sim.routes import kernel as K
+    from motor_ai_sim.routes import simulation as S
+    seen = {}
+
+    def _card(ov=None):
+        seen["ov"] = ov
+        return "N52UH_150C", M.get_magnet("N52UH_150C")
+    monkeypatch.setattr(S, "_assigned_magnet_card", _card)
+    monkeypatch.setattr(K, "_get_kernel", lambda: (_ for _ in ()).throw(AssertionError("solved")))
+    with pytest.raises(HTTPException) as e:
+        K.run(K.KernelRunRequest(capability="solver.em_transient",
+                                 payload={"magnet_temp_c": 185.0,
+                                          "mat": '{"assignment": {"magnet": "N52UH_150C"}}'}))
+    assert e.value.status_code == 422 and "180" in e.value.detail
+    assert seen["ov"]["assignment"]["magnet"] == "N52UH_150C", "the body's own override is used"
+    assert S.typed_magnet_temp_refusal(150.0) is None
+    assert S.typed_magnet_temp_refusal(None) is None
+
+
+def test_the_summary_reports_the_magnet_temperature_of_a_former_card(monkeypatch):
+    """A blank field on a former `N52UH_150C` solves at the card's 150 °C and the
+    run says so; a typed 90 °C is reported as typed, with its Br."""
+    from motor_ai_sim.routes import simulation as S
+    monkeypatch.setattr(S, "_assigned_magnet_card",
+                        lambda ov=None: ("N52UH_150C", M.get_magnet("N52UH_150C")))
+    card = S._magnet_temperature_stamp(None)
+    assert card["magnet_temp_source"] == "card" and card["magnet_temp_used_c"] == 150.0
+    assert card["magnet_card_temp_c"] == 150.0 and card["magnet_limit_c"] == 180.0
+    typed = S._magnet_temperature_stamp(90.0)
+    assert typed["magnet_temp_source"] == "typed" and typed["magnet_temp_used_c"] == 90.0
+    assert typed["magnet_Br_used_T"] == pytest.approx(1.3099, abs=1e-4)
+    assert "magnet_over_limit" not in typed

@@ -34,6 +34,8 @@ from scipy.sparse import csr_matrix as _csr_matrix
 from scipy.sparse.linalg import splu as _splu
 
 from motor_ai_sim.simulation.pardiso_lifetime import release_pardiso
+from motor_ai_sim.simulation.pardiso_perm_cache import (
+    PermCache as _PermCache, analyse as _perm_analyse)
 
 from motor_ai_sim.simulation.field_ops import (
     MU0, _grad_at_quad, _mu_r_from_bh_vec, _p2_B_at_quad,
@@ -53,7 +55,7 @@ class _SymPattern:
 
     __slots__ = ("key", "indptr", "indices", "ok", "why", "tri", "diag",
                  "u_indptr", "u_indices", "up", "lo", "up_rep", "up_c",
-                 "analysed")
+                 "analysed", "perm_key")
 
 
 def sym_pattern(indptr, indices, n: int) -> _SymPattern:
@@ -78,7 +80,7 @@ def sym_pattern(indptr, indices, n: int) -> _SymPattern:
     p.key = (int(n), int(indices.size))
     p.indptr = np.array(indptr, copy=True)
     p.indices = np.array(indices, copy=True)
-    p.ok, p.why, p.analysed = False, None, None
+    p.ok, p.why, p.analysed, p.perm_key = False, None, None, None
     nnz = int(indices.size)
     counts = np.diff(indptr)
     rows = np.repeat(np.arange(n, dtype=np.int32), counts)
@@ -193,15 +195,22 @@ class _Skeleton:
                 self.gg[j, i] = gu[0] * gv[0] + gu[1] * gv[1]
 
     def stiff(self, nu):
-        """``asm(stiff_nu2, sb, nu=nu)`` with the gradients already dotted."""
+        """``asm(stiff_nu2, sb, nu=nu)`` with the gradients already dotted.
+
+        Only the 21 pairs i ≥ j are evaluated; the other 15 are copies.
+        ``gg[j, i]`` and ``gg[i, j]`` are the same two products added in the
+        same order (IEEE multiplication commutes), so ``data[j, i]`` and
+        ``data[i, j]`` are equal bit for bit and the copy is exact."""
         nb, nt = self.nb, self.nt
         data = np.empty((nb, nb, nt))
         work = np.empty_like(self.dx)
         for j in range(nb):
-            for i in range(nb):
+            for i in range(j, nb):
                 np.multiply(nu, self.gg[j, i], out=work)
                 np.multiply(work, self.dx, out=work)
                 np.sum(work, axis=1, out=data[j, i])
+                if i != j:
+                    data[i, j] = data[j, i]
         return self._csr_stiff.assemble(data)
 
     def tang(self, gA, c):
@@ -259,6 +268,8 @@ class P2Nonlinear:
         self._skel = [None] * len(self.sat_sub)
         # ONE-DEEP MEMO for Kpw — see the note there.  (last A, K, info).
         self._kpw_memo = None
+        # (Pro, free, Pf, Pfᵀ) of the frame being solved — see reduce()
+        self._red = None
         self.kpw_calls = 0          # Kpw bodies actually executed
         self.kpw_hits = 0           # ...and calls served from the memo
         # PARDISO symbolic-factorization reuse — see solve_ff.
@@ -271,6 +282,7 @@ class P2Nonlinear:
         self._spd_pat = None        # _SymPattern of the last SPD analysis
         self.spd_solves = 0         # solves done by the Cholesky handle
         self.spd_analyses = 0       # its phase-11 calls
+        self.spd_perm_hits = 0      # ...of which ordered from the perm cache
         self.spd_declined = 0       # spd=True solves sent to LU by the checks
         self.spd_failures = 0       # Cholesky errors (then LU for the run)
 
@@ -424,8 +436,14 @@ class P2Nonlinear:
         s.iparm[11] = 0                     # no transposed solve (symmetric)
         try:
             if new or pat.analysed is not s:
-                s.set_phase(11)
-                s._call_pardiso(U, np.zeros((U.shape[0], 1)))
+                # the ordering METIS already produced for this exact pattern,
+                # if any (simulation/pardiso_perm_cache.py: same analysis, a
+                # fraction of the cost; the slip patterns repeat every ring
+                # period and every pass of a coupled run)
+                if pat.perm_key is None:
+                    pat.perm_key = _PermCache.key(2, pat.u_indptr, pat.u_indices)
+                if _perm_analyse(s, U, pat.perm_key):
+                    self.spd_perm_hits += 1
                 pat.analysed = s
                 self.spd_analyses += 1
             s.set_phase(23)
@@ -478,6 +496,51 @@ class P2Nonlinear:
                     "(n=%d); set SB_NO_PARDISO_REUSE=1 to re-analyse every "
                     "solve", int(s.iparm[13]), A.shape[0])
         return x
+
+    def reduce(self, M, Pro, free):
+        """``(Pro.T @ M @ Pro).tocsr()[free][:, free].tocsc()``, bit for bit.
+
+        That expression is the linear system of every Newton and Picard
+        iteration, and it re-derives, each time, two things fixed for the
+        whole frame: ``Pro`` restricted to the free columns and its transpose
+        (the row slice, the column slice and a format conversion).  Here they
+        are built once per frame (cached on the identity of ``Pro``/``free``,
+        which the frame loop hands to every solve of the frame) and each
+        iteration is two sparse products.
+
+        BIT-IDENTICAL, not merely close.  ``Pro`` has one ±1 per row, so both
+        products are signed sums, and SciPy adds the terms of each entry in a
+        fixed order.  The original (``Pro.T`` is CSC, so SciPy runs
+        ``csc_matmat``, i.e. the transposed CSR product) forms
+        T1[I, j] = Σ_{i ∈ G_I ↑} s_i·M[i, j] and then C[I, c] =
+        Σ_{j ∈ G_c ↑} s_j·T1[I, j], both from 0.0 in ascending order.  Here
+        ``Pfᵀ @ M`` (CSR, rows of ``Pfᵀ`` ascending) forms the same T1 in the
+        same order; its rows come out of SciPy's product UNSORTED, and
+        ``sort_indices`` puts j ascending again before ``@ Pf`` forms C.
+        Rows/columns outside ``free`` were only ever sliced away.  Exact
+        zeros are dropped at both stages in both forms.  Multiplying by ±1 is
+        exact and commutes.  ``tests/test_p2_reduce.py`` asserts array_equal
+        on indptr/indices/data against the expression above.
+
+        Anything outside that argument (``M`` not CSR, ``Pro`` not one ±1 per
+        row) takes the original expression.
+        """
+        c = self._red
+        if c is None or c[0] is not Pro or c[1] is not free:
+            P = Pro.tocsr()
+            ok = (P.shape[0] > 0
+                  and bool(np.all(np.diff(P.indptr) == 1))
+                  and bool(np.all(np.abs(P.data) == 1.0)))
+            Pf = PfT = None
+            if ok:
+                Pf = Pro.tocsc()[:, free].tocsr()
+                PfT = Pf.T.tocsr()
+            c = self._red = (Pro, free, Pf, PfT)
+        if c[2] is None or M.format != "csr" or M.shape[0] != c[2].shape[0]:
+            return (Pro.T @ M @ Pro).tocsr()[free][:, free].tocsc()
+        T1 = c[3] @ M
+        T1.sort_indices()
+        return (T1 @ c[2]).tocsc()
 
     def pad2(self, Pro, free, xf):
         _x = np.zeros(Pro.shape[1]); _x[free] = xf
@@ -630,7 +693,7 @@ class P2Nonlinear:
         for it in range(max(1, int(n_max))):
             nit = it + 1
             K = self.asmK(nu)
-            Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+            Kff = self.reduce(K, Pro, free)
             A2 = self.pad2(Pro, free, self.solve_ff(Kff, bff, spd=True))
             if linear_only or not _sat2:
                 break                            # frozen frame: 1 linear solve

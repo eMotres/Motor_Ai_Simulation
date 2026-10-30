@@ -1273,6 +1273,11 @@ def _fillet_magnet_top_arc(poly, fillet_r: float, r_top: float, scale_mm: float,
     one thing this whole mode must not do.  Clipping puts the boundary back on
     the magnet's own outline; the stations themselves are untouched by it (they
     are not near the clip) and stay bit-identical to the OD ring's.
+
+    Since 2026-10-30 a closed top (no open top / open wall) takes the core's
+    exact line-to-circle fillet instead: tangent to the side and to the true top
+    circle at the nominal radius, as Fusion draws it (G2: the magnet's top
+    corners from 0.039 to 0.021 mm of Fusion's, the rest is chord sagitta).
     """
     import numpy as _np
     base = poly if poly.is_valid else poly.buffer(0)
@@ -1283,7 +1288,11 @@ def _fillet_magnet_top_arc(poly, fillet_r: float, r_top: float, scale_mm: float,
         return _np.abs(radii - float(r_top)) < 1e-6
 
     try:
-        f = _fillet_ring_corners(base, float(fillet_r), _sel, scale_mm=scale_mm)
+        # exact line-to-top-arc fillet, except where `_open_fillet_at_top`
+        # reshapes the arc so it leaves the pocket wall at an angle (a tangent
+        # arrival there is the cusp the mesher turns into 0° elements)
+        f = _fillet_ring_corners(base, float(fillet_r), _sel, scale_mm=scale_mm,
+                                 exact_circle=not (open_top or open_wall))
         if not f.is_valid:
             f = f.buffer(0)
         f = f.intersection(base)
@@ -1410,7 +1419,7 @@ def _sanitize_polys_dict(polys: Dict, scale_mm: float,
 
 
 def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
-                         scale_mm=_DEFAULT_SCALE_MM):
+                         scale_mm=_DEFAULT_SCALE_MM, exact_circle=True):
     """THE vertex-fillet core — every rounded corner in this module goes through it.
 
     Rounds the SHARP corners of a Shapely (Multi)Polygon that `select` accepts,
@@ -1440,12 +1449,21 @@ def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
     select : callable(radii: ndarray, P: list) -> bool ndarray
         Per-vertex mask of which corners are candidates (radius band, target
         radius, ...).  Called once per ring.
+    exact_circle : bool
+        A corner between a straight edge and a circle about the axis (bore, OD,
+        magnet top arc) gets Fusion's exact fillet, tangent to the line and the
+        circle (`_exact_line_circle`).  False keeps the boundary-walking
+        approximation for callers that reshape the arc afterwards.
     """
     import numpy as _np
     import math as _m
     from shapely.geometry import Polygon as _SP, MultiPolygon as _SMP
 
     a_lo, a_hi = _m.radians(ang_min_deg), _m.radians(ang_max_deg)
+    # Report-only replay of the fillet as it was until 2026-10-30 (no exact
+    # line-circle fillet, the single-pass vertex leftover) for
+    # scripts/report_fillet_change.py; never set in production.
+    legacy = os.environ.get("MOTOR_AI_SIM_FILLET_LEGACY") == "1"
 
     def _ring(coords):
         P = [_np.asarray(c, float) for c in coords]
@@ -1489,19 +1507,152 @@ def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
                 rem -= s; k = nxt
             return P[k].copy()
 
+        # The corner's fillet is planned for EVERY corner first and the ring is
+        # emitted afterwards.  Emitting while planning (until 2026-10-30) wrote
+        # the vertices BEFORE a corner and only then marked the ones its fillet
+        # swallows on that side — so they stayed, and the arc started behind
+        # them: a spike of up to 0.06 mm into the air gap at the G2 tooth tips.
         consumed = _np.zeros(n, bool)
-        out = []
+        consumed_by = {}       # vertex -> the corner whose fillet swallowed it
+        arcs = {}
+        sharp = set()          # corners left sharp (no room / degenerate)
+
+        def _circle_side(i, step):
+            """Radius R if the boundary leaving vertex i in `step` runs on a
+            circle about the axis (the bore / OD / top-arc stations: two
+            vertices at the same radius), else None."""
+            k1, k2 = (i + step) % n, (i + 2 * step) % n
+            if k1 == i or k2 == i or bound[k1]:
+                return None
+            r1, r2 = radii[k1], radii[k2]
+            tol = 1e-9 * max(1.0, r1)
+            if abs(r1 - r2) > tol or r1 < 1e-9:
+                return None
+            # the corner vertex is on that circle's polygon (within its sagitta)
+            if abs(radii[i] - r1) > 1e-3 * r1:
+                return None
+            return float(r1)
+
+        def room(i, step):
+            """How much of the run from corner i (direction step) its fillet
+            may take: 49 % when the corner ending the run is rounded as well,
+            98 % when it stays sharp."""
+            k = i
+            for _ in range(n):
+                k = (k + step) % n
+                if k == i or bound[k]:
+                    break
+            far_rounded = bool(is_corner[k] and at_surface[k]) and k != i
+            return (0.49 if far_rounded else 0.98) * run(i, step)
+
+        def _exact_line_circle(i, bis):
+            """Fusion's construction for a corner between a straight edge and a
+            circle about the axis: the fillet is tangent to the LINE and to the
+            CIRCLE (centre on r = R ∓ r).  The generic path puts both tangent
+            points at the same distance along the polygon, which on a circle
+            draws a flatter arc than r — 0.05 mm outside the true one at the G2
+            pole tips against Fusion's B-rep.  None → generic."""
+            sides = {s: _circle_side(i, s) for s in (-1, 1)}
+            circ = [s for s, R in sides.items() if R is not None]
+            if len(circ) != 1:
+                return None
+            cs = circ[0]; ls = -cs; R = sides[cs]
+            V = P[i]
+            Q = P[(i + ls) % n]
+            u = Q - V; ul = float(_np.hypot(*u))
+            if ul < 1e-12:
+                return None
+            u = u / ul
+            nrm = _np.array([-u[1], u[0]])
+            if float(_np.dot(nrm, bis)) < 0.0:
+                nrm = -nrm
+            probe = V + bis * (1e-3 * r)
+            Rc = R - r if float(_np.hypot(*probe)) < R else R + r
+            if Rc <= 0.0:
+                return None
+            W = V + r * nrm
+            b = float(_np.dot(W, u))
+            disc = b * b - (float(_np.dot(W, W)) - Rc * Rc)
+            if disc < 0.0:
+                return None
+            sq = _m.sqrt(disc)
+            cand = [s for s in (-b - sq, -b + sq) if s > 1e-12]
+            if not cand:
+                return None
+            est = r / _m.tan(ang[i] / 2.0) if ang[i] > 1e-9 else 0.0
+            s = min(cand, key=lambda x: abs(x - est))
+            if s > ul - 1e-9:
+                return None        # the "line" side bends before the tangent point
+            C = W + s * u
+            Ta = V + s * u                                   # on the line
+            Tb = C * (R / float(_np.hypot(*C)))               # on the circle
+            # room: the tangent points must stay inside this corner's runs —
+            # half of a run whose far corner is filleted too, nearly all of one
+            # whose far corner stays sharp (the G2 lip: the tip fillet needs
+            # 55 % of it, and the pocket corner below is never rounded)
+            th_v, th_b = _m.atan2(V[1], V[0]), _m.atan2(Tb[1], Tb[0])
+            dth = abs((th_b - th_v + _m.pi) % (2 * _m.pi) - _m.pi)
+            if s > room(i, ls) or R * dth > room(i, cs):
+                return None
+            # swallow the line-side vertices short of Ta and the circle-side
+            # stations short of Tb (by angle about the axis)
+            k = (i + ls) % n
+            while k != i and float(_np.dot(P[k] - V, u)) < s - 1e-12 and not bound[k]:
+                consumed[k] = True
+                k = (k + ls) % n
+            k = (i + cs) % n
+            prev = V
+            while k != i and not bound[k]:
+                th_k = _m.atan2(P[k][1], P[k][0])
+                if abs((th_k - th_v + _m.pi) % (2 * _m.pi) - _m.pi) >= dth - 1e-12:
+                    break
+                consumed[k] = True
+                prev = P[k]
+                k = (k + cs) % n
+            # the circle-side end ON the polygon chord it falls in (prev -> P[k]),
+            # not on the true circle: the air-gap / sleeve rings are the same
+            # 256-gon, and a point a sagitta outside it would overlap them
+            A_, B_ = prev, P[k]
+            e = B_ - A_
+            den = Tb[0] * e[1] - Tb[1] * e[0]
+            if abs(den) > 1e-15:
+                lam = (A_[0] * e[1] - A_[1] * e[0]) / den
+                Tb_poly = Tb * lam
+            else:
+                Tb_poly = Tb
+            start, end = (Ta, Tb) if ls < 0 else (Tb, Ta)
+            a0 = _m.atan2(start[1] - C[1], start[0] - C[0])
+            a1 = _m.atan2(end[1] - C[1], end[0] - C[0])
+            d = a1 - a0
+            while d > _m.pi:  d -= 2 * _m.pi
+            while d < -_m.pi: d += 2 * _m.pi
+            pts = _arc_points(C[0], C[1], r, a0, d, scale_mm)
+            tb = (float(Tb_poly[0]), float(Tb_poly[1]))
+            if ls < 0:
+                pts[-1] = tb
+            else:
+                pts[0] = tb
+            return pts
+
         for i in range(n):
             if not (is_corner[i] and at_surface[i]):      # skip non-corners + deeper rows
-                if not consumed[i]:
-                    out.append(tuple(P[i]))
                 continue
+            V0 = P[i]
+            dA, dB = P[i - 1] - V0, P[(i + 1) % n] - V0
+            lA, lB = float(_np.hypot(*dA)), float(_np.hypot(*dB))
+            if lA > 1e-9 and lB > 1e-9:
+                b0 = dA / lA + dB / lB
+                if exact_circle and not legacy and float(_np.hypot(*b0)) > 1e-9:
+                    ex = _exact_line_circle(i, b0 / float(_np.hypot(*b0)))
+                    if ex is not None:
+                        arcs[i] = ex
+                        continue
             half = ang[i] / 2.0
             th = _m.tan(half)
             want = r / th if th > 1e-9 else 1e9
             t = min(want, 0.49 * run(i, -1), 0.49 * run(i, 1))   # uniform r, capped vs neighbour
             if t < 1e-6:
-                out.append(tuple(P[i])); continue
+                sharp.add(i); continue
             V = P[i]; reff = t * th
             Pa, Pb = walk(i, -1, t), walk(i, 1, t)
             # Mark the smooth vertices the fillet swallows on each side.
@@ -1524,18 +1675,20 @@ def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
                             nxt = (k + step) % n
                             if nxt != i and not bound[nxt]:
                                 consumed[nxt] = True
+                                consumed_by.setdefault(nxt, i)
                         break
                     rem -= seg[e]; k = (k + step) % n
                     if k != i:
                         consumed[k] = True
+                        consumed_by.setdefault(k, i)
             uA = Pa - V; la = float(_np.hypot(*uA))
             uB = Pb - V; lb = float(_np.hypot(*uB))
             if la < 1e-9 or lb < 1e-9:
-                out.append(tuple(V)); continue
+                sharp.add(i); continue
             uA /= la; uB /= lb
             bis = uA + uB; bl = float(_np.hypot(*bis))
             if bl < 1e-9:
-                out.append(tuple(V)); continue
+                sharp.add(i); continue
             bis /= bl
             # A near-zero corner angle (a spike vertex, e.g. an absurd
             # tooth_width driving the slot width negative) has sin(half) → 0
@@ -1546,7 +1699,7 @@ def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
             # is the one that names WHY the geometry is impossible.
             _sh = _m.sin(half)
             if abs(_sh) < 1e-9 or not _m.isfinite(reff / _sh):
-                out.append(tuple(V)); continue
+                sharp.add(i); continue
             C = V + bis * (reff / _sh)
             a0 = _m.atan2(Pa[1] - C[1], Pa[0] - C[0])
             a1 = _m.atan2(Pb[1] - C[1], Pb[0] - C[0])
@@ -1554,7 +1707,18 @@ def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
             while d > _m.pi:  d -= 2 * _m.pi
             while d < -_m.pi: d += 2 * _m.pi
             # sagitta-based arc — chord count follows reff, NOT a magic constant
-            out.extend(_arc_points(C[0], C[1], reff, a0, d, scale_mm))
+            arcs[i] = _arc_points(C[0], C[1], reff, a0, d, scale_mm)
+
+        out = []
+        for i in range(n):
+            if i in arcs:
+                out.extend(arcs[i])
+            elif i in sharp or not consumed[i]:
+                out.append(tuple(P[i]))
+            elif legacy and consumed_by.get(i, -1) > i:
+                # the pre-2026-10-30 single pass had already written a vertex
+                # that a LATER corner then swallowed (report-only replay)
+                out.append(tuple(P[i]))
         return out
 
     def _one(p):

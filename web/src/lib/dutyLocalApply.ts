@@ -31,6 +31,7 @@ import {
   beginDutyApply, endDutyApply, rememberAppliedContext,
 } from './familyFollow';
 import { canWriteServer } from './localAuth';
+import { dutyMagnetTempC } from './magnetTemp';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -360,6 +361,12 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
   // The overlay is LOCAL: nothing here writes to the stored duty.  It is
   // written per keystroke by the Simulation panel and cleared by an explicit
   // Save to duty (lib/dutySettings.ts).
+  // The MAGNET temperature is this duty's own, like its materials: a duty whose
+  // snapshot names none solves at the card's temperature (blank), never at the
+  // one the previous duty — or the die's memory — left in the field (owner
+  // 2026-10-30: «hot» 120 °C carried over into «cold»).  Set before the overlay
+  // so this duty's own un-saved typing still wins.
+  set('magnetTempC', dutyMagnetTempC(dd));
   try { restoreDutyOp(opKey); } catch { /* keep the snapshot's point */ }
   // Memory is written on LEAVING a die and on SAVING a duty — the two moments
   // when the panel state was demonstrably in use on that die.  Writing it here

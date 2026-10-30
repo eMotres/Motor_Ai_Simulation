@@ -69,3 +69,28 @@ test('one 20 °C card per grade: a former <grade>_<T>C pick becomes grade + temp
   // a former pick that left the library is never sent to the solver
   assert.equal(effectiveMagnet('F52SH', 'F52SH_80C', lib), 'F52SH');
 });
+
+// ── the field always shows the temperature the run uses (owner 2026-10-30: «меню так и не работает») ──
+import { magnetTempShown, dutyMagnetTempC } from '../magnetTemp.ts';
+
+test('an empty field shows the card temperature (grey); typed text wins', () => {
+  assert.deepEqual(magnetTempShown('', 150), { text: '150', isCard: true }, 'former N52UH_150C');
+  assert.deepEqual(magnetTempShown('', 20), { text: '20', isCard: true }, 'a 20 °C library card');
+  assert.deepEqual(magnetTempShown('  ', 20), { text: '20', isCard: true });
+  assert.deepEqual(magnetTempShown('90', 150), { text: '90', isCard: false });
+  assert.deepEqual(magnetTempShown('abc', 150), { text: 'abc', isCard: false }, 'an invalid entry stays visible (red)');
+  assert.deepEqual(magnetTempShown('', null), { text: '', isCard: false }, 'card not loaded yet');
+});
+
+test('a duty load takes the duty\'s own magnet temperature, else the card (never the previous duty\'s)', () => {
+  assert.equal(dutyMagnetTempC({ mesh: { 'sim.magnetTempC': '120' } }), '120');
+  assert.equal(dutyMagnetTempC({ mesh: { 'sim.magnetTempC': 87.5 } }), '87.5');
+  assert.equal(dutyMagnetTempC({ mesh: { 'sim.stepsPP': 60 } }), '', 'no key: the card as quoted');
+  assert.equal(dutyMagnetTempC({}), '');
+  assert.equal(dutyMagnetTempC(null), '');
+  // the duty-load sequence writes it BEFORE the per-duty overlay restore
+  const src = readFileSync(join(LIB, 'dutyLocalApply.ts'), 'utf8');
+  const a = src.indexOf("set('magnetTempC', dutyMagnetTempC(dd))");
+  const b = src.indexOf('restoreDutyOp(opKey)');
+  assert.ok(a > 0 && b > a, 'magnet temperature reset must precede the overlay restore');
+});

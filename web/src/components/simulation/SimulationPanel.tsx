@@ -38,7 +38,7 @@ import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
 import { currentText, perSetFromTotal, setsOf, totalFromPerSet } from '../../lib/perSetCurrent';
-import { magnetTempError, magnetTempOverLimit, parseMagnetTempC } from '../../lib/magnetTemp';
+import { magnetTempError, magnetTempOverLimit, magnetTempShown, parseMagnetTempC } from '../../lib/magnetTemp';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
   rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
@@ -917,7 +917,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the BH-curve knee sets how much demagnetising field it survives.  Refreshed on
   // the same event a material change fires, so it never lags the assignment.
   const [magInfo, setMagInfo] = useState<{ name: string; Br?: number; knee?: number;
-    tmax?: number; atC?: number | null } | null>(null);
+    tmax?: number; atC?: number | null; cardC?: number } | null>(null);
   // The SAME hook that feeds ?mat= to the solver (via MaterialOverrideSync) is
   // this badge's source of truth: overlay-merged, optimistic on assign, and it
   // refreshes itself on every mat-assign event.  Two earlier versions of this
@@ -972,6 +972,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     let gone = false;
     (async () => {
       let Br: number | undefined, knee: number | undefined, tmax: number | undefined;
+      let cardC: number | undefined;   // the card's OWN temperature: what a blank field solves at
       let atC: number | null = null;
       const kneeOf = (bh: unknown) => (Array.isArray(bh) && bh.length > 1)
         ? Number((bh[0] as any)?.[1] <= 0 ? (bh[1] as any)?.[0] : (bh[0] as any)?.[0])
@@ -979,23 +980,34 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       try {   // a user material's props travel with the request, not the library
         const ov = JSON.parse(currentMatJson() || 'null');
         const p = ov?.materials?.[liveMagnet];
-        if (p) { Br = Number(p.Br); knee = kneeOf(p.bh_curve); tmax = Number(p.max_working_temp_c); }
+        if (p) { Br = Number(p.Br); knee = kneeOf(p.bh_curve); tmax = Number(p.max_working_temp_c);
+                 cardC = p.temperature_c != null ? Number(p.temperature_c) : undefined; }
       } catch { /* no override props — library below */ }
       if (!Number.isFinite(Br as number)) try {
-        const q = magTypedC != null ? `?temp_c=${encodeURIComponent(String(magTypedC))}` : '';
-        let r = await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}${q}`);
-        // a temperature the card cannot be moved to: the card as quoted, the field says why
-        if (!r.ok && q) r = await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}`);
-        else if (q) atC = magTypedC;
-        const mm = await r.json();
+        const url = `${API}/api/materials/library/magnet/${encodeURIComponent(liveMagnet)}`;
+        // the card as quoted: its own temperature and limit (a former `N52UH_150C` is 150 °C)
+        const mm = await (await fetch(url)).json();
         Br = Number(mm?.Br);
         knee = kneeOf(mm?.bh_curve);
         tmax = Number(mm?.max_working_temp_c);
+        cardC = mm?.temperature_c != null ? Number(mm.temperature_c) : undefined;
+        // …and at the typed temperature, for the badge (a temperature the card
+        // cannot be moved to keeps the card's numbers; the field says why)
+        if (magTypedC != null && magTypedC !== cardC) {
+          const r = await fetch(`${url}?temp_c=${encodeURIComponent(String(magTypedC))}`);
+          if (r.ok) {
+            const md = await r.json();
+            Br = Number(md?.Br);
+            knee = kneeOf(md?.bh_curve);
+            atC = magTypedC;
+          }
+        }
       } catch { /* library lookup is optional */ }
       if (!gone) setMagInfo({ name: liveMagnet,
                               Br: Number.isFinite(Br as number) ? Br : undefined,
                               knee: Number.isFinite(knee as number) ? knee : undefined,
-                              tmax: Number.isFinite(tmax as number) ? tmax : undefined, atC });
+                              tmax: Number.isFinite(tmax as number) ? tmax : undefined, atC,
+                              cardC: Number.isFinite(cardC as number) ? cardC : undefined });
     })();
     return () => { gone = true; };
   }, [liveMagnet, magTypedC]);
@@ -1019,6 +1031,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     : magnetTempError(magnetTempC)
       ? tx('magnetTempInvalid', { why: magnetTempError(magnetTempC) })
       : magOverC != null ? tx('magnetTempOverLimit', { max: magOverC }) : null;
+  // What the field SHOWS: the typed text, else the card's own temperature in
+  // grey — the number a blank field solves at, like the coil temperature beside
+  // it (owner 2026-10-30: an empty field read as «не работает»).
+  const magShown = magnetTempShown(magnetTempC, coupled ? null : magInfo?.cardC);
   // A design load can swap the shared config's materials without firing a
   // mat-assign event — bridge that one event to the hook's refresh.
   useEffect(() => {
@@ -2625,16 +2641,23 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <TextField
               label={coupled ? tx('magnetTempLoopC') : tx('magnetTempC')}
               type="text" size="small" fullWidth
-              value={magnetTempC}
+              value={magShown.text}
               placeholder={tx('asQuoted')}
               onChange={e => setMagnetTempC(e.target.value)}
+              // the card's number is a default, not an entry: one click selects
+              // it, so typing replaces it instead of appending to it
+              onFocus={e => { if (magShown.isCard) e.target.select(); }}
               error={!!magTempWhy}
               helperText={magTempWhy ?? undefined}
               inputProps={{ readOnly: coupled, inputMode: 'decimal' }}
               InputProps={{ endAdornment: <HelpTip title={coupled
-                ? tx('magnetTempLoopTip') : tx('magnetTempTip')} /> }}
+                ? tx('magnetTempLoopTip')
+                : tx('magnetTempTip', { card: magInfo?.name ?? '—',
+                                        cardC: magInfo?.cardC ?? '—',
+                                        max: magInfo?.tmax ?? '—' })} /> }}
               disabled={isRunning}
-              sx={coupled ? { '& input': { color: '#34d399' } } : undefined}
+              sx={coupled ? { '& input': { color: '#34d399' } }
+                : magShown.isCard ? { '& input': { color: 'var(--text-3)' } } : undefined}
             />
             <TextField
               label={`End-winding factor k_end — ${endWindingSourceLabel(endWindingTyped, endWindingCoil)}`}

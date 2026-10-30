@@ -189,10 +189,14 @@ def test_solver_hook_relaxes_only_the_steps_term(monkeypatch):
     assert F._warm_seed_accept(wc, meta, 32.0, 15000.0, 6.0, n_sectors=2)[0] is False
     monkeypatch.setenv("SB_SEED_ACROSS_STEPS", "1")
     assert F._warm_seed_accept(wc, meta, 32.0, 15000.0, 6.0, n_sectors=2)[0] is True
-    # every OTHER term stays a hard refusal
-    for k, v in (("temp", 121.0), ("conn", "np2"), ("npd", 2.0), ("mscale", 0.9)):
+    # every OTHER field-state term stays a hard refusal
+    for k, v in (("conn", "np2"), ("npd", 2.0), ("mscale", 0.9)):
         bad = dict(wc, meta=dict(wc["meta"], **{k: v}))
         assert F._warm_seed_accept(bad, meta, 32.0, 15000.0, 6.0, n_sectors=2)[0] is False
+    # …but not the coil temperature (owner 2026-10-30): on the current-drive
+    # path it is the winding resistance, not the field state
+    warm = dict(wc, meta=dict(wc["meta"], temp=150.0))
+    assert F._warm_seed_accept(warm, meta, 32.0, 15000.0, 6.0, n_sectors=2)[0] is True
     assert F._warm_seed_accept(dict(wc, nsect=1), meta, 32.0, 15000.0, 6.0,
                                n_sectors=2)[0] is False
     assert F._warm_seed_accept(wc, meta, 32.0, 12000.0, 6.0, n_sectors=2)[0] is False

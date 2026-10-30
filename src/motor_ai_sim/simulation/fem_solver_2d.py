@@ -3520,13 +3520,37 @@ def _br_withheld_across_steps(wc, wmeta) -> bool:
         return True
 
 
+#: Seed-meta terms that do not change the FIELD STATE a seed carries (owner
+#: 2026-10-30: «настрой уже всё нормально, чтобы прогрев был виден везде, не
+#: важно, где его делали»).  The copper temperature sets ρ_Cu, i.e. the winding
+#: resistance and the strands' σ: on a current drive the phase currents are
+#: imposed, so the A-field, the magnet / shaft eddy history and the Br map do
+#: not see it, and the strands' own eddy state is a fast mode the march
+#: re-settles in a few frames — the settle test at the handoff decides, exactly
+#: as it does for a seed from another current or γ.  A sweep sent at 120 C
+#: (the request default, no panel sent the field) refused the 150 C Simulation's
+#: state for this term alone ("cached state is at 150.0 C coil, this run 120.0
+#: C"), so every first point re-ran the whole warm-up and pre-pass.  The warm
+#: cache is published and read on the current-drive eddy path only.
+_SEED_FIELD_FREE_META = ("temp",)
+
+
+def _seed_field_identity(meta) -> Optional[dict]:
+    """The seed meta without the terms that do not change the field state."""
+    if not isinstance(meta, Mapping):
+        return None
+    return {k: v for k, v in meta.items() if k not in _SEED_FIELD_FREE_META}
+
+
 def _seed_across_steps_ok(cached_meta, wmeta) -> bool:
     if _os_sb.environ.get("SB_SEED_ACROSS_STEPS") != "1":
         return False
     if not isinstance(cached_meta, dict) or not isinstance(wmeta, dict):
         return False
-    _a = {k: v for k, v in cached_meta.items() if k != "nspp"}
-    _b = {k: v for k, v in wmeta.items() if k != "nspp"}
+    _a = {k: v for k, v in (_seed_field_identity(cached_meta) or {}).items()
+          if k != "nspp"}
+    _b = {k: v for k, v in (_seed_field_identity(wmeta) or {}).items()
+          if k != "nspp"}
     if _a != _b:
         return False
     log.info("P2 eddy warm cache: seed solved at %s steps/period accepted for "
@@ -3550,9 +3574,11 @@ def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
     the two can never disagree about which parent state a run is continuing.
 
     The meta terms are HARD refusals in every mode: a different steps/period,
-    n_periods, winding, coil temperature or magnet scale is a different
+    n_periods, winding or magnet scale is a different
     discretisation or a different machine, and a projected field would not be
-    the same physical state.  Speed is hard too — f_elec sets the whole ∂A/∂t
+    the same physical state.  The coil temperature is NOT one of them any more
+    (`_SEED_FIELD_FREE_META`): on this current-drive path it changes the
+    winding resistance, not the field state.  Speed is hard too — f_elec sets the whole ∂A/∂t
     scale, so a seed from another speed is a field the machine was never in.
 
     Current and γ are the ones SB_SEED_FROM_PREVIOUS relaxes (user 2026-09-06),
@@ -3679,9 +3705,19 @@ def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
             return True, ""
         except (KeyError, TypeError, ValueError, OverflowError, IndexError):
             return False, "cache provenance or history contains malformed values"
-    if wc.get("meta") != wmeta and not _seed_across_steps_ok(wc.get("meta"), wmeta):
+    if (_seed_field_identity(wc.get("meta")) != _seed_field_identity(wmeta)
+            and not _seed_across_steps_ok(wc.get("meta"), wmeta)):
         return False, ("different schedule or machine (steps/period, periods, "
-                       "winding, coil temperature or magnet scale)")
+                       "winding or magnet scale)")
+    try:
+        _tc, _tr = (wc.get("meta") or {}).get("temp"), wmeta.get("temp")
+        if _tc is not None and _tr is not None and float(_tc) != float(_tr):
+            log.info("P2 warm seed: state at %.1f C coil accepted for this %.1f C "
+                     "run - the coil temperature changes the winding resistance, "
+                     "not the field state (current drive); the settle test at "
+                     "the handoff decides", float(_tc), float(_tr))
+    except (TypeError, ValueError):
+        pass
     # Symmetry is part of the discretisation: the eddy history `Ued` is one
     # value per solid conductor of the SOLVED wedge, so a full-ring state has a
     # different conductor set than a 1/2-sector run and cannot continue it
@@ -6240,7 +6276,10 @@ def _fem_transient_sliding_band_once(
         try:
             _lib_key = _wlib.machine_key(
                 _geo_fp, _wlib.mesh_digest([half["s"]["mesh"], half["r"]["mesh"]]),
-                _wmeta, (1 if int(n_sectors) <= 1 else int(n_sectors)),
+                # the field state's identity: a coil temperature is not a
+                # different machine discretisation (`_SEED_FIELD_FREE_META`)
+                _seed_field_identity(_wmeta),
+                (1 if int(n_sectors) <= 1 else int(n_sectors)),
                 extra={"element_order": int(element_order),
                        "rotor_eddy": bool(rotor_eddy)})
             _lib_op = _wlib.op_digest({

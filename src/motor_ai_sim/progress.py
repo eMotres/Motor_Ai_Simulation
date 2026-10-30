@@ -56,6 +56,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from motor_ai_sim import progress_stages as _stg
+
 __all__ = ["ProgressTracker", "ProgressCallback", "StepLedger",
            "ProgressRegistry", "RouteProgress", "TransientProgressMap",
            "RunStateMap", "registry", "reset_registry", "use_run",
@@ -85,7 +87,8 @@ class ProgressTracker:
     """
 
     __slots__ = ("_lock", "_running", "_step", "_total", "_phase",
-                 "_composition", "_ts_start", "_elapsed", "_kind")
+                 "_composition", "_ts_start", "_elapsed", "_kind",
+                 "_stages", "_stage_kind")
 
     def __init__(self, kind: str = "") -> None:
         self._lock = threading.Lock()
@@ -97,12 +100,23 @@ class ProgressTracker:
         self._ts_start = 0.0
         self._elapsed = 0.0
         self._kind = str(kind or "")
+        #: Ordered stages (``progress_stages``); ``None`` = this solve does not
+        #: report any and the payload carries ``stages: []``.
+        self._stages: Optional[List[Dict[str, Any]]] = None
+        self._stage_kind = ""
 
     # ── the solve's own bookkeeping ─────────────────────────────────────────
 
     def start(self, total: int, phase: str,
-              composition: str = "", kind: Optional[str] = None) -> None:
+              composition: str = "", kind: Optional[str] = None,
+              stages: Optional[List[Dict[str, Any]]] = None,
+              stage_kind: str = "") -> None:
         """A solve is beginning: reset the counters and start the clock.
+
+        ``stages`` (from ``progress_stages.plan_*``) opts the solve into the
+        one-row stage strip; ``stage_kind`` says how its phase labels read
+        (``"coupled"``).  Without them the payload carries ``stages: []`` and the
+        strip keeps its single bar.
 
         ``total`` is an HONEST pre-run count built from the request (cases x
         iterations, frames + stages), not a guess at wall-clock — the solver
@@ -120,6 +134,8 @@ class ProgressTracker:
             self._elapsed = 0.0
             if kind is not None:
                 self._kind = str(kind)
+            self._stages = stages
+            self._stage_kind = str(stage_kind or "")
 
     def update(self, done: Optional[int] = None, total: Optional[int] = None,
                phase: Optional[str] = None,
@@ -146,6 +162,12 @@ class ProgressTracker:
                 self._phase = str(phase)
             if composition is not None:
                 self._composition = str(composition)
+            if self._stages is not None and self._stage_kind:
+                try:
+                    _stg.observe(self._stages, done, total, phase, composition,
+                                 kind=self._stage_kind)
+                except Exception:  # noqa: BLE001 - a bar must never break a solve
+                    pass
 
     def finish(self) -> None:
         """The solve is over: stop the clock, freeze the elapsed seconds.
@@ -165,6 +187,7 @@ class ProgressTracker:
             if self._total > 0:
                 self._step = self._total
             self._running = False
+            _stg.finalize(self._stages)
 
     def callback(self) -> ProgressCallback:
         """A plain ``progress(done, total, phase=None, composition=None)``.
@@ -204,7 +227,7 @@ class ProgressTracker:
         """The progress payload, in the transient endpoint's exact shape.
 
         ``{running, step, total, elapsed_s, eta_s, per_step_s, frac, phase,
-        composition, ts_start}`` — every key on every call, including when
+        composition, ts_start, stages}`` — every key on every call, including when
         nothing is running.  The transient's own endpoint omits ``per_step_s`` /
         ``frac`` on the idle path, which forces the client to guard for them;
         here the shape is invariant so a strip can bind to it once.
@@ -218,6 +241,7 @@ class ProgressTracker:
             ts_start = self._ts_start
             elapsed = (max(time.time() - ts_start, 0.0)
                        if (running and ts_start > 0) else self._elapsed)
+            stages = _stg.public(self._stages)
 
         if running and step <= 0:
             # No completed step = no timing sample.  See the module docstring:
@@ -242,6 +266,7 @@ class ProgressTracker:
             "phase": phase,
             "composition": composition,
             "ts_start": float(ts_start),
+            "stages": stages,
         }
 
 
@@ -371,7 +396,8 @@ def _ttl_from_env() -> float:
 #: mutates it in place at a dozen sites.
 def _idle_transient() -> Dict[str, Any]:
     return {"running": False, "step": 0, "total": 0, "elapsed_s": 0.0,
-            "eta_s": 0.0, "ts_start": 0.0, "phase": "idle", "composition": ""}
+            "eta_s": 0.0, "ts_start": 0.0, "phase": "idle", "composition": "",
+            "stages": []}
 
 
 class _Entry:
@@ -459,6 +485,7 @@ def _snapshot_of_raw(p: Dict[str, Any]) -> Dict[str, Any]:
         "phase": str(p.get("phase", "") or ""),
         "composition": str(p.get("composition", "") or ""),
         "ts_start": float(ts_start),
+        "stages": _stg.public(p.get("stages")),
     }
 
 
@@ -733,10 +760,12 @@ class RouteProgress:
 
     # ── ProgressTracker, forwarded ───────────────────────────────────────────
     def start(self, total: int, phase: str, composition: str = "",
-              kind: Optional[str] = None) -> None:
+              kind: Optional[str] = None,
+              stages: Optional[List[Dict[str, Any]]] = None,
+              stage_kind: str = "") -> None:
         e = _resolve(self._route)
         e.touch()
-        e.tracker.start(total, phase, composition, kind)
+        e.tracker.start(total, phase, composition, kind, stages, stage_kind)
 
     def update(self, done: Optional[int] = None, total: Optional[int] = None,
                phase: Optional[str] = None,

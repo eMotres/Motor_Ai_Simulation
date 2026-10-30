@@ -94,6 +94,7 @@ from motor_ai_sim import coupled_continuous_rating as _ccr
 from motor_ai_sim import coupled_duty_cycle as _cdc
 from motor_ai_sim import coupled_pwm_final as _pwmf
 from motor_ai_sim import coupled_time_to_limit as _ttl
+from motor_ai_sim import progress_stages as _pstg
 from motor_ai_sim import run_recording as _rr
 from motor_ai_sim import run_history as _RH
 from motor_ai_sim import workspace as _WSP
@@ -5717,10 +5718,17 @@ def _run(body: Dict[str, Any],
     hold_v_link = _hold_v_link(body) if hold_on else None
     hold_alpha_br = _hold_alpha_br() if hold_on else None
     try:
+        # The stage row (owner 2026-10-30): the iterations, then — on an
+        # inverter run that puts the PWM aside — the controller's PWM passes.
+        # Both are adaptive (the loop stops when it converges), so their
+        # planned counts are the budget, not a promise.
         _progress.start(
             total=max_iter * 2, kind="coupled",
             phase="iteration 1/%d — electromagnetic" % max_iter,
-            composition="up to %d x (electromagnetic run + thermal solve)" % max_iter)
+            composition="up to %d x (electromagnetic run + thermal solve)" % max_iter,
+            stages=_pstg.plan_coupled(max_iter=max_iter, pwm=bool(final_pass),
+                                      max_passes=PWM_FINAL_MAX_PASSES),
+            stage_kind="coupled")
         # THE SINE STATE, REUSED — the loop below is skipped entirely and the
         # state it would have reached is the stored one (same machine, point,
         # cooling, question and build; only the drive differs).

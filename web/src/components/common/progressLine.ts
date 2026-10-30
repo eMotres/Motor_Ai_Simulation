@@ -9,6 +9,8 @@
  * (see `__tests__/progressStrip.test.mjs`).
  */
 
+import type { ProgressStage } from './progressStages';
+
 /** What every solve-progress endpoint returns (the transient contract, reused
  *  verbatim by /api/mechanical/progress and /api/thermal/progress). */
 export interface ProgressInfo {
@@ -34,6 +36,10 @@ export interface ProgressInfo {
   queued?: boolean;
   /** 1 = next.  Present with `queued`. */
   position?: number;
+  /** The run's ordered stages (warm-up, demag pre-pass, final periods…), each
+   *  with its own counts.  Empty for a solve that reports none — the strip then
+   *  keeps its single bar.  See `progressStages.ts`. */
+  stages?: ProgressStage[];
 }
 
 export interface ProgressLine {

@@ -624,5 +624,43 @@
       "run": "最近一次运行未保存到工况{duty}",
       "edits": "几何已修改但未保存：{what}"
     }
+  },
+  "progress": {
+    "label": "求解阶段",
+    "elapsed": "已用",
+    "eta": "预计剩余",
+    "adaptiveHint": "自适应：总数会增加，直到该阶段趋稳。",
+    "count": "{done} / {planned} {unit, select, steps {步} other {帧}}",
+    "countGrowing": "{done} / {planned}+ {unit, select, steps {步} other {帧}}",
+    "countOpen": "{done} {unit, select, steps {步} other {帧}}",
+    "state": {
+      "pending": "等待",
+      "running": "进行中",
+      "done": "完成",
+      "skipped": "已跳过，本次无需",
+      "stopped": "已停止"
+    },
+    "name": {
+      "calibration": "d 轴校准",
+      "gap_probe": "气隙探测",
+      "warm_up": "涡流预热",
+      "demag_prepass": "退磁预扫",
+      "final": "最终周期",
+      "extra": "参考求解",
+      "post": "后处理",
+      "loop": "耦合迭代",
+      "pwm_final": "PWM 轮次"
+    },
+    "tip": {
+      "calibration": "每个几何仅一次：一次短的空载求解，用来找出 d 轴位置。",
+      "gap_probe": "轻量的探测求解，用来确定气隙需要多少层网格。",
+      "warm_up": "在输出任何结果之前，先让涡流启动瞬态趋稳。",
+      "demag_prepass": "仅为在磁钢退磁处降低其剩磁而求解的一个稳定周期，其帧不计入结果。",
+      "final": "产出结果帧的求解：稳定周期加上报告窗口。",
+      "extra": "为得出结果而做的第二次完整求解（谐波参考或六相探测），没有帧数。",
+      "post": "动画帧、质量和汇总在最后一帧之后生成。",
+      "loop": "耦合回路：每次迭代是一次电磁运行加一次热求解，温度收敛后停止。",
+      "pwm_final": "控制器的 PWM 轮次，基于已收敛的正弦状态，每轮是一次电磁运行加一次热求解。"
+    }
   }
 }

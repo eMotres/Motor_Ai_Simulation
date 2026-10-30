@@ -372,7 +372,11 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     element_order: int = 2, demag: Optional[bool] = None,
                     pins: Optional[Dict[str, Any]] = None,
                     sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
-                    "optimization") -> str:
+                    "optimization",
+                    fp_excludes: Tuple[str, ...] = ()) -> str:
+    """``fp_excludes``: the geometry keys ``cfg_fp`` was computed WITHOUT
+    (``_config_fingerprint(exclude_geo_keys)``).  Their values exist nowhere
+    in the key but in ``ov``, so they are never dropped as no-ops."""
     if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
     payload = {
@@ -415,8 +419,16 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # the new sweep named rotor_house_height at its base value on a third
         # of its points, and that extra name alone made every key miss the
         # previous sweep's entries for the same machines.
+        # …but ONLY where the fingerprint itself carries the base value.  A
+        # sweep's fingerprint EXCLUDES its swept keys (_config_fingerprint), so
+        # a swept value equal to the base was in neither half of the key — two
+        # scans of one machine at 17 and at 16 turns per slot, each on a config
+        # whose base was its own count, shared every key and the second was
+        # served the first's torque and voltage (server, 2026-10-30, M1-L220-R3:
+        # six 1400 rpm points identical, 104.509 / 103.467 / 101.615 N·m and
+        # 425.88 / 421.98 / 418.05 V at both 16 and 17 turns).
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())
-               if not _override_is_noop(k, v)},
+               if k in fp_excludes or not _override_is_noop(k, v)},
         "I": round(float(current_a), 4), "steps": int(steps),
         "ct": round(float(coil_temp_c), 2), "np": round(float(n_periods), 5),
         "g": round(float(gamma_deg), 4), "ms": round(float(mesh_size_mm), 4),
@@ -2283,14 +2295,16 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # those points under the PRE-edit fingerprint, and a later sweep on
             # the old config got cache hits carrying new-config physics.  The
             # hash is microseconds against a multi-minute FEM eval.
-            _cfg_fp = _config_fingerprint(tuple(geo_ov.keys()))
+            _excl = tuple(geo_ov.keys())
+            _cfg_fp = _config_fingerprint(_excl)
             return _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
                                  element_order=element_order, demag=demag,
                                  pins=({"rpm": float(rpm)} if rpm else None),
-                                 sampling_purpose="optimization")
+                                 sampling_purpose="optimization",
+                                 fp_excludes=_excl)
 
         def _mk_point(out, ov, I, gi, oi, g, rpm=None, source_fp=None):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)

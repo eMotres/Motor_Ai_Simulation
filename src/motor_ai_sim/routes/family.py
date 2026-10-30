@@ -3271,6 +3271,14 @@ def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write))
 
 @router.post("/duty")
 def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
+    return _upsert_duty(req, _w)
+
+
+def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
+    """``POST /duty``.  ``may_move``: a save whose live machine is another
+    LAMINATION than the configuration's die (only die-level differences) moves
+    the configuration to the die it is and saves there (``_move_duty_save``);
+    the second pass on that die never moves again."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     dname = _check_name(req.duty.name, "duty")
@@ -3454,6 +3462,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # catalog quietly kept the wrong machine under an honest-looking
             # duty row.  The die snapshot is the build's identity; a duty may
             # never be saved from a machine the catalog does not describe.
+            _die_diffs = []
             try:
                 _die_geo = (_load_yaml(_die_file(die), "die")
                             .get("geometry") or {})
@@ -3462,9 +3471,28 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                         continue
                     lv = geo.get(k)
                     if isinstance(lv, (int, float)) and abs(float(dv) - float(lv)) > 1e-6:
-                        _diffs.append("die %s: %s → %s" % (k, dv, lv))
+                        _die_diffs.append("die %s: %s → %s" % (k, dv, lv))
             except HTTPException:
                 pass
+            _diffs.extend(_die_diffs)
+            # ANOTHER LAMINATION IS ANOTHER DIE (owner 2026-10-30, after three
+            # refused "Save to peak" on 'CIANO56 400_80 vadim 5': wire 7 -> 7.5
+            # made the derived slot 7.74 -> 8.24, the die keeps its own wire
+            # keys so its slot never follows, and the strip's only offer - a
+            # new configuration of the SAME die - hit the same 409).  When the
+            # die-level cross-section is all that stands between this build and
+            # the save, the configuration moves to the die the machine IS
+            # (reused when one exists, else minted) and the duty is saved there.
+            if may_move and _diffs and len(_diffs) == len(_die_diffs):
+                moved = _move_duty_save(die, cfg, dname, geo, _live_build,
+                                        _live_wind, _live_mats)
+                if moved:
+                    out = _upsert_duty(req.model_copy(update={
+                        "die": moved["die"], "config": moved["config"]}), _w,
+                        may_move=False)
+                    out.setdefault("die", moved["die"])
+                    out["transitioned"] = moved
+                    return out
             if _diffs:
                 raise HTTPException(409, detail=(
                     "the live machine's build differs from configuration "
@@ -3618,7 +3646,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                      "L-number follows the defined stack", die, _oldn, cfg)
             log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
                      die, cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
-            return {"ok": True, "config": cfg, "renamed_to": cfg,
+            return {"ok": True, "die": die, "config": cfg, "renamed_to": cfg,
                     "drive": _drive, "primary": _is_primary}
     _save_yaml(p, c)
     log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°, "
@@ -3628,7 +3656,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     # `drive` / `primary` let the caller say WHERE the save went instead of a
     # bare tick: a PWM save that quietly left the sine numbers standing is
     # correct but indistinguishable from one that did nothing.
-    return {"ok": True, "config": cfg, "drive": _drive, "primary": _is_primary}
+    return {"ok": True, "die": die, "config": cfg, "drive": _drive, "primary": _is_primary}
 
 
 @router.post("/duty_result")
@@ -4656,7 +4684,7 @@ def _matching_lamination(live_geo: dict, exclude: str) -> Optional[str]:
 
 def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[str],
                                   die_doc: dict, live_geo: dict, diffs: list,
-                                  others: List[str]) -> dict:
+                                  others: List[str], reason: str = "shared_die") -> dict:
     """Move the ACTIVE configuration/duty off a die it shares with ``others`` onto a
     die that is the live lamination.  The source die and every configuration in it are
     left exactly as they are (the active one too: its stored results belong to the old
@@ -4674,7 +4702,9 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
                    "geometry": dict(live_geo),
                    "derived_from": {
                        "die": die, "config": cfg, "duty": duty, "at": at,
-                       "reason": "edit of one configuration on a die shared with others",
+                       "reason": ("edit of one configuration on a die shared with others"
+                                  if reason == "shared_die" else
+                                  "duty save from a build that is another lamination"),
                        "changed": [f"{x['key']} {x['die']} → {x['live']}" for x in diffs]}})
         try:
             from motor_ai_sim.routes.presets import _gen_thumb_svg
@@ -4704,13 +4734,97 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
     _ctx_file().write_text(_json.dumps({
         "die": target, "config": target_cfg, "duty": duty, "at": at,
         "transitioned_from": {"die": die, "at": at, "diffs": diffs,
-                              "reason": "shared_die", "others": list(others)},
+                              "reason": reason, "others": list(others)},
     }), encoding="utf-8")
-    log.warning("family: '%s/%s' edited on die '%s', which also carries %s - moved to %s die '%s' "
-                "(%s); '%s' and its other configurations are untouched", die, cfg, die,
-                ", ".join(others), "new" if created else "existing", target,
+    log.warning("family: '%s/%s' (%s) moved off die '%s'%s to %s die '%s' (%s); '%s' is untouched",
+                die, cfg, reason, die, (", which also carries " + ", ".join(others)) if others else "",
+                "new" if created else "existing", target,
                 "; ".join(f"{x['key']} {x['die']} → {x['live']}" for x in diffs), die)
     return {"die": target, "config": target_cfg, "duty": duty, "created": created}
+
+
+def _config_with_build(die: str, live_build: dict, live_wind: dict,
+                       live_mats: dict) -> Optional[str]:
+    """A configuration of ``die`` that already IS the live build: the same free keys
+    (stack, wire, turns, insulation), the same connection, no named material that
+    contradicts the live one.  The duty-save move lands there instead of copying a
+    second configuration of the same machine next to it (the orchestrator built
+    'CIANO56 400_80 vadim 6 / L90-2x3ph-Al2O3-15t' by hand for the machine the
+    owner could not save, 2026-10-30)."""
+    try:
+        files = sorted(_die_dir(die).glob("*.yaml"))
+    except OSError:
+        return None
+    for f in files:
+        if f.name == "die.yaml":
+            continue
+        try:
+            c = _load_yaml(f, "configuration")
+        except HTTPException:
+            continue
+        ov = c.get("geometry_overrides") or {}
+        if not ov:
+            continue
+        same = True
+        for k in FREE_GEO_KEYS:
+            sv, lv = ov.get(k), live_build.get(k)
+            if sv is None and lv is None:
+                continue
+            try:
+                same = sv is not None and lv is not None and abs(float(sv) - float(lv)) <= 1e-9
+            except (TypeError, ValueError):
+                same = sv == lv
+            if not same:
+                break
+        if not same:
+            continue
+        if str((c.get("winding") or {}).get("connection") or "") != str((live_wind or {}).get("connection") or ""):
+            continue
+        sm = c.get("materials") or {}
+        if any(sm.get(k) and (live_mats or {}).get(k) and sm.get(k) != live_mats.get(k)
+               for k in _SAVED_MATERIAL_KEYS):
+            continue
+        return f.stem
+    return None
+
+
+def _move_duty_save(die: str, cfg: str, duty: str, live_geo: dict, live_build: dict,
+                    live_wind: dict, live_mats: dict) -> Optional[dict]:
+    """The duty save's lamination move (owner 2026-10-30).  ``live_geo`` is another
+    lamination than ``die`` (:func:`die_shape_diffs` - a die-level input, or the
+    slot width the wire stack derives): move configuration ``cfg`` (duty ``duty``) to
+    the die that IS the live lamination - one of the caller's layer that already
+    matches on every die key, else a minted ``<family base> <user> <n>`` - and make
+    it active.  When that die already holds a configuration with this very build,
+    the duty goes into it.  The source die is never written.  None = nothing to move
+    (the die differs only in a stale derived copy: the save refuses as before)."""
+    try:
+        d = _load_yaml(_die_file(die), "die")
+    except HTTPException:
+        return None
+    diffs = die_shape_diffs(d.get("geometry") or {}, live_geo)
+    if not diffs:
+        return None
+    target = _matching_lamination(live_geo, exclude=die)
+    same = _config_with_build(target, live_build, live_wind, live_mats) if target else None
+    if target and same:
+        import json as _json
+        at = datetime.now().isoformat(timespec="seconds")
+        _ctx_file().write_text(_json.dumps({
+            "die": target, "config": same, "duty": duty, "at": at,
+            "transitioned_from": {"die": die, "config": cfg, "at": at, "diffs": diffs,
+                                  "reason": "build_differs", "others": []},
+        }), encoding="utf-8")
+        log.warning("family: duty save '%s/%s/%s' is another lamination (%s) - saved into the "
+                    "existing '%s/%s', which is this build; '%s' is untouched", die, cfg, duty,
+                    "; ".join(f"{x['key']} {x['die']} → {x['live']}" for x in diffs),
+                    target, same, die)
+        out = {"die": target, "config": same, "duty": duty, "created": False}
+    else:
+        out = _transition_config_to_own_die(die, cfg, duty, d, live_geo, diffs,
+                                            _other_configs(die, cfg), reason="build_differs")
+    out.update({"from_die": die, "from_config": cfg, "diffs": diffs})
+    return out
 
 
 def sync_active_die_geometry(saved_geo: dict,

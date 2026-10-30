@@ -382,6 +382,9 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/mechanical/bearing_fit"), ("GET", "/api/mechanical/holder_strength"), ("POST", "/api/mechanical/holder_fem_job"),
     # product revisions (Rev A, B ...): a hidden configuration answers 404 like a missing one, writes are staff only (tests/test_motor_revisions.py)
     ("GET", "/api/motor-revisions"), ("POST", "/api/motor-revisions/assign"),
+    # move / copy a configuration to another die: admin only, 403 for everybody else before any name resolves
+    # (routes/family.move_config, tests/test_config_move.py)
+    ("POST", "/api/family/config/{die}/{cfg}/move"),
 }
 NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog configuration
     ("POST", "/api/family/save_as_new_die"), ("POST", "/api/optimization/saved"),

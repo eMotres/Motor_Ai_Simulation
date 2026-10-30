@@ -128,6 +128,9 @@ translated (`Phase current` → `相电流`, `R phase` → `相电阻 R`).
 | geometry | 几何 |
 | materials | 材料 |
 | optimization | 优化 |
+| optimizable (a parameter Sweep / Optimize may vary) | 可优化 |
+| fixed (not varied by Sweep / Optimize) | 固定 |
+| manage (link to a settings place) | 管理 |
 | catalog / catalogue | 目录 (motors), 器件库 (devices) |
 | compare | 对比 |
 | configure | 配置 |

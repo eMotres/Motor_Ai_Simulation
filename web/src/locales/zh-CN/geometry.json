@@ -187,5 +187,10 @@
     "shaftAlways": "轴始终参与计算，无法更改。",
     "excludedRisk": "注意：此部件具有磁性作用，排除会改变计算结果。",
     "nextExcludedRisk": "注意：排除此磁性部件会改变计算结果。"
-  }
+  },
+  "optimizableOnTip": "可优化：扫描与优化可调整该参数。关闭则保持固定。",
+  "optimizableOffTip": "固定：扫描与优化不会改动该参数。开启后允许其变化。",
+  "optimizableLast": "至少要保留一个可优化参数。",
+  "optimizableReadOnly": "可调整哪些参数由本服务器的管理员设定。",
+  "optimizableAria": "{name}：可优化"
 }

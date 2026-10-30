@@ -86,5 +86,7 @@
   "optVarsSnackAdded": "已添加 {count} 个变量",
   "optVarsSnackRemoved": "已移除 {count} 个变量",
   "optVarsResetButton": "将 {count} 个超出范围的变量重置为当前值 ±10 %",
-  "optVarsResetTip": "这些范围不包含当前电机的当前值（可能是为另一台电机设置的）。一键即可重新以当前值 ±10 % 为中心。可撤销。"
+  "optVarsResetTip": "这些范围不包含当前电机的当前值（可能是为另一台电机设置的）。一键即可重新以当前值 ±10 % 为中心。可撤销。",
+  "optVarsManage": "管理",
+  "optVarsManageTip": "选择哪些参数可以变化：几何页每一行的“可优化”开关。"
 }

@@ -24,6 +24,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import UndoIcon      from '@mui/icons-material/Undo';
 import RedoIcon      from '@mui/icons-material/Redo';
 import { useMotorStore } from '../../stores/motorStore';
+import { useUIStore } from '../../stores/uiStore';
+import { useOptimizableStore } from '../../stores/optimizableStore';
 import AutoOptimizePanel from './AutoOptimizePanel';
 import DescentPanel from './DescentPanel';
 import AutoPointsTable from './AutoPointsTable';
@@ -281,6 +283,11 @@ const SweepConfigPanel: React.FC = () => {
     updateOperatingPoint,
     initVariationsFromSchema,
   } = useMotorStore();
+
+  // The list below shows the parameters switched on in the Geometry table; "manage" is for accounts that may read the set.
+  const optAvailable = useOptimizableStore((st) => st.available);
+  const loadOptimizable = useOptimizableStore((st) => st.load);
+  useEffect(() => { void loadOptimizable(); }, [loadOptimizable]);
 
   useEffect(() => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
@@ -593,7 +600,8 @@ const SweepConfigPanel: React.FC = () => {
             <HelpTip title="Add a parameter (geometry, load angle γ, or phase current) and set its range (min · max) and step. Each algorithm keeps its own set — switch the menu above and these cards follow it (Optimize searches them, Sweep grids them). DOE has its own screening inputs." />
           </Box>
 
-          <FormControl size="small" fullWidth sx={{ mb: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+          <FormControl size="small" fullWidth>
             <InputLabel sx={{ fontSize: 12 }}>+ Add optimization variable</InputLabel>
             <Select
               label="+ Add optimization variable"
@@ -616,6 +624,17 @@ const SweepConfigPanel: React.FC = () => {
               })}
             </Select>
           </FormControl>
+          {/* Which parameters are listed here is set in the Geometry table (the switch on each row). */}
+          {optAvailable && (
+            <Tooltip title={tx('optVarsManageTip')}>
+              <Button size="small" variant="text" onClick={() => useUIStore.getState().setActiveTab('geometry')}
+                data-testid="optimizable-manage"
+                sx={{ textTransform: 'none', fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {tx('optVarsManage')}
+              </Button>
+            </Tooltip>
+          )}
+          </Box>
 
           {/* Bulk add/remove — add all geometry vars (not γ / current), or clear all */}
           <Box sx={{ display: 'flex', gap: 1, mb: 1.5, mt: -1 }}>

@@ -9,6 +9,7 @@ import {
   Chip,
   Button,
   Snackbar,
+  Switch,
 } from '@mui/material';
 import ShowChartIcon    from '@mui/icons-material/ShowChart';
 import CloseIcon        from '@mui/icons-material/Close';
@@ -18,6 +19,8 @@ import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import HelpOutlineIcon  from '@mui/icons-material/HelpOutline';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useMotorStore } from '../../stores/motorStore';
+import { useOptimizableStore } from '../../stores/optimizableStore';
+import { isLastEnabled } from '../../lib/optimizableSet';
 import { pageVisible } from '../../lib/pageVisible';
 import AddParameterDialog from '../parameters/AddParameterDialog';
 import SectionLabel from '../common/SectionLabel';
@@ -130,6 +133,14 @@ const ParamValueField: React.FC<ParamValueFieldProps> = ({
   );
 };
 
+// The per-row "optimizable" switch: small, one column, state in the tooltip only.
+const optSwitchSx = {
+  width: 26, height: 14, p: 0, justifySelf: 'center',
+  '& .MuiSwitch-switchBase': { p: '2px', '&.Mui-checked': { transform: 'translateX(12px)' } },
+  '& .MuiSwitch-thumb': { width: 10, height: 10, boxShadow: 'none' },
+  '& .MuiSwitch-track': { borderRadius: 7, opacity: 0.35 },
+} as const;
+
 const FAMILY_API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 const ParameterVariationTable: React.FC = () => {
@@ -197,6 +208,12 @@ const ParameterVariationTable: React.FC = () => {
     fetchSchemaFromApi,
     isGeometryUpdating,
   } = useMotorStore();
+
+  // Which parameters Sweep / Optimize may vary (server-side set).  Only an account the server lets read it sees the
+  // switches; the Optimization variable list reads the same flags from the schema, so a click shows there at once.
+  const { available: optAvailable, canEdit: optCanEdit, allAllowed: optAll, error: optError,
+          load: loadOptimizable, toggle: toggleOptimizable, clearError: clearOptError } = useOptimizableStore();
+  useEffect(() => { void loadOptimizable(); }, [loadOptimizable]);
 
   // ── local edits (not yet sent to API) ───────────────────────────────────
   // key → locally edited value
@@ -424,7 +441,7 @@ const ParameterVariationTable: React.FC = () => {
                   // value boxes line up in one straight vertical column (instead
                   // of floating with the label length / ✕ presence).
                   display: 'grid',
-                  gridTemplateColumns: '1fr 60px 28px',
+                  gridTemplateColumns: optAvailable ? '1fr 60px 28px 30px' : '1fr 60px 28px',
                   alignItems: 'center',
                   columnGap: 1,
                   px: 0.5,
@@ -552,6 +569,30 @@ const ParameterVariationTable: React.FC = () => {
                   // Not optimizable → empty grid cell keeps the value column aligned
                   <Box />
                 )}
+
+                {/* Optimizable switch — may Sweep / Optimize vary this parameter. */}
+                {optAvailable && (() => {
+                  const on = param.optimizable !== false;
+                  const last = isLastEnabled(parameterSchema, param.name, optAll);
+                  const tip = !optCanEdit ? tx('optimizableReadOnly')
+                    : last ? tx('optimizableLast')
+                    : on ? tx('optimizableOnTip') : tx('optimizableOffTip');
+                  return (
+                    <Tooltip title={tip}>
+                      <span style={{ display: 'flex', justifyContent: 'center' }}>
+                        <Switch
+                          size="small"
+                          checked={on}
+                          disabled={!optCanEdit || last}
+                          onChange={(_, v) => { void toggleOptimizable(param.name, v); }}
+                          inputProps={{ 'aria-label': tx('optimizableAria', { name: param.label }) }}
+                          data-testid={`optimizable-${param.name}`}
+                          sx={optSwitchSx}
+                        />
+                      </span>
+                    </Tooltip>
+                  );
+                })()}
               </Box>
             );
           })}
@@ -563,6 +604,12 @@ const ParameterVariationTable: React.FC = () => {
         autoHideDuration={2500}
         onClose={() => setShowSaved(false)}
         message="Geometry changes applied & saved to config"
+      />
+      <Snackbar
+        open={!!optError}
+        autoHideDuration={6000}
+        onClose={clearOptError}
+        message={optError ?? ''}
       />
       <Snackbar
         open={!!helpError}

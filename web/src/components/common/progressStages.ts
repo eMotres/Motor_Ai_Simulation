@@ -13,7 +13,7 @@
 export type StageState = 'pending' | 'running' | 'done' | 'skipped' | 'stopped';
 
 export interface ProgressStage {
-  /** Stable identifier the UI translates ("warm_up", "demag_prepass"…). */
+  /** Stable identifier the UI translates ("prepare", "final"…). */
   key: string;
   /** Short English fallback label from the backend. */
   name: string;
@@ -95,7 +95,7 @@ export function stageUnit(s: Pick<ProgressStage, 'unit'>): 'steps' | 'frames' {
 /** Keys with their own tooltip text in the locale files; anything else the
  *  backend might add later falls back to its English `name`. */
 export const KNOWN_STAGE_KEYS = [
-  'calibration', 'gap_probe', 'warm_up', 'demag_prepass', 'final', 'extra', 'post',
+  'prepare', 'calibration', 'gap_probe', 'warm_up', 'demag_prepass', 'final', 'extra', 'post',
   'loop', 'pwm_final',
 ] as const;
 

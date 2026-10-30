@@ -1734,3 +1734,51 @@ def relabel_br(br: np.ndarray, elems: np.ndarray, image: np.ndarray) -> np.ndarr
     e = np.asarray(elems, int)
     out[e] = np.asarray(br, float)[e[np.asarray(image, int)]]
     return out
+
+
+def cycle_min_br(br: np.ndarray, elems: np.ndarray, image: np.ndarray) -> np.ndarray:
+    """Br TRANSFERRED over the rotor-image history: every magnet element takes
+    the minimum Br of the elements on its cycle of the period relabelling
+    (:func:`relabel_br`'s ``image``, a permutation of ``elems``).
+
+    WHY THIS IS THE L-PERIOD HISTORY, not a shortcut (owner 2026-10-30, "one
+    preparation stage").  One electrical period later the rotor has turned one
+    pole pair and the stator currents are back where they were, so element
+    ``e`` meets EXACTLY the field element ``image(e)`` met this period, at the
+    same discrete instants.  Over L periods (L = the order of the relabelling)
+    it therefore meets the fields of its whole cycle, and the irreversible
+    ratchet — a running minimum — ends at the minimum over the cycle.  Marching
+    those L periods with the field held as it was is therefore this function,
+    to round-off; what the march adds is only the FEEDBACK (a weaker magnet
+    changes the field), which the pre-pass periods that follow measure, by the
+    same Br-change and observable-drift rules as before.  Both iterations are
+    deflationary, and where the period map is monotone (a weaker magnet never
+    makes another one's demagnetising field milder) they stop at the same
+    fixed point, the greatest one below the start
+    (docs/ONE_PREPARATION_STAGE_2026-10-30.md).  Br never rises: the result is
+    <= ``br`` element-wise.
+    """
+    out = np.array(br, float, copy=True)
+    e = np.asarray(elems, int)
+    perm = np.asarray(image, int)
+    if e.size == 0:
+        return out
+    if perm.shape != e.shape or np.unique(perm).size != perm.size \
+            or perm.min() < 0 or perm.max() >= perm.size:
+        raise ValueError("the period relabelling is not a permutation of the "
+                         "magnet elements")
+    vals = np.asarray(br, float)[e]
+    seen = np.zeros(perm.size, bool)
+    for i0 in range(perm.size):
+        if seen[i0]:
+            continue
+        cyc = []
+        j = i0
+        while not seen[j]:
+            seen[j] = True
+            cyc.append(j)
+            j = int(perm[j])
+        cyc = np.asarray(cyc, int)
+        vals[cyc] = float(np.min(vals[cyc]))
+    out[e] = vals
+    return out

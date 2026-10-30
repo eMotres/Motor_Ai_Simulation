@@ -4299,6 +4299,14 @@ async def get_fem_transient_progress(run_id: str = ""):
     ``position``; it carries neither at any other time.
     """
     p, _rid = _PROG.transient_dict("transient", run_id)
+    # The WHOLE run's ETA, when the solve reports stages: every frame still to
+    # come in every stage (preparation, final periods) at the rate frames are
+    # being solved now.  The flat step/total below is only the CURRENT stage's
+    # counter, so an ETA from it ended with the stage, not with the run.
+    try:
+        _eta_st = _PSTG.eta_s(p.get("stages"))
+    except Exception:                  # noqa: BLE001 — the old ETA then
+        _eta_st = None
     # The stage list (progress_stages) is bookkeeping while the solve writes it;
     # what goes on the wire is its public shape, beside the flat fields below.
     p = {**p, "stages": _PSTG.public(p.get("stages"))}
@@ -4321,7 +4329,8 @@ async def get_fem_transient_progress(run_id: str = ""):
                 "field_busy": field_busy(),
             }, _rid)
         per_step = elapsed / raw_step
-        eta = per_step * max(0, total - raw_step)
+        eta = (per_step * max(0, total - raw_step) if _eta_st is None
+               else float(_eta_st))
         return _PROG._with_queue({
             **p,
             "elapsed_s": round(elapsed, 1),
@@ -5683,7 +5692,11 @@ def get_fem_transient(
                 eddy=bool(eddy), demag=bool(demag),
                 planned_final=max(1, int(round(float(n_steps_per_period)
                                                * float(n_periods)))),
-                planned_prepass=(int(n_steps_per_period) if demag else 0)),
+                # the preparation's first guess, before the solver counts:
+                # an eddy warm-up of ~2 periods and a demag pre-pass of 2
+                # (burn-in + verification, the image history transferred)
+                planned_prepass=int(n_steps_per_period) * (
+                    (2 if eddy else 0) + (2 if demag else 0))),
         }
         def _sb_cancel_only(*_a, **_k):
             if run_id and _JOBS.is_cancelled(run_id):

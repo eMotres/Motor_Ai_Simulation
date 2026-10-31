@@ -146,6 +146,11 @@ def test_signup_on_the_consent_page_needs_the_terms_box_and_records_oauth_signup
     assert r.status_code == 422 and "country" in r.json()["detail"].lower() and senv["U"].get_user(NEW) is None    # the country is required too
     r = c.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "New Engineer", "return_to": consent,
                                            "accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE", "lang": "zh-CN"},
+               headers={"X-Forwarded-For": "203.0.113.40"})
+    assert r.status_code == 422 and "capacity" in r.json()["detail"].lower() and senv["U"].get_user(NEW) is None      # and the capacity
+    r = c.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "New Engineer", "return_to": consent,
+                                           "accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE", "lang": "zh-CN",
+                                           "capacity": "sole_trader"},
                headers={"X-Forwarded-For": "203.0.113.40", "User-Agent": "mcp-test"})
     assert r.status_code == 202, r.text
     (rec,) = [json.loads(l) for l in (tmp_path / "terms_acceptances.jsonl").read_text(encoding="utf-8").splitlines()]

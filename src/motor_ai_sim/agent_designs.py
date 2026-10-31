@@ -1138,7 +1138,13 @@ def simulate(p: Principal, design_id: str, what: str,
              steps: Optional[int] = None) -> Dict[str, Any]:
     """Queue a solve of the draft on the user's queue; return the job id."""
     from motor_ai_sim import jobs as _jobs
+    from motor_ai_sim import legal_texts as _lt
     from motor_ai_sim import mcp_tools as _t
+    needed = _lt.gate_detail(p.email)
+    if needed:      # from the owner's TERMS_REQUIRED_FROM date new simulations need the current Terms of Use (staff / MOTRES exempt)
+        raise DesignError("terms_required: the account has not accepted the current AeroStator Terms of Use, Platform Agreement and "
+                          "Privacy Policy (version %s), which new simulations need from %s. Ask the user to open aerostator.com, "
+                          "accept the \"Updated terms\" dialog, then call simulate again." % (needed["version"], needed["from"]))
     what = str(what or "").strip().lower()
     if what not in WHATS:
         raise DesignError(f"what must be one of {list(WHATS)}")

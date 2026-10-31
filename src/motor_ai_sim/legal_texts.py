@@ -20,8 +20,11 @@ Acceptance record, append-only, one JSON line per acceptance, next to ``users.js
 
     <identity root>/terms_acceptances.jsonl     id, ts, iso, user, terms_version, privacy_version, agreement_public_version, lang,
                                                 text_sha256 {terms, privacy, platform_agreement, schedules} (of the text in ``lang``),
-                                                country (where the business is established, required), business_name (optional,
-                                                empty for a sole trader), forum_variant (A | B: B for CN / HK, agreement section 13),
+                                                country (where the business is established, required), capacity (agreement section 2.3:
+                                                business | sole_trader | other, required), business_name (required for ``business``,
+                                                optional otherwise), historical_opt_in (section 7.9: the optional box for the data the
+                                                account entered before it accepted; only an existing account sees it), labels {accept,
+                                                election} (the wording shown), forum_variant (A | B: B for CN / HK, agreement section 13),
                                                 source (signup | google | oauth_signup | existing), ip, user_agent
 
 Account deletion pseudonymises it like the consent history of ``comm_prefs`` (the proof stays, the person goes); the data export
@@ -57,6 +60,13 @@ MIN_TRAINING_VERSION = "v0.4"
 
 LANGS = ("en", "zh-CN")
 SOURCES = ("signup", "google", "oauth_signup", "existing")
+#: Agreement section 2.3: (a) a named business the person may bind, (b) the person as a registered sole trader / self-employed
+#: professional, (c) neither (an employee or contractor without authority to bind its employer or customer).
+CAPACITIES = ("business", "sole_trader", "other")
+#: Capacities whose acceptance can make the account's data eligible for training; ``other`` stays excluded until a per-data
+#: confirmation exists (owner D4: fail-closed).
+TRAINING_CAPACITIES = ("business", "sole_trader")
+MAX_LABEL = 2000
 
 #: public name of a document -> (directory under config/legal, file stem, version).  The order is the order of the acceptance hashes.
 DOCS = {
@@ -77,8 +87,8 @@ class UnknownText(KeyError):
 
 
 class CompanyError(ValueError):
-    """The country / business name of an acceptance is not usable; ``code`` is the stable API code (``country_required`` |
-    ``business_name_too_long``)."""
+    """The country / capacity / business name of an acceptance is not usable; ``code`` is the stable API code (``country_required`` |
+    ``capacity_required`` | ``business_name_required`` | ``business_name_too_long``)."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -138,6 +148,31 @@ def clean_company(country: Any, business_name: Any = "") -> tuple[str, str]:
     if len(name) > MAX_BUSINESS_NAME:
         raise CompanyError("business_name_too_long", "The business name is too long (at most %d characters)." % MAX_BUSINESS_NAME)
     return c, name
+
+
+def clean_acceptance(country: Any, business_name: Any = "", capacity: Any = "") -> tuple[str, str, str]:
+    """-> (country code, business name, capacity).  Country as :func:`clean_company`; the capacity (agreement section 2.3) is required and
+    one of :data:`CAPACITIES` (``capacity_required``); a ``business`` acceptance must name the business (``business_name_required``).
+    Raises :class:`CompanyError`."""
+    c, name = clean_company(country, business_name)
+    cap = str(capacity or "").strip().lower()
+    if cap not in CAPACITIES:
+        raise CompanyError("capacity_required", "Choose in which capacity you accept: for a business you may bind, for yourself as a "
+                                                "registered sole trader, or neither.")
+    if cap == "business" and not name:
+        raise CompanyError("business_name_required", "Enter the name of the business you are authorised to bind.")
+    return c, name, cap
+
+
+def clean_labels(accept_label: Any = "", election_label: Any = "") -> dict:
+    """The wording of the two boxes as the person saw it (agreement section 15.3 keeps the labels): {accept, election}, whitespace-
+    normalised and capped; keys of a label that was not sent are left out."""
+    out = {}
+    for k, v in (("accept", accept_label), ("election", election_label)):
+        t = N._norm(v)[:MAX_LABEL]
+        if t:
+            out[k] = t
+    return out
 
 
 def read(doc: str, lang: str = "en") -> dict:
@@ -222,11 +257,13 @@ def records(email: Optional[str] = None) -> list[dict]:
     return rows
 
 
-def record_acceptance(email: str, *, source: str, country: str, business_name: str = "", lang: str = "en", ip: str = "",
-                      user_agent: str = "") -> dict:
+def record_acceptance(email: str, *, source: str, country: str, business_name: str = "", capacity: str = "", lang: str = "en",
+                      historical_opt_in: bool = False, labels: Optional[dict] = None, ip: str = "", user_agent: str = "") -> dict:
     """Append the acceptance of the CURRENT texts by this account and return the record.  ``OSError`` when it cannot be written (the
     caller decides: a sign-up logs it and goes on, the existing-user dialog tells the person to try again).  ``ValueError`` for an
-    unknown source, :class:`CompanyError` for a country that is not on the list."""
+    unknown source, :class:`CompanyError` for a country that is not on the list or a missing capacity / business name.
+
+    ``historical_opt_in`` (agreement section 7.9) is kept only for source ``existing``: a new account has no earlier data."""
     email = _norm(email)
     if not email:
         raise ValueError("no account")
@@ -237,12 +274,13 @@ def record_acceptance(email: str, *, source: str, country: str, business_name: s
     except UnknownText:
         lang = "en"
     from motor_ai_sim.private_files import ensure_private_dir, open_private
-    country, business_name = clean_company(country, business_name)
+    country, business_name, capacity = clean_acceptance(country, business_name, capacity)
     now = time.time()
     rec = dict(id="t%s-%s" % (datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime("%Y%m%d"), secrets.token_hex(6)),
                ts=round(now, 3), iso=_iso(now), user=email, terms_version=TERMS_VERSION, privacy_version=PRIVACY_VERSION,
                agreement_public_version=AGREEMENT_PUBLIC_VERSION, lang=lang, text_sha256=shown_hashes(lang), country=country,
-               business_name=business_name, forum_variant=forum_variant(country), source=source,
+               capacity=capacity, business_name=business_name, historical_opt_in=bool(historical_opt_in is True and source == "existing"),
+               labels=dict(labels or {}), forum_variant=forum_variant(country), source=source,
                ip=str(ip or ""), user_agent=str(user_agent or "")[:300])
     with _LOCK:
         ensure_private_dir(acceptances_path().parent)
@@ -251,12 +289,13 @@ def record_acceptance(email: str, *, source: str, country: str, business_name: s
     return rec
 
 
-def record_signup(email: str, *, source: str, country: str, business_name: str, lang: str, ip: str, user_agent: str) -> Optional[dict]:
+def record_signup(email: str, *, source: str, country: str, business_name: str, lang: str, ip: str, user_agent: str,
+                  capacity: str = "", labels: Optional[dict] = None) -> Optional[dict]:
     """The acceptance of a new account.  A failure to store it never blocks the account (the person is asked again at the next
     sign-in, see :func:`needs_acceptance`)."""
     try:
-        return record_acceptance(email, source=source, country=country, business_name=business_name, lang=lang, ip=ip,
-                                 user_agent=user_agent)
+        return record_acceptance(email, source=source, country=country, business_name=business_name, capacity=capacity, lang=lang,
+                                 labels=labels, ip=ip, user_agent=user_agent)
     except Exception as e:                                   # noqa: BLE001
         log.warning("terms: acceptance of a new account was not stored (%s)", type(e).__name__)
         return None
@@ -270,7 +309,13 @@ def latest(email: str) -> Optional[dict]:
 def accepted_version(email: str, minimum: Optional[str] = None) -> bool:
     """Has this account accepted the texts at ``minimum`` or later (default: the current version)?"""
     minimum = minimum or TERMS_VERSION
-    return any(version_ge(r.get("terms_version"), minimum) for r in records(email))
+    return any(version_ge(r.get("terms_version"), minimum) and _complete(r) for r in records(email))
+
+
+def _complete(r: dict) -> bool:
+    """A line of the FREE-mode texts (:data:`MIN_TRAINING_VERSION` or later) counts only with its capacity (agreement section 2.3);
+    older lines predate the choice."""
+    return not version_ge(r.get("terms_version"), MIN_TRAINING_VERSION) or str(r.get("capacity") or "") in CAPACITIES
 
 
 def needs_acceptance(email: str, role: Any = "") -> bool:
@@ -284,12 +329,115 @@ def needs_acceptance(email: str, role: Any = "") -> bool:
     return not accepted_version(email)
 
 
+def required_from() -> Optional[datetime.date]:
+    """The owner's "Later" deadline (``TERMS_REQUIRED_FROM``, an ISO date, UTC): from that day on, starting a compute job needs an
+    acceptance of the current version.  Unset or not a date = no gate."""
+    raw = (os.environ.get("TERMS_REQUIRED_FROM") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.date.fromisoformat(raw[:10])
+    except ValueError:
+        log.warning("terms: TERMS_REQUIRED_FROM=%r is not an ISO date; no gate", raw)
+        return None
+
+
+def gate_active(now: Optional[datetime.datetime] = None) -> bool:
+    d = required_from()
+    if d is None:
+        return False
+    return (now or datetime.datetime.now(datetime.timezone.utc)).date() >= d
+
+
+def gate_detail(email: str, role: Any = "") -> Optional[dict]:
+    """None when this account may start a compute job; else the body of the 428 (``code`` ``terms_required``): the deadline has
+    passed and the account has no acceptance of the current version.  Staff, MOTRES's own accounts, anonymous or process identities
+    and the switch ``TERMS_ACCEPTANCE_DISABLED`` are never gated."""
+    email = _norm(email)
+    if not email or "@" not in email or not gate_active():
+        return None
+    if not role:                                # a caller that knows only the e-mail (an agent key, a job owner)
+        try:
+            from motor_ai_sim import users as U
+            role = (U.get_user(email) or {}).get("role") or ""
+        except Exception:                                              # noqa: BLE001
+            role = ""
+    if not needs_acceptance(email, role):
+        return None
+    return {"code": "terms_required", "version": TERMS_VERSION, "from": required_from().isoformat(),
+            "message": "Accept the updated Terms of Use, Platform Agreement and Privacy Policy (version %s) to start new simulations." % TERMS_VERSION}
+
+
+def require_current(email: str, role: Any = "") -> None:
+    """Gate hook: HTTP 428 ``terms_required`` (see :func:`gate_detail`)."""
+    detail = gate_detail(email, role)
+    if detail:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=428, detail=detail)
+
+
 def status_for(email: str, role: Any = "") -> dict:
     """What the web needs after a sign-in (``GET /api/legal/status``)."""
     last = latest(email)
+    d = required_from()
     return {"version": TERMS_VERSION, "privacy_version": PRIVACY_VERSION, "agreement_version": AGREEMENT_PUBLIC_VERSION,
             "required": needs_acceptance(email, role), "accepted_version": (last or {}).get("terms_version"),
-            "accepted_at": (last or {}).get("iso")}
+            "accepted_at": (last or {}).get("iso"), "required_from": d.isoformat() if d else None}
+
+
+# -- the record as shown (agreement section 15.3, gate R16) ------------------------------------------------------
+
+CAPACITY_LABELS = {"business": "A business the account holder is authorised to bind",
+                   "sole_trader": "Itself, as a registered sole trader or self-employed professional",
+                   "other": "Neither (no authority to bind an employer or customer)"}
+FORUM_LABELS = {"A": "Variant A", "B": "Variant B (Hong Kong law, HKIAC; Mainland China and Hong Kong SAR)"}
+
+
+def record_view(rec: dict) -> list[tuple[str, str]]:
+    """The rows an ACCOUNT acceptance shows (PDF and record view): capacity, business name (only when one was given), country, forum
+    variant, the election of section 7.9, version, language, time, source, account, hashes and the record id.  A field with no value is
+    left out; the company-agreement rows (company, registration no., title, mode) never appear here."""
+    sha = rec.get("text_sha256") if isinstance(rec.get("text_sha256"), dict) else {}
+    labels = rec.get("labels") if isinstance(rec.get("labels"), dict) else {}
+    cap = str(rec.get("capacity") or "")
+    rows = [("Account", rec.get("user")), ("Accepted (UTC)", rec.get("iso")), ("Capacity", CAPACITY_LABELS.get(cap, cap)),
+            ("Business name", rec.get("business_name")), ("Country of establishment", rec.get("country")),
+            ("Forum (agreement section 13)", FORUM_LABELS.get(str(rec.get("forum_variant") or ""), "")),
+            ("Earlier data (section 7.9)", ("Included from the account's creation" if rec.get("historical_opt_in") else "Not included")
+             if "historical_opt_in" in rec else ""),
+            ("Terms of Use / Privacy / Agreement version", rec.get("terms_version")), ("Interface language", rec.get("lang")),
+            ("Route", rec.get("source")), ("IP address", rec.get("ip")), ("Acceptance label shown", labels.get("accept")),
+            ("Election label shown", labels.get("election"))]
+    rows += [("%s SHA-256" % k.replace("_", " ").capitalize(), sha.get(k)) for k in HASH_KEYS.values()]
+    rows.append(("Record ID", rec.get("id")))
+    return [(k, str(v)) for k, v in rows if v not in (None, "")]
+
+
+def record_pdf(rec: dict) -> bytes:
+    """A one-page PDF of the acceptance record built from :func:`record_view` (the texts themselves are published and hashed)."""
+    import io
+    from xml.sax.saxutils import escape
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    rows = record_view(rec)
+    font, bold = N._pdf_font(*[v for _, v in rows])
+    wrap = {"wordWrap": "CJK"} if font == "STSong-Light" else {}
+    meta = ParagraphStyle("meta", fontName=font, fontSize=8.5, leading=11, **wrap)
+    head = ParagraphStyle("head", fontName=bold, fontSize=14, leading=18, spaceAfter=8, **wrap)
+    tbl = Table([[Paragraph(escape(k), meta), Paragraph(escape(v), meta)] for k, v in rows], colWidths=[55 * mm, 110 * mm])
+    tbl.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                             ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke)]))
+    note = ("Accepted online by ticking the initially unticked box. The texts shown are published at /terms, /privacy and "
+            "/platform-agreement (and in Chinese under /zh-cn/); each SHA-256 above is the hash of the text in the language shown.")
+    buf = io.BytesIO()
+    SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
+                      title="Account acceptance %s" % rec.get("id", ""), author="MOTRES d.o.o.").build(
+        [Paragraph("AeroStator account acceptance", head), tbl, Spacer(1, 6), Paragraph(escape(note), meta)])
+    return buf.getvalue()
 
 
 # -- account erasure / export -------------------------------------------------

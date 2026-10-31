@@ -245,7 +245,7 @@ export function requestedAuthMode(): 'register' | 'signin' | null {
   return null;
 }
 
-/** The acceptance part of a sign-up request (legalLogic.acceptancePayload): `{accept_terms, terms_version, country, business_name}`. */
+/** The acceptance part of a sign-up request (legalLogic.acceptancePayload): `{accept_terms, terms_version, country, business_name, capacity, accept_label}`. */
 export type TermsAcceptance = ReturnType<typeof acceptancePayload>;
 
 /** Public legal / source links shown under the sign-up form.  They default to the in-app pages (/terms, /privacy and the agreement,

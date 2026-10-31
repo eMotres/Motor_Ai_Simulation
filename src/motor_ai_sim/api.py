@@ -136,7 +136,7 @@ from motor_ai_sim.routes.activity import router as activity_router, admin_router
 from motor_ai_sim.routes.model3d import router as model3d_router
 from motor_ai_sim.routes.construction import router as construction_router
 from motor_ai_sim.routes.nda import router as nda_router
-from motor_ai_sim.routes.legal import router as legal_router
+from motor_ai_sim.routes.legal import admin_router as legal_admin_router, router as legal_router
 from motor_ai_sim.routes.platform_agreement import admin_router as agreement_admin_router, dataset_router as dataset_exclusions_router, router as agreement_router
 from motor_ai_sim.routes.verification import router as verification_router, admin_router as verification_admin_router
 from motor_ai_sim.routes.data_sharing import router as data_sharing_router
@@ -405,6 +405,7 @@ app.include_router(model3d_router)
 app.include_router(construction_router)
 app.include_router(nda_router)
 app.include_router(legal_router)
+app.include_router(legal_admin_router)      # GET /api/admin/legal/{id}/pdf: an account acceptance as a PDF
 app.include_router(agreement_router)
 app.include_router(agreement_admin_router)
 app.include_router(dataset_exclusions_router)

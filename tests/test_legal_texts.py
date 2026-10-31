@@ -84,7 +84,7 @@ def signup(body_extra=None, email="new1@example.com", ip="203.0.113.31", ua="pyt
     return client.post("/api/auth/register", json=body, headers={"X-Forwarded-For": ip, "User-Agent": ua}, **kw)
 
 
-TICKED = {"accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE", "business_name": ""}
+TICKED = {"accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE", "business_name": "", "capacity": "sole_trader"}
 
 
 def lines(env):
@@ -173,8 +173,9 @@ def test_version_comparison_is_numeric():
 # -- sign-up: e-mail form -------------------------------------------------------------------------------------------
 
 def test_signup_without_the_box_is_refused_422_terms_required_and_makes_no_account(env):
-    for extra in ({}, {"accept_terms": False, "terms_version": LT.TERMS_VERSION, "country": "DE"}, {"accept_terms": True, "country": "DE"},
-                  {"accept_terms": True, "terms_version": "v0.2", "country": "DE"}, {"terms_version": LT.TERMS_VERSION, "country": "DE"}):
+    cap = {"capacity": "sole_trader"}
+    for extra in ({}, {"accept_terms": False, "terms_version": LT.TERMS_VERSION, "country": "DE", **cap}, {"accept_terms": True, "country": "DE", **cap},
+                  {"accept_terms": True, "terms_version": "v0.2", "country": "DE", **cap}, {"terms_version": LT.TERMS_VERSION, "country": "DE", **cap}):
         r = signup(extra)
         assert r.status_code == 422 and r.json()["code"] == "terms_required", extra
     assert env["U"].get_user("new1@example.com") is None and lines(env) == [] and env["outbox"] == []
@@ -187,6 +188,7 @@ def test_signup_with_the_box_records_the_acceptance_with_the_hashes_of_the_texts
     assert rec["user"] == "new1@example.com" and rec["source"] == "signup" and rec["lang"] == "zh-CN"
     assert (rec["terms_version"], rec["privacy_version"], rec["agreement_public_version"]) == ("v0.4", "v0.4", "v0.4")
     assert (rec["country"], rec["business_name"], rec["forum_variant"]) == ("DE", "", "A")
+    assert (rec["capacity"], rec["historical_opt_in"]) == ("sole_trader", False)
     assert rec["ip"] == "203.0.113.31" and rec["user_agent"] == "Mozilla/5.0 test"
     assert rec["id"].startswith("t") and rec["iso"].endswith("Z") and rec["ts"] > 0
     assert set(rec["text_sha256"]) == {"terms", "privacy", "platform_agreement", "schedules"}
@@ -202,7 +204,7 @@ def test_signup_with_the_box_records_the_acceptance_with_the_hashes_of_the_texts
 
 
 def test_signup_needs_the_country_of_the_business_and_records_name_and_forum_variant(env):
-    base = {"accept_terms": True, "terms_version": LT.TERMS_VERSION}
+    base = {"accept_terms": True, "terms_version": LT.TERMS_VERSION, "capacity": "sole_trader"}
     for extra in ({}, {"country": ""}, {"country": "XX"}, {"country": "Germany"}, {"country": "DE", "business_name": "x" * 301}):
         r = signup({**base, **extra})
         assert r.status_code == 422, extra
@@ -211,7 +213,8 @@ def test_signup_needs_the_country_of_the_business_and_records_name_and_forum_var
     # lower case code and a spaced business name are normalised; Mainland China and Hong Kong are forum variant B
     assert signup({**base, "country": " cn ", "business_name": "  Shenzhen   Drive Co. "}, email="cn@example.com", ip="203.0.113.60").status_code == 202
     assert signup({**base, "country": "HK"}, email="hk@example.com", ip="203.0.113.61").status_code == 202
-    assert signup({**base, "country": "SI", "business_name": "Motor d.o.o."}, email="si@example.com", ip="203.0.113.62").status_code == 202
+    assert signup({**base, "country": "SI", "business_name": "Motor d.o.o.", "capacity": "business"}, email="si@example.com",
+                  ip="203.0.113.62").status_code == 202
     by = {r["user"]: r for r in lines(env)}
     assert (by["cn@example.com"]["country"], by["cn@example.com"]["business_name"], by["cn@example.com"]["forum_variant"]) == (
         "CN", "Shenzhen Drive Co.", "B")
@@ -281,12 +284,12 @@ def test_existing_account_status_then_accept_records_source_existing(env):
     assert bad.status_code == 422 and bad.json()["code"] == "terms_required" and lines(env) == []
     nocountry = client.post("/api/legal/accept", json={"accept_terms": True, "terms_version": LT.TERMS_VERSION}, headers=h)
     assert nocountry.status_code == 422 and nocountry.json()["code"] == "country_required" and lines(env) == []
-    ok = client.post("/api/legal/accept", json={**TICKED, "country": "HK", "business_name": "Acme", "lang": "zh-CN"},
+    ok = client.post("/api/legal/accept", json={**TICKED, "country": "HK", "business_name": "Acme", "capacity": "business", "lang": "zh-CN"},
                      headers={**h, "User-Agent": "ua-1"})
     assert ok.status_code == 200 and ok.json()["ok"] is True and ok.json()["status"]["required"] is False
     (rec,) = lines(env)
     assert rec["user"] == ANNA and rec["source"] == "existing" and rec["lang"] == "zh-CN" and rec["user_agent"] == "ua-1"
-    assert (rec["country"], rec["business_name"], rec["forum_variant"]) == ("HK", "Acme", "B")
+    assert (rec["country"], rec["business_name"], rec["forum_variant"], rec["capacity"]) == ("HK", "Acme", "B", "business")
     again = client.post("/api/legal/accept", json=TICKED, headers=h)
     assert again.json()["already"] is True and len(lines(env)) == 1
     assert client.get("/api/legal/status", headers=h).json()["required"] is False
@@ -348,19 +351,29 @@ def test_the_data_export_carries_the_accounts_own_lines(env):
 
 # -- training_allowed: company -> account -> terms -> fail-closed ------------------------------------------------------------
 
+_CLOCK = [1767225600.0]          # 2026-01-01T00:00:00Z; every helper record is one minute after the previous one (call order = time order)
+
+
+def _tick() -> float:
+    _CLOCK[0] += 60
+    return _CLOCK[0]
+
+
 def _agreement_record(env, key, mode, user):
     p = env["tmp"] / "legal" / "platform_agreement_acceptances.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
-    row = dict(id="a20261101-" + "0" * 12, ts=1.0, iso="2026-11-01T00:00:00Z", key=key, scope="company" if key.startswith("company:") else "account",
+    ts = _tick()
+    row = dict(id="a20261101-" + "0" * 12, ts=ts, iso=LT._iso(ts), key=key, scope="company" if key.startswith("company:") else "account",
                user=user, mode=mode, version="v1", ai_training_allowed=mode == "FREE")
     with open(p, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
     PA._CACHE.update(sig=None, rows=[])
 
 
-def _terms_line(env, email, version):
+def _terms_line(env, email, version, **extra):
+    ts = _tick()
     with open(env["tmp"] / "terms_acceptances.jsonl", "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"id": "t20261101-" + "1" * 12, "user": email, "terms_version": version}) + "\n")
+        fh.write(json.dumps({"id": "t20261101-" + "1" * 12, "user": email, "terms_version": version, "ts": ts, "iso": LT._iso(ts), **extra}) + "\n")
 
 
 def _company(env, name, reg, emails):
@@ -380,15 +393,15 @@ def test_training_allowed_d_nothing_accepted_is_false(env):
 
 
 def test_training_allowed_c_the_terms_box_of_v03_or_later_allows(env):
-    _terms_line(env, ANNA, "v0.4")
+    _terms_line(env, ANNA, "v0.4", capacity="business")
     assert PA.training_allowed(ANNA) is True and PA.training_allowed("user:" + ANNA) is True and PA.training_allowed(BOB) is False
-    _terms_line(env, BOB, "v0.4")
+    _terms_line(env, BOB, "v0.4", capacity="sole_trader")
     assert PA.training_allowed(BOB) is True
     assert PA.training_allowed("company:whatever") is False           # a company id alone has no terms line
 
 
 def test_training_allowed_b_an_account_level_agreement_decides_over_the_terms_line(env):
-    _terms_line(env, ANNA, "v0.4")
+    _terms_line(env, ANNA, "v0.4", capacity="business")
     _agreement_record(env, "user:" + ANNA, "PRIVATE", ANNA)
     assert PA.training_allowed(ANNA) is False                         # PRIVATE is never overridden by the Terms line
     _agreement_record(env, "user:" + LONE, "FREE", LONE)
@@ -397,8 +410,8 @@ def test_training_allowed_b_an_account_level_agreement_decides_over_the_terms_li
 
 def test_training_allowed_a_the_company_acceptance_decides_for_its_confirmed_users(env):
     comp = _company(env, "Acme Drones Ltd", "HRB 12345", [ANNA, BOB])
-    _terms_line(env, ANNA, "v0.4")
-    _terms_line(env, BOB, "v0.4")
+    _terms_line(env, ANNA, "v0.4", capacity="business")
+    _terms_line(env, BOB, "v0.4", capacity="sole_trader")
     _agreement_record(env, "company:" + comp["id"], "PRIVATE", ANNA)
     assert PA.training_allowed(ANNA) is False and PA.training_allowed(BOB) is False       # the company decided, both users' ticks lose
     assert PA.training_allowed(comp["id"]) is False
@@ -409,7 +422,7 @@ def test_training_allowed_a_the_company_acceptance_decides_for_its_confirmed_use
 def test_training_allowed_a_company_without_acceptance_falls_through_to_the_users_terms(env):
     comp = _company(env, "Bolt Motors", "HRB 777", [ANNA, BOB])
     assert PA.training_allowed(ANNA) is False and PA.training_allowed(comp["id"]) is False
-    _terms_line(env, ANNA, "v0.4")
+    _terms_line(env, ANNA, "v0.4", capacity="business")
     assert PA.training_allowed(ANNA) is True and PA.training_allowed(BOB) is False
 
 

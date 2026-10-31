@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   TERMS_VERSION, LEGAL_PAGES, PAGE_DOCS, matchLegalPage, isLegalPath, legalPath, resolveLegalUrl, safeHref, parseInline, inlineText,
   parseLegalMarkdown, displayText, headingId, inShort, acceptancePayload, signupAllowed, showTermsHint, isTermsRequired, shouldAskTerms,
-  emptyAcceptance, acceptanceComplete, forumVariant,
+  emptyAcceptance, acceptanceComplete, forumVariant, asksBusinessName, acceptLabelText, termsDeadline,
 } from '../legalLogic.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -106,16 +106,17 @@ test('"In short" of the Terms of Use is found in both languages (the existing-us
 
 test('the block: country + box carried together, nothing that could pass for consent when incomplete, the buttons wait for it', () => {
   const blank = emptyAcceptance();
-  assert.deepEqual(blank, { country: '', business: '', ticked: false });                          // initially UNTICKED, no country
-  assert.deepEqual(acceptancePayload(blank, 'v0.4'), { accept_terms: false, terms_version: '', country: '', business_name: '' });
-  const full = { country: ' de ', business: '  Motor GmbH ', ticked: true };
-  assert.deepEqual(acceptancePayload(full, 'v0.4'), { accept_terms: true, terms_version: 'v0.4', country: 'DE', business_name: 'Motor GmbH' });
+  assert.deepEqual(blank, { capacity: '', country: '', business: '', ticked: false, earlier: false });   // initially UNTICKED, no capacity, no country
+  assert.deepEqual(acceptancePayload(blank, 'v0.4'), { accept_terms: false, terms_version: '', country: '', business_name: '', capacity: '' });
+  const full = { capacity: 'business', country: ' de ', business: '  Motor GmbH ', ticked: true, earlier: false };
+  assert.deepEqual(acceptancePayload(full, 'v0.4'), { accept_terms: true, terms_version: 'v0.4', country: 'DE', business_name: 'Motor GmbH', capacity: 'business' });
   assert.equal(acceptancePayload({ ...full, ticked: 'yes' }, 'v0.4').accept_terms, false);       // only a literal true is consent
-  // creating an account: off until the country is chosen AND the box is ticked (the business name is optional)
-  const only = (o) => ({ ...blank, ...o });
+  // creating an account: off until a capacity and the country are chosen AND the box is ticked (the business name is required for a business only)
+  const only = (o) => ({ ...blank, capacity: 'sole_trader', ...o });
   assert.equal(acceptanceComplete(only({ ticked: true })), false);
   assert.equal(acceptanceComplete(only({ country: 'DE' })), false);
   assert.equal(acceptanceComplete(only({ country: 'DE', ticked: true })), true);
+  assert.equal(acceptanceComplete(only({ country: 'DE', ticked: true, capacity: '' })), false);
   assert.equal(signupAllowed({ creating: true, form: blank }), false);
   assert.equal(signupAllowed({ creating: true, form: only({ ticked: true }) }), false);
   assert.equal(signupAllowed({ creating: true, form: only({ country: 'SI', ticked: true }) }), true);
@@ -129,6 +130,8 @@ test('the block: country + box carried together, nothing that could pass for con
   assert.deepEqual(['CN', 'hk', ' HK ', 'SI', 'DE', 'MO', 'TW', ''].map(forumVariant), ['B', 'B', 'B', 'A', 'A', 'A', 'A', 'A']);
   assert.equal(isTermsRequired({ code: 'terms_required' }), true);
   assert.equal(isTermsRequired({ code: 'country_required' }), true);
+  assert.equal(isTermsRequired({ code: 'capacity_required' }), true);
+  assert.equal(isTermsRequired({ code: 'business_name_required' }), true);
   assert.equal(isTermsRequired(new Error('x')), false);
   assert.equal(isTermsRequired(null), false);
 });
@@ -144,19 +147,34 @@ test('existing accounts: asked once per sign-in, never when not required, "Later
   assert.equal(shouldAskTerms(need, null, null), true);
 });
 
-test('the box sentence: the wording after the legal review, EN and zh-CN, built from the locale pieces', () => {
-  const sentence = (a) => [a.lead, a.terms, a.sep1, a.agreement, a.mid, a.privacy, a.tail].join('');
-  assert.equal(sentence(common('en').legal.accept),
-    'I use AeroStator for my own business or am authorised by the business I name. I accept the Terms of Use and the Platform Agreement '
-    + '(FREE mode): in exchange for free simulation, MOTRES may use the engineering data of my account, including data entered earlier, to '
-    + 'train its own AI models, with no further obligations and keeping models already trained. Personal data is not used. I have read the '
-    + 'Privacy Policy.');
-  assert.equal(sentence(common('zh-CN').legal.accept),
-    '我为本人业务使用 AeroStator，或已获我所指明企业的授权。我接受《使用条款》及《平台协议》（免费模式）：作为免费仿真的交换，MOTRES 可使用我账户中的工程数据'
-    + '（包括此前输入的数据）训练其自有的人工智能模型，且不承担其他义务，已训练的模型予以保留。个人数据不用于训练。我已阅读《隐私政策》。');
-  const a = common('en').legal.accept;
-  assert.equal(a.country, 'Country where your business is established');
-  assert.equal(a.business, 'Business name (leave empty if you work as a sole trader / self-employed)');
+test('the box sentence: R5 wording per capacity, EN and zh-CN, built from the locale pieces', () => {
+  const sentence = (a, cap) => [a.lead[cap], a.terms, a.sep1, a.agreement, a.mid[cap], a.privacy, a.tail].join('');
+  const en = common('en').legal.accept;
+  assert.equal(sentence(en, 'business'),
+    'I accept the Terms of Use and the Platform Agreement (FREE mode), including the Schedules and the dispute clause shown, for the business '
+    + 'named above, which I am authorised to bind. In exchange for free simulation, MOTRES may use the engineering data I supply from now on '
+    + 'to train its own internal AI models; no payment or report is owed, and lawfully trained models are kept, subject to confidentiality and '
+    + 'law. Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE. '
+    + 'Personal data is not used. I have read the Privacy Policy.');
+  assert.ok(sentence(en, 'sole_trader').includes('for myself as a registered sole trader or self-employed professional.'));
+  assert.equal(sentence(en, 'other'),
+    'I work for a business without authority to bind it; I accept the Terms of Use and the Platform Agreement for my own use, and my data are '
+    + 'used for training only where I confirm that I may license them. Training on my FREE data cannot be undone, even if I later order the '
+    + 'motor, sign a paid agreement or switch to PRIVATE. I have read the Privacy Policy.');
+  const zh = common('zh-CN').legal.accept;
+  for (const cap of ['business', 'sole_trader', 'other']) {
+    assert.ok(sentence(zh, cap).includes('我在免费模式下的数据一经用于训练即不可撤销，即使我此后订购该电机、订立付费协议或切换至私有模式亦然。'), cap);
+    assert.ok(sentence(en, cap).includes('Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE.'), cap);
+  }
+  assert.ok(sentence(zh, 'business').startsWith('我接受《使用条款》及《平台协议》（免费模式）') && sentence(zh, 'business').endsWith('我已阅读《隐私政策》。'));
+  assert.equal(en.capacity.business, 'For a business I am authorised to bind');
+  assert.equal(en.capacity.sole_trader, 'For myself as a registered sole trader or self-employed professional');
+  assert.equal(en.capacity.other, 'Neither (for example I work for an employer or customer without authority to bind it)');
+  assert.equal(en.earlier, 'Also use the engineering data my account entered before today');
+  assert.equal(zh.earlier, '同时使用我的账户在今天之前输入的工程数据');
+  assert.equal(en.country, 'Country where your business is established');
+  assert.equal(common('en').legal.update.deadline, 'From {date} new simulations need these terms.');
+  assert.equal(common('zh-CN').legal.update.deadline, '自 {date} 起，启动新的仿真须先接受这些条款。');
 });
 
 test('every assistant says it is one: the same line in the help chat, the specification assistant and the design assistant', () => {
@@ -205,12 +223,14 @@ test('the sign-in dialog, the OAuth consent sign-up and the shared surfaces use 
   const read = (...p) => readFileSync(join(HERE, '..', '..', ...p), 'utf8');
   const login = read('components', 'auth', 'LoginDialog.tsx');
   assert.match(login, /<TermsBox /);
-  assert.match(login, /acceptancePayload\(acceptance, TERMS_VERSION\)/);     // the e-mail form (also the OAuth consent page sign-up: returnTo)
-  assert.match(login, /acceptancePayload\(acceptanceRef\.current, TERMS_VERSION\)/);   // Google
+  assert.match(login, /acceptancePayload\(acceptance, TERMS_VERSION, \{ labels: legalLabels\(t, acceptance\) \}\)/);     // the e-mail form (also the OAuth consent page sign-up: returnTo)
+  assert.match(login, /acceptancePayload\(acceptanceRef\.current, TERMS_VERSION, \{ labels: legalLabels\(tRef\.current, acceptanceRef\.current\) \}\)/);   // Google
   const box = read('components', 'common', 'TermsBox.tsx');
-  assert.ok(box.indexOf('legal.accept.country') < box.indexOf('legal.accept.business') && box.indexOf('legal.accept.business') < box.indexOf('<Checkbox'));   // country, name, then the box
+  assert.ok(box.indexOf('legal.accept.capacity.label') < box.indexOf('legal.accept.country') && box.indexOf('legal.accept.country') < box.indexOf('legal.accept.business') && box.indexOf('legal.accept.business') < box.indexOf('<Checkbox'));   // capacity, country, name, then the box
+  assert.match(box, /<FormControl component="fieldset" required/);                // the capacity is required
   assert.match(box, /<TextField select[^>]*required/);                             // the country is required
-  assert.doesNotMatch(box, /<TextField(?![^>]*select)[^>]*required/);             // the business name is optional
+  assert.match(box, /required=\{cap === 'business'\}/);                              // the business name is required for a business only
+  assert.match(box, /showEarlier && \(/);                                           // the earlier-data box exists only where asked for
   assert.match(login, /disabled=\{busy \|\| boxHint\}/);
   assert.doesNotMatch(login, /TERMS_URL|PRIVACY_URL|emotres\.com/);
   const consent = read('components', 'auth', 'OAuthConsent.tsx');
@@ -221,4 +241,40 @@ test('the sign-in dialog, the OAuth consent sign-up and the shared surfaces use 
   assert.match(read('components', 'landing', 'Landing.tsx'), /termsUrl\(legalLang\)[\s\S]*agreementUrl\(legalLang\)[\s\S]*privacyUrl\(legalLang\)/);
   assert.match(read('components', 'common', 'AnalyticsConsent.tsx'), /privacyUrl\(/);
   assert.doesNotMatch(read('components', 'common', 'AnalyticsConsent.tsx'), /https:\/\/emotres\.com/);
+});
+
+test('capacity: a business must be named, a sole trader may, "neither" has no name; the name of "neither" is never sent', () => {
+  const f = (o) => ({ capacity: 'business', country: 'DE', business: '', ticked: true, earlier: false, ...o });
+  assert.equal(acceptanceComplete(f({})), false);                                                  // business without a name
+  assert.equal(acceptanceComplete(f({ business: '  ' })), false);
+  assert.equal(acceptanceComplete(f({ business: 'Motor GmbH' })), true);
+  assert.equal(acceptanceComplete(f({ capacity: 'sole_trader' })), true);
+  assert.equal(acceptanceComplete(f({ capacity: 'other' })), true);
+  assert.equal(acceptanceComplete(f({ capacity: 'owner' })), false);
+  assert.deepEqual(['business', 'sole_trader', 'other', ''].map(asksBusinessName), [true, true, false, false]);
+  assert.equal(acceptancePayload(f({ capacity: 'other', business: 'Employer AG' }), 'v0.4').business_name, '');
+  assert.equal(acceptancePayload(f({ capacity: 'sole_trader', business: ' Solo ' }), 'v0.4').business_name, 'Solo');
+});
+
+test('the earlier-data election goes only with the existing-account dialog, with the labels as shown', () => {
+  const f = { capacity: 'business', country: 'de', business: 'Acme', ticked: true, earlier: true };
+  const sign = acceptancePayload(f, 'v0.4', { labels: { accept: 'A', election: 'E' } });
+  assert.deepEqual(sign, { accept_terms: true, terms_version: 'v0.4', country: 'DE', business_name: 'Acme', capacity: 'business', accept_label: 'A' });
+  assert.ok(!('historical_opt_in' in sign));                                                       // a new account has no earlier data
+  const ex = acceptancePayload(f, 'v0.4', { existing: true, labels: { accept: 'A', election: 'E' } });
+  assert.equal(ex.historical_opt_in, true); assert.equal(ex.election_label, 'E');
+  assert.equal(acceptancePayload({ ...f, earlier: false }, 'v0.4', { existing: true }).historical_opt_in, false);   // initially unticked = false
+  assert.equal(emptyAcceptance().earlier, false);
+});
+
+test('the deadline reported by the server is shown only when it is an ISO date', () => {
+  assert.equal(termsDeadline({ required_from: '2026-12-01' }), '2026-12-01');
+  for (const bad of [null, undefined, {}, { required_from: null }, { required_from: 'soon' }, { required_from: '2026-12-01T00:00:00Z' }]) assert.equal(termsDeadline(bad), null);
+  assert.match(readFileSync(join(HERE, '..', '..', 'components', 'auth', 'TermsUpdateDialog.tsx'), 'utf8'), /legal\.update\.deadline/);
+});
+
+test('the label kept with the record is the sentence beside the box, in the language shown', () => {
+  const en = common('en').legal.accept;
+  const label = acceptLabelText(en, 'sole_trader');
+  assert.ok(label.startsWith('I accept the Terms of Use and the Platform Agreement (FREE mode)') && label.endsWith('Privacy Policy.'));
 });

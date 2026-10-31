@@ -50,5 +50,7 @@
   },
   "terms_required": "Tick the box to accept the Terms of Use, the Platform Agreement and the Privacy Policy.",
   "country_required": "Choose the country where your business is established.",
-  "business_name_too_long": "The business name is too long."
+  "business_name_too_long": "The business name is too long.",
+  "capacity_required": "Choose in which capacity you accept the terms.",
+  "business_name_required": "Enter the name of the business you are authorised to bind."
 }

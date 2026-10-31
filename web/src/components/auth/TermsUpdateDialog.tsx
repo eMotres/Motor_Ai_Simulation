@@ -1,6 +1,7 @@
 // "Updated terms: free simulation": the ONE dialog an existing account sees after sign-in when it has no acceptance of the current
 // Terms of Use (GET /api/legal/status says `required`).  The "In short" paragraph of the Terms of Use (served text, interface
-// language), links to the three texts, the same block as the sign-up (country, business name, unticked box), "Accept" (POST /api/legal/accept, source "existing")
+// language), links to the three texts, the same block as the sign-up (capacity, country, business name, unticked box) plus the optional
+// unticked box for the data entered before today, the owner's deadline when set, "Accept" (POST /api/legal/accept, source "existing")
 // and "Later" (closes it until the next sign-in; nothing else is blocked).
 import React, { useEffect, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Link, Typography } from '@mui/material';
@@ -8,10 +9,11 @@ import { useTranslation } from 'react-i18next';
 import TermsBox from '../common/TermsBox';
 import { acceptCurrentTerms, fetchLegalText } from '../../lib/legalApi';
 import { acceptanceComplete, emptyAcceptance, inShort, type AcceptanceForm, type LegalLang } from '../../lib/legalLogic';
+import { legalLabels } from '../../lib/legalLabels';
 import { agreementUrl, privacyUrl, termsUrl } from '../../lib/localAuth';
 
-const TermsUpdateDialog: React.FC<{ open: boolean; version: string; onAccepted: () => void; onLater: () => void }> = ({
-  open, version, onAccepted, onLater,
+const TermsUpdateDialog: React.FC<{ open: boolean; version: string; deadline?: string | null; onAccepted: () => void; onLater: () => void }> = ({
+  open, version, deadline, onAccepted, onLater,
 }) => {
   const { t, i18n } = useTranslation('common');
   const lang: LegalLang = (i18n.resolvedLanguage ?? 'en') === 'zh-CN' ? 'zh-CN' : 'en';
@@ -31,7 +33,7 @@ const TermsUpdateDialog: React.FC<{ open: boolean; version: string; onAccepted: 
   const accept = async () => {
     if (!acceptanceComplete(form) || busy) return;
     setBusy(true); setErr(null);
-    try { await acceptCurrentTerms(version, lang, form); onAccepted(); }
+    try { await acceptCurrentTerms(version, lang, form, legalLabels(t, form, true)); onAccepted(); }
     catch (e) { setErr(t('legal.update.error', { message: (e as Error).message })); }
     finally { setBusy(false); }
   };
@@ -53,7 +55,12 @@ const TermsUpdateDialog: React.FC<{ open: boolean; version: string; onAccepted: 
           {link(agreementUrl(lang), t('legal.accept.agreement'))}
           {link(privacyUrl(lang), t('legal.accept.privacy'))}
         </Box>
-        <TermsBox value={form} onChange={setForm} disabled={busy} />
+        {deadline && (
+          <Typography sx={{ fontSize: 13, lineHeight: 1.5, mb: 1.5, fontWeight: 600 }} data-testid="terms-deadline">
+            {t('legal.update.deadline', { date: deadline })}
+          </Typography>
+        )}
+        <TermsBox value={form} onChange={setForm} disabled={busy} showEarlier />
         {err && <Alert severity="error" sx={{ fontSize: 12.5, mt: 1.5 }}>{err}</Alert>}
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>

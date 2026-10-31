@@ -23,6 +23,7 @@ import { appLinkReturnPath } from '../../lib/appLink';
 import HelpTip from '../common/HelpTip';
 import CommPrefsBoxes from '../common/CommPrefsBoxes';
 import TermsBox from '../common/TermsBox';
+import { legalLabels } from '../../lib/legalLabels';
 import { emptyTopics, tickedTopics, type Topics } from '../../lib/commPrefsLogic';
 import { useTranslation } from 'react-i18next';
 
@@ -102,6 +103,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   const [acceptance, setAcceptance] = useState<AcceptanceForm>(emptyAcceptance());
   const acceptanceRef = useRef<AcceptanceForm>(acceptance);
   acceptanceRef.current = acceptance;
+  const tRef = useRef(t);
+  tRef.current = t;
   const modeRef = useRef<Mode>('signin');
   modeRef.current = mode;
   const termsBox = <TermsBox value={acceptance} onChange={setAcceptance} compact />;
@@ -166,7 +169,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
             // creating an account with Google needs the box; the official button cannot be disabled, so it is checked here too
             if (modeRef.current === 'register' && !signupAllowed({ creating: true, form: acceptanceRef.current })) { setErr(noBoxHint); return; }
             void googleExchange(resp.credential, tickedTopics(topicsRef.current), langRef.current,
-              acceptancePayload(acceptanceRef.current, TERMS_VERSION))
+              acceptancePayload(acceptanceRef.current, TERMS_VERSION, { labels: legalLabels(tRef.current, acceptanceRef.current) }))
               .then(({ token, user }) => onSignedIn(token, {
                 ...user,
                 name: user.name || String(claims.name ?? ''),
@@ -257,7 +260,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         onSignedIn(token, user);
       } else if (mode === 'register') {
         await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo,
-          appLinkReturnPath(window.location.pathname, window.location.search), acceptancePayload(acceptance, TERMS_VERSION));
+          appLinkReturnPath(window.location.pathname, window.location.search), acceptancePayload(acceptance, TERMS_VERSION, { labels: legalLabels(t, acceptance) }));
         setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics()); setAcceptance(emptyAcceptance());
         setMode('signin');
         setSent({ email: email.trim(), ok: null }); setChanging(false); setNewEmail(''); setCooldown(60);

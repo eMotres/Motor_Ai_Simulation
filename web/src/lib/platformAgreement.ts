@@ -116,12 +116,44 @@ export function requestAgreement(detail: { version?: string } = {}): Promise<boo
   return pending;
 }
 
-/** `res` is the answer to a gated call: when it is the 428, open the dialog and, after acceptance, repeat the call once via `retry`;
- *  any other answer (or a cancel) is returned untouched, so the caller sees the 428 and explains it itself. */
-export async function handleAgreementRequired(res: Response, retry: () => Promise<Response>, ask: typeof requestAgreement = requestAgreement): Promise<Response> {
+/** Does this answer mean "accept the updated terms first"?  HTTP 428 `terms_required`: the owner's deadline (env TERMS_REQUIRED_FROM)
+ *  has passed and the account has no acceptance of the current Terms of Use, so a new simulation cannot start. */
+export function isTermsGate(status: number, body: unknown): boolean {
+  if (status !== 428 || !body || typeof body !== 'object') return false;
+  const d = (body as { detail?: unknown }).detail;
+  return !!d && typeof d === 'object' && (d as { code?: unknown }).code === 'terms_required';
+}
+
+export type TermsHost = (detail: { version?: string; from?: string }) => Promise<boolean>;
+let termsHost: TermsHost | null = null;
+let termsPending: Promise<boolean> | null = null;
+
+/** The mounted TermsUpdateHost registers itself here (null on unmount). */
+export function setTermsHost(h: TermsHost | null): void {
+  termsHost = h;
+}
+
+/** Open the "Updated terms" dialog; concurrent gated calls share ONE dialog.  Resolves true when accepted, false on "Later" or when no host is mounted. */
+export function requestTerms(detail: { version?: string; from?: string } = {}): Promise<boolean> {
+  if (!termsHost) return Promise.resolve(false);
+  if (!termsPending) {
+    termsPending = termsHost(detail).catch(() => false).finally(() => { termsPending = null; });
+  }
+  return termsPending;
+}
+
+/** `res` is the answer to a gated call: when it is the 428 `agreement_required`, open the Platform Agreement dialog; when it is the
+ *  428 `terms_required`, open the "Updated terms" dialog; after acceptance repeat the call once via `retry`.  Any other answer (or a
+ *  cancel) is returned untouched, so the caller sees the 428 and explains it itself. */
+export async function handleAgreementRequired(res: Response, retry: () => Promise<Response>, ask: typeof requestAgreement = requestAgreement,
+  askTerms: typeof requestTerms = requestTerms): Promise<Response> {
   if (res.status !== 428) return res;
   let body: unknown = null;
   try { body = await res.clone().json(); } catch { /* not JSON */ }
+  if (isTermsGate(res.status, body)) {
+    const d = (body as { detail: { version?: string; from?: string } }).detail;
+    return (await askTerms({ version: d.version, from: d.from })) ? retry() : res;
+  }
   if (!isAgreementRequired(res.status, body)) return res;
   const detail = (body as { detail: { version?: string } }).detail;
   return (await ask({ version: detail.version })) ? retry() : res;

@@ -14,7 +14,7 @@ from a password account below; RIGHTS always come from our registry
 - POST /api/auth/sessions/{sid}/revoke — sign one of them out
 - POST /api/auth/logout       — revoke the session this request is using
 - POST /api/auth/heartbeat    — "the user is here": refreshes the session's idle clock (session_activity.py)
-- POST /api/auth/register     — self-service e-mail/password sign-up (unverified); needs ``accept_terms`` + ``terms_version`` (legal_texts.py)
+- POST /api/auth/register     — self-service e-mail/password sign-up (unverified); needs ``accept_terms`` + ``terms_version`` + ``country`` + ``capacity`` (legal_texts.py)
 - POST /api/auth/verify       — consume the e-mail confirmation link
 - POST /api/auth/register/resend        — mail the confirmation link again (rate-limited)
 - POST /api/auth/register/change-email  — an unverified account fixes a mistyped address (password proves it is theirs)
@@ -206,9 +206,13 @@ class RegisterReq(BaseModel):
     #: shown for; a new account is refused (422 ``terms_required``) without both (motor_ai_sim.legal_texts).
     accept_terms: bool = False
     terms_version: str = ""
-    #: Where the business is established (ISO code, required with the box) and, optionally, its name (empty for a sole trader).
+    #: Where the business is established (ISO code, required with the box), the capacity of agreement section 2.3 (business |
+    #: sole_trader | other, required) and the business name (required for ``business``, optional otherwise).  The wording of the box
+    #: as shown is kept with the record (section 15.3).  The earlier-data box (section 7.9) is only for existing accounts.
     country: str = ""
     business_name: str = ""
+    capacity: str = ""
+    accept_label: str = ""
     #: Sign-up started inside an OAuth authorization window (MCP connector):
     #: the consent-page path ``/agent-consent?request=<id>``.  A NEW account
     #: then gets a single-use continuation bound to {request, this address};
@@ -282,7 +286,8 @@ def _record_signup_topics(email: str, topics: dict, source: str, ip: str, lang: 
 
 def _require_terms(req: Any) -> None:
     """A NEW account exists only with the ticked box for the current texts and the country of the business (loud 422
-    ``terms_required`` / ``country_required`` otherwise).  ``req`` is the register / Google request."""
+    ``terms_required`` / ``country_required`` / ``capacity_required`` / ``business_name_required`` otherwise).  ``req`` is the
+    register / Google request."""
     from motor_ai_sim import legal_texts as LT
     if not LT.acceptance_required():
         return
@@ -290,7 +295,7 @@ def _require_terms(req: Any) -> None:
         raise ApiError(422, "terms_required",
                        "Tick the box to accept the Terms of Use, the Platform Agreement and the Privacy Policy (version %s)." % LT.TERMS_VERSION)
     try:
-        LT.clean_company(req.country, req.business_name)
+        LT.clean_acceptance(req.country, req.business_name, req.capacity)
     except LT.CompanyError as e:
         raise ApiError(422, e.code, str(e))
 
@@ -299,7 +304,8 @@ def _record_terms(email: str, source: str, request: Request, req: Any) -> None:
     """The acceptance of a new account, stored with the hashes of the texts shown; a storage failure never blocks the account."""
     from motor_ai_sim import legal_texts as LT
     if LT.acceptance_required():
-        LT.record_signup(email, source=source, country=req.country, business_name=req.business_name, lang=req.lang, ip=_ip(request),
+        LT.record_signup(email, source=source, country=req.country, business_name=req.business_name, capacity=req.capacity,
+                         labels=LT.clean_labels(req.accept_label), lang=req.lang, ip=_ip(request),
                          user_agent=request.headers.get("user-agent", ""))
 
 
@@ -766,8 +772,10 @@ class GoogleReq(BaseModel):
     lang: str = "en"
     accept_terms: bool = False          # the sign-up box; required for the FIRST sign-in only (an existing account is never blocked)
     terms_version: str = ""
-    country: str = ""                   # where the business is established (required with the box) and its optional name
+    country: str = ""                   # where the business is established (required with the box), the capacity (section 2.3), the name
     business_name: str = ""
+    capacity: str = ""
+    accept_label: str = ""
 
 
 @router.post("/google")

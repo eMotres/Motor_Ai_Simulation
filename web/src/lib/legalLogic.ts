@@ -179,11 +179,19 @@ export function inShort(terms: string): { label: string; body: string } | null {
 
 // ── the acceptance box ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The acceptance block of a sign-up / the existing-user dialog: the country where the business is established (ISO code, required), the
- *  business name (optional: empty for a sole trader) and the box (initially UNTICKED). */
-export interface AcceptanceForm { country: string; business: string; ticked: boolean }
+/** Agreement section 2.3: in which capacity an account accepts.  `business` = a business it is authorised to bind (the name is then
+ *  required), `sole_trader` = itself as a registered sole trader / self-employed professional, `other` = neither (for example an
+ *  employee or contractor without authority to bind its employer or customer). */
+export const CAPACITIES = ['business', 'sole_trader', 'other'] as const;
+export type Capacity = (typeof CAPACITIES)[number];
 
-export const emptyAcceptance = (): AcceptanceForm => ({ country: '', business: '', ticked: false });
+/** The acceptance block of a sign-up / the existing-user dialog: the capacity (REQUIRED radio), the country where the business is
+ *  established (ISO code, required), the business name (required for `business`, optional for `sole_trader`, not asked for `other`), the
+ *  box (initially UNTICKED) and, in the existing-user dialog only, the optional second box for the data entered before today
+ *  (agreement 7.9, initially UNTICKED). */
+export interface AcceptanceForm { capacity: Capacity | ''; country: string; business: string; ticked: boolean; earlier: boolean }
+
+export const emptyAcceptance = (): AcceptanceForm => ({ capacity: '', country: '', business: '', ticked: false, earlier: false });
 
 /** Mainland China and the Hong Kong SAR: section 13 variant B (Hong Kong law, HKIAC) of the Platform Agreement; everything else is variant A.
  *  Same rule as the NDA / agreement forms (`isCnHk` in lib/nda.ts, `country_is_cn_hk` in the texts). */
@@ -191,18 +199,52 @@ export function forumVariant(country: string): 'A' | 'B' {
   return ['CN', 'HK'].includes(country.trim().toUpperCase()) ? 'B' : 'A';
 }
 
-/** The block is complete: a country is chosen AND the box is ticked. */
+/** The business name is asked for `business` (required) and `sole_trader` (optional); `other` has none. */
+export function asksBusinessName(capacity: Capacity | ''): boolean {
+  return capacity === 'business' || capacity === 'sole_trader';
+}
+
+/** The block is complete: a capacity is chosen, a country is chosen, a `business` capacity names its business AND the box is ticked. */
 export function acceptanceComplete(f: AcceptanceForm): boolean {
-  return f.ticked === true && f.country.trim() !== '';
+  if (f.ticked !== true || f.country.trim() === '') return false;
+  if (!(CAPACITIES as readonly string[]).includes(f.capacity)) return false;
+  return f.capacity !== 'business' || f.business.trim() !== '';
+}
+
+/** The two labels as the person saw them (agreement 15.3 keeps them with the record). */
+export interface AcceptLabels { accept?: string; election?: string }
+
+export interface AcceptancePayload {
+  accept_terms: boolean; terms_version: string; country: string; business_name: string; capacity: string;
+  accept_label?: string; historical_opt_in?: boolean; election_label?: string;
 }
 
 /** What a sign-up request (e-mail form, Google, the existing-user dialog) carries.  The server refuses a new account without a ticked
- *  box for THIS version (422 `terms_required`) or without a country (422 `country_required`), so an incomplete block sends nothing it
- *  could mistake for consent. */
-export function acceptancePayload(f: AcceptanceForm, version: string):
-  { accept_terms: boolean; terms_version: string; country: string; business_name: string } {
+ *  box for THIS version (422 `terms_required`), without a country (`country_required`), a capacity (`capacity_required`) or, for
+ *  `business`, a name (`business_name_required`), so an incomplete block sends nothing it could mistake for consent.  The earlier-data
+ *  election goes only with `existing: true` (a new account has no earlier data). */
+export function acceptancePayload(f: AcceptanceForm, version: string, opts: { existing?: boolean; labels?: AcceptLabels } = {}): AcceptancePayload {
   const ticked = f.ticked === true;
-  return { accept_terms: ticked, terms_version: ticked ? version : '', country: f.country.trim().toUpperCase(), business_name: f.business.trim() };
+  const out: AcceptancePayload = {
+    accept_terms: ticked, terms_version: ticked ? version : '', country: f.country.trim().toUpperCase(),
+    business_name: asksBusinessName(f.capacity) ? f.business.trim() : '', capacity: f.capacity,
+  };
+  if (opts.labels?.accept) out.accept_label = opts.labels.accept;
+  if (opts.existing) {
+    out.historical_opt_in = f.earlier === true;
+    if (opts.labels?.election) out.election_label = opts.labels.election;
+  }
+  return out;
+}
+
+/** The pieces of the box sentence in common.json `legal.accept`: the capacity-specific `lead` / `mid` and the shared link texts. */
+export interface AcceptStrings {
+  lead: Record<Capacity, string>; mid: Record<Capacity, string>; terms: string; sep1: string; agreement: string; privacy: string; tail: string;
+}
+
+/** The sentence beside the box as plain text, for the capacity chosen (what the record keeps as the label shown). */
+export function acceptLabelText(a: AcceptStrings, capacity: Capacity): string {
+  return [a.lead[capacity], a.terms, a.sep1, a.agreement, a.mid[capacity], a.privacy, a.tail].join('');
 }
 
 /** May the sign-up button (or the Google button) be used?  Only a CREATING flow needs the block; signing in to an existing account
@@ -217,20 +259,26 @@ export function showTermsHint(opts: { creating: boolean; form: AcceptanceForm })
   return opts.creating && !acceptanceComplete(opts.form);
 }
 
-/** The server answered 422 `terms_required` / `country_required` (a Google sign-in of a brand-new account that was started without the
- *  block): the dialog switches to "create account" and shows it. */
+/** The server answered 422 `terms_required` / `country_required` / `capacity_required` / `business_name_required` (a Google sign-in of a
+ *  brand-new account that was started without the block): the dialog switches to "create account" and shows it. */
 export function isTermsRequired(err: unknown): boolean {
   const code = !!err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
-  return code === 'terms_required' || code === 'country_required';
+  return code === 'terms_required' || code === 'country_required' || code === 'capacity_required' || code === 'business_name_required';
 }
 
 // ── existing accounts ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-export interface LegalStatus { version: string; required: boolean; accepted_version?: string | null }
+export interface LegalStatus { version: string; required: boolean; accepted_version?: string | null; required_from?: string | null }
 
 /** Show the "Updated terms" dialog?  Once per sign-in: the server says it is needed and the person did not press "Later" in this
  *  session (`laterFor` is the id of the session they dismissed it for). */
 export function shouldAskTerms(status: LegalStatus | null | undefined, sessionId: string | null, laterFor: string | null): boolean {
   if (!status || status.required !== true) return false;
   return !(sessionId && laterFor === sessionId);
+}
+
+/** The owner's deadline ("Later" stops working): `YYYY-MM-DD` when the server reports one, else null.  The dialog shows it. */
+export function termsDeadline(status: { required_from?: string | null } | null | undefined): string | null {
+  const d = status?.required_from;
+  return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
 }

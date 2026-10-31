@@ -658,22 +658,44 @@
   },
   "legal": {
     "accept": {
-      "lead": "I use AeroStator for my own business or am authorised by the business I name. I accept the ",
+      "capacity": {
+        "label": "I accept",
+        "business": "For a business I am authorised to bind",
+        "sole_trader": "For myself as a registered sole trader or self-employed professional",
+        "other": "Neither (for example I work for an employer or customer without authority to bind it)"
+      },
+      "lead": {
+        "business": "I accept the ",
+        "sole_trader": "I accept the ",
+        "other": "I work for a business without authority to bind it; I accept the "
+      },
       "terms": "Terms of Use",
       "sep1": " and the ",
       "agreement": "Platform Agreement",
+      "mid": {
+        "business": " (FREE mode), including the Schedules and the dispute clause shown, for the business named above, which I am authorised to bind. In exchange for free simulation, MOTRES may use the engineering data I supply from now on to train its own internal AI models; no payment or report is owed, and lawfully trained models are kept, subject to confidentiality and law. Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE. Personal data is not used. I have read the ",
+        "sole_trader": " (FREE mode), including the Schedules and the dispute clause shown, for myself as a registered sole trader or self-employed professional. In exchange for free simulation, MOTRES may use the engineering data I supply from now on to train its own internal AI models; no payment or report is owed, and lawfully trained models are kept, subject to confidentiality and law. Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE. Personal data is not used. I have read the ",
+        "other": " for my own use, and my data are used for training only where I confirm that I may license them. Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE. I have read the "
+      },
       "privacy": "Privacy Policy",
       "tail": ".",
-      "hint": "Choose the country and tick the box to continue.",
-      "needBox": "This is a new account: choose the country, tick the box, then continue with Google.",
+      "chooseCapacity": "Choose in which capacity you accept, then tick this box.",
+      "hint": "Choose how you accept and the country, and tick the box to continue.",
+      "needBox": "This is a new account: choose how you accept and the country, tick the box, then continue with Google.",
       "country": "Country where your business is established",
-      "business": "Business name (leave empty if you work as a sole trader / self-employed)",
-      "mid": " (FREE mode): in exchange for free simulation, MOTRES may use the engineering data of my account, including data entered earlier, to train its own AI models, with no further obligations and keeping models already trained. Personal data is not used. I have read the "
+      "countryOther": "Country where the business you work for is established",
+      "business": "Name of the business you are authorised to bind",
+      "businessOptional": "Business name (optional)",
+      "forumA": "Dispute clause that applies to you (section 13): Variant {variant}, Slovenian law and the courts of Ljubljana.",
+      "forumB": "Dispute clause that applies to you (section 13): Variant {variant}, Hong Kong law and HKIAC arbitration.",
+      "earlier": "Also use the engineering data my account entered before today",
+      "optional": "(optional)"
     },
     "update": {
       "title": "Updated terms: free simulation",
       "accept": "Accept",
       "later": "Later",
+      "deadline": "From {date} new simulations need these terms.",
       "error": "Could not save your acceptance: {message}"
     },
     "page": {

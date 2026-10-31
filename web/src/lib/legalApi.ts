@@ -1,7 +1,7 @@
 // Client of the legal routes (src/motor_ai_sim/routes/legal.py): the texts (public), the signed-in account's acceptance status and
 // the acceptance of the current version by an existing account.
 import { getSessionSid } from './localAuth';
-import { acceptancePayload, type AcceptanceForm, type LegalLang, type LegalStatus } from './legalLogic';
+import { acceptancePayload, type AcceptLabels, type AcceptanceForm, type LegalLang, type LegalStatus } from './legalLogic';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 
@@ -37,11 +37,12 @@ export function fetchCountries(): Promise<string[]> {
   return countriesPromise;
 }
 
-/** The existing account fills the block and ticks the box: records source "existing".  Throws with the server's message. */
-export async function acceptCurrentTerms(version: string, lang: LegalLang, form: AcceptanceForm): Promise<void> {
+/** The existing account fills the block and ticks the box: records source "existing" (with the optional earlier-data election and the
+ *  labels as shown).  Throws with the server's message. */
+export async function acceptCurrentTerms(version: string, lang: LegalLang, form: AcceptanceForm, labels: AcceptLabels = {}): Promise<void> {
   const r = await fetch(`${API}/api/legal/accept`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...acceptancePayload({ ...form, ticked: true }, version), lang }),
+    body: JSON.stringify({ ...acceptancePayload({ ...form, ticked: true }, version, { existing: true, labels }), lang }),
   });
   if (!r.ok) {
     const j = await r.json().catch(() => ({})) as { detail?: string };

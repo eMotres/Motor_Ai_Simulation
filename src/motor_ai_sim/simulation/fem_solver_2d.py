@@ -11295,6 +11295,14 @@ def _fem_transient_sliding_band_once(
                     # fails this too (its settled level moved) and the march
                     # extends exactly as a cold one would.
                     _ref_dev = None
+                    # The FIRST probe frame is judged out (2026-10-31): it is
+                    # the step the seed's start takes — on L90 the magnets read
+                    # −2.5 % there and −1.35 / −0.26 % on the next two, the
+                    # shaft and the copper within 0.6 % on all three.  A seed is
+                    # good when the frames AFTER its start sit on the parent's
+                    # same-angle losses; with fewer than two samples nothing is
+                    # skipped.
+                    _ref_skip = 1 if len(_warm_ks) >= 2 else 0
                     if _warm_ref is not None and not _warm_extended:
                         try:
                             if _warm_ref_grp:
@@ -11307,14 +11315,16 @@ def _fem_transient_sliding_band_once(
                                     / max(abs(_rv[_k2 % n_total]),
                                           1e-3 * _rtot, 1e-12)
                                     for _gk2, _rv in _warm_ref_grp.items()
-                                    for _s, _k2 in zip(
+                                    for _s, _k2 in list(zip(
                                         _warm_grp.get(_gk2, [])[
-                                            -len(_warm_ks):], _warm_ks))
+                                            -len(_warm_ks):], _warm_ks))[
+                                                _ref_skip:])
                             else:
                                 _ref_dev = max(
                                     abs(_s - _warm_ref[_k2 % n_total])
                                     / max(abs(_warm_ref[_k2 % n_total]), 1e-12)
-                                    for _s, _k2 in zip(_warm_solid, _warm_ks))
+                                    for _s, _k2 in list(zip(
+                                        _warm_solid, _warm_ks))[_ref_skip:])
                         except Exception:
                             _ref_dev = None
                     _ref_ok = (_ref_dev is not None

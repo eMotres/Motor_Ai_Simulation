@@ -1678,6 +1678,114 @@ def _lxy_reuse_block(ctx: Optional[Dict[str, Any]], *, i_a: float,
     return out
 
 
+# ── …AND ACROSS RUNS (2026-10-31): the probes of THIS machine, kept ─────────
+# A catalog motor run again at its duty solved the same full-ring probe again,
+# bit for bit (L90 at 152 A: 126 s of a 458 s hot-started run).  Every solved
+# probe block is kept per workspace under a key of everything it is solved
+# from except the operating point — machine, materials and parts
+# (`_config_physics_fingerprint`), the request's geometry, the winding and the
+# six-phase spec, mesh, coil temperature, d-axis, speed and THE RUNNING CODE
+# (`run_history.code_version`: a deploy re-solves) — and a later run takes the
+# nearest one through the coupled loop's own rule (`_lxy_reuse_block`,
+# LXY_REUSE_TOL), which also writes the provenance into the result.  An
+# accelerator only: any doubt reads as "nothing stored".  SB_LXY_STORE=0: off.
+_LXY_STORE_MAX = 256
+_LXY_STORE_SOURCE = "the stored probe of this machine"
+import threading as _threading_lxy          # noqa: E402
+_LXY_STORE_LOCK = _threading_lxy.Lock()
+
+
+def _lxy_store_on() -> bool:
+    return _os_t.environ.get("SB_LXY_STORE", "1").strip() != "0"
+
+
+def _lxy_store_path():
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / ".six_phase_lxy.json"
+
+
+def _lxy_store_key(**parts: Any) -> Optional[str]:
+    """The probe's machine identity, operating point excluded; None on doubt."""
+    try:
+        import hashlib as _hl
+        from motor_ai_sim.run_history import code_version as _cv
+        _blob = _json.dumps(dict(parts, code=_cv()), sort_keys=True, default=repr)
+        return _hl.sha1(_blob.encode("utf-8")).hexdigest()[:24]
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _lxy_store_entries() -> list:
+    try:
+        _doc = _json.loads(_lxy_store_path().read_text(encoding="utf-8"))
+        _ent = _doc.get("entries") if isinstance(_doc, dict) else None
+        return [e for e in (_ent or []) if isinstance(e, dict)
+                and isinstance(e.get("six_phase"), dict)]
+    except Exception:                                   # noqa: BLE001
+        return []
+
+
+def _lxy_store_find(key: Optional[str], *, i_a: float, gamma_deg: float,
+                    magnet_temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
+    """This machine's stored probe nearest to (i_a, gamma) that the reuse rule
+    accepts (magnet temperature included), as `_lxy_reuse_block` returns it;
+    else None."""
+    if not key or not _lxy_store_on():
+        return None
+    try:
+        _blks = [e["six_phase"] for e in _lxy_store_entries()
+                 if e.get("key") == key]
+
+        def _dist(b):
+            op = b.get("probe_op") or {}
+            try:
+                return (abs(float(op["I_A"]) - float(i_a))
+                        / max(abs(float(i_a)), 1e-9)
+                        + abs(float(op["gamma_deg"]) - float(gamma_deg)) / 30.0)
+            except (KeyError, TypeError, ValueError):
+                return float("inf")
+        for _b in sorted(_blks, key=_dist):
+            _out = _lxy_reuse_block({"mode": "reuse", "six_phase": _b,
+                                     "source": _LXY_STORE_SOURCE},
+                                    i_a=i_a, gamma_deg=gamma_deg,
+                                    magnet_temp_c=magnet_temp_c)
+            if _out is not None:
+                return _out
+    except Exception:                                   # noqa: BLE001
+        pass
+    return None
+
+
+def _lxy_store_put(key: Optional[str], blk: Dict[str, Any]) -> bool:
+    """Keep one solved probe block (one per key and operating point, the
+    newest `_LXY_STORE_MAX` overall).  Atomic replace; never raises."""
+    if (not key or not _lxy_store_on() or not blk.get("inductances")
+            or not blk.get("probe_op")):
+        return False
+    try:
+        _sp = {k: blk[k] for k in _LXY_KEYS + ("probe_op",)
+               if blk.get(k) is not None}
+        # numbers only: a block that does not survive JSON is not kept
+        _sp = _json.loads(_json.dumps(_sp, allow_nan=False, default=lambda o: (
+            o.tolist() if hasattr(o, "tolist") else str(o))))
+        with _LXY_STORE_LOCK:
+            _ent = [e for e in _lxy_store_entries()
+                    if not (e.get("key") == key
+                            and e["six_phase"].get("probe_op") == _sp["probe_op"])]
+            _ent.append({"key": key, "stored_at": time.time(), "six_phase": _sp})
+            _ent = _ent[-_LXY_STORE_MAX:]
+            _p = _lxy_store_path()
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            _tmp = _p.with_name(_p.name + ".tmp%d" % _os_t.getpid())
+            _tmp.write_text(_json.dumps({"version": 1, "entries": _ent}),
+                            encoding="utf-8")
+            _os_t.replace(str(_tmp), str(_p))
+        return True
+    except Exception as _e:                             # noqa: BLE001
+        log.info("six-phase L_xy probe not stored (%s)", _e)
+        return False
+
+
 def _six_phase_geometry():
     """(slots, poles, single_layer, layout) of the loaded machine."""
     from motor_ai_sim.config import get_config as _gc
@@ -5997,6 +6105,24 @@ def get_fem_transient(
                     _reuse6 = _lxy_reuse_block(
                         _lxy_ctx, i_a=_i1, gamma_deg=_g1,
                         magnet_temp_c=magnet_temp_c)
+                    _daxis6 = (_sbres.get("daxis_deg")
+                               if _sbres.get("daxis_deg") is not None
+                               else _effective_daxis(daxis_deg))
+                    _lxy_key = _lxy_store_key(
+                        cfp=_cfp, geo=_geometry_fingerprint(_geo_ov),
+                        six=_six_spec, rpm=rpm, n_parallel=n_parallel,
+                        connection=connection,
+                        star_delta=_effective_star_delta(star_delta),
+                        daxis=_daxis6, mesh=[mesh_size_mm, min_size_mm,
+                                             outer_air_factor, gap_layers],
+                        coil_temp_c=coil_temp_c,
+                        flags=[bool(iron_template), bool(geo_mesh),
+                               bool(structured_gap)],
+                        comp_mesh=_comp_mesh, element_order=int(element_order))
+                    if _reuse6 is None:
+                        _reuse6 = _lxy_store_find(
+                            _lxy_key, i_a=_i1, gamma_deg=_g1,
+                            magnet_temp_c=magnet_temp_c)
                     if _reuse6 is not None:
                         _blk6 = dict(_sbres.get("six_phase") or {})
                         _blk6.update(_reuse6)
@@ -6015,9 +6141,7 @@ def get_fem_transient(
                         n_parallel=(None if n_parallel is None else int(n_parallel)),
                         connection=(None if connection is None else str(connection)),
                         star_delta=_effective_star_delta(star_delta),
-                        daxis_deg=(_sbres.get("daxis_deg")
-                                   if _sbres.get("daxis_deg") is not None
-                                   else _effective_daxis(daxis_deg)),
+                        daxis_deg=_daxis6,
                         mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                         outer_air_factor=float(outer_air_factor),
                         gap_layers=float(gap_layers),
@@ -6041,6 +6165,7 @@ def get_fem_transient(
                         "magnet_temp_c": (None if magnet_temp_c is None
                                           else round(float(magnet_temp_c), 3))}
                     _sbres["six_phase"] = _blk6
+                    _lxy_store_put(_lxy_key, _blk6)
                 except _LxyReused:
                     pass
                 except Exception as _e6p:   # noqa: BLE001 — never fails the run

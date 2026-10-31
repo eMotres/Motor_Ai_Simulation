@@ -443,18 +443,22 @@
       "load_2d": "torque 2-D (no 3-D passport)",
       "resistance": "R_phase at {from} °C scaled to {to} °C",
       "inductance": "2-D: no end-winding inductance, no 3-D factor on L",
-      "fit": "least squares through the origin, n in krpm"
+      "fit": "least squares through the origin, n in krpm",
+      "cogging": "2-D, I = 0, eddy and demagnetisation off, no skew or 3-D factor"
     },
     "note": {
       "unexplained": "unexplained {w} W",
       "noModel": "no model point",
       "noModelCompute": "no model point: compute it",
       "freqFlag": "{hz} Hz vs low-frequency model",
-      "remaining": "{mohm} mΩ board and joints"
+      "remaining": "{mohm} mΩ board and joints",
+      "modelAbove": "model {mohm} mΩ above the reading",
+      "benchPending": "bench value pending"
     },
     "group": {
       "resistance": "Resistance at {temp_c} °C",
       "inductance": "Inductance",
+      "cogging": "No-load cogging",
       "lcr": "LCR",
       "insulation": "Insulation",
       "mass": "Weight and dimensions",
@@ -480,6 +484,7 @@
       "hipot": "Hipot {voltage_v} V",
       "surge": "Surge {voltage_v} V: {result}",
       "weight": "Weight: {what}",
+      "cogging_pkpk": "Cogging torque, peak-to-peak",
       "fit_a": "a",
       "fit_b": "b",
       "no_noload": "no no-load duty in this configuration",
@@ -501,7 +506,8 @@
       "fit": "Least squares P = a·n + b·n² through the origin, n in krpm.",
       "load": "The duty within 2 % speed and 3 % current. Model torque x the 3-D torque factor (measured k_T, else the flux factor). Model efficiency is the motor’s at the shaft (no inverter).",
       "eff_system": "Torque·ω / (V_dc·I_dc) includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
-      "weight": "Model mass of the configuration’s parts; the bench weighs what the record names."
+      "weight": "Model mass of the configuration’s parts; the bench weighs what the record names.",
+      "cogging": "No-load cogging peak-to-peak. Model = the configuration’s stored cogging (2-D, I = 0, eddy and demagnetisation off, magnets at the stated temperature). Bench = break-away by hand through a torque meter in both directions, friction taken out."
     },
     "editor": {
       "titleAdd": "Add test: {kind}",
@@ -537,6 +543,8 @@
       "surge": "Surge: V, ok | fail",
       "weight": "Weight, g",
       "weightWhat": "What was weighed",
+      "cogPkpk": "Cogging p-p, N·m",
+      "cogPkpkTip": "No-load cogging, peak-to-peak: turn the rotor by hand through a torque meter in both directions; take friction out (half the difference of the two directions).",
       "rows": "Rows: {columns}",
       "rowsTip": "Paste the bench rows: 1000/140/80/28.3/40, 1500/240/120/42.4 ... or one row per line split by tabs. - = not measured.",
       "rowsParsed": "{count} rows",

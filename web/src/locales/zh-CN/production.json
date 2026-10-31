@@ -443,18 +443,22 @@
       "load_2d": "转矩二维（无三维护照）",
       "resistance": "相电阻由 {from} °C 换算到 {to} °C",
       "inductance": "二维：不含端部绕组电感，电感不乘三维系数",
-      "fit": "过原点最小二乘，n 单位 krpm"
+      "fit": "过原点最小二乘，n 单位 krpm",
+      "cogging": "2-D，I = 0，不计涡流和退磁，无斜极或 3-D 系数"
     },
     "note": {
       "unexplained": "无法解释 {w} W",
       "noModel": "无模型点",
       "noModelCompute": "无模型点：请计算",
       "freqFlag": "{hz} Hz，模型为低频",
-      "remaining": "{mohm} mΩ 相位板和接头"
+      "remaining": "{mohm} mΩ 相位板和接头",
+      "modelAbove": "模型比读数高 {mohm} mΩ",
+      "benchPending": "台架值待测"
     },
     "group": {
       "resistance": "{temp_c} °C 时的电阻",
       "inductance": "电感",
+      "cogging": "空载齿槽转矩",
       "lcr": "LCR",
       "insulation": "绝缘",
       "mass": "重量和尺寸",
@@ -480,6 +484,7 @@
       "hipot": "耐压 {voltage_v} V",
       "surge": "匝间冲击 {voltage_v} V：{result}",
       "weight": "重量：{what}",
+      "cogging_pkpk": "齿槽转矩峰峰值",
       "fit_a": "a",
       "fit_b": "b",
       "no_noload": "此配置没有空载工况",
@@ -501,7 +506,8 @@
       "fit": "过原点最小二乘 P = a·n + b·n²，n 单位 krpm。",
       "load": "转速相差 2 % 且电流相差 3 % 以内的工况。模型转矩 × 三维转矩系数（实测 k_T，否则为磁通系数）。模型效率为电机轴端效率（不含逆变器）。",
       "eff_system": "转矩·ω / (V_dc·I_dc) 包含逆变器：只与控制器记录中已保存的系统（直流到轴）效率对比，从不与电机效率对比。",
-      "weight": "配置零件的模型质量；台架称量记录中所写的对象。"
+      "weight": "配置零件的模型质量；台架称量记录中所写的对象。",
+      "cogging": "空载齿槽转矩峰峰值。模型 = 配置中保存的齿槽转矩（2-D，I = 0，不计涡流和退磁，磁钢温度按记录）。台架 = 通过扭矩仪手动双向转动转子，扣除摩擦。"
     },
     "editor": {
       "titleAdd": "添加测试：{kind}",
@@ -537,6 +543,8 @@
       "surge": "匝间冲击：V，ok | fail",
       "weight": "重量，g",
       "weightWhat": "称量对象",
+      "cogPkpk": "齿槽转矩峰峰值，N·m",
+      "cogPkpkTip": "空载齿槽转矩峰峰值：通过扭矩仪手动双向转动转子；扣除摩擦（两个方向差值的一半）。",
       "rows": "数据行：{columns}",
       "rowsTip": "粘贴台架数据：1000/140/80/28.3/40, 1500/240/120/42.4 ... 或每行一条、用制表符分隔。- = 未测量。",
       "rowsParsed": "{count} 行",

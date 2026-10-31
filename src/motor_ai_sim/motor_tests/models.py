@@ -229,6 +229,15 @@ def _parameters(raw: Dict[str, Any]) -> Dict[str, Any]:
         rows.append({"what": what, **_nums(p, ("value_mm", "nominal_mm"), w, required=("value_mm",))})
     if rows:
         out["dimensions"] = rows
+    # no-load cogging (owner 2026-10-31: «он должен быть в тестах»): the bench peak-to-peak, or an entry that names the
+    # cogging check with the bench value still to come (pending) so the model value is on the page before the bench
+    cg = raw.get("cogging")
+    if isinstance(cg, dict) and cg:
+        c = _nums(cg, ("pkpk_nm", "magnet_temp_c"), "cogging")
+        pending = bool(cg.get("pending")) and c.get("pkpk_nm") is None
+        if c.get("pkpk_nm") is None and not pending:
+            raise TestInputError("cogging.pkpk_nm: enter the peak-to-peak cogging torque (or mark it pending)")
+        out["cogging"] = {**c, **({"pending": True} if pending else {})}
     if not out:
         raise TestInputError("parameters: enter at least one measurement")
     return out

@@ -26,6 +26,7 @@ export interface TestRecord {
   hipot?: Array<{ voltage_v: number; leakage_ma?: number; time_s?: number; supply?: 'ac' | 'dc' }>;
   surge?: Array<{ voltage_v: number; result: 'ok' | 'fail'; note?: string }>;
   weight?: Array<{ what: string; mass_g: number }>;
+  cogging?: { pkpk_nm?: number | null; magnet_temp_c?: number | null; pending?: boolean };
   dimensions?: Array<{ what: string; value_mm: number; nominal_mm?: number }>;
   rows?: Array<Record<string, number>>;
   created_by?: string; created_at?: string; updated_by?: string; updated_at?: string;

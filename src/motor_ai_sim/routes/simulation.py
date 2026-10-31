@@ -197,6 +197,25 @@ def _outlines_from_polys(pfo: dict) -> list:
     return outlines
 
 
+def _rotor_polys_turned(polys: dict, dtheta_deg: float) -> dict:
+    """The rotor iron and the magnets of ``polys`` turned rigidly by
+    ``dtheta_deg`` about the machine axis (counter-clockwise for a positive
+    angle, the sense ``get_2d_polygons(rotor_angle_deg)`` turns them).
+
+    The builder places both at ``rotor_angle_deg`` plus a fixed offset and
+    nothing else on the rotor moves, so this is a later keyframe's rotor
+    outline without a rebuild (outline drawing only; no solve uses it)."""
+    from shapely.affinity import rotate as _rot
+    d = float(dtheta_deg)
+    rotor = polys.get("rotor")
+    return {
+        "rotor": (None if rotor is None
+                  else _rot(rotor, d, origin=(0.0, 0.0))),
+        "magnets": [((None if m is None else _rot(m, d, origin=(0.0, 0.0))), pol)
+                    for m, pol in (polys.get("magnets") or [])],
+    }
+
+
 def _parse_geo_override(geo: Optional[str]) -> Optional[dict]:
     """Parse a per-request `geo` JSON override into a geometry dict, or None when
     absent.
@@ -6243,8 +6262,17 @@ def get_fem_transient(
                                       _np.asarray(_f["By"], float))
                     # Palette tags are rotor-angle-independent (the domains do
                     # not change), so collapse them once against frame 0's polys.
-                    _polys_a = _sp_a(_mot_a.get_2d_polygons(rotor_angle_deg=_ang_a),
-                                     tol_mm=0.005)
+                    # A later keyframe needs only its ROTOR outlines, which are
+                    # frame 0's turned by the angle between them: one build per
+                    # animation, not one per keyframe (2026-10-31: the L90's 108
+                    # keyframes rebuilt and re-filleted the whole machine 108
+                    # times, ~0.55 s each, a minute of every animated run).
+                    if _fi == 0:
+                        _polys_a = _sp_a(_mot_a.get_2d_polygons(rotor_angle_deg=_ang_a),
+                                         tol_mm=0.005)
+                        _polys_a0, _ang_a0 = _polys_a, _ang_a
+                    else:
+                        _polys_a = _rotor_polys_turned(_polys_a0, _ang_a - _ang_a0)
                     if _fi == 0:
                         _tv_a = _tags_a.copy()
                         _tv_a[_tags_a >= _DCB_a] = _DC_a

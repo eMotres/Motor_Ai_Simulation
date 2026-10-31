@@ -5918,11 +5918,13 @@ def get_fem_transient(
             # The settled state for the catalog copy (owner 2026-10-31): asked
             # of THIS solve only, and only where the route may file it below (a
             # run that keeps its field, not a ripple refinement, not a
-            # background solve).  The pool carries the flag to its worker.
+            # background solve, not a six-phase set open — a failure case of
+            # the duty's machine).  The pool carries the flag to its worker.
             from motor_ai_sim.simulation.fem_solver_2d import (
                 _WANT_WARM_PUBLISH_CTX as _WWP)
             _wwp_tok = _WWP.set(bool(field_snapshot) and not ripple_refine
-                                and not _BACKGROUND_RUN.get())
+                                and not _BACKGROUND_RUN.get()
+                                and _six_open is None)
             _sbres = em_transient_eval(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 sampling_purpose=sampling_purpose,
@@ -6395,10 +6397,15 @@ def get_fem_transient(
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty field not stored", exc_info=True)
             # …and the settled warm state beside the maps (owner 2026-10-31: a
-            # catalog motor hot-starts from its own duty's converged state).
+            # catalog motor hot-starts from its own duty's converged state);
+            # never an open-set run's, which is not the duty's machine state.
             try:
+                if _six_open is not None:
+                    raise _NotFiled()
                 from motor_ai_sim import duty_fields as _df
                 _df.save_warm_active(_warm_pub)
+            except _NotFiled:
+                pass
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty warm state not stored", exc_info=True)
         # Bench Ld/Lq ride with every live-machine run (user: "compute the

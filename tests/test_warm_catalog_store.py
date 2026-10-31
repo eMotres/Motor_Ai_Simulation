@@ -652,6 +652,12 @@ def test_the_route_asks_the_solver_for_the_state_and_the_pool_carries_it():
     assert i_set < i_call < i_reset < i_pop
     assert src.count("_WWP.set(") == 1
     assert "if _wwp_tok is not None:" in src[i_pop:]
+    # a six-phase set open is a failure case of the duty's machine: never asked
+    # for, never filed (owner rule of #531, same as the duty's maps)
+    assert "and _six_open is None)" in src[i_set:i_call]
+    i_save = src.index("_df.save_warm_active(_warm_pub)")
+    assert ("if _six_open is not None:\n                    raise _NotFiled()"
+            in src[i_save - 300:i_save])
     from motor_ai_sim import solve_pool as SP
     assert (("motor_ai_sim.simulation.fem_solver_2d", "_WANT_WARM_PUBLISH_CTX")
             in SP.CARRIED_VARS)

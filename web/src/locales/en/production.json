@@ -450,7 +450,8 @@
       "noModel": "no model point",
       "noModelCompute": "no model point: compute it",
       "freqFlag": "{hz} Hz vs low-frequency model",
-      "remaining": "{mohm} mΩ board and joints"
+      "remaining": "{mohm} mΩ board and joints",
+      "modelAbove": "model {mohm} mΩ above the reading"
     },
     "group": {
       "resistance": "Resistance at {temp_c} °C",

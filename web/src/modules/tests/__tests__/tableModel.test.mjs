@@ -56,6 +56,13 @@ t('one table per test: group headers, rows, the empty info rows dropped, notes a
   assert.deepEqual(M.tableLines(null), []);
 });
 
+t('a model above the R reading is said as such, never as a negative board-and-joints remainder', () => {
+  const over = M.rowNote(row({ key: 'r_ll_mean', measured: 140.6, model: 258.2, extra: { remaining_mohm: -117.6 } }));
+  assert.deepEqual(over, { key: 'modelAbove', params: { mohm: '117.6' } });
+  const under = M.rowNote(row({ key: 'r_ll_mean', measured: 140.6, model: 134.5, extra: { remaining_mohm: 6.1 } }));
+  assert.deepEqual(under, { key: 'remaining', params: { mohm: '6.10' } });
+});
+
 t('a group with a speed per row is a series for the chart; resistance, inductance and one load point are table-only', () => {
   const emf = { key: 'emf_peak', label: 'EMF', params: {}, basis: 'magnets at 60 C, 3-D x0.950 (Stage A)', basis_key: 'emf_3d',
     basis_params: { mag: '60', k: '0.950', src: 'Stage A' }, rows: [

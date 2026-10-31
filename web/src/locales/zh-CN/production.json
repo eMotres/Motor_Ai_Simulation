@@ -450,7 +450,8 @@
       "noModel": "无模型点",
       "noModelCompute": "无模型点：请计算",
       "freqFlag": "{hz} Hz，模型为低频",
-      "remaining": "{mohm} mΩ 相位板和接头"
+      "remaining": "{mohm} mΩ 相位板和接头",
+      "modelAbove": "模型比读数高 {mohm} mΩ"
     },
     "group": {
       "resistance": "{temp_c} °C 时的电阻",

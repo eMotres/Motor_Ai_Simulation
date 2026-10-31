@@ -437,3 +437,37 @@ def test_resolve_end3d_looks_the_passport_up_by_the_configuration_geometry(monke
 def test_bad_input_is_refused_with_the_field_named(body, msg):
     with pytest.raises(models.TestInputError, match=msg):
         models.normalize(body, who="x@example.test")
+
+
+# ---------------------------------------------------------------------------
+# the rotor-out inductance from a <config>-stator-only sibling (2026-10-31, G2-L40)
+# ---------------------------------------------------------------------------
+
+def _so_doc(parts=None, materials=None, ld=0.4969, lq=0.497):
+    return {"winding": {"star_delta": "star"}, "parts": parts or {}, "materials": materials or {},
+            "duties": [{"name": "stator-only", "current_arms": 1.0,
+                        "summary": {"Ld_inc_mH": ld, "Lq_inc_mH": lq, "I_phase_rms_A": 1.0,
+                                    "ldq_method": "differential (tangent reluctivity)"}}]}
+
+
+def test_stator_only_sibling_with_excluded_rotor_is_the_rotor_out_reference():
+    ref = model_source.stator_only_from_doc(_so_doc(parts={"magnet": "excluded", "rotor_core": "excluded"}),
+                                            "G2-L40-stator-only")
+    assert ref["duty"] == "G2-L40-stator-only / stator-only"
+    assert ref["ld_mh"] == pytest.approx(0.4969) and ref["lq_mh"] == pytest.approx(0.497)
+    assert ref["connection"] == "star" and ref["current"] == 1.0
+    # star: L line-line = Ld + Lq (no saliency without a rotor)
+    ld, lq = C.model_ldq_line(ref["ld_mh"], ref["lq_mh"], "star")
+    assert (ld + lq) * 1000.0 == pytest.approx(993.9, abs=0.1)
+
+
+def test_stator_only_sibling_filed_with_air_parts_still_counts():
+    ref = model_source.stator_only_from_doc(_so_doc(materials={"magnet": "air", "rotor_core": "air"}), "L50-stator-only")
+    assert ref is not None and ref["duty"] == "L50-stator-only / stator-only"
+
+
+def test_a_sibling_that_still_has_its_rotor_is_not_a_rotor_out_reference():
+    assert model_source.stator_only_from_doc(_so_doc(parts={"magnet": "excluded"}), "x") is None
+    assert model_source.stator_only_from_doc(_so_doc(), "x") is None
+    assert model_source.stator_only_from_doc(_so_doc(parts={"magnet": "excluded", "rotor_core": "excluded"}, ld=None),
+                                             "x") is None

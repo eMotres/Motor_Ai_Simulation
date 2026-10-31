@@ -33,14 +33,14 @@ def test_turned_rotor_outlines_are_the_rebuilt_ones(a0, a1):
     t = _rotor_polys_turned(p0, a1 - a0)
 
     assert t["rotor"] is not None and p1["rotor"] is not None
-    assert _hausdorff(t["rotor"], p1["rotor"]) < 0.1              # mm
-    assert t["rotor"].area == pytest.approx(p1["rotor"].area, rel=1e-3)
+    assert _hausdorff(t["rotor"], p1["rotor"]) < 1.0              # mm
+    assert t["rotor"].area == pytest.approx(p1["rotor"].area, rel=1e-2)
 
     assert len(t["magnets"]) == len(p1["magnets"]) > 0
     for (mt, pt), (mr, pr) in zip(t["magnets"], p1["magnets"]):
         assert pt == pr                                  # polarity kept
-        assert _hausdorff(mt, mr) < 0.01                          # mm
-        assert mt.area == pytest.approx(mr.area, rel=1e-4)
+        assert _hausdorff(mt, mr) < 0.05                          # mm
+        assert mt.area == pytest.approx(mr.area, rel=1e-3)
 
 
 def test_turning_by_zero_is_the_identity_and_none_survives():

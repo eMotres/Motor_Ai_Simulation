@@ -2,7 +2,7 @@
 
 Version {{version}}. MOTRES d.o.o., Kotnikova 34, 1000 Ljubljana, Slovenia, registration no. 7255691000, VAT SI22399933 ("MOTRES"), operates AeroStator at aerostator.com. Contact: support@aerostator.com. The English text governs; the Chinese text is a full mirror.
 
-**In short:** AeroStator is for businesses. Simulations are free. In FREE mode MOTRES may use the engineering data you supply after accepting to train its own AI models, and earlier data only if you tick a separate optional box. No payment or report is owed for that use, models lawfully trained are kept, personal data is never used, and your projects stay confidential. PRIVATE mode (paid, under a separate order) excludes all AI training. The service is provided "as is", without liability except where the law does not allow it to be excluded.
+**In short:** AeroStator is for businesses. Simulations are free. In FREE mode MOTRES may use the engineering data you supply after accepting to train its own AI models, and earlier data only if you tick a separate optional box. No payment or report is owed for that use, models lawfully trained are kept and this training cannot be undone, even if you later order the motor or switch to PRIVATE, personal data is never used, and your projects stay confidential. PRIVATE mode (paid, under a separate order) excludes all AI training. The service is provided "as is", without liability except where the law does not allow it to be excluded.
 
 ## 1. Business use
 
@@ -20,11 +20,13 @@ The AeroStator Platform Services and Data Agreement, with its Schedules (the "Pl
 
 3.3 Personal data, such as names and e-mail addresses, is never used for AI training; it is removed first. Your projects stay confidential: MOTRES does not publish, sell or show your engineering data to other users, and training is not publication.
 
-3.4 PRIVATE mode, available to business clients including registered sole traders, under a separate order that sets its commercial terms, excludes all AI training on everything supplied or generated in it and on everything derived from it. You can ask for it at support@aerostator.com; from receipt of your request MOTRES holds the data concerned out of any training while the order is discussed. A switch to PRIVATE stops further training on your earlier data too (Platform Agreement sections 3.4 and 11.1).
+3.4 PRIVATE mode, available to business clients including registered sole traders, under a separate order that sets its commercial terms, excludes all AI training on everything supplied or generated in it and on everything derived from it. You can ask for it at support@aerostator.com; from receipt of your request MOTRES holds the data you supply from then on out of any training while the order is discussed. A switch to PRIVATE protects the data you supply after the switch; data you supplied earlier in FREE mode remain usable for training (Platform Agreement sections 3.4 and 11.1).
 
 3.5 Including data in the engineering dataset shared with the AeroStator community is a separate, optional choice by the rights holder of the data, never ticked for you, which you can withdraw in the account menu. It never covers personal data, PRIVATE data or NDA material. Withdrawal stops future publication; copies already published may not be recallable, as explained before you choose.
 
 3.6 Upload only data you are entitled to provide for the service. In FREE mode, data used for training must also be lawfully licensable by you for that purpose, and you warrant that you have the rights to any data from third parties, such as your customers or employers, that you upload (Platform Agreement section 7.6). PRIVATE requires no training licence and does not override third-party confidentiality or upload restrictions.
+
+3.7 **Training cannot be undone.** Once you simulate in FREE mode, the engineering data of that design may be used for training. If you later order the motor, sign a paid development or production agreement, sign an NDA or switch to PRIVATE, that training is not undone: models already trained keep what they learned, this cannot be reversed, and data entered in FREE mode before the switch remain usable for training. If a design must never be used for training, choose PRIVATE before you enter it (Platform Agreement section 7.11).
 
 ## 4. Accounts and acceptable use
 

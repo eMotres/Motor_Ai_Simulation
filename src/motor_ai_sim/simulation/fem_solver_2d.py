@@ -11205,11 +11205,24 @@ def _fem_transient_sliding_band_once(
                     _ref_ok = (_ref_dev is not None
                                and _ref_dev <= _EDDY_SETTLE_TOL)
                     if _ref_dev is not None:
+                        # per group and probe frame, so a failed seed says
+                        # which body it failed on (sample / reference [W])
+                        _ref_rows = {}
+                        try:
+                            for _gk2, _rv in (_warm_ref_grp or {}).items():
+                                _ref_rows[_gk2] = [
+                                    "%.4g/%.4g" % (_s, _rv[_k2 % n_total])
+                                    for _s, _k2 in zip(
+                                        _warm_grp.get(_gk2, [])[
+                                            -len(_warm_ks):], _warm_ks)]
+                        except Exception:              # noqa: BLE001
+                            _ref_rows = {}
                         log.info("P2 eddy warm cache: probe vs previous run's "
                                  "same-angle frames: max dev %.3g %% (tol "
-                                 "%.1f %%) — %s", 100.0 * _ref_dev,
+                                 "%.1f %%) — %s %s", 100.0 * _ref_dev,
                                  100.0 * _EDDY_SETTLE_TOL,
-                                 "settled" if _ref_ok else "not settled")
+                                 "settled" if _ref_ok else "not settled",
+                                 _ref_rows)
                     # `_dm_moved_in_warm` can only be True on a path where the
                     # ratchet was NOT frozen through the march; with the freeze
                     # (2026-09-05) the demag settling is the pre-pass's job, not

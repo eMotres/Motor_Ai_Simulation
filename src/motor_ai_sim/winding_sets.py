@@ -224,7 +224,7 @@ def resolve_six_phase(winding: Dict[str, Any], *, num_slots: int, num_poles: int
 
 
 # ---------------------------------------------------------------------------
-# one set OPEN (degraded operation, Erium 2026-10-31)
+# one set OPEN (degraded operation, 2026-10-31)
 # ---------------------------------------------------------------------------
 #
 # THE CURRENT OF EACH SET.  ``spec["set_current_scale"] = {1: a, 2: b}``: set s

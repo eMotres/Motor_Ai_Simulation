@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Six-phase winding with ONE SET OPEN (degraded operation, Erium 2026-10-31).
+"""Six-phase winding with ONE SET OPEN (degraded operation, 2026-10-31).
 
 Pins
   * the bookkeeping: ``set_current_scale`` / ``with_open_set`` and their

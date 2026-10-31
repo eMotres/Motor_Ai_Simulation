@@ -27,7 +27,7 @@ MOTRES d.o.o.，斯洛文尼亚（欧盟）卢布尔雅那市 Kotnikova 34号，
 
 ## 5. 接收方与服务提供方
 
-我们不出售或出租个人数据。个人数据由平台协议附表2 所列的服务提供方处理：Hetzner Online GmbH（托管和备份，欧盟）；Google Ireland Limited 和 Google LLC（Google Workspace 电子邮件和存储、可选的 Google 登录、仅在取得同意后启用的 Google Analytics）；Anthropic, PBC（可选的帮助助手、规格书助手和设计助手，均为人工智能系统，以及生产文本的机器翻译）；MOTRES 员工在客户项目上使用的 Anthropic、OpenAI 和 Google 商业或应用程序接口服务，在任何情况下均不使用消费者账户或个人账户；负责实物交付的物流合作方；以及负有保密义务的会计或法律顾问。接收平台项目内容或助手内容的服务提供方，依合同被禁止将该等内容用于其自身的模型训练或服务改进。您使用 Google 账户登录时，与您自己的 Google 账户相关的处理受 Google 自身的隐私声明约束。
+我们不出售或出租个人数据。个人数据由平台协议附表2 所列的服务提供方处理：Hetzner Online GmbH（托管和备份，欧盟）；Google Ireland Limited 和 Google LLC（Google Workspace 电子邮件和存储、可选的 Google 登录、仅在取得同意后启用的 Google Analytics）；Anthropic, PBC（可选的帮助助手、规格书助手和设计助手，均为人工智能系统，以及生产文本的机器翻译）；MOTRES 员工在客户项目上使用的 Anthropic、OpenAI 和 Google 人工智能订阅账户，每一账户均已关闭将所提交内容用于模型训练的功能；负责实物交付的物流合作方；以及负有保密义务的会计或法律顾问。通过平台接收项目内容或助手内容的服务提供方，依合同被禁止将该等内容用于其自身的模型训练或服务改进；在员工人工智能订阅账户中，该等用途已在账户设置中关闭。您使用 Google 账户登录时，与您自己的 Google 账户相关的处理受 Google 自身的隐私声明约束。
 
 ## 6. 国际传输
 

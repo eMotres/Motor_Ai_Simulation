@@ -1884,6 +1884,41 @@ def _round_corners_at_radius(poly, target_r, r_tol, r_fillet, scale_mm,
                                 scale_mm=scale_mm)
 
 
+# ── get_2d_polygons memo (2026-10-31) — see CadQueryMotor.get_2d_polygons ───
+import hashlib as _hashlib_poly
+import json as _json_poly
+import os as _os_poly
+import threading as _threading_poly
+from collections import OrderedDict as _ODict_poly
+
+_POLY_CACHE: "_ODict_poly" = _ODict_poly()
+_POLY_CACHE_LOCK = _threading_poly.Lock()
+_POLY_CACHE_MAX = 8
+#: Attributes the builder sets on the instance (read by callers afterwards).
+_POLY_SIDE_ATTRS = ("_slot_cut_x_mm", "_slot_cut_x_max_mm", "_coils_overflow",
+                    "_n_wires_fit")
+
+
+def _poly_cache_key(parameters: Dict, rotor_angle_deg: float) -> str:
+    blob = _json_poly.dumps(parameters, sort_keys=True, default=repr)
+    h = _hashlib_poly.blake2b(blob.encode("utf-8"), digest_size=20)
+    h.update(repr(float(rotor_angle_deg)).encode("ascii"))
+    return h.hexdigest()
+
+
+def _copy_poly_containers(obj):
+    """Fresh dict / list / tuple containers around the same leaves (shapely 2
+    geometries are immutable), so a caller that edits its dict or list cannot
+    reach into the memo."""
+    if isinstance(obj, dict):
+        return {k: _copy_poly_containers(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_copy_poly_containers(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_copy_poly_containers(v) for v in obj)
+    return obj
+
+
 class CadQueryMotor:
     """Parametric motor geometry engine using CadQuery."""
     
@@ -3333,6 +3368,41 @@ class CadQueryMotor:
         return out
 
     def get_2d_polygons(self, rotor_angle_deg: float = 0.0) -> Dict[str, Any]:
+        """:meth:`_get_2d_polygons_built`, memoised on the parameters and the
+        angle (2026-10-31).  One cold Erium L90 run called it 115 times for the
+        same machine — 87 s of shapely booleans and ring sanitising, 7 % of
+        the run: the solver's own mesh, the masses, the summary, the six-phase
+        probe's full ring each build their own ``CadQueryMotor`` from the same
+        configuration.  The output is a pure function of ``self.parameters``
+        and ``rotor_angle_deg``; a hit hands back fresh containers around the
+        same (immutable) shapely geometries and restores the four attributes
+        the builder leaves on the instance.  ``SB_POLY_CACHE=0`` switches it
+        off."""
+        if _os_poly.environ.get("SB_POLY_CACHE") == "0":
+            return self._get_2d_polygons_built(rotor_angle_deg)
+        try:
+            key = _poly_cache_key(self.parameters, rotor_angle_deg)
+        except Exception:                        # noqa: BLE001 — never a reason to fail
+            return self._get_2d_polygons_built(rotor_angle_deg)
+        with _POLY_CACHE_LOCK:
+            hit = _POLY_CACHE.get(key)
+            if hit is not None:
+                _POLY_CACHE.move_to_end(key)
+        if hit is not None:
+            out, attrs = hit
+            for _k, _v in attrs.items():
+                setattr(self, _k, _v)
+            return _copy_poly_containers(out)
+        out = self._get_2d_polygons_built(rotor_angle_deg)
+        attrs = {_k: getattr(self, _k) for _k in _POLY_SIDE_ATTRS
+                 if hasattr(self, _k)}
+        with _POLY_CACHE_LOCK:
+            _POLY_CACHE[key] = (_copy_poly_containers(out), attrs)
+            while len(_POLY_CACHE) > _POLY_CACHE_MAX:
+                _POLY_CACHE.popitem(last=False)
+        return out
+
+    def _get_2d_polygons_built(self, rotor_angle_deg: float = 0.0) -> Dict[str, Any]:
         """Return raw Shapely polygon objects for each motor domain.
 
         Same geometry as get_2d_mesh_data() but returns Shapely objects

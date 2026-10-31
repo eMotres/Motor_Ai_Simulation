@@ -133,7 +133,57 @@ copper identical, Br kept 99.366 = 99.366 %. Seeded vs cold at −3 K: torque +0
 is covered by `tests/test_warm_seed.py` + `tests/test_demag_reproducible.py`: 27 passed on the server. The Br map is NOT carried (interactive rule of 2026-09-05): the demag
 pre-pass (240 frames) still runs in full; carrying it is the next item.
 
-## 6. Raw outputs
+## 6. Hot start for catalog motors measured (A2 + the catalog copy, branch `claude/hot-start-catalog`)
+
+Owner 2026-10-31: a catalog motor is already computed, so every run of it starts hot.
+- **The magnet is carried (A2).** Every accepted seed of the same mesh carries its Br map, at any current and any
+  temperature. The map is the irreversible fraction against the card at the parent's temperature, so
+  Br_eff = fraction × card(T_this run): the reversible part comes back and the irreversible loss stays. There is
+  one checking pre-pass period. Its drift test is waived only when no element moved.
+- **The catalog copy.** The settled state is filed beside the duty's fields (`fields/warm.npz`) and looked up by
+  every run, in the workspace's catalog and the shared one.
+
+L90 at 152.1 A / 2.8° / 850 rpm, six-phase march, one sandbox with 4 CPUs, frozen workspace, read-only. The server
+was fully loaded by the priority runs, so frames and Cholesky solves are the load-independent numbers:
+
+| Run (job; one process per job, in this order) | Frames | Cholesky solves | Wall [s] | vs the reference |
+|---|---:|---:|---:|---|
+| 130 °C cold (reference; h1) | 1082 | 5160 | 1066.7 | — |
+| 130 °C again (hot, same point; h1) | **243** | 984 | **338.3** | worst 0.012 % (shaft) |
+| 67 °C, the 130 °C magnet carried (h3; h1 alike: 842 frames) | 842 | 3399 | 633.8 | see below |
+| 67 °C fresh (reference for the carried run; h1) | 1082 | 4478 | 667.5 | — |
+| 130 °C after the 67 °C run (hot; h3) | **243** | 994 | **136.3** ¹ | worst 0.012 % (shaft) |
+
+¹ with #534 and #535 in the tree: the L_xy probe is reused and the keyframe outlines take 0.9 s, so the time after
+the solve drops from 112 s to 2.3 s.
+
+Hot to cold, which is the owner's physics point:
+- Br kept is 99.004 %, equal to the 130 °C run's: the irreversible loss is kept. A fresh 67 °C magnet keeps
+  99.328 %.
+- Torque is 1021.77 N·m. That is above 1002.77 at 130 °C (the reversible part regained) and below 1023.93 for a
+  fresh 67 °C magnet (the 130 °C damage kept).
+- The checking period moved no element: a colder magnet is not de-rated further.
+
+The 67 °C carried run is still 842 frames for two reasons:
+- The probe's same-angle reference is the parent's level at 130 °C, which differs physically at 67 °C (6.9 %), so
+  the trend gauge decides.
+- The TP-EEC after period 2 fires on a fast mode and restarts the gauge, the cold-track finding below. With that
+  rule the carried run is expected at ~600 frames.
+
+## 7. Cold track measured (2026-10-31; L90 cold reference 1082 frames, 4480 Cholesky solves)
+
+| Item | Result | Status |
+|---|---|---|
+| (c) analytic dν/dB² in the march Newton (`SB_MARCH_TANGENT=analytic`) | 4237 Cholesky solves instead of 4480 (−5.4 %), results identical to 0.0002 %; wall time not measurable on the loaded server | not proposed |
+| (a) TP-EEC on a fast DC mode | on the L90 the correction after period 2 measures λ = 6.6e-5 per period (τ 0.10 period), yet it is applied and restarts the gauge. That starts the MIN_VERIFY_PERIODS count, which the demag pre-pass then has to serve (4 periods instead of 2). Without it: **722 frames instead of 1082, 3040 Cholesky solves instead of 4480 (−32 %)**, results identical to 0.014 % (shaft) | branch `claude/eec-fast-mode`: a correction is applied only when its own λ ≥ 0.5 (L155 slow shaft λ 0.956-0.960: unchanged) |
+| (b) demag pre-pass | after the fast-mode rule the pre-pass is 2 periods: period 1 moves Br, period 2 is quiet. The 4 periods before were the post-jump verification, not demag | nothing further proposed |
+| (d) animation keyframes | the machine was rebuilt and re-filleted for each of 108 keyframes: 57.7 s → 0.9 s | #534 |
+| (d) six-phase L_xy probe | the probe (98-126 s) is kept per workspace and reused through the #529 tolerance rule: 112 s → 2.5 s after the solve on a repeated run | #535 |
+
+## 8. Raw outputs
+
+H: server `/opt/motres/compute/jobs/std-speed/h1/` (hot start legs, tangent legs), `h2/` (TP-EEC A/B), `h3/`
+(integration of H + #534 + #535, keyframe bench), `h4/` (server tests); comparison `cmp_legs.py REF OTHER...`.
 
 A1: server `/opt/motres/compute/jobs/std-speed/a6/` (cold / same / −3 K JSON, `bench.log`, `tests.log`, `ref/`).
 

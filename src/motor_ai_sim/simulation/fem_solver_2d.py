@@ -3282,6 +3282,12 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                 wc["meta"]["ts"] = str(z["ts"])
             if "A2" in _f:
                 wc["A2"] = z["A2"]
+            if "msrc_json" in _f:
+                try:
+                    wc["msrc"] = {str(k): float(v) for k, v in
+                                  json.loads(str(z["msrc_json"])).items()}
+                except Exception:                        # noqa: BLE001
+                    pass
             if ((not _safe_warm_cache_enabled()
                  or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                     and wc["meta"].get("ts") == "bdf2"
@@ -3406,6 +3412,9 @@ def _warm_cache_store(wc: dict) -> None:
             _extra["ts"] = str(m["ts"])
         if wc.get("A2") is not None:
             _extra["A2"] = wc["A2"]
+        if wc.get("msrc"):
+            _extra["msrc_json"] = json.dumps(
+                {str(k): float(v) for k, v in dict(wc["msrc"]).items()})
         if ((not _safe_on_wc or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                 and wc.get("meta", {}).get("ts") == "bdf2"
                 and wc.get("Ib_prev") is not None
@@ -5852,6 +5861,17 @@ def _fem_transient_sliding_band_once(
     # reluctance-only torque) or weaken them, without touching geometry.
     _br_glob = np.full(_nt_r, float(magnet_scale))   # per-element Br factor (demag de-rating × magnet_scale)
     _br_seed_original = _br_glob.copy()
+    # The magnet SOURCE magnitude per magnet tag (the card's Br/μ_rec at this
+    # run's magnet temperature, before any de-rating): published with the warm
+    # seed, so the next run can tell how strong the magnets were that its
+    # seeded eddy history was solved with (see the seed's magnet correction).
+    _msrc_by_tag: Dict[str, float] = {}
+    for _tg_m, _ix_m in half["r"]["cells"].items():
+        _ix_m = np.asarray(_ix_m, int)
+        if _ix_m.size:
+            _nm_m = float(np.max(np.hypot(_Mx_glob[_ix_m], _My_glob[_ix_m])))
+            if _nm_m > 0.0:
+                _msrc_by_tag[str(int(_tg_m))] = _nm_m
     # per-phase unit-current stator source vectors
     f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),
               'C': np.zeros(half["s"]["n"])}
@@ -9896,6 +9916,7 @@ def _fem_transient_sliding_band_once(
     # settle test then extends the march as it would on any cold run.
     _seed_cold_retry_done = False
     _warm_seed_pending = None
+    _seed_mag_fix = None    # the parent's magnets, for the seed's correction
     _safe_edcon_fp = (_safe_circuit_identity(
         _ed_con, _ed_paths, geo, resolved_bonding=_bond_s,
         strand_group=strand_group, series_paths=series_paths)
@@ -10135,6 +10156,35 @@ def _fem_transient_sliding_band_once(
                     _Ib_prev = tuple(np.asarray(_x, float).copy() for _x in _ibp)
                     _Ib_prev2 = tuple(np.asarray(_x, float).copy() for _x in _ibp2)
                     _wc_map += ", net-current history seeded"
+                # THE MAGNETS THE SEED WAS SOLVED WITH (2026-10-31).  An
+                # interactive run warms up on pristine magnets at its OWN
+                # temperature; the parent's history was solved on de-rated
+                # magnets at the parent's.  The difference is a step in the
+                # magnet source at the first frame — a fake ∂A/∂t: L90 probe
+                # magnets +11.6 % on frame 1 (+32.7 % with the magnets 3 K
+                # colder), the slow shaft +5…17 % for periods.  Prepared here,
+                # applied before the first frame (`_seed_mag_fix` below).
+                _mp = _wc.get("msrc") or {}
+                if _mp and _msrc_by_tag:
+                    _ratio = np.ones(int(_nt_r), float)
+                    for _tg_m, _ix_m in half["r"]["cells"].items():
+                        _a = _mp.get(str(int(_tg_m)))
+                        _b = _msrc_by_tag.get(str(int(_tg_m)))
+                        if _a is not None and _b:
+                            _ratio[np.asarray(_ix_m, int)] = float(_a) / float(_b)
+                    _brp = np.full(int(_nt_r), float(magnet_scale))
+                    if _wc.get("br_val") is not None and _mag_idx.size:
+                        _rm_m = half["r"]["mesh"]
+                        _cen_m = np.asarray(_rm_m.p, float)[
+                            :, np.asarray(_rm_m.t, int)].mean(axis=1).T
+                        _tag_m = np.zeros(int(_nt_r), int)
+                        for _tg_m, _ix_m in half["r"]["cells"].items():
+                            _tag_m[np.asarray(_ix_m, int)] = int(_tg_m)
+                        _pj = _project_br(_wc, _cen_m[_mag_idx], _tag_m[_mag_idx])
+                        if _pj is not None:
+                            _brp[_mag_idx] = float(magnet_scale) * np.clip(
+                                _pj[0], 0.0, 1.0)
+                    _seed_mag_fix = {"ratio": _ratio, "br": _brp}
                 log.info("P2 eddy warm cache: seed mapped by %s", _wc_map)
             # SAME-ANGLE REFERENCE — only from a parent at the SAME operating
             # point.  This gauge can only make the handoff test more permissive
@@ -10213,6 +10263,71 @@ def _fem_transient_sliding_band_once(
     # initialiser's operating field.
     if _eddy_method != "tdm":           # a TDM run recorded its own start
         _static_seed_info = None
+    # ── THE SEED ON THIS RUN'S MAGNETS (2026-10-31) ──────────────────────
+    # The seeded history plus the STATIC field change the magnet difference
+    # makes (this run's source minus the parent's, both solved at the frame
+    # before the first one with the same conductor currents): on the periodic
+    # orbit a rotor-frame-constant change of the magnets is fully penetrated —
+    # it is the static response, there is no eddy current in it — so this is
+    # the parent's orbit moved onto this run's magnets to first order, and the
+    # first frame no longer sees a step.  Both history levels move by the same
+    # field.  SB_SEED_MAG_FIX=0 skips it (A/B).
+    if (_seed_mag_fix is not None and _warm_seeded and eddy and not _vdrive
+            and _fseq and _ed_con and _eddy_method != "tdm"
+            and _os_sb.environ.get("SB_SEED_MAG_FIX") != "0"):
+        try:
+            _ks_m = int(_fseq[0]) - 1
+            _ths_m = (_ks_m / n_total) * period_mech * n_periods
+            _ms_m = int(round(_ths_m / spacing))
+            _the_m = _ms_m * spacing
+            _dth_m = period_mech * n_periods / n_total
+            _fb_m = _Feedback(k=_ks_m, theta_prev_deg=_the_m - _dth_m,
+                              theta_deg=_the_m, t0_s=float(_ks_m * dt),
+                              t1_s=float((_ks_m + 1) * dt), fine=True,
+                              i_abc=None, psi_abc=None, v_bus=_fb_v_bus)
+            _Ist_m = _src.mean_over(_fb_m)
+            _Pro_m, _out_m = _proj.build(_ms_m)
+            _free_m = _free_columns(_Pro_m.shape[1], _out_m)
+            _I_vec_m = np.array(
+                [_Ist_m[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
+                 for c in _ed_con], float)
+            _mx_p = np.zeros(n_all_el); _my_p = np.zeros(n_all_el)
+            _fac_p = _seed_mag_fix["ratio"] * _seed_mag_fix["br"]
+            _mx_p[nst:] = _Mx_glob * _fac_p
+            _my_p[nst:] = _My_glob * _fac_p
+            _f_par = asm(_msrc, b2, mx=b2_0.interpolate(_mx_p),
+                         my=b2_0.interpolate(_my_p))
+            _f_own = _drv.f_mag
+            _nfix_m = None if _sat2 else nu_base2
+            _it_m = max(int(nonlinear_iterations), 20)
+            _cancel_point("warm seed: magnet correction")
+            _ok_own, _A_own = _drv.eddy_static_state(
+                _Pro_m, _free_m, _Aed_prev, _I_vec_m, _nfix_m, _it_m)
+            _drv.f_mag = _f_par
+            try:
+                _ok_par, _A_par = _drv.eddy_static_state(
+                    _Pro_m, _free_m, _Aed_prev, _I_vec_m, _nfix_m, _it_m)
+            finally:
+                _drv.f_mag = _f_own
+            if _ok_own and _ok_par:
+                _dA_m = np.asarray(_A_own, float) - np.asarray(_A_par, float)
+                _Aed_prev = _Aed_prev + _dA_m
+                if _Aed_prev2 is not None:
+                    _Aed_prev2 = _Aed_prev2 + _dA_m
+                log.info("P2 eddy warm cache: seed moved onto this run's magnets "
+                         "(source ratio %.5g..%.5g, parent Br factor min %.4g; "
+                         "|dA| %.3g of |A| %.3g)",
+                         float(np.min(_seed_mag_fix["ratio"])),
+                         float(np.max(_seed_mag_fix["ratio"])),
+                         float(np.min(_seed_mag_fix["br"])),
+                         float(np.linalg.norm(_dA_m)),
+                         float(np.linalg.norm(_Aed_prev)))
+            else:
+                log.info("P2 eddy warm cache: magnet correction of the seed "
+                         "skipped (static solve did not converge)")
+        except Exception as _e_mf:            # noqa: BLE001 — an accelerator
+            log.info("P2 eddy warm cache: magnet correction of the seed "
+                     "skipped (%s)", _e_mf)
     # SB_EDDY_ZERO_START=1: the pre-2026-09-24 cold start from A = 0 — for the
     # test that reproduces the start-up transient, never a production knob.
     if (eddy and not _vdrive and (not _warm_seeded or _warm_seed_pending is not None)
@@ -13304,6 +13419,8 @@ def _fem_transient_sliding_band_once(
                        if (_eddy_bdf2 and _wc_Ib_prev is not None
                            and _wc_Ib_prev2 is not None) else {}),
                     "solid": np.asarray(_solid_ref, float),
+                    # the magnets this state was solved with (per tag)
+                    "msrc": dict(_msrc_by_tag),
                     # per conductor group, for the per-group same-angle test
                     "solid_grp": {_gk: np.asarray(_gl, float) for _gk, _gl in
                                   (("cu", _ed_cu), ("mag", _ed_mag),

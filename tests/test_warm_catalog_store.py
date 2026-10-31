@@ -50,6 +50,13 @@ from motor_ai_sim.simulation import warm_library as W
 KEY = "k" * 16
 OTHER_KEY = "l" * 16
 
+
+@pytest.fixture(autouse=True)
+def _catalog_switch_default(monkeypatch):
+    """Every test starts with the catalog switch at its default (ON), whatever
+    the caller's environment says; the switch test sets it itself."""
+    monkeypatch.delenv("SB_WARM_CATALOG", raising=False)
+
 _OLD_MEMBERS = {"lib_meta", "doflocs", "A", "Ued", "solid", "A2",
                 "br_val", "br_cen", "br_tag", "solid_grp_mag"}
 _OLD_META_KEYS = {"schema", "key", "op", "origin", "created", "meta", "I", "rpm",

@@ -421,8 +421,28 @@ def test_interactive_continues_the_same_machine_magnet(legs):
     """Owner 2026-10-31: the interactive path, with a state of the same
     machine sitting beside the config, CARRIES that state's magnet (the Br
     ratchet map, an irreversible fraction) and verifies it with one checking
-    pre-pass period instead of running the whole pre-pass again."""
+    pre-pass period instead of running the whole pre-pass again.
+
+    The state it may carry is one with a pre-pass of its own: the warm library
+    keeps the cold leg's (the production setting, SB_WARM_LIB=1).  With the
+    library off, the only state left is the legacy slot, which the SWEEP leg
+    published last: a sweep lineage's magnet has no pre-pass of its own (the
+    library never marks one reproducible either), and it is never carried —
+    the interactive run re-runs the whole pre-pass.  The legacy slot's own
+    carry is pinned by the hot -> cold test below."""
+    from motor_ai_sim.simulation import warm_library as _W
     d = legs["flag_off"]
+    if not _W.enabled():
+        assert d["demag_seeded"] is False, (
+            "a sweep lineage's magnet was carried into an interactive run")
+        assert d.get("demag_seed_from") is None
+        nrep = len(d.get("T_em_Nm") or [])
+        nper = int((d.get("demag_settle") or {}).get("prepass_periods") or 0)
+        assert nper >= 1 and int(d["demag_prepass_frames"]) == nper * nrep > 0
+        t0, t1 = _t(legs["cold"]), _t(d)
+        assert abs(t1 - t0) <= 3e-3 * abs(t0), (
+            f"two interactive runs disagree by {100.0 * (t1 - t0) / t0:+.3f} %")
+        return
     assert d["demag_seeded"] is True, (
         "an interactive run of the same machine re-ran the whole pre-pass "
         "instead of carrying the stored magnet")

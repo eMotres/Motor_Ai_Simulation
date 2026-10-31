@@ -103,7 +103,39 @@ serving a coupled loop (`scripts/bench/lxy_reuse_bench.py`):
 - Base vs branch on the same point: torque, ripple, every loss and the demag loss identical to the printed digits
   (+0.0000 %).
 
-## 5. Raw outputs
+## 5. A1 measured (owner's pick, branch `claude/warm-start-l90`)
+
+Three defects made a seeded L90 run slower than a cold one, each found by the probe's own same-angle check:
+
+1. **Rotor not rewound.** The seed is the parent's frame n_total−3 = this run's frame −3 plus one whole window, i.e. the
+   rotor a pole pair further on. The march carries a state across a period through the exact pole-pair map; the
+   legacy seed (and the warm library) did not. On a sector with more than one pole pair (L90: 7 poles) the rotor eddy
+   history sat a pole pair away from the stator pattern: probe 2.2e4 % off. Fixed: `_period_shift` × n_periods,
+   and a same-mesh seed is mapped by the identity (the sliding band's coincident stator/rotor ring dofs).
+2. **No net-current history.** The first seeded frame billed its eddy loss with BDF2's own derivative at t_k, not at
+   the step midpoint the parent's reference uses: probe 38 % off. Fixed: the seed carries both levels' net currents.
+3. **Different magnets.** The run warms up on pristine magnets at its own temperature; the history was solved on
+   the parent's de-rated magnets at the parent's: magnets +11.6 % on the first frame, the slow shaft +5…17 %. Fixed:
+   the history is moved by the static field change between the two magnet sources (fully penetrated on the orbit).
+   The probe then judges the frames after the seed's start step (the first frame: magnets −2.5 %).
+
+| L90 point (one sandbox, 4 CPUs, frozen workspace, read-only) | Frames | Wall [s] | Probe |
+|---|---:|---:|---|
+| cold | 1082 | 845.1 | — |
+| seeded, same point, before (deployed code) | 1322 | 1054.8 | 2.2e4 % — extended |
+| seeded, same point, after | **363** | **458.3** | 1.36 % — settled |
+| cold, magnet −3 K (reference) | 1082 | 984.1 | — |
+| seeded, magnet −3 K (a coupled pass), after | **363** | **440.8** | 1.34 % — settled |
+
+Seeded vs cold, same point: torque +0.0000 %, ripple +0.006 %, total loss +0.003 %, core / magnets / shaft /
+copper identical, Br kept 99.366 = 99.366 %. Seeded vs cold at −3 K: torque +0.0001 %, ripple +0.008 %, total loss
++0.003 %, shaft +0.09 %, the rest identical, Br kept 99.372 = 99.372 %. The 30 mm regression fixture (the small motor)
+is covered by `tests/test_warm_seed.py` + `tests/test_demag_reproducible.py`: 27 passed on the server. The Br map is NOT carried (interactive rule of 2026-09-05): the demag
+pre-pass (240 frames) still runs in full; carrying it is the next item.
+
+## 6. Raw outputs
+
+A1: server `/opt/motres/compute/jobs/std-speed/a6/` (cold / same / −3 K JSON, `bench.log`, `tests.log`, `ref/`).
 
 Server `/opt/motres/compute/jobs/std-speed/`: `prof_base.json` (march, cProfile top 40 by tottime and
 cumulative), `prof_base.log` (timestamped stage log), `tdm6.json`/`tdm6.log` (TDM six-phase),

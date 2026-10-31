@@ -3282,8 +3282,8 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                 wc["meta"]["ts"] = str(z["ts"])
             if "A2" in _f:
                 wc["A2"] = z["A2"]
-            if (_safe_warm_cache_enabled()
-                    and wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA
+            if ((not _safe_warm_cache_enabled()
+                 or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                     and wc["meta"].get("ts") == "bdf2"
                     and {"Ib_prev_net", "Ib_prev_imposed", "Ib_prev2_net",
                          "Ib_prev2_imposed"} <= _f):
@@ -3406,7 +3406,7 @@ def _warm_cache_store(wc: dict) -> None:
             _extra["ts"] = str(m["ts"])
         if wc.get("A2") is not None:
             _extra["A2"] = wc["A2"]
-        if (_safe_on_wc and wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA
+        if ((not _safe_on_wc or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                 and wc.get("meta", {}).get("ts") == "bdf2"
                 and wc.get("Ib_prev") is not None
                 and wc.get("Ib_prev2") is not None):
@@ -10115,6 +10115,26 @@ def _fem_transient_sliding_band_once(
                         if _Aed_prev2 is not None:
                             _Aed_prev2 = _period_shift(_Aed_prev2)
                     _wc_map += ", rotor rewound %d period(s)" % _n_rw
+                # THE NET-CURRENT HISTORY of both levels (same mesh, same
+                # constraints only): without it the seeded run's first frame
+                # billed its eddy loss with BDF2's own derivative at t_k, not at
+                # the step midpoint every other frame — and the parent's
+                # same-angle reference — use, which over-reads the rotor's slot
+                # harmonics by tens of per cent: the L90 probe read 38 % off a
+                # correctly rewound seed.  It only enters the loss billing,
+                # never the solve.  The rotor bodies carry no net current
+                # (∫J = 0), so no image map is needed for it.
+                _ibp, _ibp2 = _wc.get("Ib_prev"), _wc.get("Ib_prev2")
+                if (_wc_map.startswith("identity") and _eddy_bdf2
+                        and _Aed_prev2 is not None
+                        and _ibp is not None and _ibp2 is not None
+                        and all(len(_x) == 2 for _x in (_ibp, _ibp2))
+                        and all(np.asarray(_x[0]).shape == (len(_ed_con),)
+                                and np.asarray(_x[1]).shape == (len(_ed_con),)
+                                for _x in (_ibp, _ibp2))):
+                    _Ib_prev = tuple(np.asarray(_x, float).copy() for _x in _ibp)
+                    _Ib_prev2 = tuple(np.asarray(_x, float).copy() for _x in _ibp2)
+                    _wc_map += ", net-current history seeded"
                 log.info("P2 eddy warm cache: seed mapped by %s", _wc_map)
             # SAME-ANGLE REFERENCE — only from a parent at the SAME operating
             # point.  This gauge can only make the handoff test more permissive
@@ -11891,8 +11911,11 @@ def _fem_transient_sliding_band_once(
                     and k == n_total - 4 and n_total >= 8
                     and not _warm_cache_disabled()):
                 _wc_A2 = A2.astype(float, copy=True)   # the seed's A_{k−2}
-                if _safe_warm_cache_enabled():
-                    _wc_Ib_prev2 = tuple(np.asarray(_x, float).copy() for _x in _Ib_k)
+                # …and the net currents of both levels, so the seeded run's
+                # FIRST frame bills its loss at the step midpoint like every
+                # later one (the safe cache always published them; the legacy
+                # seed now does too — see the seed's consumption below)
+                _wc_Ib_prev2 = tuple(np.asarray(_x, float).copy() for _x in _Ib_k)
             if (eddy and not _vdrive and k == n_total - 3 and n_total >= 8
                     and not _warm_cache_disabled()):
                 # Stash this frame (angle ≡ −3 steps) for the NEXT run's seed;
@@ -11900,7 +11923,7 @@ def _fem_transient_sliding_band_once(
                 # the whole measured window exist (the same-angle reference the
                 # next run's probe is judged against).
                 _wc_A = A2.astype(float, copy=True)
-                if _safe_warm_cache_enabled() and _eddy_bdf2:
+                if _eddy_bdf2:
                     _wc_Ib_prev = tuple(np.asarray(_x, float).copy() for _x in _Ib_k)
                 _wc_Ued = np.asarray(_Ued, float).copy()
             if k >= 0:
@@ -13265,7 +13288,8 @@ def _fem_transient_sliding_band_once(
                     "A2": _wc_A2,
                     **({"Ib_prev": _wc_Ib_prev,
                         "Ib_prev2": _wc_Ib_prev2}
-                       if _safe_warm_cache_enabled() and _eddy_bdf2 else {}),
+                       if (_eddy_bdf2 and _wc_Ib_prev is not None
+                           and _wc_Ib_prev2 is not None) else {}),
                     "solid": np.asarray(_solid_ref, float),
                     # per conductor group, for the per-group same-angle test
                     "solid_grp": {_gk: np.asarray(_gl, float) for _gk, _gl in

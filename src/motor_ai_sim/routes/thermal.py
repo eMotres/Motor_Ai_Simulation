@@ -1650,7 +1650,8 @@ def _solved_gamma_deg(gamma_deg, op_mode) -> float:
 def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                          outer_air_factor, n_sectors, coil_temp_c,
                          component_mesh, n_steps_per_period, n_periods, geo_ov,
-                         magnet_temp_c=None, op_mode=None, rpm=None):
+                         magnet_temp_c=None, op_mode=None, rpm=None,
+                         six_open_set=None):
     """This thermal request, spelled as a Simulation-run snapshot key.
 
     ``rpm`` (2026-10-11) is the ELECTROMAGNETIC speed to look the map up at when
@@ -1698,7 +1699,9 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         cfg_fingerprint=_config_physics_fingerprint(with_request_materials=False),
         geo_ov=geo_ov, mat_ov=_get_request_materials_safe(),
         magnet_temp_c=magnet_temp_c,
-        rotor_angle0_deg=0.0)
+        rotor_angle0_deg=0.0,
+        six_open_set=(None if six_open_set in (None, "", 0)
+                      else int(six_open_set)))
     if rpm is not None:
         from motor_ai_sim.routes.simulation import _effective_rpm
         fields["rpm"] = round(_effective_rpm(rpm), 3)
@@ -1730,7 +1733,10 @@ _PHYSICS_ID_FIELDS = ("cfg_fingerprint", "geo_ov", "mat_ov", "gamma_deg",
                       "I_phase_rms", "rpm", "coil_temp_c", "magnet_temp_c",
                       "n_steps_per_period",
                       "n_periods", "drive", "excitation", "winding",
-                      "rotor_angle0_deg")
+                      "rotor_angle0_deg",
+                      # a six-phase run with one set OPEN is another machine's
+                      # losses (None on every healthy run, old ones included)
+                      "six_open_set")
 
 
 def _freeze(v):
@@ -2193,7 +2199,7 @@ def coupled_pass_probe(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
                        mesh_size_mm, min_size_mm, outer_air_factor, n_sectors,
                        coil_temp_c, component_mesh, geo=None,
                        magnet_temp_c=None, op_mode=None, drive=None,
-                       excitation=None, rpm=None):
+                       excitation=None, rpm=None, six_open_set=None):
     """A coupled pass, spelled as the probe the Thermal tab builds for the
     same request — so the two are compared by one function, not two.
 
@@ -2217,7 +2223,7 @@ def coupled_pass_probe(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
         coil_temp_c=coil_temp_c, component_mesh=component_mesh,
         n_steps_per_period=n_steps_per_period, n_periods=n_periods,
         geo_ov=_parse_geo_override(geo), magnet_temp_c=magnet_temp_c,
-        op_mode=op_mode)
+        op_mode=op_mode, six_open_set=six_open_set)
     if rpm is not None:
         probe["rpm"] = round(_effective_rpm(rpm), 3)
     if drive:
@@ -2404,7 +2410,7 @@ def _remember_loss_map(identity, em, note: str,
 def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
                  mesh_size_mm, min_size_mm, outer_air_factor, n_sectors,
                  coil_temp_c, component_mesh, geo, geo_ov, phase_cb=None,
-                 magnet_temp_c=None, op_mode=None, rpm=None):
+                 magnet_temp_c=None, op_mode=None, rpm=None, six_open_set=None):
     """The cycle-averaged loss map for THIS operating point, and where it came
     from.  THIS FUNCTION NEVER SOLVES.
 
@@ -2454,7 +2460,7 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
             coil_temp_c=coil_temp_c, component_mesh=component_mesh,
             n_steps_per_period=n_steps_per_period, n_periods=n_periods,
             geo_ov=geo_ov, magnet_temp_c=magnet_temp_c, op_mode=op_mode,
-            rpm=rpm)
+            rpm=rpm, six_open_set=six_open_set)
     except Exception as exc:  # noqa: BLE001
         _probe_err = "the run key of this request could not be built (%s)" % exc
 
@@ -2525,6 +2531,7 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
             # keys on it — omitting it would look up the card-temperature
             # snapshot of a run stored at 163 °C and miss its own match.
             magnet_temp_c=magnet_temp_c,
+            six_open_set=_rf.get("six_open_set"),
             latest_run_field=False)
         em = _sim.get_fem_field2d(**_run_kw, use_transient_snapshot=True,
                                   snapshot_only=True,
@@ -2944,6 +2951,7 @@ def _em_map_from_run(run: Dict[str, Any], *, geo, phase_cb=None):
                        else float(f["magnet_temp_c"])),
         snap_drive=str(f.get("drive") or "current"),
         snap_excitation=str(f.get("excitation") or ""),
+        six_open_set=f.get("six_open_set"),
         latest_run_field=False, use_transient_snapshot=True,
         snapshot_only=True, snap_key=tuple(run["key"]))
     n_ld = len(em.get("loss_density_per_tri") or []) if em else 0
@@ -3933,6 +3941,9 @@ def solve_thermal_field(
     # passes its own request rpm, so the map it looks up is the run it just made
     # at that speed — the same rpm `rpm` above gives the gap and the propeller air.
     loss_map_rpm:       Optional[float] = None,
+    # SIX-PHASE, ONE SET OPEN (1 | 2): look up the run solved that way.  Its
+    # map carries the conservative copper basis (`copper_heat_uniform_factor`).
+    six_phase_open_set: Optional[int] = None,
     progress=None,
     _em_map:            Optional[Dict[str, Any]] = None,
     _em_loss_source:    Optional[Dict[str, Any]] = None,
@@ -4442,7 +4453,7 @@ def solve_thermal_field(
                     coil_temp_c=coil_temp_c, component_mesh=component_mesh,
                     geo=geo, geo_ov=_geo_ov, phase_cb=_phase,
                     magnet_temp_c=magnet_temp_c, op_mode=op_mode,
-                    rpm=loss_map_rpm)
+                    rpm=loss_map_rpm, six_open_set=six_phase_open_set)
         finally:
             _NO_WARM_CACHE_CTX.reset(_nwc_token)
     if isinstance(_em_capture, dict):
@@ -4462,6 +4473,14 @@ def solve_thermal_field(
     # vanished into the quantum.  The rounded key is the fallback for any
     # payload that predates the exact one.
     Pcu = float(em.get("P_cu_exact_W", em.get("P_cu_W", 0.0)) or 0.0)
+    # ONE SIX-PHASE SET OPEN: the copper heat sits in the active set's slots
+    # only, and this model spreads the copper uniformly over EVERY slot (q_cu
+    # below).  So the conservative basis is used — every slot at the hottest
+    # set's loss density, P_cu × the run's factor — and the result says so.
+    # (A per-slot model would put the active set's density in its own slots
+    # and only the open set's AC/proximity heat in the others.)
+    _cu_heat_f = float(em.get("copper_heat_uniform_factor") or 1.0)
+    Pcu_heat = Pcu * _cu_heat_f
     # THE END TURNS ARE ALREADY IN IT.  `field_ops.copper_loss_W` returns
     # rho·J²·V_active·k_end, so every copper number that reaches here — the
     # per-frame series and the coupled solve's total alike — is billed for the
@@ -4531,7 +4550,7 @@ def solve_thermal_field(
     V_cu = (num_slots * _n_cond
             * float(g.get("wire_width", 5.0)) * 1e-3
             * float(g.get("wire_height", 0.8)) * 1e-3 * L)
-    q_cu = (Pcu / V_cu) if V_cu > 1e-12 else 0.0
+    q_cu = (Pcu_heat / V_cu) if V_cu > 1e-12 else 0.0
 
     # 3. materials → conductivities
     # The config's assignment with this request's `mat=` override on top — the
@@ -7078,6 +7097,12 @@ def solve_thermal_field(
         # loop's feedback runs through it and 0.1 W is not a resolution a fixed
         # point can converge on (see `Pcu` above).
         "P_cu_exact_W": float(Pcu),
+        # the copper heat the conduction solve deposited — P_cu itself unless
+        # a six-phase set is open (then every slot at the hottest set's density)
+        **({"P_cu_heat_W": round(float(Pcu_heat), 3),
+            "copper_heat_uniform_factor": _cu_heat_f,
+            "copper_heat_basis": em.get("copper_heat_basis")}
+           if _cu_heat_f != 1.0 else {}),
         "P_mag_eddy_W": em.get("P_mag_eddy_W"), "P_loss_total_W": em.get("P_loss_total_W"),
         # WHERE the cycle-averaged loss map came from.  A map replayed from the
         # Simulation run the user already did and a map solved for this request

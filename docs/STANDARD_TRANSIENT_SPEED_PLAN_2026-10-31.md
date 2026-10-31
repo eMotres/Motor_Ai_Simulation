@@ -133,7 +133,7 @@ copper identical, Br kept 99.366 = 99.366 %. Seeded vs cold at −3 K: torque +0
 is covered by `tests/test_warm_seed.py` + `tests/test_demag_reproducible.py`: 27 passed on the server. The Br map is NOT carried (interactive rule of 2026-09-05): the demag
 pre-pass (240 frames) still runs in full; carrying it is the next item.
 
-## 6. Hot start for catalog motors measured (A2 + the catalog copy, branch `claude/hot-start-catalog`)
+## 6. Hot start for catalog motors measured (A2 + the catalog copy, #537)
 
 Owner 2026-10-31: a catalog motor is already computed, so every run of it starts hot.
 - **The magnet is carried (A2).** Every accepted seed of the same mesh carries its Br map, at any current and any
@@ -175,7 +175,7 @@ The 67 °C carried run is still 842 frames for two reasons:
 | Item | Result | Status |
 |---|---|---|
 | (c) analytic dν/dB² in the march Newton (`SB_MARCH_TANGENT=analytic`) | 4237 Cholesky solves instead of 4480 (−5.4 %), results identical to 0.0002 %; wall time not measurable on the loaded server | not proposed |
-| (a) TP-EEC on a fast DC mode | on the L90 the correction after period 2 measures λ = 6.6e-5 per period (τ 0.10 period), yet it is applied and restarts the gauge. That starts the MIN_VERIFY_PERIODS count, which the demag pre-pass then has to serve (4 periods instead of 2). Without it: **722 frames instead of 1082, 3040 Cholesky solves instead of 4480 (−32 %)**, results identical to 0.014 % (shaft) | branch `claude/eec-fast-mode`: a correction is applied only when its own λ ≥ 0.5 (L155 slow shaft λ 0.956-0.960: unchanged) |
+| (a) TP-EEC on a fast DC mode | on the L90 the correction after period 2 measures λ = 6.6e-5 per period (τ 0.10 period), yet it is applied and restarts the gauge. That starts the MIN_VERIFY_PERIODS count, which the demag pre-pass then has to serve (4 periods instead of 2). Without it: **722 frames instead of 1082, 3040 Cholesky solves instead of 4480 (−32 %)**, results identical to 0.014 % (shaft) | #536: a correction is applied only when its own λ ≥ 0.5 (L155 slow shaft λ 0.956-0.960: unchanged); confirmed on the server: 722 frames / 3040 solves, wall 768 -> 591 s |
 | (b) demag pre-pass | after the fast-mode rule the pre-pass is 2 periods: period 1 moves Br, period 2 is quiet. The 4 periods before were the post-jump verification, not demag | nothing further proposed |
 | (d) animation keyframes | the machine was rebuilt and re-filleted for each of 108 keyframes: 57.7 s → 0.9 s | #534 |
 | (d) six-phase L_xy probe | the probe (98-126 s) is kept per workspace and reused through the #529 tolerance rule: 112 s → 2.5 s after the solve on a repeated run | #535 |

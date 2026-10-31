@@ -254,12 +254,16 @@ motors.  The motor BOM, its costs and its readiness summary never see the toolin
 - Provider: DeepSeek via OpenRouter.
 - Env: `OPENROUTER_API_KEY` (required), `PRODUCTION_TRANSLATE_MODEL` default `deepseek/deepseek-chat`.
 - Timeout ~60 s.
-- Privacy (owner decision D3, 2026-10-31): every request carries
-  `"provider": {"data_collection": "deny", "ignore": ["DeepSeek"], "allow_fallbacks": false}`.
-  `data_collection: deny` restricts routing to providers that do not store or train on
-  prompts; `ignore: ["DeepSeek"]` excludes DeepSeek's own endpoint (it is in the PRC). If no
-  allowed provider serves the model, OpenRouter answers 404 and the text stays `pending`
-  with the retry action. The provider that answered is logged by name. Not a substitute for
+- Privacy (owner 2026-10-31): every request carries
+  `"provider": {"data_collection": "deny", "order": ["DeepInfra"], "allow_fallbacks": true}`.
+  `data_collection: deny` restricts routing to hosts that do not store or train on prompts;
+  DeepInfra is preferred and other non-collecting hosts stay allowed, so the translation keeps
+  working (the owner's OpenRouter credit exists for it). No host is excluded by name: on
+  2026-10-31 the public list of `deepseek/deepseek-chat` had DeepInfra (two endpoints) and
+  StreamLake, no DeepSeek-own endpoint. `PYTHONPATH=src python scripts/openrouter_endpoints_check.py`
+  prints the hosts that remain (exit 1 if none). The provider that answered is logged by name;
+  if it is a host the owner does not want, add it to an `ignore` list only after the check
+  shows another host remains. Not a substitute for
   the account setting: **owner step** - at https://openrouter.ai/settings/privacy turn OFF
   every option that lets endpoints (free or paid) train on or publish prompts, and leave
   input/output logging off, so the account-level policy matches the per-request one.

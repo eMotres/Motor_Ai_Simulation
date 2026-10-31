@@ -202,7 +202,7 @@ def test_default_provider_is_anthropic_claude_with_the_same_prompt(monkeypatch, 
     with caplog.at_level("INFO", logger=T.log.name):
         assert T.translate_text("Rotor assembly, tolerance H7/k6", "en", "zh", http_post=post) == "转子组件，公差 H7/k6"
     p = seen[0]
-    assert T.provider() == "anthropic" and p["model"] == "claude-sonnet-5-5" and p["temperature"] == 0 and p["max_tokens"] > 0
+    assert T.provider() == "anthropic" and p["model"] == "claude-sonnet-5-5" and "temperature" not in p and p["max_tokens"] > 0
     assert p["system"] == T.SYSTEM_PROMPT.format(src="English", tgt="Simplified Chinese")
     assert p["messages"] == [{"role": "user", "content": "Rotor assembly, tolerance H7/k6"}] and "provider" not in p
     assert any("anthropic:claude-sonnet-5-5" in r.getMessage() for r in caplog.records)

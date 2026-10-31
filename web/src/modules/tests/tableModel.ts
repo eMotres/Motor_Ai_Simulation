@@ -45,6 +45,7 @@ export interface RowNote { key: string; params: Record<string, unknown> }
 /** The one short note a row carries next to its numbers (translated by the caller), or null. */
 export function rowNote(row: CompareRow): RowNote | null {
   const x = row.extra ?? {};
+  if (row.key === 'cogging_pkpk' && x.pending === true && row.measured === null) return { key: 'benchPending', params: {} };
   if (row.key === 'loss' && typeof x.unexplained_w === 'number') return { key: 'unexplained', params: { w: fmtValue(x.unexplained_w as number) } };
   if (row.status === 'no_model' && row.action) return { key: 'noModelCompute', params: {} };
   if (row.status === 'no_model') return { key: 'noModel', params: {} };

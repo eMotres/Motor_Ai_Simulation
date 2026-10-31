@@ -56,6 +56,15 @@ t('one table per test: group headers, rows, the empty info rows dropped, notes a
   assert.deepEqual(M.tableLines(null), []);
 });
 
+t('a cogging check with the bench value still to come shows the model and says pending', () => {
+  const r = row({ key: 'cogging_pkpk', measured: null, model: 4.745, extra: { pending: true } });
+  assert.deepEqual(M.rowNote(r), { key: 'benchPending', params: {} });
+  const lines = M.tableLines({ test_id: 'c', kind: 'parameters', model_available: true,
+    groups: [{ key: 'cogging', label: 'No-load cogging', params: {}, rows: [r] }] });
+  assert.deepEqual(lines.map((l) => l.type === 'group' ? `#${l.key}` : l.row.key), ['#cogging', 'cogging_pkpk']);
+  assert.equal(lines[1].model, '4.75'); assert.equal(lines[1].measured, '—');
+});
+
 t('a model above the R reading is said as such, never as a negative board-and-joints remainder', () => {
   const over = M.rowNote(row({ key: 'r_ll_mean', measured: 140.6, model: 258.2, extra: { remaining_mohm: -117.6 } }));
   assert.deepEqual(over, { key: 'modelAbove', params: { mohm: '117.6' } });

@@ -471,3 +471,40 @@ def test_a_sibling_that_still_has_its_rotor_is_not_a_rotor_out_reference():
     assert model_source.stator_only_from_doc(_so_doc(), "x") is None
     assert model_source.stator_only_from_doc(_so_doc(parts={"magnet": "excluded", "rotor_core": "excluded"}, ld=None),
                                              "x") is None
+
+
+# ---------------------------------------------------------------------------
+# no-load cogging in Tests (owner 2026-10-31: «он должен быть в тестах»)
+# ---------------------------------------------------------------------------
+
+def _cog_rec(cogging):
+    return models.normalize({"kind": "parameters", "date": "2026-10-31", "title": "cogging",
+                             "conditions": {"rotor": "in", "magnet_temp_c": 20}, "cogging": cogging}, who="t@x")
+
+
+def test_a_cogging_entry_is_a_measurement_or_an_explicit_pending_check():
+    assert _cog_rec({"pkpk_nm": 3.6, "magnet_temp_c": 22})["cogging"] == {"pkpk_nm": 3.6, "magnet_temp_c": 22.0}
+    assert _cog_rec({"pending": True})["cogging"] == {"pending": True}
+    with pytest.raises(models.TestInputError):
+        _cog_rec({"magnet_temp_c": 22})
+
+
+def test_cogging_row_compares_the_bench_with_the_configuration_block():
+    model = model_source.from_docs({}, {"cogging": {"pkpk_Nm": 4.745, "magnet_temp_c": 20.0, "fundamental_order": 12,
+                                                    "dominant_order": 6}, "duties": []}, {}, {})
+    assert model["cogging"]["pkpk_nm"] == pytest.approx(4.745)
+    out = comparison.compare_record(_cog_rec({"pkpk_nm": 3.6}), model, "CILN28", "G2-L40")
+    g = [x for x in out["groups"] if x["key"] == "cogging"][0]
+    r = g["rows"][0]
+    assert r["measured"] == 3.6 and r["model"] == pytest.approx(4.745) and r["status"] == "ok"
+    assert r["delta_pct"] == pytest.approx(C.delta_pct(4.745, 3.6))
+    pend = comparison.compare_record(_cog_rec({"pending": True}), model, "CILN28", "G2-L40")
+    r = [x for x in pend["groups"] if x["key"] == "cogging"][0]["rows"][0]
+    assert r["measured"] is None and r["model"] == pytest.approx(4.745) and r["extra"]["pending"] is True
+
+
+def test_a_record_without_a_cogging_entry_gets_no_cogging_group():
+    model = model_source.from_docs({}, {"cogging": {"pkpk_Nm": 4.745}, "duties": []}, {}, {})
+    rec = models.normalize({"kind": "parameters", "date": "2026-10-31", "title": "r",
+                            "resistance": {"temp_c": 21.7, "pairs": [{"pair": "1-2", "value_mohm": 140}]}}, who="t@x")
+    assert not [g for g in comparison.compare_record(rec, model, "d", "c")["groups"] if g["key"] == "cogging"]

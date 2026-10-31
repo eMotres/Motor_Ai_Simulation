@@ -234,7 +234,14 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
             noload.append({"duty": name, "rpm": rpm, "v_ll_peak": vpk, "v_ll_rms": num(s.get("V_line_rms_V")),
                            "hyst": hy, "eddy": ed, "excess": ex, "p_core": num(s.get("P_core_W")),
                            "p_solid": p_solid, "magnet_temp_c": mag_t})
+    cog = cfg_doc.get("cogging") if isinstance(cfg_doc.get("cogging"), dict) else None
+    cogging = None
+    if cog and num(cog.get("pkpk_Nm")) is not None:
+        cogging = {"pkpk_nm": num(cog.get("pkpk_Nm")), "magnet_temp_c": num(cog.get("magnet_temp_c")),
+                   "fundamental_order": cog.get("fundamental_order"), "dominant_order": cog.get("dominant_order"),
+                   "samples_per_cycle": num(cog.get("samples_per_cycle")), "computed_at": cog.get("computed_at")}
     return {"connection": connection, "duties": duties, "noload": noload, "r_ref": r_ref, "l_ref": l_ref,
+            "cogging": cogging,
             "l_stator_only": l_stator, "magnet": magnet or {"card": None, "grade": None, "temp_c": None, "points": []},
             "mass_kg": mass, "mech": mech, "end3d": factors, "has_bearings": bool(mech and getattr(mech, "has_bearings", False)),
             "available": bool(duties)}
@@ -319,7 +326,7 @@ def collect(die: str, config: str) -> Dict[str, Any]:
     except Exception as e:                                  # noqa: BLE001
         log.info("motor tests: no model for %s/%s (%s)", die, config, e)
         return {"available": False, "duties": [], "noload": [], "r_ref": None, "l_ref": None, "l_stator_only": None,
-                "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
+                "cogging": None, "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
                 "end3d": factors_from_end3d(None)}
     geometry: Dict[str, Any] = {}
     try:

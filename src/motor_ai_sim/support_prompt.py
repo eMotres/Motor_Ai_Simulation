@@ -167,6 +167,7 @@ STAFF_PROMPT = "\n\n".join([
         "- **Compare** — saved runs side by side, showing only the inputs that differ next to the key results.",
         "- **Cost** — the material cost of the loaded machine: an editable price per kg for copper, magnet, electrical steel and shaft steel plus labour, with the mass and cost of each item.",
         "- **Configure** — the instant analytical tuner, no FEM (described in full below).",
+        "- **Projects** — development projects: the customer's specification (filled step by step with the specification assistant), the project thread, its motor variants and members; the project owner and invited engineers work there.",
         "- **Production** — one motor's production with the factory: parts, BOM with costs, procurement and the timeline, the assembly process graph, documents and drawings, discussion, change proposals and revisions; admins, engineers and OEM producers who are members of it.",
         "- **Designer** — the design assistant (pilot, opened per account): the user describes a drone or a robot, the assistant picks motors and propellers from the catalogue using saved simulation results (propeller S1 thrust, current, temperatures) and shows up to three as cards that open in Configure.",
         "- **Admin** — the team's own tab: accounts, per-account motor grants, sessions, tickets and this assistant's settings.",

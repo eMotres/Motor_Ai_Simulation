@@ -3262,7 +3262,7 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                 wc["eddy_complete"] = bool(z["eddy_complete"])
             if _safe_warm_cache_enabled() and "demag_complete" in _f:
                 wc["demag_complete"] = bool(z["demag_complete"])
-            if _safe_warm_cache_enabled() and "demag_history_json" in _f:
+            if "demag_history_json" in _f:
                 wc["demag_history"] = json.loads(str(z["demag_history_json"]))
             # The Br RATCHET state (2026-09-06).  OPTIONAL by construction: a
             # cache written before this existed, or by a run with demag off,
@@ -3402,7 +3402,7 @@ def _warm_cache_store(wc: dict) -> None:
             _extra["eddy_complete"] = bool(wc["eddy_complete"])
         if _safe_on_wc and wc.get("demag_complete") is not None:
             _extra["demag_complete"] = bool(wc["demag_complete"])
-        if _safe_on_wc and wc.get("demag_history") is not None:
+        if wc.get("demag_history") is not None:
             _extra["demag_history_json"] = json.dumps(
                 wc["demag_history"], sort_keys=True, separators=(",", ":"),
                 allow_nan=False)
@@ -6407,6 +6407,82 @@ def _fem_transient_sliding_band_once(
             _lib_br_ok = False
             log.info("P2 warm library: Br seed skipped (%s) - full pre-pass", _e_lbr)
 
+    # ── THE MAGNET CARRIED FROM A SEED OF THIS MACHINE (owner 2026-10-31) ──
+    # Owner: a motor that is already in the catalog has already been computed
+    # and must always hot-start; carry the demagnetisation state over between
+    # coupled passes.  The library above continues a Br map only at its own
+    # operating point.  Any ACCEPTED seed of the SAME geometry and mesh now
+    # carries its map too, at any current and temperature, because the map is
+    # the irreversible fraction alone: each element's factor is measured
+    # against the card's Br AT THAT RUN'S magnet temperature (demag.py, `Br0`),
+    # so this run's magnet is factor × card(T_this run) — a colder run gets
+    # the reversible part back through the card's own α_Br and keeps the
+    # irreversible loss, a hotter or harder run goes on de-rating from it (the
+    # ratchet is min(): nothing ever heals).  It is VERIFIED by one pre-pass
+    # period with the ratchet active, exactly as a library seed is; a period
+    # that is not quiet goes on period by period like a cold run.  Same mesh
+    # only (element centroids and magnet tags identical): no projection.
+    # SB_SEED_BR_CARRY=0 keeps the full pre-pass (A/B).
+    if (not _dm_seeded and _lib_br_pending is None and demag
+            and _dmst is not None and _dmst.active and _mag_idx.size
+            and _wc_seed is not None and _wc_ok
+            and not _seed_from_previous() and not _safe_warm_cache_enabled()
+            and _os_sb.environ.get("SB_SEED_BR_CARRY") != "0"):
+        try:
+            _br_c = np.asarray(_wc_seed.get("br_val"), float)
+            _cen_c = np.asarray(_wc_seed.get("br_cen"), float)
+            _tag_c = np.asarray(_wc_seed.get("br_tag"), int)
+            _dh_c = _wc_seed.get("demag_history") or {}
+            _rm_c = half["r"]["mesh"]
+            _cen_own = np.asarray(_rm_c.p, float)[
+                :, np.asarray(_rm_c.t, int)].mean(axis=1).T[_mag_idx]
+            _tag_own = np.zeros(int(_br_glob.size), int)
+            for _tg_c, _ix_c in half["r"]["cells"].items():
+                _tag_own[np.asarray(_ix_c, int)] = int(_tg_c)
+            _tag_own = _tag_own[_mag_idx]
+            if str(_wc_seed.get("geo_fp") or "") != str(_geo_fp):
+                raise ValueError("the seed is another geometry")
+            if (_br_c.shape != (int(_mag_idx.size),)
+                    or _cen_c.shape != (int(_mag_idx.size), 2)
+                    or _tag_c.shape != (int(_mag_idx.size),)
+                    or not np.all(np.isfinite(_br_c))):
+                raise ValueError("the seed's Br map is another magnet mesh")
+            if (not np.array_equal(_tag_c, _tag_own)
+                    or float(np.max(np.abs(_cen_c - _cen_own))) > 1e-9):
+                raise ValueError("the seed's magnet elements are not this mesh's")
+            if (int(_dh_c.get("prepass_periods") or 0) < 1
+                    or not isinstance(_dh_c.get("last_torque"), Mapping)):
+                raise ValueError("the seed carries no pre-pass history")
+            _lib_br_pending = float(magnet_scale) * np.clip(_br_c, 0.0, 1.0)
+            _dm_seeded = True
+            _dm_lib_verify = True
+            _dm_inherited_history = dict(_dh_c)
+            _same_op_c = bool(
+                abs(float(_wc_seed["I"]) - float(I_phase_rms))
+                <= 1e-9 * max(abs(float(I_phase_rms)), 1.0)
+                and abs(float(_wc_seed["gam"]) - float(gamma_deg)) <= 1e-9)
+            _dm_seed_from = {
+                "I": float(_wc_seed["I"]), "gam": float(_wc_seed["gam"]),
+                "rpm": float(_wc_seed["rpm"]),
+                "geometry_fingerprint": str(_wc_seed.get("geo_fp") or ""),
+                "same_geometry": True, "source": str(_seed_source),
+                "same_operating_point": _same_op_c,
+                "carried": "irreversible fraction x this run's card",
+                "inherited_prepass_periods": int(_dh_c["prepass_periods"]),
+            }
+            log.info("P2 warm seed: Br map of this machine carried (%d magnet "
+                     "elements, %.2f %% .. %.2f %% kept, parent %.4g A / %.4g deg, "
+                     "%d pre-pass period(s)); one checking pre-pass period follows",
+                     int(_mag_idx.size), 100.0 * float(np.min(_br_c)),
+                     100.0 * float(np.max(_br_c)), float(_wc_seed["I"]),
+                     float(_wc_seed["gam"]), int(_dh_c["prepass_periods"]))
+        except Exception as _e_cbr:          # noqa: BLE001 — never fails a run
+            _lib_br_pending = None
+            _dm_seeded = False; _dm_lib_verify = False
+            _dm_seed_from = None; _dm_inherited_history = None
+            log.info("P2 warm seed: Br map not carried (%s) - full pre-pass",
+                     _e_cbr)
+
     def _install_lib_br() -> None:
         """Put the staged library Br map into the magnet (the caller rebuilds
         the magnet source from `_br_glob`, which `_dmst` shares)."""
@@ -8612,6 +8688,20 @@ def _fem_transient_sliding_band_once(
         drift below the safety fraction.  Annotates ``rec``."""
         _img, _img_ok = _dm_image_check(len(passes))
         _dr = _dm_drift(passes)
+        # A CARRIED magnet's first checking period (2026-10-31): its drift is
+        # measured against the PARENT's last pre-pass torque, which at another
+        # current or temperature differs by the change of operating point, not
+        # by any settling.  When the ratchet did not move a single element in
+        # this period (≤ DEMAG_TOL, the rule's own "moved" threshold) the
+        # magnet is the same at both ends of it and there is no demag drift to
+        # measure: waived.  A period in which anything de-rated keeps the test.
+        if (not _dr.get("ok") and _dm_seeded and _dm_lib_verify
+                and len(passes) == 1
+                and float(rec.get("element_max", 1.0)) <= 1e-4):
+            _dr = dict(_dr, ok=True,
+                       waived=("carried magnet: no element moved in the "
+                               "checking period (max %.3g)"
+                               % float(rec.get("element_max", 0.0))))
         rec["image_history"] = _img
         rec["drift"] = _dr
         rec["element_warning"] = _demag_element_warning(rec, _dm_settle_etol)
@@ -13453,6 +13543,9 @@ def _fem_transient_sliding_band_once(
                     # a different conductor set) - see _warm_seed_accept.
                     "nsect": (1 if int(n_sectors) <= 1 else int(n_sectors)),
                     "br_val": _br_pub, "br_cen": _br_cen, "br_tag": _br_tag,
+                    # what the Br map's own pre-pass did (periods, last torque):
+                    # the next run's ONE checking period is judged against it
+                    "demag_history": _demag_history_pub,
                     **({
                         "br_mat": _br_mat,
                         "safe_schema": _SAFE_WARM_CACHE_SCHEMA,

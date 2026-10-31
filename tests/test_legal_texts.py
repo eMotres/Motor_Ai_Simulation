@@ -30,12 +30,12 @@ client = TestClient(app)
 PINNED = {
     ("terms", "en"): "d1fe1060b95ca44debd600c2e2979efddcc1fad696ac406005b9120f45c8af88",
     ("terms", "zh-CN"): "ba50635c61697898b221ca0a34af7f8fea05e76df54e5360951728c6fcd61940",
-    ("privacy", "en"): "5fd28125f634efbfca05fa418e6715d0377512100f2b35528fc67d359fe96c8b",
-    ("privacy", "zh-CN"): "71ace641c4152b3294f97c1710615137ac12034f592dbbbe3b7b917b27c81d45",
-    ("platform-agreement", "en"): "07052234494e25fa0bf094d7e951ac164136635941af67f8929afda3a78c93da",
-    ("platform-agreement", "zh-CN"): "8773676d310a72b020cf826ef0484021af8adc511c785a8b413c2a649ad91c0e",
-    ("schedules", "en"): "e6367f9a6bc5f65f8035d9d8222966a677e639146fae4f53d93c513e17cd5ccb",
-    ("schedules", "zh-CN"): "7d62af465bb85dcea7b31176ab7ce08d052105566a3db2dafc86894651b58eec",
+    ("privacy", "en"): "1870287819b89df729c5067ce00c3145c92a63ee77e4d409e6075fadb1c2ef6c",
+    ("privacy", "zh-CN"): "f33b1bc6718b99a6e3620849ddca0030a559bc2df4abc443b121b5688b5c7b14",
+    ("platform-agreement", "en"): "9e000f8b9ee34d0ff09fa9a969fe1fa73abb17d8d5a386479fef60765c6a8af2",
+    ("platform-agreement", "zh-CN"): "84364ecf76266738fcee0f16d705a44c197213411b7e1dee83e90e745109ab83",
+    ("schedules", "en"): "9af6d4c7f06bb43c5c16dfcf2c682380e5e76d2608b0e70f325bd4ea6d0b9a74",
+    ("schedules", "zh-CN"): "9a30a6c9ea20081ddbfe5701e4ec03ea0ee84fc362cab6db5d354b0f32fa3edd",
 }
 
 

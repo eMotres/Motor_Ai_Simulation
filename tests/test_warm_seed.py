@@ -20,8 +20,13 @@ The fix has three parts and this file guards all three:
   * the coordinator solves the first queued point ALONE when nothing usable
     exists yet and the queue is longer than the worker pool.
 
-The INTERACTIVE path is unchanged by construction — it never sets the flag — and
-``test_interactive_still_runs_the_full_prepass`` is what says so out loud.
+The INTERACTIVE path never sets the flag.  Since 2026-10-31 (owner: a motor
+already in the catalog must always hot-start, and the demag state is carried
+between coupled passes) an interactive run seeded by a state of the SAME
+geometry and mesh carries that state's Br map — the irreversible fraction —
+and verifies it with one checking pre-pass period instead of the whole
+pre-pass: ``test_interactive_continues_the_same_machine_magnet`` and the
+hot -> cold pair below say so out loud.
 """
 from __future__ import annotations
 
@@ -412,25 +417,101 @@ def test_the_seeded_eval_is_the_same_machine_for_fewer_frames(legs):
 
 
 @pytestmark_slow
-def test_interactive_still_runs_the_full_prepass(legs):
-    """The flag is off on the interactive path, and that must still be true
-    with a fully-populated cache sitting beside the config."""
+def test_interactive_continues_the_same_machine_magnet(legs):
+    """Owner 2026-10-31: the interactive path, with a state of the same
+    machine sitting beside the config, CARRIES that state's magnet (the Br
+    ratchet map, an irreversible fraction) and verifies it with one checking
+    pre-pass period instead of running the whole pre-pass again.
+
+    The state it may carry is one with a pre-pass of its own: the warm library
+    keeps the cold leg's (the production setting, SB_WARM_LIB=1).  With the
+    library off, the only state left is the legacy slot, which the SWEEP leg
+    published last: a sweep lineage's magnet has no pre-pass of its own (the
+    library never marks one reproducible either), and it is never carried —
+    the interactive run re-runs the whole pre-pass.  The legacy slot's own
+    carry is pinned by the hot -> cold test below."""
+    from motor_ai_sim.simulation import warm_library as _W
     d = legs["flag_off"]
-    assert d["demag_seeded"] is False, (
-        "an interactive Simulation run continued another run's magnet — the "
-        "2026-09-05 reproducibility fix is gone")
-    assert d.get("demag_seed_from") is None
+    if not _W.enabled():
+        assert d["demag_seeded"] is False, (
+            "a sweep lineage's magnet was carried into an interactive run")
+        assert d.get("demag_seed_from") is None
+        nrep = len(d.get("T_em_Nm") or [])
+        nper = int((d.get("demag_settle") or {}).get("prepass_periods") or 0)
+        assert nper >= 1 and int(d["demag_prepass_frames"]) == nper * nrep > 0
+        t0, t1 = _t(legs["cold"]), _t(d)
+        assert abs(t1 - t0) <= 3e-3 * abs(t0), (
+            f"two interactive runs disagree by {100.0 * (t1 - t0) / t0:+.3f} %")
+        return
+    assert d["demag_seeded"] is True, (
+        "an interactive run of the same machine re-ran the whole pre-pass "
+        "instead of carrying the stored magnet")
+    src = d.get("demag_seed_from") or {}
+    assert src.get("source") in ("last_run", "library")
+    assert src.get("same_geometry") is True
     nrep = len(d.get("T_em_Nm") or [])
-    # whole periods, repeated to the demag fixed point since 2026-09-30
+    # whole periods, and fewer than the cold run's full pre-pass
     nper = int((d.get("demag_settle") or {}).get("prepass_periods") or 0)
     assert nper >= 1 and int(d["demag_prepass_frames"]) == nper * nrep > 0, (
-        "the interactive pre-pass is no longer a whole number of electrical "
-        "periods")
+        "the checking pre-pass is not a whole number of electrical periods")
+    assert int(d["demag_prepass_frames"]) < int(legs["cold"]["demag_prepass_frames"])
     # It agrees with the cold leg to the same tolerance test_demag_reproducible
-    # pins — the seeding work must not have touched that.
+    # pins.
     t0, t1 = _t(legs["cold"]), _t(d)
     assert abs(t1 - t0) <= 3e-3 * abs(t0), (
         f"two interactive runs disagree by {100.0 * (t1 - t0) / t0:+.3f} %")
+
+
+# ── (d2) hot -> cold: the carried magnet keeps its IRREVERSIBLE loss only ────
+# The coordinator's physics point (2026-10-31): the stored map must hold only
+# the irreversible de-rating, so a colder run regains the reversible part from
+# the card at its own magnet temperature and keeps the irreversible loss — and
+# a run that is colder must never "heal" the stored map.
+def _run_at(t_mag: float) -> Dict[str, Any]:
+    set_request_materials(OVERRIDE)
+    try:
+        return fem_transient_sliding_band(
+            geo_override=dict(GEO_30MM), rpm=RPM, connection=CONNECTION,
+            eddy_method="march", **dict(CASE, magnet_temp_c=float(t_mag)))
+    finally:
+        set_request_materials(None)
+
+
+@pytest.fixture(scope="module")
+def hot_cold() -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    _clear_warm_cache()
+    out["hot"] = _run_at(130.0)            # publishes its magnet
+    out["cold_carried"] = _run_at(67.0)    # carries the 130 C map
+    _clear_warm_cache()
+    out["cold_fresh"] = _run_at(67.0)      # nothing carried
+    _clear_warm_cache()
+    print("\n--- hot -> cold, measured on this machine ---")
+    for _n in ("hot", "cold_carried", "cold_fresh"):
+        _d = out[_n]
+        print("  %-12s T_avg %.6g Nm | Br kept %.4f %% | seeded %s | pre-pass %d"
+              % (_n, _t(_d), _br(_d), _d.get("demag_seeded"),
+                 int(_d["demag_prepass_frames"])))
+    return out
+
+
+@pytestmark_slow
+def test_a_colder_run_keeps_the_irreversible_loss_and_regains_the_reversible(
+        hot_cold):
+    h, c, f = hot_cold["hot"], hot_cold["cold_carried"], hot_cold["cold_fresh"]
+    assert c["demag_seeded"] is True and f["demag_seeded"] is False
+    # never heals: the 67 C ratchet cannot move a 130 C map, so the carried
+    # run's magnet keeps exactly the hot run's irreversible loss …
+    assert _br(c) == pytest.approx(_br(h), abs=1e-6)
+    # … which is at least the loss a fresh 67 C run builds by itself
+    assert _br(c) <= _br(f) + 1e-6
+    # the reversible part comes back with the card's own alpha_Br: the carried
+    # cold machine is stronger than the hot one, and no stronger than a fresh
+    # cold one (equal when the hot run lost nothing extra)
+    assert _t(c) > _t(h)
+    assert _t(c) <= _t(f) * (1.0 + 1e-6)
+    # and it was checked in one period, not re-built in a full pre-pass
+    assert int(c["demag_prepass_frames"]) < int(h["demag_prepass_frames"])
 
 
 # ── (e) the warm LIBRARY: many settled states, interactive reuse ────────────

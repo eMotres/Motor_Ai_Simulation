@@ -198,6 +198,18 @@ def fields_dir(die: str, cfg: str, duty: str, *,
             / _duty_stem(duty) / "fields")
 
 
+#: The duty's settled warm state (the catalog copy, owner 2026-10-31) — not a
+#: report map, so not in ``KINDS``; ``warm_library.catalog_candidates`` finds it.
+WARM_FILE = "warm.npz"
+
+
+def warm_path(die: str, cfg: str, duty: str, *,
+              root: Optional[Any] = None) -> Path:
+    """Where the duty's warm state is WRITTEN: ``fields_dir(...) / warm.npz``
+    (the writers' layer, like :func:`save` — never the read-through one)."""
+    return fields_dir(die, cfg, duty, root=root) / WARM_FILE
+
+
 def _runs_roots(die: str, cfg: str) -> List[Path]:
     """Every folder a stored field may be read from, caller-preferred first.
 
@@ -1025,3 +1037,42 @@ def save_active(kind: str, payload: Dict[str, Any], **kw) -> Optional[str]:
         log.debug("duty_fields: no active duty — %s field not stored", kind)
         return None
     return save(ctx[0], ctx[1], ctx[2], kind, payload, **kw)
+
+
+def save_warm_active(pub: Optional[Dict[str, Any]]) -> Optional[str]:
+    """File this solve's settled warm state under the ACTIVE duty, or do nothing.
+
+    ``pub`` is what the solver hands back for the catalog (``_warm_publish``):
+    ``{"wc", "key", "op", "origin", "br_repro_op", "demag_history",
+    "extra_meta"}`` — the keyword arguments of ``warm_library.store_at`` plus
+    the state.  It lands in ``warm_path`` beside the duty's stored fields, so a
+    catalog motor hot-starts from its own converged state wherever the run
+    happens.  Same silences as :func:`save_active` (no active duty, a run the
+    caller marked ``record: false``); ``None`` or a malformed ``pub`` writes
+    nothing.  Returns the path written, or ``None`` — never raises.
+    """
+    try:
+        if pub is None or not isinstance(pub, dict) or not pub:
+            return None
+        try:
+            from motor_ai_sim import run_recording as _rr
+            if _rr.suppressed():
+                log.debug("duty_fields: recording suppressed — warm state not stored")
+                return None
+        except Exception:                                   # noqa: BLE001
+            pass
+        ctx = active_context()
+        if ctx is None:
+            log.debug("duty_fields: no active duty — warm state not stored")
+            return None
+        from motor_ai_sim.simulation import warm_library as _wl
+        out = _wl.store_at(
+            warm_path(ctx[0], ctx[1], ctx[2]), pub["wc"],
+            key=pub["key"], op=pub["op"], origin=pub["origin"],
+            br_repro_op=pub.get("br_repro_op") or "",
+            demag_history=pub.get("demag_history"),
+            extra_meta=pub.get("extra_meta"))
+        return str(out) if out else None
+    except Exception as exc:                                # noqa: BLE001
+        log.info("duty_fields: could not store the warm state (%s)", exc)
+        return None

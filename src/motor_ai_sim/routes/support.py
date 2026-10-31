@@ -14,10 +14,19 @@ Firestore rules so clients cannot read the `config` collection (see firestore.ru
 
 When no key is configured anywhere, the endpoint returns a flagged mock reply.
 
-WHAT THE MODEL SEES OF THE SCREEN (owner decision D3, 2026-10-31).  The session snapshot the widget sends (``context``)
-is reduced before it reaches ANY model (``support_context.model_view``): the page name and non-engineering UI state
-only - no geometry, configuration values or results.  The full sanitised snapshot is still stored with a ticket the
-user confirms (our own store, not a model).  Provider selection is unchanged.
+NO TRAINING ON USERS' WORDS (owner decision D3, 2026-10-31).  The unpaid Gemini API tier lets Google use the prompts
+to improve its products (and its terms allow only paid services for EEA users), and paid Gemini is not an option for
+us.  So the production provider is ANTHROPIC (commercial API: inputs are not used for training); the model comes from
+``ANTHROPIC_SUPPORT_MODEL`` (default ``claude-haiku-5-5``) and the key from ``ANTHROPIC_API_KEY``.  Gemini stays in the
+code, behind a GUARD in ``_effective``: when the effective provider is Gemini and the key is not explicitly marked
+paid (``GEMINI_PAID_TIER=1``), Gemini is REFUSED - logged once, and the call falls back to Anthropic when an Anthropic
+key exists, else to the existing "assistant unavailable" path (the flagged mock reply).  This holds whatever chose
+Gemini: the Firestore override, ``SUPPORT_PROVIDER`` or the automatic pick.  The automatic pick now prefers Anthropic.
+The same ``_effective`` serves the specification assistant (``development/spec_assistant.py``).
+
+The session snapshot the widget sends (``context``) is reduced before it reaches ANY model (``support_context.
+model_view``): the page name and non-engineering UI state only - no geometry, configuration values or results.  The
+full sanitised snapshot is still stored with a ticket the user confirms (our own store, not a model).
 
 ANONYMOUS CALLERS (2026-09-17).  The landing page shows this widget to a
 signed-out visitor, so the route is on ``auth._ANON_OK_PATHS`` and no longer
@@ -103,7 +112,7 @@ ENV_PROVIDER = os.environ.get("SUPPORT_PROVIDER", "").strip().lower()
 ENV_GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
 ENV_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
 ENV_ANTHROPIC_KEY = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-ENV_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_SUPPORT_MODEL", "claude-opus-4-8").strip()
+ENV_ANTHROPIC_MODEL = (os.environ.get("ANTHROPIC_SUPPORT_MODEL") or "claude-haiku-5-5").strip()
 
 #: The FULL prompt (every tab).  Kept under its old name for the admin settings
 #: page and for callers that want "the" prompt; what a given caller is actually
@@ -390,8 +399,32 @@ def _str(v) -> str:
     return v.strip() if isinstance(v, str) else ""
 
 
+def gemini_paid() -> bool:
+    """True only when the owner marked the Gemini key as a PAID-tier key (``GEMINI_PAID_TIER=1``).  Read on every
+    call so a deploy-time env change needs no import-time state."""
+    return os.environ.get("GEMINI_PAID_TIER", "").strip() == "1"
+
+
+_gemini_refusal_logged = False
+
+
+def _log_gemini_refusal(fallback: str) -> None:
+    """One log line per process, however many calls are refused."""
+    global _gemini_refusal_logged
+    if _gemini_refusal_logged:
+        return
+    _gemini_refusal_logged = True
+    logger.warning(
+        "support: Gemini refused - the key is not marked paid (GEMINI_PAID_TIER=1); the unpaid tier lets Google train "
+        "on user content. Using %s instead.", fallback)
+
+
 def _effective() -> dict:
-    """Merge admin overrides over env defaults. Keys resolve admin > env."""
+    """Merge admin overrides over env defaults. Keys resolve admin > env.
+
+    The provider is the Firestore override, else ``SUPPORT_PROVIDER``, else automatic (Anthropic when it has a key,
+    else Gemini).  Gemini is then GUARDED: unless ``GEMINI_PAID_TIER=1`` it is replaced by Anthropic (when a key
+    exists) or by "none" (the unavailable path) - see the module docstring."""
     ov = _load_overrides()
     gem_key = _str(ov.get("gemini_key")) or ENV_GEMINI_KEY
     gem_src = "admin" if _str(ov.get("gemini_key")) else ("env" if ENV_GEMINI_KEY else "none")
@@ -401,9 +434,15 @@ def _effective() -> dict:
     ant_model = _str(ov.get("anthropic_model")) or ENV_ANTHROPIC_MODEL
     prov = (_str(ov.get("provider")) or ENV_PROVIDER).lower()
     if prov not in ("anthropic", "gemini"):
-        prov = "gemini" if gem_key else ("anthropic" if ant_key else "none")
+        prov = "anthropic" if ant_key else ("gemini" if gem_key else "none")
+    blocked = False
+    if prov == "gemini" and not gemini_paid():
+        blocked = True
+        prov = "anthropic" if ant_key else "none"
+        _log_gemini_refusal("Anthropic" if ant_key else "nothing (assistant unavailable)")
     return {
         "provider": prov,
+        "gemini_blocked": blocked,
         "gemini": {"key": gem_key, "model": gem_model, "key_source": gem_src},
         "anthropic": {"key": ant_key, "model": ant_model, "key_source": ant_src},
     }
@@ -435,6 +474,7 @@ def provider_status() -> dict:
     return {
         "provider": active, "model": model, "configured": configured,
         "providerOverride": _str(_load_overrides().get("provider")),  # "" = auto
+        "geminiBlocked": bool(eff.get("gemini_blocked")),  # chosen but refused: key not marked paid
         "store": "firestore" if _firestore() is not None else "env-only",
         "gemini": {"model": g["model"], "configured": bool(g["key"]), "hint": _mask(g["key"]), "keySource": g["key_source"]},
         "anthropic": {"model": a["model"], "configured": bool(a["key"]), "hint": _mask(a["key"]), "keySource": a["key_source"]},
@@ -486,7 +526,7 @@ _STATIC_MODELS = {
         "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash",
     ],
     "anthropic": [
-        "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
+        "claude-haiku-5-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
     ],
 }
 

@@ -62,7 +62,7 @@ Gains are estimates for this L90 point unless marked "measured".
 
 | # | Item | Expected gain | Risk / note |
 |---|---|---|---|
-| A1 | **Warm start of every coupled pass from the previous pass of the same machine.** Measured why it never happens today: the seed identity (`_seed_field_identity`, used by the legacy slot AND the warm library's machine key) contains the MAGNET SCALE, so every coupled pass — solved at a new magnet temperature — refuses the previous pass's state and starts cold (the coil temperature was relaxed for exactly this reason, `_SEED_FIELD_FREE_META = ("temp",)`); the warm library (#506) is also off for six-phase and delta (`_safe_drive_ok`). On the profiled run the legacy slot was refused for "current differs by more than 5 %". Fix: eddy history accepted across magnet temperature (the handoff settle test still decides), library on for six-phase/delta | coupled pass 2..n: warm-up 482 -> ~120-240 frames, prep 962 -> ~600-720 (x1.3-1.6 on prep) | eddy history only; Br from the same operating point only (the 2026-09-05 rule) |
+| A1 | **Make the warm start help instead of hurt.** CORRECTED 2026-10-31 by measurement: the legacy warm slot DOES seed the next run of the same current at another magnet temperature (`mscale` in the seed identity is the `magnet_scale` torque knob, not the temperature). On L90 the seeded run fails its own same-angle check (max deviation 2.2e4 %, tol 2 %) and then needs 10 warm-up extensions instead of the cold run's 8: 1322 frames against 1082 (+22 %), with identical results. Find why the seeded start is worse than cold, then extend the library (#506) to six-phase/delta | today +22 % on every seeded L90 pass; fixed: warm-up 482 -> ~120-240 frames on passes 2..n | eddy history only; Br from the same operating point only (the 2026-09-05 rule) |
 | A2 | **Br continued from the previous coupled pass** + one verification pre-pass period (as sweeps do since 2026-09-06) | pre-pass 480 -> 120 frames on passes 2..n | **owner decision**: the reproducibility rule says Br only from the same operating point |
 | A3 | coarse-time preparation: warm-up marched at 40 steps/period, then 1-2 fine periods (the PWM "mixed" idea) | prep 962 -> ~550 frames on a cold run | changes the start of the reported window: needs the 0.1 % check |
 | A4 | TP-EEC applied from the first warm-up period and to more than the 0th harmonic | warm-up 4 -> 2-3 periods | small code; check the settle gauge |
@@ -82,11 +82,32 @@ x3-4** (A1 + A2 + C1 + B1-B3); **a whole coupled loop of one duty x3-5** (plus C
 Recommended order (cheap and safe first): C1 + B3 (pure reuse/caching) -> B1 -> A1 -> A4 -> B2 -> A3;
 A2 needs the owner's decision; A5 needs a second validation point; B4/B5 later.
 
-## 4. Raw outputs
+## 4. Item 1 measured (owner's pick, branch `claude/std-transient-speed`)
+
+Same L90 point, one sandbox (4 CPUs, nice 10, server at load 10-15), read-only runs, one process like the API
+serving a coupled loop (`scripts/bench/lxy_reuse_bench.py`):
+
+| Run | Frames | Wall [s] | Solver [s] | Outside the solver [s] | L_xy [mH] |
+|---|---:|---:|---:|---:|---:|
+| base code, cold | 1082 | 980.2 | 777.0 | 203.2 | 0.374433 |
+| branch, same point (warm-seeded from the base run, see A1) | 1322 | 1054.8 | 859.5 | 195.3 | 0.374433 |
+| branch, magnet +3 K, **L_xy reused** | 1322 | **955.9** | 873.0 | **82.9** | 0.374433 (reused) |
+| branch, magnet +3 K, L_xy solved | 1322 | 1157.1 | 934.8 | 222.3 | 0.375172 |
+
+- **L_xy reuse: -139 s outside the solver per coupled pass after the first** (222.3 -> 82.9 s; wall -201 s,
+  x1.21 here, the solver part differing by run-to-run load). The reused L_xy is 0.20 % below the probe solved
+  3 K hotter (Ld/Lq per set within 0.24 %); every other quantity is bit-identical (437 of 570 scalars identical, the
+  rest are the six-phase inductances and the probe's own temperature).
+- **Polygon memo: not measurable** above the run-to-run noise (outside-solver 203 -> 195 s with the probe in both).
+  The profile's 87 s was cProfile's own overhead on millions of small shapely calls.
+- Base vs branch on the same point: torque, ripple, every loss and the demag loss identical to the printed digits
+  (+0.0000 %).
+
+## 5. Raw outputs
 
 Server `/opt/motres/compute/jobs/std-speed/`: `prof_base.json` (march, cProfile top 40 by tottime and
 cumulative), `prof_base.log` (timestamped stage log), `tdm6.json`/`tdm6.log` (TDM six-phase),
-`cmp_march_tdm6.txt` (560 scalars compared).
+`cmp_march_tdm6.txt` (560 scalars compared); `item1/` (base1, new_1, new_2reuse, new_3probe JSON and logs).
 
 ## Sources
 

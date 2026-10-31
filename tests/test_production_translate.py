@@ -17,7 +17,8 @@ from tests.test_production_access import (
 
 
 def test_translate_text_unit(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    for k in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "PRODUCTION_TRANSLATE_PROVIDER", "PRODUCTION_TRANSLATE_MODEL"):
+        monkeypatch.delenv(k, raising=False)
 
     # 1. Without key, raises TranslateError
     with pytest.raises(T.TranslateError) as exc:
@@ -59,6 +60,7 @@ def test_translate_text_unit(monkeypatch):
 def test_translate_payload_denies_data_collection_and_keeps_fallbacks(monkeypatch, caplog):
     """Owner 2026-10-31: OpenRouter must not route to a provider that stores/trains on prompts, and the translation must keep working."""
     monkeypatch.delenv("PRODUCTION_TRANSLATE_MODEL", raising=False)
+    monkeypatch.setenv("PRODUCTION_TRANSLATE_PROVIDER", "openrouter")             # OpenRouter is an explicit opt-in now
     seen = []
 
     def post(payload, timeout):
@@ -70,7 +72,7 @@ def test_translate_payload_denies_data_collection_and_keeps_fallbacks(monkeypatc
     assert len(seen) == 1
     assert seen[0]["provider"] == {"data_collection": "deny", "order": ["DeepInfra"], "allow_fallbacks": True}
     assert "ignore" not in seen[0]["provider"]
-    assert seen[0]["model"] == T.DEFAULT_MODEL
+    assert seen[0]["model"] == T.DEFAULT_MODELS["openrouter"]
     # the provider that answered is logged, nothing else of the exchange
     assert any("Fireworks" in r.getMessage() for r in caplog.records)
     assert not any("Rotor assembly" in r.getMessage() for r in caplog.records)
@@ -185,3 +187,33 @@ def test_api_translation_degrades_to_pending_and_retry(prod_env, monkeypatch):
     p = [x for x in parts if x["id"] == part_id][0]
     assert p["name"]["en"] == "Laminated Stator Core (Custom)"
     assert p["name"]["status"]["en"] == "confirmed"
+
+
+def test_default_provider_is_anthropic_claude_with_the_same_prompt(monkeypatch, caplog):
+    """Owner 2026-10-31 «переводи перевод на Claude»: Anthropic by default, the same system prompt, no OpenRouter fields."""
+    for k in ("PRODUCTION_TRANSLATE_PROVIDER", "PRODUCTION_TRANSLATE_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    seen = []
+
+    def post(payload, timeout):
+        seen.append(payload)
+        return {"model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "转子组件，公差 H7/k6"}]}
+
+    with caplog.at_level("INFO", logger=T.log.name):
+        assert T.translate_text("Rotor assembly, tolerance H7/k6", "en", "zh", http_post=post) == "转子组件，公差 H7/k6"
+    p = seen[0]
+    assert T.provider() == "anthropic" and p["model"] == "claude-sonnet-5-5" and p["temperature"] == 0 and p["max_tokens"] > 0
+    assert p["system"] == T.SYSTEM_PROMPT.format(src="English", tgt="Simplified Chinese")
+    assert p["messages"] == [{"role": "user", "content": "Rotor assembly, tolerance H7/k6"}] and "provider" not in p
+    assert any("anthropic:claude-sonnet-5-5" in r.getMessage() for r in caplog.records)
+    # a stale OpenRouter model id in the env does not reach Anthropic
+    monkeypatch.setenv("PRODUCTION_TRANSLATE_MODEL", "deepseek/deepseek-chat")
+    assert T.model() == "claude-sonnet-5-5"
+    monkeypatch.setenv("PRODUCTION_TRANSLATE_MODEL", "claude-haiku-5-5")
+    assert T.model() == "claude-haiku-5-5"
+    # the key of the chosen provider is the one required
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    with pytest.raises(T.TranslateError) as exc:
+        T.translate_text("Shaft", "en", "zh")
+    assert "no provider key" in str(exc.value)

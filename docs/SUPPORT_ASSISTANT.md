@@ -55,8 +55,11 @@ used for training).
 3. `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GEMINI_MODEL`: remove them. If they stay, nothing
    calls Gemini (no `GEMINI_PAID_TIER=1`), but a stale key on the server is a liability.
    Never set `GEMINI_PAID_TIER=1` unless the owner buys a paid tier, which is not planned.
-4. Restart the API and open Admin -> Support settings: provider `anthropic`, the model
-   `claude-haiku-5-5`, configured.
+4. Production translation (same deploy): set `PRODUCTION_TRANSLATE_PROVIDER=anthropic` and
+   `PRODUCTION_TRANSLATE_MODEL=claude-sonnet-5-5` (replace the old `deepseek/deepseek-chat`). `OPENROUTER_API_KEY` is then
+   unused by the app; keep it only if the OpenRouter opt-in may be needed again.
+5. Restart the API and open Admin -> Support settings: provider `anthropic`, the model
+   `claude-haiku-5-5`, configured. Then translate one production text (EN -> ZH) and check it is no longer `pending`.
 
 The model also no longer receives engineering data: see "What is attached" below.
 

@@ -251,22 +251,17 @@ motors.  The motor BOM, its costs and its readiness summary never see the toolin
 ## 6. Translation provider
 
 - Module: `src/motor_ai_sim/production/translate.py`
-- Provider: DeepSeek via OpenRouter.
-- Env: `OPENROUTER_API_KEY` (required), `PRODUCTION_TRANSLATE_MODEL` default `deepseek/deepseek-chat`.
-- Timeout ~60 s.
-- Privacy (owner 2026-10-31): every request carries
-  `"provider": {"data_collection": "deny", "order": ["DeepInfra"], "allow_fallbacks": true}`.
-  `data_collection: deny` restricts routing to hosts that do not store or train on prompts;
-  DeepInfra is preferred and other non-collecting hosts stay allowed, so the translation keeps
-  working (the owner's OpenRouter credit exists for it). No host is excluded by name: on
-  2026-10-31 the public list of `deepseek/deepseek-chat` had DeepInfra (two endpoints) and
-  StreamLake, no DeepSeek-own endpoint. `PYTHONPATH=src python scripts/openrouter_endpoints_check.py`
-  prints the hosts that remain (exit 1 if none). The provider that answered is logged by name;
-  if it is a host the owner does not want, add it to an `ignore` list only after the check
-  shows another host remains. Not a substitute for
-  the account setting: **owner step** - at https://openrouter.ai/settings/privacy turn OFF
-  every option that lets endpoints (free or paid) train on or publish prompts, and leave
-  input/output logging off, so the account-level policy matches the per-request one.
+- Provider (owner 2026-10-31 «переводи перевод на Claude»): **Anthropic Claude** by default, on the corporate
+  `ANTHROPIC_API_KEY` (commercial terms: no training on inputs or outputs).
+- Env: `PRODUCTION_TRANSLATE_PROVIDER` = `anthropic` (default) | `openrouter` (explicit opt-in only);
+  `PRODUCTION_TRANSLATE_MODEL` default `claude-sonnet-5-5` (Anthropic) or `deepseek/deepseek-chat` (OpenRouter). A model id
+  of the other provider (e.g. a stale `deepseek/deepseek-chat` with Anthropic) is replaced by the provider default and logged.
+- Timeout ~60 s; `max_tokens` 8192; temperature 0. The system prompt and the output (translation only) are unchanged.
+- OpenRouter opt-in: every request carries
+  `"provider": {"data_collection": "deny", "order": ["DeepInfra"], "allow_fallbacks": true}`
+  (only hosts that do not store or train on prompts). `PYTHONPATH=src python scripts/openrouter_endpoints_check.py`
+  prints the hosts that remain. With the Anthropic default the app does not call OpenRouter at all.
+- Tests never see real keys: `tests/conftest.py` removes `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` for every test.
 - System prompt: technical translation for motor manufacturing; keep numbers, units, tolerances, part codes verbatim.
 - Never log or return the key.
 - On failure / missing key: store text with status `pending` and provide `retry` action.

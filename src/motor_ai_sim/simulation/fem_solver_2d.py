@@ -3055,6 +3055,12 @@ import contextvars as _ctxv
 _NO_WARM_CACHE_CTX = _ctxv.ContextVar("sb_no_warm_cache", default=False)
 
 
+# The route that persists a live-machine run's settled state into the
+# catalog (`duty_fields.save_warm_active`) sets this around ITS solve; every
+# other caller of the solver gets no `_warm_publish` in its result.
+_WANT_WARM_PUBLISH_CTX = _ctxv.ContextVar("sb_want_warm_publish", default=False)
+
+
 def _warm_cache_disabled() -> bool:
     """True when this solve must neither consume nor publish the warm seed."""
     return _os_sb.environ.get("SB_NO_WARM_CACHE") == "1" or bool(_NO_WARM_CACHE_CTX.get())
@@ -6190,10 +6196,24 @@ def _fem_transient_sliding_band_once(
     # label would otherwise never match its own sweep, and the seed would be
     # silently refused for a difference that is not a difference.
     _geo_fp = _geo_fingerprint(geo)
+    # THE WINDING the state belongs to (2026-10-31): which coil sits in which
+    # phase with which sign, the parallel paths, the connection, the six-phase
+    # sets and the strand bonding.  Two configurations of one geometry and mesh
+    # with different windings are different machines; with the catalog-wide
+    # hot start and the carried Br map they must never share a state.
+    try:
+        import hashlib as _hl_wind
+        _wind_fp = _hl_wind.sha1(json.dumps({
+            "layout": [[str(_ph), int(_sg)] for _ph, _sg in dom.winding_layout],
+            "np": int(n_parallel), "sd": str(star_delta or "star"),
+            "six": six_phase, "bond": strand_bonding},
+            sort_keys=True, default=repr).encode()).hexdigest()[:16]
+    except Exception:                       # noqa: BLE001 — identity only
+        _wind_fp = ""
     _wmeta = {"nspp": int(n_steps_per_period), "npd": float(n_periods),
               "conn": "np%d" % int(n_parallel),
               "temp": round(float(coil_temp_c), 1),
-              "mscale": float(magnet_scale)}
+              "mscale": float(magnet_scale), "wind": _wind_fp}
     if _safe_warm_cache_enabled():
         try:
             _safe_s_tags = [int(t) for t in half["s"]["cells"]
@@ -6293,9 +6313,14 @@ def _fem_transient_sliding_band_once(
     _lib_br_ok = False        # …and it may seed the Br map too
     _lib_n_same_machine = 0   # stored states of this machine discretisation
     _seed_source = "cold"
-    _lib_on = bool(eddy and not _vdrive and _safe_drive_ok
+    # Six-phase and delta windings too since 2026-10-31: the winding is in the
+    # seed's machine terms (`_wmeta["wind"]`), so the key separates them.
+    _lib_catalog = bool(getattr(_wlib, "catalog_enabled", lambda: False)())
+    _lib_on = bool(eddy and not _vdrive and drive == "current"
+                   and waveform is None and excitation is None
                    and not _warm_cache_disabled()
-                   and not _safe_warm_cache_enabled() and _wlib.enabled())
+                   and not _safe_warm_cache_enabled()
+                   and (_wlib.enabled() or _lib_catalog))
     if _lib_on:
         try:
             _lib_key = _wlib.machine_key(
@@ -6316,6 +6341,15 @@ def _fem_transient_sliding_band_once(
                 "eddy_method": str(_eddy_method), "tdm_demag": str(_tdm_demag)})
             if not _seed_from_previous():
                 _lib_cands = _wlib.candidates(_lib_key)
+                # …and the CATALOG: the states persisted beside the stored
+                # duties of every die this run can see (owner 2026-10-31: a
+                # catalog motor always hot-starts, wherever it runs)
+                if _lib_catalog:
+                    try:
+                        _lib_cands = _lib_cands + list(
+                            _wlib.catalog_candidates(_lib_key))
+                    except Exception as _e_cat:      # noqa: BLE001
+                        log.info("P2 warm catalog: lookup failed (%s)", _e_cat)
                 _lib_n_same_machine = len(_lib_cands)
                 _lib_meta = _wlib.pick(_lib_cands, I=float(I_phase_rms),
                                        gam=float(gamma_deg), rpm=float(rpm),
@@ -6442,6 +6476,10 @@ def _fem_transient_sliding_band_once(
             _tag_own = _tag_own[_mag_idx]
             if str(_wc_seed.get("geo_fp") or "") != str(_geo_fp):
                 raise ValueError("the seed is another geometry")
+            _mat_c = (_wc_seed.get("mat_fp")
+                      or (_wc_seed.get("lib") or {}).get("mat_fp"))
+            if str(_mat_c or "") != str(_noload_material_fingerprint()):
+                raise ValueError("the seed's materials are not this run's")
             if (_br_c.shape != (int(_mag_idx.size),)
                     or _cen_c.shape != (int(_mag_idx.size), 2)
                     or _tag_c.shape != (int(_mag_idx.size),)
@@ -13543,6 +13581,9 @@ def _fem_transient_sliding_band_once(
                     # a different conductor set) - see _warm_seed_accept.
                     "nsect": (1 if int(n_sectors) <= 1 else int(n_sectors)),
                     "br_val": _br_pub, "br_cen": _br_cen, "br_tag": _br_tag,
+                    # the materials the magnet map belongs to (a Br map is
+                    # only carried onto the same magnet grade)
+                    "mat_fp": str(_noload_material_fingerprint()),
                     # what the Br map's own pre-pass did (periods, last torque):
                     # the next run's ONE checking period is judged against it
                     "demag_history": _demag_history_pub,
@@ -13869,6 +13910,7 @@ def _fem_transient_sliding_band_once(
     # the warm cache is published only by a solve that is ACCEPTED (after the
     # orbit-error estimate verdict): a rejected TDM attempt must leave nothing for the retry
     # or the march to start from (transactional)
+    _warm_publish_out = None    # the settled state for the catalog (route opt-in)
     for _wcp in _wc_pending:
         try:
             _warm_cache_store(_wcp)
@@ -13902,11 +13944,21 @@ def _fem_transient_sliding_band_once(
                                            "torque_method", ""))}}
                     else:
                         _br_repro = ""
-                _wlib.store(_wcp, key=_lib_key, op=_lib_op,
-                            origin=("sweep" if _seed_from_previous() else "interactive"),
-                            br_repro_op=_br_repro, demag_history=_dh_pub,
-                            extra_meta={"eddy_method": str(_eddy_method),
-                                        "demag_seeded": bool(_dm_seeded)})
+                _xm_pub = {"eddy_method": str(_eddy_method),
+                           "demag_seeded": bool(_dm_seeded),
+                           "mat_fp": str(_noload_material_fingerprint())}
+                if _wlib.enabled():
+                    _wlib.store(_wcp, key=_lib_key, op=_lib_op,
+                                origin=("sweep" if _seed_from_previous()
+                                        else "interactive"),
+                                br_repro_op=_br_repro, demag_history=_dh_pub,
+                                extra_meta=_xm_pub)
+                if (_WANT_WARM_PUBLISH_CTX.get() and not _seed_from_previous()
+                        and _lib_catalog):
+                    _warm_publish_out = {
+                        "wc": _wcp, "key": _lib_key, "op": _lib_op,
+                        "origin": "interactive", "br_repro_op": _br_repro,
+                        "demag_history": _dh_pub, "extra_meta": _xm_pub}
             except Exception as _e_lst:      # noqa: BLE001 — an accelerator only
                 log.info("P2 warm library: not stored (%s)", _e_lst)
     _wc_pending = []
@@ -14750,6 +14802,10 @@ def _fem_transient_sliding_band_once(
         # and what the reported period moved against the last settling one.
         # None on every fixed-count run.
         "voltage_settle": _voltage_settle,
+        # the settled state the route persists beside the duty (catalog hot
+        # start); present only when the route asked (`_WANT_WARM_PUBLISH_CTX`)
+        **({"_warm_publish": _warm_publish_out}
+           if _warm_publish_out is not None else {}),
         "solve_wall_s": round(float(_t.time() - t0), 1),
         # What the caller ASKED for, beside what actually ran.  The whole-node
         # snap silently changed the time resolution of every run whose requested

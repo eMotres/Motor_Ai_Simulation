@@ -181,6 +181,14 @@ def _drop_stale_lazy_overrides(before: dict) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_translation_keys(monkeypatch):
+    """The production translation calls Anthropic by default (2026-10-31) and the owner's PC has the corporate
+    ``ANTHROPIC_API_KEY`` in its user environment: no test may reach the real API through it.  Tests that need a key set it."""
+    for k in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _undo_stale_lazy_path_overrides():
     """``monkeypatch.setattr(routes.presets, "_PRESETS_PATH", x)`` must not outlive
     the test (2026-10-10).

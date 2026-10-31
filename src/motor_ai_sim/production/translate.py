@@ -1,14 +1,16 @@
-"""Machine translation EN <-> ZH for the production module: DeepSeek through OpenRouter.
+"""Machine translation EN <-> ZH for the production module: Anthropic Claude by default, OpenRouter only as an explicit opt-in.
 
-``OPENROUTER_API_KEY`` is required (read inside ``_post`` only, never logged, never returned); ``PRODUCTION_TRANSLATE_MODEL`` defaults to
-``deepseek/deepseek-chat``.  A failure or a missing key raises ``TranslateError``; the caller stores the text with status ``pending`` and
+Owner 2026-10-31: «переводи перевод на Claude».  ``PRODUCTION_TRANSLATE_PROVIDER`` = ``anthropic`` (default) or ``openrouter``;
+``PRODUCTION_TRANSLATE_MODEL`` defaults to ``claude-sonnet-5-5`` (Anthropic) or ``deepseek/deepseek-chat`` (OpenRouter).  A model id
+that does not belong to the chosen provider (for example a stale ``deepseek/...`` with the Anthropic default) is replaced by that
+provider's default and logged once.  The key (``ANTHROPIC_API_KEY`` / ``OPENROUTER_API_KEY``) is read inside ``_post`` only, never
+logged, never returned.  A failure or a missing key raises ``TranslateError``; the caller stores the text with status ``pending`` and
 offers a retry - saving is never blocked.
 
-NO TRAINING (owner decision 2026-10-31).  Every request carries ``PROVIDER_PREFS``: ``data_collection: deny`` (OpenRouter routes
-only to hosts of the model that do not store or train on prompts) and a preferred host order; fallbacks stay allowed, so the
-translation keeps working while any non-collecting host serves the model (the owner's OpenRouter credit exists for this translation).
-:func:`usable_endpoints` answers which hosts of the public endpoint list remain (``scripts/openrouter_endpoints_check.py`` runs it
-live).  The provider that actually answered is logged (name only) because the translation metadata has no field for it.  Tests pass ``http_post`` (``(payload, timeout) -> OpenRouter JSON``) or patch ``_post``.
+NO TRAINING.  Anthropic's commercial API does not train on inputs or outputs.  The OpenRouter opt-in carries ``PROVIDER_PREFS``:
+``data_collection: deny`` (only hosts that do not store or train on prompts), DeepInfra preferred, fallbacks allowed;
+:func:`usable_endpoints` / ``scripts/openrouter_endpoints_check.py`` show which hosts remain.  The provider that answered is logged
+(name only).  Tests pass ``http_post`` (``(payload, timeout) -> provider JSON``; both answer shapes are read) or patch ``_post``.
 """
 from __future__ import annotations
 
@@ -20,12 +22,20 @@ from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
-URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-chat"
+PROVIDERS = ("anthropic", "openrouter")
+DEFAULT_PROVIDER = "anthropic"
+URLS = {"anthropic": "https://api.anthropic.com/v1/messages", "openrouter": "https://openrouter.ai/api/v1/chat/completions"}
+URL = URLS["openrouter"]
+DEFAULT_MODELS = {"anthropic": "claude-sonnet-5-5", "openrouter": "deepseek/deepseek-chat"}
+DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER]
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+ANTHROPIC_VERSION = "2023-06-01"
+MAX_TOKENS = 8192
 TIMEOUT_S = 60.0
-#: OpenRouter provider routing sent with every request (see the module docstring).
+#: OpenRouter provider routing sent with every OpenRouter request (see the module docstring).
 PROVIDER_PREFS = {"data_collection": "deny", "order": ["DeepInfra"], "allow_fallbacks": True}
 _NAMES = {"en": "English", "zh": "Simplified Chinese"}
+_warned_model: set = set()
 
 
 def usable_endpoints(endpoints: list) -> list:
@@ -47,18 +57,52 @@ class TranslateError(RuntimeError):
     """The provider could not translate (no key, network, bad answer).  The message never contains the key."""
 
 
+def provider() -> str:
+    p = (os.environ.get("PRODUCTION_TRANSLATE_PROVIDER") or "").strip().lower()
+    return p if p in PROVIDERS else DEFAULT_PROVIDER
+
+
 def model() -> str:
-    return (os.environ.get("PRODUCTION_TRANSLATE_MODEL") or "").strip() or DEFAULT_MODEL
+    p = provider()
+    m = (os.environ.get("PRODUCTION_TRANSLATE_MODEL") or "").strip()
+    if not m:
+        return DEFAULT_MODELS[p]
+    if (p == "anthropic") != m.startswith("claude-"):
+        if m not in _warned_model:
+            _warned_model.add(m)
+            log.warning("PRODUCTION_TRANSLATE_MODEL=%s does not belong to provider %s; using %s", m, p, DEFAULT_MODELS[p])
+        return DEFAULT_MODELS[p]
+    return m
+
+
+def _payload(text: str, src_lang: str, tgt_lang: str) -> dict:
+    system = SYSTEM_PROMPT.format(src=_NAMES[src_lang], tgt=_NAMES[tgt_lang])
+    if provider() == "anthropic":
+        return {"model": model(), "max_tokens": MAX_TOKENS, "temperature": 0, "system": system,
+                "messages": [{"role": "user", "content": str(text)}]}
+    return {"model": model(), "temperature": 0, "provider": {**PROVIDER_PREFS, "order": list(PROVIDER_PREFS["order"])},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": str(text)}]}
+
+
+def _answer(data: dict) -> tuple[str, str]:
+    """(text, who served it) from an Anthropic (``content`` blocks) or an OpenRouter (``choices``) answer."""
+    if isinstance(data.get("content"), list):
+        text = "".join(str(b.get("text") or "") for b in data["content"] if isinstance(b, dict) and b.get("type", "text") == "text")
+        return text.strip(), "anthropic:" + str(data.get("model") or "")[:40]
+    return str(data["choices"][0]["message"]["content"]).strip(), str(data.get("provider") or "").strip()[:60]
 
 
 def _post(payload: dict, timeout: float) -> dict:
     """The one place that touches the key and the network."""
-    key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    p = provider()
+    key = (os.environ.get(KEY_ENV[p]) or "").strip()
     if not key:
         raise TranslateError("translation is not configured (no provider key)")
-    req = urllib.request.Request(
-        URL, data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, method="POST")
+    if p == "anthropic":
+        headers = {"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+    else:
+        headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    req = urllib.request.Request(URLS[p], data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -70,13 +114,9 @@ def translate_text(text: str, src_lang: str, tgt_lang: str,
         raise TranslateError("unsupported language pair %s -> %s" % (src_lang, tgt_lang))
     if not str(text or "").strip():
         return ""
-    payload = {"model": model(), "temperature": 0, "provider": {**PROVIDER_PREFS, "order": list(PROVIDER_PREFS["order"])},
-               "messages": [{"role": "system", "content": SYSTEM_PROMPT.format(src=_NAMES[src_lang], tgt=_NAMES[tgt_lang])},
-                            {"role": "user", "content": str(text)}]}
+    payload = _payload(text, src_lang, tgt_lang)
     try:
-        data = (http_post or _post)(payload, TIMEOUT_S)
-        out = str(data["choices"][0]["message"]["content"]).strip()
-        served_by = str(data.get("provider") or "").strip()[:60] if isinstance(data, dict) else ""
+        out, served_by = _answer((http_post or _post)(payload, TIMEOUT_S))
     except TranslateError:
         raise
     except Exception as e:                                  # noqa: BLE001 - any provider failure degrades to "pending"

@@ -193,6 +193,7 @@ def test_solver_snapshot_call_is_guarded():
 NOT_PER_FRAME = {
     "_frames2",       # animation keyframes, picked beyond the settling prefix
     "_inc_rows",      # incremental Ldq rows at sampled frames only
+    "_six_rows",      # six-phase L_xy probe rows, at the same sampled frames
     "_pic_fallback", "_pic_unconv",    # frame INDEX lists (diagnostics)
     "_v_bpsi",        # period-boundary flux samples (Aitken anchor)
     "_cs_hist",       # one row per settling PERIOD (converged sine settle)

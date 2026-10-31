@@ -78,7 +78,8 @@ def model() -> str:
 def _payload(text: str, src_lang: str, tgt_lang: str) -> dict:
     system = SYSTEM_PROMPT.format(src=_NAMES[src_lang], tgt=_NAMES[tgt_lang])
     if provider() == "anthropic":
-        return {"model": model(), "max_tokens": MAX_TOKENS, "temperature": 0, "system": system,
+        # No ``temperature``: the current Claude models reject it ("deprecated for this model", HTTP 400, 2026-10-31).
+        return {"model": model(), "max_tokens": MAX_TOKENS, "system": system,
                 "messages": [{"role": "user", "content": str(text)}]}
     return {"model": model(), "temperature": 0, "provider": {**PROVIDER_PREFS, "order": list(PROVIDER_PREFS["order"])},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": str(text)}]}

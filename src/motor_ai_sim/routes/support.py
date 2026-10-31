@@ -458,6 +458,18 @@ def _effective_prompt(role: Optional[str] = None) -> str:
     return STAFF_PROMPT if role is None else prompt_for_role(role)
 
 
+def effective_provider() -> str:
+    """The provider that answers the help chat right now: ``gemini`` | ``anthropic`` | ``none`` (no key / mock replies).  The kind only;
+    ``/api/me`` hands it to the web, which shows the Gemini notice above the chat input."""
+    eff = _effective()
+    p = eff["provider"]
+    if p == "gemini" and eff["gemini"]["key"]:
+        return "gemini"
+    if p == "anthropic" and eff["anthropic"]["key"]:
+        return "anthropic"
+    return "none"
+
+
 def _mask(k: str):
     if not k:
         return None

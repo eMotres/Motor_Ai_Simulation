@@ -115,3 +115,31 @@ test('without a mounted host nobody is asked; concurrent calls share one dialog'
   assert.equal(opened, 2);
   A.setAgreementHost(null);
 });
+
+const termsGate = () => json(428, { detail: { code: 'terms_required', version: 'v0.4', from: '2026-12-01' } });
+
+test('a 428 terms_required opens the Updated-terms dialog, not the agreement dialog, and repeats the call after acceptance', async () => {
+  const never = async () => { throw new Error('agreement dialog opened'); };
+  let asked = 0; let retried = 0;
+  const res = await A.handleAgreementRequired(termsGate(), async () => { retried += 1; return json(200, { ok: true }); }, never,
+    async (d) => { asked += 1; assert.equal(d.version, 'v0.4'); assert.equal(d.from, '2026-12-01'); return true; });
+  assert.equal(res.status, 200); assert.equal(asked, 1); assert.equal(retried, 1);
+  // "Later": the 428 is returned untouched and nothing is repeated
+  let again = 0;
+  const kept = await A.handleAgreementRequired(termsGate(), async () => { again += 1; return json(200, {}); }, never, async () => false);
+  assert.equal(kept.status, 428); assert.equal(again, 0); assert.equal((await kept.json()).detail.code, 'terms_required');
+});
+
+test('isTermsGate: only the 428 with the terms code; no host mounted = nobody is asked', async () => {
+  assert.equal(A.isTermsGate(428, { detail: { code: 'terms_required' } }), true);
+  for (const [st, b] of [[200, { detail: { code: 'terms_required' } }], [428, { detail: { code: 'agreement_required' } }], [428, null], [403, { detail: { code: 'terms_required' } }]]) {
+    assert.equal(A.isTermsGate(st, b), false);
+  }
+  A.setTermsHost(null);
+  assert.equal(await A.requestTerms({ version: 'v0.4' }), false);
+  let calls = 0;
+  A.setTermsHost(async () => { calls += 1; return true; });
+  const [x, y] = await Promise.all([A.requestTerms(), A.requestTerms()]);
+  assert.equal(x && y, true); assert.equal(calls, 1);                                              // concurrent gated calls share ONE dialog
+  A.setTermsHost(null);
+});

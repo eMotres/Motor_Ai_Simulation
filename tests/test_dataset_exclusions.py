@@ -97,9 +97,9 @@ def build_world(env):
 def test_no_acceptance_means_everything_is_empty(env):
     build_world(env)
     out = PA.dataset_exclusions()
-    assert {k: v for k, v in out.items() if k != "generated"} == EMPTY and out["generated"].endswith("Z")
+    assert {k: v for k, v in out.items() if k not in ("generated", "training")} == EMPTY and out["generated"].endswith("Z")
     accept(env, "company:" + env["freeco"]["id"], "FREE")                                  # a FREE acceptance excludes nobody either
-    assert {k: v for k, v in PA.dataset_exclusions().items() if k != "generated"} == EMPTY
+    assert {k: v for k, v in PA.dataset_exclusions().items() if k not in ("generated", "training")} == EMPTY
 
 
 def test_private_company_lists_people_workspaces_projects_motors_productions(env):
@@ -116,7 +116,7 @@ def test_private_company_lists_people_workspaces_projects_motors_productions(env
     assert {(m["die"], m["config"]) for m in out["motors"]} == {("CIANO28 85", "A1"), ("CIANO28 85", "OLD"), ("DIE-X", "cfg"),
                                                                   ("LOOSE DIE", "l")}
     assert {(m["die"], m["config"]) for m in out["productions"]} == {("CIANO28 85", "A1"), ("LOOSE DIE", "l")}
-    blob = json.dumps(out)
+    blob = json.dumps({k: v for k, v in out.items() if k != "training"})
     assert ENG not in blob and OWN not in blob and FREE1 not in blob and "FREE DIE" not in blob and "MIXED DIE" not in blob
 
 
@@ -125,7 +125,7 @@ def test_a_later_free_acceptance_removes_the_company(env):
     accept(env, "company:" + env["acme"]["id"], "PRIVATE", ts=2000)
     assert PA.dataset_exclusions()["emails"]
     accept(env, "company:" + env["acme"]["id"], "FREE", ts=3000)
-    assert {k: v for k, v in PA.dataset_exclusions().items() if k != "generated"} == EMPTY
+    assert {k: v for k, v in PA.dataset_exclusions().items() if k not in ("generated", "training")} == EMPTY
     accept(env, "company:" + env["acme"]["id"], "PRIVATE", ts=4000)                       # and PRIVATE again brings it back
     assert PA.dataset_exclusions()["companies"] == [env["acme"]["id"]]
 
@@ -180,7 +180,7 @@ def test_admin_route(env):
     assert client.get("/api/admin/dataset/exclusions").status_code in (401, 403)
     assert client.get("/api/admin/dataset/exclusions", headers=env["user"]).status_code in (401, 403)
     r = client.get("/api/admin/dataset/exclusions", headers=env["admin"])
-    assert r.status_code == 200 and r.json()["companies"] == [env["acme"]["id"]] and set(r.json()) == set(EMPTY) | {"generated"}
+    assert r.status_code == 200 and r.json()["companies"] == [env["acme"]["id"]] and set(r.json()) == set(EMPTY) | {"generated", "training"}
 
 
 def test_owner_without_any_acceptance_falls_back_to_the_members(env):

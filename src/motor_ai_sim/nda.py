@@ -122,10 +122,14 @@ _BLOCK = re.compile(r"\{\{#(if|unless)\s+(\w+)\s*\}\}(.*?)\{\{/\1\s*\}\}", re.S)
 _BLANKS = re.compile(r"\n{3,}")
 
 
+def is_cn_hk(country) -> bool:
+    """Mainland China or the Hong Kong SAR: the flag ``country_is_cn_hk`` of the texts (agreement section 13, variant B)."""
+    return str(country or "").strip().upper() in ("CN", "HK")
+
+
 def template_values(fields: dict, email: str, date: str, version: str) -> dict:
     """The values a text is rendered with: the form fields, e-mail, date, version and the flag ``country_is_cn_hk``."""
-    return dict(fields, email=email, date=date, version=version,
-                country_is_cn_hk=str(fields.get("country") or "").upper() in ("CN", "HK"))
+    return dict(fields, email=email, date=date, version=version, country_is_cn_hk=is_cn_hk(fields.get("country")))
 
 
 def render(text: str, values: dict) -> str:

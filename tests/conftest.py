@@ -94,6 +94,12 @@ for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.y
             _zero_the_sleeve(_copy)
     os.environ[_env] = str(_copy)
 
+# ── sign-up acceptance of the Terms of Use (owner 2026-10-27) ────────────────
+# A NEW account needs the ticked terms box (422 ``terms_required``, legal_texts.py).  The many suites that merely create an account by
+# POST /api/auth/register | /google do not test that, so the suite runs with the requirement off; tests/test_legal_texts.py and the
+# sign-up cases of tests/test_mcp_signup.py switch it on again (monkeypatch.delenv).  Production never sets the variable.
+os.environ.setdefault("TERMS_ACCEPTANCE_DISABLED", "1")
+
 # ── presets of the CLOSED motors (owner 2026-10-19) ──────────────────────────
 # The presets of the closed motors (my_40mm_last, ...) live only in the private data repository
 # (config/motor_presets_closed.json of the checkout MOTOR_AI_SIM_PRIVATE_DATA points at).  With that checkout present the

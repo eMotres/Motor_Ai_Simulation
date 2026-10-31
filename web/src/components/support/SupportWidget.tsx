@@ -47,8 +47,9 @@ const TYPE_COLOR: Record<string, string> = {
 const BODY = { fontSize: 13, lineHeight: 1.45 } as const;
 
 const SupportWidget: React.FC = () => {
-  const { user } = useAuth();
+  const { user, supportProvider } = useAuth();
   const { t, i18n } = useTranslation('support');
+  const { t: tc } = useTranslation('common');
   const activeTab = useUIStore((s) => s.activeTab) as string;
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'ask' | 'tickets'>('ask');
@@ -187,7 +188,17 @@ const SupportWidget: React.FC = () => {
               <Typography sx={{ ...BODY, color: '#fbbf24', textAlign: 'center', mt: 0.5 }}>{t('demo')}</Typography>
             )}
           </Box>
-          <Box sx={{ display: 'flex', gap: 0.75, p: 1, borderTop: '1px solid var(--line-soft)' }}>
+          {/* every assistant says it is one (Terms of Use); when the help chat runs on the Gemini API free tier it also says that Google
+              may use the messages (Privacy Policy section 5) */}
+          <Box sx={{ px: 1.25, pt: 0.75, borderTop: '1px solid var(--line-soft)' }}>
+            <Typography sx={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text-2)' }} data-testid="ai-disclosure">{tc('legal.aiDisclosure')}</Typography>
+            {supportProvider === 'gemini' && (
+              <Typography sx={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text-2)' }} data-testid="support-gemini-notice">
+                {t('geminiNotice')}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex', gap: 0.75, p: 1 }}>
             <TextField
               value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}

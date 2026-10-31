@@ -23,7 +23,13 @@ version (and keeps deciding the mode until the new one is given).
 
 The gate: :func:`require_accepted` (HTTP 428 ``agreement_required``) is called by the actions that START a development; staff
 (admin / engineer accounts) and MOTRES's own company are never gated.  :func:`training_allowed` is the helper the dataset export
-calls: FREE -> True, PRIVATE -> False, no acceptance -> False (fail-closed), MOTRES's own data -> True.
+calls: company acceptance, else account acceptance (FREE -> True, PRIVATE -> False), else the ticked Terms of Use box of v0.4 or later
+(``legal_texts``) -> True, else False (fail-closed); MOTRES's own data -> True.
+
+:func:`training_eligibility` is the richer answer behind it (owner 2026-10-31, agreement sections 2.3, 2.4, 3.4, 7.9, 7.10): WHEN the data
+became eligible, the election for earlier data and the capacity; the allow-list of the dataset export (``dataset_exclusions()["training"]``,
+:func:`training_allowlist`) is built from it.  A written PRIVATE request puts a no-training HOLD on the client at once
+(``platform_agreement_holds.jsonl``, append-only; admin ``POST /api/admin/agreement/holds``).
 """
 from __future__ import annotations
 
@@ -256,33 +262,414 @@ def company_summary(company_id: str) -> Optional[dict]:
 
 
 def training_allowed(company_or_email: str) -> bool:
-    """May MOTRES's internal AI train on this client's engineering data?  ``company_or_email`` is an account e-mail, a directory
-    company id or a stored key (``company:<id>`` / ``user:<email>``).  FREE -> True; PRIVATE -> False; no acceptance -> False
-    (fail-closed); MOTRES's own company and domains -> True (its own data).  The acceptance in force is the newest one of any
-    version (a later version replaces it when it is given)."""
+    """May MOTRES's internal AI train on data this client supplies NOW?  True iff :func:`training_eligibility` has a window that is open
+    at this moment (a PRIVATE switch or a hold closes it; data of the closed window stay eligible for the allow-list, see there)."""
+    w = training_eligibility(company_or_email)
+    return w is not None and (not w.get("eligible_until") or w["eligible_until"] > _iso(datetime.datetime.now(datetime.timezone.utc).timestamp()))
+
+
+# -- no-training holds (agreement section 3.4, gate R10) ----------------------------------------------------------
+
+def holds_path() -> Path:
+    return N.legal_root() / "platform_agreement_holds.jsonl"
+
+
+def _hold_rows() -> list[dict]:
+    rows = []
+    try:
+        with open(holds_path(), encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict):
+                    rows.append(r)
+    except OSError:
+        return []
+    return rows
+
+
+def hold_key(*, email: Any = "", company_id: Any = "") -> str:
+    """The filing key of a hold: ``company:<directory id>`` or ``user:<e-mail>``."""
+    if str(company_id or "").strip():
+        return "company:%s" % str(company_id).strip()
+    e = _norm_email(email)
+    if not e or "@" not in e:
+        raise ValueError("name an e-mail address or a directory company id")
+    return "user:%s" % e
+
+
+def hold_state() -> tuple[dict[str, dict], dict[str, str]]:
+    """(active, released): key -> the ``hold`` line in force, and key -> time of the ``release`` that ended its newest hold.  A key is on
+    hold from its newest ``hold`` line until a later ``release`` line.  Data supplied while the key was held are never eligible, so a
+    release reopens the window from the release time on (as a FREE - PRIVATE - FREE history keeps the newest FREE run only)."""
+    active: dict[str, dict] = {}
+    released: dict[str, str] = {}
+    for r in _hold_rows():
+        k = str(r.get("key") or "")
+        if not k:
+            continue
+        if r.get("kind") == "release":
+            if active.pop(k, None) is not None:
+                released[k] = _iso_of(r)
+        elif r.get("kind") == "hold":
+            active[k] = r
+    return active, released
+
+
+def active_holds() -> dict[str, dict]:
+    """key -> the ``hold`` line in force (see :func:`hold_state`)."""
+    return hold_state()[0]
+
+
+def record_hold(key: str, *, kind: str, actor: str, note: str = "", reference: str = "") -> dict:
+    """Append a ``hold`` (a written PRIVATE request was received: no training on these data until the Order is concluded or declined,
+    section 3.4) or a ``release`` line.  Never rewritten.  ``OSError`` when the legal directory is not writable."""
+    from motor_ai_sim.private_files import ensure_private_dir, open_private
+    if kind not in ("hold", "release"):
+        raise ValueError("kind must be hold or release")
+    if not re.match(r"^(company|user):.+", key or ""):
+        raise ValueError("bad hold key %r" % (key,))
+    root = N.legal_root()
+    if not root.is_dir():
+        raise OSError("legal directory %s is not installed" % root)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rec = dict(id="h%s-%s" % (now.strftime("%Y%m%d"), secrets.token_hex(6)), ts=round(now.timestamp(), 3), iso=_iso(now.timestamp()),
+               kind=kind, key=key, actor=str(actor or ""), note=_norm_text(note, 500), reference=_norm_text(reference, 200))
+    with _LOCK:
+        ensure_private_dir(root)
+        with open_private(holds_path(), "a") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
+    return rec
+
+
+# -- eligibility for AI training (owner 2026-10-31) -------------------------------------------------------------------
+
+EPOCH = "1970-01-01T00:00:00Z"
+
+
+def _iso(ts: float) -> str:
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _iso_of(rec: dict) -> str:
+    iso = str(rec.get("iso") or "")
+    if iso:
+        return iso
+    try:
+        return _iso(float(rec.get("ts") or 0))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return EPOCH
+
+
+def _created_iso(email: str) -> str:
+    """Creation time of the account (UTC ISO); the registry stores local time.  "" when unknown."""
+    try:
+        from motor_ai_sim import users as U
+        raw = str((U.get_user(email) or {}).get("created") or "")
+        if not raw:
+            return ""
+        local = datetime.datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S")
+        return local.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:                                                  # noqa: BLE001
+        return ""
+
+
+def _window(rows: list[dict]) -> tuple[Optional[str], Optional[str]]:
+    """(start, end) of the FREE window an ordered run of agreement records (oldest first, ONE filing key) leaves.  ``start`` = the first
+    record of the FREE run that is still the newest FREE run (None when the key never had FREE); ``end`` = the first non-FREE (PRIVATE)
+    record after it (None while the newest record is FREE).  Owner decision 2026-10-31 (agreement 11.1): a switch to PRIVATE excludes
+    only what is supplied from that moment, so the data of the FREE run stay eligible and the window merely closes.  A FREE - PRIVATE -
+    FREE history keeps only the newest FREE run (fail-closed: the PRIVATE interval is never eligible)."""
+    if not rows:
+        return None, None
+    modes = [str(r.get("mode") or "").upper() for r in rows]
+    last = len(rows) - 1
+    if modes[last] == "FREE":
+        i = last
+        while i > 0 and modes[i - 1] == "FREE":
+            i -= 1
+        return _iso_of(rows[i]), None
+    j = last
+    while j >= 0 and modes[j] != "FREE":
+        j -= 1
+    end = _iso_of(rows[j + 1])
+    if j < 0:
+        return None, end
+    i = j
+    while i > 0 and modes[i - 1] == "FREE":
+        i -= 1
+    return _iso_of(rows[i]), end
+
+
+class _Eligibility:
+    """One read of the stores the eligibility rules need; reused for a whole export (:func:`training_allowlist`)."""
+
+    def __init__(self) -> None:
+        from motor_ai_sim import legal_texts as LT
+        self.LT = LT
+        self.by_key: dict[str, list[dict]] = {}
+        for r in sorted(_rows(), key=lambda r: float(r.get("ts") or 0)):          # stable: file order breaks ties
+            k = str(r.get("key") or "")
+            if k:
+                self.by_key.setdefault(k, []).append(r)
+        self.newest = {k: v[-1] for k, v in self.by_key.items()}
+        self.holds, self.released = hold_state()
+        self._terms: Optional[dict[str, list[dict]]] = None
+
+    def terms_lines(self, email: str) -> list[dict]:
+        if self._terms is None:
+            by: dict[str, list[dict]] = {}
+            for r in sorted(self.LT.records(), key=lambda r: float(r.get("ts") or 0)):
+                by.setdefault(_norm_email(r.get("user")), []).append(r)
+            self._terms = by
+        return self._terms.get(_norm_email(email), [])
+
+    def hold_since(self, email: str, company: Optional[dict]) -> Optional[str]:
+        """Time of the earliest no-training hold on the account or its company, None = no hold."""
+        ks = ["user:%s" % email] + (["company:%s" % company.get("id")] if company else [])
+        times = [_iso_of(self.holds[k]) for k in ks if k in self.holds]
+        return min(times) if times else None
+
+    def held(self, email: str, company: Optional[dict]) -> bool:
+        return self.hold_since(email, company) is not None
+
+    def mode_of(self, email: str, company: Optional[dict]) -> Optional[str]:
+        """Mode of the agreement acceptance in force for this address (company record first, then the account's), None = none."""
+        for k in (("company:%s" % company["id"]) if company else "", "user:%s" % email):
+            r = self.newest.get(k) if k else None
+            if r:
+                return str(r.get("mode") or "").upper()
+        return None
+
+    @staticmethod
+    def _out(start: str, end: Optional[str], *, historical: bool, capacity: str, scope: str) -> Optional[dict]:
+        if end is not None and end <= start:
+            return None                                                # the window closed before it opened
+        out = {"mode": "FREE", "eligible_from": start, "historical_opt_in": historical, "capacity": capacity, "scope": scope}
+        if end is not None:
+            out["eligible_until"] = end
+        return out
+
+    def company(self, company_id: str) -> Optional[dict]:
+        key = "company:%s" % company_id
+        start, end = _window(self.by_key.get(key, []))
+        if start is None:
+            return None
+        start = max(start, self.released.get(key, ""))
+        if key in self.holds:
+            end = min([end, _iso_of(self.holds[key])] if end else [_iso_of(self.holds[key])])
+        return self._out(start, end, historical=False, capacity="company", scope="company")
+
+    def email(self, email: str, company: Optional[dict]) -> Optional[dict]:
+        email = _norm_email(email)
+        if email.rsplit("@", 1)[-1] in _own_domains() or _is_own_company(company):
+            return {"mode": "FREE", "eligible_from": EPOCH, "historical_opt_in": True, "capacity": "own", "scope": "own"}
+        caps: list[str] = []
+        base: Optional[dict] = None
+        ckey = ("company:%s" % company["id"]) if company else ""
+        if ckey and self.by_key.get(ckey):                             # (a) the company decides for its confirmed users
+            s, e = _window(self.by_key[ckey])
+            if s is not None:
+                base = {"start": s, "end": e, "historical": False, "capacity": "company", "scope": "company"}
+            elif e:
+                caps.append(e)                                         # PRIVATE from the start: only earlier account data remain
+        if base is None:
+            ukey = "user:%s" % email
+            s, e = _window(self.by_key.get(ukey, []))                  # (b) an account-level agreement acceptance
+            if s is not None:
+                base = {"start": s, "end": e, "historical": False, "capacity": "business", "scope": "account"}
+            else:
+                if e:
+                    caps.append(e)
+                base = self._terms_window(email)                       # (c) the Terms of Use box by its capacity
+        if base is None:
+            return None
+        h = self.hold_since(email, company)
+        if h:
+            caps.append(h)
+        for k in ("user:%s" % email, ckey):
+            if k and k in self.released:
+                base["start"] = max(base["start"], self.released[k])   # a released hold: never the interval it covered
+        if base["end"]:
+            caps.append(base["end"])
+        return self._out(base["start"], min(caps) if caps else None, historical=base["historical"], capacity=base["capacity"],
+                         scope=base["scope"])
+
+    def _terms_window(self, email: str) -> Optional[dict]:
+        """Terms of Use box of v0.4 or later, by the capacity stated (section 2.3).  The newest line decides; the run of qualifying lines
+        up to it sets the start.  ``other`` and a line without a capacity stay out (fail-closed until a per-data confirmation exists)."""
+        lines = [r for r in self.terms_lines(email) if self.LT.version_ge(r.get("terms_version"), self.LT.MIN_TRAINING_VERSION)]
+        run: list[dict] = []
+        for r in reversed(lines):
+            if str(r.get("capacity") or "") not in self.LT.TRAINING_CAPACITIES:
+                break
+            run.append(r)
+        if not run:
+            return None
+        start = _iso_of(run[-1])
+        historical = any(r.get("historical_opt_in") is True for r in run)
+        if historical:
+            created = _created_iso(email)
+            start = min(start, created) if created else start         # unknown creation time: no extension (fail-closed)
+        return {"start": start, "end": None, "historical": historical, "capacity": str(run[0].get("capacity")), "scope": "account"}
+
+
+def training_eligibility(company_or_email: str) -> Optional[dict]:
+    """May MOTRES's internal AI train on this client's engineering data, and in which window?  -> ``{mode, eligible_from (ISO UTC),
+    [eligible_until (ISO UTC)], historical_opt_in, capacity, scope}`` or None (never eligible).  A record is eligible iff
+    ``eligible_from <= its time < eligible_until`` (``eligible_until`` absent = open-ended).  ``company_or_email`` is an account e-mail,
+    a directory company id or a stored key (``company:<id>`` / ``user:<email>``).  Rules, first match decides (agreement sections 2.3,
+    2.4, 3.4, 7.9, 7.10, 11.1):
+
+    (a) a COMPANY acceptance of this agreement decides for the company's confirmed users: FREE -> window from the acceptance;
+    (b) else an ACCOUNT-level acceptance of this agreement decides the same way;
+    (c) else the Terms of Use box of ``legal_texts.MIN_TRAINING_VERSION`` (v0.4) or later (``terms_acceptances.jsonl``) by its capacity:
+        ``business`` / ``sole_trader`` -> window from the acceptance, or from the account's creation when the earlier-data box
+        (7.9) was ticked; ``other`` (no authority to bind) and a line without a capacity -> None until a per-data confirmation exists;
+    (d) else None (fail-closed): nothing accepted, a bare company id without an acceptance, an unknown key.
+
+    PRIVATE and holds close the window, they never reopen the past (owner 2026-10-31, agreement 11.1): a switch to PRIVATE by the company
+    or the account, or a no-training HOLD (a written PRIVATE request, section 3.4), sets ``eligible_until`` to that moment; data supplied
+    in FREE mode before it stay eligible.  An entity that was never FREE (or whose window is empty) -> None.
+
+    MOTRES's own company and domains -> eligible from the epoch with scope ``own`` (its own data; data derived from a client's project
+    still pass through the project rules of :func:`training_allowlist`).  The acceptance in force is the newest one of any version of this
+    agreement."""
     s = str(company_or_email or "").strip()
     if not s:
-        return False
-    if "@" in s and not s.startswith(("company:", "user:")):
-        sc = scope_of(s)
-        if sc["exempt"] == "motres":
-            return True
-        r = _latest((sc["key"], sc["account_key"]))
-    else:
-        key = s if s.startswith(("company:", "user:")) else "company:" + s
-        if key.startswith("user:"):
-            if key[5:].rsplit("@", 1)[-1].lower() in _own_domains():
-                return True
+        return None
+    el = _Eligibility()
+    if s.startswith("company:") or ("@" not in s and not s.startswith("user:")):
+        cid = s[8:] if s.startswith("company:") else s
+        try:
+            from motor_ai_sim.directory import store as DS
+            c = next((c for c in DS.load_companies() if c.get("id") == cid), None)
+        except Exception:                                              # noqa: BLE001
+            c = None
+        if c and _is_own_company(dict(id=c.get("id"), name=c.get("legal_name"), reg_no=c.get("reg_no"))):
+            return {"mode": "FREE", "eligible_from": EPOCH, "historical_opt_in": True, "capacity": "own", "scope": "own"}
+        return el.company(cid)
+    email = _norm_email(s[5:] if s.startswith("user:") else s)
+    if "@" not in email:
+        return None
+    return el.email(email, company_of(email))
+
+
+def _staff_emails() -> set[str]:
+    try:
+        from motor_ai_sim import users as U
+        return {_norm_email(u.get("email")) for u in U.list_users() if is_staff(u.get("role"))}
+    except Exception:                                                  # noqa: BLE001
+        log.exception("platform_agreement: user registry unreadable for the training allow-list")
+        return set()
+
+
+def training_allowlist() -> dict:
+    """The allow-list of the dataset export (owner D10; ``dataset_exclusions()["training"]``): ONLY entries that are eligible appear, and
+    whatever is absent is NOT eligible.  Built from :func:`training_eligibility`; see ``docs/PLATFORM_AGREEMENT.md`` ("For the dataset
+    export") for the shape.  An entity that was FREE and then went PRIVATE or was held STAYS in the list with ``eligible_until`` set to that
+    moment (owner 2026-10-31, agreement 11.1: only what is supplied from then on is excluded).  A project is eligible only if its owning side
+    (the non-staff owners; for a staff-owned project the customer members) is eligible and no member who was never FREE is PRIVATE or on hold
+    (agreement 2.4, the most restrictive permission wins); its window is the intersection of its owners' windows (latest ``eligible_from``,
+    earliest ``eligible_until``), also closed by a member who switched to PRIVATE.  A store that cannot be read raises (the caller must not read that as "nothing")."""
+    from motor_ai_sim.directory import store as DS
+    from motor_ai_sim.workspace import workspace_id
+    el = _Eligibility()
+    people, comps, affs = DS.load_people(), {c.get("id"): c for c in DS.load_companies()}, DS.load_affiliations()
+    comp_of_person: dict[Any, str] = {}
+    for a in sorted((a for a in affs if a.get("status") == "confirmed"), key=lambda a: str(a.get("updated") or "")):
+        if a.get("company_id") in comps:
+            comp_of_person[a.get("person_id")] = a["company_id"]
+    comp_of_email: dict[str, str] = {}
+    for p in people:
+        cid = comp_of_person.get(p.get("id"))
+        if cid:
+            for e in list(p.get("emails") or []) + [p.get("user_id")]:
+                if _norm_email(e):
+                    comp_of_email[_norm_email(e)] = cid
+
+    def company_dict(e: str) -> Optional[dict]:
+        c = comps.get(comp_of_email.get(e))
+        return dict(id=c["id"], name=str(c.get("legal_name") or ""), reg_no=str(c.get("reg_no") or "")) if c else None
+
+    known: set[str] = set(comp_of_email)
+    staff = _staff_emails()
+    try:
+        from motor_ai_sim import users as U
+        known |= {_norm_email(u.get("email")) for u in U.list_users()}
+    except Exception:                                                  # noqa: BLE001
+        pass
+    for r in el.LT.records():
+        known.add(_norm_email(r.get("user")))
+    known |= {k[5:] for k in el.newest if k.startswith("user:")}
+    from motor_ai_sim.development import store as PS
+    projects = PS.list_projects()
+    for p in projects:
+        for m in p.get("members") or []:
+            if isinstance(m, dict):
+                known.add(_norm_email(m.get("email")))
+    known = {e for e in known if e and "@" in e}
+
+    accounts: dict[str, dict] = {}
+    own_emails: list[str] = []
+    verdict: dict[str, Optional[dict]] = {}
+    for e in sorted(known):
+        v = el.email(e, company_dict(e))
+        verdict[e] = v
+        if v is None:
+            continue
+        if v["scope"] == "own":
+            own_emails.append(e)
         else:
-            try:
-                from motor_ai_sim.directory import store as DS
-                c = next((c for c in DS.load_companies() if c.get("id") == key[8:]), None)
-            except Exception:                                          # noqa: BLE001
-                c = None
-            if c and _is_own_company(dict(id=c.get("id"), name=c.get("legal_name"), reg_no=c.get("reg_no"))):
-                return True
-        r = _latest((key,))
-    return bool(r and r.get("mode") == "FREE")
+            accounts[e] = {"eligible_from": v["eligible_from"], "mode": v["mode"], "historical_opt_in": v["historical_opt_in"],
+                           "capacity": v["capacity"], **({"eligible_until": v["eligible_until"]} if v.get("eligible_until") else {})}
+
+    companies: dict[str, dict] = {}
+    own_company_ids = sorted(cid for cid, c in comps.items()
+                             if _is_own_company(dict(id=cid, name=c.get("legal_name"), reg_no=c.get("reg_no"))))
+    for cid in sorted(comps):
+        if cid in own_company_ids:
+            continue
+        v = el.company(cid)
+        if v:
+            companies[cid] = {"eligible_from": v["eligible_from"], "mode": v["mode"],
+                              **({"eligible_until": v["eligible_until"]} if v.get("eligible_until") else {})}
+
+    eligible_projects: dict[str, dict] = {}
+    for p in projects:
+        members = [(_norm_email(m.get("email")), m.get("role")) for m in p.get("members") or []
+                   if isinstance(m, dict) and "@" in _norm_email(m.get("email"))]
+        customers = [(e, r) for e, r in members if e not in staff]
+        blocked = False
+        member_ends: list[str] = []
+        for e, _r in customers:
+            if e in own_emails or e.rsplit("@", 1)[-1] in _own_domains():
+                continue
+            v = verdict.get(e)
+            if v is None:
+                if el.mode_of(e, company_dict(e)) == "PRIVATE" or el.held(e, company_dict(e)):
+                    blocked = True                                     # never FREE and PRIVATE / held: the most restrictive wins
+                    break
+            elif v.get("eligible_until"):
+                member_ends.append(v["eligible_until"])               # a member who switched to PRIVATE / was held closes the window
+        if blocked:
+            continue
+        owners = [e for e, r in customers if r == "owner"] or [e for e, _r in customers]
+        if not owners or any(verdict.get(e) is None for e in owners):
+            continue
+        start = max(verdict[e]["eligible_from"] for e in owners)
+        ends = member_ends + [verdict[e]["eligible_until"] for e in owners if verdict[e].get("eligible_until")]
+        if ends and min(ends) <= start:
+            continue
+        eligible_projects[str(p.get("id"))] = {"eligible_from": start, **({"eligible_until": min(ends)} if ends else {})}
+
+    wanted = sorted(set(accounts) | set(own_emails))
+    return {"version": 1, "policy": "allow-list", "generated": _iso(datetime.datetime.now(datetime.timezone.utc).timestamp()),
+            "accounts": accounts, "companies": companies, "workspaces": {workspace_id(e): e for e in wanted},
+            "projects": dict(sorted(eligible_projects.items())),
+            "own": {"emails": own_emails, "domains": sorted(_own_domains()), "company_ids": own_company_ids}}
 
 
 # -- status and the gate ------------------------------------------------------
@@ -461,6 +848,8 @@ def dataset_exclusions() -> dict:
     * ``productions`` the productions of those motors, plus any production whose non-staff owner member is listed.
     * ``acceptance_ids`` ids of the agreement records (every version) filed under a listed company / account: their signed PDFs
                       and register lines name the client and must not reach the dataset either.
+    * ``training``    the ALLOW-list (owner D10, :func:`training_allowlist`): the opposite polarity - only what is listed there may be
+                      trained on; an account, company or project that is absent is not eligible.  The keys above are unchanged.
 
     Staff (admin / engineer accounts), MOTRES's own company and own domains are never listed.  A store that cannot be read raises
     (the caller must not mistake that for an empty list)."""
@@ -469,7 +858,7 @@ def dataset_exclusions() -> dict:
     companies = sorted(k[8:] for k in private_keys if k.startswith("company:"))
     out: dict[str, Any] = {"generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                            "companies": companies, "emails": [], "workspace_ids": [], "project_ids": [], "motors": [], "productions": [],
-                           "acceptance_ids": []}
+                           "acceptance_ids": [], "training": training_allowlist()}
     if not private_keys:
         return out
 

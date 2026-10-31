@@ -47,5 +47,10 @@
   },
   "die": {
     "retire_required": "“{die}”是共享冲片：删除会对所有用户隐藏它。请使用“对所有用户停用”。"
-  }
+  },
+  "terms_required": "请勾选选项，接受使用条款、平台协议和隐私政策。",
+  "country_required": "请选择企业注册所在的国家或地区。",
+  "business_name_too_long": "企业名称过长。",
+  "capacity_required": "请选择您以何种身份接受这些条款。",
+  "business_name_required": "请填写您有权代表签约的企业名称。"
 }

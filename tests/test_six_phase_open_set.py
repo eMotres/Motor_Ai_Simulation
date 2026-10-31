@@ -233,7 +233,7 @@ def test_open_set_currents_and_copper(ring_pair):
     assert s2["I_phase_rms_A"] == 0.0 and s2["open"]
     # the active set alone at 30 A in half the paths: half the healthy I²R
     assert deg["P_cu_dc_W"] == pytest.approx(0.5 * bal["P_cu_dc_W"], rel=1e-9)
-    assert s1["P_cu_dc_W"] == pytest.approx(deg["P_cu_dc_W"], rel=1e-6)
+    assert s1["P_cu_dc_W"] == pytest.approx(deg["P_cu_dc_W"], abs=6e-4)  # reported to 0.001 W
     assert d["copper_heat_uniform_factor"] > 1.5
     assert deg["copper_heat_uniform_factor"] == d["copper_heat_uniform_factor"]
 

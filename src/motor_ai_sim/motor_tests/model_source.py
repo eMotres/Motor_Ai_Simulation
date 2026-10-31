@@ -234,7 +234,14 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
             noload.append({"duty": name, "rpm": rpm, "v_ll_peak": vpk, "v_ll_rms": num(s.get("V_line_rms_V")),
                            "hyst": hy, "eddy": ed, "excess": ex, "p_core": num(s.get("P_core_W")),
                            "p_solid": p_solid, "magnet_temp_c": mag_t})
+    cog = cfg_doc.get("cogging") if isinstance(cfg_doc.get("cogging"), dict) else None
+    cogging = None
+    if cog and num(cog.get("pkpk_Nm")) is not None:
+        cogging = {"pkpk_nm": num(cog.get("pkpk_Nm")), "magnet_temp_c": num(cog.get("magnet_temp_c")),
+                   "fundamental_order": cog.get("fundamental_order"), "dominant_order": cog.get("dominant_order"),
+                   "samples_per_cycle": num(cog.get("samples_per_cycle")), "computed_at": cog.get("computed_at")}
     return {"connection": connection, "duties": duties, "noload": noload, "r_ref": r_ref, "l_ref": l_ref,
+            "cogging": cogging,
             "l_stator_only": l_stator, "magnet": magnet or {"card": None, "grade": None, "temp_c": None, "points": []},
             "mass_kg": mass, "mech": mech, "end3d": factors, "has_bearings": bool(mech and getattr(mech, "has_bearings", False)),
             "available": bool(duties)}
@@ -267,6 +274,43 @@ def mech_function(cfg_doc: Dict[str, Any], geometry: Dict[str, Any], rotor_mass_
     return f
 
 
+#: The sibling configuration that holds the stator-without-rotor model of ``<config>`` (2026-10-31, G2-L40): a part
+#: state or a material cannot differ between two duties of ONE configuration, so the rotor-out machine is its own
+#: configuration next to the motor, named ``<config>-stator-only``.
+STATOR_ONLY_SUFFIX = "-stator-only"
+
+
+def _rotor_removed(cfg_doc: Dict[str, Any]) -> bool:
+    """True when the configuration really has no rotor in the field: magnet AND rotor core excluded (part states) or
+    assigned air (configurations filed before the material check refused air on those parts)."""
+    parts = cfg_doc.get("parts") if isinstance(cfg_doc.get("parts"), dict) else {}
+    mats = cfg_doc.get("materials") if isinstance(cfg_doc.get("materials"), dict) else {}
+    return all(str(parts.get(p) or "").lower() == "excluded" or str(mats.get(p) or "").lower() == "air"
+               for p in ("magnet", "rotor_core"))
+
+
+def stator_only_from_doc(cfg_doc: Dict[str, Any], label: str) -> Optional[Dict[str, Any]]:
+    """The rotor-out inductance reference from a stator-only configuration document: its first duty with a stored Ld/Lq
+    (same shape as ``from_docs``' ``l_stator_only``), or None when the document is not a rotor-out machine."""
+    if not isinstance(cfg_doc, dict) or not _rotor_removed(cfg_doc):
+        return None
+    winding = cfg_doc.get("winding") if isinstance(cfg_doc.get("winding"), dict) else {}
+    connection = str(winding.get("star_delta") or "star").lower()
+    for d in cfg_doc.get("duties") or []:
+        if not isinstance(d, dict) or not isinstance(d.get("summary"), dict):
+            continue
+        s = d["summary"]
+        ld = num(s.get("Ld_inc_mH")) or num(s.get("Ld_mH"))
+        lq = num(s.get("Lq_inc_mH")) or num(s.get("Lq_mH"))
+        if ld and lq:
+            cur = num(s.get("I_phase_rms_A"))
+            return {"duty": "%s / %s" % (label, d.get("name")), "ld_mh": ld, "lq_mh": lq,
+                    "current": cur if cur is not None else num(d.get("current_arms")),
+                    "connection": str(s.get("star_delta") or s.get("connection") or connection).lower(),
+                    "method": s.get("ldq_method") or ("differential" if s.get("Ld_inc_mH") else "stored")}
+    return None
+
+
 def collect(die: str, config: str) -> Dict[str, Any]:
     """Read the stores for ``die/config`` and return :func:`from_docs`' answer (``available: False`` when unreadable)."""
     try:
@@ -282,7 +326,7 @@ def collect(die: str, config: str) -> Dict[str, Any]:
     except Exception as e:                                  # noqa: BLE001
         log.info("motor tests: no model for %s/%s (%s)", die, config, e)
         return {"available": False, "duties": [], "noload": [], "r_ref": None, "l_ref": None, "l_stator_only": None,
-                "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
+                "cogging": None, "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
                 "end3d": factors_from_end3d(None)}
     geometry: Dict[str, Any] = {}
     try:
@@ -311,6 +355,14 @@ def collect(die: str, config: str) -> Dict[str, Any]:
     except Exception:                                       # noqa: BLE001 - no passport is the normal state
         log.debug("motor tests: no 3-D passport for %s/%s", die, config, exc_info=True)
     out = from_docs(die_doc, cfg_doc, stored, library, mech=mech, end3d=e3)
+    if out.get("l_stator_only") is None:
+        sib = config + STATOR_ONLY_SUFFIX
+        try:
+            if family._cfg_file(die, sib).exists():
+                out["l_stator_only"] = stator_only_from_doc(family._load_yaml(family._cfg_file(die, sib), "configuration"),
+                                                            sib)
+        except Exception:                                   # noqa: BLE001 - a missing sibling is the normal state
+            log.debug("motor tests: no stator-only sibling for %s/%s", die, config, exc_info=True)
     out["mass"] = whole_motor_mass(die, config)
     return out
 

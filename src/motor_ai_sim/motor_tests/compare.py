@@ -21,6 +21,9 @@ RHO_CU_20 = 0.017241
 
 #: The one-line explanations the UI puts in a tooltip (EN source; the web carries the zh mirror).
 TIPS = {
+    "cogging": ("no-load cogging peak-to-peak: model = the configuration's stored cogging block (2-D, I = 0, eddy and "
+                "demagnetisation off, magnets at the temperature the block states); bench = break-away by hand through a "
+                "torque meter in both directions, friction taken out"),
     "resistance": ("model R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line "
                    "in star (2/3 in delta), plus the stated lead cables; the phase board and the joints are not in the model"),
     "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star); model = the incremental Ld/Lq of the lowest-current duty",

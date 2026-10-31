@@ -56,6 +56,7 @@ export const TestEditor: React.FC<{
     hipot: (r?.hipot ?? []).map((x) => [x.voltage_v, x.leakage_ma ?? '', x.time_s ?? ''].join(' ').trim()).join('\n'),
     surge: (r?.surge ?? []).map((x) => `${x.voltage_v} ${x.result}`).join('\n'),
     weight: str(r?.weight?.[0]?.mass_g), weightWhat: str(r?.weight?.[0]?.what),
+    cogPkpk: str(r?.cogging?.pkpk_nm), cogPending: r?.cogging?.pending ? 'yes' : '',
     rows: rowsToText(r?.rows, kind),
   }));
   const [docs, setDocs] = useState<string[]>(r?.documents ?? []);
@@ -93,6 +94,9 @@ export const TestEditor: React.FC<{
         return { voltage_v: num(v ?? ''), result: (res ?? 'ok').toLowerCase() };
       });
       if (f.weight.trim()) out.weight = [{ what: f.weightWhat || 'motor', mass_g: num(f.weight) }];
+      // no-load cogging: the bench peak-to-peak; a record that only names the check keeps it pending
+      if (f.cogPkpk.trim()) out.cogging = { pkpk_nm: num(f.cogPkpk), magnet_temp_c: num(f.magnetTemp) };
+      else if (r?.cogging?.pending) out.cogging = { pending: true };
       // dimensions are kept as they were (entered through the API / a later editor)
       if (r?.dimensions?.length) out.dimensions = r.dimensions;
     } else {
@@ -158,6 +162,7 @@ export const TestEditor: React.FC<{
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                 {tf('hipot', { w: 200, multiline: true })}{tf('surge', { w: 200, multiline: true })}
                 {tf('weight', { w: 110 })}{tf('weightWhat', { w: 200 })}
+                {tf('cogPkpk', { w: 150, tip: tt('cogPkpkTip') })}
               </Box>
             </>
           ) : (

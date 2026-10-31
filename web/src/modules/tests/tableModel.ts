@@ -45,11 +45,17 @@ export interface RowNote { key: string; params: Record<string, unknown> }
 /** The one short note a row carries next to its numbers (translated by the caller), or null. */
 export function rowNote(row: CompareRow): RowNote | null {
   const x = row.extra ?? {};
+  if (row.key === 'cogging_pkpk' && x.pending === true && row.measured === null) return { key: 'benchPending', params: {} };
   if (row.key === 'loss' && typeof x.unexplained_w === 'number') return { key: 'unexplained', params: { w: fmtValue(x.unexplained_w as number) } };
   if (row.status === 'no_model' && row.action) return { key: 'noModelCompute', params: {} };
   if (row.status === 'no_model') return { key: 'noModel', params: {} };
   if (x.high_freq === true && typeof x.freq_hz === 'number') return { key: 'freqFlag', params: { hz: x.freq_hz } };
-  if (row.key === 'r_ll_mean' && typeof x.remaining_mohm === 'number') return { key: 'remaining', params: { mohm: fmtValue(x.remaining_mohm as number) } };
+  // the remainder is the board and the joints only when the measurement is the larger one; a model above the reading
+  // says so instead of filing a negative resistance on the board
+  if (row.key === 'r_ll_mean' && typeof x.remaining_mohm === 'number') {
+    const r = x.remaining_mohm as number;
+    return r >= 0 ? { key: 'remaining', params: { mohm: fmtValue(r) } } : { key: 'modelAbove', params: { mohm: fmtValue(-r) } };
+  }
   return null;
 }
 

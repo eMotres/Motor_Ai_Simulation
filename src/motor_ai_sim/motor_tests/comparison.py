@@ -206,6 +206,28 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
                   basis="2-D, no end-winding inductance, no 3-D flux factor on L", basis_key="inductance")
 
 
+def _cogging(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """No-load cogging peak-to-peak: the bench value (or a pending entry) against the configuration's stored cogging
+    block (``cogging.py``).  Only on a record that names the cogging check - a stator-only record has no rotor."""
+    cg = rec.get("cogging")
+    if not isinstance(cg, dict):
+        return None
+    ref = model.get("cogging") or {}
+    m = num(ref.get("pkpk_nm"))
+    det = ""
+    if ref:
+        det = "configuration cogging block: magnets %s C, cycle order %s, dominant order %s" % (
+            "?" if ref.get("magnet_temp_c") is None else f"{ref['magnet_temp_c']:g}", ref.get("fundamental_order"),
+            ref.get("dominant_order"))
+    rows = [_row("cogging_pkpk", "Cogging torque, peak-to-peak", "N*m", cg.get("pkpk_nm"), m, tip="cogging",
+                 detail=det or "no cogging stored on the configuration",
+                 status=("info" if cg.get("pkpk_nm") is None else None),
+                 extra={"pending": bool(cg.get("pending")), "bench_magnet_temp_c": cg.get("magnet_temp_c"),
+                        "model_magnet_temp_c": ref.get("magnet_temp_c")})]
+    return _group("cogging", "No-load cogging", rows, tip="cogging",
+                  basis="2-D, I = 0, eddy and demagnetisation off, no skew or 3-D factor", basis_key="cogging")
+
+
 def _info_groups(rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
     lcr = rec.get("lcr") or []
@@ -494,7 +516,7 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
 def compare_record(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     kind = rec.get("kind")
     if kind == "parameters":
-        groups = [g for g in (_resistance(rec, model), _inductance(rec, model)) if g] + _info_groups(rec, model)
+        groups = [g for g in (_resistance(rec, model), _inductance(rec, model), _cogging(rec, model)) if g] + _info_groups(rec, model)
         out = {"groups": groups, "fit": None}
     elif kind == "free_run":
         out = _free_run(rec, model, die, config)

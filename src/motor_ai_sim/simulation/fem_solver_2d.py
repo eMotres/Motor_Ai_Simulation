@@ -3295,6 +3295,8 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                                   json.loads(str(z["msrc_json"])).items()}
                 except Exception:                        # noqa: BLE001
                     pass
+            if "mat_fp" in _f:
+                wc["mat_fp"] = str(z["mat_fp"])
             if ((not _safe_warm_cache_enabled()
                  or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                     and wc["meta"].get("ts") == "bdf2"
@@ -3422,6 +3424,8 @@ def _warm_cache_store(wc: dict) -> None:
         if wc.get("msrc"):
             _extra["msrc_json"] = json.dumps(
                 {str(k): float(v) for k, v in dict(wc["msrc"]).items()})
+        if wc.get("mat_fp"):
+            _extra["mat_fp"] = str(wc["mat_fp"])
         if ((not _safe_on_wc or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                 and wc.get("meta", {}).get("ts") == "bdf2"
                 and wc.get("Ib_prev") is not None
@@ -13637,7 +13641,11 @@ def _fem_transient_sliding_band_once(
                 if np.any(_dof_region_pub < 0):
                     raise RuntimeError("cannot publish cache with unclassified DOFs")
             _demag_history_pub = None
-            if (_safe_warm_cache_enabled() and demag and _dm_settle
+            # In EVERY mode since 2026-10-31: the next run that carries this
+            # Br map (the same-machine carry below the seed) judges its one
+            # checking period against this history; the safe cache was its
+            # only reader before.
+            if (demag and _dm_settle
                     and _dm_settle.get("settled") is True):
                 _history0 = (_dm_inherited_history or {}) if _dm_seeded else {}
                 _pass_rows = list(_history0.get("prepass") or [])

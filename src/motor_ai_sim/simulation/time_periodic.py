@@ -246,7 +246,11 @@ def tdm_refusals(*, eddy: bool, voltage_drive: bool, series_paths: bool,
     if external_excitation or source_name not in ("current", "custom_current",
                                                   "bldc_current"):
         why.append("an external or closed-loop excitation source")
-    if six_phase:
+    if six_phase and os.environ.get("SB_TDM_SIX_PHASE") != "1":
+        # SB_TDM_SIX_PHASE=1: the validation switch (2026-10-31, Erium L90).
+        # The frames take their currents from the same source as the march's
+        # and the acceptance gate marches the reported period from the orbit,
+        # so a wrong orbit is refused into a march, never reported.
         why.append("six-phase winding (not validated with TDM)")
     if voltage_drive:
         why.append("voltage / PWM drive: the circuit state is not in the "

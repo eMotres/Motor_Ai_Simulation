@@ -3670,8 +3670,14 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
             magnet_temp_c: Optional[float],
             inverter: Optional[Dict[str, Any]] = None,
             controller: Optional["_ControllerLoop"] = None,
-            fresh: bool = False, ledger: bool = False) -> Dict[str, Any]:
+            fresh: bool = False, ledger: bool = False,
+            lxy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """ONE Electromagnetic run — the same call the Run button makes.
+
+    ``lxy`` — the six-phase L_xy probe this run may take instead of solving
+    its own (:func:`_lxy_from`): ``routes.simulation._LXY_REUSE_CTX`` is set
+    around the call, and the transient takes the stored probe only when its
+    own operating point matches it (``simulation.LXY_REUSE_TOL``).
 
     ``ledger`` — OFF for every pass except the loop's very FIRST one, and even
     there only when the caller opts in.  Every iteration from the second on
@@ -3706,6 +3712,32 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
     lifetime: it cannot leak into a parallel request the way a module global
     would, and it reaches the summary whatever this function is.
     """
+    from motor_ai_sim.routes import simulation as _sim_l
+    _ltok = _sim_l._LXY_REUSE_CTX.set(lxy) if lxy is not None else None
+    try:
+        return _em_run_in(body, coil_temp_c=coil_temp_c,
+                          magnet_temp_c=magnet_temp_c, inverter=inverter,
+                          controller=controller, fresh=fresh, ledger=ledger)
+    finally:
+        if _ltok is not None:
+            _sim_l._LXY_REUSE_CTX.reset(_ltok)
+
+
+def _lxy_from(em: Optional[Dict[str, Any]], source: str
+              ) -> Optional[Dict[str, Any]]:
+    """The ``lxy`` argument of :func:`_em_run` that offers ``em``'s own L_xy
+    probe — ``None`` when that run carries none (a three-phase machine)."""
+    blk = ((em or {}).get("summary") or {}).get("six_phase")
+    if not isinstance(blk, dict) or not blk.get("inductances"):
+        return None
+    return {"mode": "reuse", "six_phase": blk, "source": str(source)}
+
+
+def _em_run_in(body: Dict[str, Any], *, coil_temp_c: float,
+               magnet_temp_c: Optional[float],
+               inverter: Optional[Dict[str, Any]] = None,
+               controller: Optional["_ControllerLoop"] = None,
+               fresh: bool = False, ledger: bool = False) -> Dict[str, Any]:
     from motor_ai_sim.modules.solvers import _call_filtered
     from motor_ai_sim.routes.simulation import get_fem_transient
 
@@ -5821,7 +5853,8 @@ def _run(body: Dict[str, Any],
                 # it even there.
                 em = _em_run(body, coil_temp_c=t_coil, magnet_temp_c=t_mag,
                              inverter=inverter, controller=ctl,
-                             ledger=(it == 1 and not history_fresh))
+                             ledger=(it == 1 and not history_fresh),
+                             lxy=_lxy_from(em, "coupled pass %d" % (it - 1)))
             except HTTPException as exc:
                 if not history:
                     raise               # the first pass: nothing solved to keep
@@ -5922,7 +5955,9 @@ def _run(body: Dict[str, Any],
                     try:
                         em = _em_run(body, coil_temp_c=t_coil,
                                      magnet_temp_c=t_mag, inverter=inverter,
-                                     controller=ctl, fresh=True)
+                                     controller=ctl, fresh=True,
+                                     lxy=_lxy_from(em, "coupled pass %d"
+                                                   % (it - 1)))
                     finally:
                         _ml.BEARING_TEMP_C.reset(_tok2)
                     try:

@@ -56,6 +56,37 @@ def test_translate_text_unit(monkeypatch):
     assert "came back empty" in str(exc.value)
 
 
+def test_translate_payload_denies_data_collection_and_the_prc_endpoint(monkeypatch, caplog):
+    """Owner decision D3 (2026-10-31): OpenRouter must not route to a provider that stores/trains on prompts, nor to DeepSeek's own endpoint."""
+    monkeypatch.delenv("PRODUCTION_TRANSLATE_MODEL", raising=False)
+    seen = []
+
+    def post(payload, timeout):
+        seen.append(payload)
+        return {"provider": "Fireworks", "choices": [{"message": {"content": "转子组件"}}]}
+
+    with caplog.at_level("INFO", logger=T.log.name):
+        assert T.translate_text("Rotor assembly", "en", "zh", http_post=post) == "转子组件"
+    assert len(seen) == 1
+    assert seen[0]["provider"] == {"data_collection": "deny", "ignore": ["DeepSeek"], "allow_fallbacks": False}
+    assert seen[0]["model"] == T.DEFAULT_MODEL
+    # the provider that answered is logged, nothing else of the exchange
+    assert any("Fireworks" in r.getMessage() for r in caplog.records)
+    assert not any("Rotor assembly" in r.getMessage() for r in caplog.records)
+    # the module constant is not shared with the payload (a caller cannot mutate it through the request)
+    seen[0]["provider"]["ignore"].append("X")
+    assert T.PROVIDER_PREFS["ignore"] == ["DeepSeek"]
+
+
+def test_translate_with_no_allowed_provider_fails_to_pending():
+    """OpenRouter answers 404 when every provider is excluded: the text stays pending, saving is not blocked."""
+    def post(payload, timeout):
+        raise OSError("HTTP 404: No allowed providers are available for the selected model")
+
+    with pytest.raises(T.TranslateError):
+        T.translate_text("Rotor assembly", "en", "zh", http_post=post)
+
+
 def test_api_translation_degrades_to_pending_and_retry(prod_env, monkeypatch):
     client = prod_env["client"]
     admin = prod_env["admin"]

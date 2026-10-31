@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Chip, CircularProgress, IconButton, TextField, Tooltip, Typography } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SendIcon from '@mui/icons-material/Send';
+import { useTranslation } from 'react-i18next';
 import { MiniMarkdown } from './miniMarkdown';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUIStore } from '../../stores/motorStore';
@@ -114,6 +115,7 @@ const EXAMPLES = [
 ];
 
 export default function DesignerTab() {
+  const { t: tc } = useTranslation('common');
   const [status, setStatus] = useState<Status | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [conv, setConv] = useState<Conversation | null>(null);
@@ -188,6 +190,7 @@ export default function DesignerTab() {
             {!conv && (
               <Box sx={{ mt: 2 }}>
                 <Typography sx={{ fontWeight: 700, fontSize: 18, mb: 0.5 }}>Design assistant</Typography>
+                <Typography data-testid="ai-notice" sx={{ fontSize: 12, color: 'text.secondary', mb: 0.5 }}>{tc('aiNotice')}</Typography>
                 <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 2 }}>
                   Describe what you are building. The assistant picks motors and propellers from your catalogue using our
                   simulation results only, and opens the one you choose in Configure.

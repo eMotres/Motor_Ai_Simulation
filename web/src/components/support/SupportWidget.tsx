@@ -155,6 +155,7 @@ const SupportWidget: React.FC = () => {
       {tab === 'ask' && (
         <>
           <Box ref={scrollRef} sx={{ flex: 1, overflowY: 'auto', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Typography data-testid="ai-notice" sx={{ ...BODY, fontSize: 12, color: 'var(--text-2)' }}>{t('aiNotice', { ns: 'common' })}</Typography>
             <Box sx={{ alignSelf: 'flex-start', maxWidth: '88%', bgcolor: 'var(--line-soft)', color: 'var(--text-0)', px: 1.25, py: 0.85, borderRadius: 1.5, ...BODY }}>
               {user ? t('greeting') : t('greetingVisitor')}
             </Box>

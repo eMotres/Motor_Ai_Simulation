@@ -9,7 +9,9 @@ app build, the browser and the last few failed API calls).  It has two uses:
   * a confirmed ticket stores it next to the conversation, so the team reads the
     state the problem happened in.
 
-Both uses go through ``sanitize_context``, and nothing the browser sends is
+Both uses go through ``sanitize_context``; the model's copy is reduced further by ``model_view`` (owner decision D3,
+2026-10-31: no engineering data to a model provider - only the page name and non-engineering UI state), while a
+confirmed ticket keeps the full sanitised snapshot in our own store.  Nothing the browser sends is
 trusted: only whitelisted top-level keys survive, every string is clipped and
 scrubbed of anything that looks like a credential, keys that name a secret are
 dropped outright, and the whole thing is capped.  The identity is never read
@@ -159,6 +161,31 @@ def sanitize_context(raw: Any) -> dict:
     return out
 
 
+#: What a MODEL may be told about the screen (owner decision D3, 2026-10-31).  Page/route name, UI language, the app
+#: build and the browser are not engineering data; the machine, the Configure knobs, tiles and warnings are.
+MODEL_TOP = ("tab", "tabLabel", "lang", "app", "browser")
+
+
+def model_view(ctx: dict) -> dict:
+    """The part of a sanitised snapshot that may go to a model provider.
+
+    Kept: the tab / page name, language, app build, browser, and for each failed API call only its method, path (no
+    query), status and age - its message is dropped because an error text can quote a value ("12500 rpm is
+    outside ...").  ``configure`` is reduced to ``{"open": true}`` (the user is on Configure); ``machine`` and
+    everything else (geometry, configuration values, knobs, results, warnings) never leaves the server."""
+    ctx = ctx if isinstance(ctx, dict) else {}
+    out: dict = {k: ctx[k] for k in MODEL_TOP if k in ctx}
+    if ctx.get("configure"):
+        out["configure"] = {"open": True}
+    calls = []
+    for c in ctx.get("failedCalls") or []:
+        if isinstance(c, dict):
+            calls.append({k: c[k] for k in ("method", "path", "status", "agoS") if k in c})
+    if calls:
+        out["failedCalls"] = calls
+    return out
+
+
 def sanitize_conversation(raw: Any, *, max_msgs: int = 30, max_chars: int = 2000) -> list[dict]:
     """The chat to attach to a ticket: user / assistant turns only, the last
     ``max_msgs`` of them, each clipped and scrubbed of credentials (the user's
@@ -189,7 +216,7 @@ def server_facts(role: str = "") -> dict:
 
 def render_for_model(ctx: dict, *, role: str = "") -> str:
     """The hidden block appended to the system prompt ('' when there is nothing)."""
-    ctx = ctx or {}
+    ctx = model_view(ctx or {})
     if not ctx and not role:
         return ""
     body = dict(ctx)

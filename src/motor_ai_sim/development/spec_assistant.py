@@ -1,8 +1,9 @@
 """The specification assistant (owner 2026-10-27): the in-app support assistant, in SPEC MODE, beside the
 Development -> Specification form.
 
-It is the SAME assistant and provider as ``routes/support.py`` (``_effective()``: in production Gemini on the free
-tier, Firestore / env overrides) - one plain text completion, no tools.  The server builds the model's context itself
+It is the SAME assistant and provider as ``routes/support.py`` (``_effective()``: in production Anthropic's commercial
+API - no training on inputs; Firestore / env overrides; Gemini only behind the paid-tier guard, owner decision D3
+2026-10-31) - one plain text completion, no tools.  The server builds the model's context itself
 (the draft, what is missing, the schema shape of every unfilled field) and the model answers with text plus
 ``[[SPEC_PROPOSAL: field="..."; value={json}; reason="..."; basis="..."]]`` markers.  ``parse_proposals`` cuts
 every marker out of the text (parsed, malformed or unclosed) and ``take_proposals`` stores the valid ones through
@@ -244,7 +245,8 @@ class AssistantUnavailable(RuntimeError):
 
 
 def complete(messages: list[dict], system_prompt: str) -> tuple[str, str, str]:
-    """(reply, source, model) from the support assistant's provider.  Raises ``AssistantUnavailable`` when none."""
+    """(reply, source, model) from the support assistant's provider (already guarded: an unpaid Gemini key never gets here,
+    ``S._effective`` swapped it for Anthropic or "none").  Raises ``AssistantUnavailable`` when there is none."""
     from motor_ai_sim.routes import support as S
     eff = S._effective()
     if eff["provider"] == "gemini" and eff["gemini"]["key"]:
@@ -260,7 +262,7 @@ def complete(messages: list[dict], system_prompt: str) -> tuple[str, str, str]:
     raise AssistantUnavailable("no provider configured")
 
 
-# ── a day cap per user (the provider is a free tier) ─────────────────────────
+# ── a day cap per user (bounds the provider bill) ────────────────────────────
 _DAY = {"day": "", "n": {}}
 _DAY_LOCK = threading.Lock()
 

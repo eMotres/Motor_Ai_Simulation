@@ -133,6 +133,7 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
         <Tooltip title={t('specAssistant.tip')}><Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{t('specAssistant.title')}</Typography></Tooltip>
         <IconButton size="small" aria-label={t('specAssistant.close')} onClick={() => toggle(false)}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
       </Box>
+      <Typography data-testid="ai-notice" sx={{ fontSize: 11.5, color: 'text.secondary', px: 1.5, py: 0.4 }}>{t('aiNotice', { ns: 'common' })}</Typography>
       {cards.length > 0 && (
         <Box sx={{ maxHeight: '45%', overflowY: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 1, borderBottom: '1px solid var(--line-soft)' }}>
           {cards.map((p) => {

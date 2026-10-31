@@ -329,18 +329,45 @@ def _system_of_last_call(env) -> str:
     return env["model"]["calls"][-1]["system"]
 
 
-def test_the_model_gets_the_sanitised_context_as_hidden_text(env):
-    ctx = {"tab": "compare", "tabLabel": "Configure",
-           "configure": {"knobs": {"speed_rpm": 8000}, "warnings": ["Refused: 12500 rpm is outside"]},
+def test_the_model_gets_the_page_name_but_no_engineering_data(env):
+    """Owner decision D3 (2026-10-31): the model is told where the user is, never what the motor is."""
+    ctx = {"tab": "compare", "tabLabel": "Configure", "lang": "en",
+           "machine": {"name": "SECRET-DIE-77", "die": "D85", "configuration": "L99-CONF"},
+           "configure": {"knobs": {"speed_rpm": 8000, "stackLength_mm": 41.5},
+                         "tiles": {"torque_Nm": 77.7},
+                         "geometry": {"slots": 24, "rotor_od_mm": 123.4},
+                         "warnings": ["WARN-MARK-5: 12500 rpm is outside"]},
            "authToken": "supersecretvalue", "failedCalls": [
-               {"method": "GET", "path": "/api/x?token=abc", "status": 500, "message": "boom"}]}
+               {"method": "GET", "path": "/api/x?token=abc", "status": 500,
+                "message": "boom: stack 41.5 mm", "agoS": 3}]}
     chat("why a dash?", headers=env["client"], context=ctx)
     sp = _system_of_last_call(env)
     assert "Session context (hidden from the user)" in sp
-    assert '"speed_rpm":8000' in sp and "Refused: 12500 rpm" in sp
-    assert '"role":"user"' in sp
-    assert "supersecretvalue" not in sp and "token=abc" not in sp
-    assert '"path":"/api/x"' in sp
+    assert '"tabLabel":"Configure"' in sp and '"role":"user"' in sp
+    assert '"path":"/api/x"' in sp and '"status":500' in sp
+    for gone in ("speed_rpm", "8000", "stackLength", "41.5", "torque_Nm", "77.7", "rotor_od", "123.4", "SECRET-DIE-77",
+                 "D85", "L99-CONF", "WARN-MARK-5", "12500", "boom", "supersecretvalue", "token=abc"):
+        assert gone not in sp, gone
+
+
+def test_model_view_keeps_only_the_whitelisted_ui_state():
+    full = C.sanitize_context({
+        "tab": "compare", "tabLabel": "Configure", "lang": "zh-CN",
+        "app": {"version": "1.2.3", "gitSha": "6a2ca6b"}, "browser": "Chrome/130",
+        "machine": {"name": "L12", "die": "D85"},
+        "configure": {"preset": "ref", "knobs": {"speed_rpm": 8000}, "drive": {"mode": "pwm"},
+                      "battery": {"cells": 12}, "tiles": {"torque_Nm": 1.5}, "warnings": ["w"]},
+        "failedCalls": [{"method": "post", "path": "/api/geometry?geo=1", "status": 502, "message": "m 3 mm", "agoS": 4}]})
+    mv = C.model_view(full)
+    assert set(mv) <= {"tab", "tabLabel", "lang", "app", "browser", "configure", "failedCalls"}
+    assert "machine" not in mv and mv["configure"] == {"open": True}
+    assert mv["failedCalls"] == [{"method": "POST", "path": "/api/geometry", "status": 502, "agoS": 4}]
+    text = json.dumps(mv)
+    for gone in ("speed_rpm", "torque_Nm", "knobs", "tiles", "drive", "battery", "warnings", "preset", "L12", "D85", "3 mm"):
+        assert gone not in text, gone
+    assert C.model_view({}) == {} and C.model_view("junk") == {}
+    # the ticket keeps the full sanitised snapshot: model_view must not mutate it
+    assert full["configure"]["knobs"]["speed_rpm"] == 8000 and full["machine"]["name"] == "L12"
 
 
 def test_a_regular_account_gets_the_three_tab_prompt(env):

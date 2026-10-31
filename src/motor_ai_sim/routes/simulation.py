@@ -1727,6 +1727,22 @@ def _effective_six_phase(star_delta: Optional[str] = None,
         raise HTTPException(status_code=422, detail=str(e))
 
 
+def _six_open_set_value(v: Any) -> Optional[int]:
+    """The request's open six-phase set: None (both sets run), else 1 or 2.
+    Anything else is a 422 — a typo must not run the healthy machine."""
+    if v in (None, "", 0, "0", "none"):
+        return None
+    try:
+        s = int(v)
+    except (TypeError, ValueError):
+        s = -1
+    if s not in (1, 2):
+        raise HTTPException(status_code=422, detail=(
+            "six_phase_open_set must be 1 or 2 (the set whose controller is "
+            "off); got %r" % (v,)))
+    return s
+
+
 def _effective_star_delta(v: Optional[str] = None) -> str:
     """"star" | "delta" — the argument if given, else the saved operating point.
 
@@ -1797,7 +1813,8 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                            excitation="", magnet_temp_c=None,
                            sampling_purpose: Literal["standard", "optimization",
                                                      "cogging_quality"] =
-                           "standard") -> "OrderedDict":
+                           "standard",
+                           six_open_set=None) -> "OrderedDict":
     """The snapshot key as NAMED fields, in key order.
 
     Named because the key is the thing that decides "is this the run the user
@@ -1885,6 +1902,11 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         # and the field views (J⟳ / Loss) would re-solve for a picture the
         # coupled run already made.
         _kf["magnet_temp_c"] = round(float(magnet_temp_c), 1)
+    # ONE SIX-PHASE SET OPEN: a different field and loss map from the healthy
+    # machine at the same request.  Appended only when set, like the magnet
+    # temperature, so every healthy key keeps its spelling.
+    if six_open_set is not None:
+        _kf["six_open_set"] = int(six_open_set)
     return _kf
 
 
@@ -2095,7 +2117,10 @@ def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                 # made in the thermal route.  Absent from every snapshot written
                 # before this line, which is why the thermal side falls back to
                 # the same geometry estimator the solver uses for 0 = auto.
-                "end_winding_factor")},
+                "end_winding_factor",
+                # One six-phase set open: the copper heat basis of the thermal
+                # map (every slot at the hottest set's density) and its label.
+                "copper_heat_uniform_factor", "copper_heat_basis")},
             "meta": {
                 "eddy": bool(eddy),
                 "n_steps_per_period": int(n_steps_per_period),
@@ -2298,6 +2323,7 @@ def _field2d_cache_key(
     latest_run_field:    bool  = True,
     snap_drive:          str   = "current",
     snap_excitation:     str   = "",
+    six_open_set:        Optional[int] = None,
     **_ignored,
 ) -> tuple:
     """THE cache key of a field-view request — one definition, two readers.
@@ -2360,6 +2386,8 @@ def _field2d_cache_key(
     # machine — a 24 kHz PWM map and the sine map at the same point.
     if str(snap_drive or "current") != "current" or str(snap_excitation or ""):
         key = key + (str(snap_drive or "current"), str(snap_excitation or ""))
+    if six_open_set is not None:          # same rule: healthy keys unchanged
+        key = key + (("six_open_set", int(six_open_set)),)
     return key
 
 
@@ -2414,6 +2442,7 @@ def get_fem_field2d(
     snap_excitation:     str   = "",
     progress_cb=None,
     snap_key:            Optional[tuple] = None,
+    six_open_set:        Optional[int] = None,  # the run had six-phase set 1|2 open
 ):
     """The field view — QUEUED.  Parameters are documented on the body below
     (`_fem_field2d_impl`), which is the function this one calls.
@@ -2477,6 +2506,7 @@ def get_fem_field2d(
         use_transient_snapshot=use_transient_snapshot,
         snapshot_only=snapshot_only, latest_run_field=latest_run_field,
         snap_drive=snap_drive, snap_excitation=snap_excitation,
+        six_open_set=(None if six_open_set in (None, "", 0) else int(six_open_set)),
     )
     key = _field2d_cache_key(**_p)
     _hit = _fem_field_cache.get(key)
@@ -2558,6 +2588,9 @@ def _fem_field2d_impl(
     snap_excitation:     str   = "",          # …and that source's own key string
                                           # ("<v_bus>/<f_switch>" for PWM).  See the
                                           # note on `get_fem_field2d`.
+    six_open_set:        Optional[int] = None,  # a run with six-phase set 1|2 OPEN:
+                                          # served from its snapshot only (this
+                                          # view's own solve has no such mode)
     *,
     _key:                tuple,           # THE cache key, built by the queue in
                                           # front of this body (see
@@ -2699,6 +2732,7 @@ def _fem_field2d_impl(
             magnet_temp_c=magnet_temp_c,
             drive=str(snap_drive or "current"),
             excitation=str(snap_excitation or ""),
+            six_open_set=six_open_set,
             element_order=2,
             cfg_fingerprint=_config_physics_fingerprint(
                 with_request_materials=False),
@@ -2778,6 +2812,15 @@ def _fem_field2d_impl(
                        "operating point / mesh / frame count"
                        + ("" if _sweep else " (single-angle views are never "
                                             "served from a transient snapshot)")),
+        }
+    elif six_open_set is not None:
+        # This view's own solve has no one-set-open mode: answering it would
+        # show the HEALTHY machine under the open-set label.
+        return {
+            "ok": False, "no_snapshot": True,
+            "reason": ("no field snapshot of the run with six-phase set %d open "
+                       "matches; run the transient with six_phase_open_set=%d "
+                       "first" % (int(six_open_set), int(six_open_set))),
         }
     else:
         _src = "on-demand solve"
@@ -3097,6 +3140,13 @@ def _fem_field2d_impl(
             # stored, which the reader treats as "not recorded".
             "end_winding_factor": float(d.get("end_winding_factor", 0.0) or 0.0),
         })
+        if d.get("copper_heat_uniform_factor") is not None:
+            # ONE SIX-PHASE SET OPEN: the copper heat is not uniform over the
+            # slots, and the thermal solve spreads it uniformly — so it reads
+            # P_cu × this factor (every slot at the hottest set's density).
+            result["copper_heat_uniform_factor"] = float(
+                d["copper_heat_uniform_factor"])
+            result["copper_heat_basis"] = d.get("copper_heat_basis")
     # Demag %-map + per-magnet knee report (only when demag modelling is on).
     _dc = d.get("demag_coef_per_tri")
     if _dc is not None and len(_dc) == int(T.shape[1]):
@@ -4669,6 +4719,11 @@ def get_fem_transient(
     connection:  Optional[str] = None,    # ← WINDING CONNECTION label ("4S" / "2S-2P" / "4P").
                                           #   Supplies n_parallel when that is absent and enters
                                           #   the d-axis topology key.  Unreadable label -> 400.
+    six_phase_open_set: Optional[int] = None,  # ← six-phase winding with ONE SET OPEN (1 | 2):
+                                          #   that set's controller is off, the other set
+                                          #   alone carries the load.  I_phase_rms is then the
+                                          #   ACTIVE set's phase current (its controller's).
+                                          #   Full ring, imposed current only; None = both sets.
     mesh_size_mm:        Optional[float] = None,  # ┐ Mesh-tab settings: None = the
     min_size_mm:         Optional[float] = None,  # │ machine's saved Mesh settings
     outer_air_factor:    Optional[float] = None,  # │ (mesh_settings.py); a labelled
@@ -4906,6 +4961,7 @@ def get_fem_transient(
     # MESH SETTINGS come only from the Mesh tab (owner 2026-09-30): what the
     # request carries, else the machine's saved Mesh settings, else a labelled
     # last-resort fallback that the result reports (mesh_settings.py).
+    _ns_requested = n_sectors          # the CALLER's, before the Mesh-tab fill-in
     _mesh_vals, _mesh_src = _resolve_mesh_settings(
         {"mesh_size_mm": mesh_size_mm, "min_size_mm": min_size_mm,
          "outer_air_factor": outer_air_factor, "gap_layers": gap_layers,
@@ -5102,6 +5158,24 @@ def get_fem_transient(
             star_delta, _effective_winding(n_parallel, connection)[0])
     except ValueError as _e6:
         raise HTTPException(status_code=400, detail=str(_e6))
+    # ONE SET OPEN (degraded operation): a property of the REQUEST, never of
+    # the stored winding — the same machine is solved healthy or degraded.
+    _six_open = _six_open_set_value(six_phase_open_set)
+    if _six_open is not None:
+        from motor_ai_sim.winding_sets import SixPhaseError, with_open_set
+        try:
+            _six_spec = with_open_set(_six_spec, _six_open)
+        except SixPhaseError as _e6o:
+            raise HTTPException(status_code=422, detail=str(_e6o))
+        if _drive not in ("current", "custom_current", "bldc_current"):
+            raise HTTPException(status_code=422, detail=(
+                "six_phase_open_set needs an imposed-current drive (current / "
+                "custom_current / bldc_current); %r would need each set's own "
+                "voltage circuit" % _drive))
+        if _ns_requested is not None and int(_ns_requested) > 1:
+            raise HTTPException(status_code=422, detail=(
+                "six_phase_open_set needs the full-ring model (n_sectors=1): "
+                "the active set's field is not repeated by any sector"))
     _eq_star = (_drive in ("voltage",) + _pwm_like and _sd_eff == "delta")
     # The bus the SOURCE chops.  Star: v_bus, byte for byte.  The REQUEST keeps
     # the real link everywhere else (cache key, snapshot key, the reported
@@ -5315,6 +5389,16 @@ def get_fem_transient(
                     n_sectors = _sym
             except Exception:
                 pass
+    if _six_open is not None and int(n_sectors) > 1:
+        # One set open: the full ring is the only model of it.  A sector here
+        # came from the saved Mesh setting or the auto-symmetry, not from the
+        # caller (an explicit one is refused above) — so the ring is used and
+        # the result says so.
+        _mesh_note = ((_mesh_note + "; ") if _mesh_note else "") + (
+            "one six-phase set open: solved on the FULL RING (the saved / "
+            "automatic 1/%d sector cannot hold the unequal set currents)"
+            % int(n_sectors))
+        n_sectors = 1
     # Config fingerprint of the base physics a solve depends on but that is
     # NOT in the request signature (num_wires_per_slot, the whole geometry,
     # winding connection, materials/magnet/steel).  WITHOUT this, editing a
@@ -5398,7 +5482,11 @@ def get_fem_transient(
         # 3 or 6 phases, and which paths are set 1: the six-phase result
         # carries per-set values and L_xy the 3-phase one does not.
         ("six_phase", (None if not _six_spec else
-                       (tuple(_six_spec["set1_paths"]), _six_spec["neutrals"]))),
+                       (tuple(_six_spec["set1_paths"]), _six_spec["neutrals"])
+                       # one set open: a different machine at the terminals;
+                       # the healthy key keeps its old spelling
+                       + ((("open_set", int(_six_open)),)
+                          if _six_open is not None else ()))),
         # Transposed / soldered / per-turn-parallel are three different
         # windings and they differ by kilowatts of copper — never one entry.
         ("strand_bonding", _effective_bonding(strand_bonding) or "auto"),
@@ -5469,7 +5557,7 @@ def get_fem_transient(
         sampling_purpose=sampling_purpose,
         eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
         drive=_drive, element_order=element_order,
-        magnet_temp_c=magnet_temp_c,
+        magnet_temp_c=magnet_temp_c, six_open_set=_six_open,
         excitation=(_inv_key if _drive == "inverter"
                     else "%g/%g" % (float(v_bus), float(f_switch))
                     if _drive == "pwm_voltage"
@@ -8686,6 +8774,14 @@ def _build_transient_summary(
             p_loss_w=_ploss, efficiency=_eff, op_mode=_op_mode,
             mass_components=_masses.get("components")),
     }
+    # NET FORCE ON THE ROTOR (the bearing load of an unbalanced field): the
+    # means on the summary, the per-frame Fx/Fy beside them.  Full ring only.
+    if isinstance(sbres.get("rotor_net_force"), dict):
+        _summary_out["rotor_net_force"] = dict(sbres["rotor_net_force"])
+    if sbres.get("copper_heat_uniform_factor") is not None:
+        _summary_out["copper_heat_uniform_factor"] = float(
+            sbres["copper_heat_uniform_factor"])
+        _summary_out["copper_heat_basis"] = sbres.get("copper_heat_basis")
     # SIX PHASES: the per-set values + the solver's L_xy block, on the summary
     # every consumer (duty record, Controller, report) reads.
     if isinstance(sbres.get("six_phase"), dict):
@@ -8695,7 +8791,18 @@ def _build_transient_summary(
             _spec6 = {"set1_paths": _b6.get("set1_paths"),
                       "set2_paths": _b6.get("set2_paths"),
                       "set_connection": _summary_out.get("star_delta")}
-            _b6.update(_psv(_summary_out, _spec6))
+            _dg6 = _b6.get("degraded")
+            if isinstance(_dg6, dict):
+                # ONE SET OPEN: the sets are NOT identical halves — the per-set
+                # values are the solver's own (current, voltage, copper), never
+                # the symmetric split below.
+                _b6["sets"] = [dict(r, paths=_spec6["set%d_paths" % r["set"]],
+                                    connection=_spec6["set_connection"])
+                               for r in (_dg6.get("sets") or [])]
+                _b6["basis"] = ("one set open: per-set values solved on the "
+                                "full ring (six_phase.degraded)")
+            else:
+                _b6.update(_psv(_summary_out, _spec6))
             _summary_out["six_phase"] = _b6
             _ind = _b6.get("inductances") or {}
             if _ind.get("Lxy_mH") is not None:

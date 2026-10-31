@@ -179,6 +179,7 @@ from motor_ai_sim.simulation.sb_postproc import (
 from motor_ai_sim.simulation.moving_band import slip_ring_nodes as _slip_ring_nodes
 from motor_ai_sim.simulation.virtual_work_torque import (
     air_mask_from as _vwt_air_mask, frame_torques as _frame_torques,
+    frame_forces as _frame_forces,
     resolve_torque_method as _resolve_torque_method,
     prepare_sliding_band_frame_torques as _prepare_sb_frame_torques,
     coulomb_series_summary as _coulomb_series_summary,
@@ -4831,6 +4832,34 @@ def _fem_transient_sliding_band_once(
     from motor_ai_sim.simulation.geometry_2d import validate_sector_symmetry
     validate_sector_symmetry(p.num_slots, p.num_poles, NS, dom.winding_layout,
                              paired_stator=True)
+    # ── SIX-PHASE, ONE SET OPEN (or any unequal set currents) ───────────────
+    # ``six_phase["set_current_scale"]`` (winding_sets.with_open_set): set s
+    # carries a_s × its balanced share of I_phase_rms.  None = balanced, and
+    # nothing below changes.  Unequal set currents are a field the sector
+    # cannot copy unless the set pattern repeats with it — refused, never
+    # solved as a different machine.
+    _six_scale = None              # (a1, a2) when the sets are unequal
+    _six_slot_w = None             # per-slot current factor (by slot index)
+    if isinstance(six_phase, dict) and six_phase:
+        from motor_ai_sim.winding_sets import set_current_scale as _set_scale
+        _sc6 = _set_scale(six_phase)
+        if _sc6 != (1.0, 1.0):
+            _ss6 = [int(x) for x in (six_phase.get("slot_set") or [])]
+            if len(_ss6) != len(dom.winding_layout) or set(_ss6) - {1, 2}:
+                raise ValueError(
+                    "six_phase.slot_set must give set 1 or 2 for each of the "
+                    "%d slots" % len(dom.winding_layout))
+            _secl6 = len(_ss6) // max(int(NS), 1)
+            if not all(_ss6[k] == _ss6[(k + _secl6) % len(_ss6)]
+                       for k in range(len(_ss6))):
+                raise ValueError(
+                    "six-phase with unequal set currents (one set open) needs "
+                    "the full-ring model: the set pattern does not repeat with "
+                    "the 1/%d sector, so a sector would copy the active set's "
+                    "field into the open one — run it with n_sectors=1"
+                    % int(NS))
+            _six_scale = (float(_sc6[0]), float(_sc6[1]))
+            _six_slot_w = [_six_scale[s - 1] for s in _ss6]
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
     # Early Br image restoration needs the electrical-period angle before the
@@ -5118,6 +5147,16 @@ def _fem_transient_sliding_band_once(
     # settling/anchor/copper-from-solved-current path below applies unchanged —
     # only what V(t) is changes.
     _vdrive = (str(getattr(_src, "kind", "I")).strip().upper() == "V")
+    if _six_scale is not None and (
+            _vdrive or excitation is not None
+            or _drv_name not in ("current", "custom_current", "bldc_current")):
+        # The set currents are IMPOSED per set.  A voltage / PWM / inverter
+        # drive would have to solve each set's own circuit (the open set's
+        # floating terminals included), which the bordered Newton does not.
+        raise ValueError(
+            "six-phase with one set open is solved with an imposed current "
+            "(drive current / custom_current / bldc_current); %r would need "
+            "each set's own voltage circuit" % _drv_name)
     # How long this source's circuit state takes to reach its orbit, and which
     # accelerators apply.  Everything the schedule below derives comes from it.
     _settle = _src.settle_policy()
@@ -5525,6 +5564,17 @@ def _fem_transient_sliding_band_once(
         p, geo, float(I_phase_rms), n_parallel,
         coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor,
         copper_area_m2=_cu_area_m2)
+    # UNEQUAL SETS.  Set s (half the paths: resistance 2·R_phase) carries
+    # a_s·I/2, so the winding's I²R is 3·I²·R_phase·(a1² + a2²)/2.  R_phase
+    # takes the same factor so that R·I in the terminal voltage stays the
+    # power-consistent one: with one set open (a = 2, 0) it is exactly the
+    # active set's own 2·R_phase at its own current I.
+    _six_k_cu = (1.0 if _six_scale is None
+                 else 0.5 * (_six_scale[0] ** 2 + _six_scale[1] ** 2))
+    _R_phase_bal = float(R_phase)          # the balanced winding's R_phase
+    if _six_scale is not None:
+        P_cu = float(P_cu) * _six_k_cu
+        R_phase = float(R_phase) * _six_k_cu
     # NOMINAL section = every STRIP's rectangle.  A strip is wire_width ×
     # wire_height and there are num_wires × wire_split of them per slot, so the
     # copper the parameters describe grows with the split exactly as the drawn
@@ -5891,6 +5941,18 @@ def _fem_transient_sliding_band_once(
     mats_full = build_materials(_nominal_currents(0.0), dom.winding_layout,
                                 getattr(cs, "polys", polys), 0.0, slot_area_m2,
                                 n_wires, coil_area_m2=_coil_area_meshed)
+
+    def _six_w_of(nm: str) -> float:
+        """The set current factor of the coil named ``nm``
+        ("coil_<i>_slot<j>_<phase><+|->", the slot from build_materials'
+        own coil_slot_index) — 1.0 unless the six-phase sets are unequal."""
+        if _six_slot_w is None:
+            return 1.0
+        try:
+            _j = int(nm.split("_slot", 1)[1].split("_", 1)[0])
+        except (IndexError, ValueError):
+            raise ValueError("six-phase: coil %r names no slot" % nm)
+        return float(_six_slot_w[_j])
     for tag, idx in half["s"]["cells"].items():
         _mt = mats_full.get(int(tag))
         if _mt is None:
@@ -5904,7 +5966,9 @@ def _fem_transient_sliding_band_once(
         ph = nm[-2] if nm[-1] in "+-" else nm[-1]
         direction = 1.0 if nm.endswith("+") else -1.0
         if ph in "ABC":
-            coil_info.append((idx, areas_s[idx], direction, ph,
+            # The set factor rides on the direction: ψ (eddy path) and the J
+            # view then read the current each conductor actually carries.
+            coil_info.append((idx, areas_s[idx], direction * _six_w_of(nm), ph,
                               (_coil_areas.get(int(tag))
                                or (0.0, float(areas_s[idx].sum())))[1]))
 
@@ -5952,6 +6016,10 @@ def _fem_transient_sliding_band_once(
                 "g": np.concatenate([g_s, np.zeros(_nr0)]),
                 "S": float(g_s.sum()),
                 "Iunit": dr,
+                # The set's current factor, kept apart from the sign: the
+                # strand paths read their polarity off Iunit, and an open set
+                # (factor 0) must keep its paths — only its current is zero.
+                "Iscale": _six_w_of(nm),
                 "phase": ph,
                 "slot": _slot_j,
                 "coil": (_slot_j // 2 if _slot_j >= 0 else -1),
@@ -6320,7 +6388,10 @@ def _fem_transient_sliding_band_once(
                      else "eddy history only")
         else:
             _wc_seed = None
+    # (unequal six-phase sets: never seeded from the last run, whose state may
+    # be the balanced machine's — the warm identity does not carry the factors)
     if (_wc_seed is None and eddy and not _vdrive and not _warm_cache_disabled()
+            and _six_scale is None
             and (not _safe_warm_cache_enabled() or _safe_drive_ok)):
         _wc_seed = _warm_cache_load()
         _wc_ok, _wc_why = _warm_seed_accept(_wc_seed, _wmeta, I_phase_rms, rpm,
@@ -6562,6 +6633,25 @@ def _fem_transient_sliding_band_once(
     _coil_parts = [np.asarray(_i, int) for _t, _i in half["s"]["cells"].items()
                    if int(_t) >= DOM_COIL_BASE or int(_t) == int(DOM_COIL)]
     _coil_idx = np.concatenate(_coil_parts) if _coil_parts else np.array([], int)
+    # unequal six-phase sets: the set of every coil element, in _coil_idx order
+    # (0 = a coil tag the material map does not name), for the per-set copper
+    _coil_set_el = None
+    _six_ac_set: Dict[int, float] = {}
+    if _six_scale is not None and _coil_parts:
+        _ss6l = [int(x) for x in six_phase["slot_set"]]
+
+        def _set_of_tag6(_t):
+            _mt6 = mats_full.get(int(_t))
+            if _mt6 is None or not _mt6.name.startswith("coil_"):
+                return 0
+            try:
+                return _ss6l[int(_mt6.name.split("_slot", 1)[1].split("_", 1)[0])]
+            except (IndexError, ValueError):
+                return 0
+        _coil_set_el = np.concatenate([
+            np.full(len(_i), _set_of_tag6(_t), int)
+            for _t, _i in half["s"]["cells"].items()
+            if int(_t) >= DOM_COIL_BASE or int(_t) == int(DOM_COIL)])
     if "slot" in _ex_parts:
         # An EXCLUDED winding is air: no source (build_materials zeroed J_z),
         # no conductivity, and therefore no AC copper loss either.  The DC I²R
@@ -7081,6 +7171,18 @@ def _fem_transient_sliding_band_once(
             _six_blk["sets_in_model"] == [1, 2]
             and all(_slot_set[k] == _slot_set[(k + _secl) % _nsl]
                     for k in range(_nsl)))
+        if _six_scale is not None:
+            # UNEQUAL SETS: the phase source is the per-set split weighted by
+            # each set's current factor.  Every consumer of f_coil2 (the field
+            # RHS, ψ, the Ld/Lq probe columns) then sees the machine that runs:
+            # ψ_phase = a1·ψ_set1/2 + a2·ψ_set2/2, which with one set open
+            # (2, 0) IS the active set's own flux linkage.
+            _a6, _b6 = _six_scale
+            f_coil2 = {ph: _a6 * f_set2[1][ph] + _b6 * f_set2[2][ph]
+                       for ph in 'ABC'}
+            _six_blk["solve"] = (
+                "unequal set currents: the source is a1*f_set1 + a2*f_set2 "
+                "(set s carries a_s x its balanced share of I_phase_rms)")
 
     # ── per-element base ν + saturable element sets (mesh_all element ids) ─
     nu_base2 = np.empty(n_all_el)
@@ -7121,7 +7223,10 @@ def _fem_transient_sliding_band_once(
         air_mask=_vwt_air_mask(_tags_all2, _nu_const2),
         r_rotor_metal=_r_rot_max, r_slip=mid, r_stator_metal=_r_sta_min,
         slip_nodes_rotor=np.asarray(rring, int) + nsn,
-        slip_nodes_stator=np.asarray(sring, int), log_warning=log.warning)
+        slip_nodes_stator=np.asarray(sring, int), log_warning=log.warning,
+        # the NET force on the rotor: meaningful on the full ring only (a
+        # sector's copies cancel it by symmetry)
+        with_force=bool(_full_ring))
 
     # ── frame-independent solver helpers ─────────────────────────────────
     # The saturable-iron assembly, the Newton tangent and the damped-Picard
@@ -7319,6 +7424,7 @@ def _fem_transient_sliding_band_once(
                 "key": _ky, "tag": _tg, "tags": [_tg], "g": _g,
                 "S": float(_g.sum()),
                 "Iunit": float(_cm["Iunit"]) if _cm else 0.0,
+                "Iscale": float(_cm.get("Iscale", 1.0)) if _cm else 1.0,
                 "phase": (_cm["phase"] if _cm else None),
                 "slot": (int(_cm.get("slot", -1)) if _cm else -1),
                 "coil": (int(_cm.get("coil", -1)) if _cm else -1),
@@ -7396,6 +7502,8 @@ def _fem_transient_sliding_band_once(
                         "g": np.sum([c["g"] for c in _grp], axis=0),
                         "S": float(sum(c["S"] for c in _grp)),
                         "Iunit": float(sum(c["Iunit"] for c in _grp)),
+                        # strands in hand of one coil: one set, one factor
+                        "Iscale": float(_grp[0].get("Iscale", 1.0)),
                         "phase": _grp[0]["phase"],
                     })
             _ed_con = _merged + _rest
@@ -7832,6 +7940,7 @@ def _fem_transient_sliding_band_once(
 
     # ── frame loop ───────────────────────────────────────────────────────
     _T2 = []; _T_vw = []; _T_vw_reason = []; _Tc2 = []; _Tc2l = []
+    _Fnet2 = []             # (Fx, Fy, |F| rotor-side ring) per frame, full ring
     _psiA = []; _psiB = []; _psiC = []; _tt = []; _theta_samples = []
     _dt_steps = []          # Δt each reported frame's step was solved with
     _pre_frame = None       # (ψ, i) of the frame solved just before frame 0
@@ -8782,8 +8891,9 @@ def _fem_transient_sliding_band_once(
                                  t1_s=float((k + 1) * dt), fine=True, i_abc=None,
                                  psi_abc=None, v_bus=_fb_v_bus)
                 _Is = _src.mean_over(_fbk)
-                _Iv = np.array([_Is[c["phase"]] * c["Iunit"] if c["key"] == "cu"
-                                else 0.0 for c in _ed_con], float)
+                _Iv = np.array([_Is[c["phase"]] * c["Iunit"] * c.get("Iscale", 1.0)
+                                if c["key"] == "cu" else 0.0 for c in _ed_con],
+                               float)
                 if _m not in _td_geometry_cache:
                     _P, _o = _proj.build(_m)
                     _free = _free_columns(_P.shape[1], _o)
@@ -10187,8 +10297,8 @@ def _fem_transient_sliding_band_once(
                     _Pro_s, _free_s, np.asarray(_Pro_s.T @ _f_s).ravel()[_free_s],
                     _nu_s, _PIC_SEED_MAX, _PIC_SEED_TOL)
             _I_vec_s = np.array(
-                [_Ist_s[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
-                 for c in _ed_con], float)
+                [_Ist_s[c["phase"]] * c["Iunit"] * c.get("Iscale", 1.0)
+                 if c["key"] == "cu" else 0.0 for c in _ed_con], float)
             _cancel_point("static start field")
             _ok_s, _A_static = _drv.eddy_static_state(
                 _Pro_s, _free_s, _A_s0, _I_vec_s,
@@ -10529,8 +10639,8 @@ def _fem_transient_sliding_band_once(
                                        or not _sat2) else None)
             if eddy and not _vdrive:
                 _I_vec = np.array(
-                    [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
-                     for c in _ed_con], float)
+                    [Ist[c["phase"]] * c["Iunit"] * c.get("Iscale", 1.0)
+                     if c["key"] == "cu" else 0.0 for c in _ed_con], float)
                 _Ahist, _dte, _ts_k = _ed_history()
                 (_eok, A2, _Ued, _res, _nit) = _drv.eddy_solve(
                     Pro, _free2, _A_start, _Ued, _I_vec, _Ahist,
@@ -10909,7 +11019,7 @@ def _fem_transient_sliding_band_once(
             # reference below bills
             _Ib_k = (_S_con * np.asarray(_Ued, float)
                      - np.asarray(_G2.T @ _dAe).ravel(),
-                     np.array([Ist[c["phase"]] * c["Iunit"]
+                     np.array([Ist[c["phase"]] * c["Iunit"] * c.get("Iscale", 1.0)
                                if c["key"] == "cu" else 0.0
                                for c in _ed_con], float))
             _Uev = _Ued                  # the U the loss is evaluated with
@@ -11945,15 +12055,24 @@ def _fem_transient_sliding_band_once(
         _T2.append(Tq)
         _Tc2.append(_ftk["coulomb_Nm"])
         _Tc2l.append((_ftk["coulomb_rotor_side_Nm"], _ftk["coulomb_stator_side_Nm"]))
+        _ffk = _frame_forces(_ftq2, A2)
+        _Fnet2.append(None if _ffk is None else
+                      (_ffk["Fx_N"], _ffk["Fy_N"], _ffk["F_rotor_side_mag_N"]))
         _pa, _pb, _pc = _psi2(A2)
         _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
         if f_set2 is not None and _six_blk.get("sets_in_model") == [1, 2]:
             # per-set phase-A flux linkage (one branch of that set) and the
             # electrical angle it was taken at — the per-set voltage, measured
             # (not assumed equal) wherever both sets are in the model
+            # (θe, ψ1A, ψ2A, ψ1B, ψ2B, ψ1C, ψ2C): B and C ride behind the
+            # first three, which every older reader indexes
             _six_psi.append((math.radians(theta_eff * pole_pairs),
                              2.0 * _sc_psi2 * float(A2 @ f_set2[1]['A']),
-                             2.0 * _sc_psi2 * float(A2 @ f_set2[2]['A'])))
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[2]['A']),
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[1]['B']),
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[2]['B']),
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[1]['C']),
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[2]['C'])))
         _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
         # The Δt this frame's step was SOLVED with (rotor time on a voltage
         # run, the nominal step otherwise) — the step voltage divides by it.
@@ -12679,7 +12798,7 @@ def _fem_transient_sliding_band_once(
     # PWM eddy run P_sleeve was averaged over the settling frames too, and the
     # loss-total zip paired the trimmed copper series with the sleeve's
     # SETTLING prefix (docs/solver-guards-2026-09-23.md).
-    _v2_lists = (_T2, _T_vw, _T_vw_reason, _Tc2, _Tc2l,
+    _v2_lists = (_T2, _T_vw, _T_vw_reason, _Tc2, _Tc2l, _Fnet2, _six_psi,
                  _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
                  _histA_rot2, _pic_iters, _frame_converged, _bgap2,
@@ -12883,6 +13002,7 @@ def _fem_transient_sliding_band_once(
         P_cu, _k_end_used, _R_solved, _I_ph_solved = _vdrive_copper_loss(
             p, geo, _IA, _IB, _IC, n_parallel, coil_temp_c,
             end_winding_factor, copper_area_m2=_cu_area_m2)
+        P_cu = float(P_cu) * _six_k_cu       # unequal sets: see copper_loss_W above
         # The rms TERMINAL phase current this run actually carried.  Under an
         # imposed voltage the current is the answer, so `I_phase_rms` in the
         # request means nothing here — and every constraint an outer loop wants
@@ -12936,6 +13056,20 @@ def _fem_transient_sliding_band_once(
             _hcx2, _hcy2, _coil_idx, _cc, areas_s, _sig_cu2,
             _w_cu2, _h_cu2, p.stack_length, n_total,
             _central_difference(dt), scale=NS)
+        if _six_scale is not None and _coil_set_el is not None:
+            # the same proximity loss, element by element, split by SET: the
+            # open set's strands sit in the active set's field and are heated
+            # by it whatever their own current is
+            for _s6 in (1, 2):
+                _m6 = (_coil_set_el == _s6)
+                if not _m6.any():
+                    _six_ac_set[_s6] = 0.0
+                    continue
+                _six_ac_set[_s6] = float(_proximity_loss_series(
+                    [h[_m6] for h in _hcx2], [h[_m6] for h in _hcy2],
+                    _coil_idx[_m6], _cc[:, _m6], areas_s, _sig_cu2,
+                    _w_cu2, _h_cu2, p.stack_length, n_total,
+                    _central_difference(dt), scale=NS)[1])
     P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
 
     # Iron loss: ONE implementation (simulation/losses.py) for both element
@@ -13222,7 +13356,10 @@ def _fem_transient_sliding_band_once(
                                         and _demag_history_pub is not None)
                 if not _safe_publish_ok:
                     log.info("P2 safe warm cache: publication skipped (eddy or demag state is not affirmatively settled)")
-            if len(_solid_ref) == n_total and _safe_publish_ok:
+            # (an unequal-set six-phase state is never published: the warm
+            # identity cannot tell it from the balanced machine's)
+            if (len(_solid_ref) == n_total and _safe_publish_ok
+                    and _six_scale is None):
                 _wc_pending.append({
                     "doflocs": np.asarray(b2.doflocs.T,
                         dtype=(np.float64 if _safe_warm_cache_enabled()
@@ -14341,6 +14478,22 @@ def _fem_transient_sliding_band_once(
                     "fundamental of each set's phase-A flux linkage (one "
                     "branch); V1_flux = omega * psi1 — the loaded EMF, "
                     "without the R drop")
+            if _six_scale is not None:
+                _six_out["degraded"] = _six_degraded_block(
+                    scale=_six_scale, six_psi=_six_psi, IA=_IA, IB=_IB, IC=_IC,
+                    dts=_dts_v, n_parallel=n_parallel,
+                    R_phase_bal=_R_phase_bal, f_elec=f_elec,
+                    set_connection=_six.get("set_connection"),
+                    P_cu_dc=P_cu_dc2,
+                    P_cu_total=(float(np.mean(P_cu_ser2)) if P_cu_ser2
+                                else float(P_cu_dc2)),
+                    P_ac_set=({} if eddy else dict(_six_ac_set)), eddy=eddy)
+                _six_out["degraded"].update({
+                    "open_set": _six.get("open_set"),
+                    "active_set": _six.get("active_set"),
+                    "I_phase_rms_meaning": _six.get("I_phase_rms_meaning") or (
+                        "set s carries set_current_scale[s] x I_phase_rms / 2"),
+                    "model": "full ring" if _full_ring else "1/%d sector" % NS})
             if _six_rows:
                 def _m6(_k):
                     return float(np.mean([_r[_k] for _r in _six_rows]))
@@ -14425,6 +14578,16 @@ def _fem_transient_sliding_band_once(
         "method": "sliding_band_p2", "element_order": 2,
         **({"inc_ldq": _inc} if _inc else {}),
         **({"six_phase": _six_out} if _six_out is not None else {}),
+        # NET FORCE on the rotor (Fx, Fy per frame) — the bearing load of an
+        # unbalanced field; full ring only (a sector cancels it by symmetry)
+        "rotor_net_force": _net_force_block(_Fnet2, full_ring=bool(_full_ring)),
+        # the thermal model's copper heat basis (1 = the solved total)
+        **({"copper_heat_uniform_factor": float(
+                ((_six_out or {}).get("degraded") or {}).get(
+                    "copper_heat_uniform_factor", 1.0)),
+            "copper_heat_basis": ((_six_out or {}).get("degraded") or {}).get(
+                "copper_heat_basis")}
+           if _six_scale is not None else {}),
         # WHICH ELECTRICAL FRAME THIS RUN WAS SOLVED IN.  gamma is measured
         # from the q-axis, and the q-axis is wherever the d-axis calibration
         # put it — so a run whose calibration landed on the wrong sample of
@@ -15439,6 +15602,139 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = False) -> Dict:
     cur["gap_layers_requested"] = res.get("gap_layers_requested")
     cur["gap_layers_note"] = note
     return cur
+
+
+def _fundamental_phasor(theta_e, y) -> complex:
+    """X with y ≈ Re(X·e^{jθ}) + c, least squares over the samples."""
+    th = np.asarray(theta_e, float)
+    M = np.column_stack([np.cos(th), np.sin(th), np.ones_like(th)])
+    cf = np.linalg.lstsq(M, np.asarray(y, float), rcond=None)[0]
+    return complex(cf[0], -cf[1])
+
+
+def _six_degraded_block(*, scale, six_psi, IA, IB, IC, dts, n_parallel,
+                        R_phase_bal, f_elec, set_connection, P_cu_dc,
+                        P_cu_total, P_ac_set, eddy) -> Dict[str, Any]:
+    """Per-set terminal values of a six-phase run with UNEQUAL set currents.
+
+    ``scale`` = (a1, a2): set s carries a_s × its balanced share, i.e. a set
+    phase current a_s·n_par/2 × the solve's branch current ``IA..IC``.  Each set
+    is half the paths, so its phase resistance is 2·R_phase of the balanced
+    winding.  ``six_psi`` rows are (θe, ψ1A, ψ2A, ψ1B, ψ2B, ψ1C, ψ2C) per frame,
+    each set's own flux linkage (one branch of it, measured on the field).
+
+    The voltage is the step voltage R_set·i + Δψ/Δt (``_step_voltage_series``,
+    closed periodically — an imposed-current window); an OPEN set's is its
+    open-circuit EMF in the field of the other set and the magnets.
+    """
+    a = (float(scale[0]), float(scale[1]))
+    k_cu = 0.5 * (a[0] ** 2 + a[1] ** 2)
+    P_dc_bal = float(P_cu_dc) / k_cu if k_cu > 0 else 0.0
+    rows = np.asarray(six_psi, float)
+    th = rows[:, 0] if rows.size else np.zeros(0)
+    ib = {ph: np.asarray(v, float) for ph, v in zip("ABC", (IA, IB, IC))}
+    R_set = 2.0 * float(R_phase_bal)
+    w_el = 2.0 * math.pi * float(f_elec)
+    delta = str(set_connection or "star").lower().startswith("d")
+    sets = []
+    for s in (1, 2):
+        a_s = a[s - 1]
+        cur = {ph: a_s * 0.5 * float(n_parallel) * ib[ph] for ph in "ABC"}
+        psi = {ph: rows[:, c] for ph, c in
+               zip("ABC", ((1, 3, 5) if s == 1 else (2, 4, 6)))} if rows.size else {}
+        row: Dict[str, Any] = {
+            "set": s, "current_factor": a_s, "open": a_s == 0.0,
+            "I_phase_rms_A": round(math.sqrt(float(np.mean(
+                cur["A"] ** 2 + cur["B"] ** 2 + cur["C"] ** 2)) / 3.0), 4)
+            if cur["A"].size else 0.0,
+            "R_phase_ohm": round(R_set, 9),
+            "P_cu_dc_W": round(P_dc_bal * a_s ** 2 / 2.0, 3),
+            "P_cu_ac_W": (None if P_ac_set.get(s) is None
+                          else round(float(P_ac_set[s]), 3)),
+        }
+        if psi and psi["A"].size >= 3 and psi["A"].size == cur["A"].size:
+            v = {ph: _step_voltage_series(psi[ph], cur[ph], R_set, dts)[0]
+                 for ph in "ABC"}
+            vll = (max(float(np.max(np.abs(v[x]))) for x in "ABC") if delta
+                   else max(float(np.max(np.abs(v[x] - v[y])))
+                            for x, y in (("A", "B"), ("B", "C"), ("C", "A"))))
+            psi1 = _fundamental_phasor(th, psi["A"])
+            i1 = _fundamental_phasor(th, cur["A"])
+            v1 = abs(R_set * i1 + 1j * w_el * psi1)
+            row.update({
+                "psi1_A_Wb": round(abs(psi1), 6),
+                "V_phase_peak_V": round(max(float(np.max(np.abs(v[x])))
+                                            for x in "ABC"), 2),
+                "V_LL_peak_V": round(vll, 2),
+                "V1_phase_peak_V": round(v1, 2),
+                "V1_LL_peak_V": round(v1 * (1.0 if delta else math.sqrt(3.0)), 2),
+            })
+        sets.append(row)
+    # THERMAL.  The 2-D thermal model spreads the copper total uniformly over
+    # every slot (routes.thermal: q_cu = P_cu / V_cu).  With unequal sets the
+    # copper heat is not uniform, so the conservative choice is used: EVERY
+    # slot at the hottest set's copper loss density.
+    if all(r["P_cu_ac_W"] is not None for r in sets):
+        p_heat = 2.0 * max(r["P_cu_dc_W"] + r["P_cu_ac_W"] for r in sets)
+    else:      # (coupled AC not split by set: the AC total kept as solved)
+        p_heat = (2.0 * max(r["P_cu_dc_W"] for r in sets)
+                  + max(float(P_cu_total) - float(P_cu_dc), 0.0))
+    factor = (p_heat / float(P_cu_total)) if float(P_cu_total) > 0 else 1.0
+    return {
+        "set_current_scale": {"1": a[0], "2": a[1]},
+        "sets": sets,
+        "P_cu_true_W": round(float(P_cu_total), 3),
+        "P_cu_heat_uniform_W": round(p_heat, 3),
+        "copper_heat_uniform_factor": factor,
+        "copper_heat_basis": (
+            "conservative: every slot at the hottest set's copper loss "
+            "density (the 2-D thermal model spreads copper uniformly over "
+            "all slots)"),
+        "voltage_basis": (
+            "per set: R_set*i_set + dpsi_set/dt per step, R_set = 2 x the "
+            "balanced R_phase (a set = half the paths); an open set's voltage "
+            "is its open-circuit EMF"),
+        "ac_copper_note": (None if not eddy else
+                           "coupled-eddy AC copper is not split by set; "
+                           "P_cu_ac_W per set is None"),
+    }
+
+
+def _net_force_block(F, *, full_ring: bool) -> Dict[str, Any]:
+    """The net force on the rotor over the reported frames [N], stator frame.
+
+    ``F`` rows are (Fx, Fy, |F| of the rotor-side ring) or None."""
+    if not full_ring:
+        return {"available": False,
+                "reason": "sector model: the net force on the rotor is zero by "
+                          "the sector symmetry (not computed)"}
+    rows = [r for r in F if r is not None]
+    if not rows or len(rows) != len(F):
+        return {"available": False,
+                "reason": "the Coulomb gap layers are unavailable"}
+    a = np.asarray([(r[0], r[1]) for r in rows], float)
+    mag = np.hypot(a[:, 0], a[:, 1])
+    mx, my = float(np.mean(a[:, 0])), float(np.mean(a[:, 1]))
+    rs = [r[2] for r in rows]
+    chk = (None if any(v is None for v in rs) else
+           float(np.max(np.abs(mag - np.asarray(rs, float))))
+           / max(float(np.max(mag)), 1e-9))
+    return {
+        "available": True, "frame": "stator (x, y of the CAD)",
+        "method": ("Coulomb virtual work of a rigid TRANSLATION of the rotor "
+                   "across the stator-side gap air ring"),
+        "Fx_N": [round(float(v), 3) for v in a[:, 0]],
+        "Fy_N": [round(float(v), 3) for v in a[:, 1]],
+        "Fx_mean_N": round(mx, 3), "Fy_mean_N": round(my, 3),
+        "F_mean_mag_N": round(math.hypot(mx, my), 3),
+        "F_mean_angle_deg": round(math.degrees(math.atan2(my, mx)), 2),
+        "F_mag_max_N": round(float(np.max(mag)), 3),
+        "F_mag_min_N": round(float(np.min(mag)), 3),
+        "self_check_rel": (None if chk is None else round(chk, 5)),
+        "self_check_note": ("max | |F| stator-side ring - |F| rotor-side ring "
+                            "| / max |F| (the rotor ring sits in the rotor "
+                            "frame, so only magnitudes compare)"),
+    }
 
 
 def measure_six_phase_inductances(*, six_phase: dict, I_phase_rms: float,

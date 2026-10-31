@@ -3644,6 +3644,13 @@ class _NoLossMap(Exception):
         self.reason = reason
 
 
+def _six_open_of(body: Dict[str, Any]) -> Optional[int]:
+    """The body's ``six_phase_open_set`` (1 | 2), or None — validated by the
+    transient route, which every pass goes through first."""
+    v = (body or {}).get("six_phase_open_set")
+    return None if v in (None, "", 0, "0") else int(v)
+
+
 def _em_call(fn, kw: Dict[str, Any]) -> Dict[str, Any]:
     """The transient call, with a CANCEL turned back into a cancel.
 
@@ -4097,7 +4104,9 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         magnet_temp_c=(None if magnet_temp_c is None else float(magnet_temp_c)),
         # The EM half solved the body's mode (generator = panel γ + 180°); the
         # thermal half must look the run up under the same angle.
-        op_mode=body.get("mode"))
+        op_mode=body.get("mode"),
+        # …and the same machine: one six-phase set open is its own loss map
+        six_phase_open_set=_six_open_of(body))
     if bearing_temp_c is not None:
         kw["bearing_temp_c"] = float(bearing_temp_c)
     # The loss map is looked up at THIS pass's speed — the rpm the EM half just
@@ -4202,8 +4211,9 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
                            else float(magnet_temp_c)),
             op_mode=body.get("mode"))
         _rpm = None if body.get("rpm") in (None, "") else body["rpm"]
+        _open6 = _six_open_of(body)
         probe = _th.coupled_pass_probe(**kw, drive=drive, excitation=excitation,
-                                       rpm=_rpm)
+                                       rpm=_rpm, six_open_set=_open6)
         if em_map is None:
             if drive:
                 raise ValueError("a PWM pass must hand its own loss map over")
@@ -4211,7 +4221,8 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
             _kw = dict(kw)
             _geo = _kw.pop("geo")
             em_map, _src = _th._em_loss_map(
-                **_kw, geo=_geo, geo_ov=_parse_geo_override(_geo), rpm=_rpm)
+                **_kw, geo=_geo, geo_ov=_parse_geo_override(_geo), rpm=_rpm,
+                six_open_set=_open6)
         rec["point"] = _th.register_coupled_pass(
             phase=phase, probe=probe, em=em_map, run_id=rec["run_id"])
         rec["registered"] = True

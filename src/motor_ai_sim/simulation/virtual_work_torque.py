@@ -235,6 +235,44 @@ def prepare_coulomb_torque(mesh, element, layer: CoulombLayer,
     return torque
 
 
+def prepare_coulomb_force(mesh, element, layer: CoulombLayer,
+                          stack_length_m: float, nu: float = NU0
+                          ) -> Callable[[np.ndarray], tuple]:
+    """Return ``force(A) -> (Fx, Fy) [N]``: the NET force on the side of the
+    layer where φ = 1, in the layer's own coordinates.
+
+    Same virtual work as the torque with a TRANSLATION for the displacement:
+    u = φ·e_x (resp. φ·e_y), so D = e_x ⊗ ∇φ (resp. e_y ⊗ ∇φ) and
+
+        a_x = φ_x/2, b_x = φ_y/2;      a_y = −φ_y/2, b_y = φ_x/2
+
+    in the element formula L ν0 ∫ [a (A_x² − A_y²) + 2 b A_x A_y] dΩ.  No
+    sector multiplier: a sector model's net force is zero by its symmetry, so
+    this is meaningful on the full ring only (the caller's choice).
+    """
+    from skfem import Basis
+    p = np.asarray(mesh.p, float)
+    t = np.asarray(mesh.t, int)[:, layer.elements]
+    gx, gy, _ = _p1_gradients(p, t)
+    ph = np.asarray(layer.phi, float)[t]
+    px = np.sum(ph * gx, axis=0)                  # ∂φ/∂x per element
+    py = np.sum(ph * gy, axis=0)                  # ∂φ/∂y per element
+    gb = Basis(mesh, element, elements=layer.elements)
+    dx = np.asarray(gb.dx)
+    scale = float(nu) * float(stack_length_m)
+    w = {"x": (dx * (0.5 * px)[:, None], dx * py[:, None]),
+         "y": (dx * (-0.5 * py)[:, None], dx * px[:, None])}
+
+    def force(A_vec) -> tuple:
+        g = _grad_at_quad(gb, np.asarray(A_vec))
+        q1 = g[0] * g[0] - g[1] * g[1]
+        q2 = g[0] * g[1]
+        return tuple(scale * float(np.sum(w[c][0] * q1 + w[c][1] * q2))
+                     for c in ("x", "y"))
+
+    return force
+
+
 def coulomb_torque(mesh, element, A_vec, layer: CoulombLayer,
                    stack_length_m: float, sector_count: int = 1,
                    nu: float = NU0) -> float:
@@ -425,6 +463,9 @@ class FrameTorqueEvaluator:
     sector_count: int = 1
     unavailable_reason: Optional[str] = None
     layers_info: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    #: layer name -> prepared NET-force evaluator (``prepare_coulomb_force``);
+    #: empty unless asked for (full-ring models only)
+    force: Dict[str, Callable[[np.ndarray], tuple]] = field(default_factory=dict)
 
 
 def prepare_sliding_band_frame_torques(
@@ -435,6 +476,7 @@ def prepare_sliding_band_frame_torques(
         slip_nodes_rotor: Optional[np.ndarray] = None,
         slip_nodes_stator: Optional[np.ndarray] = None,
         log_warning: Optional[Callable[..., None]] = None,
+        with_force: bool = False,
 ) -> FrameTorqueEvaluator:
     """Build the per-frame torque evaluator of a two-half sliding-band mesh.
 
@@ -443,6 +485,7 @@ def prepare_sliding_band_frame_torques(
     through ``log_warning`` when given) and Coulomb is reported as None.
     """
     coul: Dict[str, Callable[[np.ndarray], float]] = {}
+    forc: Dict[str, Callable[[np.ndarray], tuple]] = {}
     info: Dict[str, Dict[str, object]] = {}
     reason = None
     try:
@@ -453,15 +496,42 @@ def prepare_sliding_band_frame_torques(
         for name, lay in layers.items():
             coul[name] = prepare_coulomb_torque(mesh, element, lay,
                                                 stack_length_m, sector_count)
+            if with_force:
+                forc[name] = prepare_coulomb_force(mesh, element, lay,
+                                                   stack_length_m)
             info[name] = dict(lay.info)
     except Exception as exc:          # noqa: BLE001 — recorded, never silent
         coul = {}
+        forc = {}
         reason = "%s: %s" % (type(exc).__name__, exc)
         if log_warning is not None:
             log_warning("Coulomb virtual-work torque unavailable (%s)", reason)
     return FrameTorqueEvaluator(maxwell_sector=maxwell_sector, coulomb=coul,
                                 sector_count=int(sector_count),
-                                unavailable_reason=reason, layers_info=info)
+                                unavailable_reason=reason, layers_info=info,
+                                force=forc)
+
+
+def frame_forces(evaluator: FrameTorqueEvaluator, A_vec
+                 ) -> Optional[Dict[str, float]]:
+    """NET force on the rotor of ONE solved frame [N], or ``None`` when the
+    evaluator carries no force layers.
+
+    ``Fx_N`` / ``Fy_N`` come from the STATOR-side gap ring: it is meshed in the
+    stator frame, so the force is in stator coordinates on every frame.  The
+    rotor-side ring sits in the ROTOR frame (its vector is the same force
+    turned by the rotor angle), so only its MAGNITUDE is comparable:
+    ``F_rotor_side_mag_N`` is the self-check of ``|F|``.
+    """
+    if "stator_side" not in evaluator.force:
+        return None
+    fx, fy = evaluator.force["stator_side"](A_vec)
+    out = {"Fx_N": float(fx), "Fy_N": float(fy),
+           "F_rotor_side_mag_N": None}
+    if "rotor_side" in evaluator.force:
+        rx, ry = evaluator.force["rotor_side"](A_vec)
+        out["F_rotor_side_mag_N"] = float(math.hypot(rx, ry))
+    return out
 
 
 def frame_torques(evaluator: FrameTorqueEvaluator, A_vec) -> Dict[str, Optional[float]]:

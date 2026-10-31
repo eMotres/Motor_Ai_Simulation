@@ -687,7 +687,7 @@ class P2Drive:
         for _ci, _c in enumerate(ed_con):
             if _c["key"] != "cu":
                 continue                   # ∫J = 0 body: no terminal current
-            _iu = float(_c["Iunit"])
+            _iu = float(_c["Iunit"]) * float(_c.get("Iscale", 1.0))
             if _c["phase"] == 'A':
                 self.ed_ca[_ci] = _iu
             elif _c["phase"] == 'B':

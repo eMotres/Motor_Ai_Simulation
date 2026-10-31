@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 __all__ = [
     "SixPhaseError", "SPLITS", "NEUTRALS", "resolve_six_phase",
     "coil_units", "per_set_values", "vsd_basis",
+    "set_current_scale", "with_open_set", "is_degraded",
 ]
 
 SPLITS = ("parallel_paths",)
@@ -220,6 +221,83 @@ def resolve_six_phase(winding: Dict[str, Any], *, num_slots: int, num_poles: int
                  f"{n_par // 2} of the {n_par} parallel paths, half the phase "
                  "current at the full phase voltage"),
     }
+
+
+# ---------------------------------------------------------------------------
+# one set OPEN (degraded operation, Erium 2026-10-31)
+# ---------------------------------------------------------------------------
+#
+# THE CURRENT OF EACH SET.  ``spec["set_current_scale"] = {1: a, 2: b}``: set s
+# carries a_s times its BALANCED share of ``I_phase_rms``, i.e. a branch-set
+# current of a_s * I_phase_rms / 2 (a set holds half the paths).  Absent, or
+# {1: 1, 2: 1}, is the balanced machine and the solve is the 3-phase one, bit
+# for bit.  ``with_open_set`` is the spelling a caller should use: the open
+# set gets 0 and the active set 2, so ``I_phase_rms`` IS the active set's phase
+# current — the current its own controller delivers.
+
+def set_current_scale(spec: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+    """``(a1, a2)`` of a six-phase spec — ``(1.0, 1.0)`` when balanced/absent.
+
+    Keys may be ints or strings (a JSON round trip).  Refused: a negative or
+    non-finite factor, both sets at zero."""
+    raw = (spec or {}).get("set_current_scale")
+    if raw in (None, {}):
+        return 1.0, 1.0
+    if not isinstance(raw, dict):
+        raise SixPhaseError("set_current_scale must map set 1/2 to a factor",
+                            ["set_current_scale"])
+    vals = {}
+    for k, v in raw.items():
+        try:
+            s, f = int(k), float(v)
+        except (TypeError, ValueError):
+            raise SixPhaseError(f"set_current_scale entry {k!r}: {v!r} is not a "
+                                "set number and a factor", ["set_current_scale"])
+        if s not in (1, 2):
+            raise SixPhaseError(f"set_current_scale names set {s}; the sets are "
+                                "1 and 2", ["set_current_scale"])
+        if not math.isfinite(f) or f < 0.0:
+            raise SixPhaseError(f"set_current_scale of set {s} must be a finite "
+                                f"factor >= 0; got {v!r}", ["set_current_scale"])
+        vals[s] = f
+    a = (vals.get(1, 1.0), vals.get(2, 1.0))
+    if a[0] == 0.0 and a[1] == 0.0:
+        raise SixPhaseError("both sets open: there is no current to solve",
+                            ["set_current_scale"])
+    return a
+
+
+def is_degraded(spec: Optional[Dict[str, Any]]) -> bool:
+    """True when the two sets do NOT carry the balanced (identical) current."""
+    return bool(spec) and set_current_scale(spec) != (1.0, 1.0)
+
+
+def with_open_set(spec: Dict[str, Any], open_set: Any) -> Dict[str, Any]:
+    """The six-phase spec with set ``open_set`` OPEN (its controller off, its
+    terminals floating) and the other set alone carrying the load.
+
+    ``I_phase_rms`` of a solve with this spec is the ACTIVE set's phase current
+    — what its controller delivers — so a 157 A balanced point (78.5 A per set)
+    with one set lost is the request ``I_phase_rms = 78.5``."""
+    if not spec:
+        raise SixPhaseError("one set open needs a six-phase winding (phases: 6)",
+                            ["six_phase_open_set"])
+    try:
+        s = int(open_set)
+    except (TypeError, ValueError):
+        s = 0
+    if s not in (1, 2):
+        raise SixPhaseError(f"the open set must be 1 or 2; got {open_set!r}",
+                            ["six_phase_open_set"])
+    active = 3 - s
+    out = dict(spec)
+    out["set_current_scale"] = {active: 2.0, s: 0.0}
+    out["open_set"] = s
+    out["active_set"] = active
+    out["I_phase_rms_meaning"] = (
+        f"the phase current of set {active} (its controller's current); "
+        f"set {s} is open and carries none")
+    return out
 
 
 # ---------------------------------------------------------------------------

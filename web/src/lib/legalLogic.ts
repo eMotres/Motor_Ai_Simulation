@@ -16,7 +16,7 @@ export const PAGE_DOCS: Record<LegalPageKind, readonly string[]> = {
 
 /** The version of the texts this build shows and a sign-up accepts.  Must equal legal_texts.TERMS_VERSION on the server (a node test
  *  compares the two): a request with another version is refused with 422 `terms_required`. */
-export const TERMS_VERSION = 'v0.3';
+export const TERMS_VERSION = 'v0.4';
 
 export const LEGAL_PAGES: readonly LegalPageKind[] = ['terms', 'privacy', 'platform-agreement'];
 

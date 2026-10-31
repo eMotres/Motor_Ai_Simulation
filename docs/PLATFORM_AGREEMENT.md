@@ -65,7 +65,7 @@ decides:
 
 1. a COMPANY acceptance of this agreement decides for the company's confirmed users (FREE True, PRIVATE False);
 2. else an ACCOUNT-level acceptance of this agreement decides the same way;
-3. else True only if the e-mail has accepted the Terms of Use at v0.3 or later (the sign-up box / the existing-user dialog, see
+3. else True only if the e-mail has accepted the Terms of Use at v0.4 or later (the sign-up box / the existing-user dialog, see
    `docs/LEGAL_TEXTS.md`, `terms_acceptances.jsonl`);
 4. else False (fail-closed).
 

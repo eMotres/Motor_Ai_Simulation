@@ -23,7 +23,7 @@ version (and keeps deciding the mode until the new one is given).
 
 The gate: :func:`require_accepted` (HTTP 428 ``agreement_required``) is called by the actions that START a development; staff
 (admin / engineer accounts) and MOTRES's own company are never gated.  :func:`training_allowed` is the helper the dataset export
-calls: company acceptance, else account acceptance (FREE -> True, PRIVATE -> False), else the ticked Terms of Use box of v0.3 or later
+calls: company acceptance, else account acceptance (FREE -> True, PRIVATE -> False), else the ticked Terms of Use box of v0.4 or later
 (``legal_texts``) -> True, else False (fail-closed); MOTRES's own data -> True.
 """
 from __future__ import annotations
@@ -262,7 +262,7 @@ def training_allowed(company_or_email: str) -> bool:
 
     (a) a COMPANY acceptance of this agreement decides for the company's confirmed users: FREE -> True, PRIVATE -> False;
     (b) else an ACCOUNT-level acceptance of this agreement decides the same way;
-    (c) else True only if the e-mail has accepted the Terms of Use at ``legal_texts.MIN_TRAINING_VERSION`` (v0.3) or later - the box
+    (c) else True only if the e-mail has accepted the Terms of Use at ``legal_texts.MIN_TRAINING_VERSION`` (v0.4) or later - the box
         of the sign-up form / the existing-user dialog, ``terms_acceptances.jsonl``;
     (d) else False (fail-closed): nothing accepted, a bare company id without an acceptance, an unknown key.
 

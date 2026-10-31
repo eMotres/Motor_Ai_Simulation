@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Copy the approved legal texts verbatim into config/legal (docs/LEGAL_TEXTS.md).
 
-    python scripts/sync_legal_texts.py <folder with the *_v0.3.md files> [--version v0.3]
+    python scripts/sync_legal_texts.py <folder with the *_v0.4.md files> [--version v0.4]
 
 Four documents x two languages are copied as they are, only CRLF line ends become LF (the SHA-256 recorded with an acceptance must be the same
 on every checkout); nothing is edited, translated or filled.  Re-run it whenever the approved
@@ -22,7 +22,7 @@ MAP = {"terms_of_use": ("terms_of_use", "terms_of_use"), "privacy_notice": ("pri
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("source", type=Path)
-    ap.add_argument("--version", default="v0.3")
+    ap.add_argument("--version", default="v0.4")
     a = ap.parse_args(argv)
     missing = [str(a.source / f"{s}_{l}_{a.version}.md") for s in MAP for l in ("en", "zh-CN")
                if not (a.source / f"{s}_{l}_{a.version}.md").is_file()]

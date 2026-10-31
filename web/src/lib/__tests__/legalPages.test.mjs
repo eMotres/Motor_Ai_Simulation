@@ -14,7 +14,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..', '..');
 const LOCALES = join(HERE, '..', '..', 'locales');
-const text = (sub, stem, lang) => readFileSync(join(ROOT, 'config', 'legal', sub, 'v0.3', `${stem}_${lang}.md`), 'utf8').replace('{{version}}', 'v0.3');
+const text = (sub, stem, lang) => readFileSync(join(ROOT, 'config', 'legal', sub, 'v0.4', `${stem}_${lang}.md`), 'utf8').replace('{{version}}', 'v0.4');
 const common = (lng) => JSON.parse(readFileSync(join(LOCALES, lng, 'common.json'), 'utf8'));
 
 test('the web version is the server version (a mismatch would make every sign-up a 422)', () => {
@@ -78,8 +78,8 @@ test('the real texts parse: every text has a title, sections, the privacy list, 
     assert.ok(priv.some((b) => b.t === 'ul' && b.items.length >= 3), `${lang} privacy has its bullet list`);
     const tables = parseLegalMarkdown(docs.schedules).filter((b) => b.t === 'table');
     assert.equal(tables.length, 1, `${lang} schedules: the one table`);
-    assert.equal(tables[0].head.length, 5);
-    assert.ok(tables[0].rows.length >= 8 && tables[0].rows.every((r) => r.length === 5));
+    assert.equal(tables[0].head.length, 6);
+    assert.ok(tables[0].rows.length >= 8 && tables[0].rows.every((r) => r.length === 6));
   }
 });
 
@@ -107,10 +107,10 @@ test('"In short" of the Terms of Use is found in both languages (the existing-us
 test('the block: country + box carried together, nothing that could pass for consent when incomplete, the buttons wait for it', () => {
   const blank = emptyAcceptance();
   assert.deepEqual(blank, { country: '', business: '', ticked: false });                          // initially UNTICKED, no country
-  assert.deepEqual(acceptancePayload(blank, 'v0.3'), { accept_terms: false, terms_version: '', country: '', business_name: '' });
+  assert.deepEqual(acceptancePayload(blank, 'v0.4'), { accept_terms: false, terms_version: '', country: '', business_name: '' });
   const full = { country: ' de ', business: '  Motor GmbH ', ticked: true };
-  assert.deepEqual(acceptancePayload(full, 'v0.3'), { accept_terms: true, terms_version: 'v0.3', country: 'DE', business_name: 'Motor GmbH' });
-  assert.equal(acceptancePayload({ ...full, ticked: 'yes' }, 'v0.3').accept_terms, false);       // only a literal true is consent
+  assert.deepEqual(acceptancePayload(full, 'v0.4'), { accept_terms: true, terms_version: 'v0.4', country: 'DE', business_name: 'Motor GmbH' });
+  assert.equal(acceptancePayload({ ...full, ticked: 'yes' }, 'v0.4').accept_terms, false);       // only a literal true is consent
   // creating an account: off until the country is chosen AND the box is ticked (the business name is optional)
   const only = (o) => ({ ...blank, ...o });
   assert.equal(acceptanceComplete(only({ ticked: true })), false);
@@ -134,11 +134,11 @@ test('the block: country + box carried together, nothing that could pass for con
 });
 
 test('existing accounts: asked once per sign-in, never when not required, "Later" holds only for that session', () => {
-  const need = { version: 'v0.3', required: true };
+  const need = { version: 'v0.4', required: true };
   assert.equal(shouldAskTerms(need, 'sid-1', null), true);
   assert.equal(shouldAskTerms(need, 'sid-1', 'sid-1'), false);      // "Later" in this session
   assert.equal(shouldAskTerms(need, 'sid-2', 'sid-1'), true);       // a new sign-in is a new session
-  assert.equal(shouldAskTerms({ version: 'v0.3', required: false }, 'sid-1', null), false);
+  assert.equal(shouldAskTerms({ version: 'v0.4', required: false }, 'sid-1', null), false);
   assert.equal(shouldAskTerms(null, 'sid-1', null), false);        // a failed status call shows nothing
   assert.equal(shouldAskTerms(undefined, null, null), false);
   assert.equal(shouldAskTerms(need, null, null), true);

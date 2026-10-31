@@ -1,4 +1,4 @@
-# Legal texts and the sign-up acceptance (free simulation launch, texts v0.3)
+# Legal texts and the sign-up acceptance (free simulation launch, texts v0.4)
 
 Owner 2026-10-27. Simulation is free; in FREE mode MOTRES may train its own AI on the engineering data of the user's projects (never personal
 data); PRIVATE (paid) excludes AI training. One unticked box accepts three texts: the **Terms of Use**, the **Platform Agreement**
@@ -56,7 +56,7 @@ until the next sign-in (remembered per session id); nothing else is blocked. Sta
 
 ## Dataset permission
 
-`platform_agreement.training_allowed` falls back to this record when no agreement acceptance exists: an account that accepted v0.3 or later
+`platform_agreement.training_allowed` falls back to this record when no agreement acceptance exists: an account that accepted v0.4 or later
 may be trained on; see `docs/PLATFORM_AGREEMENT.md` for the precedence.
 
 ## Other places

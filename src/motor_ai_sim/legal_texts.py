@@ -1,4 +1,4 @@
-"""The legal texts of the free simulation launch and the record of who accepted them (owner 2026-10-27, texts v0.3).
+"""The legal texts of the free simulation launch and the record of who accepted them (owner 2026-10-27, texts v0.4).
 
 Three documents are accepted by ONE unticked box when an account is created: the Terms of Use, the Platform Agreement (the click-through
 of ``platform_agreement.py`` is the company-level version of the same agreement) and the Privacy Policy.  The texts live in the repo,
@@ -49,11 +49,11 @@ log = logging.getLogger(__name__)
 
 #: The version of the Terms of Use, the Privacy Policy and the public Platform Agreement a sign-up accepts.  One number for the set: a
 #: change of any of them is a new version of all (the texts reference each other).
-TERMS_VERSION = "v0.3"
+TERMS_VERSION = "v0.4"
 PRIVACY_VERSION = TERMS_VERSION
 AGREEMENT_PUBLIC_VERSION = TERMS_VERSION
 #: First terms version that carries the FREE-mode data use: an account that accepted it may be trained on (platform_agreement.training_allowed).
-MIN_TRAINING_VERSION = "v0.3"
+MIN_TRAINING_VERSION = "v0.4"
 
 LANGS = ("en", "zh-CN")
 SOURCES = ("signup", "google", "oauth_signup", "existing")
@@ -176,7 +176,7 @@ def _vtuple(v: Any) -> tuple:
 
 
 def version_ge(version: Any, minimum: str) -> bool:
-    """``v0.10 >= v0.3`` by number, not by string; a version that is not ``v<n>[.<n>...]`` is never enough."""
+    """``v0.10 >= v0.4`` by number, not by string; a version that is not ``v<n>[.<n>...]`` is never enough."""
     a, b = _vtuple(version), _vtuple(minimum)
     return bool(a) and bool(b) and a >= b
 

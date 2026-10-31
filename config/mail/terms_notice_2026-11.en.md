@@ -13,7 +13,7 @@ We are asking you to review new AeroStator Terms of Use and the Platform Agreeme
 - **Trained models.** For the training use no payment, attribution or routine reporting is due. Models lawfully trained before you switch to PRIVATE or delete data are kept, subject to the confidentiality and correction duties in the Platform Agreement.
 - **Training cannot be undone.** Once you simulate in FREE mode, the data of that design may be used for training. If you later order the motor, sign a paid agreement or switch to PRIVATE, that training is not undone: models already trained keep what they learned. If a design must never be used for training, choose PRIVATE before you enter it.
 - **PRIVATE mode** excludes all AI training on the data you supply after switching to it and on everything derived from them; data supplied earlier in FREE mode remain usable for training. It is a paid mode for business clients, including registered sole traders, with its commercial terms in a separate order; you can ask for it at support@aerostator.com.
-- **AI assistants** in AeroStator run on commercial AI services that may not train on your inputs.
+- **AI assistants** in AeroStator are optional and run on paid commercial AI services (Google Gemini, Anthropic Claude) that do not use your inputs to train their models.
 - **Liability.** The service, simulations and results are free and provided "as is". MOTRES's liability is excluded in full, except where the law does not allow it to be excluded. Liability for a product arises only under a separate paid agreement.
 - **Law and forum:** Slovenian law and the courts of Ljubljana, or Hong Kong law and HKIAC arbitration for businesses established in Mainland China or Hong Kong.
 

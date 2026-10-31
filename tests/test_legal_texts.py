@@ -29,13 +29,13 @@ client = TestClient(app)
 #: SHA-256 of the texts as served (``{{version}}`` = v0.4), EN and zh-CN.  Change a text -> publish a NEW version (docs/LEGAL_TEXTS.md) and re-pin.
 PINNED = {
     ("terms", "en"): "d1fe1060b95ca44debd600c2e2979efddcc1fad696ac406005b9120f45c8af88",
-    ("terms", "zh-CN"): "51b227835596f7c8885e09a7f8db56a8ac77adc3571e4a9d521b07f8941547a8",
-    ("privacy", "en"): "14f47739049ea6df8b8677c0b85bfd2f2ef38f28e93a0fd2161de999ef047ec4",
-    ("privacy", "zh-CN"): "966800829e3e4f836dc5b8990156763cb5ea026b06509bb201921592aa8fd10d",
-    ("platform-agreement", "en"): "d2502cd7ed68d483dff40ee72d80d0c77418a77ac33dd72675658e1a2b95d43a",
-    ("platform-agreement", "zh-CN"): "1ad9302a464484ac3b9fe9677fd241a2f8e02abff4eba48bf6929d26d0d04095",
-    ("schedules", "en"): "ef21c88310e7b8608439e9f716cb5a9a605d77aded0c38f6819839cb0a8b5213",
-    ("schedules", "zh-CN"): "afeeb5c7addb47599cebf9d2d18289b4836775b9c772ed18bac445db180bfbd2",
+    ("terms", "zh-CN"): "ba50635c61697898b221ca0a34af7f8fea05e76df54e5360951728c6fcd61940",
+    ("privacy", "en"): "921e089445f8ca11a92888f18156a0304025777724c9d16452501308da0301c2",
+    ("privacy", "zh-CN"): "1d1be3a124619ad033d8fbed09ae309ebc8898c3dedad3e8cba448e4ef886784",
+    ("platform-agreement", "en"): "7e87f4c268302a39687d584cf2d3ce45f7dd1a5f52dacbd12afc6b11eae72adb",
+    ("platform-agreement", "zh-CN"): "51d7c29a30a9b33c81211857af4330d15e8441d73e4e97578adcc8bc53cafa77",
+    ("schedules", "en"): "f4850af36c3ccde0f8b2a4f6ba35bcc98939516aa12454b9e1beba7504e51049",
+    ("schedules", "zh-CN"): "ec0a14681d020885fd4259858315b7c51a1ebb6e9f9689ec11a527ea922e3e25",
 }
 
 

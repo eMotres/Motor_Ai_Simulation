@@ -252,6 +252,19 @@ def refile_fields(sandbox: Any, die: str, cfg: str, duty: str, *,
                                                 / _REPACK_SOURCES[kind][0])}
         else:
             out["missing"].append(kind)
+    # …and the duty's settled warm state (``duty_fields.WARM_FILE``, owner
+    # 2026-10-31: a catalog motor hot-starts from its own converged state).
+    # Not a map: copied when the sandbox has one, never repacked, never listed
+    # as missing — without it the next run of the duty simply starts cold.
+    wsrc = src_dir / df.WARM_FILE
+    if wsrc.is_file():
+        try:
+            n = _atomic_install(wsrc, dst_dir / df.WARM_FILE)
+            out["written"]["warm"] = {"how": "copied", "bytes": n,
+                                      "path": str(dst_dir / df.WARM_FILE),
+                                      "from": str(wsrc)}
+        except Exception as exc:                            # noqa: BLE001
+            log.warning("duty_refile: could not install %s (%s)", wsrc, exc)
     return out
 
 

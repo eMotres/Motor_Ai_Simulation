@@ -5806,6 +5806,8 @@ def get_fem_transient(
                               _phase, _composition)
             except Exception:              # noqa: BLE001
                 pass
+        _warm_pub = None
+        _wwp_tok = None
         try:
             # ONE canonical solve — shared with the optimizer (refine_proc) and
             # the solver.em_transient module via em_transient_eval, so they can
@@ -5821,6 +5823,14 @@ def get_fem_transient(
             _I_wind = float(I_phase_rms) / (
                 math.sqrt(3.0) if _effective_star_delta(star_delta) == "delta"
                 else 1.0)
+            # The settled state for the catalog copy (owner 2026-10-31): asked
+            # of THIS solve only, and only where the route may file it below (a
+            # run that keeps its field, not a ripple refinement, not a
+            # background solve).  The pool carries the flag to its worker.
+            from motor_ai_sim.simulation.fem_solver_2d import (
+                _WANT_WARM_PUBLISH_CTX as _WWP)
+            _wwp_tok = _WWP.set(bool(field_snapshot) and not ripple_refine
+                                and not _BACKGROUND_RUN.get())
             _sbres = em_transient_eval(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 sampling_purpose=sampling_purpose,
@@ -5874,6 +5884,10 @@ def get_fem_transient(
                 # Keep the last frame's field for the J⟳ / Loss views.  Free:
                 # the frame is already solved; this stops it being discarded.
                 return_field=bool(field_snapshot))
+            _WWP.reset(_wwp_tok)
+            _wwp_tok = None
+            # the solver's settled state for the catalog: arrays, kept out of the result payload
+            _warm_pub = _sbres.pop("_warm_publish", None)
             _sbres["mesh_settings_source"] = dict(_mesh_src)
             _sbres["mesh_settings_note"] = _mesh_note
             # ── SIX PHASES: L_xy on the full ring, at THIS operating point ──
@@ -6099,6 +6113,8 @@ def get_fem_transient(
             # d-axis; these need the solved frame.)
             raise HTTPException(status_code=422, detail=str(_ee))
         finally:
+            if _wwp_tok is not None:       # the solve raised: drop the opt-in
+                _WWP.reset(_wwp_tok)
             # NOT done yet — what follows (animation keyframes, CAD masses, the
             # summary block, the disk save) is seconds to tens of seconds on a
             # big machine, and the panel is still waiting on this response the
@@ -6280,6 +6296,13 @@ def get_fem_transient(
                     computed_at=_sbres.get("computed_at"))
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty field not stored", exc_info=True)
+            # …and the settled warm state beside the maps (owner 2026-10-31: a
+            # catalog motor hot-starts from its own duty's converged state).
+            try:
+                from motor_ai_sim import duty_fields as _df
+                _df.save_warm_active(_warm_pub)
+            except Exception:      # noqa: BLE001 — never fails a run
+                log.debug("transient: per-duty warm state not stored", exc_info=True)
         # Bench Ld/Lq ride with every live-machine run (user: "compute the
         # inductance during the calculation" — no separate button).  Once per
         # machine+connection: a cache hit costs a file read, a miss costs

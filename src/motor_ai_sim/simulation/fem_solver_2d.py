@@ -10069,9 +10069,21 @@ def _fem_transient_sliding_band_once(
                          int(np.count_nonzero(_mask_a)), N2,
                          "full field" if _warm_seeded else "static belt fill pending")
             else:
-                from scipy.spatial import cKDTree as _KDT
-                _widx = _KDT(_wc["doflocs"]).query(
-                    np.asarray(b2.doflocs.T, dtype=np.float32), k=1)[1]
+                # SAME MESH → the identity, not a nearest-neighbour search: the
+                # sliding band's stator and rotor rings have coincident dof
+                # locations in the reference mesh, and a k-d tree hands either
+                # twin the other's value.
+                _wdl = np.asarray(_wc["doflocs"], float)
+                _cdl = np.asarray(b2.doflocs.T, float)
+                if (_wdl.shape == _cdl.shape
+                        and float(np.max(np.abs(_wdl - _cdl))) <= 1e-6):
+                    _widx = np.arange(_cdl.shape[0])
+                    _wc_map = "identity (same mesh)"
+                else:
+                    from scipy.spatial import cKDTree as _KDT
+                    _widx = _KDT(_wc["doflocs"]).query(
+                        np.asarray(b2.doflocs.T, dtype=np.float32), k=1)[1]
+                    _wc_map = "nearest dof"
                 _Aed_prev = np.asarray(_wc["A"], float)[_widx]
                 # BDF2 needs the level before it too; a seed published by a BDF2
                 # run carries it (frame n_total−4), an older one does not → the
@@ -10082,6 +10094,28 @@ def _fem_transient_sliding_band_once(
                     _hed_prev = float(dt)
                 if len(_wc["Ued"]) == len(_ed_con):
                     _Ued = np.asarray(_wc["Ued"], float).copy()
+                # THE ROTOR BACK BY THE PARENT'S WINDOW (2026-10-31, Erium L90).
+                # The seed is the parent's frame n_total−3 — the angle of this
+                # run's frame −3 PLUS its whole reported window, i.e. the rotor
+                # n_periods pole pairs further on.  The march carries a state
+                # back across a period through the exact pole-pair map
+                # (`_period_shift`, the warm-up splices); the seed did not, so
+                # on a fractional-slot machine its rotor eddy history sat a pole
+                # pair away from the stator pattern it was solved under: the
+                # probe read 2.2e4 % off the parent's same-angle losses and the
+                # seeded L90 run marched 1322 frames against 1082 cold.  The
+                # safe cache rewinds the same way (`_safe_rewind_rotor_dofs`).
+                # SB_SEED_REWIND=0 restores the unrewound seed (A/B only).
+                _npd_rw = float(_wmeta.get("npd", n_periods))
+                _n_rw = (int(round(_npd_rw))
+                         if abs(_npd_rw - round(_npd_rw)) < 1e-9 else 0)
+                if _os_sb.environ.get("SB_SEED_REWIND") != "0" and _n_rw > 0:
+                    for _irw in range(_n_rw):
+                        _Aed_prev = _period_shift(_Aed_prev)
+                        if _Aed_prev2 is not None:
+                            _Aed_prev2 = _period_shift(_Aed_prev2)
+                    _wc_map += ", rotor rewound %d period(s)" % _n_rw
+                log.info("P2 eddy warm cache: seed mapped by %s", _wc_map)
             # SAME-ANGLE REFERENCE — only from a parent at the SAME operating
             # point.  This gauge can only make the handoff test more permissive
             # (it passes the probe when each sample matches the parent's

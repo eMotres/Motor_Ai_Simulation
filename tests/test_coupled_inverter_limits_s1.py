@@ -110,7 +110,7 @@ def _inverter_drive(monkeypatch, seen_ctl_kw: list, maps: list):
         return {"map_of": float(body.get("I_phase_rms") or 0.0)}, {
             "kind": "pwm_run"}
     monkeypatch.setattr(cp, "_pwm_loss_map", _map, raising=True)
-    monkeypatch.setattr(cp, "_regulate_v1", lambda inv, i, pts: None,
+    monkeypatch.setattr(cp, "_regulate_v1", lambda inv, i, pts, **kw: None,
                         raising=True)
     real_em = cp._em_run
 

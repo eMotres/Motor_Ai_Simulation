@@ -17,8 +17,10 @@ from tests.test_coupled_limited_state import LOOP_BODY
 from tests.test_coupled_sine_comparison import _post, client, rig  # noqa: F401
 
 
-def test_final_pass_is_the_default_loop_on_sine_then_pwm(client, rig):
-    c = _post(client, drive="inverter", fresh=True)
+def test_final_pass_pwm_thermal_is_the_loop_on_sine_then_pwm(client, rig):
+    """``pwm_final_thermal: "pwm"`` — the step 3 before 2026-10-31: the second
+    PWM pass sits at the first pass's own thermal map."""
+    c = _post(client, drive="inverter", fresh=True, pwm_final_thermal="pwm")
     ctl = _FakeCtl.instances[-1]
     # 2 sine passes (120 °C, then the map's 400 °C, which settles) + 2 PWM
     # passes: the first at the sine state's 400 °C, the second at the PWM
@@ -65,7 +67,8 @@ def test_an_existing_sine_state_is_reused(client, rig):
     _post(client, drive="current", fresh=True)
     n_sine = len(rig["ctl"])
     assert n_sine == 2                            # the sine run's own passes
-    c = _post(client, drive="inverter")           # not fresh: may reuse
+    c = _post(client, drive="inverter",           # not fresh: may reuse
+              pwm_final_thermal="pwm")
     after = rig["ctl"][n_sine:]
     ctl = _FakeCtl.instances[-1]
     assert after == [ctl, ctl]                    # ONLY the PWM passes
@@ -140,3 +143,81 @@ def test_limits_pwm_pass_short_of_the_current_is_reaimed_once(
     assert pf["dT_vs_sine_K"] is None and "limit instant" in pf["note"]
     # same temperatures on both passes: one inverter column, the re-aimed one
     assert c["sine_comparison"]["has_corrected"] is False
+
+
+# ---------------------------------------------------------------------------
+# step 3 on sine + the PWM harmonic delta (2026-10-31, the default)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def delta_rig(monkeypatch, rig):
+    """The rig above, with maps that carry totals: the sine map 100 W (the
+    winding at 400 °C), the PWM map 115 W and anything carrying the PWM delta
+    at 420 °C — so the thermal loop on sine + delta converges at the PWM's own
+    temperature in one iterate and the final PWM pass lands on it."""
+    from motor_ai_sim.routes import coupled as cp
+
+    def _th(body, cooling, *, coil_temp_c, magnet_temp_c, rpm, **k):
+        m = k.get("em_map")
+        if k.get("capture") is not None:
+            k["capture"]["em"] = {"P_loss_total_W": 100.0,
+                                  "P_cu_exact_W": 60.0, "at": coil_temp_c}
+        hot = m is not None and ("map_of" in m or "pwm_delta_applied" in m)
+        if m is not None and "pwm_delta_applied" in m:
+            rig.setdefault("corrected", []).append(dict(m))
+        w = 420.0 if hot else 400.0
+        return {"ok": True,
+                "components": {"winding": {"avg": w, "max": w + 30.0},
+                               "magnet": {"avg": 93.0, "max": 95.0}}}
+    monkeypatch.setattr(cp, "_thermal_solve", _th, raising=True)
+
+    def _map(body, em, inv, *, coil_temp_c, magnet_temp_c, controller=None):
+        rig["maps"].append({"controller": controller, "T": coil_temp_c})
+        return {"map_of": float(body.get("I_phase_rms") or 0.0),
+                "P_loss_total_W": 115.0, "P_cu_exact_W": 70.0}, {
+            "kind": "pwm_run"}
+    monkeypatch.setattr(cp, "_pwm_loss_map", _map, raising=True)
+    return rig
+
+
+def test_delta_thermal_iterates_on_sine_then_one_pwm_pass(client, delta_rig):
+    c = _post(client, drive="inverter", fresh=True)
+    ctl = _FakeCtl.instances[-1]
+    # 2 sine passes, PWM pass 1 at the sine state, ONE sine pass of the
+    # thermal correction, the final PWM pass at its converged temperature
+    assert delta_rig["ctl"] == [None, None, ctl, None, ctl]
+    pf = c["pwm_final"]
+    assert pf["thermal_mode"] == "delta"
+    assert pf["n_pwm_passes"] == 2
+    assert pf["passes"][0]["T_coil_in"] == 400.0
+    assert pf["passes"][1]["T_coil_in"] == 420.0
+    d = pf["delta_iterations"]
+    assert d["converged"] is True and len(d["rows"]) == 1
+    assert d["delta_totals_W"] == {"P_cu_exact_W": 10.0,
+                                   "P_loss_total_W": 15.0}
+    assert d["sine_map_source"].startswith("the sine loop's last pass")
+    # the thermal solve read the sine map at the iterate + the PWM delta
+    (cm,) = delta_rig["corrected"]
+    assert cm["P_loss_total_W"] == pytest.approx(115.0)
+    assert cm["P_cu_exact_W"] == pytest.approx(70.0)
+    assert pf["converged"] is True
+    assert c["coil_temp_c"] == 420.0
+
+
+def test_delta_falls_back_to_the_pwm_step_when_the_sine_map_is_missing(
+        client, rig):
+    """The plain rig fills no capture: the correction refuses by name and the
+    second PWM pass sits at the first one's own map, as before."""
+    c = _post(client, drive="inverter", fresh=True)
+    pf = c["pwm_final"]
+    assert pf["n_pwm_passes"] == 2
+    assert pf["passes"][1]["T_coil_in"] == 420.0
+    assert "refusal" in pf["delta_iterations"]
+
+
+def test_unknown_pwm_final_thermal_is_refused(client, rig):
+    r = client.post("/api/coupled/run",
+                    json={**LOOP_BODY, "drive": "inverter",
+                          "pwm_final_thermal": "sometimes"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["error_code"] == "bad_pwm_final_thermal"

@@ -1555,6 +1555,28 @@ _SB_VDRIVE_ROTOR_EDDY = (
     _os_sb.environ.get("SB_VDRIVE_ROTOR_EDDY", "1") or "1").strip() != "0"
 
 
+# ── THE MIXED PWM SETTLE'S COARSE PREFIX, STOPPED WHEN IT HAS CONVERGED ─────
+# (2026-10-31, Erium L90).  The prefix length was ceil(3·τ_e/T_e) periods,
+# capped at SB_V_SETTLE_MAX: a rule for a circuit DC decaying FREELY — and the
+# DC-orbit solve has not let it decay freely since 2026-09-26, it solves it out
+# at every whole period.  What the prefix still has to settle is the rotor's
+# eddy field and the Br ratchet.  So the τ count is now only the CAP, and at
+# the end of every coarse period the prefix compares it with the period
+# before: current amplitude, torque mean and ripple (the converged sine
+# settle's own metrics and tolerance), the solid conductors' period-mean eddy
+# loss (SB_PWM_COARSE_EDDY_TOL, relative), the period's own DC (within 2 % of
+# the current amplitude or 0.5 A) and the Br map (unchanged to 1e-4).  On a
+# stop the schedule is rebuilt for the coarse periods actually marched — a
+# prefix of the planned one, frame for frame — and the fine periods follow
+# exactly as before.  SB_PWM_COARSE_CONVERGE=0 marches the full cap (the
+# reference behaviour).
+_PWM_COARSE_CONVERGE = (_os_sb.environ.get("SB_PWM_COARSE_CONVERGE", "1")
+                        or "1").strip() != "0"
+_PWM_COARSE_EDDY_TOL = float(_os_sb.environ.get("SB_PWM_COARSE_EDDY_TOL",
+                                                "0.005") or 0.005)
+_PWM_COARSE_BR_TOL = 1e-4
+
+
 def _coarse_settle_nspp(fine_nspp: int, cap: int = None) -> int:
     """Largest divisor of ``fine_nspp`` that is <= ``cap`` (>= 4 if one exists).
 
@@ -5131,6 +5153,7 @@ def _fem_transient_sliding_band_once(
             converged_cap=_conv_cap))
     # The converged settle's state: None = a fixed count (every other source).
     _conv_settle = None
+    _pwm_cc = None           # the mixed PWM settle's converged coarse prefix
     if _settle_selection_reason == "plain_sinusoidal_voltage_converged_settle":
         _conv_settle = {"mode": "converged", "tol_rel": float(_conv_tol),
                         "cap_periods": int(_conv_cap), "converged": None,
@@ -7829,6 +7852,18 @@ def _fem_transient_sliding_band_once(
                      ("%d corrected + 1 free (verification)" % (len(_dc_win) - 1)
                       if _dc_orbit.correcting else
                       "MEASURED ONLY — corrections off (SB_V_DC_SOLVE=0)"))
+        _pc_n_coarse = sum(1 for _kk in _dc_win if not _sched_fine[_kk])
+        _pc_n_fine = sum(1 for _kk in _dc_win if _sched_fine[_kk])
+        if (_PWM_COARSE_CONVERGE and _sched_mixed and _dc_orbit is not None
+                and _pc_n_coarse >= 3 and _pc_n_fine >= 1):
+            _pwm_cc = {"mode": "converged_coarse_prefix",
+                       "cap_coarse_periods": int(_pc_n_coarse),
+                       "fine_settle_periods": int(_pc_n_fine),
+                       "tol_rel": float(_sine_settle_criterion()[0]),
+                       "eddy_tol_rel": float(_PWM_COARSE_EDDY_TOL),
+                       "br_tol": float(_PWM_COARSE_BR_TOL),
+                       "converged": None, "periods_used": None,
+                       "history": [], "_br": None}
 
     # ── frame loop ───────────────────────────────────────────────────────
     _T2 = []; _T_vw = []; _T_vw_reason = []; _Tc2 = []; _Tc2l = []
@@ -12132,6 +12167,131 @@ def _fem_transient_sliding_band_once(
                 # over-shoot and diverge on the reference generator delta, 2026-09-28).
                 _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k,
                                 getattr(_src, "ll_feedback_gain", None))
+            # ── CONVERGED COARSE PREFIX (mixed PWM settle, 2026-10-31) ──────
+            # See _PWM_COARSE_CONVERGE.  Here, BEFORE the DC-orbit's period
+            # end below, so that a stop makes THIS boundary the coarse→fine
+            # handover on the rebuilt schedule — and the orbit solve applies
+            # the modulator turn-on predictor to it exactly as it would have
+            # at the end of the planned prefix.
+            if (_pwm_cc is not None and _pwm_cc["periods_used"] is None
+                    and k in _dc_win and not _sched_fine[k]
+                    and 0 <= k < int(_vskip)):
+                _pc_k0 = int(_dc_win[k])
+                _pc_p = sum(1 for _kk in _dc_win
+                            if _kk <= k and not _sched_fine[_kk])
+                _pc_o = len(_IA) - 1 - k
+                _pc_a, _pc_b = _pc_o + _pc_k0, _pc_o + k + 1
+                _pc_met = _settle_period_metrics(
+                    _T2[_pc_a:_pc_b], _IA[_pc_a:_pc_b], _IB[_pc_a:_pc_b],
+                    _IC[_pc_a:_pc_b], _dt_steps[_pc_a:_pc_b])
+                _pc_wd = np.asarray(_sched_dt[_pc_k0:k + 1], float)
+                _pc_dc = max(abs(_period_dc(_ser, _pc_o + _pc_k0, _pc_o + k,
+                                            _pc_wd))
+                             for _ser in (_IA, _IB, _IC))
+                _pc_sol = [float(_w) for _kq, _w in zip(_warm_ks, _warm_solid)
+                           if _pc_k0 <= int(_kq) <= k]
+                _pc_solm = (float(np.mean(_pc_sol)) if _pc_sol else None)
+                _pc_br = (None if (_dmst is None or not demag)
+                          else np.array(_dmst.br, float, copy=True))
+                _pc_row = {"period": int(_pc_p),
+                           "I_amp_A": round(float(_pc_met["I_amp_A"]), 6),
+                           "T_mean_Nm": round(float(_pc_met["T_mean_Nm"]), 6),
+                           "T_ripple_pct": (None if _pc_met["T_ripple_pct"]
+                                            is None else round(float(
+                                                _pc_met["T_ripple_pct"]), 6)),
+                           "dc_max_A": round(float(_pc_dc), 6),
+                           "solid_eddy_W": (None if _pc_solm is None
+                                            else round(_pc_solm, 6)),
+                           "residual": None}
+                _pc_hist = _pwm_cc["history"]
+                _pc_ok = False
+                if _pc_hist:
+                    _pc_rs = _settle_period_residual(_pc_hist[-1]["_m"],
+                                                     _pc_met)
+                    _pc_prev_sol = _pc_hist[-1].get("solid_eddy_W")
+                    _pc_rsol = (None if (_pc_solm is None or _pc_prev_sol is
+                                         None)
+                                else abs(_pc_solm - float(_pc_prev_sol))
+                                / max(abs(_pc_solm), 1e-12))
+                    _pc_rbr = (None if (_pc_br is None or _pwm_cc["_br"] is
+                                        None)
+                               else float(np.max(np.abs(_pc_br
+                                                        - _pwm_cc["_br"]))
+                                          if _pc_br.size else 0.0))
+                    _pc_dc_band = max(0.5, 0.02 * float(_pc_met["I_amp_A"])
+                                      / math.sqrt(2.0))
+                    _pc_row["residual"] = {
+                        **{_kk: float(_vv) for _kk, _vv in _pc_rs.items()},
+                        "solid_eddy": _pc_rsol, "br": _pc_rbr,
+                        "dc_band_A": round(float(_pc_dc_band), 6)}
+                    _pc_ok = bool(
+                        _pc_rs["max"] <= float(_pwm_cc["tol_rel"])
+                        and (_pc_rsol is None
+                             or _pc_rsol <= float(_pwm_cc["eddy_tol_rel"]))
+                        and (_pc_rbr is None
+                             or _pc_rbr <= float(_pwm_cc["br_tol"]))
+                        and float(_pc_dc) <= _pc_dc_band)
+                _pc_row["_m"] = _pc_met
+                _pc_hist.append(_pc_row)
+                _pwm_cc["_br"] = _pc_br
+                _pc_last = _pc_p >= int(_pwm_cc["cap_coarse_periods"])
+                if _pc_ok or _pc_last:
+                    _pwm_cc["periods_used"] = int(_pc_p)
+                    _pwm_cc["converged"] = bool(_pc_ok)
+                    if _pc_ok:
+                        log.info("P2 PWM coarse settle CONVERGED after %d of "
+                                 "%d coarse period(s): dI %.2e, dT %.2e, "
+                                 "dripple %.2e, d(solid eddy) %s, dc %.3g A",
+                                 _pc_p, int(_pwm_cc["cap_coarse_periods"]),
+                                 _pc_row["residual"]["I_amp"],
+                                 _pc_row["residual"]["T_mean"],
+                                 _pc_row["residual"]["T_ripple"],
+                                 ("%.2e" % _pc_row["residual"]["solid_eddy"])
+                                 if _pc_row["residual"]["solid_eddy"]
+                                 is not None else "n/a", float(_pc_dc))
+                    else:
+                        log.warning(
+                            "P2 PWM coarse settle reached its cap of %d coarse "
+                            "period(s) without converging (last residual %s): "
+                            "the fine periods follow as planned and the result "
+                            "says so", _pc_p,
+                            None if _pc_row["residual"] is None else
+                            {_kk: (None if _vv is None else "%.2e" % _vv)
+                             for _kk, _vv in _pc_row["residual"].items()})
+                    if _pc_ok and not _pc_last:
+                        _pc_th = list(_sched_th[:k + 1])
+                        _S = _build_schedule(int(_pc_p)
+                                             + int(_pwm_cc["fine_settle_periods"]))
+                        (_vskip, _v_nspp, _v_settle_periods, n_periods, n_total,
+                         _dmskip, period_mech, dt, _fine_frames, _c_nspp,
+                         _settle_bounds, _sched_mixed, _sched_th, _sched_dth,
+                         _sched_dt, _sched_t, _sched_fine, _dc_win,
+                         _vskip_periods, _progress_comp) = [
+                            _S[_kk] for _kk in _SCHED_KEYS]
+                        if (not _sched_mixed or _sched_fine[k]
+                                or not _sched_fine[k + 1]
+                                or sum(1 for _kk in _dc_win
+                                       if not _sched_fine[_kk]) != int(_pc_p)
+                                or not np.allclose(_sched_th[:k + 1], _pc_th,
+                                                   rtol=0.0, atol=1e-9)):
+                            raise RuntimeError(
+                                "converged PWM coarse settle: the rebuilt "
+                                "schedule is not a prefix of the one marched "
+                                "(frame %d) — refusing to splice" % k)
+                        _dc_starts = {int(_k0x): int(_k1x)
+                                      for _k1x, _k0x in _dc_win.items()}
+                        _dc_verify_k = max(_dc_win)
+                        _fseq = _fseq[:_fi] + list(range(k + 1, int(n_total)))
+                        if inc_ldq:
+                            _inc_at = _inc_probe_frames(
+                                int(_vskip) + int(_dmskip), int(n_total))
+                        if int(return_frames) > 0 and n_total > 1:
+                            _anim_k0 = int(_vskip) + int(_dmskip)
+                            _nf = max(2, min(int(return_frames),
+                                             n_total - _anim_k0))
+                            _anim_idx = {_anim_k0 + int(round(
+                                i * (n_total - 1 - _anim_k0) / (_nf - 1)))
+                                for i in range(_nf)}
             if _dc_orbit is not None and k in _dc_win:
                 _k0 = int(_dc_win[k])                   # first frame of the period
                 _off = len(_IA) - 1 - k                 # list index of frame k
@@ -14459,6 +14619,13 @@ def _fem_transient_sliding_band_once(
         # and what the reported period moved against the last settling one.
         # None on every fixed-count run.
         "voltage_settle": _voltage_settle,
+        # the mixed PWM settle's coarse prefix: how many coarse periods were
+        # marched of the τ cap, and why it stopped (None: not this schedule)
+        "pwm_coarse_settle": (None if _pwm_cc is None else {
+            **{_kk: _vv for _kk, _vv in _pwm_cc.items()
+               if not _kk.startswith("_") and _kk != "history"},
+            "history": [{_kk: _vv for _kk, _vv in _r.items() if _kk != "_m"}
+                        for _r in _pwm_cc["history"]]}),
         "solve_wall_s": round(float(_t.time() - t0), 1),
         # What the caller ASKED for, beside what actually ran.  The whole-node
         # snap silently changed the time resolution of every run whose requested

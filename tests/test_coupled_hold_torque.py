@@ -144,6 +144,53 @@ def test_a_machine_that_no_longer_makes_torque_is_unreachable():
                                 i_cap=1e9, v_link=800.0) is None
 
 
+def test_the_secant_skips_a_pass_at_a_far_magnet_temperature():
+    """Erium L90 cruise 2026-10-31: pass 1 at the 100 °C seed, pass 2 at the
+    network's 64.6 °C, torque +0.17 % where the card's Br said +5 % — the
+    exponent measured across that gap was −0.18 and stopped the hold."""
+    from motor_ai_sim.routes import coupled as cp
+    pts = [(152.1, 959.9991, 100.0), (150.628, 961.6659, 64.6)]
+    kw = dict(i_cap=228.15, i_floor=7.6, alpha_br_pct=-0.12, t_mag_next=63.5)
+    # the provisional verdict's call (no Br carry): exactly the −0.178 the
+    # record shows, under the saturation threshold
+    _, old = cp._hold_next_current(pts, 1000.0, i_cap=228.15, i_floor=7.6)
+    assert old["alpha_measured"] == pytest.approx(-0.178, abs=1e-3)
+    assert cp._hold_unreachable(-3.833, 150.628, old, {}, i_cap=228.15,
+                                v_link=None)[0] == (
+        "torque_unreachable_saturation")
+    i, info = cp._hold_next_current(
+        pts, 1000.0, max_dt_magnet_k=cp.HOLD_SECANT_MAX_DT_MAGNET_K, **kw)
+    assert info["method"] == "proportional" and info["alpha_measured"] is None
+    assert 155.0 < i < 158.0
+    # …and two passes close in magnet temperature still take the secant
+    pts2 = pts + [(156.4, 995.0, 63.6)]
+    _, info2 = cp._hold_next_current(
+        pts2, 1000.0, max_dt_magnet_k=cp.HOLD_SECANT_MAX_DT_MAGNET_K, **kw)
+    assert info2["method"] == "secant"
+
+
+def test_a_pass_off_its_temperatures_is_not_judged_on_demag_or_saturation():
+    """Erium L90 takeoff 2026-10-31: pass 1 at the 150 °C seed lost 1.48 % Br
+    and the hold stopped there; the network put the magnets at 129 °C."""
+    from motor_ai_sim.routes import coupled as cp
+    sat = {"alpha_measured": 0.01}
+    ok = {"alpha_measured": 1.0}
+    dm = {"demag": {"loss_pct": 1.48}}
+    assert cp._hold_unreachable(-4.9, 170.6, ok, dm, i_cap=255.9,
+                                v_link=None)[0] == "torque_unreachable_demag"
+    assert cp._hold_unreachable(-4.9, 170.6, ok, dm, i_cap=255.9,
+                                v_link=None, settled=False) is None
+    assert cp._hold_unreachable(-4.9, 170.6, sat, {}, i_cap=255.9,
+                                v_link=None, settled=False) is None
+    # the current ceiling and the link voltage are not thermal: still judged
+    assert cp._hold_unreachable(-4.9, 255.9, ok, {}, i_cap=255.9,
+                                v_link=None, settled=False)[0] == (
+        "torque_unreachable_current")
+    assert cp._hold_unreachable(-4.9, 170.0, ok, {"V_line_peak_V": 900.0},
+                                i_cap=255.9, v_link=800.0,
+                                settled=False)[0] == "torque_unreachable_voltage"
+
+
 # ---------------------------------------------------------------------------
 # where the target comes from
 # ---------------------------------------------------------------------------

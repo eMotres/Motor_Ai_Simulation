@@ -207,7 +207,23 @@ def test_pwm_coarse_settle_frames_see_the_smooth_fundamental():
 
 
 # ── settle policies ─────────────────────────────────────────────────────────
-@pytest.mark.skipif(bool(ex._V_SETTLE_ENV or ex._PWM_COARSE_SETTLE_ENV
+def test_pwm_coarse_settle_switch_is_read_per_run(monkeypatch):
+    """The coupled loop sets SB_PWM_COARSE_SETTLE around ONE call: the policy
+    must see the value of the moment, not the one at import (2026-10-31)."""
+    src = make_source("pwm_voltage", **_common(
+        v_phase_peak=7.0, v_delta_deg=10.0, v_bus=48.0, f_switch=28000.0))
+    monkeypatch.setenv("SB_PWM_COARSE_SETTLE", "1")
+    p = src.settle_policy()
+    assert p.coarse_settle and p.coarse_settle_forced
+    monkeypatch.setenv("SB_PWM_COARSE_SETTLE", "0")
+    p = src.settle_policy()
+    assert not p.coarse_settle and not p.coarse_settle_forced
+    monkeypatch.delenv("SB_PWM_COARSE_SETTLE")
+    p = src.settle_policy()
+    assert p.coarse_settle and not p.coarse_settle_forced
+
+
+@pytest.mark.skipif(bool(ex._V_SETTLE_ENV or ex._pwm_coarse_settle_env()
                          or ex._DC_SOLVE_ENV),
                     reason="SB_V_SETTLE_PERIODS / SB_PWM_COARSE_SETTLE / "
                            "SB_V_DC_SOLVE set")

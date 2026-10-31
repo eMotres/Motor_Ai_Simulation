@@ -93,6 +93,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from motor_ai_sim import coupled_continuous_rating as _ccr
 from motor_ai_sim import coupled_duty_cycle as _cdc
 from motor_ai_sim import coupled_pwm_final as _pwmf
+from motor_ai_sim import coupled_pwm_delta as _pwmd
 from motor_ai_sim import coupled_time_to_limit as _ttl
 from motor_ai_sim import progress_stages as _pstg
 from motor_ai_sim import run_recording as _rr
@@ -1869,8 +1870,25 @@ def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
 #
 # ``inverter_coupling: "full"`` keeps the old loop (every pass on the PWM) for
 # validation.
+#
+# STEP 3, SINCE 2026-10-31 (``pwm_final_thermal: "delta"``, the default): a
+# temperature move after the first PWM pass is no longer answered by a PWM
+# pass at the temperatures that ONE thermal step produced.  The thermal loop
+# runs to convergence on the sine drive's losses at each iterate PLUS the
+# first PWM pass's own harmonic-loss delta (``coupled_pwm_delta``: per element,
+# PWM map − sine map, both at the sine state's temperatures) — a sine pass and
+# a thermal solve per iterate, minutes on the largest machine — and then ONE
+# PWM pass at the converged temperatures, its fundamental aimed by the sine
+# drive's own measured V1 trend between the two states on top of the
+# regulator's step for the first pass's miss.  That pass's own
+# map is the reported answer; its residual against the temperatures it was
+# solved at says whether the frozen delta held (``pwm_final.residual_K``).
+# ``pwm_final_thermal: "pwm"`` keeps the previous step 3 for validation.
 INVERTER_COUPLING_MODES = ("final_pass", "full")
+PWM_FINAL_THERMAL_MODES = ("delta", "pwm")
 PWM_FINAL_MAX_PASSES = 2
+#: Thermal-correction iterates between the first PWM pass and the final one.
+PWM_DELTA_MAX_ITER = 8
 #: ONE more PWM pass past the cap above, and ONLY when the last pass's current
 #: is still outside ``inverter.i_tol_pct`` (2026-09-26).  With the 2-pass cap
 #: the damped regulator left the Ø40 L12 steady answer at −3.4 % of its
@@ -1987,6 +2005,129 @@ def _pwm_v1_first_guess(*, v_sine_peak_V: float, v_delta_deg: float,
     }
 
 
+def _pwm_final_thermal_mode(body: Dict[str, Any]) -> str:
+    raw = str(body.get("pwm_final_thermal") or "delta").strip().lower()
+    if raw not in PWM_FINAL_THERMAL_MODES:
+        raise _refuse("pwm_final_thermal must be one of %s; got %r"
+                      % (", ".join(PWM_FINAL_THERMAL_MODES),
+                         body.get("pwm_final_thermal")),
+                      ["pwm_final_thermal"], code="bad_pwm_final_thermal")
+    return raw
+
+
+def _pwm_delta_iterations(body_k: Dict[str, Any], cooling: Dict[str, Any], *,
+                          rpm: float, pwm_map: Dict[str, Any],
+                          sine_map: Optional[Dict[str, Any]],
+                          sine_temps: Tuple[float, Optional[float],
+                                            Optional[float]],
+                          start: Tuple[float, Optional[float], Optional[float]],
+                          tol: float, damping: float, max_iter: int,
+                          field_params: Optional[Dict[str, Any]],
+                          run_id: str) -> Dict[str, Any]:
+    """The thermal loop between the first PWM pass and the final one — on the
+    sine drive's losses at each iterate plus the first PWM pass's harmonic
+    delta (see the algorithm note above and ``coupled_pwm_delta``).
+
+    ``sine_map`` is the sine state's own loss map at ``sine_temps`` (the loop's
+    last pass); ``None`` (a reused sine state, an S1 current) solves it once.
+    Returns ``{"rows", "converged", "coil_c", "magnet_c", "bearing_c",
+    "em_sine", "field", "delta_mode", "sine_map_source"}``.
+    """
+    from motor_ai_sim import mech_losses as _ml
+
+    def _sine_pass(c, m, b):
+        tok = _ml.BEARING_TEMP_C.set(None if b is None else float(b))
+        try:
+            em_s = _em_run(body_k, coil_temp_c=c, magnet_temp_c=m,
+                           fresh=True, lxy=_LXY_SKIP)
+            cap: Dict[str, Any] = {}
+            # the sine map of THIS pass, as the sine loop's thermal solve finds
+            # it (the snapshot lookup by the pass's own identity)
+            _thermal_solve(body_k, cooling, coil_temp_c=c, magnet_temp_c=m,
+                           rpm=rpm, bearing_temp_c=b, capture=cap)
+        finally:
+            _ml.BEARING_TEMP_C.reset(tok)
+        if not isinstance(cap.get("em"), dict):
+            raise _refuse("the thermal-correction sine pass left no loss map",
+                          ["drive"], code="pwm_delta_no_sine_map")
+        return em_s, cap["em"]
+
+    src = "the sine loop's last pass (at the sine state's temperatures)"
+    if sine_map is None:
+        _progress.update(phase="PWM harmonic delta — the sine map at the sine "
+                               "state's temperatures")
+        _, sine_map = _sine_pass(*sine_temps)
+        src = "a sine pass solved for it at the sine state's temperatures"
+    delta = _pwmd.loss_map_delta(pwm_map, sine_map)
+    c_in, m_in, b_in = start
+    out: Dict[str, Any] = {"rows": [], "converged": False, "em_sine": None,
+                           "field": None, "delta_mode": delta.get("mode"),
+                           "delta_totals_W": {k: round(float(v), 3) for k, v
+                                              in (delta.get("totals") or {})
+                                              .items()},
+                           "sine_map_source": src,
+                           "note": delta.get("note")}
+    for j in range(1, max(1, int(max_iter)) + 1):
+        _check_cancelled(run_id)
+        _progress.update(phase="thermal correction %d — sine + PWM harmonic "
+                               "delta, coil %.1f °C" % (j, c_in))
+        em_s, smap = _sine_pass(c_in, m_in, b_in)
+        cmap, info = _pwmd.apply_loss_delta(smap, delta)
+        tok = _ml.BEARING_TEMP_C.set(None if b_in is None else float(b_in))
+        try:
+            field = _thermal_solve(
+                body_k, cooling, coil_temp_c=c_in, magnet_temp_c=m_in, rpm=rpm,
+                bearing_temp_c=b_in, em_map=cmap,
+                em_loss_source={"kind": "sine_plus_pwm_delta",
+                                "drive": "inverter",
+                                "computed_at": em_s.get("computed_at"),
+                                "delta_mode": delta.get("mode"),
+                                "note": ("the sine drive's own loss map at "
+                                         "these temperatures + the first PWM "
+                                         "pass's harmonic delta (%s)"
+                                         % delta.get("mode"))},
+                params_out=field_params)
+        finally:
+            _ml.BEARING_TEMP_C.reset(tok)
+        c_out = _bulk_temp(_component(field, "winding"))
+        m_out = _bulk_temp(_component(field, "magnet"))
+        _hit = _bearing_temp(field)
+        b_out = None if _hit is None else float(_hit[0])
+        s_s = em_s.get("summary") or {}
+        row = {"iter": j, "T_coil_in": round(float(c_in), 2),
+               "T_magnet_in": None if m_in is None else round(float(m_in), 2),
+               "T_bearing_in": None if b_in is None else round(float(b_in), 2),
+               "T_coil_out": None if c_out is None else round(float(c_out), 2),
+               "T_magnet_out": (None if m_out is None
+                                else round(float(m_out), 2)),
+               "T_bearing_out": None if b_out is None else round(b_out, 2),
+               "P_loss_sine_W": s_s.get("P_loss_total_W"),
+               "P_loss_map_W": cmap.get("P_loss_total_W"),
+               "V1_sine_peak_V": s_s.get("V1_seed_peak_V"),
+               "clipped_density_area": info.get("clipped_density_area")}
+        out["rows"].append(row)
+        out.update(em_sine=em_s, field=field)
+        if c_out is None:
+            break
+        d_c = float(c_out) - float(c_in)
+        d_m = (None if (m_out is None or m_in is None)
+               else float(m_out) - float(m_in))
+        d_b = (None if (b_out is None or b_in is None) else b_out - float(b_in))
+        if (abs(d_c) < tol and (d_m is None or abs(d_m) < tol)
+                and (d_b is None or abs(d_b) < BEARING_TOL_K)):
+            out["converged"] = True
+            c_in, m_in = float(c_out), (m_in if m_out is None
+                                        else float(m_out))
+            b_in = b_in if b_out is None else b_out
+            break
+        c_in = float(c_in) + float(damping) * d_c
+        if d_m is not None:
+            m_in = float(m_in) + float(damping) * d_m
+        b_in = b_in if b_out is None else b_out
+    out.update(coil_c=float(c_in), magnet_c=m_in, bearing_c=b_in)
+    return out
+
+
 def _inverter_coupling_mode(body: Dict[str, Any]) -> str:
     raw = str(body.get("inverter_coupling") or "final_pass").strip().lower()
     if raw not in INVERTER_COUPLING_MODES:
@@ -2005,8 +2146,17 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                       i_target: float, tol: float, adjust_temps: bool,
                       max_passes: int = PWM_FINAL_MAX_PASSES,
                       field_params: Optional[Dict[str, Any]] = None,
-                      run_id: str = "") -> Dict[str, Any]:
-    """Steps 2–3 above.  Returns ``{"passes": [...], "em", "em_first", "field",
+                      run_id: str = "",
+                      sine_map: Optional[Dict[str, Any]] = None,
+                      thermal_mode: str = "pwm",
+                      damping: float = 1.0,
+                      max_delta_iter: int = PWM_DELTA_MAX_ITER
+                      ) -> Dict[str, Any]:
+    """Steps 2–3 above.  ``thermal_mode`` "delta": the temperature move after
+    the first PWM pass is iterated on sine + the PWM harmonic delta
+    (:func:`_pwm_delta_iterations`, ``sine_map`` its starting map) and the
+    second PWM pass is the final one, at the converged temperatures; "pwm":
+    the second PWM pass sits at the first pass's own thermal map.  Returns ``{"passes": [...], "em", "em_first", "field",
     "coil_c", "magnet_c", "bearing_c", "inverter", "v1_pts", "dc_notes",
     "ripple_quotable", "refusal", "refusal_code", "converged",
     "v1_first_guess", "current_extra_pass"}``; ``em`` is
@@ -2098,7 +2248,8 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                            "dc_notes": [], "ripple_quotable": True,
                            "refusal": None, "refusal_code": None,
                            "converged": False, "v1_first_guess": v1_guess,
-                           "current_extra_pass": False}
+                           "current_extra_pass": False,
+                           "thermal_mode": str(thermal_mode), "delta": None}
     c_in, m_in, b_in = float(coil_c), magnet_c, bearing_c
     n = max(1, int(max_passes))
     # The hard cap: `n`, plus the current-only pass(es) below.
@@ -2111,7 +2262,8 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
         st = ctl.state()
         try:
             em_k = _em_run(body_k, coil_temp_c=c_in, magnet_temp_c=m_in,
-                           inverter=inv, controller=ctl, fresh=True)
+                           inverter=inv, controller=ctl, fresh=True,
+                           lxy=_lxy_from(sine_em, "the converged sine state"))
             _ok, _quot, _dc, _band, _dcnote = _pwm_dc_verdict(
                 inv, em_k.get("summary") or {})
             if not _ok:
@@ -2128,7 +2280,8 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                                            magnet_temp_c=m_in, controller=ctl)
             except _NoLossMap:
                 em_k = _em_run(body_k, coil_temp_c=c_in, magnet_temp_c=m_in,
-                               inverter=inv, controller=ctl, fresh=True)
+                               inverter=inv, controller=ctl, fresh=True,
+                               lxy=_lxy_from(em_k, "this PWM pass"))
                 try:
                     _map, _src = _pwm_loss_map(body_k, em_k, inv,
                                                coil_temp_c=c_in,
@@ -2240,6 +2393,66 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
             if not point_off:
                 break
             out["current_extra_pass"] = True
+        t_moved = adjust_temps and not (
+            (d_c is None or abs(d_c) < tol) and (d_m is None or abs(d_m) < tol)
+            and (d_b is None or abs(d_b) < BEARING_TOL_K))
+        if (thermal_mode == "delta" and k == 1 and t_moved
+                and out["delta"] is None):
+            # THE THERMAL LOOP ON SINE + THE PWM HARMONIC DELTA, then the
+            # final PWM pass at the temperatures it converges to.
+            _dlt = None
+            try:
+                _dlt = _pwm_delta_iterations(
+                    body_k, cooling, rpm=rpm, pwm_map=_map, sine_map=sine_map,
+                    sine_temps=(float(coil_c), magnet_c, bearing_c),
+                    start=(float(c_out),
+                           m_in if m_out is None else float(m_out),
+                           b_in if b_out is None else b_out),
+                    tol=tol, damping=damping, max_iter=max_delta_iter,
+                    field_params=field_params, run_id=run_id)
+            except HTTPException as exc:
+                log.warning("coupled: PWM harmonic-delta iterations refused "
+                            "(%s) — the second PWM pass sits at the first "
+                            "pass's own map", _detail_text(exc))
+                out["delta"] = {"refusal": _detail_text(exc)}
+            except Exception as exc:                        # noqa: BLE001
+                log.warning("coupled: PWM harmonic-delta iterations failed "
+                            "(%s) — the second PWM pass sits at the first "
+                            "pass's own map", exc, exc_info=True)
+                out["delta"] = {"refusal": "%s: %s" % (type(exc).__name__,
+                                                       exc)}
+            if _dlt is not None:
+                out["delta"] = {k2: v2 for k2, v2 in _dlt.items()
+                                if k2 not in ("em_sine", "field")}
+                c_in = float(_dlt["coil_c"])
+                m_in = _dlt["magnet_c"]
+                b_in = _dlt["bearing_c"]
+                # THE AIM: the regulator's step for pass 1's miss, and the
+                # sine drive's own measured V1 trend from T_s to T_c on top
+                # of it (the magnets' back-EMF and the copper's resistance
+                # at the new temperatures).
+                _nx = _regulate_v1(inv, i_k, out["v1_pts"])
+                if _nx is not None:
+                    inv = _nx
+                _ff = _pwmd.v1_feed_forward(
+                    s0, (_dlt.get("em_sine") or {}).get("summary") or {})
+                if _ff.get("applied"):
+                    inv = dict(inv)
+                    _v = float(inv["v_phase_peak_V"]) * float(_ff["ratio"])
+                    _cap = inv.get("v_phase_peak_max_V")
+                    _at_cap = bool(_cap and _v > float(_cap) > 0.0)
+                    inv["v_phase_peak_V"] = float(_cap) if _at_cap else _v
+                    inv["v_phase_peak_at_modulation_ceiling"] = _at_cap
+                    if _ff.get("d_delta_deg") is not None:
+                        inv["v_delta_deg"] = (float(inv["v_delta_deg"])
+                                              + float(_ff["d_delta_deg"]))
+                out["delta"]["v1_aim"] = {
+                    "feed_forward": {k2: (round(v2, 6)
+                                          if isinstance(v2, float) else v2)
+                                     for k2, v2 in _ff.items()},
+                    "v_phase_peak_V": round(float(inv["v_phase_peak_V"]), 4),
+                    "v_delta_deg": round(float(inv["v_delta_deg"]), 4)}
+                continue
         # ONE MORE PWM PASS — at the temperatures the PWM losses produced
         # (not on `limits`), re-aimed at the current when it landed outside
         # the band.
@@ -2276,6 +2489,10 @@ def _pwm_final_block(fin: Dict[str, Any], *, sine_coil_c: float,
         # pass past the 2-pass cap was spent.
         "v1_first_guess": fin.get("v1_first_guess"),
         "current_extra_pass": bool(fin.get("current_extra_pass")),
+        # step 3's thermal: "delta" (sine + the PWM harmonic delta between the
+        # PWM passes) or "pwm", and what the delta iterations did
+        "thermal_mode": fin.get("thermal_mode"),
+        **({"delta_iterations": fin["delta"]} if fin.get("delta") else {}),
         "final_point_error_pct": last.get("point_error_pct"),
         "tol_K": float(tol),
         # How far the PWM losses moved the machine from the sine state — the
@@ -3670,8 +3887,14 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
             magnet_temp_c: Optional[float],
             inverter: Optional[Dict[str, Any]] = None,
             controller: Optional["_ControllerLoop"] = None,
-            fresh: bool = False, ledger: bool = False) -> Dict[str, Any]:
+            fresh: bool = False, ledger: bool = False,
+            lxy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """ONE Electromagnetic run — the same call the Run button makes.
+
+    ``lxy`` — the six-phase L_xy probe this run may take instead of solving
+    its own (:func:`_lxy_from`): ``routes.simulation._LXY_REUSE_CTX`` is set
+    around the call, and the transient takes the stored probe only when its
+    own operating point matches it (``simulation.LXY_REUSE_TOL``).
 
     ``ledger`` — OFF for every pass except the loop's very FIRST one, and even
     there only when the caller opts in.  Every iteration from the second on
@@ -3706,6 +3929,38 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
     lifetime: it cannot leak into a parallel request the way a module global
     would, and it reaches the summary whatever this function is.
     """
+    from motor_ai_sim.routes import simulation as _sim_l
+    _ltok = _sim_l._LXY_REUSE_CTX.set(lxy) if lxy is not None else None
+    try:
+        return _em_run_in(body, coil_temp_c=coil_temp_c,
+                          magnet_temp_c=magnet_temp_c, inverter=inverter,
+                          controller=controller, fresh=fresh, ledger=ledger)
+    finally:
+        if _ltok is not None:
+            _sim_l._LXY_REUSE_CTX.reset(_ltok)
+
+
+def _lxy_from(em: Optional[Dict[str, Any]], source: str
+              ) -> Optional[Dict[str, Any]]:
+    """The ``lxy`` argument of :func:`_em_run` that offers ``em``'s own L_xy
+    probe — ``None`` when that run carries none (a three-phase machine)."""
+    blk = ((em or {}).get("summary") or {}).get("six_phase")
+    if not isinstance(blk, dict) or not blk.get("inductances"):
+        return None
+    return {"mode": "reuse", "six_phase": blk, "source": str(source)}
+
+
+#: ``lxy`` for an internal pass whose six-phase block is never reported.
+_LXY_SKIP = {"mode": "skip",
+             "source": "a thermal-correction sine pass of the coupled loop "
+                       "(its L_xy is never reported)"}
+
+
+def _em_run_in(body: Dict[str, Any], *, coil_temp_c: float,
+               magnet_temp_c: Optional[float],
+               inverter: Optional[Dict[str, Any]] = None,
+               controller: Optional["_ControllerLoop"] = None,
+               fresh: bool = False, ledger: bool = False) -> Dict[str, Any]:
     from motor_ai_sim.modules.solvers import _call_filtered
     from motor_ai_sim.routes.simulation import get_fem_transient
 
@@ -4253,6 +4508,15 @@ HOLD_LIMIT_MAX_PASSES = 2
 #: How close the body's point must sit to the duty's own (current, speed) [%]
 #: for the duty's torque target to apply to it.
 HOLD_POINT_MATCH_PCT = 1.0
+#: The largest magnet-temperature gap [K] two passes may have for the secant to
+#: MEASURE the torque exponent between them (2026-10-31, Erium L90 cruise).
+#: Further apart, the torque change is mostly the magnet's, and the card's
+#: linear Br model that carries one pass to the other's temperature is then the
+#: whole of the "measurement": pass 1 at the seed 100 °C and pass 2 at the
+#: network's 64.6 °C differed by 0.17 % in torque where the card predicted
+#: +5 %, the exponent came out −0.18, and the loop stopped as "saturated" after
+#: two passes.  Past this gap the step is the proportional one.
+HOLD_SECANT_MAX_DT_MAGNET_K = 5.0
 
 
 def _hold_flag(body: Dict[str, Any]) -> Optional[bool]:
@@ -4404,7 +4668,8 @@ def _hold_alpha_br() -> Optional[float]:
 def _hold_next_current(pts: List[tuple], target: float, *, i_cap: float,
                        i_floor: float, damp: float = 1.0,
                        alpha_br_pct: Optional[float] = None,
-                       t_mag_next: Optional[float] = None
+                       t_mag_next: Optional[float] = None,
+                       max_dt_magnet_k: Optional[float] = None
                        ) -> Tuple[float, Dict[str, Any]]:
     """The NEXT pass's current, from the (current, |shaft torque|, magnet
     temperature) passes so far.
@@ -4418,15 +4683,28 @@ def _hold_next_current(pts: List[tuple], target: float, *, i_cap: float,
     SECANT in log space.  The exponent is clamped (:data:`HOLD_ALPHA_BOUNDS`),
     the step is bounded to ±:data:`HOLD_STEP_MAX_FRACTION` and damped by
     ``damp`` once the error has flipped sign, and the result is kept inside
-    ``[i_floor, i_cap]``.
+    ``[i_floor, i_cap]``.  ``max_dt_magnet_k`` (when given) admits to the
+    secant only a pass whose magnet temperature is that close to the last
+    one's (:data:`HOLD_SECANT_MAX_DT_MAGNET_K`); with none, the step is the
+    proportional one.
     """
     def _at_next(p):
         tm = p[2] if len(p) > 2 else None
         return float(p[1]) * _hold_br_ratio(alpha_br_pct, tm, t_mag_next)
 
+    def _near(p, q):
+        if max_dt_magnet_k is None:
+            return True
+        tp = p[2] if len(p) > 2 else None
+        tq = q[2] if len(q) > 2 else None
+        return (tp is None or tq is None
+                or abs(float(tp) - float(tq)) <= float(max_dt_magnet_k))
+
     i_now, t_now = float(pts[-1][0]), _at_next(pts[-1])
     alpha, alpha_raw, method = 1.0, None, "proportional"
     for p in reversed(pts[:-1]):
+        if not _near(p, pts[-1]):
+            continue
         i_prev, t_prev = float(p[0]), _at_next(p)
         if (i_prev > 0.0 and t_prev > 0.0
                 and abs(math.log(i_now / i_prev)) > 1e-4):
@@ -4454,10 +4732,20 @@ def _hold_next_current(pts: List[tuple], target: float, *, i_cap: float,
 
 def _hold_unreachable(err_pct: float, i_now: float, info: Dict[str, Any],
                       summary: Dict[str, Any], *, i_cap: float,
-                      v_link: Optional[float]) -> Optional[Tuple[str, str]]:
+                      v_link: Optional[float],
+                      settled: bool = True) -> Optional[Tuple[str, str]]:
     """``(code, why)`` when the torque target cannot be reached from this pass
     — only ever when MORE torque is needed (a machine above its target can
-    always be given less current)."""
+    always be given less current).
+
+    ``settled`` False: this pass was solved at temperatures the network has
+    not confirmed yet (the first pass sits at the request's seed, a later one
+    moved by more than the loop's tolerance).  The demagnetisation and the
+    saturation verdicts are THERMAL facts — a 150 °C seed magnet loses
+    remanence a 129 °C one does not (Erium L90 takeoff, 2026-10-31: stopped on
+    pass 1 at a 1.48 % loss the real temperature never had) — so on such a
+    pass only the current ceiling and the link voltage may stop the hold.
+    """
     if err_pct >= 0.0:
         return None
     if i_now >= float(i_cap) * (1.0 - 1e-6):
@@ -4468,6 +4756,8 @@ def _hold_unreachable(err_pct: float, i_now: float, info: Dict[str, Any],
         return ("torque_unreachable_voltage",
                 "the line voltage is already %.1f V peak, over the %.1f V link"
                 % (v_ll, float(v_link)))
+    if not settled:
+        return None
     dm = summary.get("demag")
     loss = _hold_num((dm or {}).get("loss_pct")) if isinstance(dm, dict) else None
     if loss is not None and loss > HOLD_DEMAG_LOSS_PCT:
@@ -5226,7 +5516,7 @@ _SINE_STATE_HISTORY = _RH.history_for("coupled.sine_state")
 _SINE_STATE_SKIP = frozenset({
     "run_id", "for_duty", "record", "mat", "fresh", "drive", "inverter",
     "controller", "inverter_coupling", "sine_compare", "cold_constants",
-    "mechanical", "harm_ref"})
+    "mechanical", "harm_ref", "pwm_final_thermal"})
 
 
 def _sine_state_canonical(body: Dict[str, Any], cooling: Dict[str, Any],
@@ -5246,6 +5536,34 @@ def _sine_state_key(body: Dict[str, Any], cooling: Dict[str, Any],
                     solve_to: str, max_iter: int) -> str:
     return _RH.make_key("coupled.sine_state",
                         _sine_state_canonical(body, cooling, solve_to, max_iter))
+
+
+# ── THE SAME STEADY STATE, ASKED THE OTHER WAY (2026-10-31) ─────────────────
+# A HELD steady sine run (``hold_torque`` true) converges to the machine at the
+# held current; a FIXED-current run at that current, started from any seed
+# temperatures, converges to the same fixed point.  The exact key cannot see it
+# — the request's current, its hold keys and its seed temperatures all differ —
+# so the Erium L90 duties solved the whole sine loop again, eddy warm-up,
+# demag pre-pass and L_xy probe included, in the very sandbox where the held
+# run had just converged.  A converged held steady state is therefore ALSO
+# filed under this alias: the body without the hold keys and the seed
+# temperatures, at the held current; a fixed-current steady request looks it
+# up when its exact key misses.  ``steady`` only: on ``limits`` the seed is the
+# start of the transient and is part of the question.
+_SINE_ALIAS_DROP = frozenset({"hold_torque", "torque_nm", "hold_tol_pct",
+                              "hold_i_max_a", "coil_temp_c", "magnet_temp_c"})
+
+
+def _sine_state_alias_key(body: Dict[str, Any], cooling: Dict[str, Any],
+                          solve_to: str, max_iter: int, *,
+                          i_phase_rms: float) -> Optional[str]:
+    if str(solve_to) != "steady":
+        return None
+    b = {k: v for k, v in body.items() if k not in _SINE_ALIAS_DROP}
+    b["I_phase_rms"] = float(i_phase_rms)
+    can = _sine_state_canonical(b, cooling, solve_to, max_iter)
+    can["alias"] = "steady_fixed_point"
+    return _RH.make_key("coupled.sine_state", can)
 
 
 def _sine_state_miss_reason(body: Dict[str, Any], cooling: Dict[str, Any],
@@ -5641,6 +5959,8 @@ def _run(body: Dict[str, Any],
     # `full` keeps the old loop, every pass on the PWM, for validation.
     inv_mode = _inverter_coupling_mode(body) if drive == "inverter" else None
     final_pass = inv_mode == "final_pass"
+    pwm_thermal_mode = (_pwm_final_thermal_mode(body) if final_pass
+                        else "pwm")
     inv_final: Optional[Dict[str, Any]] = None
     ctl_final: Optional["_ControllerLoop"] = None
     if final_pass:
@@ -5652,6 +5972,7 @@ def _run(body: Dict[str, Any],
     # sine-state key; `fresh` (Recompute) always solves.
     sine_key: Optional[str] = None
     sine_hit: Optional[Dict[str, Any]] = None
+    sine_hit_alias = False
     sine_reuse_note: Optional[str] = None
     if (inverter is None and drive in ("current", "sine", "inverter")
             and not _rr.suppressed()):
@@ -5659,6 +5980,16 @@ def _run(body: Dict[str, Any],
             sine_key = _sine_state_key(body, cooling, solve_to, max_iter)
             if final_pass and not history_fresh:
                 sine_hit = _SINE_STATE_HISTORY.get(sine_key)
+                if sine_hit is None and not hold["active"]:
+                    _ak = _sine_state_alias_key(
+                        body, cooling, solve_to, max_iter,
+                        i_phase_rms=_f(body, "I_phase_rms", 0.0))
+                    _ah = (_SINE_STATE_HISTORY.get(_ak) if _ak is not None
+                           else None)
+                    if _ah is not None and bool(
+                            (_ah.get("payload") or {}).get("converged")):
+                        sine_hit = _ah
+                        sine_hit_alias = True
                 if sine_hit is None:
                     sine_reuse_note = _sine_state_miss_reason(
                         body, cooling, solve_to, max_iter)
@@ -5767,7 +6098,10 @@ def _run(body: Dict[str, Any],
                     "computed_at": (sine_hit.get("entry") or {}).get(
                         "computed_at"),
                     "key": (sine_hit.get("entry") or {}).get("key"),
-                    "source": "run history (coupled.sine_state)"}
+                    "source": ("run history (coupled.sine_state, the "
+                               "converged held steady state at this "
+                               "current)" if sine_hit_alias else
+                               "run history (coupled.sine_state)")}
                 em, field = _sp["em"], _sp["field"]
                 t_coil = float(_sp["coil_c"])
                 t_mag = None if _sp.get("magnet_c") is None else float(
@@ -5821,7 +6155,8 @@ def _run(body: Dict[str, Any],
                 # it even there.
                 em = _em_run(body, coil_temp_c=t_coil, magnet_temp_c=t_mag,
                              inverter=inverter, controller=ctl,
-                             ledger=(it == 1 and not history_fresh))
+                             ledger=(it == 1 and not history_fresh),
+                             lxy=_lxy_from(em, "coupled pass %d" % (it - 1)))
             except HTTPException as exc:
                 if not history:
                     raise               # the first pass: nothing solved to keep
@@ -5922,7 +6257,9 @@ def _run(body: Dict[str, Any],
                     try:
                         em = _em_run(body, coil_temp_c=t_coil,
                                      magnet_temp_c=t_mag, inverter=inverter,
-                                     controller=ctl, fresh=True)
+                                     controller=ctl, fresh=True,
+                                     lxy=_lxy_from(em, "coupled pass %d"
+                                                   % (it - 1)))
                     finally:
                         _ml.BEARING_TEMP_C.reset(_tok2)
                     try:
@@ -6166,12 +6503,17 @@ def _run(body: Dict[str, Any],
                         hold_next, _hinfo = _hold_next_current(
                             hold_pts, hold["target_nm"], i_cap=hold["i_cap_a"],
                             i_floor=0.05 * hold["i_requested_a"],
-                            damp=hold_damp)
+                            damp=hold_damp,
+                            max_dt_magnet_k=HOLD_SECANT_MAX_DT_MAGNET_K)
                         history[-1]["I_phase_rms_next_A"] = hold_next
                         history[-1]["hold_step"] = _hinfo
+                        # Judged on THIS pass only once the network agrees
+                        # with the temperatures it was solved at.
+                        _h_settled = (abs(d_coil) < tol and abs(d_mag) < tol)
                         hold_stop = _hold_unreachable(
                             hold_err, hold_i, _hinfo, summary,
-                            i_cap=hold["i_cap_a"], v_link=hold_v_link)
+                            i_cap=hold["i_cap_a"], v_link=hold_v_link,
+                            settled=_h_settled)
                         if hold_stop is not None:
                             # STOPPED AND SAID: the pass is a solved state and
                             # is kept; it is not the duty's torque.
@@ -6266,7 +6608,8 @@ def _run(body: Dict[str, Any],
                                     i_cap=hold["i_cap_a"],
                                     i_floor=0.05 * hold["i_requested_a"],
                                     damp=hold_damp, alpha_br_pct=hold_alpha_br,
-                                    t_mag_next=t_mag)
+                                    t_mag_next=t_mag,
+                                    max_dt_magnet_k=HOLD_SECANT_MAX_DT_MAGNET_K)
                                 history[-1]["I_phase_rms_next_A"] = hold_next
                                 history[-1]["hold_step"] = _hinfo
                                 hold_i = float(hold_next)
@@ -6380,7 +6723,8 @@ def _run(body: Dict[str, Any],
                 hold_next, _hinfo = _hold_next_current(
                     hold_pts, hold["target_nm"], i_cap=hold["i_cap_a"],
                     i_floor=0.05 * hold["i_requested_a"], damp=hold_damp,
-                    alpha_br_pct=hold_alpha_br, t_mag_next=t_mag)
+                    alpha_br_pct=hold_alpha_br, t_mag_next=t_mag,
+                    max_dt_magnet_k=HOLD_SECANT_MAX_DT_MAGNET_K)
                 history[-1]["I_phase_rms_next_A"] = hold_next
                 history[-1]["hold_step"] = _hinfo
                 hold_i = float(hold_next)
@@ -6641,7 +6985,8 @@ def _run(body: Dict[str, Any],
                 _i_n, _hinfo = _hold_next_current(
                     hold_pts, hold["target_nm"], i_cap=hold["i_cap_a"],
                     i_floor=0.05 * hold["i_requested_a"], damp=hold_damp,
-                    alpha_br_pct=hold_alpha_br, t_mag_next=_t_m)
+                    alpha_br_pct=hold_alpha_br, t_mag_next=_t_m,
+                    max_dt_magnet_k=HOLD_SECANT_MAX_DT_MAGNET_K)
                 _st = _hold_unreachable(
                     hold_err, hold_i, _hinfo, _em_lim.get("summary") or {},
                     i_cap=hold["i_cap_a"], v_link=hold_v_link)
@@ -7182,13 +7527,7 @@ def _run(body: Dict[str, Any],
                 and history and em and field and not runaway
                 and refusal is None and not _rr.suppressed()):
             try:
-                _SINE_STATE_HISTORY.put(
-                    sine_key,
-                    params=_sine_state_canonical(body_key, cooling, solve_to,
-                                                 max_iter),
-                    summary=("sine state: coil %.1f °C, %s" % (
-                        float(em_at[0]), solve_to)),
-                    payload={"em": em, "field": field,
+                _sine_payload = {"em": em, "field": field,
                              "coil_c": float(em_at[0]),
                              "magnet_c": (None if em_at[1] is None
                                           else float(em_at[1])),
@@ -7201,7 +7540,31 @@ def _run(body: Dict[str, Any],
                              # the current this state was HELD at (2026-10-27)
                              "hold": ({"i": hold_i, "err": hold_err,
                                        "pts": [list(p) for p in hold_pts]}
-                                      if hold_on else None)})
+                                      if hold_on else None)}
+                _SINE_STATE_HISTORY.put(
+                    sine_key,
+                    params=_sine_state_canonical(body_key, cooling, solve_to,
+                                                 max_iter),
+                    summary=("sine state: coil %.1f °C, %s" % (
+                        float(em_at[0]), solve_to)),
+                    payload=_sine_payload)
+                _held_ok = (hold_on and converged and hold_err is not None
+                            and abs(float(hold_err))
+                            <= float(hold.get("tol_pct") or 0.0))
+                _ak = (_sine_state_alias_key(body_key, cooling, solve_to,
+                                             max_iter, i_phase_rms=hold_i)
+                       if _held_ok else None)
+                if _ak is not None:
+                    _SINE_STATE_HISTORY.put(
+                        _ak,
+                        params=dict(_sine_state_canonical(
+                            {k: v for k, v in body_key.items()
+                             if k not in _SINE_ALIAS_DROP} | {
+                                "I_phase_rms": float(hold_i)},
+                            cooling, solve_to, max_iter),
+                            alias="steady_fixed_point"),
+                        summary=("held steady sine state at %.3f A" % hold_i),
+                        payload=dict(_sine_payload, hold=None))
             except Exception:                               # noqa: BLE001
                 log.warning("coupled: the sine state was not filed for reuse",
                             exc_info=True)
@@ -7237,13 +7600,26 @@ def _run(body: Dict[str, Any],
                 _i_body, _i_tgt = _i_s1, _i_tgt_set * _ratio
             else:
                 _i_body, _i_tgt = _i_body_set, _i_tgt_set
+            # the sine map at the sine state's temperatures, for the PWM
+            # harmonic delta: the loop's last pass — only when it IS the
+            # reported state at the PWM pass's current
+            _smap = None
+            if (last_pass is not None and _state_phase == "loop"
+                    and isinstance(last_pass.get("em_map"), dict)
+                    and abs(float(last_pass.get("coil_temp_c") or 0.0)
+                            - float(sine_temps[0])) < 1e-6
+                    and abs(_f(last_pass.get("body") or {}, "I_phase_rms",
+                               0.0) - float(_i_body)) < 1e-6):
+                _smap = last_pass["em_map"]
             fin = _pwm_final_passes(
                 body, cooling=cooling, rpm=rpm_eff, inverter=inv_final,
                 ctl=ctl_final, sine_em=sine_em, coil_c=sine_temps[0],
                 magnet_c=sine_temps[1], bearing_c=sine_brg, i_body=_i_body,
                 i_target=_i_tgt, tol=tol,
                 adjust_temps=(_state_phase != "limit"),
-                field_params=field_params, run_id=run_id)
+                field_params=field_params, run_id=run_id,
+                sine_map=_smap, thermal_mode=pwm_thermal_mode,
+                damping=damping)
             pwm_final_blk = _pwm_final_block(
                 fin, sine_coil_c=sine_temps[0], sine_magnet_c=sine_temps[1],
                 sine_bearing_c=sine_brg, tol=tol, t_wall_s=time.time() - _t0p)

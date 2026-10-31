@@ -103,8 +103,17 @@ _SETTLE_MAX = max(1, int(os.environ.get("SB_V_SETTLE_MAX", "12") or 12))
 # SB_PWM_COARSE_SETTLE: "0" forces the all-fine march, "1" forces the mixed
 # scheme, unset -> AUTO (mixed only while the run is itself a coarse pass; the
 # steps-per-carrier test needs the run's step count and stays in the solver).
-_PWM_COARSE_SETTLE_ENV = (
-    os.environ.get("SB_PWM_COARSE_SETTLE") or "").strip()
+#
+# READ PER RUN, not at import (2026-10-31).  The coupled loop asks for its
+# inverter block's `schedule` by setting this variable around the one
+# electromagnetic call it makes (`routes.coupled._em_run`).  A module constant
+# read at import never saw that: every coupled PWM pass since the freeze ran
+# the all-fine march whatever its `schedule` said — on Erium L90 at 20 kHz
+# that is 12 fine settling periods of 1000 steps instead of a 40-step coarse
+# prefix, ~3.8x the frames.  `settle_policy()` reads it when the run builds
+# its schedule.
+def _pwm_coarse_settle_env() -> str:
+    return (os.environ.get("SB_PWM_COARSE_SETTLE") or "").strip()
 # (SB_PWM_PREROLL_CARRIERS is gone with it: a fine pre-roll a couple of CARRIERS
 # wide is shorter than one electrical period, and the DC in a window that is not
 # a whole period cannot be measured at all.  SB_PWM_FINE_SETTLE below marches
@@ -526,13 +535,14 @@ class PwmVoltageSource(_VoltageSourceBase):
         return self._mod.fundamental(0.5 * (fb.theta_deg + fb.theta_prev_deg))
 
     def settle_policy(self) -> SettlePolicy:
+        _coarse_env = _pwm_coarse_settle_env()
         return SettlePolicy(
             periods_static=_settle_periods(2),
             # An EXPLICIT settle count outranks the adaptive rule entirely.
             adaptive_tau_mult=(None if _V_SETTLE_ENV else _SETTLE_TAU_MULT),
             periods_cap=_SETTLE_MAX,
-            coarse_settle=(_PWM_COARSE_SETTLE_ENV != "0"),
-            coarse_settle_forced=(_PWM_COARSE_SETTLE_ENV == "1"),
+            coarse_settle=(_coarse_env != "0"),
+            coarse_settle_forced=(_coarse_env == "1"),
             fine_settle_periods=_PWM_FINE_SETTLE,
             # The Δ² FLUX anchor is off on PWM since B5: it extrapolates each
             # phase's boundary flux as a SCALAR geometric sequence and fires

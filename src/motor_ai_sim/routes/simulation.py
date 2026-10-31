@@ -1615,6 +1615,69 @@ def _effective_bonding(v: Optional[str] = None) -> Optional[str]:
     return None
 
 
+# ── THE SIX-PHASE L_xy PROBE, REUSED (2026-10-31) ───────────────────────────
+# The probe is a full-ring mesh build plus four cold nonlinear frames after
+# every transient of a six-phase winding — and the coupled loop makes many
+# transients of ONE machine at ONE current.  A caller that already holds a
+# probe of this machine sets this around its call:
+#   {"mode": "reuse", "six_phase": <a result's six_phase block>,
+#    "source": "<what it came from>"}  — taken when that block's own
+#   `probe_op` (current, angle, magnet temperature) is within
+#   LXY_REUSE_TOL of this run's; otherwise the probe runs as before;
+#   {"mode": "skip", "source": "..."}  — an internal pass whose six-phase
+#   block nobody reads (the coupled loop's thermal-correction sine passes).
+_LXY_REUSE_CTX: "_CtxVar[Optional[Dict[str, Any]]]" = _CtxVar(
+    "six_phase_lxy_reuse", default=None)
+#: (current [%], angle [deg], magnet temperature [K]) inside which a stored
+#: probe is this run's: L_xy is the circulating mode's incremental inductance,
+#: a leakage-dominated path that moves well under 1 % across this window.
+LXY_REUSE_TOL = (2.0, 2.0, 5.0)
+_LXY_KEYS = ("inductances", "probe", "per_set_flux", "per_set_flux_note",
+             "source_sum_residual")
+
+
+class _LxyReused(Exception):
+    """Control flow: the probe was taken from a stored block (or skipped)."""
+
+
+def _lxy_reuse_block(ctx: Optional[Dict[str, Any]], *, i_a: float,
+                     gamma_deg: float, magnet_temp_c: Optional[float]
+                     ) -> Optional[Dict[str, Any]]:
+    """The stored probe's fields to copy into this run's six-phase block, or
+    ``None`` when there is none or it is not this operating point."""
+    if not ctx or ctx.get("mode") != "reuse":
+        return None
+    blk = ctx.get("six_phase") or {}
+    op = blk.get("probe_op") or {}
+    if not blk.get("inductances") or not op:
+        return None
+    try:
+        i0, g0 = float(op["I_A"]), float(op["gamma_deg"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    ti, tg, tm = LXY_REUSE_TOL
+    if not (i0 > 0.0 and abs(float(i_a) - i0) <= ti / 100.0 * i0):
+        return None
+    if abs(((float(gamma_deg) - g0 + 180.0) % 360.0) - 180.0) > tg:
+        return None
+    m0 = op.get("magnet_temp_c")
+    if (m0 is None) != (magnet_temp_c is None):
+        return None
+    if m0 is not None and abs(float(magnet_temp_c) - float(m0)) > tm:
+        return None
+    out = {k: blk[k] for k in _LXY_KEYS if blk.get(k) is not None}
+    out["probe_op"] = dict(op)
+    out["inductances_reused"] = {
+        "source": str(ctx.get("source") or "a previous run of this machine"),
+        "probe_op": dict(op),
+        "this_op": {"I_A": round(float(i_a), 4),
+                    "gamma_deg": round(float(gamma_deg), 4),
+                    "magnet_temp_c": (None if magnet_temp_c is None
+                                      else round(float(magnet_temp_c), 2))},
+        "tolerance": {"I_pct": ti, "gamma_deg": tg, "magnet_K": tm}}
+    return out
+
+
 def _six_phase_geometry():
     """(slots, poles, single_layer, layout) of the loaded machine."""
     from motor_ai_sim.config import get_config as _gc
@@ -5822,10 +5885,6 @@ def get_fem_transient(
             if _six_spec and not ((_sbres.get("six_phase") or {})
                                   .get("inductances")):
                 try:
-                    _fem_transient_progress["current"]["phase"] = \
-                        "fem-solve (six-phase L_xy probe, full ring)"
-                    _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
-                                  None, None, "fem-solve (six-phase L_xy probe, full ring)")
                     from motor_ai_sim.simulation.fem_solver_2d import \
                         measure_six_phase_inductances as _msi
                     _i1 = _I_wind
@@ -5835,6 +5894,29 @@ def get_fem_transient(
                             fundamental_current as _fc6
                         _f6 = _fc6(_sbres)
                         _i1, _g1 = float(_f6["I1_phase_rms_A"]), float(_f6["gamma1_deg"])
+                    _lxy_ctx = _LXY_REUSE_CTX.get()
+                    if _lxy_ctx and _lxy_ctx.get("mode") == "skip":
+                        # an internal pass whose six-phase block nobody reads
+                        _blk6 = dict(_sbres.get("six_phase") or {})
+                        _blk6["inductances_skipped"] = str(
+                            _lxy_ctx.get("source") or "internal pass")
+                        _sbres["six_phase"] = _blk6
+                        raise _LxyReused()
+                    _reuse6 = _lxy_reuse_block(
+                        _lxy_ctx, i_a=_i1, gamma_deg=_g1,
+                        magnet_temp_c=magnet_temp_c)
+                    if _reuse6 is not None:
+                        _blk6 = dict(_sbres.get("six_phase") or {})
+                        _blk6.update(_reuse6)
+                        _blk6.pop("inductances_note", None)
+                        _sbres["six_phase"] = _blk6
+                        log.info("six-phase L_xy probe reused from %s",
+                                 _reuse6["inductances_reused"]["source"])
+                        raise _LxyReused()
+                    _fem_transient_progress["current"]["phase"] = \
+                        "fem-solve (six-phase L_xy probe, full ring)"
+                    _PSTG.observe(_fem_transient_progress["current"].setdefault("stages", []),
+                                  None, None, "fem-solve (six-phase L_xy probe, full ring)")
                     _pr = _msi(
                         six_phase=_six_spec, I_phase_rms=_i1, gamma_deg=_g1,
                         rpm=(None if rpm is None else float(rpm)),
@@ -5855,12 +5937,20 @@ def get_fem_transient(
                         component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                         element_order=int(element_order))
                     _blk6 = dict(_sbres.get("six_phase") or {})
-                    for _k in ("inductances", "probe", "per_set_flux",
-                               "per_set_flux_note", "source_sum_residual"):
+                    for _k in _LXY_KEYS:
                         if _pr.get(_k) is not None:
                             _blk6[_k] = _pr[_k]
                     _blk6.pop("inductances_note", None)
+                    # the operating point this probe was solved at — what a
+                    # later run of this machine checks before reusing it
+                    _blk6["probe_op"] = {
+                        "I_A": round(float(_i1), 6),
+                        "gamma_deg": round(float(_g1), 6),
+                        "magnet_temp_c": (None if magnet_temp_c is None
+                                          else round(float(magnet_temp_c), 3))}
                     _sbres["six_phase"] = _blk6
+                except _LxyReused:
+                    pass
                 except Exception as _e6p:   # noqa: BLE001 — never fails the run
                     log.warning("six-phase L_xy probe failed: %s", _e6p)
                     _blk6 = dict(_sbres.get("six_phase") or {})
@@ -8485,6 +8575,12 @@ def _build_transient_summary(
         "pwm_dc_residual_phase": sbres.get("v_dc_residual_phase"),
         "pwm_dc_tol_A": sbres.get("v_dc_residual_tol_A"),
         "pwm_dc_unconverged": sbres.get("v_dc_unconverged"),
+        # the mixed PWM settle's coarse prefix: periods marched of the τ cap
+        # and whether its period-to-period check converged (None elsewhere)
+        "pwm_coarse_settle": (
+            {k: v for k, v in sbres["pwm_coarse_settle"].items()
+             if k != "history"}
+            if isinstance(sbres.get("pwm_coarse_settle"), dict) else None),
         "nonlinear_converged": bool(sbres.get("picard_converged", True)),
         "nonlinear_resid_max": float(sbres.get("picard_resid_max", 0.0) or 0.0),
         "nonlinear_tol": float(sbres.get("picard_tol", 0.0) or 0.0),

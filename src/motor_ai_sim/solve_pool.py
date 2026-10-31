@@ -1258,6 +1258,7 @@ CARRIED_VARS: Tuple[Tuple[str, str], ...] = (
     ("motor_ai_sim.simulation.fem_solver_2d", "_OPT_CANDIDATE"),
     ("motor_ai_sim.simulation.fem_solver_2d", "_TDM_DEMAG_REQUEST"),
     ("motor_ai_sim.simulation.fem_solver_2d", "_NO_WARM_CACHE_CTX"),
+    ("motor_ai_sim.simulation.fem_solver_2d", "_WANT_WARM_PUBLISH_CTX"),
     ("motor_ai_sim.run_recording", "_RECORD"),
 )
 

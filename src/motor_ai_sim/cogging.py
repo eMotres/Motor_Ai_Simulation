@@ -433,6 +433,17 @@ def machine_from_config(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any],
         rpm = float(m_duty.get("sim.rpm") or (duty or {}).get("rpm") or 1000.0)
     except (TypeError, ValueError):
         rpm = 1000.0
+    # The d-axis the machine is calibrated to (its duty's saved summary, else the Simulation-tab pin).  At I = 0 the
+    # d-axis has no physical role, but the solver refuses a pin more than 15 deg from the topology's calibration on
+    # file (fem_solver_2d d-axis guard) - so the run pins THIS machine's own value, not 0 (G2-L40 24s/28p: 60 deg).
+    daxis = None
+    for v in (((duty or {}).get("summary") or {}).get("daxis_deg"), m_duty.get("sim.daxisDeg")):
+        try:
+            if v not in (None, "") and math.isfinite(float(v)):
+                daxis = float(v)
+                break
+        except (TypeError, ValueError):
+            continue
     assignment = {str(k): str(v) for k, v in (cfg_doc.get("materials") or {}).items() if v}
     for k, v in _ABSENT_MATERIALS.items():
         assignment.setdefault(k, v)
@@ -442,7 +453,7 @@ def machine_from_config(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any],
         "connection": (winding.get("connection") or None),
         "star_delta": str(winding.get("star_delta") or (duty or {}).get("star_delta")
                           or m_duty.get("sim.starDelta") or "star"),
-        "mesh": mesh, "mesh_source": source, "end_winding_factor": ewf, "rpm": rpm,
+        "mesh": mesh, "mesh_source": source, "end_winding_factor": ewf, "rpm": rpm, "daxis_deg": daxis,
         "assignment": assignment, "magnet_card": assignment.get("magnet"),
         "live": False,
     }
@@ -538,7 +549,7 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
     sectors = _clamp_sectors(int(mesh.get("n_sectors", -1)), slots, poles)
     kw: Dict[str, Any] = dict(
         n_steps_per_period=steps, sampling_purpose="cogging_quality", n_periods=1.0,
-        gamma_deg=0.0, I_phase_rms=0.0, daxis_deg=0.0,
+        gamma_deg=0.0, I_phase_rms=0.0, daxis_deg=float(machine.get("daxis_deg") or 0.0),
         connection=machine.get("connection"), star_delta=machine.get("star_delta") or "star",
         mesh_size_mm=float(mesh["mesh_size_mm"]), min_size_mm=float(mesh["min_size_mm"]),
         outer_air_factor=float(mesh["outer_air_factor"]), gap_layers=float(mesh["gap_layers"]),

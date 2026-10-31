@@ -34,6 +34,19 @@ pre-pass at that operating point (``br_repro_op``), never from a sweep lineage.
 Every file is written atomically (tmp + replace), a reader holds it for
 milliseconds, and nothing here may ever fail a run: every public function
 swallows its own errors and answers "nothing stored".
+
+THE CATALOG COPY (owner 2026-10-31).  A catalog motor must hot-start from the
+converged state of its own duty wherever the run happens, and the per-workspace
+library does not travel with the catalog (another account, a fresh server, a
+wiped ``.warm_lib``).  So a live-machine run also writes its settled state NEXT
+TO THE DUTY'S STORED FIELDS, in this same file format::
+
+    <dies>/<die>/runs/<cfg>/<duty-stem>/fields/warm.npz
+
+(``store_at``, called by ``duty_fields.save_warm_active``), and
+``catalog_candidates`` offers every such file of the workspace's own and the
+shared catalog to the same key-then-``pick`` lookup.  One file per duty,
+replaced on every run, never trimmed; a run only READS them (no LRU touch).
 """
 from __future__ import annotations
 
@@ -44,7 +57,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -56,6 +69,12 @@ _DEFAULT_MAX_ENTRIES = 400
 # The speed band a seed may come from — the same 5 % the legacy gate uses
 # (f_elec sets the whole dA/dt scale).
 RPM_BAND = 0.05
+#: The catalog copy's file name inside a duty's ``fields`` folder
+#: (``duty_fields.warm_path``) and where ``catalog_candidates`` looks for it
+#: under a ``dies`` directory.
+CATALOG_FILE = "warm.npz"
+_CATALOG_GLOB = "*/runs/*/*/fields/" + CATALOG_FILE
+_CATALOG_MAX_FILES = 4000
 
 
 def enabled() -> bool:
@@ -168,6 +187,99 @@ def candidates(key: str) -> List[Dict[str, Any]]:
         return []
 
 
+def catalog_enabled() -> bool:
+    """The catalog copy is read unless ``SB_WARM_CATALOG=0`` (default ON).
+    Independent of ``SB_WARM_LIB`` — the caller combines the two."""
+    return os.environ.get("SB_WARM_CATALOG", "1").strip() != "0"
+
+
+def catalog_roots() -> List[Path]:
+    """The ``dies`` directories a run of this workspace can read a duty's
+    stored fields from: the workspace's own (``duty_fields._dies_dir``, which
+    follows a redirected catalogue) and the shared catalog's
+    (``<SHARED_ROOT>/dies``).  De-duplicated, existing directories only —
+    with ``SHARED_ROOT`` unset both are the process config's ``dies``.  Never
+    raises."""
+    try:
+        cands: List[Path] = []
+        try:
+            from motor_ai_sim import duty_fields as _df
+            cands.append(Path(str(_df._dies_dir())))
+        except Exception:       # noqa: BLE001
+            pass
+        try:
+            from motor_ai_sim import workspace as _ws
+            cands.append(Path(str(_ws.shared_root())) / "dies")
+        except Exception:       # noqa: BLE001
+            pass
+        out: List[Path] = []
+        seen = set()
+        for c in cands:
+            try:
+                if not c.is_dir():
+                    continue
+                k = os.path.normcase(os.path.realpath(str(c)))
+            except OSError:
+                continue
+            if k not in seen:
+                seen.add(k)
+                out.append(c)
+        return out
+    except Exception:       # noqa: BLE001
+        return []
+
+
+def _inside(p: Path, base_real: str) -> bool:
+    """Does ``p`` (symlinks resolved) lie inside the resolved ``base_real``?
+    A symlink planted in one workspace must not read another's files."""
+    try:
+        rp = os.path.normcase(os.path.realpath(str(p)))
+        return rp == base_real or rp.startswith(base_real.rstrip(os.sep) + os.sep)
+    except (OSError, ValueError):
+        return False
+
+
+def catalog_candidates(key: str, *, roots: Optional[Iterable[Any]] = None,
+                       max_files: int = _CATALOG_MAX_FILES) -> List[Dict[str, Any]]:
+    """Every stored duty state of this machine discretisation found under the
+    catalog ``roots`` (default ``catalog_roots()``): metadata only, each marked
+    ``"_catalog": True`` (``load`` then leaves the file's mtime alone).  Scans
+    at most ``max_files`` files.  Off with ``SB_WARM_CATALOG=0``.  Never
+    raises."""
+    if not catalog_enabled():
+        return []
+    try:
+        if roots is None:
+            rs = catalog_roots()
+        elif isinstance(roots, (str, os.PathLike)):
+            rs = [roots]
+        else:
+            rs = list(roots)
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        scanned, limit = 0, max(0, int(max_files))
+        for root in rs:
+            root = Path(str(root))
+            if not root.is_dir():
+                continue
+            base_real = os.path.normcase(os.path.realpath(str(root)))
+            for p in root.glob(_CATALOG_GLOB):
+                if scanned >= limit:
+                    return out
+                scanned += 1
+                real = os.path.normcase(os.path.realpath(str(p)))
+                if real in seen or not _inside(p, base_real):
+                    continue
+                seen.add(real)
+                m = _read_meta(p)
+                if m is not None and m.get("key") == key:
+                    m["_catalog"] = True
+                    out.append(m)
+        return out
+    except Exception:       # noqa: BLE001
+        return []
+
+
 def pick(cands: List[Dict[str, Any]], *, I: float, gam: float, rpm: float,
          op: str, want_br: bool) -> Optional[Dict[str, Any]]:
     """The best seed among ``cands`` for (I, gamma, rpm).
@@ -199,7 +311,8 @@ def pick(cands: List[Dict[str, Any]], *, I: float, gam: float, rpm: float,
 def load(meta: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """The full state of a picked entry, in the shape ``_warm_cache_load``
     returns (plus ``lib`` = its library metadata).  Touches the file's mtime:
-    that is the LRU clock."""
+    that is the LRU clock — except for a catalog entry (``"_catalog"``), which
+    a run only reads."""
     try:
         p = Path(meta["_path"])
         with np.load(p, allow_pickle=False) as z:
@@ -221,16 +334,124 @@ def load(meta: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
                 wc["br_val"] = np.asarray(z["br_val"], float)
                 wc["br_cen"] = np.asarray(z["br_cen"], float)
                 wc["br_tag"] = np.asarray(z["br_tag"], int)
+            # net-current history of the BDF2 eddy march (optional)
+            if {"Ib_prev_net", "Ib_prev_imposed", "Ib_prev2_net",
+                    "Ib_prev2_imposed"} <= f:
+                wc["Ib_prev"] = (np.asarray(z["Ib_prev_net"], float),
+                                 np.asarray(z["Ib_prev_imposed"], float))
+                wc["Ib_prev2"] = (np.asarray(z["Ib_prev2_net"], float),
+                                  np.asarray(z["Ib_prev2_imposed"], float))
         wc["demag_history"] = m.get("demag_history")
+        msrc = _msrc_meta(m.get("msrc"))
+        if msrc:
+            wc["msrc"] = msrc
         wc["lib"] = {k: v for k, v in m.items() if not k.startswith("_")}
-        try:
-            os.utime(p, None)
-        except OSError:
-            pass
+        if not meta.get("_catalog"):
+            try:
+                os.utime(p, None)
+            except OSError:
+                pass
         return wc
     except Exception as e:       # noqa: BLE001
         log.info("warm library: entry unreadable (%s) - not used", e)
         return None
+
+
+def _msrc_meta(v: Any) -> Dict[str, float]:
+    """The magnet source per domain tag as ``{str: float}``; ``{}`` when the
+    state carries none (or a malformed one)."""
+    try:
+        if isinstance(v, Mapping) and v:
+            return {str(k): float(x) for k, x in v.items()}
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
+def _ib_pair(v: Any) -> Optional[Tuple[Any, Any]]:
+    """``(net, imposed)`` as float arrays when ``v`` is a 2-sequence of 1-D
+    arrays (one level of the stator-current history), else None."""
+    try:
+        if isinstance(v, (tuple, list)) and len(v) == 2:
+            a, b = np.asarray(v[0], float), np.asarray(v[1], float)
+            if a.ndim == 1 and b.ndim == 1:
+                return a, b
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _write(p: Path, wc: Mapping[str, Any], *, key: str, op: str, origin: str,
+           br_repro_op: str = "", demag_history: Optional[Mapping] = None,
+           extra_meta: Optional[Mapping[str, Any]] = None) -> Optional[Path]:
+    """The atomic write of one state to ``p`` (tmp in the same folder +
+    replace) in the library's file format.  Returns ``p``, or None when it
+    could not be written.  Never raises."""
+    fd = None
+    tmp = None
+    try:
+        d = p.parent
+        has_br = wc.get("br_val") is not None
+        meta = {
+            "schema": SCHEMA, "key": key, "op": op, "origin": str(origin),
+            "created": time.time(),
+            "meta": dict(wc["meta"]), "I": float(wc["I"]), "rpm": float(wc["rpm"]),
+            "gam": float(wc["gam"]), "geo_fp": str(wc.get("geo_fp") or ""),
+            "nspp_req": int(wc.get("nspp_req") or wc["meta"]["nspp"]),
+            "nsect": int(wc.get("nsect") or 0),
+            "has_br": bool(has_br),
+            "br_repro_op": str(br_repro_op or "") if has_br else "",
+            "demag_history": (dict(demag_history) if demag_history else None),
+        }
+        msrc = _msrc_meta(wc.get("msrc"))
+        if msrc:
+            meta["msrc"] = msrc
+        meta.update(dict(extra_meta or {}))
+        arrays = {"doflocs": np.asarray(wc["doflocs"]), "A": np.asarray(wc["A"]),
+                  "Ued": np.asarray(wc["Ued"]), "solid": np.asarray(wc["solid"])}
+        if wc.get("A2") is not None:
+            arrays["A2"] = np.asarray(wc["A2"])
+        if has_br:
+            for k in ("br_val", "br_cen", "br_tag"):
+                arrays[k] = np.asarray(wc[k])
+        for gk, gv in (wc.get("solid_grp") or {}).items():
+            arrays["solid_grp_" + str(gk)] = np.asarray(gv, float)
+        ib1, ib2 = _ib_pair(wc.get("Ib_prev")), _ib_pair(wc.get("Ib_prev2"))
+        if ib1 is not None and ib2 is not None:
+            arrays["Ib_prev_net"], arrays["Ib_prev_imposed"] = ib1
+            arrays["Ib_prev2_net"], arrays["Ib_prev2_imposed"] = ib2
+        meta_json = json.dumps(meta, sort_keys=True, allow_nan=False)
+        d.mkdir(parents=True, exist_ok=True)       # only once the state is valid
+        fd, tmp_name = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=str(d))
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "wb") as fh:
+            fd = None
+            np.savez(fh, lib_meta=meta_json, **arrays)
+        for i in range(6):       # a reader's open handle blocks the rename on Windows
+            try:
+                os.replace(tmp, p)
+                tmp = None
+                break
+            except OSError:
+                time.sleep(0.02 * (i + 1))
+        if tmp is not None:
+            log.info("warm library: could not replace %s (held open) - not stored", p.name)
+            return None
+        return p
+    except Exception as e:       # noqa: BLE001 — an accelerator, never a failure
+        log.info("warm library: state not stored (%s)", e)
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def store(wc: Mapping[str, Any], *, key: str, op: str, origin: str,
@@ -240,8 +461,6 @@ def store(wc: Mapping[str, Any], *, key: str, op: str, origin: str,
     then trims the library to its budget.  Never raises."""
     if not enabled():
         return None
-    fd = None
-    tmp = None
     try:
         d = lib_dir()
         d.mkdir(parents=True, exist_ok=True)
@@ -258,59 +477,32 @@ def store(wc: Mapping[str, Any], *, key: str, op: str, origin: str,
                 except OSError:
                     pass
                 return p
-        meta = {
-            "schema": SCHEMA, "key": key, "op": op, "origin": str(origin),
-            "created": time.time(),
-            "meta": dict(wc["meta"]), "I": float(wc["I"]), "rpm": float(wc["rpm"]),
-            "gam": float(wc["gam"]), "geo_fp": str(wc.get("geo_fp") or ""),
-            "nspp_req": int(wc.get("nspp_req") or wc["meta"]["nspp"]),
-            "nsect": int(wc.get("nsect") or 0),
-            "has_br": bool(has_br),
-            "br_repro_op": str(br_repro_op or "") if has_br else "",
-            "demag_history": (dict(demag_history) if demag_history else None),
-        }
-        meta.update(dict(extra_meta or {}))
-        arrays = {"doflocs": np.asarray(wc["doflocs"]), "A": np.asarray(wc["A"]),
-                  "Ued": np.asarray(wc["Ued"]), "solid": np.asarray(wc["solid"])}
-        if wc.get("A2") is not None:
-            arrays["A2"] = np.asarray(wc["A2"])
-        if has_br:
-            for k in ("br_val", "br_cen", "br_tag"):
-                arrays[k] = np.asarray(wc[k])
-        for gk, gv in (wc.get("solid_grp") or {}).items():
-            arrays["solid_grp_" + str(gk)] = np.asarray(gv, float)
-        fd, tmp_name = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=str(d))
-        tmp = Path(tmp_name)
-        with os.fdopen(fd, "wb") as fh:
-            fd = None
-            np.savez(fh, lib_meta=json.dumps(meta, sort_keys=True, allow_nan=False),
-                     **arrays)
-        for i in range(6):       # a reader's open handle blocks the rename on Windows
-            try:
-                os.replace(tmp, p)
-                tmp = None
-                break
-            except OSError:
-                time.sleep(0.02 * (i + 1))
-        if tmp is not None:
-            log.info("warm library: could not replace %s (held open) - not stored", p.name)
+        out = _write(p, wc, key=key, op=op, origin=origin,
+                     br_repro_op=br_repro_op, demag_history=demag_history,
+                     extra_meta=extra_meta)
+        if out is None:
             return None
         trim()
-        return p
+        return out
     except Exception as e:       # noqa: BLE001 — an accelerator, never a failure
         log.info("warm library: state not stored (%s)", e)
         return None
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        if tmp is not None:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+
+
+def store_at(p: Any, wc: Mapping[str, Any], *, key: str, op: str, origin: str,
+             br_repro_op: str = "", demag_history: Optional[Mapping] = None,
+             extra_meta: Optional[Mapping[str, Any]] = None) -> Optional[Path]:
+    """Write one settled state to the explicit path ``p`` — the catalog copy
+    beside a duty's stored fields (``duty_fields.save_warm_active``).  Same
+    file format as ``store``; no ``SB_WARM_LIB`` gate and no trim (the file is
+    replaced in place, one per duty).  Never raises."""
+    try:
+        return _write(Path(p), wc, key=key, op=op, origin=origin,
+                      br_repro_op=br_repro_op, demag_history=demag_history,
+                      extra_meta=extra_meta)
+    except Exception as e:       # noqa: BLE001 — an accelerator, never a failure
+        log.info("warm library: catalog state not stored (%s)", e)
+        return None
 
 
 def trim() -> Dict[str, int]:

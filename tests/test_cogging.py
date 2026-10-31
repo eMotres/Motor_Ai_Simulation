@@ -134,6 +134,22 @@ def test_run_asks_for_a_no_load_virtual_work_cogging_solve():
         C.run(machine, samples_per_cycle=3, em_transient_eval=_fake_solver(seen))
 
 
+def test_the_run_pins_the_machines_own_d_axis_not_zero():
+    """G2-L40 (24s/28p, 2026-10-31): the solver refuses a d-axis pin > 15 deg from the topology's calibration on file,
+    so a no-load run pinned at 0 deg was refused on a machine calibrated to 60 deg.  The duty summary's d-axis is used,
+    then the Simulation-tab pin, else 0 (nothing known: no guard can trip)."""
+    seen = []
+    duty = {"name": "rated", "mode": "motor", "current_arms": 85.0, "rpm": 6000.0, "gamma_deg": 12.0,
+            "summary": {"T_em_avg_Nm": 4.0, "daxis_deg": 60.0}, "mesh": {"sim.daxisDeg": ""}}
+    m = C.machine_from_config(_die_doc(), _cfg_doc(duties=[duty]), {"mesh_size_mm": 2.0})
+    assert m["daxis_deg"] == 60.0
+    C.run(m, em_transient_eval=_fake_solver(seen))
+    assert seen[0]["daxis_deg"] == 60.0
+    duty2 = dict(duty, summary={"T_em_avg_Nm": 4.0}, mesh={"sim.daxisDeg": "33.5"})
+    assert C.machine_from_config(_die_doc(), _cfg_doc(duties=[duty2]))["daxis_deg"] == 33.5
+    assert C.machine_from_config(_die_doc(), _cfg_doc())["daxis_deg"] is None
+
+
 def test_sector_count_is_the_largest_divisor_of_gcd_not_above_the_request():
     assert C._clamp_sectors(4, 12, 14) == 2          # gcd 2
     assert C._clamp_sectors(4, 24, 28) == 4

@@ -627,3 +627,20 @@ def test_account_deletion_removes_state_and_pseudonymises_the_proof(env):
     assert ANNA not in (env["tmp"] / "comm_prefs_history.jsonl").read_text(encoding="utf-8")
     assert CP.get(BOB)["topics"]["new_motors"] is True
     assert CP.export_for(BOB)["history"][0]["topic"] == "new_motors"
+
+
+def test_essential_notice_reaches_unsubscribed_accounts_but_never_unverified_or_disabled(mail, capsys):
+    M, CP = mail["M"], mail["CP"]
+    CP.unsubscribe_all(ANNA)
+    rcpt, skipped = M.collect_audience(M.load_users(), locales={})
+    assert ANNA not in [r.email for r in rcpt] and (ANNA, "unsubscribed") in skipped          # marketing: skipped
+    rcpt, skipped = M.collect_audience(M.load_users(), locales={}, essential=True)
+    assert sorted(r.email for r in rcpt) == sorted([ADMIN, ANNA, LI])                          # essential: still reached
+    assert (BOB, "disabled") in skipped and ("unver@example.com", "unverified") in skipped
+    with pytest.raises(ValueError):
+        M.collect_audience(M.load_users(), locales={}, topic="new_motors", essential=True)
+    out = mail["tmp"] / "essential_out"
+    code, _ = run(mail, "--essential", "--out-dir", str(out))
+    assert code == 0 and len(list(out.glob("*.eml"))) == 3 and "would send 3" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        run(mail, "--essential", "--topic", "new_motors")

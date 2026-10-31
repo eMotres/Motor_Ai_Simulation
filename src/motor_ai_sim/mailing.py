@@ -252,11 +252,17 @@ def load_users(users_file: Optional[Path] = None) -> dict:
 
 
 def collect_audience(users: dict, *, locales: Optional[dict] = None, default_lang: str = "en",
-                     topic: Optional[str] = None) -> tuple[list[Recipient], list[tuple[str, str]]]:
+                     topic: Optional[str] = None, essential: bool = False) -> tuple[list[Recipient], list[tuple[str, str]]]:
     """-> (recipients sorted by address, [(address, reason it is skipped)]).
 
     ``topic`` (one of ``comm_prefs.TOPICS``): only accounts that CURRENTLY have that topic ticked are recipients; the others are
-    skipped as ``topic_not_chosen``.  Without it every verified, enabled, not-unsubscribed account is a recipient (the launch mailing)."""
+    skipped as ``topic_not_chosen``.  Without it every verified, enabled, not-unsubscribed account is a recipient (the launch mailing).
+
+    ``essential``: an account notice that is not marketing (a change of the terms of the service): every verified, enabled account is a
+    recipient, including accounts that unsubscribed from the marketing topics or the legacy newsletter.  It cannot be combined with
+    ``topic``."""
+    if essential and topic is not None:
+        raise ValueError("an essential notice goes to every account; it cannot be limited to a topic")
     if topic is not None and topic not in CP.TOPICS:
         raise ValueError("unknown topic: %r (one of %s)" % (topic, ", ".join(CP.TOPICS)))
     from motor_ai_sim import newsletter as N
@@ -275,9 +281,9 @@ def collect_audience(users: dict, *, locales: Optional[dict] = None, default_lan
             skipped.append((e, "disabled"))
         elif not U.is_verified(rec):
             skipped.append((e, "unverified"))
-        elif CP.is_unsubscribed_all(e):
+        elif not essential and CP.is_unsubscribed_all(e):
             skipped.append((e, "unsubscribed"))
-        elif N.status(e)["status"] == "unsubscribed":
+        elif not essential and N.status(e)["status"] == "unsubscribed":
             skipped.append((e, "newsletter_unsubscribed"))
         elif topic is not None and not CP.opted_in(e, topic):
             skipped.append((e, "topic_not_chosen"))

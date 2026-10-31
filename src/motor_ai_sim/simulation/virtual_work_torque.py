@@ -496,16 +496,24 @@ def prepare_sliding_band_frame_torques(
         for name, lay in layers.items():
             coul[name] = prepare_coulomb_torque(mesh, element, lay,
                                                 stack_length_m, sector_count)
-            if with_force:
-                forc[name] = prepare_coulomb_force(mesh, element, lay,
-                                                   stack_length_m)
             info[name] = dict(lay.info)
     except Exception as exc:          # noqa: BLE001 — recorded, never silent
         coul = {}
-        forc = {}
+        layers = {}
         reason = "%s: %s" % (type(exc).__name__, exc)
         if log_warning is not None:
             log_warning("Coulomb virtual-work torque unavailable (%s)", reason)
+    if with_force and coul:
+        # its own guard: a force that cannot be set up costs the force only,
+        # never the torque above
+        try:
+            forc = {name: prepare_coulomb_force(mesh, element, lay, stack_length_m)
+                    for name, lay in layers.items()}
+        except Exception as exc:      # noqa: BLE001 — recorded, never silent
+            forc = {}
+            if log_warning is not None:
+                log_warning("net rotor force unavailable (%s: %s)",
+                            type(exc).__name__, exc)
     return FrameTorqueEvaluator(maxwell_sector=maxwell_sector, coulomb=coul,
                                 sector_count=int(sector_count),
                                 unavailable_reason=reason, layers_info=info,

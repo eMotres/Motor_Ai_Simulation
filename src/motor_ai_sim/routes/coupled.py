@@ -5326,6 +5326,10 @@ def _record_wanted(body: Dict[str, Any]) -> bool:
     which is every caller that existed before 2026-09-15 — says answer, so the
     default is today's behaviour bit for bit.
     """
+    if body.get("six_phase_open_set") not in (None, "", 0, "0"):
+        # one six-phase set OPEN is a failure case of the duty's machine:
+        # never filed as the duty's answer, whatever the body says
+        return False
     v = body.get("record")
     if v is None:
         return True

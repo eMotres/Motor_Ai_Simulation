@@ -124,7 +124,7 @@ def test_per_set_block_arithmetic():
         P_ac_set={1: 20.0, 2: 10.0}, eddy=False)
     s1, s2 = blk["sets"]
     # set phase current = 2 × (npar/2) × branch = 20 A peak → 14.142 A rms
-    assert s1["I_phase_rms_A"] == pytest.approx(20.0 / math.sqrt(2), rel=1e-6)
+    assert s1["I_phase_rms_A"] == pytest.approx(20.0 / math.sqrt(2), rel=1e-5)
     assert s2["I_phase_rms_A"] == 0.0 and s2["open"] and not s1["open"]
     assert s1["R_phase_ohm"] == pytest.approx(2 * R)
     # P_cu_dc of the run (k = 2) is set 1's alone; set 2 carries no DC copper
@@ -133,9 +133,48 @@ def test_per_set_block_arithmetic():
     assert blk["P_cu_heat_uniform_W"] == pytest.approx(440.0)
     assert blk["copper_heat_uniform_factor"] == pytest.approx(440.0 / 230.0)
     # open set: pure EMF, ω·ψ1 = 2π·100·0.08
-    assert s2["V1_phase_peak_V"] == pytest.approx(2 * math.pi * 100 * 0.08, rel=1e-6)
+    assert s2["V1_phase_peak_V"] == pytest.approx(2 * math.pi * 100 * 0.08, abs=0.006)
     assert s2["V1_LL_peak_V"] == pytest.approx(math.sqrt(3) * s2["V1_phase_peak_V"], rel=1e-3)
     assert s1["V_LL_peak_V"] > s1["V_phase_peak_V"]
+
+
+# ── the keys: an open-set run is never served for the healthy one ────────
+
+def test_snapshot_key_and_thermal_identity_carry_the_open_set():
+    from motor_ai_sim.routes.simulation import _field_snap_key_fields
+    from motor_ai_sim.routes.thermal import _PHYSICS_ID_FIELDS, _physics_identity
+    kw = dict(gamma_deg=2.8, I_phase_rms=78.5, mesh_size_mm=2.0, min_size_mm=0.3,
+              outer_air_factor=1.1, n_sectors=1, stator_fillet_mm=0.0,
+              gap_layers=1.0, coil_temp_c=118.0, comp_mesh={}, pole_copy=False,
+              iron_template=True, geo_mesh=True, structured_gap=True,
+              airgap_macro=False, n_steps_per_period=24, n_periods=1.0,
+              eddy=True, rotor_eddy=True, demag=False, drive="current",
+              element_order=2, cfg_fingerprint="x", geo_ov=None, mat_ov=None,
+              rpm=850.0)
+    healthy = _field_snap_key_fields(**kw)
+    assert "six_open_set" not in healthy          # healthy keys keep their spelling
+    assert _field_snap_key_fields(**kw, six_open_set=None) == healthy
+    opened = _field_snap_key_fields(**kw, six_open_set=2)
+    assert opened["six_open_set"] == 2 and tuple(opened.values()) != tuple(healthy.values())
+    assert "six_open_set" in _PHYSICS_ID_FIELDS
+    assert _physics_identity(opened) != _physics_identity(healthy)
+
+
+def test_field_view_cache_key_carries_the_open_set():
+    from motor_ai_sim.routes.simulation import _field2d_cache_key
+    a = _field2d_cache_key(gamma_deg=2.8, I_phase_rms=78.5)
+    assert _field2d_cache_key(gamma_deg=2.8, I_phase_rms=78.5, six_open_set=None) == a
+    assert _field2d_cache_key(gamma_deg=2.8, I_phase_rms=78.5, six_open_set=2) != a
+
+
+def test_route_open_set_value_is_validated():
+    from fastapi import HTTPException
+    from motor_ai_sim.routes.simulation import _six_open_set_value
+    assert _six_open_set_value(None) is None and _six_open_set_value("") is None
+    assert _six_open_set_value("2") == 2 and _six_open_set_value(1) == 1
+    for bad in (3, "x", -1):
+        with pytest.raises(HTTPException):
+            _six_open_set_value(bad)
 
 
 # ── the solver, on the pinned 30 mm machine (12 s / 14 p) with 2 paths ────

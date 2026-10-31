@@ -12055,7 +12055,11 @@ def _fem_transient_sliding_band_once(
         _T2.append(Tq)
         _Tc2.append(_ftk["coulomb_Nm"])
         _Tc2l.append((_ftk["coulomb_rotor_side_Nm"], _ftk["coulomb_stator_side_Nm"]))
-        _ffk = _frame_forces(_ftq2, A2)
+        try:
+            _ffk = _frame_forces(_ftq2, A2)
+        except Exception as _eff:      # noqa: BLE001 — a result, never fatal
+            log.warning("net rotor force failed at frame %d: %s", k, _eff)
+            _ffk = None
         _Fnet2.append(None if _ffk is None else
                       (_ffk["Fx_N"], _ffk["Fy_N"], _ffk["F_rotor_side_mag_N"]))
         _pa, _pb, _pc = _psi2(A2)

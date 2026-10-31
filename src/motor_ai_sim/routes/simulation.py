@@ -1727,6 +1727,10 @@ def _effective_six_phase(star_delta: Optional[str] = None,
         raise HTTPException(status_code=422, detail=str(e))
 
 
+class _NotFiled(Exception):
+    """A run that is deliberately not filed under the duty (see its raiser)."""
+
+
 def _six_open_set_value(v: Any) -> Optional[int]:
     """The request's open six-phase set: None (both sets run), else 1 or 2.
     Anything else is a 422 — a typo must not run the healthy machine."""
@@ -6361,11 +6365,17 @@ def get_fem_transient(
             # the one place a live-machine run's field is persisted at all, and
             # a candidate eval / background solve never gets this far.
             try:
+                if _six_open is not None:
+                    # one six-phase set open is a FAILURE CASE of the duty's
+                    # machine, never the duty's own field (nor its EM row below)
+                    raise _NotFiled()
                 from motor_ai_sim import duty_fields as _df
                 _df.save_active(
                     "em", _transient_field_snap.get(_fsnap_key),
                     geometry_fingerprint=_sbres.get("geo_fingerprint"),
                     computed_at=_sbres.get("computed_at"))
+            except _NotFiled:
+                pass
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty field not stored", exc_info=True)
         # Bench Ld/Lq ride with every live-machine run (user: "compute the
@@ -6483,7 +6493,8 @@ def get_fem_transient(
             # physics and not by duty.  ``record: false`` files nothing.
             try:
                 from motor_ai_sim import duty_results as _dr_em
-                _dr_em.note_em_run(_sbres)
+                if _six_open is None:
+                    _dr_em.note_em_run(_sbres)
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty EM run not recorded", exc_info=True)
         return _sbres

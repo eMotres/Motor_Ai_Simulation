@@ -1,6 +1,8 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
-import type { CompareGroup, CompareRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord } from './types';
+import type {
+  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord,
+} from './types';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
 export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c'] as const;
@@ -155,6 +157,48 @@ export function tableBlocks(cmp: TestCompare | undefined | null): TableBlock[] {
       basisKey: g.basis_key ?? null, basisParams: g.basis_params ?? {}, lines: rows.map(rowLine), series: seriesOf(g) });
   }
   return out;
+}
+
+/** The point a compute action stands for: rpm rounded to 10, current to 0.5 A (the server's `comparison.action_key`). */
+export function actionKey(a: CreateDutyAction): string {
+  const d = a.body.duty;
+  return `${Math.round(d.rpm / 10) * 10}|${Math.round(d.current_arms * 2) / 2}`;
+}
+
+/** Every "no model point" action of one test's table, one per distinct point, in table order ("Compute all missing"). */
+export function missingActions(cmp: TestCompare | undefined | null): CreateDutyAction[] {
+  const seen = new Set<string>();
+  const out: CreateDutyAction[] = [];
+  for (const g of cmp?.groups ?? []) for (const r of g.rows) {
+    if (!r.action || r.action.kind !== 'create_duty') continue;
+    const k = actionKey(r.action);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(r.action);
+  }
+  return out;
+}
+
+/** What a set of queued solves is doing, from the job list (`GET /api/jobs`): finished = every run left the queue. */
+export interface ComputeProgress {
+  total: number; done: number; failed: number; running: number; unlisted: number; error: string | null; finished: boolean;
+}
+export function computeProgress(runIds: string[], jobs: JobRow[]): ComputeProgress {
+  const byId = new Map(jobs.map((j) => [j.run_id, j]));
+  let done = 0, failed = 0, running = 0, unlisted = 0;
+  let error: string | null = null;
+  for (const id of runIds) {
+    const job = byId.get(id);
+    if (job?.state === 'done') done += 1;
+    else if (job && (job.state === 'failed' || job.state === 'cancelled' || job.state === 'interrupted')) {
+      failed += 1;
+      error = error ?? job.error ?? job.state;
+    } else {
+      running += 1;                                          // queued or running ...
+      if (!job) unlisted += 1;                               // ... or not (yet) in the list
+    }
+  }
+  return { total: runIds.length, done, failed, running, unlisted, error, finished: runIds.length > 0 && running === 0 };
 }
 
 /** The tests of one sub-menu, newest first. */

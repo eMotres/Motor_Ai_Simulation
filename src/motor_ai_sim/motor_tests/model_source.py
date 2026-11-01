@@ -201,7 +201,11 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
                "connection": conn, "torque_nm": torque, "torque_kind": "shaft" if p_shaft is not None else "em",
                "eff_pct": None if eff is None else 100.0 * eff,
                "eff_system_pct": None if eff_sys is None else 100.0 * eff_sys, "winding_c": temps["winding_c"],
-               "magnet_c": temps["magnet_c"], "temps_source": temps["source"], "magnet_temp_c": mag_t}
+               "magnet_c": temps["magnet_c"], "temps_source": temps["source"], "magnet_temp_c": mag_t,
+               # the current angle the point was solved at (the run's own, else the duty's setting): what "Compute it"
+               # copies to a new point at a similar current
+               "gamma_deg": num(s.get("gamma_deg")) if num(s.get("gamma_deg")) is not None else num(d.get("gamma_deg")),
+               "kind": str(d.get("kind") or "")}
         duties.append(row)
         if not s:
             continue
@@ -241,10 +245,25 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
                    "fundamental_order": cog.get("fundamental_order"), "dominant_order": cog.get("dominant_order"),
                    "samples_per_cycle": num(cog.get("samples_per_cycle")), "computed_at": cog.get("computed_at")}
     return {"connection": connection, "duties": duties, "noload": noload, "r_ref": r_ref, "l_ref": l_ref,
-            "cogging": cogging,
+            "cogging": cogging, "sim_gamma_deg": _sim_gamma(cfg_doc),
             "l_stator_only": l_stator, "magnet": magnet or {"card": None, "grade": None, "temp_c": None, "points": []},
             "mass_kg": mass, "mech": mech, "end3d": factors, "has_bearings": bool(mech and getattr(mech, "has_bearings", False)),
             "available": bool(duties)}
+
+
+def _sim_gamma(cfg_doc: Dict[str, Any]) -> Optional[float]:
+    """The configuration's own stored current angle: its ``simulation.gamma_deg`` block, else the default duty's angle.
+
+    ``None`` when the configuration states neither (the caller then falls back to 0)."""
+    sim = cfg_doc.get("simulation") if isinstance(cfg_doc.get("simulation"), dict) else {}
+    g = num(sim.get("gamma_deg"))
+    if g is not None:
+        return g
+    name = cfg_doc.get("default_duty")
+    for d in cfg_doc.get("duties") or []:
+        if isinstance(d, dict) and name and str(d.get("name")) == str(name):
+            return num(d.get("gamma_deg"))
+    return None
 
 
 def mech_function(cfg_doc: Dict[str, Any], geometry: Dict[str, Any], rotor_mass_kg: Optional[float]) -> Optional[Callable]:
@@ -326,7 +345,7 @@ def collect(die: str, config: str) -> Dict[str, Any]:
     except Exception as e:                                  # noqa: BLE001
         log.info("motor tests: no model for %s/%s (%s)", die, config, e)
         return {"available": False, "duties": [], "noload": [], "r_ref": None, "l_ref": None, "l_stator_only": None,
-                "cogging": None, "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
+                "cogging": None, "sim_gamma_deg": None, "magnet": {"points": []}, "mass_kg": None, "mech": None, "connection": "star", "has_bearings": False,
                 "end3d": factors_from_end3d(None)}
     geometry: Dict[str, Any] = {}
     try:

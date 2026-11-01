@@ -412,8 +412,14 @@
     "modelMissing": "此配置没有已保存的结果",
     "modelMissingTip": "没有可对比的数据：请先运行并保存此配置的工况。",
     "compute": "计算",
-    "computeTip": "将此工作点添加为此配置的工况；请在仿真中运行。",
-    "computeDone": "已添加工况：请在仿真中运行",
+    "computeTip": "将此点添加为测试工况并求解（电磁计算，排队运行）；完成后模型值和偏差自动填入。仅限管理员。",
+    "computeGamma": "电流角 {gamma}°，来自 {source}",
+    "computeAll": "计算全部缺失点（{count}）",
+    "computeAllTip": "将此测试的 {count} 个缺失点添加为测试工况并排队求解（转速按 10 rpm、电流按 0.5 A 取整去重）。仅限管理员。",
+    "computing": "正在计算 {count} 个点…",
+    "computingProgress": "计算中… 已完成 {done}/{total}",
+    "computeFinished": "已计算 {count} 个点",
+    "computeNothing": "无需计算：这些点已在配置中",
     "reload": "刷新",
     "chart": {
       "measured": "实测",
@@ -574,6 +580,7 @@
     "errors": {
       "load": "无法加载测试：{reason}",
       "save": "未保存：{reason}",
+      "compute": "未计算：{reason}",
       "parse": "第 {line} 行无法读取：{text}"
     }
   }

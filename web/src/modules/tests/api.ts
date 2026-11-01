@@ -1,6 +1,6 @@
 // Tests section — fetch wrappers for /api/motor-tests/* (production side) and /api/projects/{id}/motors/tests (read-only
 // project view).  The session token is added by the global fetch interceptor.
-import type { CreateDutyAction, TestRecord, TestsPayload } from './types';
+import type { ComputeResult, CreateDutyAction, JobRow, TestRecord, TestsPayload } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const enc = encodeURIComponent;
@@ -41,6 +41,9 @@ export const testsApi = {
   projectIndex: async (projectId: string, showAll = false) =>
     (await call<{ motors: Array<{ die: string; config: string; count: number; visible_to_customer: boolean }> }>(
       'GET', `/api/projects/${enc(projectId)}/motors/tests${showAll ? '?show_all=true' : ''}`)).motors,
-  /** "Compute it": add the missing operating point as a duty of the configuration (no solve; run it in Simulation). */
-  createDuty: (action: CreateDutyAction) => call<unknown>('POST', '/api/family/duty', action.body),
+  /** "Compute it" (admin only): create the missing points as TEST duties and queue their solve; poll `jobs()` for the run ids. */
+  compute: (die: string, config: string, actions: CreateDutyAction[]) =>
+    call<ComputeResult>('POST', `${base(die, config)}/compute`, { actions }),
+  /** This caller's jobs (queued / running / finished): the state of the solves `compute` queued. */
+  jobs: async () => (await call<{ jobs: JobRow[] }>('GET', '/api/jobs?limit=200')).jobs,
 };

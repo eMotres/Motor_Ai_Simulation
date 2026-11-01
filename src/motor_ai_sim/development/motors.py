@@ -1677,8 +1677,11 @@ def motor_view_for(open_die: str, config: str, cfg_path: Path, cfg: dict, author
         fields = {}
     rows = _results(open_die, config, cfg, stored, set(), own_only=True)
     configure = configure_duties_for_motor(open_die, config, cfg, cfg_path, authorization)
+    summaries = {str(d.get("name") or ""): d.get("summary") for d in (cfg.get("duties") or []) if isinstance(d, dict)}
     for row in rows:
         row["can_open_configure"] = row["duty"] in configure
+        # the duty's saved EM summary: the results panel (motor_view.build_panel) is drawn from it, whole
+        row["em_summary"] = summaries.get(row["duty"])
     return motor_view.build_view(open_die, config, rows, stored, fields, configure)
 
 

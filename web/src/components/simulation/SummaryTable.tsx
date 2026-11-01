@@ -26,6 +26,7 @@ import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
 import SaveContinuousPointButton from './SaveContinuousPointButton';
 import EmResultTiles from './EmResultTiles';
+import { apply3dToSummary } from '../../lib/apply3d';
 import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -689,46 +690,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const ktBasis = kTmeas != null ? '3-D' : '3-D flux';
   const s = (() => {
     if (!apply3d || k3d == null) return summary;
-    const k = k3d;
-    const kq = kTq ?? k;
-    const Pm = summary.P_mech_W * kq;
+    const kq = kTq ?? k3d;
     return {
-      ...summary,
-      T_em_avg_Nm: summary.T_em_avg_Nm * kq,
-      P_mech_W: Pm,
-      torque_per_mass_Nm_kg: summary.torque_per_mass_Nm_kg * kq,
-      power_per_mass_W_kg: summary.power_per_mass_W_kg * kq,
-      // the same torque factor on the per-mass figures over the FULL mass (the server's divisor, not ours)
-      torque_per_mass_full_Nm_kg: summary.torque_per_mass_full_Nm_kg != null
-        ? summary.torque_per_mass_full_Nm_kg * kq : summary.torque_per_mass_full_Nm_kg,
-      power_per_mass_full_W_kg: summary.power_per_mass_full_W_kg != null
-        ? summary.power_per_mass_full_W_kg * kq : summary.power_per_mass_full_W_kg,
-      V_phase_peak_V: summary.V_phase_peak_V * k,
-      V_phase_rms_V: summary.V_phase_rms_V * k,
-      V_line_peak_V: summary.V_line_peak_V * k,
-      V_line_rms_V: summary.V_line_rms_V * k,
-      // The delta tiles read the SOLVER's line values — flux-proportional
-      // like every voltage above, and the catalog row already stores them
-      // ×k (user 2026-09-13: card 722 V beside a saved 702 V).
-      V_line_peak_solved_V: summary.V_line_peak_solved_V != null
-        ? summary.V_line_peak_solved_V * k : summary.V_line_peak_solved_V,
-      V_line_rms_solved_V: summary.V_line_rms_solved_V != null
-        ? summary.V_line_rms_solved_V * k : summary.V_line_rms_solved_V,
-      V1_LL_V: summary.V1_LL_V != null ? summary.V1_LL_V * k : summary.V1_LL_V,
-      KV_rpm_per_V_line: summary.KV_rpm_per_V_line / k,
-      KV_noload_rpm_per_V_line: summary.KV_noload_rpm_per_V_line != null
-        ? summary.KV_noload_rpm_per_V_line / k : summary.KV_noload_rpm_per_V_line,
-      psi_pm_Wb: summary.psi_pm_Wb != null ? summary.psi_pm_Wb * k : summary.psi_pm_Wb,
-      // Km and Km/mass are NOT flux-scaled (owner 2026-09-30): they carry
-      // the torque factor, like the torque (see ktBasis)
-      Km_Nm_sqrtW: summary.Km_Nm_sqrtW != null
-        ? summary.Km_Nm_sqrtW * kq : summary.Km_Nm_sqrtW,
-      Km_per_mass_Nm_sqrtW_kg: summary.Km_per_mass_Nm_sqrtW_kg != null
-        ? summary.Km_per_mass_Nm_sqrtW_kg * kq : summary.Km_per_mass_Nm_sqrtW_kg,
-      Km_per_mass_full_Nm_sqrtW_kg: summary.Km_per_mass_full_Nm_sqrtW_kg != null
-        ? summary.Km_per_mass_full_Nm_sqrtW_kg * kq : summary.Km_per_mass_full_Nm_sqrtW_kg,
-      efficiency: (Pm > 0 && summary.P_loss_total_W > 0)
-        ? Pm / (Pm + summary.P_loss_total_W) : summary.efficiency,
+      // the flux- and torque-proportional fields: ONE function (lib/apply3d.ts), shared with the stored point's panel
+      ...apply3dToSummary(summary),
       // The charging card is an energy balance on the shaft power, so it moves
       // with k too: P_charge = k·P_mech_in − losses (losses kept 2D, same rule
       // as the efficiency tile), then the bus re-rooted on the pack

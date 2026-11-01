@@ -18,7 +18,9 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'rea
 import { Box, Button, Chip, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
-import { MetricTile, PANEL, LABEL, TileRow, fmt } from '../common/ResultTiles';
+import { PANEL, LABEL, fmt } from '../common/ResultTiles';
+import ResultsPanel from '../common/ResultsPanel';
+import { panelDcBus, panelRows } from '../../lib/resultsPanel';
 import { watchChunkImport } from '../../lib/chunkReload';
 // the field viewer is three.js: fetched when a stored field map is opened, not with the Configure tab
 const StoredFieldViewer = lazy(watchChunkImport(() => import('./StoredFieldViewer')));
@@ -42,8 +44,6 @@ import { fetchMotorField } from '../../lib/motorViewApi';
 import { openProjectMotor } from '../../lib/openProjectMotor';
 import { nsT } from '../../i18n/nsT';
 import { stepLabels } from '../../modules/development/stepSeries';
-import { configureGrid } from '../../modules/development/configureGrid';
-import { temperatureRowIndex, temperatureTiles } from '../../modules/development/temperatureTiles';
 import { specBatteryView } from '../../modules/development/specBattery';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -141,22 +141,15 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
   const peers = useMemo(() => steps.map((v) => v.points.find((p) => p.duty === duty) ?? null), [steps, duty]);
   const labels = useMemo(() => stepLabels(steps), [steps]);
-  // the result grid of the ordinary Configure, fed from the stored point (cells that cannot be computed or are 0 are not drawn);
-  // the MAGNET / WINDING temperature tiles are a row of their own (owner 2026-10-27): the coupled loop's values, or the EM run's
-  // input temperatures drawn muted; the rest of the temperatures stay in the thermal block with their own source
-  const grid = useMemo(() => configureGrid(current), [current]);
-  const temps = useMemo(() => temperatureTiles(current), [current]);
-  const tempAt = temperatureRowIndex(grid);
-  const dcBus = grid.flat().find((c) => c.id === 'dcBus')?.value ?? null;
+  // the information panel of the ordinary Configure (ONE component, components/common/ResultsPanel), fed with the point's FINAL stored
+  // result: the coupled loop's numbers, temperatures and drive where one exists, else the saved EM run's; a tile the point does not
+  // store is not drawn (owner 2026-11-01)
+  const panel = current?.panel ?? null;
+  const dcBus = useMemo(() => panelDcBus(panel), [panel]);
   const tileName = (id: string) => { const key = configureTileKey(id, current); return key ? tc(key) : t(`points.tile.${id}`); };
-  const emSource = current?.sources?.em;
-  const emChip = emSource?.kind === 'coupled' ? t('points.source.coupledChip')
-    : emSource?.coil_temp_c !== undefined ? t('points.source.emChip', { winding: Math.round(emSource.coil_temp_c) }) : t('points.source.emChipPlain');
-  const emChipTip = emSource?.kind === 'coupled' ? t('points.source.coupledTip')
-    : t(emSource?.coil_temp_c !== undefined ? 'points.source.emTip' : 'points.source.emTipPlain', { winding: emSource?.coil_temp_c !== undefined ? Math.round(emSource.coil_temp_c) : '', magnet: emSource?.magnet_temp_c !== undefined ? Math.round(emSource.magnet_temp_c) : '—' });
   const showChart = steps.length > 1 && stepIndex >= 0;
   // a block is drawn only when this point has real results for it (owner 2026-10-26): no header, no empty tiles, no placeholder
-  const showTiles = grid.length > 0 || temps.length > 0;
+  const showTiles = useMemo(() => panelRows(panel).length > 0, [panel]);
   const operating = pointOperating(current);
 
   const openStep = (index: number) => {
@@ -244,31 +237,8 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
         {/* the chart sits next to the tiles (owner 2026-10-26: "move the chart left"): the tile column takes its content width (up to 860 px), the chart the rest */}
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart && showTiles ? 'fit-content(860px) minmax(360px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
-          {showTiles && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
-            <Tooltip title={emChipTip}>
-              <Chip size="small" label={emChip} data-testid="em-source-chip" sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />
-            </Tooltip>
-            {[...grid.slice(0, tempAt), ...(temps.length > 0 ? [null] : []), ...grid.slice(tempAt)].map((row, index) => (
-              row === null ? (
-                <TileRow key="temperatures">
-                  {temps.map((tile) => (
-                    <Box key={tile.id} data-testid={`temp-tile-${tile.id}`} data-basis={tile.basis} sx={{ display: 'flex', opacity: tile.muted ? 0.65 : 1 }}>
-                      <MetricTile label={t(tile.labelKey)} value={tile.value} unit={tile.unit} d={tile.d} base={tile.value} plain
-                        valueColor={tile.muted ? 'var(--text-3)' : 'var(--text-0)'}
-                        tip={tile.tip.map((p) => t(p.key, p.args)).join('\n')} />
-                    </Box>
-                  ))}
-                </TileRow>
-              ) : (
-              <TileRow key={index}>
-                {row.map((cell) => (
-                  <MetricTile key={cell.id} label={tc(cell.labelKey)} value={cell.value} unit={cell.unit} d={cell.d}
-                    base={cell.value} plain
-                    tip={cell.tipKey ? [tc(cell.tipKey), ...(cell.tipParts ?? []).map((p) => tc(p.key, p.args))].join(' ') : undefined} />
-                ))}
-              </TileRow>
-              )
-            ))}
+          {showTiles && panel && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
+            <ResultsPanel panel={panel} />
             {dcBus !== null && (
               // the same size as in the ordinary Configure (owner 2026-10-26): there the panel shares a row with the cross-section
               // and the side view (flex 1 1 300px, about a third of the page); here it sat alone in the wide column and its bar and

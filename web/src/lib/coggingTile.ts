@@ -1,5 +1,5 @@
 /** The cogging-torque tile, shared by every screen that draws a motor's parameters (owner 2026-10-26): the points-limited
- *  Configure grid (`modules/development/configureGrid.ts`), the ordinary Configure tile (`ConfiguratorPanel`), the project
+ *  Configure grid (`lib/emResultTiles.ts`), the ordinary Configure tile (`ConfiguratorPanel`), the project
  *  comparison and the Motors row.  Pure functions: `node --test` imports this file.
  *
  *  Headline = peak-to-peak no-load torque in N·m; the tooltip carries the half-amplitude, the share of the continuous

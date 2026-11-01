@@ -339,8 +339,8 @@ test('wiring: blocks without real results are not drawn at all - no header, no e
   assert.match(results, /\{blocks\.thermal && <Box/);
   assert.match(results, /\{blocks\.mechanical && <Box/);
   const panel = src('../../../components/compare/PointsConfigure.tsx');
-  assert.match(panel, /const showTiles = grid\.length > 0 \|\| temps\.length > 0;/);          // the temperature row counts as a result
-  assert.match(panel, /\{showTiles && <Box/);
+  assert.match(panel, /const showTiles = useMemo\(\(\) => panelRows\(panel\)\.length > 0, \[panel\]\);/);   // the shared panel's own rows, temperatures included
+  assert.match(panel, /\{showTiles && panel && <Box/);
   assert.match(panel, /\{kinds\.length > 0 && <Box/);                                       // the maps panel only when a map belongs to the point
   assert.doesNotMatch(panel, /field\?\.missing && <Typography|kinds\.length === 0 &&/);
 });

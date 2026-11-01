@@ -69,7 +69,8 @@ test('wiring: chart right of the tiles on wide screens, stacked on narrow ones; 
   const src = readFileSync(new URL('../../../components/compare/PointsConfigure.tsx', import.meta.url), 'utf8');
   assert.match(src, /gridTemplateColumns: \{ xs: 'minmax\(0,1fr\)', lg: showChart && showTiles \?/);
   assert.match(src, /<StepsChart /);
-  assert.match(src, /data-testid="em-source-chip"/);
+  assert.match(src, /<ResultsPanel panel=\{panel\}/);                 // the one panel carries the one source chip (components/common/ResultsPanel)
+  assert.match(readFileSync(new URL('../../../components/common/ResultsPanel.tsx', import.meta.url), 'utf8'), /data-testid="em-source-chip"/);
   assert.doesNotMatch(src, /compareWith|baseVariantPoint|points-note|steps\[stepIndex\]\?\.note/);
   assert.match(src, /spec\.group !== 'thermal'/);                    // temperatures sit in the thermal block with their own source
   const chart = readFileSync(new URL('../../../components/compare/StepsChart.tsx', import.meta.url), 'utf8');

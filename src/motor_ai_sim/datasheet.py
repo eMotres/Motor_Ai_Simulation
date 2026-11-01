@@ -992,6 +992,13 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # bench-test / validation points (``duty_kind``) are not on the customer datasheet
     duties: List[Dict[str, Any]] = [d for d in (cfg_doc.get("duties") or [])
                                     if isinstance(d, dict) and not is_test_duty(d)]
+    # a duty that was never computed has no column (owner 2026-11-01: the sheet carries the computed positions - cruise and peak -
+    # and states nothing about the others); a configuration with no computed duty keeps them all
+    _computed = [d for d in duties
+                 if (isinstance(d.get("summary"), dict) and d["summary"]) or (isinstance(d.get("result"), dict) and d["result"])
+                 or (coupled or {}).get(str(d.get("name") or ""))]
+    if _computed:
+        duties = _computed
     # SHORT-TIME OR CONTINUOUS (owner 2026-10-19), read off each duty's stored
     # coupled record: a CONTINUOUS duty leads the card (it is the rating), a
     # SHORT-TIME one is never shown as the rating — it keeps its own column,

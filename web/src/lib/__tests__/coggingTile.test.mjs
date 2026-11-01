@@ -2,7 +2,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { coggingDigits, coggingValue, coggingTipParts, coggingFromFlat, coggingTipText } from '../coggingTile.ts';
-import { configureGrid } from '../../modules/development/configureGrid.ts';
+
+// the tile modules import each other the way Vite does (no '.ts'); resolve them for the tests only
+const hooks = await import('node:module');
+if (typeof hooks.registerHooks === 'function') {
+  hooks.registerHooks({
+    resolve(specifier, context, nextResolve) {
+      try { return nextResolve(specifier, context); } catch (err) {
+        if (/^\.{1,2}\//.test(specifier) && !/\.[cm]?[jt]sx?$/.test(specifier)) return nextResolve(`${specifier}.ts`, context);
+        throw err;
+      }
+    },
+  });
+}
+const E = await import('../emResultTiles.ts');
 
 test('digits follow the size of the value', () => {
   assert.equal(coggingDigits(0.0637), 4);
@@ -39,13 +52,12 @@ test('flat comparison keys map back to a view', () => {
   assert.deepEqual([v.pkpk_Nm, v.half_amp_Nm, v.pct_of_continuous, v.stale], [0.2, 0.1, 2, true]);
 });
 
-test('the Configure grid draws one cogging cell after ripple, only when a value is stored (no zero / empty rows)', () => {
-  const point = (comparison) => ({ duty: 'rated', has_result: true, comparison });
-  const row0 = (comparison) => configureGrid(point(comparison))[0].map((c) => c.id);
-  assert.deepEqual(row0({ torque_nm: 5, ripple_pct: 3 }), ['torque', 'ripple']);
-  assert.deepEqual(row0({ torque_nm: 5, ripple_pct: 3, cogging_pkpk_nm: 0.0637 }), ['torque', 'ripple', 'cogging']);
-  assert.deepEqual(row0({ torque_nm: 5, cogging_pkpk_nm: 0 }), ['torque']);
-  const cell = configureGrid(point({ cogging_pkpk_nm: 0.0637, cogging_half_nm: 0.0319, cogging_pct_of_continuous: 0.4, cogging_magnet_temp_c: 120 }))[0][0];
+test('the information panel draws one cogging tile after ripple, only when a value is stored (no zero / empty tile)', () => {
+  const tiles = (cogging) => E.emTileRows({ T_em_avg_Nm: 5, T_ripple_pct: 3, P_mech_W: 500, P_loss_total_W: 20 }, { cogging: coggingFromFlat(cogging) })[0].map((c) => c.id);
+  assert.deepEqual(tiles({}), ['torque', 'power', 'elecPower', 'efficiency', 'tRipple']);
+  assert.deepEqual(tiles({ cogging_pkpk_nm: 0.0637 }), ['torque', 'power', 'elecPower', 'efficiency', 'tRipple', 'cogging']);
+  assert.ok(!tiles({ cogging_pkpk_nm: 0 }).includes('cogging'));
+  const cell = E.emTileRows({ T_em_avg_Nm: 5 }, { cogging: coggingFromFlat({ cogging_pkpk_nm: 0.0637, cogging_half_nm: 0.0319, cogging_pct_of_continuous: 0.4, cogging_magnet_temp_c: 120 }) })[0].find((c) => c.id === 'cogging');
   assert.equal(cell.labelKey, 'configure.cogging');
   assert.equal(cell.tipKey, 'configure.coggingTip');
   assert.equal(cell.unit, 'N·m');

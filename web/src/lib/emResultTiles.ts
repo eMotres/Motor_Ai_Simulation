@@ -14,6 +14,7 @@ import { hasSleeve } from './hasSleeve.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
 import { quotedRipple, type RippleRefined } from './rippleAccuracy.ts';
+import { coggingDigits, coggingTipParts, coggingValue, type CoggingView, type TipPart } from './coggingTile.ts';
 
 /** The run summary, as far as these tiles read it: every field optional, nothing invented. */
 export interface EmTileSummary {
@@ -129,6 +130,8 @@ export interface EmTileSummary {
   coupling?: {
     coil_temp_c?: number | null;
     magnet_temp_c?: number | null;
+    /** the extra motor loss the carrier adds over the same point on a sine (PWM only) */
+    motor_pwm_loss_W?: number | null;
     controller?: {
       t_j_c?: number | null;
       losses?: { total_W?: number | null } | null;
@@ -159,6 +162,17 @@ export interface EmTileView {
    *  `extra_W` null = the machine has NO bearing model: the friction is UNKNOWN, not zero.
    *  Absent altogether = the caller has no mechanical block (the tiles then say so). */
   mech?: EmMech | null;
+  /** the temperatures around the winding / magnets that the stored thermal map states (not in the EM run itself) */
+  cooling?: EmCooling | null;
+  /** the configuration's saved cogging torque (a property of the configuration, not of the run); absent = none saved */
+  cogging?: CoggingView | null;
+}
+
+export interface EmCooling {
+  housing_c?: number | null;
+  /** air speed over the housing [m/s]; absent for a liquid jacket */
+  air_speed_mps?: number | null;
+  coolant_c?: number | null;
 }
 
 export interface EmMech {
@@ -185,6 +199,8 @@ export interface EmTileSpec {
   tipVars?: Record<string, string | number>;
   /** verbatim text the RUN carries (a part's note): appended to the tooltip as it is */
   tipText?: string;
+  /** more tooltip sentences, each a locale key with its own values (the cogging tile's half-amplitude, share, method ...) */
+  tipParts?: TipPart[];
   unit: string;
   d: number;
   value: number | null;
@@ -324,6 +340,10 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       display: ripple != null && rq.accurate === false ? `${ripple.toFixed(1)}*` : undefined,
       level: ripple == null ? undefined : rq.accurate === false ? 'warn'
         : ripple <= 5 ? 'ok' : ripple <= 15 ? 'warn' : 'bad' }),
+    // COGGING TORQUE: peak-to-peak with no current, saved with the configuration; the half-amplitude, share of the continuous
+    // torque, magnet state and method go to the tooltip.  Not drawn without a value.
+    tile({ id: 'cogging', labelKey: 'configure.cogging', tipKey: 'configure.coggingTip', tipParts: coggingTipParts(view.cogging),
+      unit: 'N·m', d: coggingDigits(coggingValue(view.cogging) ?? 0), value: coggingValue(view.cogging) }),
     tile({ id: 'tPerMass', labelKey: pm('torque').full ? 'configure.tPerMass' : 'configure.tPerMassActive',
       tipKey: pm('torque').full ? 'emTiles.tPerMassFullTip' : 'emTiles.tPerMassTip', unit: 'N·m/kg', d: 2,
       value: pm('torque').value }),
@@ -397,6 +417,8 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     tile({ id: 'lossDensity', labelKey: pm('loss').full ? 'configure.lossDensity' : 'configure.lossDensityActive',
       tipKey: pm('loss').full ? 'emTiles.lossDensityFullTip' : 'emTiles.lossDensityTip', unit: 'W/kg', d: 0,
       value: pm('loss').value }),
+    tile({ id: 'motorLoss', labelKey: 'configureDrive.motorLoss', tipKey: 'configureDrive.motorLossTip', unit: 'W', d: 0,
+      value: num(s.coupling?.motor_pwm_loss_W) }),
     tile({ id: 'invLoss', labelKey: 'configureDrive.invLoss', tipKey: 'emTiles.ctrlLossTip', unit: 'W', d: 1,
       value: num(ctl?.losses?.total_W) }),
     tile({ id: 'tj', labelKey: 'configureDrive.tj', tipKey: 'emTiles.tjTip', unit: '°C', d: 0, value: tj,
@@ -434,6 +456,14 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
             cardT: num(s.magnet_card_temp_c) != null ? _n(num(s.magnet_card_temp_c) as number) : '—',
             br: num(s.magnet_Br_used_T) != null ? (num(s.magnet_Br_used_T) as number).toFixed(3) : '—',
             knee: num(s.magnet_knee_used_kA_m) != null ? _n(num(s.magnet_knee_used_kA_m) as number) : '—' } }),
+    // what the stored thermal map states beside the two temperatures: the housing (never hotter than the winding it carries),
+    // the air over it or the coolant of a liquid jacket - a tile only when the map states it
+    tile(tempEmTile('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip',
+      num(view.cooling?.housing_c), lim.winding_C)),
+    tile({ id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
+      value: num(view.cooling?.air_speed_mps) }),
+    tile({ id: 'coolant', labelKey: 'emTiles.coolant', tipKey: 'emTiles.coolantTip', unit: '°C', d: 0,
+      value: num(view.cooling?.coolant_c) }),
   );
 
   // ── 4 voltages + current density ──────────────────────────────────────────

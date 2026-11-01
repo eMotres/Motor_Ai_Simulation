@@ -731,6 +731,16 @@
     "cursorAt": "Selected speed: {rpm} rpm"
   },
   "emTiles": {
+    "coolant": "Coolant",
+    "coolantTip": "Coolant temperature of the liquid jacket, from the stored thermal map.",
+    "sourceCoupledPwm": "Coupled EM + thermal, PWM {freq} kHz",
+    "sourceCoupledPwmNoFreq": "Coupled EM + thermal, PWM",
+    "sourceCoupled": "Coupled EM + thermal, sine",
+    "sourceEmThermal": "EM run, winding {winding} °C + thermal map",
+    "sourceEm": "EM run, winding {winding} °C",
+    "sourceEmPlain": "EM run",
+    "sourceCoupledTip": "The point's final stored result: torque, losses, temperatures and the drive come from the coupled loop. The constants (KV, Kt, Km, inductances) are from the saved EM run.",
+    "sourceEmTip": "From the saved EM run, made at a fixed winding temperature. Temperatures appear only where a thermal map is stored; no coupled result is stored for this point.",
     "torqueTip": "Mean electromagnetic torque of THIS run, averaged over one electrical period.",
     "powerTip": "Shaft power, at the coupling: rotor power T·ω ({rotor} kW) {op} {mech} W of bearings and windage, which sit between the rotor and the coupling. The efficiency is computed from it.",
     "massTip": "Active mass of this run: stator and rotor iron, copper, magnets, sleeve, shaft tube. The full motor mass (with holders, bearings, board) is in Configure, the catalog and the datasheet. EM-active part alone: {active} kg.",

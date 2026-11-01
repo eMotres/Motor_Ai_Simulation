@@ -626,6 +626,243 @@ def em_run_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "provenance": provenance(row)}
 
 
+# ---------------------------------------------------------------------------
+# the results panel (owner 2026-11-01): ONE tile list everywhere, fed with the point's FINAL stored result
+# ---------------------------------------------------------------------------
+#
+# The panel the ordinary Configure draws (all rows: temperatures, PWM / controller, constants, inductances, ...) is drawn from
+# the SAME shape of data in every place: the electromagnetic summary of the point (the fields the Simulation summary carries,
+# lib/emResultTiles.ts) with a ``coupling`` block (temperatures, controller, continuous rating).  This block assembles it:
+#
+#   * ``summary``  - the duty's saved EM summary (else the kernel run's flat numbers, else the coupled loop's own numbers);
+#   * the point's OWN coupled record (never a limit search; a within-limits run to the limits counts as steady) wins:
+#     its EM numbers overlay the summary's (the loop's torque / losses at ITS temperatures), its temperatures and controller
+#     fill ``summary.coupling``; without it a steady temperature map stands in for the temperatures only;
+#   * ``source``   - which record each half came from and the drive (sine / PWM with its carrier), for the one-line caption.
+#
+# Nothing is invented: a value that no record carries stays absent and its tile is not drawn.
+
+#: Largest list kept in the panel summary (arrays of frames, histories and series are not panel data).
+_PANEL_MAX_LIST = 64
+#: Keys of the summary that never reach the panel (bulky, per-frame or run bookkeeping).
+_PANEL_DROP = {"runs", "history", "nonlinear_unconverged_frames", "part_states", "sleeve_hoop",
+               "schematic_svg", "mesh", "waveform"}
+
+
+def _panel_plain(value: Any, depth: int = 4) -> Any:
+    """A JSON-safe copy of a stored summary: finite numbers, booleans, short strings, nested dicts, short lists."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else None
+    if isinstance(value, str):
+        return value[:400]
+    if depth <= 0:
+        return None
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if str(k) in _PANEL_DROP:
+                continue
+            p = _panel_plain(v, depth - 1)
+            if p is not None:
+                out[str(k)[:60]] = p
+        return out
+    if isinstance(value, (list, tuple)):
+        if len(value) > _PANEL_MAX_LIST:
+            return None
+        items = [_panel_plain(v, depth - 1) for v in value]
+        return [v for v in items if v is not None]
+    return None
+
+
+#: The numbers the coupled loop's last EM run states itself (routes.coupled._EM_FACE_KEYS): they replace the saved run's.
+_PANEL_EM_OVERLAY = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W", "P_solid_W", "P_mag_W", "P_shaft_W",
+                     "P_sleeve_W", "P_loss_total_W", "efficiency", "I1_phase_rms_A", "THD_I_pct", "THD_LL_pct",
+                     "V_line_peak_V", "n_steps_per_period")
+#: ... and the loop's mechanical half + shaft efficiency, from the top level of its record.
+_PANEL_LOOP_KEYS = ("P_bearings_W", "P_windage_W", "P_mech_extra_W", "P_loss_total_incl_mech_W", "efficiency_shaft")
+#: Derived numbers of the saved run that cannot follow the loop's and are left out rather than shown stale.
+_PANEL_STALE = ("P_shaft_net_W", "P_elec_in_solved_W", "P_mech_balance_W",
+                "P_core_stator_W", "P_core_rotor_W", "P_core_terms", "ripple_refined",
+                "T_ripple_filt_pct", "T_ripple_raw_pct", "T_noise_floor_pct")
+
+
+def _ratio(new: Any, old: Any) -> Optional[float]:
+    a, b = _num(new), _num(old)
+    return a / b if a is not None and b is not None and b > 0 else None
+
+
+def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
+    """Carry the saved run's DERIVED numbers over to the loop's torque / losses (pure proportions of numbers both stored).
+
+    At a fixed speed and current the shaft power, the per-mass figures and the 3-D corrected torque scale with the torque,
+    the voltages with the line peak, the loss density with the total loss.  A derived number with no such proportion
+    (the stator / rotor heat split, the iron split, the ripple refinements) is dropped: stale is worse than absent.
+    """
+    def scale(keys, r):
+        if r is None:
+            return
+        for k in keys:
+            if _num(base.get(k)) is not None:
+                base[k] = base[k] * r
+
+    scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
+           "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
+    e3 = base.get("end3d")
+    if isinstance(e3, dict):
+        r = _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm"))
+        if r is not None and _num(e3.get("T_corrected_Nm")) is not None:
+            e3["T_corrected_Nm"] = e3["T_corrected_Nm"] * r
+    scale(("V_phase_peak_V", "V_phase_rms_V", "V_line_rms_V", "V_line_peak_solved_V", "V_line_rms_solved_V"),
+          _ratio(base.get("V_line_peak_V"), before.get("V_line_peak_V")))
+    loss_new = base.get("P_loss_total_incl_mech_W") if _num(before.get("P_loss_total_incl_mech_W")) is not None else base.get("P_loss_total_W")
+    loss_old = before.get("P_loss_total_incl_mech_W") if _num(before.get("P_loss_total_incl_mech_W")) is not None else before.get("P_loss_total_W")
+    scale(("loss_density_W_kg", "loss_density_full_W_kg"), _ratio(loss_new, loss_old))
+    # the stator / rotor heat split follows the total electromagnetic loss; it is then an estimate, and says so
+    r_loss = _ratio(base.get("P_loss_total_W"), before.get("P_loss_total_W"))
+    if r_loss is not None and (_num(base.get("P_loss_stator_W")) is not None or _num(base.get("P_loss_rotor_W")) is not None):
+        scale(("P_loss_stator_W", "P_loss_rotor_W"), r_loss)
+        base["P_loss_split_measured"] = False
+    for k in _PANEL_STALE:
+        base.pop(k, None)
+
+
+def _motor_pwm_loss_w(cp: Dict[str, Any]) -> Optional[float]:
+    """The extra motor loss the carrier adds over the same point on an ideal sinusoid: the sine comparison's motor-loss row
+    (inverter minus sine).  Absent when the record has no such pair - never a guess."""
+    cmp_ = cp.get("sine_comparison") if isinstance(cp.get("sine_comparison"), dict) else {}
+    for r in cmp_.get("rows") or []:
+        if isinstance(r, dict) and r.get("key") == "P_loss_total_W":
+            a, b = _num(r.get("sine")), _num(r.get("inverter"))
+            if a is not None and b is not None:
+                return round(b - a, 2)
+    return None
+
+
+def _panel_coupling(cp: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``coupling`` block the tiles read, from one stored coupled record."""
+    ctl = _panel_plain(cp.get("controller")) if isinstance(cp.get("controller"), dict) else {}
+    inv = cp.get("inverter") if isinstance(cp.get("inverter"), dict) else {}
+    sine_inv = {}
+    if isinstance(cp.get("sine_comparison"), dict) and isinstance(cp["sine_comparison"].get("inverter"), dict):
+        sine_inv = cp["sine_comparison"]["inverter"]
+    out: Dict[str, Any] = {}
+    for key in ("coil_temp_c", "magnet_temp_c", "magnet_temp_max_c", "bearing_temp_c"):
+        v = _num(cp.get(key))
+        if v is not None:
+            out[key] = v
+    if ctl:
+        tj = _num(ctl.get("t_j_c"))
+        if tj is None and isinstance(ctl.get("thermal"), dict):
+            tj = _num(ctl["thermal"].get("t_j_c"))
+        if tj is None:
+            tj = _num(inv.get("t_j_c"))
+        if tj is None:
+            tj = _num(sine_inv.get("t_j_c"))
+        slim = {k: ctl[k] for k in ("losses", "efficiency", "limits_verdict", "thermal", "feasible") if k in ctl}
+        if tj is not None:
+            slim["t_j_c"] = tj
+        out["controller"] = slim
+    for key in ("continuous_rating", "time_to_limit"):
+        if isinstance(cp.get(key), dict) and cp[key]:
+            out[key] = _panel_plain(cp[key], 3)
+    pwm_loss = _motor_pwm_loss_w(cp)
+    if pwm_loss is not None:
+        out["motor_pwm_loss_W"] = pwm_loss
+    return out
+
+
+def build_panel(duty_summary: Any, kept: Dict[str, Any], thermal: Optional[Dict[str, Any]],
+                em_run: Optional[Dict[str, Any]], comparison: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The ONE results-panel block of a duty (see the section comment), or ``None`` when no EM numbers are stored at all.
+
+    ``duty_summary`` - the duty's saved EM summary; ``kept`` - the duty's OWN records (``own_records``); ``thermal`` - its
+    ``thermal_block``; ``em_run`` - its ``em_run_block``; ``comparison`` - the duty's flat row, of which only the configuration's saved
+    cogging torque (``cogging_*``) is read.
+    """
+    base: Dict[str, Any] = {}
+    em_from = None
+    if isinstance(duty_summary, dict) and duty_summary:
+        base = _panel_plain(duty_summary) or {}
+        em_from = "summary"
+    elif em_run and em_run.get("numbers"):
+        base = dict(em_run["numbers"])
+        em_from = "em_run"
+    cp = kept.get("coupled") if isinstance(kept.get("coupled"), dict) else None
+    cl = kept.get("coupled_limit") if isinstance(kept.get("coupled_limit"), dict) else None
+    # the coupled record that IS the point's answer: a plain coupled run, else a run to the limits that ended inside them all
+    if cp and not _is_limit_search(cp):
+        final = cp
+    elif limit_run_is_steady(cl):
+        final = cl
+    elif limit_run_is_steady(cp):
+        final = cp
+    else:
+        final = None
+    # a stale `coupling` block saved beside the EM run is not the final result: temperatures come from the stored records only
+    base.pop("coupling", None)
+    coupling: Dict[str, Any] = {}
+    drive = "sine"
+    f_carrier = None
+    thermal_from = None
+    em_overlaid = False
+    if final:
+        coupling = _panel_coupling(final)
+        thermal_from = "coupled" if coupling else None
+        if str(final.get("drive") or "sine").lower() in ("inverter", "pwm", "pwm_voltage", "controller"):
+            drive = "inverter"
+            inv = final.get("inverter") if isinstance(final.get("inverter"), dict) else {}
+            f_carrier = _num(inv.get("f_carrier_hz"))
+        em = final.get("em") if isinstance(final.get("em"), dict) else {}
+        before = dict(base)
+        for k, v in (_panel_plain(em, 2) or {}).items():
+            if k in _PANEL_EM_OVERLAY and isinstance(v, (int, float)) and not isinstance(v, bool):
+                base[k] = v
+                em_overlaid = True
+        if em_overlaid:
+            # the loop's own mechanical half rides with its electromagnetic numbers (top level of the record)
+            for k in _PANEL_LOOP_KEYS:
+                if _num(final.get(k)) is not None:
+                    base[k] = _num(final[k])
+            _rescale_to_loop(base, before)
+        if not em_from and em_overlaid:
+            em_from = "coupled"
+    elif thermal and isinstance(thermal.get("duty_temps"), dict):
+        dt = thermal["duty_temps"]
+        for src, dst in (("winding_c", "coil_temp_c"), ("magnet_c", "magnet_temp_c"), ("magnet_max_c", "magnet_temp_max_c"),
+                         ("bearing_c", "bearing_temp_c")):
+            v = _num(dt.get(src))
+            if v is not None:
+                coupling[dst] = v
+        thermal_from = "thermal" if coupling else None
+    cooling: Dict[str, Any] = {}
+    if thermal:
+        dt = thermal.get("duty_temps") if isinstance(thermal.get("duty_temps"), dict) else {}
+        for src, dst in ((dt.get("housing_c"), "housing_c"), (thermal.get("cooling_air_speed_mps"), "air_speed_mps"),
+                         (thermal.get("coolant_c"), "coolant_c")):
+            if _num(src) is not None:
+                cooling[dst] = _num(src)
+    # the bearing block is kept to what the tiles name (the cards, the windage split): its notes and per-bearing rows stay home
+    ml = base.get("mech_losses")
+    if isinstance(ml, dict):
+        wind = ml.get("windage") if isinstance(ml.get("windage"), dict) else {}
+        base["mech_losses"] = {**({"cards": ml["cards"]} if isinstance(ml.get("cards"), list) else {}),
+                               "windage": {k: wind[k] for k in ("P_gap_W", "P_faces_W") if k in wind}}
+    if coupling:
+        base["coupling"] = coupling
+    if not base:
+        return None
+    em_source = "coupled" if em_overlaid else "em_run"
+    source: Dict[str, Any] = {"em": em_source, "thermal": thermal_from, "drive": drive}
+    if f_carrier is not None:
+        source["f_carrier_hz"] = f_carrier
+    if em_source == "em_run" and _num(base.get("coil_temp_C")) is not None:
+        source["em_winding_c"] = _num(base["coil_temp_C"])
+    cogging = {k: v for k, v in (comparison or {}).items() if str(k).startswith("cogging") and v is not None}
+    return {"summary": base, "cooling": cooling, "source": source, **({"cogging": _panel_plain(cogging, 1)} if cogging else {})}
+
+
 def fields_block(rows: Any) -> Dict[str, Any]:
     """Which field kinds are stored for one duty, each with its provenance."""
     out: Dict[str, Any] = {}
@@ -662,6 +899,7 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
         thermal = thermal_block(kept)
         mechanical = mechanical_block(kept, duty_rotor_stress(kept))
         em_run = em_run_block(kept)
+        panel = build_panel(row.get("em_summary"), kept, thermal, em_run, row.get("comparison"))
         # the duty's own saved electromagnetic result (yaml) or any of its own records makes it a stored point
         has_anything = bool(row.get("electromagnetic") or row.get("comparison") or thermal or mechanical or em_run or fields)
         em_nums = row.get("electromagnetic") if isinstance(row.get("electromagnetic"), dict) else {}
@@ -677,6 +915,7 @@ def build_view(die: str, config: str, result_rows: List[Dict[str, Any]], stored_
             "electromagnetic": row.get("electromagnetic") or {},
             "comparison": row.get("comparison") or {},
             "em_run": em_run,
+            "panel": panel,
             "thermal": thermal,
             "mechanical": mechanical,
             "fields": fields,

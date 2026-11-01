@@ -9,7 +9,6 @@ import { useTranslation } from 'react-i18next';
 import { Box, Button, Chip, CircularProgress, IconButton, TextField, Tooltip, Typography } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SendIcon from '@mui/icons-material/Send';
-import { useTranslation } from 'react-i18next';
 import { MiniMarkdown } from './miniMarkdown';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUIStore } from '../../stores/motorStore';

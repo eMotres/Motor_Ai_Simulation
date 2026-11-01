@@ -63,10 +63,10 @@ def test_a_new_account_never_carries_the_earlier_data_election(env):
 
 
 def test_a_current_terms_only_line_counts_as_the_terms_but_not_as_the_agreement(env):
-    _terms_line(env, ANNA, "v0.4")                                           # the sign-up box: no capacity
+    _terms_line(env, ANNA, LT.TERMS_VERSION)                                 # the sign-up box: no capacity
     assert LT.accepted_version(ANNA) is True and LT.agreement_accepted(ANNA) is False
     assert client.get("/api/legal/status", headers=env["h"](ANNA)).json()["required"] is False
-    _terms_line(env, BOB, "v0.4", capacity="other", country="DE", mode="FREE")
+    _terms_line(env, BOB, LT.TERMS_VERSION, capacity="other", country="DE", mode="FREE")
     assert LT.agreement_accepted(BOB) is True                                # an agreement line, even for "other" (it may simulate)
 
 
@@ -99,8 +99,9 @@ def test_a_terms_only_line_is_never_eligible_and_never_disturbs_an_agreement_win
 
 def test_a_first_release_line_without_a_mode_is_a_free_agreement_line(env):
     _terms_line(env, ANNA, "v0.4", capacity="business", country="DE")                           # the #525 shape: capacity, no kind / mode
-    assert PA.training_eligibility(ANNA)["mode"] == "FREE" and LT.agreement_accepted(ANNA) is True
-    assert LT.line_mode(LT.agreement_line(ANNA)) == "FREE"
+    # still a FREE training window (v0.4 >= MIN_TRAINING_VERSION), but not an acceptance of the CURRENT agreement (v0.5):
+    # the account accepts the v0.5 text at its next simulation start
+    assert PA.training_eligibility(ANNA)["mode"] == "FREE" and LT.agreement_accepted(ANNA) is False
 
 
 def test_account_agreement_free_from_the_acceptance_or_the_account_creation_with_the_opt_in(env):

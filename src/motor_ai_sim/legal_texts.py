@@ -1,4 +1,4 @@
-"""The legal texts of the free simulation launch and the record of who accepted them (owner 2026-10-27, texts v0.4; two steps since
+"""The legal texts of the free simulation launch and the record of who accepted them (owner 2026-10-27, texts v0.5; two steps since
 owner 2026-11-01: "the agreement is needed only by users who want to simulate a motor").
 
 Step 1, sign-up: ONE unticked box accepts the Terms of Use and the Privacy Policy ("I use AeroStator for business and accept ...").  No
@@ -63,7 +63,7 @@ log = logging.getLogger(__name__)
 
 #: The version of the Terms of Use, the Privacy Policy and the public Platform Agreement a sign-up accepts.  One number for the set: a
 #: change of any of them is a new version of all (the texts reference each other).
-TERMS_VERSION = "v0.4"
+TERMS_VERSION = "v0.5"
 PRIVACY_VERSION = TERMS_VERSION
 AGREEMENT_PUBLIC_VERSION = TERMS_VERSION
 #: First terms version that carries the FREE-mode data use: an account that accepted it may be trained on (platform_agreement.training_allowed).

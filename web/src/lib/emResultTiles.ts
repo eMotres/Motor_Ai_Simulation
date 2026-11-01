@@ -616,6 +616,34 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   return [r1, r2, r3, r4, r5, r6, r7, r8, r9].filter((r) => r.length > 0);
 }
 
+/** Tiles of the Electromagnetic card that the ordinary Configure does not draw (engineering extras of the FEM run). */
+const NOT_IN_CONFIGURE = new Set(['elecPower', 'shaftLoss', 'sleeveLoss', 'bearings', 'windage', 'wallToShaft', 'iWinding', 'turnsCoil',
+  'bGapMean', 'lxy', 'iSet', 'vSet', 'rotorInertia', 'brCorner', 'end3d']);
+/** Decimals Configure prints each tile with (components/compare/ConfiguratorPanel): the same number reads the same in both. */
+const CONFIGURE_DIGITS: Record<string, number> = { torque: 1, mass: 3, efficiency: 1 };
+/** Configure colours by comparison with the reference design, not by absolute thresholds, except temperatures, the T_j, the
+ *  current density and the fill factor. */
+const NO_ABSOLUTE_LEVEL = new Set(['efficiency', 'tRipple', 'pContMax', 'demagKoef', 'saturationKoef', 'totalKoef']);
+
+/** The panel exactly as the ordinary Configure draws it (owner 2026-11-01: «the same look of the interface for viewing the
+ *  parameters»): its tile set, row order and decimals - the Electromagnetic card's engineering extras (electrical power, bearings,
+ *  windage, part masses ...) are left out, the full-motor-mass row gets Configure's separate ACTIVE MASS tile, and the colours
+ *  Configure does not use are not used.  Same tile component, so size, type, case and units are Configure's by construction. */
+export function configureLook(rows: EmTileSpec[][], s: EmTileSummary): EmTileSpec[][] {
+  const ms = shownMass(s as MassSummary);
+  const out = rows.map((r) => r.flatMap((t): EmTileSpec[] => {
+    if (NOT_IN_CONFIGURE.has(t.id) || t.id.startsWith('part')) return [];
+    const d = CONFIGURE_DIGITS[t.id] ?? t.d;
+    const flagged = typeof t.display === 'string' && t.display.endsWith('*');
+    const display = flagged && t.value != null ? `${t.value.toFixed(d)}*` : t.display;
+    const level = NO_ABSOLUTE_LEVEL.has(t.id) && !(t.level === 'warn' && flagged) ? undefined : t.level;
+    const spec: EmTileSpec = { ...t, d, display, level };
+    if (t.id !== 'mass' || ms.kind !== 'full' || ms.activeKg == null) return [spec];
+    return [spec, { id: 'massActive', labelKey: 'configure.massActive', tipKey: 'configure.massActiveTip', unit: 'kg', d: 3, value: ms.activeKg }];
+  }));
+  return out.filter((r) => r.length > 0);
+}
+
 /** What the lead-cable tile needs (the renderer turns it into its own JSX). */
 export const leadCableSection = (s: EmTileSummary): number | null => num(s.A_phase_mm2);
 

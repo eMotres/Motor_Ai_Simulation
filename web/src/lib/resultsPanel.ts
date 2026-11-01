@@ -2,7 +2,7 @@
 // a tile that cannot be computed is simply not shown»).  Pure: no React, no fetch, no i18n - the caption is a locale key
 // the renderer resolves, and no value is invented: the tiles come from lib/emResultTiles.ts, which omits every tile whose
 // number the record lacks and every row left empty.
-import { emTileRows, type EmMech, type EmTileSpec, type EmTileSummary } from './emResultTiles';
+import { configureLook, emTileRows, type EmMech, type EmTileSpec, type EmTileSummary } from './emResultTiles';
 import { apply3dFactors, apply3dToSummary, type Apply3dFields } from './apply3d';
 import { coggingFromFlat, type CoggingView } from './coggingTile';
 import type { StoredPanel } from '../modules/development/types';
@@ -60,7 +60,8 @@ export const panelCogging = (panel: StoredPanel): CoggingView | null => coggingF
 export function panelRows(panel: StoredPanel | null | undefined): EmTileSpec[][] {
   if (!panel || !panel.summary) return [];
   const { summary, k3dBasis } = panelSummary(panel);
-  return emTileRows(summary, { k3dBasis, mech: panelMech(panel.summary), cooling: panel.cooling ?? null, cogging: panelCogging(panel) });
+  // the tiles are Configure's, in Configure's look (set, rows, decimals, colours): lib/emResultTiles.configureLook
+  return configureLook(emTileRows(summary, { k3dBasis, mech: panelMech(panel.summary), cooling: panel.cooling ?? null, cogging: panelCogging(panel) }), summary);
 }
 
 /** panel tile -> the key of the steps table's `comparison` row (and the factor to its unit): the SAME numbers the panel shows. */

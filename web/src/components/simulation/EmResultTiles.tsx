@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import type { CoggingView } from '../../lib/coggingTile';
 import { LABEL, MetricTile, TileRow, LeadCableTile } from '../common/ResultTiles';
-import { emTileRows, emTempLimits, emWarning, type EmCooling, type EmMech, type EmTileSpec, type EmTileSummary } from '../../lib/emResultTiles';
+import { configureLook, emTileRows, emTempLimits, emWarning, type EmCooling, type EmMech, type EmTileSpec, type EmTileSummary } from '../../lib/emResultTiles';
 
 const tx = nsT('controller');   // the tile labels and tooltips (EN source, ZH mirror — docs/I18N.md)
 
@@ -26,9 +26,12 @@ const EmResultTiles: React.FC<{
   cooling?: EmCooling | null;
   /** the configuration's saved cogging torque (a stored point only) */
   cogging?: CoggingView | null;
-}> = ({ summary: s, rf, k3dBasis, mech, cooling, cogging }) => {
+  /** 'configure' = exactly the ordinary Configure's tile set, row order, decimals and colours (stored points); default = the FEM card with its engineering extras */
+  look?: 'configure';
+}> = ({ summary: s, rf, k3dBasis, mech, cooling, cogging, look }) => {
   useTranslation('controller');   // subscribe + lazy-load the namespace
-  const rows = emTileRows(s, { rf, k3dBasis, mech, cooling, cogging });
+  const all = emTileRows(s, { rf, k3dBasis, mech, cooling, cogging });
+  const rows = look === 'configure' ? configureLook(all, s) : all;
   const warn = emWarning(s);
   const lim = emTempLimits(s);
   const hasTemps = s.coupling?.coil_temp_c != null || s.coupling?.magnet_temp_c != null;

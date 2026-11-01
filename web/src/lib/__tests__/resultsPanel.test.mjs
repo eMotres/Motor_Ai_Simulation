@@ -131,11 +131,36 @@ t('the 3-D end-effect is applied like the Electromagnetic card does; a machine w
   assert.equal(P.panelSummary(PANEL).k3dBasis, null);
 });
 
-t('bearings and windage come from the saved run (the machine with no bearing model has no such tile)', () => {
-  assert.equal(one(P.panelRows(PANEL), 'bearings').value, 20);
+t('bearings and windage are not tiles of Configure: they only feed the shaft power; the machine with no bearing model keeps the rotor power', () => {
+  const rows = P.panelRows(PANEL);
+  assert.equal(one(rows, 'bearings'), undefined);
+  assert.equal(one(rows, 'windage'), undefined);
+  assert.ok(Math.abs(one(rows, 'power').value - (8000 - 25) / 1000) < 1e-9);                       // shaft power = rotor power - bearings - windage
   assert.equal(P.panelMech(SUMMARY).cards, '2 × 6805');
   assert.equal(P.panelMech({ T_em_avg_Nm: 1 }), null);
-  assert.equal(one(P.panelRows({ ...PANEL, summary: { ...SUMMARY, P_bearings_W: undefined, P_mech_extra_W: undefined, mech_losses: undefined } }), 'bearings'), undefined);
+  const noBrg = P.panelRows({ ...PANEL, summary: { ...SUMMARY, P_bearings_W: undefined, P_mech_extra_W: undefined, mech_losses: undefined } });
+  assert.ok(Math.abs(one(noBrg, 'power').value - 8) < 1e-9);
+});
+
+t('the panel LOOKS like Configure: its tile set and row order, its decimals, no colours Configure does not use', () => {
+  const rows = P.panelRows({ ...PANEL, summary: { ...SUMMARY, mass_full_kg: 40, mass_partial: false, turns_per_coil: 9, wire_split: 2, B_gap_mean_T: 0.8,
+    rotor_inertia: { J_kg_cm2: 3 }, P_shaft_W: 5, P_sleeve_W: 1, star_delta: 'delta', I_winding_rms_A: 100 } });
+  const all = ids(rows);
+  for (const extra of ['elecPower', 'shaftLoss', 'sleeveLoss', 'bearings', 'windage', 'wallToShaft', 'iWinding', 'turnsCoil', 'bGapMean', 'rotorInertia', 'brCorner', 'end3d']) {
+    assert.ok(!all.includes(extra), `${extra} is not a tile of Configure`);
+  }
+  assert.ok(!all.some((x) => x.startsWith('part')));
+  // Configure's row order: results, losses (+ drive tail), temperatures, voltages, winding, inductances, constants, coefficients
+  assert.deepEqual(rows[0].map((x) => x.id), ['torque', 'power', 'mass', 'massActive', 'efficiency', 'tRipple', 'cogging', 'tPerMass', 'pPerMass']);
+  assert.deepEqual(rows.map((r) => r[0].id), ['torque', 'totalLoss', 'tWinding', 'dcBusMin', 'phaseSection', 'ld', 'kv', 'demagKoef']);
+  // Configure's decimals: torque 1, mass 3, efficiency 1
+  assert.deepEqual([one(rows, 'torque').d, one(rows, 'mass').d, one(rows, 'massActive').d, one(rows, 'efficiency').d], [1, 3, 3, 1]);
+  // colours: Configure judges efficiency / ripple / coefficients against the reference, not by thresholds; temperatures, J and fill keep theirs
+  for (const id of ['efficiency', 'tRipple', 'pContMax', 'demagKoef', 'saturationKoef', 'totalKoef']) assert.equal(one(rows, id)?.level, undefined, id);
+  assert.ok(one(rows, 'currDensity').level && one(rows, 'fillFactor').level && one(rows, 'tWinding').level);
+  assert.equal(one(rows, 'massActive').value, 37.7);
+  // a partial mass (no CAD build) has no separate active-mass tile
+  assert.equal(one(P.panelRows(PANEL), 'massActive'), undefined);
 });
 
 test('every locale key of the panel exists in EN and ZH, and the caption is Chinese in ZH', () => {
@@ -156,7 +181,7 @@ test('wiring: ONE panel - the stored point draws it through the shared component
   assert.match(points, /<ResultsPanel panel=\{panel\}/);
   assert.doesNotMatch(points, /configureGrid|temperatureTiles|<MetricTile|em-source-chip/);
   const shared = read('components/common/ResultsPanel.tsx');
-  assert.match(shared, /<EmResultTiles /);
+  assert.match(shared, /<EmResultTiles [^>]*look="configure"/);
   assert.match(read('components/simulation/SummaryTable.tsx'), /<EmResultTiles /);
   assert.ok(!existsSync(join(SRC, 'modules/development/configureGrid.ts')));
   assert.ok(!existsSync(join(SRC, 'modules/development/temperatureTiles.ts')));

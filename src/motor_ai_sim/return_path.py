@@ -30,7 +30,7 @@ MAX_LEN = 280
 _SEG = r"[A-Za-z0-9][A-Za-z0-9 ._\-]{0,79}"
 #: the sub-tabs of a production page (web: ProductionPage TABS) and the views of a development project (web: DEVELOPMENT_VIEWS)
 PRODUCTION_TABS = ("bom", "tooling", "assembly", "timeline", "documents", "discussion", "proposals", "changes", "tests")
-PROJECT_VIEWS = ("specification", "motors", "messages", "notes")
+PROJECT_VIEWS = ("specification", "motors", "messages", "notes", "documents")
 _PROD = re.compile(r"^/production/(%s)/(%s)(?:/(%s))?$" % (_SEG, _SEG, "|".join(PRODUCTION_TABS)))
 _PROJ = re.compile(r"^/projects/([a-z0-9]+(?:-[a-z0-9]+)*)(?:/(%s))?$" % "|".join(PROJECT_VIEWS))
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

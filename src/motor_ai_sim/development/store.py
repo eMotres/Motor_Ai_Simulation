@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -274,6 +275,123 @@ def motor_history(project_id: str, project: dict | None = None) -> list[dict]:
             rows.append({"die": die, "config": config, "linked_at": None,
                          "linked_by": None, "unlinked_at": None, "unlinked_by": None})
     return rows
+
+
+# ── project documents: documents/documents.json (rows) + documents/files/<file_id> (bytes) ─────────────────────────
+
+_FILE_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+DOCUMENTS_JSON = "documents/documents.json"
+
+
+def valid_file_id(file_id: str) -> bool:
+    """File ids are server-generated (``secrets.token_urlsafe``): anything else - '..', separators - is refused."""
+    return bool(_FILE_ID.fullmatch(str(file_id or "")))
+
+
+def documents_file_dir(project_id: str) -> Path:
+    return _file(project_id, "documents/files")
+
+
+def load_documents(project_id: str) -> list[dict]:
+    value = _read(_file(project_id, DOCUMENTS_JSON), {"documents": []})
+    rows = value.get("documents") if isinstance(value, dict) else None
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def mutate_documents(project_id: str, mutator: Callable[[list], Any]) -> Any:
+    """Run ``mutator(rows)`` on the document list under the file lock; ``rows`` is edited in place."""
+    ensure_writable()
+    path = _file(project_id, DOCUMENTS_JSON)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    result: dict = {}
+
+    def apply(doc: dict) -> None:
+        rows = doc.setdefault("documents", [])
+        result["value"] = mutator(rows)
+
+    json_store.mutate_json(path, apply, default={"documents": []})
+    return result.get("value")
+
+
+def read_document_file(project_id: str, file_id: str) -> Path | None:
+    if not valid_file_id(file_id):
+        return None
+    candidate = documents_file_dir(project_id) / file_id
+    return candidate if candidate.is_file() else None
+
+
+def save_document_stream(project_id: str, file_id: str, chunks, limit: int) -> tuple[int, str]:
+    """Write ``chunks`` (an iterator of bytes) to ``documents/files/<file_id>`` without holding the file in memory.
+
+    Returns ``(size, sha256)``.  A file over ``limit`` bytes (or an empty one) is removed again and ``ValueError`` is
+    raised ("too_large" / "empty"), so a refused upload never leaves bytes behind."""
+    ensure_writable()
+    if not valid_file_id(file_id):
+        raise ValueError("invalid file id")
+    directory = documents_file_dir(project_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    dest = directory / file_id
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with dest.open("wb") as stream:
+            for chunk in chunks:
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError("too_large")
+                digest.update(chunk)
+                stream.write(chunk)
+        if size == 0:
+            raise ValueError("empty")
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    from motor_ai_sim.private_files import chmod_private
+    chmod_private(dest)
+    return size, digest.hexdigest()
+
+
+# ── project cover image: cover.webp (small thumbnail) + project.json "cover" {document_id, version, set_by, set_at} ──
+
+def cover_file(project_id: str) -> Path:
+    return _file(project_id, "cover.webp")
+
+
+def read_cover(project_id: str) -> Path | None:
+    path = cover_file(project_id)
+    return path if path.is_file() else None
+
+
+def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str) -> dict:
+    """Write the thumbnail and point the project at it; the returned ``version`` changes with every cover (cache key)."""
+    import secrets
+    from datetime import datetime, timezone
+    ensure_writable()
+    path = cover_file(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name("cover.webp.tmp")
+    tmp.write_bytes(thumbnail)
+    os.replace(tmp, path)
+    cover = {"document_id": document_id, "version": secrets.token_hex(4), "set_by": actor.lower(),
+             "set_at": datetime.now(timezone.utc).isoformat()}
+    mutate_project(project_id, lambda project: project.__setitem__("cover", cover))
+    return cover
+
+
+def clear_cover(project_id: str, only_document_id: str | None = None) -> bool:
+    """Remove the cover (when ``only_document_id`` is given: only if that document is the cover).  True when one was removed."""
+    removed: dict = {}
+
+    def apply(project: dict) -> None:
+        cover = project.get("cover")
+        if isinstance(cover, dict) and (only_document_id is None or cover.get("document_id") == only_document_id):
+            project.pop("cover", None)
+            removed["yes"] = True
+
+    mutate_project(project_id, apply)
+    if removed:
+        cover_file(project_id).unlink(missing_ok=True)
+    return bool(removed)
 
 
 def list_projects() -> list[dict]:

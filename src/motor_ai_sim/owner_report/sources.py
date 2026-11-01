@@ -419,6 +419,28 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
         return f"member removed: {eid}", None
     if action in ("post", "project_thread_reopened") and entity == "thread_message":
         return None if action == "post" else "message thread reopened", "messages"      # posted messages come from thread.jsonl
+    if action == "cover.set":
+        return f"project cover image set ({det.get('name') or eid})", None
+    if action == "cover.clear":
+        return "project cover image removed", None
+    if entity == "document" or action == "documents.zip":
+        name = str(det.get("name") or eid)
+        folder = str(det.get("folder") or "")
+        where = f" [{folder}]" if folder else ""
+        if action == "document.upload":
+            return f"document uploaded: {name}{where}" + (f" rev {det['revision']}" if det.get("revision") else "") + (
+                " (internal)" if det.get("internal") else ""), "documents"
+        if action == "document.update":
+            changes = det.get("changes") if isinstance(det.get("changes"), dict) else {}
+            return f"document updated: {name} ({', '.join(str(k) for k in changes)})", "documents"
+        if action == "document.archive":
+            return f"document archived: {name}{where}", "documents"
+        if action == "document.restore":
+            return f"document restored: {name}{where}", "documents"
+        if action == "document.download":
+            return f"document downloaded: {name}{where}", "documents"
+        if action == "documents.zip":
+            return f"documents archive downloaded ({det.get('files') or 0} files)", "documents"
     if action.startswith("spec.proposal."):
         return f"specification proposal {action.rsplit('.', 1)[-1]}: {eid}", "specification"
     return f"{action} {entity} {eid}".strip(), None

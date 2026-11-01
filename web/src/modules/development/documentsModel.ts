@@ -10,3 +10,6 @@ export function formatBytes(bytes: number, language = 'en'): string {
   const digits = i === 0 || value >= 100 ? 0 : 1;
   return `${value.toLocaleString(language, { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${units[i]}`;
 }
+
+/** PNG, JPEG and WebP files can be the project cover (the server checks the content too). */
+export const isCoverImage = (name: string): boolean => /\.(png|jpe?g|webp)$/i.test(name);

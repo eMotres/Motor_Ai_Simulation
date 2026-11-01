@@ -419,6 +419,10 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
         return f"member removed: {eid}", None
     if action in ("post", "project_thread_reopened") and entity == "thread_message":
         return None if action == "post" else "message thread reopened", "messages"      # posted messages come from thread.jsonl
+    if action == "cover.set":
+        return f"project cover image set ({det.get('name') or eid})", None
+    if action == "cover.clear":
+        return "project cover image removed", None
     if entity == "document" or action == "documents.zip":
         name = str(det.get("name") or eid)
         folder = str(det.get("folder") or "")

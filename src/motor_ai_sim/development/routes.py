@@ -114,7 +114,9 @@ def _summary(project: dict, user: dict) -> dict:
     role = access.membership(_email(user), project)
     engineer = access.is_engineer(user) or role in ("owner", "engineer")
     draft = store.load_json(project["id"], "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0})
-    projection = {k: copy.deepcopy(v) for k, v in project.items() if k not in ("notes", "pending_invites")}
+    projection = {k: copy.deepcopy(v) for k, v in project.items() if k not in ("notes", "pending_invites", "cover")}
+    cover = project.get("cover")
+    projection["cover_version"] = cover.get("version") if isinstance(cover, dict) else None     # the image: GET /{id}/cover
     if not engineer:
         owner = projection.get("owner_engineer")
         if owner:
@@ -1088,4 +1090,6 @@ def notify_project_members(project_id: str, message: dict) -> None:
 
 # Documents of a project (production package files): /api/projects/{project_id}/documents*
 from motor_ai_sim.development.documents import router as _documents_router  # noqa: E402
+from motor_ai_sim.development.cover import router as _cover_router  # noqa: E402
 router.include_router(_documents_router)
+router.include_router(_cover_router)

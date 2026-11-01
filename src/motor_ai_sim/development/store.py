@@ -351,6 +351,49 @@ def save_document_stream(project_id: str, file_id: str, chunks, limit: int) -> t
     return size, digest.hexdigest()
 
 
+# ── project cover image: cover.webp (small thumbnail) + project.json "cover" {document_id, version, set_by, set_at} ──
+
+def cover_file(project_id: str) -> Path:
+    return _file(project_id, "cover.webp")
+
+
+def read_cover(project_id: str) -> Path | None:
+    path = cover_file(project_id)
+    return path if path.is_file() else None
+
+
+def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str) -> dict:
+    """Write the thumbnail and point the project at it; the returned ``version`` changes with every cover (cache key)."""
+    import secrets
+    from datetime import datetime, timezone
+    ensure_writable()
+    path = cover_file(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name("cover.webp.tmp")
+    tmp.write_bytes(thumbnail)
+    os.replace(tmp, path)
+    cover = {"document_id": document_id, "version": secrets.token_hex(4), "set_by": actor.lower(),
+             "set_at": datetime.now(timezone.utc).isoformat()}
+    mutate_project(project_id, lambda project: project.__setitem__("cover", cover))
+    return cover
+
+
+def clear_cover(project_id: str, only_document_id: str | None = None) -> bool:
+    """Remove the cover (when ``only_document_id`` is given: only if that document is the cover).  True when one was removed."""
+    removed: dict = {}
+
+    def apply(project: dict) -> None:
+        cover = project.get("cover")
+        if isinstance(cover, dict) and (only_document_id is None or cover.get("document_id") == only_document_id):
+            project.pop("cover", None)
+            removed["yes"] = True
+
+    mutate_project(project_id, apply)
+    if removed:
+        cover_file(project_id).unlink(missing_ok=True)
+    return bool(removed)
+
+
 def list_projects() -> list[dict]:
     base = root()
     if not base.is_dir():

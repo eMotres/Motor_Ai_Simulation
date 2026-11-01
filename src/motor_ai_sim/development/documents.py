@@ -132,8 +132,11 @@ def _log_download(request: Request, user: dict, project_id: str, *, kind: str, f
 def list_documents(request: Request, project_id: str, archived: bool = False):
     user, _project, role, staff = _context(request, project_id)
     rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and staff))
-    return {"documents": [_public(r, staff) for r in rows], "folders": list(models.DOCUMENT_FOLDERS),
-            "can_edit": bool(staff), "max_bytes": models.DOCUMENT_MAX_BYTES}
+    cover = (store.get_project(project_id) or {}).get("cover")
+    cover = cover if isinstance(cover, dict) else {}
+    return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id")) for r in rows],
+            "folders": list(models.DOCUMENT_FOLDERS), "can_edit": bool(staff), "max_bytes": models.DOCUMENT_MAX_BYTES,
+            "cover_version": cover.get("version")}
 
 
 def _flag(value: Any) -> bool:
@@ -244,6 +247,8 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
     restored = "archived" in changed
     if changed:
         _audit(project_id, user, "document.restore" if restored else "document.update", found["row"], {"changes": changed})
+    if found["row"].get("internal") and store.clear_cover(project_id, doc_id):       # the cover is shown to the whole project
+        store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document marked internal"})
     return _public(found["row"], True)
 
 
@@ -269,6 +274,8 @@ def archive_document(request: Request, project_id: str, doc_id: str):
         raise HTTPException(status_code=404, detail="Document not found")
     if not found["was"]:
         _audit(project_id, user, "document.archive", found["row"])
+        if store.clear_cover(project_id, doc_id):
+            store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document archived"})
     return _public(found["row"], True)
 
 

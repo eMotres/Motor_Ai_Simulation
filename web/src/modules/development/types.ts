@@ -8,6 +8,8 @@ export interface ProjectSummary {
   can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
   /** project-thread messages the caller has not read (list and detail answers) */
   unread_messages?: number;
+  /** cache key of the cover image (GET /api/projects/{id}/cover); null = the project has none */
+  cover_version?: string | null;
   created_at?: string; updated_at?: string;
 }
 export type Localized = string | { en?: string; 'zh-CN'?: string };
@@ -82,6 +84,6 @@ export type DocumentFolder = 'kicad' | 'fabrication' | 'bom' | '3d' | 'docs';
 /** One file of a project's production package (GET /api/projects/{id}/documents). */
 export interface ProjectDocument {
   id: string; name: string; folder: DocumentFolder; revision: string; internal: boolean; size: number; sha256: string;
-  uploader: string; uploaded_at: string; archived: boolean; archived_at?: string | null;
+  uploader: string; uploaded_at: string; archived: boolean; archived_at?: string | null; is_cover?: boolean;
 }
-export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; max_bytes: number }
+export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; max_bytes: number; cover_version?: string | null }

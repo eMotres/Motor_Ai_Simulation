@@ -303,6 +303,11 @@
     "member": "Project member",
     "revisionPlaceholder": "Rev",
     "tooLarge": "{name}: larger than 200 MB",
+    "coverSet": "Use as project cover",
+    "coverClear": "Remove project cover",
+    "coverUpload": "Cover image",
+    "coverTip": "The cover is shown on the project card and at the top of the project page (PNG, JPEG or WebP, not internal). Pick an image below with the star or upload one here.",
+    "coverNotImage": "{name}: not a PNG, JPEG or WebP image",
     "folders": {
       "kicad": "KiCad",
       "fabrication": "Fabrication",

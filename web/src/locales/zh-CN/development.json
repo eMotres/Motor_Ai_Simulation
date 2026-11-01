@@ -303,6 +303,11 @@
     "member": "项目成员",
     "revisionPlaceholder": "版本",
     "tooLarge": "{name}：超过 200 MB",
+    "coverSet": "设为项目封面",
+    "coverClear": "移除项目封面",
+    "coverUpload": "封面图片",
+    "coverTip": "封面显示在项目卡片和项目页面顶部（图片文件，非内部文档）。可点击下方图片行的星标选择，也可在此上传。",
+    "coverNotImage": "{name}：不是可用的图片文件",
     "folders": {
       "kicad": "电路板工程",
       "fabrication": "生产文件",

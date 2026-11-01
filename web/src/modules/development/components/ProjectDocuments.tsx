@@ -6,11 +6,14 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import HelpTip from '../../../components/common/HelpTip';
 import { NARROW } from '../../../lib/narrowLayout';
 import { developmentApi, downloadProjectDocument, downloadProjectDocumentsZip } from '../api';
 import type { DocumentFolder, ProjectDocument } from '../types';
-import { formatBytes, MAX_DOCUMENT_BYTES } from '../documentsModel';
+import { formatBytes, isCoverImage, MAX_DOCUMENT_BYTES } from '../documentsModel';
 
 const FOLDERS: DocumentFolder[] = ['kicad', 'fabrication', 'bom', '3d', 'docs'];
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -19,9 +22,11 @@ interface Props {
   projectId: string;
   language: string;
   t: (key: string, opts?: Record<string, unknown>) => any;
+  /** the project's cover changed (new cache key, or null when removed): the page updates the header image */
+  onCoverChange?: (version: string | null) => void;
 }
 
-export default function ProjectDocuments({ projectId, language, t }: Props) {
+export default function ProjectDocuments({ projectId, language, t, onCoverChange }: Props) {
   const [docs, setDocs] = useState<ProjectDocument[]>([]);
   const [canEdit, setCanEdit] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -30,6 +35,8 @@ export default function ProjectDocuments({ projectId, language, t }: Props) {
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const coverInput = useRef<HTMLInputElement>(null);
+  const coverVersion = useRef<string | null>(null);
   const projectRef = useRef(projectId);
   projectRef.current = projectId;
 
@@ -40,6 +47,8 @@ export default function ProjectDocuments({ projectId, language, t }: Props) {
       if (projectRef.current !== id) return;
       setDocs(list.documents);
       setCanEdit(list.can_edit);
+      const version = list.cover_version ?? null;
+      if (version !== coverVersion.current) { coverVersion.current = version; onCoverChange?.(version); }
     } catch (e) { if (projectRef.current === id) setError(msg(e)); }
   }, [projectId, showArchived]);
   useEffect(() => { setDocs([]); setError(''); void load(); }, [load]);
@@ -61,6 +70,25 @@ export default function ProjectDocuments({ projectId, language, t }: Props) {
     setError('');
     try { await developmentApi.patchDocument(projectId, doc.id, body); await load(); } catch (e) { setError(msg(e)); await load(); }
   };
+  const setCover = async (docId: string) => {
+    setError('');
+    try { const r = await developmentApi.setCover(projectId, docId); coverVersion.current = r.cover_version; onCoverChange?.(r.cover_version); await load(); }
+    catch (e) { setError(msg(e)); }
+  };
+  const clearCover = async () => {
+    setError('');
+    try { await developmentApi.clearCover(projectId); coverVersion.current = null; onCoverChange?.(null); await load(); } catch (e) { setError(msg(e)); }
+  };
+  /** A direct upload of the cover: the image is stored as an ordinary document first, then marked as the cover. */
+  const uploadCover = async (file: File | undefined) => {
+    if (!file || !canEdit) return;
+    setError('');
+    if (!isCoverImage(file.name)) { setError(t('documents.coverNotImage', { name: file.name })); return; }
+    setBusy(t('documents.uploading', { name: file.name }));
+    try { const doc = await developmentApi.uploadDocument(projectId, file, { folder: 'docs' }); await setCover(doc.id); }
+    catch (e) { setError(`${file.name}: ${msg(e)}`); }
+    finally { setBusy(''); }
+  };
   const run = async (action: () => Promise<unknown>) => { setError(''); try { await action(); } catch (e) { setError(msg(e)); } };
 
   const shown = docs.filter((d) => filter === 'all' || d.folder === filter);
@@ -80,6 +108,8 @@ export default function ProjectDocuments({ projectId, language, t }: Props) {
       {canEdit && <>
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { void uploadFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
         <Button size="small" startIcon={<UploadFileIcon />} disabled={!!busy} onClick={() => fileInput.current?.click()}>{t('documents.upload')}</Button>
+        <input ref={coverInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => { void uploadCover(e.target.files?.[0]); e.target.value = ''; }} />
+        <Tooltip title={t('documents.coverTip')}><span><Button size="small" startIcon={<ImageOutlinedIcon />} disabled={!!busy} onClick={() => coverInput.current?.click()}>{t('documents.coverUpload')}</Button></span></Tooltip>
       </>}
       <Button size="small" startIcon={<DownloadIcon />} disabled={!docs.length} onClick={() => void run(() => downloadProjectDocumentsZip(projectId))}>{t('documents.zipAll')}</Button>
       <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
@@ -126,6 +156,9 @@ export default function ProjectDocuments({ projectId, language, t }: Props) {
             {canEdit && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
             <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
               <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => void run(() => downloadProjectDocument(projectId, d))}><DownloadIcon fontSize="small" /></IconButton></Tooltip>
+              {canEdit && !d.archived && (d.is_cover
+                ? <Tooltip title={t('documents.coverClear')}><IconButton size="small" color="primary" aria-label={t('documents.coverClear')} onClick={() => void clearCover()}><StarIcon fontSize="small" /></IconButton></Tooltip>
+                : (!d.internal && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
               {canEdit && (d.archived
                 ? <Tooltip title={t('documents.restore')}><IconButton size="small" aria-label={t('documents.restore')} onClick={() => void patch(d, { archived: false })}><UnarchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>
                 : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}

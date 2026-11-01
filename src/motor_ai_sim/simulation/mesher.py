@@ -2409,12 +2409,24 @@ def _split_geom_pinches(geom):
         return geom
     return _MP(parts) if len(parts) > 1 else parts[0]
 
-def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02):
+def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02,
+                        exact_ends: bool = False):
     """Return `geom` with every boundary run lying ON the circle r≈r_ring
-    resampled to the UNIFORM angular grid (n_grid points per revolution),
-    keeping each run's END vertices exactly (slot-mouth / pocket corner angles
-    untouched).  Kills the random chord-sagitta roughness of the iron's
-    gap-facing surface without re-geometrising the openings."""
+    resampled to the UNIFORM angular grid (n_grid points per revolution).
+    Kills the random chord-sagitta roughness of the iron's gap-facing surface.
+
+    ``exact_ends=False`` (legacy) ROUNDS each run's two end angles to the
+    nearest grid node, i.e. it MOVES every slot-mouth / pole-shoe / pocket edge
+    by up to half a grid step (24s/20p Ø146 bore at 2160 nodes: 0.1 mm per
+    edge, a slot opening 0.2 mm off) — and by a different amount for every
+    grid density, so cogging changed with the gap-layer count (audit
+    2026-11-01).  ``exact_ends=True`` keeps the exact crossing point of each
+    run end (on the circle, at its true angle) and puts grid nodes only
+    strictly inside the run: the openings keep their CAD width.  Valid where
+    the gap belt is stitched to the iron by the seam triangulation
+    (``_weld_belt_into_half``), which takes any node set on the iron circle;
+    the circles drawn next to the iron must then carry the same end points
+    (``ring_end_angles``)."""
     import numpy as _np
     from shapely.geometry import Polygon as _P, MultiPolygon as _MP
 
@@ -2487,6 +2499,22 @@ def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02):
             while a_out - a_mid > math.pi:  a_out -= 2*math.pi
             while a_out - a_mid < -math.pi: a_out += 2*math.pi
             lo, hi = (a_in, a_out) if a_out >= a_in else (a_out, a_in)
+            if exact_ends:
+                # exact ends + the grid nodes strictly inside the run; a grid
+                # node closer than a quarter step to an end is left out (no
+                # sub-step edge next to a corner)
+                k_lo = int(math.ceil(lo / step + 0.25))
+                k_hi = int(math.floor(hi / step - 0.25))
+                pts_run = [(r_ring * math.cos(lo), r_ring * math.sin(lo))]
+                pts_run += [(r_ring * math.cos(step * k), r_ring * math.sin(step * k))
+                            for k in range(k_lo, k_hi + 1)]
+                pts_run.append((r_ring * math.cos(hi), r_ring * math.sin(hi)))
+                if a_out < a_in:
+                    pts_run = pts_run[::-1]
+                for p in pts_run:
+                    _push(p)
+                i = j
+                continue
             # ROUND (not ceil/floor) both ends: the iron run and the adjacent
             # pocket/mouth run share the SAME physical crossing angle, so
             # rounding makes them meet at the SAME grid node — ceil/floor made

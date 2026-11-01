@@ -15,7 +15,9 @@ Proven recipe (see the sliver investigation, 2026-07-15):
   1. resample every gap-/shaft-facing arc onto the UNIFORM slip grid
      (fem_solver_2d._resample_ring_arcs) so the iron's ring points and the
      bore/OD/shaft circle points coincide bit-for-bit — kills the "double arc"
-     slivers and lets the belt weld by node identity;
+     slivers and lets the belt weld by node identity; on the gap circles the
+     run ENDS (slot mouths, pole shoes, pocket lips) stay at their exact CAD
+     angles and the circle carries the same points (``_GAP_EXACT_EDGES``);
   2. HOMOGENISE the winding: one clean copper block per slot (area = the slot's
      copper area) instead of 336 sub-micron wire rectangles + insulation — the
      solver's J_z is uniform per slot anyway (I·n_wires/slot_area), so the wire
@@ -66,6 +68,12 @@ _ROTOR_DEFEATURE_MM = 0.06  # morphological-opening radius (mm) for the rotor
                       # remeshing the whole rotor area-only (rough texture)  # if the capped-q rotor mesh is worse than this max aspect
                       # ratio, it's a genuinely singular knife-edge → area-only
 _DEFAULT_N_SLIP = 1008
+# Gap-facing iron edges (slot mouths, pole shoes, pocket lips on the bore / OD
+# circle) kept at their EXACT CAD angles instead of rounded onto the slip grid
+# (audit 2026-11-01: the rounding moved each edge by up to half a grid step, a
+# different amount for every gap-layer count, and cogging followed it).
+# SB_GAP_EXACT_EDGES=0 restores the legacy rounding (A/B comparisons only).
+_GAP_EXACT_EDGES = os.environ.get("SB_GAP_EXACT_EDGES", "1").lower() not in ("0", "false")
 
 # Per-part element size (UI "Per-part element size (mm)") keys this mesher can
 # honour.  Solid parts become their own CDT region seed with their own target
@@ -924,12 +932,55 @@ def _add_free_points(V: np.ndarray, P: np.ndarray,
     return np.vstack([V, P[keep]]) if keep.any() else V
 
 
-def _grid_circle(r: float, n: int) -> np.ndarray:
+def _grid_circle(r: float, n: int, extra=None) -> np.ndarray:
     """Closed circle polyline on the UNIFORM angular grid 2*pi*k/n (k=0..n-1)
-    — identical grid the sliding band uses, so nodes coincide with the belt."""
-    t = np.arange(n) * (2.0 * math.pi / n)
+    — identical grid the sliding band uses, so nodes coincide with the belt.
+    ``extra``: the iron's exact edge angles on this circle (``ring_end_angles``),
+    merged in so the circle and the iron share one chain."""
+    t = _merge_angles(np.arange(n) * (2.0 * math.pi / n), extra, 2.0 * math.pi / n)
     c = np.c_[r * np.cos(t), r * np.sin(t)]
     return np.vstack([c, c[:1]])
+
+
+def _merge_angles(grid, extra, step):
+    """Grid angles plus ``extra`` (sorted); a grid angle within a quarter step of
+    an extra one is dropped, exactly as ``_resample_ring_arcs(exact_ends=True)``
+    drops it from the iron run — the circle then follows the iron chain node for
+    node and the PSLG has no near-parallel double segment."""
+    grid = np.asarray(grid, float)
+    if extra is None or not len(extra):
+        return grid
+    ex = np.mod(np.asarray(extra, float), 2.0 * math.pi)
+    d = np.abs(grid[:, None] - ex[None, :])
+    d = np.minimum(d, 2.0 * math.pi - d)
+    keep = d.min(axis=1) >= 0.25 * step - 1e-12
+    return np.sort(np.concatenate([grid[keep], ex]))
+
+
+def ring_end_angles(geoms, r_ring: float, n_grid: int, tol_mm: float = 1e-6):
+    """Angles [0, 2*pi) of the boundary vertices lying ON the circle r_ring that
+    are NOT slip-grid nodes: the exact slot-mouth / pole-shoe / pocket edges that
+    ``_resample_ring_arcs(exact_ends=True)`` keeps.  Empty in the legacy mode."""
+    if not _GAP_EXACT_EDGES:
+        return []
+    step = 2.0 * math.pi / max(8, int(n_grid))
+    out = []
+    for g in geoms:
+        for gg in getattr(g, "geoms", [g]):
+            if getattr(gg, "is_empty", True) or gg.geom_type != "Polygon":
+                continue
+            for ring in [gg.exterior, *gg.interiors]:
+                xy = np.asarray(ring.coords, float)
+                r = np.hypot(xy[:, 0], xy[:, 1])
+                a = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
+                k = a / step
+                sel = (np.abs(r - r_ring) < tol_mm) & (np.abs(k - np.round(k)) > 1e-6)
+                out.extend(a[sel].tolist())
+    if not out:
+        return []
+    out = np.sort(np.asarray(out))
+    keep = np.r_[True, np.diff(out) > 1e-9]
+    return out[keep].tolist()
 
 
 def _radius_span(geom) -> Tuple[float, float]:
@@ -944,11 +995,15 @@ def _radius_span(geom) -> Tuple[float, float]:
     return rmin, rmax
 
 
-def _resample(geom, r_ring: float, n_grid: int):
+def _resample(geom, r_ring: float, n_grid: int, gap: bool = False):
     """Snap every boundary run on r≈r_ring onto the uniform n_grid — reuses the
-    solver's own routine so the geo mesh and the belt agree bit-for-bit."""
+    solver's own routine so the geo mesh and the belt agree bit-for-bit.
+    ``gap=True`` (a belt-facing circle: bore, rotor / sleeve OD) keeps each run's
+    END at its exact angle (``_GAP_EXACT_EDGES``); the belt seam takes any node
+    set on that circle."""
     from motor_ai_sim.simulation.fem_solver_2d import _resample_ring_arcs
-    return _resample_ring_arcs(geom, r_ring, n_grid)
+    return _resample_ring_arcs(geom, r_ring, n_grid,
+                               exact_ends=bool(gap and _GAP_EXACT_EDGES))
 
 
 def _build_pslg(lines, merge_tol: float = 0.006) -> Tuple[np.ndarray, np.ndarray]:
@@ -1734,7 +1789,8 @@ def _stator_half_impl(polys: Dict, r_bore: float, r_out_iron: float,
     from shapely.geometry import LineString, Polygon
     _pa = part_area or {}
     a_iron = float(_pa.get("stator", area))                # per-part override
-    iron = _resample(polys["stator"], r_bore, n_slip)      # bore → slip grid
+    iron = _resample(polys["stator"], r_bore, n_slip, gap=True)   # bore → slip grid
+    _bore_ex = ring_end_angles([iron], r_bore, n_slip)
     coils = [w for w in (polys.get("coils") or []) if w is not None and not w.is_empty]
     _c_rings, _c_pts, _c_seeds, _c_patch = _coil_pslg(
         coils, _pa.get("coil"), area, patch=patch, iron=iron,
@@ -1756,7 +1812,7 @@ def _stator_half_impl(polys: Dict, r_bore: float, r_out_iron: float,
     for r in _c_rings:                                     # REAL conductors
         add(r)
     air_area = max(area, 0.4330 * air_mm * air_mm)          # coarse air cell
-    add(_grid_circle(r_bore, n_slip))                       # bore (slip grid)
+    add(_grid_circle(r_bore, n_slip, _bore_ex))             # bore (slip grid)
     if 0.0 < r2_band < r_bore - 1e-6:
         add(_grid_circle(r2_band, n_slip))                  # moving-band R2
     # the FAR-FIELD outer circle is not a belt boundary, so discretise it at the
@@ -2118,7 +2174,7 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     # With a sleeve fitted, the iron's OD is the sleeve's ID; r_od is the
     # sleeve OD and stays the belt circle.
     r_iron_od = float(r_sleeve_in) if r_sleeve_in > 0.0 else float(r_od)
-    iron = _resample(steel, r_iron_od, n_slip)                  # OD → slip grid
+    iron = _resample(steel, r_iron_od, n_slip, gap=True)        # OD → slip grid
     # shaft seam is internal (not a belt boundary) → discretise at the air size
     n_sh = max(48, int(2 * math.pi * r_shaft / max(0.35, air_mm)))
     # HOLLOW shaft (see _shaft_bore_r): mesh the tube wall as its own region and
@@ -2138,7 +2194,8 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     if _sk is not None and r_bore > 0.0 and _sk["r_in"] <= r_bore + 1e-9:
         n_bore = n_sh                          # the patch's inner ring IS the bore
     mags = [mg for mg, _pol in (polys.get("magnets") or [])]
-    mags = [_resample(mg, r_iron_od, n_slip) for mg in mags]   # top on the OD → slip grid (see sector)
+    mags = [_resample(mg, r_iron_od, n_slip, gap=True) for mg in mags]   # top on the OD → slip grid (see sector)
+    _od_ex = ring_end_angles([iron] + mags, r_iron_od, n_slip)
     mags = [_weld_outline(mg, iron, 0.01) for mg in mags]  # see sector (zipper)
 
     lines = []
@@ -2158,8 +2215,8 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         for run in _air_facing_runs(mg, iron):
             add(run)             # shared walls come from the iron chain
     if r_iron_od < r_od - 1e-9:
-        add(_grid_circle(r_iron_od, n_slip))                    # rotor|sleeve seam
-    add(_grid_circle(r_od, n_slip))                             # gap ring
+        add(_grid_circle(r_iron_od, n_slip, _od_ex))            # rotor|sleeve seam
+    add(_grid_circle(r_od, n_slip, None if r_iron_od < r_od - 1e-9 else _od_ex))   # gap ring
     if r1_band > r_od + 1e-6:
         add(_grid_circle(r1_band, n_slip))                      # moving-band R1
     add(_grid_circle(r_shaft, n_sh))                            # iron|shaft seam
@@ -2232,11 +2289,16 @@ def _wedge(a0, a1, r0, r1, n=400):
                               np.c_[r0 * np.cos(t[::-1]), r0 * np.sin(t[::-1])]]))
 
 
-def _grid_arc(r, n_slip, span):
-    """Slip-grid arc from angle 0 to span (endpoints land on the grid)."""
+def _grid_arc(r, n_slip, span, extra=None):
+    """Slip-grid arc from angle 0 to span (endpoints land on the grid); ``extra``
+    as in ``_grid_circle`` (only the angles inside the arc)."""
     step = 2.0 * math.pi / n_slip
     ks = [k for k in range(n_slip + 1) if -1e-9 <= k * step <= span + 1e-9]
     a = np.array(ks) * step
+    if extra is not None and len(extra):
+        ex = [x for x in extra if 1e-9 < x < span - 1e-9]
+        if ex:
+            a = _merge_angles(a, ex, step)
     return np.c_[r * np.cos(a), r * np.sin(a)]
 
 
@@ -2425,7 +2487,9 @@ def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
     a_iron = float(_pa.get("stator", area))                # per-part override
     _rin = r2_band if 0.0 < r2_band < r_bore - 1e-6 else r_bore
     W = _wedge(-1e-3, span + 1e-3, _rin - 3.0, r_outer + 3.0)
-    iron = _resample(polys["stator"], r_bore, n_slip).intersection(W)
+    iron = _resample(polys["stator"], r_bore, n_slip, gap=True)
+    _bore_ex = ring_end_angles([iron], r_bore, n_slip)
+    iron = iron.intersection(W)
     coils = [c.intersection(W) for c in (polys.get("coils") or [])
              if c is not None and not c.is_empty and c.intersects(W)]
     coils = [c for c in coils if c.geom_type == "Polygon" and c.area > 1e-6]
@@ -2457,7 +2521,7 @@ def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
             add(h.coords)
     for r in _c_rings:
         add(r)
-    add(_grid_arc(r_bore, n_slip, span))
+    add(_grid_arc(r_bore, n_slip, span, _bore_ex))
     if 0.0 < r2_band < r_bore - 1e-6:
         add(_grid_arc(r2_band, n_slip, span))           # moving-band R2
     if cell:
@@ -2545,7 +2609,7 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         n_bore = n_sh                          # the patch's inner ring IS the bore
     # With a sleeve, the iron ends at the ring's ID and r_od is the ring's OD.
     r_iron_od = float(r_sleeve_in) if r_sleeve_in > 0.0 else float(r_od)
-    iron = _resample(steel, r_iron_od, n_slip)
+    iron = _resample(steel, r_iron_od, n_slip, gap=True)
     iron = _resample(iron, r_shaft, n_sh)
     _rout = r1_band if r1_band > r_od + 1e-6 else r_od
     W = _wedge(-1e-3, span + 1e-3, 0.0, _rout + 3.0)
@@ -2564,7 +2628,8 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     # Resampling the magnet tops onto the SAME grid as the iron makes the seam
     # one conforming chain; magnets below the OD have no run on that radius
     # and come back unchanged.
-    mags = [_resample(g, r_iron_od, n_slip) for g in mags]
+    mags = [_resample(g, r_iron_od, n_slip, gap=True) for g in mags]
+    _od_ex = ring_end_angles([iron] + mags, r_iron_od, n_slip)
     # SNAP the magnet outlines onto the iron chain (10 um): CadQuery discretises
     # the shared pocket boundary INDEPENDENTLY for the iron and the magnet, so
     # with a corner fillet the two arc polylines land 2-4 um apart — a
@@ -2618,8 +2683,8 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         for run in _air_facing_runs(g, iron):
             add(run)             # shared pocket walls come from the IRON chain
     if r_iron_od < r_od - 1e-9:
-        add(_grid_arc(r_iron_od, n_slip, span))         # rotor|sleeve seam
-    add(_grid_arc(r_od, n_slip, span))
+        add(_grid_arc(r_iron_od, n_slip, span, _od_ex))  # rotor|sleeve seam
+    add(_grid_arc(r_od, n_slip, span, None if r_iron_od < r_od - 1e-9 else _od_ex))
     if r1_band > r_od + 1e-6:
         add(_grid_arc(r1_band, n_slip, span))           # moving-band R1
     if r_bore > 0.0:                                    # shaft tube bore

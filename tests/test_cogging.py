@@ -86,7 +86,8 @@ def _fake_solver(seen, *, torque_method="coulomb_virtual_work", frames=None, con
         out = {"T_em_Nm": _wave(n, 0.03, 12),
                "rotor_angle_deg": [per * i / n for i in range(n)],
                "torque_method": torque_method, "frozen_nu": kw.get("frozen_nu"),
-               "gap_layers_effective": 3.0, "picard_converged": converged}
+               "gap_layers_effective": 3.0, "picard_converged": converged,
+               "coulomb_torque": {"layer_self_check": {"rel_to_ripple_scale": 0.0123, "ripple_mesh_limited": False}}}
         if converged is False:
             out["picard_unconverged_frames"] = [3, 4]
         return out
@@ -123,6 +124,10 @@ def test_run_asks_for_a_no_load_virtual_work_cogging_solve():
     assert kw["daxis_deg"] == 0.0                                           # given: no calibration solve is paid for
     assert kw["frozen_nu"] is False                                         # the iron is re-converged (see the module note)
     assert kw["mesh_size_mm"] == 2.0 and kw["geo_override"]["num_slots"] == 12
+    assert kw["gap_refine"] is True                                         # a stored number gets the gap-ring refinement
+    assert kw["magnet_temp_c"] == 20.0 and run["magnet_temp_c"] == 20.0     # cogging is always quoted at 20 C magnets
+    assert C.overrides_of(magnet_temp_c=20.0) == []
+    assert run["mesh"]["ring_self_check_rel"] == 0.0123 and run["mesh"]["ripple_mesh_limited"] is False
     assert run["summary"]["pkpk_Nm"] == pytest.approx(0.06, rel=1e-3)
     assert run["summary"]["pct_of_continuous"] == pytest.approx(1.5, rel=1e-3)
     assert run["magnet_card"] == "F52SH_120C" and run["torque_method"] == "coulomb_virtual_work"

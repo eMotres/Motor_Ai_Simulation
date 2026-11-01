@@ -5506,7 +5506,10 @@ def get_fem_transient(
         # factorization, which dominates P2 wall-time, shrinks steeply).  So
         # if the caller left n_sectors at the full motor (≤1), auto-use the
         # machine's natural rotational symmetry gcd(slots, poles) = num_seg.
-        if int(n_sectors) <= 1:
+        # SB_DIAG_FULL_RING=1: DIAGNOSTIC ONLY (cogging audit 2026-11-01) —
+        # keep the full ring for an asymmetric as-built case (per-magnet Br
+        # spread); a symmetric machine never needs it.
+        if int(n_sectors) <= 1 and _os_t.environ.get("SB_DIAG_FULL_RING", "") != "1":
             try:
                 from math import gcd as _gcd
                 from motor_ai_sim.config import get_config as _gc2

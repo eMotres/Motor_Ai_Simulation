@@ -63,7 +63,7 @@ def _remember(run: Dict[str, Any], owner: str) -> str:
 class CoggingRun(BaseModel):
     die: Optional[str] = None            # with `config`: a catalogued machine; absent: the LIVE machine
     config: Optional[str] = None
-    magnet_temp_c: Optional[float] = None  # None = the magnet card as the library quotes it
+    magnet_temp_c: Optional[float] = None  # None = the cogging standard, 20 °C magnets (cogging.MAGNET_TEMP_C)
     frozen_nu: bool = False               # frozen permeability: kept for comparison, see cogging.py for why it is off
     samples_per_cycle: int = Field(default=C.SAMPLES_PER_CYCLE, ge=6, le=48)
     mesh_size_mm: Optional[float] = Field(default=None, ge=C.MIN_MESH_MM, le=C.MAX_MESH_MM)   # a different mesh (else the machine's)

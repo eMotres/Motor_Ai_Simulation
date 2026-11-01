@@ -604,11 +604,18 @@ def start_design(p: Principal, requirements: Dict[str, Any],
                  name: Optional[str] = None) -> Dict[str, Any]:
     from motor_ai_sim import mcp_tools as _t
     from motor_ai_sim import platform_agreement as _pa
-    needed = _pa.required_detail(p.email)
-    if needed:      # starting a development needs the company's accepted Platform Agreement (staff / MOTRES exempt; off until installed)
-        raise DesignError("agreement_required: the account's company has not accepted the AeroStator Platform Services and Data "
-                          "Agreement (version %s). Ask the user to open aerostator.com, account menu -> Platform agreement, "
-                          "read and accept it, then call start_design again." % needed["version"])
+    if _pa.agreement_at_simulation():
+        needed = _pa.simulation_gate_detail(p.email)
+        if needed:  # owner 2026-11-01: the agreement is needed by users who want to simulate (company OR account acceptance; staff / MOTRES exempt)
+            raise DesignError("agreement_required: the account has not accepted the AeroStator Platform Agreement (version %s). Ask the "
+                              "user to open aerostator.com, start a simulation and accept the agreement in the dialog (FREE, or ask "
+                              "for PRIVATE), then call start_design again." % needed["version"])
+    else:
+        needed = _pa.required_detail(p.email)
+        if needed:  # starting a development needs the company's accepted Platform Agreement (staff / MOTRES exempt; off until installed)
+            raise DesignError("agreement_required: the account's company has not accepted the AeroStator Platform Services and Data "
+                              "Agreement (version %s). Ask the user to open aerostator.com, account menu -> Platform agreement, "
+                              "read and accept it, then call start_design again." % needed["version"])
     req, ask, assumptions = normalize_requirements(requirements or {})
     if base is not None:
         if not isinstance(base, dict) or not base.get("die") or not base.get("config"):
@@ -1138,13 +1145,13 @@ def simulate(p: Principal, design_id: str, what: str,
              steps: Optional[int] = None) -> Dict[str, Any]:
     """Queue a solve of the draft on the user's queue; return the job id."""
     from motor_ai_sim import jobs as _jobs
-    from motor_ai_sim import legal_texts as _lt
     from motor_ai_sim import mcp_tools as _t
-    needed = _lt.gate_detail(p.email)
-    if needed:      # from the owner's TERMS_REQUIRED_FROM date new simulations need the current Terms of Use (staff / MOTRES exempt)
-        raise DesignError("terms_required: the account has not accepted the current AeroStator Terms of Use, Platform Agreement and "
-                          "Privacy Policy (version %s), which new simulations need from %s. Ask the user to open aerostator.com, "
-                          "accept the \"Updated terms\" dialog, then call simulate again." % (needed["version"], needed["from"]))
+    from motor_ai_sim import platform_agreement as _pa
+    needed = _pa.simulation_gate_detail(p.email)
+    if needed:      # PLATFORM_AGREEMENT_AT_SIMULATION=1: new simulations need the Platform Agreement (company OR account; staff / MOTRES exempt)
+        raise DesignError("agreement_required: the account has not accepted the AeroStator Platform Agreement (version %s), which "
+                          "new simulations need. Ask the user to open aerostator.com, start a simulation and accept the agreement in "
+                          "the dialog (FREE, or ask for PRIVATE), then call simulate again." % needed["version"])
     what = str(what or "").strip().lower()
     if what not in WHATS:
         raise DesignError(f"what must be one of {list(WHATS)}")

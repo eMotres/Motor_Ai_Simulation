@@ -678,11 +678,10 @@
         "sole_trader": " (FREE mode), including the Schedules and the dispute clause shown, for myself as a registered sole trader or self-employed professional. In exchange for free simulation, MOTRES may use the engineering data I supply from now on to train its own internal AI models; no payment or report is owed, and lawfully trained models are kept, subject to confidentiality and law. Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE. Personal data is not used. I have read the ",
         "other": " for my own use, and my data are used for training only where I confirm that I may license them. Training on my FREE data cannot be undone, even if I later order the motor, sign a paid agreement or switch to PRIVATE. I have read the "
       },
+      "privateMid": " (PRIVATE mode requested), including the Schedules and the dispute clause shown. I ask for PRIVATE mode: my engineering data are not used to train MOTRES's AI models, and our team will contact me about the fee. I have read the ",
       "privacy": "Privacy Policy",
       "tail": ".",
-      "chooseCapacity": "Choose in which capacity you accept, then tick this box.",
-      "hint": "Choose how you accept and the country, and tick the box to continue.",
-      "needBox": "This is a new account: choose how you accept and the country, tick the box, then continue with Google.",
+      "chooseCapacity": "Choose the mode and the capacity in which you accept, then tick this box.",
       "country": "Country where your business is established",
       "countryOther": "Country where the business you work for is established",
       "business": "Name of the business you are authorised to bind",
@@ -692,11 +691,36 @@
       "earlier": "Also use the engineering data my account entered before today",
       "optional": "(optional)"
     },
-    "update": {
-      "title": "Updated terms: free simulation",
+    "signup": {
+      "lead": "I use AeroStator for business and accept the ",
+      "sep": " and the ",
+      "tail": ".",
+      "hint": "Tick the box to continue.",
+      "needBox": "This is a new account: tick the box, then continue with Google."
+    },
+    "banner": {
+      "lead": "We updated the ",
+      "sep": " and the ",
+      "tail": ".",
       "accept": "Accept",
-      "later": "Later",
-      "deadline": "From {date} new simulations need these terms.",
+      "dismiss": "Dismiss",
+      "error": "Could not save. Try again."
+    },
+    "agreement": {
+      "title": "Platform Agreement: needed to simulate",
+      "point1": "Simulation is free (FREE mode).",
+      "point2": "In FREE mode MOTRES may train its own AI on the engineering data you supply from now on. Personal data is never used.",
+      "point3": "That cannot be undone, even if you later order the motor or switch to PRIVATE.",
+      "point4": "PRIVATE is paid and excludes AI training. Ask for it below and our team will contact you.",
+      "point5": "Full texts:",
+      "modeLabel": "Mode",
+      "modeFree": "FREE: free simulation; MOTRES may train its AI on my engineering data.",
+      "modePrivate": "Ask for PRIVATE (paid): no AI training; our team will contact me.",
+      "privateNote": "Our team will contact you about PRIVATE. Until then your data are not used for AI training.",
+      "privateDone": "Our team will contact you about PRIVATE. You can simulate now; your data are not used for AI training.",
+      "continue": "Continue",
+      "accept": "Accept",
+      "cancel": "Cancel",
       "error": "Could not save your acceptance: {message}"
     },
     "page": {

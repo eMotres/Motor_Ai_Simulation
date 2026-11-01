@@ -15,15 +15,13 @@ import {
   pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
   GOOGLE_CLIENT_ID, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
-import {
-  TERMS_VERSION, acceptancePayload, emptyAcceptance, isTermsRequired, showTermsHint, signupAllowed, type AcceptanceForm,
-} from '../../lib/legalLogic';
+import { TERMS_VERSION, isTermsRequired, showTermsHint, signupAllowed, signupPayload } from '../../lib/legalLogic';
 import { isChineseVisitor } from '../../i18n/detectInitialLanguage';
 import { appLinkReturnPath } from '../../lib/appLink';
 import HelpTip from '../common/HelpTip';
 import CommPrefsBoxes from '../common/CommPrefsBoxes';
 import TermsBox from '../common/TermsBox';
-import { legalLabels } from '../../lib/legalLabels';
+import { signupLabel } from '../../lib/legalLabels';
 import { emptyTopics, tickedTopics, type Topics } from '../../lib/commPrefsLogic';
 import { useTranslation } from 'react-i18next';
 
@@ -97,18 +95,19 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
 
   const consentBox = <CommPrefsBoxes value={topics} onChange={setTopics} compact />;
 
-  // Creating an account (form, first Google sign-in, sign-up from an AI app's consent page) needs the unticked terms box (Terms of
-  // Use + Platform Agreement + Privacy Policy, owner 2026-10-27); the buttons stay off until it is ticked.  Refs so the GIS callback
-  // registered once still reads the current state.  Signing in to an existing account never asks.
-  const [acceptance, setAcceptance] = useState<AcceptanceForm>(emptyAcceptance());
-  const acceptanceRef = useRef<AcceptanceForm>(acceptance);
-  acceptanceRef.current = acceptance;
+  // Creating an account (form, first Google sign-in, sign-up from an AI app's consent page) needs the ONE unticked terms box (Terms of
+  // Use + Privacy Policy, owner 2026-11-01; the Platform Agreement is accepted at the start of a simulation); the buttons stay off
+  // until it is ticked.  Refs so the GIS callback registered once still reads the current state.  Signing in to an existing account
+  // never asks.
+  const [ticked, setTicked] = useState(false);
+  const tickedRef = useRef(ticked);
+  tickedRef.current = ticked;
   const tRef = useRef(t);
   tRef.current = t;
   const modeRef = useRef<Mode>('signin');
   modeRef.current = mode;
-  const termsBox = <TermsBox value={acceptance} onChange={setAcceptance} compact />;
-  const noBoxHint = t('legal.accept.hint');
+  const termsBox = <TermsBox ticked={ticked} onChange={setTicked} compact />;
+  const noBoxHint = t('legal.signup.hint');
 
   const termsLine = (
     <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
@@ -167,9 +166,9 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
             if (!resp.credential) return;
             const claims = decodeJwtPayload(resp.credential);
             // creating an account with Google needs the box; the official button cannot be disabled, so it is checked here too
-            if (modeRef.current === 'register' && !signupAllowed({ creating: true, form: acceptanceRef.current })) { setErr(noBoxHint); return; }
+            if (modeRef.current === 'register' && !signupAllowed({ creating: true, ticked: tickedRef.current })) { setErr(noBoxHint); return; }
             void googleExchange(resp.credential, tickedTopics(topicsRef.current), langRef.current,
-              acceptancePayload(acceptanceRef.current, TERMS_VERSION, { labels: legalLabels(tRef.current, acceptanceRef.current) }))
+              signupPayload(tickedRef.current, TERMS_VERSION, signupLabel(tRef.current)))
               .then(({ token, user }) => onSignedIn(token, {
                 ...user,
                 name: user.name || String(claims.name ?? ''),
@@ -177,7 +176,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
               }))
               .catch((e: Error) => {
                 // a brand-new Google account that was started without the box: show it, the next click on Google carries it
-                if (isTermsRequired(e)) { setMode('register'); setAcceptance(emptyAcceptance()); setErr(t('legal.accept.needBox')); return; }
+                if (isTermsRequired(e)) { setMode('register'); setTicked(false); setErr(t('legal.signup.needBox')); return; }
                 setErr(e.message);
               });
           },
@@ -231,7 +230,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   };
 
   const switchMode = (m: Mode) => {
-    setMode(m); setErr(null); setInfo(null); setTouched(false); setAcceptance(emptyAcceptance());
+    setMode(m); setErr(null); setInfo(null); setTouched(false); setTicked(false);
     setPassword(''); setPassword2('');
     setSent(null); setChanging(false);
   };
@@ -247,11 +246,11 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   const nameErr = mode === 'register' && !name.trim() ? t('auth.validation.nameRequired') : '';
   const invalid = !!(emailErr || pwErr || pw2Err || nameErr);
   const creating = mode === 'register';
-  const boxHint = showTermsHint({ creating, form: acceptance });
+  const boxHint = showTermsHint({ creating, ticked });
 
   const submit = async () => {
     setTouched(true);
-    if (busy || invalid || !signupAllowed({ creating, form: acceptance })) return;
+    if (busy || invalid || !signupAllowed({ creating, ticked })) return;
     setBusy(true); setErr(null); setInfo(null);
     try {
       if (mode === 'signin') {
@@ -260,8 +259,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         onSignedIn(token, user);
       } else if (mode === 'register') {
         await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo,
-          appLinkReturnPath(window.location.pathname, window.location.search), acceptancePayload(acceptance, TERMS_VERSION, { labels: legalLabels(t, acceptance) }));
-        setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics()); setAcceptance(emptyAcceptance());
+          appLinkReturnPath(window.location.pathname, window.location.search), signupPayload(ticked, TERMS_VERSION, signupLabel(t)));
+        setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics()); setTicked(false);
         setMode('signin');
         setSent({ email: email.trim(), ok: null }); setChanging(false); setNewEmail(''); setCooldown(60);
         setInfo(null);

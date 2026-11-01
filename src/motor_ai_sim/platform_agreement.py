@@ -22,9 +22,13 @@ to the account when the account has no company.  A newer version needs a new acc
 version (and keeps deciding the mode until the new one is given).
 
 The gate: :func:`require_accepted` (HTTP 428 ``agreement_required``) is called by the actions that START a development; staff
-(admin / engineer accounts) and MOTRES's own company are never gated.  :func:`training_allowed` is the helper the dataset export
-calls: company acceptance, else account acceptance (FREE -> True, PRIVATE -> False), else the ticked Terms of Use box of v0.4 or later
-(``legal_texts``) -> True, else False (fail-closed); MOTRES's own data -> True.
+(admin / engineer accounts) and MOTRES's own company are never gated.  A second gate, :func:`simulation_gate_detail`, guards the START
+OF A SIMULATION (every route through ``jobs.queued``, the MCP ``simulate`` and ``start_design``; owner 2026-11-01: the agreement is
+needed only by users who want to simulate): same 428 ``agreement_required``, satisfied by a company acceptance (any version) or by the
+account's own agreement acceptance of the current public version (``legal_texts.agreement_line``: capacity, country, mode); off unless
+env ``PLATFORM_AGREEMENT_AT_SIMULATION=1``.  :func:`training_allowed` is the helper the dataset export
+calls: company acceptance, else account acceptance (FREE -> True, PRIVATE -> False), else the account's agreement acceptance of v0.4 or
+later with a capacity (``legal_texts``) -> True, else False (fail-closed; a Terms-only sign-up line does not count); MOTRES's own data -> True.
 
 :func:`training_eligibility` is the richer answer behind it (owner 2026-10-31, agreement sections 2.3, 2.4, 3.4, 7.9, 7.10): WHEN the data
 became eligible, the election for earlier data and the capacity; the allow-list of the dataset export (``dataset_exclusions()["training"]``,
@@ -436,12 +440,14 @@ class _Eligibility:
         return self.hold_since(email, company) is not None
 
     def mode_of(self, email: str, company: Optional[dict]) -> Optional[str]:
-        """Mode of the agreement acceptance in force for this address (company record first, then the account's), None = none."""
+        """Mode of the agreement acceptance in force for this address (company record first, then the account's, then the account's own
+        agreement line of the simulation-start dialog), None = none."""
         for k in (("company:%s" % company["id"]) if company else "", "user:%s" % email):
             r = self.newest.get(k) if k else None
             if r:
                 return str(r.get("mode") or "").upper()
-        return None
+        own = [r for r in self.terms_lines(email) if self.LT.is_agreement_line(r)]
+        return self.LT.line_mode(own[-1]) if own else None
 
     @staticmethod
     def _out(start: str, end: Optional[str], *, historical: bool, capacity: str, scope: str) -> Optional[dict]:
@@ -498,22 +504,32 @@ class _Eligibility:
                          scope=base["scope"])
 
     def _terms_window(self, email: str) -> Optional[dict]:
-        """Terms of Use box of v0.4 or later, by the capacity stated (section 2.3).  The newest line decides; the run of qualifying lines
-        up to it sets the start.  ``other`` and a line without a capacity stay out (fail-closed until a per-data confirmation exists)."""
-        lines = [r for r in self.terms_lines(email) if self.LT.version_ge(r.get("terms_version"), self.LT.MIN_TRAINING_VERSION)]
-        run: list[dict] = []
-        for r in reversed(lines):
-            if str(r.get("capacity") or "") not in self.LT.TRAINING_CAPACITIES:
-                break
-            run.append(r)
-        if not run:
+        """The account's own agreement lines of ``legal_texts.MIN_TRAINING_VERSION`` (v0.4) or later (``terms_acceptances.jsonl``, those
+        with a capacity: source ``simulation_start``, or the lines of the first v0.4 release), by capacity and mode.  A Terms-only line
+        (sign-up, the "updated terms" banner) has no capacity and is ignored: it is not an agreement acceptance.  The newest agreement
+        line decides: FREE with ``business`` / ``sole_trader`` -> a window from the start of the newest unbroken FREE run; a PRIVATE
+        request closes the window at that line (the earlier FREE data stay eligible, as for a hold); ``other`` (no authority to bind) as
+        the newest line -> None (fail-closed until a per-data confirmation exists)."""
+        LT = self.LT
+        lines = [r for r in self.terms_lines(email) if LT.version_ge(r.get("terms_version"), LT.MIN_TRAINING_VERSION) and LT.is_agreement_line(r)]
+        if not lines:
             return None
-        start = _iso_of(run[-1])
+        toks = [LT.training_token(r) for r in lines]
+        if toks[-1] == "OTHER":
+            return None
+        start, end = _window([{"mode": "FREE" if t == "FREE" else "NO", "iso": _iso_of(r)} for t, r in zip(toks, lines)])
+        if start is None:
+            return None                                                # never FREE (PRIVATE from the first line)
+        last = max(i for i, t in enumerate(toks) if t == "FREE")
+        first = last
+        while first > 0 and toks[first - 1] == "FREE":
+            first -= 1
+        run = lines[first:last + 1]
         historical = any(r.get("historical_opt_in") is True for r in run)
         if historical:
             created = _created_iso(email)
             start = min(start, created) if created else start         # unknown creation time: no extension (fail-closed)
-        return {"start": start, "end": None, "historical": historical, "capacity": str(run[0].get("capacity")), "scope": "account"}
+        return {"start": start, "end": end, "historical": historical, "capacity": str(run[-1].get("capacity")), "scope": "account"}
 
 
 def training_eligibility(company_or_email: str) -> Optional[dict]:
@@ -525,9 +541,11 @@ def training_eligibility(company_or_email: str) -> Optional[dict]:
 
     (a) a COMPANY acceptance of this agreement decides for the company's confirmed users: FREE -> window from the acceptance;
     (b) else an ACCOUNT-level acceptance of this agreement decides the same way;
-    (c) else the Terms of Use box of ``legal_texts.MIN_TRAINING_VERSION`` (v0.4) or later (``terms_acceptances.jsonl``) by its capacity:
-        ``business`` / ``sole_trader`` -> window from the acceptance, or from the account's creation when the earlier-data box
-        (7.9) was ticked; ``other`` (no authority to bind) and a line without a capacity -> None until a per-data confirmation exists;
+    (c) else the account's agreement acceptance of ``legal_texts.MIN_TRAINING_VERSION`` (v0.4) or later (``terms_acceptances.jsonl``,
+        the dialog at the start of a simulation) by its capacity and mode: FREE with ``business`` / ``sole_trader`` -> window from the
+        acceptance, or from the account's creation when the earlier-data box (7.9) was ticked; PRIVATE requested -> the window closes at
+        that line; ``other`` (no authority to bind) -> None until a per-data confirmation exists.  A Terms-only line (the sign-up box,
+        no capacity) is no agreement acceptance and never makes data eligible;
     (d) else None (fail-closed): nothing accepted, a bare company id without an acceptance, an unknown key.
 
     PRIVATE and holds close the window, they never reopen the past (owner 2026-10-31, agreement 11.1): a switch to PRIVATE by the company
@@ -717,6 +735,47 @@ def required_detail(email: str, role: Any = "") -> Optional[dict]:
         return None
     return {"code": CODE, "version": version,
             "message": "Accept the AeroStator Platform Services and Data Agreement (version %s) to start a development." % version}
+
+
+def agreement_at_simulation() -> bool:
+    """The owner's switch (env ``PLATFORM_AGREEMENT_AT_SIMULATION``; ``1`` / ``true`` / ``yes`` = on, default OFF so a deploy never
+    activates the gate; activation is the owner's command)."""
+    return (os.environ.get("PLATFORM_AGREEMENT_AT_SIMULATION") or "").strip().lower() in ("1", "true", "yes")
+
+
+def simulation_gate_detail(email: Any, role: Any = "") -> Optional[dict]:
+    """None when this account may START a simulation; else the body of the 428 (``code`` ``agreement_required``, ``version`` = the public
+    agreement version, ``at`` ``simulation`` so the web opens the short account dialog and not the company click-through).  Gated: a signed-in, non-staff, non-MOTRES account that has neither (a) a company / account acceptance of the
+    click-through agreement (any version; ``platform_agreement_acceptances.jsonl``) nor (b) an account-level agreement acceptance of the
+    current public version with capacity, country and mode (``legal_texts.agreement_line``).  Never gated: the switch being off, staff,
+    MOTRES's own company and domains, an anonymous / process identity (no e-mail), ``TERMS_ACCEPTANCE_DISABLED=1``."""
+    if not agreement_at_simulation():
+        return None
+    from motor_ai_sim import legal_texts as LT
+    email = _norm_email(email)
+    if not email or "@" not in email or not LT.acceptance_required():
+        return None
+    if not role:                                # a caller that knows only the e-mail (an agent key, a job owner)
+        try:
+            from motor_ai_sim import users as U
+            role = (U.get_user(email) or {}).get("role") or ""
+        except Exception:                                              # noqa: BLE001
+            role = ""
+    if is_staff(role):
+        return None
+    sc = scope_of(email, role)
+    if sc["exempt"] or _latest((sc["key"], sc["account_key"])) or LT.agreement_accepted(email):
+        return None
+    return {"code": CODE, "version": LT.AGREEMENT_PUBLIC_VERSION, "at": "simulation",
+            "message": "Accept the AeroStator Platform Agreement (version %s) to start a simulation." % LT.AGREEMENT_PUBLIC_VERSION}
+
+
+def require_agreement_at_simulation(email: Any, role: Any = "") -> None:
+    """Gate hook of ``jobs.queued``: HTTP 428 ``agreement_required`` (see :func:`simulation_gate_detail`)."""
+    detail = simulation_gate_detail(email, role)
+    if detail:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=428, detail=detail)
 
 
 def require_accepted(user: Any) -> None:

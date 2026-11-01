@@ -116,30 +116,61 @@ test('without a mounted host nobody is asked; concurrent calls share one dialog'
   A.setAgreementHost(null);
 });
 
-const termsGate = () => json(428, { detail: { code: 'terms_required', version: 'v0.4', from: '2026-12-01' } });
+const simGate = () => json(428, { detail: { code: 'agreement_required', version: 'v0.4', at: 'simulation' } });
 
-test('a 428 terms_required opens the Updated-terms dialog, not the agreement dialog, and repeats the call after acceptance', async () => {
-  const never = async () => { throw new Error('agreement dialog opened'); };
-  let asked = 0; let retried = 0;
-  const res = await A.handleAgreementRequired(termsGate(), async () => { retried += 1; return json(200, { ok: true }); }, never,
-    async (d) => { asked += 1; assert.equal(d.version, 'v0.4'); assert.equal(d.from, '2026-12-01'); return true; });
-  assert.equal(res.status, 200); assert.equal(asked, 1); assert.equal(retried, 1);
-  // "Later": the 428 is returned untouched and nothing is repeated
-  let again = 0;
-  const kept = await A.handleAgreementRequired(termsGate(), async () => { again += 1; return json(200, {}); }, never, async () => false);
-  assert.equal(kept.status, 428); assert.equal(again, 0); assert.equal((await kept.json()).detail.code, 'terms_required');
+test('isSimulationGate: only the agreement_required 428 that says at: simulation', () => {
+  assert.equal(A.isSimulationGate(428, { detail: { code: 'agreement_required', version: 'v0.4', at: 'simulation' } }), true);
+  for (const [st, b] of [[200, { detail: { code: 'agreement_required', at: 'simulation' } }], [428, { detail: { code: 'agreement_required', version: 'v1' } }],
+    [428, { detail: { code: 'terms_required', at: 'simulation' } }], [428, null], [403, { detail: { code: 'agreement_required', at: 'simulation' } }]]) {
+    assert.equal(A.isSimulationGate(st, b), false);
+  }
 });
 
-test('isTermsGate: only the 428 with the terms code; no host mounted = nobody is asked', async () => {
-  assert.equal(A.isTermsGate(428, { detail: { code: 'terms_required' } }), true);
-  for (const [st, b] of [[200, { detail: { code: 'terms_required' } }], [428, { detail: { code: 'agreement_required' } }], [428, null], [403, { detail: { code: 'terms_required' } }]]) {
-    assert.equal(A.isTermsGate(st, b), false);
-  }
-  A.setTermsHost(null);
-  assert.equal(await A.requestTerms({ version: 'v0.4' }), false);
-  let calls = 0;
-  A.setTermsHost(async () => { calls += 1; return true; });
-  const [x, y] = await Promise.all([A.requestTerms(), A.requestTerms()]);
-  assert.equal(x && y, true); assert.equal(calls, 1);                                              // concurrent gated calls share ONE dialog
-  A.setTermsHost(null);
+test('a simulation 428 opens the simulation-start dialog, not the company dialog, and repeats the call once after acceptance', async () => {
+  const never = async () => { throw new Error('company dialog opened'); };
+  let asked = 0; let retried = 0;
+  const res = await A.handleAgreementRequired(simGate(), async () => { retried += 1; return json(200, { ok: true }); }, never,
+    async (d) => { asked += 1; assert.equal(d.version, 'v0.4'); return true; });
+  assert.equal(res.status, 200); assert.equal(asked, 1); assert.equal(retried, 1);
+  // a development 428 (no `at`) still opens the company dialog, never the simulation one
+  const neverSim = async () => { throw new Error('simulation dialog opened'); };
+  let company = 0;
+  const dev = await A.handleAgreementRequired(gated(), async () => json(200, {}), async () => { company += 1; return true; }, neverSim);
+  assert.equal(dev.status, 200); assert.equal(company, 1);
+});
+
+test('a cancelled simulation dialog returns the 428 untouched and the call is not repeated; a retry that is gated again is not looped', async () => {
+  let again = 0;
+  const kept = await A.handleAgreementRequired(simGate(), async () => { again += 1; return json(200, {}); }, async () => true, async () => false);
+  assert.equal(kept.status, 428); assert.equal(again, 0); assert.equal((await kept.json()).detail.code, 'agreement_required');
+  // the repeat is ONE call: whatever it answers (even another 428) is returned to the caller, the dialog is not opened a second time
+  let asks = 0; let calls = 0;
+  const res = await A.handleAgreementRequired(simGate(), async () => { calls += 1; return simGate(); }, async () => true, async () => { asks += 1; return true; });
+  assert.equal(res.status, 428); assert.equal(asks, 1); assert.equal(calls, 1);
+});
+
+test('without a mounted simulation host nobody is asked; concurrent gated calls share one dialog and all repeat', async () => {
+  A.setSimulationAgreementHost(null);
+  assert.equal(await A.requestSimulationAgreement({ version: 'v0.4' }), false);
+  let opened = 0; let release;
+  A.setSimulationAgreementHost(() => { opened += 1; return new Promise((resolve) => { release = resolve; }); });
+  let retried = 0;
+  const go = () => A.handleAgreementRequired(simGate(), async () => { retried += 1; return json(200, {}); });
+  const calls = [go(), go(), go()];
+  await new Promise((r) => setTimeout(r, 0));
+  release(true);
+  assert.deepEqual((await Promise.all(calls)).map((r) => r.status), [200, 200, 200]);
+  assert.equal(opened, 1); assert.equal(retried, 3);                                               // ONE dialog, every refused call repeated once
+  const c = A.requestSimulationAgreement({});                                                      // after it closed, a new gated call opens a new dialog
+  release(false);
+  assert.equal(await c, false);
+  assert.equal(opened, 2);
+  A.setSimulationAgreementHost(null);
+});
+
+test('the terms gate is gone: terms_required is no longer intercepted', async () => {
+  const never = async () => { throw new Error('asked'); };
+  const r = json(428, { detail: { code: 'terms_required', version: 'v0.4', from: '2026-12-01' } });
+  assert.equal((await A.handleAgreementRequired(r, never, never, never)).status, 428);
+  assert.equal(A.setTermsHost, undefined); assert.equal(A.requestTerms, undefined); assert.equal(A.isTermsGate, undefined);
 });

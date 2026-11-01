@@ -1283,13 +1283,15 @@ def body_run_id(prefix: str) -> Callable[[Dict[str, Any]], str]:
     return _extract
 
 
-def require_current_terms() -> None:
-    """The owner's "Later" deadline (``TERMS_REQUIRED_FROM``, legal_texts.py): from that date a non-staff, non-MOTRES account that has not
-    accepted the current Terms of Use cannot START a compute job - HTTP 428 ``terms_required``; the web opens the "Updated terms" dialog
-    and repeats the call.  Unset = no gate (one environment read).  A direct call without a signed-in identity is never gated."""
-    from motor_ai_sim import legal_texts as _LT
-    if _LT.gate_active():
-        _LT.require_current(current_owner(), current_role())
+def require_agreement_at_simulation() -> None:
+    """The Platform Agreement at the START of a simulation (owner 2026-11-01, platform_agreement.py): while env
+    ``PLATFORM_AGREEMENT_AT_SIMULATION=1`` a non-staff, non-MOTRES account with neither a company acceptance nor its own agreement
+    acceptance of the current public version cannot START a compute job - HTTP 428 ``{"code": "agreement_required", "version"}``; the
+    web (lib/apiAuth.ts) opens the agreement dialog and repeats the call once.  Off = no gate (one environment read).  A direct call
+    without a signed-in identity is never gated."""
+    from motor_ai_sim import platform_agreement as _PA
+    if _PA.agreement_at_simulation():
+        _PA.require_agreement_at_simulation(current_owner(), current_role())
 
 
 def queued(kind: str, *, priority: Priority = Priority.DUTY,
@@ -1316,7 +1318,7 @@ def queued(kind: str, *, priority: Priority = Priority.DUTY,
         def _wrapped(*a, **kw):
             if current_run_id() is not None or (skip is not None and skip(kw)):
                 return fn(*a, **kw)
-            require_current_terms()
+            require_agreement_at_simulation()
             rid = (str(run_id_from(kw) or "") if run_id_from is not None
                    else str(kw.get("run_id") or ""))
             body = {k: kw.get(k) for k in body_keys if k in kw}

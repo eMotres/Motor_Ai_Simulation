@@ -1,13 +1,14 @@
 """Owner decisions 2026-10-31 (D1, D4, D7, D10) on top of the account acceptance of ``legal_texts`` and the agreement of
 ``platform_agreement``:
 
-* the capacity choice (agreement 2.3) and the optional earlier-data box (7.9) in every acceptance path, 422 ``capacity_required`` /
-  ``business_name_required``;
-* ``training_eligibility``: the window ``[eligible_from, eligible_until)`` of every branch (company, account agreement, Terms box by
-  capacity, historical opt-in, PRIVATE switch, no-training hold, MOTRES's own);
+* the capacity choice (agreement 2.3) and the optional earlier-data box (7.9) in the account agreement of the simulation-start dialog
+  (owner 2026-11-01), 422 ``capacity_required`` / ``business_name_required``; the sign-up Terms box has none;
+* ``training_eligibility``: the window ``[eligible_from, eligible_until)`` of every branch (company, account agreement, the account's
+  agreement line by capacity and mode, historical opt-in, PRIVATE switch, no-training hold, MOTRES's own); a Terms-only line is never
+  eligible;
 * the allow-list ``dataset_exclusions()["training"]`` (owner D10);
-* the ``TERMS_REQUIRED_FROM`` deadline (HTTP 428 ``terms_required``, MCP ``simulate``);
 * the account-acceptance record view / PDF without empty company rows (gate R16).
+(The simulation gate has its own file: ``tests/test_simulation_agreement_gate.py``.)
 
 Everything runs on tmp_path; no mail, no solver.
 """
@@ -15,14 +16,12 @@ from __future__ import annotations
 
 import datetime
 import json
-import types
 
 import pytest
-from fastapi import HTTPException
 
 from motor_ai_sim import legal_texts as LT
 from motor_ai_sim import platform_agreement as PA
-from tests.test_legal_texts import (ADMIN, ANNA, BOB, ENG, LONE, OWN, TICKED, _agreement_record, _company, _terms_line, client, env,  # noqa: F401
+from tests.test_legal_texts import (ADMIN, AGREE, ANNA, BOB, ENG, LONE, OWN, TICKED, _agreement_record, _company, _terms_line, client, env,  # noqa: F401
                                     lines, signup)
 
 FAR = "2099-01-01T00:00:00Z"                     # a line time later than every account creation
@@ -38,61 +37,45 @@ def _line(env, email, **extra):
 
 # -- capacity and the earlier-data box -------------------------------------------------------------------------------
 
-def test_signup_needs_a_capacity_and_a_business_name_for_a_business(env):
-    base = {"accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE"}
+def test_the_agreement_dialog_needs_a_capacity_and_a_business_name_for_a_business(env):
+    h = env["h"](ANNA)
+    base = {"accept_agreement": True, "agreement_version": LT.AGREEMENT_PUBLIC_VERSION, "mode": "FREE", "country": "DE"}
     for extra, code in (({}, "capacity_required"), ({"capacity": ""}, "capacity_required"), ({"capacity": "owner"}, "capacity_required"),
                         ({"capacity": "business"}, "business_name_required"),
                         ({"capacity": "business", "business_name": "   "}, "business_name_required")):
-        r = signup({**base, **extra})
+        r = client.post("/api/legal/accept-agreement", json={**base, **extra}, headers=h)
         assert r.status_code == 422 and r.json()["code"] == code, (extra, r.json())
-    assert env["U"].get_user("new1@example.com") is None and lines(env) == []
+    assert lines(env) == []
     for i, cap in enumerate(("business", "sole_trader", "other")):
-        r = signup({**base, "capacity": cap, "business_name": "Motor GmbH", "accept_label": "  I accept   the terms "},
-                   email=f"cap{i}@example.com", ip=f"203.0.113.7{i}")
-        assert r.status_code == 202, r.text
+        who = (ANNA, BOB, LONE)[i]
+        r = client.post("/api/legal/accept-agreement", json={**base, "capacity": cap, "business_name": "Motor GmbH", "accept_label": "  I accept   the terms "},
+                        headers=env["h"](who))
+        assert r.status_code == 200, r.text
     by = {r["user"]: r for r in lines(env)}
-    assert [by[f"cap{i}@example.com"]["capacity"] for i in range(3)] == ["business", "sole_trader", "other"]
-    assert by["cap0@example.com"]["labels"] == {"accept": "I accept the terms"} and by["cap0@example.com"]["historical_opt_in"] is False
+    assert [by[w]["capacity"] for w in (ANNA, BOB, LONE)] == ["business", "sole_trader", "other"]
+    assert by[ANNA]["labels"] == {"accept": "I accept the terms"} and by[ANNA]["historical_opt_in"] is False
 
 
 def test_a_new_account_never_carries_the_earlier_data_election(env):
     r = signup({**TICKED, "historical_opt_in": True})                        # no such field at sign-up; an old client may still send it
     assert r.status_code == 202
-    assert lines(env)[0]["historical_opt_in"] is False
+    assert "historical_opt_in" not in lines(env)[0]
 
 
-def test_existing_account_dialog_records_capacity_election_and_labels(env):
-    h = env["h"](ANNA)
-    from fastapi.testclient import TestClient
-    from motor_ai_sim.api import app
-    c = TestClient(app)
-    bad = c.post("/api/legal/accept", json={**TICKED, "capacity": ""}, headers=h)
-    assert bad.status_code == 422 and bad.json()["code"] == "capacity_required" and lines(env) == []
-    bad = c.post("/api/legal/accept", json={**TICKED, "capacity": "business"}, headers=h)
-    assert bad.status_code == 422 and bad.json()["code"] == "business_name_required" and lines(env) == []
-    ok = c.post("/api/legal/accept", json={**TICKED, "capacity": "business", "business_name": "Acme", "historical_opt_in": True,
-                                           "accept_label": "A", "election_label": "Also use the engineering data my account entered before today"},
-                headers=h)
-    assert ok.status_code == 200, ok.text
-    (rec,) = lines(env)
-    assert (rec["source"], rec["capacity"], rec["business_name"], rec["historical_opt_in"]) == ("existing", "business", "Acme", True)
-    assert rec["labels"] == {"accept": "A", "election": "Also use the engineering data my account entered before today"}
-
-
-def test_a_current_line_without_a_capacity_does_not_count_as_accepted(env):
-    _terms_line(env, ANNA, "v0.4")
-    assert LT.accepted_version(ANNA) is False
-    assert env["U"] and client.get("/api/legal/status", headers=env["h"](ANNA)).json()["required"] is True
-    _terms_line(env, ANNA, "v0.4", capacity="other")
-    assert LT.accepted_version(ANNA) is True
+def test_a_current_terms_only_line_counts_as_the_terms_but_not_as_the_agreement(env):
+    _terms_line(env, ANNA, "v0.4")                                           # the sign-up box: no capacity
+    assert LT.accepted_version(ANNA) is True and LT.agreement_accepted(ANNA) is False
+    assert client.get("/api/legal/status", headers=env["h"](ANNA)).json()["required"] is False
+    _terms_line(env, BOB, "v0.4", capacity="other", country="DE", mode="FREE")
+    assert LT.agreement_accepted(BOB) is True                                # an agreement line, even for "other" (it may simulate)
 
 
 # -- training_eligibility: every branch -------------------------------------------------------------------------------
 
-def test_terms_box_by_capacity(env):
-    _terms_line(env, ANNA, "v0.4", capacity="business")
-    _terms_line(env, BOB, "v0.4", capacity="sole_trader")
-    _terms_line(env, LONE, "v0.4", capacity="other")
+def test_agreement_line_by_capacity(env):
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="FREE")
+    _terms_line(env, BOB, "v0.4", capacity="sole_trader", country="DE", mode="FREE")
+    _terms_line(env, LONE, "v0.4", capacity="other", country="DE", mode="FREE")
     a, b = PA.training_eligibility(ANNA), PA.training_eligibility(BOB)
     assert (a["mode"], a["capacity"], a["scope"], a["historical_opt_in"]) == ("FREE", "business", "account", False)
     assert b["capacity"] == "sole_trader" and "eligible_until" not in a
@@ -104,14 +87,54 @@ def test_terms_box_by_capacity(env):
     assert PA.training_eligibility("late@example.com") is None
 
 
-def test_the_newest_terms_line_decides_and_the_run_sets_the_start(env):
-    _terms_line(env, ANNA, "v0.4", capacity="business")
+def test_a_terms_only_line_is_never_eligible_and_never_disturbs_an_agreement_window(env):
+    _terms_line(env, ANNA, "v0.4")                                                               # the sign-up box
+    assert PA.training_eligibility(ANNA) is None and PA.training_allowed(ANNA) is False
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="FREE")               # the agreement at the first simulation
+    start = PA.training_eligibility(ANNA)["eligible_from"]
+    _terms_line(env, ANNA, "v0.4")                                                               # the "updated terms" line afterwards
+    w = PA.training_eligibility(ANNA)
+    assert w["eligible_from"] == start and "eligible_until" not in w and PA.training_allowed(ANNA) is True
+
+
+def test_a_first_release_line_without_a_mode_is_a_free_agreement_line(env):
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE")                           # the #525 shape: capacity, no kind / mode
+    assert PA.training_eligibility(ANNA)["mode"] == "FREE" and LT.agreement_accepted(ANNA) is True
+    assert LT.line_mode(LT.agreement_line(ANNA)) == "FREE"
+
+
+def test_account_agreement_free_from_the_acceptance_or_the_account_creation_with_the_opt_in(env):
+    created = PA._created_iso(BOB)
+    _line(env, ANNA, at=FAR, capacity="business", country="DE", mode="FREE", kind="agreement", source="simulation_start", historical_opt_in=False)
+    _line(env, BOB, at=FAR, capacity="sole_trader", country="DE", mode="FREE", kind="agreement", source="simulation_start", historical_opt_in=True)
+    assert PA.training_eligibility(ANNA)["eligible_from"] == FAR and PA.training_eligibility(ANNA)["historical_opt_in"] is False
+    b = PA.training_eligibility(BOB)
+    assert b["eligible_from"] == created and b["historical_opt_in"] is True
+
+
+def test_private_requested_closes_the_window_at_that_line_and_the_hold_does_too(env):
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="FREE")
+    free_at = PA.training_eligibility(ANNA)["eligible_from"]
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="PRIVATE")
+    w = PA.training_eligibility(ANNA)
+    assert w["eligible_from"] == free_at and w["eligible_until"] > free_at and PA.training_allowed(ANNA) is False
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="FREE")                # back to FREE: the newest FREE run
+    assert "eligible_until" not in PA.training_eligibility(ANNA) and PA.training_allowed(ANNA) is True
+    # PRIVATE from the very first agreement line: never eligible
+    _terms_line(env, BOB, "v0.4")
+    _terms_line(env, BOB, "v0.4", capacity="sole_trader", country="DE", mode="PRIVATE")
+    assert PA.training_eligibility(BOB) is None and PA.training_allowed(BOB) is False
+    assert PA._Eligibility().mode_of(BOB, None) == "PRIVATE"                                      # the most restrictive wins for projects
+
+
+def test_the_newest_agreement_line_decides_and_the_run_sets_the_start(env):
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="FREE")
     first = PA.training_eligibility(ANNA)["eligible_from"]
-    _terms_line(env, ANNA, "v0.4", capacity="sole_trader")
+    _terms_line(env, ANNA, "v0.4", capacity="sole_trader", country="DE", mode="FREE")
     assert PA.training_eligibility(ANNA)["eligible_from"] == first                                # one unbroken run
-    _terms_line(env, ANNA, "v0.4", capacity="other")
+    _terms_line(env, ANNA, "v0.4", capacity="other", country="DE", mode="FREE")
     assert PA.training_eligibility(ANNA) is None                                                  # the person changed capacity: out
-    _terms_line(env, ANNA, "v0.4", capacity="business")
+    _terms_line(env, ANNA, "v0.4", capacity="business", country="DE", mode="FREE")
     assert PA.training_eligibility(ANNA)["eligible_from"] > first                                 # a new run starts at the new line
 
 
@@ -341,76 +364,21 @@ def test_cli_and_admin_route_carry_the_training_key(world):
     assert client.get("/api/admin/dataset/exclusions", headers=world["h"](ANNA)).status_code in (401, 403)
 
 
-# -- the deadline (owner D7) ---------------------------------------------------------------------------------------------
-
-def test_no_gate_without_the_deadline_or_before_it(env):
-    assert LT.required_from() is None and LT.gate_detail(ANNA) is None
-    env["mp"].setenv("TERMS_REQUIRED_FROM", "2099-01-01")
-    assert LT.required_from() == datetime.date(2099, 1, 1) and LT.gate_active() is False and LT.gate_detail(ANNA) is None
-    env["mp"].setenv("TERMS_REQUIRED_FROM", "not a date")
-    assert LT.required_from() is None and LT.gate_active() is False
-    st = client.get("/api/legal/status", headers=env["h"](ANNA)).json()
-    assert st["required_from"] is None
-    env["mp"].setenv("TERMS_REQUIRED_FROM", "2099-01-01")
-    assert client.get("/api/legal/status", headers=env["h"](ANNA)).json()["required_from"] == "2099-01-01"
-
-
-def test_from_the_deadline_a_compute_job_needs_the_current_terms(env):
-    from motor_ai_sim import jobs as J
-    from motor_ai_sim import workspace as WSP
-
-    @J.queued("test.terms_gate")
-    def start():
-        return {"ran": True}
-
-    def call(email, role="user"):
-        with WSP.use_caller({"id": email, "role": role}):
-            return start()
-
-    env["mp"].setenv("TERMS_REQUIRED_FROM", "2020-01-01")
-    with pytest.raises(HTTPException) as e:
-        call(ANNA)
-    assert e.value.status_code == 428 and e.value.detail["code"] == "terms_required"
-    assert e.value.detail["version"] == LT.TERMS_VERSION and e.value.detail["from"] == "2020-01-01"
-    # staff and MOTRES's own accounts are never gated; so is an anonymous / process identity and the global switch
-    for who, role in ((ENG, "engineer"), (ADMIN, "admin"), (OWN, "user")):
-        assert call(who, role)["ran"] is True
-    assert call("process")["ran"] is True
-    # an account that accepted the current version passes - and after the acceptance the same call repeats
-    h = env["h"](ANNA)
-    assert client.post("/api/legal/accept", json={**TICKED, "capacity": "business", "business_name": "Acme"}, headers=h).status_code == 200
-    assert call(ANNA)["ran"] is True
-    env["mp"].setenv("TERMS_ACCEPTANCE_DISABLED", "1")
-    assert call(BOB)["ran"] is True
-
-
-def test_the_gate_applies_to_the_real_workspace_routes_and_nested_runs_are_not_gated_twice(env):
-    env["mp"].setenv("TERMS_REQUIRED_FROM", "2020-01-01")
-    env["mp"].setenv("WORKSPACES_ROOT", str(env["tmp"] / "workspaces"))          # the server mode: every request resolves its caller
-    r = client.post("/api/simulation/cogging/run", json={}, headers=env["h"](BOB))
-    assert r.status_code == 428 and r.json()["detail"]["code"] == "terms_required"
-
-
-def test_mcp_simulate_is_refused_with_a_terms_required_tool_error(env):
-    from motor_ai_sim import agent_designs as AD
-    env["mp"].setenv("TERMS_REQUIRED_FROM", "2020-01-01")
-    with pytest.raises(AD.DesignError) as e:
-        AD.simulate(types.SimpleNamespace(email=BOB, client_name="t", credential_id="c", kind="key"), "d-x", "em")
-    assert str(e.value).startswith("terms_required:") and LT.TERMS_VERSION in str(e.value) and "2020-01-01" in str(e.value)
-    # staff are not gated: the call gets past the gate (and fails later on the unknown draft, not on the terms)
-    with pytest.raises(Exception) as e2:
-        AD.simulate(types.SimpleNamespace(email=ENG, client_name="t", credential_id="c", kind="key"), "d-x", "em")
-    assert not str(e2.value).startswith("terms_required")
-
-
 # -- the record as shown (R16) ----------------------------------------------------------------------------------------------
 
 def test_record_view_never_shows_empty_company_rows(env):
-    assert signup({**TICKED, "capacity": "sole_trader", "country": "DE"}).status_code == 202
-    rec = lines(env)[0]
+    assert signup(TICKED).status_code == 202
+    plain = dict(LT.record_view(lines(env)[0]))                                       # a Terms-only line: no capacity / country / mode rows
+    for absent in ("Capacity", "Country of establishment", "Forum (agreement section 13)", "Agreement mode", "Earlier data (section 7.9)"):
+        assert absent not in plain
+    assert plain["Route"] == "signup" and all(v.strip() for v in plain.values())
+    assert client.post("/api/legal/accept-agreement", json={**AGREE, "capacity": "sole_trader", "business_name": ""},
+                       headers=env["h"](ANNA)).status_code == 200
+    rec = lines(env)[-1]
     rows = dict(LT.record_view(rec))
     assert rows["Capacity"].startswith("Itself, as a registered sole trader") and rows["Country of establishment"] == "DE"
     assert rows["Forum (agreement section 13)"] == "Variant A" and "Business name" not in rows          # no name: no empty row
+    assert rows["Agreement mode"] == "FREE"
     for banned in ("Company", "Registration no.", "Title", "Mode", "Signatory", "Address"):
         assert banned not in rows
     assert all(v.strip() for v in rows.values())
@@ -423,7 +391,7 @@ def test_record_view_never_shows_empty_company_rows(env):
 def test_own_acceptance_pdf_and_rows_are_served_and_the_admin_can_fetch_any(env):
     h = env["h"](ANNA)
     assert client.get("/api/legal/mine/pdf", headers=h).status_code == 404
-    assert client.post("/api/legal/accept", json={**TICKED, "capacity": "business", "business_name": "Acme", "lang": "zh-CN"}, headers=h).status_code == 200
+    assert client.post("/api/legal/accept-agreement", json={**AGREE, "lang": "zh-CN"}, headers=h).status_code == 200
     mine = client.get("/api/legal/mine", headers=h).json()["acceptances"]
     labels = [r["label"] for r in mine[0]["rows"]]
     assert "Capacity" in labels and "Business name" in labels and "Company" not in labels and "Registration no." not in labels

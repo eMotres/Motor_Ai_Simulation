@@ -108,7 +108,8 @@ def test_member_sees_variants_in_project_order_with_stored_points_only(client):
     # nothing beyond allow-listed numbers: no invented values, no free-form summary keys
     assert "geometry_secret" not in json.dumps(body)
     assert "v_dc_required_v" not in takeoff["comparison"]
-    assert set(takeoff) == {"duty", "operating_point", "electromagnetic", "comparison", "stored_results", "has_result"}
+    # ... plus the light panel of the point's final result (numbers only), which the steps table and chart read
+    assert set(takeoff) - {"panel"} == {"duty", "operating_point", "electromagnetic", "comparison", "stored_results", "has_result"}
     assert body["selected"] is None
 
 

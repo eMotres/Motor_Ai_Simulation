@@ -863,6 +863,36 @@ def build_panel(duty_summary: Any, kept: Dict[str, Any], thermal: Optional[Dict[
     return {"summary": base, "cooling": cooling, "source": source, **({"cogging": _panel_plain(cogging, 1)} if cogging else {})}
 
 
+def light_panel(panel: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The panel of a point reduced to what the steps table and chart read: the scalar numbers of the summary, the 3-D factors
+    and the two coupled temperatures.  The steps feed carries one per computed point of every variant, so the bulky nested
+    blocks (part masses, iron split, controller tables) stay in the single-motor view."""
+    if not panel:
+        return None
+    s = panel.get("summary") or {}
+    out = {k: v for k, v in s.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    for k in ("op_mode", "star_delta", "mass_basis", "mass_scope", "mass_partial_reason"):
+        if isinstance(s.get(k), str):
+            out[k] = s[k]
+    if isinstance(s.get("mass_partial"), bool):
+        out["mass_partial"] = s["mass_partial"]
+    if isinstance(s.get("end3d"), dict):
+        out["end3d"] = {k: v for k, v in s["end3d"].items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    cpl = s.get("coupling") if isinstance(s.get("coupling"), dict) else {}
+    slim = {k: cpl[k] for k in ("coil_temp_c", "magnet_temp_c") if isinstance(cpl.get(k), (int, float))}
+    if slim:
+        out["coupling"] = slim
+    return {"summary": out, "source": panel.get("source") or {}}
+
+
+def panel_for_duty(cfg_duty: Any, stored_duty: Any, op: Dict[str, Optional[float]], comparison: Optional[Dict[str, Any]] = None
+                   ) -> Optional[Dict[str, Any]]:
+    """The panel of ONE duty from its config entry and its stored records (the steps feed has no ``build_view`` row)."""
+    kept, _hidden = own_records(stored_duty or {}, op)
+    summary = cfg_duty.get("summary") if isinstance(cfg_duty, dict) else None
+    return build_panel(summary, kept, thermal_block(kept), em_run_block(kept), comparison)
+
+
 def fields_block(rows: Any) -> Dict[str, Any]:
     """Which field kinds are stored for one duty, each with its provenance."""
     out: Dict[str, Any] = {}

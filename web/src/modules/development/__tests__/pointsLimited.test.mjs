@@ -50,17 +50,17 @@ test('a project motor click loads a duty exactly like the Motors tab would: aske
 
 // ── thermal / mechanical tiles + provenance ──────────────────────────────────
 
-test('thermal tiles: only the duty\'s own temperatures (coupled loop / steady map); S1 / S2 are tiles of their own', () => {
+test('thermal tiles: the bearing seat, S1 and S2 only - winding / magnet / housing are the information panel', () => {
   const t = {
     duty_temps: { kind: 'coupled', winding_c: 128.5, magnet_c: 70, housing_c: 64, bearing_c: 55, provenance: { computed_at: '2026-10-25T10:00:00' } },
     s1: { I_cont_A_rms: 41.5, limiting_part: 'winding' },
     s2: { time_to_limit_s: 160, limiting_part: 'winding' },
   };
   const byId = Object.fromEntries(thermalTiles(t).map((x) => [x.id, x.value]));
-  assert.deepEqual(byId, { winding: 128.5, magnet: 70, housing: 64, bearing: 55, s1: 41.5, s2: 160 });
+  assert.deepEqual(byId, { bearing: 55, s1: 41.5, s2: 160 });
   assert.deepEqual(thermalSource(t), { kind: 'coupled', day: '2026-10-25 10:00' });
   const noHousing = Object.fromEntries(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: 120 } }).map((x) => [x.id, x.value]));
-  assert.deepEqual(noHousing, { winding: 120 });                                       // a missing value is not drawn (owner 2026-10-26), never 0
+  assert.deepEqual(noHousing, {});                                       // a missing value is not drawn (owner 2026-10-26), never 0
   assert.deepEqual(thermalTiles(null), []);
 });
 
@@ -307,7 +307,7 @@ test('thermal block: drawn only with a real temperature, S1 / S2 value or a labe
   assert.equal(plausibleC(-147.4), false);
   assert.equal(plausibleC(200), true);
   assert.equal(plausibleC(1800), true);                                                 // an over-limit temperature is shown as it is
-  assert.deepEqual(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: -147.4, magnet_c: 90, bearing_c: -300 } }).map((x) => x.id), ['magnet']);
+  assert.deepEqual(thermalTiles({ duty_temps: { kind: 'thermal', winding_c: -147.4, magnet_c: 90, bearing_c: -300 } }).map((x) => x.id), []);
   assert.equal(pointThermal(peak({ thermal: { duty_temps: { kind: 'thermal', winding_c: -147.4 } } })), null);
   assert.equal(pointThermal(peak({ thermal: { limit_search: { kind: 'coupled_limit', solve_to: 'continuous', winding_c: -147.4 } } })), null);
   assert.notEqual(pointThermal(peak({ thermal: { limit_search: { kind: 'coupled_limit', solve_to: 'continuous', winding_c: 200 } } })), null);

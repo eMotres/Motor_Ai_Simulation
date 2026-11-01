@@ -161,3 +161,16 @@ test('wiring: ONE panel - the stored point draws it through the shared component
   assert.ok(!existsSync(join(SRC, 'modules/development/configureGrid.ts')));
   assert.ok(!existsSync(join(SRC, 'modules/development/temperatureTiles.ts')));
 });
+
+t('the steps table reads the panel\'s final numbers: finalComparison merges them over the stored row', () => {
+  const stored = { torque_nm: 100, power_w: 1, efficiency_pct: 50, coil_temp_c: 150, mass_kg: 9, cogging_pkpk_nm: 0.4 };
+  const withK = { summary: { ...SUMMARY, end3d: { k_flux: 0.9 } }, source: PANEL.source };
+  const c = P.finalComparison(withK, stored);
+  assert.ok(Math.abs(c.torque_nm - one(P.panelRows(withK), 'torque').value) < 1e-9);       // 3-D applied, as the panel shows it
+  assert.ok(Math.abs(c.power_w - one(P.panelRows(withK), 'power').value * 1000) < 1e-6);
+  assert.equal(c.coil_temp_c, 118);                                                         // the coupled loop's temperature, not the EM run's 150
+  assert.equal(c.magnet_temp_c, 96);
+  assert.equal(c.cogging_pkpk_nm, 0.4);                                                     // what the panel does not state stays stored
+  assert.deepEqual(P.finalComparison(null, stored), stored);
+  assert.deepEqual(P.finalComparison({ summary: {}, source: PANEL.source }, stored), stored);
+});

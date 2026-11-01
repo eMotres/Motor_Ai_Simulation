@@ -63,6 +63,30 @@ export function panelRows(panel: StoredPanel | null | undefined): EmTileSpec[][]
   return emTileRows(summary, { k3dBasis, mech: panelMech(panel.summary), cooling: panel.cooling ?? null, cogging: panelCogging(panel) });
 }
 
+/** panel tile -> the key of the steps table's `comparison` row (and the factor to its unit): the SAME numbers the panel shows. */
+const COMPARISON_OF_TILE: Record<string, [string, number]> = {
+  torque: ['torque_nm', 1], power: ['power_w', 1e3], efficiency: ['efficiency_pct', 1], tRipple: ['ripple_pct', 1],
+  totalLoss: ['p_loss_total_w', 1], copperLoss: ['p_cu_w', 1], ironLoss: ['p_fe_w', 1], magnetLoss: ['p_mag_w', 1],
+  vLinePeak: ['v_line_peak_v', 1], vPhasePeak: ['v_phase_peak_v', 1], currDensity: ['current_density_a_mm2', 1],
+  mass: ['mass_kg', 1], tPerMass: ['torque_to_mass_nm_kg', 1], tWinding: ['coil_temp_c', 1], tMagnet: ['magnet_temp_c', 1],
+};
+
+/** The comparison row of a stored point carrying the panel's FINAL numbers (the coupled loop's first, 3-D applied, shaft power):
+ *  merged over the stored row so the steps table and chart cannot read another torque than the panel (owner 2026-11-01).
+ *  A tile with no number (hidden, or a temperature drawn as "> limit") leaves the stored value alone. */
+export function finalComparison(panel: StoredPanel | null | undefined, stored: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(stored ?? {}) };
+  for (const tile of panelRows(panel).flat()) {
+    const map = COMPARISON_OF_TILE[tile.id];
+    if (map && tile.value != null) out[map[0]] = tile.value * map[1];
+  }
+  const mass = one(panelRows(panel), 'mass');
+  if (mass && mass.value != null) out.mass_partial = mass.labelKey !== 'configure.mass';
+  return out;
+}
+
+const one = (rows: EmTileSpec[][], id: string) => rows.flat().find((t) => t.id === id);
+
 /** The DC bus the point was computed to need (the DC BUS tile), for the battery block; null when not stored. */
 export function panelDcBus(panel: StoredPanel | null | undefined): number | null {
   const tile = panelRows(panel).flat().find((t) => t.id === 'dcBusMin');

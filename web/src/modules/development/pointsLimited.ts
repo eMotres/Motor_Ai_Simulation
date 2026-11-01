@@ -141,20 +141,14 @@ export interface ResultTile { id: string; value: number | null; unit: string; d:
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** The thermal tiles of a duty.  Temperatures are the DUTY's own (`duty_temps`: the converged coupled loop, else the
- *  steady map); a limit-search state is never turned into a tile.  S1 and S2 are tiles of their own.  Only tiles that hold
- *  a real, physical value are returned (owner 2026-10-26): a missing or impossible number is not drawn as "-". */
+/** The thermal tiles of a duty that the information panel does not carry: the bearing seat, the S1 current and the S2 time.
+ *  The winding / magnet / housing temperatures and the loop's torque are the panel's (ONE place for them, owner 2026-11-01:
+ *  components/common/ResultsPanel).  A limit-search state is never turned into a tile.  Only tiles that hold a real, physical
+ *  value are returned (owner 2026-10-26): a missing or impossible number is not drawn as "-". */
 export function thermalTiles(t: MotorViewDuty['thermal']): ResultTile[] {
   if (!t) return [];
   const d = t.duty_temps;
-  const c = (v: unknown): number | null => { const n = num(v); return plausibleC(n) ? n : null; };      // an impossible temperature is never a tile
-  const out: ResultTile[] = d ? [
-    { id: 'winding', value: c(d.winding_c), unit: '°C', d: 0 },
-    { id: 'magnet', value: c(d.magnet_max_c) ?? c(d.magnet_c), unit: '°C', d: 0 },
-    { id: 'housing', value: c(d.housing_c), unit: '°C', d: 0 },
-  ] : [];
-  const emTorque = num(d?.em?.torque_nm);
-  if (emTorque !== null) out.push({ id: 'emTorque', value: emTorque, unit: 'N·m', d: 2 });
+  const out: ResultTile[] = [];
   const bearing = num(d?.bearing_c);
   if (bearing !== null && plausibleC(bearing)) out.push({ id: 'bearing', value: bearing, unit: '°C', d: 0 });
   if (t.s1 && num(t.s1.I_cont_A_rms) !== null) out.push({ id: 's1', value: num(t.s1.I_cont_A_rms), unit: 'A', d: 1 });

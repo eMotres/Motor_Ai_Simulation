@@ -26,9 +26,7 @@ test('only a run that reached a limit is a limit state; the thermal tiles of the
   assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'limits', mode: 'limited', reached_limit: true }), 'time');
   assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'limits' }), 'time');       // an older payload without the flag keeps its meaning
   assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'continuous', reached_limit: true }), 'continuous');
-  const tiles = by(thermalTiles(steadyDuty.thermal));
-  assert.equal(tiles.winding.value, 137.3);
-  assert.equal(tiles.magnet.value, 84.1);
+  assert.deepEqual(thermalTiles(steadyDuty.thermal), []);       // the temperatures are the panel's (lib/resultsPanel), not this block's
 });
 
 test('the new captions are locale strings in EN and zh-CN; the time-to-limit caption stays for a real limit', () => {

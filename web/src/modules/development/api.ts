@@ -1,5 +1,6 @@
 import type { CatalogController } from './controllerCatalog';
 import { parseActivity } from './stageBar';
+import { finalComparison } from '../../lib/resultsPanel';
 import type { DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -21,6 +22,20 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 const p = (id: string) => `/api/projects/${enc(id)}`;
+
+/** The steps feed carries a light panel per computed point; its FINAL numbers are merged into the point's comparison row, so the
+ *  steps table and chart read what the information panel shows (the panel itself is not kept). */
+const withFinalNumbers = (answer: MotorPointsAnswer): MotorPointsAnswer => ({
+  ...answer,
+  variants: (answer.variants ?? []).map((v) => ({
+    ...v,
+    points: (v.points ?? []).map((pt) => {
+      if (!pt.panel) return pt;
+      const { panel, ...rest } = pt;
+      return { ...rest, comparison: finalComparison(panel, pt.comparison) };
+    }),
+  })),
+});
 
 export const developmentApi = {
   // a 200 that is not the project list (no server answer reached the page, e.g. the app fell back to Local Mode)
@@ -61,7 +76,7 @@ export const developmentApi = {
     if (o.config) q.set('config', o.config);
     if (o.showAll) q.set('show_all', 'true');
     const qs = q.toString();
-    return call<MotorPointsAnswer>('GET', `${p(id)}/motors/points${qs ? `?${qs}` : ''}`);
+    return call<MotorPointsAnswer>('GET', `${p(id)}/motors/points${qs ? `?${qs}` : ''}`).then(withFinalNumbers);
   },
   /** Everything stored for one project motor (same gates as the motor list); the Motors-tab twin is lib/motorViewApi. */
   motorView: (id: string, die: string, config: string, showAll = false) =>

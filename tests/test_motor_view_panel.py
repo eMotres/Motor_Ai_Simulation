@@ -95,3 +95,18 @@ def test_with_no_saved_summary_the_kernel_runs_numbers_stand_in():
     p = motor_view.build_panel(None, {}, None, {"numbers": {"T_em_avg_Nm": 80.0, "Km_Nm_sqrtW": 1.1}})
     assert p["summary"] == {"T_em_avg_Nm": 80.0, "Km_Nm_sqrtW": 1.1}
     assert p["source"]["em"] == "em_run"
+
+
+def test_the_steps_feed_gets_a_light_panel_of_the_final_result():
+    cp = _coupled(coil_temp_c=118.0, point={"rpm": 850, "I_phase_rms": 152})
+    cfg_duty = {"name": "cruise", "rpm": 850, "current_arms": 152, "summary": {**SUMMARY, "mass_components": [{"name": "x", "mass_kg": 1.0}],
+                                                                                 "end3d": {"k_flux": 0.9, "inherited": False}}}
+    full = motor_view.panel_for_duty(cfg_duty, {"coupled": cp}, motor_view.operating_of({"operating_point": cfg_duty}))
+    assert full["summary"]["T_em_avg_Nm"] == 90.0                           # the loop's torque
+    light = motor_view.light_panel(full)
+    s = light["summary"]
+    assert s["T_em_avg_Nm"] == 90.0 and s["end3d"] == {"k_flux": 0.9}
+    assert s["coupling"] == {"coil_temp_c": 118.0, "magnet_temp_c": 96.0}
+    assert "mass_components" not in s and "P_core_terms" not in s            # the bulky blocks stay in the single-motor view
+    assert light["source"]["em"] == "coupled"
+    assert motor_view.light_panel(None) is None

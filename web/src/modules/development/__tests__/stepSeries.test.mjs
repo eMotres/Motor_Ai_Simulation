@@ -58,11 +58,9 @@ test('tile names are the ordinary Configure ones; the mass names follow the mass
   assert.equal(configureTileKey('pSolid'), null);                   // not a Configure tile: the caller keeps its own wording
 });
 
-test('the coupled loop torque is its own thermal tile, never merged with the EM run tiles', () => {
+test('the thermal block carries no temperature or torque tile of the panel: one place for them', () => {
   const t = { duty_temps: { kind: 'coupled', winding_c: 134, magnet_c: 70, em: { torque_nm: 865 } } };
-  const byId = Object.fromEntries(thermalTiles(t).map((x) => [x.id, x.value]));
-  assert.equal(byId.emTorque, 865);
-  assert.equal(byId.winding, 134);
+  assert.deepEqual(thermalTiles(t), []);
 });
 
 test('wiring: chart right of the tiles on wide screens, stacked on narrow ones; no compare control, no step note, one source chip', () => {

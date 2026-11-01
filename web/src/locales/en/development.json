@@ -277,11 +277,46 @@
     "tip": "{count} unread messages",
     "new": "New"
   },
+  "documents": {
+    "upload": "Upload",
+    "uploading": "Uploading {name}…",
+    "dropHere": "Drop files here",
+    "all": "All",
+    "zipAll": "Download all (ZIP)",
+    "showArchived": "Show archived",
+    "empty": "No documents yet",
+    "tip": "KiCad projects, fabrication files (Gerber, drill, pick-and-place), BOM, 3-D models and drawings of this project. Up to 200 MB per file. Every download is logged.",
+    "internalTip": "Internal documents are hidden from customer-side members.",
+    "archiveTip": "Archive hides the document; the file and its history are kept.",
+    "colName": "Name",
+    "colCategory": "Category",
+    "colRevision": "Revision",
+    "colSize": "Size",
+    "colUploader": "Uploaded by",
+    "colDate": "Date",
+    "colInternal": "Internal",
+    "colActions": "",
+    "download": "Download",
+    "archive": "Archive",
+    "restore": "Restore",
+    "archived": "Archived",
+    "member": "Project member",
+    "revisionPlaceholder": "Rev",
+    "tooLarge": "{name}: larger than 200 MB",
+    "folders": {
+      "kicad": "KiCad",
+      "fabrication": "Fabrication",
+      "bom": "BOM",
+      "3d": "3-D models",
+      "docs": "Drawings & docs"
+    }
+  },
   "tabs": {
     "specification": "Specification",
     "motors": "Motors & results",
     "messages": "Messages",
-    "notes": "Internal notes"
+    "notes": "Internal notes",
+    "documents": "Documents"
   },
   "step": "Step {current} of {total}",
   "previous": "Back",

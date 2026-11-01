@@ -1,6 +1,6 @@
 import type { CatalogController } from './controllerCatalog';
 import { parseActivity } from './stageBar';
-import type { DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
+import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const enc = encodeURIComponent;
@@ -11,7 +11,8 @@ export class DevelopmentApiError extends Error {
   constructor(status: number, message: string, body: unknown) { super(message); this.status = status; this.body = body; }
 }
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const r = await fetch(`${API}${path}`, { method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
+  const r = await fetch(`${API}${path}`, { method, headers: body === undefined || isForm ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body) });
   const data = await r.json().catch(() => null);
   if (!r.ok) {
     const detail = data?.detail;
@@ -51,6 +52,19 @@ export const developmentApi = {
   markThreadRead: (id: string, upTo: string) => call<{ last_read_id: string; unread: number }>('POST', `${p(id)}/thread/read`, { up_to: upTo }),
   postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string } = {}) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope }),
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
+  /** Documents of a project (production package files): KiCad, fabrication, BOM, 3-D models, drawings. */
+  documents: (id: string, archived = false) => call<ProjectDocumentList>('GET', `${p(id)}/documents${archived ? '?archived=true' : ''}`),
+  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean } = {}) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    if (o.folder) form.append('folder', o.folder);
+    if (o.revision) form.append('revision', o.revision);
+    if (o.internal) form.append('internal', 'true');
+    return call<ProjectDocument>('POST', `${p(id)}/documents`, form);
+  },
+  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'folder' | 'revision'>> | { archived: false }) =>
+    call<ProjectDocument>('PATCH', `${p(id)}/documents/${enc(docId)}`, v),
+  archiveDocument: (id: string, docId: string) => call<ProjectDocument>('DELETE', `${p(id)}/documents/${enc(docId)}`),
   invite: (id: string, email: string, role: string) => call<unknown>('POST', `${p(id)}/members`, { email, role }),
   motors: async (id: string, showAll = false) => (await call<{ motors: ProjectMotor[] }>('GET', `${p(id)}/motors${showAll ? '?show_all=true' : ''}`)).motors,
   /** Live runs on the project's motors (one request per project; polled every 30 s while the page is visible). */
@@ -79,3 +93,23 @@ export const developmentApi = {
   unlinkMotor: (id: string, die: string, config: string) => call<unknown>('DELETE', `${p(id)}/motors?die=${enc(die)}&config=${enc(config)}`),
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
 };
+
+/** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */
+async function saveResponse(r: Response, fallbackName: string): Promise<void> {
+  if (!r.ok) {
+    const data = await r.json().catch(() => null);
+    const detail = data?.detail;
+    throw new DevelopmentApiError(r.status, typeof detail === 'string' ? detail : `HTTP ${r.status}`, data);
+  }
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = Array.from(fallbackName).map((c) => (c.charCodeAt(0) < 32 || '\\/:*?"<>|'.includes(c) ? '_' : c)).join('') || 'document';
+  document.body.appendChild(a); a.click(); a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export const downloadProjectDocument = async (id: string, doc: Pick<ProjectDocument, 'id' | 'name'>): Promise<void> =>
+  saveResponse(await fetch(`${API}${p(id)}/documents/${enc(doc.id)}/download`), doc.name);
+
+export const downloadProjectDocumentsZip = async (id: string): Promise<void> =>
+  saveResponse(await fetch(`${API}${p(id)}/documents.zip`), `${id}_documents.zip`);

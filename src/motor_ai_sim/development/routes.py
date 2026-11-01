@@ -1084,3 +1084,8 @@ async def remove_member(request: Request, project_id: str, email: str):
 def notify_project_members(project_id: str, message: dict) -> None:
     """Stage 1 notification hook. Stage 2 may deliver notifications here."""
     return None
+
+
+# Documents of a project (production package files): /api/projects/{project_id}/documents*
+from motor_ai_sim.development.documents import router as _documents_router  # noqa: E402
+router.include_router(_documents_router)

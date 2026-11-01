@@ -27,8 +27,9 @@ HOW IT IS COMPUTED (one rule, no second method):
   owner 2026-09-30).  The flux-linkage (Clarke) torque cannot be used here at all: at I = 0 it is identically zero,
   and the Maxwell band over-reads (docs / memory: torque methodology), so virtual work is the energy method that
   exists at no load;
-* the magnet card is the configuration's, at the temperature stated on the result (default: the card as the library
-  quotes it; ``magnet_temp_c`` corrects Br / Hc along the card's own coefficients).
+* the magnet card is the configuration's, at 20 °C (``MAGNET_TEMP_C``, owner 2026-11-01: cogging is always quoted at
+  20 °C magnets; an administrator's other ``magnet_temp_c`` is an override named on the result) - Br / Hc are
+  corrected along the card's own coefficients and the temperature is stored with the value.
 
 STALE.  The block carries the ``build_sig`` of the build it was computed on (die geometry + configuration overrides +
 winding + materials + part states, ``routes.family._build_sig``) and the geometry hash; a build that moved since marks
@@ -54,6 +55,9 @@ SCHEMA = 1
 
 #: Raw samples per cogging cycle this module asks for (the solver's quality gate is 6; the passport uses 12).
 SAMPLES_PER_CYCLE = 12
+#: Magnet temperature of every cogging number (owner 2026-11-01: «cogging torque везде при 20 °C только») - the
+#: bench condition, whatever the duties' temperatures are; stored with the value.
+MAGNET_TEMP_C = 20.0
 #: What the label of the stored number says (one place; the datasheet / report / tooltip read it).
 def method_label(frozen_nu: bool = False, samples_per_cycle: float = SAMPLES_PER_CYCLE) -> str:
     """The one-line method statement stored with the number (tooltip / datasheet / report read it).  The sample count
@@ -79,7 +83,7 @@ def overrides_of(*, frozen_nu: bool = False, mesh_size_mm: Optional[float] = Non
         out.append("frozen permeability")
     if mesh_size_mm is not None:
         out.append("mesh %g mm" % float(mesh_size_mm))
-    if magnet_temp_c is not None:
+    if magnet_temp_c is not None and float(magnet_temp_c) != MAGNET_TEMP_C:
         out.append("magnets at %g °C" % float(magnet_temp_c))
     if int(samples_per_cycle) != SAMPLES_PER_CYCLE:
         out.append("%d samples per cycle" % int(samples_per_cycle))
@@ -503,7 +507,8 @@ def _clamp_sectors(requested: int, slots: int, poles: int) -> int:
 def _magnet_reference(card: Optional[str], magnet_temp_c: Optional[float]) -> Tuple[Optional[float], str]:
     """``(°C, source)`` of the magnet state a run is at."""
     if magnet_temp_c is not None:
-        return float(magnet_temp_c), "requested"
+        return float(magnet_temp_c), ("cogging standard (20 °C)" if float(magnet_temp_c) == MAGNET_TEMP_C
+                                      else "requested")
     try:
         from motor_ai_sim.materials import get_material
         t = getattr(get_material("magnet", str(card)), "temperature_c", None)
@@ -532,6 +537,8 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
     if em_transient_eval is None:
         from motor_ai_sim.solve_pool import em_transient_eval as _eval
         em_transient_eval = _eval
+    if magnet_temp_c is None:
+        magnet_temp_c = MAGNET_TEMP_C
     per = int(samples_per_cycle)
     if not 6 <= per <= 48:
         raise ValueError("samples_per_cycle must be 6..48 (the solver's quality gate is 6)")
@@ -563,6 +570,11 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
         pole_copy=bool(mesh.get("pole_copy", False)),
         structured_gap=True, airgap_macro=False, hi_fidelity=False, element_order=2,
         torque_method="coulomb", inc_ldq=False, drive="current",
+        # a stored cogging number is a final measurement: ask for the owner's gap refinement (2026-09-30 rule) -
+        # while the rotor- and stator-side Coulomb rings disagree by more than 5 % of the pk-pk, one more gap layer
+        # per side (up to 4).  Audit 2026-11-01: a 24s/28p machine had been stored from 1 layer/side at 2.25 mm
+        # with the rings 30 % apart, 5 % above its converged value.
+        gap_refine=True,
     )
     if machine.get("rpm"):
         kw["rpm"] = float(machine["rpm"])
@@ -603,6 +615,9 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
         raise RuntimeError("cogging: the solver delivered %d frames = %.2f samples per cogging cycle, below the %d "
                            "asked for (it snapped the frame count) - nothing is stored"
                            % (len(series), delivered_spc, per))
+    # The ring check travels with the number (the two Coulomb rings' disagreement over the pk-pk; > 5 % = the gap
+    # mesh limits the result even after the refinement).
+    _chk = ((res.get("coulomb_torque") or {}).get("layer_self_check") or {})
     summ = summarize(series, num_slots=slots, num_poles=poles, continuous_torque_nm=continuous_torque_nm)
     card = machine.get("magnet_card") or _card_from_result(res)
     mtemp, msrc = _magnet_reference(card, magnet_temp_c)
@@ -618,6 +633,9 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
         "mesh": {"mesh_size_mm": kw["mesh_size_mm"], "min_size_mm": kw["min_size_mm"],
                  "outer_air_factor": kw["outer_air_factor"], "gap_layers": kw["gap_layers"],
                  "gap_layers_effective": res.get("gap_layers_effective"), "n_sectors": sectors,
+                 "ring_self_check_rel": (None if _chk.get("rel_to_ripple_scale") is None
+                                         else round(float(_chk["rel_to_ripple_scale"]), 4)),
+                 "ripple_mesh_limited": (None if not _chk else bool(_chk.get("ripple_mesh_limited"))),
                  "steps_per_period": len(series), "steps_requested": steps, "source": machine.get("mesh_source")},
         "geo_hash": geo_hash(geo) if geo else None,
         "die": machine.get("die"), "config": machine.get("config"),

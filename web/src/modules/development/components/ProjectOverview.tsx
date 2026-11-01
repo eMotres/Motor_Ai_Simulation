@@ -6,6 +6,7 @@ import CardMotorThumb, { useDieIndex } from '../../../components/common/CardMoto
 import { projectCardMotor } from '../../../lib/cardMotor';
 import { NARROW } from '../../../lib/narrowLayout';
 import type { ProjectSummary } from '../types';
+import ProjectCover from './ProjectCover';
 import type { ViewMode } from '../../../lib/viewMode';
 
 export interface ProjectOverviewProps {
@@ -95,6 +96,7 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
         return (
           <Paper key={p.id} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={keyOpen(() => onOpen(p))}
             sx={{ position: 'relative', p: 1.8, minHeight: motor ? 108 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
+            {p.cover_version && <ProjectCover projectId={p.id} version={p.cover_version} height={110} sx={{ mb: 1 }} />}
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}>
               <Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}<UnreadBadge count={n} /></Typography>
               <Chip size="small" label={t(`status.${p.status}`)} />

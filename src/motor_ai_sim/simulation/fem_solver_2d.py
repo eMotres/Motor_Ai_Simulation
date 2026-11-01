@@ -2101,6 +2101,13 @@ def _magnet_at_temp(mat_mag, magnet_temp_c: float, mag_name: str):
     return hot
 
 
+#: DIAGNOSTIC ONLY (cogging audit 2026-11-01): per-magnet remanence factors,
+#: magnet i gets factor[i % n] (SB_DIAG_MAGNET_BR_SCALE="1.01,0.99,..."), to
+#: model an as-built magnet-to-magnet spread on a full ring
+#: (SB_DIAG_FULL_RING=1).  Unset = every magnet the card's Br (bit-identical).
+_DIAG_MAGNET_BR_SCALE = [float(x) for x in _os_sb.environ.get("SB_DIAG_MAGNET_BR_SCALE", "").split(",") if x.strip()]
+
+
 def build_materials(
     I_ph: Dict[str, float],
     winding_layout: List[Tuple[str, int]],
@@ -2393,6 +2400,9 @@ def build_materials(
         except Exception:
             continue
         sign = +1.0 if polarity > 0 else -1.0
+        if _DIAG_MAGNET_BR_SCALE:
+            # diagnostic only (as-built magnet spread, cogging audit 2026-11-01)
+            sign *= _DIAG_MAGNET_BR_SCALE[i % len(_DIAG_MAGNET_BR_SCALE)]
         # Per-magnet material uses the assigned magnet's recoil permeability
         # and full demagnetisation BH curve so the Picard iteration can
         # detect under-knee operation and warn / reduce Br_eff.
@@ -5427,18 +5437,21 @@ def _fem_transient_sliding_band_once(
     # multiple of the requested steps that is at least the adaptive density, and
     # kept divisible by n_sectors so the wedge ring stays integral.
     #
-    # Deliberately NOT applied below the ceiling.  A request that is merely a
-    # non-divisor (36 on a 240 ring) still snaps to the nearest divisor, because
-    # raising the ring there would change the mesh — and with it the torque and
-    # the ripple floor — of every existing run that asked for a non-divisor.
-    # Above the ceiling there is no such history: the run was impossible before.
-    if (not _macro_free_m) and _req_steps > _nodes_per_period:
+    # Applied below the ceiling too (owner 2026-11-01): a request that is not a
+    # divisor of the ring (72 on a 120 ring) used to SNAP to the nearest divisor
+    # (60) — fewer samples than asked, silently, and the cogging / ripple of an
+    # optimisation "at 72 steps" was the one of 60 samples (a 48s/56p machine:
+    # cogging 6 % low at "72", 3 % high at 40).  Now the ring
+    # becomes the smallest multiple of the request at least the adaptive
+    # density (72 -> 144 nodes/period) and the request is delivered exactly.
+    if (not _macro_free_m) and (_req_steps > _nodes_per_period
+                                or _nodes_per_period % max(1, _req_steps)):
         _ns_abs2 = max(1, abs(int(n_sectors)))
         _spp2 = int(_req_steps) * max(
             1, int(math.ceil(_nodes_per_period / float(_req_steps))))
         while (pole_pairs * _spp2) % _ns_abs2:
             _spp2 += int(_req_steps)
-        log.warning("SB: %d steps/period requested above the %d-node slip ring "
+        log.warning("SB: %d steps/period requested, not a divisor of the %d-node slip ring "
                     "— RAISING the ring to %d nodes/period (%d on the full "
                     "circle) so the requested time resolution is honoured "
                     "exactly; the band mesh is correspondingly denser and the "

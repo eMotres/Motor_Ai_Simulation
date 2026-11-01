@@ -17,7 +17,7 @@ import { parseProductionLink, validDay, MAX_LINK_IDS } from './productionLink.ts
 
 export const PRODUCTION_TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes', 'tests'] as const;
 export type ProductionTabId = (typeof PRODUCTION_TABS)[number];
-export const PROJECT_VIEWS = ['specification', 'motors', 'messages', 'notes'] as const;
+export const PROJECT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'documents'] as const;
 export type ProjectViewId = (typeof PROJECT_VIEWS)[number];
 
 export type AppLink =

@@ -1193,3 +1193,56 @@ def validation_errors_for_mission(draft: dict) -> list[dict]:
             errors.append({"field": f"mission_profile[{i}].direct_drive_confirmed", "section": "mission_profile",
                            "message": "Confirm direct drive before using a load-shaft catalog point as a motor point"})
     return errors
+
+
+# ── project documents (production package: KiCad, fabrication, BOM, 3-D, drawings) ──────────────────────────────────
+DOCUMENT_FOLDERS = ("kicad", "fabrication", "bom", "3d", "docs")
+DOCUMENT_MAX_BYTES = 200 * 1024 * 1024
+_FABRICATION_HINT = re.compile(r"gerber|drill|excellon|pos|pick[-_ ]?and[-_ ]?place|placement|centroid|fabrication|fab|cpl|nc", re.I)
+_DOCUMENT_EXT_FOLDER = {
+    ".step": "3d", ".stp": "3d", ".stl": "3d", ".iges": "3d", ".igs": "3d", ".fcstd": "3d", ".wrl": "3d", ".3mf": "3d",
+    ".csv": "bom", ".xlsx": "bom", ".xls": "bom", ".ods": "bom",
+    ".kicad_pro": "kicad", ".kicad_sch": "kicad", ".kicad_pcb": "kicad", ".kicad_sym": "kicad", ".kicad_mod": "kicad",
+    ".gbr": "fabrication", ".drl": "fabrication", ".gtl": "fabrication", ".gbl": "fabrication", ".gto": "fabrication",
+    ".gbo": "fabrication", ".gts": "fabrication", ".gbs": "fabrication", ".gko": "fabrication",
+}
+
+
+def guess_document_folder(name: str) -> str:
+    """The category an uploaded file most likely belongs to (the uploader can always choose another)."""
+    lower = str(name or "").lower()
+    ext = Path(lower).suffix
+    if ext in _DOCUMENT_EXT_FOLDER:
+        return _DOCUMENT_EXT_FOLDER[ext]
+    if ext in (".zip", ".7z", ".gz", ".tgz", ".rar"):
+        if "kicad" in lower:
+            return "kicad"
+        if _FABRICATION_HINT.search(lower):
+            return "fabrication"
+        return "kicad" if "pcb" in lower or "sch" in lower else "docs"
+    return "docs"
+
+
+def clean_document_label(value: Any, limit: int, field: str) -> str:
+    """A short single-line label (revision, display name); raises ``ValueError`` when it is not text or too long."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be text")
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())
+    if len(text) > limit:
+        raise ValueError(f"{field} must have at most {limit} characters")
+    return text
+
+
+def normalize_document(file_id: str, uploader_email: str, name: str, *, folder: str | None = None, revision: str = "",
+                       internal: bool = False, size: int = 0, sha256: str = "", content_type: str = "") -> dict:
+    """One project document row.  The file itself lives under ``documents/files/<file_id>``; the row is never deleted
+    (``archived`` hides it), so the audit trail and the stored file always match."""
+    name = clean_document_label(Path(str(name or "").replace("\\", "/")).name, 200, "name") or "unnamed"
+    if folder not in DOCUMENT_FOLDERS:
+        folder = guess_document_folder(name)
+    return {"id": "doc-" + __import__("secrets").token_urlsafe(9), "file_id": file_id, "name": name, "folder": folder,
+            "revision": revision, "internal": bool(internal), "size": int(size), "sha256": sha256,
+            "content_type": str(content_type or "")[:100], "uploader_email": str(uploader_email or "").strip().lower(),
+            "uploaded_at": now(), "archived": False, "archived_at": None, "archived_by": None}

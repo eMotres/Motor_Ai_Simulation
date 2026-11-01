@@ -2,7 +2,7 @@
  *  Pure helpers, so the restore rules are tested without a browser. */
 import { oneOf, shape, smallInt, text } from '../../lib/viewMemory.ts';
 
-export const DEVELOPMENT_VIEWS = ['specification', 'motors', 'messages', 'notes'] as const;
+export const DEVELOPMENT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'documents'] as const;
 export type DevelopmentViewTab = (typeof DEVELOPMENT_VIEWS)[number];
 export interface DevelopmentView { project: string; view: DevelopmentViewTab; step: number; stepId?: string }
 

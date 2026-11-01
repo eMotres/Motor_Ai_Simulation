@@ -4479,6 +4479,23 @@ def _fig_pair(st, left: Optional[bytes], right: Optional[bytes], caption: str,
 # ---------------------------------------------------------------------------
 
 
+#: Names of a continuous duty: it leads the document, the peak duty closes it (owner 2026-11-01: the report carries the two
+#: positions cruise and peak).
+_CONTINUOUS_NAME_WORDS = ("cruise", "rated", "continuous", "nominal", "s1")
+
+
+def duty_report_order(d: Dict[str, Any]) -> Tuple[bool, bool, str]:
+    """Sort key of the report's duty columns: the continuous duty (cruise / rated ...) first, the other duties after it in name
+    order, the peak duty last - the order of the paper card."""
+    name = str(d.get("name", "")).lower()
+    return ("peak" in name, not any(w in name for w in _CONTINUOUS_NAME_WORDS), name)
+
+
+def duty_has_saved_result(d: Dict[str, Any]) -> bool:
+    """Whether a duty carries a saved electromagnetic result of its own (a duty that was never computed has none)."""
+    return bool((isinstance(d.get("summary"), dict) and d["summary"]) or (isinstance(d.get("result"), dict) and d["result"]))
+
+
 def _pick_duty(cfg_doc: Dict[str, Any],
                duty: Optional[str]) -> Optional[Dict[str, Any]]:
     duties = [d for d in (cfg_doc.get("duties") or []) if isinstance(d, dict)]
@@ -4488,10 +4505,9 @@ def _pick_duty(cfg_doc: Dict[str, Any],
         hit = next((d for d in duties if str(d.get("name") or "") == duty), None)
         if hit is not None:
             return hit
-    # continuous-looking first, peak last — the order of the paper card
-    duties.sort(key=lambda d: ("peak" in str(d.get("name", "")).lower(),
-                               str(d.get("name", ""))))
-    return duties[0]
+    # the cover is a COMPUTED duty (a configuration whose first duty was never solved still has a cover), the continuous one first
+    duties.sort(key=duty_report_order)
+    return next((d for d in duties if duty_has_saved_result(d)), duties[0])
 
 
 def _geo_delta(cfg_geo: Dict[str, Any], live: Dict[str, Any]) -> List[str]:
@@ -7235,17 +7251,18 @@ def own_point_records(stored_duty: Any, d: Optional[Dict[str, Any]]) -> Dict[str
 def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
                   th: Dict[str, Any], me: Dict[str, Any],
                   cp: Optional[Dict[str, Any]],
-                  same_machine: bool = True) -> Tuple[List[Dict[str, Any]],
+                  same_machine: bool = True,
+                  keep: Optional[str] = None) -> Tuple[List[Dict[str, Any]],
                                                          Optional[str]]:
-    """One column per saved duty, and the duty the editor currently has loaded.
+    """One column per COMPUTED duty, and the duty the editor currently has loaded.
 
-    Order is the paper card's: continuous-looking points first, peak last —
-    the same sort ``datasheet.build_datasheet`` uses, so the two documents read
-    left to right the same way.
+    Order is the paper card's: the continuous duty (cruise) first, peak last - the same two positions the information panel
+    switches between.  A duty that was never computed (no saved result, no stored record) has no column: an empty column states
+    nothing (owner 2026-11-01); the cover duty ``keep`` always has one, and a configuration with no computed duty at all keeps
+    every duty (an empty report is still a valid report).
     """
     duties = [d for d in (cfg_doc.get("duties") or []) if isinstance(d, dict)]
-    duties.sort(key=lambda d: ("peak" in str(d.get("name", "")).lower(),
-                               str(d.get("name", ""))))
+    duties.sort(key=duty_report_order)
     stored: Dict[str, Any] = {}
     active: Optional[str] = None
     try:
@@ -7317,6 +7334,9 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
         col["fp2"], col["fp2_computed"] = duty_geometry_fingerprint_v2(
             res, col.get("em") or {}, _dmats, cfg_doc.get("winding") or {})
         cols.append(col)
+    computed = [c for c in cols if c.get("em") or c.get("result") or c.get("res")]
+    if computed:
+        cols = [c for c in cols if c in computed or c["duty"] == keep]
     return cols, owners
 
 
@@ -9395,7 +9415,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # across every simulation, and the per-duty store is what makes that
     # possible without a column ever borrowing its neighbour's number.
     cols, map_owner = _duty_columns(die, cfg, cfg_doc, th, me, cp,
-                                    same_machine=not delta)
+                                    same_machine=not delta, keep=d_duty.get("name") or None)
     # The cover's bearings: the cover duty's coupled record, when it has one.
     _cov = next((c for c in cols if c.get("duty") == (d_duty.get("name") or "")), None)
     if _cov is not None:

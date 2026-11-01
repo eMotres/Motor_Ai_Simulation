@@ -1,9 +1,8 @@
 // Owner 2026-10-27 (CIANO56 400_80 vadim 3 / L110-2x3ph / cruise): a within-limits limit run is a steady state, the maps are framed
-// to the solved part, and an empty map tab says why.
+// to the solved part, and an empty map tab says why.  (The temperature tiles themselves are the shared panel's: lib/resultsPanel.)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { temperatureTiles } from '../temperatureTiles.ts';
 import { limitKind, otherPointFields, storedFieldKinds, thermalTiles } from '../pointsLimited.ts';
 import { drawnExtent, isCropped, mapExtent } from '../storedFieldPayload.ts';
 
@@ -22,37 +21,12 @@ const steadyDuty = {
   },
 };
 
-test('a within-limits limit run gives both temperature tiles, not the muted 150 C EM input', () => {
-  const tiles = temperatureTiles(steadyDuty);
-  const t = by(tiles);
-  assert.deepEqual(tiles.map((x) => x.id), ['magnetTemp', 'windingTemp']);
-  assert.equal(t.windingTemp.value, 137.3);
-  assert.equal(t.magnetTemp.value, 82.4);
-  assert.ok(tiles.every((x) => !x.muted && x.basis === 'coupled'));
-});
-
-test('the hottest winding and magnet go to the tooltip and the tooltip calls it a steady state', () => {
-  const t = by(temperatureTiles(steadyDuty));
-  assert.equal(t.windingTemp.tip[0].key, 'points.tempTile.steady.winding');
-  assert.equal(t.magnetTemp.tip[0].key, 'points.tempTile.steady.magnet');
-  assert.deepEqual(t.windingTemp.tip[1], { key: 'points.tempTile.hottestWinding', args: { value: 141 } });
-  assert.deepEqual(t.magnetTemp.tip[1], { key: 'points.tempTile.hottestMagnet', args: { value: 84 } });
-});
-
-test('a plain coupled loop still says coupled, and shows no hottest line when it states none', () => {
-  const t = by(temperatureTiles({ duty: 'x', thermal: { duty_temps: { kind: 'coupled', winding_c: 128.5, magnet_c: 72, provenance: prov } } }));
-  assert.equal(t.windingTemp.tip[0].key, 'points.tempTile.coupled.winding');
-  assert.equal(t.windingTemp.tip.length, 1);
-});
-
 test('only a run that reached a limit is a limit state; the thermal tiles of the block show the steady one', () => {
   assert.equal(limitKind(steadyDuty.thermal.limit_search), 'steady');
   assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'limits', mode: 'limited', reached_limit: true }), 'time');
   assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'limits' }), 'time');       // an older payload without the flag keeps its meaning
   assert.equal(limitKind({ kind: 'coupled_limit', solve_to: 'continuous', reached_limit: true }), 'continuous');
-  const tiles = by(thermalTiles(steadyDuty.thermal));
-  assert.equal(tiles.winding.value, 137.3);
-  assert.equal(tiles.magnet.value, 84.1);
+  assert.deepEqual(thermalTiles(steadyDuty.thermal), []);       // the temperatures are the panel's (lib/resultsPanel), not this block's
 });
 
 test('the new captions are locale strings in EN and zh-CN; the time-to-limit caption stays for a real limit', () => {

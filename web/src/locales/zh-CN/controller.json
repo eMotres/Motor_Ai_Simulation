@@ -731,6 +731,16 @@
     "cursorAt": "当前转速：{rpm} rpm"
   },
   "emTiles": {
+    "coolant": "冷却液",
+    "coolantTip": "来自已存热分析图的液冷套冷却液温度。",
+    "sourceCoupledPwm": "耦合电磁 + 热分析，PWM {freq} kHz",
+    "sourceCoupledPwmNoFreq": "耦合电磁 + 热分析，PWM",
+    "sourceCoupled": "耦合电磁 + 热分析，正弦驱动",
+    "sourceEmThermal": "电磁计算，绕组 {winding} °C + 热分析图",
+    "sourceEm": "电磁计算，绕组 {winding} °C",
+    "sourceEmPlain": "电磁计算",
+    "sourceCoupledTip": "该点最终存储的结果：转矩、损耗、温度和驱动方式来自耦合迭代。常数（KV、Kt、Km、电感）来自已保存的电磁计算。",
+    "sourceEmTip": "数值来自在固定绕组温度下完成并保存的电磁计算。仅当存有热分析图时才显示温度；该点没有存储耦合结果。",
     "torqueTip": "本次求解的平均电磁转矩，在一个电周期内取平均。",
     "powerTip": "轴功率（联轴器处）：转子功率 转矩 × 角速度（{rotor} kW）{op} 轴承与风摩损耗 {mech} W，这部分损耗位于转子与联轴器之间。效率由它算出。",
     "massTip": "本次运行的有效质量：定子和转子铁芯、铜、磁体、护套、轴管。含支架、轴承、电路板的整机质量见配置页、目录和数据表。仅电磁有效部分：{active} kg。",

@@ -138,9 +138,12 @@ t('SummaryTable carries the full-mass fields and flux-scales the per-mass figure
   const st = read('components/simulation/SummaryTable.tsx');
   for (const k of ['mass_full_kg', 'mass_non_active_kg', 'mass_partial', 'torque_per_mass_full_Nm_kg', 'power_per_mass_full_W_kg',
     'Km_per_mass_full_Nm_sqrtW_kg']) assert.match(st, new RegExp(k));
-  assert.match(st, /torque_per_mass_full_Nm_kg: summary\.torque_per_mass_full_Nm_kg != null/);
-  assert.match(st, /power_per_mass_full_W_kg: summary\.power_per_mass_full_W_kg != null/);
-  assert.match(st, /Km_per_mass_full_Nm_sqrtW_kg: summary\.Km_per_mass_full_Nm_sqrtW_kg != null/);
+  // the flux / torque scaling itself is ONE function shared with the stored point's panel (lib/apply3d.ts)
+  assert.match(st, /apply3dToSummary\(summary\)/);
+  const a3 = read('lib/apply3d.ts');
+  assert.match(a3, /torque_per_mass_full_Nm_kg: mul\(summary\.torque_per_mass_full_Nm_kg, kq\)/);
+  assert.match(a3, /power_per_mass_full_W_kg: mul\(summary\.power_per_mass_full_W_kg, kq\)/);
+  assert.match(a3, /Km_per_mass_full_Nm_sqrtW_kg: mul\(summary\.Km_per_mass_full_Nm_sqrtW_kg, kq\)/);
 });
 
 t('Compare: Mass (full where the row has it), Active mass kept as its own column, TD / PD on the full mass, "*" for active rows', () => {

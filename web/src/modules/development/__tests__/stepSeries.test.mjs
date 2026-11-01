@@ -58,18 +58,17 @@ test('tile names are the ordinary Configure ones; the mass names follow the mass
   assert.equal(configureTileKey('pSolid'), null);                   // not a Configure tile: the caller keeps its own wording
 });
 
-test('the coupled loop torque is its own thermal tile, never merged with the EM run tiles', () => {
+test('the thermal block carries no temperature or torque tile of the panel: one place for them', () => {
   const t = { duty_temps: { kind: 'coupled', winding_c: 134, magnet_c: 70, em: { torque_nm: 865 } } };
-  const byId = Object.fromEntries(thermalTiles(t).map((x) => [x.id, x.value]));
-  assert.equal(byId.emTorque, 865);
-  assert.equal(byId.winding, 134);
+  assert.deepEqual(thermalTiles(t), []);
 });
 
 test('wiring: chart right of the tiles on wide screens, stacked on narrow ones; no compare control, no step note, one source chip', () => {
   const src = readFileSync(new URL('../../../components/compare/PointsConfigure.tsx', import.meta.url), 'utf8');
   assert.match(src, /gridTemplateColumns: \{ xs: 'minmax\(0,1fr\)', lg: showChart && showTiles \?/);
   assert.match(src, /<StepsChart /);
-  assert.match(src, /data-testid="em-source-chip"/);
+  assert.match(src, /<ResultsPanel panel=\{panel\}/);                 // the one panel carries the one source chip (components/common/ResultsPanel)
+  assert.match(readFileSync(new URL('../../../components/common/ResultsPanel.tsx', import.meta.url), 'utf8'), /data-testid="em-source-chip"/);
   assert.doesNotMatch(src, /compareWith|baseVariantPoint|points-note|steps\[stepIndex\]\?\.note/);
   assert.match(src, /spec\.group !== 'thermal'/);                    // temperatures sit in the thermal block with their own source
   const chart = readFileSync(new URL('../../../components/compare/StepsChart.tsx', import.meta.url), 'utf8');

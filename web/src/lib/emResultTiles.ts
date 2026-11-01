@@ -14,6 +14,7 @@ import { hasSleeve } from './hasSleeve.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
 import { quotedRipple, type RippleRefined } from './rippleAccuracy.ts';
+import { coggingDigits, coggingTipParts, coggingValue, type CoggingView, type TipPart } from './coggingTile.ts';
 
 /** The run summary, as far as these tiles read it: every field optional, nothing invented. */
 export interface EmTileSummary {
@@ -129,6 +130,8 @@ export interface EmTileSummary {
   coupling?: {
     coil_temp_c?: number | null;
     magnet_temp_c?: number | null;
+    /** the extra motor loss the carrier adds over the same point on a sine (PWM only) */
+    motor_pwm_loss_W?: number | null;
     controller?: {
       t_j_c?: number | null;
       losses?: { total_W?: number | null } | null;
@@ -159,6 +162,17 @@ export interface EmTileView {
    *  `extra_W` null = the machine has NO bearing model: the friction is UNKNOWN, not zero.
    *  Absent altogether = the caller has no mechanical block (the tiles then say so). */
   mech?: EmMech | null;
+  /** the temperatures around the winding / magnets that the stored thermal map states (not in the EM run itself) */
+  cooling?: EmCooling | null;
+  /** the configuration's saved cogging torque (a property of the configuration, not of the run); absent = none saved */
+  cogging?: CoggingView | null;
+}
+
+export interface EmCooling {
+  housing_c?: number | null;
+  /** air speed over the housing [m/s]; absent for a liquid jacket */
+  air_speed_mps?: number | null;
+  coolant_c?: number | null;
 }
 
 export interface EmMech {
@@ -185,6 +199,8 @@ export interface EmTileSpec {
   tipVars?: Record<string, string | number>;
   /** verbatim text the RUN carries (a part's note): appended to the tooltip as it is */
   tipText?: string;
+  /** more tooltip sentences, each a locale key with its own values (the cogging tile's half-amplitude, share, method ...) */
+  tipParts?: TipPart[];
   unit: string;
   d: number;
   value: number | null;
@@ -324,6 +340,10 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       display: ripple != null && rq.accurate === false ? `${ripple.toFixed(1)}*` : undefined,
       level: ripple == null ? undefined : rq.accurate === false ? 'warn'
         : ripple <= 5 ? 'ok' : ripple <= 15 ? 'warn' : 'bad' }),
+    // COGGING TORQUE: peak-to-peak with no current, saved with the configuration; the half-amplitude, share of the continuous
+    // torque, magnet state and method go to the tooltip.  Not drawn without a value.
+    tile({ id: 'cogging', labelKey: 'configure.cogging', tipKey: 'configure.coggingTip', tipParts: coggingTipParts(view.cogging),
+      unit: 'N·m', d: coggingDigits(coggingValue(view.cogging) ?? 0), value: coggingValue(view.cogging) }),
     tile({ id: 'tPerMass', labelKey: pm('torque').full ? 'configure.tPerMass' : 'configure.tPerMassActive',
       tipKey: pm('torque').full ? 'emTiles.tPerMassFullTip' : 'emTiles.tPerMassTip', unit: 'N·m/kg', d: 2,
       value: pm('torque').value }),
@@ -397,6 +417,8 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     tile({ id: 'lossDensity', labelKey: pm('loss').full ? 'configure.lossDensity' : 'configure.lossDensityActive',
       tipKey: pm('loss').full ? 'emTiles.lossDensityFullTip' : 'emTiles.lossDensityTip', unit: 'W/kg', d: 0,
       value: pm('loss').value }),
+    tile({ id: 'motorLoss', labelKey: 'configureDrive.motorLoss', tipKey: 'configureDrive.motorLossTip', unit: 'W', d: 0,
+      value: num(s.coupling?.motor_pwm_loss_W) }),
     tile({ id: 'invLoss', labelKey: 'configureDrive.invLoss', tipKey: 'emTiles.ctrlLossTip', unit: 'W', d: 1,
       value: num(ctl?.losses?.total_W) }),
     tile({ id: 'tj', labelKey: 'configureDrive.tj', tipKey: 'emTiles.tjTip', unit: '°C', d: 0, value: tj,
@@ -434,6 +456,14 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
             cardT: num(s.magnet_card_temp_c) != null ? _n(num(s.magnet_card_temp_c) as number) : '—',
             br: num(s.magnet_Br_used_T) != null ? (num(s.magnet_Br_used_T) as number).toFixed(3) : '—',
             knee: num(s.magnet_knee_used_kA_m) != null ? _n(num(s.magnet_knee_used_kA_m) as number) : '—' } }),
+    // what the stored thermal map states beside the two temperatures: the housing (never hotter than the winding it carries),
+    // the air over it or the coolant of a liquid jacket - a tile only when the map states it
+    tile(tempEmTile('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip',
+      num(view.cooling?.housing_c), lim.winding_C)),
+    tile({ id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
+      value: num(view.cooling?.air_speed_mps) }),
+    tile({ id: 'coolant', labelKey: 'emTiles.coolant', tipKey: 'emTiles.coolantTip', unit: '°C', d: 0,
+      value: num(view.cooling?.coolant_c) }),
   );
 
   // ── 4 voltages + current density ──────────────────────────────────────────
@@ -584,6 +614,34 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   }));
 
   return [r1, r2, r3, r4, r5, r6, r7, r8, r9].filter((r) => r.length > 0);
+}
+
+/** Tiles of the Electromagnetic card that the ordinary Configure does not draw (engineering extras of the FEM run). */
+const NOT_IN_CONFIGURE = new Set(['elecPower', 'shaftLoss', 'sleeveLoss', 'bearings', 'windage', 'wallToShaft', 'iWinding', 'turnsCoil',
+  'bGapMean', 'lxy', 'iSet', 'vSet', 'rotorInertia', 'brCorner', 'end3d']);
+/** Decimals Configure prints each tile with (components/compare/ConfiguratorPanel): the same number reads the same in both. */
+const CONFIGURE_DIGITS: Record<string, number> = { torque: 1, mass: 3, efficiency: 1 };
+/** Configure colours by comparison with the reference design, not by absolute thresholds, except temperatures, the T_j, the
+ *  current density and the fill factor. */
+const NO_ABSOLUTE_LEVEL = new Set(['efficiency', 'tRipple', 'pContMax', 'demagKoef', 'saturationKoef', 'totalKoef']);
+
+/** The panel exactly as the ordinary Configure draws it (owner 2026-11-01: «the same look of the interface for viewing the
+ *  parameters»): its tile set, row order and decimals - the Electromagnetic card's engineering extras (electrical power, bearings,
+ *  windage, part masses ...) are left out, the full-motor-mass row gets Configure's separate ACTIVE MASS tile, and the colours
+ *  Configure does not use are not used.  Same tile component, so size, type, case and units are Configure's by construction. */
+export function configureLook(rows: EmTileSpec[][], s: EmTileSummary): EmTileSpec[][] {
+  const ms = shownMass(s as MassSummary);
+  const out = rows.map((r) => r.flatMap((t): EmTileSpec[] => {
+    if (NOT_IN_CONFIGURE.has(t.id) || t.id.startsWith('part')) return [];
+    const d = CONFIGURE_DIGITS[t.id] ?? t.d;
+    const flagged = typeof t.display === 'string' && t.display.endsWith('*');
+    const display = flagged && t.value != null ? `${t.value.toFixed(d)}*` : t.display;
+    const level = NO_ABSOLUTE_LEVEL.has(t.id) && !(t.level === 'warn' && flagged) ? undefined : t.level;
+    const spec: EmTileSpec = { ...t, d, display, level };
+    if (t.id !== 'mass' || ms.kind !== 'full' || ms.activeKg == null) return [spec];
+    return [spec, { id: 'massActive', labelKey: 'configure.massActive', tipKey: 'configure.massActiveTip', unit: 'kg', d: 3, value: ms.activeKg }];
+  }));
+  return out.filter((r) => r.length > 0);
 }
 
 /** What the lead-cable tile needs (the renderer turns it into its own JSX). */

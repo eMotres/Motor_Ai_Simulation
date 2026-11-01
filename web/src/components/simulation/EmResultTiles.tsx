@@ -7,8 +7,9 @@ import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import type { CoggingView } from '../../lib/coggingTile';
 import { LABEL, MetricTile, TileRow, LeadCableTile } from '../common/ResultTiles';
-import { emTileRows, emTempLimits, emWarning, type EmMech, type EmTileSpec, type EmTileSummary } from '../../lib/emResultTiles';
+import { configureLook, emTileRows, emTempLimits, emWarning, type EmCooling, type EmMech, type EmTileSpec, type EmTileSummary } from '../../lib/emResultTiles';
 
 const tx = nsT('controller');   // the tile labels and tooltips (EN source, ZH mirror — docs/I18N.md)
 
@@ -21,15 +22,22 @@ const EmResultTiles: React.FC<{
   k3dBasis?: '3-D' | '3-D flux' | null;
   /** bearings + windage of the run (analytic block); null = the machine has no bearing model */
   mech?: EmMech | null;
-}> = ({ summary: s, rf, k3dBasis, mech }) => {
+  /** housing / air / coolant temperatures of the stored thermal map (a stored point only) */
+  cooling?: EmCooling | null;
+  /** the configuration's saved cogging torque (a stored point only) */
+  cogging?: CoggingView | null;
+  /** 'configure' = exactly the ordinary Configure's tile set, row order, decimals and colours (stored points); default = the FEM card with its engineering extras */
+  look?: 'configure';
+}> = ({ summary: s, rf, k3dBasis, mech, cooling, cogging, look }) => {
   useTranslation('controller');   // subscribe + lazy-load the namespace
-  const rows = emTileRows(s, { rf, k3dBasis, mech });
+  const all = emTileRows(s, { rf, k3dBasis, mech, cooling, cogging });
+  const rows = look === 'configure' ? configureLook(all, s) : all;
   const warn = emWarning(s);
   const lim = emTempLimits(s);
   const hasTemps = s.coupling?.coil_temp_c != null || s.coupling?.magnet_temp_c != null;
   const renderTile = (t: EmTileSpec) => {
     if (t.kind === 'leadCable') return <LeadCableTile key={t.id} section_mm2={t.value as number} />;
-    const tip = [t.tipKey ? tx(t.tipKey, t.tipVars) : '', ...(t.tipExtraKeys ?? []).map((k) => tx(k, t.tipVars)), t.tipText ?? '']
+    const tip = [t.tipKey ? tx(t.tipKey, t.tipVars) : '', ...(t.tipExtraKeys ?? []).map((k) => tx(k, t.tipVars)), ...(t.tipParts ?? []).map((p) => tx(p.key, p.args)), t.tipText ?? '']
       .filter((x) => !!x).join(' ');
     return (
       <MetricTile key={t.id} label={t.label ?? tx(t.labelKey as string)} value={t.value} display={t.display}

@@ -1585,6 +1585,28 @@ def _point_rows(rows: list[dict]) -> list[dict]:
             for row in rows if row.get("has_result")]
 
 
+def _attach_panels(points: list[dict], die: str, config: str, cfg: dict) -> None:
+    """Give every point the light panel of its FINAL stored result (the coupled loop's numbers first), so the steps table and chart
+    read the same numbers as the information panel (owner 2026-11-01).  A store that cannot be read leaves the point as it is."""
+    from motor_ai_sim import duty_results
+    from motor_ai_sim.development import motor_view
+    try:
+        full = duty_results.get(die, config) or {}
+    except Exception:
+        return
+    duties = {str(d.get("name") or ""): d for d in (cfg.get("duties") or []) if isinstance(d, dict)}
+    for point in points:
+        name = str(point.get("duty") or "")
+        try:
+            panel = motor_view.light_panel(motor_view.panel_for_duty(
+                duties.get(name), full.get(name), motor_view.operating_of({"operating_point": duties.get(name) or {}}),
+                point.get("comparison")))
+        except Exception:
+            panel = None
+        if panel:
+            point["panel"] = panel
+
+
 @router.get("/points")
 def project_motor_points(project_id: str, request: Request, die: str | None = None,
                          config: str | None = None, show_all: bool = False):
@@ -1627,6 +1649,7 @@ def project_motor_points(project_id: str, request: Request, die: str | None = No
         except Exception:
             stored = {}
         points = _point_rows(_results(open_die, cfg_name, cfg, stored, set(), own_only=True))
+        _attach_panels(points, open_die, cfg_name, cfg)
         variants.append({"step": len(variants) + 1, "die": open_die, "canonical_die": canonical,
                          "config": cfg_name, "status": status, "note": str(link.get("note") or ""),
                          # the staff marks ride on the light steps feed: the points-limited view needs no project motor list
@@ -1677,8 +1700,11 @@ def motor_view_for(open_die: str, config: str, cfg_path: Path, cfg: dict, author
         fields = {}
     rows = _results(open_die, config, cfg, stored, set(), own_only=True)
     configure = configure_duties_for_motor(open_die, config, cfg, cfg_path, authorization)
+    summaries = {str(d.get("name") or ""): d.get("summary") for d in (cfg.get("duties") or []) if isinstance(d, dict)}
     for row in rows:
         row["can_open_configure"] = row["duty"] in configure
+        # the duty's saved EM summary: the results panel (motor_view.build_panel) is drawn from it, whole
+        row["em_summary"] = summaries.get(row["duty"])
     return motor_view.build_view(open_die, config, rows, stored, fields, configure)
 
 

@@ -128,7 +128,8 @@ def _login(c, email=NEW, ip="203.0.113.40"):
 
 
 def test_signup_on_the_consent_page_needs_the_terms_box_and_records_oauth_signup(senv, monkeypatch, tmp_path):
-    """The unticked box is required on this path too (owner 2026-10-27): no box, no account, the pending authorization stays alive."""
+    """The unticked box (Terms of Use + Privacy Policy) is required on this path too (owner 2026-11-01): no box, no account, the pending
+    authorization stays alive; no capacity, country or business name is asked, and the line carries no agreement fields."""
     import json
     from motor_ai_sim import comm_prefs as CP
     from motor_ai_sim import legal_texts as LT
@@ -141,22 +142,17 @@ def test_signup_on_the_consent_page_needs_the_terms_box_and_records_oauth_signup
     assert senv["U"].get_user(NEW) is None and senv["outbox"] == []
     assert O.describe_request(rid) is not None
     r = c.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "New Engineer", "return_to": consent,
-                                           "accept_terms": True, "terms_version": LT.TERMS_VERSION},
+                                           "accept_terms": False, "terms_version": LT.TERMS_VERSION, "country": "DE", "capacity": "business"},
                headers={"X-Forwarded-For": "203.0.113.40"})
-    assert r.status_code == 422 and "country" in r.json()["detail"].lower() and senv["U"].get_user(NEW) is None    # the country is required too
+    assert r.status_code == 422 and "Tick the box" in r.json()["detail"] and senv["U"].get_user(NEW) is None     # the box alone decides
     r = c.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "New Engineer", "return_to": consent,
-                                           "accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE", "lang": "zh-CN"},
-               headers={"X-Forwarded-For": "203.0.113.40"})
-    assert r.status_code == 422 and "capacity" in r.json()["detail"].lower() and senv["U"].get_user(NEW) is None      # and the capacity
-    r = c.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "New Engineer", "return_to": consent,
-                                           "accept_terms": True, "terms_version": LT.TERMS_VERSION, "country": "DE", "lang": "zh-CN",
-                                           "capacity": "sole_trader"},
+                                           "accept_terms": True, "terms_version": LT.TERMS_VERSION, "lang": "zh-CN"},
                headers={"X-Forwarded-For": "203.0.113.40", "User-Agent": "mcp-test"})
     assert r.status_code == 202, r.text
     (rec,) = [json.loads(l) for l in (tmp_path / "terms_acceptances.jsonl").read_text(encoding="utf-8").splitlines()]
     assert rec["user"] == NEW and rec["source"] == "oauth_signup" and rec["lang"] == "zh-CN" and rec["user_agent"] == "mcp-test"
     assert rec["terms_version"] == LT.TERMS_VERSION and rec["text_sha256"]["terms"] == LT.read("terms", "zh-CN")["sha256"]
-    assert rec["country"] == "DE" and rec["forum_variant"] == "A"
+    assert rec["kind"] == "terms" and "country" not in rec and "capacity" not in rec and "forum_variant" not in rec
     assert senv["outbox"] and senv["outbox"][-1]["to"] == NEW            # the confirmation mail still goes out
 
 

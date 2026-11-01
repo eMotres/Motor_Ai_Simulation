@@ -1,9 +1,11 @@
 // AeroStator Platform Services and Data Agreement: the pure helpers behind the dialog and the 428 retry (no React, no fetch of
 // its own) so node --test can pin them.  Backend: motor_ai_sim/platform_agreement.py, routes/platform_agreement.py.
 //
-// The agreement is accepted by a COMPANY before a development starts.  The server answers a gated action with HTTP 428
-// {detail: {code: 'agreement_required', version}}; lib/apiAuth.ts hands that to `handleAgreementRequired`, which asks the host
-// component (components/agreement/AgreementHost) to open the dialog and, once accepted, repeats the action.
+// The agreement is accepted by a COMPANY before a development starts, and by an ACCOUNT at the START of a simulation (owner 2026-11-01).
+// The server answers a gated action with HTTP 428 {detail: {code: 'agreement_required', version}}; the simulation gate adds `at:
+// 'simulation'`.  lib/apiAuth.ts hands the answer to `handleAgreementRequired`, which asks the host component
+// (components/agreement/AgreementHost) to open the right dialog (the company click-through, or the short simulation-start dialog) and,
+// once accepted, repeats the action once.
 import { norm, renderNda, type NdaValues } from './nda';
 
 export const AGREEMENT_MODES = ['FREE', 'PRIVATE'] as const;
@@ -116,45 +118,41 @@ export function requestAgreement(detail: { version?: string } = {}): Promise<boo
   return pending;
 }
 
-/** Does this answer mean "accept the updated terms first"?  HTTP 428 `terms_required`: the owner's deadline (env TERMS_REQUIRED_FROM)
- *  has passed and the account has no acceptance of the current Terms of Use, so a new simulation cannot start. */
-export function isTermsGate(status: number, body: unknown): boolean {
-  if (status !== 428 || !body || typeof body !== 'object') return false;
-  const d = (body as { detail?: unknown }).detail;
-  return !!d && typeof d === 'object' && (d as { code?: unknown }).code === 'terms_required';
+/** Is this 428 the simulation gate (`detail.at === 'simulation'`: every route through the job queue, and the MCP simulate / start_design)? */
+export function isSimulationGate(status: number, body: unknown): boolean {
+  if (!isAgreementRequired(status, body)) return false;
+  return (body as { detail: { at?: unknown } }).detail.at === 'simulation';
 }
 
-export type TermsHost = (detail: { version?: string; from?: string }) => Promise<boolean>;
-let termsHost: TermsHost | null = null;
-let termsPending: Promise<boolean> | null = null;
+export type SimulationAgreementHost = (detail: { version?: string }) => Promise<boolean>;
+let simulationHost: SimulationAgreementHost | null = null;
+let simulationPending: Promise<boolean> | null = null;
 
-/** The mounted TermsUpdateHost registers itself here (null on unmount). */
-export function setTermsHost(h: TermsHost | null): void {
-  termsHost = h;
+/** The mounted AgreementHost registers the simulation-start dialog here (null on unmount). */
+export function setSimulationAgreementHost(h: SimulationAgreementHost | null): void {
+  simulationHost = h;
 }
 
-/** Open the "Updated terms" dialog; concurrent gated calls share ONE dialog.  Resolves true when accepted, false on "Later" or when no host is mounted. */
-export function requestTerms(detail: { version?: string; from?: string } = {}): Promise<boolean> {
-  if (!termsHost) return Promise.resolve(false);
-  if (!termsPending) {
-    termsPending = termsHost(detail).catch(() => false).finally(() => { termsPending = null; });
+/** Open the simulation-start agreement dialog; concurrent gated calls share ONE dialog.  Resolves true when accepted, false when
+ *  cancelled or no host is mounted. */
+export function requestSimulationAgreement(detail: { version?: string } = {}): Promise<boolean> {
+  if (!simulationHost) return Promise.resolve(false);
+  if (!simulationPending) {
+    simulationPending = simulationHost(detail).catch(() => false).finally(() => { simulationPending = null; });
   }
-  return termsPending;
+  return simulationPending;
 }
 
-/** `res` is the answer to a gated call: when it is the 428 `agreement_required`, open the Platform Agreement dialog; when it is the
- *  428 `terms_required`, open the "Updated terms" dialog; after acceptance repeat the call once via `retry`.  Any other answer (or a
- *  cancel) is returned untouched, so the caller sees the 428 and explains it itself. */
+/** `res` is the answer to a gated call: when it is the 428 `agreement_required` of the simulation gate, open the simulation-start
+ *  agreement dialog; when it is the 428 of a development gate, open the company click-through; after acceptance repeat the call once via
+ *  `retry`.  Any other answer (or a cancel) is returned untouched, so the caller sees the 428 and explains it itself. */
 export async function handleAgreementRequired(res: Response, retry: () => Promise<Response>, ask: typeof requestAgreement = requestAgreement,
-  askTerms: typeof requestTerms = requestTerms): Promise<Response> {
+  askSimulation: typeof requestSimulationAgreement = requestSimulationAgreement): Promise<Response> {
   if (res.status !== 428) return res;
   let body: unknown = null;
   try { body = await res.clone().json(); } catch { /* not JSON */ }
-  if (isTermsGate(res.status, body)) {
-    const d = (body as { detail: { version?: string; from?: string } }).detail;
-    return (await askTerms({ version: d.version, from: d.from })) ? retry() : res;
-  }
   if (!isAgreementRequired(res.status, body)) return res;
   const detail = (body as { detail: { version?: string } }).detail;
-  return (await ask({ version: detail.version })) ? retry() : res;
+  const accepted = isSimulationGate(res.status, body) ? await askSimulation({ version: detail.version }) : await ask({ version: detail.version });
+  return accepted ? retry() : res;
 }

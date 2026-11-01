@@ -1,8 +1,9 @@
 // Legal pages (/terms, /privacy, /platform-agreement) and the sign-up acceptance: pure helpers (no DOM, no network, no React) so
 // node --test can run them directly.  The texts come from GET /api/legal/{doc}?lang= (src/motor_ai_sim/legal_texts.py), verbatim;
 // this file only (a) knows the routes, (b) turns the Markdown of a text into blocks the page renders as React elements (never HTML),
-// (c) decides when the acceptance box lets a sign-up button go and what the request carries, (d) decides when the existing-user
-// dialog is shown.
+// (c) decides when the sign-up box lets a button go and what the request carries, (d) decides when the one-line "updated terms" notice
+// is shown to an existing account, (e) holds the form and the request of the Platform Agreement dialog that opens at the START of a
+// simulation (owner 2026-11-01: the agreement is needed only by users who want to simulate).
 
 export type LegalPageKind = 'terms' | 'privacy' | 'platform-agreement';
 export type LegalLang = 'en' | 'zh-CN';
@@ -16,7 +17,7 @@ export const PAGE_DOCS: Record<LegalPageKind, readonly string[]> = {
 
 /** The version of the texts this build shows and a sign-up accepts.  Must equal legal_texts.TERMS_VERSION on the server (a node test
  *  compares the two): a request with another version is refused with 422 `terms_required`. */
-export const TERMS_VERSION = 'v0.4';
+export const TERMS_VERSION = 'v0.5';
 
 export const LEGAL_PAGES: readonly LegalPageKind[] = ['terms', 'privacy', 'platform-agreement'];
 
@@ -177,7 +178,64 @@ export function inShort(terms: string): { label: string; body: string } | null {
   return null;
 }
 
-// ── the acceptance box ──────────────────────────────────────────────────────────────────────────────────────────────────
+// ── the sign-up box ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** What a sign-up request (e-mail form, Google, the OAuth-consent sign-up) carries: ONE unticked box that accepts the Terms of Use and the
+ *  Privacy Policy ("I use AeroStator for business and accept ...").  No capacity, country or business name is asked at sign-up. */
+export interface SignupPayload { accept_terms: boolean; terms_version: string; accept_label?: string }
+
+/** The pieces of the box sentence in common.json `legal.signup` (+ the shared link texts of `legal.accept`). */
+export interface SignupStrings { lead: string; terms: string; sep: string; privacy: string; tail: string }
+
+/** The sentence beside the sign-up box as plain text, for the record (the label shown). */
+export function signupLabelText(s: SignupStrings): string {
+  return [s.lead, s.terms, s.sep, s.privacy, s.tail].join('');
+}
+
+/** The server refuses a new account without a ticked box for THIS version (422 `terms_required`), so an unticked box sends nothing it
+ *  could mistake for consent (only a literal `true` counts). */
+export function signupPayload(ticked: boolean, version: string, label?: string): SignupPayload {
+  const ok = ticked === true;
+  const out: SignupPayload = { accept_terms: ok, terms_version: ok ? version : '' };
+  if (ok && label) out.accept_label = label;
+  return out;
+}
+
+/** May the sign-up button (or the Google button) be used?  Only a CREATING flow needs the box; signing in to an existing account never
+ *  does.  `busy` keeps its own say. */
+export function signupAllowed(opts: { creating: boolean; ticked: boolean; busy?: boolean }): boolean {
+  if (opts.busy) return false;
+  return !opts.creating || opts.ticked === true;
+}
+
+/** The short hint beside a disabled button: shown while a creating flow has an unticked box. */
+export function showTermsHint(opts: { creating: boolean; ticked: boolean }): boolean {
+  return opts.creating && opts.ticked !== true;
+}
+
+/** The server answered 422 `terms_required` (a Google sign-in of a brand-new account that was started without the box): the dialog
+ *  switches to "create account" and shows it. */
+export function isTermsRequired(err: unknown): boolean {
+  const code = !!err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
+  return code === 'terms_required';
+}
+
+// ── existing accounts: the one-line "updated terms" notice ──────────────────────────────────────────────────────────────
+
+export interface LegalStatus {
+  version: string; required: boolean; accepted_version?: string | null;
+  agreement?: { accepted: boolean; mode: string | null; accepted_at?: string | null };
+}
+
+/** Show the "We updated the Terms of Use and the Privacy Policy" line?  When the server says the account has no acceptance of the current
+ *  Terms and the person did not press "Dismiss" in this browser session (`dismissedFor` is the account it was dismissed for).  Nothing is
+ *  blocked by the line. */
+export function termsLineVisible(status: LegalStatus | null | undefined, email: string, dismissedFor: string | null): boolean {
+  if (!status || status.required !== true) return false;
+  return !(email && dismissedFor && dismissedFor.toLowerCase() === email.toLowerCase());
+}
+
+// ── the Platform Agreement at the start of a simulation ────────────────────────────────────────────────────────────────
 
 /** Agreement section 2.3: in which capacity an account accepts.  `business` = a business it is authorised to bind (the name is then
  *  required), `sole_trader` = itself as a registered sole trader / self-employed professional, `other` = neither (for example an
@@ -185,13 +243,19 @@ export function inShort(terms: string): { label: string; body: string } | null {
 export const CAPACITIES = ['business', 'sole_trader', 'other'] as const;
 export type Capacity = (typeof CAPACITIES)[number];
 
-/** The acceptance block of a sign-up / the existing-user dialog: the capacity (REQUIRED radio), the country where the business is
- *  established (ISO code, required), the business name (required for `business`, optional for `sole_trader`, not asked for `other`), the
- *  box (initially UNTICKED) and, in the existing-user dialog only, the optional second box for the data entered before today
- *  (agreement 7.9, initially UNTICKED). */
-export interface AcceptanceForm { capacity: Capacity | ''; country: string; business: string; ticked: boolean; earlier: boolean }
+/** FREE (simulation is free, MOTRES may train its AI on the engineering data) or a request for PRIVATE (paid, no AI training; the team
+ *  contacts the person).  There is NO default: the person chooses explicitly. */
+export const AGREEMENT_CHOICES = ['FREE', 'PRIVATE'] as const;
+export type AgreementChoice = (typeof AGREEMENT_CHOICES)[number];
 
-export const emptyAcceptance = (): AcceptanceForm => ({ capacity: '', country: '', business: '', ticked: false, earlier: false });
+/** The form of the dialog: the mode (REQUIRED, nothing preselected), the capacity (REQUIRED radio), the country where the business is
+ *  established (ISO code, required), the business name (required for `business`, optional for `sole_trader`, not asked for `other`), the
+ *  acceptance box (initially UNTICKED) and the optional, unticked box for the data entered before today (agreement 7.9). */
+export interface AgreementForm {
+  mode: AgreementChoice | ''; capacity: Capacity | ''; country: string; business: string; ticked: boolean; earlier: boolean;
+}
+
+export const emptyAgreementForm = (): AgreementForm => ({ mode: '', capacity: '', country: '', business: '', ticked: false, earlier: false });
 
 /** Mainland China and the Hong Kong SAR: section 13 variant B (Hong Kong law, HKIAC) of the Platform Agreement; everything else is variant A.
  *  Same rule as the NDA / agreement forms (`isCnHk` in lib/nda.ts, `country_is_cn_hk` in the texts). */
@@ -204,9 +268,11 @@ export function asksBusinessName(capacity: Capacity | ''): boolean {
   return capacity === 'business' || capacity === 'sole_trader';
 }
 
-/** The block is complete: a capacity is chosen, a country is chosen, a `business` capacity names its business AND the box is ticked. */
-export function acceptanceComplete(f: AcceptanceForm): boolean {
+/** The dialog may be accepted: a mode is chosen, a capacity is chosen, a country is chosen, a `business` capacity names its business AND
+ *  the box is ticked. */
+export function agreementComplete(f: AgreementForm): boolean {
   if (f.ticked !== true || f.country.trim() === '') return false;
+  if (!(AGREEMENT_CHOICES as readonly string[]).includes(f.mode)) return false;
   if (!(CAPACITIES as readonly string[]).includes(f.capacity)) return false;
   return f.capacity !== 'business' || f.business.trim() !== '';
 }
@@ -214,71 +280,34 @@ export function acceptanceComplete(f: AcceptanceForm): boolean {
 /** The two labels as the person saw them (agreement 15.3 keeps them with the record). */
 export interface AcceptLabels { accept?: string; election?: string }
 
-export interface AcceptancePayload {
-  accept_terms: boolean; terms_version: string; country: string; business_name: string; capacity: string;
-  accept_label?: string; historical_opt_in?: boolean; election_label?: string;
+/** The body of POST /api/legal/accept-agreement.  An incomplete form sends nothing it could mistake for consent (only a literal `true`
+ *  counts); the server validates again (422 `agreement_box_required` / `mode_required` / `capacity_required` / `country_required` /
+ *  `business_name_required`). */
+export interface AgreementPayload {
+  accept_agreement: boolean; agreement_version: string; mode: string; capacity: string; country: string; business_name: string;
+  historical_opt_in: boolean; lang: string; accept_label?: string; election_label?: string;
 }
 
-/** What a sign-up request (e-mail form, Google, the existing-user dialog) carries.  The server refuses a new account without a ticked
- *  box for THIS version (422 `terms_required`), without a country (`country_required`), a capacity (`capacity_required`) or, for
- *  `business`, a name (`business_name_required`), so an incomplete block sends nothing it could mistake for consent.  The earlier-data
- *  election goes only with `existing: true` (a new account has no earlier data). */
-export function acceptancePayload(f: AcceptanceForm, version: string, opts: { existing?: boolean; labels?: AcceptLabels } = {}): AcceptancePayload {
+export function agreementPayload(f: AgreementForm, version: string, lang: string, labels: AcceptLabels = {}): AgreementPayload {
   const ticked = f.ticked === true;
-  const out: AcceptancePayload = {
-    accept_terms: ticked, terms_version: ticked ? version : '', country: f.country.trim().toUpperCase(),
-    business_name: asksBusinessName(f.capacity) ? f.business.trim() : '', capacity: f.capacity,
+  const out: AgreementPayload = {
+    accept_agreement: ticked, agreement_version: ticked ? version : '', mode: f.mode, capacity: f.capacity, country: f.country.trim().toUpperCase(),
+    business_name: asksBusinessName(f.capacity) ? f.business.trim() : '', historical_opt_in: f.earlier === true, lang,
   };
-  if (opts.labels?.accept) out.accept_label = opts.labels.accept;
-  if (opts.existing) {
-    out.historical_opt_in = f.earlier === true;
-    if (opts.labels?.election) out.election_label = opts.labels.election;
-  }
+  if (labels.accept) out.accept_label = labels.accept;
+  if (labels.election) out.election_label = labels.election;
   return out;
 }
 
-/** The pieces of the box sentence in common.json `legal.accept`: the capacity-specific `lead` / `mid` and the shared link texts. */
+/** The pieces of the box sentence in common.json `legal.accept`: the capacity-specific `lead` / `mid` (FREE), the PRIVATE `privateMid` and
+ *  the shared link texts. */
 export interface AcceptStrings {
-  lead: Record<Capacity, string>; mid: Record<Capacity, string>; terms: string; sep1: string; agreement: string; privacy: string; tail: string;
+  lead: Record<Capacity, string>; mid: Record<Capacity, string>; privateMid: string; terms: string; sep1: string; agreement: string;
+  privacy: string; tail: string;
 }
 
-/** The sentence beside the box as plain text, for the capacity chosen (what the record keeps as the label shown). */
-export function acceptLabelText(a: AcceptStrings, capacity: Capacity): string {
-  return [a.lead[capacity], a.terms, a.sep1, a.agreement, a.mid[capacity], a.privacy, a.tail].join('');
-}
-
-/** May the sign-up button (or the Google button) be used?  Only a CREATING flow needs the block; signing in to an existing account
- *  never does.  `busy` keeps its own say. */
-export function signupAllowed(opts: { creating: boolean; form: AcceptanceForm; busy?: boolean }): boolean {
-  if (opts.busy) return false;
-  return !opts.creating || acceptanceComplete(opts.form);
-}
-
-/** The short hint beside a disabled button: shown while a creating flow has an incomplete block. */
-export function showTermsHint(opts: { creating: boolean; form: AcceptanceForm }): boolean {
-  return opts.creating && !acceptanceComplete(opts.form);
-}
-
-/** The server answered 422 `terms_required` / `country_required` / `capacity_required` / `business_name_required` (a Google sign-in of a
- *  brand-new account that was started without the block): the dialog switches to "create account" and shows it. */
-export function isTermsRequired(err: unknown): boolean {
-  const code = !!err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
-  return code === 'terms_required' || code === 'country_required' || code === 'capacity_required' || code === 'business_name_required';
-}
-
-// ── existing accounts ───────────────────────────────────────────────────────────────────────────────────────────────────
-
-export interface LegalStatus { version: string; required: boolean; accepted_version?: string | null; required_from?: string | null }
-
-/** Show the "Updated terms" dialog?  Once per sign-in: the server says it is needed and the person did not press "Later" in this
- *  session (`laterFor` is the id of the session they dismissed it for). */
-export function shouldAskTerms(status: LegalStatus | null | undefined, sessionId: string | null, laterFor: string | null): boolean {
-  if (!status || status.required !== true) return false;
-  return !(sessionId && laterFor === sessionId);
-}
-
-/** The owner's deadline ("Later" stops working): `YYYY-MM-DD` when the server reports one, else null.  The dialog shows it. */
-export function termsDeadline(status: { required_from?: string | null } | null | undefined): string | null {
-  const d = status?.required_from;
-  return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+/** The sentence beside the agreement box as plain text for the mode and capacity chosen (what the record keeps as the label shown): the
+ *  FREE sentence carries the free-simulation exchange and its irreversibility, the PRIVATE one the no-training promise. */
+export function acceptLabelText(a: AcceptStrings, capacity: Capacity, mode: AgreementChoice = 'FREE'): string {
+  return [a.lead[capacity], a.terms, a.sep1, a.agreement, mode === 'PRIVATE' ? a.privateMid : a.mid[capacity], a.privacy, a.tail].join('');
 }

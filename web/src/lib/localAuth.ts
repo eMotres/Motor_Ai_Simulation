@@ -5,7 +5,7 @@
 // 30-day HS256 token (POST /api/auth/google | /api/auth/login), which is what
 // every API call carries. Rights (role/admin) always live server-side in
 // config/users.json + ADMIN_EMAILS — nothing here is trusted for authorization.
-import { acceptancePayload, emptyAcceptance, resolveLegalUrl, type LegalLang } from './legalLogic';
+import { resolveLegalUrl, signupPayload, type LegalLang } from './legalLogic';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -200,7 +200,7 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
  *  sign-up started inside an AI app's authorization window — the mailed link
  *  then opens that page again and the pending authorization is kept alive. */
 export function registerAccount(email: string, password: string, name: string, commPrefs: Partial<Record<string, boolean>> = {},
-  lang = 'en', returnTo?: string, next?: string, terms: TermsAcceptance = acceptancePayload(emptyAcceptance(), '')) {
+  lang = 'en', returnTo?: string, next?: string, terms: TermsAcceptance = signupPayload(false, '')) {
   return postPlain('/api/auth/register', {
     email, password, name, comm_prefs: commPrefs, lang, ...terms, ...(returnTo ? { return_to: returnTo } : {}),
     // a shared link the visitor opened before registering (lib/productionLink.ts): the confirmation page leads on to it
@@ -245,8 +245,8 @@ export function requestedAuthMode(): 'register' | 'signin' | null {
   return null;
 }
 
-/** The acceptance part of a sign-up request (legalLogic.acceptancePayload): `{accept_terms, terms_version, country, business_name, capacity, accept_label}`. */
-export type TermsAcceptance = ReturnType<typeof acceptancePayload>;
+/** The acceptance part of a sign-up request (legalLogic.signupPayload): `{accept_terms, terms_version, accept_label}`. */
+export type TermsAcceptance = ReturnType<typeof signupPayload>;
 
 /** Public legal / source links shown under the sign-up form.  They default to the in-app pages (/terms, /privacy and the agreement,
  *  with the /zh-cn/ prefix in Chinese); VITE_TERMS_URL / VITE_PRIVACY_URL still override at build time. */
@@ -295,7 +295,7 @@ export function clearEmailLink(): void {
  *  sign-in only and records them with the wording shown in `lang` (comm_prefs.py).  `terms` = the sign-up box: the server needs it
  *  for a brand-new account only (422 `terms_required` otherwise); an existing account signs in without it. */
 export function googleExchange(credential: string, commPrefs: Partial<Record<string, boolean>> = {}, lang = 'en',
-  terms: TermsAcceptance = acceptancePayload(emptyAcceptance(), '')) {
+  terms: TermsAcceptance = signupPayload(false, '')) {
   return post('/api/auth/google', { credential, comm_prefs: commPrefs, lang, ...terms });
 }
 

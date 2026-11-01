@@ -1,7 +1,6 @@
-// Client of the legal routes (src/motor_ai_sim/routes/legal.py): the texts (public), the signed-in account's acceptance status and
-// the acceptance of the current version by an existing account.
-import { getSessionSid } from './localAuth';
-import { acceptancePayload, type AcceptLabels, type AcceptanceForm, type LegalLang, type LegalStatus } from './legalLogic';
+// Client of the legal routes (src/motor_ai_sim/routes/legal.py): the texts (public), the signed-in account's acceptance status, the
+// acceptance of the current Terms by an existing account and the Platform Agreement accepted at the start of a simulation.
+import { agreementPayload, signupPayload, type AcceptLabels, type AgreementForm, type LegalLang, type LegalStatus } from './legalLogic';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 
@@ -37,26 +36,32 @@ export function fetchCountries(): Promise<string[]> {
   return countriesPromise;
 }
 
-/** The existing account fills the block and ticks the box: records source "existing" (with the optional earlier-data election and the
- *  labels as shown).  Throws with the server's message. */
-export async function acceptCurrentTerms(version: string, lang: LegalLang, form: AcceptanceForm, labels: AcceptLabels = {}): Promise<void> {
-  const r = await fetch(`${API}/api/legal/accept`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...acceptancePayload({ ...form, ticked: true }, version, { existing: true, labels }), lang }),
-  });
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({})) as { detail?: string };
-    throw new Error(j.detail || `HTTP ${r.status}`);
-  }
+async function postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const r = await fetch(`${API}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({})) as { detail?: unknown };
+  if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : `HTTP ${r.status}`);
+  return j as Record<string, unknown>;
 }
 
-// "Later" lasts until the next sign-in: it is remembered per SESSION id (a new sign-in is a new session).
-const LATER_KEY = 'mas.terms.later';
-
-export function laterSession(): string | null {
-  try { return sessionStorage.getItem(LATER_KEY); } catch { return null; }
+/** The "We updated the Terms of Use and the Privacy Policy" line: the existing account accepts with one click.  Records a Terms-only line,
+ *  source "existing", with the label as shown.  Throws with the server's message. */
+export async function acceptCurrentTerms(version: string, lang: LegalLang, label?: string): Promise<void> {
+  await postJson('/api/legal/accept', { ...signupPayload(true, version, label), lang });
 }
 
-export function rememberLater(): void {
-  try { const sid = getSessionSid(); if (sid) sessionStorage.setItem(LATER_KEY, sid); } catch { /* private mode: asked again next load */ }
+/** The Platform Agreement dialog at the start of a simulation: records source "simulation_start" (mode FREE, or PRIVATE requested which
+ *  also places the no-training hold).  Throws with the server's message. */
+export async function acceptAgreement(form: AgreementForm, version: string, lang: LegalLang, labels: AcceptLabels = {}): Promise<void> {
+  await postJson('/api/legal/accept-agreement', agreementPayload(form, version, lang, labels));
+}
+
+// "Dismiss" lasts for the browser session (the tab): remembered as the e-mail of the account it was dismissed for.
+const DISMISS_KEY = 'mas.terms.dismissed';
+
+export function dismissedFor(): string | null {
+  try { return sessionStorage.getItem(DISMISS_KEY); } catch { return null; }
+}
+
+export function rememberDismissed(email: string): void {
+  try { if (email) sessionStorage.setItem(DISMISS_KEY, email); } catch { /* private mode: shown again next load */ }
 }

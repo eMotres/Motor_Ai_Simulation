@@ -5,7 +5,7 @@ Owner 2026-10-27: B2B only. A company accepts the agreement before it starts a d
 client's data; no payment integration yet - the record says `private_pending_payment: true` and the UI says "our team will contact you
 about the fee", no price). Modelled on the online NDA (`docs/NDA_ONLINE.md`). Code: `src/motor_ai_sim/platform_agreement.py`,
 `src/motor_ai_sim/routes/platform_agreement.py`, web `web/src/components/agreement/`, `web/src/lib/platformAgreement.ts`.
-The public texts, the account acceptance of the Terms of Use and the existing-user dialog: `docs/LEGAL_TEXTS.md`.
+The public texts, the sign-up box, the "updated terms" line and the account-level agreement at the start of a simulation: `docs/LEGAL_TEXTS.md`.
 
 ## Off until an approved text is installed
 
@@ -50,13 +50,20 @@ the audit line `agreement.accept` (live activity feed) and Admin -> Companies & 
 authority: true, version, lang[, company, reg_no, country, address where the directory/NDA does not know them]}`,
 `GET /api/agreement/mine/pdf`, admin `GET /api/admin/agreement/acceptances`, `GET /api/admin/agreement/{id}/pdf`.
 
-## The gate (HTTP 428 `{"code": "agreement_required", "version": ...}`)
+## The gates (HTTP 428 `{"code": "agreement_required", "version": ...}`)
 
-Only when an approved version is installed: `POST /api/projects` (create a development project), `POST /api/projects/{id}/spec/submit`
-(submit the specification), `POST /api/design-agent/conversations` (start a design-assistant run) and the MCP `start_design` (a tool error
-starting with `agreement_required`). Never gated: staff (role admin / engineer), MOTRES's own company (directory reg. no. 7255691000,
+**Gate list.** (1) *Development* gate, only when an approved version is installed: `POST /api/projects` (create a development project),
+`POST /api/projects/{id}/spec/submit` (submit the specification), `POST /api/design-agent/conversations` (start a design-assistant run) and, with the
+simulation flag off, the MCP `start_design` (a tool error starting with `agreement_required`); the company click-through satisfies it.
+(2) *Simulation* gate (owner 2026-11-01), only while env `PLATFORM_AGREEMENT_AT_SIMULATION=1` (default OFF, activation is the owner's command):
+every route through `jobs.queued`, the MCP `simulate` and (flag on) `start_design`; body `{"code": "agreement_required", "version": <public agreement
+version>, "at": "simulation"}`; satisfied by a company acceptance (any version) OR by the account's own agreement acceptance of the current public
+version with capacity, country and mode (`terms_acceptances.jsonl`, source `simulation_start`; FREE, or PRIVATE requested which also places a
+no-training hold) - see `docs/LEGAL_TEXTS.md`. Reading stored results, the catalogue, Configure, the help chat and the specification assistant are
+in neither list. Never gated: staff (role admin / engineer), MOTRES's own company (directory reg. no. 7255691000,
 name "MOTRES d.o.o.", ids in `MOTRES_OWN_COMPANY_IDS`) and accounts on `motresres.com`, `emotres.com`, `aerostator.com`
-(`MOTRES_OWN_DOMAINS` adds more); every read of an existing project. The web (`lib/apiAuth.ts`) opens the dialog on a 428 and repeats the call.
+(`MOTRES_OWN_DOMAINS` adds more); every read of an existing project. The web (`lib/apiAuth.ts`) opens the dialog on a 428 (the company
+click-through for gate 1, the short simulation-start dialog for gate 2 which says `at: simulation`) and repeats the call once.
 
 ## For the dataset export
 
@@ -89,9 +96,9 @@ only if it is covered by the allow-list; absent = NOT eligible.
   switches to PRIVATE, or a PRIVATE request puts a no-training hold on it, the entry STAYS in the list with `eligible_until` = that moment;
   data supplied in FREE mode before it stay eligible. Only an account/company that was never FREE (or whose window is empty) is absent.
   A FREE - PRIVATE - FREE history keeps the newest FREE run only (the PRIVATE interval is never eligible).
-* **accounts** - one entry per account that is eligible by its own Terms-of-Use box or account-level agreement (`capacity` `business` or
-  `sole_trader`, as ticked at the sign-up/update dialog) or covered by its company's FREE acceptance (`capacity: "company"`). Capacity
-  `other` (no authority to bind) and a Terms line without a capacity are NOT listed (fail-closed until a per-data confirmation exists, D4).
+* **accounts** - one entry per account that is eligible by its own account-level agreement (`capacity` `business` or
+  `sole_trader`, as chosen in the simulation-start dialog, or the click-through) or covered by its company's FREE acceptance (`capacity: "company"`).
+  Capacity `other` (no authority to bind) and a Terms-only line (the sign-up box, no capacity) are NOT listed (fail-closed until a per-data confirmation exists, D4).
   `historical_opt_in: true` (the optional box of agreement 7.9) sets `eligible_from` to the account's creation time instead of the acceptance.
   The company acceptance decides for its confirmed users (agreement 2.4); a company that is PRIVATE from the start leaves only the
   accounts' own earlier windows, closed at the company's switch.
@@ -107,8 +114,9 @@ only if it is covered by the allow-list; absent = NOT eligible.
 
 `training_eligibility(company_or_email) -> dict | None` returns the same window for one account, company id or key
 (`{mode, eligible_from, [eligible_until], historical_opt_in, capacity, scope}`; `scope` is `company`, `account` or `own`; None = never
-eligible). First match decides: a COMPANY acceptance of this agreement, else an ACCOUNT-level acceptance, else the Terms-of-Use box of v0.4 or
-later by capacity (the newest line decides; the unbroken run of qualifying lines sets the start), else None. A no-training **hold** (below) on
+eligible). First match decides: a COMPANY acceptance of this agreement, else an ACCOUNT-level acceptance, else the account's agreement line of v0.4 or
+later by capacity and mode (the newest agreement line decides; the unbroken run of FREE lines sets the start; a PRIVATE line closes the window; a
+Terms-only line is ignored), else None. A no-training **hold** (below) on
 the account or its company closes the window at the hold time. `training_allowed(x)` stays: True iff the window is open now.
 
 **Holds (gate R10).** A written PRIVATE request received at support@aerostator.com places the client's data on a no-training hold at once
@@ -123,7 +131,7 @@ any version; a PRIVATE choice is never overridden by the Terms line.
 
 ## Account acceptance and the public texts
 
-Accepting the Terms of Use when an account is created (or once, after sign-in, for an existing account) accepts this agreement in FREE
-mode for the account (agreement section 2.3). The texts, the acceptance record and how a new version is published are in
-`docs/LEGAL_TEXTS.md`. The click-through above is unchanged: it still reads the INSTALLED version from `<shared>/legal`; the public copy in
+Since 2026-11-01 the sign-up box accepts only the Terms of Use and the Privacy Policy. This agreement is accepted for the account, in FREE
+mode or as a PRIVATE request, at the start of the first simulation (agreement section 2.3). The texts, the acceptance record and how a new
+version is published are in `docs/LEGAL_TEXTS.md`. The click-through above is unchanged: it still reads the INSTALLED version from `<shared>/legal`; the public copy in
 `config/legal/platform_agreement_public/` is only what `/platform-agreement` shows.

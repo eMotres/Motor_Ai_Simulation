@@ -2,7 +2,7 @@ Subject: AeroStator account notice: new terms and engineering-data choices
 
 Hello,
 
-We are asking you to review new AeroStator Terms of Use and the Platform Agreement. They apply only if you accept them. Until then, your data are not used for internal AI training. When you next sign in, AeroStator shows the new terms; you can accept them or choose "Later".
+We have updated the AeroStator Terms of Use and Privacy Policy and introduced a Platform Agreement for simulations. When you next sign in, a short line asks you to accept the updated Terms. The Platform Agreement, with the choice of FREE or PRIVATE mode, is asked for when you first start a simulation; without it, simulations cannot be started. Until you accept it, your data are not used for internal AI training.
 
 ## What the new terms say
 
@@ -19,7 +19,7 @@ We are asking you to review new AeroStator Terms of Use and the Platform Agreeme
 
 ## If you do not agree
 
-You do not have to accept. You can download your data from the account menu and delete your account. Data of accounts that do not accept are not used for AI training.
+You do not have to accept. Browsing, the catalogue and your stored results stay available; you can also download your data from the account menu and delete your account. Data of accounts that do not accept the Platform Agreement are not used for AI training.
 
 => [Review the terms in your account]({{open_url}})
 

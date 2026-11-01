@@ -14,7 +14,7 @@ from a password account below; RIGHTS always come from our registry
 - POST /api/auth/sessions/{sid}/revoke — sign one of them out
 - POST /api/auth/logout       — revoke the session this request is using
 - POST /api/auth/heartbeat    — "the user is here": refreshes the session's idle clock (session_activity.py)
-- POST /api/auth/register     — self-service e-mail/password sign-up (unverified); needs ``accept_terms`` + ``terms_version`` + ``country`` + ``capacity`` (legal_texts.py)
+- POST /api/auth/register     — self-service e-mail/password sign-up (unverified); needs ``accept_terms`` + ``terms_version`` (Terms of Use + Privacy Policy, legal_texts.py)
 - POST /api/auth/verify       — consume the e-mail confirmation link
 - POST /api/auth/register/resend        — mail the confirmation link again (rate-limited)
 - POST /api/auth/register/change-email  — an unverified account fixes a mistyped address (password proves it is theirs)
@@ -202,16 +202,13 @@ class RegisterReq(BaseModel):
     #: wording was shown in; recorded with the consent proof (motor_ai_sim.comm_prefs) once the account exists.
     comm_prefs: Optional[dict] = None
     lang: str = "en"
-    #: The unticked box of the sign-up form (Terms of Use + Platform Agreement + Privacy Policy) and the version of the texts it was
-    #: shown for; a new account is refused (422 ``terms_required``) without both (motor_ai_sim.legal_texts).
+    #: The unticked box of the sign-up form (Terms of Use + Privacy Policy, "I use AeroStator for business and accept ...") and the
+    #: version of the texts it was shown for; a new account is refused (422 ``terms_required``) without both (motor_ai_sim.legal_texts).
+    #: The wording of the box as shown is kept with the record (section 15.3).  No capacity, country or business name is asked here:
+    #: the Platform Agreement is accepted at the start of a simulation (routes/legal.py ``/api/legal/accept-agreement``); a client
+    #: that still sends them is ignored.
     accept_terms: bool = False
     terms_version: str = ""
-    #: Where the business is established (ISO code, required with the box), the capacity of agreement section 2.3 (business |
-    #: sole_trader | other, required) and the business name (required for ``business``, optional otherwise).  The wording of the box
-    #: as shown is kept with the record (section 15.3).  The earlier-data box (section 7.9) is only for existing accounts.
-    country: str = ""
-    business_name: str = ""
-    capacity: str = ""
     accept_label: str = ""
     #: Sign-up started inside an OAuth authorization window (MCP connector):
     #: the consent-page path ``/agent-consent?request=<id>``.  A NEW account
@@ -285,27 +282,21 @@ def _record_signup_topics(email: str, topics: dict, source: str, ip: str, lang: 
 
 
 def _require_terms(req: Any) -> None:
-    """A NEW account exists only with the ticked box for the current texts and the country of the business (loud 422
-    ``terms_required`` / ``country_required`` / ``capacity_required`` / ``business_name_required`` otherwise).  ``req`` is the
-    register / Google request."""
+    """A NEW account exists only with the ticked box for the current Terms of Use and Privacy Policy (loud 422 ``terms_required``
+    otherwise).  ``req`` is the register / Google request."""
     from motor_ai_sim import legal_texts as LT
     if not LT.acceptance_required():
         return
     if not LT.accepted_now(req.accept_terms, req.terms_version):
         raise ApiError(422, "terms_required",
-                       "Tick the box to accept the Terms of Use, the Platform Agreement and the Privacy Policy (version %s)." % LT.TERMS_VERSION)
-    try:
-        LT.clean_acceptance(req.country, req.business_name, req.capacity)
-    except LT.CompanyError as e:
-        raise ApiError(422, e.code, str(e))
+                       "Tick the box to accept the Terms of Use and the Privacy Policy (version %s)." % LT.TERMS_VERSION)
 
 
 def _record_terms(email: str, source: str, request: Request, req: Any) -> None:
-    """The acceptance of a new account, stored with the hashes of the texts shown; a storage failure never blocks the account."""
+    """The Terms-only acceptance of a new account, stored with the hashes of the texts shown; a storage failure never blocks the account."""
     from motor_ai_sim import legal_texts as LT
     if LT.acceptance_required():
-        LT.record_signup(email, source=source, country=req.country, business_name=req.business_name, capacity=req.capacity,
-                         labels=LT.clean_labels(req.accept_label), lang=req.lang, ip=_ip(request),
+        LT.record_signup(email, source=source, labels=LT.clean_labels(req.accept_label), lang=req.lang, ip=_ip(request),
                          user_agent=request.headers.get("user-agent", ""))
 
 
@@ -772,9 +763,6 @@ class GoogleReq(BaseModel):
     lang: str = "en"
     accept_terms: bool = False          # the sign-up box; required for the FIRST sign-in only (an existing account is never blocked)
     terms_version: str = ""
-    country: str = ""                   # where the business is established (required with the box), the capacity (section 2.3), the name
-    business_name: str = ""
-    capacity: str = ""
     accept_label: str = ""
 
 

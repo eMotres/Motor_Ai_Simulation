@@ -1,7 +1,12 @@
-"""The legal texts of the free simulation launch and the record of who accepted them (owner 2026-10-27, texts v0.4).
+"""The legal texts of the free simulation launch and the record of who accepted them (owner 2026-10-27, texts v0.5; two steps since
+owner 2026-11-01: "the agreement is needed only by users who want to simulate a motor").
 
-Three documents are accepted by ONE unticked box when an account is created: the Terms of Use, the Platform Agreement (the click-through
-of ``platform_agreement.py`` is the company-level version of the same agreement) and the Privacy Policy.  The texts live in the repo,
+Step 1, sign-up: ONE unticked box accepts the Terms of Use and the Privacy Policy ("I use AeroStator for business and accept ...").  No
+capacity, country or business name is asked and the line carries no agreement fields.  Step 2, the START of a simulation: the Platform
+Agreement (the click-through of ``platform_agreement.py`` is the company-level version of the same agreement) is accepted in FREE mode or
+PRIVATE is asked for, with capacity, country, business name and the optional earlier-data box (``record_acceptance`` source
+``simulation_start``); ``agreement_accepted`` / ``platform_agreement.simulation_gate_detail`` decide whether a job may start (env
+``PLATFORM_AGREEMENT_AT_SIMULATION=1``, default OFF).  The texts live in the repo,
 EN and zh-CN, one directory per version, and are shown read-only in the app (``/terms``, ``/privacy``, ``/platform-agreement``):
 
     config/legal/terms_of_use/<version>/terms_of_use_<lang>.md
@@ -20,12 +25,18 @@ Acceptance record, append-only, one JSON line per acceptance, next to ``users.js
 
     <identity root>/terms_acceptances.jsonl     id, ts, iso, user, terms_version, privacy_version, agreement_public_version, lang,
                                                 text_sha256 {terms, privacy, platform_agreement, schedules} (of the text in ``lang``),
+                                                labels {accept, election} (the wording shown), kind (terms | agreement), source
+                                                (signup | google | oauth_signup | existing | simulation_start), ip, user_agent, and ONLY on
+                                                an ``agreement`` line (source ``simulation_start``): mode (FREE | PRIVATE; PRIVATE =
+                                                requested, the fee is agreed with the team), private_pending_payment, ai_training_allowed,
                                                 country (where the business is established, required), capacity (agreement section 2.3:
                                                 business | sole_trader | other, required), business_name (required for ``business``,
                                                 optional otherwise), historical_opt_in (section 7.9: the optional box for the data the
-                                                account entered before it accepted; only an existing account sees it), labels {accept,
-                                                election} (the wording shown), forum_variant (A | B: B for CN / HK, agreement section 13),
-                                                source (signup | google | oauth_signup | existing), ip, user_agent
+                                                account entered before it accepted), forum_variant (A | B: B for CN / HK, section 13)
+
+A ``terms`` line (sign-up, the "updated terms" banner) is NOT an agreement acceptance: it has no capacity, so ``training_eligibility`` and
+the simulation gate ignore it.  Lines of the first v0.4 release (#525) carry a capacity and a country but no ``kind`` / ``mode``: they are
+agreement lines in FREE mode (their label carried the FREE exchange).
 
 Account deletion pseudonymises it like the consent history of ``comm_prefs`` (the proof stays, the person goes); the data export
 carries the account's own lines.  A new version is published by adding its directories and bumping :data:`TERMS_VERSION`
@@ -52,14 +63,20 @@ log = logging.getLogger(__name__)
 
 #: The version of the Terms of Use, the Privacy Policy and the public Platform Agreement a sign-up accepts.  One number for the set: a
 #: change of any of them is a new version of all (the texts reference each other).
-TERMS_VERSION = "v0.4"
+TERMS_VERSION = "v0.5"
 PRIVACY_VERSION = TERMS_VERSION
 AGREEMENT_PUBLIC_VERSION = TERMS_VERSION
 #: First terms version that carries the FREE-mode data use: an account that accepted it may be trained on (platform_agreement.training_allowed).
 MIN_TRAINING_VERSION = "v0.4"
 
 LANGS = ("en", "zh-CN")
-SOURCES = ("signup", "google", "oauth_signup", "existing")
+#: The sources of a Terms-only line (no agreement fields) and of an agreement line.
+TERMS_SOURCES = ("signup", "google", "oauth_signup", "existing")
+AGREEMENT_SOURCES = ("simulation_start",)
+SOURCES = TERMS_SOURCES + AGREEMENT_SOURCES
+#: The two modes of the account agreement (the same words as the company click-through): FREE = the data may train MOTRES's AI;
+#: PRIVATE = requested, paid, no training (a no-training hold is placed at once).
+MODES = ("FREE", "PRIVATE")
 #: Agreement section 2.3: (a) a named business the person may bind, (b) the person as a registered sole trader / self-employed
 #: professional, (c) neither (an employee or contractor without authority to bind its employer or customer).
 CAPACITIES = ("business", "sole_trader", "other")
@@ -87,8 +104,8 @@ class UnknownText(KeyError):
 
 
 class CompanyError(ValueError):
-    """The country / capacity / business name of an acceptance is not usable; ``code`` is the stable API code (``country_required`` |
-    ``capacity_required`` | ``business_name_required`` | ``business_name_too_long``)."""
+    """The mode / country / capacity / business name of an agreement acceptance is not usable; ``code`` is the stable API code
+    (``mode_required`` | ``country_required`` | ``capacity_required`` | ``business_name_required`` | ``business_name_too_long``)."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -257,13 +274,17 @@ def records(email: Optional[str] = None) -> list[dict]:
     return rows
 
 
-def record_acceptance(email: str, *, source: str, country: str, business_name: str = "", capacity: str = "", lang: str = "en",
-                      historical_opt_in: bool = False, labels: Optional[dict] = None, ip: str = "", user_agent: str = "") -> dict:
+def record_acceptance(email: str, *, source: str, country: str = "", business_name: str = "", capacity: str = "", lang: str = "en",
+                      historical_opt_in: bool = False, labels: Optional[dict] = None, ip: str = "", user_agent: str = "",
+                      mode: str = "") -> dict:
     """Append the acceptance of the CURRENT texts by this account and return the record.  ``OSError`` when it cannot be written (the
-    caller decides: a sign-up logs it and goes on, the existing-user dialog tells the person to try again).  ``ValueError`` for an
-    unknown source, :class:`CompanyError` for a country that is not on the list or a missing capacity / business name.
+    caller decides: a sign-up logs it and goes on, the banner and the simulation-start dialog tell the person to try again).
+    ``ValueError`` for an unknown source or mode.
 
-    ``historical_opt_in`` (agreement section 7.9) is kept only for source ``existing``: a new account has no earlier data."""
+    A Terms-only source (:data:`TERMS_SOURCES`) records the versions, hashes, labels and source and nothing about a capacity: country,
+    capacity, business name, earlier-data election and mode are not stored (they were not asked).  Source ``simulation_start`` records
+    the account agreement: the ``mode`` (FREE | PRIVATE), the capacity, the country (:class:`CompanyError` when missing or not on the
+    list), the business name (required for ``business``) and the earlier-data election ``historical_opt_in`` (section 7.9)."""
     email = _norm(email)
     if not email:
         raise ValueError("no account")
@@ -274,14 +295,22 @@ def record_acceptance(email: str, *, source: str, country: str, business_name: s
     except UnknownText:
         lang = "en"
     from motor_ai_sim.private_files import ensure_private_dir, open_private
-    country, business_name, capacity = clean_acceptance(country, business_name, capacity)
+    agreement = source in AGREEMENT_SOURCES
+    mode = str(mode or "").strip().upper()
+    if agreement:
+        if mode not in MODES:
+            raise CompanyError("mode_required", "Choose FREE, or ask for PRIVATE.")
+        country, business_name, capacity = clean_acceptance(country, business_name, capacity)
     now = time.time()
     rec = dict(id="t%s-%s" % (datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime("%Y%m%d"), secrets.token_hex(6)),
                ts=round(now, 3), iso=_iso(now), user=email, terms_version=TERMS_VERSION, privacy_version=PRIVACY_VERSION,
-               agreement_public_version=AGREEMENT_PUBLIC_VERSION, lang=lang, text_sha256=shown_hashes(lang), country=country,
-               capacity=capacity, business_name=business_name, historical_opt_in=bool(historical_opt_in is True and source == "existing"),
-               labels=dict(labels or {}), forum_variant=forum_variant(country), source=source,
+               agreement_public_version=AGREEMENT_PUBLIC_VERSION, lang=lang, text_sha256=shown_hashes(lang),
+               labels=dict(labels or {}), kind="agreement" if agreement else "terms", source=source,
                ip=str(ip or ""), user_agent=str(user_agent or "")[:300])
+    if agreement:
+        rec.update(mode=mode, private_pending_payment=mode == "PRIVATE", ai_training_allowed=mode == "FREE" and capacity in TRAINING_CAPACITIES,
+                   country=country, capacity=capacity, business_name=business_name, historical_opt_in=historical_opt_in is True,
+                   forum_variant=forum_variant(country))
     with _LOCK:
         ensure_private_dir(acceptances_path().parent)
         with open_private(acceptances_path(), "a") as fh:
@@ -289,13 +318,11 @@ def record_acceptance(email: str, *, source: str, country: str, business_name: s
     return rec
 
 
-def record_signup(email: str, *, source: str, country: str, business_name: str, lang: str, ip: str, user_agent: str,
-                  capacity: str = "", labels: Optional[dict] = None) -> Optional[dict]:
-    """The acceptance of a new account.  A failure to store it never blocks the account (the person is asked again at the next
-    sign-in, see :func:`needs_acceptance`)."""
+def record_signup(email: str, *, source: str, lang: str, ip: str, user_agent: str, labels: Optional[dict] = None) -> Optional[dict]:
+    """The Terms-only acceptance of a new account.  A failure to store it never blocks the account (the person gets the "updated terms"
+    line at the next sign-in, see :func:`needs_acceptance`)."""
     try:
-        return record_acceptance(email, source=source, country=country, business_name=business_name, capacity=capacity, lang=lang,
-                                 labels=labels, ip=ip, user_agent=user_agent)
+        return record_acceptance(email, source=source, lang=lang, labels=labels, ip=ip, user_agent=user_agent)
     except Exception as e:                                   # noqa: BLE001
         log.warning("terms: acceptance of a new account was not stored (%s)", type(e).__name__)
         return None
@@ -307,15 +334,45 @@ def latest(email: str) -> Optional[dict]:
 
 
 def accepted_version(email: str, minimum: Optional[str] = None) -> bool:
-    """Has this account accepted the texts at ``minimum`` or later (default: the current version)?"""
+    """Has this account accepted the Terms of Use and the Privacy Policy at ``minimum`` or later (default: the current version)?  Any
+    line counts, a Terms-only line of the sign-up as well as an agreement line (whose label names the Terms too)."""
     minimum = minimum or TERMS_VERSION
-    return any(version_ge(r.get("terms_version"), minimum) and _complete(r) for r in records(email))
+    return any(version_ge(r.get("terms_version"), minimum) for r in records(email))
 
 
-def _complete(r: dict) -> bool:
-    """A line of the FREE-mode texts (:data:`MIN_TRAINING_VERSION` or later) counts only with its capacity (agreement section 2.3);
-    older lines predate the choice."""
-    return not version_ge(r.get("terms_version"), MIN_TRAINING_VERSION) or str(r.get("capacity") or "") in CAPACITIES
+# -- the account agreement (step 2: the start of a simulation) ------------------------------------------------------
+
+def is_agreement_line(r: dict) -> bool:
+    """Does this line carry the agreement fields (a capacity of agreement section 2.3)?  A Terms-only line never does."""
+    return isinstance(r, dict) and str(r.get("capacity") or "") in CAPACITIES
+
+
+def line_mode(r: dict) -> str:
+    """FREE | PRIVATE of an agreement line; a line of the first v0.4 release has no ``mode`` and was accepted in FREE mode."""
+    m = str(r.get("mode") or "").strip().upper()
+    return m if m in MODES else "FREE"
+
+
+def training_token(r: dict) -> str:
+    """What an agreement line means for AI training: ``FREE`` (business / sole_trader in FREE mode), ``PRIVATE`` (PRIVATE requested) or
+    ``OTHER`` (capacity ``other``: no authority to bind, fail-closed until a per-data confirmation exists)."""
+    if str(r.get("capacity") or "") not in TRAINING_CAPACITIES:
+        return "OTHER"
+    return "PRIVATE" if line_mode(r) == "PRIVATE" else "FREE"
+
+
+def agreement_line(email: str) -> Optional[dict]:
+    """The newest account-level acceptance of the CURRENT public agreement version or later that carries capacity, country and mode
+    (FREE or PRIVATE-requested); None when the account has none."""
+    for r in reversed(records(email)):
+        if (is_agreement_line(r) and version_ge(r.get("agreement_public_version"), AGREEMENT_PUBLIC_VERSION)
+                and str(r.get("country") or "").strip() and line_mode(r) in MODES):
+            return r
+    return None
+
+
+def agreement_accepted(email: str) -> bool:
+    return agreement_line(email) is not None
 
 
 def needs_acceptance(email: str, role: Any = "") -> bool:
@@ -329,60 +386,14 @@ def needs_acceptance(email: str, role: Any = "") -> bool:
     return not accepted_version(email)
 
 
-def required_from() -> Optional[datetime.date]:
-    """The owner's "Later" deadline (``TERMS_REQUIRED_FROM``, an ISO date, UTC): from that day on, starting a compute job needs an
-    acceptance of the current version.  Unset or not a date = no gate."""
-    raw = (os.environ.get("TERMS_REQUIRED_FROM") or "").strip()
-    if not raw:
-        return None
-    try:
-        return datetime.date.fromisoformat(raw[:10])
-    except ValueError:
-        log.warning("terms: TERMS_REQUIRED_FROM=%r is not an ISO date; no gate", raw)
-        return None
-
-
-def gate_active(now: Optional[datetime.datetime] = None) -> bool:
-    d = required_from()
-    if d is None:
-        return False
-    return (now or datetime.datetime.now(datetime.timezone.utc)).date() >= d
-
-
-def gate_detail(email: str, role: Any = "") -> Optional[dict]:
-    """None when this account may start a compute job; else the body of the 428 (``code`` ``terms_required``): the deadline has
-    passed and the account has no acceptance of the current version.  Staff, MOTRES's own accounts, anonymous or process identities
-    and the switch ``TERMS_ACCEPTANCE_DISABLED`` are never gated."""
-    email = _norm(email)
-    if not email or "@" not in email or not gate_active():
-        return None
-    if not role:                                # a caller that knows only the e-mail (an agent key, a job owner)
-        try:
-            from motor_ai_sim import users as U
-            role = (U.get_user(email) or {}).get("role") or ""
-        except Exception:                                              # noqa: BLE001
-            role = ""
-    if not needs_acceptance(email, role):
-        return None
-    return {"code": "terms_required", "version": TERMS_VERSION, "from": required_from().isoformat(),
-            "message": "Accept the updated Terms of Use, Platform Agreement and Privacy Policy (version %s) to start new simulations." % TERMS_VERSION}
-
-
-def require_current(email: str, role: Any = "") -> None:
-    """Gate hook: HTTP 428 ``terms_required`` (see :func:`gate_detail`)."""
-    detail = gate_detail(email, role)
-    if detail:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=428, detail=detail)
-
-
 def status_for(email: str, role: Any = "") -> dict:
     """What the web needs after a sign-in (``GET /api/legal/status``)."""
     last = latest(email)
-    d = required_from()
+    ag = agreement_line(email)
     return {"version": TERMS_VERSION, "privacy_version": PRIVACY_VERSION, "agreement_version": AGREEMENT_PUBLIC_VERSION,
             "required": needs_acceptance(email, role), "accepted_version": (last or {}).get("terms_version"),
-            "accepted_at": (last or {}).get("iso"), "required_from": d.isoformat() if d else None}
+            "accepted_at": (last or {}).get("iso"),
+            "agreement": {"accepted": ag is not None, "mode": line_mode(ag) if ag else None, "accepted_at": (ag or {}).get("iso")}}
 
 
 # -- the record as shown (agreement section 15.3, gate R16) ------------------------------------------------------
@@ -395,12 +406,16 @@ FORUM_LABELS = {"A": "Variant A", "B": "Variant B (Hong Kong law, HKIAC; Mainlan
 
 def record_view(rec: dict) -> list[tuple[str, str]]:
     """The rows an ACCOUNT acceptance shows (PDF and record view): capacity, business name (only when one was given), country, forum
-    variant, the election of section 7.9, version, language, time, source, account, hashes and the record id.  A field with no value is
-    left out; the company-agreement rows (company, registration no., title, mode) never appear here."""
+    variant, the election of section 7.9, the agreement mode, version, language, time, source, account, hashes and the record id.  A field
+    with no value is left out (a Terms-only line shows no capacity, country or mode); the company-agreement rows (company, registration
+    no., title) never appear here."""
     sha = rec.get("text_sha256") if isinstance(rec.get("text_sha256"), dict) else {}
     labels = rec.get("labels") if isinstance(rec.get("labels"), dict) else {}
     cap = str(rec.get("capacity") or "")
-    rows = [("Account", rec.get("user")), ("Accepted (UTC)", rec.get("iso")), ("Capacity", CAPACITY_LABELS.get(cap, cap)),
+    mode = str(rec.get("mode") or "").upper()
+    rows = [("Account", rec.get("user")), ("Accepted (UTC)", rec.get("iso")),
+            ("Agreement mode", {"FREE": "FREE", "PRIVATE": "PRIVATE (requested; our team agrees the fee)"}.get(mode, "")),
+            ("Capacity", CAPACITY_LABELS.get(cap, cap)),
             ("Business name", rec.get("business_name")), ("Country of establishment", rec.get("country")),
             ("Forum (agreement section 13)", FORUM_LABELS.get(str(rec.get("forum_variant") or ""), "")),
             ("Earlier data (section 7.9)", ("Included from the account's creation" if rec.get("historical_opt_in") else "Not included")

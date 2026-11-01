@@ -3062,6 +3062,41 @@ _NO_WARM_CACHE_CTX = _ctxv.ContextVar("sb_no_warm_cache", default=False)
 _WANT_WARM_PUBLISH_CTX = _ctxv.ContextVar("sb_want_warm_publish", default=False)
 
 
+# A FAST DC MODE IS LEFT TO THE MARCH (2026-10-31).  The TP-EEC exists for a
+# slow solid ring: the L155 shaft wall, slowest periodic DC mode λ 0.956-0.960
+# per period (docs/EDDY_SHAFT_SETTLE_2026-09-29.md).  It measures that mode
+# itself (inverse iteration, ``info["lambda"]``).  When it decays faster than
+# this per period, the march removes the DC error within a period or two on its
+# own, while an APPLIED correction restarts the settle gauge and starts the
+# MIN_VERIFY_PERIODS count after a jump: on the L90 (λ 6.6e-5, τ 0.10 period)
+# it cost 360 of the cold run's 1082 frames for results identical to 0.014 %.
+# SB_EDDY_EEC_LAMBDA_MIN=0 applies every correction, as before.
+EEC_LAMBDA_MIN_DEFAULT = 0.5
+
+
+def _eec_lambda_min() -> float:
+    try:
+        return max(0.0, float(_os_sb.environ.get(
+            "SB_EDDY_EEC_LAMBDA_MIN", EEC_LAMBDA_MIN_DEFAULT)))
+    except (TypeError, ValueError):
+        return EEC_LAMBDA_MIN_DEFAULT
+
+
+def _eec_apply_decision(lam, refused, lam_min: float):
+    """Is a computed DC correction applied?  ``(apply, why_not)``: refused
+    or out of (0, 0.999) as before, and NOT applied when the slowest mode it
+    measured decays faster than ``lam_min`` per period (a fast mode)."""
+    if refused or lam is None or not (0.0 < float(lam) < 0.999):
+        return False, None
+    if float(lam) < float(lam_min):
+        _tau = -1.0 / math.log(float(lam))
+        return False, ("the slowest DC mode decays by itself (lambda %.3g per "
+                       "period, tau %.2f period(s) < lambda_min %g): the march "
+                       "settles it, no gauge restart" % (float(lam), _tau,
+                                                          float(lam_min)))
+    return True, None
+
+
 def _warm_cache_disabled() -> bool:
     """True when this solve must neither consume nor publish the warm seed."""
     return _os_sb.environ.get("SB_NO_WARM_CACHE") == "1" or bool(_NO_WARM_CACHE_CTX.get())
@@ -8361,6 +8396,7 @@ def _fem_transient_sliding_band_once(
     _eec_groups = [_gk for _gk in ("shaft", "sleeve") if _gk in _Msig_grp]
     _eec_at = sorted({int(_s) for _s in (_os_sb.environ.get(
         "SB_EDDY_EEC_AT", "2,4") or "").split(",") if _s.strip()})
+    _eec_lam_min = _eec_lambda_min()   # a faster mode is left to the march
     _eec_J = None                 # Σ over the period's frames of K + T (unclamped)
     _eec_nJ = 0
     _eec_x0 = None                # the period's start state (same labelling)
@@ -11839,8 +11875,10 @@ def _fem_transient_sliding_band_once(
                                                            _pm_e, _sg_e, _q_e, _s_e,
                                                            _Te)
                                 _lam_e = _ie.get("lambda")
-                                _ok_e = bool(_lam_e is not None and 0.0 < _lam_e < 0.999
-                                             and not _ie.get("refused"))
+                                _ok_e, _skip_e = _eec_apply_decision(
+                                    _lam_e, _ie.get("refused"), _eec_lam_min)
+                                if _skip_e:
+                                    _ie = dict(_ie, skipped=_skip_e)
                                 if _ok_e:
                                     # a time-constant (rotor-frame DC) correction:
                                     # added to BOTH BDF2 history levels (A2 =

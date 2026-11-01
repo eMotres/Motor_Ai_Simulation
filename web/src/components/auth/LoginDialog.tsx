@@ -7,18 +7,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, Box, TextField, Button,
-  Typography, CircularProgress, Tabs, Tab, Link,
+  Typography, CircularProgress, Tabs, Tab, Link, Tooltip,
 } from '@mui/material';
 import {
   decodeJwtPayload, googleExchange, loadGis, GisUnreachableError, passwordLogin,
   registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset, resendVerification, changeSignupEmail, ApiErr,
   pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
-  GOOGLE_CLIENT_ID, TERMS_URL, PRIVACY_URL, SOURCE_URL, type SessionUser,
+  GOOGLE_CLIENT_ID, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
+import {
+  TERMS_VERSION, acceptancePayload, emptyAcceptance, isTermsRequired, showTermsHint, signupAllowed, type AcceptanceForm,
+} from '../../lib/legalLogic';
 import { isChineseVisitor } from '../../i18n/detectInitialLanguage';
 import { appLinkReturnPath } from '../../lib/appLink';
 import HelpTip from '../common/HelpTip';
 import CommPrefsBoxes from '../common/CommPrefsBoxes';
+import TermsBox from '../common/TermsBox';
+import { legalLabels } from '../../lib/legalLabels';
 import { emptyTopics, tickedTopics, type Topics } from '../../lib/commPrefsLogic';
 import { useTranslation } from 'react-i18next';
 
@@ -92,14 +97,22 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
 
   const consentBox = <CommPrefsBoxes value={topics} onChange={setTopics} compact />;
 
-  // Creating an account (form or first Google sign-in) accepts the terms.
+  // Creating an account (form, first Google sign-in, sign-up from an AI app's consent page) needs the unticked terms box (Terms of
+  // Use + Platform Agreement + Privacy Policy, owner 2026-10-27); the buttons stay off until it is ticked.  Refs so the GIS callback
+  // registered once still reads the current state.  Signing in to an existing account never asks.
+  const [acceptance, setAcceptance] = useState<AcceptanceForm>(emptyAcceptance());
+  const acceptanceRef = useRef<AcceptanceForm>(acceptance);
+  acceptanceRef.current = acceptance;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const modeRef = useRef<Mode>('signin');
+  modeRef.current = mode;
+  const termsBox = <TermsBox value={acceptance} onChange={setAcceptance} compact />;
+  const noBoxHint = t('legal.accept.hint');
+
   const termsLine = (
     <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-      {t('auth.terms.prefix')}{' '}
-      <Link href={TERMS_URL} target="_blank" rel="noopener noreferrer">{t('auth.terms.terms')}</Link>
-      {' · '}
-      <Link href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">{t('auth.terms.privacy')}</Link>
-      {'. '}{t('auth.terms.license')}{' '}
+      {t('auth.terms.license')}{' '}
       <Link href={SOURCE_URL} target="_blank" rel="noopener noreferrer">{t('auth.terms.source')}</Link>
     </Typography>
   );
@@ -153,13 +166,20 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
           callback: (resp: { credential?: string }) => {
             if (!resp.credential) return;
             const claims = decodeJwtPayload(resp.credential);
-            void googleExchange(resp.credential, tickedTopics(topicsRef.current), langRef.current)
+            // creating an account with Google needs the box; the official button cannot be disabled, so it is checked here too
+            if (modeRef.current === 'register' && !signupAllowed({ creating: true, form: acceptanceRef.current })) { setErr(noBoxHint); return; }
+            void googleExchange(resp.credential, tickedTopics(topicsRef.current), langRef.current,
+              acceptancePayload(acceptanceRef.current, TERMS_VERSION, { labels: legalLabels(tRef.current, acceptanceRef.current) }))
               .then(({ token, user }) => onSignedIn(token, {
                 ...user,
                 name: user.name || String(claims.name ?? ''),
                 picture: typeof claims.picture === 'string' ? claims.picture : undefined,
               }))
-              .catch((e: Error) => setErr(e.message));
+              .catch((e: Error) => {
+                // a brand-new Google account that was started without the box: show it, the next click on Google carries it
+                if (isTermsRequired(e)) { setMode('register'); setAcceptance(emptyAcceptance()); setErr(t('legal.accept.needBox')); return; }
+                setErr(e.message);
+              });
           },
         });
         if (gButtonRef.current) {
@@ -211,7 +231,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   };
 
   const switchMode = (m: Mode) => {
-    setMode(m); setErr(null); setInfo(null); setTouched(false);
+    setMode(m); setErr(null); setInfo(null); setTouched(false); setAcceptance(emptyAcceptance());
     setPassword(''); setPassword2('');
     setSent(null); setChanging(false);
   };
@@ -226,10 +246,12 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   const pw2Err = needsNewPw && password2 !== password ? t('auth.validation.passwordMismatch') : '';
   const nameErr = mode === 'register' && !name.trim() ? t('auth.validation.nameRequired') : '';
   const invalid = !!(emailErr || pwErr || pw2Err || nameErr);
+  const creating = mode === 'register';
+  const boxHint = showTermsHint({ creating, form: acceptance });
 
   const submit = async () => {
     setTouched(true);
-    if (busy || invalid) return;
+    if (busy || invalid || !signupAllowed({ creating, form: acceptance })) return;
     setBusy(true); setErr(null); setInfo(null);
     try {
       if (mode === 'signin') {
@@ -238,8 +260,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         onSignedIn(token, user);
       } else if (mode === 'register') {
         await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo,
-          appLinkReturnPath(window.location.pathname, window.location.search));
-        setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics());
+          appLinkReturnPath(window.location.pathname, window.location.search), acceptancePayload(acceptance, TERMS_VERSION, { labels: legalLabels(t, acceptance) }));
+        setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics()); setAcceptance(emptyAcceptance());
         setMode('signin');
         setSent({ email: email.trim(), ok: null }); setChanging(false); setNewEmail(''); setCooldown(60);
         setInfo(null);
@@ -302,20 +324,29 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
 
         {tab === 'google' && GOOGLE_CLIENT_ID ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, py: 1 }}>
-            <div ref={setGButtonBox} />
-            {gisState !== 'ready' && (
-              <Button variant="outlined" onClick={startGoogle} disabled={gisState === 'loading'}
-                data-testid="google-signin"
-                sx={{ textTransform: 'none', width: 280, py: 1, fontWeight: 600 }}>
-                {gisState === 'loading' ? <CircularProgress size={18} sx={{ color: 'inherit' }} /> : t('auth.google.signIn')}
-              </Button>
-            )}
+            <Tooltip title={boxHint ? noBoxHint : ''}>
+              <Box component="span" sx={{ display: 'block' }}>
+                {/* the official Google button cannot be disabled: while the box is unticked it is dimmed and takes no clicks */}
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+                  ...(boxHint ? { opacity: 0.45, pointerEvents: 'none' as const } : {}) }} data-testid="google-area" aria-disabled={boxHint}>
+                  <div ref={setGButtonBox} />
+                  {gisState !== 'ready' && (
+                    <Button variant="outlined" onClick={startGoogle} disabled={gisState === 'loading' || boxHint}
+                      data-testid="google-signin"
+                      sx={{ textTransform: 'none', width: 280, py: 1, fontWeight: 600 }}>
+                      {gisState === 'loading' ? <CircularProgress size={18} sx={{ color: 'inherit' }} /> : t('auth.google.signIn')}
+                    </Button>
+                  )}
+                </Box>
+              </Box>
+            </Tooltip>
             {/* The e-mail topics are asked only when creating an account (owner 2026-10-24); a returning user
                 changes them on the account page (CommPrefsPage), not at every sign-in. */}
             {mode === 'register' ? (
               <>
                 {consentBox}
                 <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.75 }}>{t('auth.consent.newAccountOnly')}</Typography>
+                {termsBox}
               </>
             ) : (
               <Link component="button" type="button" sx={{ fontSize: 12 }} onClick={() => switchMode('register')}>
@@ -407,12 +438,17 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
                 error={!!show(pw2Err)} helperText={show(pw2Err)} />
             )}
             {mode === 'register' && consentBox}
+            {mode === 'register' && termsBox}
             {mode === 'register' && termsLine}
             {err && <Typography variant="caption" color="error" role="alert">{err}</Typography>}
-            <Button type="submit" variant="contained" disabled={busy}
-              sx={{ textTransform: 'none' }}>
-              {busy ? <CircularProgress size={18} sx={{ color: 'inherit' }} /> : cta}
-            </Button>
+            <Tooltip title={boxHint ? noBoxHint : ''}>
+              <Box component="span" sx={{ display: 'block' }}>
+                <Button type="submit" variant="contained" fullWidth disabled={busy || boxHint}
+                  sx={{ textTransform: 'none' }}>
+                  {busy ? <CircularProgress size={18} sx={{ color: 'inherit' }} /> : cta}
+                </Button>
+              </Box>
+            </Tooltip>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
               {mode === 'signin' ? (
                 <>

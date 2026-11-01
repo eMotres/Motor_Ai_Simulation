@@ -25,6 +25,7 @@ oauth_grants.json           grants, codes and pending requests removed
 newsletter.json             subscriber record + notice reads removed
 comm_prefs.json             communication-preference state removed; the consent
                             history (comm_prefs_history.jsonl) is pseudonymised (proof of consent kept)
+terms_acceptances.jsonl     the acceptances of the Terms of Use / Privacy Policy are pseudonymised the same way (proof kept, person not)
 project_limits.json         the admin's open-project limit override of the address removed
 support access requests     removed (contact data the person gave us)
 mcp_audit.jsonl             e-mail -> subject hash (security log, kept)
@@ -376,6 +377,10 @@ def purge(email: str, *, actor: str, reason: str = "") -> Dict[str, Any]:
         from motor_ai_sim import comm_prefs as CP
         return CP.erase(email, subj)
 
+    def _terms_acceptances():
+        from motor_ai_sim import legal_texts as LT
+        return LT.erase(email, subj)
+
     def _newsletter():
         from motor_ai_sim import newsletter as N
         with N._LOCK:
@@ -492,7 +497,8 @@ def purge(email: str, *, actor: str, reason: str = "") -> Dict[str, Any]:
 
     for name, fn in (("deletion_request", _request), ("sessions", _sessions), ("agent_keys", _agent_keys),
                      ("oauth", _oauth), ("newsletter", _newsletter),
-                     ("comm_prefs", _comm_prefs), ("project_limit", _project_limit),
+                     ("comm_prefs", _comm_prefs), ("terms_acceptances", _terms_acceptances),
+                     ("project_limit", _project_limit),
                      ("support_requests", _support), ("mcp_audit", _mcp_audit),
                      ("auth_events", _auth_events), ("usage", _usage),
                      ("admin_audit", _admin_audit), ("workspace", _workspace),
@@ -722,6 +728,7 @@ def build_export(email: str, dest: Optional[Path] = None) -> Path:
             "Your data from the eMotres / Aerostator simulation service.\n"
             "account.json        your account record (no password hash)\n"
             "consents.json       newsletter consent and its history\n"
+            "terms_acceptances.json  when you accepted the Terms of Use, Platform Agreement and Privacy Policy, and which version\n"
             "deletion.json       a pending deletion request, if any\n"
             "sessions.json       your sign-in sessions (IP addresses are stored hashed)\n"
             "agent_keys.json     your agent keys (public part only)\n"
@@ -739,6 +746,11 @@ def build_export(email: str, dest: Optional[Path] = None) -> Path:
             from motor_ai_sim import comm_prefs as _CP
             zf.writestr("communication_preferences.json", js(_CP.export_for(email)))
         except Exception:                                   # noqa: BLE001 - the rest of the export must still be built
+            pass
+        try:
+            from motor_ai_sim import legal_texts as _LT
+            zf.writestr("terms_acceptances.json", js(_LT.export_for(email)))
+        except Exception:                                   # noqa: BLE001
             pass
         zf.writestr("deletion.json", js(pending(email)))
         zf.writestr("sessions.json", js([S.public(r) for r in S.list_for(email)]))

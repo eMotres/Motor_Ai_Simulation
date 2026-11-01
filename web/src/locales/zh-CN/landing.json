@@ -101,6 +101,9 @@
   "cta": { "title": "准备好试用了吗？" },
   "footer": {
     "licence": "软件采用 Apache-2.0。AeroStator Core 电机技术正在申请专利；制造需获得 MOTRES 的许可。",
-    "company": "MOTRES d.o.o."
+    "company": "MOTRES d.o.o.",
+    "terms": "使用条款",
+    "agreement": "平台协议",
+    "privacy": "隐私政策"
   }
 }

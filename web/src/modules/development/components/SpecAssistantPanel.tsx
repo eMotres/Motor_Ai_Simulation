@@ -39,6 +39,7 @@ const writeChat = (id: string, m: ChatMessage[]) => { try { window.sessionStorag
 
 export default function SpecAssistantPanel({ projectId, schema, lang, beforeApply, onApplied, docked = false }: Props) {
   const { t } = useTranslation('development');
+  const { t: tc } = useTranslation('common');
   const ui = langOf(lang);
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [open, setOpen] = useState(() => readStore(OPEN_KEY) === '1');
@@ -177,7 +178,10 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
         {error && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main', my: 0.8 }}>{error}</Typography>}
         <div ref={bottom} />
       </Box>
-      <Box sx={{ display: 'flex', gap: 0.8, p: 1, borderTop: '1px solid var(--line-soft)' }}>
+      <Typography sx={{ fontSize: 12, color: 'text.secondary', px: 1.25, pt: 0.75, borderTop: '1px solid var(--line-soft)' }} data-testid="ai-disclosure">
+        {tc('legal.aiDisclosure')}
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 0.8, p: 1 }}>
         <TextField size="small" fullWidth multiline maxRows={4} value={text} placeholder={t('specAssistant.placeholder')} disabled={sending}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(text); } }} />

@@ -2,12 +2,10 @@ import React from 'react';
 import { Box, Button, Link, Paper, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/uiStore';
+import { privacyUrl } from '../../lib/localAuth';
 import {
   getAnalytics, pageViewPath, OPEN_COOKIE_SETTINGS_EVENT, type AnalyticsState,
 } from '../../lib/analytics';
-
-/** Where the privacy information lives (the app has no privacy page of its own). */
-const PRIVACY_URL = 'https://emotres.com';
 
 /** Live analytics state (re-read on every consent change and when the UI language changes). */
 export function useAnalyticsState(): AnalyticsState {
@@ -27,7 +25,7 @@ export function useAnalyticsState(): AnalyticsState {
  * analytics is blocked (China, Do Not Track, Global Privacy Control).
  */
 const AnalyticsConsent: React.FC = () => {
-  const { t } = useTranslation('common');
+  const { t, i18n } = useTranslation('common');
   const a = getAnalytics();
   const state = useAnalyticsState();
   const [reopened, setReopened] = React.useState(false);
@@ -59,7 +57,7 @@ const AnalyticsConsent: React.FC = () => {
       }}>
       <Typography sx={{ fontSize: '0.8rem', flex: '1 1 260px' }}>
         {t('cookies.text')}{' '}
-        <Link href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" underline="always"
+        <Link href={privacyUrl((i18n.resolvedLanguage ?? 'en') === 'zh-CN' ? 'zh-CN' : 'en')} target="_blank" rel="noopener noreferrer" underline="always"
           color="inherit">
           {t('cookies.privacy')}
         </Link>

@@ -40,5 +40,6 @@
   "tickets": {
     "empty": "还没有工单。把遇到的问题或想法告诉我，我会为你准备一张。",
     "loadFailed": "无法加载你的工单。"
-  }
+  },
+  "geminiNotice": "由 Google Gemini 提供。Google 可能使用帮助对话内容改进其服务。请勿输入保密信息。"
 }

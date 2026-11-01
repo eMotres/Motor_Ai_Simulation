@@ -5,7 +5,7 @@
  *     the first-load bundle and needs no engineering code;
  *   - anybody signed in, or a backend that does not enforce auth (the local dev server)
  *     -> `App`, the whole workspace, as a LAZY chunk;
- *   - /agent-consent and /preferences -> their own small pages, also lazy.
+ *   - /agent-consent, /preferences and the legal texts (/terms, /privacy, /platform-agreement) -> their own small pages, also lazy.
  *
  * Why: the workspace pulls three.js, recharts, the flow editor, the FEM viewers and the
  * admin tools (~1.2 MB gzip).  A first-time visitor in mainland China on a slow
@@ -17,16 +17,20 @@
 import React, { Suspense, lazy, useEffect } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { isPreferencesPath } from './lib/commPrefsLogic';
+import { matchLegalPage } from './lib/legalLogic';
 import LandingShell from './components/landing/LandingShell';
 import { showsLandingShell } from './lib/rootGate';
 import { watchChunkImport } from './lib/chunkReload';
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import { parseAppLink } from './lib/appLink';
 import AgreementHost from './components/agreement/AgreementHost';
+import TermsUpdateHost from './components/auth/TermsUpdateHost';
 
 const App = lazy(watchChunkImport(() => import('./App')));
 const OAuthConsent = lazy(watchChunkImport(() => import('./components/auth/OAuthConsent')));
 const CommPrefsPage = lazy(watchChunkImport(() => import('./components/auth/CommPrefsPage')));
+// the Terms of Use, Privacy Policy and Platform Agreement, read-only, readable signed out (/terms, /privacy, /platform-agreement, also under /zh-cn/)
+const LegalPage = lazy(watchChunkImport(() => import('./components/auth/LegalPage')));
 // the door behind a shared production-documents link: asks the server whether the caller is a member before the workspace opens
 const ShareLinkEntry = lazy(watchChunkImport(() => import('./modules/production/components/ShareLinkEntry')));
 
@@ -55,6 +59,8 @@ const Root: React.FC = () => {
   // preferences (mailed link, account menu) are pages of their own.
   if (path === '/agent-consent') return <Suspense fallback={<Loading />}><OAuthConsent /></Suspense>;
   if (isPreferencesPath(path)) return <Suspense fallback={<Loading />}><CommPrefsPage /></Suspense>;
+  const legalKind = matchLegalPage(path);
+  if (legalKind) return <Suspense fallback={<Loading />}><LegalPage kind={legalKind} /></Suspense>;
   if (showsLandingShell(!!user, resolved, enforced)) return <LandingShell />;
   // A link to a production page or one of its tabs (owner 2026-10-19, 2026-10-26): the link grants nothing, the server decides (a stranger gets a
   // one-line "request access" page with no names).  A signed-out visitor got the landing above, with the sign-in dialog open.
@@ -64,10 +70,11 @@ const Root: React.FC = () => {
       <Suspense fallback={<Loading />}>
         <ShareLinkEntry link={shareLink}><Suspense fallback={<Loading />}><App /></Suspense></ShareLinkEntry>
         <AgreementHost />
+        <TermsUpdateHost />
       </Suspense>
     );
   }
-  return <><Suspense fallback={<Loading />}><App /></Suspense><AgreementHost /></>;
+  return <><Suspense fallback={<Loading />}><App /></Suspense><AgreementHost /><TermsUpdateHost /></>;
 };
 
 export default Root;

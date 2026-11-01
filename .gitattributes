@@ -1,3 +1,6 @@
 
 # shell scripts run on the Linux server: LF everywhere, also in `git archive` from a Windows checkout (autocrlf)
 *.sh text eol=lf
+
+# versioned legal texts: LF everywhere so the SHA-256 recorded with an acceptance is the same on every checkout
+config/legal/**/*.md text eol=lf

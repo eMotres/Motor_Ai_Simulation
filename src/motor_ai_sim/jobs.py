@@ -1283,6 +1283,15 @@ def body_run_id(prefix: str) -> Callable[[Dict[str, Any]], str]:
     return _extract
 
 
+def require_current_terms() -> None:
+    """The owner's "Later" deadline (``TERMS_REQUIRED_FROM``, legal_texts.py): from that date a non-staff, non-MOTRES account that has not
+    accepted the current Terms of Use cannot START a compute job - HTTP 428 ``terms_required``; the web opens the "Updated terms" dialog
+    and repeats the call.  Unset = no gate (one environment read).  A direct call without a signed-in identity is never gated."""
+    from motor_ai_sim import legal_texts as _LT
+    if _LT.gate_active():
+        _LT.require_current(current_owner(), current_role())
+
+
 def queued(kind: str, *, priority: Priority = Priority.DUTY,
            skip: Optional[Callable[[Dict[str, Any]], bool]] = None,
            run_id_from: Optional[Callable[[Dict[str, Any]], str]] = None,
@@ -1307,6 +1316,7 @@ def queued(kind: str, *, priority: Priority = Priority.DUTY,
         def _wrapped(*a, **kw):
             if current_run_id() is not None or (skip is not None and skip(kw)):
                 return fn(*a, **kw)
+            require_current_terms()
             rid = (str(run_id_from(kw) or "") if run_id_from is not None
                    else str(kw.get("run_id") or ""))
             body = {k: kw.get(k) for k in body_keys if k in kw}

@@ -37,7 +37,7 @@
 import React from 'react';
 import { Box, Button, Link, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
+import { GOOGLE_CLIENT_ID, agreementUrl, privacyUrl, termsUrl } from '../../lib/localAuth';
 import { forgetLandingMotor } from '../../lib/landingMotors';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 import BrandLogo from '../common/BrandLogo';
@@ -242,7 +242,8 @@ const APP_ICONS: Record<(typeof APP_IDS)[number], React.ReactNode> = {
 };
 
 const Landing: React.FC = () => {
-  const { t } = useTranslation('landing');
+  const { t, i18n } = useTranslation('landing');
+  const legalLang = (i18n.resolvedLanguage ?? 'en') === 'zh-CN' ? 'zh-CN' : 'en';
 
   return (
     <Box component="main" sx={{
@@ -454,6 +455,12 @@ const Landing: React.FC = () => {
               underline="hover" color="inherit">
               aerostator.com
             </Link>
+            {' · '}
+            <Link href={termsUrl(legalLang)} underline="hover" color="inherit">{t('footer.terms')}</Link>
+            {' · '}
+            <Link href={agreementUrl(legalLang)} underline="hover" color="inherit">{t('footer.agreement')}</Link>
+            {' · '}
+            <Link href={privacyUrl(legalLang)} underline="hover" color="inherit">{t('footer.privacy')}</Link>
             <CookieSettingsLink prefix=" · " />
           </Typography>
         </Box>

@@ -88,6 +88,9 @@ On the server run it with the API's environment (`MOTOR_AI_SIM_CONFIG`, `SMTP_*`
 `COMM_PREFS_SECRET`) so it reads the real users and signs the links with the real key.
 
 * Audience: verified, enabled accounts that did not unsubscribe (communication preferences or legacy newsletter).
+  `--topic <id>`: only accounts that currently have that topic ticked (promotional mail, e.g. `free_simulation_launch_2026-11`).
+  `--essential`: an account notice that is not marketing (a change of the terms, e.g. `terms_notice_2026-11`): every verified,
+  enabled account, including those that unsubscribed from the topics; it cannot be combined with `--topic`.
 * Language: the account's stored UI language, else the language of its last preference change, else English (`--default-lang`).
 * One message per account per campaign id: `<identity root>/mailing/<campaign>.sendlog.jsonl` (user, time, message-id; an `attempt`
   line is flushed before each SMTP call, `sent` / `failed` after).  An unresolved `attempt` (a crash between SMTP and the log) is

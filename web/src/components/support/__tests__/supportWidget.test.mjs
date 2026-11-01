@@ -88,7 +88,7 @@ test('ZH is a full mirror: same keys, same placeholders, Chinese text, no mixed 
   const zhMap = new Map(flat(zh));
   assert.deepEqual([...zhMap.keys()].sort(), [...enMap.keys()].sort(), 'identical key sets');
   const ph = (s) => [...String(s).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
-  const allowedLatin = new Set(['vadim', 'motresres', 'com', 'AeroStator']);
+  const allowedLatin = new Set(['vadim', 'motresres', 'com', 'AeroStator', 'Google', 'Gemini']);   // the Gemini notice names its provider
   for (const [k, v] of zhMap) {
     assert.deepEqual(ph(v), ph(enMap.get(k)), `${k}: placeholders`);
     assert.ok(CJK.test(v), `${k}: the ZH string has no Chinese`);

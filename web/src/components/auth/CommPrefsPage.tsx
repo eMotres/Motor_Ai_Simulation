@@ -14,7 +14,7 @@ import LanguageSwitcher from '../common/LanguageSwitcher';
 import NdaDialog from '../model3d/NdaDialog';
 import DataSharingDialog from './DataSharingDialog';
 import { useAuth } from '../../contexts/AuthContext';
-import { PRIVACY_URL } from '../../lib/localAuth';
+import { privacyUrl } from '../../lib/localAuth';
 import { buildAppTheme, loadThemeMode } from '../../theme';
 import {
   changedTopics, emptyTopics, maskEmail, ndaCta, ndaRequestTicket, readLink, type Topics,
@@ -154,7 +154,7 @@ const CommPrefsPage: React.FC = () => {
                 {!msg && state.unsubscribed_all && <Alert severity="info" sx={{ fontSize: 12.5, mt: 1.5 }}>{t('commPrefs.unsubscribed')}</Alert>}
                 <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 1.5 }}>
                   {t('commPrefs.legal')}{' '}
-                  <Link href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">{t('commPrefs.privacy')}</Link>
+                  <Link href={privacyUrl(lang)} target="_blank" rel="noopener noreferrer">{t('commPrefs.privacy')}</Link>
                   {' · '}{t('commPrefs.textVersion', { version: state.text_version })}
                 </Typography>
               </>

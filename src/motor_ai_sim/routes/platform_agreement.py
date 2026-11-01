@@ -8,7 +8,11 @@
 * ``GET  /api/agreement/mine/pdf``            the caller's accepted copy
 * ``GET  /api/admin/agreement/acceptances``   admin: recent acceptances
 * ``GET  /api/admin/agreement/{id}/pdf``      admin: any accepted copy
-* ``GET  /api/admin/dataset/exclusions``      admin: what the engineering dataset must not record (PRIVATE clients' data)
+* ``GET  /api/admin/dataset/exclusions``      admin: what the engineering dataset must not record (PRIVATE clients' data) and, under
+                                              ``training``, the allow-list of what it may train on (docs/PLATFORM_AGREEMENT.md)
+* ``GET  /api/admin/agreement/holds``         admin: the no-training holds in force and the whole append-only history
+* ``POST /api/admin/agreement/holds``         admin: ``{email | company_id, action: hold|release, note, reference}`` - "PRIVATE request received"
+                                              (agreement section 3.4): the client's data leave the training allow-list at once
 
 Nothing here sends e-mail (owner rule: no outside message without his OK on the text); the admin notice is the audit line
 ``agreement.accept``, which the live activity feed shows.
@@ -107,6 +111,44 @@ def acceptances(limit: int = 200, _admin: dict = Depends(require_admin)):
     return {"acceptances": [PA.public_record(r) for r in PA.read_records(max(1, min(int(limit), 2000)))],
             "enforced": PA.enforced(), "current_version": cur["version"] if cur else None,
             "installed": bool(cur and cur["installed"])}
+
+
+@admin_router.get("/holds")
+def holds(_admin: dict = Depends(require_admin)):
+    rows = PA._hold_rows()
+    return {"active": sorted(PA.active_holds().values(), key=lambda r: str(r.get("iso"))), "history": rows[-500:][::-1]}
+
+
+@admin_router.post("/holds")
+def set_hold(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """A written PRIVATE request reached support@aerostator.com: place the no-training hold (action ``hold``) until the Order is
+    concluded or declined (action ``release``).  Append-only; takes effect at once."""
+    from motor_ai_sim import admin_audit as AA
+    body = body if isinstance(body, dict) else {}
+    action = str(body.get("action") or "hold").strip().lower()
+    if action not in ("hold", "release"):
+        raise HTTPException(status_code=422, detail="action must be hold or release")
+    try:
+        key = PA.hold_key(email=body.get("email"), company_id=body.get("company_id"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if key.startswith("company:"):
+        try:
+            from motor_ai_sim.directory import store as DS
+            if not any(c.get("id") == key[8:] for c in DS.load_companies()):
+                raise HTTPException(status_code=404, detail="No such directory company.")
+        except HTTPException:
+            raise
+        except Exception:                                              # noqa: BLE001
+            raise HTTPException(status_code=503, detail="The directory could not be read.")
+    actor = AA.actor_of(_admin)
+    try:
+        r = PA.record_hold(key, kind=action, actor=actor, note=str(body.get("note") or ""), reference=str(body.get("reference") or ""))
+    except OSError as e:
+        log.error("agreement: cannot store the hold (%s)", e)
+        raise HTTPException(status_code=503, detail="The hold could not be stored; nothing changed. Try again later.")
+    AA.record(actor, "agreement.hold" if action == "hold" else "agreement.hold_release", key, details={"record": r["id"], "key": key})
+    return {"ok": True, "record": r, "active": sorted(PA.active_holds())}
 
 
 @admin_router.get("/{record_id}/pdf")

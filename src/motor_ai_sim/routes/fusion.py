@@ -113,7 +113,11 @@ def _name_map() -> Dict[str, str]:
 #: A user parameter the model does not drive and nobody may sensibly edit is
 #: noise in Fusion's list, so it is neither exported nor read back: the import
 #: treats such a row exactly like a derived one — ignored, and reported.
-FUSION_EXCLUDED_NAMES: frozenset = frozenset({"slot_hs"})
+#: `stator_outer_notches` (2026-11-03) is a lamination FLAG, not a length:
+#: Fusion's parameter table holds expressions with units, and the notch is a
+#: feature of the Fusion sketch itself (suppress it there), so the flag is
+#: set in the Geometry tab and never travels through the CSV.
+FUSION_EXCLUDED_NAMES: frozenset = frozenset({"slot_hs", "stator_outer_notches"})
 
 
 def _rows():

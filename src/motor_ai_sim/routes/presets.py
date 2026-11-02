@@ -668,9 +668,16 @@ def _geo_sig(geometry: dict) -> str:
     which matters when the question is "why does this card show that torque?".
     """
     try:
-        return "|".join(f"{k}:{_fmt_num(v)}"
-                        for k, v in sorted((geometry or {}).items())
-                        if isinstance(v, (int, float)) and not isinstance(v, bool))
+        g = dict(geometry or {})
+        items = {k: v for k, v in g.items()
+                 if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        # The OD-notch FLAG is the one bool that is a different machine: it is
+        # stamped as `stator_outer_notches:0` when OFF and not at all when on,
+        # so every stamp of a notched machine is the string it always was.
+        # Same rule in the browser (geoSig.ts).
+        if g.get("stator_outer_notches") is False:
+            items["stator_outer_notches"] = 0
+        return "|".join(f"{k}:{_fmt_num(v)}" for k, v in sorted(items.items()))
     except Exception:
         return ""
 

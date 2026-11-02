@@ -322,7 +322,28 @@ _AREA_KEYS = (
     # The retaining ring's own section, and it also moves the mechanical gap —
     # so it must split the cache like any other geometry knob.
     "sleeve_thickness",
+    # The stator OD with or without the wedge notches (absent = on): the stator
+    # section differs by the notch area.  Keyed through `_area_key`, which
+    # reads absence as on, so every existing key is unchanged.
+    "stator_outer_notches",
 )
+
+
+def _area_key(geo: Dict[str, Any]) -> tuple:
+    """The section-cache key of ``geo``.  ``stator_outer_notches`` enters as
+    its MEANING (absent = on = None, off = False), so a notched machine keys
+    exactly as it did before the flag existed and a notch-free one never
+    shares its entry."""
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+    out = []
+    for k in _AREA_KEYS:
+        if k == "stator_outer_notches":
+            if stator_outer_notches(geo):
+                continue
+            out.append((k, False))
+            continue
+        out.append((k, _area_key_val(geo.get(k))))
+    return tuple(out)
 
 
 def _area_key_val(v):
@@ -353,7 +374,7 @@ def cad_areas_m2(geo: Dict[str, Any]) -> Optional[Dict[str, float]]:
     optimizer is entitled to propose): the caller falls back to the parametric
     sections and records that it did.
     """
-    key = tuple((k, _area_key_val(geo.get(k))) for k in _AREA_KEYS)
+    key = _area_key(geo)
     if key in _AREA_CACHE:
         return _AREA_CACHE[key]
     areas: Optional[Dict[str, float]] = None
@@ -412,7 +433,7 @@ def slot_fill_from_cad(geo: Dict[str, Any]) -> Optional[Dict[str, float]]:
     copper, insulation and air.  Returns None when the CAD cannot build the
     cross-section (the caller then simply does not show a fill).
     """
-    key = tuple((k, _area_key_val(geo.get(k))) for k in _AREA_KEYS)
+    key = _area_key(geo)
     if key in _SLOT_CACHE:
         return _SLOT_CACHE[key]
     out: Optional[Dict[str, float]] = None

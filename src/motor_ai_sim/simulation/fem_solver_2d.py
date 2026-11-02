@@ -412,6 +412,9 @@ _DAXIS_SYMMETRIC_KEYS = frozenset({
     "air_gap", "insulation_thickness", "wire_width", "wire_height",
     "wire_spacing_x", "wire_spacing_y", "num_wires_per_slot", "wire_parallel",
     "wire_split",
+    # the OD notches are cut as a ±x pair in every unit: on or off, the
+    # stator stays mirror-symmetric about the phase axis
+    "stator_outer_notches",
     # rotor
     "rotor_outer_radius", "rotor_inner_radius", "rotor_house_height",
     "rotor_hole", "rotor_fill_r", "magnet_height", "magnet_down_height",

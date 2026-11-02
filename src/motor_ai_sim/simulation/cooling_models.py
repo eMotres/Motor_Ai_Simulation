@@ -1238,6 +1238,68 @@ def heat_path_film(*, t_body_c: float, t_ambient_c: float,
             "G_W_per_K": (h_conv + h_rad) * area, "area_m2": area}
 
 
+# ---------------------------------------------------------------------------
+# THE STATOR-OD SLEEVE (2026-11-03) — a dry press fit into a round sleeve
+# ---------------------------------------------------------------------------
+# Owner, 2026-11-03: a submerged pod motor has its stator pressed DRY into a
+# round aluminium sleeve (1–2 mm wall) with water outside; every watt leaves
+# through that sleeve.  Only the IRON arcs of the OD touch it — with the outer
+# notches on, the notch openings carry practically nothing.  The default
+# outer surface (the film acting on the stator's own outer contour, notch
+# walls included — right where coolant flows over the stator, e.g. the
+# generators) is unchanged; this is a separate, explicit choice.
+#
+# Three resistances in SERIES, one whole-machine conductance spread over the
+# OD contact facets of the cross-section:
+#   contact   1 / (h_c · A_c),        A_c = contact fraction · π·D·L
+#   sleeve    ln((r + t)/r) / (2π·k·L)  (radial conduction, the full ring —
+#             the wall spreads the heat circumferentially over the notch
+#             openings; a 1–2 mm aluminium wall makes this term small)
+#   film      1 / (h_out · A_out),    A_out = 2π·(r + t)·L, h_out = the outer
+#             boundary condition the request chose (water film, jacket pin, …)
+STATOR_OD_COOLING = ("direct", "sleeve_contact")
+#: Lamination OD ↔ sleeve contact: the same press-fit ``HOUSING_CONTACT_H``
+#: as the robotics housing (one number, so the two cannot drift).
+SLEEVE_WALL_DEFAULT_MM = 1.5
+#: Wrought aluminium alloy (6061-T6 ~167, 5083 ~117 W/m·K); the middle.
+SLEEVE_K_DEFAULT = 160.0
+
+
+def sleeve_contact_path(*, r_od_m: float, stack_m: float,
+                        contact_fraction: float, wall_m: float,
+                        k_sleeve: float, h_out: float,
+                        h_contact: Optional[float] = None) -> Dict[str, Any]:
+    """Stator OD contact arcs → sleeve wall → the outer film, as ONE W/K.
+
+    ``h_out`` = 0 (no outer film) gives G = 0.  Returns every term so the
+    payload can state where the kelvins go."""
+    r = max(float(r_od_m), 1e-5)
+    L = max(float(stack_m), 1e-6)
+    t = max(float(wall_m), 0.0)
+    frac = min(max(float(contact_fraction), 0.0), 1.0)
+    hc = float(HOUSING_CONTACT_H if h_contact is None else h_contact)
+    a_c = frac * 2.0 * math.pi * r * L
+    a_o = 2.0 * math.pi * (r + t) * L
+    g_c = hc * a_c
+    g_s = (2.0 * math.pi * max(float(k_sleeve), 1e-9) * L / math.log((r + t) / r)
+           if t > 0.0 else float("inf"))
+    g_o = max(float(h_out), 0.0) * a_o
+    inv = 0.0
+    for g in (g_c, g_s, g_o):
+        if g <= 0.0:
+            inv = float("inf")
+            break
+        if math.isfinite(g):
+            inv += 1.0 / g
+    g_tot = 0.0 if not math.isfinite(inv) or inv <= 0.0 else 1.0 / inv
+    return {"G_W_per_K": g_tot, "contact_fraction": frac,
+            "contact_area_m2": a_c, "outer_area_m2": a_o,
+            "h_contact": hc, "G_contact_W_per_K": g_c,
+            "G_sleeve_W_per_K": (g_s if math.isfinite(g_s) else None),
+            "G_film_W_per_K": g_o, "h_out": float(h_out),
+            "wall_mm": t * 1e3, "k_sleeve": float(k_sleeve)}
+
+
 def housing_contact_g(*, d_stator_m: float, stack_m: float) -> float:
     """Stator OD → housing, W/K: ``HOUSING_CONTACT_H`` over π·D·L_stack."""
     return HOUSING_CONTACT_H * math.pi * float(d_stator_m) * float(stack_m)

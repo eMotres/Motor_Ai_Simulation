@@ -1646,6 +1646,18 @@ def _build_sliding_band_meshes(
         # so candidates stay comparable and the optimizer must not reject them.
         _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
         _use_geo = True
+    # ── …NOR A NOTCH-FREE STATOR OD ─────────────────────────────────────────
+    # The template's stator unit has the V-notch between the slot units built
+    # into its blocks (iron_template.stator_half_mesh, T2 = the notch air).  A
+    # stator built with `stator_outer_notches: false` has a full-circle OD, so
+    # it routes to the geometry-driven mesher, which triangulates the real
+    # polygon — the same rule as the sleeve above.
+    if _use_tpl and polys.get("stator_outer_notches") is False:
+        log.info("stator without outer notches — the tensor iron template "
+                 "builds the notch into its blocks, so this build uses the "
+                 "geometry-driven mesher")
+        _trace_note("notch-free stator OD: geometry-driven mesh instead of the iron template")
+        _use_geo = True
     if _use_tpl and _use_geo:
         # The geometry-driven mesher triangulates its PSLG with the CDT backend
         # named by MOTOR_AI_SIM_GEO_CDT: netgen by default (owner 2026-10-01),

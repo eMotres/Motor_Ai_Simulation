@@ -114,6 +114,11 @@ def update_current_geometry(**kwargs) -> MotorGeometryParams:
     for key, value in kwargs.items():
         if value is not None:
             update_dict[key] = value
+    # A whole-lamination update silent on `stator_outer_notches` is a notched
+    # stator (the key is stored only when off): the previous machine's flag
+    # must not survive a catalogue load.
+    from motor_ai_sim.geometry.motor_geometry import merge_outer_notches
+    merge_outer_notches(update_dict, {k: v for k, v in kwargs.items() if v is not None})
 
     geometry_config = {
         k: v for k, v in update_dict.items()

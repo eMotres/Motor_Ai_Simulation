@@ -272,6 +272,11 @@ _AIR_IN = "the rotor-side air region (pockets + inner half of the air gap)"
 _AIR_OUT = "the stator-side air region (slot openings + outer half of the air gap)"
 
 
+#: The knobs that shape only the stator's OUTER NOTCHES (the wedge, the neck,
+#: the OD corner fillet).  A stator built with ``stator_outer_notches: false``
+#: has none of these features, so they are never named as a cause there.
+_NOTCH_ONLY_KEYS = frozenset({"cut_width", "tooth2_width", "stator_fillet_r"})
+
 # Which geometry parameters most plausibly cause each defect.  The polygons are
 # built from named parameters, so this maps a defect straight back to the knob.
 _CAUSES: Dict[str, List[str]] = {
@@ -521,6 +526,14 @@ def slot_cut_limits(geo: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
     available to anything else that needs to ask "how much room is left across
     the slot".  ``None`` when a key it needs is missing or unusable — a partial
     edit is judged by the rules that CAN see their inputs.
+
+    A stator WITHOUT outer notches (``stator_outer_notches: false``) has no
+    wedge and no mouth fillet: the neighbouring units' legs are one piece of
+    iron, and what can collide is the two slot POCKETS.  There the pair is the
+    pocket's outer wall ``cut_x − tooth2_width`` against the half-sector line at
+    the bore, ``stator_inner_radius·sin(slot_angle/2)`` — ``cut_width`` and
+    ``tooth2_width`` play no part (same arithmetic as the builder's
+    ``_slot_cut_x_mm`` / ``_slot_cut_x_max_mm``).
     """
     # The PRIMARY inputs first: ``num_slots`` is derived from them, and on a
     # PUT that changes ``num_seg`` the dict still carries the OLD product when
@@ -547,6 +560,10 @@ def slot_cut_limits(geo: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
     column = ww if n_split <= 1 else n_split * ww + (n_split - 1) * _GAP_F * dx
     cut_x = tw / 2.0 + 2.0 * ins + column + dx + t2w
     half_slots = max(1, int(round(ns)) // 2)
+    if not _notched(geo):
+        return (float(cut_x - t2w),
+                float(inner_r * math.sin(math.radians(360.0 / half_slots / 2.0))),
+                n_split)
     cut_x_max = (inner_r + cw) * math.sin(math.radians(360.0 / half_slots / 2.0))
     return float(cut_x), float(cut_x_max), n_split
 
@@ -592,11 +609,11 @@ def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
                 "would be gone. Splitting a wire means NARROWING it: set "
                 "wire_width to {:.4f} mm or less to keep {:d} strips (halving a "
                 "bar is the usual intent). Otherwise use wire_split = {:d} or "
-                "less here, or make room: a smaller tooth2_width or more slot "
-                "pitch."
+                "less here, or make room: {}more slot pitch."
                 .format(n_split, n_split, ww, n_split - 1, gap,
                         n_split * ww + (n_split - 1) * gap,
-                        cut_x, cut_x_max, over, w_fit, n_split, n_max),
+                        cut_x, cut_x_max, over, w_fit, n_split, n_max,
+                        "a smaller tooth2_width or " if _notched(geo) else ""),
                 float(n_max))
     w_max = max(0.0, ww - over / max(1, n_split))
     return ("wire_width",
@@ -608,7 +625,14 @@ def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
             float(w_max))
 
 
-def stator_pieces_violation(stator, min_rel: float = 1e-4) -> Optional[Dict[str, Any]]:
+def _notched(geo: Optional[Dict[str, Any]]) -> bool:
+    """``stator_outer_notches`` of ``geo`` (absent = True)."""
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+    return stator_outer_notches(geo)
+
+
+def stator_pieces_violation(stator, min_rel: float = 1e-4,
+                            notched: bool = True) -> Optional[Dict[str, Any]]:
     """``{"n", "areas", "message"}`` when the stator polygon is not ONE piece.
 
     A lamination is one piece.  Fragments under ``min_rel`` of the largest piece
@@ -630,6 +654,15 @@ def stator_pieces_violation(stator, min_rel: float = 1e-4) -> Optional[Dict[str,
     big = [a for a in areas if a >= min_rel * areas[0]]
     if len(big) < 2:
         return None
+    if not notched:
+        # no notches to blame: a notch-free stator splits only where the slot
+        # pockets themselves cut through the iron
+        return {"n": len(big), "areas": big,
+                "message": ("the stator is {:d} separate pieces ({}) — the slot "
+                            "pockets cut right through the lamination, so it is "
+                            "not one part. Make the slots narrower or shallower, "
+                            "or core_thickness larger."
+                            .format(len(big), ", ".join("{:.3f} mm²".format(a) for a in big)))}
     return {"n": len(big), "areas": big,
             "message": ("the stator is {:d} separate pieces ({}) — the notches "
                         "between the slot units cut right through the lamination, "
@@ -984,6 +1017,8 @@ def validate_polygons(polys: Dict[str, Any],
         _causes = list(_CAUSES["winding_split_does_not_fit"])
         if _n_split <= 1:
             _causes = [c for c in _causes if c != "wire_split"]
+        if polys.get("stator_outer_notches") is False:
+            _causes = [c for c in _causes if c not in _NOTCH_ONLY_KEYS]
         col.add(Violation(
             code="winding_split_does_not_fit", severity=_SEV_ERROR,
             part_a="The winding", part_b="the slot",
@@ -1013,13 +1048,16 @@ def validate_polygons(polys: Dict[str, Any],
 
     # ── 1b'. the stator is ONE piece ─────────────────────────────────────────
     checks.append("stator_one_piece")
-    _pieces = stator_pieces_violation(polys.get("stator"))
+    _notch_on = _notched(p) and polys.get("stator_outer_notches") is not False
+    _pieces = stator_pieces_violation(polys.get("stator"), notched=_notch_on)
     if _pieces is not None:
         col.add(Violation(
             code="stator_not_one_piece", severity=_SEV_ERROR,
             part_a="The stator", part_b="",
             message=_pieces["message"],
-            likely_params=list(_CAUSES["stator_not_one_piece"])))
+            likely_params=(list(_CAUSES["stator_not_one_piece"]) if _notch_on
+                           else [c for c in _CAUSES["stator_not_one_piece"]
+                                 if c not in _NOTCH_ONLY_KEYS])))
 
     # ── 1b-2. the stator is the SAME in every slot-pair unit ─────────────────
     checks.append("stator_outline_symmetric")
@@ -1029,7 +1067,10 @@ def validate_polygons(polys: Dict[str, Any],
             code="stator_outline_not_symmetric", severity=_SEV_ERROR,
             part_a="The stator", part_b="",
             message=_outline["message"],
-            likely_params=list(_CAUSES["stator_outline_not_symmetric"])))
+            likely_params=(list(_CAUSES["stator_outline_not_symmetric"])
+                           if _notch_on else
+                           [c for c in _CAUSES["stator_outline_not_symmetric"]
+                            if c not in _NOTCH_ONLY_KEYS])))
 
     # ── 1c. conductor cross-section actually delivered ───────────────────────
     # ``winding_does_not_fit`` only catches a stack that would CROSS THE BORE —
@@ -1459,13 +1500,13 @@ _POSITIVE_INT = (
     "num_seg", "num_slots_per_segment", "num_poles_per_segment",
     "num_wires_per_slot", "wire_split", "wire_parallel",
 )
-#: Geometry keys that are FLAGS, not dimensions — none today.  Kept as the
-#: named hook the numeric loop below already skips on: `isinstance(True, int)`
-#: is True in Python, so a bool-valued knob would otherwise fall through the
-#: numeric rules as a length of 1 mm.  ``wire_split_series`` was the only entry
-#: and it lived for a few hours on 2026-09-08 (the strips of a wire_split row
-#: are always SERIES turns now).
-_BOOLEAN_KEYS: tuple = ()
+#: Geometry keys that are FLAGS, not dimensions.  The numeric loop below skips
+#: them: `isinstance(True, int)` is True in Python, so a bool-valued knob would
+#: otherwise fall through the numeric rules as a length of 1 mm (and False as a
+#: zero dimension).  ``wire_split_series`` lived here for a few hours on
+#: 2026-09-08; ``stator_outer_notches`` (2026-11-03) is the lamination flag
+#: "wedge notches cut from the stator OD" (absent = on).
+_BOOLEAN_KEYS: tuple = ("stator_outer_notches",)
 _FRACTION_0_1 = (
     "magnet_fill_down", "magnet_fill_up", "rotor_hole", "slot_hs",
 )

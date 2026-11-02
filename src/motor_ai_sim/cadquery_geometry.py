@@ -608,6 +608,129 @@ def _stator_leg_outer_x(tooth_w: float, slot_w: float, tooth2_w: float) -> float
     return tooth_w / 2.0 + slot_w + tooth2_w
 
 
+def _outer_notches(p: Dict) -> bool:
+    """``stator_outer_notches`` of a parameter dict — absent = True (the wedge
+    notches between the slot units are cut from the OD).  ONE reader, shared
+    by the three stator builders and everything that reasons about the OD."""
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+    return stator_outer_notches(p)
+
+
+def measure_od_contact(stator, R: float, rel_tol: float = 1e-4) -> float:
+    """Length [mm] of a stator polygon's EXTERIOR boundary that lies on its
+    outer circle ``r = R`` (both ends of a segment within ``rel_tol·R``): the
+    iron arcs a sleeve pressed on the OD touches.  The OD polygon's vertices
+    sit exactly on the circle and fillet arcs leave it at once, so this is the
+    flat contact arc to the discretisation."""
+    import math as _m
+    if stator is None or getattr(stator, "is_empty", True) or not R or R <= 0:
+        return 0.0
+    r_lo = float(R) * (1.0 - rel_tol)
+    total = 0.0
+    for g in getattr(stator, "geoms", [stator]):
+        cs = list(g.exterior.coords)
+        for (x0, y0), (x1, y1) in zip(cs[:-1], cs[1:]):
+            if _m.hypot(x0, y0) >= r_lo and _m.hypot(x1, y1) >= r_lo:
+                total += _m.hypot(x1 - x0, y1 - y0)
+    return float(total)
+
+
+def stator_od_contact(geo: Dict, stator=None) -> Optional[Dict[str, float]]:
+    """How much of the stator OD circle is IRON — the arcs a housing sleeve
+    pressed on the OD actually touches.
+
+    Same wedge as the builders: per slot unit the iron reaches the OD between
+    the two notch walls at ``x = ±cut_x`` (``_stator_leg_outer_x``, unit frame
+    with the wound tooth on +Y), so the iron arc of one unit spans
+    ``2·asin(cut_x / R)`` of its ``360°/(num_slots/2)``.  With an OD fillet
+    ``stator_fillet_r`` the notch corner is rounded and the arc ends at the
+    fillet's tangent point instead: centre at ``x = cut_x − r_f``, distance
+    ``R − r_f`` from the axis, so the half arc is ``atan2(cut_x − r_f, y_c)``.
+    That closed form holds while the notch wall itself reaches the OD (its foot
+    ``rr·cos(slot_angle/2)`` below the OD at ``x = cut_x``); a degenerate notch
+    (only the root circle bites the OD) is MEASURED on the builder's polygon
+    instead (``measure_od_contact``), and so is any call that passes the
+    ``stator`` polygon it already has.
+    Notches OFF (``stator_outer_notches: false``): the whole circle, 1.0.
+
+    Returns ``{"fraction", "contact_arc_mm", "od_circumference_mm",
+    "notch_opening_mm", "notched", "basis"}`` (lengths per cross-section; ×
+    stack length for an area), or ``None`` when a needed key is missing."""
+    import math as _m
+    from motor_ai_sim.geometry.motor_geometry import derived_geometry
+
+    def _n(k):
+        v = geo.get(k)
+        if v is None or isinstance(v, bool):
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if _m.isfinite(f) else None
+
+    # from the PRIMARY (stator_diameter): a die's stored derived radius can be
+    # stale (motor_geometry.refresh_derived_geometry)
+    _d = derived_geometry(geo)
+    R = _d.get("stator_outer_radius") or _n("stator_outer_radius")
+    r_in = _d.get("stator_inner_radius") or _n("stator_inner_radius")
+    # the builder's count tier: explicit num_slots first, else the segment form
+    seg, sps = _n("num_seg"), _n("num_slots_per_segment")
+    ns = _n("num_slots") or (seg * sps if (seg and sps and seg > 0 and sps > 0) else None)
+    if not R or R <= 0 or not ns or ns < 2:
+        return None
+    circ = 2.0 * _m.pi * R
+
+    def _out(arc: float, basis: str, notched: bool = True) -> Dict[str, Any]:
+        arc = min(max(float(arc), 0.0), circ)
+        return {"fraction": float(arc / circ), "contact_arc_mm": float(arc),
+                "od_circumference_mm": float(circ),
+                "notch_opening_mm": float(circ - arc), "notched": notched,
+                "basis": basis}
+
+    if not _outer_notches(geo):
+        return _out(circ, "no notches: the whole OD circle", notched=False)
+    if stator is not None:
+        return _out(measure_od_contact(stator, R), "measured on the stator polygon")
+    tw, t2w = _n("tooth_width"), _n("tooth2_width")
+    ww, dx, ins = (_n("wire_width"), _n("wire_spacing_x"),
+                   _n("insulation_thickness"))
+    cw = _n("cut_width")
+    if None in (tw, t2w, ww, dx, ins):
+        return None
+    slot_w = _strip_span(ww, _wire_split(dict(geo)), dx) + 2.0 * ins + dx
+    cut_x = _stator_leg_outer_x(tw, slot_w, t2w)
+    half_slots = int(round(ns)) // 2
+    half = _m.pi / max(1, half_slots)               # half a slot unit, rad
+    regular = cut_x < R
+    if regular and r_in is not None:
+        cw = 2.0 if cw is None else cw
+        s2 = _m.sin(half)
+        fill_r = ((r_in + cw) * s2 - cut_x) / (1.0 - s2) if s2 < 1.0 else -1.0
+        y_foot = (r_in + cw + fill_r) * _m.cos(half)
+        regular = fill_r > 0.0 and y_foot < _m.sqrt(R * R - cut_x * cut_x)
+    if not regular:
+        # the closed form does not describe this notch: measure the builder's own
+        try:
+            import io as _io
+            import contextlib as _cl
+            with _cl.redirect_stdout(_io.StringIO()):
+                _cm = CadQueryMotor()
+                _cm.set_parameters(dict(geo))
+                _st = _cm.get_2d_polygons(rotor_angle_deg=0.0).get("stator")
+            return _out(measure_od_contact(_st, R), "measured on the stator polygon")
+        except Exception:                          # noqa: BLE001
+            return None
+    rf = max(0.0, _n("stator_fillet_r") or 0.0)
+    theta = _m.asin(cut_x / R)
+    if 0.0 < rf < min(cut_x, R):
+        xc, rc = cut_x - rf, R - rf
+        if rc > abs(xc):
+            theta = _m.atan2(xc, _m.sqrt(rc * rc - xc * xc))
+    theta = min(max(theta, 0.0), half)
+    return _out(theta / half * circ, "closed form (notch walls at x = ±cut_x, OD fillet)")
+
+
 def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
                        fill_down: float, fill_up: float, down_h: float,
                        up_gap: float):
@@ -1961,6 +2084,11 @@ class CadQueryMotor:
         for key, value in api_params.items():
             if value is not None:
                 mapped[key] = value
+        # A whole-lamination override that is silent on `stator_outer_notches`
+        # is a NOTCHED stator (an ON die never stores the key): the config's
+        # flag must not leak onto it (the config-leak family, see merge_geo_override).
+        from motor_ai_sim.geometry.motor_geometry import merge_outer_notches
+        merge_outer_notches(mapped, api_params)
         
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
@@ -2069,6 +2197,11 @@ class CadQueryMotor:
         
         # Update with mapped params
         updated.update(mapped_params)
+        # ...and a flag the mapping dropped (a whole-lamination override silent
+        # on the notches = notched) is dropped here too.
+        from motor_ai_sim.geometry.motor_geometry import STATOR_OUTER_NOTCHES
+        if STATOR_OUTER_NOTCHES not in mapped_params:
+            updated.pop(STATOR_OUTER_NOTCHES, None)
         self.parameters = updated
         
     def get_parameter_hash(self) -> str:
@@ -2196,37 +2329,42 @@ class CadQueryMotor:
             .extrude(stator_w)
         )
 
+        # Outer notches OFF (`stator_outer_notches: false`): no wedge, no
+        # notch-root circle — the OD stays a full circle and only the slots are
+        # cut.  ON (absent = on) builds exactly what it always did.
+        notched = _outer_notches(p)
         cutters = []
         for i in range(half_slots):
             angle = i * slot_angle
-            # Trapezoid wedge (+X)
-            cutters.append(
-                cq.Workplane("XY")
-                .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
-                .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
-                .close().extrude(stator_w + 1)
-                .rotate((0,0,0),(0,0,1), angle)
-            )
-            # Trapezoid wedge (-X mirror)
-            cutters.append(
-                cq.Workplane("XY")
-                .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
-                .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
-                .close().extrude(stator_w + 1)
-                .rotate((0,0,0),(0,0,1), angle)
-            )
-            # Fillet cylinder at p3 (+X)
-            cutters.append(
-                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
-                .translate((p3[0], p3[1], 0))
-                .rotate((0,0,0),(0,0,1), angle)
-            )
-            # Fillet cylinder at p3 (-X)
-            cutters.append(
-                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
-                .translate((-p3[0], p3[1], 0))
-                .rotate((0,0,0),(0,0,1), angle)
-            )
+            if notched:
+                # Trapezoid wedge (+X)
+                cutters.append(
+                    cq.Workplane("XY")
+                    .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
+                    .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
+                    .close().extrude(stator_w + 1)
+                    .rotate((0,0,0),(0,0,1), angle)
+                )
+                # Trapezoid wedge (-X mirror)
+                cutters.append(
+                    cq.Workplane("XY")
+                    .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
+                    .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
+                    .close().extrude(stator_w + 1)
+                    .rotate((0,0,0),(0,0,1), angle)
+                )
+                # Fillet cylinder at p3 (+X)
+                cutters.append(
+                    cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                    .translate((p3[0], p3[1], 0))
+                    .rotate((0,0,0),(0,0,1), angle)
+                )
+                # Fillet cylinder at p3 (-X)
+                cutters.append(
+                    cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                    .translate((-p3[0], p3[1], 0))
+                    .rotate((0,0,0),(0,0,1), angle)
+                )
             # Slot rectangle (+X)
             cutters.append(
                 cq.Workplane("XY")
@@ -2253,8 +2391,9 @@ class CadQueryMotor:
         import cadquery as _cq
 
         # ── Fillet: OUTER RADIUS corners ─────────────────────────────────────
-        # |Z edges where trapezoid walls meet the outer cylinder (r ≈ outer_r)
-        if slot_fillet_r > 0:
+        # |Z edges where trapezoid walls meet the outer cylinder (r ≈ outer_r).
+        # A notch-free OD has no such corners.
+        if slot_fillet_r > 0 and notched:
             _r_lo = outer_r - 0.5
             _r_hi = outer_r + 0.2
 
@@ -3068,27 +3207,31 @@ class CadQueryMotor:
         # base ring
         stator_poly = SPoly(_circle(outer_r), [_circle(inner_r)])
 
+        # Outer notches OFF: no wedge cutters - a full-circle OD (see
+        # _create_stator); ON builds exactly what it always did.
+        notched = _outer_notches(p)
         cutters = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
-            # +X trapezoid pre-merged with fill_r fillet circle at p3s
-            # (circle overlaps trap → clean Polygon union, no tangency issues)
-            trap_p = SPoly([_rot(*p1s, a), _rot(*p2s, a),
-                             _rot(*p3s, a), _rot(*p4s, a)])
-            cx, cy = _rot(p3s[0], p3s[1], a)
-            circ_p = SPoly(_arc_points(cx, cy, fill_r, 0.0, 2*pi, scale_mm)[:-1])
-            m_p = _safe_union(trap_p, circ_p)
-            cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
+            if notched:
+                # +X trapezoid pre-merged with fill_r fillet circle at p3s
+                # (circle overlaps trap → clean Polygon union, no tangency issues)
+                trap_p = SPoly([_rot(*p1s, a), _rot(*p2s, a),
+                                 _rot(*p3s, a), _rot(*p4s, a)])
+                cx, cy = _rot(p3s[0], p3s[1], a)
+                circ_p = SPoly(_arc_points(cx, cy, fill_r, 0.0, 2*pi, scale_mm)[:-1])
+                m_p = _safe_union(trap_p, circ_p)
+                cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
 
-            # -X trapezoid pre-merged with fill_r fillet circle
-            mp1n = (-p1s[0], p1s[1]); mp2n = (-p2s[0], p2s[1])
-            mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
-            trap_n = SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
-                             _rot(*mp3n, a), _rot(*mp4n, a)])
-            cxn, cyn = _rot(-p3s[0], p3s[1], a)
-            circ_n = SPoly(_arc_points(cxn, cyn, fill_r, 0.0, 2*pi, scale_mm)[:-1])
-            m_n = _safe_union(trap_n, circ_n)
-            cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
+                # -X trapezoid pre-merged with fill_r fillet circle
+                mp1n = (-p1s[0], p1s[1]); mp2n = (-p2s[0], p2s[1])
+                mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
+                trap_n = SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
+                                 _rot(*mp3n, a), _rot(*mp4n, a)])
+                cxn, cyn = _rot(-p3s[0], p3s[1], a)
+                circ_n = SPoly(_arc_points(cxn, cyn, fill_r, 0.0, 2*pi, scale_mm)[:-1])
+                m_n = _safe_union(trap_n, circ_n)
+                cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
 
             # slot rectangles — sized on the wire COLUMN (wire_split widens it)
             slot_w  = wire_col_w + ins_w*2 + wire_dx
@@ -3124,7 +3267,8 @@ class CadQueryMotor:
         # corners on small motors (see [[slot_fillet_root_cause]]).
         # Same shared corner-fillet core as get_2d_polygons — one implementation.
         _out_tol = min(1.5, 0.45 * core_h)
-        if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
+        # the OD fillet rounds the notch corners; a notch-free OD has none
+        if fillet_r > 0 and notched and hasattr(stator_poly, 'exterior'):
             stator_poly = _round_corners_at_radius(stator_poly, outer_r, _out_tol,
                                                    fillet_r, scale_mm)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
@@ -3713,9 +3857,18 @@ class CadQueryMotor:
         # polys dict so the validator can name WHICH knob overflowed — with a
         # split it is almost always `wire_split`, whose extra strips and their
         # gaps are the only thing that just moved.
-        self._slot_cut_x_mm     = float(cut_x)
-        self._slot_cut_x_max_mm = float((inner_r + cut_w)
-                                        * sin(radians(slot_angle_deg/2)))
+        # Outer notches OFF: there is no wedge, so the limit is where the two
+        # neighbouring slot POCKETS meet - the pocket's outer wall (the leg's
+        # inner side, cut_x - tooth2_width) against the half-sector line at the
+        # bore (geometry_validation.slot_cut_limits, same arithmetic).
+        notched = _outer_notches(p)
+        if notched:
+            self._slot_cut_x_mm     = float(cut_x)
+            self._slot_cut_x_max_mm = float((inner_r + cut_w)
+                                            * sin(radians(slot_angle_deg/2)))
+        else:
+            self._slot_cut_x_mm     = float(cut_x - float(p.get('tooth2_width', 4.5)))
+            self._slot_cut_x_max_mm = float(inner_r * sin(radians(slot_angle_deg/2)))
         fill_r2 = ((inner_r + cut_w) * sin(radians(slot_angle_deg/2)) - cut_x) \
                   / (1 - sin(radians(slot_angle_deg/2)))
         rr  = inner_r + cut_w + fill_r2
@@ -3730,20 +3883,21 @@ class CadQueryMotor:
         cutters = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
-            trap_p = SPoly([_rot(*p1s,a), _rot(*p2s,a), _rot(*p3s,a), _rot(*p4s,a)])
-            cx, cy = _rot(p3s[0], p3s[1], a)
-            # slot-mouth rounding circle — sagitta-discretised like every other arc
-            circ_p = SPoly(_arc_points(cx, cy, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
-            m_p = _safe_union(trap_p, circ_p)
-            cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
+            if notched:
+                trap_p = SPoly([_rot(*p1s,a), _rot(*p2s,a), _rot(*p3s,a), _rot(*p4s,a)])
+                cx, cy = _rot(p3s[0], p3s[1], a)
+                # slot-mouth rounding circle — sagitta-discretised like every other arc
+                circ_p = SPoly(_arc_points(cx, cy, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
+                m_p = _safe_union(trap_p, circ_p)
+                cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
 
-            mp1n=(-p1s[0],p1s[1]); mp2n=(-p2s[0],p2s[1])
-            mp3n=(-p3s[0],p3s[1]); mp4n=(-p4s[0],p4s[1])
-            trap_n = SPoly([_rot(*mp1n,a), _rot(*mp2n,a), _rot(*mp3n,a), _rot(*mp4n,a)])
-            cxn,cyn = _rot(-p3s[0],p3s[1],a)
-            circ_n = SPoly(_arc_points(cxn, cyn, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
-            m_n = _safe_union(trap_n, circ_n)
-            cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
+                mp1n=(-p1s[0],p1s[1]); mp2n=(-p2s[0],p2s[1])
+                mp3n=(-p3s[0],p3s[1]); mp4n=(-p4s[0],p4s[1])
+                trap_n = SPoly([_rot(*mp1n,a), _rot(*mp2n,a), _rot(*mp3n,a), _rot(*mp4n,a)])
+                cxn,cyn = _rot(-p3s[0],p3s[1],a)
+                circ_n = SPoly(_arc_points(cxn, cyn, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
+                m_n = _safe_union(trap_n, circ_n)
+                cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
 
             # the wire COLUMN, so a split's extra strips and their (N−1) gaps of
             # 2·wire_spacing_x get real pocket to sit in
@@ -3777,7 +3931,8 @@ class CadQueryMotor:
         fillet_r  = p.get('stator_fillet_r',  0.0)
         fillet_r1 = p.get('stator_fillet_r1', 0.0)
         _out_tol = min(1.5, 0.45 * core_h)
-        if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
+        # the OD fillet rounds the notch corners; a notch-free OD has none
+        if fillet_r > 0 and notched and hasattr(stator_poly, 'exterior'):
             stator_poly = _round_corners_at_radius(stator_poly, outer_r, _out_tol,
                                                    fillet_r, scale_mm)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
@@ -3956,6 +4111,9 @@ class CadQueryMotor:
             'wire_column_mm':  float(wire_col_w),
             'slot_cut_x_mm':     float(getattr(self, '_slot_cut_x_mm', 0.0)),
             'slot_cut_x_max_mm': float(getattr(self, '_slot_cut_x_max_mm', 0.0)),
+            # the stator OD as built: False = smooth full circle (no notches);
+            # the mesher routes such a stator to the geometry-driven mesher
+            'stator_outer_notches': bool(notched),
         }
 
         # ── Final ring sanitize — NOTHING defective leaves this builder ───────

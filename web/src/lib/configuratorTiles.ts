@@ -126,16 +126,30 @@ const EXTRA_LABEL: Record<PwmSplitState, { labelKey: string; tipKey: string }> =
   parts: { labelKey: 'configureDrive.motorLossOther', tipKey: 'configureDrive.motorLossOtherTip' },
 };
 
+/** Decimals of a loss tile in watts (owner 2026-11-02): one decimal below 10 W, so a +0.7 W PWM part is visible,
+ *  whole watts from 10 W up.  Judged on the ROUNDED value (9.96 prints "10.0", so it prints "10"). */
+export const lossDigits = (w: number | null | undefined): number =>
+  w != null && Number.isFinite(w) && Math.abs(Number(w.toFixed(1))) < 10 ? 1 : 0;
+
+/** The PWM extra tile's name follows the SELECTED variant (owner 2026-11-02): "PWM other" when that variant carries
+ *  the split by part, "PWM unsplit" when it carries only the total.  Without a variant reading (Sine, refused, no value)
+ *  the machine-level state `fallback` names it. */
+export function extraLossSplit(mode: DriveMode, drv: VariantReading | null, fallback: PwmSplitState): PwmSplitState {
+  if (mode === 'pwm' && drv && drv.motor_pwm_loss_W != null) return drv.motor_pwm_loss_parts_W ? 'parts' : 'total';
+  return fallback;
+}
+
 /** The extra motor loss tile: 0 in Sine (a real zero), "—" when PWM is refused or the variant carries no value.
  *  With the split (`split` = 'parts') it shows only the remainder the iron / magnet / copper tiles do not carry
  *  (`lossPartTiles`), so the tiles of the loss row never count a watt twice. */
 export function extraLossTile(mode: DriveMode, drv: VariantReading | null, split: PwmSplitState = 'none'): DriveTileSpec {
-  const base = { id: EXTRA_LOSS_ID, ...EXTRA_LABEL[split], unit: 'W', d: 0, goodHi: false };
+  const base = { id: EXTRA_LOSS_ID, ...EXTRA_LABEL[extraLossSplit(mode, drv, split)], unit: 'W', d: 0, goodHi: false };
   if (mode === 'sine') return { ...base, value: 0, blank: null };
   if (!drv) return { ...base, value: null, blank: 'refused' };
   if (drv.motor_pwm_loss_W == null) return { ...base, value: null, blank: 'missing' };
   const q = drv.motor_pwm_loss_parts_W;
-  return { ...base, value: q ? q.other : drv.motor_pwm_loss_W, blank: null };
+  const value = q ? q.other : drv.motor_pwm_loss_W;
+  return { ...base, d: lossDigits(value), value, blank: null };
 }
 
 /** One motor-loss tile of the breakdown (iron / copper / magnet) under the drive in use. */
@@ -177,11 +191,11 @@ export const controllerLossW = (drv: VariantReading): number | null =>
 
 export function controllerLossTile(mode: DriveMode, drv: VariantReading | null): DriveTileSpec {
   const base = { id: CONTROLLER_LOSS_ID, labelKey: 'configureDrive.invLoss', tipKey: 'configureDrive.invLossTip',
-    unit: 'W', d: 1, goodHi: false };
+    unit: 'W', d: 0, goodHi: false };
   if (mode === 'sine') return { ...base, value: 0, blank: null };
   if (!drv) return { ...base, value: null, blank: 'refused' };
   const w = controllerLossW(drv);
-  return w == null ? { ...base, value: null, blank: 'missing' } : { ...base, value: w, blank: null };
+  return w == null ? { ...base, value: null, blank: 'missing' } : { ...base, d: lossDigits(w), value: w, blank: null };
 }
 
 /** The two loss-row tiles that depend on the drive, in their fixed order. */

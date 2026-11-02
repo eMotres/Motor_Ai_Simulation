@@ -577,7 +577,6 @@
     "packEdited": "edited",
     "preset": "Preset",
     "presetModified": "modified from {config} preset",
-    "changedFrom": "changed from {mode}",
     "restoreFallback": "Saved settings did not fit the pack - back to {mode}",
     "restoreFallbackTip": "Saved settings do not fit this pack ({why}).",
     "restoreWhyVoltage": "line {line} V above the pack nominal {nominal} V",

@@ -44,7 +44,7 @@ import PropellerLoadChart from './PropellerLoadChart';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import { coggingDigits, coggingTipText, coggingValue } from '../../lib/coggingTile';
 import {
-  driveRowTiles, pwmExtraW, pwmMagnetW, lossPartTiles, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, pwmExtraW, pwmMagnetW, lossPartTiles, lossTailTiles, lossDigits, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -73,7 +73,7 @@ import {
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
 import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, presetMassAnchor, type Preset } from '../../lib/configuratorPresets';
-import { buildModePresets, baseModeLabel, presetButtons, type ModePreset } from '../../lib/configuratorModes';
+import { buildModePresets, baseModeLabel, matchesMode, presetButtons, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
@@ -1912,11 +1912,12 @@ ${s1Text.text}` : '';
       }
     }
   };
-  // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
+  // Which mode button the state IS (every knob and the pack equal) — highlighted.  The drive (Sine/PWM, transistor,
+  // carrier) is not part of the operating mode, so changing it keeps the highlight (owner 2026-11-02).
   // (with a propeller as the load the current is the propeller's, not a setting)
-  const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
+  const matchedKey = modePresets.find((pr) => matchesMode(presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
     cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
-    { ignoreCurrent: propLoad, speedCap: propLoad ? ratedCapRpm : null, speedIsCap: isRatedPreset(pr) }).length === 0)?.key ?? null;
+    { ignoreCurrent: propLoad, speedCap: propLoad ? ratedCapRpm : null, speedIsCap: isRatedPreset(pr) })))?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
   const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
   const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);
@@ -2349,11 +2350,6 @@ ${s1Text.text}` : '';
             <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mb: 1.25, flexWrap: 'wrap' }}>
               <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={tx('configure.presetTip')}>
                 {tx('configure.preset')}
-                {basePreset && modified && (
-                  <Box component="span" sx={{ color: '#fbbf24' }}>
-                    {' · '}{tx('configure.changedFrom', { mode: baseLabel ?? basePreset.config })}
-                  </Box>
-                )}
               </Typography>
               {defaultMotor && defaultRef && (
                 <Button size="small" onClick={goDefault}
@@ -2700,10 +2696,10 @@ ${s1Text.text}` : '';
             <MetricTile label={tx('configure.totalLoss')} value={pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null} unit="W" d={0}
               base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')}
               blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? partTile.iron.value : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
+            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? partTile.iron.value : null} unit="W" d={lossDigits(partTile.iron.value)} base={baseRes.P_fe_W} goodHi={false}
               tip={tx('configure.ironLossTip') + partTip(partTile.iron)} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? partTile.copper.value : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip + partTip(partTile.copper)} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? partTile.magnet.value : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
+            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? partTile.copper.value : null} unit="W" d={lossDigits(partTile.copper.value)} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip + partTip(partTile.copper)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? partTile.magnet.value : null} unit="W" d={lossDigits(partTile.magnet.value)} base={baseRes.P_mag_W} goodHi={false}
               tip={tx('configure.magnetLossTip') + partTip(partTile.magnet)} blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
             <MetricTile label={tx('configure.statorHeat')} value={motorHeat?.stator_W ?? null} unit="W" d={0}

@@ -830,7 +830,7 @@ def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path,
                 log.warning("config move: an audit line could not be written", exc_info=True)
         if copy:
             try:
-                fam._autolink_new_config(dst, cfg, None, copied_from=die)
+                fam._autolink_new_config(dst, cfg, None, copied_from=die, source_config=cfg)
             except Exception:                               # noqa: BLE001
                 log.warning("config copy: autolink failed", exc_info=True)
         try:

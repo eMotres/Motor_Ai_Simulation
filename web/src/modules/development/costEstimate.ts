@@ -1,7 +1,9 @@
 /** Project cost estimate (owner 2026-11-02, simplified the same day): ADMIN ONLY.  Each iteration has exactly four lines -
  *  tooling, motor manufacturing (one motor x the motors), testing, shipping (DHL).  Types and pure helpers of the wizard
  *  (steps, line edits, source chips, the review table), tested without a browser.  The schema is the server's
- *  `cost_estimate_schema.json`; totals are computed by the server and are PER CURRENCY. */
+ *  `cost_estimate_schema.json`; the server computes the totals PER CURRENCY and, at the estimate's dated exchange rates
+ *  (`estimate.fx`: ECB or manual), also in the DISPLAY currency (`computed.converted`), which follows the UI language
+ *  (en -> EUR, zh-CN -> CNY) unless the owner picks one.  Every line keeps its own entered currency. */
 
 export type CostLang = 'en' | 'zh-CN';
 export type Bilingual = Record<CostLang, string>;
@@ -15,7 +17,7 @@ export type Money = Record<string, number>;
 export interface CostField { id: string; type: 'bool' | 'int' | 'number' | 'enum'; min?: number; max?: number; options?: string[]; option_labels?: Record<string, Bilingual>; default?: unknown; label: Bilingual; help: Bilingual }
 export interface CostLineDef { id: LineId; label: Bilingual; help: Bilingual; per_motor?: boolean; later_pct_default?: number }
 export interface CostSchema {
-  schema_version: number; currencies: string[]; default_currency: string; factor_limits: [number, number];
+  schema_version: number; currencies: string[]; default_currency: string; display_currency_by_locale?: Record<CostLang, string>; factor_limits: [number, number];
   settings: CostField[]; iteration_fields: CostField[]; lines: CostLineDef[];
 }
 export interface SourceRef { production?: string; project?: string; title?: string; iteration?: string; analog_mass_kg?: number; target_mass_kg?: number }
@@ -24,10 +26,16 @@ export interface CostLine {
   source_ref: SourceRef | null; factor: number | null; date: string | null; by: string | null; note: string; hint: string;
 }
 export interface CostIteration { index: number; motors: number; bench: Bench; lines: Record<LineId, CostLine> }
-export interface CostSettings { complex: boolean; iterations: number; currency: string; contingency_pct: number; target_motor: { die: string; config: string } | null; [key: string]: unknown }
+export interface CostSettings { complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null; [key: string]: unknown }
 export interface CostMigration { from_version: number; date: string | null; dropped: string[]; note: string }
+/** Dated exchange rates, EUR base: `rates` = units of each currency per 1 EUR (effective: a manual rate wins over the ECB one). */
+export interface CostFx {
+  base: 'EUR'; date: string | null; rates: Record<string, number>; source: 'ECB' | 'manual';
+  ecb: { date: string | null; rates: Record<string, number> } | null; manual: Record<string, number>; manual_date: string | null;
+}
+export interface FxStatus { state: 'ok' | 'stale' | 'none'; date: string | null; manual: string[]; error: string | null }
 export interface CostEstimate {
-  version: number; schema_version: number; project_id: string; revision: number; settings: CostSettings;
+  version: number; schema_version: number; project_id: string; revision: number; settings: CostSettings; fx?: CostFx | null;
   iterations: CostIteration[]; migration: CostMigration | null; updated_at: string | null; updated_by: string | null;
 }
 export interface LineResult { amount: Money | null; origin: string }
@@ -36,13 +44,20 @@ export interface IterationResult {
   subtotal: Money; lines: Record<LineId, LineResult>;
 }
 export interface MissingLine { iteration: number; line: LineId; reason: string }
+/** The lines and totals in the display currency; `available` is false when a rate is unknown (`missing_rates`): the
+ *  per-currency figures are then the only totals.  A line / total that cannot be converted is null. */
+export interface CostConverted {
+  currency: string; available: boolean; missing_rates: string[];
+  iterations: Array<{ index: number; lines: Record<LineId, number | null>; subtotal: number | null }>;
+  subtotal: number | null; contingency: number | null; total: number | null;
+}
 export interface CostComputed {
   iterations: IterationResult[]; subtotal: Money; contingency_pct: number; contingency: Money; total: Money; currencies: string[];
-  missing: MissingLine[]; missing_count: number; warnings: string[];
+  converted?: CostConverted; missing: MissingLine[]; missing_count: number; warnings: string[];
 }
-export interface CostSnapshot { id: string; n: number; note: string; created_at: string; created_by: string; revision: number; parent: string | null; totals: { total: Money; missing_count: number }; diff: Array<{ path: string; was: unknown; now: unknown }> }
+export interface CostSnapshot { id: string; n: number; note: string; created_at: string; created_by: string; revision: number; parent: string | null; totals: { total: Money; converted?: CostConverted; missing_count: number }; diff: Array<{ path: string; was: unknown; now: unknown }> }
 export interface CostEstimateAnswer {
-  estimate: CostEstimate; computed: CostComputed; schema: CostSchema; stored: boolean;
+  estimate: CostEstimate; computed: CostComputed; schema: CostSchema; stored: boolean; fx_status?: FxStatus;
   linked_motors: Array<{ die: string; config: string; status: string }>;
   changes?: Array<{ path: string; was: unknown; now: unknown }>;
   report?: { filled_count: number; skipped: Array<{ iteration: number; line: LineId; reason: string }>; notes: string[];
@@ -52,6 +67,72 @@ export interface CostEstimateAnswer {
 export type T = (key: string, args?: Record<string, unknown>) => string;
 export const langOf = (language: string | undefined): CostLang => (String(language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en');
 export const txt = (b: Bilingual | undefined, lang: CostLang): string => (b ? b[lang] || b.en || '' : '');
+
+/** The currency the money is shown in by default: it follows the UI language (English -> EUR, Chinese -> CNY). */
+export const DISPLAY_BY_LANG: Record<CostLang, string> = { en: 'EUR', 'zh-CN': 'CNY' };
+export const defaultDisplayCurrency = (lang: CostLang, schema?: Pick<CostSchema, 'display_currency_by_locale'> | null): string =>
+  schema?.display_currency_by_locale?.[lang] ?? DISPLAY_BY_LANG[lang];
+/** The owner's own pick (stored in the estimate) wins over the language default. */
+export const displayCurrencyOf = (settings: Pick<CostSettings, 'display_currency'> | undefined, lang: CostLang, schema?: Pick<CostSchema, 'display_currency_by_locale'> | null): string =>
+  settings?.display_currency || defaultDisplayCurrency(lang, schema);
+
+export function setDisplayCurrency(e: CostEstimate, value: string | null): CostEstimate {
+  const next = clone(e);
+  next.settings.display_currency = value || null;
+  return next;
+}
+
+/** The owner types an exchange rate (units of `currency` per 1 EUR) or clears it (back to the ECB rate).  Only the manual
+ *  rate is sent to the server; it takes the ECB rates from its own cache. */
+export function setManualRate(e: CostEstimate, currency: string, rate: number | null): CostEstimate {
+  const next = clone(e);
+  const manual = { ...(next.fx?.manual ?? {}) };
+  if (rate === null || !(rate > 0)) delete manual[currency]; else manual[currency] = rate;
+  const base: CostFx = next.fx ?? { base: 'EUR', date: null, rates: {}, source: 'ECB', ecb: null, manual: {}, manual_date: null };
+  next.fx = { ...base, manual, source: Object.keys(manual).length ? 'manual' : 'ECB', rates: { ...(base.ecb?.rates ?? {}), ...manual } };
+  return next;
+}
+
+/** A frozen snapshot's total, as it was shown then: in its display currency at the rates it kept, else per currency. */
+export function snapshotTotalText(s: Pick<CostSnapshot, 'totals'>): string {
+  const cv = s.totals.converted;
+  return cv && cv.available && cv.total !== null ? formatMoney({ [cv.currency]: cv.total }) : formatMoney(s.totals.total);
+}
+
+const rateNum = (r: number): string => String(Number(r.toFixed(4)));
+/** "8 CNY, 1.25 USD" - the rates of the line under the review totals; a manual one is tagged. */
+export function ratesText(fx: CostFx, manualTag = 'manual'): string {
+  return Object.entries(fx.rates).map(([cur, r]) => `${rateNum(r)} ${cur}${cur in (fx.manual ?? {}) ? ` (${manualTag})` : ''}`).join(', ');
+}
+/** "converted at ECB 2026-11-02 (1 EUR = 8 CNY, 1.25 USD)" or "manual rates 2026-11-05 (1 EUR = ...)"; null when no rate is known. */
+export function fxLine(fx: CostFx | null | undefined, t: T): string | null {
+  if (!fx || !Object.keys(fx.rates ?? {}).length) return null;
+  const rates = ratesText(fx, t('costEstimate.fx.manualTag'));
+  return fx.source === 'manual' ? t('costEstimate.fx.manual', { date: fx.manual_date || fx.date || '', rates }) : t('costEstimate.fx.ecb', { date: fx.date || '', rates });
+}
+
+/** The money figures of the header / review: in the display currency when the server could convert (`converted.available`),
+ *  else per currency, as before.  `original` = the per-currency originals (for a tooltip). */
+export interface TotalsView { converted: boolean; currency: string; subtotal: string; contingency: string; total: string; original: string; missingRates: string[] }
+export function totalsView(c: CostComputed): TotalsView {
+  const cv = c.converted;
+  const ok = !!cv && cv.available && cv.total !== null;
+  const one = (v: number | null | undefined) => (cv ? formatMoney(v === null || v === undefined ? null : { [cv.currency]: v }) : '—');
+  return {
+    converted: ok, currency: cv?.currency ?? '', missingRates: cv?.missing_rates ?? [], original: formatMoney(c.total),
+    subtotal: ok ? one(cv!.subtotal) : formatMoney(c.subtotal), contingency: ok ? one(cv!.contingency) : formatMoney(c.contingency), total: ok ? one(cv!.total) : formatMoney(c.total),
+  };
+}
+
+/** The grey "EUR 1 234.00" next to a line whose money is (partly) in another currency than the display one; null when it
+ *  needs none (same currency, or nothing entered) or cannot be converted (no rate). */
+export function lineConverted(c: CostComputed, index: number, id: LineId): string | null {
+  const cv = c.converted;
+  const v = cv?.iterations.find((it) => it.index === index)?.lines[id];
+  const own = Object.keys(c.iterations.find((it) => it.index === index)?.lines[id]?.amount ?? {});
+  if (!cv || v === null || v === undefined || !own.some((cur) => cur !== cv.currency)) return null;
+  return formatMoney({ [cv.currency]: v });
+}
 
 /** The wizard: Settings -> Iteration 1 -> Iteration 2 ... -> Review. */
 export interface CostStep { id: string; kind: 'settings' | 'iteration' | 'review'; iteration?: number }
@@ -168,8 +249,21 @@ export function originChip(line: CostLine, it: CostIteration, lineId: LineId, t:
 
 /** The review table: one row per iteration (tooling / manufacturing / testing / shipping / subtotal); a missing line
  *  shows `missing`. */
-export interface ReviewRow { key: string; iteration: number; tooling: string; manufacturing: string; testing: string; shipping: string; subtotal: string }
+export interface ReviewRow { key: string; iteration: number; tooling: string; manufacturing: string; testing: string; shipping: string; subtotal: string; original?: string }
+/** With the totals converted (`converted.available`) every cell is in the display currency and `original` keeps the
+ *  per-currency subtotal for a tooltip; otherwise the cells are per currency, as the lines were entered. */
 export function reviewRows(c: CostComputed, missing = 'missing'): ReviewRow[] {
+  const cv = c.converted;
+  if (cv && cv.available && cv.total !== null) {
+    const cur = (v: number | null | undefined) => (v === null || v === undefined ? missing : formatMoney({ [cv.currency]: v }));
+    return c.iterations.map((it) => {
+      const conv = cv.iterations.find((x) => x.index === it.index);
+      const empty = (id: LineId) => it[id] !== null && Object.keys(it[id] ?? {}).length === 0;          // no bench: nothing to test
+      const cell = (id: LineId) => (empty(id) ? formatMoney(null) : cur(conv?.lines[id]));
+      return { key: `it${it.index}`, iteration: it.index, tooling: cell('tooling'), manufacturing: cell('manufacturing'), testing: cell('testing'), shipping: cell('shipping'),
+        subtotal: cur(conv?.subtotal ?? 0), original: formatMoney(it.subtotal) };
+    });
+  }
   const cell = (m: Money | null) => (m === null ? missing : formatMoney(m));
   return c.iterations.map((it) => ({ key: `it${it.index}`, iteration: it.index, tooling: cell(it.tooling), manufacturing: cell(it.manufacturing), testing: cell(it.testing), shipping: cell(it.shipping), subtotal: formatMoney(it.subtotal) }));
 }

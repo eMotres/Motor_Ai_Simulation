@@ -2,8 +2,13 @@
 
 ``GET  /api/admin/projects/{id}/cost-estimate``            the estimate (or the defaults when none is stored; an old
                                                            68-line estimate converted on read), its totals, the schema
-                                                           and the project's linked motors
-``PUT  /api/admin/projects/{id}/cost-estimate``            save (optimistic ``revision``; 409 with the stored one)
+                                                           and the project's linked motors.  Every route takes
+                                                           ``?display_currency=EUR|CNY|USD`` (the UI language's currency,
+                                                           used unless the owner chose one in the estimate's
+                                                           ``settings.display_currency``): the totals are also
+                                                           given in it (``computed.converted``) at the estimate's dated
+                                                           exchange rates (``estimate.fx``, ECB or manual)
+``PUT /api/admin/projects/{id}/cost-estimate``            save (optimistic ``revision``; 409 with the stored one)
 ``POST /api/admin/projects/{id}/cost-estimate/suggest``    fill missing lines from built motors (scaled by active mass)
                                                            and other projects' estimates
 ``POST /api/admin/projects/{id}/cost-estimate/snapshot``   freeze the estimate with a note and the "what changed" diff
@@ -15,12 +20,13 @@ cost through the MCP)."""
 from __future__ import annotations
 
 import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from motor_ai_sim import auth
 from motor_ai_sim.development import cost_estimate as CE
+from motor_ai_sim.development import cost_estimate_fx as FX
 from motor_ai_sim.development import cost_estimate_sources as SRC
 from motor_ai_sim.development import cost_estimate_store as CS
 from motor_ai_sim.development import store
@@ -51,13 +57,45 @@ def _linked(project: dict) -> list:
             for m in project.get("linked_motors") or [] if isinstance(m, dict) and m.get("die") and m.get("config")]
 
 
-def _payload(project: dict, estimate: dict, schema: dict, *, stored: bool, **extra: Any) -> Dict[str, Any]:
-    return {"estimate": estimate, "computed": CE.compute(estimate, schema), "schema": schema, "stored": stored,
-            "linked_motors": _linked(project), **extra}
+def _compute(estimate: dict, schema: dict, display: Optional[str]) -> dict:
+    try:
+        return CE.compute(estimate, schema, display)
+    except CE.EstimateError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+def _payload(project: dict, estimate: dict, schema: dict, *, stored: bool, display: Optional[str] = None,
+             fx_status: Optional[dict] = None, **extra: Any) -> Dict[str, Any]:
+    return {"estimate": estimate, "computed": _compute(estimate, schema, display), "schema": schema, "stored": stored,
+            "fx_status": fx_status or _fx_status(estimate, None), "linked_motors": _linked(project), **extra}
 
 
 def _today() -> str:
     return datetime.date.today().isoformat()
+
+
+def _fx_status(estimate: dict, live_status: Optional[dict]) -> dict:
+    """What the web says about the rates: ``state`` ``ok`` (ECB rates of ``date``, fetched in the last day), ``stale`` (the ECB
+    could not be reached: the last stored rates of ``date`` are kept), ``none`` (no ECB rate is known: a manual rate or the
+    per-currency totals only); ``manual`` lists the currencies whose rate is the owner's."""
+    fx = estimate.get("fx") or {}
+    ecb = fx.get("ecb") or {}
+    state = (live_status or {}).get("state") or "ok"
+    if not ecb:
+        state = "none"
+    elif state == "none":
+        state = "stale"
+    return {"state": state, "date": ecb.get("date"), "manual": sorted((fx.get("manual") or {}).keys()),
+            "error": (live_status or {}).get("error")}
+
+
+def _with_live_fx(estimate: dict, schema: dict) -> tuple[dict, dict]:
+    """The estimate with the rates refreshed from the ECB (cached for a day; a failure keeps the stored ones) - in memory only,
+    it is stored by the next save / suggest / snapshot.  Returns ``(estimate, fx status)``."""
+    live, status = FX.live_rates()
+    out = dict(estimate)
+    out["fx"] = CE.merge_fx(estimate.get("fx"), (estimate.get("fx") or {}).get("manual"), live, schema, _today())
+    return out, _fx_status(out, status)
 
 
 def _read(project: dict, stored: Any, schema: dict) -> dict:
@@ -98,16 +136,19 @@ def _conflict(project: dict, schema: dict, current: Any) -> HTTPException:
 
 
 @router.get("/{project_id}/cost-estimate")
-def get_estimate(project_id: str, response: Response, admin_user: dict = Depends(_admin)):
+def get_estimate(project_id: str, response: Response, display_currency: Optional[str] = Query(None),
+                 admin_user: dict = Depends(_admin)):
     response.headers["Cache-Control"] = "no-store"
     project = _project(project_id)
     schema = CE.load_schema()
     estimate, stored = _current(project, schema)
-    return _payload(project, estimate, schema, stored=stored)
+    estimate, status = _with_live_fx(estimate, schema)
+    return _payload(project, estimate, schema, stored=stored, display=display_currency, fx_status=status)
 
 
 @router.put("/{project_id}/cost-estimate")
-async def put_estimate(project_id: str, request: Request, response: Response, admin_user: dict = Depends(_admin)):
+async def put_estimate(project_id: str, request: Request, response: Response, display_currency: Optional[str] = Query(None),
+                       admin_user: dict = Depends(_admin)):
     response.headers["Cache-Control"] = "no-store"
     project = _project(project_id)
     schema = CE.load_schema()
@@ -118,19 +159,30 @@ async def put_estimate(project_id: str, request: Request, response: Response, ad
     except CE.EstimateError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    live, live_status = FX.live_rates()                  # before the file lock: it may touch the network
+    manual = (candidate.get("fx") or {}).get("manual") or {}
+
+    def build(previous):
+        # the rates follow the ECB (the stored ones are kept when it cannot be reached); only the owner's manual rates
+        # come from the request
+        old_fx = (_read(project, previous, schema) if previous else {}).get("fx")
+        return {**candidate, "fx": CE.merge_fx(old_fx, manual, live, schema, _today())}
+
     try:
-        previous, saved = CS.save(project_id, expected, lambda _previous: candidate, _email(admin_user))
+        previous, saved = CS.save(project_id, expected, build, _email(admin_user))
     except CS.RevisionConflict as exc:
         raise _conflict(project, schema, exc.current) from None
     old = _read(project, previous, schema) if previous else None
     changes = CE.diff(old, saved)
     CS.audit(project_id, _email(admin_user), "cost_estimate.update",
              {"revision": saved["revision"], "changes": len(changes), "paths": [c["path"] for c in changes][:60]})
-    return _payload(project, saved, schema, stored=True, changes=changes)
+    return _payload(project, saved, schema, stored=True, display=display_currency, fx_status=_fx_status(saved, live_status),
+                    changes=changes)
 
 
 @router.post("/{project_id}/cost-estimate/suggest")
-async def suggest_estimate(project_id: str, request: Request, response: Response, admin_user: dict = Depends(_admin)):
+async def suggest_estimate(project_id: str, request: Request, response: Response, display_currency: Optional[str] = Query(None),
+                           admin_user: dict = Depends(_admin)):
     response.headers["Cache-Control"] = "no-store"
     project = _project(project_id)
     schema = CE.load_schema()
@@ -142,11 +194,13 @@ async def suggest_estimate(project_id: str, request: Request, response: Response
     data = SRC.gather(project_id, current, schema)
     today = _today()
     report: Dict[str, Any] = {}
+    live, live_status = FX.live_rates()
 
     def build(previous):
         base = _read(project, previous, schema) if previous else current
         new, rep = CE.suggest(base, schema, data, today=today, refresh=bool(body.get("refresh")))
         report.update(rep)
+        new["fx"] = CE.merge_fx(base.get("fx"), (base.get("fx") or {}).get("manual"), live, schema, today)
         return new
 
     try:
@@ -158,7 +212,8 @@ async def suggest_estimate(project_id: str, request: Request, response: Response
     CS.audit(project_id, _email(admin_user), "cost_estimate.suggest",
              {"revision": saved["revision"], "filled": report.get("filled_count", 0), "refresh": bool(body.get("refresh")),
               "analogs": {k: v.get("ref") for k, v in (report.get("analogs") or {}).items()}})
-    return _payload(project, saved, schema, stored=True, changes=changes, report=report)
+    return _payload(project, saved, schema, stored=True, display=display_currency, fx_status=_fx_status(saved, live_status),
+                    changes=changes, report=report)
 
 
 @router.post("/{project_id}/cost-estimate/snapshot")
@@ -172,7 +227,8 @@ async def snapshot_estimate(project_id: str, request: Request, admin_user: dict 
         raise HTTPException(status_code=409, detail="Save the cost estimate before freezing it.")
     if "revision" in body and _revision(body) != int(estimate.get("revision") or 0):
         raise _conflict(project, schema, estimate)
-    computed = CE.compute(estimate, schema)
+    estimate, _status = _with_live_fx(estimate, schema)      # the snapshot keeps the rates its numbers were computed with
+    computed = _compute(estimate, schema, str(body.get("display_currency") or "").strip() or None)
 
     def make(previous, n):
         prev_est = (previous or {}).get("estimate")
@@ -183,7 +239,7 @@ async def snapshot_estimate(project_id: str, request: Request, admin_user: dict 
             changes = []
         return {"id": f"{n:04d}", "n": n, "note": note, "created_at": CS.now(), "created_by": _email(admin_user),
                 "revision": estimate.get("revision"), "parent": (previous or {}).get("id"), "estimate": estimate,
-                "totals": {k: computed[k] for k in ("subtotal", "contingency", "total", "currencies", "missing_count")},
+                "totals": {k: computed[k] for k in ("subtotal", "contingency", "total", "currencies", "converted", "missing_count")},
                 "iterations": [{k: it[k] for k in it if k != "lines"} for it in computed["iterations"]],
                 "diff": changes if previous else []}
 

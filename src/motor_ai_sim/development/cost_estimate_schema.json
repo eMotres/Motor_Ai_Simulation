@@ -3,6 +3,8 @@
  "locales": ["en", "zh-CN"],
  "currencies": ["EUR", "CNY", "USD"],
  "default_currency": "EUR",
+ "display_currency_by_locale": {"en": "EUR", "zh-CN": "CNY"},
+ "fx": {"base": "EUR", "sources": ["ECB", "manual"], "ecb_url": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"},
  "factor_limits": [0.25, 4.0],
  "settings": [
   {"id": "complex", "type": "bool", "default": false,
@@ -13,7 +15,7 @@
    "help": {"en": "1 to 5. Usually 2; 3 for a complex project.", "zh-CN": "1 至 5 轮。通常 2 轮；复杂项目 3 轮。"}},
   {"id": "currency", "type": "enum", "options": ["EUR", "CNY", "USD"], "default": "EUR",
    "label": {"en": "Currency", "zh-CN": "货币"},
-   "help": {"en": "Default for new lines. Totals stay per currency, never converted.", "zh-CN": "新行默认货币。合计按货币分开，不换算。"}},
+   "help": {"en": "Default for new lines. Each line keeps its own currency; the totals are shown in the display currency at the dated rates.", "zh-CN": "新行默认货币。每行保留自己的货币；合计按带日期的汇率换算为显示货币。"}},
   {"id": "contingency_pct", "type": "number", "min": 0, "max": 100, "default": 10,
    "label": {"en": "Contingency", "zh-CN": "不可预见费"},
    "help": {"en": "% on top of the subtotal, per currency.", "zh-CN": "按货币在小计上加的百分比。"}}

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  buildCostSteps, editLine, formatMoney, langOf, LINE_IDS, originChip, reviewRows, setIterationField, setSetting, setToolingMode,
-  sourceCounts, stepIndexOfMissing, stepState, toolingMode,
+  buildCostSteps, defaultDisplayCurrency, DISPLAY_BY_LANG, displayCurrencyOf, editLine, formatMoney, fxLine, langOf, LINE_IDS, lineConverted, originChip,
+  reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, setToolingMode, snapshotTotalText, sourceCounts, stepIndexOfMissing,
+  stepState, toolingMode, totalsView,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -114,4 +115,117 @@ test('every key the wizard uses exists in en and zh-CN', () => {
   for (const k of ['production', 'estimate', 'manual', 'converted', 'rule']) used.add(`source.${k}`);
   const get = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
   for (const lang of ['en', 'zh-CN']) for (const key of used) assert.equal(typeof get(locale(lang), key), 'string', `${lang}: costEstimate.${key}`);
+});
+
+// ── display currency and exchange rates (made-up rates: 1 EUR = 8 CNY = 1.25 USD) ────────────────────────────────────
+
+// a tiny t(): the real en / zh-CN strings with {placeholders} filled
+const realT = (lang) => (key, args = {}) => {
+  const s = key.replace(/^costEstimate\./, '').split('.').reduce((a, k) => a?.[k], locale(lang));
+  assert.equal(typeof s, 'string', `${lang}: ${key}`);
+  return s.replace(/\{(\w+)\}/g, (_m, k) => String(args[k]));
+};
+const ecbFx = { base: 'EUR', date: '2026-11-02', rates: { CNY: 8, USD: 1.25 }, source: 'ECB', ecb: { date: '2026-11-02', rates: { CNY: 8, USD: 1.25 } }, manual: {}, manual_date: null };
+const money = (cur, v) => ({ [cur]: v });
+// what the server computes for: tooling EUR 1000, manufacturing CNY 800 (= EUR 100), testing USD 125 (= EUR 100); shipping missing
+function computedEur(available = true) {
+  const iteration = { index: 1, motors: 2, bench: 'dyno', tooling: money('EUR', 1000), manufacturing: money('CNY', 800), testing: money('USD', 125), shipping: null,
+    subtotal: { EUR: 1000, CNY: 800, USD: 125 },
+    lines: { tooling: { amount: money('EUR', 1000), origin: '' }, manufacturing: { amount: money('CNY', 800), origin: '' }, testing: { amount: money('USD', 125), origin: '' }, shipping: { amount: null, origin: '' } } };
+  return { iterations: [iteration], subtotal: { EUR: 1000, CNY: 800, USD: 125 }, contingency_pct: 10, contingency: { EUR: 100, CNY: 80, USD: 12.5 }, total: { EUR: 1100, CNY: 880, USD: 137.5 }, currencies: ['EUR', 'CNY', 'USD'],
+    converted: available
+      ? { currency: 'EUR', available: true, missing_rates: [], iterations: [{ index: 1, lines: { tooling: 1000, manufacturing: 100, testing: 100, shipping: null }, subtotal: 1200 }], subtotal: 1200, contingency: 120, total: 1320 }
+      : { currency: 'EUR', available: false, missing_rates: ['CNY', 'USD'], iterations: [{ index: 1, lines: { tooling: 1000, manufacturing: null, testing: null, shipping: null }, subtotal: null }], subtotal: null, contingency: null, total: null },
+    missing: [{ iteration: 1, line: 'shipping', reason: 'not filled' }], missing_count: 1, warnings: [] };
+}
+
+test('the display currency follows the UI language until the owner picks one', () => {
+  assert.deepEqual(DISPLAY_BY_LANG, schema.display_currency_by_locale);           // the web default is the server schema's
+  assert.equal(defaultDisplayCurrency('en'), 'EUR');
+  assert.equal(defaultDisplayCurrency('zh-CN'), 'CNY');
+  assert.equal(defaultDisplayCurrency(langOf('en-US')), 'EUR');
+  assert.equal(defaultDisplayCurrency(langOf('zh-CN')), 'CNY');
+  assert.equal(defaultDisplayCurrency(langOf('zh')), 'CNY');
+  assert.equal(defaultDisplayCurrency(langOf(undefined), schema), 'EUR');
+  const e = estimate();
+  assert.equal(displayCurrencyOf(e.settings, 'en', schema), 'EUR');
+  assert.equal(displayCurrencyOf(e.settings, 'zh-CN', schema), 'CNY');
+  // the owner's pick is stored in the estimate and wins in both languages; "auto" (null) goes back to the language
+  const usd = setDisplayCurrency(e, 'USD');
+  assert.equal(displayCurrencyOf(usd.settings, 'en', schema), 'USD');
+  assert.equal(displayCurrencyOf(usd.settings, 'zh-CN', schema), 'USD');
+  assert.equal(displayCurrencyOf(setDisplayCurrency(usd, null).settings, 'zh-CN', schema), 'CNY');
+  assert.equal(e.settings.display_currency, undefined);                            // the input is not mutated
+});
+
+test('converted totals are shown in the display currency, the originals stay for the tooltip', () => {
+  const c = computedEur();
+  const tv = totalsView(c);
+  assert.equal(tv.converted, true);
+  assert.equal(tv.total, 'EUR 1 320.00');
+  assert.equal(tv.subtotal, 'EUR 1 200.00');
+  assert.equal(tv.contingency, 'EUR 120.00');
+  assert.equal(tv.original, 'EUR 1 100.00 · CNY 880.00 · USD 137.50');
+  const rows = reviewRows(c, 'missing');
+  assert.deepEqual(rows[0], { key: 'it1', iteration: 1, tooling: 'EUR 1 000.00', manufacturing: 'EUR 100.00', testing: 'EUR 100.00', shipping: 'missing',
+    subtotal: 'EUR 1 200.00', original: 'EUR 1 000.00 · CNY 800.00 · USD 125.00' });
+  // the line entered in CNY / USD shows its converted value in grey; one already in the display currency shows nothing
+  assert.equal(lineConverted(c, 1, 'manufacturing'), 'EUR 100.00');
+  assert.equal(lineConverted(c, 1, 'testing'), 'EUR 100.00');
+  assert.equal(lineConverted(c, 1, 'tooling'), null);
+  assert.equal(lineConverted(c, 1, 'shipping'), null);
+});
+
+test('with a rate missing the totals stay per currency, as before', () => {
+  const c = computedEur(false);
+  const tv = totalsView(c);
+  assert.equal(tv.converted, false);
+  assert.equal(tv.total, 'EUR 1 100.00 · CNY 880.00 · USD 137.50');
+  assert.deepEqual(tv.missingRates, ['CNY', 'USD']);
+  assert.equal(reviewRows(c, 'missing')[0].manufacturing, 'CNY 800.00');
+  assert.equal(reviewRows(c, 'missing')[0].original, undefined);
+  assert.equal(lineConverted(c, 1, 'manufacturing'), null);                      // cannot be converted: nothing to show
+  const noConverted = { ...computedEur(), converted: undefined };                // an answer of an older server
+  assert.equal(totalsView(noConverted).total, 'EUR 1 100.00 · CNY 880.00 · USD 137.50');
+});
+
+test('the review line names the rates: ECB with its date, or manual', () => {
+  const en = realT('en');
+  assert.equal(fxLine(ecbFx, en), 'converted at ECB 2026-11-02 (1 EUR = 8 CNY, 1.25 USD)');
+  assert.equal(fxLine(ecbFx, realT('zh-CN')), '按欧洲央行 2026-11-02 汇率换算（1 EUR = 8 CNY, 1.25 USD）');
+  const manual = setManualRate({ ...estimate(), fx: ecbFx }, 'CNY', 7.5);
+  assert.equal(manual.fx.source, 'manual');
+  assert.deepEqual(manual.fx.rates, { CNY: 7.5, USD: 1.25 });
+  assert.equal(fxLine({ ...manual.fx, manual_date: '2026-11-05', date: '2026-11-05' }, en), 'manual rates 2026-11-05 (1 EUR = 7.5 CNY (manual), 1.25 USD)');
+  assert.equal(fxLine(null, en), null);
+  assert.equal(fxLine({ ...ecbFx, rates: {} }, en), null);
+});
+
+test('a manual rate is set and cleared; clearing falls back to the ECB rate, with no rate known there is none', () => {
+  const e = { ...estimate(), fx: ecbFx };
+  const set = setManualRate(e, 'CNY', 7.5);
+  assert.deepEqual(set.fx.manual, { CNY: 7.5 });
+  assert.equal(e.fx.manual.CNY, undefined);                                      // the input is not mutated
+  const cleared = setManualRate(set, 'CNY', null);
+  assert.equal(cleared.fx.source, 'ECB');
+  assert.deepEqual(cleared.fx.manual, {});
+  assert.deepEqual(cleared.fx.rates, { CNY: 8, USD: 1.25 });
+  assert.deepEqual(setManualRate(set, 'CNY', 0).fx.manual, {});                  // 0 is not a rate
+  const fromNothing = setManualRate(estimate(), 'USD', 1.3);                     // no ECB rate known: only his own
+  assert.deepEqual(fromNothing.fx.rates, { USD: 1.3 });
+  assert.deepEqual(setManualRate(fromNothing, 'USD', null).fx.rates, {});
+});
+
+test('a frozen snapshot shows its total as it was frozen', () => {
+  assert.equal(snapshotTotalText({ totals: { total: { EUR: 1100, CNY: 880 }, converted: computedEur().converted, missing_count: 0 } }), 'EUR 1 320.00');
+  assert.equal(snapshotTotalText({ totals: { total: { EUR: 1100, CNY: 880 }, converted: computedEur(false).converted, missing_count: 0 } }), 'EUR 1 100.00 · CNY 880.00');
+  assert.equal(snapshotTotalText({ totals: { total: { EUR: 5 }, missing_count: 0 } }), 'EUR 5.00');                      // an older snapshot
+});
+
+test('the new strings exist in both languages', () => {
+  for (const lang of ['en', 'zh-CN']) {
+    const l = locale(lang);
+    for (const k of ['displayCurrency', 'displayCurrencyTip', 'displayAuto', 'originalsTip']) assert.equal(typeof l[k], 'string', `${lang}: ${k}`);
+    for (const k of ['ecb', 'manual', 'manualTag', 'none', 'noneFor', 'stale', 'settingsTitle', 'settingsTip', 'rateLabel', 'useEcb', 'manualChip', 'ecbChip', 'noRate']) assert.equal(typeof l.fx[k], 'string', `${lang}: fx.${k}`);
+  }
 });

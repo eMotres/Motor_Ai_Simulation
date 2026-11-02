@@ -1119,7 +1119,7 @@
     "adminOnly": "Admin only",
     "adminOnlyTip": "Never shown to the customer, project viewers, the factory or agents.",
     "total": "Total",
-    "totalTip": "Per currency, with contingency. Currencies are never converted.",
+    "totalTip": "With contingency, in the display currency at the dated exchange rates. Hover for the originals per currency.",
     "missingCount": "{count} missing",
     "suggest": "Suggest",
     "suggestTip": "Fills missing lines: motor and tooling from the closest built motor, x active mass; testing and shipping from other estimates. Never changes your numbers.",
@@ -1186,13 +1186,32 @@
     "byIteration": "By iteration",
     "subtotal": "Subtotal",
     "contingency": "Contingency {pct} %",
-    "multiCurrency": "Lines are in several currencies ({list}); totals stay per currency, never converted.",
+    "multiCurrency": "Lines are in several currencies ({list}) and a rate is missing; totals stay per currency.",
     "missingTitle": "Missing ({count})",
     "missingTip": "Click a line to open its iteration.",
     "noneMissing": "Nothing missing.",
     "snapshots": "Snapshots",
     "noSnapshots": "No snapshot yet.",
     "firstSnapshot": "First snapshot",
-    "changes": "{count} change(s)"
+    "changes": "{count} change(s)",
+    "displayCurrency": "Show in",
+    "displayCurrencyTip": "Currency of the totals. Follows the interface language (English: EUR, Chinese: CNY) unless you pick one. Each line keeps the currency you entered; its converted value is shown in grey.",
+    "displayAuto": "Auto ({currency})",
+    "originalsTip": "Originals, per currency: {list}",
+    "fx": {
+      "ecb": "converted at ECB {date} (1 EUR = {rates})",
+      "manual": "manual rates {date} (1 EUR = {rates})",
+      "manualTag": "manual",
+      "none": "No exchange rate is known: totals stay per currency.",
+      "noneFor": "No exchange rate for {list}: totals stay per currency.",
+      "stale": "The ECB could not be reached; using the last stored rates of {date}.",
+      "settingsTitle": "Exchange rates",
+      "settingsTip": "Units of the currency per 1 EUR. By default the ECB euro reference rates (fetched once a day, stored with their date in the estimate). A rate you type wins and is labelled manual.",
+      "rateLabel": "1 EUR =",
+      "useEcb": "Use the ECB rate",
+      "manualChip": "Manual",
+      "ecbChip": "ECB {date}",
+      "noRate": "No rate"
+    }
   }
 }

@@ -3,106 +3,115 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  buildCostSteps, editLine, formatMoney, langOf, originChip, reviewRows, setLineStatus, setSetting, sourceCounts,
-  stepIndexOfMissing, stepLines, stepState,
+  buildCostSteps, editLine, formatMoney, langOf, LINE_IDS, originChip, reviewRows, setIterationField, setSetting, setToolingMode,
+  sourceCounts, stepIndexOfMissing, stepState, toolingMode,
 } from '../costEstimate.ts';
 
-// the real line catalogue the server serves
+// the real schema the server serves
 const schema = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../../src/motor_ai_sim/development/cost_estimate_schema.json', import.meta.url)), 'utf8'));
+const locale = (lang) => JSON.parse(readFileSync(fileURLToPath(new URL(`../../../locales/${lang}/development.json`, import.meta.url)), 'utf8')).costEstimate;
 const t = (key, args) => (args ? `${key}|${JSON.stringify(args)}` : key);
 
-const blank = (unit) => ({ status: 'missing', qty: null, unit, unit_cost: null, currency: 'EUR', source: null, source_ref: null, scale: null, derive: null, date: null, note: '', by: null });
-function estimate(iterations = 2) {
-  const iterItems = schema.groups.filter((g) => g.scope === 'iteration').flatMap((g) => g.sections.flatMap((s) => s.items));
-  const projItems = schema.groups.filter((g) => g.scope === 'project').flatMap((g) => g.sections.flatMap((s) => s.items));
-  return {
-    version: 1, schema_version: 1, project_id: 'alpha', revision: 3,
-    settings: { complex: false, iterations, motors_per_iteration: 2, currency: 'EUR', contingency_pct: 10, liquid_cooling: false, high_voltage: false, target_motor: null, analogs: [], basis_overrides: {} },
-    iterations: Array.from({ length: iterations }, (_, i) => ({ index: i + 1, settings: { bench: 'dyno', milestone_pct: null }, lines: Object.fromEntries(iterItems.map((it) => [it.id, blank(it.unit)])) })),
-    project_lines: Object.fromEntries(projItems.map((it) => [it.id, blank(it.unit)])), basis: {}, updated_at: null, updated_by: null,
-  };
+const blank = () => ({ status: 'missing', amount: null, currency: 'EUR', pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '' });
+const iteration = (index) => ({ index, motors: 2, bench: 'dyno', lines: { tooling: index > 1 ? { ...blank(), status: 'filled', pct: 20, source: 'rule' } : blank(), manufacturing: blank(), testing: blank(), shipping: blank() } });
+function estimate(n = 2) {
+  return { version: 2, schema_version: 2, project_id: 'alpha', revision: 3, settings: { complex: false, iterations: n, currency: 'EUR', contingency_pct: 10, target_motor: null },
+    iterations: Array.from({ length: n }, (_, i) => iteration(i + 1)), migration: null, updated_at: null, updated_by: null };
 }
 
-test('steps: settings, then manufacturing / testing / logistics per iteration, project-wide, review', () => {
-  const steps = buildCostSteps(schema, estimate(3));
-  assert.deepEqual(steps.map((s) => s.id), ['settings', 'it1-manufacturing', 'it1-testing', 'it1-logistics', 'it2-manufacturing', 'it2-testing',
-    'it2-logistics', 'it3-manufacturing', 'it3-testing', 'it3-logistics', 'project', 'review']);
-  const rows = stepLines(steps[1], estimate(3));
-  assert.ok(rows.length > 30 && rows[0].item.id === 'tool_main' && rows[0].section.id === 'tooling');
-  assert.equal(stepState(steps[1], estimate(3)).state, 'empty');
-  assert.equal(stepIndexOfMissing(steps, { scope: 'iteration', iteration: 2, group: 'testing', item: 'test_bench' }), 5);
-  assert.equal(stepIndexOfMissing(steps, { scope: 'project', iteration: null, group: 'project', item: 'proj_travel_factory' }), 10);
+test('the schema is four lines, and the steps are settings, one per iteration, review', () => {
+  assert.deepEqual(schema.lines.map((l) => l.id), LINE_IDS);
+  for (const e of [...schema.lines, ...schema.settings, ...schema.iteration_fields]) assert.ok(e.label.en && e.label['zh-CN'] && e.help.en && e.help['zh-CN'], e.id);
+  const steps = buildCostSteps(estimate(3));
+  assert.deepEqual(steps.map((s) => s.id), ['settings', 'it1', 'it2', 'it3', 'review']);
+  assert.equal(stepIndexOfMissing(steps, { iteration: 2, line: 'shipping', reason: 'not filled' }), 2);
+  assert.deepEqual(stepState(steps[1], estimate()), { state: 'empty', missing: 4 });
+  assert.deepEqual(stepState(steps[2], estimate()), { state: 'partial', missing: 3 });
 });
 
-test('typing a number makes the line manual, filled only with quantity and unit cost; the source is never lost silently', () => {
-  let e = estimate();
-  const ref = { iteration: 1, item: 'mech_shaft' };
-  e = editLine(e, ref, { qty: 2 }, 'owner@example.test', '2026-11-02');
-  let line = e.iterations[0].lines.mech_shaft;
-  assert.equal(line.status, 'missing');
-  assert.equal(line.source, 'manual');
-  e = editLine(e, ref, { unit_cost: 120 }, 'owner@example.test', '2026-11-02');
-  line = e.iterations[0].lines.mech_shaft;
+test('typing an amount makes the line manual and filled; clearing it makes it missing; a note keeps the source', () => {
+  let e = editLine(estimate(), { iteration: 1, line: 'manufacturing' }, { amount: 450 }, 'owner@example.test', '2026-11-02');
+  let line = e.iterations[0].lines.manufacturing;
   assert.equal(line.status, 'filled');
+  assert.equal(line.source, 'manual');
   assert.equal(line.by, 'owner@example.test');
   assert.equal(line.date, '2026-11-02');
-  // a note alone keeps the suggested source
+  e = editLine(e, { iteration: 1, line: 'manufacturing' }, { amount: null }, 'o', '2026-11-02');
+  line = e.iterations[0].lines.manufacturing;
+  assert.equal(line.status, 'missing');
+  assert.equal(line.source, null);
   const sug = estimate();
-  Object.assign(sug.iterations[0].lines.mech_housing, { status: 'filled', qty: 2, unit_cost: 450, source: 'analog', source_ref: { production: 'MID/b' }, scale: { rule: 'active_mass', factor: 1.5 } });
-  const noted = editLine(sug, { iteration: 1, item: 'mech_housing' }, { note: 'quote 2026-10' }, 'o', '2026-11-02');
-  assert.equal(noted.iterations[0].lines.mech_housing.source, 'analog');
-  // a derived "modifications" line keeps its derive when only the % is edited
-  const der = estimate();
-  Object.assign(der.iterations[1].lines.tool_main, { status: 'filled', source: 'rule', derive: { pct: 20, from_iteration: 1 } });
-  const pct = editLine(der, { iteration: 2, item: 'tool_main' }, { derivePct: 35 }, 'o', '2026-11-02');
-  assert.deepEqual(pct.iterations[1].lines.tool_main.derive, { pct: 35, from_iteration: 1 });
-  assert.equal(pct.iterations[1].lines.tool_main.status, 'filled');
-  // a percentage line needs only its %
-  const p2 = editLine(estimate(), { iteration: 1, item: 'scrap_allowance' }, { qty: 5 }, 'o', '2026-11-02', true);
-  assert.equal(p2.iterations[0].lines.scrap_allowance.status, 'filled');
-  // the input is not mutated
-  assert.equal(estimate().iterations[0].lines.mech_shaft.qty, null);
+  Object.assign(sug.iterations[0].lines.shipping, { status: 'filled', amount: 420, source: 'estimate', source_ref: { project: 'other', iteration: '1' } });
+  const noted = editLine(sug, { iteration: 1, line: 'shipping' }, { note: 'DHL quote' }, 'o', '2026-11-02');
+  assert.equal(noted.iterations[0].lines.shipping.source, 'estimate');
+  assert.equal(noted.iterations[0].lines.shipping.note, 'DHL quote');
+  assert.equal(estimate().iterations[0].lines.manufacturing.amount, null);      // the input is not mutated
 });
 
-test('not applicable is the owner\'s decision; back to missing clears the source', () => {
-  let e = setLineStatus(estimate(), { iteration: 1, item: 'mech_cooling' }, 'not_applicable', 'o', '2026-11-02');
-  assert.equal(e.iterations[0].lines.mech_cooling.source, 'manual');
-  e = setLineStatus(e, { iteration: 1, item: 'mech_cooling' }, 'missing', 'o', '2026-11-02');
-  assert.equal(e.iterations[0].lines.mech_cooling.source, null);
-  assert.equal(setSetting(estimate(2), 'complex', true).settings.iterations, 3);
+test('later-iteration tooling: % of iteration 1 by default, an amount on request, the % editable', () => {
+  let e = estimate();
+  assert.equal(toolingMode(e.iterations[1].lines.tooling), 'pct');
+  e = editLine(e, { iteration: 2, line: 'tooling' }, { pct: 35 }, 'o', '2026-11-02');
+  assert.equal(e.iterations[1].lines.tooling.pct, 35);
+  assert.equal(e.iterations[1].lines.tooling.source, 'manual');
+  e = setToolingMode(e, 2, 'amount', 20);
+  assert.equal(toolingMode(e.iterations[1].lines.tooling), 'amount');
+  assert.equal(e.iterations[1].lines.tooling.status, 'missing');
+  e = setToolingMode(e, 2, 'pct', 20);
+  assert.deepEqual([e.iterations[1].lines.tooling.pct, e.iterations[1].lines.tooling.source], [20, 'rule']);
+  assert.equal(setToolingMode(estimate(), 1, 'pct', 20).iterations[0].lines.tooling.pct, null);   // iteration 1 has no %
+});
+
+test('settings: the iteration list follows the count; complex makes it at least 3; motors and bench per iteration', () => {
+  let e = setSetting(estimate(2), schema, 'complex', true);
+  assert.equal(e.settings.iterations, 3);
+  assert.equal(e.iterations.length, 3);
+  assert.equal(e.iterations[2].motors, 2);
+  assert.equal(e.iterations[2].lines.tooling.pct, 20);
+  e = setSetting(e, schema, 'iterations', 1);
+  assert.deepEqual(e.iterations.map((it) => it.index), [1]);
+  assert.equal(setSetting(e, schema, 'iterations', 9).iterations.length, 5);
+  e = setIterationField(estimate(), 2, 'bench', 'none');
+  assert.equal(e.iterations[1].bench, 'none');
+  assert.deepEqual(stepState({ kind: 'iteration', iteration: 2 }, e), { state: 'partial', missing: 2 });   // testing not needed
+  assert.equal(setIterationField(estimate(), 1, 'motors', 4).iterations[0].motors, 4);
 });
 
 test('source chips say where the number came from', () => {
-  const line = { ...blank('motor'), status: 'filled', qty: 2, unit_cost: 450, source: 'analog', source_ref: { production: 'MID/b', label: 'Housing' }, scale: { rule: 'active_mass', factor: 4.2 } };
-  const chip = originChip(line, schema, 'en', t);
-  assert.equal(chip.kind, 'analog');
-  assert.match(chip.tip, /analogProduction/);
-  assert.match(chip.tip, /MID\/b/);
-  assert.match(chip.tip, /4\.2/);
-  const manual = originChip({ ...line, source: 'manual', scale: null, by: 'owner@example.test', date: '2026-11-02' }, schema, 'en', t);
-  assert.match(manual.tip, /owner@example.test/);
-  assert.equal(originChip(blank('lot'), schema, 'en', t).kind, 'missing');
-  assert.equal(originChip({ ...blank('lot'), status: 'not_applicable' }, schema, 'en', t).kind, 'not_applicable');
+  const it = estimate().iterations[0];
+  const prod = originChip({ ...blank(), status: 'filled', amount: 4500, source: 'production', factor: 1.5, source_ref: { production: 'MID/b' } }, it, 'manufacturing', t);
+  assert.equal(prod.kind, 'production');
+  assert.match(prod.tip, /origin\.production/);
+  assert.match(prod.tip, /MID\/b/);
+  assert.match(prod.tip, /1\.5/);
+  const man = originChip({ ...blank(), status: 'filled', amount: 1, source: 'manual', by: 'owner@example.test', date: '2026-11-02' }, it, 'shipping', t);
+  assert.match(man.tip, /owner@example.test/);
+  const est = originChip({ ...blank(), status: 'filled', amount: 1, source: 'estimate', source_ref: { project: 'other', title: 'Other', iteration: '2' } }, it, 'testing', t);
+  assert.match(est.tip, /origin\.estimate.*Other.*"iteration":"2"/);
+  const miss = originChip({ ...blank(), hint: 'nearest analog MID/b is x5 by active mass, outside 0.25..4: enter it' }, it, 'manufacturing', t);
+  assert.equal(miss.kind, 'missing');
+  assert.match(miss.tip, /x5/);
+  assert.equal(originChip(estimate().iterations[1].lines.tooling, estimate().iterations[1], 'tooling', t).kind, 'rule');
+  assert.equal(originChip(blank(), { ...it, bench: 'none' }, 'testing', t).kind, 'none');
   assert.equal(langOf('zh-CN'), 'zh-CN');
   assert.equal(langOf('en-US'), 'en');
 });
 
-test('money stays per currency in the review table', () => {
+test('money stays per currency in the review table; a missing line says so', () => {
   assert.equal(formatMoney({ EUR: 1200, CNY: 300.5 }), 'EUR 1 200.00 · CNY 300.50');
   assert.equal(formatMoney({}), '—');
-  const rows = reviewRows({ iterations: [{ index: 1, manufacturing: { EUR: 10 }, testing: {}, logistics: { USD: 5 }, subtotal: { EUR: 10, USD: 5 }, lines: {} }],
-    project: { total: { EUR: 1 }, lines: {} }, subtotal: {}, contingency_pct: 0, contingency: {}, total: {}, currencies: [], missing: [], missing_count: 0, milestones: [], warnings: [] });
-  assert.equal(rows[0].subtotal, 'EUR 10.00 · USD 5.00');
-  assert.equal(rows[1].key, 'project');
-  const counts = sourceCounts(setLineStatus(estimate(1), { iteration: 1, item: 'mech_cooling' }, 'not_applicable', 'o', 'd'));
-  assert.equal(counts.not_applicable, 1);
-  assert.ok(counts.missing > 50);
+  const rows = reviewRows({ iterations: [{ index: 1, motors: 2, bench: 'dyno', tooling: { EUR: 10 }, manufacturing: null, testing: {}, shipping: { USD: 5 }, subtotal: { EUR: 10, USD: 5 }, lines: {} }],
+    subtotal: {}, contingency_pct: 10, contingency: {}, total: {}, currencies: [], missing: [], missing_count: 1, warnings: [] }, 'missing');
+  assert.deepEqual(rows[0], { key: 'it1', iteration: 1, tooling: 'EUR 10.00', manufacturing: 'missing', testing: '—', shipping: 'USD 5.00', subtotal: 'EUR 10.00 · USD 5.00' });
+  const counts = sourceCounts(setIterationField(estimate(2), 2, 'bench', 'none'));
+  assert.deepEqual(counts, { missing: 6, rule: 1 });
 });
 
-test('every catalogue item has both locales, a known unit and a known scale rule', () => {
-  for (const g of schema.groups) for (const s of g.sections) for (const it of s.items) {
-    assert.ok(it.label.en && it.label['zh-CN'] && it.help.en && it.help['zh-CN'], it.id);
-    assert.ok(schema.units[it.unit], it.id);
-    if (it.analog) assert.ok(schema.scale_rules[it.analog.scale], it.id);
-  }
+test('every key the wizard uses exists in en and zh-CN', () => {
+  const src = readFileSync(fileURLToPath(new URL('../components/costEstimate/CostEstimateWizard.tsx', import.meta.url)), 'utf8')
+    + readFileSync(fileURLToPath(new URL('../costEstimate.ts', import.meta.url)), 'utf8');
+  const used = new Set([...src.matchAll(/'costEstimate\.([A-Za-z.]+)'/g)].map((m) => m[1]));
+  for (const k of ['production', 'estimate', 'manual', 'converted', 'rule']) used.add(`source.${k}`);
+  const get = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
+  for (const lang of ['en', 'zh-CN']) for (const key of used) assert.equal(typeof get(locale(lang), key), 'string', `${lang}: costEstimate.${key}`);
 });

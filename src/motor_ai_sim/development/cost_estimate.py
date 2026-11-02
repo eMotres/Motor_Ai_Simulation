@@ -1,23 +1,21 @@
-"""Project cost estimate (owner 2026-11-02): an ADMIN-ONLY questionnaire that estimates what a development project costs us.
+"""Project cost estimate (owner 2026-11-02): an ADMIN-ONLY, deliberately SIMPLE estimate of what a development project
+costs us («не надо до такой степени оценивать стоимость» - the 68-line catalogue of #551 was too detailed).
 
-After the simulation there is no full BOM of the motor, so the cost is ESTIMATED from other projects: the real BOMs, cost
-rows and tooling of motors already built (Production), the test costs other projects recorded, and the masses of the
-simulation.  Where nothing can be based on, the owner enters the number himself.
+* A project has 1..5 ITERATIONS (default 2, 3 when "complex" is ticked).  Each iteration has exactly FOUR lines:
+  ``tooling`` (iteration 1: the tooling; later iterations: "modifications" = a % of iteration 1's tooling, default 20 %,
+  or an amount), ``manufacturing`` (the cost of ONE motor x the motors of the iteration), ``testing`` (one amount; the
+  bench is dyno / propeller stand / both / none) and ``shipping`` (DHL, one amount).
+* Settings: iterations, currency (EUR / CNY / USD), contingency % (default 10).  Totals are PER CURRENCY: no exchange
+  rate exists in the app and none is invented here.
+* Every number keeps its origin: ``production`` (the per-motor cost / tooling sum of the most similar built motor, x ONE
+  factor = target active mass / analog active mass), ``estimate`` (another project's estimate, as-is), ``manual`` (the
+  owner, with e-mail and date), ``converted`` (from an old 68-line estimate) or ``rule`` (the default % of iteration 1).
+  ``suggest`` never overwrites a ``manual`` or ``converted`` value.
 
-* A project has ITERATIONS (1..5; usually 2, at least 3 for a complex project).  Each iteration splits into MANUFACTURING,
-  TESTING and LOGISTICS; iteration 1 carries most of the tooling, later iterations default to "modifications" (a % of
-  iteration 1's tooling line) plus parts and testing.  PROJECT-WIDE lines (engineering hours, travel, warranty) come on top.
-* The line catalogue is ``cost_estimate_schema.json`` (sections with items, help text, unit and the default suggestion
-  rule), so lines are added without code.
-* Every line keeps where its number came from: ``source`` (``analog`` - another production's cost / tooling row, scaled;
-  ``test_history`` - another project's test cost; ``model`` - a simulation mass x a price per kg; ``manual`` - the owner;
-  ``rule`` - a default rule such as "20 % of iteration 1"), ``source_ref``, the scale rule and factor, date and note.
-* Totals are PER CURRENCY (EUR / CNY / USD): no exchange rate exists in the app and none is invented here.
-
-This module is pure (no I/O): schema, defaults, validation, totals, the scale rule, ``suggest`` over gathered source data,
-and the diff between two estimates.  Storage and data gathering live in ``cost_estimate_store`` / ``cost_estimate_sources``,
-the admin routes in ``cost_estimate_routes``.  Nothing here is ever shown to a customer, a project viewer, the factory (OEM)
-or an MCP agent.
+This module is pure (no I/O): schema, defaults, validation, the old-shape conversion, totals, ``suggest`` over gathered
+data, and the diff.  Storage and data gathering live in ``cost_estimate_store`` / ``cost_estimate_sources``, the admin
+routes in ``cost_estimate_routes``.  Nothing here is ever shown to a customer, a project viewer, the factory (OEM) or an
+MCP agent.
 """
 from __future__ import annotations
 
@@ -30,13 +28,15 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SCHEMA_PATH = Path(__file__).with_name("cost_estimate_schema.json")
-VERSION = 1
-SOURCES = ("analog", "test_history", "model", "manual", "rule")
-STATUSES = ("filled", "not_applicable", "missing")
-#: sources ``suggest`` may refresh (never ``manual``: the owner's numbers are never overwritten)
-AUTO_SOURCES = ("analog", "test_history", "model", "rule")
+VERSION = 2
+LINES = ("tooling", "manufacturing", "testing", "shipping")
+SOURCES = ("production", "estimate", "manual", "converted", "rule")
+#: sources ``suggest`` may refresh; ``manual`` and ``converted`` (the owner's own old numbers) are never overwritten
+AUTO_SOURCES = ("production", "estimate")
 _MAX_NOTE = 500
 _MAX_REF = 200
+
+Money = Dict[str, float]
 
 
 class EstimateError(ValueError):
@@ -48,148 +48,98 @@ class EstimateError(ValueError):
 # ---------------------------------------------------------------------------------------------------------------------
 
 def _check_schema(schema: dict) -> dict:
-    if not isinstance(schema, dict) or schema.get("schema_version") != 1:
-        raise ValueError("cost estimate schema: schema_version 1 expected")
-    currencies = schema.get("currencies") or []
-    if not currencies or schema.get("default_currency") not in currencies:
+    if not isinstance(schema, dict) or schema.get("schema_version") != 2:
+        raise ValueError("cost estimate schema: schema_version 2 expected")
+    if not schema.get("currencies") or schema.get("default_currency") not in schema["currencies"]:
         raise ValueError("cost estimate schema: currencies / default_currency")
-    rules = schema.get("scale_rules") or {}
-    units = schema.get("units") or {}
-    seen = set()
-    for group in schema.get("groups") or []:
-        if group.get("scope") not in ("iteration", "project"):
-            raise ValueError("cost estimate schema: group %r scope" % group.get("id"))
-        for section in group.get("sections") or []:
-            for item in section.get("items") or []:
-                iid = item.get("id")
-                if not iid or iid in seen:
-                    raise ValueError("cost estimate schema: duplicate or empty item id %r" % iid)
-                seen.add(iid)
-                if item.get("unit") not in units:
-                    raise ValueError("cost estimate schema: item %r unit %r" % (iid, item.get("unit")))
-                for lang in schema.get("locales") or []:
-                    if not (item.get("label") or {}).get(lang) or not (item.get("help") or {}).get(lang):
-                        raise ValueError("cost estimate schema: item %r has no %s label / help" % (iid, lang))
-                analog = item.get("analog")
-                if analog and (analog.get("scale") not in rules or not analog.get("match")):
-                    raise ValueError("cost estimate schema: item %r analog rule" % iid)
-                if item.get("scale") and item["scale"] not in rules:
-                    raise ValueError("cost estimate schema: item %r scale rule" % iid)
-    if not seen:
-        raise ValueError("cost estimate schema: no items")
+    if [ln.get("id") for ln in schema.get("lines") or []] != list(LINES):
+        raise ValueError("cost estimate schema: the lines must be %s" % ", ".join(LINES))
+    lo, hi = schema.get("factor_limits") or (0, 0)
+    if not 0 < float(lo) < 1 < float(hi):
+        raise ValueError("cost estimate schema: factor_limits")
+    for entry in (schema.get("lines") or []) + (schema.get("settings") or []) + (schema.get("iteration_fields") or []):
+        for lang in schema.get("locales") or []:
+            if not (entry.get("label") or {}).get(lang) or not (entry.get("help") or {}).get(lang):
+                raise ValueError("cost estimate schema: %r has no %s label / help" % (entry.get("id"), lang))
     return schema
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=4)
 def _schema_cached(path: str, mtime: float) -> dict:
     with open(path, encoding="utf-8") as fh:
         return _check_schema(json.load(fh))
 
 
 def load_schema(path: Optional[Path] = None) -> dict:
-    """The line catalogue (a deep copy: callers may not mutate the cached one)."""
+    """The schema (a deep copy: callers may not mutate the cached one)."""
     p = Path(path or SCHEMA_PATH)
     return copy.deepcopy(_schema_cached(str(p), p.stat().st_mtime))
 
 
-def catalogue(schema: dict) -> Dict[str, Tuple[dict, dict, dict]]:
-    """``item id -> (group, section, item)`` in schema order."""
-    out: Dict[str, Tuple[dict, dict, dict]] = {}
-    for group in schema.get("groups") or []:
-        for section in group.get("sections") or []:
-            for item in section.get("items") or []:
-                out[item["id"]] = (group, section, item)
-    return out
+def _field(schema: dict, group: str, fid: str) -> dict:
+    return next(f for f in schema.get(group) or [] if f["id"] == fid)
 
 
-def _items_of_scope(schema: dict, scope: str) -> List[Tuple[dict, dict, dict]]:
-    return [v for v in catalogue(schema).values() if v[0]["scope"] == scope]
+def later_pct_default(schema: dict) -> float:
+    return float(next(ln for ln in schema["lines"] if ln["id"] == "tooling").get("later_pct_default") or 0.0)
+
+
+def factor_limits(schema: dict) -> Tuple[float, float]:
+    lo, hi = schema["factor_limits"]
+    return float(lo), float(hi)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # defaults
 # ---------------------------------------------------------------------------------------------------------------------
 
-def default_settings(schema: dict, *, linked_motors: Iterable[dict] = ()) -> dict:
-    out: Dict[str, Any] = {}
-    for field in schema.get("settings") or []:
-        default = field.get("default")
-        if isinstance(default, dict) and default.get("rule") == "complex":
-            continue
-        out[field["id"]] = default
-    for field in schema.get("settings") or []:
-        default = field.get("default")
-        if isinstance(default, dict) and default.get("rule") == "complex":
-            out[field["id"]] = default["if_true"] if out.get("complex") else default["if_false"]
-    target = None
+def default_iterations(complex_project: bool, schema: dict) -> int:
+    rule = _field(schema, "settings", "iterations")["default"]
+    return int(rule["if_true"] if complex_project else rule["if_false"])
+
+
+def _target_from(linked_motors: Iterable[dict]) -> Optional[dict]:
     for link in linked_motors or []:
         if isinstance(link, dict) and link.get("die") and link.get("config") and str(link.get("status") or "current") == "current":
-            target = {"die": str(link["die"]), "config": str(link["config"])}
-            break
-    out["target_motor"] = target
-    out["analogs"] = []
-    out["basis_overrides"] = {}
-    return out
+            return {"die": str(link["die"]), "config": str(link["config"])}
+    return None
 
 
-def default_iteration_settings(schema: dict) -> dict:
-    return {f["id"]: f.get("default") for f in schema.get("iteration_settings") or []}
+def default_settings(schema: dict, *, linked_motors: Iterable[dict] = ()) -> dict:
+    complex_project = bool(_field(schema, "settings", "complex")["default"])
+    return {"complex": complex_project, "iterations": default_iterations(complex_project, schema),
+            "currency": _field(schema, "settings", "currency")["default"],
+            "contingency_pct": float(_field(schema, "settings", "contingency_pct")["default"]),
+            "target_motor": _target_from(linked_motors)}
 
 
-def _applies(item: dict, settings: dict, it_settings: Optional[dict]) -> bool:
-    cond = item.get("applies_if") or {}
-    for key, want in cond.items():
-        have = (it_settings or {}).get(key) if key in (it_settings or {}) else settings.get(key)
-        if isinstance(want, list):
-            if have not in want:
-                return False
-        elif bool(have) != bool(want):
-            return False
-    return True
+def blank_line(currency: str) -> dict:
+    return {"status": "missing", "amount": None, "currency": currency, "pct": None, "source": None, "source_ref": None,
+            "factor": None, "date": None, "by": None, "note": "", "hint": ""}
 
 
-def blank_line(item: dict, currency: str) -> dict:
-    return {"status": "missing", "qty": None, "unit": item["unit"], "unit_cost": None, "currency": currency,
-            "source": None, "source_ref": None, "scale": None, "derive": None, "date": None, "note": "", "by": None}
-
-
-def default_line(item: dict, settings: dict, *, iteration: Optional[int], it_settings: Optional[dict] = None) -> dict:
-    """The line a new estimate starts with: missing; ``not_applicable`` where the item does not apply (bench type, liquid
-    cooling, HV) or by its ``first`` rule in iteration 1; a later iteration's tooling = "modifications" (``later`` rule:
-    ``pct`` of iteration 1's line, source ``rule``)."""
-    line = blank_line(item, str(settings.get("currency") or "EUR"))
-    if item.get("qty", {}).get("rule") == "one":
-        line["qty"] = 1.0
-    elif item.get("qty", {}).get("rule") == "motors":
-        line["qty"] = float(settings.get("motors_per_iteration") or 1)
-    if not _applies(item, settings, it_settings):
-        line["status"] = "not_applicable"
-        return line
-    if iteration == 1 and item.get("first") == "not_applicable":
-        line["status"] = "not_applicable"
-        return line
-    later = item.get("later")
-    if iteration is not None and iteration > 1 and isinstance(later, dict) and later.get("mode") == "pct_of_first":
-        line.update({"status": "filled", "source": "rule", "derive": {"pct": float(later.get("pct") or 0), "from_iteration": 1},
-                     "qty": None, "unit_cost": None})
+def default_line(line_id: str, index: int, currency: str, schema: dict) -> dict:
+    """A new line is missing - except a later iteration's tooling, which starts as "modifications": the default % of
+    iteration 1's tooling (source ``rule``)."""
+    line = blank_line(currency)
+    if line_id == "tooling" and index > 1:
+        line.update({"status": "filled", "pct": later_pct_default(schema), "source": "rule"})
     return line
 
 
 def default_iteration(schema: dict, settings: dict, index: int) -> dict:
-    its = default_iteration_settings(schema)
-    return {"index": index, "settings": its,
-            "lines": {item["id"]: default_line(item, settings, iteration=index, it_settings=its)
-                      for _g, _s, item in _items_of_scope(schema, "iteration")}}
+    cur = str(settings.get("currency") or schema["default_currency"])
+    return {"index": index, "motors": int(_field(schema, "iteration_fields", "motors")["default"]),
+            "bench": _field(schema, "iteration_fields", "bench")["default"],
+            "lines": {lid: default_line(lid, index, cur, schema) for lid in LINES}}
 
 
 def default_estimate(schema: dict, project_id: str, *, linked_motors: Iterable[dict] = ()) -> dict:
     settings = default_settings(schema, linked_motors=linked_motors)
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id, "revision": 0,
             "settings": settings,
-            "iterations": [default_iteration(schema, settings, i) for i in range(1, int(settings["iterations"]) + 1)],
-            "project_lines": {item["id"]: default_line(item, settings, iteration=None)
-                              for _g, _s, item in _items_of_scope(schema, "project")},
-            "basis": {}, "updated_at": None, "updated_by": None}
+            "iterations": [default_iteration(schema, settings, i) for i in range(1, settings["iterations"] + 1)],
+            "migration": None, "updated_at": None, "updated_by": None}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -226,95 +176,89 @@ def _text(v: Any, n: int = _MAX_NOTE) -> str:
 def normalize_settings(raw: Any, schema: dict) -> dict:
     if not isinstance(raw, dict):
         raise EstimateError("settings: an object is required")
-    out: Dict[str, Any] = {}
-    for field in schema.get("settings") or []:
-        fid, kind = field["id"], field["type"]
-        v = raw.get(fid, None)
-        if kind == "bool":
-            out[fid] = bool(v)
-        elif kind == "int":
-            out[fid] = _int(v, fid, int(field["min"]), int(field["max"]))
-        elif kind == "number":
-            out[fid] = _num(v, fid, lo=field.get("min"), hi=field.get("max"), allow_none=False)
-        elif kind == "enum":
-            if v not in field["options"]:
-                raise EstimateError("%s: one of %s" % (fid, ", ".join(field["options"])))
-            out[fid] = v
+    it_field = _field(schema, "settings", "iterations")
+    pct_field = _field(schema, "settings", "contingency_pct")
+    currency = raw.get("currency", schema["default_currency"])
+    if currency not in schema["currencies"]:
+        raise EstimateError("currency: one of %s" % ", ".join(schema["currencies"]))
     target = raw.get("target_motor")
     if target is not None:
         if not isinstance(target, dict) or not str(target.get("die") or "").strip() or not str(target.get("config") or "").strip():
             raise EstimateError("target_motor: {die, config} or null")
         target = {"die": _text(target["die"], _MAX_REF), "config": _text(target["config"], _MAX_REF)}
-    out["target_motor"] = target
-    analogs = raw.get("analogs") or []
-    if not isinstance(analogs, list) or not all(isinstance(a, str) and "/" in a for a in analogs):
-        raise EstimateError("analogs: a list of 'die/config' productions")
-    out["analogs"] = [_text(a, _MAX_REF) for a in analogs][:50]
-    overrides = raw.get("basis_overrides") or {}
-    if not isinstance(overrides, dict):
-        raise EstimateError("basis_overrides: an object")
-    allowed = set(schema.get("basis_fields") or [])
-    if set(overrides) - allowed:
-        raise EstimateError("basis_overrides: unknown keys %s" % ", ".join(sorted(set(overrides) - allowed)))
-    out["basis_overrides"] = {k: _num(v, k) for k, v in overrides.items() if _num(v, k) is not None}
-    return out
+    complex_project = bool(raw.get("complex"))
+    return {"complex": complex_project,
+            "iterations": _int(raw.get("iterations", default_iterations(complex_project, schema)), "iterations",
+                               int(it_field["min"]), int(it_field["max"])),
+            "currency": currency,
+            "contingency_pct": _num(raw.get("contingency_pct", pct_field["default"]), "contingency_pct",
+                                    lo=pct_field["min"], hi=pct_field["max"], allow_none=False),
+            "target_motor": target}
 
 
-def normalize_line(raw: Any, item: dict, schema: dict, what: str) -> dict:
+def _source_ref(raw: Any, what: str) -> Optional[dict]:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise EstimateError("%s.source_ref: an object or null" % what)
+    out: Dict[str, Any] = {}
+    for k in ("production", "project", "title", "iteration"):
+        if raw.get(k) not in (None, ""):
+            out[k] = _text(raw.get(k), _MAX_REF)
+    for k in ("analog_mass_kg", "target_mass_kg"):
+        v = _num(raw.get(k), "%s.source_ref.%s" % (what, k))
+        if v:
+            out[k] = v
+    return out or None
+
+
+def normalize_line(raw: Any, line_id: str, index: int, schema: dict, what: str) -> dict:
+    """One line as it is SAVED.  The status follows the content: ``filled`` = an amount (or, for a later iteration's
+    tooling, a % of iteration 1); otherwise ``missing``."""
     if not isinstance(raw, dict):
         raise EstimateError("%s: an object is required" % what)
-    status = raw.get("status") or "missing"
-    if status not in STATUSES:
-        raise EstimateError("%s.status: one of %s" % (what, ", ".join(STATUSES)))
     source = raw.get("source")
     if source is not None and source not in SOURCES:
         raise EstimateError("%s.source: one of %s" % (what, ", ".join(SOURCES)))
-    if status == "filled" and source is None:
-        source = "manual"
     currency = str(raw.get("currency") or schema["default_currency"]).strip().upper()
     if currency not in schema["currencies"]:
         raise EstimateError("%s.currency: one of %s" % (what, ", ".join(schema["currencies"])))
-    unit = raw.get("unit") or item["unit"]
-    if unit not in (schema.get("units") or {}):
-        raise EstimateError("%s.unit: %r is not a known unit" % (what, unit))
-    ref = raw.get("source_ref")
-    if ref is not None:
-        if not isinstance(ref, dict):
-            raise EstimateError("%s.source_ref: an object or null" % what)
-        ref = {k: (_text(ref.get(k), _MAX_REF) or None) for k in ("project", "production", "row", "iteration", "label", "updated_at")
-               if ref.get(k) not in (None, "")}
-    scale = raw.get("scale")
-    if scale is not None:
-        if not isinstance(scale, dict) or scale.get("rule") not in (schema.get("scale_rules") or {}):
-            raise EstimateError("%s.scale: {rule, factor}" % what)
-        scale = {"rule": scale["rule"], "factor": _num(scale.get("factor"), what + ".scale.factor", allow_none=False),
-                 "target": _num(scale.get("target"), what + ".scale.target"),
-                 "analog": _num(scale.get("analog"), what + ".scale.analog"),
-                 "exponent": _num(scale.get("exponent", 1.0), what + ".scale.exponent", lo=0, hi=3) or 1.0}
-    derive = raw.get("derive")
-    if derive is not None:
-        if not isinstance(derive, dict):
-            raise EstimateError("%s.derive: {pct} or null" % what)
-        derive = {"pct": _num(derive.get("pct"), what + ".derive.pct", hi=1000, allow_none=False), "from_iteration": 1}
-    pct_line = item["unit"] == "pct"
-    qty = _num(raw.get("qty"), what + ".qty", hi=1000 if pct_line else 1e9)
-    unit_cost = _num(raw.get("unit_cost"), what + ".unit_cost", hi=1e12)
+    amount = _num(raw.get("amount"), what + ".amount", hi=1e12)
+    pct = _num(raw.get("pct"), what + ".pct", hi=1000)
+    if pct is not None and not (line_id == "tooling" and index > 1):
+        raise EstimateError("%s.pct: only a later iteration's tooling is a %% of iteration 1" % what)
+    if pct is not None:
+        amount = None                                 # one mode at a time: % of iteration 1 OR an amount
+    filled = amount is not None or pct is not None
+    if filled and source is None:
+        source = "rule" if pct is not None else "manual"
+    if not filled and source in AUTO_SOURCES + ("rule",):
+        source = None
     date = _text(raw.get("date"), 32) or None
     if date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}([T ][0-9:.+Z-]*)?", date):
         raise EstimateError("%s.date: YYYY-MM-DD" % what)
-    return {"status": status, "qty": qty, "unit": unit, "unit_cost": unit_cost, "currency": currency, "source": source,
-            "source_ref": ref or None, "scale": scale, "derive": derive, "date": date[:10] if date else None,
-            "note": _text(raw.get("note")), "by": _text(raw.get("by"), _MAX_REF) or None}
+    factor = _num(raw.get("factor"), what + ".factor")
+    return {"status": "filled" if filled else "missing", "amount": amount, "currency": currency, "pct": pct,
+            "source": source, "source_ref": _source_ref(raw.get("source_ref"), what) if filled else None,
+            "factor": factor if filled else None, "date": date[:10] if date else None,
+            "by": _text(raw.get("by"), _MAX_REF) or None, "note": _text(raw.get("note")),
+            "hint": "" if filled else _text(raw.get("hint"))}
+
+
+def _normalize_migration(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    dropped = raw.get("dropped") if isinstance(raw.get("dropped"), list) else []
+    return {"from_version": int(raw.get("from_version") or 1), "date": _text(raw.get("date"), 32) or None,
+            "dropped": [_text(d, _MAX_REF) for d in dropped if d][:50], "note": _text(raw.get("note"))}
 
 
 def normalize_estimate(raw: Any, schema: dict, project_id: str) -> dict:
-    """A full estimate as it is SAVED: every setting and line checked (``EstimateError``), unknown items refused, missing
+    """A full estimate as it is SAVED: every setting and line checked (``EstimateError``), unknown lines refused, missing
     lines and iterations filled with their defaults, the iteration list cut / grown to ``settings.iterations``."""
     if not isinstance(raw, dict):
         raise EstimateError("an estimate object is required")
     settings = normalize_settings(raw.get("settings"), schema)
-    iter_items = {i["id"]: i for _g, _s, i in _items_of_scope(schema, "iteration")}
-    proj_items = {i["id"]: i for _g, _s, i in _items_of_scope(schema, "project")}
     raw_iters = raw.get("iterations") or []
     if not isinstance(raw_iters, list):
         raise EstimateError("iterations: a list")
@@ -323,252 +267,329 @@ def normalize_estimate(raw: Any, schema: dict, project_id: str) -> dict:
         if not isinstance(it, dict):
             raise EstimateError("iterations: objects")
         by_index[_int(it.get("index"), "iterations.index", 1, 5)] = it
+    m_field = _field(schema, "iteration_fields", "motors")
+    b_field = _field(schema, "iteration_fields", "bench")
     iterations = []
-    its_fields = schema.get("iteration_settings") or []
     for index in range(1, settings["iterations"] + 1):
         src = by_index.get(index)
         if src is None:
             iterations.append(default_iteration(schema, settings, index))
             continue
-        its_raw = src.get("settings") or {}
-        if not isinstance(its_raw, dict):
-            raise EstimateError("iteration %d settings: an object" % index)
-        its: Dict[str, Any] = {}
-        for f in its_fields:
-            v = its_raw.get(f["id"], f.get("default"))
-            if f["type"] == "enum":
-                if v not in f["options"]:
-                    raise EstimateError("iteration %d %s: one of %s" % (index, f["id"], ", ".join(f["options"])))
-                its[f["id"]] = v
-            elif f["type"] == "number":
-                its[f["id"]] = _num(v, "iteration %d %s" % (index, f["id"]), lo=f.get("min"), hi=f.get("max"))
+        bench = src.get("bench", b_field["default"])
+        if bench not in b_field["options"]:
+            raise EstimateError("iteration %d bench: one of %s" % (index, ", ".join(b_field["options"])))
         lines_raw = src.get("lines") or {}
         if not isinstance(lines_raw, dict):
             raise EstimateError("iteration %d lines: an object" % index)
-        unknown = set(lines_raw) - set(iter_items)
+        unknown = set(lines_raw) - set(LINES)
         if unknown:
             raise EstimateError("iteration %d: unknown lines %s" % (index, ", ".join(sorted(unknown)[:5])))
-        lines = {}
-        for iid, item in iter_items.items():
-            lines[iid] = (normalize_line(lines_raw[iid], item, schema, "iteration %d %s" % (index, iid)) if iid in lines_raw
-                          else default_line(item, settings, iteration=index, it_settings=its))
-        iterations.append({"index": index, "settings": its, "lines": lines})
-    proj_raw = raw.get("project_lines") or {}
-    if not isinstance(proj_raw, dict):
-        raise EstimateError("project_lines: an object")
-    unknown = set(proj_raw) - set(proj_items)
-    if unknown:
-        raise EstimateError("project_lines: unknown lines %s" % ", ".join(sorted(unknown)[:5]))
-    project_lines = {iid: (normalize_line(proj_raw[iid], item, schema, "project %s" % iid) if iid in proj_raw
-                           else default_line(item, settings, iteration=None))
-                     for iid, item in proj_items.items()}
-    basis = raw.get("basis") if isinstance(raw.get("basis"), dict) else {}
+        iterations.append({
+            "index": index,
+            "motors": _int(src.get("motors", m_field["default"]), "iteration %d motors" % index, int(m_field["min"]), int(m_field["max"])),
+            "bench": bench,
+            "lines": {lid: (normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid)) if lid in lines_raw
+                            else default_line(lid, index, settings["currency"], schema)) for lid in LINES}})
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id,
             "revision": int(raw.get("revision") or 0), "settings": settings, "iterations": iterations,
-            "project_lines": project_lines, "basis": _clean_basis(basis, schema),
+            "migration": _normalize_migration(raw.get("migration")),
             "updated_at": raw.get("updated_at"), "updated_by": raw.get("updated_by")}
 
 
-def _clean_basis(basis: dict, schema: dict) -> dict:
-    out: Dict[str, Any] = {}
-    for k in schema.get("basis_fields") or []:
-        v = basis.get(k)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v)) and float(v) > 0:
-            out[k] = float(v)
-    if isinstance(basis.get("motor"), str):
-        out["motor"] = basis["motor"][:_MAX_REF]
-    return out
+# ---------------------------------------------------------------------------------------------------------------------
+# reading a stored estimate (any shape) and converting the old 68-line shape
+# ---------------------------------------------------------------------------------------------------------------------
+
+#: old (version 1) line id prefix -> new line; ``proj_`` (project-wide lines) has no new home
+_V1_GROUPS = (("tool_", "tooling"), ("lam_", "manufacturing"), ("mag_", "manufacturing"), ("wire_", "manufacturing"),
+              ("wind_", "manufacturing"), ("el_", "manufacturing"), ("mech_", "manufacturing"), ("asm_", "manufacturing"),
+              ("scrap_", "manufacturing"), ("redesign_", "manufacturing"), ("test_", "testing"), ("log_", "shipping"))
+#: the old percentage lines: scrap = % of the iteration's manufacturing without tooling / redesign; warranty = % of all
+#: manufacturing (project-wide, dropped)
+_V1_SCRAP = "scrap_allowance"
+
+
+def _v1_group(item_id: str) -> Optional[str]:
+    for prefix, group in _V1_GROUPS:
+        if item_id.startswith(prefix):
+            return group
+    return None
+
+
+def _money_text(m: Money) -> str:
+    return " + ".join("%s %s" % (c, _fmt(a)) for c, a in m.items())
+
+
+def _f(v: Any) -> Optional[float]:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def migrate_v1(old: dict, schema: dict, project_id: str, *, linked_motors: Iterable[dict] = (), today: str = "") -> dict:
+    """Convert a stored estimate of the old 68-line shape (version 1, still a draft) into the 4-line shape.
+
+    Per iteration the old filled lines are summed into the four new lines (tooling / manufacturing / testing / shipping);
+    manufacturing becomes a per-motor cost (old total / the old motors per iteration).  A converted line has source
+    ``converted`` and a note naming how many old lines it sums.  A group whose old lines are in several currencies is
+    left missing with a hint listing them (no exchange rate is invented).  A later iteration whose old tooling was only
+    the default "% of iteration 1" keeps that % as the new rule.  Project-wide lines (engineering hours, travel,
+    warranty) and payment milestones have no new home: they are listed in ``migration.dropped``.  When the owner had
+    filled nothing (only the default rules), the estimate starts blank with the old settings."""
+    s_old = old.get("settings") if isinstance(old.get("settings"), dict) else {}
+    defaults = default_settings(schema, linked_motors=linked_motors)
+    complex_project = bool(s_old.get("complex"))
+    try:
+        n_iter = min(5, max(1, int(s_old.get("iterations") or default_iterations(complex_project, schema))))
+    except (TypeError, ValueError):
+        n_iter = default_iterations(complex_project, schema)
+    currency = s_old.get("currency") if s_old.get("currency") in schema["currencies"] else schema["default_currency"]
+    pct = _f(s_old.get("contingency_pct"))
+    target = s_old.get("target_motor") if isinstance(s_old.get("target_motor"), dict) else defaults["target_motor"]
+    settings = {"complex": complex_project, "iterations": n_iter, "currency": currency,
+                "contingency_pct": pct if pct is not None and 0 <= pct <= 100 else defaults["contingency_pct"],
+                "target_motor": target}
+    try:
+        motors = min(50, max(1, int(s_old.get("motors_per_iteration") or 2)))
+    except (TypeError, ValueError):
+        motors = 2
+
+    old_iters = {}
+    for it in old.get("iterations") or []:
+        if isinstance(it, dict) and isinstance(it.get("lines"), dict):
+            try:
+                old_iters[int(it.get("index"))] = it
+            except (TypeError, ValueError):
+                continue
+
+    def plain(line: dict) -> Optional[Money]:
+        q, u = _f(line.get("qty")), _f(line.get("unit_cost"))
+        if q is None or u is None:
+            return None
+        cur = str(line.get("currency") or currency).upper()
+        return {cur if cur in schema["currencies"] else currency: q * u}
+
+    owner_filled = False
+    first_amounts: Dict[str, Money] = {}
+    iterations = []
+    for index in range(1, n_iter + 1):
+        it_old = old_iters.get(index) or {}
+        lines_old = it_old.get("lines") or {}
+        bench = (it_old.get("settings") or {}).get("bench")
+        new_it = default_iteration(schema, settings, index)
+        new_it["motors"] = motors
+        new_it["bench"] = bench if bench in _field(schema, "iteration_fields", "bench")["options"] else new_it["bench"]
+        sums: Dict[str, Money] = {g: {} for g in LINES}
+        counts = {g: 0 for g in LINES}
+        derive_pcts: Dict[str, set] = {g: set() for g in LINES}
+        manual_like = {g: 0 for g in LINES}
+        scrap_pct = None
+        for iid, line in lines_old.items():
+            group = _v1_group(str(iid))
+            if group is None or not isinstance(line, dict) or line.get("status") != "filled":
+                continue
+            if line.get("source") != "rule":
+                owner_filled = True
+            if iid == _V1_SCRAP:
+                scrap_pct = _f(line.get("qty"))
+                continue
+            if isinstance(line.get("derive"), dict):
+                base = first_amounts.get(iid) if index > 1 else None
+                p = _f(line["derive"].get("pct"))
+                if base is None or p is None:
+                    continue
+                amount = {c: a * p / 100.0 for c, a in base.items()}
+                derive_pcts[group].add(p)
+            else:
+                amount = plain(line)
+                if amount is None:
+                    continue
+                manual_like[group] += 1
+            if index == 1:
+                first_amounts[iid] = amount
+            for c, a in amount.items():
+                sums[group][c] = sums[group].get(c, 0.0) + a
+            counts[group] += 1
+        if scrap_pct:
+            # the old scrap line: % of this iteration's manufacturing (tooling, redesign and scrap excluded)
+            base: Money = {}
+            for iid, line in lines_old.items():
+                if _v1_group(str(iid)) == "manufacturing" and not str(iid).startswith(("redesign_", "scrap_")) \
+                        and isinstance(line, dict) and line.get("status") == "filled" and not line.get("derive"):
+                    for c, a in (plain(line) or {}).items():
+                        base[c] = base.get(c, 0.0) + a
+            for c, a in base.items():
+                sums["manufacturing"][c] = sums["manufacturing"].get(c, 0.0) + a * scrap_pct / 100.0
+            if base:
+                counts["manufacturing"] += 1
+        for group in LINES:
+            money = dict(sums[group])
+            if not counts[group]:
+                continue                                       # nothing filled: the new default line stays
+            if group == "tooling" and index > 1 and not manual_like[group] and len(derive_pcts[group]) == 1:
+                new_it["lines"]["tooling"].update({"status": "filled", "pct": next(iter(derive_pcts[group])), "source": "rule",
+                                                   "amount": None})
+                continue
+            line = blank_line(currency)
+            if len(money) == 1:
+                cur, total = next(iter(money.items()))
+                per_motor = group == "manufacturing"
+                line.update({"status": "filled", "currency": cur, "source": "converted", "date": today or None,
+                             "amount": round(total / motors, 2) if per_motor else round(total, 2),
+                             "note": ("%d old line(s), %s %s total over %d motor(s)" % (counts[group], cur, _fmt(total), motors))
+                             if per_motor else "%d old line(s)" % counts[group]})
+            else:
+                line["hint"] = "old lines in several currencies (%s): enter it in one currency" % _money_text(money)
+            new_it["lines"][group] = line
+        iterations.append(new_it)
+
+    dropped = []
+    for iid, line in (old.get("project_lines") or {}).items():
+        if not isinstance(line, dict) or line.get("status") != "filled":
+            continue
+        owner_filled = True
+        money = plain(line)
+        q = _f(line.get("qty"))
+        dropped.append("project-wide %s: %s" % (iid, _money_text(money) if money else ("%s %%" % _fmt(q) if q is not None else "set")))
+    for it in old.get("iterations") or []:
+        mp = ((it or {}).get("settings") or {}).get("milestone_pct") if isinstance(it, dict) else None
+        if mp is not None:
+            dropped.append("payment milestone of iteration %s: %s %%" % (it.get("index"), _fmt(mp)))
+
+    est = {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id,
+           "revision": int(old.get("revision") or 0), "settings": settings, "iterations": iterations,
+           "updated_at": old.get("updated_at"), "updated_by": old.get("updated_by")}
+    if not owner_filled:
+        blank = [default_iteration(schema, settings, i) for i in range(1, n_iter + 1)]
+        for it, b in zip(iterations, blank):
+            b["motors"], b["bench"] = it["motors"], it["bench"]
+        est["iterations"] = blank
+        est["migration"] = {"from_version": 1, "date": today or None, "dropped": [],
+                            "note": "The old detailed estimate had no filled line: started blank with its settings."}
+    else:
+        est["migration"] = {"from_version": 1, "date": today or None, "dropped": dropped[:50],
+                            "note": "Converted from the old detailed estimate: lines summed into tooling / manufacturing / "
+                                    "testing / shipping per iteration."}
+    return normalize_estimate(est, schema, project_id)
+
+
+def from_stored(stored: Any, schema: dict, project_id: str, *, linked_motors: Iterable[dict] = (), today: str = "") -> dict:
+    """The estimate of a stored document of ANY shape: version 2 normalised, version 1 converted (``migrate_v1``).  Never
+    raises: a document that cannot be read starts blank (keeping its revision, so the owner can save over it)."""
+    if isinstance(stored, dict):
+        try:
+            if stored.get("version") == 1:
+                return migrate_v1(stored, schema, project_id, linked_motors=linked_motors, today=today)
+            return normalize_estimate(stored, schema, project_id)
+        except (EstimateError, TypeError, ValueError, KeyError, AttributeError):
+            pass
+    est = default_estimate(schema, project_id, linked_motors=linked_motors)
+    if isinstance(stored, dict):
+        try:
+            est["revision"] = int(stored.get("revision") or 0)
+        except (TypeError, ValueError):
+            pass
+        version = stored.get("version")
+        est["migration"] = {"from_version": version if isinstance(version, int) else 0,
+                            "date": today or None, "dropped": [], "note": "The stored estimate could not be read: started blank."}
+    return est
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # totals
 # ---------------------------------------------------------------------------------------------------------------------
 
-def _add(acc: Dict[str, float], cur: str, amount: float) -> None:
-    acc[cur] = acc.get(cur, 0.0) + amount
-
-
-def _merge(acc: Dict[str, float], other: Dict[str, float]) -> None:
-    for cur, amount in other.items():
-        _add(acc, cur, amount)
-
-
-def _rounded(acc: Dict[str, float], order: List[str]) -> Dict[str, float]:
+def _rounded(acc: Money, order: List[str]) -> Money:
     rank = {c: i for i, c in enumerate(order)}
     return {c: round(acc[c], 2) for c in sorted(acc, key=lambda c: (rank.get(c, 99), c))}
 
 
-def _plain_amount(line: dict, multiplier: float = 1.0) -> Tuple[Optional[Dict[str, float]], str]:
-    if line.get("qty") is None or line.get("unit_cost") is None:
-        return None, "quantity or unit cost not set"
-    return {line["currency"]: float(line["qty"]) * float(line["unit_cost"]) * multiplier}, ""
+def _merge(acc: Money, other: Money) -> None:
+    for cur, amount in other.items():
+        acc[cur] = acc.get(cur, 0.0) + amount
 
 
 def compute(estimate: dict, schema: dict) -> dict:
-    """Amounts of every line, totals per iteration x (manufacturing, testing, logistics), project-wide lines, subtotal,
-    contingency and total - all PER CURRENCY - plus the missing lines and the payment milestones."""
-    cat = catalogue(schema)
+    """Per iteration: tooling / manufacturing / testing / shipping / subtotal; then the project subtotal, contingency and
+    total - all PER CURRENCY - plus the missing lines (``[{iteration, line, reason}]``)."""
     order = list(schema["currencies"])
-    settings = estimate["settings"]
-    groups = [g["id"] for g in schema["groups"] if g["scope"] == "iteration"]
     missing: List[dict] = []
-    iterations_out = []
-    first_amounts: Dict[str, Optional[Dict[str, float]]] = {}
-    all_manufacturing: Dict[str, float] = {}
-
-    def note_missing(scope: str, index: Optional[int], iid: str, reason: str) -> None:
-        group, section, item = cat[iid]
-        missing.append({"scope": scope, "iteration": index, "group": group["id"], "section": section["id"], "item": iid,
-                        "reason": reason})
-
+    out_iters = []
+    first_tooling: Optional[Money] = None
     for it in estimate["iterations"]:
         index = it["index"]
-        amounts: Dict[str, Optional[Dict[str, float]]] = {}
+        lines = it["lines"]
+        amounts: Dict[str, Optional[Money]] = {}
         reasons: Dict[str, str] = {}
-        pct_items = []
-        for iid, line in it["lines"].items():
-            group, section, item = cat[iid]
-            if line["status"] == "not_applicable":
-                amounts[iid] = {}
+        for lid in LINES:
+            line = lines[lid]
+            if lid == "testing" and it.get("bench") == "none":
+                amounts[lid] = {}                              # no bench in this iteration: nothing to test, nothing missing
                 continue
-            if line["status"] == "missing":
-                amounts[iid], reasons[iid] = None, "not filled"
-                continue
-            if item.get("amount_rule"):
-                pct_items.append(iid)
-                continue
-            if line.get("derive"):
-                base = first_amounts.get(iid) if index > 1 else None
-                if base is None:
-                    amounts[iid], reasons[iid] = None, "iteration 1 line not filled"
+            if lid == "tooling" and line.get("pct") is not None and index > 1:
+                if first_tooling is None:
+                    amounts[lid], reasons[lid] = None, "iteration 1 tooling missing"
                 else:
-                    amounts[iid] = {c: a * float(line["derive"]["pct"]) / 100.0 for c, a in base.items()}
+                    amounts[lid] = {c: a * float(line["pct"]) / 100.0 for c, a in first_tooling.items()}
                 continue
-            amounts[iid], reasons[iid] = _plain_amount(line)
-        for iid in pct_items:
-            line, (_g, _s, item) = it["lines"][iid], cat[iid]
-            rule = item["amount_rule"]
-            if line.get("qty") is None:
-                amounts[iid], reasons[iid] = None, "percentage not set"
+            if line.get("amount") is None:
+                amounts[lid], reasons[lid] = None, line.get("hint") or "not filled"
                 continue
-            base: Dict[str, float] = {}
-            for other, amount in amounts.items():
-                og, osec, oitem = cat[other]
-                if amount and og["id"] == rule["pct_of"] and osec["id"] not in rule.get("exclude_sections", []) \
-                        and not oitem.get("amount_rule"):
-                    _merge(base, amount)
-            amounts[iid] = {c: a * float(line["qty"]) / 100.0 for c, a in base.items()}
+            mult = float(it.get("motors") or 1) if lid == "manufacturing" else 1.0
+            amounts[lid] = {line["currency"]: float(line["amount"]) * mult}
         if index == 1:
-            first_amounts = dict(amounts)
-        by_group: Dict[str, Dict[str, float]] = {g: {} for g in groups}
-        subtotal: Dict[str, float] = {}
+            first_tooling = amounts["tooling"]
+        subtotal: Money = {}
         line_out = {}
-        for iid, amount in amounts.items():
-            gid = cat[iid][0]["id"]
+        for lid in LINES:
+            amount = amounts[lid]
             if amount is None:
-                note_missing("iteration", index, iid, reasons.get(iid, ""))
+                missing.append({"iteration": index, "line": lid, "reason": reasons.get(lid, "not filled")})
             else:
-                _merge(by_group[gid], amount)
                 _merge(subtotal, amount)
-            line_out[iid] = {"amount": None if amount is None else _rounded(amount, order),
-                             "origin": origin_text(it["lines"][iid], schema, cat[iid][2])}
-        _merge(all_manufacturing, by_group.get("manufacturing", {}))
-        iterations_out.append({"index": index, **{g: _rounded(by_group[g], order) for g in groups},
-                               "subtotal": _rounded(subtotal, order), "lines": line_out})
-
-    project_amounts: Dict[str, Optional[Dict[str, float]]] = {}
-    project_total: Dict[str, float] = {}
-    project_lines_out = {}
-    n_iter = len(estimate["iterations"])
-    for iid, line in estimate["project_lines"].items():
-        _g, _s, item = cat[iid]
-        amount: Optional[Dict[str, float]]
-        reason = ""
-        if line["status"] == "not_applicable":
-            amount = {}
-        elif line["status"] == "missing":
-            amount, reason = None, "not filled"
-        elif item.get("amount_rule"):
-            if line.get("qty") is None:
-                amount, reason = None, "percentage not set"
-            else:
-                amount = {c: a * float(line["qty"]) / 100.0 for c, a in all_manufacturing.items()}
-        else:
-            amount, reason = _plain_amount(line, float(n_iter) if item.get("per_iteration") else 1.0)
-        project_amounts[iid] = amount
-        if amount is None:
-            note_missing("project", None, iid, reason)
-        else:
-            _merge(project_total, amount)
-        project_lines_out[iid] = {"amount": None if amount is None else _rounded(amount, order),
-                                  "origin": origin_text(line, schema, item)}
-
-    subtotal_all: Dict[str, float] = {}
-    for it in iterations_out:
+            line_out[lid] = {"amount": None if amount is None else _rounded(amount, order),
+                             "origin": origin_text(lines[lid], index, bench=it.get("bench") if lid == "testing" else None)}
+        out_iters.append({"index": index, "motors": it.get("motors"), "bench": it.get("bench"),
+                          **{lid: (None if amounts[lid] is None else _rounded(amounts[lid], order)) for lid in LINES},
+                          "subtotal": _rounded(subtotal, order), "lines": line_out})
+    subtotal_all: Money = {}
+    for it in out_iters:
         _merge(subtotal_all, it["subtotal"])
-    _merge(subtotal_all, project_total)
-    pct = float(settings.get("contingency_pct") or 0.0)
+    pct = float(estimate["settings"].get("contingency_pct") or 0.0)
     contingency = {c: a * pct / 100.0 for c, a in subtotal_all.items()}
     total = {c: subtotal_all[c] + contingency[c] for c in subtotal_all}
     currencies = list(_rounded(total, order).keys())
-
-    # payment milestones: the % the owner set per iteration; the suggestion is the iteration's share of the subtotal in
-    # the main currency (the estimate's currency, else the first one that has money)
-    main = settings.get("currency") if settings.get("currency") in subtotal_all else (currencies[0] if currencies else None)
-    iter_sum = sum(it["subtotal"].get(main, 0.0) for it in iterations_out) if main else 0.0
-    milestones = []
-    set_sum = 0.0
-    any_set = False
-    for it, it_out in zip(estimate["iterations"], iterations_out):
-        mp = (it.get("settings") or {}).get("milestone_pct")
-        suggested = round(100.0 * it_out["subtotal"].get(main, 0.0) / iter_sum, 1) if main and iter_sum > 0 else None
-        if mp is not None:
-            any_set = True
-            set_sum += float(mp)
-        share = mp if mp is not None else suggested
-        milestones.append({"iteration": it["index"], "pct": mp, "suggested_pct": suggested,
-                           "amount": None if share is None else _rounded({c: a * float(share) / 100.0 for c, a in total.items()}, order)})
     warnings = []
     if len(currencies) > 1:
-        warnings.append("Lines are in several currencies (%s); totals are per currency and never added together." % ", ".join(currencies))
-    if any_set and abs(set_sum - 100.0) > 0.05:
-        warnings.append("Payment milestones add up to %.1f %%, not 100 %%." % set_sum)
-    return {"iterations": iterations_out, "project": {"total": _rounded(project_total, order), "lines": project_lines_out},
-            "subtotal": _rounded(subtotal_all, order), "contingency_pct": pct, "contingency": _rounded(contingency, order),
-            "total": _rounded(total, order), "currencies": currencies, "missing": missing, "missing_count": len(missing),
-            "milestones": milestones, "warnings": warnings}
+        warnings.append("Lines are in several currencies (%s); totals are per currency and never added together."
+                        % ", ".join(currencies))
+    return {"iterations": out_iters, "subtotal": _rounded(subtotal_all, order), "contingency_pct": pct,
+            "contingency": _rounded(contingency, order), "total": _rounded(total, order), "currencies": currencies,
+            "missing": missing, "missing_count": len(missing), "warnings": warnings}
 
 
-def origin_text(line: dict, schema: dict, item: Optional[dict] = None) -> str:
+def origin_text(line: dict, index: int = 1, *, bench: Optional[str] = None) -> str:
     """Where the number came from, in one English line (the web shows its own translated chip)."""
-    status = line.get("status")
-    if status == "not_applicable":
-        return "not applicable"
-    if status == "missing":
-        return "missing"
+    if bench == "none":
+        return "no test bench in this iteration"
+    if line.get("pct") is not None:
+        who = (" (set by %s on %s)" % (line.get("by") or "the owner", line.get("date") or "")) if line.get("source") == "manual" else ""
+        return "%s %% of iteration 1 tooling%s" % (_fmt(line["pct"]), who)
+    if line.get("status") != "filled":
+        return "missing" + ((": " + line["hint"]) if line.get("hint") else "")
     src, ref = line.get("source"), line.get("source_ref") or {}
-    when = line.get("date") or ""
-    scale = line.get("scale") or {}
-    rule = (schema.get("scale_rules") or {}).get(scale.get("rule") or "", {})
-    scaled = ""
-    if scale and scale.get("rule") != "one_to_one":
-        scaled = ", scaled by %s x%s" % ((rule.get("label") or {}).get("en", scale.get("rule")), _fmt(scale.get("factor")))
-    if line.get("derive"):
-        return "%s %% of iteration 1 (default rule)" % _fmt(line["derive"].get("pct"))
-    if src == "manual":
-        return ("entered by %s on %s" % (line.get("by") or "the owner", when)).strip()
-    if src == "analog":
-        what = ref.get("production") or ref.get("project") or "another project"
-        return "from %s %s%s%s" % ("production" if ref.get("production") else "project", what,
-                                   (" (%s)" % ref["label"]) if ref.get("label") else "", scaled)
-    if src == "test_history":
-        return "test cost of project %s%s" % (ref.get("project") or "?", scaled)
-    if src == "model":
-        price = ref.get("production") or ref.get("project")
-        return "simulation mass x price per kg%s" % ((" from %s" % price) if price else "")
+    if src == "production":
+        return "from production %s, x%s by active mass" % (ref.get("production") or "?", _fmt(line.get("factor")))
+    if src == "estimate":
+        return "from estimate of project %s%s" % (ref.get("project") or "?",
+                                                  (" (iteration %s)" % ref["iteration"]) if ref.get("iteration") else "")
+    if src == "converted":
+        return "converted from the old detailed estimate" + ((" (%s)" % line["note"]) if line.get("note") else "")
     if src == "rule":
         return "default rule"
-    return ""
+    return ("entered by %s on %s" % (line.get("by") or "the owner", line.get("date") or "")).strip()
 
 
 def _fmt(x: Any) -> str:
@@ -580,233 +601,8 @@ def _fmt(x: Any) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# scale rule and suggest
+# suggest
 # ---------------------------------------------------------------------------------------------------------------------
-
-def scale_factor(schema: dict, rule: str, target: dict, analog: dict, exponent: float = 1.0) -> Tuple[Optional[float], str, Optional[float], Optional[float]]:
-    """``(factor, reason, target value, analog value)``: (target basis / analog basis) ** exponent for the rule's basis
-    (active mass, magnet / copper / steel mass, outer diameter, stack length, power), 1 for ``one_to_one``.  ``None`` with
-    the reason when a basis is unknown - a line is then never scaled by a guess."""
-    spec = (schema.get("scale_rules") or {}).get(rule)
-    if spec is None:
-        return None, "unknown scale rule %r" % rule, None, None
-    basis = spec.get("basis")
-    if not basis:
-        return 1.0, "", None, None
-    t, a = (target or {}).get(basis), (analog or {}).get(basis)
-    if not t or not a or t <= 0 or a <= 0:
-        return None, "%s unknown for %s" % (basis, "the target" if not t or t <= 0 else "the analog"), t, a
-    return round((float(t) / float(a)) ** float(exponent or 1.0), 4), "", float(t), float(a)
-
-
-_LATIN = re.compile(r"[a-z0-9]")
-
-
-def _match_len(text: str, keywords: Iterable[str]) -> int:
-    """Length of the longest keyword in ``text``: a latin keyword must start a word (``ring`` is not in ``bearing``)."""
-    best = 0
-    for kw in keywords:
-        k = kw.lower()
-        if _LATIN.match(k):
-            if re.search(r"(?<![a-z0-9])" + re.escape(k), text):
-                best = max(best, len(k))
-        elif k in text:
-            best = max(best, len(k))
-    return best
-
-
-def assign_rows(schema: dict, rows: List[dict]) -> Dict[str, List[dict]]:
-    """Each analog production row to AT MOST ONE catalogue item: the item whose keyword is the longest match on the row's
-    name / material (ties: schema order) and whose ``analog.list`` takes that row's list.  No row is counted twice."""
-    cands = [(i, item) for i, (_g, _s, item) in enumerate(catalogue(schema).values()) if item.get("analog")]
-    out: Dict[str, List[dict]] = {}
-    for row in rows:
-        text = " ".join(str(row.get(k) or "") for k in ("name_en", "name_zh", "material")).lower()
-        best: Tuple[int, int, Optional[str]] = (0, 0, None)
-        for order, item in cands:
-            lst = item["analog"]["list"]
-            if (lst == "any" and row.get("list") == "tooling") or (lst != "any" and lst != row.get("list")):
-                continue                                 # "any" = a motor-BOM or a work line, never a tool
-            n = _match_len(text, item["analog"]["match"])
-            if n > best[0]:                              # strictly longer: a tie keeps the first item in schema order
-                best = (n, order, item["id"])
-        if best[2]:
-            out.setdefault(best[2], []).append(row)
-    return out
-
-
-def _closeness(factor: Optional[float]) -> float:
-    return abs(math.log(factor)) if factor and factor > 0 else 0.0
-
-
-def _suggestable(line: dict, refresh: bool) -> bool:
-    if line.get("source") == "manual" or line.get("status") == "not_applicable":
-        return False                                   # the owner's numbers and decisions are never overwritten
-    if line.get("status") == "missing":
-        return True
-    return refresh and line.get("source") in AUTO_SOURCES and not line.get("derive")
-
-
-def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bool = False) -> Tuple[dict, dict]:
-    """Fill the missing lines from the gathered ``data`` and return ``(new estimate, report)``.
-
-    ``data`` = ``{"target_basis": {...}, "productions": [{ref, title, updated_at, basis, rows: [{list, row_id, name_en,
-    name_zh, material, amount, currency}]}], "estimates": [{project_id, title, basis, iterations: [{index, lines}],
-    project_lines}], "tests": {production ref: {"days": n, "kinds": {...}}}}``.
-
-    Never touches a ``manual`` line or a line the owner set ``not_applicable``; with ``refresh`` it also re-suggests lines
-    an earlier suggestion filled.  Order per line: (1) a ``model`` mass line - the simulation mass x buy factor x the price
-    per kg of the nearest analog production's matching rows; (2) the nearest analog PRODUCTION's matching cost / tooling
-    rows, scaled by the item's rule; (3) another project's estimate line of the same item (``test_history`` for testing,
-    ``analog`` otherwise), scaled the same way.  "Nearest" = the scale factor closest to 1, then the newest."""
-    est = copy.deepcopy(estimate)
-    cat = catalogue(schema)
-    settings = est["settings"]
-    target = dict(data.get("target_basis") or {})
-    target.update({k: v for k, v in (settings.get("basis_overrides") or {}).items() if v})
-    wanted = set(settings.get("analogs") or [])
-    productions = [p for p in data.get("productions") or [] if not wanted or p.get("ref") in wanted]
-    rows_by_prod = {p["ref"]: assign_rows(schema, p.get("rows") or []) for p in productions}
-    estimates = [e for e in data.get("estimates") or [] if e.get("project_id") != est.get("project_id")]
-    motors = float(settings.get("motors_per_iteration") or 1)
-    filled: List[dict] = []
-    skipped: List[dict] = []
-
-    def from_productions(item: dict) -> Optional[dict]:
-        rule, exponent = item["analog"]["scale"], float(item["analog"].get("exponent") or 1.0)
-        cands = []
-        for prod in productions:
-            rows = rows_by_prod.get(prod["ref"], {}).get(item["id"]) or []
-            if not rows:
-                continue
-            curs = {r["currency"] for r in rows}
-            if len(curs) != 1:
-                skipped.append({"item": item["id"], "analog": prod["ref"], "reason": "rows in several currencies"})
-                continue
-            factor, why, t, a = scale_factor(schema, rule, target, prod.get("basis") or {}, exponent)
-            if factor is None:
-                skipped.append({"item": item["id"], "analog": prod["ref"], "reason": why})
-                continue
-            cands.append({"prod": prod, "rows": rows, "factor": factor, "t": t, "a": a, "rule": rule, "exponent": exponent,
-                          "amount": sum(float(r["amount"]) for r in rows), "currency": next(iter(curs))})
-        return min(cands, key=lambda c: (round(_closeness(c["factor"]), 6), _newest_first(c["prod"].get("updated_at"))))             if cands else None
-
-    def from_estimates(item: dict, group_id: str, index: Optional[int]) -> Optional[dict]:
-        rule = item.get("scale") or (item.get("analog") or {}).get("scale") or "one_to_one"
-        best = None
-        for other in estimates:
-            if index is None:
-                cands = [(None, (other.get("project_lines") or {}).get(item["id"]))]
-            else:
-                its = {i.get("index"): i for i in other.get("iterations") or [] if isinstance(i, dict)}
-                order = [index] + [k for k in sorted(its) if k != index]
-                cands = [(k, (its[k].get("lines") or {}).get(item["id"])) for k in order if k in its]
-            for k, line in cands:
-                if not isinstance(line, dict) or line.get("status") != "filled" or line.get("derive") \
-                        or line.get("qty") is None or line.get("unit_cost") is None or line.get("unit") != item["unit"]:
-                    continue
-                factor, why, t, a = scale_factor(schema, rule, target, other.get("basis") or {})
-                if factor is None:
-                    skipped.append({"item": item["id"], "analog": "project " + str(other.get("project_id")), "reason": why})
-                    break
-                key = (0 if k == index else 1, _closeness(factor))
-                cand = {"other": other, "iteration": k, "line": line, "factor": factor, "t": t, "a": a, "rule": rule, "key": key}
-                if best is None or key < best["key"]:
-                    best = cand
-                break
-        return best
-
-    def fill(line: dict, item: dict, group_id: str, index: Optional[int], where: str) -> None:
-        qrule = (item.get("qty") or {}).get("rule")
-        new = None
-        if qrule == "model_mass":
-            mkey = item["qty"]["mass"]
-            buy = float(item["qty"].get("buy_factor") or 1.0)
-            mass = target.get(mkey)
-            if not mass:
-                skipped.append({"item": item["id"], "where": where, "reason": "%s unknown for the target motor" % mkey})
-            else:
-                qty = round(float(mass) * buy * motors, 3)
-                price = None
-                best = from_productions(item) if item.get("analog") else None
-                if best and (best["prod"].get("basis") or {}).get(mkey):
-                    price = best["amount"] / (float(best["prod"]["basis"][mkey]) * buy)
-                new = {**line, "qty": qty, "unit": item["unit"], "source": "model", "date": today, "by": "suggest",
-                       "scale": None, "derive": None,
-                       "note": "%.3f kg x %s buy factor x %d motor(s)" % (float(mass), _fmt(buy), int(motors))}
-                if price is not None:
-                    new.update({"status": "filled", "unit_cost": round(price, 4), "currency": best["currency"],
-                                "source_ref": {"production": best["prod"]["ref"], "label": _row_label(best["rows"]),
-                                               "updated_at": best["prod"].get("updated_at")}})
-                    new["note"] += "; price per kg from %s" % best["prod"]["ref"]
-                else:
-                    new.update({"status": "missing", "unit_cost": None, "source_ref": None})
-                    new["note"] += "; price per kg: no analog - enter it"
-        if new is None and item.get("analog") and qrule != "model_mass":
-            best = from_productions(item)
-            if best:
-                # motor-BOM and work-line rows cost PER MOTOR, tooling rows are the price of the whole list line
-                per_motor = best["rows"][0]["list"] != "tooling"
-                qty = motors if item["unit"] == "motor" else 1.0
-                unit_cost = best["amount"] * best["factor"]
-                if item["unit"] != "motor" and per_motor:
-                    unit_cost *= motors                    # a lot (e.g. one etch batch) for this iteration's motors
-                new = {**line, "status": "filled", "qty": qty, "unit": item["unit"], "unit_cost": round(unit_cost, 2),
-                       "currency": best["currency"], "source": "analog",
-                       "source_ref": {"production": best["prod"]["ref"], "row": ",".join(str(r.get("row_id")) for r in best["rows"])[:_MAX_REF],
-                                      "label": _row_label(best["rows"]), "updated_at": best["prod"].get("updated_at")},
-                       "scale": {"rule": best["rule"], "factor": best["factor"], "target": best["t"], "analog": best["a"],
-                                 "exponent": best["exponent"]},
-                       "derive": None, "date": today, "by": "suggest",
-                       "note": "%d row(s) of %s" % (len(best["rows"]), best["prod"]["ref"])}
-        if new is None and (item.get("history") or item.get("analog")):
-            best = from_estimates(item, group_id, index)
-            if best:
-                src = best["line"]
-                new = {**line, "status": "filled", "qty": src["qty"], "unit": item["unit"],
-                       "unit_cost": round(float(src["unit_cost"]) * best["factor"], 2), "currency": src["currency"],
-                       "source": "test_history" if group_id == "testing" else "analog",
-                       "source_ref": {"project": best["other"]["project_id"],
-                                      "iteration": None if best["iteration"] is None else str(best["iteration"]),
-                                      "label": best["other"].get("title") or None},
-                       "scale": {"rule": best["rule"], "factor": best["factor"], "target": best["t"], "analog": best["a"],
-                                 "exponent": 1.0},
-                       "derive": None, "date": today, "by": "suggest",
-                       "note": "project %s%s" % (best["other"]["project_id"],
-                                                 "" if best["iteration"] is None else ", iteration %s" % best["iteration"])}
-        if new is None:
-            hint = _test_hint(item, group_id, data)
-            if hint and hint not in (line.get("note") or ""):
-                line["note"] = ((line.get("note") or "") + ("; " if line.get("note") else "") + hint)[:_MAX_NOTE]
-            skipped.append({"item": item["id"], "where": where, "reason": "nothing to base it on - enter it"})
-            return
-        line.clear()
-        line.update(new)
-        filled.append({"item": item["id"], "where": where, "source": new["source"], "status": new["status"]})
-
-    for it in est["iterations"]:
-        index = it["index"]
-        for iid, line in it["lines"].items():
-            group, _section, item = cat[iid]
-            if not _suggestable(line, refresh) or item.get("amount_rule"):
-                continue
-            later = item.get("later")
-            if index > 1 and isinstance(later, dict) and later.get("mode") == "pct_of_first":
-                line.update({"status": "filled", "source": "rule", "derive": {"pct": float(later.get("pct") or 0), "from_iteration": 1},
-                             "qty": None, "unit_cost": None, "scale": None, "source_ref": None, "date": today, "by": "suggest"})
-                filled.append({"item": iid, "where": "iteration %d" % index, "source": "rule", "status": "filled"})
-                continue
-            fill(line, item, group["id"], index, "iteration %d" % index)
-    for iid, line in est["project_lines"].items():
-        group, _section, item = cat[iid]
-        if _suggestable(line, refresh) and not item.get("amount_rule"):
-            fill(line, item, group["id"], None, "project")
-    est["basis"] = _clean_basis({**target, "motor": data.get("target_ref") or ""}, schema)
-    report = {"filled": filled, "skipped": skipped, "filled_count": len(filled),
-              "analogs": [{"ref": p["ref"], "title": p.get("title") or "", "basis": p.get("basis") or {}} for p in productions],
-              "estimates": [e.get("project_id") for e in estimates], "target_basis": target}
-    return est, report
-
 
 def _newest_first(stamp: Any) -> Tuple[int, str]:
     """Sort key: a newer ISO time stamp first, an undated record last."""
@@ -814,28 +610,151 @@ def _newest_first(stamp: Any) -> Tuple[int, str]:
     return (0, "".join(chr(0x10FFFF - ord(c)) for c in s)) if s else (1, "")
 
 
-def _row_label(rows: List[dict]) -> str:
-    names = [str(r.get("name_en") or r.get("name_zh") or r.get("row_id") or "") for r in rows][:3]
-    more = "" if len(rows) <= 3 else " +%d" % (len(rows) - 3)
-    return (", ".join(n for n in names if n) + more)[:_MAX_REF]
+def pick_analog(productions: List[dict], kind: str, target_mass: Optional[float], schema: dict) -> Tuple[Optional[dict], str]:
+    """The production to base ``kind`` (``cost_per_motor`` or ``tooling``) on: among the productions that HAVE that data
+    and a simulated active mass, the one whose active mass is closest to the target's (the factor target / analog nearest
+    1, i.e. the smallest |ln factor|; ties: the newest).  ``(None, one-line reason)`` when there is none, when the
+    factor is outside the limits (0.25..4: the nearest analog and its factor are named) or when the analog's money is in
+    several currencies (no exchange rate)."""
+    what = "per-motor cost" if kind == "cost_per_motor" else "tooling"
+    with_data = [p for p in productions if any((v or 0) > 0 for v in (p.get(kind) or {}).values())]
+    if not with_data:
+        return None, "no built motor has %s data" % what
+    if not target_mass or target_mass <= 0:
+        return None, "the project's motor has no simulated active mass"
+    with_mass = [p for p in with_data if (p.get("active_mass_kg") or 0) > 0]
+    if not with_mass:
+        return None, "no built motor with %s data has a simulated active mass" % what
+    best = min(with_mass, key=lambda p: (round(abs(math.log(target_mass / float(p["active_mass_kg"]))), 9),
+                                         _newest_first(p.get("updated_at")), str(p.get("ref"))))
+    factor = round(target_mass / float(best["active_mass_kg"]), 4)
+    lo, hi = factor_limits(schema)
+    if not lo <= factor <= hi:
+        return None, "nearest analog %s is x%s by active mass, outside %s..%s: enter it" % (best["ref"], _fmt(factor), _fmt(lo), _fmt(hi))
+    money = {c: float(v) for c, v in (best.get(kind) or {}).items() if v}
+    if len(money) != 1:
+        return None, "analog %s %s is in several currencies (%s), x%s: enter it in one currency" % (
+            best["ref"], what, _money_text(money), _fmt(factor))
+    cur, base = next(iter(money.items()))
+    return {"ref": best["ref"], "title": best.get("title") or best["ref"], "factor": factor, "currency": cur, "base": base,
+            "amount": round(base * factor, 2), "analog_mass_kg": float(best["active_mass_kg"]), "target_mass_kg": float(target_mass),
+            "missing_prices": int(best.get("missing_prices") or 0)}, ""
 
 
-def _test_hint(item: dict, group_id: str, data: dict) -> str:
-    """For bench time: what the analog productions' test records show (test days), as a hint only - never a number."""
-    if group_id != "testing" or item["id"] != "test_bench":
-        return ""
-    parts = []
-    for ref, info in sorted((data.get("tests") or {}).items()):
-        if isinstance(info, dict) and info.get("days"):
-            parts.append("%s: %d test day(s) recorded" % (ref, int(info["days"])))
-    return ("test records - " + "; ".join(parts[:3])) if parts else ""
+def _from_estimates(estimates: List[dict], line_id: str, index: int, bench: Optional[str]) -> Optional[dict]:
+    """Another project's value for ``line_id``, as-is: the newest estimate first; in it the same iteration first (and for
+    testing the same bench), else its first filled iteration."""
+    best = None
+    for other in estimates:
+        for it in other.get("iterations") or []:
+            line = (it.get("lines") or {}).get(line_id) or {}
+            if line.get("status") != "filled" or line.get("amount") is None:
+                continue
+            if line_id == "testing" and it.get("bench") == "none":
+                continue
+            key = (_newest_first(other.get("updated_at")), 0 if it.get("index") == index else 1,
+                   0 if (line_id != "testing" or it.get("bench") == bench) else 1, int(it.get("index") or 0))
+            if best is None or key < best[0]:
+                best = (key, other, it, line)
+    if best is None:
+        return None
+    _k, other, it, line = best
+    return {"project": other["project_id"], "title": other.get("title") or other["project_id"], "iteration": it.get("index"),
+            "amount": float(line["amount"]), "currency": line["currency"]}
+
+
+def _suggestable(line: dict, refresh: bool) -> bool:
+    if line.get("pct") is not None:
+        return False                                   # "modifications" rule: the owner's choice of mode
+    if line.get("status") == "missing":
+        return True                                    # no value to lose
+    # a filled line: the owner's numbers (manual, converted) are never overwritten; with refresh an earlier suggestion is
+    return refresh and line.get("source") in AUTO_SOURCES
+
+
+def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bool = False) -> Tuple[dict, dict]:
+    """Fill the missing lines from ``data`` and return ``(new estimate, report)``.
+
+    ``data`` = ``{"target_ref", "target_mass_kg", "productions": [{ref, title, updated_at, active_mass_kg,
+    cost_per_motor: {cur: amount}, tooling: {cur: amount}, missing_prices}], "estimates": [{project_id, title, updated_at,
+    iterations: [{index, bench, lines}]}]}``.
+
+    * manufacturing (every iteration): the nearest analog's per-motor cost x (target / analog active mass);
+    * tooling of iteration 1: the nearest analog's tooling sum x the same kind of factor; a later iteration's missing
+      tooling goes back to the default "% of iteration 1";
+    * testing and shipping: another project's value for that line, as-is.
+    A line that cannot be suggested stays missing with a one-line ``hint``.  Never touches a ``manual`` or ``converted``
+    line; with ``refresh`` it also re-suggests lines an earlier suggestion filled."""
+    est = copy.deepcopy(estimate)
+    target_mass = data.get("target_mass_kg")
+    productions = list(data.get("productions") or [])
+    estimates = [e for e in data.get("estimates") or [] if e.get("project_id") != est.get("project_id")]
+    picks = {kind: pick_analog(productions, kind, target_mass, schema) for kind in ("cost_per_motor", "tooling")}
+    filled: List[dict] = []
+    skipped: List[dict] = []
+    notes: List[str] = []
+
+    def put(line: dict, new: dict, index: int, lid: str) -> None:
+        note = line.get("note") or ""
+        line.clear()
+        line.update(blank_line(new["currency"]))
+        line.update(new)
+        line.update({"status": "filled", "date": today, "by": "suggest", "note": note, "hint": ""})
+        filled.append({"iteration": index, "line": lid, "source": new["source"]})
+
+    def miss(line: dict, index: int, lid: str, reason: str) -> None:
+        if line.get("status") == "missing":            # a refreshed earlier suggestion keeps its number
+            line["hint"] = reason[:_MAX_NOTE]
+        skipped.append({"iteration": index, "line": lid, "reason": reason})
+
+    for it in est["iterations"]:
+        index = it["index"]
+        for lid in LINES:
+            line = it["lines"][lid]
+            if not _suggestable(line, refresh):
+                continue
+            if lid == "testing" and it.get("bench") == "none":
+                continue
+            if lid == "tooling" and index > 1:
+                line.update({"status": "filled", "amount": None, "pct": later_pct_default(schema), "source": "rule",
+                             "source_ref": None, "factor": None, "date": today, "by": "suggest", "hint": ""})
+                filled.append({"iteration": index, "line": lid, "source": "rule"})
+                continue
+            if lid in ("manufacturing", "tooling"):
+                pick, why = picks["cost_per_motor" if lid == "manufacturing" else "tooling"]
+                if pick is None:
+                    miss(line, index, lid, why)
+                    continue
+                put(line, {"amount": pick["amount"], "currency": pick["currency"], "source": "production", "factor": pick["factor"],
+                           "source_ref": {"production": pick["ref"], "title": pick["title"],
+                                          "analog_mass_kg": pick["analog_mass_kg"], "target_mass_kg": pick["target_mass_kg"]}},
+                    index, lid)
+                if pick["missing_prices"]:
+                    notes.append("analog %s has %d unpriced BOM row(s): its per-motor cost is incomplete"
+                                 % (pick["ref"], pick["missing_prices"]))
+                continue
+            other = _from_estimates(estimates, lid, index, it.get("bench"))
+            if other is None:
+                miss(line, index, lid, "no other project's estimate has %s: enter it" % lid)
+                continue
+            put(line, {"amount": other["amount"], "currency": other["currency"], "source": "estimate", "factor": None,
+                       "source_ref": {"project": other["project"], "title": other["title"], "iteration": str(other["iteration"])}},
+                index, lid)
+    report = {"filled": filled, "skipped": skipped, "filled_count": len(filled), "notes": sorted(set(notes)),
+              "target_ref": data.get("target_ref") or "",
+              "target_mass_kg": target_mass,
+              "analogs": {("manufacturing" if k == "cost_per_motor" else "tooling"):
+                          ({"ref": p["ref"], "factor": p["factor"]} if p else {"ref": None, "reason": why})
+                          for k, (p, why) in picks.items()},
+              "estimates": [e.get("project_id") for e in estimates]}
+    return est, report
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # diff
 # ---------------------------------------------------------------------------------------------------------------------
 
-_LINE_FIELDS = ("status", "qty", "unit", "unit_cost", "currency", "source", "source_ref", "scale", "derive", "note")
+_LINE_FIELDS = ("status", "amount", "currency", "pct", "source", "source_ref", "factor", "note")
 
 
 def _flat(estimate: dict) -> Dict[str, Any]:
@@ -843,20 +762,17 @@ def _flat(estimate: dict) -> Dict[str, Any]:
     for k, v in (estimate.get("settings") or {}).items():
         out["settings.%s" % k] = v
     for it in estimate.get("iterations") or []:
-        for k, v in (it.get("settings") or {}).items():
-            out["iteration %s.settings.%s" % (it["index"], k)] = v
-        for iid, line in (it.get("lines") or {}).items():
+        for k in ("motors", "bench"):
+            out["iteration %s.%s" % (it["index"], k)] = it.get(k)
+        for lid, line in (it.get("lines") or {}).items():
             for f in _LINE_FIELDS:
-                out["iteration %s.%s.%s" % (it["index"], iid, f)] = line.get(f)
-    for iid, line in (estimate.get("project_lines") or {}).items():
-        for f in _LINE_FIELDS:
-            out["project.%s.%s" % (iid, f)] = line.get(f)
+                out["iteration %s.%s.%s" % (it["index"], lid, f)] = line.get(f)
     return out
 
 
 def diff(old: Optional[dict], new: dict, schema: Optional[dict] = None) -> List[dict]:
-    """What changed from ``old`` to ``new``: ``[{path, was, now}]`` over the settings, the iteration settings and every
-    line field (``None`` -> everything is new).  With ``schema`` the totals are compared too (``total.<currency>``)."""
+    """What changed from ``old`` to ``new``: ``[{path, was, now}]`` over the settings, the iteration fields and every line
+    field (``None`` -> everything is new).  With ``schema`` the totals are compared too (``total.<currency>``)."""
     a, b = _flat(old or {}), _flat(new)
     out = [{"path": k, "was": a.get(k), "now": b.get(k)} for k in sorted(set(a) | set(b), key=_path_key) if a.get(k) != b.get(k)]
     if schema is not None:

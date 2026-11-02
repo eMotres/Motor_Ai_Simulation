@@ -1,9 +1,11 @@
 """Admin-only routes of the project cost estimate (owner 2026-11-02).
 
-``GET  /api/admin/projects/{id}/cost-estimate``            the estimate (or the defaults when none is stored), its totals,
-                                                           the line catalogue and the project's linked motors
+``GET  /api/admin/projects/{id}/cost-estimate``            the estimate (or the defaults when none is stored; an old
+                                                           68-line estimate converted on read), its totals, the schema
+                                                           and the project's linked motors
 ``PUT  /api/admin/projects/{id}/cost-estimate``            save (optimistic ``revision``; 409 with the stored one)
-``POST /api/admin/projects/{id}/cost-estimate/suggest``    fill missing lines from other productions / projects / masses
+``POST /api/admin/projects/{id}/cost-estimate/suggest``    fill missing lines from built motors (scaled by active mass)
+                                                           and other projects' estimates
 ``POST /api/admin/projects/{id}/cost-estimate/snapshot``   freeze the estimate with a note and the "what changed" diff
 ``GET  /api/admin/projects/{id}/cost-estimate/snapshots``  the frozen snapshots
 
@@ -54,27 +56,21 @@ def _payload(project: dict, estimate: dict, schema: dict, *, stored: bool, **ext
             "linked_motors": _linked(project), **extra}
 
 
+def _today() -> str:
+    return datetime.date.today().isoformat()
+
+
+def _read(project: dict, stored: Any, schema: dict) -> dict:
+    """A stored document of any shape as the 4-line estimate (the old 68-line shape is converted, see
+    ``cost_estimate.migrate_v1``); never raises."""
+    return CE.from_stored(stored, schema, project["id"], linked_motors=project.get("linked_motors") or [], today=_today())
+
+
 def _current(project: dict, schema: dict) -> tuple[dict, bool]:
     stored = CS.load(project["id"])
     if stored is None:
         return CE.default_estimate(schema, project["id"], linked_motors=project.get("linked_motors") or []), False
-    try:
-        return CE.normalize_estimate(stored, schema, project["id"]), True
-    except CE.EstimateError:
-        # a stored estimate the current catalogue no longer accepts (an item removed): keep what still fits
-        return _tolerant(stored, schema, project), True
-
-
-def _tolerant(stored: dict, schema: dict, project: dict) -> dict:
-    known = CE.catalogue(schema)
-    raw = dict(stored)
-    raw["iterations"] = [{**it, "lines": {k: v for k, v in (it.get("lines") or {}).items() if k in known}}
-                         for it in stored.get("iterations") or [] if isinstance(it, dict)]
-    raw["project_lines"] = {k: v for k, v in (stored.get("project_lines") or {}).items() if k in known}
-    try:
-        return CE.normalize_estimate(raw, schema, project["id"])
-    except CE.EstimateError:
-        return CE.default_estimate(schema, project["id"], linked_motors=project.get("linked_motors") or [])
+    return _read(project, stored, schema), True
 
 
 async def _body(request: Request) -> dict:
@@ -95,7 +91,7 @@ def _revision(body: dict) -> int:
 
 
 def _conflict(project: dict, schema: dict, current: Any) -> HTTPException:
-    est = CE.normalize_estimate(current, schema, project["id"]) if isinstance(current, dict) else None
+    est = _read(project, current, schema) if isinstance(current, dict) else None
     return HTTPException(status_code=409, detail={"code": "revision_conflict",
                                                   "message": "The cost estimate was changed meanwhile; reload it.",
                                                   "revision": (est or {}).get("revision", 0)})
@@ -122,15 +118,11 @@ async def put_estimate(project_id: str, request: Request, response: Response, ad
     except CE.EstimateError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
-    def build(previous):
-        candidate["basis"] = candidate.get("basis") or ((previous or {}).get("basis") or {})
-        return candidate
-
     try:
-        previous, saved = CS.save(project_id, expected, build, _email(admin_user))
+        previous, saved = CS.save(project_id, expected, lambda _previous: candidate, _email(admin_user))
     except CS.RevisionConflict as exc:
         raise _conflict(project, schema, exc.current) from None
-    old = CE.normalize_estimate(previous, schema, project_id) if previous else None
+    old = _read(project, previous, schema) if previous else None
     changes = CE.diff(old, saved)
     CS.audit(project_id, _email(admin_user), "cost_estimate.update",
              {"revision": saved["revision"], "changes": len(changes), "paths": [c["path"] for c in changes][:60]})
@@ -147,12 +139,12 @@ async def suggest_estimate(project_id: str, request: Request, response: Response
     current, _stored = _current(project, schema)
     if int(current.get("revision") or 0) != expected:
         raise _conflict(project, schema, current)
-    data = SRC.gather(project_id, current)
-    today = datetime.date.today().isoformat()
+    data = SRC.gather(project_id, current, schema)
+    today = _today()
     report: Dict[str, Any] = {}
 
     def build(previous):
-        base = CE.normalize_estimate(previous, schema, project_id) if previous else current
+        base = _read(project, previous, schema) if previous else current
         new, rep = CE.suggest(base, schema, data, today=today, refresh=bool(body.get("refresh")))
         report.update(rep)
         return new
@@ -161,11 +153,11 @@ async def suggest_estimate(project_id: str, request: Request, response: Response
         previous, saved = CS.save(project_id, expected, build, _email(admin_user))
     except CS.RevisionConflict as exc:
         raise _conflict(project, schema, exc.current) from None
-    old = CE.normalize_estimate(previous, schema, project_id) if previous else current
+    old = _read(project, previous, schema) if previous else current
     changes = CE.diff(old, saved)
     CS.audit(project_id, _email(admin_user), "cost_estimate.suggest",
              {"revision": saved["revision"], "filled": report.get("filled_count", 0), "refresh": bool(body.get("refresh")),
-              "analogs": [a["ref"] for a in report.get("analogs", [])][:30]})
+              "analogs": {k: v.get("ref") for k, v in (report.get("analogs") or {}).items()}})
     return _payload(project, saved, schema, stored=True, changes=changes, report=report)
 
 
@@ -184,7 +176,7 @@ async def snapshot_estimate(project_id: str, request: Request, admin_user: dict 
 
     def make(previous, n):
         prev_est = (previous or {}).get("estimate")
-        prev_est = CE.normalize_estimate(prev_est, schema, project_id) if isinstance(prev_est, dict) else None
+        prev_est = _read(project, prev_est, schema) if isinstance(prev_est, dict) else None   # an old-shape snapshot too
         try:
             changes = CE.diff(prev_est, estimate, schema)
         except CE.EstimateError:

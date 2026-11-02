@@ -27,7 +27,8 @@
     "owner": "负责人",
     "engineer": "工程师",
     "oem": "OEM 生产方",
-    "admin": "管理员"
+    "admin": "管理员",
+    "viewer": "项目成员（只读）"
   },
   "col": {
     "motor": "电机",
@@ -247,7 +248,11 @@
     "forPart": "话题所属零件",
     "thread": "话题",
     "writeLang": "书写语言",
-    "tip": "请用您的语言书写；对方阅读机器翻译，直至成员确认。"
+    "tip": "请用您的语言书写；对方阅读机器翻译，直至成员确认。",
+    "viewerTip": "团队向项目开放的讨论。只读。",
+    "customerVisible": "项目可见",
+    "factoryOnly": "仅工厂",
+    "customerVisibleTip": "点击将此讨论向关联此电机的项目成员开放，或再次设为仅工厂可见。"
   },
   "proposals": {
     "none": "暂无建议。",

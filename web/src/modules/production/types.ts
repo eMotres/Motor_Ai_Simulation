@@ -12,8 +12,9 @@ export interface Bilingual {
 }
 
 export type MemberRole = 'owner' | 'engineer' | 'oem';
-/** The caller's standing in one production ('admin' = platform admin who is not a member). */
-export type CallerRole = MemberRole | 'admin' | null;
+/** The caller's standing in one production ('admin' = platform admin who is not a member; 'viewer' = a member of the
+ *  development project that links this motor: read-only documents, customer-visible discussions and tests, owner 2026-11-02). */
+export type CallerRole = MemberRole | 'admin' | 'viewer' | null;
 
 export interface Member { email: string; role: MemberRole }
 
@@ -34,6 +35,9 @@ export interface Production {
   members: Member[];
   created_at: string;
   updated_at: string;
+  /** 'project' = the caller reads this production through the project that links its motor (no member list, read-only) */
+  access?: 'project';
+  project_id?: string;
   /** admin list only: members without a signed NDA (when the server reports it) */
   members_without_nda?: string[];
 }
@@ -326,6 +330,10 @@ export interface Thread {
   part_id: string | null;
   created_at: string;
   messages: Message[];
+  /** opened to the members of the project that links this motor; absent / false = factory-only (owner 2026-11-02) */
+  customer_visible?: boolean;
+  /** a project viewer's list only: the name of the thread's part (a viewer gets no parts list) */
+  part_name?: Bilingual | null;
   /** the caller's unread messages in this thread: their number and ids (list answer only; owner 2026-10-28) */
   unread?: number;
   unread_ids?: string[];
@@ -399,5 +407,5 @@ export interface AssemblyProcessView { default: boolean; steps: AssemblyStep[] }
 
 /** GET /api/production/{die}/{config}/access - the answer behind a shared documents link. */
 export type ProductionAccess =
-  | { access: 'member'; role: MemberRole | 'admin'; can_share: boolean; factory: boolean }
+  | { access: 'member'; role: MemberRole | 'admin' | 'viewer'; can_share: boolean; factory: boolean }
   | { access: 'none'; requested: boolean };

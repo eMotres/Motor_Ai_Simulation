@@ -189,6 +189,9 @@ export const productionApi = {
 
   threads: async (die: string, config: string) => unwrapList<Thread>(await call('GET', `${base(die, config)}/threads`), 'threads'),
   /** The caller has seen the thread up to message `upTo` (the server never moves the mark back). */
+  /** editors: open a thread to the members of the project that links this motor, or make it factory-only again */
+  setThreadCustomerVisible: (die: string, config: string, threadId: string, customerVisible: boolean) =>
+    call<Thread>('PATCH', `${base(die, config)}/threads/${enc(threadId)}`, { customer_visible: customerVisible }),
   markThreadRead: (die: string, config: string, threadId: string, upTo: string) =>
     call<{ last_read_id: string; unread: number }>('POST', `${base(die, config)}/threads/${enc(threadId)}/read`, { up_to: upTo }),
   createThread: (die: string, config: string, partId: string | null) =>

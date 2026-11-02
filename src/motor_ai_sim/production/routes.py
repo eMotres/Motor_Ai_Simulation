@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from motor_ai_sim import auth, model3d, users
-from motor_ai_sim.production import store, models, access, unread
+from motor_ai_sim.production import store, models, access, unread, project_link
 from motor_ai_sim.production.access import (
     require_member, require_member_with_full_view,
     require_editor, require_editor_with_full_view,
@@ -111,6 +111,36 @@ def _production_list_for(email: str, is_admin: bool) -> list[dict]:
     return out
 
 
+def _project_productions_for(email: str, have: set) -> list[dict]:
+    """The productions of the motors linked to the projects ``email`` is a member of (``project_link``): read-only,
+    marked ``access: "project"``, without the member list and the cost flag."""
+    try:
+        from motor_ai_sim.development import store as DS
+        projects = DS.list_projects()
+    except Exception:                                       # noqa: BLE001 - no development store
+        return []
+    out = []
+    for project in projects:
+        if project_link.project_role(email, project) is None:
+            continue
+        for link in project.get("linked_motors") or []:
+            if not isinstance(link, dict):
+                continue
+            die, config = str(link.get("die") or ""), str(link.get("config") or "")
+            if not die or not config:
+                continue
+            try:
+                rec = access.load_production(die, config)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or not rec.get("die") or (rec.get("die"), rec.get("config")) in have:
+                continue
+            have.add((rec.get("die"), rec.get("config")))
+            out.append({**_with_product_revision(project_link.viewer_header(rec)), "access": "project",
+                        "project_id": str(project.get("id") or "")})
+    return out
+
+
 def _with_product_revision(rec: dict) -> dict:
     """The production tells which PRODUCT revision of the motor it is for ("Rev A"; ``motor_revisions``, owner 2026-10-27).  The
     key is absent for a motor with no product revision.  Not to be confused with the production's own revisions (1.4, 1.5 ...)."""
@@ -141,8 +171,13 @@ def list_productions(request: Request):
         raise HTTPException(status_code=401, detail="Sign in required.")
     email = _email(user)
     rows = _production_list_for(email, _is_admin(user))
+    if not _is_admin(user):
+        rows += _project_productions_for(email, {(r.get("die"), r.get("config")) for r in rows})
     started = unread.since()
     for rec in rows:
+        if rec.get("access") == "project":
+            rec["unread_messages"] = 0                       # a viewer's list carries no thread counts
+            continue
         # a badge never breaks the list; an OEM member without the NDA cannot open the threads, so sees no count either
         try:
             can_open = access.full_view_denial(request, user, rec) is None
@@ -290,7 +325,11 @@ def get_die_timeline(request: Request, die: str, today: Optional[str] = None):
 
 @router.get("/{die}/{config}")
 def get_production(request: Request, die: str, config: str):
-    user, production = require_member_with_full_view(request, die, config)
+    user, production, role, viewer = access.require_reader(request, die, config)
+    if viewer is not None:
+        # a member of the project that links this motor: the header only, read-only (project_link)
+        return {**_with_product_revision(project_link.viewer_header(production)), "access": "project",
+                "project_id": viewer["project_id"]}
     return _with_product_revision(production)
 
 
@@ -322,6 +361,9 @@ def my_access(request: Request, die: str, config: str):
     if production is not None and (admin or role is not None):
         return {"access": "member", "role": role or "admin",
                 "can_share": bool(admin or role == "owner"), "factory": role == "oem" and not admin}
+    if production is not None and project_link.viewer_context(_email(user), die, config) is not None:
+        # a member of the project that links this motor reads the production (no share, no factory view)
+        return {"access": "member", "role": project_link.VIEWER, "can_share": False, "factory": False}
     title = _access_request_title(die, config)
     return {"access": "none", "requested": _has_open_access_request(_email(user), title)}
 
@@ -1055,8 +1097,10 @@ def _file_download_allowed(file_id: str, die: str, config: str, user: dict, prod
 
 @router.get("/{die}/{config}/documents")
 def list_documents(request: Request, die: str, config: str):
-    user, production = require_member_with_full_view(request, die, config)
+    user, production, _role, viewer = access.require_reader(request, die, config)
     data = store.load_file(die, config, "documents.json") or {"documents": []}
+    if viewer is not None:
+        return dict(data, documents=project_link.visible_documents(data.get("documents", [])))
     if not _sees_internal(user, production):
         data = dict(data, documents=[d for d in data.get("documents", []) if not d.get("internal")])
     return data
@@ -1119,8 +1163,15 @@ def download_file(request: Request, die: str, config: str, file_id: str):
     (model3d.log_download: who, company, NDA basis, sha256, IP) plus the production audit."""
     import datetime
     from motor_ai_sim import model3d as M
-    user, _production = require_member_with_full_view(request, die, config)
-    if not _file_download_allowed(file_id, die, config, user, _production):
+    user, _production, _role, viewer = access.require_reader(request, die, config)
+    if viewer is not None:
+        # a project viewer: only the files of visible documents and of customer-visible threads, and only with the NDA
+        if not store.valid_file_id(file_id) or file_id not in project_link.viewer_file_ids(die, config):
+            raise HTTPException(status_code=404, detail="File not found")
+        denial = access.viewer_download_denial(request)
+        if denial is not None:
+            raise HTTPException(status_code=403, detail=denial, headers={"code": "nda_required"})
+    elif not _file_download_allowed(file_id, die, config, user, _production):
         raise HTTPException(status_code=404, detail="File not found")
     path = store.read_uploaded_file(die, config, file_id)
     if path is None:
@@ -1495,16 +1546,54 @@ def download_documents_zip(request: Request, die: str, config: str, lang: str = 
 
 @router.get("/{die}/{config}/threads")
 def list_threads(request: Request, die: str, config: str):
-    user, _production = require_member_with_full_view(request, die, config)
+    user, _production, _role, viewer = access.require_reader(request, die, config)
     # each thread carries ``unread`` (count) and ``unread_ids`` (the messages to highlight) for the caller
-    return {"threads": unread.threads_with_unread(die, config, _email(user))}
+    threads = unread.threads_with_unread(die, config, _email(user))
+    if viewer is not None:
+        # a project viewer reads only the threads an editor opened to the customer; the rest is factory-only
+        threads = [t for t in threads if project_link.customer_visible_thread(t)]
+        # the viewer gets no parts list: a part thread names its part itself (the name only)
+        names = {p.get("id"): p.get("name") for p in store.load_file(die, config, "parts.json").get("parts", [])
+                 if isinstance(p, dict)}
+        threads = [{**t, "part_name": names.get(t.get("part_id"))} if t.get("part_id") else t for t in threads]
+    return {"threads": threads}
+
+
+@router.patch("/{die}/{config}/threads/{thread_id}")
+async def patch_thread(request: Request, die: str, config: str, thread_id: str):
+    """Editors open a thread to the members of the project that links this motor (``customer_visible``) or close it
+    again (factory-only, the default)."""
+    user, _production = require_editor_with_full_view(request, die, config)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("customer_visible"), bool):
+        raise HTTPException(status_code=422, detail="customer_visible: true | false expected")
+    flag = bool(body["customer_visible"])
+    found = {}
+
+    def mut(d):
+        for t in d.get("threads", []):
+            if isinstance(t, dict) and t.get("id") == thread_id:
+                t["customer_visible"] = flag
+                found["thread"] = t
+    store.mutate_file(die, config, "threads.json", mut)
+    if not found:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    _audit(_email(user), die, config, "update", "thread", thread_id, {"customer_visible": flag})
+    return found["thread"]
 
 
 @router.post("/{die}/{config}/threads/{thread_id}/read")
 async def mark_thread_read(request: Request, die: str, config: str, thread_id: str):
     """The user has seen the thread up to message ``up_to`` (the newest when omitted).  Called by the page when the thread is
     shown - never by the list or the counts endpoints."""
-    user, _production = require_member_with_full_view(request, die, config)
+    user, _production, _role, viewer = access.require_reader(request, die, config)
+    if viewer is not None and not any(t.get("id") == thread_id and project_link.customer_visible_thread(t)
+                                      for t in store.load_file(die, config, "threads.json").get("threads", [])
+                                      if isinstance(t, dict)):
+        raise HTTPException(status_code=404, detail="Thread not found")
     try:
         body = await request.json()
     except ValueError:
@@ -1518,6 +1607,11 @@ async def mark_thread_read(request: Request, die: str, config: str, thread_id: s
         raise HTTPException(status_code=404, detail="Thread message not found")
     if last is None:
         raise HTTPException(status_code=404, detail="Thread not found")
+    if viewer is not None:
+        # never a count over the factory-only threads
+        return {"last_read_id": last, "unread": sum(len(unread.thread_unread_ids(die, config, t, _email(user)))
+                                                     for t in store.load_file(die, config, "threads.json").get("threads", [])
+                                                     if project_link.customer_visible_thread(t))}
     return {"last_read_id": last, "unread": unread.production_count(die, config, _email(user))}
 
 

@@ -321,7 +321,8 @@
     "motors": "电机与结果",
     "messages": "消息",
     "notes": "内部备注",
-    "documents": "文档"
+    "documents": "文档",
+    "production": "生产"
   },
   "step": "第 {current} 步，共 {total} 步",
   "previous": "上一步",
@@ -1084,5 +1085,32 @@
     "expected": "预计出结果 {time}",
     "ready": "结果已就绪",
     "server": "服务器当前：运行 {running} 项，等待 {queued} 项"
+  },
+  "productionView": {
+    "none": "本项目的电机尚无生产记录。",
+    "tip": "本项目关联的每台电机的生产。项目成员可查看测试、可见文档以及向其开放的讨论。",
+    "revision": "版本 {rev}",
+    "status": {
+      "active": "进行中",
+      "paused": "已暂停",
+      "archived": "已归档"
+    },
+    "open": "在生产中打开",
+    "openTip": "打开此电机的生产（项目成员只读）。",
+    "count": {
+      "tests": "测试",
+      "testsTip": "台架测试与仿真的对比。点击查看对比。",
+      "documents": "文档",
+      "documentsTip": "您可在生产中打开的文档。",
+      "discussions": "讨论",
+      "discussionsTip": "您可在生产中阅读的讨论。"
+    },
+    "testKind": {
+      "parameters": "参数",
+      "free_run": "空载",
+      "load": "负载"
+    },
+    "readiness": "零件 {received}/{total}（{pct} %），延误 {late}",
+    "readinessTip": "已到货的装配零件。"
   }
 }

@@ -1,6 +1,7 @@
 import type { CatalogController } from './controllerCatalog';
 import { parseActivity } from './stageBar';
 import { finalComparison } from '../../lib/resultsPanel';
+import type { ProjectProductionEntry } from './projectProductions';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -110,6 +111,8 @@ export const developmentApi = {
   linkMotor: (id: string, die: string, config: string) => call<unknown>('POST', `${p(id)}/motors`, { die, config }),
   unlinkMotor: (id: string, die: string, config: string) => call<unknown>('DELETE', `${p(id)}/motors?die=${enc(die)}&config=${enc(config)}`),
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
+  /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
+  productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
 };
 
 /** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */

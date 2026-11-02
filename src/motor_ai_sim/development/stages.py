@@ -364,8 +364,10 @@ def collect(project_id: str, project: dict, request: Any) -> List[Dict[str, Any]
         item["stored"] = {str(d): {str(k): {"computed_at": (v.get("computed_at") or v.get("recorded_at"))}
                                    for k, v in kinds.items() if isinstance(v, dict)}
                           for d, kinds in stored.items() if isinstance(kinds, dict)}
+        from motor_ai_sim.duty_kind import is_test_duty
         for duty in cfg.get("duties") or []:
-            if not isinstance(duty, dict) or not duty.get("name"):
+            # a bench-test point (Production -> Tests) is not a step of the project's work
+            if not isinstance(duty, dict) or not duty.get("name") or is_test_duty(duty):
                 continue
             name = str(duty["name"])
             kinds = stored.get(name) if isinstance(stored.get(name), dict) else {}

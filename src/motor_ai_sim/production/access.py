@@ -112,6 +112,43 @@ def require_member_with_full_view(request: Request, die: str, config: str) -> tu
     return user, production
 
 
+def require_reader(request: Request, die: str, config: str) -> tuple[dict, dict, str, Optional[dict]]:
+    """A production MEMBER (with the NDA gate for the factory), an admin, or a member of the project that links this
+    motor (``project_link``: derived at request time, read-only).
+
+    Returns ``(user, production, role, viewer_ctx)``: ``role`` is the production role (``owner`` / ``engineer`` /
+    ``oem``), ``"admin"`` for a global admin who is not a member, or ``"viewer"`` for a project member; ``viewer_ctx`` is
+    ``{"project_id", "project_role"}`` for a viewer and ``None`` otherwise.  Anybody else gets 404, exactly like a
+    missing production.  Only the read routes a viewer may use call this; every other route keeps ``require_member``."""
+    from motor_ai_sim.production import project_link
+    user = require_signed_in(request)
+    production = load_production(die, config)
+    if production is None:
+        raise HTTPException(status_code=404, detail="Production not found.")
+    email = str(user.get("email") or "")
+    role = is_member(email, production)
+    if role is not None:
+        denial = None if is_admin(user) else full_view_denial(request, user, production)
+        if denial is not None:
+            raise HTTPException(status_code=403, detail=denial, headers={"code": "nda_required"})
+        return user, production, role, None
+    if is_admin(user):
+        return user, production, "admin", None
+    ctx = project_link.viewer_context(email, die, config)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Production not found.")
+    return user, production, project_link.VIEWER, ctx
+
+
+def viewer_download_denial(request: Request) -> Optional[dict]:
+    """A project viewer downloads a production FILE only with the signed NDA - the same gate as the factory's."""
+    identity = auth.caller_identity(request.headers.get("authorization"))
+    rec = _user_rec(identity.get("id") or "")
+    if not model3d.can_download(identity, rec):
+        return {"code": "nda_required", "message": str(model3d.denial_detail(identity, rec))}
+    return None
+
+
 def require_editor(request: Request, die: str, config: str) -> tuple[dict, dict]:
     user, production = require_member(request, die, config)
     is_admin = bool(user.get("role") == "admin")

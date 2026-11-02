@@ -32,6 +32,8 @@ import { createErrorText, createPayload, createReady } from '../createProject';
   import { VariantControls } from './VariantControls';
   import SpecAssistantPanel from './SpecAssistantPanel';
   import ProjectDocuments from './ProjectDocuments';
+  import ProjectProductions from './ProjectProductions';
+  import { hasProductionView, type ProjectProductionEntry } from '../projectProductions';
   import ProjectCover from './ProjectCover';
   import SpecWizard from './specWizard/SpecWizard';
   import { useSpecFields } from './specWizard/useSpecFields';
@@ -57,7 +59,7 @@ import { createErrorText, createPayload, createReady } from '../createProject';
   import { developmentViewScope, parseDevelopmentView, restorableView, type DevelopmentView } from '../viewState';
   import { appLinkPath, parseAppLink, type AppLink } from '../../../lib/appLink';
   import DigestSettings from '../../../components/digest/DigestSettings';
-type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents';
+type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production';
 const STATUSES = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'] as const;
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
 const completenessNumbers = (c?: Completeness) => ({ filled: c?.filled_required ?? c?.filled ?? 0, total: c?.total_required ?? c?.required ?? 0 });
@@ -114,6 +116,16 @@ export default function DevelopmentPage() {
   const [catalog, setCatalog] = useState<CatalogController[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<ProjectThreadMessage[]>([]);
+  // the productions of the linked motors (owner 2026-11-02): derived on the server from linked_motors, never linked by hand
+  const [productions, setProductions] = useState<ProjectProductionEntry[]>([]);
+  useEffect(() => {
+    const id = selected?.id;
+    setProductions([]);
+    if (!id) return;
+    let live = true;
+    void developmentApi.productions(id).then((rows) => { if (live) setProductions(rows); }).catch(() => { /* no production view */ });
+    return () => { live = false; };
+  }, [selected?.id]);
   const [message, setMessage] = useState('');
   const [messageFieldRef, setMessageFieldRef] = useState('');
   const [reviewField, setReviewField] = useState('');
@@ -579,6 +591,7 @@ export default function DevelopmentPage() {
         { id: 'motors', label: tr('tabs.motors') },
         { id: 'messages', label: projectUnread(selected) > 0 ? <Tooltip title={tr('unread.tip', { count: projectUnread(selected) })}><span>{tr('tabs.messages')} <Chip size="small" color="primary" label={unreadLabel(projectUnread(selected))} sx={{ height: 16, fontSize: 10, ml: 0.5 }} /></span></Tooltip> : tr('tabs.messages') },
         { id: 'documents' as const, label: tr('tabs.documents') },
+        ...(hasProductionView(productions) ? [{ id: 'production' as const, label: tr('tabs.production') }] : []),
         ...(canEditProject ? [{ id: 'notes' as const, label: tr('tabs.notes') }] : []),
       ]} />
     </HeaderTabs>
@@ -646,6 +659,7 @@ export default function DevelopmentPage() {
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Box key={`${m.created_at}-${i}`}>{i === firstUnreadIndex(messages, shownUnread) && <Divider sx={{ mb: 0.8, fontSize: 10.5 }}><Chip size="small" color="primary" label={tr('unread.new')} sx={{ height: 16, fontSize: 10 }} /></Divider>}<Paper sx={{ p: 1, bgcolor: 'var(--panel-2)', ...(m.id && shownUnread.has(m.id) ? { borderLeft: '3px solid', borderLeftColor: 'primary.main' } : {}) }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper></Box>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
     {view === 'documents' && <ProjectDocuments projectId={selected.id} language={i18n.language} t={tr} onCoverChange={(version) => { setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, cover_version: version } : cur)); }} />}
+    {view === 'production' && <ProjectProductions projectId={selected.id} entries={productions} language={i18n.language} t={tr} />}
     {view === 'notes' && canEditProject && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
     <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
     <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />

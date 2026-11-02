@@ -121,7 +121,7 @@ def test_no_cad_profile_is_read(monkeypatch, tmp_path):
     geo = dict(G40, motor_length=20.0)
     for die in ("GEN X", "CIANO14 40 new", "OTHER"):
         c = coil_build.coil_parameters(geo, die=die, config="c", cad_overrides={})
-        assert c == dict(coil_build.coil_rule(geo), typed=[], die=die, config="c")
+        assert c == dict(coil_build.coil_rule(geo), typed=[], config_keys=[], die=die, config="c")
 
 
 @pytest.mark.parametrize("L_mm, target_coil_len_mm", [(12.0, 315.916), (20.0, 427.916)])

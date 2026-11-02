@@ -1897,7 +1897,10 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # only while a stale stored override could disagree with what a duty was
     # actually solved with; with the override gone, quote the solved value
     # (all duties agree) or the cross-section's own formula.
-    _kg = _k_end_geom(geo)
+    # THIS configuration's coil (its lead edits and coil_overrides), never the loaded machine's
+    from motor_ai_sim.coil_build import machine_scope
+    with machine_scope(die, cfg, cfg_doc):
+        _kg = _k_end_geom(geo)
     ew = [(_g(d, "summary.end_winding_factor") or _setting(d, "sim.endWinding"))
           for d in duties]
     ew_vals = {round(float(x), 2) for x in ew if x}

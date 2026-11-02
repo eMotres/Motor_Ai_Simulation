@@ -156,11 +156,14 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
     own = {k: v for k, v in (cy.get("materials") or {}).items() if v}
     assigned.update(own)
     try:
+        from motor_ai_sim.coil_build import machine_scope
         from motor_ai_sim.masses import compute_masses
         from motor_ai_sim.simulation.geometry_2d import merge_geo_override, params_from_config
         p = params_from_config(geo_override=geo)
         g = merge_geo_override(dict(cfg_doc.get("geometry") or {}), geo)
-        m = compute_masses(p, g, k_end=0.0, materials=assigned)
+        # k_end of THIS configuration's coil (its lead edits and coil_overrides), never the loaded machine's
+        with machine_scope(die, config, cy):
+            m = compute_masses(p, g, k_end=0.0, materials=assigned)
     except Exception as exc:                                               # noqa: BLE001
         raise MotorMassError(f"mass of {die} {config} could not be computed: {exc}") from exc
     mats = m.get("MAT") or {}

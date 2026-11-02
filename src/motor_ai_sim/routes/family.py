@@ -1187,6 +1187,11 @@ def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
         # when the configuration carries no `parts:` block — which is every
         # configuration written before this feature.
         **({"parts": cfg_doc["parts"]} if cfg_doc.get("parts") else {}),
+        # The configuration's own coil (bend radius / straight overhang, owner
+        # 2026-11-02): it moves k_end, so R, copper loss and copper mass — a
+        # result computed before the edit is on an older build.  Absent block =
+        # the signature every configuration had before.
+        **({"coil": cfg_doc["coil_overrides"]} if cfg_doc.get("coil_overrides") else {}),
     }
     return hashlib.sha1(
         _json.dumps(src, sort_keys=True, default=str).encode()).hexdigest()[:12]
@@ -6022,6 +6027,151 @@ def set_limits(die: str, cfg: str, req: LimitsPatch,
     _save_yaml(_cfg_file(die, cfg), c)
     log.info("family: limits on '%s/%s': %s", die, cfg, lim)
     return {"ok": True, "limits": lim}
+
+
+# ── the configuration's own coil (owner 2026-11-02: «все бери из Fusion») ────
+# Machines on one die with one wire can still have different coils in their
+# Fusion models (a motor and two generators on one shared die).  The inner bend
+# radius ``wire_beng_r`` and the straight overhang ``coil_straight_extra`` used
+# to come only from the die's geometry (or the coil rule), so one die-level
+# edit moved all of them.  A configuration now keeps its own in the
+# ``coil_overrides`` block: it wins over the die, an absent key keeps the die's
+# value (coil_build.coil_parameters).  The block is NOT a geometry override: it
+# never reaches the live geometry (PUT /api/geometry), so loading a sibling
+# configuration never carries this one's coil along — the coil is read from the
+# configuration document of the machine a computation is for.
+
+
+def _config_coil_view(die: str, cfg: str, die_doc: dict, c: dict) -> Dict[str, Any]:
+    """What ``GET .../coil`` answers: the stored block, the die's values, the
+    coil k_end is billed at for this configuration, and k_end itself."""
+    from motor_ai_sim import coil_build as _cb
+    die_geo = dict((die_doc or {}).get("geometry") or {})
+    view: Dict[str, Any] = {
+        "die": die, "config": cfg, "locked": bool(c.get("locked", False)),
+        "block": _cb.CONFIG_COIL_BLOCK, "keys": list(_cb.CONFIG_COIL_KEYS), "unit": "mm",
+        "limits_mm": {k: {"above": lo, "max": hi} for k, (lo, hi) in _cb.CONFIG_COIL_LIMITS_MM.items()},
+        "overrides": _cb.clean_coil_overrides(c.get(_cb.CONFIG_COIL_BLOCK)),
+        "die_values": {k: die_geo.get(k) for k in _cb.CONFIG_COIL_KEYS},
+        "coil": None, "k_end": None,
+    }
+    try:
+        from motor_ai_sim.masses import cad_coil_dimensions
+        from motor_ai_sim.modules.motor_mass import _default_config_doc
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override, params_from_config
+        geo = dict(die_geo)
+        geo.update({k: v for k, v in (c.get("geometry_overrides") or {}).items() if v is not None})
+        p = params_from_config(geo_override=geo)
+        g = merge_geo_override(dict(_default_config_doc().get("geometry") or {}), geo)
+        # the same scope the catalog mass uses (modules.motor_mass): THIS configuration's file
+        with _cb.machine_scope(die, cfg, c):
+            dims = cad_coil_dimensions(p, g)
+        view["coil"] = {
+            "wire_beng_r": round(float(dims["wire_beng_r_mm"]), 4),
+            "coil_straight_extra": round(float(dims["coil_straight_extra_mm"]), 4),
+            "coil_lead_total": round(float(dims["coil_lead_total_mm"]), 4),
+            "mean_turn_length_mm": round(float(dims["mean_turn_length_mm"]), 3),
+            "source": dims.get("coil_source"),
+            "config_keys": dims.get("coil_config_keys") or [],
+            "typed_keys": dims.get("coil_typed") or [],
+        }
+        view["k_end"] = round(float(dims["k_end_cad"]), 4)
+    except Exception as exc:                  # noqa: BLE001 - the stored block still answers
+        log.warning("family: coil view of '%s/%s' - k_end not computed: %s", die, cfg, exc)
+    return view
+
+
+@router.get("/config/{die}/{cfg}/coil")
+def get_config_coil(die: str, cfg: str, authorization: str = Header(default=None)):
+    """The configuration's own coil keys (``coil_overrides``), the die's values
+    beside them, and the coil + k_end this configuration is billed at."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_access(die, authorization, cfg)
+    d = _load_yaml(_die_file(die), "die")
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    return _config_coil_view(die, cfg, d, c)
+
+
+def set_config_coil(die: str, cfg: str, values: Dict[str, Any], *, source: str = "form") -> Dict[str, Any]:
+    """Write the SENT keys of a configuration's ``coil_overrides`` (a value in
+    mm sets it, ``None`` clears it - the die's value then stands again).  The
+    one writer, shared by ``PATCH .../coil`` and the Fusion import.  No access
+    check here: the callers make it.  422 for an unknown key or a value out of
+    range (nothing is written), 423 for a locked configuration."""
+    from motor_ai_sim import coil_build as _cb
+    bad, clean = [], {}
+    for k, v in (values or {}).items():
+        if k not in _cb.CONFIG_COIL_KEYS:
+            bad.append({"field": k, "reason": "not a configuration coil key (allowed: %s)"
+                        % ", ".join(_cb.CONFIG_COIL_KEYS)})
+            continue
+        if v is None:
+            clean[k] = None
+            continue
+        val, why = _cb.validate_coil_override(k, v)
+        if why:
+            bad.append({"field": k, "value": v, "reason": why})
+        else:
+            clean[k] = val
+    if bad:
+        raise HTTPException(422, detail={"error": "invalid coil values", "invalid_parameters": bad})
+    d = _load_yaml(_die_file(die), "die")
+    cfile = _cfg_file(die, cfg)
+    c = _load_yaml(cfile, "configuration")
+    if c.get("locked") is True and clean:
+        raise HTTPException(423, detail={
+            "error": "configuration is locked", "die": die, "config": cfg,
+            "hint": "the coil is part of the configuration's build; unlock it in the Motors catalog (admin) first"})
+    before = _cb.clean_coil_overrides(c.get(_cb.CONFIG_COIL_BLOCK))
+    after = dict(before)
+    for k, v in clean.items():
+        if v is None:
+            after.pop(k, None)
+        else:
+            after[k] = round(float(v), 6)
+    changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    k_before = _config_coil_view(die, cfg, d, c).get("k_end") if changed else None
+    if changed:
+        if after:
+            c[_cb.CONFIG_COIL_BLOCK] = {k: after[k] for k in _cb.CONFIG_COIL_KEYS if k in after}
+        else:
+            c.pop(_cb.CONFIG_COIL_BLOCK, None)
+        # a stored end-winding factor belongs to the coil it was measured on
+        # (the same rule as a build adopted by the duty save): absent = derive
+        if c.pop("end_winding_factor", None) is not None:
+            log.info("family: '%s/%s' stored end_winding_factor dropped - the coil changed", die, cfg)
+        _save_yaml(cfile, c)
+        _cb.clear_cache()
+        log.info("family: coil of '%s/%s' (%s): %s", die, cfg, source,
+                 ", ".join("%s %s -> %s" % (k, before.get(k), after.get(k)) for k in changed))
+    view = _config_coil_view(die, cfg, d, c)
+    has_results = any(isinstance(x, dict) and (x.get("result") or x.get("summary") or x.get("runs"))
+                      for x in (c.get("duties") or []))
+    return {"ok": True, "changed": changed,
+            "before": {k: before.get(k) for k in changed}, "after": {k: after.get(k) for k in changed},
+            "k_end_before": k_before, "k_end_after": view.get("k_end") if changed else None,
+            # the coil is part of the build signature: stored results are now "computed on an older build"
+            "results_stale": bool(changed) and has_results,
+            **view}
+
+
+class CoilPatch(BaseModel):
+    # Any, not float: the validator says what is wrong in words (and a bool is not a length)
+    wire_beng_r: Optional[Any] = None             # inner bend radius of the wire [mm]; null clears
+    coil_straight_extra: Optional[Any] = None     # straight overhang beyond the stack, both ends [mm]; null clears
+
+
+@router.patch("/config/{die}/{cfg}/coil")
+def patch_config_coil(die: str, cfg: str, req: CoilPatch, _w: dict = Depends(require_catalog_write)):
+    """Set or clear the configuration's own coil keys.  A field that is NOT SENT
+    is left unchanged, an explicit ``null`` clears it (the die's value, or the
+    coil rule, stands again).  k_end, the phase resistance, the copper loss and
+    the copper mass of THIS configuration follow; its siblings on the same die
+    keep theirs."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    sent = set(getattr(req, "model_fields_set", None) or getattr(req, "__fields_set__", None) or ())
+    return set_config_coil(die, cfg, {k: getattr(req, k) for k in sent}, source="form")
 
 
 class CadMassPut(BaseModel):

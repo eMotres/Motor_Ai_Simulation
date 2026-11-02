@@ -1,11 +1,15 @@
 /** Project cost estimate wizard (owner 2026-11-02, ADMIN ONLY, simple): Settings -> Iteration 1 -> Iteration 2 ... ->
  *  Review.  One short screen per iteration with the four lines (tooling, motor manufacturing, testing, shipping), each
- *  with an amount, a currency, a source chip and a note.  Autosaves with the server's optimistic revision. */
+ *  with an amount, a currency, a source chip and a note.  Autosaves with the server's optimistic revision.
+ *  Owner 2026-11-02 (later): a "Table | Steps" toggle (Table by default, remembered per viewer; Steps kept for rollback) -
+ *  both edit the same estimate; every line has a duration in weeks and the iteration / project durations are shown. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, ButtonBase, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Select,
+  Alert, Box, Button, ButtonBase, ButtonGroup, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Select,
   Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery,
 } from '@mui/material';
+import CostEstimateTable from './CostEstimateTable';
+import CostShipping from './CostShipping';
 import CheckIcon from '@mui/icons-material/Check';
 import HelpTip from '../../../../components/common/HelpTip';
 import { BigNumber, StepCard, TOUCH } from '../specWizard/ui';
@@ -14,14 +18,18 @@ import {
   buildCostSteps, defaultDisplayCurrency, displayCurrencyOf, editLine, fieldLabel, formatMoney, fxLine, iterationSubtotal, langOf, LINE_IDS, lineNeeded, lineTotal, originChip, reconcile,
   reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, snapshotTotalText, sourceCounts, stepIndexOfMissing,
   stepState, todayIso, totalsView, txt,
+  iterationWeeks, projectWeeks, readView, setLineWeeks, setWeeksOverride, suggestionKey, validWeeks, weeksText, writeView, WEEKS_OVERRIDE_MAX,
   type Bench, type CostComputed, type CostEstimate, type CostEstimateAnswer, type CostField, type CostIteration, type CostLang,
-  type CostLine, type CostLineDef, type CostSnapshot, type CostStep, type LineId, type T,
+  type CostLine, type CostLineDef, type CostSnapshot, type CostStep, type CostSuggestions, type CostView, type LineId, type T,
 } from '../../costEstimate';
+
+/** localStorage, or null where it cannot be reached (private window, blocked site data). */
+const viewStorage = (): Storage | null => { try { return window.localStorage; } catch { return null; } };
 
 const is409 = (e: unknown): boolean => e instanceof DevelopmentApiError && e.status === 409;
 
 const CHIP_COLOR: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'info'> = {
-  production: 'info', estimate: 'secondary', converted: 'primary', manual: 'success', rule: 'default', missing: 'warning', none: 'default',
+  production: 'info', estimate: 'secondary', converted: 'primary', manual: 'success', rule: 'default', missing: 'warning', none: 'default', dhl: 'info',
 };
 
 function SettingField({ field, value, onChange, lang }: { field: CostField; value: unknown; onChange: (v: unknown) => void; lang: CostLang }) {
@@ -37,14 +45,14 @@ function SettingField({ field, value, onChange, lang }: { field: CostField; valu
 
 /** One of the four lines: label, source chip, (later tooling: % of iteration 1 or an amount), amount + currency, the
  *  line's money, a note; a missing line shows why. */
-function LineRow({ def, line, it, total, lang, t, onEdit }: {
+function LineRow({ def, line, it, total, lang, t, onEdit, onWeeks }: {
   def: CostLineDef; line: CostLine; it: CostIteration; total: string; lang: CostLang; t: T;
-  onEdit: (patch: Parameters<typeof editLine>[2]) => void;
+  onEdit: (patch: Parameters<typeof editLine>[2]) => void; onWeeks: (weeks: number | null) => void;
 }) {
   const label = txt(def.label, lang);
   const chip = originChip(line, it, def.id, t);
   const needed = lineNeeded(it, def.id);
-  return <Box sx={{ display: 'grid', gap: 1, alignItems: 'end', gridTemplateColumns: { xs: '1fr 1fr', md: 'minmax(180px, 1.4fr) minmax(130px, 1fr) minmax(120px, 1fr) minmax(140px, 1.2fr)' }, py: 1.25, borderTop: '1px solid var(--line-soft)', opacity: needed ? 1 : 0.55 }}>
+  return <Box sx={{ display: 'grid', gap: 1, alignItems: 'end', gridTemplateColumns: { xs: '1fr 1fr', md: 'minmax(180px, 1.4fr) minmax(130px, 1fr) minmax(120px, 1fr) 92px minmax(140px, 1.2fr)' }, py: 1.25, borderTop: '1px solid var(--line-soft)', opacity: needed ? 1 : 0.55 }}>
     <Stack spacing={0.5} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' }, minWidth: 0, alignSelf: 'center' }}>
       <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{label}</Typography><HelpTip title={txt(def.help, lang)} /></Stack>
       <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -56,6 +64,8 @@ function LineRow({ def, line, it, total, lang, t, onEdit }: {
       ariaLabel={`${label}: ${def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')}`} onChange={(n) => onEdit({ amount: n })} />
     <Stack spacing={0.6} sx={{ minWidth: 0 }}><Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{def.per_motor ? t('costEstimate.timesMotors', { count: it.motors }) : t('costEstimate.lineTotal')}</Typography>
       <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums', minHeight: TOUCH, display: 'flex', alignItems: 'center', color: 'var(--text-0)', overflowWrap: 'anywhere' }}>{total}</Typography></Stack>
+    <Tooltip title={t(`costEstimate.durations.${def.id}`)}><Box><BigNumber label={t('costEstimate.weeksLabel')} unit={t('costEstimate.weeksUnit')} size="normal" min={0} value={line.weeks ?? null}
+      ariaLabel={`${label}: ${t(`costEstimate.durations.${def.id}`)}`} onChange={(n) => { if (validWeeks(n)) onWeeks(n); }} /></Box></Tooltip>
     <TextField size="small" value={line.note} placeholder={t('costEstimate.note')} onChange={(e) => onEdit({ note: e.target.value })} inputProps={{ 'aria-label': `${label}: ${t('costEstimate.note')}`, maxLength: 500 }} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }} />
   </Box>;
 }
@@ -82,11 +92,33 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const synced = useRef<CostEstimate | null>(null);   // the server's version our local edits started from
   const dirty = useRef(false);                          // unsaved local edits
   const clashes = useRef(0);                            // consecutive 409s of one save
+  const [view, setView] = useState<CostView>(() => readView(viewStorage(), who));
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const [suggestions, setSuggestions] = useState<CostSuggestions | null>(null);
+  const suggestionsKey = useRef('');
+  const suggestionsCall = useRef(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   latest.current = estimate;
   // the totals are shown in the display currency: the owner's pick, else the UI language's (en -> EUR, zh-CN -> CNY)
   const displayOf = (e: CostEstimate | null | undefined) => displayCurrencyOf(e?.settings, lang);
 
-  const apply = (a: CostEstimateAnswer) => { synced.current = a.estimate; dirty.current = false; latest.current = a.estimate; setAnswer(a); setEstimate(a.estimate); setComputed(a.computed); };
+  /** The table's grey suggestions (what Suggest would fill in the empty cells): fetched again only when what they depend
+   *  on changed (`suggestionKey`), and only in the Table view; a failure leaves the cells without placeholders. */
+  const refreshSuggestions = async (e: CostEstimate) => {
+    if (viewRef.current !== 'table') return;
+    const key = suggestionKey(e);
+    if (key === suggestionsKey.current) return;
+    suggestionsKey.current = key;
+    const call = ++suggestionsCall.current;
+    try { const s = await developmentApi.costEstimateSuggestions(projectId, e); if (call === suggestionsCall.current) setSuggestions(s); }
+    catch { if (call === suggestionsCall.current) { setSuggestions(null); suggestionsKey.current = ''; } }
+  };
+  const pickView = (v: CostView) => {
+    setView(v); viewRef.current = v; writeView(viewStorage(), who, v);
+    if (v === 'table' && latest.current) void refreshSuggestions(latest.current);
+  };
+  const apply = (a: CostEstimateAnswer) => { synced.current = a.estimate; dirty.current = false; latest.current = a.estimate; setAnswer(a); setEstimate(a.estimate); setComputed(a.computed); void refreshSuggestions(a.estimate); };
   const load = useCallback(async () => {
     setError('');
     try { apply(await developmentApi.costEstimate(projectId, defaultDisplayCurrency(lang))); setSnapshots(await developmentApi.costEstimateSnapshots(projectId)); }
@@ -105,7 +137,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
       const a = await developmentApi.saveCostEstimate(projectId, cur, displayOf(cur));
       synced.current = a.estimate; clashes.current = 0;
       setAnswer(a); setComputed(a.computed);
-      if (edits.current === mark) { dirty.current = false; setEstimate(a.estimate); }
+      if (edits.current === mark) { dirty.current = false; setEstimate(a.estimate); void refreshSuggestions(a.estimate); }
       else { setEstimate((e) => (e ? { ...e, revision: a.estimate.revision } : e)); schedule(); }
       setError('');
     } catch (e) {
@@ -177,8 +209,12 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Stack direction="row" spacing={1} alignItems="center"><Typography component="h1" sx={{ fontSize: 18, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.title')}</Typography>
         <Tooltip title={t('costEstimate.adminOnlyTip')}><Chip size="small" label={t('costEstimate.adminOnly')} sx={{ height: 20, fontSize: 10.5 }} /></Tooltip></Stack>
-      <Tooltip title={t('costEstimate.totalTip')}><Typography data-testid="header-total" sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {formatMoney(computed.total)} · {t('costEstimate.missingCount', { count: computed.missing_count })}</Typography></Tooltip>
+      <Tooltip title={t('costEstimate.totalTip')}><Typography data-testid="header-total" sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {formatMoney(computed.total)} · {t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })} · {t('costEstimate.missingCount', { count: computed.missing_count })}</Typography></Tooltip>
     </Box>
+    <Tooltip title={t('costEstimate.view.tip')}><ButtonGroup size="small" aria-label={t('costEstimate.view.label')} data-testid="cost-view-toggle">
+      {(['table', 'steps'] as CostView[]).map((v) => <Button key={v} variant={view === v ? 'contained' : 'outlined'} aria-pressed={view === v} onClick={() => pickView(v)}
+        sx={{ textTransform: 'none', minHeight: 36 }}>{t(`costEstimate.view.${v}`)}</Button>)}
+    </ButtonGroup></Tooltip>
     <Tooltip title={t('costEstimate.suggestTip')}><span><Button variant="contained" disabled={busy} onClick={() => void suggest(false)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{busy ? <CircularProgress size={16} /> : t('costEstimate.suggest')}</Button></span></Tooltip>
     <Tooltip title={t('costEstimate.refreshTip')}><span><Button disabled={busy} onClick={() => void suggest(true)} sx={{ textTransform: 'none', minHeight: TOUCH }}>{t('costEstimate.refresh')}</Button></span></Tooltip>
     <Tooltip title={t('costEstimate.snapshotTip')}><span><Button variant="outlined" disabled={busy || !answer.stored} onClick={() => setSnapOpen(true)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{t('costEstimate.snapshot')}</Button></span></Tooltip>
@@ -231,25 +267,39 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
         })}
       </Box>
     </Stack>
+    <CostShipping estimate={estimate} schema={schema} lang={lang} t={t} today={today} onChange={change} />
   </StepCard>;
 
   const iterationStep = (index: number) => {
     const it = estimate.iterations.find((x) => x.index === index);
     if (!it) return null;
     const sub = iterationSubtotal(computed, index);
+    const weeks = iterationWeeks(it);
     return <StepCard title={t('costEstimate.iteration', { n: index })} action={<Typography data-testid="iteration-total" sx={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text-1)' }}>{sub}</Typography>}>
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
         {schema.iteration_fields.map((f) => <SettingField key={f.id} field={f} value={it[f.id as 'motors' | 'bench']} lang={lang}
           onChange={(v) => change(setIterationField(estimate, index, f.id as 'motors' | 'bench', v as number | Bench))} />)}
       </Box>
       <Box>{LINE_IDS.map((id) => { const def = schema.lines.find((l) => l.id === id)!; return <LineRow key={id} def={def} line={it.lines[id]} it={it} total={lineTotal(computed, index, id)} lang={lang} t={t}
-        onEdit={(patch) => change(editLine(estimate, { iteration: index, line: id }, patch, who, today))} />; })}</Box>
+        onEdit={(patch) => change(editLine(estimate, { iteration: index, line: id }, patch, who, today))}
+        onWeeks={(n) => change(setLineWeeks(estimate, { iteration: index, line: id }, n))} />; })}</Box>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'flex-end' }} data-testid="iteration-duration" sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.25 }}>
+        <Stack spacing={0.4} sx={{ flex: 1 }}>
+          <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.iterationDuration')}</Typography><HelpTip title={txt(schema.durations?.help, lang)} /></Stack>
+          <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.weeksN', { n: weeksText(weeks.total) })}</Typography>
+          <Typography sx={{ fontSize: 12, color: weeks.missing.length ? 'warning.main' : 'var(--text-3)' }}>{t('costEstimate.durationSum', { n: weeksText(weeks.sum) })}{weeks.missing.length ? ` · ${t('costEstimate.weeksMissing', { count: weeks.missing.length })}` : ''}</Typography>
+        </Stack>
+        <Tooltip title={t('costEstimate.weeksOverrideTip')}><Box sx={{ width: 160 }}><BigNumber label={t('costEstimate.weeksOverride')} unit={t('costEstimate.weeksUnit')} size="normal" min={0} value={it.weeks_override ?? null}
+          placeholder={weeksText(weeks.sum)} ariaLabel={`${t('costEstimate.iteration', { n: index })}: ${t('costEstimate.weeksOverride')}`}
+          onChange={(n) => { if (validWeeks(n, WEEKS_OVERRIDE_MAX)) change(setWeeksOverride(estimate, index, n)); }} /></Box></Tooltip>
+      </Stack>
     </StepCard>;
   };
 
   const counts = sourceCounts(estimate);
   const lineLabel = (id: LineId) => txt(schema.lines.find((l) => l.id === id)?.label, lang);
   const missingWord = t('costEstimate.status.missing');
+  const reviewWeeks = (index: number) => { const it = estimate.iterations.find((x) => x.index === index); return it ? t('costEstimate.weeksN', { n: weeksText(iterationWeeks(it).total) }) : '—'; };
   const reviewStep = <Stack spacing={2}>
     {estimate.migration && <Alert severity="info" sx={{ py: 0.5 }}>
       <Typography sx={{ fontSize: 13 }}>{t('costEstimate.migrated')}</Typography>
@@ -263,16 +313,17 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
       </Select>
     </Stack></Tooltip>}>
       <Box sx={{ overflowX: 'auto' }}><Table size="small">
-        <TableHead><TableRow><TableCell />{LINE_IDS.map((id) => <TableCell key={id}>{lineLabel(id)}</TableCell>)}<TableCell>{t('costEstimate.subtotal')}</TableCell></TableRow></TableHead>
+        <TableHead><TableRow><TableCell />{LINE_IDS.map((id) => <TableCell key={id}>{lineLabel(id)}</TableCell>)}<TableCell>{t('costEstimate.durationCol')}</TableCell><TableCell>{t('costEstimate.subtotal')}</TableCell></TableRow></TableHead>
         <TableBody>
           {reviewRows(computed, missingWord).map((r) => <TableRow key={r.key}>
             <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('costEstimate.iteration', { n: r.iteration })}</TableCell>
             {LINE_IDS.map((id) => <TableCell key={id} sx={{ color: r[id] === missingWord ? 'warning.main' : undefined }}>{r[id]}</TableCell>)}
+            <TableCell sx={{ whiteSpace: 'nowrap' }}>{reviewWeeks(r.iteration)}</TableCell>
             <TableCell sx={{ fontWeight: 600 }}>{r.original ? <Tooltip title={t('costEstimate.originalsTip', { list: r.original })}><span>{r.subtotal}</span></Tooltip> : r.subtotal}</TableCell>
           </TableRow>)}
-          <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.subtotal')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ fontWeight: 600 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.subtotal) })}><span>{tv.subtotal}</span></Tooltip> : tv.subtotal}</TableCell></TableRow>
-          <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.contingency', { pct: computed.contingency_pct })}</TableCell><TableCell colSpan={4} /><TableCell>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.contingency) })}><span>{tv.contingency}</span></Tooltip> : tv.contingency}</TableCell></TableRow>
-          <TableRow><TableCell sx={{ fontWeight: 700 }}>{t('costEstimate.total')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ fontWeight: 700 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: tv.original })}><span data-testid="review-total">{tv.total}</span></Tooltip> : <span data-testid="review-total">{tv.total}</span>}</TableCell></TableRow>
+          <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.subtotal')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ whiteSpace: 'nowrap' }}>{t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</TableCell><TableCell sx={{ fontWeight: 600 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.subtotal) })}><span>{tv.subtotal}</span></Tooltip> : tv.subtotal}</TableCell></TableRow>
+          <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.contingency', { pct: computed.contingency_pct })}</TableCell><TableCell colSpan={5} /><TableCell>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.contingency) })}><span>{tv.contingency}</span></Tooltip> : tv.contingency}</TableCell></TableRow>
+          <TableRow><TableCell sx={{ fontWeight: 700 }}>{t('costEstimate.total')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ fontWeight: 700, whiteSpace: 'nowrap' }} data-testid="review-weeks">{t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</TableCell><TableCell sx={{ fontWeight: 700 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: tv.original })}><span data-testid="review-total">{tv.total}</span></Tooltip> : <span data-testid="review-total">{tv.total}</span>}</TableCell></TableRow>
         </TableBody>
       </Table></Box>
       {tv.converted && tv.currency !== 'EUR' && fxLine(estimate.fx, t) && <Typography data-testid="fx-note" sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{fxLine(estimate.fx, t)}</Typography>}
@@ -302,7 +353,15 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     {notice && <Alert data-testid="cost-merge-note" severity="info" icon={false} onClose={() => setNotice('')} sx={{ py: 0, bgcolor: 'transparent', color: 'var(--text-2)', border: '1px solid var(--line)' }}>{notice}</Alert>}
     {error && estimate && <Alert severity="error">{error}</Alert>}
     {report && <Alert severity="info" onClose={() => setReport(null)}>{t('costEstimate.suggested', { count: report.filled_count, analog: report.analogs.manufacturing.ref ?? '—' })}{report.notes.length > 0 ? ` ${report.notes.join('; ')}` : ''}</Alert>}
-    <Box sx={{ display: 'flex', flexDirection: wide ? 'row' : 'column', gap: wide ? 3 : 1.5, alignItems: 'flex-start', minWidth: 0 }}>
+    {view === 'table' ? <Stack spacing={2} sx={{ minWidth: 0 }}>
+      <CostEstimateTable ctx={{ estimate, schema, lang, t, who, today, suggestions, change }}
+        displayCurrency={estimate.settings.display_currency || 'EUR'} fxText={fxLine(estimate.fx, t)}
+        onDisplayCurrency={(cur) => changeNow(setDisplayCurrency(estimate, cur === 'EUR' ? null : cur))} />
+      <Box>
+        <Button size="small" onClick={() => setSettingsOpen((o) => !o)} aria-expanded={settingsOpen} sx={{ textTransform: 'none' }}>{settingsOpen ? '▾' : '▸'} {t('costEstimate.steps.settings')}</Button>
+        <Collapse in={settingsOpen} unmountOnExit><Box sx={{ mt: 1 }}>{settingsStep}</Box></Collapse>
+      </Box>
+    </Stack> : <Box sx={{ display: 'flex', flexDirection: wide ? 'row' : 'column', gap: wide ? 3 : 1.5, alignItems: 'flex-start', minWidth: 0 }}>
       <Box sx={{ width: wide ? 200 : '100%', flex: wide ? '0 0 200px' : undefined, position: wide ? 'sticky' : 'static', top: 8 }}>{nav}</Box>
       <Box sx={{ flex: 1, minWidth: 0, maxWidth: 1000, display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
         {current.kind === 'settings' ? settingsStep : current.kind === 'review' ? reviewStep : iterationStep(current.iteration ?? 1)}
@@ -312,7 +371,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
           {step < steps.length - 1 && <Button variant="contained" onClick={() => setStep(step + 1)} sx={{ minHeight: 48, textTransform: 'none', borderRadius: '12px', fontWeight: 600 }}>{t('costEstimate.nextTo', { title: stepTitle(steps[step + 1]) })}</Button>}
         </Stack>
       </Box>
-    </Box>
+    </Box>}
     <Dialog open={snapOpen} onClose={() => !busy && setSnapOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>{t('costEstimate.snapshot')}</DialogTitle>
       <DialogContent><TextField autoFocus fullWidth multiline minRows={2} sx={{ mt: 1 }} label={t('costEstimate.snapshotNote')} value={snapNote} onChange={(e) => setSnapNote(e.target.value)} inputProps={{ maxLength: 500 }} /></DialogContent>

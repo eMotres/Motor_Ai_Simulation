@@ -1165,13 +1165,15 @@
       "estimate": "Other estimate",
       "manual": "Manual",
       "converted": "Converted",
-      "rule": "Rule"
+      "rule": "Rule",
+      "dhl": "DHL quote"
     },
     "origin": {
       "production": "From production {ref}, ×{factor} by active mass",
       "estimate": "From estimate of project {ref}, iteration {iteration}",
       "converted": "Converted from the old detailed estimate. {note}",
       "rule": "Default rule",
+      "dhl": "DHL quote {date}, {from}→{to}, {weight} kg, +{margin} %",
       "manual": "Entered by {by} on {date}",
       "owner": "the owner"
     },
@@ -1205,6 +1207,76 @@
       "manualChip": "Manual",
       "ecbChip": "ECB {date}",
       "noRate": "No rate"
+    },
+    "view": {
+      "table": "Table",
+      "steps": "Steps",
+      "label": "View",
+      "tip": "Table: one row per iteration. Steps: the guided wizard. Both edit the same estimate."
+    },
+    "weeksN": "{n} wk",
+    "weeksUnit": "wk",
+    "weeksLabel": "Weeks",
+    "durationCol": "Duration",
+    "iterationDuration": "Iteration duration",
+    "durationSum": "Sum of stages: {n} wk",
+    "weeksOverride": "Override",
+    "weeksOverrideTip": "Empty: the sum of the stages. Type weeks to override it.",
+    "weeksOverridden": "Overridden: {n} wk",
+    "weeksMissing": "{count, plural, one {# stage without weeks} other {# stages without weeks}}",
+    "durations": {
+      "tooling": "Tooling lead time",
+      "manufacturing": "Manufacturing",
+      "testing": "Testing",
+      "shipping": "Shipping transit"
+    },
+    "table": {
+      "col": {
+        "iteration": "Iteration",
+        "tooling": "Tooling",
+        "motors": "Motors × price",
+        "testing": "Testing",
+        "shipping": "Shipping DHL",
+        "duration": "Duration",
+        "total": "Iteration total"
+      },
+      "add": "+ iteration",
+      "addTip": "1 to 5 iterations.",
+      "remove": "Remove iteration {n}",
+      "accept": "Accept",
+      "suggested": "Suggested",
+      "noteTip": "Source, note and weeks",
+      "contingency": "Contingency",
+      "totalCurrency": "Currency of the total",
+      "currencyTip": "Only the total is converted; every other amount is in EUR.",
+      "noRate": "No rate for {currency}: the total stays in EUR."
+    },
+    "dhl": {
+      "title": "Shipping (DHL)",
+      "country": "Country (ISO)",
+      "city": "City",
+      "lanes": "DHL quotes",
+      "lanesTip": "Dated quotes. The shipping suggestion takes the nearest quoted weight for the route, scales it per kg and adds the margin.",
+      "add": "+ quote",
+      "save": "Save",
+      "edit": "Edit quote",
+      "remove": "Remove quote",
+      "none": "No DHL quote yet.",
+      "invalid": "Fill the marked fields.",
+      "weight": "Gross weight {weight} kg = {motors} × (motor {mass} kg, {basis}, × 1.3 housing + 15 kg crate), rounded up to 5 kg.",
+      "quote": "Quote: {currency} {price} for {weight} kg, {days} days, {mode}.",
+      "col": {
+        "from": "From",
+        "to_country": "To",
+        "quoted_on": "Quoted",
+        "weight_kg": "kg",
+        "price": "Price",
+        "currency": "Currency",
+        "transit_days": "Days",
+        "mode": "Mode",
+        "source": "Source",
+        "note": "Note"
+      }
     }
   }
 }

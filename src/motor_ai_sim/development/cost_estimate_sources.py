@@ -31,6 +31,20 @@ def active_mass(die: str, config: str) -> Optional[float]:
         return None
 
 
+def shipping_mass(die: str, config: str) -> Dict[str, Any]:
+    """The masses a shipment is weighed with (``motor_mass.mass_summary``): ``{full_kg, complete, active_kg}``; the full mass
+    counts as complete only when it is not partial.  Empty values when the die cannot be read (unknown, never zero)."""
+    if not die or not config:
+        return {"full_kg": None, "complete": False, "active_kg": None}
+    try:
+        from motor_ai_sim.modules import motor_mass as MM
+        s = MM.mass_summary(die, config) or {}
+        return {"full_kg": s.get("full_kg"), "complete": bool(s) and not s.get("partial"), "active_kg": s.get("active_kg")}
+    except Exception:                                       # noqa: BLE001 - no mass is "unknown", not zero
+        log.debug("cost estimate: no full mass for %s/%s", die, config, exc_info=True)
+        return {"full_kg": None, "complete": False, "active_kg": None}
+
+
 def cost_summary(die: str, config: str, list_name: str) -> Dict[str, Any]:
     """The Production record's cost summary of one list, as the Production costs tab computes it
     (``models.compute_cost_summary``): ``{"cost": {currency: cost per motor (motor list) or the list's sum (tooling)},
@@ -101,10 +115,16 @@ def other_estimates(exclude_project: str, schema: dict) -> List[Dict[str, Any]]:
     return out
 
 
-def gather(project_id: str, estimate: dict, schema: dict, *, mass_of=active_mass) -> Dict[str, Any]:
-    """Everything ``cost_estimate.suggest`` needs for ``project_id``."""
+def gather(project_id: str, estimate: dict, schema: dict, *, mass_of=active_mass, ship_mass_of=None) -> Dict[str, Any]:
+    """Everything ``cost_estimate.suggest`` needs for ``project_id``: also the motor mass a shipment is weighed with
+    (``motor_mass_kg``: the complete mass when known, else the active mass x 1.3; ``motor_mass_basis`` says which)."""
+    from motor_ai_sim.development import cost_estimate as CE
     target = (estimate.get("settings") or {}).get("target_motor") or {}
     die, config = str(target.get("die") or ""), str(target.get("config") or "")
+    target_mass = mass_of(die, config) if die and config else None
+    masses = (ship_mass_of or shipping_mass)(die, config) if die and config else {}
+    motor_mass, basis = CE.motor_mass_for_shipping(masses.get("full_kg"), bool(masses.get("complete")),
+                                                   masses.get("active_kg") or target_mass, schema)
     return {"target_ref": f"{die}/{config}" if die and config else "",
-            "target_mass_kg": mass_of(die, config) if die and config else None,
+            "target_mass_kg": target_mass, "motor_mass_kg": motor_mass, "motor_mass_basis": basis,
             "productions": productions(mass_of), "estimates": other_estimates(project_id, schema)}

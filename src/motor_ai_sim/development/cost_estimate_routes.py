@@ -11,6 +11,8 @@
 ``PUT /api/admin/projects/{id}/cost-estimate``            save (optimistic ``revision``; 409 with the stored one)
 ``POST /api/admin/projects/{id}/cost-estimate/suggest``    fill missing lines from built motors (scaled by active mass)
                                                            and other projects' estimates
+``POST /api/admin/projects/{id}/cost-estimate/suggestions`` what suggest WOULD fill in the empty cells of the posted estimate
+                                                           (the table's grey placeholders; nothing is saved)
 ``POST /api/admin/projects/{id}/cost-estimate/snapshot``   freeze the estimate with a note and the "what changed" diff
 ``GET  /api/admin/projects/{id}/cost-estimate/snapshots``  the frozen snapshots
 
@@ -219,6 +221,28 @@ async def suggest_estimate(project_id: str, request: Request, response: Response
                     changes=changes, report=report)
 
 
+@router.post("/{project_id}/cost-estimate/suggestions")
+async def preview_suggestions(project_id: str, request: Request, response: Response, admin_user: dict = Depends(_admin)):
+    """What ``suggest`` would put in the EMPTY cells of the estimate on screen (the body), for the table's grey placeholders:
+    nothing is saved and nothing is audited.  The rates are the stored / live ECB ones plus the manual ones of the body."""
+    response.headers["Cache-Control"] = "no-store"
+    project = _project(project_id)
+    schema = CE.load_schema()
+    body = await _body(request)
+    try:
+        candidate = CE.normalize_estimate(body, schema, project_id)
+    except CE.EstimateError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    live, _status = FX.live_rates()
+    stored, _ = _current(project, schema)
+    candidate["fx"] = CE.merge_fx(stored.get("fx"), (candidate.get("fx") or {}).get("manual") or {}, live, schema, _today())
+    data = SRC.gather(project_id, candidate, schema)
+    after, report = CE.suggest(candidate, schema, data, today=_today())
+    return {"cells": CE.suggestion_cells(candidate, after), "motor_mass_kg": data.get("motor_mass_kg"),
+            "motor_mass_basis": data.get("motor_mass_basis") or "",
+            "analogs": report.get("analogs"), "notes": report.get("notes")}
+
+
 @router.post("/{project_id}/cost-estimate/snapshot")
 async def snapshot_estimate(project_id: str, request: Request, admin_user: dict = Depends(_admin)):
     project = _project(project_id)
@@ -242,7 +266,8 @@ async def snapshot_estimate(project_id: str, request: Request, admin_user: dict 
             changes = []
         return {"id": f"{n:04d}", "n": n, "note": note, "created_at": CS.now(), "created_by": _email(admin_user),
                 "revision": estimate.get("revision"), "parent": (previous or {}).get("id"), "estimate": estimate,
-                "totals": {k: computed[k] for k in ("subtotal", "contingency", "total", "currencies", "converted", "missing_count")},
+                "totals": {k: computed[k] for k in ("subtotal", "contingency", "total", "currencies", "converted", "missing_count",
+                                                    "weeks_total")},
                 "iterations": [{k: it[k] for k in it if k != "lines"} for it in computed["iterations"]],
                 "diff": changes if previous else []}
 

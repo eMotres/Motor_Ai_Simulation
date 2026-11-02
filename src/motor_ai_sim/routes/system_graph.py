@@ -172,7 +172,8 @@ class RunGraphRequest(BaseModel):
 @router.post("/run")
 @router.post("/graphs/run")
 def run_graph_endpoint(req: RunGraphRequest,
-                       _user: Dict[str, Any] = Depends(require_engineer)) -> Dict[str, Any]:
+                       _user: Dict[str, Any] = Depends(require_engineer),
+                       authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """Run a graph study: sorts topologically, executes via kernel, updates per-block status."""
     doc = req.graph
     if doc is None and req.name:
@@ -184,6 +185,10 @@ def run_graph_endpoint(req: RunGraphRequest,
     if not doc or not isinstance(doc, dict):
         raise HTTPException(status_code=400, detail={"error": "a 'graph' object or valid 'name' must be provided"})
 
+    # a graph block of an admin-only capability (cost) runs for an admin only, exactly like POST /api/kernel/study
+    from motor_ai_sim.routes.kernel import refuse_admin_only
+    refuse_admin_only([n.get("capability") or n.get("id") for n in (doc.get("nodes") or []) if isinstance(n, dict)],
+                      authorization)
     try:
         return _SGE.run_graph_study(doc)
     except (_SGE.WiringError, _SGE.CycleRefusalError, ValueError) as exc:

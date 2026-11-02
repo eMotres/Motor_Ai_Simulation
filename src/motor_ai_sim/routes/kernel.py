@@ -10,9 +10,9 @@ expensive-endpoint auth gate (added when the app is switched over).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from motor_ai_sim.modules.kernel import Kernel
@@ -27,6 +27,26 @@ def _get_kernel() -> Kernel:
     if _kernel is None:
         _kernel = Kernel()
     return _kernel
+
+
+#: Capabilities only an admin may run, whatever the route that reaches the kernel (/run, /study, the System graph's run).
+#: ``cost`` prices a machine: it is the Cost tab's capability and that tab is admin-only (web ``accessUi.TAB_GATES.cost``);
+#: a price must never reach a customer before the quote stage (owner 2026-11-02).
+ADMIN_ONLY_CAPABILITIES = frozenset({"cost"})
+
+
+def refuse_admin_only(capabilities: Iterable[Any], authorization: Optional[str]) -> None:
+    """403 when ``capabilities`` names an admin-only capability and the caller is not an admin.  The admin test is
+    ``auth.caller_identity`` - one definition for the backend (the local unconfigured workstation is the admin; an MCP call
+    acting for an agent key's owner answers as that owner)."""
+    blocked = sorted({str(c) for c in capabilities if str(c) in ADMIN_ONLY_CAPABILITIES})
+    if not blocked:
+        return
+    from motor_ai_sim import auth as _auth
+    if not _auth.caller_identity(authorization).get("is_admin"):
+        raise HTTPException(status_code=403, detail={
+            "code": "admin_only_capability", "capabilities": blocked,
+            "message": "This capability requires an admin account."})
 
 
 class KernelRunRequest(BaseModel):
@@ -55,7 +75,8 @@ def capabilities() -> Dict[str, Any]:
 
 
 @router.post("/run")
-def run(req: KernelRunRequest) -> Dict[str, Any]:
+def run(req: KernelRunRequest, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    refuse_admin_only([req.capability], authorization)
     # A TYPED magnet temperature above the grade's limit is refused here too:
     # this is the route the Simulation tab's Run posts to (owner 2026-10-30).
     p = req.payload or {}
@@ -77,10 +98,11 @@ class KernelStudyRequest(BaseModel):
 
 
 @router.post("/study")
-def study(req: KernelStudyRequest) -> Dict[str, Any]:
+def study(req: KernelStudyRequest, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """Run a pipeline of capabilities through the kernel. Each stage's result is
     threaded to the next (payload['upstream']); failures are recorded, not raised
     (fault isolation). Returns per-stage {ok, module, result|error}."""
+    refuse_admin_only(req.capabilities, authorization)
     steps = [(cap, dict(req.payload or {})) for cap in req.capabilities]
     out = _get_kernel().run_study(steps)
     for step in out.get("steps", {}).values():

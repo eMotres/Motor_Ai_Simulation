@@ -1,0 +1,1996 @@
+{
+ "schema_version": 1,
+ "locale_source": "en",
+ "locales": [
+  "en",
+  "zh-CN"
+ ],
+ "currencies": [
+  "EUR",
+  "CNY",
+  "USD"
+ ],
+ "default_currency": "EUR",
+ "statuses": [
+  "filled",
+  "not_applicable",
+  "missing"
+ ],
+ "sources": [
+  "analog",
+  "test_history",
+  "model",
+  "manual",
+  "rule"
+ ],
+ "units": {
+  "lot": {
+   "en": "lot",
+   "zh-CN": "批"
+  },
+  "motor": {
+   "en": "motor",
+   "zh-CN": "台"
+  },
+  "kg": {
+   "en": "kg",
+   "zh-CN": "kg"
+  },
+  "h": {
+   "en": "h",
+   "zh-CN": "小时"
+  },
+  "shipment": {
+   "en": "shipment",
+   "zh-CN": "票"
+  },
+  "trip": {
+   "en": "trip",
+   "zh-CN": "次"
+  },
+  "pct": {
+   "en": "%",
+   "zh-CN": "%"
+  }
+ },
+ "scale_rules": {
+  "one_to_one": {
+   "basis": null,
+   "label": {
+    "en": "1:1",
+    "zh-CN": "1:1"
+   }
+  },
+  "active_mass": {
+   "basis": "active_mass_kg",
+   "label": {
+    "en": "active mass",
+    "zh-CN": "有效质量"
+   }
+  },
+  "magnet_mass": {
+   "basis": "magnet_mass_kg",
+   "label": {
+    "en": "magnet mass",
+    "zh-CN": "磁钢质量"
+   }
+  },
+  "copper_mass": {
+   "basis": "copper_mass_kg",
+   "label": {
+    "en": "copper mass",
+    "zh-CN": "铜质量"
+   }
+  },
+  "steel_mass": {
+   "basis": "steel_mass_kg",
+   "label": {
+    "en": "steel mass",
+    "zh-CN": "铁芯质量"
+   }
+  },
+  "outer_diameter": {
+   "basis": "outer_diameter_mm",
+   "label": {
+    "en": "outer diameter",
+    "zh-CN": "外径"
+   }
+  },
+  "stack_length": {
+   "basis": "stack_length_mm",
+   "label": {
+    "en": "stack length",
+    "zh-CN": "叠长"
+   }
+  },
+  "power": {
+   "basis": "power_kw",
+   "label": {
+    "en": "power",
+    "zh-CN": "功率"
+   }
+  }
+ },
+ "basis_fields": [
+  "active_mass_kg",
+  "magnet_mass_kg",
+  "copper_mass_kg",
+  "steel_mass_kg",
+  "outer_diameter_mm",
+  "stack_length_mm",
+  "power_kw"
+ ],
+ "settings": [
+  {
+   "id": "complex",
+   "type": "bool",
+   "default": false,
+   "label": {
+    "en": "Complex project",
+    "zh-CN": "复杂项目"
+   },
+   "help": {
+    "en": "A complex project (e.g. eVTOL) needs at least 3 iterations.",
+    "zh-CN": "复杂项目（如 eVTOL）至少 3 轮。"
+   }
+  },
+  {
+   "id": "iterations",
+   "type": "int",
+   "min": 1,
+   "max": 5,
+   "default": {
+    "rule": "complex",
+    "if_true": 3,
+    "if_false": 2
+   },
+   "label": {
+    "en": "Iterations",
+    "zh-CN": "迭代轮数"
+   },
+   "help": {
+    "en": "Usually 2; 3 for a complex project.",
+    "zh-CN": "通常 2 轮；复杂项目 3 轮。"
+   }
+  },
+  {
+   "id": "motors_per_iteration",
+   "type": "int",
+   "min": 1,
+   "max": 50,
+   "default": 2,
+   "label": {
+    "en": "Motors per iteration",
+    "zh-CN": "每轮电机数"
+   },
+   "help": {
+    "en": "2 for a back-to-back dyno.",
+    "zh-CN": "背靠背测功机为 2 台。"
+   }
+  },
+  {
+   "id": "currency",
+   "type": "enum",
+   "options": [
+    "EUR",
+    "CNY",
+    "USD"
+   ],
+   "default": "EUR",
+   "label": {
+    "en": "Currency",
+    "zh-CN": "货币"
+   },
+   "help": {
+    "en": "Default for new lines. Totals stay per currency, never converted.",
+    "zh-CN": "新行默认货币。合计按货币分开，不换算。"
+   }
+  },
+  {
+   "id": "contingency_pct",
+   "type": "number",
+   "min": 0,
+   "max": 100,
+   "default": 10,
+   "label": {
+    "en": "Risk / contingency",
+    "zh-CN": "风险/不可预见费"
+   },
+   "help": {
+    "en": "% on top of the total, per currency.",
+    "zh-CN": "按货币在合计上加的百分比。"
+   }
+  },
+  {
+   "id": "liquid_cooling",
+   "type": "bool",
+   "default": false,
+   "label": {
+    "en": "Liquid cooling",
+    "zh-CN": "液冷"
+   },
+   "help": {
+    "en": "Adds the cooling jacket and the test cooling loop.",
+    "zh-CN": "增加冷却套和测试冷却回路。"
+   }
+  },
+  {
+   "id": "high_voltage",
+   "type": "bool",
+   "default": false,
+   "label": {
+    "en": "High voltage",
+    "zh-CN": "高压"
+   },
+   "help": {
+    "en": "Adds the partial-discharge test.",
+    "zh-CN": "增加局部放电测试。"
+   }
+  }
+ ],
+ "iteration_settings": [
+  {
+   "id": "bench",
+   "type": "enum",
+   "default": "dyno",
+   "options": [
+    "dyno",
+    "propeller",
+    "both",
+    "none"
+   ],
+   "option_labels": {
+    "dyno": {
+     "en": "Dyno",
+     "zh-CN": "测功机"
+    },
+    "propeller": {
+     "en": "Propeller stand",
+     "zh-CN": "螺旋桨台架"
+    },
+    "both": {
+     "en": "Both",
+     "zh-CN": "两者"
+    },
+    "none": {
+     "en": "None",
+     "zh-CN": "无"
+    }
+   },
+   "label": {
+    "en": "Test bench",
+    "zh-CN": "测试台架"
+   },
+   "help": {
+    "en": "Dyno, propeller stand, both or none.",
+    "zh-CN": "测功机、螺旋桨台架、两者或无。"
+   }
+  },
+  {
+   "id": "milestone_pct",
+   "type": "number",
+   "min": 0,
+   "max": 100,
+   "default": null,
+   "label": {
+    "en": "Payment milestone",
+    "zh-CN": "付款节点"
+   },
+   "help": {
+    "en": "% of the total paid for this iteration.",
+    "zh-CN": "本轮付款占总额的百分比。"
+   }
+  }
+ ],
+ "groups": [
+  {
+   "id": "manufacturing",
+   "scope": "iteration",
+   "label": {
+    "en": "Manufacturing",
+    "zh-CN": "制造"
+   },
+   "sections": [
+    {
+     "id": "tooling",
+     "label": {
+      "en": "Tooling",
+      "zh-CN": "工装"
+     },
+     "items": [
+      {
+       "id": "tool_main",
+       "label": {
+        "en": "Main tooling",
+        "zh-CN": "主要工装"
+       },
+       "help": {
+        "en": "Holders, moulds and dies the motor cannot be built without. Iteration 1 carries it in full.",
+        "zh-CN": "没有就无法制造电机的夹具、模具。第 1 轮全额承担。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "tooling",
+        "match": [
+         "mould",
+         "mold",
+         "die",
+         "tooling",
+         "模具",
+         "工装"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       },
+       "later": {
+        "mode": "pct_of_first",
+        "pct": 20
+       }
+      },
+      {
+       "id": "tool_assembly",
+       "label": {
+        "en": "Assembly fixtures",
+        "zh-CN": "装配夹具"
+       },
+       "help": {
+        "en": "Everything needed to assemble the motor if nothing suitable exists.",
+        "zh-CN": "如无现成可用，装配电机所需的全部夹具。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "tooling",
+        "match": [
+         "assembly",
+         "fixture",
+         "press",
+         "装配",
+         "压装"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       },
+       "later": {
+        "mode": "pct_of_first",
+        "pct": 20
+       }
+      },
+      {
+       "id": "tool_winding",
+       "label": {
+        "en": "Coil-winding tooling",
+        "zh-CN": "绕线工装"
+       },
+       "help": {
+        "en": "Winding mandrels, forming tools, coil press.",
+        "zh-CN": "绕线模、成型工具、线圈压机。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "tooling",
+        "match": [
+         "winding",
+         "coil",
+         "mandrel",
+         "绕线",
+         "线圈"
+        ],
+        "scale": "stack_length",
+        "exponent": 1.0
+       },
+       "later": {
+        "mode": "pct_of_first",
+        "pct": 20
+       }
+      },
+      {
+       "id": "tool_stack",
+       "label": {
+        "en": "Stack fixture",
+        "zh-CN": "叠压夹具"
+       },
+       "help": {
+        "en": "Fixture to stack and bond the laminations.",
+        "zh-CN": "叠片叠压/粘接夹具。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "tooling",
+        "match": [
+         "stack",
+         "叠压",
+         "叠片"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       },
+       "later": {
+        "mode": "pct_of_first",
+        "pct": 20
+       }
+      },
+      {
+       "id": "tool_magnet",
+       "label": {
+        "en": "Magnet-insertion fixture",
+        "zh-CN": "磁钢装配夹具"
+       },
+       "help": {
+        "en": "Fixture to insert and hold the magnets safely.",
+        "zh-CN": "安全装入并固定磁钢的夹具。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "tooling",
+        "match": [
+         "magnet",
+         "磁钢",
+         "磁体"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       },
+       "later": {
+        "mode": "pct_of_first",
+        "pct": 20
+       }
+      }
+     ]
+    },
+    {
+     "id": "laminations",
+     "label": {
+      "en": "Laminations",
+      "zh-CN": "叠片"
+     },
+     "items": [
+      {
+       "id": "lam_sheet",
+       "label": {
+        "en": "Lamination sheet (with MOQ)",
+        "zh-CN": "硅钢片采购（含起订量）"
+       },
+       "help": {
+        "en": "Bought sheet = core mass x buy factor (sheet utilisation, MOQ).",
+        "zh-CN": "采购量 = 铁芯质量 x 采购系数（材料利用率、起订量）。"
+       },
+       "unit": "kg",
+       "qty": {
+        "rule": "model_mass",
+        "mass": "steel_mass_kg",
+        "buy_factor": 2.2
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "lamination",
+         "sheet",
+         "silicon steel",
+         "electrical steel",
+         "硅钢",
+         "冲片",
+         "叠片"
+        ],
+        "scale": "steel_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "lam_cut",
+       "label": {
+        "en": "Cutting (laser / EDM or stamping die)",
+        "zh-CN": "切割（激光/线切割或冲压模）"
+       },
+       "help": {
+        "en": "Prototype: laser or wire EDM. Series: stamping die.",
+        "zh-CN": "样机：激光或线切割。批量：冲压模。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "laser",
+         "edm",
+         "wire cut",
+         "cutting",
+         "stamping",
+         "激光",
+         "线切割",
+         "冲压"
+        ],
+        "scale": "stack_length",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "lam_etch",
+       "label": {
+        "en": "Acid etch >= 24 h",
+        "zh-CN": "酸洗 >= 24 小时"
+       },
+       "help": {
+        "en": "Stator and rotor in separate batches, at least 24 h.",
+        "zh-CN": "定子、转子分开批次，至少 24 小时。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "etch",
+         "acid",
+         "酸洗",
+         "腐蚀"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "lam_stack",
+       "label": {
+        "en": "Stacking / bonding",
+        "zh-CN": "叠压/粘接"
+       },
+       "help": {
+        "en": "Stacking and bonding of the cores.",
+        "zh-CN": "铁芯叠压与粘接。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "stacking",
+         "bonding",
+         "bond",
+         "叠压",
+         "粘接"
+        ],
+        "scale": "stack_length",
+        "exponent": 1.0
+       }
+      }
+     ]
+    },
+    {
+     "id": "magnets",
+     "label": {
+      "en": "Magnets",
+      "zh-CN": "磁钢"
+     },
+     "items": [
+      {
+       "id": "mag_material",
+       "label": {
+        "en": "Magnet material",
+        "zh-CN": "磁钢材料"
+       },
+       "help": {
+        "en": "Magnet mass from the simulation x price per kg (grade, coating).",
+        "zh-CN": "仿真磁钢质量 x 每公斤价格（牌号、镀层）。"
+       },
+       "unit": "kg",
+       "qty": {
+        "rule": "model_mass",
+        "mass": "magnet_mass_kg",
+        "buy_factor": 1.0
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "magnet",
+         "ndfeb",
+         "磁钢",
+         "磁体",
+         "钕铁硼"
+        ],
+        "scale": "magnet_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mag_segmentation",
+       "label": {
+        "en": "Segmentation",
+        "zh-CN": "分段"
+       },
+       "help": {
+        "en": "Axial / circumferential segments and their insulation.",
+        "zh-CN": "轴向/周向分段及其绝缘。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "segment",
+         "分段"
+        ],
+        "scale": "magnet_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mag_magnetising",
+       "label": {
+        "en": "Magnetising",
+        "zh-CN": "充磁"
+       },
+       "help": {
+        "en": "Magnetising before or after assembly.",
+        "zh-CN": "装配前或装配后充磁。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "magnetiz",
+         "magnetis",
+         "充磁"
+        ],
+        "scale": "magnet_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mag_moq",
+       "label": {
+        "en": "MOQ / lead-time surcharge",
+        "zh-CN": "起订量/交期附加费"
+       },
+       "help": {
+        "en": "Minimum order and rush surcharge of the magnet supplier.",
+        "zh-CN": "磁钢供应商的最小起订量与加急费。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       }
+      },
+      {
+       "id": "mag_spare",
+       "label": {
+        "en": "Spare magnet set",
+        "zh-CN": "备用磁钢"
+       },
+       "help": {
+        "en": "One spare set for breakage during assembly.",
+        "zh-CN": "装配破损用的一套备件。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       }
+      }
+     ]
+    },
+    {
+     "id": "winding",
+     "label": {
+      "en": "Winding",
+      "zh-CN": "绕组"
+     },
+     "items": [
+      {
+       "id": "wire_purchase",
+       "label": {
+        "en": "Wire (with MOQ)",
+        "zh-CN": "导线（含起订量）"
+       },
+       "help": {
+        "en": "Copper mass from the simulation x buy factor (leads, trimming, MOQ). Flat or round.",
+        "zh-CN": "仿真铜质量 x 采购系数（引线、修剪、起订量）。扁线或圆线。"
+       },
+       "unit": "kg",
+       "qty": {
+        "rule": "model_mass",
+        "mass": "copper_mass_kg",
+        "buy_factor": 1.3
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "wire",
+         "copper",
+         "漆包线",
+         "铜线",
+         "扁线",
+         "圆线"
+        ],
+        "scale": "copper_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "wind_insulation",
+       "label": {
+        "en": "Slot insulation",
+        "zh-CN": "槽绝缘"
+       },
+       "help": {
+        "en": "Nomex or Al2O3 ceramic plates, liners, wedges.",
+        "zh-CN": "Nomex 或 Al2O3 陶瓷片、槽衬、槽楔。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "nomex",
+         "liner",
+         "insulation",
+         "al2o3",
+         "ceramic",
+         "绝缘",
+         "陶瓷",
+         "槽楔"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "wind_impregnation",
+       "label": {
+        "en": "Vacuum impregnation + resin",
+        "zh-CN": "真空浸漆 + 树脂"
+       },
+       "help": {
+        "en": "VPI cycle and resin.",
+        "zh-CN": "真空压力浸漆及树脂。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "impregnat",
+         "varnish",
+         "resin",
+         "vpi",
+         "浸漆",
+         "树脂",
+         "灌封"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      }
+     ]
+    },
+    {
+     "id": "electrical",
+     "label": {
+      "en": "Electrical",
+      "zh-CN": "电气"
+     },
+     "items": [
+      {
+       "id": "el_phase_board",
+       "label": {
+        "en": "Phase board / busbars",
+        "zh-CN": "相板/汇流排"
+       },
+       "help": {
+        "en": "Phase board or busbars.",
+        "zh-CN": "相板或汇流排。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "phase board",
+         "busbar",
+         "bus bar",
+         "相板",
+         "汇流"
+        ],
+        "scale": "power",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "el_leads",
+       "label": {
+        "en": "Leads",
+        "zh-CN": "引出线"
+       },
+       "help": {
+        "en": "Phase leads.",
+        "zh-CN": "相引出线。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "lead",
+         "引出线",
+         "引线"
+        ],
+        "scale": "power",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "el_connectors",
+       "label": {
+        "en": "Connectors",
+        "zh-CN": "连接器"
+       },
+       "help": {
+        "en": "Power and signal connectors.",
+        "zh-CN": "功率与信号连接器。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "connector",
+         "terminal",
+         "连接器",
+         "端子"
+        ],
+        "scale": "power",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "el_temp_sensors",
+       "label": {
+        "en": "Temperature sensors (PT1000)",
+        "zh-CN": "温度传感器（PT1000）"
+       },
+       "help": {
+        "en": "Winding and housing sensors.",
+        "zh-CN": "绕组与机壳传感器。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "pt1000",
+         "pt100",
+         "ntc",
+         "temperature",
+         "温度"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "el_position_sensor",
+       "label": {
+        "en": "Position sensor (encoder / resolver)",
+        "zh-CN": "位置传感器（编码器/旋变）"
+       },
+       "help": {
+        "en": "Encoder or resolver with its mount.",
+        "zh-CN": "编码器或旋变及其安装件。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "encoder",
+         "resolver",
+         "hall",
+         "编码器",
+         "旋变",
+         "霍尔"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "el_cables",
+       "label": {
+        "en": "Cables",
+        "zh-CN": "电缆"
+       },
+       "help": {
+        "en": "Power and signal cables to the controller.",
+        "zh-CN": "到控制器的功率和信号电缆。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "cable",
+         "电缆"
+        ],
+        "scale": "power",
+        "exponent": 1.0
+       }
+      }
+     ]
+    },
+    {
+     "id": "mechanical",
+     "label": {
+      "en": "Mechanical",
+      "zh-CN": "机械"
+     },
+     "items": [
+      {
+       "id": "mech_shaft",
+       "label": {
+        "en": "Shaft",
+        "zh-CN": "轴"
+       },
+       "help": {
+        "en": "Machined shaft.",
+        "zh-CN": "机加工轴。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "shaft",
+         "转轴",
+         "主轴"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_hub",
+       "label": {
+        "en": "Hub / rotor carrier",
+        "zh-CN": "轮毂/转子支架"
+       },
+       "help": {
+        "en": "Hub or rotor carrier.",
+        "zh-CN": "轮毂或转子支架。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "hub",
+         "carrier",
+         "轮毂",
+         "转子支架"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_housing",
+       "label": {
+        "en": "Housing",
+        "zh-CN": "机壳"
+       },
+       "help": {
+        "en": "Machined housing.",
+        "zh-CN": "机加工机壳。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "housing",
+         "case",
+         "机壳",
+         "外壳"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_end_plates",
+       "label": {
+        "en": "End plates",
+        "zh-CN": "端盖"
+       },
+       "help": {
+        "en": "Front and rear end plates.",
+        "zh-CN": "前后端盖。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "end plate",
+         "end cover",
+         "flange",
+         "端盖",
+         "法兰"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_holders",
+       "label": {
+        "en": "Holders (CNC)",
+        "zh-CN": "支架（数控）"
+       },
+       "help": {
+        "en": "CNC holders, rings, spacers.",
+        "zh-CN": "数控支架、环、垫片。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "holder",
+         "ring",
+         "spacer",
+         "支架",
+         "垫片"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_materials",
+       "label": {
+        "en": "Raw materials",
+        "zh-CN": "原材料"
+       },
+       "help": {
+        "en": "Bar and plate stock for the made parts.",
+        "zh-CN": "自制件用棒料和板料。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "material",
+         "stock",
+         "bar",
+         "plate",
+         "原材料",
+         "棒料",
+         "板料"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_coatings",
+       "label": {
+        "en": "Coatings",
+        "zh-CN": "表面处理"
+       },
+       "help": {
+        "en": "Anodising, plating, paint.",
+        "zh-CN": "阳极氧化、电镀、喷漆。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "coating",
+         "anodi",
+         "plating",
+         "paint",
+         "阳极",
+         "电镀",
+         "喷涂",
+         "涂层"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_bearings",
+       "label": {
+        "en": "Bearings",
+        "zh-CN": "轴承"
+       },
+       "help": {
+        "en": "Bearings from the bearing card.",
+        "zh-CN": "按轴承卡选用的轴承。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "bearing",
+         "轴承"
+        ],
+        "scale": "outer_diameter",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_fasteners",
+       "label": {
+        "en": "Fasteners",
+        "zh-CN": "紧固件"
+       },
+       "help": {
+        "en": "Zinc-plated screws, pins, washers.",
+        "zh-CN": "镀锌螺钉、销、垫圈。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "screw",
+         "bolt",
+         "fastener",
+         "pin",
+         "washer",
+         "螺钉",
+         "螺栓",
+         "紧固",
+         "垫圈"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_loctite",
+       "label": {
+        "en": "Loctite 641",
+        "zh-CN": "乐泰 641"
+       },
+       "help": {
+        "en": "On every bearing / shaft / hub fit.",
+        "zh-CN": "用于每个轴承/轴/轮毂配合面。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "loctite",
+         "641",
+         "乐泰",
+         "胶"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "mech_cooling",
+       "label": {
+        "en": "Cooling jacket / fittings",
+        "zh-CN": "冷却套/接头"
+       },
+       "help": {
+        "en": "Only with liquid cooling.",
+        "zh-CN": "仅液冷时需要。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "motor",
+        "match": [
+         "cooling",
+         "jacket",
+         "fitting",
+         "冷却",
+         "水套",
+         "接头"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       },
+       "applies_if": {
+        "liquid_cooling": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "assembly",
+     "label": {
+      "en": "Assembly & QC",
+      "zh-CN": "装配与质检"
+     },
+     "items": [
+      {
+       "id": "asm_labour",
+       "label": {
+        "en": "Assembly labour",
+        "zh-CN": "装配人工"
+       },
+       "help": {
+        "en": "Labour hours x rate, per motor.",
+        "zh-CN": "工时 x 费率，每台。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "extras",
+        "match": [
+         "assembly",
+         "labour",
+         "labor",
+         "work",
+         "装配",
+         "人工",
+         "工时"
+        ],
+        "scale": "active_mass",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "asm_balancing",
+       "label": {
+        "en": "Balancing G2.5",
+        "zh-CN": "动平衡 G2.5"
+       },
+       "help": {
+        "en": "Rotor balancing to G2.5.",
+        "zh-CN": "转子动平衡至 G2.5。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "any",
+        "match": [
+         "balanc",
+         "动平衡",
+         "平衡"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "asm_incoming",
+       "label": {
+        "en": "Incoming inspection report",
+        "zh-CN": "来料检验报告"
+       },
+       "help": {
+        "en": "Inspection of received parts with a report.",
+        "zh-CN": "来料检验并出具报告。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "analog": {
+        "list": "extras",
+        "match": [
+         "inspection",
+         "incoming",
+         "检验",
+         "来料"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "asm_hipot",
+       "label": {
+        "en": "Hipot",
+        "zh-CN": "耐压测试"
+       },
+       "help": {
+        "en": "Hipot / insulation test.",
+        "zh-CN": "耐压/绝缘测试。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "any",
+        "match": [
+         "hipot",
+         "hi-pot",
+         "insulation test",
+         "耐压"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      },
+      {
+       "id": "asm_rle",
+       "label": {
+        "en": "R / L / EMF check",
+        "zh-CN": "R/L/反电势检查"
+       },
+       "help": {
+        "en": "Resistance, inductance and EMF check.",
+        "zh-CN": "电阻、电感和反电势检查。"
+       },
+       "unit": "motor",
+       "qty": {
+        "rule": "motors"
+       },
+       "analog": {
+        "list": "any",
+        "match": [
+         "resistance",
+         "inductance",
+         "emf",
+         "电阻",
+         "电感",
+         "反电势"
+        ],
+        "scale": "one_to_one",
+        "exponent": 1.0
+       }
+      }
+     ]
+    },
+    {
+     "id": "scrap",
+     "label": {
+      "en": "Scrap / spares",
+      "zh-CN": "报废/备件"
+     },
+     "items": [
+      {
+       "id": "scrap_allowance",
+       "label": {
+        "en": "Scrap / spares allowance",
+        "zh-CN": "报废/备件余量"
+       },
+       "help": {
+        "en": "% of this iteration's manufacturing without tooling and redesign.",
+        "zh-CN": "本轮制造费用（不含工装和改型）的百分比。"
+       },
+       "unit": "pct",
+       "qty": {
+        "rule": "pct"
+       },
+       "amount_rule": {
+        "pct_of": "manufacturing",
+        "exclude_sections": [
+         "tooling",
+         "redesign",
+         "scrap"
+        ]
+       },
+       "hint": 5
+      }
+     ]
+    },
+    {
+     "id": "redesign",
+     "label": {
+      "en": "Redesign",
+      "zh-CN": "改型"
+     },
+     "items": [
+      {
+       "id": "redesign_changes",
+       "label": {
+        "en": "Redesign after tests",
+        "zh-CN": "测试后改型"
+       },
+       "help": {
+        "en": "Drawing and tooling changes after the previous iteration's tests.",
+        "zh-CN": "根据上一轮测试修改图纸和工装。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "first": "not_applicable"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "testing",
+   "scope": "iteration",
+   "label": {
+    "en": "Testing",
+    "zh-CN": "测试"
+   },
+   "sections": [
+    {
+     "id": "testing",
+     "label": {
+      "en": "Testing",
+      "zh-CN": "测试"
+     },
+     "items": [
+      {
+       "id": "test_bench",
+       "label": {
+        "en": "Bench time",
+        "zh-CN": "台架时间"
+       },
+       "help": {
+        "en": "Rented bench or own bench hours x rate.",
+        "zh-CN": "租用台架或自有台架小时数 x 费率。"
+       },
+       "unit": "h",
+       "qty": {
+        "rule": "manual"
+       },
+       "history": true,
+       "applies_if": {
+        "bench": [
+         "dyno",
+         "propeller",
+         "both"
+        ]
+       }
+      },
+      {
+       "id": "test_couplings",
+       "label": {
+        "en": "Couplings and adapter plate",
+        "zh-CN": "联轴器和转接板"
+       },
+       "help": {
+        "en": "Couplings, adapter plate or propeller hub adapter.",
+        "zh-CN": "联轴器、转接板或螺旋桨轮毂转接件。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "later": {
+        "mode": "pct_of_first",
+        "pct": 20
+       },
+       "applies_if": {
+        "bench": [
+         "dyno",
+         "propeller",
+         "both"
+        ]
+       }
+      },
+      {
+       "id": "test_controllers",
+       "label": {
+        "en": "Controllers for test",
+        "zh-CN": "测试用控制器"
+       },
+       "help": {
+        "en": "Bought, or not applicable if the customer supplies them.",
+        "zh-CN": "购买；如客户提供则不适用。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_hv_supply",
+       "label": {
+        "en": "HV supply or battery rental",
+        "zh-CN": "高压电源或电池租赁"
+       },
+       "help": {
+        "en": "DC supply or battery for the test.",
+        "zh-CN": "测试用直流电源或电池。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_instruments",
+       "label": {
+        "en": "Power analyzer and torque sensor calibration",
+        "zh-CN": "功率分析仪与扭矩传感器校准"
+       },
+       "help": {
+        "en": "Calibration or rental of the instruments.",
+        "zh-CN": "仪器校准或租赁。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_cooling",
+       "label": {
+        "en": "Cooling loop",
+        "zh-CN": "冷却回路"
+       },
+       "help": {
+        "en": "Coolant loop for the test.",
+        "zh-CN": "测试用冷却回路。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "applies_if": {
+        "liquid_cooling": true
+       }
+      },
+      {
+       "id": "test_emf",
+       "label": {
+        "en": "EMF test",
+        "zh-CN": "反电势测试"
+       },
+       "help": {
+        "en": "Back-EMF at several speeds.",
+        "zh-CN": "多转速反电势。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_cogging",
+       "label": {
+        "en": "Cogging test",
+        "zh-CN": "齿槽转矩测试"
+       },
+       "help": {
+        "en": "Cogging torque at 20 C.",
+        "zh-CN": "20 C 下齿槽转矩。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_load_points",
+       "label": {
+        "en": "Load points",
+        "zh-CN": "负载点"
+       },
+       "help": {
+        "en": "The specified key points on load.",
+        "zh-CN": "规定的关键工作点负载测试。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_thermal",
+       "label": {
+        "en": "Thermal run to limit",
+        "zh-CN": "温升至限值"
+       },
+       "help": {
+        "en": "Thermal run to the winding limit.",
+        "zh-CN": "温升测试至绕组限值。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_vibration",
+       "label": {
+        "en": "Vibration / noise",
+        "zh-CN": "振动/噪声"
+       },
+       "help": {
+        "en": "Vibration and noise measurement.",
+        "zh-CN": "振动与噪声测量。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_pd",
+       "label": {
+        "en": "Partial discharge (HV)",
+        "zh-CN": "局部放电（高压）"
+       },
+       "help": {
+        "en": "Only for HV windings.",
+        "zh-CN": "仅高压绕组。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "applies_if": {
+        "high_voltage": true
+       }
+      },
+      {
+       "id": "test_endurance",
+       "label": {
+        "en": "Endurance",
+        "zh-CN": "耐久"
+       },
+       "help": {
+        "en": "Endurance run.",
+        "zh-CN": "耐久运行。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_report",
+       "label": {
+        "en": "Test report",
+        "zh-CN": "测试报告"
+       },
+       "help": {
+        "en": "Report of this iteration's tests.",
+        "zh-CN": "本轮测试报告。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "test_witness",
+       "label": {
+        "en": "Customer witness",
+        "zh-CN": "客户见证"
+       },
+       "help": {
+        "en": "Customer at the test.",
+        "zh-CN": "客户到场见证测试。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "logistics",
+   "scope": "iteration",
+   "label": {
+    "en": "Logistics",
+    "zh-CN": "物流"
+   },
+   "sections": [
+    {
+     "id": "logistics",
+     "label": {
+      "en": "Logistics",
+      "zh-CN": "物流"
+     },
+     "items": [
+      {
+       "id": "log_factory_test",
+       "label": {
+        "en": "DHL factory -> test site",
+        "zh-CN": "DHL 工厂 -> 测试地"
+       },
+       "help": {
+        "en": "DHL leg.",
+        "zh-CN": "DHL 运段。"
+       },
+       "unit": "shipment",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "scale": "active_mass"
+      },
+      {
+       "id": "log_test_us",
+       "label": {
+        "en": "DHL test site -> us",
+        "zh-CN": "DHL 测试地 -> 我方"
+       },
+       "help": {
+        "en": "DHL leg.",
+        "zh-CN": "DHL 运段。"
+       },
+       "unit": "shipment",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "scale": "active_mass"
+      },
+      {
+       "id": "log_us_customer",
+       "label": {
+        "en": "DHL us -> customer",
+        "zh-CN": "DHL 我方 -> 客户"
+       },
+       "help": {
+        "en": "DHL leg.",
+        "zh-CN": "DHL 运段。"
+       },
+       "unit": "shipment",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "scale": "active_mass"
+      },
+      {
+       "id": "log_crate",
+       "label": {
+        "en": "Crate",
+        "zh-CN": "木箱"
+       },
+       "help": {
+        "en": "Shipping crate.",
+        "zh-CN": "运输木箱。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true,
+       "scale": "outer_diameter"
+      },
+      {
+       "id": "log_insurance",
+       "label": {
+        "en": "Insurance",
+        "zh-CN": "保险"
+       },
+       "help": {
+        "en": "Transport insurance.",
+        "zh-CN": "运输保险。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "log_duties",
+       "label": {
+        "en": "Duties / import VAT",
+        "zh-CN": "关税/进口增值税"
+       },
+       "help": {
+        "en": "Duties and import VAT.",
+        "zh-CN": "关税与进口增值税。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "log_export_docs",
+       "label": {
+        "en": "Export documents",
+        "zh-CN": "出口文件"
+       },
+       "help": {
+        "en": "Export declaration, certificates.",
+        "zh-CN": "出口报关、证书。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      },
+      {
+       "id": "log_magnet_air",
+       "label": {
+        "en": "Magnetised assembly by air (IATA PI 953)",
+        "zh-CN": "磁化组件空运（IATA PI 953）"
+       },
+       "help": {
+        "en": "Shielding and field check for air shipping.",
+        "zh-CN": "空运所需屏蔽与磁场检测。"
+       },
+       "unit": "lot",
+       "qty": {
+        "rule": "one"
+       },
+       "history": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "project",
+   "scope": "project",
+   "label": {
+    "en": "Project-wide",
+    "zh-CN": "项目总体"
+   },
+   "sections": [
+    {
+     "id": "project",
+     "label": {
+      "en": "Project-wide",
+      "zh-CN": "项目总体"
+     },
+     "items": [
+      {
+       "id": "proj_engineering",
+       "label": {
+        "en": "Engineering / simulation hours",
+        "zh-CN": "工程/仿真工时"
+       },
+       "help": {
+        "en": "Hours per iteration x rate (x iterations). 0 if not charged.",
+        "zh-CN": "每轮工时 x 费率（x 轮数）。不收费填 0。"
+       },
+       "unit": "h",
+       "qty": {
+        "rule": "manual"
+       },
+       "per_iteration": true,
+       "history": true
+      },
+      {
+       "id": "proj_travel_factory",
+       "label": {
+        "en": "Travel: factory visits",
+        "zh-CN": "差旅：工厂访问"
+       },
+       "help": {
+        "en": "Trips to the factory.",
+        "zh-CN": "去工厂的差旅。"
+       },
+       "unit": "trip",
+       "qty": {
+        "rule": "manual"
+       },
+       "history": true
+      },
+      {
+       "id": "proj_travel_witness",
+       "label": {
+        "en": "Travel: test witness",
+        "zh-CN": "差旅：测试见证"
+       },
+       "help": {
+        "en": "Trips to the tests.",
+        "zh-CN": "去测试现场的差旅。"
+       },
+       "unit": "trip",
+       "qty": {
+        "rule": "manual"
+       },
+       "history": true
+      },
+      {
+       "id": "proj_warranty",
+       "label": {
+        "en": "Warranty reserve",
+        "zh-CN": "质保准备金"
+       },
+       "help": {
+        "en": "% of the manufacturing of all iterations.",
+        "zh-CN": "所有轮次制造费用的百分比。"
+       },
+       "unit": "pct",
+       "qty": {
+        "rule": "pct"
+       },
+       "amount_rule": {
+        "pct_of": "manufacturing",
+        "exclude_sections": []
+       },
+       "hint": 3
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

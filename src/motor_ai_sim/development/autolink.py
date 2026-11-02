@@ -5,6 +5,14 @@ time".  When a configuration is created in a die (``POST /api/family/config``, a
 any configuration of that same die - or of the die it was copied from (``die.yaml`` ``derived_from``) - is linked to a project,
 the new configuration is linked to the same project(s) with status ``current`` and an audit entry ``motor.autolink``.
 
+WHICH project (2026-11-02, bug: a copied configuration went to the alphabetically first project that held ANY
+configuration of the die - a motor and two generators of one die sit in three projects): the copy joins the project that
+holds its SOURCE configuration - the motor it was copied from (``source_config``, in ``copied_from`` or the same die).
+The source in no project: nothing is linked.  The source held by more than one project (spellings of one die under two
+keys): nothing is linked and each candidate project gets a ``motor.autolink_skipped`` audit note - never a guess.  A
+configuration with no known source (created from scratch) falls back to the die family, and only when exactly ONE project
+holds that family; several projects = the same skip note.
+
 It never links into a project the die is not already in, never steals a motor that another project holds, and never fails
 the route that created the configuration (the caller logs and moves on).  No owner check here on purpose: the person who may
 create a configuration in that die is the person who is already working on the project's motor; the link only adds what the
@@ -113,18 +121,60 @@ def _link(project_id: str, die: str, config: str, actor: str) -> bool:
     return True
 
 
-def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = None, actor: str = "",
-                        sources: Optional[List[str]] = None) -> List[str]:
-    """Link ``die/config`` to every project that already holds a sibling variant.  Returns the project ids it joined."""
+def _projects_holding(source_die: str, source_config: str, die: str) -> Dict[str, str]:
+    """``{project_id: canonical die to link under}`` for every project that holds exactly ``source_die/source_config``."""
+    wanted, own, cfg = _names(source_die), _names(die), str(source_config).casefold()
+    found: Dict[str, str] = {}
+    for key, row in (store.load_index().get("motors") or {}).items():
+        if not isinstance(row, dict) or not row.get("project_id"):
+            continue
+        kdie, _, kcfg = str(key).partition("\0")
+        rdie, rcfg = str(row.get("die") or kdie), str(row.get("config") or kcfg)
+        if rcfg.casefold() == cfg and _names(rdie) & wanted:
+            found.setdefault(str(row["project_id"]), rdie if _names(rdie) & own else str(die))
+    return found
+
+
+def _note_skipped(candidates: List[str], die: str, config: str, source: str, reason: str, actor: str) -> None:
+    """An ambiguous source: no link, one audit note in every candidate project (no other project's id in it)."""
+    for project_id in candidates:
+        try:
+            store.append_audit(project_id, actor or "autolink", "motor.autolink_skipped", "motor", f"{die}/{config}",
+                               {"reason": reason, "source": source, "candidates": len(candidates)})
+        except Exception as exc:                            # noqa: BLE001 - the note is best effort
+            log.warning("autolink: could not note the skipped link of %s/%s in project %s: %s", die, config, project_id, exc)
+    log.warning("autolink: %s/%s not linked - %s (%d candidate projects)", die, config, reason, len(candidates))
+
+
+def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = None, source_config: Optional[str] = None,
+                        actor: str = "", sources: Optional[List[str]] = None) -> List[str]:
+    """Link ``die/config`` to the ONE project that holds its source motor.  Returns the project ids it joined (0 or 1).
+
+    ``source_config`` names the configuration the new one was copied from, in ``copied_from`` (another die) or in ``die``
+    itself.  Without it the die family decides, and only when exactly one project holds that family."""
     die, config = str(die or "").strip(), str(config or "").strip()
     if not die or not config or any(x in die + config for x in ("/", "\\", "..")):
         return []
-    sources = sources or source_dies(die, copied_from)
-    joined: List[str] = []
-    for project_id, canonical in sorted(_projects_of(sources, die).items()):
-        try:
-            if _link(project_id, canonical, config, str(actor or "").strip().lower()):
-                joined.append(project_id)
-        except Exception as exc:                            # noqa: BLE001 - never fails the route that made the variant
-            log.warning("autolink of %s/%s into project %s failed: %s", canonical, config, project_id, exc)
-    return joined
+    actor = str(actor or "").strip().lower()
+    src_cfg = str(source_config or "").strip()
+    if src_cfg:
+        src_die = str(copied_from or die).strip()
+        source = f"{src_die}/{src_cfg}"
+        candidates = _projects_holding(src_die, src_cfg, die)
+        reason = "the source configuration is held by more than one project"
+    else:
+        source = str(copied_from or die)
+        candidates = _projects_of(sources or source_dies(die, copied_from), die)
+        reason = "no source configuration named and the die is in more than one project"
+    if not candidates:
+        return []                                           # the source motor is in no project: nothing to join
+    if len(candidates) > 1:
+        _note_skipped(sorted(candidates), die, config, source, reason, actor)
+        return []
+    (project_id, canonical), = candidates.items()
+    try:
+        if _link(project_id, canonical, config, actor):
+            return [project_id]
+    except Exception as exc:                                # noqa: BLE001 - never fails the route that made the variant
+        log.warning("autolink of %s/%s into project %s failed: %s", canonical, config, project_id, exc)
+    return []

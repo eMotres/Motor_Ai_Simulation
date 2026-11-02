@@ -2860,15 +2860,20 @@ def retired_dies(_w: dict = Depends(require_catalog_write)):
 
 # ── configuration ────────────────────────────────────────────────────────────
 
-def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None) -> None:
+def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None,
+                         source_config: Optional[str] = None) -> None:
     """A new variant of a project's motor joins the project at once (owner 2026-10-27, ``development.autolink``).  Never
-    raises: the configuration is already saved, the link is an addition."""
+    raises: the configuration is already saved, the link is an addition.
+
+    ``source_config`` (with ``copied_from`` when it lives in another die) is the configuration the new one was made
+    from: the copy joins THAT motor's project (2026-11-02), not the first project that holds the die."""
     try:
         from motor_ai_sim.development import autolink
         actor = ""
         if isinstance(w, dict) and isinstance(w.get("user"), dict):
             actor = str(w["user"].get("email") or "").strip().lower()
-        joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor)
+        kw = {"source_config": source_config} if source_config else {}
+        joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor, **kw)
         if joined:
             log.info("family: new configuration '%s/%s' linked to project(s) %s", die, cfg, ", ".join(joined))
     except Exception:                                       # noqa: BLE001
@@ -2929,7 +2934,10 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     _save_yaml(_cfg_file(die, name), doc)
     log.info("family: configuration '%s/%s' created from the live machine",
              die, name)
-    _autolink_new_config(die, name, _w)
+    # the live machine came from the configuration the editor has loaded: the new one joins THAT motor's project
+    _src = _read_ctx() or {}
+    _autolink_new_config(die, name, _w, copied_from=(str(_src.get("die") or "") or None),
+                         source_config=(str(_src.get("config") or "") or None))
     out = {"ok": True, "die": die, "config": name}
     _shaft_note = _live_shaft_note()
     if _shaft_note:
@@ -3161,7 +3169,7 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     _save_yaml(dst, c)
     log.info("family: configuration '%s/%s' duplicated as '%s' (%d duty(ies))",
              die, cfg, new, len(c.get("duties") or []))
-    _autolink_new_config(die, new, _w)
+    _autolink_new_config(die, new, _w, source_config=cfg)
     return {"ok": True, "config": new,
             "duties": [d.get("name") for d in (c.get("duties") or [])]}
 
@@ -4586,7 +4594,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
             target_cfg = _copy_config_into(die, target, cfg)
             new_variant = True
     if new_variant and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
     # The configurations now sit on the NEW lamination: a connection that
     # factored the old slot count may not factor this one (2S on 48 slots).
     _repick_die_windings(target, skip_locked=not created)
@@ -4751,7 +4759,7 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
             target_cfg = _copy_config_into(die, target, cfg)
             copied = True
     if copied and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
     import json as _json
     at = datetime.now().isoformat(timespec="seconds")
     _ctx_file().write_text(_json.dumps({
@@ -5564,7 +5572,8 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
                                                from_current=True,
                                                note=req.note or "")), _w=_w)
     cfg_name = str(out.get("config") or cfg_name)
-    _autolink_new_config(name, cfg_name, _w, copied_from=(rel.get("released_from") or None))
+    _autolink_new_config(name, cfg_name, _w, copied_from=(rel.get("released_from") or None),
+                         source_config=(rel.get("released_config") or None))
     import json as _json
     _ctx_file().write_text(
         _json.dumps({"die": name, "config": cfg_name, "duty": duty_name,

@@ -265,6 +265,122 @@ def test_worker_cli_idle_rule():
     assert worker.main(["bogus"]) == 64
 
 
+# ── open streams (an MCP client's server-sent-event connection) are not work ─────────────────────────────────────────
+
+def _serve_through_middleware(method, path, accept, inner):
+    """Run one request through ``InflightMiddleware``; ``inner()`` runs while the request is open."""
+    import asyncio
+
+    async def app(scope, receive, send):
+        inner()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_msg):
+        return None
+
+    scope = {"type": "http", "method": method, "path": path, "headers": [(b"accept", accept.encode())]}
+    asyncio.run(L.InflightMiddleware(app)(scope, receive, send))
+
+
+def _worker_live_state():
+    from motor_ai_sim.routes import worker_state as W
+    return W.state_payload()
+
+
+@pytest.fixture()
+def _clean_live(monkeypatch, tmp_path):
+    monkeypatch.setenv(roles.ENV_ROLE, "worker")
+    monkeypatch.setattr(L, "_tabs", {})
+    monkeypatch.setattr(L, "_inflight", {})
+    monkeypatch.setattr(L, "_streams", {})
+    monkeypatch.setattr(L, "_notice_path", lambda: tmp_path / "notice.json")
+
+
+def test_an_open_mcp_stream_with_no_jobs_is_idle(_clean_live):
+    """2026-11-02: ``worker state`` showed jobs 0/0 but ``mcp requests 1, oldest 1044 s`` - the deploy waited for ever."""
+    from motor_ai_sim import worker
+    seen = {}
+
+    def during():
+        seen["snap"] = L.local_snapshot()
+        seen["state"] = _worker_live_state()
+
+    _serve_through_middleware("GET", "/mcp", "text/event-stream", during)
+    snap = seen["snap"]
+    assert snap["requests_total"] == 0 and snap["busy_total"] == 0 and snap["streams_total"] == 1
+    assert snap["modules"]["mcp"]["requests"] == 0 and snap["modules"]["mcp"]["streams"] == 1
+    assert L.idle(snap, ["all"]) and L.idle(snap, ["mcp"])
+    assert worker.idle(seen["state"]), "an open, idle MCP stream must not keep the worker busy"
+    assert L.local_snapshot()["streams_total"] == 0, "the stream is forgotten when it closes"
+
+
+def test_any_server_sent_event_get_is_a_stream_but_a_post_never_is():
+    def scope(method, path, accept):
+        return {"method": method, "path": path, "headers": [(b"accept", accept.encode())]}
+    assert L.is_stream(scope("GET", "/mcp", "text/event-stream"))
+    assert L.is_stream(scope("GET", "/mcp/", "*/*"))
+    assert L.is_stream(scope("GET", "/api/jobs/events", "text/event-stream"))
+    assert not L.is_stream(scope("POST", "/mcp", "application/json, text/event-stream")), "a tool call is a request"
+    assert not L.is_stream(scope("GET", "/api/jobs", "application/json"))
+
+
+def test_an_mcp_tool_call_in_flight_still_counts(_clean_live):
+    from motor_ai_sim import worker
+    seen = {}
+    _serve_through_middleware("POST", "/mcp", "application/json, text/event-stream",
+                              lambda: seen.setdefault("state", _worker_live_state()))
+    assert seen["state"]["live"]["requests_total"] == 1 and not worker.idle(seen["state"])
+
+
+def test_an_open_mcp_stream_does_not_hide_a_queued_or_running_job(_clean_live):
+    """The solve an MCP tool call starts is a job in the queue: it keeps the worker busy, stream or not."""
+    import threading
+    from motor_ai_sim import worker
+    q = J.queue()
+    gate = threading.Event()
+    seen = {}
+
+    def slow():
+        gate.wait(5)
+        return "ok"
+
+    threads = [threading.Thread(target=lambda: J.run_job("agent.coupled", slow)) for _ in range(3)]   # 2 slots
+    for t in threads:
+        t.start()
+    try:
+        for _ in range(100):
+            if q.snapshot()["running"] == 2 and q.snapshot()["queued"] == 1:
+                break
+            time.sleep(0.02)
+
+        def during():
+            seen["state"] = _worker_live_state()
+        _serve_through_middleware("GET", "/mcp", "text/event-stream", during)
+        live = seen["state"]["live"]
+        assert live["jobs"]["running"] == 2 and live["jobs"]["queued"] == 1 and live["streams_total"] == 1
+        assert not worker.idle(seen["state"])
+        assert not L.idle(live, ["all"])
+    finally:
+        gate.set()
+        for t in threads:
+            t.join(5)
+    assert worker.idle(_worker_live_state())
+
+
+def test_the_api_shows_the_workers_streams_without_counting_them(monkeypatch, tmp_path):
+    st = _worker_state(running=0, requests=0)
+    st["live"]["streams_total"] = 1
+    st["live"]["modules"]["mcp"] = {"users": 0, "requests": 0, "oldest_request_s": 0.0, "streams": 1}
+    snap = L.merge_worker(_api_snapshot(monkeypatch, tmp_path), st)
+    snap["modules"]["thermal"]["users"] = 0
+    assert snap["streams_total"] == 1 and snap["modules"]["mcp"]["streams"] == 1 and snap["requests_total"] == 0
+    assert L.idle(snap, ["all"])
+
+
 # ── background work: what a blue-green drain must wait for besides requests ────────────────────────────────────────────
 
 def test_background_threads_count_as_busy_for_the_drain(monkeypatch, tmp_path):

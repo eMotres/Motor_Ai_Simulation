@@ -20,7 +20,7 @@ OUTSIDER = "outsider@example.com"
 GLOBAL_ENG = "global-eng@example.com"      # global engineer, member of nothing
 DIE = "Demo die"
 M1, G1, OTHER = "M1", "G1", "X9"
-PROJECT = "maxim-ciln28"
+PROJECT = "three-motors"
 
 PARAM_TEST = {"kind": "parameters", "date": "2026-01-15", "instrument": "LCR meter", "profile": "profile-a",
               "conditions": {"ambient_c": 25.0, "rotor": "in"},
@@ -72,7 +72,7 @@ def env(tmp_path, monkeypatch):
             "order_quantity": 2, "share_costs_with_oem": True,
             "members": [{"email": PROD_ENG, "role": "engineer"}, {"email": OEM, "role": "oem"}]})
         assert r.status_code == 200, r.text
-    DS.create_project({"id": PROJECT, "title": "CILN28", "members": [
+    DS.create_project({"id": PROJECT, "title": "Three motors", "members": [
         {"email": CUSTOMER, "role": "customer"}, {"email": CUSTOMER_NO_NDA, "role": "customer"},
         {"email": PROJ_ENG, "role": "engineer"}],
         "linked_motors": [{"die": DIE, "config": M1, "status": "current"}, {"die": DIE, "config": G1, "status": "current"},

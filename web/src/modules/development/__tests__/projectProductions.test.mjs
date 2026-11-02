@@ -11,7 +11,7 @@ try { H = await import('../../production/helpers.ts'); } catch { /* old Node */ 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const get = (obj, path) => path.split('.').reduce((o, k) => o?.[k], obj);
 const entry = (config, over = {}) => ({
-  die: 'CILN28', config, title: { en: `Motor ${config}`, zh: `电机 ${config}` }, revision: '1.0', status: 'active',
+  die: 'DieA', config, title: { en: `Motor ${config}`, zh: `电机 ${config}` }, revision: '1.0', status: 'active',
   access: 'project', role: 'viewer', documents: 1, discussions: 0, ...over,
 });
 

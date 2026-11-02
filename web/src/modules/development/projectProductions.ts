@@ -1,4 +1,4 @@
-/** The Production view of a project (owner 2026-11-02): one block per linked motor that has a production (Maxim's M1 / G1 / G2 =
+/** The Production view of a project (owner 2026-11-02): one block per linked motor that has a production (a motor M1 and generators G1 / G2 =
  *  three blocks).  There is no manual production <-> project link: the server derives it from the project's linked motors
  *  (`GET /api/projects/{id}/productions`, `development/productions.py`) and answers only what the caller may see.
  *

@@ -334,7 +334,7 @@ const BomTable: React.FC<BomTableProps> = ({
       if (!init) return r.unit_price !== null || (r.note && r.note.trim() !== '');
       return init.unit_price !== r.unit_price || init.currency !== r.currency || (init.note || '') !== (r.note || '');
     });
-    const marginChanged = initialCosts ? initialCosts.margin_pct !== marginPct : marginPct !== 0;
+    const marginChanged = initialCosts ? (initialCosts.margin_pct ?? 0) !== marginPct : marginPct !== 0;
     const extrasChanged = initialCosts ? JSON.stringify(initialCosts.extras) !== JSON.stringify(extras) : extras.length > 0;
 
     return bomChanged || costsChanged || marginChanged || extrasChanged;

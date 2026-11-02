@@ -275,6 +275,8 @@ export interface CurrencyTotals {
 export interface CostSummary {
   margin_pct: number;
   order_quantity: number;
+  /** the server's summary: true when the lines use several currencies (its flat totals are then null) */
+  mixed_currency?: boolean;
   /** one entry per currency in use (the default currency when nothing is priced), in display order */
   by_currency: CurrencyTotals[];
   missing_prices_count: number;
@@ -284,7 +286,8 @@ export interface CostSummary {
 export interface CostsData {
   rows: CostRow[];
   extras: ExtraCost[];
-  margin_pct: number;
+  /** absent for the factory: it sees costs (when shared), never our margin */
+  margin_pct?: number;
   summary: CostSummary;
 }
 

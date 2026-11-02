@@ -657,7 +657,10 @@ async def save_costs(request: Request, die: str, config: str):
 
     list_name = _list_name(request)
     body = await _json_or_form(request)
-    costs = models.normalize_costs(body)
+    try:
+        costs = models.normalize_costs(body)
+    except ValueError as exc:                    # an unknown currency is refused loudly, never stored or summed
+        raise HTTPException(status_code=422, detail=str(exc))
     for extra in costs["extras"]:
         extra["name"] = models.ensure_translated(extra["name"])
 

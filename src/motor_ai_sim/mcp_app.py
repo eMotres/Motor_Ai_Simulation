@@ -142,7 +142,8 @@ def _run(fn, ctx, *args):
     from mcp.server.mcpserver.exceptions import ToolError as _SdkToolError
     from motor_ai_sim import agent_designs as _ad
     try:
-        return fn(_principal_from(ctx), *args)
+        # every signed-in tool answer passes the no-price guard (mcp_tools NO-PRICE RULE) before it leaves
+        return _t.no_commercial(fn(_principal_from(ctx), *args))
     except (_t.ToolError, _ad.DesignError) as e:
         raise _SdkToolError(str(e)) from e
     except _ad.QuotaExceeded as e:
@@ -173,14 +174,14 @@ def _register_public(srv) -> None:
         "PUBLIC (no sign-in). What AeroStator is: summary, operator, licence "
         "(Apache-2.0), website, MCP endpoint, terms, privacy and docs links."))
     def describe_service() -> Dict[str, Any]:
-        return _d.describe_service()
+        return _t.no_commercial(_d.describe_service())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). The full tool catalogue: name, one-line purpose, "
         "required scope, whether it needs sign-in, read-only or not; and what "
         "each scope unlocks."))
     def list_capabilities() -> Dict[str, Any]:
-        return _d.capabilities()
+        return _t.no_commercial(_d.capabilities())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). The calculation types AeroStator supports (fit "
@@ -189,7 +190,7 @@ def _register_public(srv) -> None:
         "map, mechanics, inverter losses, 3-D end effect, optimization) and "
         "the tools that run them."))
     def list_calculation_types() -> Dict[str, Any]:
-        return _d.calculation_types()
+        return _t.no_commercial(_d.calculation_types())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). Required and optional inputs of one calculation "
@@ -199,7 +200,7 @@ def _register_public(srv) -> None:
         calculation_type: Annotated[str, Field(description="id from list_calculation_types, e.g. design_from_requirements")],
     ) -> Dict[str, Any]:
         try:
-            return _d.input_requirements(calculation_type)
+            return _t.no_commercial(_d.input_requirements(calculation_type))
         except ValueError as e:
             raise _SdkToolError(str(e)) from e
 
@@ -208,7 +209,7 @@ def _register_public(srv) -> None:
         "scopes and what each unlocks, the sign-up URL and the API-key "
         "alternative, plus a user_message to relay."))
     def how_to_authenticate() -> Dict[str, Any]:
-        return _d.how_to_authenticate()
+        return _t.no_commercial(_d.how_to_authenticate())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). For a user with no AeroStator account: the "
@@ -217,7 +218,7 @@ def _register_public(srv) -> None:
         "never in chat. Easiest path: Connect / Sign in in the AI app, then "
         "'Create account' on the page that opens."))
     def start_sign_up() -> Dict[str, Any]:
-        return _d.start_sign_up()
+        return _t.no_commercial(_d.start_sign_up())
 
 
 def build_server():

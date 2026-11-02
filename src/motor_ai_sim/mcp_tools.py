@@ -13,6 +13,12 @@ winding geometry, thumbnails or build signatures.  Every machine payload is
 built from an explicit whitelist, and ``assert_no_geometry`` re-checks the
 result against ``GEOMETRY_DENYLIST`` before it leaves the server.
 
+NO-PRICE RULE (owner 2026-11-02): no price or quote talk with a customer before
+the quote stage, and never through the MCP.  ``assert_no_commercial`` refuses any
+answer carrying a cost, price, margin, markup, quote or currency field
+(``COMMERCIAL_DENYLIST`` / ``COMMERCIAL_TOKENS``); ``mcp_app`` runs it on EVERY
+tool answer, public tools included.
+
 PUBLIC-CATALOG RULE (2026-10-19): the MCP is public-facing for every caller,
 admins included.  Catalogue text is sanitised (``public_text``): no warehouse
 stock (batches, lots, kilograms), no internal design notes or attributions, no
@@ -52,6 +58,42 @@ GEOMETRY_DENYLIST = frozenset({
     "contact_core_mm2", "film_area_mm2", "char_len_mm",
     "rotor_face_open_fraction", "holder_open_fraction",
 })
+
+
+#: Keys that must never appear anywhere in a tool answer: money (owner 2026-11-02, the NO-PRICE RULE above).  Exact
+#: names first; ``COMMERCIAL_TOKENS`` then catches any key with one of these words between underscores
+#: (``unit_price``, ``order_cost_total``, ``quote_id`` ...).  ``margin`` is matched EXACTLY only: the physics margins
+#: (``torque_margin_pct`` in check_fit, a mode's frequency margin) are engineering data, not our commercial margin.
+COMMERCIAL_DENYLIST = frozenset({
+    "margin", "margin_pct", "share_costs_with_oem", "by_currency", "mixed_currency",
+})
+COMMERCIAL_TOKENS = frozenset({
+    "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",
+    "quotation", "currency", "currencies", "subtotal", "invoice", "payment",
+})
+
+
+def commercial_key(key: Any) -> bool:
+    k = str(key).strip().lower()
+    return k in COMMERCIAL_DENYLIST or any(t in COMMERCIAL_TOKENS for t in k.replace("-", "_").split("_"))
+
+
+def assert_no_commercial(obj: Any, path: str = "$") -> None:
+    """Raise if any key of `obj` (recursively) is a cost / price / margin / quote field."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if commercial_key(k):
+                raise AssertionError(f"commercial field leaked: {path}.{k}")
+            assert_no_commercial(v, f"{path}.{k}")
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            assert_no_commercial(v, f"{path}[{i}]")
+
+
+def no_commercial(obj: Any) -> Any:
+    """``obj`` itself once it is checked - the guard ``mcp_app`` wraps every tool answer in."""
+    assert_no_commercial(obj)
+    return obj
 
 
 class ToolError(ValueError):
@@ -115,6 +157,7 @@ def assert_no_geometry(obj: Any, path: str = "$") -> None:
 
 def _checked(obj: Any) -> Any:
     assert_no_geometry(obj)
+    assert_no_commercial(obj)
     return obj
 
 

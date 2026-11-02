@@ -119,6 +119,11 @@ def _cached_rates(cache: dict) -> Optional[dict]:
     return None
 
 
+def cached_rates() -> Optional[dict]:
+    """The last cached ECB rates (``{date, rates}``) WITHOUT any network access, or None."""
+    return _cached_rates(_read_cache())
+
+
 def live_rates(now: Optional[datetime.datetime] = None) -> Tuple[Optional[dict], dict]:
     """``(ecb, status)``.  ``status`` = ``{state, date, fetched_at, error}`` with ``state``:
 

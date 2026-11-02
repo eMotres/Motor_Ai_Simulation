@@ -101,7 +101,9 @@ def _with_live_fx(estimate: dict, schema: dict) -> tuple[dict, dict]:
 def _read(project: dict, stored: Any, schema: dict) -> dict:
     """A stored document of any shape as the 4-line estimate (the old 68-line shape is converted, see
     ``cost_estimate.migrate_v1``); never raises."""
-    return CE.from_stored(stored, schema, project["id"], linked_motors=project.get("linked_motors") or [], today=_today())
+    cached = FX.cached_rates()                           # no network here: an old non-EUR line is converted at the stored or cached rate
+    return CE.from_stored(stored, schema, project["id"], linked_motors=project.get("linked_motors") or [], today=_today(),
+                          fallback_rates=(cached or {}).get("rates"))
 
 
 def _current(project: dict, schema: dict) -> tuple[dict, bool]:
@@ -141,6 +143,7 @@ def get_estimate(project_id: str, response: Response, display_currency: Optional
     response.headers["Cache-Control"] = "no-store"
     project = _project(project_id)
     schema = CE.load_schema()
+    FX.live_rates()                                      # refresh the ECB cache first: old non-EUR lines are converted at it
     estimate, stored = _current(project, schema)
     estimate, status = _with_live_fx(estimate, schema)
     return _payload(project, estimate, schema, stored=stored, display=display_currency, fx_status=status)
@@ -188,19 +191,19 @@ async def suggest_estimate(project_id: str, request: Request, response: Response
     schema = CE.load_schema()
     body = await _body(request)
     expected = _revision(body)
+    live, live_status = FX.live_rates()
     current, _stored = _current(project, schema)
     if int(current.get("revision") or 0) != expected:
         raise _conflict(project, schema, current)
     data = SRC.gather(project_id, current, schema)
     today = _today()
     report: Dict[str, Any] = {}
-    live, live_status = FX.live_rates()
 
     def build(previous):
         base = _read(project, previous, schema) if previous else current
-        new, rep = CE.suggest(base, schema, data, today=today, refresh=bool(body.get("refresh")))
+        base = {**base, "fx": CE.merge_fx(base.get("fx"), (base.get("fx") or {}).get("manual"), live, schema, today)}
+        new, rep = CE.suggest(base, schema, data, today=today, refresh=bool(body.get("refresh")))      # the analog's money -> EUR at these rates
         report.update(rep)
-        new["fx"] = CE.merge_fx(base.get("fx"), (base.get("fx") or {}).get("manual"), live, schema, today)
         return new
 
     try:

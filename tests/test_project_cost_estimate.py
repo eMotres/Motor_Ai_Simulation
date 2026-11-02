@@ -48,9 +48,10 @@ def _fill(line, amount, currency="EUR", by="owner@example.test"):
 
 def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
     assert [ln["id"] for ln in schema["lines"]] == ["tooling", "manufacturing", "testing", "shipping"]
-    assert [f["id"] for f in schema["settings"]] == ["complex", "iterations", "currency", "contingency_pct"]
+    assert [f["id"] for f in schema["settings"]] == ["complex", "iterations", "contingency_pct"]
     assert [f["id"] for f in schema["iteration_fields"]] == ["motors", "bench"]
-    assert schema["currencies"] == ["EUR", "CNY", "USD"] and schema["default_currency"] == "EUR"
+    # every amount is in EUR; USD / CNY exist for the final table and the rates only
+    assert schema["currencies"] == ["EUR", "CNY", "USD"] and schema["default_currency"] == "EUR" and schema["line_currency"] == "EUR"
     assert schema["factor_limits"] == [0.25, 4.0]
     for entry in schema["lines"] + schema["settings"] + schema["iteration_fields"]:
         assert entry["label"]["en"] and entry["label"]["zh-CN"] and entry["help"]["en"] and entry["help"]["zh-CN"]
@@ -105,32 +106,83 @@ def test_validation_refuses_unknown_lines_currencies_and_negative_amounts(schema
             CE.normalize_estimate(bad, schema, "alpha")
 
 
+# ── EUR only ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_new_saves_take_eur_lines_only_and_old_lines_are_converted_on_read(schema):
+    est = _est(schema, iterations=2)
+    for cur in ("CNY", "USD"):
+        bad = json.loads(json.dumps(est))
+        bad["iterations"][0]["lines"]["shipping"].update({"amount": 5, "currency": cur})
+        with pytest.raises(CE.EstimateError, match="currency: EUR only"):
+            CE.normalize_estimate(bad, schema, "alpha")
+    bad = json.loads(json.dumps(est))
+    bad["settings"]["currency"] = "CNY"
+    with pytest.raises(CE.EstimateError, match="currency: EUR only"):
+        CE.normalize_estimate(bad, schema, "alpha")
+
+    # stored data with CNY / USD lines (before this rule): EUR on read at the stored rate (1 EUR = 8 CNY = 1.25 USD)
+    old = json.loads(json.dumps(est))
+    old["settings"]["currency"] = "CNY"
+    old["fx"] = CE.build_fx({"date": "2026-11-02", "rates": {"CNY": 8.0, "USD": 1.25}}, {}, None)
+    _fill(old["iterations"][0]["lines"]["manufacturing"], 400.0, "CNY")
+    old["iterations"][0]["lines"]["manufacturing"]["note"] = "quote"
+    _fill(old["iterations"][0]["lines"]["testing"], 125.0, "USD")
+    _fill(old["iterations"][0]["lines"]["shipping"], 90.0)
+    got = CE.from_stored(old, schema, "alpha")
+    l1 = got["iterations"][0]["lines"]
+    assert got["settings"]["currency"] == "EUR"
+    assert (l1["manufacturing"]["amount"], l1["manufacturing"]["currency"], l1["manufacturing"]["source"]) == (50.0, "EUR", "converted")
+    assert l1["manufacturing"]["note"] == "quote; was CNY 400.00" and l1["manufacturing"]["status"] == "filled"
+    assert (l1["testing"]["amount"], l1["testing"]["note"]) == (100.0, "was USD 125.00")
+    assert (l1["shipping"]["amount"], l1["shipping"]["source"]) == (90.0, "manual")                  # already EUR: untouched
+    assert all(ln["currency"] == "EUR" for it in got["iterations"] for ln in it["lines"].values())
+    assert CE.normalize_estimate(got, schema, "alpha")["iterations"][0]["lines"]["testing"]["amount"] == 100.0     # saves again as it is
+
+    # no stored rate: the cached ECB rate is used; with neither, the line is missing and the hint gives the old amount
+    old["fx"] = None
+    assert CE.from_stored(old, schema, "alpha", fallback_rates={"CNY": 10.0})["iterations"][0]["lines"]["manufacturing"]["amount"] == 40.0
+    none = CE.from_stored(old, schema, "alpha")["iterations"][0]["lines"]["manufacturing"]
+    assert none["status"] == "missing" and none["amount"] is None and none["currency"] == "EUR"
+    assert none["hint"] == "was CNY 400.00: no exchange rate known, enter it in EUR"
+
+
 # ── later-iteration tooling ─────────────────────────────────────────────────────────────────────────────────────────
 
-def test_later_iterations_tooling_is_a_percent_of_iteration_one_or_an_amount(schema):
+def test_later_iterations_tooling_is_an_amount_like_iteration_one(schema):
     est = _est(schema, iterations=3)
-    t1, t2, t3 = (it["lines"]["tooling"] for it in est["iterations"])
-    assert t1["status"] == "missing" and t1["pct"] is None
-    assert t2["pct"] == 20.0 and t2["source"] == "rule" and t2["status"] == "filled"
+    for it in est["iterations"]:
+        t = it["lines"]["tooling"]
+        assert t["status"] == "missing" and t["pct"] is None and t["source"] is None
     out = CE.compute(est, schema)
     assert out["iterations"][1]["tooling"] is None
-    assert {"iteration": 2, "line": "tooling", "reason": "iteration 1 tooling missing"} in out["missing"]
-
-    _fill(t1, 10000.0)
-    t3.update({"pct": 35.0, "source": "manual", "by": "owner@example.test", "date": "2026-11-02"})
+    assert {"iteration": 2, "line": "tooling", "reason": "not filled"} in out["missing"]
+    _fill(est["iterations"][0]["lines"]["tooling"], 10000.0)
+    _fill(est["iterations"][1]["lines"]["tooling"], 1500.0)
     out = CE.compute(CE.normalize_estimate(est, schema, "alpha"), schema)
-    assert out["iterations"][0]["tooling"] == {"EUR": 10000.0}
-    assert out["iterations"][1]["tooling"] == {"EUR": 2000.0}
-    assert out["iterations"][2]["tooling"] == {"EUR": 3500.0}
-    assert out["iterations"][1]["lines"]["tooling"]["origin"] == "20 % of iteration 1 tooling"
-    assert "35 % of iteration 1 tooling (set by owner@example.test" in out["iterations"][2]["lines"]["tooling"]["origin"]
-    # a manual amount instead of the %: the amount wins, the % is gone
-    raw = json.loads(json.dumps(est))
-    raw["iterations"][1]["lines"]["tooling"] = {"amount": 1500, "currency": "CNY"}
-    est2 = CE.normalize_estimate(raw, schema, "alpha")
-    assert est2["iterations"][1]["lines"]["tooling"]["pct"] is None
-    assert est2["iterations"][1]["lines"]["tooling"]["source"] == "manual"
-    assert CE.compute(est2, schema)["iterations"][1]["tooling"] == {"CNY": 1500.0}
+    assert out["iterations"][1]["tooling"] == {"EUR": 1500.0} and out["iterations"][2]["tooling"] is None
+
+
+def test_an_old_stored_percent_rule_becomes_its_amount_on_read(schema):
+    raw = _est(schema, iterations=3)
+    _fill(raw["iterations"][0]["lines"]["tooling"], 10000.0)
+    raw["iterations"][1]["lines"]["tooling"].update({"status": "filled", "amount": None, "pct": 20.0, "source": "rule", "currency": "EUR"})
+    raw["iterations"][2]["lines"]["tooling"].update({"status": "filled", "amount": None, "pct": 35.0, "source": "manual", "currency": "EUR",
+                                                      "note": "my note", "by": "owner@example.test", "date": "2026-11-02"})
+    est = CE.from_stored(raw, schema, "alpha")
+    t2, t3 = (est["iterations"][i]["lines"]["tooling"] for i in (1, 2))
+    # 20 % / 35 % of iteration 1's tooling, source "converted"; the line has no % any more
+    assert (t2["amount"], t2["currency"], t2["source"], t2["pct"], t2["status"]) == (2000.0, "EUR", "converted", None, "filled")
+    assert (t3["amount"], t3["currency"], t3["source"], t3["pct"], t3["note"]) == (3500.0, "EUR", "converted", None, "my note")
+    assert CE.compute(est, schema)["iterations"][1]["tooling"] == {"EUR": 2000.0}
+    assert "converted" in CE.compute(est, schema)["iterations"][1]["lines"]["tooling"]["origin"]
+    # iteration 1's tooling missing: the converted line is missing too (and reads like any missing line)
+    raw["iterations"][0]["lines"]["tooling"].update({"status": "missing", "amount": None, "source": None})
+    est = CE.from_stored(raw, schema, "alpha")
+    t2 = est["iterations"][1]["lines"]["tooling"]
+    assert t2["status"] == "missing" and t2["amount"] is None and t2["pct"] is None and t2["hint"] == "iteration 1 tooling missing"
+    assert {"iteration": 2, "line": "tooling", "reason": "iteration 1 tooling missing"} in CE.compute(est, schema)["missing"]
+    # saving it again keeps the amount (no % comes back)
+    assert CE.normalize_estimate(est, schema, "alpha")["iterations"][1]["lines"]["tooling"] == t2
 
 
 # ── totals ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -143,6 +195,7 @@ def test_totals_per_iteration_and_currency_with_contingency(schema):
     _fill(it1["lines"]["testing"], 500.0, "EUR")
     _fill(it1["lines"]["shipping"], 300.0, "USD")
     it2["motors"] = 3
+    _fill(it2["lines"]["tooling"], 200.0, "EUR")
     _fill(it2["lines"]["manufacturing"], 100.0, "EUR")
     it2["bench"] = "none"                                          # no testing: not counted, not missing
     _fill(it2["lines"]["testing"], 999.0, "EUR")
@@ -178,35 +231,44 @@ def _data(target_mass=21.0):
                                                             "shipping": {"status": "filled", "amount": 222.0, "currency": "EUR"}}}]},
                 {"project_id": "other", "title": "Other", "updated_at": "2026-10-20", "iterations": [
                     {"index": 1, "bench": "propeller", "lines": {"testing": {"status": "filled", "amount": 900.0, "currency": "EUR"},
-                                                                 "shipping": {"status": "filled", "amount": 420.0, "currency": "USD"}}},
+                                                                 "shipping": {"status": "filled", "amount": 420.0, "currency": "EUR"}}},
                     {"index": 2, "bench": "dyno", "lines": {"testing": {"status": "filled", "amount": 1200.0, "currency": "EUR"},
                                                             "shipping": {"status": "missing", "amount": None, "currency": "EUR"}}}]}]}
 
 
+def _est_fx(schema, **kw):
+    est = _est(schema, **kw)
+    est["fx"] = CE.build_fx({"date": "2026-11-02", "rates": {"CNY": 8.0, "USD": 1.25}}, {}, None)
+    return est
+
+
 def test_suggest_scales_the_nearest_analogs_per_motor_cost_by_active_mass(schema):
-    est = _est(schema, iterations=2)
+    est = _est_fx(schema, iterations=2)
     new, report = CE.suggest(est, schema, _data(), today="2026-11-02")
     m1 = new["iterations"][0]["lines"]["manufacturing"]
     # nearest by active mass: MID/b (21/14 = 1.5) beats SMALL/a (21/5 = 4.2); NOMASS/c has no mass
     assert m1["source"] == "production" and m1["source_ref"]["production"] == "MID/b"
-    assert m1["factor"] == 1.5 and m1["amount"] == 4500.0 and m1["currency"] == "CNY"
+    # CNY 3000 x 1.5 = CNY 4500, shown in EUR at 8 CNY per EUR (every amount is in EUR)
+    assert m1["factor"] == 1.5 and m1["amount"] == 562.5 and m1["currency"] == "EUR"
     assert m1["source_ref"]["analog_mass_kg"] == 14.0 and m1["source_ref"]["target_mass_kg"] == 21.0
     assert m1["by"] == "suggest" and m1["date"] == "2026-11-02"
     assert CE.origin_text(m1) == "from production MID/b, x1.5 by active mass"
-    assert new["iterations"][1]["lines"]["manufacturing"]["amount"] == 4500.0       # every iteration, per motor
-    assert CE.compute(new, schema)["iterations"][0]["manufacturing"] == {"CNY": 9000.0}
+    assert new["iterations"][1]["lines"]["manufacturing"]["amount"] == 562.5        # every iteration, per motor
+    assert CE.compute(new, schema)["iterations"][0]["manufacturing"] == {"EUR": 1125.0}
     assert report["analogs"]["manufacturing"] == {"ref": "MID/b", "factor": 1.5}
     assert any("MID/b has 2 unpriced" in n for n in report["notes"])
 
 
 def test_suggest_tooling_is_the_analogs_tooling_sum_by_the_same_rule(schema):
-    est = _est(schema, iterations=2)
+    est = _est_fx(schema, iterations=2)
     data = _data(target_mass=6.0)
     new, report = CE.suggest(est, schema, data, today="2026-11-02")
     t1 = new["iterations"][0]["lines"]["tooling"]
     # only SMALL/a has tooling (and a mass): 3000 x 6/5
-    assert t1["source_ref"]["production"] == "SMALL/a" and t1["factor"] == 1.2 and t1["amount"] == 3600.0
-    assert new["iterations"][1]["lines"]["tooling"]["pct"] == 20.0                    # later: still "modifications"
+    assert t1["source_ref"]["production"] == "SMALL/a" and t1["factor"] == 1.2 and t1["amount"] == 450.0 and t1["currency"] == "EUR"       # CNY 3600 / 8
+    # a later iteration's tooling is not suggested (no % rule any more): it stays missing for the owner to enter
+    t2 = new["iterations"][1]["lines"]["tooling"]
+    assert t2["status"] == "missing" and t2["pct"] is None and "enter it" in t2["hint"]
     # no tooling data anywhere: tooling stays missing, with the reason
     for p in data["productions"]:
         p["tooling"] = {}
@@ -235,21 +297,21 @@ def test_suggest_refuses_a_factor_outside_quarter_to_four(schema):
 
 
 def test_suggest_never_overwrites_manual_or_converted_values(schema):
-    est = _est(schema, iterations=2)
+    est = _est_fx(schema, iterations=2)
     _fill(est["iterations"][0]["lines"]["manufacturing"], 777.0)
     est["iterations"][0]["lines"]["shipping"].update({"status": "filled", "amount": 55.0, "currency": "EUR", "source": "converted"})
-    est["iterations"][1]["lines"]["tooling"].update({"pct": 50.0, "source": "manual"})
+    _fill(est["iterations"][1]["lines"]["tooling"], 500.0)
     new, _ = CE.suggest(est, schema, _data(), today="2026-11-02")
     assert new["iterations"][0]["lines"]["manufacturing"] == est["iterations"][0]["lines"]["manufacturing"]
     assert new["iterations"][0]["lines"]["shipping"] == est["iterations"][0]["lines"]["shipping"]
-    assert new["iterations"][1]["lines"]["tooling"]["pct"] == 50.0
+    assert new["iterations"][1]["lines"]["tooling"]["amount"] == 500.0
     again, _ = CE.suggest(new, schema, _data(target_mass=14.0), today="2026-11-03", refresh=True)
     assert again["iterations"][0]["lines"]["manufacturing"]["amount"] == 777.0
     # refresh re-suggests an earlier suggestion (iteration 2 manufacturing: now x1.0)
-    assert again["iterations"][1]["lines"]["manufacturing"]["amount"] == 3000.0
+    assert again["iterations"][1]["lines"]["manufacturing"]["amount"] == 375.0
     # without refresh a filled suggestion is left alone
     same, _ = CE.suggest(new, schema, _data(target_mass=14.0), today="2026-11-03")
-    assert same["iterations"][1]["lines"]["manufacturing"]["amount"] == 4500.0
+    assert same["iterations"][1]["lines"]["manufacturing"]["amount"] == 562.5
 
 
 def test_suggest_testing_and_shipping_come_from_other_estimates_as_is(schema):
@@ -261,7 +323,7 @@ def test_suggest_testing_and_shipping_come_from_other_estimates_as_is(schema):
     assert it1["testing"]["amount"] == 900.0 and it1["testing"]["source"] == "estimate"
     assert it1["testing"]["source_ref"] == {"project": "other", "title": "Other", "iteration": "1"}
     assert it2["testing"]["amount"] == 1200.0
-    assert it1["shipping"]["amount"] == 420.0 and it1["shipping"]["currency"] == "USD"
+    assert it1["shipping"]["amount"] == 420.0 and it1["shipping"]["currency"] == "EUR"
     assert it2["shipping"]["amount"] == 420.0                                       # iteration 2 of "other" is empty
     assert CE.origin_text(it1["testing"]) == "from estimate of project other (iteration 1)"
     # the own project's estimate is never its own source; no other estimate -> missing with the reason
@@ -270,6 +332,13 @@ def test_suggest_testing_and_shipping_come_from_other_estimates_as_is(schema):
     new, _ = CE.suggest(est, schema, data, today="2026-11-02")
     assert new["iterations"][0]["lines"]["shipping"]["status"] == "missing"
     assert "no other project's estimate has shipping" in new["iterations"][0]["lines"]["shipping"]["hint"]
+
+
+def test_suggest_without_a_rate_leaves_a_cny_analog_to_the_owner(schema):
+    new, _ = CE.suggest(_est(schema, iterations=1), schema, _data(target_mass=14.0), today="2026-11-02")      # no fx in the estimate
+    line = new["iterations"][0]["lines"]["manufacturing"]
+    assert line["status"] == "missing" and line["amount"] is None
+    assert "priced in CNY and no exchange rate is known: enter it in EUR" in line["hint"]
 
 
 def test_suggest_leaves_a_multi_currency_analog_to_the_owner(schema):
@@ -341,8 +410,8 @@ def test_old_shape_is_summed_into_the_four_lines(schema):
     assert l1["testing"]["amount"] == 1000.0
     # shipping lines in EUR and CNY: no exchange rate -> missing, the old amounts in the hint
     assert l1["shipping"]["status"] == "missing" and "EUR 200 + CNY 300" in l1["shipping"]["hint"]
-    # iteration 2: the old default "20 % of iteration 1" tooling stays a 20 % rule
-    assert l2["tooling"]["pct"] == 20.0 and l2["tooling"]["source"] == "rule"
+    # iteration 2: the old default "20 % of iteration 1" tooling is now its amount (20 % of 10000), source converted
+    assert l2["tooling"]["pct"] is None and l2["tooling"]["amount"] == 2000.0 and l2["tooling"]["source"] == "converted"
     assert l2["manufacturing"]["amount"] == 100.0
     assert l2["testing"]["status"] == "missing" and l2["shipping"]["status"] == "missing"
     assert any("proj_engineering: EUR 800" in d for d in est["migration"]["dropped"])
@@ -357,7 +426,7 @@ def test_old_shape_with_nothing_filled_starts_blank_and_garbage_never_crashes(sc
     est = CE.from_stored(_v1({}, iterations=3, complex=True), schema, "alpha")
     assert est["settings"]["iterations"] == 3 and est["revision"] == 7
     assert all(it["lines"][lid]["status"] == "missing" for it in est["iterations"] for lid in ("manufacturing", "testing", "shipping"))
-    assert est["iterations"][1]["lines"]["tooling"]["pct"] == 20.0
+    assert est["iterations"][1]["lines"]["tooling"]["pct"] is None and est["iterations"][1]["lines"]["tooling"]["status"] == "missing"
     assert "started blank" in est["migration"]["note"]
     for junk in ({"version": 1, "revision": 3, "settings": "x", "iterations": "y"}, {"version": 2, "revision": 4, "settings": []},
                  {"version": 1, "revision": 5, "iterations": [{"index": "a"}, None, {"index": 1, "lines": {"tool_main": "x"}}]}):
@@ -450,6 +519,7 @@ def test_admin_round_trip_revision_suggest_snapshot_and_audit(client, monkeypatc
 
     est = got["estimate"]
     _fill(est["iterations"][0]["lines"]["tooling"], 1000.0)
+    _fill(est["iterations"][1]["lines"]["tooling"], 200.0)
     saved = client.put("/api/admin/projects/alpha/cost-estimate", json=est)
     assert saved.status_code == 200, saved.text
     body = saved.json()
@@ -550,12 +620,13 @@ ECB = {"date": "2026-11-02", "rates": {"CNY": 8.0, "USD": 1.25}}
 
 def _mixed(schema, fx):
     """Iteration 1: tooling EUR 1000, manufacturing CNY 400 per motor (2 motors = 800 CNY = 100 EUR), testing USD 125
-    (= 100 EUR), shipping missing; iteration 2: tooling 20 % of iteration 1 (EUR 200), the rest missing."""
+    (= 100 EUR), shipping missing; iteration 2: tooling EUR 200, the rest missing."""
     est = _est(schema, iterations=2)
     lines = est["iterations"][0]["lines"]
     _fill(lines["tooling"], 1000.0)
     _fill(lines["manufacturing"], 400.0, "CNY")
     _fill(lines["testing"], 125.0, "USD")
+    _fill(est["iterations"][1]["lines"]["tooling"], 200.0)
     est["fx"] = fx
     return est
 
@@ -703,12 +774,17 @@ def test_routes_store_the_rates_in_the_estimate_and_a_snapshot_keeps_them(client
     monkeypatch.setattr(FX, "fetch_text", lambda *_a, **_k: ECB_XML)
     est = got["estimate"]
     _fill(est["iterations"][0]["lines"]["tooling"], 1000.0)
-    _fill(est["iterations"][0]["lines"]["manufacturing"], 400.0, "CNY")
+    _fill(est["iterations"][0]["lines"]["manufacturing"], 400.0)
+    _fill(est["iterations"][1]["lines"]["tooling"], 200.0)
+    cny_line = json.loads(json.dumps(est))
+    cny_line["iterations"][0]["lines"]["shipping"].update({"amount": 5.0, "currency": "CNY"})
+    refused = client.put(url + "?display_currency=EUR", json=cny_line)                 # a new save in another currency is refused
+    assert refused.status_code == 422 and "EUR only" in refused.text
     body = client.put(url + "?display_currency=EUR", json=est).json()
     assert body["estimate"]["fx"]["source"] == "ECB" and body["estimate"]["fx"]["rates"] == {"CNY": 8.0, "USD": 1.25}
     assert body["fx_status"] == {"state": "ok", "date": "2026-11-02", "manual": [], "error": None}
-    assert body["computed"]["converted"]["iterations"][0]["lines"]["manufacturing"] == 100.0
-    assert body["computed"]["converted"]["total"] == round(1100 * 1.1 + 200 * 1.1, 2) and body["computed"]["total"]["CNY"] == 880.0
+    assert body["computed"]["converted"]["iterations"][0]["lines"]["manufacturing"] == 800.0
+    assert body["computed"]["converted"]["total"] == 2200.0 and body["computed"]["total"] == {"EUR": 2200.0}
     cny = client.get(url + "?display_currency=CNY").json()["computed"]["converted"]
     assert cny["currency"] == "CNY" and cny["iterations"][0]["lines"]["tooling"] == 8000.0
     assert client.get(url + "?display_currency=GBP").status_code == 422
@@ -720,7 +796,7 @@ def test_routes_store_the_rates_in_the_estimate_and_a_snapshot_keeps_them(client
     man = client.put(url + "?display_currency=EUR", json=forged).json()
     assert man["estimate"]["fx"]["rates"] == {"CNY": 7.5, "USD": 1.25} and man["estimate"]["fx"]["source"] == "manual"
     assert man["fx_status"]["manual"] == ["CNY"]
-    assert man["computed"]["converted"]["iterations"][0]["lines"]["manufacturing"] == round(800 / 7.5, 2)
+    assert client.get(url + "?display_currency=CNY").json()["computed"]["converted"]["iterations"][0]["lines"]["tooling"] == 7500.0
 
     # the snapshot freezes the numbers with the rates (and the display currency) they were computed with
     snap = client.post(url + "/snapshot", json={"note": "frozen", "display_currency": "EUR"}).json()["snapshot"]
@@ -771,4 +847,4 @@ def test_the_display_currency_setting_is_validated(schema):
     est["settings"]["display_currency"] = "GBP"
     with pytest.raises(CE.EstimateError):
         CE.normalize_estimate(est, schema, "alpha")
-    assert schema["display_currency_by_locale"] == {"en": "EUR", "zh-CN": "CNY"}
+    assert schema["display_currency_by_locale"] == {"en": "EUR", "zh-CN": "EUR"}

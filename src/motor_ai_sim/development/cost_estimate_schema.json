@@ -3,7 +3,8 @@
  "locales": ["en", "zh-CN"],
  "currencies": ["EUR", "CNY", "USD"],
  "default_currency": "EUR",
- "display_currency_by_locale": {"en": "EUR", "zh-CN": "CNY"},
+ "line_currency": "EUR",
+ "display_currency_by_locale": {"en": "EUR", "zh-CN": "EUR"},
  "fx": {"base": "EUR", "sources": ["ECB", "manual"], "ecb_url": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"},
  "factor_limits": [0.25, 4.0],
  "settings": [
@@ -13,16 +14,13 @@
   {"id": "iterations", "type": "int", "min": 1, "max": 5, "default": {"rule": "complex", "if_true": 3, "if_false": 2},
    "label": {"en": "Iterations", "zh-CN": "迭代轮数"},
    "help": {"en": "1 to 5. Usually 2; 3 for a complex project.", "zh-CN": "1 至 5 轮。通常 2 轮；复杂项目 3 轮。"}},
-  {"id": "currency", "type": "enum", "options": ["EUR", "CNY", "USD"], "default": "EUR",
-   "label": {"en": "Currency", "zh-CN": "货币"},
-   "help": {"en": "Default for new lines. Each line keeps its own currency; the totals are shown in the display currency at the dated rates.", "zh-CN": "新行默认货币。每行保留自己的货币；合计按带日期的汇率换算为显示货币。"}},
   {"id": "contingency_pct", "type": "number", "min": 0, "max": 100, "default": 10,
    "label": {"en": "Contingency", "zh-CN": "不可预见费"},
    "help": {"en": "% on top of the subtotal, per currency.", "zh-CN": "按货币在小计上加的百分比。"}}
  ],
  "iteration_fields": [
   {"id": "motors", "type": "int", "min": 1, "max": 50, "default": 2,
-   "label": {"en": "Motors", "zh-CN": "电机数"},
+   "label": {"en": "Number of motors", "zh-CN": "电机数量"},
    "help": {"en": "Motors built in this iteration (2 for a back-to-back dyno).", "zh-CN": "本轮制造的电机数（背靠背测功机为 2 台）。"}},
   {"id": "bench", "type": "enum", "options": ["dyno", "propeller", "both", "none"], "default": "dyno",
    "option_labels": {"dyno": {"en": "Dyno", "zh-CN": "测功机"}, "propeller": {"en": "Propeller stand", "zh-CN": "螺旋桨台架"},
@@ -31,10 +29,10 @@
    "help": {"en": "None = no testing in this iteration.", "zh-CN": "无 = 本轮不测试。"}}
  ],
  "lines": [
-  {"id": "tooling", "later_pct_default": 20,
+  {"id": "tooling",
    "label": {"en": "Tooling", "zh-CN": "工装"},
-   "help": {"en": "Iteration 1: the tooling. Later: modifications, % of iteration 1 or an amount.",
-            "zh-CN": "第 1 轮：工装。之后：修改，按第 1 轮的百分比或金额。"}},
+   "help": {"en": "Tooling (or modifications) of this iteration: one amount.",
+            "zh-CN": "本轮的工装（或修改）：一个金额。"}},
   {"id": "manufacturing", "per_motor": true,
    "label": {"en": "Motor manufacturing", "zh-CN": "电机制造"},
    "help": {"en": "Cost of one motor; multiplied by the motors of the iteration.", "zh-CN": "单台电机成本；乘以本轮电机数。"}},

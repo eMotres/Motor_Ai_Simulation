@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  buildCostSteps, defaultDisplayCurrency, DISPLAY_BY_LANG, displayCurrencyOf, editLine, formatMoney, fxLine, langOf, LINE_IDS, lineConverted, originChip,
-  reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, setToolingMode, snapshotTotalText, sourceCounts, stepIndexOfMissing,
-  stepState, toolingMode, totalsView,
+  buildCostSteps, defaultDisplayCurrency, DISPLAY_BY_LANG, displayCurrencyOf, editLine, formatMoney, fxLine, langOf, LINE_IDS, originChip,
+  reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, snapshotTotalText, sourceCounts, stepIndexOfMissing,
+  stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -14,7 +14,7 @@ const locale = (lang) => JSON.parse(readFileSync(fileURLToPath(new URL(`../../..
 const t = (key, args) => (args ? `${key}|${JSON.stringify(args)}` : key);
 
 const blank = () => ({ status: 'missing', amount: null, currency: 'EUR', pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '' });
-const iteration = (index) => ({ index, motors: 2, bench: 'dyno', lines: { tooling: index > 1 ? { ...blank(), status: 'filled', pct: 20, source: 'rule' } : blank(), manufacturing: blank(), testing: blank(), shipping: blank() } });
+const iteration = (index) => ({ index, motors: 2, bench: 'dyno', lines: { tooling: blank(), manufacturing: blank(), testing: blank(), shipping: blank() } });
 function estimate(n = 2) {
   return { version: 2, schema_version: 2, project_id: 'alpha', revision: 3, settings: { complex: false, iterations: n, currency: 'EUR', contingency_pct: 10, target_motor: null },
     iterations: Array.from({ length: n }, (_, i) => iteration(i + 1)), migration: null, updated_at: null, updated_by: null };
@@ -27,7 +27,7 @@ test('the schema is four lines, and the steps are settings, one per iteration, r
   assert.deepEqual(steps.map((s) => s.id), ['settings', 'it1', 'it2', 'it3', 'review']);
   assert.equal(stepIndexOfMissing(steps, { iteration: 2, line: 'shipping', reason: 'not filled' }), 2);
   assert.deepEqual(stepState(steps[1], estimate()), { state: 'empty', missing: 4 });
-  assert.deepEqual(stepState(steps[2], estimate()), { state: 'partial', missing: 3 });
+  assert.deepEqual(stepState(steps[2], estimate()), { state: 'empty', missing: 4 });
 });
 
 test('typing an amount makes the line manual and filled; clearing it makes it missing; a note keeps the source', () => {
@@ -49,18 +49,17 @@ test('typing an amount makes the line manual and filled; clearing it makes it mi
   assert.equal(estimate().iterations[0].lines.manufacturing.amount, null);      // the input is not mutated
 });
 
-test('later-iteration tooling: % of iteration 1 by default, an amount on request, the % editable', () => {
-  let e = estimate();
-  assert.equal(toolingMode(e.iterations[1].lines.tooling), 'pct');
-  e = editLine(e, { iteration: 2, line: 'tooling' }, { pct: 35 }, 'o', '2026-11-02');
-  assert.equal(e.iterations[1].lines.tooling.pct, 35);
-  assert.equal(e.iterations[1].lines.tooling.source, 'manual');
-  e = setToolingMode(e, 2, 'amount', 20);
-  assert.equal(toolingMode(e.iterations[1].lines.tooling), 'amount');
-  assert.equal(e.iterations[1].lines.tooling.status, 'missing');
-  e = setToolingMode(e, 2, 'pct', 20);
-  assert.deepEqual([e.iterations[1].lines.tooling.pct, e.iterations[1].lines.tooling.source], [20, 'rule']);
-  assert.equal(setToolingMode(estimate(), 1, 'pct', 20).iterations[0].lines.tooling.pct, null);   // iteration 1 has no %
+test('tooling is the same window in every iteration: an amount, no % of iteration 1', () => {
+  let e = estimate(3);
+  for (const it of e.iterations) assert.deepEqual([it.lines.tooling.status, it.lines.tooling.pct, it.lines.tooling.source], ['missing', null, null]);
+  e = editLine(e, { iteration: 2, line: 'tooling' }, { amount: 2000 }, 'o', '2026-11-02', 'EUR');
+  const t2 = e.iterations[1].lines.tooling;
+  assert.deepEqual([t2.status, t2.amount, t2.currency, t2.source, t2.pct], ['filled', 2000, 'EUR', 'manual', null]);
+  // the schema has no later_pct_default any more, and the wizard has no % mode
+  assert.equal(schema.lines.find((l) => l.id === 'tooling').later_pct_default, undefined);
+  const src = readFileSync(fileURLToPath(new URL('../components/costEstimate/CostEstimateWizard.tsx', import.meta.url)), 'utf8');
+  assert.ok(!/pctMode|ToggleButton|ofIterationOne/.test(src));
+  for (const lang of ['en', 'zh-CN']) for (const k of ['pctMode', 'amountMode', 'ofIterationOne']) assert.equal(locale(lang)[k], undefined, `${lang}: ${k}`);
 });
 
 test('settings: the iteration list follows the count; complex makes it at least 3; motors and bench per iteration', () => {
@@ -68,13 +67,13 @@ test('settings: the iteration list follows the count; complex makes it at least 
   assert.equal(e.settings.iterations, 3);
   assert.equal(e.iterations.length, 3);
   assert.equal(e.iterations[2].motors, 2);
-  assert.equal(e.iterations[2].lines.tooling.pct, 20);
+  assert.equal(e.iterations[2].lines.tooling.status, 'missing');
   e = setSetting(e, schema, 'iterations', 1);
   assert.deepEqual(e.iterations.map((it) => it.index), [1]);
   assert.equal(setSetting(e, schema, 'iterations', 9).iterations.length, 5);
   e = setIterationField(estimate(), 2, 'bench', 'none');
   assert.equal(e.iterations[1].bench, 'none');
-  assert.deepEqual(stepState({ kind: 'iteration', iteration: 2 }, e), { state: 'partial', missing: 2 });   // testing not needed
+  assert.deepEqual(stepState({ kind: 'iteration', iteration: 2 }, e), { state: 'empty', missing: 3 });   // testing not needed
   assert.equal(setIterationField(estimate(), 1, 'motors', 4).iterations[0].motors, 4);
 });
 
@@ -92,7 +91,7 @@ test('source chips say where the number came from', () => {
   const miss = originChip({ ...blank(), hint: 'nearest analog MID/b is x5 by active mass, outside 0.25..4: enter it' }, it, 'manufacturing', t);
   assert.equal(miss.kind, 'missing');
   assert.match(miss.tip, /x5/);
-  assert.equal(originChip(estimate().iterations[1].lines.tooling, estimate().iterations[1], 'tooling', t).kind, 'rule');
+  assert.equal(originChip(estimate().iterations[1].lines.tooling, estimate().iterations[1], 'tooling', t).kind, 'missing');
   assert.equal(originChip(blank(), { ...it, bench: 'none' }, 'testing', t).kind, 'none');
   assert.equal(langOf('zh-CN'), 'zh-CN');
   assert.equal(langOf('en-US'), 'en');
@@ -105,7 +104,7 @@ test('money stays per currency in the review table; a missing line says so', () 
     subtotal: {}, contingency_pct: 10, contingency: {}, total: {}, currencies: [], missing: [], missing_count: 1, warnings: [] }, 'missing');
   assert.deepEqual(rows[0], { key: 'it1', iteration: 1, tooling: 'EUR 10.00', manufacturing: 'missing', testing: '—', shipping: 'USD 5.00', subtotal: 'EUR 10.00 · USD 5.00' });
   const counts = sourceCounts(setIterationField(estimate(2), 2, 'bench', 'none'));
-  assert.deepEqual(counts, { missing: 6, rule: 1 });
+  assert.deepEqual(counts, { missing: 7 });
 });
 
 test('every key the wizard uses exists in en and zh-CN', () => {
@@ -123,7 +122,9 @@ test('every key the wizard uses exists in en and zh-CN', () => {
 const realT = (lang) => (key, args = {}) => {
   const s = key.replace(/^costEstimate\./, '').split('.').reduce((a, k) => a?.[k], locale(lang));
   assert.equal(typeof s, 'string', `${lang}: ${key}`);
-  return s.replace(/\{(\w+)\}/g, (_m, k) => String(args[k]));
+  // ICU plural {count, plural, one {# motor} other {# motors}} (English one/other), then plain {placeholders}
+  const plural = s.replace(/\{(\w+), plural, one \{([^}]*)\} other \{([^}]*)\}\}/g, (_m, k, one, other) => (args[k] === 1 ? one : other).replace('#', String(args[k])));
+  return plural.replace(/\{(\w+)\}/g, (_m, k) => String(args[k]));
 };
 const ecbFx = { base: 'EUR', date: '2026-11-02', rates: { CNY: 8, USD: 1.25 }, source: 'ECB', ecb: { date: '2026-11-02', rates: { CNY: 8, USD: 1.25 } }, manual: {}, manual_date: null };
 const money = (cur, v) => ({ [cur]: v });
@@ -139,22 +140,22 @@ function computedEur(available = true) {
     missing: [{ iteration: 1, line: 'shipping', reason: 'not filled' }], missing_count: 1, warnings: [] };
 }
 
-test('the display currency follows the UI language until the owner picks one', () => {
+test('the final table is in EUR unless the owner picks USD / CNY; the UI language does not change it', () => {
   assert.deepEqual(DISPLAY_BY_LANG, schema.display_currency_by_locale);           // the web default is the server schema's
-  assert.equal(defaultDisplayCurrency('en'), 'EUR');
-  assert.equal(defaultDisplayCurrency('zh-CN'), 'CNY');
+  assert.deepEqual(DISPLAY_BY_LANG, { en: 'EUR', 'zh-CN': 'EUR' });
+  for (const lang of ['en', 'zh-CN']) assert.equal(defaultDisplayCurrency(lang), 'EUR');
   assert.equal(defaultDisplayCurrency(langOf('en-US')), 'EUR');
-  assert.equal(defaultDisplayCurrency(langOf('zh-CN')), 'CNY');
-  assert.equal(defaultDisplayCurrency(langOf('zh')), 'CNY');
+  assert.equal(defaultDisplayCurrency(langOf('zh-CN')), 'EUR');
+  assert.equal(defaultDisplayCurrency(langOf('zh')), 'EUR');
   assert.equal(defaultDisplayCurrency(langOf(undefined), schema), 'EUR');
   const e = estimate();
   assert.equal(displayCurrencyOf(e.settings, 'en', schema), 'EUR');
-  assert.equal(displayCurrencyOf(e.settings, 'zh-CN', schema), 'CNY');
-  // the owner's pick is stored in the estimate and wins in both languages; "auto" (null) goes back to the language
+  assert.equal(displayCurrencyOf(e.settings, 'zh-CN', schema), 'EUR');
+  // the owner's pick (final table only) is stored in the estimate and wins in both languages; null goes back to EUR
   const usd = setDisplayCurrency(e, 'USD');
   assert.equal(displayCurrencyOf(usd.settings, 'en', schema), 'USD');
   assert.equal(displayCurrencyOf(usd.settings, 'zh-CN', schema), 'USD');
-  assert.equal(displayCurrencyOf(setDisplayCurrency(usd, null).settings, 'zh-CN', schema), 'CNY');
+  assert.equal(displayCurrencyOf(setDisplayCurrency(usd, null).settings, 'zh-CN', schema), 'EUR');
   assert.equal(e.settings.display_currency, undefined);                            // the input is not mutated
 });
 
@@ -169,11 +170,6 @@ test('converted totals are shown in the display currency, the originals stay for
   const rows = reviewRows(c, 'missing');
   assert.deepEqual(rows[0], { key: 'it1', iteration: 1, tooling: 'EUR 1 000.00', manufacturing: 'EUR 100.00', testing: 'EUR 100.00', shipping: 'missing',
     subtotal: 'EUR 1 200.00', original: 'EUR 1 000.00 · CNY 800.00 · USD 125.00' });
-  // the line entered in CNY / USD shows its converted value in grey; one already in the display currency shows nothing
-  assert.equal(lineConverted(c, 1, 'manufacturing'), 'EUR 100.00');
-  assert.equal(lineConverted(c, 1, 'testing'), 'EUR 100.00');
-  assert.equal(lineConverted(c, 1, 'tooling'), null);
-  assert.equal(lineConverted(c, 1, 'shipping'), null);
 });
 
 test('with a rate missing the totals stay per currency, as before', () => {
@@ -184,7 +180,6 @@ test('with a rate missing the totals stay per currency, as before', () => {
   assert.deepEqual(tv.missingRates, ['CNY', 'USD']);
   assert.equal(reviewRows(c, 'missing')[0].manufacturing, 'CNY 800.00');
   assert.equal(reviewRows(c, 'missing')[0].original, undefined);
-  assert.equal(lineConverted(c, 1, 'manufacturing'), null);                      // cannot be converted: nothing to show
   const noConverted = { ...computedEur(), converted: undefined };                // an answer of an older server
   assert.equal(totalsView(noConverted).total, 'EUR 1 100.00 · CNY 880.00 · USD 137.50');
 });
@@ -225,7 +220,132 @@ test('a frozen snapshot shows its total as it was frozen', () => {
 test('the new strings exist in both languages', () => {
   for (const lang of ['en', 'zh-CN']) {
     const l = locale(lang);
-    for (const k of ['displayCurrency', 'displayCurrencyTip', 'displayAuto', 'originalsTip']) assert.equal(typeof l[k], 'string', `${lang}: ${k}`);
+    for (const k of ['displayCurrency', 'displayCurrencyTip', 'originalsTip']) assert.equal(typeof l[k], 'string', `${lang}: ${k}`);
     for (const k of ['ecb', 'manual', 'manualTag', 'none', 'noneFor', 'stale', 'settingsTitle', 'settingsTip', 'rateLabel', 'useEcb', 'manualChip', 'ecbChip', 'noRate']) assert.equal(typeof l.fx[k], 'string', `${lang}: fx.${k}`);
   }
+});
+
+
+// ── owner feedback 2026-11-02: label, plural, no scary banner on a 409, converted iteration total ───────────────────────
+
+test('the motors field reads "Number of motors" and the multiplier is a plural', () => {
+  const f = schema.iteration_fields.find((x) => x.id === 'motors');
+  assert.equal(f.label.en, 'Number of motors');
+  assert.equal(f.label['zh-CN'], '电机数量');
+  const en = realT('en'); const zh = realT('zh-CN');
+  assert.equal(en('costEstimate.timesMotors', { count: 1 }), '× 1 motor');
+  assert.equal(en('costEstimate.timesMotors', { count: 2 }), '× 2 motors');
+  assert.equal(en('costEstimate.timesMotors', { count: 12 }), '× 12 motors');
+  assert.equal(zh('costEstimate.timesMotors', { count: 1 }), '× 1 台');
+  assert.equal(zh('costEstimate.timesMotors', { count: 2 }), '× 2 台');
+  assert.match(locale('en').timesMotors, /plural, one \{# motor\} other \{# motors\}/);
+});
+
+// synced = what the server had when the user started; latest = the server now (saved elsewhere, revision 4)
+const withEdit = (e, patch) => editLine(e, { iteration: 1, line: 'manufacturing' }, patch, 'me', '2026-11-02');
+const bumped = (e) => ({ ...e, revision: e.revision + 1 });
+
+test('a 409 with no unsaved local edits: the latest estimate is shown as it is, nothing to save, no note', () => {
+  const synced = estimate();
+  const latest = bumped(withEdit(synced, { amount: 700 }));      // somebody else typed 700
+  const r = reconcile(false, synced, synced, latest);
+  assert.deepEqual(r.estimate, latest);
+  assert.equal(r.save, false);
+  assert.deepEqual(r.overridden, []);
+  assert.equal(r.estimate.revision, 4);
+});
+
+test('a 409 with unsaved edits: the latest with the edits re-applied on top, saved again; no note when nothing clashes', () => {
+  const synced = estimate();
+  const mine = withEdit(synced, { amount: 450 });                                   // my pending edit: manufacturing 450
+  const latest = bumped(editLine(synced, { iteration: 1, line: 'shipping' }, { amount: 90 }, 'other', '2026-11-02'));   // elsewhere: shipping 90
+  const r = reconcile(true, synced, mine, latest);
+  assert.equal(r.save, true);
+  assert.equal(r.estimate.revision, 4, 'saved against the latest revision');
+  assert.equal(r.estimate.iterations[0].lines.manufacturing.amount, 450, 'my edit is re-applied');
+  assert.equal(r.estimate.iterations[0].lines.shipping.amount, 90, 'the other session\'s change stays');
+  assert.deepEqual(r.overridden, []);
+});
+
+test('a re-applied field that was changed elsewhere too is named; mine wins', () => {
+  const synced = estimate();
+  const mine = setIterationField(withEdit(synced, { amount: 450 }), 1, 'motors', 3);
+  const latest = bumped(setIterationField(withEdit(synced, { amount: 700 }), 2, 'motors', 4));   // elsewhere: same line 700, iteration 2 motors 4
+  const r = mergeEdits(synced, mine, latest);
+  assert.equal(r.merged.iterations[0].lines.manufacturing.amount, 450);
+  assert.equal(r.merged.iterations[0].motors, 3);
+  assert.equal(r.merged.iterations[1].motors, 4, 'a change elsewhere to a field I did not touch stays');
+  assert.deepEqual(r.overridden, [{ kind: 'line', iteration: 1, line: 'manufacturing' }]);
+  // an elsewhere change to the very same value is no clash
+  assert.deepEqual(mergeEdits(synced, mine, bumped(mine)).overridden, []);
+  const name = fieldLabel(r.overridden[0], schema, 'en', realT('en'));
+  assert.equal(name, 'Iteration 1 · Motor manufacturing');
+  assert.equal(realT('en')('costEstimate.keptNote', { field: name }), 'Updated from another session; your change to Iteration 1 · Motor manufacturing was kept.');
+  assert.match(realT('zh-CN')('costEstimate.keptNote', { field: 'x' }), /x/);
+  assert.equal(fieldLabel({ kind: 'iterField', iteration: 2, id: 'motors' }, schema, 'en', realT('en')), 'Iteration 2 · Number of motors');
+});
+
+test('settings and manual rates edited locally survive a 409 too', () => {
+  const synced = estimate(2);
+  let mine = setSetting(synced, schema, 'iterations', 3);
+  mine = setManualRate(mine, 'CNY', 7.5);
+  const latest = bumped(setDisplayCurrency(synced, 'USD'));
+  const { merged, overridden } = mergeEdits(synced, mine, latest);
+  assert.equal(merged.iterations.length, 3);
+  assert.equal(merged.settings.display_currency, 'USD', 'changed elsewhere, untouched here');
+  assert.equal(merged.fx.manual.CNY, 7.5);
+  assert.equal(merged.fx.rates.CNY, 7.5);
+  assert.deepEqual(overridden, []);
+});
+
+// what the server computes when every line is EUR (the only currency of a line)
+function computedAllEur() {
+  const lines = { tooling: { amount: money('EUR', 1000), origin: '' }, manufacturing: { amount: money('EUR', 800), origin: '' }, testing: { amount: money('EUR', 100), origin: '' }, shipping: { amount: null, origin: '' } };
+  const iteration = { index: 1, motors: 2, bench: 'dyno', tooling: money('EUR', 1000), manufacturing: money('EUR', 800), testing: money('EUR', 100), shipping: null, subtotal: money('EUR', 1900), lines };
+  const conv = (currency, k) => ({ currency, available: true, missing_rates: [], iterations: [{ index: 1, lines: { tooling: 1000 * k, manufacturing: 800 * k, testing: 100 * k, shipping: null }, subtotal: 1900 * k }], subtotal: 1900 * k, contingency: 190 * k, total: 2090 * k });
+  return { iterations: [iteration], subtotal: money('EUR', 1900), contingency_pct: 10, contingency: money('EUR', 190), total: money('EUR', 2090), currencies: ['EUR'], converted: conv('EUR', 1),
+    missing: [{ iteration: 1, line: 'shipping', reason: 'not filled' }], missing_count: 1, warnings: [], _usd: conv('USD', 1.25) };
+}
+
+test('in the iteration steps every amount and total is EUR, whatever the final table is shown in', () => {
+  const c = computedAllEur();
+  assert.equal(iterationSubtotal(c, 1), 'EUR 1 900.00');
+  assert.equal(lineTotal(c, 1, 'manufacturing'), 'EUR 800.00');          // per motor x the motors
+  assert.equal(lineTotal(c, 1, 'shipping'), '—');
+  assert.equal(lineTotal(c, 1, 'tooling'), 'EUR 1 000.00');
+  // the owner picks USD for the final table: the iteration cards stay EUR, only the review table follows
+  const usd = { ...c, converted: c._usd };
+  assert.equal(iterationSubtotal(usd, 1), 'EUR 1 900.00');
+  assert.equal(lineTotal(usd, 1, 'manufacturing'), 'EUR 800.00');
+  assert.equal(reviewRows(usd, 'missing')[0].subtotal, 'USD 2 375.00');
+  assert.equal(totalsView(usd).total, 'USD 2 612.50');
+  assert.equal(reviewRows(c, 'missing')[0].subtotal, 'EUR 1 900.00');
+});
+
+// ── every amount is EUR ───────────────────────────────────────────────────────────────────────────────────────────────
+
+test('a typed amount is EUR: an old converted CNY line becomes EUR, and there is no currency choice on a line', () => {
+  const base = estimate();
+  const ref = { iteration: 1, line: 'manufacturing' };
+  const converted = { ...base.iterations[0].lines.manufacturing, status: 'filled', amount: 1000, currency: 'CNY', source: 'converted', note: 'was CNY 8000.00' };
+  const withConverted = { ...base, iterations: [{ ...base.iterations[0], lines: { ...base.iterations[0].lines, manufacturing: converted } }, base.iterations[1]] };
+  const typed = editLine(withConverted, ref, { amount: 30000 }, 'me', '2026-11-02');
+  const line = typed.iterations[0].lines.manufacturing;
+  assert.deepEqual([line.amount, line.currency, line.source, line.by], [30000, 'EUR', 'manual', 'me']);
+  // a missing line preset to another currency takes EUR too; a note alone leaves the line as it is
+  const missing = { ...base, iterations: [{ ...base.iterations[0], lines: { ...base.iterations[0].lines, shipping: { ...blank(), currency: 'CNY' } } }, base.iterations[1]] };
+  assert.equal(editLine(missing, { iteration: 1, line: 'shipping' }, { amount: 90 }, 'me', '2026-11-02').iterations[0].lines.shipping.currency, 'EUR');
+  assert.equal(editLine(withConverted, ref, { note: 'x' }, 'me', '2026-11-02').iterations[0].lines.manufacturing.currency, 'CNY');
+  // the wizard: no currency selector on the lines, the display-currency selector only in the review
+  const src = readFileSync(fileURLToPath(new URL('../components/costEstimate/CostEstimateWizard.tsx', import.meta.url)), 'utf8');
+  assert.ok(!/costEstimate\.currency'/.test(src), 'no per-line currency label');
+  assert.equal((src.match(/costEstimate\.displayCurrency'\)\}<\/Typography>/g) || []).length, 1, 'one display-currency selector');
+  assert.ok(src.indexOf("t('costEstimate.byIteration')") < src.indexOf("t('costEstimate.displayCurrency')"), 'the selector sits in the review card');
+  assert.ok(src.indexOf("t('costEstimate.displayCurrency')") > src.indexOf('const reviewStep'));
+});
+
+test('the rates block lists USD and CNY (ECB or manual); the schema has no per-line currency setting', () => {
+  assert.deepEqual(schema.currencies.filter((c) => c !== 'EUR'), ['CNY', 'USD']);
+  assert.equal(schema.line_currency, 'EUR');
+  assert.ok(!schema.settings.some((f) => f.id === 'currency'));
 });

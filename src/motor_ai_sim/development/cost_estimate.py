@@ -2,18 +2,20 @@
 costs us («не надо до такой степени оценивать стоимость» - the 68-line catalogue of #551 was too detailed).
 
 * A project has 1..5 ITERATIONS (default 2, 3 when "complex" is ticked).  Each iteration has exactly FOUR lines:
-  ``tooling`` (iteration 1: the tooling; later iterations: "modifications" = a % of iteration 1's tooling, default 20 %,
-  or an amount), ``manufacturing`` (the cost of ONE motor x the motors of the iteration), ``testing`` (one amount; the
+  ``tooling`` (an amount in every iteration, the same window; owner 2026-11-02: no "% of iteration 1" any more),
+  ``manufacturing`` (the cost of ONE motor x the motors of the iteration), ``testing`` (one amount; the
   bench is dyno / propeller stand / both / none) and ``shipping`` (DHL, one amount).
-* Settings: iterations, currency (EUR / CNY / USD), contingency % (default 10), ``display_currency`` (``None`` = follows
-  the UI language: en -> EUR, zh-CN -> CNY; the owner may pick EUR / CNY / USD).  Every line keeps its own entered amount
-  and currency; the per-currency totals are always computed.  The estimate also carries dated exchange rates, ``fx`` (EUR
+* EVERY AMOUNT IS IN EUR (owner 2026-11-02: «все цены в евро»): a line has no currency choice, new saves refuse any other
+  currency, and an old line in another currency is converted to EUR on read (``legacy_to_eur``: at the stored or the cached
+  ECB rate, source ``converted``, the original amount in the note; with no rate known the line is missing).
+* Settings: iterations, contingency % (default 10), ``display_currency`` (``None`` = EUR; the FINAL table may be shown in
+  EUR / USD / CNY at the rates below - the only place with a currency choice).  The estimate also carries dated exchange rates, ``fx`` (EUR
   base: ECB reference rates stored with their date, optionally overridden per currency by hand - a manual rate wins), and
   ``compute`` adds ``converted``: the lines and totals in the display currency at those rates.  A rate that is not known
   is never invented: the totals then stay per currency (``converted.available`` is false).
 * Every number keeps its origin: ``production`` (the per-motor cost / tooling sum of the most similar built motor, x ONE
   factor = target active mass / analog active mass), ``estimate`` (another project's estimate, as-is), ``manual`` (the
-  owner, with e-mail and date), ``converted`` (from an old 68-line estimate) or ``rule`` (the default % of iteration 1).
+  owner, with e-mail and date), ``converted`` (from an old 68-line estimate, or an old "% of iteration 1" tooling rule turned into its amount).
   ``suggest`` never overwrites a ``manual`` or ``converted`` value.
 
 This module is pure (no I/O): schema, defaults, validation, the old-shape conversion, totals, ``suggest`` over gathered
@@ -58,6 +60,8 @@ def _check_schema(schema: dict) -> dict:
         raise ValueError("cost estimate schema: schema_version 2 expected")
     if not schema.get("currencies") or schema.get("default_currency") not in schema["currencies"]:
         raise ValueError("cost estimate schema: currencies / default_currency")
+    if schema.get("line_currency") != FX_BASE:
+        raise ValueError("cost estimate schema: line_currency must be %s" % FX_BASE)
     by_locale = schema.get("display_currency_by_locale") or {}
     if set(by_locale) != set(schema.get("locales") or []) or any(c not in schema["currencies"] for c in by_locale.values()):
         raise ValueError("cost estimate schema: display_currency_by_locale")
@@ -89,10 +93,6 @@ def _field(schema: dict, group: str, fid: str) -> dict:
     return next(f for f in schema.get(group) or [] if f["id"] == fid)
 
 
-def later_pct_default(schema: dict) -> float:
-    return float(next(ln for ln in schema["lines"] if ln["id"] == "tooling").get("later_pct_default") or 0.0)
-
-
 def factor_limits(schema: dict) -> Tuple[float, float]:
     lo, hi = schema["factor_limits"]
     return float(lo), float(hi)
@@ -117,7 +117,7 @@ def _target_from(linked_motors: Iterable[dict]) -> Optional[dict]:
 def default_settings(schema: dict, *, linked_motors: Iterable[dict] = ()) -> dict:
     complex_project = bool(_field(schema, "settings", "complex")["default"])
     return {"complex": complex_project, "iterations": default_iterations(complex_project, schema),
-            "currency": _field(schema, "settings", "currency")["default"],
+            "currency": schema["line_currency"],
             "contingency_pct": float(_field(schema, "settings", "contingency_pct")["default"]),
             "display_currency": None, "target_motor": _target_from(linked_motors)}
 
@@ -128,12 +128,8 @@ def blank_line(currency: str) -> dict:
 
 
 def default_line(line_id: str, index: int, currency: str, schema: dict) -> dict:
-    """A new line is missing - except a later iteration's tooling, which starts as "modifications": the default % of
-    iteration 1's tooling (source ``rule``)."""
-    line = blank_line(currency)
-    if line_id == "tooling" and index > 1:
-        line.update({"status": "filled", "pct": later_pct_default(schema), "source": "rule"})
-    return line
+    """A new line is missing (tooling too, in every iteration)."""
+    return blank_line(currency)
 
 
 def default_iteration(schema: dict, settings: dict, index: int) -> dict:
@@ -182,14 +178,14 @@ def _text(v: Any, n: int = _MAX_NOTE) -> str:
     return str(v or "").strip()[:n]
 
 
-def normalize_settings(raw: Any, schema: dict) -> dict:
+def normalize_settings(raw: Any, schema: dict, legacy: bool = False) -> dict:
     if not isinstance(raw, dict):
         raise EstimateError("settings: an object is required")
     it_field = _field(schema, "settings", "iterations")
     pct_field = _field(schema, "settings", "contingency_pct")
-    currency = raw.get("currency", schema["default_currency"])
-    if currency not in schema["currencies"]:
-        raise EstimateError("currency: one of %s" % ", ".join(schema["currencies"]))
+    currency = schema["line_currency"] if legacy else raw.get("currency", schema["line_currency"])
+    if currency != schema["line_currency"]:
+        raise EstimateError("currency: %s only (every amount is in %s)" % (schema["line_currency"], schema["line_currency"]))
     target = raw.get("target_motor")
     if target is not None:
         if not isinstance(target, dict) or not str(target.get("die") or "").strip() or not str(target.get("config") or "").strip():
@@ -228,17 +224,17 @@ def _source_ref(raw: Any, what: str) -> Optional[dict]:
     return out or None
 
 
-def normalize_line(raw: Any, line_id: str, index: int, schema: dict, what: str) -> dict:
-    """One line as it is SAVED.  The status follows the content: ``filled`` = an amount (or, for a later iteration's
-    tooling, a % of iteration 1); otherwise ``missing``."""
+def normalize_line(raw: Any, line_id: str, index: int, schema: dict, what: str, legacy: bool = False) -> dict:
+    """One line as it is SAVED.  The status follows the content: ``filled`` = an amount (an old later-iteration tooling
+    ``pct`` is accepted and turned into its amount by ``normalize_estimate``); otherwise ``missing``."""
     if not isinstance(raw, dict):
         raise EstimateError("%s: an object is required" % what)
     source = raw.get("source")
     if source is not None and source not in SOURCES:
         raise EstimateError("%s.source: one of %s" % (what, ", ".join(SOURCES)))
-    currency = str(raw.get("currency") or schema["default_currency"]).strip().upper()
-    if currency not in schema["currencies"]:
-        raise EstimateError("%s.currency: one of %s" % (what, ", ".join(schema["currencies"])))
+    currency = str(raw.get("currency") or schema["line_currency"]).strip().upper()
+    if currency not in (schema["currencies"] if legacy else [schema["line_currency"]]):        # old data: converted on read
+        raise EstimateError("%s.currency: %s only (every amount is in %s)" % (what, schema["line_currency"], schema["line_currency"]))
     amount = _num(raw.get("amount"), what + ".amount", hi=1e12)
     pct = _num(raw.get("pct"), what + ".pct", hi=1000)
     if pct is not None and not (line_id == "tooling" and index > 1):
@@ -261,6 +257,27 @@ def normalize_line(raw: Any, line_id: str, index: int, schema: dict, what: str) 
             "hint": "" if filled else _text(raw.get("hint"))}
 
 
+def _rules_to_amounts(iterations: List[dict]) -> None:
+    """An old estimate stored a later iteration's tooling as "N % of iteration 1" (``pct``).  The % is gone (owner
+    2026-11-02, "no %"): on read the rule becomes its amount - N % of iteration 1's tooling, in iteration 1's currency,
+    source ``converted`` - and, when iteration 1's tooling has no amount, a missing line."""
+    first = next((it for it in iterations if it["index"] == 1), None)
+    base = first["lines"]["tooling"] if first else None
+    for it in iterations:
+        line = it["lines"]["tooling"]
+        if line.get("pct") is None:
+            continue
+        pct = float(line["pct"])
+        note = line.get("note") or ""
+        if base is not None and it["index"] > 1 and base.get("amount") is not None:
+            line.update({"status": "filled", "amount": round(float(base["amount"]) * pct / 100.0, 2), "currency": base["currency"],
+                         "pct": None, "source": "converted", "source_ref": None, "factor": None, "hint": "",
+                         "note": note or ("was %s %% of iteration 1 tooling" % _fmt(pct))})
+        else:
+            line.update({"status": "missing", "amount": None, "pct": None, "source": None, "source_ref": None, "factor": None,
+                         "date": None, "by": None, "note": note, "hint": "iteration 1 tooling missing"})
+
+
 def _normalize_migration(raw: Any) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
@@ -269,12 +286,13 @@ def _normalize_migration(raw: Any) -> Optional[dict]:
             "dropped": [_text(d, _MAX_REF) for d in dropped if d][:50], "note": _text(raw.get("note"))}
 
 
-def normalize_estimate(raw: Any, schema: dict, project_id: str) -> dict:
+def normalize_estimate(raw: Any, schema: dict, project_id: str, *, legacy: bool = False) -> dict:
     """A full estimate as it is SAVED: every setting and line checked (``EstimateError``), unknown lines refused, missing
-    lines and iterations filled with their defaults, the iteration list cut / grown to ``settings.iterations``."""
+    lines and iterations filled with their defaults, the iteration list cut / grown to ``settings.iterations``.
+    ``legacy`` (reading stored data only) lets a line keep an old non-EUR currency for ``legacy_to_eur``."""
     if not isinstance(raw, dict):
         raise EstimateError("an estimate object is required")
-    settings = normalize_settings(raw.get("settings"), schema)
+    settings = normalize_settings(raw.get("settings"), schema, legacy)
     raw_iters = raw.get("iterations") or []
     if not isinstance(raw_iters, list):
         raise EstimateError("iterations: a list")
@@ -304,8 +322,9 @@ def normalize_estimate(raw: Any, schema: dict, project_id: str) -> dict:
             "index": index,
             "motors": _int(src.get("motors", m_field["default"]), "iteration %d motors" % index, int(m_field["min"]), int(m_field["max"])),
             "bench": bench,
-            "lines": {lid: (normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid)) if lid in lines_raw
+            "lines": {lid: (normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid), legacy) if lid in lines_raw
                             else default_line(lid, index, settings["currency"], schema)) for lid in LINES}})
+    _rules_to_amounts(iterations)
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id,
             "revision": int(raw.get("revision") or 0), "settings": settings, "fx": normalize_fx(raw.get("fx"), schema),
             "iterations": iterations, "migration": _normalize_migration(raw.get("migration")),
@@ -616,17 +635,53 @@ def migrate_v1(old: dict, schema: dict, project_id: str, *, linked_motors: Itera
         est["migration"] = {"from_version": 1, "date": today or None, "dropped": dropped[:50],
                             "note": "Converted from the old detailed estimate: lines summed into tooling / manufacturing / "
                                     "testing / shipping per iteration."}
-    return normalize_estimate(est, schema, project_id)
+    return normalize_estimate(est, schema, project_id, legacy=True)
 
 
-def from_stored(stored: Any, schema: dict, project_id: str, *, linked_motors: Iterable[dict] = (), today: str = "") -> dict:
+def _money_text_one(x: float) -> str:
+    return "{:,.2f}".format(x).replace(",", " ")
+
+
+def legacy_to_eur(estimate: dict, schema: dict, fallback_rates: Optional[Dict[str, float]] = None) -> dict:
+    """Old data had a currency per line.  Every amount is in EUR now: a line in another currency becomes EUR at the
+    estimate's stored rate (``fx``; the ECB or the owner's), else at ``fallback_rates`` (the cached ECB rates); source
+    ``converted`` and the original amount in the note ("was CNY 400.00").  With no rate known the line is MISSING, its hint
+    giving the old amount - a rate is never invented."""
+    base = schema["line_currency"]
+    est = copy.deepcopy(estimate)
+    rates = dict(fallback_rates or {})
+    rates.update(fx_rates(est.get("fx")))
+    for it in est["iterations"]:
+        for lid in LINES:
+            line = it["lines"][lid]
+            cur = line.get("currency") or base
+            if cur == base:
+                continue
+            amount = line.get("amount")
+            line["currency"] = base
+            if amount is None:
+                continue
+            was = "was %s %s" % (cur, _money_text_one(float(amount)))
+            note = line.get("note") or ""
+            rate = rates.get(cur)
+            if rate:
+                line.update({"status": "filled", "amount": round(float(amount) / rate, 2), "source": "converted", "source_ref": None,
+                             "factor": None, "hint": "", "note": ((note + "; ") if note else "") + was})
+            else:
+                line.update({"status": "missing", "amount": None, "source": None, "source_ref": None, "factor": None, "date": None,
+                             "by": None, "note": note, "hint": "%s: no exchange rate known, enter it in %s" % (was, base)})
+    return est
+
+
+def from_stored(stored: Any, schema: dict, project_id: str, *, linked_motors: Iterable[dict] = (), today: str = "",
+                fallback_rates: Optional[Dict[str, float]] = None) -> dict:
     """The estimate of a stored document of ANY shape: version 2 normalised, version 1 converted (``migrate_v1``).  Never
     raises: a document that cannot be read starts blank (keeping its revision, so the owner can save over it)."""
     if isinstance(stored, dict):
         try:
             if stored.get("version") == 1:
-                return migrate_v1(stored, schema, project_id, linked_motors=linked_motors, today=today)
-            return normalize_estimate(stored, schema, project_id)
+                return legacy_to_eur(migrate_v1(stored, schema, project_id, linked_motors=linked_motors, today=today), schema, fallback_rates)
+            return legacy_to_eur(normalize_estimate(stored, schema, project_id, legacy=True), schema, fallback_rates)
         except (EstimateError, TypeError, ValueError, KeyError, AttributeError):
             pass
     est = default_estimate(schema, project_id, linked_motors=linked_motors)
@@ -679,7 +734,6 @@ def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None
     conv_iters: List[dict] = []
     missing: List[dict] = []
     out_iters = []
-    first_tooling: Optional[Money] = None
     for it in estimate["iterations"]:
         index = it["index"]
         lines = it["lines"]
@@ -690,19 +744,11 @@ def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None
             if lid == "testing" and it.get("bench") == "none":
                 amounts[lid] = {}                              # no bench in this iteration: nothing to test, nothing missing
                 continue
-            if lid == "tooling" and line.get("pct") is not None and index > 1:
-                if first_tooling is None:
-                    amounts[lid], reasons[lid] = None, "iteration 1 tooling missing"
-                else:
-                    amounts[lid] = {c: a * float(line["pct"]) / 100.0 for c, a in first_tooling.items()}
-                continue
             if line.get("amount") is None:
                 amounts[lid], reasons[lid] = None, line.get("hint") or "not filled"
                 continue
             mult = float(it.get("motors") or 1) if lid == "manufacturing" else 1.0
             amounts[lid] = {line["currency"]: float(line["amount"]) * mult}
-        if index == 1:
-            first_tooling = amounts["tooling"]
         subtotal: Money = {}
         line_out = {}
         conv_lines: Dict[str, Optional[float]] = {}
@@ -756,9 +802,6 @@ def origin_text(line: dict, index: int = 1, *, bench: Optional[str] = None) -> s
     """Where the number came from, in one English line (the web shows its own translated chip)."""
     if bench == "none":
         return "no test bench in this iteration"
-    if line.get("pct") is not None:
-        who = (" (set by %s on %s)" % (line.get("by") or "the owner", line.get("date") or "")) if line.get("source") == "manual" else ""
-        return "%s %% of iteration 1 tooling%s" % (_fmt(line["pct"]), who)
     if line.get("status") != "filled":
         return "missing" + ((": " + line["hint"]) if line.get("hint") else "")
     src, ref = line.get("source"), line.get("source_ref") or {}
@@ -830,7 +873,7 @@ def _from_estimates(estimates: List[dict], line_id: str, index: int, bench: Opti
     for other in estimates:
         for it in other.get("iterations") or []:
             line = (it.get("lines") or {}).get(line_id) or {}
-            if line.get("status") != "filled" or line.get("amount") is None:
+            if line.get("status") != "filled" or line.get("amount") is None or line.get("currency") != "EUR":
                 continue
             if line_id == "testing" and it.get("bench") == "none":
                 continue
@@ -846,8 +889,6 @@ def _from_estimates(estimates: List[dict], line_id: str, index: int, bench: Opti
 
 
 def _suggestable(line: dict, refresh: bool) -> bool:
-    if line.get("pct") is not None:
-        return False                                   # "modifications" rule: the owner's choice of mode
     if line.get("status") == "missing":
         return True                                    # no value to lose
     # a filled line: the owner's numbers (manual, converted) are never overwritten; with refresh an earlier suggestion is
@@ -862,8 +903,8 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
     iterations: [{index, bench, lines}]}]}``.
 
     * manufacturing (every iteration): the nearest analog's per-motor cost x (target / analog active mass);
-    * tooling of iteration 1: the nearest analog's tooling sum x the same kind of factor; a later iteration's missing
-      tooling goes back to the default "% of iteration 1";
+    * tooling of iteration 1: the nearest analog's tooling sum x the same kind of factor; a later iteration's tooling is
+      left for the owner to enter;
     * testing and shipping: another project's value for that line, as-is.
     A line that cannot be suggested stays missing with a one-line ``hint``.  Never touches a ``manual`` or ``converted``
     line; with ``refresh`` it also re-suggests lines an earlier suggestion filled."""
@@ -872,6 +913,8 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
     productions = list(data.get("productions") or [])
     estimates = [e for e in data.get("estimates") or [] if e.get("project_id") != est.get("project_id")]
     picks = {kind: pick_analog(productions, kind, target_mass, schema) for kind in ("cost_per_motor", "tooling")}
+    rates = fx_rates(est.get("fx"))
+    base_cur = schema["line_currency"]
     filled: List[dict] = []
     skipped: List[dict] = []
     notes: List[str] = []
@@ -898,16 +941,21 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
             if lid == "testing" and it.get("bench") == "none":
                 continue
             if lid == "tooling" and index > 1:
-                line.update({"status": "filled", "amount": None, "pct": later_pct_default(schema), "source": "rule",
-                             "source_ref": None, "factor": None, "date": today, "by": "suggest", "hint": ""})
-                filled.append({"iteration": index, "line": lid, "source": "rule"})
+                miss(line, index, lid, "a later iteration's tooling is not suggested: enter it")
                 continue
             if lid in ("manufacturing", "tooling"):
                 pick, why = picks["cost_per_motor" if lid == "manufacturing" else "tooling"]
                 if pick is None:
                     miss(line, index, lid, why)
                     continue
-                put(line, {"amount": pick["amount"], "currency": pick["currency"], "source": "production", "factor": pick["factor"],
+                amount = pick["amount"]
+                if pick["currency"] != base_cur:               # every amount is in EUR: the analog's money is converted
+                    if not rates.get(pick["currency"]):
+                        miss(line, index, lid, "analog %s is priced in %s and no exchange rate is known: enter it in %s"
+                             % (pick["ref"], pick["currency"], base_cur))
+                        continue
+                    amount = round(amount / rates[pick["currency"]], 2)
+                put(line, {"amount": amount, "currency": base_cur, "source": "production", "factor": pick["factor"],
                            "source_ref": {"production": pick["ref"], "title": pick["title"],
                                           "analog_mass_kg": pick["analog_mass_kg"], "target_mass_kg": pick["target_mass_kg"]}},
                     index, lid)

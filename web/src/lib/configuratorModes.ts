@@ -89,6 +89,15 @@ export function presetButtons(modePresets: readonly ModePreset[], config: string
     : modePresets.map((m) => ({ preset: m, text: m.label }));
 }
 
+/** `presetDiff` keys that are NOT part of the operating mode (owner 2026-11-02): the drive choice - Sine/PWM, the
+ *  transistor and the carrier, i.e. the knobs only the drive picker sets - leaves the RATED / PEAK highlight alone. */
+export const MODE_IGNORED_DIFFS: readonly string[] = ['drive'];
+
+/** Does a `presetDiff` result still mean "the state is this mode"?  Every other knob (build, current, speed,
+ *  battery, propeller) still breaks the match; only the drive is ignored. */
+export const matchesMode = (diff: readonly string[]): boolean =>
+  diff.every((d) => MODE_IGNORED_DIFFS.includes(d));
+
 /** The "changed from ..." wording: the mode button the state started from. */
 export function baseModeLabel(modePresets: readonly ModePreset[], config: string | null,
                               duty: string | null): string | null {

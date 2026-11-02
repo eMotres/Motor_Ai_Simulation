@@ -577,7 +577,6 @@
     "packEdited": "已修改",
     "preset": "预设",
     "presetModified": "已偏离预设 {config}",
-    "changedFrom": "已偏离 {mode}",
     "restoreFallback": "已保存的设置与电池组不匹配 - 已恢复为 {mode}",
     "restoreFallbackTip": "保存的设置与此电池组不匹配（{why}）。",
     "restoreWhyVoltage": "线电压 {line} V 高于电池组标称 {nominal} V",

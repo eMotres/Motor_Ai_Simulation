@@ -45,17 +45,48 @@ t('a configuration with no saved mode keeps one button, named by the configurati
 t('the state IS a button only while the build and the point both match', () => {
   const bs = M.buildModePresets([L12, L20]);
   const k = { N: 7, L_mm: 12, wireH_mm: 0.6, nP: 1, split: 1, I_A: 42.8, rpm: 13000, drive: 'sine' };
-  const match = (kk) => bs.find((b) => P.presetDiff(b, kk, null, null).length === 0)?.key ?? null;
+  const match = (kk) => bs.find((b) => M.matchesMode(P.presetDiff(b, kk, null, null)))?.key ?? null;
   assert.equal(match(k), 'L12|rated');
   assert.equal(match({ ...k, I_A: 48.8, rpm: 14400 }), 'L12|peak');
-  assert.equal(match({ ...k, I_A: 50 }), null);             // a knob moved: "changed from L12 . rated"
+  assert.equal(match({ ...k, I_A: 50 }), null);             // a real knob moved: no button is highlighted
+  assert.equal(match({ ...k, rpm: 9000 }), null);
+  assert.equal(match({ ...k, N: 8 }), null);
 });
 
-t('the "changed from" label names the mode button the state started from', () => {
+t('switching the drive keeps the mode highlight (owner 2026-11-02)', () => {
+  const bs = M.buildModePresets([L12, L20]);
+  const k = { N: 7, L_mm: 12, wireH_mm: 0.6, nP: 1, split: 1, I_A: 42.8, rpm: 13000, drive: 'sine' };
+  const match = (kk) => bs.find((b) => M.matchesMode(P.presetDiff(b, kk, null, null)))?.key ?? null;
+  // Sine -> PWM, another transistor, another carrier: still rated / still peak
+  assert.equal(match({ ...k, drive: 'pwm', drive_variant: 'v1', drive_device: 'SiC-A', drive_carrier_hz: 24000 }), 'L12|rated');
+  assert.equal(match({ ...k, drive: 'pwm', drive_variant: 'v2', drive_device: 'SiC-B', drive_carrier_hz: 48000 }), 'L12|rated');
+  assert.equal(match({ ...k, I_A: 48.8, rpm: 14400, drive: 'pwm', drive_device: 'SiC-A', drive_carrier_hz: 24000 }), 'L12|peak');
+  // the drive is the ONLY thing ignored: a moved knob together with a drive change still drops the match
+  assert.equal(match({ ...k, I_A: 50, drive: 'pwm', drive_variant: 'v1' }), null);
+  assert.ok(M.matchesMode(['drive']));
+  assert.ok(M.matchesMode([]));
+  for (const d of ['build', 'current', 'speed', 'battery', 'propeller']) assert.ok(!M.matchesMode([d]), d);
+  assert.ok(!M.matchesMode(['drive', 'current']));
+});
+
+t('the restore wording names the mode button the state started from', () => {
   const bs = M.buildModePresets([L12, L20]);
   assert.equal(M.baseModeLabel(bs, 'L12', 'rated'), 'L12 · rated');
   assert.equal(M.baseModeLabel(bs, 'L20', null), 'L20 · rated');
   assert.equal(M.baseModeLabel(bs, null, null), null);
+});
+
+t('the panel no longer shows the yellow "changed from" label, and its locale key is gone', async () => {
+  const { readFileSync } = await import('node:fs');
+  const root = new URL('../../', import.meta.url);
+  const panel = readFileSync(new URL('components/compare/ConfiguratorPanel.tsx', root), 'utf8');
+  assert.ok(!panel.includes('configure.changedFrom'));
+  assert.ok(/matchesMode\(presetDiff\(/.test(panel));          // the highlight ignores the drive
+  for (const l of ['en', 'zh-CN']) {
+    const j = JSON.parse(readFileSync(new URL(`locales/${l}/controller.json`, root), 'utf8'));
+    assert.ok(!('changedFrom' in j.configure), l);
+    assert.ok('preset' in j.configure && 'resetToDefault' in j.configure, l);
+  }
 });
 
 t('a loaded machine on a mode point is recognised as that mode', () => {

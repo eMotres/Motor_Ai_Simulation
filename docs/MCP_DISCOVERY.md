@@ -61,7 +61,7 @@ declaration ChatGPT's Apps SDK reads.
 |---|---|
 | `describe_service()` | name, operator (MOTRES d.o.o.), summary, licence `Apache-2.0`, website, MCP endpoint, source / terms / privacy / docs URLs, data policy |
 | `list_capabilities()` | every tool: name, one-line purpose, `required_scope` (null = public), `requires_auth`, `read_only`; every scope with what it unlocks |
-| `list_calculation_types()` | `machine_fit_check`, `saved_performance`, `design_from_requirements`, `em_fem_transient`, `thermal`, `coupled_em_thermal`, `catalog_lookup` (via MCP), plus `efficiency_map`, `mechanical`, `controller_losses`, `end_effect_3d`, `optimization` (web app only, no MCP tool yet) |
+| `list_calculation_types()` | `machine_fit_check`, `saved_performance`, `design_from_requirements`, `em_fem_transient`, `thermal`, `coupled_em_thermal`, `catalog_lookup`, `motor_order` (via MCP), plus `efficiency_map`, `mechanical`, `controller_losses`, `end_effect_3d`, `optimization` (web app only, no MCP tool yet) |
 | `get_input_requirements(calculation_type)` | required / optional inputs with UCUM units (`N.m`, `/min`, `V`, `mm`, `kg`, `Cel`, `kW`) and ranges. The ranges come from the validators' own constants (`agent_designs.TORQUE_RANGE_NM`, `DC_BUS_RANGE_V`, `COOLINGS`, `DUTIES`, `STEPS_RANGE`…) and the tool schemas, so they cannot drift. Web-only types return no inputs and name the web tab. |
 | `how_to_authenticate()` | OAuth metadata URLs (protected resource, authorization server), authorize / token / registration endpoints, default scopes, the API-key alternative, sign-in and sign-up URLs, each scope and what it unlocks, a `user_message` |
 | `start_sign_up()` | the sign-up URL, steps, `account_created_by_this_call: false`, a `user_message`. It takes no input and creates nothing. |
@@ -75,6 +75,16 @@ workspace, die grant, machine, draft, job or usage record. A test calls every
 public tool, `initialize`, the lists and the guide anonymously with two users
 holding keys and granted dies, and checks that no e-mail, name, key id or die
 name appears in any answer.
+
+### Ordering a motor (signed in, 2026-11-02)
+
+`list_calculation_types` lists `motor_order` and `get_input_requirements("motor_order")`
+gives the required fields of the specification (from `development/schema.json`).
+After sign-in with the scopes `projects:read` + `projects:write` the flow is
+`get_spec_form` -> `create_order` -> `update_spec` until `needs_input` is empty
+-> `submit_spec` -> `get_order_status`; the order ends at a submitted
+specification and nothing in it talks about money or delivery dates
+(`docs/MCP_2026-09-28.md` "Orders").
 
 ### Anonymous fair use and audit
 

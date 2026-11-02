@@ -37,9 +37,12 @@ from motor_ai_sim.json_store import lock_for, mutate_json, read_json
 #: Every scope a key / OAuth grant may carry.  Stage 3 (2026-09-28) added
 #: ``designs:write`` (create DRAFT machines in the owner's workspace) and
 #: ``simulate`` (queue solves of those drafts, daily quota).  Overwriting a
-#: saved duty (``duties:write``) does not exist yet.
+#: saved duty (``duties:write``) does not exist yet.  2026-11-02: ``projects:read``
+#: / ``projects:write`` - the order flow (``development.spec_order``): read the
+#: specification form and the owner's own projects; open a development project
+#: and fill / submit its specification.
 SCOPES: Tuple[str, ...] = ("catalog:read", "machines:read", "designs:write",
-                           "simulate")
+                           "simulate", "projects:read", "projects:write")
 #: What a key gets when the owner ticks nothing: read-only.
 DEFAULT_SCOPES: Tuple[str, ...] = ("catalog:read", "machines:read")
 #: One line per scope — the key dialog and the consent page print these.
@@ -50,6 +53,11 @@ SCOPE_DESCRIPTIONS: Dict[str, str] = {
                      "agent's; never changes your saved machines or open motor)",
     "simulate": "Queue simulations of those drafts in your job queue "
                 "(daily fair-use limit)",
+    "projects:read": "Read the specification form and your own development "
+                     "projects (status, completeness, linked motors)",
+    "projects:write": "Open development projects in your name and fill and "
+                      "submit their specification (MOTRES engineers take it "
+                      "from there)",
 }
 TOKEN_PREFIX = "emk_"
 MAX_KEYS_PER_USER = 10

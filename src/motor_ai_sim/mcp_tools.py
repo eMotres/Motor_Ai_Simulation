@@ -532,7 +532,17 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
     })
 
 
-GUIDE = """# AeroStator MCP — how to use (Stages 1-3 + public discovery)
+#: The one rule about money and dates (owner 2026-10-26 / 2026-11-02).  Quoted
+#: verbatim in the guide and the server instructions; tests check that no tool
+#: description and no other line of the guide talks about it.
+NO_PRICE_RULE = ("NO PRICES: this server never gives, estimates or discusses "
+                 "prices, quotes, costs, budgets or lead times, and neither "
+                 "does the agent. The order ends at a submitted specification; "
+                 "MOTRES engineers run the full simulation and agree the design "
+                 "with the customer first, and they contact the customer about "
+                 "everything after that.")
+
+GUIDE = """# AeroStator MCP — how to use (Stages 1-3, orders, public discovery)
 
 AeroStator (aerostator.com, by eMotres) designs permanent-magnet
 motors/generators and keeps a catalog of simulated machines (2-D FEM,
@@ -576,6 +586,32 @@ Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
 Example: "I need 12 N*m at 3000 rpm, 48 V" -> start_design -> needs_input
 [cooling, duty] -> ask -> start_design again -> simulate(em) -> get_job until
 done -> get_design_result -> open_in_configure link to the engineer.
+
+Order a motor (scopes projects:read + projects:write) — turn the customer's
+requirements into a development project with a submitted specification:
+1. get_spec_form(lang?) — the form, generated from the live schema: sections,
+   field ids, labels, units, required flags, choices, which fields accept
+   not_known_yet, the key point and mission phase rows, and how to fill it.
+2. create_order(title, customer_org?, application?, answers?) — opens a
+   project owned by the user (he is its owner and the only one who edits the
+   specification) and saves the first answers.  Returns project_id, revision,
+   link, completeness and needs_input.
+3. update_spec(project_id, revision, answers) — merges answers into the draft.
+   Ask the user for every needs_input row (label, unit and reason are written
+   to be read out), never invent a value; mark a field 'not_known_yet' only
+   when the user says so.  Numbers in the field's unit; one key point per
+   continuous and per peak operating point.  Repeat until needs_input is empty.
+4. submit_spec(project_id, revision) — creates the specification version;
+   MOTRES engineers review it, run the full simulation and contact the user
+   in the project's messages.
+5. get_order_status(project_id?) — the user's own projects: stage, completeness,
+   submitted version, linked motor names, unread messages.
+Answers that come back 'agreement_required' or 'project_limit' carry a
+user_message: relay it (the user accepts the platform agreement himself on
+aerostator.com; an agent never accepts it).  Only the user's own projects are
+visible; only the project owner changes the specification.
+
+""" + NO_PRICE_RULE + """
 
 Rules: read tools solve nothing; numbers are the last saved simulation.  Drafts
 never change the user's saved machines or the machine he has open.

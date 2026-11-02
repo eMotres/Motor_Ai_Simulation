@@ -36,8 +36,13 @@ def require_signed_in(request: Request) -> dict:
 
 
 def require_project(request: Request, project_id: str, *, edit: bool = False) -> tuple[dict, dict, str | None]:
-    user = require_signed_in(request)
-    project = store.get_project(project_id)
+    return project_for(require_signed_in(request), project_id, edit=edit)
+
+
+def project_for(user: dict, project_id: str, *, edit: bool = False) -> tuple[dict, dict, str | None]:
+    """``require_project`` for a caller that is already resolved (the web session or an MCP agent acting for its owner):
+    404 unless ``user`` may view the project, 403 for ``edit`` without project-engineer rights."""
+    project = store.get_project(project_id) if store.valid_id(project_id) else None
     if project is None or not can_view(user, project):
         raise HTTPException(status_code=404, detail="Project not found")
     role = membership(str(user.get("email") or ""), project)
@@ -47,7 +52,12 @@ def require_project(request: Request, project_id: str, *, edit: bool = False) ->
 
 
 def require_spec_editor(request: Request, project_id: str) -> tuple[dict, dict, str | None]:
-    user, project, role = require_project(request, project_id)
+    return spec_editor_for(require_signed_in(request), project_id)
+
+
+def spec_editor_for(user: dict, project_id: str) -> tuple[dict, dict, str | None]:
+    """``require_spec_editor`` for an already resolved caller: 404 / 403 unless ``can_edit_spec``."""
+    user, project, role = project_for(user, project_id)
     if not can_edit_spec(user, project):
         raise HTTPException(status_code=403, detail="Only the project owner or an admin can edit the specification")
     return user, project, role

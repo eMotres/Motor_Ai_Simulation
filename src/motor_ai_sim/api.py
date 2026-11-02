@@ -1116,6 +1116,8 @@ def get_full_config(geo: Optional[str] = None):
                     # "rule" = the one coil rule (coil_build.coil_rule) - no CAD profile on this path
                     "kind": _cd.get("coil_kind"),
                     "typed_keys": _cd.get("coil_typed") or [],
+                    # the keys the loaded CONFIGURATION sets itself (its coil_overrides, owner 2026-11-02)
+                    "config_keys": _cd.get("coil_config_keys") or [],
                     "wire_beng_r_mm": round(float(_cd["wire_beng_r_mm"]), 4),
                     "coil_straight_extra_mm": round(float(_cd["coil_straight_extra_mm"]), 4),
                     "coil_lead_total_mm": round(float(_cd["coil_lead_total_mm"]), 4),

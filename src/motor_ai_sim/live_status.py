@@ -10,6 +10,10 @@ one answer for the whole site, and ``worker`` in it says what the worker is doin
   in a tab for ``LIVE_WINDOW_S`` after the last beat (the app beats about once a minute while the tab is visible and
   the user interacts);
 * requests in flight per module - an ASGI middleware counts the open requests by path prefix;
+* open streams per module - a request the CLIENT holds open with no work behind it (the MCP server-sent-event stream an
+  AI app keeps connected for as long as it is connected, ``is_stream``) is counted apart, as ``streams``: never as a
+  request, so it never makes the site, the worker or a module busy.  A tool call that starts a solve is a short POST
+  that queues a job: the job queue counts it;
 * queued / running jobs - read from the per-workspace job files.
 
 The deploy script reads ``GET /api/admin/live`` (admin, or a direct loopback call inside the container) and waits
@@ -41,9 +45,15 @@ MODULE_PREFIXES: Tuple[Tuple[str, str], ...] = (
     ("/mcp", "mcp"), ("/api", "other"),
 )
 
+#: Routes whose GET / HEAD is a stream the client holds open (not work): the MCP standalone server-sent-event stream
+#: (streamable HTTP: an MCP client opens ``GET /mcp`` with ``Accept: text/event-stream`` and keeps it for the whole
+#: connection - 2026-11-02 one stayed open 1044 s and the worker never counted as idle, so the deploy waited forever).
+STREAM_ROUTES: Tuple[str, ...] = ("/mcp",)
+
 _lock = threading.Lock()
 _tabs: Dict[Tuple[str, str], Tuple[str, float]] = {}          # (user, sid) -> (tab, last beat)
 _inflight: Dict[int, Tuple[str, float]] = {}                  # request token -> (module, started)
+_streams: Dict[int, Tuple[str, float]] = {}                   # stream token -> (module, opened); never counted as work
 _seq = 0
 
 
@@ -82,14 +92,29 @@ def background(kind: str):
                 _background.pop(kind, None)
 
 
-def _begin(path: str) -> Optional[int]:
+def is_stream(scope) -> bool:
+    """A request the client holds open with no work behind it: a ``GET`` / ``HEAD`` of a ``STREAM_ROUTES`` path, or any
+    ``GET`` / ``HEAD`` that asks for ``text/event-stream`` (a server-sent-event stream).  POSTs are never streams (an MCP
+    tool call is a POST, and the solve it starts is a queued job)."""
+    if str(scope.get("method") or "").upper() not in ("GET", "HEAD"):
+        return False
+    path = str(scope.get("path") or "").rstrip("/")
+    if path in STREAM_ROUTES:
+        return True
+    for k, v in scope.get("headers") or ():
+        if k.lower() == b"accept" and b"text/event-stream" in v.lower():
+            return True
+    return False
+
+
+def _begin(path: str, stream: bool = False) -> Optional[int]:
     global _seq
     mod = module_of(path)
     if mod is None:
         return None
     with _lock:
         _seq += 1
-        _inflight[_seq] = (mod, time.time())
+        (_streams if stream else _inflight)[_seq] = (mod, time.time())
         return _seq
 
 
@@ -97,10 +122,12 @@ def _end(token: Optional[int]) -> None:
     if token is not None:
         with _lock:
             _inflight.pop(token, None)
+            _streams.pop(token, None)
 
 
 class InflightMiddleware:
-    """Counts the HTTP requests being served, by module (pure ASGI: streaming responses are counted until done)."""
+    """Counts the HTTP requests being served, by module (pure ASGI: streaming responses are counted until done).  An
+    open stream (``is_stream``) is counted apart and is never work."""
 
     def __init__(self, app):
         self.app = app
@@ -109,7 +136,7 @@ class InflightMiddleware:
         if scope.get("type") != "http" or scope.get("path") in (
                 "/api/admin/live", "/api/health", "/api/notice", "/api/worker/state", "/api/worker/drain"):
             return await self.app(scope, receive, send)
-        token = _begin(scope.get("path") or "")
+        token = _begin(scope.get("path") or "", stream=is_stream(scope))
         try:
             return await self.app(scope, receive, send)
         finally:
@@ -184,7 +211,10 @@ def merge_worker(snap: Dict[str, Any], state: Optional[Dict[str, Any]] = None) -
         mine = snap["modules"].setdefault(name, {"users": 0, "requests": 0, "oldest_request_s": 0.0})
         mine["requests"] += int(m.get("requests") or 0)
         mine["oldest_request_s"] = max(float(mine.get("oldest_request_s") or 0.0), float(m.get("oldest_request_s") or 0.0))
+        if m.get("streams"):
+            mine["streams"] = int(mine.get("streams") or 0) + int(m.get("streams") or 0)
     snap["requests_total"] += int(live.get("requests_total") or 0)
+    snap["streams_total"] = int(snap.get("streams_total") or 0) + int(live.get("streams_total") or 0)
     snap["worker"] = {"reachable": True, "draining": bool(state.get("draining")), "build": state.get("build"),
                       "instance": state.get("instance"), "uptime_s": state.get("uptime_s"),
                       "jobs": snap["jobs"], "items": state.get("jobs") or []}
@@ -196,6 +226,7 @@ def local_snapshot(include_users: bool = False, now: Optional[float] = None) -> 
     with _lock:
         tabs = [(u, t) for (u, _s), (t, ts) in _tabs.items() if now - ts <= LIVE_WINDOW_S]
         infl = list(_inflight.values())
+        strm = list(_streams.values())
         bg = dict(_background)
     by_tab: Dict[str, Dict[str, Any]] = {}
     for user, tab in tabs:
@@ -211,16 +242,21 @@ def local_snapshot(include_users: bool = False, now: Optional[float] = None) -> 
         m = modules.setdefault(mod, {"users": 0, "requests": 0, "oldest_request_s": 0.0})
         m["requests"] += 1
         m["oldest_request_s"] = round(max(m["oldest_request_s"], now - started), 1)
+    for mod, _opened in strm:                                  # shown, never counted as requests / busy
+        m = modules.setdefault(mod, {"users": 0, "requests": 0, "oldest_request_s": 0.0})
+        m["streams"] = int(m.get("streams") or 0) + 1
     from motor_ai_sim import roles
     return {"at": now, "window_s": LIVE_WINDOW_S, "users_total": len({u for u, _t in tabs}),
-            "requests_total": len(infl), "jobs": _jobs_memory() if roles.is_worker() else _jobs(), "modules": modules,
+            "requests_total": len(infl), "streams_total": len(strm), "jobs": _jobs_memory() if roles.is_worker() else _jobs(), "modules": modules,
             "background": {"total": sum(bg.values()), "kinds": bg},
-            # what stopping this process would cut off: requests in flight + background threads (the drain checks it)
+            # what stopping this process would cut off: requests in flight + background threads (the drain checks it);
+            # open streams are not in it - the client reconnects, no work is lost
             "busy_total": len(infl) + sum(bg.values()), "notice": read_notice(now)}
 
 
 def idle(snap: Dict[str, Any], modules: List[str]) -> bool:
-    """No job queued or running, and nobody / no request in any of ``modules`` ("all" = anywhere)."""
+    """No job queued or running, and nobody / no request in any of ``modules`` ("all" = anywhere).  Open streams
+    (``streams``) do not count."""
     if snap["jobs"]["running"] or snap["jobs"]["queued"]:
         return False
     for name, m in snap["modules"].items():

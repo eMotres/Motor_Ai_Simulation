@@ -2,7 +2,7 @@
 import React from 'react';
 import { Box, Chip, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
 import UnreadBadge from '../../../components/common/UnreadBadge';
-import CardMotorThumb, { useDieIndex } from '../../../components/common/CardMotorThumb';
+import CardMotorThumb, { CARD_THUMB_SIZE, useDieIndex } from '../../../components/common/CardMotorThumb';
 import { projectCardMotor } from '../../../lib/cardMotor';
 import { NARROW } from '../../../lib/narrowLayout';
 import type { ProjectSummary } from '../types';
@@ -93,23 +93,27 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>
       {projects.map((p) => {
         const c = numbers(p), n = unread(p), motor = projectCardMotor(p.linked_motors, dieIndex);
+        // one picture per card, always the small one in the bottom-right corner (owner 2026-11-02): the cover the project
+        // chose (a board's top view, a render) wins over the linked motor's section
+        const corner = Boolean(p.cover_version || motor);
         return (
           <Paper key={p.id} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={keyOpen(() => onOpen(p))}
-            sx={{ position: 'relative', p: 1.8, minHeight: motor ? 108 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
-            {p.cover_version && <ProjectCover projectId={p.id} version={p.cover_version} height={110} sx={{ mb: 1 }} />}
+            sx={{ position: 'relative', p: 1.8, minHeight: corner ? 108 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}>
               <Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}<UnreadBadge count={n} /></Typography>
               <Chip size="small" label={t(`status.${p.status}`)} />
             </Box>
-            <Box sx={{ pr: motor ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
+            <Box sx={{ pr: corner ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
               <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>
               {/* with a picture in the corner the label and the bar stack (owner 2026-10-28: side by side the bar shrank to a stub) */}
-              <Box sx={{ mt: 1.2, display: 'flex', flexDirection: motor ? 'column' : 'row', alignItems: motor ? 'stretch' : 'center', gap: motor ? 0.5 : 1 }}>
+              <Box sx={{ mt: 1.2, display: 'flex', flexDirection: corner ? 'column' : 'row', alignItems: corner ? 'stretch' : 'center', gap: corner ? 0.5 : 1 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>
                 <Bar filled={c.filled} total={c.total} />
               </Box>
             </Box>
-            {motor && <CardMotorThumb motor={motor} />}
+            {p.cover_version && <ProjectCover projectId={p.id} version={p.cover_version} height={CARD_THUMB_SIZE} alt={p.title}
+              sx={{ position: 'absolute', right: 10, bottom: 8, width: CARD_THUMB_SIZE, bgcolor: 'transparent', borderRadius: 0 }} />}
+            {!p.cover_version && motor && <CardMotorThumb motor={motor} />}
           </Paper>
         );
       })}

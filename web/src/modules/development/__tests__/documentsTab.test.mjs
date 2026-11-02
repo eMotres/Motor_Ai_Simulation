@@ -46,6 +46,9 @@ test('the cover shows on the project card and at the top of the project page, wi
   const card = readFileSync(new URL('../components/ProjectOverview.tsx', import.meta.url), 'utf8');
   const page = readFileSync(new URL('../components/DevelopmentPage.tsx', import.meta.url), 'utf8');
   assert.match(card, /p\.cover_version && <ProjectCover/);
+  // on the card the cover is the small corner picture, in place of the motor section (owner 2026-11-02: one style)
+  assert.match(card, /<ProjectCover[^>]*height=\{CARD_THUMB_SIZE\}[\s\S]*?position: 'absolute', right: 10, bottom: 8/);
+  assert.match(card, /!p\.cover_version && motor && <CardMotorThumb/);
   assert.match(page, /selected\.cover_version && <ProjectCover/);
   for (const lang of ['en', 'zh-CN']) for (const k of ['coverSet', 'coverClear', 'coverUpload', 'coverTip', 'coverNotImage']) assert.ok(locale(lang).documents[k], `${lang}.${k}`);
 });

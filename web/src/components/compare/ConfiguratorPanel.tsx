@@ -44,7 +44,7 @@ import PropellerLoadChart from './PropellerLoadChart';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import { coggingDigits, coggingTipText, coggingValue } from '../../lib/coggingTile';
 import {
-  driveRowTiles, pwmExtraW, pwmMagnetW, lossPartTiles, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, pwmExtraW, pwmMagnetW, lossPartTiles, lossTailTiles, lossDigits, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -2696,10 +2696,10 @@ ${s1Text.text}` : '';
             <MetricTile label={tx('configure.totalLoss')} value={pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null} unit="W" d={0}
               base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')}
               blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? partTile.iron.value : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
+            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? partTile.iron.value : null} unit="W" d={lossDigits(partTile.iron.value)} base={baseRes.P_fe_W} goodHi={false}
               tip={tx('configure.ironLossTip') + partTip(partTile.iron)} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? partTile.copper.value : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip + partTip(partTile.copper)} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? partTile.magnet.value : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
+            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? partTile.copper.value : null} unit="W" d={lossDigits(partTile.copper.value)} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip + partTip(partTile.copper)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? partTile.magnet.value : null} unit="W" d={lossDigits(partTile.magnet.value)} base={baseRes.P_mag_W} goodHi={false}
               tip={tx('configure.magnetLossTip') + partTip(partTile.magnet)} blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
             <MetricTile label={tx('configure.statorHeat')} value={motorHeat?.stator_W ?? null} unit="W" d={0}

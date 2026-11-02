@@ -34,7 +34,10 @@ t('the drive-dependent tiles are the same list, in the same order, in Sine, PWM 
   for (const [name, [mode, drv]] of Object.entries(STATES)) assert.deepEqual(ids(mode, drv), want, name);
   // the label / unit / precision of a tile never depends on the mode either (the width cannot move)
   const shape = (mode, drv) => JSON.stringify([...T.driveRowTiles(mode, drv, 150), ...T.lossTailTiles(mode, drv)]
-    .map(({ id, labelKey, tipKey, unit, d }) => ({ id, labelKey, tipKey, unit, d })));
+    // (the loss tiles' decimals follow their VALUE: one below 10 W - `lossDigits`, tested below)
+    // (and the PWM remainder's title follows the selected variant's split - tested below)
+    .map(({ id, labelKey, tipKey, unit, d }) => (T.LOSS_TAIL_IDS.includes(id)
+      ? { id, unit } : { id, labelKey, tipKey, unit, d })));
   for (const [name, [mode, drv]] of Object.entries(STATES)) assert.equal(shape(mode, drv), shape('sine', null), name);
 });
 
@@ -52,6 +55,52 @@ t('PWM: the numbers; a refusal or a missing field blanks the value in place', ()
   const part = Object.fromEntries(T.driveRowTiles('pwm', PARTIAL, 150, 90).map((r) => [r.id, r.blank]));
   assert.equal(part.tj, 'missing'); assert.equal(part.pContMax, 'missing'); assert.equal(part.motorEff, null);
   assert.deepEqual(T.lossTailTiles('pwm', PARTIAL).map((x) => x.blank), ['missing', 'missing']);
+});
+
+// ── loss tiles: precision and the title of the PWM remainder (owner 2026-11-02) ─────────────────
+const LPARTS = { iron: 3.2, copper_ac: 6.1, magnet: 0.7, other: 1.5 };
+const LSPLIT_PT = { ...FULL, motor_pwm_loss_W: 11.5, motor_pwm_loss_parts_W: LPARTS };      // the selected variant HAS the split
+const LTOTAL_PT = { ...FULL, motor_pwm_loss_parts_W: null };                                // a `_1par` variant: the total only
+
+t('loss tiles: one decimal below 10 W, whole watts from 10 W (judged on the rounded value)', () => {
+  assert.equal(T.lossDigits(4), 1); assert.equal(T.lossDigits(4.7), 1); assert.equal(T.lossDigits(0), 1);
+  assert.equal(T.lossDigits(9.94), 1); assert.equal(T.lossDigits(9.96), 0);          // 9.96 prints "10.0" -> whole watts
+  assert.equal(T.lossDigits(10), 0); assert.equal(T.lossDigits(123.4), 0);
+  assert.equal(T.lossDigits(null), 0); assert.equal(T.lossDigits(undefined), 0); assert.equal(T.lossDigits(NaN), 0);
+  const fmt = (w) => w.toFixed(T.lossDigits(w));
+  assert.equal(fmt(4), '4.0'); assert.equal(fmt(4.7), '4.7'); assert.equal(fmt(12.5), '13');
+  // the PWM remainder and the controller tiles carry it in their spec
+  const [extra, ctrl] = T.lossTailTiles('pwm', { ...FULL, motor_pwm_loss_W: 4.6, inv_total_W: 7, board_copper_W: 2.3 });
+  assert.deepEqual([extra.value, extra.d], [4.6, 1]); assert.deepEqual([ctrl.value, ctrl.d], [9.3, 1]);
+  const [e2, c2] = T.lossTailTiles('pwm', FULL);
+  assert.deepEqual([e2.value, e2.d], [12.5, 0]); assert.deepEqual([c2.value, c2.d], [9.5, 1]);
+  const [e3, c3] = T.lossTailTiles('pwm', { ...FULL, inv_total_W: 20 });
+  assert.equal(c3.d, 0); assert.equal(e3.d, 0);
+  // the iron / copper / magnet tiles of the panel use the same formatter
+  const panel = read('components/compare/ConfiguratorPanel.tsx');
+  for (const k of ['iron', 'copper', 'magnet']) assert.ok(panel.includes(`d={lossDigits(partTile.${k}.value)}`), k);
+});
+
+t('the PWM remainder title follows the SELECTED variant: "PWM other" with the split, "PWM unsplit" without', () => {
+  const key = (mode, drv, split) => T.extraLossTile(mode, drv, split).labelKey;
+  // machine with mixed variants (split state 'total'): the selected variant decides in PWM
+  assert.equal(key('pwm', LSPLIT_PT, 'total'), 'configureDrive.motorLossOther');
+  assert.equal(key('pwm', LTOTAL_PT, 'total'), 'configureDrive.motorLossUnsplit');
+  assert.equal(key('pwm', LSPLIT_PT, 'parts'), 'configureDrive.motorLossOther');
+  assert.equal(key('pwm', LTOTAL_PT, 'parts'), 'configureDrive.motorLossUnsplit');
+  // the split variant's remainder is its own `other`, the total-only variant shows the whole total
+  assert.equal(T.extraLossTile('pwm', LSPLIT_PT, 'total').value, 1.5);
+  assert.equal(T.extraLossTile('pwm', LTOTAL_PT, 'total').value, 12.5);
+  // no variant reading (Sine, refused, no value): the machine-level state names it
+  assert.equal(key('sine', null, 'total'), 'configureDrive.motorLossUnsplit');
+  assert.equal(key('sine', null, 'parts'), 'configureDrive.motorLossOther');
+  assert.equal(key('pwm', null, 'parts'), 'configureDrive.motorLossOther');
+  assert.equal(key('pwm', PARTIAL, 'none'), 'configureDrive.motorLoss');
+  // the titles keep the tile-width cap (en 11, zh-CN 12 characters)
+  for (const [l, max] of [['en', 11], ['zh-CN', 12]]) {
+    const d = loc(l).configureDrive;
+    for (const k of ['motorLossOther', 'motorLossUnsplit']) assert.ok([...d[k]].length <= max, `${l} ${k}`);
+  }
 });
 
 t('T_j is coloured by the device limit only when there is a number and a limit', () => {
@@ -557,10 +606,11 @@ t('Sine and an old passport without the split: the rows are the sine values; the
   const old = T.extraLossTile('pwm', FULL, 'total');
   assert.equal(old.value, 12.5); assert.equal(old.labelKey, 'configureDrive.motorLossUnsplit');
   assert.equal(T.pwmMagnetW('pwm', FULL), 0);
-  // the tile names depend on the MACHINE (split or not), never on the drive: same label in Sine and PWM
+  // the title follows the selected variant (owner 2026-11-02); on a machine whose variants all agree it is the same in
+  // Sine and PWM, and a refused point keeps the machine's name
   for (const split of ['none', 'total', 'parts']) {
     const lab = (mode, drv) => T.lossTailTiles(mode, drv, split).map((x) => x.labelKey).join();
-    assert.equal(lab('pwm', split === 'parts' ? SPLIT : FULL), lab('sine', null), split);
+    if (split !== 'none') assert.equal(lab('pwm', split === 'parts' ? SPLIT : FULL), lab('sine', null), split);
     assert.equal(lab('pwm', null), lab('sine', null), split);
   }
   assert.equal(T.extraLossTile('sine', null, 'parts').value, 0);

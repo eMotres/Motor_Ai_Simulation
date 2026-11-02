@@ -26,6 +26,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 const p = (id: string) => `/api/projects/${enc(id)}`;
 const ce = (id: string) => `/api/admin/projects/${enc(id)}/cost-estimate`;
+/** `?display_currency=` - the UI language's currency, for the cost estimate's converted totals. */
+const dq = (display?: string) => (display ? `?display_currency=${enc(display)}` : '');
 
 /** The steps feed carries a light panel per computed point; its FINAL numbers are merged into the point's comparison row, so the
  *  steps table and chart read what the information panel shows (the panel itself is not kept). */
@@ -116,10 +118,10 @@ export const developmentApi = {
   /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
   productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
   /** ADMIN ONLY (owner 2026-11-02): the project cost estimate (costEstimate.ts).  403 for anybody else. */
-  costEstimate: (id: string) => call<CostEstimateAnswer>('GET', ce(id)),
-  saveCostEstimate: (id: string, estimate: CostEstimate) => call<CostEstimateAnswer>('PUT', ce(id), estimate),
-  suggestCostEstimate: (id: string, revision: number, refresh = false) => call<CostEstimateAnswer>('POST', `${ce(id)}/suggest`, { revision, refresh }),
-  snapshotCostEstimate: (id: string, revision: number, note: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note }),
+  costEstimate: (id: string, display?: string) => call<CostEstimateAnswer>('GET', ce(id) + dq(display)),
+  saveCostEstimate: (id: string, estimate: CostEstimate, display?: string) => call<CostEstimateAnswer>('PUT', ce(id) + dq(display), estimate),
+  suggestCostEstimate: (id: string, revision: number, refresh = false, display?: string) => call<CostEstimateAnswer>('POST', `${ce(id)}/suggest${dq(display)}`, { revision, refresh }),
+  snapshotCostEstimate: (id: string, revision: number, note: string, display?: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note, display_currency: display }),
   costEstimateSnapshots: async (id: string) => (await call<{ snapshots: CostSnapshot[] }>('GET', `${ce(id)}/snapshots`)).snapshots ?? [],
 };
 

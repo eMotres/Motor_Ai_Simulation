@@ -66,10 +66,12 @@ GEOMETRY_DENYLIST = frozenset({
 #: (``torque_margin_pct`` in check_fit, a mode's frequency margin) are engineering data, not our commercial margin.
 COMMERCIAL_DENYLIST = frozenset({
     "margin", "margin_pct", "share_costs_with_oem", "by_currency", "mixed_currency",
+    # the cost estimate's exchange rates and display-currency totals (``display_currency`` is caught by "currency")
+    "fx", "fx_status", "rates", "converted",
 })
 COMMERCIAL_TOKENS = frozenset({
     "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",
-    "quotation", "currency", "currencies", "subtotal", "invoice", "payment", "contingency",
+    "quotation", "currency", "currencies", "subtotal", "invoice", "payment", "contingency", "exchange", "ecb",
 })
 
 

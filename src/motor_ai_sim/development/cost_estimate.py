@@ -5,8 +5,12 @@ costs us («не надо до такой степени оценивать ст
   ``tooling`` (iteration 1: the tooling; later iterations: "modifications" = a % of iteration 1's tooling, default 20 %,
   or an amount), ``manufacturing`` (the cost of ONE motor x the motors of the iteration), ``testing`` (one amount; the
   bench is dyno / propeller stand / both / none) and ``shipping`` (DHL, one amount).
-* Settings: iterations, currency (EUR / CNY / USD), contingency % (default 10).  Totals are PER CURRENCY: no exchange
-  rate exists in the app and none is invented here.
+* Settings: iterations, currency (EUR / CNY / USD), contingency % (default 10), ``display_currency`` (``None`` = follows
+  the UI language: en -> EUR, zh-CN -> CNY; the owner may pick EUR / CNY / USD).  Every line keeps its own entered amount
+  and currency; the per-currency totals are always computed.  The estimate also carries dated exchange rates, ``fx`` (EUR
+  base: ECB reference rates stored with their date, optionally overridden per currency by hand - a manual rate wins), and
+  ``compute`` adds ``converted``: the lines and totals in the display currency at those rates.  A rate that is not known
+  is never invented: the totals then stay per currency (``converted.available`` is false).
 * Every number keeps its origin: ``production`` (the per-motor cost / tooling sum of the most similar built motor, x ONE
   factor = target active mass / analog active mass), ``estimate`` (another project's estimate, as-is), ``manual`` (the
   owner, with e-mail and date), ``converted`` (from an old 68-line estimate) or ``rule`` (the default % of iteration 1).
@@ -35,6 +39,8 @@ SOURCES = ("production", "estimate", "manual", "converted", "rule")
 AUTO_SOURCES = ("production", "estimate")
 _MAX_NOTE = 500
 _MAX_REF = 200
+FX_BASE = "EUR"
+FX_SOURCES = ("ECB", "manual")
 
 Money = Dict[str, float]
 
@@ -52,6 +58,9 @@ def _check_schema(schema: dict) -> dict:
         raise ValueError("cost estimate schema: schema_version 2 expected")
     if not schema.get("currencies") or schema.get("default_currency") not in schema["currencies"]:
         raise ValueError("cost estimate schema: currencies / default_currency")
+    by_locale = schema.get("display_currency_by_locale") or {}
+    if set(by_locale) != set(schema.get("locales") or []) or any(c not in schema["currencies"] for c in by_locale.values()):
+        raise ValueError("cost estimate schema: display_currency_by_locale")
     if [ln.get("id") for ln in schema.get("lines") or []] != list(LINES):
         raise ValueError("cost estimate schema: the lines must be %s" % ", ".join(LINES))
     lo, hi = schema.get("factor_limits") or (0, 0)
@@ -110,7 +119,7 @@ def default_settings(schema: dict, *, linked_motors: Iterable[dict] = ()) -> dic
     return {"complex": complex_project, "iterations": default_iterations(complex_project, schema),
             "currency": _field(schema, "settings", "currency")["default"],
             "contingency_pct": float(_field(schema, "settings", "contingency_pct")["default"]),
-            "target_motor": _target_from(linked_motors)}
+            "display_currency": None, "target_motor": _target_from(linked_motors)}
 
 
 def blank_line(currency: str) -> dict:
@@ -137,7 +146,7 @@ def default_iteration(schema: dict, settings: dict, index: int) -> dict:
 def default_estimate(schema: dict, project_id: str, *, linked_motors: Iterable[dict] = ()) -> dict:
     settings = default_settings(schema, linked_motors=linked_motors)
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id, "revision": 0,
-            "settings": settings,
+            "settings": settings, "fx": None,
             "iterations": [default_iteration(schema, settings, i) for i in range(1, settings["iterations"] + 1)],
             "migration": None, "updated_at": None, "updated_by": None}
 
@@ -186,6 +195,13 @@ def normalize_settings(raw: Any, schema: dict) -> dict:
         if not isinstance(target, dict) or not str(target.get("die") or "").strip() or not str(target.get("config") or "").strip():
             raise EstimateError("target_motor: {die, config} or null")
         target = {"die": _text(target["die"], _MAX_REF), "config": _text(target["config"], _MAX_REF)}
+    display = raw.get("display_currency")
+    if display in (None, ""):
+        display = None
+    else:
+        display = str(display).strip().upper()
+        if display not in schema["currencies"]:
+            raise EstimateError("display_currency: null or one of %s" % ", ".join(schema["currencies"]))
     complex_project = bool(raw.get("complex"))
     return {"complex": complex_project,
             "iterations": _int(raw.get("iterations", default_iterations(complex_project, schema)), "iterations",
@@ -193,7 +209,7 @@ def normalize_settings(raw: Any, schema: dict) -> dict:
             "currency": currency,
             "contingency_pct": _num(raw.get("contingency_pct", pct_field["default"]), "contingency_pct",
                                     lo=pct_field["min"], hi=pct_field["max"], allow_none=False),
-            "target_motor": target}
+            "display_currency": display, "target_motor": target}
 
 
 def _source_ref(raw: Any, what: str) -> Optional[dict]:
@@ -291,9 +307,137 @@ def normalize_estimate(raw: Any, schema: dict, project_id: str) -> dict:
             "lines": {lid: (normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid)) if lid in lines_raw
                             else default_line(lid, index, settings["currency"], schema)) for lid in LINES}})
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id,
-            "revision": int(raw.get("revision") or 0), "settings": settings, "iterations": iterations,
-            "migration": _normalize_migration(raw.get("migration")),
+            "revision": int(raw.get("revision") or 0), "settings": settings, "fx": normalize_fx(raw.get("fx"), schema),
+            "iterations": iterations, "migration": _normalize_migration(raw.get("migration")),
             "updated_at": raw.get("updated_at"), "updated_by": raw.get("updated_by")}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# exchange rates (EUR base).  ``fx`` = {base, date, rates, source, ecb: {date, rates} | None, manual: {cur: rate},
+# manual_date}: ``rates`` are the EFFECTIVE units of each currency per 1 EUR (a manual rate wins over the ECB one),
+# ``source`` is "manual" as soon as one rate is manual, else "ECB"; ``date`` is the date shown with the rates (the manual
+# date for "manual", else the ECB reference date).  Pure: the ECB fetch and its disk cache are in ``cost_estimate_fx``.
+# ---------------------------------------------------------------------------------------------------------------------
+
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def fx_currencies(schema: dict) -> List[str]:
+    """The currencies that need a rate (everything but the EUR base)."""
+    return [c for c in schema["currencies"] if c != FX_BASE]
+
+
+def _rate(v: Any, what: str) -> float:
+    x = _num(v, what, lo=0.0, hi=1e9, allow_none=False)
+    if not x or x <= 0:
+        raise EstimateError("%s: a rate above 0 is required" % what)
+    return float(x)
+
+
+def _rate_map(raw: Any, schema: dict, what: str) -> Dict[str, float]:
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise EstimateError("%s: an object {currency: rate}" % what)
+    allowed = fx_currencies(schema)
+    out: Dict[str, float] = {}
+    for cur, value in raw.items():
+        c = str(cur).strip().upper()
+        if c not in allowed:
+            raise EstimateError("%s: %r is not one of %s" % (what, cur, ", ".join(allowed)))
+        out[c] = _rate(value, "%s.%s" % (what, c))
+    return {c: out[c] for c in allowed if c in out}
+
+
+def _fx_date(v: Any, what: str) -> Optional[str]:
+    d = _text(v, 32)[:10]
+    if not d:
+        return None
+    if not _DATE.fullmatch(d):
+        raise EstimateError("%s: YYYY-MM-DD" % what)
+    return d
+
+
+def build_fx(ecb: Optional[dict], manual: Dict[str, float], manual_date: Optional[str]) -> Optional[dict]:
+    """The ``fx`` document from the ECB rates (``{date, rates}`` or None) and the manual ones; None when no rate is known."""
+    rates: Dict[str, float] = dict((ecb or {}).get("rates") or {})
+    rates.update(manual)
+    if not rates:
+        return None
+    source = "manual" if manual else "ECB"
+    return {"base": FX_BASE, "date": manual_date if manual else (ecb or {}).get("date"), "rates": rates, "source": source,
+            "ecb": {"date": ecb.get("date"), "rates": dict(ecb["rates"])} if ecb and ecb.get("rates") else None,
+            "manual": dict(manual), "manual_date": manual_date if manual else None}
+
+
+def normalize_fx(raw: Any, schema: dict) -> Optional[dict]:
+    """A stored / submitted ``fx`` checked and rebuilt (``None`` stays None).  The effective rates are re-derived from the
+    ECB part and the manual part, so they can never disagree with them."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise EstimateError("fx: an object or null")
+    if raw.get("base", FX_BASE) != FX_BASE:
+        raise EstimateError("fx.base: %s" % FX_BASE)
+    if raw.get("source") not in (None,) + FX_SOURCES:
+        raise EstimateError("fx.source: one of %s" % ", ".join(FX_SOURCES))
+    manual = _rate_map(raw.get("manual"), schema, "fx.manual")
+    ecb_raw = raw.get("ecb")
+    ecb = None
+    if isinstance(ecb_raw, dict):
+        rates = _rate_map(ecb_raw.get("rates"), schema, "fx.ecb.rates")
+        if rates:
+            ecb = {"date": _fx_date(ecb_raw.get("date"), "fx.ecb.date"), "rates": rates}
+    elif ecb_raw is not None:
+        raise EstimateError("fx.ecb: an object or null")
+    if ecb is None and not manual:
+        # rates given without their parts (a hand-made payload): they are ECB rates of the given date
+        rates = _rate_map(raw.get("rates"), schema, "fx.rates")
+        if rates and raw.get("source") != "manual":
+            ecb = {"date": _fx_date(raw.get("date"), "fx.date"), "rates": rates}
+    return build_fx(ecb, manual, _fx_date(raw.get("manual_date"), "fx.manual_date") if manual else None)
+
+
+def merge_fx(previous: Optional[dict], manual: Optional[Dict[str, float]], live: Optional[dict], schema: dict, today: str) -> Optional[dict]:
+    """The ``fx`` to store: the rates of the PREVIOUS stored ``fx`` kept, the live ECB rates (``{date, rates}``) taken when they
+    are newer or equal, the manual rates as given (a manual rate wins, dated today unless unchanged).  Nothing is invented: with
+    no ECB rate and no manual one the result is None."""
+    prev = previous or {}
+    prev_ecb = prev.get("ecb") if isinstance(prev.get("ecb"), dict) else None
+    ecb = prev_ecb
+    if live and live.get("rates") and (prev_ecb is None or str(live.get("date") or "") >= str(prev_ecb.get("date") or "")):
+        ecb = {"date": live.get("date"), "rates": dict(live["rates"])}
+    manual = _rate_map(manual if manual is not None else prev.get("manual"), schema, "fx.manual")
+    manual_date = prev.get("manual_date") if manual and manual == (prev.get("manual") or {}) else (today or None)
+    return build_fx(ecb, manual, manual_date if manual else None)
+
+
+def fx_rates(fx: Optional[dict]) -> Dict[str, float]:
+    """Units of each currency per 1 EUR, EUR itself included; only the currencies a rate is known for."""
+    rates = {FX_BASE: 1.0}
+    for cur, v in ((fx or {}).get("rates") or {}).items():
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x) and x > 0:
+            rates[cur] = x
+    return rates
+
+
+def convert_money(money: Money, display: str, rates: Dict[str, float]) -> Tuple[Optional[float], List[str]]:
+    """``money`` expressed in ``display`` at ``rates`` (units per 1 EUR): ``(value, [])``, or ``(None, [currencies without a
+    rate])`` - never a guessed rate."""
+    total = 0.0
+    lacking: List[str] = []
+    for cur, amount in money.items():
+        if cur == display:
+            total += amount
+        elif cur in rates and display in rates:
+            total += amount / rates[cur] * rates[display]
+        else:
+            lacking.extend(c for c in (cur, display) if c not in rates and c not in lacking)
+    return (None, lacking) if lacking else (total, [])
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -511,10 +655,28 @@ def _merge(acc: Money, other: Money) -> None:
         acc[cur] = acc.get(cur, 0.0) + amount
 
 
-def compute(estimate: dict, schema: dict) -> dict:
+def display_currency_of(estimate: dict, schema: dict, display_currency: Optional[str] = None) -> str:
+    """The currency the money is shown in: the owner's own choice stored in the estimate (``settings.display_currency``), else
+    the caller's (the UI language's: en -> EUR, zh-CN -> CNY), else the schema default.  An unknown code is refused."""
+    def valid(code: Any) -> Optional[str]:
+        code = str(code or "").strip().upper()
+        if code and code not in schema["currencies"]:
+            raise EstimateError("display_currency: one of %s" % ", ".join(schema["currencies"]))
+        return code or None
+    asked = valid(display_currency)
+    return valid((estimate.get("settings") or {}).get("display_currency")) or asked or schema["default_currency"]
+
+
+def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None) -> dict:
     """Per iteration: tooling / manufacturing / testing / shipping / subtotal; then the project subtotal, contingency and
-    total - all PER CURRENCY - plus the missing lines (``[{iteration, line, reason}]``)."""
+    total - all PER CURRENCY - plus the missing lines (``[{iteration, line, reason}]``).  ``converted`` repeats the lines and
+    the totals in the display currency at the estimate's ``fx`` rates (see ``display_currency_of``); with a rate missing for a
+    currency in use it is ``available: false`` and the per-currency figures are the only totals."""
     order = list(schema["currencies"])
+    display = display_currency_of(estimate, schema, display_currency)
+    rates = fx_rates(estimate.get("fx"))
+    lacking: List[str] = []
+    conv_iters: List[dict] = []
     missing: List[dict] = []
     out_iters = []
     first_tooling: Optional[Money] = None
@@ -543,17 +705,23 @@ def compute(estimate: dict, schema: dict) -> dict:
             first_tooling = amounts["tooling"]
         subtotal: Money = {}
         line_out = {}
+        conv_lines: Dict[str, Optional[float]] = {}
         for lid in LINES:
             amount = amounts[lid]
             if amount is None:
                 missing.append({"iteration": index, "line": lid, "reason": reasons.get(lid, "not filled")})
+                conv_lines[lid] = None
             else:
                 _merge(subtotal, amount)
+                value, lack = convert_money(amount, display, rates)
+                conv_lines[lid] = None if value is None else round(value, 2)
+                lacking.extend(c for c in lack if c not in lacking)
             line_out[lid] = {"amount": None if amount is None else _rounded(amount, order),
                              "origin": origin_text(lines[lid], index, bench=it.get("bench") if lid == "testing" else None)}
         out_iters.append({"index": index, "motors": it.get("motors"), "bench": it.get("bench"),
                           **{lid: (None if amounts[lid] is None else _rounded(amounts[lid], order)) for lid in LINES},
                           "subtotal": _rounded(subtotal, order), "lines": line_out})
+        conv_iters.append({"index": index, "lines": conv_lines, "_subtotal": subtotal})
     subtotal_all: Money = {}
     for it in out_iters:
         _merge(subtotal_all, it["subtotal"])
@@ -562,12 +730,26 @@ def compute(estimate: dict, schema: dict) -> dict:
     total = {c: subtotal_all[c] + contingency[c] for c in subtotal_all}
     currencies = list(_rounded(total, order).keys())
     warnings = []
-    if len(currencies) > 1:
-        warnings.append("Lines are in several currencies (%s); totals are per currency and never added together."
-                        % ", ".join(currencies))
+    available = not lacking
+    if len(currencies) > 1 and not available:
+        warnings.append("Lines are in several currencies (%s) and no exchange rate is known for %s; totals stay per currency."
+                        % (", ".join(currencies), ", ".join(sorted(lacking, key=lambda c: order.index(c) if c in order else 99))))
+    conv_total = None
+    for ci in conv_iters:
+        sub = ci.pop("_subtotal")
+        value, _lack = convert_money(sub, display, rates)
+        ci["subtotal"] = None if value is None else round(value, 2)
+    if available:
+        sub_all, _l = convert_money(subtotal_all, display, rates)
+        sub_all = sub_all or 0.0
+        conv_total = {"subtotal": round(sub_all, 2), "contingency": round(sub_all * pct / 100.0, 2),
+                      "total": round(sub_all * (1 + pct / 100.0), 2)}
+    converted = {"currency": display, "available": available,
+                 "missing_rates": sorted(lacking, key=lambda c: order.index(c) if c in order else 99),
+                 "iterations": conv_iters, **(conv_total or {"subtotal": None, "contingency": None, "total": None})}
     return {"iterations": out_iters, "subtotal": _rounded(subtotal_all, order), "contingency_pct": pct,
             "contingency": _rounded(contingency, order), "total": _rounded(total, order), "currencies": currencies,
-            "missing": missing, "missing_count": len(missing), "warnings": warnings}
+            "converted": converted, "missing": missing, "missing_count": len(missing), "warnings": warnings}
 
 
 def origin_text(line: dict, index: int = 1, *, bench: Optional[str] = None) -> str:
@@ -761,6 +943,12 @@ def _flat(estimate: dict) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for k, v in (estimate.get("settings") or {}).items():
         out["settings.%s" % k] = v
+    fx = estimate.get("fx") or {}
+    for k in ("date", "source"):
+        if fx.get(k) is not None:
+            out["fx.%s" % k] = fx[k]
+    for cur, rate in (fx.get("rates") or {}).items():
+        out["fx.rates.%s" % cur] = rate
     for it in estimate.get("iterations") or []:
         for k in ("motors", "bench"):
             out["iteration %s.%s" % (it["index"], k)] = it.get(k)

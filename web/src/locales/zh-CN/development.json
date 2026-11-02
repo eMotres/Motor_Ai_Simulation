@@ -1119,7 +1119,7 @@
     "adminOnly": "仅管理员",
     "adminOnlyTip": "客户、项目查看者、工厂和代理均不可见。",
     "total": "合计",
-    "totalTip": "按货币计，含不可预见费。货币不换算。",
+    "totalTip": "含不可预见费，按带日期的汇率换算为显示货币。悬停可查看各货币的原始金额。",
     "missingCount": "缺 {count} 项",
     "suggest": "建议",
     "suggestTip": "填写缺失行：电机和工装取自最接近的已制造电机，按有效质量缩放；测试和运输取自其他估算。不会改动您的数字。",
@@ -1186,13 +1186,32 @@
     "byIteration": "按轮",
     "subtotal": "小计",
     "contingency": "不可预见费 {pct} %",
-    "multiCurrency": "多种货币（{list}）；合计按货币分开，不换算。",
+    "multiCurrency": "多种货币（{list}）且缺少汇率；合计按货币分开显示。",
     "missingTitle": "缺失（{count}）",
     "missingTip": "点击一行打开其所在轮次。",
     "noneMissing": "无缺失。",
     "snapshots": "快照",
     "noSnapshots": "尚无快照。",
     "firstSnapshot": "第一个快照",
-    "changes": "{count} 处变化"
+    "changes": "{count} 处变化",
+    "displayCurrency": "显示货币",
+    "displayCurrencyTip": "合计所用的货币。默认随界面语言（英文：EUR，中文：CNY），也可自选。每行保留您输入的货币，其换算值以灰色显示。",
+    "displayAuto": "自动（{currency}）",
+    "originalsTip": "按货币的原始金额：{list}",
+    "fx": {
+      "ecb": "按欧洲央行 {date} 汇率换算（1 EUR = {rates}）",
+      "manual": "手动汇率 {date}（1 EUR = {rates}）",
+      "manualTag": "手动",
+      "none": "汇率未知：合计按货币分开显示。",
+      "noneFor": "缺少 {list} 的汇率：合计按货币分开显示。",
+      "stale": "无法连接欧洲央行；使用最近保存的 {date} 汇率。",
+      "settingsTitle": "汇率",
+      "settingsTip": "每 1 EUR 兑换的该货币数量。默认取欧洲央行每日参考汇率（每天获取一次，连同日期保存在估算中）。手动输入的汇率优先，并标为手动。",
+      "rateLabel": "1 EUR =",
+      "useEcb": "改用欧洲央行汇率",
+      "manualChip": "手动",
+      "ecbChip": "欧洲央行 {date}",
+      "noRate": "无汇率"
+    }
   }
 }

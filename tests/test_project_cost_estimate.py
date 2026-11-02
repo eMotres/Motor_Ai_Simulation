@@ -11,9 +11,20 @@ from fastapi.testclient import TestClient
 
 from motor_ai_sim import auth
 from motor_ai_sim.development import cost_estimate as CE
+from motor_ai_sim.development import cost_estimate_fx as FX
 from motor_ai_sim.development import cost_estimate_routes as R
 from motor_ai_sim.development import cost_estimate_sources as SRC
 from motor_ai_sim.development import store
+
+
+@pytest.fixture(autouse=True)
+def no_network_for_rates(tmp_path, monkeypatch):
+    """The ECB is never reached from a test: the fetch fails unless a test supplies a fixture, and the rate cache lives in tmp."""
+    monkeypatch.setenv("MOTRES_FX_CACHE_DIR", str(tmp_path / "fx"))
+
+    def offline(*_a, **_k):
+        raise OSError("offline in tests")
+    monkeypatch.setattr(FX, "fetch_text", offline)
 
 
 @pytest.fixture
@@ -45,7 +56,7 @@ def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
         assert entry["label"]["en"] and entry["label"]["zh-CN"] and entry["help"]["en"] and entry["help"]["zh-CN"]
     est = CE.default_estimate(schema, "alpha")
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 10.0,
-                               "target_motor": None}
+                               "display_currency": None, "target_motor": None}
 
 
 def test_schema_refuses_a_fifth_line(tmp_path, schema):
@@ -320,7 +331,7 @@ def test_old_shape_is_summed_into_the_four_lines(schema):
     est = CE.from_stored(old, schema, "alpha", today="2026-11-02")
     assert est["version"] == 2 and est["revision"] == 7
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 15.0,
-                               "target_motor": {"die": "DIE-A", "config": "big"}}
+                               "display_currency": None, "target_motor": {"die": "DIE-A", "config": "big"}}
     l1, l2 = (it["lines"] for it in est["iterations"])
     assert est["iterations"][0]["bench"] == "both" and est["iterations"][0]["motors"] == 2
     assert l1["tooling"]["amount"] == 10000.0 and l1["tooling"]["source"] == "converted"
@@ -522,3 +533,242 @@ def test_the_project_routes_never_carry_the_estimate(client, monkeypatch):
     resp = TestClient(app).get("/api/projects/alpha", headers={"Authorization": "Bearer x"})
     assert resp.status_code == 200
     assert "cost" not in resp.text.lower() and "1000" not in resp.text
+
+
+# ── exchange rates and the display currency (owner 2026-11-02) ──────────────────────────────────────────────────────
+# Made-up rates: 1 EUR = 8 CNY = 1.25 USD, so 800 CNY = 100 EUR and 125 USD = 100 EUR.
+
+ECB_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
+<gesmes:subject>Reference rates</gesmes:subject>
+<gesmes:Sender><gesmes:name>European Central Bank</gesmes:name></gesmes:Sender>
+<Cube><Cube time='2026-11-02'><Cube currency='USD' rate='1.2500'/><Cube currency='JPY' rate='160.00'/><Cube currency='CNY' rate='8.0000'/></Cube></Cube>
+</gesmes:Envelope>"""
+ECB_XML_LATER = ECB_XML.replace("2026-11-02", "2026-11-03").replace("8.0000", "8.5000")
+ECB = {"date": "2026-11-02", "rates": {"CNY": 8.0, "USD": 1.25}}
+
+
+def _mixed(schema, fx):
+    """Iteration 1: tooling EUR 1000, manufacturing CNY 400 per motor (2 motors = 800 CNY = 100 EUR), testing USD 125
+    (= 100 EUR), shipping missing; iteration 2: tooling 20 % of iteration 1 (EUR 200), the rest missing."""
+    est = _est(schema, iterations=2)
+    lines = est["iterations"][0]["lines"]
+    _fill(lines["tooling"], 1000.0)
+    _fill(lines["manufacturing"], 400.0, "CNY")
+    _fill(lines["testing"], 125.0, "USD")
+    est["fx"] = fx
+    return est
+
+
+def test_the_ecb_xml_is_parsed(schema):
+    doc = FX.parse_ecb_xml(ECB_XML)
+    assert doc == {"date": "2026-11-02", "rates": {"CNY": 8.0, "USD": 1.25}}      # JPY is in the feed and ignored
+    with pytest.raises(FX.FxError, match="DTD"):
+        FX.parse_ecb_xml('<!DOCTYPE x [<!ENTITY a "b">]>' + ECB_XML)
+    with pytest.raises(FX.FxError, match="CNY"):
+        FX.parse_ecb_xml(ECB_XML.replace("<Cube currency='CNY' rate='8.0000'/>", ""))
+    with pytest.raises(FX.FxError, match="date"):
+        FX.parse_ecb_xml(ECB_XML.replace("time='2026-11-02'", ""))
+    with pytest.raises(FX.FxError):
+        FX.parse_ecb_xml("not xml")
+
+
+def test_totals_are_converted_to_the_display_currency_at_the_given_rates(schema):
+    est = _mixed(schema, CE.build_fx(ECB, {}, None))
+    assert est["fx"]["source"] == "ECB" and est["fx"]["date"] == "2026-11-02" and est["fx"]["rates"] == {"CNY": 8.0, "USD": 1.25}
+    c = CE.compute(est, schema, "EUR")
+    cv = c["converted"]
+    assert cv["currency"] == "EUR" and cv["available"] is True and cv["missing_rates"] == []
+    assert cv["iterations"][0]["lines"] == {"tooling": 1000.0, "manufacturing": 100.0, "testing": 100.0, "shipping": None}
+    assert cv["iterations"][0]["subtotal"] == 1200.0 and cv["iterations"][1]["subtotal"] == 200.0
+    assert (cv["subtotal"], cv["contingency"], cv["total"]) == (1400.0, 140.0, 1540.0)
+    # the entered amounts and the per-currency totals are untouched
+    assert c["iterations"][0]["manufacturing"] == {"CNY": 800.0}
+    assert c["total"] == {"EUR": 1320.0, "CNY": 880.0, "USD": 137.5}
+    cny = CE.compute(est, schema, "CNY")["converted"]
+    assert cny["currency"] == "CNY" and cny["total"] == 12320.0 and cny["iterations"][0]["lines"]["manufacturing"] == 800.0
+    usd = CE.compute(est, schema, "USD")["converted"]
+    assert usd["total"] == 1925.0 and usd["iterations"][0]["lines"]["testing"] == 125.0
+    # the owner's own choice in the estimate wins over the UI language's; without either the schema default (EUR) is used
+    assert CE.compute(est, schema)["converted"]["currency"] == "EUR"
+    est["settings"]["display_currency"] = "USD"
+    assert CE.compute(est, schema)["converted"]["currency"] == "USD"
+    assert CE.compute(est, schema, "CNY")["converted"]["currency"] == "USD"
+    est["settings"]["display_currency"] = None
+    with pytest.raises(CE.EstimateError):
+        CE.compute(est, schema, "GBP")
+
+
+def test_without_rates_the_totals_stay_per_currency(schema):
+    est = _mixed(schema, None)
+    c = CE.compute(est, schema, "EUR")
+    cv = c["converted"]
+    assert cv["available"] is False and cv["missing_rates"] == ["CNY", "USD"]
+    assert cv["total"] is None and cv["subtotal"] is None and cv["iterations"][0]["subtotal"] is None
+    assert cv["iterations"][0]["lines"]["tooling"] == 1000.0 and cv["iterations"][0]["lines"]["manufacturing"] is None
+    assert c["total"] == {"EUR": 1320.0, "CNY": 880.0, "USD": 137.5} and c["currencies"] == ["EUR", "CNY", "USD"]
+    assert any("several currencies" in w for w in c["warnings"])
+    # a single currency needs no rate at all, in its own currency
+    one = _est(schema, iterations=1)
+    _fill(one["iterations"][0]["lines"]["tooling"], 100.0, "CNY")
+    assert CE.compute(one, schema, "CNY")["converted"]["total"] == 110.0
+    assert CE.compute(one, schema, "EUR")["converted"]["available"] is False       # CNY -> EUR needs the CNY rate
+    eur = _est(schema, iterations=1)
+    _fill(eur["iterations"][0]["lines"]["tooling"], 100.0)
+    assert CE.compute(eur, schema, "EUR")["converted"]["total"] == 110.0
+    # a rate that is missing for ONE currency still converts the others and names the one it lacks
+    part = _mixed(schema, CE.build_fx(None, {"CNY": 8.0}, "2026-11-02"))
+    cvp = CE.compute(part, schema, "EUR")["converted"]
+    assert cvp["available"] is False and cvp["missing_rates"] == ["USD"] and cvp["iterations"][0]["lines"]["manufacturing"] == 100.0
+
+
+def test_a_manual_rate_wins_over_the_ecb_one_and_is_labelled(schema):
+    fx = CE.merge_fx(None, {"CNY": 7.5}, ECB, schema, "2026-11-05")
+    assert fx["source"] == "manual" and fx["date"] == "2026-11-05" and fx["manual"] == {"CNY": 7.5}
+    assert fx["rates"] == {"CNY": 7.5, "USD": 1.25}                      # USD stays the ECB one
+    assert fx["ecb"] == {"date": "2026-11-02", "rates": {"CNY": 8.0, "USD": 1.25}}      # the ECB rates are kept underneath
+    est = _mixed(schema, fx)
+    assert CE.compute(est, schema, "EUR")["converted"]["iterations"][0]["lines"]["manufacturing"] == round(800 / 7.5, 2)
+    # a newer ECB reference does not touch the manual rate (and keeps its date); removing it falls back to the ECB rate
+    newer = {"date": "2026-11-03", "rates": {"CNY": 8.5, "USD": 1.3}}
+    again = CE.merge_fx(fx, {"CNY": 7.5}, newer, schema, "2026-11-09")
+    assert again["rates"] == {"CNY": 7.5, "USD": 1.3} and again["manual_date"] == "2026-11-05" and again["ecb"]["date"] == "2026-11-03"
+    gone = CE.merge_fx(again, {}, newer, schema, "2026-11-09")
+    assert gone["source"] == "ECB" and gone["rates"] == {"CNY": 8.5, "USD": 1.3} and gone["manual"] == {} and gone["date"] == "2026-11-03"
+    # the stored document round-trips through validation; a bad rate is refused
+    assert CE.normalize_fx(fx, schema) == fx
+    for bad in ({"manual": {"CNY": 0}}, {"manual": {"CNY": -1}}, {"manual": {"GBP": 1.1}}, {"manual": {"CNY": "x"}}, {"base": "USD"}):
+        with pytest.raises(CE.EstimateError):
+            CE.normalize_fx(bad, schema)
+    # nothing known -> no fx (a rate is never invented)
+    assert CE.merge_fx(None, {}, None, schema, "2026-11-05") is None
+    # an older live answer never replaces a newer stored ECB rate
+    assert CE.merge_fx(gone, {}, ECB, schema, "2026-11-09")["ecb"]["date"] == "2026-11-03"
+
+
+def test_the_ecb_rates_are_cached_for_a_day_and_the_last_ones_are_kept_when_it_fails(monkeypatch):
+    import datetime
+    calls = []
+
+    def fetch(*_a, **_k):
+        calls.append(1)
+        return ECB_XML
+    monkeypatch.setattr(FX, "fetch_text", fetch)
+    t0 = datetime.datetime(2026, 11, 2, 12, 0, tzinfo=datetime.timezone.utc)
+    doc, status = FX.live_rates(t0)
+    assert doc == ECB and status["state"] == "ok" and len(calls) == 1
+    assert FX.cache_path().is_file()
+    doc, status = FX.live_rates(t0 + datetime.timedelta(hours=5))
+    assert doc == ECB and status["state"] == "ok" and len(calls) == 1             # cached: no second fetch
+
+    # a day later the fetch is tried again; it fails -> the last rates are kept and the answer says so
+    def broken(*_a, **_k):
+        calls.append(1)
+        raise OSError("network down")
+    monkeypatch.setattr(FX, "fetch_text", broken)
+    day2 = t0 + datetime.timedelta(hours=26)
+    doc, status = FX.live_rates(day2)
+    assert doc == ECB and status["state"] == "stale" and status["date"] == "2026-11-02" and "network down" in status["error"]
+    assert len(calls) == 2
+    FX.live_rates(day2 + datetime.timedelta(minutes=5))
+    assert len(calls) == 2                                                         # a failed fetch is not retried at once
+    monkeypatch.setattr(FX, "fetch_text", lambda *_a, **_k: ECB_XML_LATER)
+    doc, status = FX.live_rates(day2 + datetime.timedelta(hours=1))
+    assert doc["date"] == "2026-11-03" and doc["rates"]["CNY"] == 8.5 and status["state"] == "ok"
+
+
+def test_with_nothing_cached_and_no_network_no_rate_is_known():
+    doc, status = FX.live_rates()
+    assert doc is None and status["state"] == "none" and "offline" in status["error"]
+
+
+def _age_cache(days):
+    import datetime
+    cache = FX.cache_path()
+    doc = json.loads(cache.read_text(encoding="utf-8"))
+    old = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat(timespec="seconds")
+    doc["fetched_at"] = doc["last_attempt"] = old
+    cache.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_routes_store_the_rates_in_the_estimate_and_a_snapshot_keeps_them(client, monkeypatch, tmp_path):
+    _as(monkeypatch, {"email": "admin@example.test", "role": "admin"})
+    url = "/api/admin/projects/alpha/cost-estimate"
+    got = client.get(url + "?display_currency=EUR").json()                       # offline: no rate
+    assert got["estimate"]["fx"] is None and got["fx_status"]["state"] == "none"
+    assert got["computed"]["converted"]["currency"] == "EUR" and got["computed"]["converted"]["available"] is True   # all EUR
+
+    assert FX.cache_path().is_file()                                             # the failed attempt is remembered (no retry for 15 min)
+    FX.cache_path().unlink()
+    monkeypatch.setattr(FX, "fetch_text", lambda *_a, **_k: ECB_XML)
+    est = got["estimate"]
+    _fill(est["iterations"][0]["lines"]["tooling"], 1000.0)
+    _fill(est["iterations"][0]["lines"]["manufacturing"], 400.0, "CNY")
+    body = client.put(url + "?display_currency=EUR", json=est).json()
+    assert body["estimate"]["fx"]["source"] == "ECB" and body["estimate"]["fx"]["rates"] == {"CNY": 8.0, "USD": 1.25}
+    assert body["fx_status"] == {"state": "ok", "date": "2026-11-02", "manual": [], "error": None}
+    assert body["computed"]["converted"]["iterations"][0]["lines"]["manufacturing"] == 100.0
+    assert body["computed"]["converted"]["total"] == round(1100 * 1.1 + 200 * 1.1, 2) and body["computed"]["total"]["CNY"] == 880.0
+    cny = client.get(url + "?display_currency=CNY").json()["computed"]["converted"]
+    assert cny["currency"] == "CNY" and cny["iterations"][0]["lines"]["tooling"] == 8000.0
+    assert client.get(url + "?display_currency=GBP").status_code == 422
+
+    # a client cannot push its own ECB numbers: only the manual rate is taken from the request
+    forged = body["estimate"]
+    forged["fx"] = {**forged["fx"], "rates": {"CNY": 99.0, "USD": 99.0}, "ecb": {"date": "2026-11-02", "rates": {"CNY": 99.0, "USD": 99.0}},
+                    "manual": {"CNY": 7.5}}
+    man = client.put(url + "?display_currency=EUR", json=forged).json()
+    assert man["estimate"]["fx"]["rates"] == {"CNY": 7.5, "USD": 1.25} and man["estimate"]["fx"]["source"] == "manual"
+    assert man["fx_status"]["manual"] == ["CNY"]
+    assert man["computed"]["converted"]["iterations"][0]["lines"]["manufacturing"] == round(800 / 7.5, 2)
+
+    # the snapshot freezes the numbers with the rates (and the display currency) they were computed with
+    snap = client.post(url + "/snapshot", json={"note": "frozen", "display_currency": "EUR"}).json()["snapshot"]
+    assert snap["estimate"]["fx"]["rates"] == {"CNY": 7.5, "USD": 1.25} and snap["estimate"]["fx"]["source"] == "manual"
+    assert snap["totals"]["converted"]["currency"] == "EUR" and snap["totals"]["converted"]["total"] == man["computed"]["converted"]["total"]
+
+    # the ECB moves on and the owner drops the manual rate: the live estimate follows, the snapshot does not
+    monkeypatch.setattr(FX, "fetch_text", lambda *_a, **_k: ECB_XML_LATER)
+    _age_cache(2)
+    later = man["estimate"]
+    later["fx"] = {**later["fx"], "manual": {}}
+    moved = client.put(url + "?display_currency=EUR", json=later).json()
+    assert moved["estimate"]["fx"]["rates"]["CNY"] == 8.5 and moved["estimate"]["fx"]["source"] == "ECB"
+    assert moved["estimate"]["fx"]["date"] == "2026-11-03"
+    snaps = client.get(url + "/snapshots").json()["snapshots"]
+    stored_snap = json.loads((tmp_path / "projects" / "alpha" / "cost_estimate" / "snapshots" / "0001.json").read_text(encoding="utf-8"))
+    assert stored_snap["estimate"]["fx"]["rates"]["CNY"] == 7.5
+    assert stored_snap["totals"]["converted"]["total"] == snap["totals"]["converted"]["total"]
+    assert "estimate" not in snaps[0]
+
+    # the ECB breaks: the last stored rates stay, and the answer says so
+    _age_cache(2)
+
+    def down(*_a, **_k):
+        raise OSError("ECB down")
+    monkeypatch.setattr(FX, "fetch_text", down)
+    stale = client.get(url + "?display_currency=EUR").json()
+    assert stale["fx_status"]["state"] == "stale" and stale["fx_status"]["date"] == "2026-11-03"
+    assert "ECB down" in stale["fx_status"]["error"]
+    assert stale["estimate"]["fx"]["rates"]["CNY"] == 8.5 and stale["computed"]["converted"]["available"] is True
+
+
+def test_the_mcp_guard_refuses_the_new_exchange_rate_keys():
+    from motor_ai_sim import mcp_tools as T
+    for leak in ({"fx": {}}, {"fx_status": "ok"}, {"display_currency": "EUR"}, {"converted": {}}, {"rates": {"CNY": 8}},
+                 {"computed": {"converted": {"total": 1.0}}}, {"ecb_date": "2026-11-02"}, {"exchange_rate": 8.0}):
+        with pytest.raises(AssertionError, match="commercial field leaked"):
+            T.assert_no_commercial(leak)
+    T.assert_no_commercial({"fx_N": 1.0, "force_x": 2.0, "heat_exchanger": 3})       # physics keys are not caught
+
+
+def test_the_display_currency_setting_is_validated(schema):
+    est = _est(schema, iterations=1)
+    est["settings"]["display_currency"] = "cny"
+    assert CE.normalize_estimate(est, schema, "alpha")["settings"]["display_currency"] == "CNY"
+    est["settings"]["display_currency"] = ""
+    assert CE.normalize_estimate(est, schema, "alpha")["settings"]["display_currency"] is None
+    est["settings"]["display_currency"] = "GBP"
+    with pytest.raises(CE.EstimateError):
+        CE.normalize_estimate(est, schema, "alpha")
+    assert schema["display_currency_by_locale"] == {"en": "EUR", "zh-CN": "CNY"}

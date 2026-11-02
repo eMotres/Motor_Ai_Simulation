@@ -4,19 +4,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, ButtonBase, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Select,
-  Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography, useMediaQuery,
+  Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery,
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import HelpTip from '../../../../components/common/HelpTip';
 import { BigNumber, StepCard, TOUCH } from '../specWizard/ui';
 import { developmentApi, DevelopmentApiError } from '../../api';
 import {
-  buildCostSteps, defaultDisplayCurrency, displayCurrencyOf, editLine, formatMoney, fxLine, langOf, LINE_IDS, lineConverted, lineNeeded, originChip,
-  reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, setToolingMode, snapshotTotalText, sourceCounts, stepIndexOfMissing,
-  stepState, todayIso, toolingMode, totalsView, txt,
+  buildCostSteps, defaultDisplayCurrency, displayCurrencyOf, editLine, fieldLabel, formatMoney, fxLine, iterationSubtotal, langOf, LINE_IDS, lineNeeded, lineTotal, originChip, reconcile,
+  reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, snapshotTotalText, sourceCounts, stepIndexOfMissing,
+  stepState, todayIso, totalsView, txt,
   type Bench, type CostComputed, type CostEstimate, type CostEstimateAnswer, type CostField, type CostIteration, type CostLang,
-  type CostLine, type CostLineDef, type CostSchema, type CostSnapshot, type CostStep, type LineId, type T,
+  type CostLine, type CostLineDef, type CostSnapshot, type CostStep, type LineId, type T,
 } from '../../costEstimate';
+
+const is409 = (e: unknown): boolean => e instanceof DevelopmentApiError && e.status === 409;
 
 const CHIP_COLOR: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'info'> = {
   production: 'info', estimate: 'secondary', converted: 'primary', manual: 'success', rule: 'default', missing: 'warning', none: 'default',
@@ -35,40 +37,25 @@ function SettingField({ field, value, onChange, lang }: { field: CostField; valu
 
 /** One of the four lines: label, source chip, (later tooling: % of iteration 1 or an amount), amount + currency, the
  *  line's money, a note; a missing line shows why. */
-function LineRow({ def, line, it, total, converted, schema, lang, t, onEdit, onMode }: {
-  def: CostLineDef; line: CostLine; it: CostIteration; total: string; converted: string | null; schema: CostSchema; lang: CostLang; t: T;
-  onEdit: (patch: Parameters<typeof editLine>[2]) => void; onMode: (mode: 'pct' | 'amount') => void;
+function LineRow({ def, line, it, total, lang, t, onEdit }: {
+  def: CostLineDef; line: CostLine; it: CostIteration; total: string; lang: CostLang; t: T;
+  onEdit: (patch: Parameters<typeof editLine>[2]) => void;
 }) {
   const label = txt(def.label, lang);
   const chip = originChip(line, it, def.id, t);
   const needed = lineNeeded(it, def.id);
-  const pctMode = def.id === 'tooling' && it.index > 1 && toolingMode(line) === 'pct';
-  return <Box sx={{ display: 'grid', gap: 1, alignItems: 'end', gridTemplateColumns: { xs: '1fr 1fr', md: 'minmax(180px, 1.4fr) minmax(130px, 1fr) 96px minmax(120px, 1fr) minmax(140px, 1.2fr)' }, py: 1.25, borderTop: '1px solid var(--line-soft)', opacity: needed ? 1 : 0.55 }}>
+  return <Box sx={{ display: 'grid', gap: 1, alignItems: 'end', gridTemplateColumns: { xs: '1fr 1fr', md: 'minmax(180px, 1.4fr) minmax(130px, 1fr) minmax(120px, 1fr) minmax(140px, 1.2fr)' }, py: 1.25, borderTop: '1px solid var(--line-soft)', opacity: needed ? 1 : 0.55 }}>
     <Stack spacing={0.5} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' }, minWidth: 0, alignSelf: 'center' }}>
       <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{label}</Typography><HelpTip title={txt(def.help, lang)} /></Stack>
       <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
         <Tooltip title={chip.tip} enterTouchDelay={0}><Chip size="small" color={CHIP_COLOR[chip.kind] ?? 'default'} variant={chip.kind === 'none' ? 'outlined' : 'filled'} label={chip.label} sx={{ height: 22, fontSize: 11 }} /></Tooltip>
-        {def.id === 'tooling' && it.index > 1 && <ToggleButtonGroup size="small" exclusive value={toolingMode(line)} onChange={(_e, v) => v && onMode(v)} aria-label={label}>
-          <ToggleButton value="pct" sx={{ py: 0, px: 1, fontSize: 11, textTransform: 'none' }}>{t('costEstimate.pctMode')}</ToggleButton>
-          <ToggleButton value="amount" sx={{ py: 0, px: 1, fontSize: 11, textTransform: 'none' }}>{t('costEstimate.amountMode')}</ToggleButton>
-        </ToggleButtonGroup>}
       </Stack>
       {line.status === 'missing' && needed && line.hint && <Typography sx={{ fontSize: 11.5, color: 'warning.main' }}>{line.hint}</Typography>}
     </Stack>
-    {pctMode ? <>
-      <BigNumber label={t('costEstimate.ofIterationOne')} unit="%" size="normal" min={0} value={line.pct} ariaLabel={`${label}: ${t('costEstimate.ofIterationOne')}`} onChange={(n) => onEdit({ pct: n })} />
-      <Box sx={{ display: { xs: 'none', md: 'block' } }} />
-    </> : <>
-      <BigNumber label={def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')} unit="" size="normal" min={0} value={line.amount} disabled={!needed}
-        ariaLabel={`${label}: ${def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')}`} onChange={(n) => onEdit({ amount: n })} />
-      <Stack spacing={0.6}><Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{t('costEstimate.currency')}</Typography>
-        <Select size="small" value={line.currency} disabled={!needed} onChange={(e) => onEdit({ currency: String(e.target.value) })} inputProps={{ 'aria-label': `${label}: ${t('costEstimate.currency')}` }}>
-          {schema.currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
-        </Select></Stack>
-    </>}
-    <Stack spacing={0.6} sx={{ minWidth: 0 }}><Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{def.per_motor ? t('costEstimate.timesMotors', { n: it.motors }) : t('costEstimate.lineTotal')}</Typography>
-      <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums', minHeight: TOUCH, display: 'flex', alignItems: 'center', color: 'var(--text-0)', overflowWrap: 'anywhere' }}>{total}</Typography>
-      {converted && <Typography data-testid="line-converted" sx={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums', color: 'var(--text-3)', mt: -0.5, overflowWrap: 'anywhere' }}>{converted}</Typography>}</Stack>
+    <BigNumber label={def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')} unit="EUR" size="normal" min={0} value={line.amount} disabled={!needed}
+      ariaLabel={`${label}: ${def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')}`} onChange={(n) => onEdit({ amount: n })} />
+    <Stack spacing={0.6} sx={{ minWidth: 0 }}><Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{def.per_motor ? t('costEstimate.timesMotors', { count: it.motors }) : t('costEstimate.lineTotal')}</Typography>
+      <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums', minHeight: TOUCH, display: 'flex', alignItems: 'center', color: 'var(--text-0)', overflowWrap: 'anywhere' }}>{total}</Typography></Stack>
     <TextField size="small" value={line.note} placeholder={t('costEstimate.note')} onChange={(e) => onEdit({ note: e.target.value })} inputProps={{ 'aria-label': `${label}: ${t('costEstimate.note')}`, maxLength: 500 }} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }} />
   </Box>;
 }
@@ -82,7 +69,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [conflict, setConflict] = useState(false);
+  const [notice, setNotice] = useState('');           // calm one-line note after a merge with a change made elsewhere
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<CostEstimateAnswer['report'] | null>(null);
   const [snapOpen, setSnapOpen] = useState(false);
@@ -92,11 +79,14 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const timer = useRef<number | null>(null);
   const latest = useRef<CostEstimate | null>(null);
   const inflight = useRef(false);
+  const synced = useRef<CostEstimate | null>(null);   // the server's version our local edits started from
+  const dirty = useRef(false);                          // unsaved local edits
+  const clashes = useRef(0);                            // consecutive 409s of one save
   latest.current = estimate;
   // the totals are shown in the display currency: the owner's pick, else the UI language's (en -> EUR, zh-CN -> CNY)
   const displayOf = (e: CostEstimate | null | undefined) => displayCurrencyOf(e?.settings, lang);
 
-  const apply = (a: CostEstimateAnswer) => { setAnswer(a); setEstimate(a.estimate); setComputed(a.computed); setConflict(false); };
+  const apply = (a: CostEstimateAnswer) => { synced.current = a.estimate; dirty.current = false; latest.current = a.estimate; setAnswer(a); setEstimate(a.estimate); setComputed(a.computed); };
   const load = useCallback(async () => {
     setError('');
     try { apply(await developmentApi.costEstimate(projectId, defaultDisplayCurrency(lang))); setSnapshots(await developmentApi.costEstimateSnapshots(projectId)); }
@@ -110,22 +100,50 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     const mark = edits.current;
     setSaving(true);
     inflight.current = true;
+    let again = false;
     try {
       const a = await developmentApi.saveCostEstimate(projectId, cur, displayOf(cur));
+      synced.current = a.estimate; clashes.current = 0;
       setAnswer(a); setComputed(a.computed);
-      if (edits.current === mark) setEstimate(a.estimate);
+      if (edits.current === mark) { dirty.current = false; setEstimate(a.estimate); }
       else { setEstimate((e) => (e ? { ...e, revision: a.estimate.revision } : e)); schedule(); }
       setError('');
     } catch (e) {
-      if (e instanceof DevelopmentApiError && e.status === 409) setConflict(true);
-      else setError(e instanceof Error ? e.message : String(e));
+      if (is409(e) && clashes.current < 3) {
+        // saved elsewhere meanwhile: take the latest, lay our pending edits back on it and save again - the page never blocks
+        clashes.current += 1;
+        try { again = await resolveConflict(); } catch (e2) { setError(e2 instanceof Error ? e2.message : String(e2)); }
+      } else setError(e instanceof Error ? e.message : String(e));
     } finally { inflight.current = false; setSaving(false); }
+    if (again) await save();
+  };
+  /** After a 409: fetch the latest estimate.  No unsaved local edits -> just show it (quietly).  With edits -> the latest
+   *  with those edits re-applied on top (`mergeEdits`); a note only when a re-applied field had also been changed elsewhere.
+   *  Returns true when the merged estimate still has to be saved. */
+  const resolveConflict = async (): Promise<boolean> => {
+    const fresh = await developmentApi.costEstimate(projectId, displayOf(latest.current));
+    const mine = latest.current;
+    const base = synced.current;
+    const r = reconcile(dirty.current, base, mine, fresh.estimate);
+    if (!r.save) { apply(fresh); return false; }
+    synced.current = fresh.estimate; latest.current = r.estimate;
+    setAnswer(fresh); setComputed(fresh.computed); setEstimate(r.estimate);
+    if (r.overridden.length) setNotice(t('costEstimate.keptNote', { field: r.overridden.map((f) => fieldLabel(f, fresh.schema, lang, t)).join(', ') }));
+    return true;
+  };
+  /** A server action keyed to the revision (suggest, snapshot) met a 409: refresh quietly, save pending edits, run it once more. */
+  const retryOn409 = async <R,>(run: () => Promise<R>): Promise<R> => {
+    try { return await run(); } catch (e) {
+      if (!is409(e)) throw e;
+      if (await resolveConflict()) await save();
+      return run();
+    }
   };
   const schedule = () => { if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => { timer.current = null; void save(); }, 700); };
-  const change = (next: CostEstimate) => { edits.current += 1; setEstimate(next); schedule(); };
+  const change = (next: CostEstimate) => { edits.current += 1; dirty.current = true; setEstimate(next); schedule(); };
   /** The display currency changes the numbers on screen: save at once so they follow. */
   const changeNow = (next: CostEstimate) => {
-    edits.current += 1; latest.current = next; setEstimate(next);
+    edits.current += 1; dirty.current = true; latest.current = next; setEstimate(next);
     if (inflight.current) { schedule(); return; }          // a save is running: the next one follows it (revision order)
     if (timer.current) { window.clearTimeout(timer.current); timer.current = null; }
     void save();
@@ -138,42 +156,29 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const current: CostStep = steps[Math.min(step, steps.length - 1)];
   const today = todayIso();
   const tv = totalsView(computed);
-  const laterPct = schema.lines.find((l) => l.id === 'tooling')?.later_pct_default ?? 20;
 
   const suggest = async (refresh: boolean) => {
     if (timer.current) { window.clearTimeout(timer.current); timer.current = null; await save(); }
     setBusy(true);
-    try { const a = await developmentApi.suggestCostEstimate(projectId, latest.current?.revision ?? estimate.revision, refresh, displayOf(latest.current)); apply(a); setReport(a.report ?? null); }
-    catch (e) { if (e instanceof DevelopmentApiError && e.status === 409) setConflict(true); else setError(e instanceof Error ? e.message : String(e)); }
+    try { const a = await retryOn409(() => developmentApi.suggestCostEstimate(projectId, latest.current?.revision ?? estimate.revision, refresh, displayOf(latest.current))); apply(a); setReport(a.report ?? null); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
   const freeze = async () => {
     setBusy(true);
-    try { await developmentApi.snapshotCostEstimate(projectId, estimate.revision, snapNote, displayOf(estimate)); setSnapOpen(false); setSnapNote(''); setSnapshots(await developmentApi.costEstimateSnapshots(projectId)); }
+    try { await retryOn409(() => developmentApi.snapshotCostEstimate(projectId, (latest.current ?? estimate).revision, snapNote, displayOf(latest.current ?? estimate))); setSnapOpen(false); setSnapNote(''); setSnapshots(await developmentApi.costEstimateSnapshots(projectId)); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
   const stepTitle = (s: CostStep) => s.kind === 'settings' ? t('costEstimate.steps.settings') : s.kind === 'review' ? t('costEstimate.steps.review') : t('costEstimate.iteration', { n: s.iteration });
-  const lineTotal = (index: number, id: LineId): string => {
-    const r = computed.iterations.find((it) => it.index === index)?.lines[id];
-    return r?.amount ? formatMoney(r.amount) : '—';
-  };
 
   const header = <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 2 }} alignItems={{ md: 'center' }} sx={{ bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: { xs: 2, md: 3 }, py: 1.5 }}>
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Stack direction="row" spacing={1} alignItems="center"><Typography component="h1" sx={{ fontSize: 18, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.title')}</Typography>
         <Tooltip title={t('costEstimate.adminOnlyTip')}><Chip size="small" label={t('costEstimate.adminOnly')} sx={{ height: 20, fontSize: 10.5 }} /></Tooltip></Stack>
-      <Tooltip title={tv.converted ? `${t('costEstimate.totalTip')} ${t('costEstimate.originalsTip', { list: tv.original })}` : t('costEstimate.totalTip')}><Typography sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {tv.total} · {t('costEstimate.missingCount', { count: computed.missing_count })}</Typography></Tooltip>
+      <Tooltip title={t('costEstimate.totalTip')}><Typography data-testid="header-total" sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {formatMoney(computed.total)} · {t('costEstimate.missingCount', { count: computed.missing_count })}</Typography></Tooltip>
     </Box>
-    <Tooltip title={t('costEstimate.displayCurrencyTip')}><Stack direction="row" spacing={0.75} alignItems="center">
-      <Typography component="span" sx={{ fontSize: 12.5, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{t('costEstimate.displayCurrency')}</Typography>
-      <Select size="small" displayEmpty value={estimate.settings.display_currency || ''} onChange={(e) => changeNow(setDisplayCurrency(estimate, String(e.target.value) || null))}
-        inputProps={{ 'aria-label': t('costEstimate.displayCurrency') }} sx={{ minWidth: 118, '& .MuiSelect-select': { py: 0.75 } }}>
-        <MenuItem value="">{t('costEstimate.displayAuto', { currency: defaultDisplayCurrency(lang, schema) })}</MenuItem>
-        {schema.currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
-      </Select>
-    </Stack></Tooltip>
     <Tooltip title={t('costEstimate.suggestTip')}><span><Button variant="contained" disabled={busy} onClick={() => void suggest(false)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{busy ? <CircularProgress size={16} /> : t('costEstimate.suggest')}</Button></span></Tooltip>
     <Tooltip title={t('costEstimate.refreshTip')}><span><Button disabled={busy} onClick={() => void suggest(true)} sx={{ textTransform: 'none', minHeight: TOUCH }}>{t('costEstimate.refresh')}</Button></span></Tooltip>
     <Tooltip title={t('costEstimate.snapshotTip')}><span><Button variant="outlined" disabled={busy || !answer.stored} onClick={() => setSnapOpen(true)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{t('costEstimate.snapshot')}</Button></span></Tooltip>
@@ -231,15 +236,14 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const iterationStep = (index: number) => {
     const it = estimate.iterations.find((x) => x.index === index);
     if (!it) return null;
-    const res = computed.iterations.find((x) => x.index === index);
-    return <StepCard title={t('costEstimate.iteration', { n: index })} action={<Typography sx={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text-1)' }}>{reviewRows(computed).find((r) => r.iteration === index)?.subtotal ?? formatMoney(res?.subtotal)}</Typography>}>
+    const sub = iterationSubtotal(computed, index);
+    return <StepCard title={t('costEstimate.iteration', { n: index })} action={<Typography data-testid="iteration-total" sx={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text-1)' }}>{sub}</Typography>}>
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
         {schema.iteration_fields.map((f) => <SettingField key={f.id} field={f} value={it[f.id as 'motors' | 'bench']} lang={lang}
           onChange={(v) => change(setIterationField(estimate, index, f.id as 'motors' | 'bench', v as number | Bench))} />)}
       </Box>
-      <Box>{LINE_IDS.map((id) => { const def = schema.lines.find((l) => l.id === id)!; return <LineRow key={id} def={def} line={it.lines[id]} it={it} total={lineTotal(index, id)} converted={lineConverted(computed, index, id)} schema={schema} lang={lang} t={t}
-        onEdit={(patch) => change(editLine(estimate, { iteration: index, line: id }, patch, who, today))}
-        onMode={(mode) => change(setToolingMode(estimate, index, mode, laterPct))} />; })}</Box>
+      <Box>{LINE_IDS.map((id) => { const def = schema.lines.find((l) => l.id === id)!; return <LineRow key={id} def={def} line={it.lines[id]} it={it} total={lineTotal(computed, index, id)} lang={lang} t={t}
+        onEdit={(patch) => change(editLine(estimate, { iteration: index, line: id }, patch, who, today))} />; })}</Box>
     </StepCard>;
   };
 
@@ -251,7 +255,13 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
       <Typography sx={{ fontSize: 13 }}>{t('costEstimate.migrated')}</Typography>
       {estimate.migration.dropped.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('costEstimate.dropped')}: {estimate.migration.dropped.join('; ')}</Typography>}
     </Alert>}
-    <StepCard title={t('costEstimate.byIteration')} tip={t('costEstimate.totalTip')}>
+    <StepCard title={t('costEstimate.byIteration')} tip={t('costEstimate.totalTip')} action={<Tooltip title={t('costEstimate.displayCurrencyTip')}><Stack direction="row" spacing={0.75} alignItems="center">
+      <Typography component="span" sx={{ fontSize: 12.5, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{t('costEstimate.displayCurrency')}</Typography>
+      <Select size="small" value={estimate.settings.display_currency || defaultDisplayCurrency(lang, schema)} onChange={(e) => changeNow(setDisplayCurrency(estimate, String(e.target.value) === defaultDisplayCurrency(lang, schema) ? null : String(e.target.value)))}
+        inputProps={{ 'aria-label': t('costEstimate.displayCurrency') }} sx={{ minWidth: 96, '& .MuiSelect-select': { py: 0.5 } }}>
+        {schema.currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+      </Select>
+    </Stack></Tooltip>}>
       <Box sx={{ overflowX: 'auto' }}><Table size="small">
         <TableHead><TableRow><TableCell />{LINE_IDS.map((id) => <TableCell key={id}>{lineLabel(id)}</TableCell>)}<TableCell>{t('costEstimate.subtotal')}</TableCell></TableRow></TableHead>
         <TableBody>
@@ -265,7 +275,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
           <TableRow><TableCell sx={{ fontWeight: 700 }}>{t('costEstimate.total')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ fontWeight: 700 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: tv.original })}><span data-testid="review-total">{tv.total}</span></Tooltip> : <span data-testid="review-total">{tv.total}</span>}</TableCell></TableRow>
         </TableBody>
       </Table></Box>
-      {tv.converted && fxLine(estimate.fx, t) && <Typography data-testid="fx-note" sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{fxLine(estimate.fx, t)}</Typography>}
+      {tv.converted && tv.currency !== 'EUR' && fxLine(estimate.fx, t) && <Typography data-testid="fx-note" sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{fxLine(estimate.fx, t)}</Typography>}
       {answer.fx_status?.state === 'stale' && <Alert severity="warning" sx={{ py: 0 }}>{t('costEstimate.fx.stale', { date: answer.fx_status.date || '' })}</Alert>}
       {!tv.converted && (tv.missingRates.length > 0
         ? <Alert severity="info" sx={{ py: 0 }}>{estimate.fx ? t('costEstimate.fx.noneFor', { list: tv.missingRates.join(', ') }) : t('costEstimate.fx.none')}</Alert>
@@ -289,7 +299,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
 
   return <Box data-testid="cost-estimate" sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, '& .MuiInputBase-root': { bgcolor: 'var(--input-bg)', borderRadius: '10px' } }}>
     {header}
-    {conflict && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => void load()}>{t('costEstimate.reload')}</Button>}>{t('costEstimate.conflict')}</Alert>}
+    {notice && <Alert data-testid="cost-merge-note" severity="info" icon={false} onClose={() => setNotice('')} sx={{ py: 0, bgcolor: 'transparent', color: 'var(--text-2)', border: '1px solid var(--line)' }}>{notice}</Alert>}
     {error && estimate && <Alert severity="error">{error}</Alert>}
     {report && <Alert severity="info" onClose={() => setReport(null)}>{t('costEstimate.suggested', { count: report.filled_count, analog: report.analogs.manufacturing.ref ?? '—' })}{report.notes.length > 0 ? ` ${report.notes.join('; ')}` : ''}</Alert>}
     <Box sx={{ display: 'flex', flexDirection: wide ? 'row' : 'column', gap: wide ? 3 : 1.5, alignItems: 'flex-start', minWidth: 0 }}>

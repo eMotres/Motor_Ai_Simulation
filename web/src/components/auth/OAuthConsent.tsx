@@ -14,8 +14,10 @@ const SCOPE_TEXT: Record<string, string> = {
   'machines:read': 'Read your machines and their saved results',
   'designs:write': 'Create draft machines in your workspace (never your saved motors or open machine)',
   simulate: 'Queue simulations of those drafts in your job queue (daily fair-use limit)',
+  'projects:read': 'Read the specification form and your own development projects',
+  'projects:write': 'Open development projects in your name and fill and submit their specification',
 };
-const WRITE_SCOPES = ['designs:write', 'simulate'];
+const WRITE_SCOPES = ['designs:write', 'simulate', 'projects:write'];
 
 interface Req {
   client_name: string; client_uri?: string | null; redirect_host: string; scopes: string[]; account: string;

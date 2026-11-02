@@ -113,6 +113,11 @@ TOOL_SUMMARIES: Dict[str, str] = {
     "get_job": "Status, queue position, progress and ETA of a queued simulation.",
     "get_design_result": "Headline results of a draft's finished runs and the requirement checks.",
     "open_in_configure": "The link that opens a draft in the Configure tab of the web app.",
+    "get_spec_form": "The motor specification form (fields, units, required flags, choices) generated from the live schema.",
+    "create_order": "Order a motor: open a development project in your name and save the first specification answers.",
+    "update_spec": "Merge answers into a project's specification draft; returns needs_input until it is complete.",
+    "submit_spec": "Submit the complete specification; MOTRES engineers review it, simulate and contact you.",
+    "get_order_status": "Your own development projects: stage, completeness, submitted version, motors, unread messages.",
 }
 
 
@@ -191,6 +196,15 @@ def _calc_types() -> List[Dict[str, Any]]:
          "method": "fixed-point loop of 2-D FEM transient and thermal solves",
          "available_via": "mcp", "tools": ["simulate", "get_job", "get_design_result"],
          "simulate_what": "coupled", "required_scope": "simulate"},
+        {"id": "motor_order",
+         "title": "Order a motor to your specification",
+         "what": ("turns the customer's requirements into a development project "
+                  "with a filled, submitted specification; MOTRES engineers then "
+                  "review it, run the full simulation and contact the customer."),
+         "method": "the AeroStator specification form (the same one the web app shows)",
+         "available_via": "mcp",
+         "tools": ["get_spec_form", "create_order", "update_spec", "submit_spec", "get_order_status"],
+         "required_scope": "projects:write"},
         {"id": "catalog_lookup",
          "title": "Materials and component catalog",
          "what": ("magnets, lamination steels, wires, bearings, power devices and "
@@ -288,6 +302,30 @@ def _design_inputs() -> Dict[str, Any]:
     }
 
 
+def _order_inputs() -> Dict[str, Any]:
+    """The required fields of the specification, from schema.json (static, no user data)."""
+    from motor_ai_sim.development import spec_order as _so
+    inputs = []
+    for fid, (_, field) in _so.writable_fields().items():
+        if not field.get("required"):
+            continue
+        label = (field.get("label") or {}).get("en") if isinstance(field.get("label"), dict) else None
+        inputs.append(_field(fid, field.get("unit") or None, label or fid,
+                             type_="object" if field.get("properties") else str(field.get("type") or "string"),
+                             required=True, accepts_not_known_yet=bool(field.get("allow_not_known_yet"))))
+    inputs.append(_field("mission_profile", None, "mission phases (phase, torque_Nm, speed_rpm, duration_s, "
+                         "battery_voltage_V) or not_known_yet", type_="list", required=True,
+                         accepts_not_known_yet=True))
+    return {
+        "tool": "create_order / update_spec", "argument": "answers",
+        "rule": ("every required field needs a value or 'not_known_yet'; get_spec_form "
+                 "(after sign-in) gives the full form with properties, units and choices; "
+                 "needs_input in each answer says what is still missing"),
+        "flow": ["get_spec_form", "create_order", "update_spec", "submit_spec", "get_order_status"],
+        "inputs": inputs,
+    }
+
+
 def _simulate_inputs(what: str) -> Dict[str, Any]:
     from motor_ai_sim import agent_designs as _ad
     return {
@@ -341,6 +379,8 @@ def input_requirements(calculation_type: str) -> Dict[str, Any]:
         return head | _design_inputs()
     if ct in ("em_fem_transient", "thermal", "coupled_em_thermal"):
         return head | _simulate_inputs(t["simulate_what"])
+    if ct == "motor_order":
+        return head | _order_inputs()
     if ct == "catalog_lookup":
         from motor_ai_sim.mcp_tools import CATALOG_KINDS
         return head | {"tool": "list_catalog", "inputs": [
@@ -363,9 +403,10 @@ def describe_service() -> Dict[str, Any]:
         "operator": OPERATOR,
         "summary": ("Engineering service for permanent-magnet electric motors "
                     "and generators: a catalog of FEM-characterised machines, "
-                    "draft designs from requirements, and 2-D FEM "
+                    "draft designs from requirements, 2-D FEM "
                     "electromagnetic, thermal and coupled simulations on the "
-                    "user's own job queue."),
+                    "user's own job queue, and motor orders: a development "
+                    "project with the customer's specification."),
         "for_whom": "engineers sizing motors / generators (aerospace, robotics, EV, marine)",
         "license": LICENSE,
         "website": L["website"],
@@ -375,7 +416,7 @@ def describe_service() -> Dict[str, Any]:
         "privacy_url": L["privacy_url"],
         "docs_url": L["docs_url"],
         "access": ("the public tools (list_capabilities) work without an "
-                   "account; machines, drafts, simulations and your saved "
+                   "account; machines, drafts, simulations, projects and your saved "
                    "results need an account and an OAuth sign-in (or an agent key). "
                    "Which catalog machines an account may see is granted per "
                    "account."),
@@ -384,6 +425,10 @@ def describe_service() -> Dict[str, Any]:
                         "jobs or usage. Only public-datasheet data leaves the "
                         "server — never internal dimensions or drawings."),
         "next": "list_calculation_types, then how_to_authenticate to sign in",
+        "order_flow": ("to order a motor: sign in, get_spec_form, create_order, "
+                       "update_spec until needs_input is empty, submit_spec, "
+                       "get_order_status. The order ends at a submitted "
+                       "specification; MOTRES engineers take it from there."),
     }
 
 
@@ -730,8 +775,11 @@ def llms_txt(tools: List[Dict[str, Any]]) -> str:
         f"{SERVICE_NAME} is run by {OPERATOR}; the code is open source ({LICENSE}). "
         "AI agents use it through an MCP server (Model Context Protocol, "
         "streamable HTTP, stateless JSON). Without sign-in an agent can call the "
-        "public discovery tools below; machines, draft designs and FEM "
-        "simulations need an OAuth sign-in by the user.\n\n"
+        "public discovery tools below; machines, draft designs, FEM "
+        "simulations and motor orders need an OAuth sign-in by the user.\n\n"
+        "To order a motor built to a customer's requirements, a signed-in agent "
+        "calls get_spec_form, create_order, update_spec (until needs_input is "
+        "empty), submit_spec and get_order_status.\n\n"
         "## MCP\n\n"
         f"- [MCP endpoint]({ep}): POST JSON-RPC 2.0 (`initialize`, `tools/list`, "
         "`tools/call`); a plain GET returns the service card\n"

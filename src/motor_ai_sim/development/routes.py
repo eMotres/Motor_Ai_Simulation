@@ -473,11 +473,18 @@ async def create_project(request: Request):
     members; every other account gets a project of its own: it is the project OWNER, the id comes from the title, the status is
     "spec", and the number of open projects it owns is limited (``self_service``)."""
     user = access.require_signed_in(request)
-    staff = access.is_engineer(user)
     platform_agreement.require_accepted(user)       # starting a development (428 until the company accepted; staff exempt)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
+    return _summary(create_project_for(user, body), user)
+
+
+def create_project_for(user: dict, body: dict, *, audit_details: dict | None = None) -> dict:
+    """The work of ``POST /api/projects`` for a resolved caller (the web session, or an MCP agent acting for its owner -
+    ``spec_order.create_order``): the stored project record.  Raises ``HTTPException`` (428 agreement, 429 limit, 422, 409)."""
+    staff = access.is_engineer(user)
+    platform_agreement.require_accepted(user)
     if not staff:
         # a customer cannot choose the members, the status or the engineer in charge
         body = {"title": body.get("title"), "customer_org": body.get("customer_org")}
@@ -507,8 +514,9 @@ async def create_project(request: Request):
     project_id = project["id"]
     store.save_json(project_id, "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "schema_version": 2, "revision": 0, "version": None, "updated_at": project["created_at"]})
     # the audit row is what the owner's daily report lists ("project created by the customer")
-    store.append_audit(project_id, _email(user), "create", "project", project_id, {} if staff else {"self_service": True})
-    return _summary(project, user)
+    store.append_audit(project_id, _email(user), "create", "project", project_id,
+                       ({} if staff else {"self_service": True}) | dict(audit_details or {}))
+    return project
 
 
 @router.get("/{project_id}")
@@ -666,6 +674,17 @@ async def put_spec(request: Request, project_id: str):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
+    saved = save_spec_for(user, project_id, body)
+    response_draft = saved["draft"] if access.is_engineer(user) else _customer_spec({"draft": saved["draft"]})["draft"]
+    return {"draft": response_draft, "revision": saved["revision"], "version": saved.get("version"), "schema_version": saved.get("schema_version", 1),
+            "completeness": models.completeness(saved["draft"])}
+
+
+def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dict | None = None) -> dict:
+    """The work of ``PUT /{id}/spec`` for a resolved caller: normalise ``body["draft"]`` and save it under the optimistic
+    ``body["revision"]``.  Returns the saved draft wrapper; raises ``HTTPException`` (403 not the spec editor, 409 stale
+    revision / schema, 422 invalid draft).  The MCP order tools (``spec_order``) write through here."""
+    user, _, _ = access.spec_editor_for(user, project_id)
     try:
         raw_revision = body.get("revision")
         if isinstance(raw_revision, bool) or not isinstance(raw_revision, int):
@@ -708,10 +727,9 @@ async def put_spec(request: Request, project_id: str):
     if result.get("validation_error") is not None:
         raise HTTPException(status_code=422, detail=result["validation_error"])
     saved = result["saved"]
-    store.append_audit(project_id, _email(user), "autosave", "spec_draft", "draft", {"revision": saved["revision"]})
-    response_draft = saved["draft"] if access.is_engineer(user) else _customer_spec({"draft": saved["draft"]})["draft"]
-    return {"draft": response_draft, "revision": saved["revision"], "version": saved.get("version"), "schema_version": saved.get("schema_version", 1),
-            "completeness": models.completeness(saved["draft"])}
+    store.append_audit(project_id, _email(user), "autosave", "spec_draft", "draft",
+                       {"revision": saved["revision"]} | dict(audit_details or {}))
+    return saved
 
 
 @router.post("/{project_id}/spec/submit")
@@ -720,6 +738,19 @@ async def submit_spec(request: Request, project_id: str):
     platform_agreement.require_accepted(user)       # submitting the specification starts the development (428 until accepted)
     body = await request.json()
     raw_revision = body.get("revision") if isinstance(body, dict) else None
+    submitted = submit_spec_for(user, project_id, raw_revision)
+    return {"version": submitted["version"]["version"], "spec": _customer_spec(submitted["version"]),
+            "revision": submitted["current"]["revision"],
+            "completeness": models.completeness(submitted["version"]["draft"])}
+
+
+def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_details: dict | None = None) -> dict:
+    """The work of ``POST /{id}/spec/submit`` for a resolved caller: freeze the draft at ``raw_revision`` into the next
+    specification version.  Returns ``{version: <version record>, current: <draft wrapper>}``; raises ``HTTPException``
+    (403, 428 agreement, 409 stale revision, 422 incomplete with ``errors`` + ``completeness``)."""
+    user, _, _ = access.spec_editor_for(user, project_id)
+    platform_agreement.require_accepted(user)
+    extra = dict(audit_details or {})
     if isinstance(raw_revision, bool) or not isinstance(raw_revision, int) or raw_revision < 0:
         raise HTTPException(status_code=422, detail="revision must be a non-negative integer")
     expected = raw_revision
@@ -730,7 +761,7 @@ async def submit_spec(request: Request, project_id: str):
     if ensure:
         try: ensure()
         except OSError as exc: raise HTTPException(status_code=503, detail="Project store is read-only") from exc
-    store.append_audit(project_id, _email(user), "submit_attempt", "spec_draft", "draft", {"revision": expected})
+    store.append_audit(project_id, _email(user), "submit_attempt", "spec_draft", "draft", {"revision": expected} | extra)
     with json_store.lock_for(path):
         current = json_store.read_json(path, {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0, "version": None})
         if int(current.get("revision", 0)) != expected:
@@ -738,11 +769,11 @@ async def submit_spec(request: Request, project_id: str):
         try:
             draft = models.normalize_draft(current.get("draft", {}), schema_version=int(current.get("schema_version", current.get("draft", {}).get("schema_version", 1))))
         except ValueError as exc:
-            store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "reason": str(exc)})
+            store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "reason": str(exc)} | extra)
             raise HTTPException(status_code=422, detail={"message": "Stored specification is invalid", "errors": [{"field": "draft", "message": str(exc)}]})
         errors = models.validation_errors(draft)
         if errors:
-            store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "errors": errors})
+            store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "errors": errors} | extra)
             raise HTTPException(status_code=422, detail={"message": "Specification is incomplete", "errors": errors,
                                                          "completeness": models.completeness(draft)})
         index = store.load_json(project_id, "spec/index.json", {"versions": []})
@@ -762,11 +793,9 @@ async def submit_spec(request: Request, project_id: str):
         current["updated_at"] = models.now()
         json_store.atomic_write_json(path, current)
         store.append_audit(project_id, _email(user), "submit", "spec_version", str(number),
-                           {"revision": expected, "completeness": models.completeness(draft)})
+                           {"revision": expected, "completeness": models.completeness(draft)} | extra)
         submitted.update({"version": version, "current": current})
-    return {"version": submitted["version"]["version"], "spec": _customer_spec(submitted["version"]),
-            "revision": submitted["current"]["revision"],
-            "completeness": models.completeness(submitted["version"]["draft"])}
+    return submitted
 
 
 @router.get("/{project_id}/spec/versions")

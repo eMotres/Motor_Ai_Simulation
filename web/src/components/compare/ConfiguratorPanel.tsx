@@ -44,7 +44,7 @@ import PropellerLoadChart from './PropellerLoadChart';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import { coggingDigits, coggingTipText, coggingValue } from '../../lib/coggingTile';
 import {
-  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, pwmExtraW, pwmMagnetW, lossPartTiles, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -97,6 +97,7 @@ import { slotMouthLimit } from '../../lib/slotMouthFit';
 import i18n from '../../i18n';
 import {
   usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems, pwmBuildScale, transferPwmReading,
+  pwmSplitState, pwmPartsAnchors,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits, type VariantReading,
@@ -839,6 +840,9 @@ const ConfiguratorPanel: React.FC = () => {
     [p, basePreset, ref.referenceOnly]);
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn ? (resolveVariant(variants, knobs) ?? null) : null;
+  /** is the motor PWM extra split by part on this machine (owner 2026-11-02)?  Machine-level: the tile names never
+   *  change when the drive is switched */
+  const pwmSplit = useMemo(() => pwmSplitState(variants), [variants]);
   /** the drive choice that names a variant: its id AND its (transistor, frequency) pair */
   const choiceOf = (v: PwmVariant): Partial<Knobs> =>
     ({ drive: 'pwm', drive_variant: v.id, drive_device: v.device, drive_carrier_hz: Number(v.carrier_hz) });
@@ -1536,10 +1540,19 @@ ${s1Text.text}` : '';
     const v = Number(t?.rated_winding_C ?? NaN);
     return Number.isFinite(v) && v > 0 ? v : null;
   })();
-  const extraLossW = extraLossTile(driveMode, drv).value;
+  const extraLossW = pwmExtraW(driveMode, drv);
+  /** iron / copper / magnet as the tiles show them: the sine value, + its PWM part under a split PWM passport */
+  const partTile = Object.fromEntries(lossPartTiles(driveMode, drv, { iron: result.P_fe_W, copper: result.P_cu_W, magnet: result.P_mag_W })
+    .map((x) => [x.id, x])) as Record<'iron' | 'copper' | 'magnet', ReturnType<typeof lossPartTiles>[number]>;
+  /** one tooltip line: "Sine X W + PWM Y W. 2-D FEM at anchor (…), scaled by modulation." (only when a PWM part is shown) */
+  const partTip = (x: ReturnType<typeof lossPartTiles>[number]) => (x.pwmW == null || x.sineW == null ? ''
+    : ['', [tx('configureDrive.partTip', { sine: fmt(x.sineW, 1), pwm: fmt(x.pwmW, 1) }),
+      tx('configureDrive.partBasis', { anchors: pwmPartsAnchors(variant) || '—' })].join(' ')].join('\n'));
   const motorHeatBase = pointGate.showMotorLosses ? { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
     stator_W: result.P_loss_stator_W, rotor_W: result.P_loss_rotor_W } : null;
-  const motorHeat = configureMotorHeat(driveMode, pointGate.accepted, motorHeatBase, extraLossW);
+  // the heat tiles put the PWM magnet part on the rotor (the split by part); the thermal verdict keeps the whole
+  // extra on the winding (conservative, `judgePoint`)
+  const motorHeat = configureMotorHeat(driveMode, pointGate.accepted, motorHeatBase, extraLossW, pwmMagnetW(driveMode, drv));
   // The typed cooling system (air speed or a liquid jacket) of a machine the registry gives no
   // cooling for: `CoolingControls` persists it to localStorage `sim.cool.*` and fires
   // `cooling:changed` — it is not React state, so read it again on that event.
@@ -1728,7 +1741,7 @@ ${s1Text.text}` : '';
     const j = judgePoint(driveMode, gate.accepted,
       gate.showMotorLosses ? { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W, P_mag_W: r.P_mag_W,
         stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W } : null,
-      extraLossTile(driveMode, dr).value,
+      pwmExtraW(driveMode, dr),
       pt.h_W_m2K != null ? { h_Wm2K: pt.h_W_m2K, ambient_C: ambient } : null,
       rpm, ld.I_A, kI.L_mm);
     // RATED aims at the rated winding temperature when the server states one (owner 2026-10-19: the continuous point
@@ -2687,11 +2700,11 @@ ${s1Text.text}` : '';
             <MetricTile label={tx('configure.totalLoss')} value={pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null} unit="W" d={0}
               base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')}
               blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? result.P_fe_W : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
-              tip={tx('configure.ironLossTip')} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? result.P_mag_W : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
-              tip={tx('configure.magnetLossTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? partTile.iron.value : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
+              tip={tx('configure.ironLossTip') + partTip(partTile.iron)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? partTile.copper.value : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip + partTip(partTile.copper)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? partTile.magnet.value : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
+              tip={tx('configure.magnetLossTip') + partTip(partTile.magnet)} blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
             <MetricTile label={tx('configure.statorHeat')} value={motorHeat?.stator_W ?? null} unit="W" d={0}
               base={baseRes.P_loss_stator_W} goodHi={false}
@@ -2706,7 +2719,7 @@ ${s1Text.text}` : '';
               base={baseRes.loss_density_W_kg} goodHi={false} tip={tx('configure.lossDensityTip')} blankTip={pointBlankTip} />
             {/* ONE contiguous controller group at the end of the loss row (owner 2026-10-05): the PWM loss,
                 the controller loss, then T_j, the efficiencies and P cont — same cells in Sine and PWM */}
-            {lossTailTiles(driveMode, drv).map(renderSpec)}
+            {lossTailTiles(driveMode, drv, pwmSplit).map(renderSpec)}
             {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, motorLoss_W)).map(renderSpec)}
           </Box>
           {/* ── TEMPERATURES — ONE row in EVERY cooling mode (owner 2026-10-12: the separate

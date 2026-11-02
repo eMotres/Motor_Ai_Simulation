@@ -179,3 +179,48 @@ t('driveText: the saved-configuration cell', () => {
   assert.equal(D.driveText({ mode: 'pwm', device: 'IGC016K10S2', carrier_hz: 100000 }), 'PWM · IGC016K10S2 · 100 kHz');
   assert.equal(D.driveText({ mode: 'pwm' }), 'PWM');
 });
+
+// ── the motor PWM extra loss split by part (owner 2026-11-02) ─────────────────────────────────
+// point k: total 100k = iron 50k + magnet 10k*(k) + copper_ac (40 - 10)k ... chosen so every corner has its own shares
+const ptS = (rpm, I, k) => ({ ...pt(rpm, I, k),
+  motor_pwm_loss_parts_W: { iron: 50 * k, magnet: 5 * k * k, copper_ac: 50 * k - 5 * k * k - 1, other: 1 } });
+const VS = { ...V1, id: 'split', points: { a: ptS(1000, 10, 1), b: ptS(1000, 30, 2), c: ptS(3000, 10, 3), d: ptS(3000, 30, 4) },
+  motor_pwm_loss_parts: { anchors: [{ tag: 'x', rpm: 13000, I_A: 42.78 }, { tag: 'y', rpm: 13000, I_A: 42.78 }, { tag: 'z', rpm: 13000, I_A: 21.4 }] } };
+const sum = (q) => q.iron + q.magnet + q.copper_ac + q.other;
+
+t('the split is read part by part with the same weights, so the parts still sum to the total', () => {
+  const n = D.readVariant(VS, 1000, 30);
+  assert.ok(n.ok && n.exact);
+  assert.deepEqual(n.values.motor_pwm_loss_parts_W, VS.points.b.motor_pwm_loss_parts_W);
+  const r = D.readVariant(VS, 1700, 23);
+  assert.ok(r.ok && !r.exact);
+  assert.ok(Math.abs(sum(r.values.motor_pwm_loss_parts_W) - r.values.motor_pwm_loss_W) < 1e-9);
+  // each part bilinear on its own corners (centre of the cell = mean of the corners)
+  const c = D.readVariant(VS, 2000, 20).values.motor_pwm_loss_parts_W;
+  assert.ok(Math.abs(c.magnet - 5 * (1 + 4 + 9 + 16) / 4) < 1e-9);
+  // the nearest-point read and the build transfer keep the split
+  const near = D.readVariantNear(VS, 5000, 30);
+  assert.ok(near.ok); assert.deepEqual(near.values.motor_pwm_loss_parts_W, VS.points.d.motor_pwm_loss_parts_W);
+  const tr = D.transferPwmReading(n.values, 0.5);
+  assert.ok(Math.abs(sum(tr.motor_pwm_loss_parts_W) - tr.motor_pwm_loss_W) < 1e-9);
+  assert.equal(tr.motor_pwm_loss_parts_W.iron, 50);
+});
+
+t('an old passport (no split) still reads: the total, parts null; one corner without the split = no split', () => {
+  const r = D.readVariant(V1, 2000, 20);
+  assert.ok(r.ok); assert.equal(r.values.motor_pwm_loss_parts_W, null); assert.ok(Math.abs(r.values.motor_pwm_loss_W - 250) < 1e-9);
+  const mixed = { ...VS, points: { ...VS.points, a: pt(1000, 10, 1) } };
+  assert.equal(D.readVariant(mixed, 2000, 20).values.motor_pwm_loss_parts_W, null);
+  assert.equal(D.transferPwmReading(r.values, 2).motor_pwm_loss_parts_W, null);
+  // a part that is not a number = no split (never a silent zero)
+  assert.equal(D.partsOf({ motor_pwm_loss_parts_W: { iron: 1, magnet: 'x', copper_ac: 1, other: 0 } }), null);
+});
+
+t('pwmSplitState is per machine: none / total / parts; the anchors line for the tooltip', () => {
+  assert.equal(D.pwmSplitState([]), 'none');
+  assert.equal(D.pwmSplitState([V1]), 'total');
+  assert.equal(D.pwmSplitState([VS]), 'parts');
+  assert.equal(D.pwmSplitState([VS, V1]), 'total');            // one unsplit variant: the machine shows the total
+  assert.equal(D.pwmPartsAnchors(VS), '42.8 A · 13000 rpm; 21.4 A · 13000 rpm');
+  assert.equal(D.pwmPartsAnchors(V1), '');
+});

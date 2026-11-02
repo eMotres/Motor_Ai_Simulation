@@ -182,11 +182,27 @@ export interface PackSpec {
 export interface PwmVariantPoint {
   rpm?: number; I_A?: number;
   motor_pwm_loss_W?: number | null;
+  /** the same extra loss BY PART (owner 2026-11-02), summing to `motor_pwm_loss_W`; absent on a passport
+   *  built before the split (Configure then shows the total as one "not split" tile) */
+  motor_pwm_loss_parts_W?: PwmLossParts | null;
   inverter_loss_W?: { cond?: number | null; sw?: number | null; dead?: number | null } | number | null;
   tj_C?: number | null;
   eta_drive_pct?: number | null;
   eta_shaft_pct?: number | null;
   p_cont_max_W?: number | null;
+  [k: string]: unknown;
+}
+
+/** The motor's PWM extra loss by part [W]: laminated iron, magnet eddy, copper (DC-resistance ripple + AC), and the
+ *  explicit remainder (shaft / sleeve eddy, rounding, or what an anchor could not split). */
+export interface PwmLossParts { iron: number; magnet: number; copper_ac: number; other: number; }
+
+/** The variant-level record of the split (passport_v1.stage3.PwmModel.parts_block). */
+export interface PwmLossPartsBlock {
+  keys?: string[];
+  anchors?: { tag?: string | null; rpm?: number | null; I_A?: number | null; mode?: string | null }[];
+  modes?: string[];
+  basis?: string | null;
   [k: string]: unknown;
 }
 
@@ -205,6 +221,8 @@ export interface PwmVariant {
   i_board_limit_A?: Record<string, number> | null;
   bus_v?: { min?: number | null; nom?: number | null; max?: number | null } | null;
   provenance?: string | Record<string, unknown> | null;
+  /** how the motor PWM extra loss was split by part (absent = not split) */
+  motor_pwm_loss_parts?: PwmLossPartsBlock | null;
   points: Record<string, PwmVariantPoint>;
 }
 

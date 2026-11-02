@@ -130,10 +130,10 @@ t('no results tile in the panel is conditional on the drive (no `drv &&` around 
   assert.doesNotMatch(panel, /\{\s*drv\s*&&\s*variant\s*&&/);
   assert.doesNotMatch(panel, /\{\s*driveOn\s*&&[^}]*<MetricTile/s);
   assert.match(panel, /driveRowTiles\(driveMode, drv,/);
-  assert.match(panel, /lossTailTiles\(driveMode, drv\)\.map\(renderSpec\)/);
+  assert.match(panel, /lossTailTiles\(driveMode, drv, pwmSplit\)\.map\(renderSpec\)/);
   // the two drive-dependent loss tiles are the LAST tiles of the loss row, right after the loss density
   const i = panel.indexOf("tx('configure.lossDensity')");
-  const j = panel.indexOf('lossTailTiles(driveMode, drv)', i);
+  const j = panel.indexOf('lossTailTiles(driveMode, drv, pwmSplit)', i);
   assert.ok(i > 0 && j > i && j - i < 700, 'directly after loss density');
   // a fixed tile width: a number never resizes a tile (the tile itself moved to
   // components/common/ResultTiles.tsx — shared with the Electromagnetic tab, 2026-10-12)
@@ -195,7 +195,7 @@ t('ONE contiguous controller group: PWM loss, controller loss, T_j, eta motor, P
   }
   const panel = read('components/compare/ConfiguratorPanel.tsx');
   const i = panel.indexOf("tx('configure.lossDensity')");
-  const a = panel.indexOf('lossTailTiles(driveMode, drv).map(renderSpec)', i);
+  const a = panel.indexOf('lossTailTiles(driveMode, drv, pwmSplit).map(renderSpec)', i);
   const b = panel.indexOf('driveRowTiles(driveMode, drv,', a);
   const end = panel.indexOf('</Box>', b);
   assert.ok(i > 0 && a > i && b > a && end > b, 'the group follows the loss density');
@@ -207,7 +207,7 @@ t('ONE contiguous controller group: PWM loss, controller loss, T_j, eta motor, P
 for (const [l, max] of [['en', 11], ['zh-CN', 12]]) {
   t(`controller-group titles are short enough for the tile (no ellipsis) and the full name is in the tooltip (${l})`, () => {
     const d = loc(l).configureDrive;
-    for (const k of ['motorLoss', 'invLoss', 'tj', 'motorEff', 'pContMax']) {
+    for (const k of ['motorLoss', 'motorLossUnsplit', 'motorLossOther', 'invLoss', 'tj', 'motorEff', 'pContMax']) {
       assert.ok([...d[k]].length <= max, `${l} configureDrive.${k} = "${d[k]}" (${[...d[k]].length} > ${max})`);
       assert.ok(d[`${k}Tip`] && d[`${k}Tip`].length > d[k].length, `${k}Tip carries the details`);
     }
@@ -526,3 +526,51 @@ t('the hover text wraps at about 300 px so it never covers the tiles around it',
   assert.match(src, /<Tip title=/);                                   // the tile uses it, not a native title
   assert.match(src, /whiteSpace: 'pre-line'/);
 });
+
+// ── the motor PWM extra loss SPLIT BY PART (owner 2026-11-02) ─────────────────────────────────
+const PARTS = { iron: 2.68, magnet: 0.67, copper_ac: 1.95, other: 0.0 };
+const SPLIT = { ...FULL, motor_pwm_loss_W: 5.3, motor_pwm_loss_parts_W: PARTS };
+const SINE_LOSS = { iron: 9.2, copper: 52.0, magnet: 3.0 };
+
+t('PWM with a split: iron / copper / magnet show sine + their PWM part; the PWM tile keeps only the remainder', () => {
+  const rows = Object.fromEntries(T.lossPartTiles('pwm', SPLIT, SINE_LOSS).map((x) => [x.id, x]));
+  assert.deepEqual([rows.iron.sineW, rows.iron.pwmW], [9.2, 2.68]);
+  assert.ok(Math.abs(rows.iron.value - (9.2 + 2.68)) < 1e-12);
+  assert.ok(Math.abs(rows.copper.value - (52.0 + 1.95)) < 1e-12);   // copper incl. AC
+  assert.ok(Math.abs(rows.magnet.value - (3.0 + 0.67)) < 1e-12);
+  const extra = T.extraLossTile('pwm', SPLIT, 'parts');
+  assert.equal(extra.value, 0.0); assert.equal(extra.labelKey, 'configureDrive.motorLossOther');
+  // the tiles shown add up to the same total: sine rows + PWM parts + remainder = sine total + PWM extra
+  const shown = Object.values(rows).reduce((a, x) => a + x.value, 0) + extra.value;
+  assert.ok(Math.abs(shown - (9.2 + 52.0 + 3.0 + 5.3)) < 1e-9);
+  assert.equal(T.totalLossShown(64.2, 'pwm', SPLIT), 64.2 + 5.3 + 7.5 + 2);   // the TOTAL counts the extra once
+  assert.equal(T.pwmExtraW('pwm', SPLIT), 5.3);
+  assert.equal(T.pwmMagnetW('pwm', SPLIT), 0.67);
+});
+
+t('Sine and an old passport without the split: the rows are the sine values; the extra is ONE "not split" tile', () => {
+  for (const [mode, drv] of [['sine', null], ['pwm', FULL], ['pwm', null]]) {
+    for (const x of T.lossPartTiles(mode, drv, SINE_LOSS)) {
+      assert.equal(x.pwmW, null, `${mode} ${x.id}`); assert.equal(x.value, SINE_LOSS[x.id], `${mode} ${x.id}`);
+    }
+  }
+  const old = T.extraLossTile('pwm', FULL, 'total');
+  assert.equal(old.value, 12.5); assert.equal(old.labelKey, 'configureDrive.motorLossUnsplit');
+  assert.equal(T.pwmMagnetW('pwm', FULL), 0);
+  // the tile names depend on the MACHINE (split or not), never on the drive: same label in Sine and PWM
+  for (const split of ['none', 'total', 'parts']) {
+    const lab = (mode, drv) => T.lossTailTiles(mode, drv, split).map((x) => x.labelKey).join();
+    assert.equal(lab('pwm', split === 'parts' ? SPLIT : FULL), lab('sine', null), split);
+    assert.equal(lab('pwm', null), lab('sine', null), split);
+  }
+  assert.equal(T.extraLossTile('sine', null, 'parts').value, 0);
+});
+
+for (const l of ['en', 'zh-CN']) {
+  t(`the split labels exist and the tooltip names the basis (${l})`, () => {
+    const d = loc(l).configureDrive;
+    for (const k of ['motorLossUnsplit', 'motorLossUnsplitTip', 'motorLossOther', 'motorLossOtherTip', 'partTip', 'partBasis']) assert.ok(d[k], k);
+    assert.match(d.partTip, /\{sine\}/); assert.match(d.partTip, /\{pwm\}/);
+    assert.match(d.partBasis, /\{anchors\}/); assert.match(d.partBasis, /2-D|二维/);
+  });
+}

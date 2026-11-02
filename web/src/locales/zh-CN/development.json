@@ -1165,13 +1165,15 @@
       "estimate": "其他估算",
       "manual": "手动",
       "converted": "已转换",
-      "rule": "规则"
+      "rule": "规则",
+      "dhl": "DHL 报价"
     },
     "origin": {
       "production": "取自生产 {ref}，按有效质量 ×{factor}",
       "estimate": "取自项目 {ref} 的估算，第 {iteration} 轮",
       "converted": "由旧的详细估算转换。{note}",
       "rule": "默认规则",
+      "dhl": "DHL 报价 {date}，{from}→{to}，{weight} kg，+{margin} %",
       "manual": "由 {by} 于 {date} 输入",
       "owner": "所有者"
     },
@@ -1205,6 +1207,76 @@
       "manualChip": "手动",
       "ecbChip": "欧洲央行 {date}",
       "noRate": "无汇率"
+    },
+    "view": {
+      "table": "表格",
+      "steps": "分步",
+      "label": "视图",
+      "tip": "表格：每轮一行。分步：引导式向导。两者编辑同一份估算。"
+    },
+    "weeksN": "{n} 周",
+    "weeksUnit": "周",
+    "weeksLabel": "周数",
+    "durationCol": "工期",
+    "iterationDuration": "本轮工期",
+    "durationSum": "各阶段之和：{n} 周",
+    "weeksOverride": "手动工期",
+    "weeksOverrideTip": "留空：各阶段之和。输入周数即可覆盖。",
+    "weeksOverridden": "已覆盖：{n} 周",
+    "weeksMissing": "{count, plural, one {# 个阶段缺周数} other {# 个阶段缺周数}}",
+    "durations": {
+      "tooling": "工装交期",
+      "manufacturing": "制造",
+      "testing": "测试",
+      "shipping": "运输时间"
+    },
+    "table": {
+      "col": {
+        "iteration": "轮次",
+        "tooling": "工装",
+        "motors": "电机 × 单价",
+        "testing": "测试",
+        "shipping": "DHL 运输",
+        "duration": "工期",
+        "total": "本轮合计"
+      },
+      "add": "+ 迭代",
+      "addTip": "1 至 5 轮。",
+      "remove": "删除第 {n} 轮",
+      "accept": "采用",
+      "suggested": "建议",
+      "noteTip": "来源、备注和周数",
+      "contingency": "不可预见费",
+      "totalCurrency": "合计的货币",
+      "currencyTip": "只换算合计；其他金额均为欧元。",
+      "noRate": "没有 {currency} 汇率：合计仍为欧元。"
+    },
+    "dhl": {
+      "title": "运输（DHL）",
+      "country": "国家（ISO）",
+      "city": "城市",
+      "lanes": "DHL 报价",
+      "lanesTip": "带日期的报价。运费建议取该线路重量最接近的报价，按公斤换算并加上余量。",
+      "add": "+ 报价",
+      "save": "保存",
+      "edit": "编辑报价",
+      "remove": "删除报价",
+      "none": "尚无 DHL 报价。",
+      "invalid": "请填写标出的字段。",
+      "weight": "毛重 {weight} kg = {motors} × （电机 {mass} kg，{basis}，× 1.3 外壳 + 15 kg 木箱），向上取整到 5 kg。",
+      "quote": "报价：{currency} {price}，{weight} kg，{days} 天，{mode}。",
+      "col": {
+        "from": "发货地",
+        "to_country": "目的国",
+        "quoted_on": "报价日期",
+        "weight_kg": "kg",
+        "price": "价格",
+        "currency": "货币",
+        "transit_days": "天数",
+        "mode": "方式",
+        "source": "来源",
+        "note": "备注"
+      }
     }
   }
 }

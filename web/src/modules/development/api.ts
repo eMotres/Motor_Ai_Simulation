@@ -2,7 +2,7 @@ import type { CatalogController } from './controllerCatalog';
 import { parseActivity } from './stageBar';
 import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
-import type { CostEstimate, CostEstimateAnswer, CostSnapshot } from './costEstimate';
+import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -121,6 +121,8 @@ export const developmentApi = {
   costEstimate: (id: string, display?: string) => call<CostEstimateAnswer>('GET', ce(id) + dq(display)),
   saveCostEstimate: (id: string, estimate: CostEstimate, display?: string) => call<CostEstimateAnswer>('PUT', ce(id) + dq(display), estimate),
   suggestCostEstimate: (id: string, revision: number, refresh = false, display?: string) => call<CostEstimateAnswer>('POST', `${ce(id)}/suggest${dq(display)}`, { revision, refresh }),
+  /** What Suggest WOULD put in the empty cells of the estimate on screen (the table's grey placeholders); nothing is saved. */
+  costEstimateSuggestions: (id: string, estimate: CostEstimate) => call<CostSuggestions>('POST', `${ce(id)}/suggestions`, estimate),
   snapshotCostEstimate: (id: string, revision: number, note: string, display?: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note, display_currency: display }),
   costEstimateSnapshots: async (id: string) => (await call<{ snapshots: CostSnapshot[] }>('GET', `${ce(id)}/snapshots`)).snapshots ?? [],
 };

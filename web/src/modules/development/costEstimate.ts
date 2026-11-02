@@ -3,30 +3,54 @@
  *  (steps, line edits, source chips, the review table), tested without a browser.  The schema is the server's
  *  `cost_estimate_schema.json`; the server computes the totals PER CURRENCY and, at the estimate's dated exchange rates
  *  (`estimate.fx`: ECB or manual), also in the DISPLAY currency (`computed.converted`), which follows the UI language
- *  (en -> EUR, zh-CN -> CNY) unless the owner picks one.  Every line keeps its own entered currency. */
+ *  (en -> EUR, zh-CN -> CNY) unless the owner picks one.  Every line keeps its own entered currency.
+ *  Owner 2026-11-02 (later the same day): a one-table view (default; the Steps view stays for rollback), a duration in weeks
+ *  for every stage (the iteration runs them in sequence, the owner may override it; the project is the sum), and the
+ *  shipping line suggested from the dated DHL lane table (`dhl_lanes`). */
 
 export type CostLang = 'en' | 'zh-CN';
 export type Bilingual = Record<CostLang, string>;
 export type LineId = 'tooling' | 'manufacturing' | 'testing' | 'shipping';
 export const LINE_IDS: LineId[] = ['tooling', 'manufacturing', 'testing', 'shipping'];
 export type LineStatus = 'filled' | 'missing';
-export type LineSource = 'production' | 'estimate' | 'manual' | 'converted' | 'rule';
+export type LineSource = 'production' | 'estimate' | 'manual' | 'converted' | 'rule' | 'dhl';
 export type Bench = 'dyno' | 'propeller' | 'both' | 'none';
 export type Money = Record<string, number>;
 
-export interface CostField { id: string; type: 'bool' | 'int' | 'number' | 'enum'; min?: number; max?: number; options?: string[]; option_labels?: Record<string, Bilingual>; default?: unknown; label: Bilingual; help: Bilingual }
+export interface CostField { id: string; type: 'bool' | 'int' | 'number' | 'enum' | 'text' | 'place'; min?: number; max?: number; options?: string[]; option_labels?: Record<string, Bilingual>; default?: unknown; label: Bilingual; help: Bilingual }
 export interface CostLineDef { id: LineId; label: Bilingual; help: Bilingual; per_motor?: boolean }
+/** One dated DHL quote: the shipping suggestion scales its price per kg to the shipment's weight. */
+export interface DhlLane {
+  from: string; to_country: string; mode: string; quoted_on: string; weight_kg: number; price: number; currency: string;
+  transit_days: number | null; source: string; note: string;
+}
+export interface CostShippingSchema {
+  settings: CostField[]; housing_factor: number; active_to_complete: number; crate_kg: number; round_to_kg: number; customs_weeks: number;
+  lane_limit: number; excluded: Bilingual; dhl_lanes: DhlLane[];
+}
+export interface CostDurationsSchema { unit: 'weeks'; line_min: number; line_max: number; override_max: number; label: Bilingual; help: Bilingual }
 export interface CostSchema {
   schema_version: number; currencies: string[]; default_currency: string; display_currency_by_locale?: Record<CostLang, string>; factor_limits: [number, number];
-  settings: CostField[]; iteration_fields: CostField[]; lines: CostLineDef[];
+  settings: CostField[]; iteration_fields: CostField[]; lines: CostLineDef[]; durations?: CostDurationsSchema; shipping?: CostShippingSchema;
 }
-export interface SourceRef { production?: string; project?: string; title?: string; iteration?: string; analog_mass_kg?: number; target_mass_kg?: number }
+/** How a DHL shipping suggestion was made (the cell's tooltip). */
+export interface DhlRef {
+  quoted_on?: string; from?: string; to?: string; mode?: string; lane_weight_kg?: number; lane_price?: number; currency?: string;
+  weight_kg?: number; margin_pct?: number; price?: number; rate?: number; motor_mass_kg?: number; mass_basis?: string; transit_days?: number; source?: string;
+}
+export interface SourceRef { production?: string; project?: string; title?: string; iteration?: string; analog_mass_kg?: number; target_mass_kg?: number; dhl?: DhlRef }
 export interface CostLine {
   status: LineStatus; amount: number | null; currency: string; pct: number | null; source: LineSource | null;
   source_ref: SourceRef | null; factor: number | null; date: string | null; by: string | null; note: string; hint: string;
+  /** the stage's duration in weeks (tooling lead time, manufacturing, testing, shipping transit); null = not given */
+  weeks?: number | null;
 }
-export interface CostIteration { index: number; motors: number; bench: Bench; lines: Record<LineId, CostLine> }
-export interface CostSettings { complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null; [key: string]: unknown }
+export interface CostIteration { index: number; motors: number; bench: Bench; lines: Record<LineId, CostLine>; weeks_override?: number | null }
+export interface ShipTo { country: string; city: string }
+export interface CostSettings {
+  complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null;
+  ship_from?: string; ship_to?: ShipTo | null; ship_margin_pct?: number; [key: string]: unknown;
+}
 export interface CostMigration { from_version: number; date: string | null; dropped: string[]; note: string }
 /** Dated exchange rates, EUR base: `rates` = units of each currency per 1 EUR (effective: a manual rate wins over the ECB one). */
 export interface CostFx {
@@ -36,12 +60,12 @@ export interface CostFx {
 export interface FxStatus { state: 'ok' | 'stale' | 'none'; date: string | null; manual: string[]; error: string | null }
 export interface CostEstimate {
   version: number; schema_version: number; project_id: string; revision: number; settings: CostSettings; fx?: CostFx | null;
-  iterations: CostIteration[]; migration: CostMigration | null; updated_at: string | null; updated_by: string | null;
+  iterations: CostIteration[]; dhl_lanes?: DhlLane[]; migration: CostMigration | null; updated_at: string | null; updated_by: string | null;
 }
 export interface LineResult { amount: Money | null; origin: string }
 export interface IterationResult {
   index: number; motors: number; bench: Bench; tooling: Money | null; manufacturing: Money | null; testing: Money | null; shipping: Money | null;
-  subtotal: Money; lines: Record<LineId, LineResult>;
+  subtotal: Money; lines: Record<LineId, LineResult>; weeks?: WeeksBreakdown;
 }
 export interface MissingLine { iteration: number; line: LineId; reason: string }
 /** The lines and totals in the display currency; `available` is false when a rate is unknown (`missing_rates`): the
@@ -54,8 +78,16 @@ export interface CostConverted {
 export interface CostComputed {
   iterations: IterationResult[]; subtotal: Money; contingency_pct: number; contingency: Money; total: Money; currencies: string[];
   converted?: CostConverted; missing: MissingLine[]; missing_count: number; warnings: string[];
+  weeks_total?: number; weeks_missing?: Array<{ iteration: number; line: LineId }>;
 }
-export interface CostSnapshot { id: string; n: number; note: string; created_at: string; created_by: string; revision: number; parent: string | null; totals: { total: Money; converted?: CostConverted; missing_count: number }; diff: Array<{ path: string; was: unknown; now: unknown }> }
+export interface CostSnapshot { id: string; n: number; note: string; created_at: string; created_by: string; revision: number; parent: string | null; totals: { total: Money; converted?: CostConverted; missing_count: number; weeks_total?: number }; diff: Array<{ path: string; was: unknown; now: unknown }> }
+/** What Suggest WOULD put in an empty cell (a grey placeholder): an amount with its source, or why there is none; and a
+ *  duration when the line's weeks are empty. */
+export interface SuggestionCell { amount?: number; source?: LineSource; source_ref?: SourceRef | null; factor?: number | null; origin?: string; hint?: string; weeks?: number }
+export interface CostSuggestions {
+  cells: Record<string, Partial<Record<LineId, SuggestionCell>>>; motor_mass_kg: number | null; motor_mass_basis: string;
+  analogs?: Record<string, { ref: string | null; factor?: number; reason?: string }>; notes?: string[];
+}
 export interface CostEstimateAnswer {
   estimate: CostEstimate; computed: CostComputed; schema: CostSchema; stored: boolean; fx_status?: FxStatus;
   linked_motors: Array<{ die: string; config: string; status: string }>;
@@ -158,7 +190,7 @@ const clone = (e: CostEstimate): CostEstimate => JSON.parse(JSON.stringify(e)) a
 const lineAt = (e: CostEstimate, ref: LineRef): CostLine | undefined => e.iterations.find((it) => it.index === ref.iteration)?.lines[ref.line];
 
 export function blankLine(currency: string): CostLine {
-  return { status: 'missing', amount: null, currency, pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '' };
+  return { status: 'missing', amount: null, currency, pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '', weeks: null };
 }
 
 /** The owner edits a line.  A number makes it `manual` - by him, today; clearing the amount makes it missing.  A note alone
@@ -181,7 +213,7 @@ export function editLine(e: CostEstimate, ref: LineRef, patch: { amount?: number
 export function defaultIteration(schema: CostSchema, settings: CostSettings, index: number): CostIteration {
   const field = (id: string) => schema.iteration_fields.find((f) => f.id === id)?.default;
   const lines = Object.fromEntries(LINE_IDS.map((id) => [id, blankLine(settings.currency)])) as Record<LineId, CostLine>;
-  return { index, motors: Number(field('motors') ?? 2), bench: (field('bench') as Bench) ?? 'dyno', lines };
+  return { index, motors: Number(field('motors') ?? 2), bench: (field('bench') as Bench) ?? 'dyno', weeks_override: null, lines };
 }
 
 /** Settings; the iteration list follows the count at once (new iterations get the defaults, extra ones are cut);
@@ -196,7 +228,7 @@ export function setSetting(e: CostEstimate, schema: CostSchema, key: string, val
   return next;
 }
 
-export function setIterationField(e: CostEstimate, index: number, key: 'motors' | 'bench', value: number | Bench): CostEstimate {
+export function setIterationField(e: CostEstimate, index: number, key: 'motors' | 'bench' | 'weeks_override', value: number | Bench | null): CostEstimate {
   const next = clone(e);
   const it = next.iterations.find((x) => x.index === index);
   if (it) (it as unknown as Record<string, unknown>)[key] = value;
@@ -223,6 +255,7 @@ export function originChip(line: CostLine, it: CostIteration, lineId: LineId, t:
   else if (src === 'estimate') tip = t('costEstimate.origin.estimate', { ref: ref.title || ref.project || '?', iteration: ref.iteration || '' });
   else if (src === 'converted') tip = t('costEstimate.origin.converted', { note: line.note || '' });
   else if (src === 'rule') tip = t('costEstimate.origin.rule');
+  else if (src === 'dhl') tip = dhlOrigin(ref.dhl, t);
   else tip = t('costEstimate.origin.manual', { by: line.by || t('costEstimate.origin.owner'), date: line.date || '' });
   return { kind: src, label: t(`costEstimate.source.${src}`), tip };
 }
@@ -271,7 +304,8 @@ export const todayIso = (): string => new Date().toISOString().slice(0, 10);
 /** One field of the estimate, as the wizard names it to the user. */
 export type FieldRef =
   | { kind: 'setting'; id: string }
-  | { kind: 'iterField'; iteration: number; id: 'motors' | 'bench' }
+  | { kind: 'iterField'; iteration: number; id: 'motors' | 'bench' | 'weeks_override' }
+  | { kind: 'lanes' }
   | { kind: 'line'; iteration: number; line: LineId }
   | { kind: 'fx'; currency: string };
 
@@ -304,9 +338,11 @@ export function mergeEdits(synced: CostEstimate, mine: CostEstimate, latest: Cos
     if (!L) return copy(M);
     if (edited(S?.motors, M.motors, L.motors, { kind: 'iterField', iteration: index, id: 'motors' })) L.motors = M.motors;
     if (edited(S?.bench, M.bench, L.bench, { kind: 'iterField', iteration: index, id: 'bench' })) L.bench = M.bench;
+    if (edited(S?.weeks_override ?? null, M.weeks_override ?? null, L.weeks_override ?? null, { kind: 'iterField', iteration: index, id: 'weeks_override' })) L.weeks_override = M.weeks_override ?? null;
     for (const id of LINE_IDS) if (edited(S?.lines[id], M.lines[id], L.lines[id], { kind: 'line', iteration: index, line: id })) L.lines[id] = copy(M.lines[id]);
     return L;
   });
+  if (edited(synced.dhl_lanes, mine.dhl_lanes, latest.dhl_lanes, { kind: 'lanes' })) merged.dhl_lanes = copy(mine.dhl_lanes);
   for (const cur of new Set([...Object.keys(synced.fx?.manual ?? {}), ...Object.keys(mine.fx?.manual ?? {})])) {
     if (edited(synced.fx?.manual?.[cur], mine.fx?.manual?.[cur], latest.fx?.manual?.[cur], { kind: 'fx', currency: cur })) merged = setManualRate(merged, cur, mine.fx?.manual?.[cur] ?? null);
   }
@@ -323,13 +359,206 @@ export function reconcile(dirty: boolean, synced: CostEstimate | null, mine: Cos
 }
 
 /** The user-facing name of a field, for the "your change to <field> was kept" note. */
-export function fieldLabel(ref: FieldRef, schema: Pick<CostSchema, 'settings' | 'iteration_fields' | 'lines'>, lang: CostLang, t: T): string {
+export function fieldLabel(ref: FieldRef, schema: Pick<CostSchema, 'settings' | 'iteration_fields' | 'lines' | 'shipping'>, lang: CostLang, t: T): string {
   const it = (n: number) => t('costEstimate.iteration', { n });
   if (ref.kind === 'setting') {
     const f = schema.settings.find((x) => x.id === ref.id);
-    return f ? txt(f.label, lang) : ref.id === 'target_motor' ? t('costEstimate.targetMotor') : ref.id === 'display_currency' ? t('costEstimate.displayCurrency') : ref.id;
+    const ship = schema.shipping?.settings.find((x) => x.id === ref.id);
+    return f ? txt(f.label, lang) : ship ? txt(ship.label, lang) : ref.id === 'target_motor' ? t('costEstimate.targetMotor') : ref.id === 'display_currency' ? t('costEstimate.displayCurrency') : ref.id;
   }
+  if (ref.kind === 'lanes') return t('costEstimate.dhl.lanes');
+  if (ref.kind === 'iterField' && ref.id === 'weeks_override') return `${it(ref.iteration)} · ${t('costEstimate.weeksOverride')}`;
   if (ref.kind === 'iterField') return `${it(ref.iteration)} · ${txt(schema.iteration_fields.find((x) => x.id === ref.id)?.label, lang) || ref.id}`;
   if (ref.kind === 'line') return `${it(ref.iteration)} · ${txt(schema.lines.find((x) => x.id === ref.line)?.label, lang) || ref.line}`;
   return `${t('costEstimate.fx.rateLabel')} ${ref.currency}`;
+}
+
+// ── durations (owner 2026-11-02: «обязательно указывать время выполнения каждого этапа») ─────────────────────────────────
+
+export const WEEKS_MAX = 104;            // per line (server: 0..104)
+export const WEEKS_OVERRIDE_MAX = 416;   // per iteration
+/** A duration the server accepts: null (cleared) or a finite number of weeks 0..max. */
+export const validWeeks = (v: number | null | undefined, max = WEEKS_MAX): boolean => v === null || v === undefined || (Number.isFinite(v) && v >= 0 && v <= max);
+
+export interface WeeksBreakdown { tooling: number | null; manufacturing: number | null; testing: number | null; shipping: number | null; sum: number; override: number | null; total: number; missing: LineId[] }
+/** One iteration's duration: the four stages in SEQUENCE (their sum), testing not counted without a bench; the owner's
+ *  override wins.  `missing` = the needed stages without a duration (0 in the sum).  Same rule as the server. */
+export function iterationWeeks(it: CostIteration): WeeksBreakdown {
+  const per = {} as Record<LineId, number | null>;
+  const missing: LineId[] = [];
+  for (const id of LINE_IDS) {
+    if (!lineNeeded(it, id)) { per[id] = null; continue; }
+    const w = it.lines[id]?.weeks;
+    per[id] = w === null || w === undefined ? null : Number(w);
+    if (per[id] === null) missing.push(id);
+  }
+  const sum = Number(LINE_IDS.reduce((a, id) => a + (per[id] ?? 0), 0).toFixed(2));
+  const override = it.weeks_override === null || it.weeks_override === undefined ? null : Number(it.weeks_override);
+  return { ...per, sum, override, total: override ?? sum, missing };
+}
+/** The project's duration: the sum of the iterations. */
+export const projectWeeks = (e: CostEstimate): number => Number(e.iterations.reduce((a, it) => a + iterationWeeks(it).total, 0).toFixed(2));
+export const weeksText = (w: number | null | undefined): string => (w === null || w === undefined ? '—' : String(Number(Number(w).toFixed(1))));
+
+export function setLineWeeks(e: CostEstimate, ref: LineRef, weeks: number | null): CostEstimate {
+  if (!validWeeks(weeks)) return e;
+  const next = clone(e);
+  const line = lineAt(next, ref);
+  if (line) line.weeks = weeks;
+  return next;
+}
+export function setWeeksOverride(e: CostEstimate, index: number, weeks: number | null): CostEstimate {
+  if (!validWeeks(weeks, WEEKS_OVERRIDE_MAX)) return e;
+  return setIterationField(e, index, 'weeks_override', weeks);
+}
+
+// ── the one-table view ───────────────────────────────────────────────────────────────────────────────────────────────
+
+export type CostView = 'table' | 'steps';
+const viewKey = (who: string) => `costEstimate.view:${who || 'admin'}`;
+/** The viewer's choice of view (Table is the default; Steps stays for rollback).  Storage may be missing or throw
+ *  (private window, blocked site data): then Table. */
+export function readView(storage: Pick<Storage, 'getItem'> | null | undefined, who: string): CostView {
+  try { return storage?.getItem(viewKey(who)) === 'steps' ? 'steps' : 'table'; } catch { return 'table'; }
+}
+export function writeView(storage: Pick<Storage, 'setItem'> | null | undefined, who: string, view: CostView): void {
+  try { storage?.setItem(viewKey(who), view); } catch { /* a per-viewer convenience only */ }
+}
+
+export const MIN_ITERATIONS = 1;
+export const MAX_ITERATIONS = 5;
+/** "+ iteration" under the table: a new last iteration with the defaults (at most 5). */
+export function addIteration(e: CostEstimate, schema: CostSchema): CostEstimate {
+  if (e.iterations.length >= MAX_ITERATIONS) return e;
+  const next = clone(e);
+  next.iterations.push(defaultIteration(schema, next.settings, next.iterations.length + 1));
+  next.settings.iterations = next.iterations.length;
+  return next;
+}
+/** The row's remove control: the iteration goes, the later ones move up (re-numbered); at least one stays. */
+export function removeIteration(e: CostEstimate, index: number): CostEstimate {
+  if (e.iterations.length <= MIN_ITERATIONS || !e.iterations.some((it) => it.index === index)) return e;
+  const next = clone(e);
+  next.iterations = next.iterations.filter((it) => it.index !== index).map((it, i) => ({ ...it, index: i + 1 }));
+  next.settings.iterations = next.iterations.length;
+  return next;
+}
+
+const eur = (line: CostLine | undefined): number | null => (line && line.amount !== null && line.amount !== undefined && Number.isFinite(line.amount) ? Number(line.amount) : null);
+const r2 = (x: number): number => Math.round(x * 100) / 100;
+
+export interface TableRow {
+  index: number; motors: number; bench: Bench; testingNeeded: boolean;
+  tooling: number | null; perMotor: number | null; manufacturing: number | null; testing: number | null; shipping: number | null;
+  weeks: WeeksBreakdown; total: number; missing: number;
+}
+export interface TableModel {
+  rows: TableRow[]; subtotal: number; contingencyPct: number; contingency: number; total: number; weeksTotal: number; missing: number;
+  /** the Total row only: in the display currency at the estimate's rates (null = no rate known: EUR stays) */
+  display: { currency: string; total: number | null; rate: number | null };
+  canAdd: boolean; canRemove: boolean;
+}
+/** Everything the table shows, from the estimate alone (EUR; manufacturing = per motor x motors; testing 0 without a bench).
+ *  Only the Total row is converted to `displayCurrency`. */
+export function tableModel(e: CostEstimate, displayCurrency = 'EUR'): TableModel {
+  const rows = e.iterations.map((it): TableRow => {
+    const testingNeeded = lineNeeded(it, 'testing');
+    const perMotor = eur(it.lines.manufacturing);
+    const vals = { tooling: eur(it.lines.tooling), manufacturing: perMotor === null ? null : r2(perMotor * (it.motors || 0)), testing: testingNeeded ? eur(it.lines.testing) : 0, shipping: eur(it.lines.shipping) };
+    const missing = LINE_IDS.filter((id) => lineNeeded(it, id) && it.lines[id].status === 'missing').length;
+    return { index: it.index, motors: it.motors, bench: it.bench, testingNeeded, perMotor, ...vals,
+      weeks: iterationWeeks(it), total: r2((vals.tooling ?? 0) + (vals.manufacturing ?? 0) + (vals.testing ?? 0) + (vals.shipping ?? 0)), missing };
+  });
+  const subtotal = r2(rows.reduce((a, r) => a + r.total, 0));
+  const contingencyPct = Number(e.settings.contingency_pct) || 0;
+  const contingency = r2(subtotal * contingencyPct / 100);
+  const total = r2(subtotal + contingency);
+  const cur = displayCurrency || 'EUR';
+  const rate = cur === 'EUR' ? 1 : (e.fx?.rates?.[cur] ?? null);
+  return { rows, subtotal, contingencyPct, contingency, total, weeksTotal: projectWeeks(e), missing: rows.reduce((a, r) => a + r.missing, 0),
+    display: { currency: cur, total: rate ? r2(total * rate) : null, rate }, canAdd: rows.length < MAX_ITERATIONS, canRemove: rows.length > MIN_ITERATIONS };
+}
+
+/** Accept a grey suggestion (Enter or one click): the amount with its source (by the viewer, today) when the line is empty,
+ *  and the duration when the line's weeks are empty.  A filled line or set weeks are never overwritten. */
+export function acceptSuggestion(e: CostEstimate, ref: LineRef, cell: SuggestionCell | undefined, who: string, today: string): CostEstimate {
+  if (!cell) return e;
+  const next = clone(e);
+  const line = lineAt(next, ref);
+  if (!line) return e;
+  let changed = false;
+  if (line.status === 'missing' && cell.amount !== undefined && cell.amount !== null && Number.isFinite(cell.amount)) {
+    Object.assign(line, { status: 'filled', amount: cell.amount, currency: 'EUR', pct: null, source: cell.source ?? 'manual', source_ref: cell.source_ref ?? null,
+      factor: cell.factor ?? null, date: today, by: who, hint: '' });
+    changed = true;
+  }
+  if ((line.weeks === null || line.weeks === undefined) && cell.weeks !== undefined && validWeeks(cell.weeks)) { line.weeks = cell.weeks; changed = true; }
+  return changed ? next : e;
+}
+export const suggestionAt = (s: CostSuggestions | null | undefined, ref: LineRef): SuggestionCell | undefined => s?.cells?.[String(ref.iteration)]?.[ref.line];
+
+// ── shipping (DHL) ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** "DHL quote 2026-11-02, CN Shanghai→AR, 85 kg, +20 %" */
+export function dhlOrigin(d: DhlRef | undefined, t: T): string {
+  return t('costEstimate.origin.dhl', { date: d?.quoted_on ?? '?', from: d?.from ?? '?', to: d?.to ?? '?', weight: weeksText(d?.weight_kg ?? null), margin: weeksText(d?.margin_pct ?? 0) });
+}
+/** The extra tooltip lines of a DHL suggestion: the weight and how it was made, the quote, and what is NOT included. */
+export function dhlDetails(d: DhlRef | undefined, motors: number, t: T, excluded: string): string[] {
+  if (!d) return [excluded];
+  const out: string[] = [];
+  if (d.weight_kg !== undefined) out.push(t('costEstimate.dhl.weight', { weight: weeksText(d.weight_kg), motors, mass: weeksText(d.motor_mass_kg ?? null), basis: d.mass_basis ?? '' }));
+  if (d.lane_price !== undefined) out.push(t('costEstimate.dhl.quote', { price: String(Number(Number(d.lane_price).toFixed(2))), currency: d.currency ?? '', weight: weeksText(d.lane_weight_kg ?? null), days: d.transit_days ?? '—', mode: d.mode ?? '' }));
+  out.push(excluded);
+  return out;
+}
+
+export function setShipTo(e: CostEstimate, country: string, city: string): CostEstimate {
+  const next = clone(e);
+  const c = country.trim().toUpperCase();
+  next.settings.ship_to = /^[A-Z]{2}$/.test(c) ? { country: c, city: city.trim().slice(0, 80) } : null;
+  return next;
+}
+export const shipToText = (s: ShipTo | null | undefined): string => (s?.country ? `${s.country}${s.city ? ` ${s.city}` : ''}` : '');
+
+export function blankLane(e: CostEstimate, today: string): DhlLane {
+  return { from: e.settings.ship_from || 'CN Shanghai', to_country: e.settings.ship_to?.country ?? '', mode: 'DHL Air Freight (Global Forwarding)', quoted_on: today,
+    weight_kg: 0, price: 0, currency: 'CNY', transit_days: null, source: 'dhl.com get-a-quote', note: '' };
+}
+/** The fields of a lane the server would refuse (so a half-typed lane is never autosaved). */
+export function laneErrors(l: DhlLane, currencies: string[] = ['EUR', 'CNY', 'USD']): Array<keyof DhlLane> {
+  const bad: Array<keyof DhlLane> = [];
+  if (!String(l.from || '').trim()) bad.push('from');
+  if (!/^[A-Z]{2}$/.test(String(l.to_country || '').trim().toUpperCase())) bad.push('to_country');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(l.quoted_on || ''))) bad.push('quoted_on');
+  if (!(Number(l.weight_kg) > 0 && Number(l.weight_kg) <= 100000)) bad.push('weight_kg');
+  if (!(Number(l.price) > 0 && Number(l.price) <= 1e9)) bad.push('price');
+  if (!currencies.includes(String(l.currency || '').toUpperCase())) bad.push('currency');
+  if (l.transit_days !== null && l.transit_days !== undefined && !(Number.isInteger(Number(l.transit_days)) && Number(l.transit_days) >= 0 && Number(l.transit_days) <= 365)) bad.push('transit_days');
+  return bad;
+}
+/** Add (`index` null) or replace a lane; refused (the estimate unchanged) while the lane has an error. */
+export function upsertLane(e: CostEstimate, lane: DhlLane, index: number | null, currencies?: string[]): CostEstimate {
+  if (laneErrors(lane, currencies).length) return e;
+  const next = clone(e);
+  const clean: DhlLane = { ...lane, to_country: lane.to_country.trim().toUpperCase(), currency: lane.currency.toUpperCase(), weight_kg: Number(lane.weight_kg), price: Number(lane.price),
+    transit_days: lane.transit_days === null || lane.transit_days === undefined || String(lane.transit_days) === '' ? null : Number(lane.transit_days) };
+  const lanes = [...(next.dhl_lanes ?? [])];
+  if (index === null || index < 0 || index >= lanes.length) { if (lanes.length >= 50) return e; lanes.push(clean); } else lanes[index] = clean;
+  next.dhl_lanes = lanes;
+  return next;
+}
+/** What the grey suggestions depend on: refetch them only when this changes (the motor, the destination and margin, the
+ *  lanes, the manual rates, the motors / bench of each iteration, which cells are empty). */
+export function suggestionKey(e: CostEstimate): string {
+  const s = e.settings;
+  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
+    e.iterations.map((it) => [it.index, it.motors, it.bench, LINE_IDS.map((id) => [it.lines[id].status === 'missing', it.lines[id].weeks === null || it.lines[id].weeks === undefined])])]);
+}
+
+export function removeLane(e: CostEstimate, index: number): CostEstimate {
+  if (!e.dhl_lanes || index < 0 || index >= e.dhl_lanes.length) return e;
+  const next = clone(e);
+  next.dhl_lanes = next.dhl_lanes!.filter((_, i) => i !== index);
+  return next;
 }

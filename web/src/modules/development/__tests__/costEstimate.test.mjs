@@ -6,6 +6,8 @@ import {
   buildCostSteps, defaultDisplayCurrency, DISPLAY_BY_LANG, displayCurrencyOf, editLine, formatMoney, fxLine, langOf, LINE_IDS, originChip,
   reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, snapshotTotalText, sourceCounts, stepIndexOfMissing,
   stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
+  acceptSuggestion, addIteration, blankLane, dhlDetails, dhlOrigin, iterationWeeks, laneErrors, projectWeeks, readView, removeIteration, removeLane,
+  setLineWeeks, setShipTo, setWeeksOverride, suggestionAt, suggestionKey, tableModel, upsertLane, validWeeks, weeksText, writeView,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -108,10 +110,16 @@ test('money stays per currency in the review table; a missing line says so', () 
 });
 
 test('every key the wizard uses exists in en and zh-CN', () => {
-  const src = readFileSync(fileURLToPath(new URL('../components/costEstimate/CostEstimateWizard.tsx', import.meta.url)), 'utf8')
-    + readFileSync(fileURLToPath(new URL('../costEstimate.ts', import.meta.url)), 'utf8');
+  const src = ['../components/costEstimate/CostEstimateWizard.tsx', '../components/costEstimate/CostEstimateTable.tsx', '../components/costEstimate/CostShipping.tsx', '../costEstimate.ts']
+    .map((f) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8')).join('\n');
   const used = new Set([...src.matchAll(/'costEstimate\.([A-Za-z.]+)'/g)].map((m) => m[1]));
-  for (const k of ['production', 'estimate', 'manual', 'converted', 'rule']) used.add(`source.${k}`);
+  for (const k of ['production', 'estimate', 'manual', 'converted', 'rule', 'dhl']) used.add(`source.${k}`);
+  // keys built from a variable: the view toggle, the stage durations, the table and lane column heads
+  for (const k of ['table', 'steps']) used.add(`view.${k}`);
+  for (const k of LINE_IDS) used.add(`durations.${k}`);
+  for (const k of ['iteration', 'tooling', 'motors', 'testing', 'shipping', 'duration', 'total']) used.add(`table.col.${k}`);
+  for (const k of ['from', 'to_country', 'quoted_on', 'weight_kg', 'price', 'currency', 'transit_days', 'mode', 'source', 'note']) used.add(`dhl.col.${k}`);
+  assert.ok(used.size > 80, `scanned ${used.size} keys`);
   const get = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
   for (const lang of ['en', 'zh-CN']) for (const key of used) assert.equal(typeof get(locale(lang), key), 'string', `${lang}: costEstimate.${key}`);
 });
@@ -348,4 +356,216 @@ test('the rates block lists USD and CNY (ECB or manual); the schema has no per-l
   assert.deepEqual(schema.currencies.filter((c) => c !== 'EUR'), ['CNY', 'USD']);
   assert.equal(schema.line_currency, 'EUR');
   assert.ok(!schema.settings.some((f) => f.id === 'currency'));
+});
+
+// ── owner 2026-11-02 (later): one-table view, durations, DHL shipping suggestion ─────────────────────────────────────────
+
+const fill = (e, iteration, line, amount) => editLine(e, { iteration, line }, { amount }, 'me', '2026-11-02');
+function priced() {
+  let e = { ...estimate(2), fx: ecbFx };
+  e = fill(e, 1, 'tooling', 1000); e = fill(e, 1, 'manufacturing', 400); e = fill(e, 1, 'testing', 500); e = fill(e, 1, 'shipping', 300);
+  e = fill(e, 2, 'tooling', 200); e = fill(e, 2, 'manufacturing', 100);
+  e = setIterationField(e, 2, 'motors', 3);
+  e = setIterationField(e, 2, 'bench', 'none');
+  return e;
+}
+
+test('the table: one row per iteration, motors x price, no-bench testing is 0, totals with contingency', () => {
+  const m = tableModel(priced());
+  assert.equal(m.rows.length, 2);
+  assert.deepEqual([m.rows[0].tooling, m.rows[0].perMotor, m.rows[0].manufacturing, m.rows[0].testing, m.rows[0].shipping, m.rows[0].total], [1000, 400, 800, 500, 300, 2600]);
+  assert.deepEqual([m.rows[1].manufacturing, m.rows[1].testing, m.rows[1].testingNeeded, m.rows[1].shipping, m.rows[1].total, m.rows[1].missing], [300, 0, false, null, 500, 1]);
+  assert.deepEqual([m.subtotal, m.contingencyPct, m.contingency, m.total, m.missing], [3100, 10, 310, 3410, 1]);
+  // the same numbers the server computes (EUR lines)
+  assert.equal(m.rows[0].total, 1000 + 2 * 400 + 500 + 300);
+  assert.equal(setSetting(priced(), schema, 'contingency_pct', 20) && tableModel(setSetting(priced(), schema, 'contingency_pct', 20)).total, 3720);
+});
+
+test('the currency choice converts the Total row only, at the stored rate; without a rate it stays EUR', () => {
+  const e = priced();
+  const usd = tableModel(e, 'USD');
+  assert.deepEqual(usd.display, { currency: 'USD', total: 4262.5, rate: 1.25 });            // 3410 x 1.25
+  assert.equal(usd.subtotal, 3100); assert.equal(usd.rows[0].total, 2600); assert.equal(usd.total, 3410);   // everything else is EUR
+  assert.deepEqual(tableModel(e, 'CNY').display.total, 27280);
+  assert.deepEqual(tableModel(e).display, { currency: 'EUR', total: 3410, rate: 1 });
+  assert.deepEqual(tableModel({ ...e, fx: null }, 'USD').display, { currency: 'USD', total: null, rate: null });
+  // the table file has exactly one currency selector, on the Total row; the cells carry no currency choice
+  const src = readFileSync(fileURLToPath(new URL('../components/costEstimate/CostEstimateTable.tsx', import.meta.url)), 'utf8');
+  assert.equal((src.match(/schema\.currencies\.map/g) || []).length, 1);
+  assert.ok(src.indexOf('schema.currencies.map') > src.indexOf("t('costEstimate.total')"), 'the selector sits on the Total row');
+});
+
+test('+ iteration adds a default row (at most 5); remove renumbers the later rows (at least 1 stays)', () => {
+  let e = priced();
+  e = addIteration(e, schema);
+  assert.deepEqual(e.iterations.map((it) => it.index), [1, 2, 3]);
+  assert.equal(e.settings.iterations, 3);
+  assert.equal(e.iterations[2].lines.tooling.status, 'missing');
+  e = addIteration(addIteration(e, schema), schema);
+  assert.equal(e.iterations.length, 5);
+  assert.equal(addIteration(e, schema), e, 'no sixth iteration');
+  assert.equal(tableModel(e).canAdd, false);
+  const removed = removeIteration(priced(), 1);
+  assert.deepEqual(removed.iterations.map((it) => it.index), [1]);
+  assert.equal(removed.settings.iterations, 1);
+  assert.equal(removed.iterations[0].lines.tooling.amount, 200, 'iteration 2 moved up');
+  assert.equal(removeIteration(removed, 1), removed, 'the last iteration stays');
+  assert.equal(tableModel(removed).canRemove, false);
+  assert.equal(priced().iterations.length, 2, 'the input is not mutated');
+});
+
+test('the view: Table by default, Steps remembered per viewer; a broken storage never breaks the page', () => {
+  const store = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }; };
+  const s = store();
+  assert.equal(readView(s, 'a@example.test'), 'table');
+  writeView(s, 'a@example.test', 'steps');
+  assert.equal(readView(s, 'a@example.test'), 'steps');
+  assert.equal(readView(s, 'b@example.test'), 'table', 'another viewer keeps his own');
+  writeView(s, 'a@example.test', 'table');
+  assert.equal(readView(s, 'a@example.test'), 'table');
+  const broken = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } };
+  assert.equal(readView(broken, 'a'), 'table');
+  assert.doesNotThrow(() => writeView(broken, 'a', 'steps'));
+  assert.equal(readView(null, 'a'), 'table');
+  const src = readFileSync(fileURLToPath(new URL('../components/costEstimate/CostEstimateWizard.tsx', import.meta.url)), 'utf8');
+  assert.match(src, /try \{ return window\.localStorage; \} catch \{ return null; \}/);
+  assert.match(src, /view === 'table' \? <Stack/, 'both views render from the same estimate');
+});
+
+test('durations: the stages in sequence, testing not counted without a bench, the override wins, the project is the sum', () => {
+  let e = estimate(2);
+  for (const [line, w] of [['tooling', 6], ['manufacturing', 4], ['testing', 2], ['shipping', 3]]) e = setLineWeeks(e, { iteration: 1, line }, w);
+  e = setLineWeeks(e, { iteration: 2, line: 'manufacturing' }, 5);
+  e = setLineWeeks(e, { iteration: 2, line: 'testing' }, 9);
+  e = setIterationField(e, 2, 'bench', 'none');
+  const w1 = iterationWeeks(e.iterations[0]);
+  assert.deepEqual([w1.sum, w1.override, w1.total, w1.missing], [15, null, 15, []]);
+  const w2 = iterationWeeks(e.iterations[1]);
+  assert.deepEqual([w2.sum, w2.testing, w2.total, w2.missing], [5, null, 5, ['tooling', 'shipping']]);
+  assert.equal(projectWeeks(e), 20);
+  e = setWeeksOverride(e, 2, 8);
+  assert.equal(iterationWeeks(e.iterations[1]).total, 8);
+  assert.equal(iterationWeeks(e.iterations[1]).sum, 5);
+  assert.equal(projectWeeks(e), 23);
+  assert.equal(tableModel(e).weeksTotal, 23);
+  assert.equal(projectWeeks(setWeeksOverride(e, 2, null)), 20, 'cleared: back to the sum');
+  assert.equal(weeksText(2.25), '2.3'); assert.equal(weeksText(null), '—');
+});
+
+test('durations are validated like the server: 0..104 per line, 0..416 per iteration', () => {
+  assert.ok(validWeeks(0) && validWeeks(104) && validWeeks(null) && validWeeks(2.5));
+  assert.ok(!validWeeks(-1) && !validWeeks(105) && !validWeeks(Number.NaN) && !validWeeks(Infinity));
+  const e = estimate(1);
+  assert.equal(setLineWeeks(e, { iteration: 1, line: 'tooling' }, 200), e, 'refused: unchanged');
+  assert.equal(setWeeksOverride(e, 1, 500), e);
+  assert.equal(setWeeksOverride(e, 1, 300).iterations[0].weeks_override, 300);
+  assert.equal(schema.durations.line_max, 104);
+  assert.equal(schema.durations.override_max, 416);
+});
+
+test('an old estimate without durations, lanes or shipping settings still works', () => {
+  const old = estimate(2);                              // the test fixture has no weeks, no weeks_override, no dhl_lanes
+  assert.equal(old.iterations[0].lines.tooling.weeks, undefined);
+  const w = iterationWeeks(old.iterations[0]);
+  assert.deepEqual([w.sum, w.total, w.missing.length], [0, 0, 4]);
+  assert.equal(projectWeeks(old), 0);
+  assert.equal(tableModel(old).rows.length, 2);
+  assert.ok(suggestionKey(old));
+  const { merged } = mergeEdits(old, setLineWeeks(old, { iteration: 1, line: 'tooling' }, 3), old);
+  assert.equal(merged.iterations[0].lines.tooling.weeks, 3);
+});
+
+test('a 409 keeps my duration override and lane edits on top of the latest estimate', () => {
+  const synced = { ...estimate(2), dhl_lanes: [schema.shipping.dhl_lanes[0]] };
+  let mine = setWeeksOverride(synced, 1, 12);
+  mine = upsertLane(mine, { ...schema.shipping.dhl_lanes[0], price: 21000 }, 0);
+  const latest = bumped(setWeeksOverride(synced, 2, 4));
+  const { merged, overridden } = mergeEdits(synced, mine, latest);
+  assert.equal(merged.iterations[0].weeks_override, 12);
+  assert.equal(merged.iterations[1].weeks_override, 4, 'changed elsewhere, untouched here');
+  assert.equal(merged.dhl_lanes[0].price, 21000);
+  assert.deepEqual(overridden, []);
+  const clash = mergeEdits(synced, mine, bumped(removeLane(synced, 0)));
+  assert.deepEqual(clash.overridden, [{ kind: 'lanes' }]);
+  assert.equal(fieldLabel({ kind: 'lanes' }, schema, 'en', realT('en')), 'DHL quotes');
+  assert.equal(fieldLabel({ kind: 'iterField', iteration: 1, id: 'weeks_override' }, schema, 'en', realT('en')), 'Iteration 1 · Override');
+});
+
+// what the server's preview returns for an empty shipping cell (made-up numbers)
+const dhlRef = { quoted_on: '2026-11-02', from: 'CN Shanghai', to: 'AR Buenos Aires', mode: 'DHL Air Freight (Global Forwarding)', lane_weight_kg: 150, lane_price: 20169.14,
+  currency: 'CNY', weight_kg: 85, margin_pct: 20, price: 13715.02, motor_mass_kg: 20, mass_basis: 'complete', transit_days: 16 };
+const suggestions = { cells: { 1: { shipping: { amount: 1714.38, source: 'dhl', source_ref: { dhl: dhlRef }, origin: 'DHL quote 2026-11-02, CN Shanghai→AR Buenos Aires, 85 kg, +20 %', weeks: 4 },
+  manufacturing: { hint: 'the project\'s motor has no simulated active mass' } } }, motor_mass_kg: 20, motor_mass_basis: 'complete' };
+
+test('a grey suggestion is accepted with its source; a filled line or set weeks are never overwritten', () => {
+  const e = estimate(1);
+  const ref = { iteration: 1, line: 'shipping' };
+  const cell = suggestionAt(suggestions, ref);
+  assert.equal(cell.amount, 1714.38);
+  assert.equal(suggestionAt(suggestions, { iteration: 2, line: 'shipping' }), undefined);
+  const got = acceptSuggestion(e, ref, cell, 'me', '2026-11-02').iterations[0].lines.shipping;
+  assert.deepEqual([got.status, got.amount, got.currency, got.source, got.by, got.date, got.weeks], ['filled', 1714.38, 'EUR', 'dhl', 'me', '2026-11-02', 4]);
+  assert.equal(got.source_ref.dhl.weight_kg, 85);
+  const mine = setLineWeeks(fill(e, 1, 'shipping', 900), ref, 6);
+  assert.equal(acceptSuggestion(mine, ref, cell, 'me', '2026-11-02'), mine, 'nothing to accept');
+  assert.equal(acceptSuggestion(e, { iteration: 1, line: 'manufacturing' }, suggestionAt(suggestions, { iteration: 1, line: 'manufacturing' }), 'me', 'd'), e, 'a hint is not a value');
+  assert.equal(acceptSuggestion(e, ref, undefined, 'me', 'd'), e);
+});
+
+test('the DHL tooltip says where the price comes from, the weight, and that duties and import VAT are not included', () => {
+  const en = realT('en');
+  assert.equal(dhlOrigin(dhlRef, en), 'DHL quote 2026-11-02, CN Shanghai→AR Buenos Aires, 85 kg, +20 %');
+  const excluded = schema.shipping.excluded.en;
+  const lines = dhlDetails(dhlRef, 2, en, excluded);
+  assert.match(lines[0], /85 kg = 2 × \(motor 20 kg, complete, × 1\.3 housing \+ 15 kg crate\)/);
+  assert.match(lines[1], /CNY 20169\.14 for 150 kg, 16 days/);
+  assert.equal(lines[2], 'Duties and import VAT are not included.');
+  assert.deepEqual(dhlDetails(undefined, 2, en, excluded), [excluded]);
+  const chip = originChip({ ...blank(), status: 'filled', amount: 1714.38, source: 'dhl', source_ref: { dhl: dhlRef } }, estimate().iterations[0], 'shipping', en);
+  assert.equal(chip.kind, 'dhl');
+  assert.equal(chip.label, 'DHL quote');
+  assert.match(realT('zh-CN')('costEstimate.origin.dhl', { date: 'd', from: 'a', to: 'b', weight: 1, margin: 20 }), /DHL 报价 d，a→b/);
+});
+
+test('the lane table: add, edit and remove; a lane with an error is never saved', () => {
+  const e = { ...estimate(1), settings: { ...estimate(1).settings, ship_from: 'CN Shanghai', ship_to: null }, dhl_lanes: [] };
+  const draft = blankLane(setShipTo(e, 'ar', 'Buenos Aires'), '2026-11-02');
+  assert.deepEqual([draft.from, draft.to_country, draft.quoted_on, draft.currency], ['CN Shanghai', 'AR', '2026-11-02', 'CNY']);
+  assert.deepEqual(laneErrors(draft), ['weight_kg', 'price']);
+  assert.equal(upsertLane(e, draft, null), e, 'refused while weight and price are missing');
+  const lane = { ...draft, weight_kg: 150, price: 20169.14, transit_days: 16 };
+  let next = upsertLane(e, lane, null);
+  assert.equal(next.dhl_lanes.length, 1);
+  next = upsertLane(next, { ...lane, price: 21000, to_country: 'de' }, 0);
+  assert.deepEqual([next.dhl_lanes.length, next.dhl_lanes[0].price, next.dhl_lanes[0].to_country], [1, 21000, 'DE']);
+  assert.deepEqual(laneErrors({ ...lane, to_country: 'Argentina', quoted_on: '02.11.2026', currency: 'GBP', transit_days: 400, from: ' ' }),
+    ['from', 'to_country', 'quoted_on', 'currency', 'transit_days']);
+  assert.deepEqual(removeLane(next, 0).dhl_lanes, []);
+  assert.equal(removeLane(next, 5), next);
+  assert.deepEqual(laneErrors(schema.shipping.dhl_lanes[0]), [], 'the seeded lane is valid');
+  // ship to: a 2-letter country, else no destination
+  assert.deepEqual(setShipTo(e, 'ar', ' Buenos Aires ').settings.ship_to, { country: 'AR', city: 'Buenos Aires' });
+  assert.equal(setShipTo(e, 'Arg', 'x').settings.ship_to, null);
+  assert.equal(setShipTo(e, '', 'x').settings.ship_to, null);
+});
+
+test('the suggestions are fetched again only when what they depend on changes', () => {
+  const e = estimate(2);
+  const k = suggestionKey(e);
+  assert.equal(suggestionKey(editLine(e, { iteration: 1, line: 'tooling' }, { note: 'x' }, 'me', 'd')), k, 'a note does not change them');
+  assert.notEqual(suggestionKey(fill(e, 1, 'tooling', 5)), k, 'a cell that is no longer empty');
+  assert.equal(suggestionKey(fill(fill(e, 1, 'tooling', 5), 1, 'tooling', 6)), suggestionKey(fill(e, 1, 'tooling', 5)), 'typing more digits does not');
+  assert.notEqual(suggestionKey(setIterationField(e, 1, 'motors', 4)), k);
+  assert.notEqual(suggestionKey(setShipTo(e, 'AR', '')), k);
+  assert.notEqual(suggestionKey(setLineWeeks(e, { iteration: 1, line: 'shipping' }, 2)), k);
+});
+
+test('the schema carries the durations and the shipping block in both languages', () => {
+  for (const f of schema.shipping.settings) assert.ok(f.label.en && f.label['zh-CN'] && f.help.en && f.help['zh-CN'], f.id);
+  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct']);
+  assert.equal(schema.shipping.settings[0].default, 'CN Shanghai');
+  assert.equal(schema.shipping.settings[2].default, 20);
+  assert.ok(schema.shipping.excluded['zh-CN'] && schema.durations.help['zh-CN']);
+  for (const lang of ['en', 'zh-CN']) assert.match(realT(lang)('costEstimate.weeksMissing', { count: 2 }), /2/);
+  assert.equal(realT('en')('costEstimate.weeksMissing', { count: 1 }), '1 stage without weeks');
 });

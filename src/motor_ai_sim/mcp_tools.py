@@ -68,6 +68,8 @@ COMMERCIAL_DENYLIST = frozenset({
     "margin", "margin_pct", "share_costs_with_oem", "by_currency", "mixed_currency",
     # the cost estimate's exchange rates and display-currency totals (``display_currency`` is caught by "currency")
     "fx", "fx_status", "rates", "converted",
+    # the cost estimate's DHL quote table and shipping margin (``price`` / ``quoted_on`` inside are caught by the tokens)
+    "dhl_lanes", "ship_margin_pct",
 })
 COMMERCIAL_TOKENS = frozenset({
     "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",

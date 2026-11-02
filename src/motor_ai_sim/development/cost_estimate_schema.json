@@ -42,5 +42,34 @@
   {"id": "shipping",
    "label": {"en": "Shipping (DHL)", "zh-CN": "运输（DHL）"},
    "help": {"en": "One amount for the shipments of this iteration.", "zh-CN": "本轮运输的总金额。"}}
- ]
+ ],
+ "durations": {"unit": "weeks", "line_min": 0, "line_max": 104, "override_max": 416,
+  "label": {"en": "Duration", "zh-CN": "工期"},
+  "help": {"en": "Weeks per stage (tooling lead time, manufacturing, testing, shipping transit), in sequence; the project is the sum of the iterations.",
+           "zh-CN": "每个阶段的周数（工装交期、制造、测试、运输），按顺序相加；项目工期为各轮之和。"}},
+ "shipping": {
+  "settings": [
+   {"id": "ship_from", "type": "text", "default": "CN Shanghai",
+    "label": {"en": "Ship from", "zh-CN": "发货地"},
+    "help": {"en": "Where the motors leave from; matched to the DHL quotes.", "zh-CN": "电机发货地；用于匹配 DHL 报价。"}},
+   {"id": "ship_to", "type": "place", "default": null,
+    "label": {"en": "Ship to", "zh-CN": "收货地"},
+    "help": {"en": "Destination country (ISO code, e.g. AR) and city.", "zh-CN": "目的地国家（ISO 代码，如 AR）和城市。"}},
+   {"id": "ship_margin_pct", "type": "number", "min": 0, "max": 100, "default": 20,
+    "label": {"en": "Shipping margin", "zh-CN": "运费余量"},
+    "help": {"en": "% added to the DHL quote scaled to the weight.", "zh-CN": "在按重量换算的 DHL 报价上加的百分比。"}}
+  ],
+  "housing_factor": 1.3,
+  "active_to_complete": 1.3,
+  "crate_kg": 15,
+  "round_to_kg": 5,
+  "customs_weeks": 1,
+  "lane_limit": 50,
+  "excluded": {"en": "Duties and import VAT are not included.", "zh-CN": "不含关税和进口增值税。"},
+  "dhl_lanes": [
+   {"from": "CN Shanghai", "to_country": "AR", "mode": "DHL Air Freight (Global Forwarding)", "quoted_on": "2026-11-02",
+    "weight_kg": 150, "price": 20169.14, "currency": "CNY", "transit_days": 16, "source": "dhl.com get-a-quote",
+    "note": "2 x 75 kg crates 60x60x40 cm; excl. VAT"}
+  ]
+ }
 }

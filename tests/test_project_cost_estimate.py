@@ -57,7 +57,8 @@ def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
         assert entry["label"]["en"] and entry["label"]["zh-CN"] and entry["help"]["en"] and entry["help"]["zh-CN"]
     est = CE.default_estimate(schema, "alpha")
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 10.0,
-                               "display_currency": None, "target_motor": None}
+                               "display_currency": None, "target_motor": None,
+                               "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0}
 
 
 def test_schema_refuses_a_fifth_line(tmp_path, schema):
@@ -400,7 +401,8 @@ def test_old_shape_is_summed_into_the_four_lines(schema):
     est = CE.from_stored(old, schema, "alpha", today="2026-11-02")
     assert est["version"] == 2 and est["revision"] == 7
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 15.0,
-                               "display_currency": None, "target_motor": {"die": "DIE-A", "config": "big"}}
+                               "display_currency": None, "target_motor": {"die": "DIE-A", "config": "big"},
+                               "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0}
     l1, l2 = (it["lines"] for it in est["iterations"])
     assert est["iterations"][0]["bench"] == "both" and est["iterations"][0]["motors"] == 2
     assert l1["tooling"]["amount"] == 10000.0 and l1["tooling"]["source"] == "converted"
@@ -476,7 +478,8 @@ URLS = [("get", "/api/admin/projects/alpha/cost-estimate", None),
         ("put", "/api/admin/projects/alpha/cost-estimate", {"revision": 0}),
         ("post", "/api/admin/projects/alpha/cost-estimate/suggest", {"revision": 0}),
         ("post", "/api/admin/projects/alpha/cost-estimate/snapshot", {"note": "x"}),
-        ("get", "/api/admin/projects/alpha/cost-estimate/snapshots", None)]
+        ("get", "/api/admin/projects/alpha/cost-estimate/snapshots", None),
+        ("post", "/api/admin/projects/alpha/cost-estimate/suggestions", {"revision": 0})]
 
 
 @pytest.mark.parametrize("who", [
@@ -848,3 +851,260 @@ def test_the_display_currency_setting_is_validated(schema):
     with pytest.raises(CE.EstimateError):
         CE.normalize_estimate(est, schema, "alpha")
     assert schema["display_currency_by_locale"] == {"en": "EUR", "zh-CN": "EUR"}
+
+
+# ── durations (owner 2026-11-02: «обязательно указывать время выполнения каждого этапа») ───────────────────────────────
+
+def test_durations_run_in_sequence_the_owner_may_override_and_the_project_is_the_sum(schema):
+    est = _est(schema, iterations=2)
+    for lid, w in (("tooling", 6), ("manufacturing", 4), ("testing", 2), ("shipping", 3)):
+        est["iterations"][0]["lines"][lid]["weeks"] = w
+    est["iterations"][1]["lines"]["manufacturing"]["weeks"] = 5
+    est["iterations"][1]["bench"] = "none"
+    est["iterations"][1]["lines"]["testing"]["weeks"] = 9                    # no bench: testing does not count
+    est = CE.normalize_estimate(est, schema, "alpha")
+    out = CE.compute(est, schema)
+    w1, w2 = (it["weeks"] for it in out["iterations"])
+    assert (w1["sum"], w1["override"], w1["total"], w1["missing"]) == (15.0, None, 15.0, [])
+    assert (w2["sum"], w2["total"], w2["testing"], w2["missing"]) == (5.0, 5.0, None, ["tooling", "shipping"])
+    assert out["weeks_total"] == 20.0
+    assert {"iteration": 2, "line": "tooling"} in out["weeks_missing"]
+    # the owner overrides iteration 2 (e.g. stages overlap): the project follows
+    est["iterations"][1]["weeks_override"] = 8
+    out = CE.compute(CE.normalize_estimate(est, schema, "alpha"), schema)
+    assert out["iterations"][1]["weeks"]["total"] == 8.0 and out["iterations"][1]["weeks"]["sum"] == 5.0
+    assert out["weeks_total"] == 23.0
+    # a change of a duration is named by the diff
+    b = json.loads(json.dumps(est))
+    b["iterations"][0]["lines"]["tooling"]["weeks"] = 7
+    assert "iteration 1.tooling.weeks" in {c["path"] for c in CE.diff(est, b)}
+
+
+def test_durations_are_validated_0_to_104_weeks_per_line(schema):
+    est = _est(schema, iterations=1)
+    for bad_value in (-1, 105, "soon", float("inf")):
+        bad = json.loads(json.dumps(est))
+        bad["iterations"][0]["lines"]["tooling"]["weeks"] = bad_value
+        with pytest.raises(CE.EstimateError, match="weeks"):
+            CE.normalize_estimate(bad, schema, "alpha")
+    ok = json.loads(json.dumps(est))
+    ok["iterations"][0]["lines"]["tooling"]["weeks"] = 104
+    ok["iterations"][0]["lines"]["shipping"]["weeks"] = ""                  # cleared -> no duration
+    ok["iterations"][0]["weeks_override"] = 0
+    got = CE.normalize_estimate(ok, schema, "alpha")
+    assert got["iterations"][0]["lines"]["tooling"]["weeks"] == 104.0 and got["iterations"][0]["lines"]["shipping"]["weeks"] is None
+    assert got["iterations"][0]["weeks_override"] == 0.0
+    bad = json.loads(json.dumps(est))
+    bad["iterations"][0]["weeks_override"] = 500
+    with pytest.raises(CE.EstimateError, match="weeks_override"):
+        CE.normalize_estimate(bad, schema, "alpha")
+
+
+def test_an_old_estimate_without_durations_or_lanes_still_loads(schema):
+    old = _est(schema, iterations=2)
+    for it in old["iterations"]:
+        it.pop("weeks_override")
+        for line in it["lines"].values():
+            line.pop("weeks")
+    old.pop("dhl_lanes")
+    for k in ("ship_from", "ship_to", "ship_margin_pct"):
+        old["settings"].pop(k)
+    _fill(old["iterations"][0]["lines"]["tooling"], 1000.0)
+    got = CE.from_stored(old, schema, "alpha")
+    assert got["iterations"][0]["lines"]["tooling"]["amount"] == 1000.0
+    assert got["iterations"][0]["lines"]["tooling"]["weeks"] is None and got["iterations"][0]["weeks_override"] is None
+    assert got["settings"]["ship_from"] == "CN Shanghai" and got["settings"]["ship_to"] is None and got["settings"]["ship_margin_pct"] == 20.0
+    assert [ln["to_country"] for ln in got["dhl_lanes"]] == ["AR"]          # the seeded quote
+    out = CE.compute(got, schema)
+    assert out["weeks_total"] == 0.0 and len(out["weeks_missing"]) == 8
+    # the owner removed every lane: an empty table stays empty
+    got["dhl_lanes"] = []
+    assert CE.normalize_estimate(got, schema, "alpha")["dhl_lanes"] == []
+
+
+# ── shipping (DHL), suggested by us ─────────────────────────────────────────────────────────────────────────────────
+
+SEED = {"from": "CN Shanghai", "to_country": "AR", "mode": "DHL Air Freight (Global Forwarding)", "quoted_on": "2026-11-02",
+        "weight_kg": 150.0, "price": 20169.14, "currency": "CNY", "transit_days": 16, "source": "dhl.com get-a-quote"}
+
+
+def _ship(schema, iterations=1, motors=2, lanes=None, **settings):
+    est = _est_fx(schema, iterations=iterations)
+    est["settings"].update({"ship_to": {"country": "AR", "city": "Buenos Aires"}, **settings})
+    for it in est["iterations"]:
+        it["motors"] = motors
+    if lanes is not None:
+        est["dhl_lanes"] = lanes
+    return CE.normalize_estimate(est, schema, "alpha")
+
+
+def test_the_schema_seeds_the_dated_dhl_lane(schema):
+    lanes = CE.default_estimate(schema, "alpha")["dhl_lanes"]
+    assert len(lanes) == 1
+    assert {k: lanes[0][k] for k in SEED} == SEED
+    assert schema["shipping"]["housing_factor"] == 1.3 and schema["shipping"]["crate_kg"] == 15
+    assert schema["shipping"]["round_to_kg"] == 5 and schema["shipping"]["customs_weeks"] == 1
+    assert "VAT" in schema["shipping"]["excluded"]["en"]
+
+
+def test_the_shipping_weight_is_motors_times_housed_motor_plus_crate_rounded_up_to_5_kg(schema):
+    assert CE.shipping_weight(2, 20.0, schema) == 85.0                       # 2 x (26 + 15) = 82 -> 85
+    assert CE.shipping_weight(1, 50.0, schema) == 80.0                       # 65 + 15 = 80 exactly
+    assert CE.shipping_weight(3, 1.0, schema) == 50.0                        # 3 x 16.3 = 48.9 -> 50
+    # the motor mass: the complete mass when known, else the active mass x 1.3
+    assert CE.motor_mass_for_shipping(42.0, True, 20.0, schema) == (42.0, "complete")
+    assert CE.motor_mass_for_shipping(20.0, False, 20.0, schema) == (26.0, "active x 1.3")
+    assert CE.motor_mass_for_shipping(None, False, None, schema) == (None, "")
+
+
+def test_dhl_scales_the_nearest_quote_per_kg_adds_the_margin_and_converts_to_eur(schema):
+    est = _ship(schema)                                                     # seeded lane only, 1 EUR = 8 CNY
+    sug, why = CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0, "complete")
+    assert why == ""
+    d = sug["source_ref"]["dhl"]
+    assert d["weight_kg"] == 85.0 and d["lane_weight_kg"] == 150.0 and d["margin_pct"] == 20.0
+    cny = 20169.14 / 150 * 85 * 1.2
+    assert d["price"] == round(cny, 2) and d["currency"] == "CNY"
+    assert sug["amount"] == round(cny / 8.0, 2)
+    assert sug["weeks"] == 4.0                                              # 16 days -> 3 weeks + 1 week customs
+    line = {"status": "filled", "source": "dhl", "source_ref": sug["source_ref"]}
+    assert CE.origin_text(line) == "DHL quote 2026-11-02, CN Shanghai→AR Buenos Aires, 85 kg, +20 %"
+    # the margin is a setting; the nearest quoted weight wins (a 50 kg quote for a 65 kg shipment)
+    small = dict(SEED, weight_kg=50.0, price=9000.0, transit_days=10, quoted_on="2026-11-01")
+    est = _ship(schema, lanes=[SEED, small], ship_margin_pct=10)
+    sug, _ = CE.dhl_suggestion(est, est["iterations"][0], schema, 13.0, "active x 1.3")   # 2 x (16.9 + 15) = 63.8 -> 65
+    assert sug["source_ref"]["dhl"]["weight_kg"] == 65.0 and sug["source_ref"]["dhl"]["lane_weight_kg"] == 50.0
+    assert sug["amount"] == round(9000.0 / 50 * 65 * 1.1 / 8.0, 2) and sug["weeks"] == 3.0
+    # a EUR quote needs no rate
+    eur = dict(SEED, currency="EUR", price=1500.0)
+    est = _ship(schema, lanes=[eur])
+    est["fx"] = None
+    sug, _ = CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)
+    assert sug["amount"] == round(1500.0 / 150 * 85 * 1.2, 2)
+
+
+def test_dhl_without_a_lane_destination_mass_or_rate_is_missing_with_the_reason(schema):
+    est = _ship(schema, ship_to={"country": "DE", "city": "Munich"})
+    assert CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0) == (None, "no DHL quote for DE; add one")
+    est = _ship(schema, ship_from="CN Ningbo")                                # same country, another origin: no quote
+    assert CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)[1] == "no DHL quote for AR; add one"
+    est = _ship(schema, ship_to=None)
+    assert "ship to is missing" in CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)[1]
+    est = _ship(schema)
+    assert "no known mass" in CE.dhl_suggestion(est, est["iterations"][0], schema, None)[1]
+    est["fx"] = None
+    assert "no exchange rate" in CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)[1]
+
+
+def test_suggest_fills_shipping_from_dhl_and_an_empty_duration_but_never_the_owners_numbers(schema):
+    est = _ship(schema, iterations=2)
+    est["iterations"][1]["lines"]["shipping"]["weeks"] = 6                  # the owner's duration stays
+    data = dict(_data(), motor_mass_kg=20.0, motor_mass_basis="complete")
+    new, report = CE.suggest(est, schema, data, today="2026-11-02")
+    s1, s2 = (it["lines"]["shipping"] for it in new["iterations"])
+    assert s1["source"] == "dhl" and s1["amount"] == round(20169.14 / 150 * 85 * 1.2 / 8.0, 2) and s1["weeks"] == 4.0
+    assert s1["by"] == "suggest" and s1["source_ref"]["dhl"]["weight_kg"] == 85.0
+    assert s2["source"] == "dhl" and s2["weeks"] == 6.0
+    assert report["weeks_filled"] == [{"iteration": 1, "line": "shipping", "weeks": 4.0}]
+    assert CE.normalize_estimate(new, schema, "alpha")["iterations"][0]["lines"]["shipping"] == s1     # saves as it is
+    # a manual shipping amount is kept; no lane -> missing with the hint
+    _fill(est["iterations"][0]["lines"]["shipping"], 999.0)
+    est["settings"]["ship_to"] = {"country": "BR", "city": ""}
+    new, _ = CE.suggest(est, schema, data, today="2026-11-02")
+    assert new["iterations"][0]["lines"]["shipping"]["amount"] == 999.0
+    assert new["iterations"][1]["lines"]["shipping"]["hint"] == "no DHL quote for BR; add one"
+    # with refresh an earlier DHL suggestion follows a new margin
+    est = _ship(schema)
+    first, _ = CE.suggest(est, schema, data, today="2026-11-02")
+    first["settings"]["ship_margin_pct"] = 0
+    again, _ = CE.suggest(first, schema, data, today="2026-11-03", refresh=True)
+    assert again["iterations"][0]["lines"]["shipping"]["amount"] == round(20169.14 / 150 * 85 / 8.0, 2)
+
+
+def test_suggestion_cells_are_only_for_empty_cells(schema):
+    est = _ship(schema, iterations=1)
+    _fill(est["iterations"][0]["lines"]["tooling"], 100.0)
+    data = dict(_data(), motor_mass_kg=20.0, motor_mass_basis="complete")
+    after, _ = CE.suggest(est, schema, data, today="2026-11-02")
+    cells = CE.suggestion_cells(est, after)["1"]
+    assert "tooling" not in cells                                           # filled by the owner: no placeholder
+    assert cells["shipping"]["source"] == "dhl" and cells["shipping"]["weeks"] == 4.0
+    assert cells["shipping"]["origin"].startswith("DHL quote 2026-11-02, CN Shanghai")
+    assert cells["manufacturing"]["source"] == "production"
+    assert est["iterations"][0]["lines"]["shipping"]["status"] == "missing"     # nothing is written
+
+
+def test_the_lane_table_is_validated(schema):
+    est = _ship(schema)
+    good = dict(SEED, to_country="de", weight_kg="300", transit_days="")
+    lanes = CE.normalize_estimate({**est, "dhl_lanes": [SEED, good]}, schema, "alpha")["dhl_lanes"]
+    assert lanes[1]["to_country"] == "DE" and lanes[1]["weight_kg"] == 300.0 and lanes[1]["transit_days"] is None
+    edited = CE.normalize_estimate({**est, "dhl_lanes": [dict(SEED, price=21000.0)]}, schema, "alpha")["dhl_lanes"]
+    assert edited[0]["price"] == 21000.0
+    for bad, match in ((dict(SEED, to_country="Argentina"), "to_country"), ({**SEED, "from": ""}, "from"),
+                       (dict(SEED, quoted_on="02.11.2026"), "quoted_on"), (dict(SEED, weight_kg=0), "weight_kg"),
+                       (dict(SEED, price=-1), "price"), (dict(SEED, currency="GBP"), "currency"),
+                       (dict(SEED, transit_days=400), "transit_days"), ("lane", "object")):
+        with pytest.raises(CE.EstimateError, match=match):
+            CE.normalize_estimate({**est, "dhl_lanes": [bad]}, schema, "alpha")
+    with pytest.raises(CE.EstimateError, match="at most"):
+        CE.normalize_estimate({**est, "dhl_lanes": [SEED] * 51}, schema, "alpha")
+    with pytest.raises(CE.EstimateError, match="ship_to"):
+        CE.normalize_estimate({**est, "settings": {**est["settings"], "ship_to": {"country": "Argentina"}}}, schema, "alpha")
+    with pytest.raises(CE.EstimateError, match="ship_margin_pct"):
+        CE.normalize_estimate({**est, "settings": {**est["settings"], "ship_margin_pct": 150}}, schema, "alpha")
+    assert CE.normalize_estimate({**est, "settings": {**est["settings"], "ship_to": {"country": "", "city": ""}}},
+                                 schema, "alpha")["settings"]["ship_to"] is None
+    # a lane change is named by the diff
+    assert any(c["path"] == "dhl_lanes.1" for c in CE.diff(est, {**est, "dhl_lanes": [dict(SEED, price=21000.0)]}))
+
+
+def test_sources_weigh_the_target_motor_for_shipping(schema):
+    est = _est(schema)
+    data = SRC.gather("alpha", est, schema, mass_of=lambda d, c: 10.0,
+                      ship_mass_of=lambda d, c: {"full_kg": 30.0, "complete": True, "active_kg": 10.0})
+    assert (data["motor_mass_kg"], data["motor_mass_basis"]) == (30.0, "complete")
+    data = SRC.gather("alpha", est, schema, mass_of=lambda d, c: 10.0,
+                      ship_mass_of=lambda d, c: {"full_kg": 10.0, "complete": False, "active_kg": 10.0})
+    assert (data["motor_mass_kg"], data["motor_mass_basis"]) == (13.0, "active x 1.3")
+
+
+def test_routes_preview_suggestions_and_a_snapshot_keeps_durations_and_lanes(client, monkeypatch):
+    _as(monkeypatch, {"email": "admin@example.test", "role": "admin"})
+    monkeypatch.setattr(SRC, "shipping_mass", lambda die, config: {"full_kg": 20.0, "complete": True, "active_kg": 10.0})
+    url = "/api/admin/projects/alpha/cost-estimate"
+    est = client.get(url).json()["estimate"]
+    assert est["dhl_lanes"][0]["to_country"] == "AR" and est["settings"]["ship_to"] is None
+    est["settings"]["ship_to"] = {"country": "AR", "city": "Buenos Aires"}
+    est["fx"] = {"manual": {"CNY": 8.0}}
+    est["iterations"][0]["lines"]["tooling"]["weeks"] = 6
+    est["iterations"][1]["weeks_override"] = 10
+    est["dhl_lanes"].append(dict(SEED, to_country="DE", quoted_on="2026-11-01"))
+    preview = client.post(url + "/suggestions", json=est)
+    assert preview.status_code == 200, preview.text
+    p = preview.json()
+    assert p["motor_mass_kg"] == 20.0 and p["cells"]["1"]["shipping"]["source"] == "dhl"
+    assert p["cells"]["1"]["shipping"]["weeks"] == 4.0
+    assert client.get(url).json()["stored"] is False                        # a preview saves nothing
+    bad = json.loads(json.dumps(est))
+    bad["iterations"][0]["lines"]["tooling"]["weeks"] = 200
+    assert client.post(url + "/suggestions", json=bad).status_code == 422
+    assert client.put(url, json=bad).status_code == 422
+
+    saved = client.put(url, json=est)
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["estimate"]["iterations"][0]["lines"]["tooling"]["weeks"] == 6.0
+    assert body["computed"]["weeks_total"] == 16.0 and len(body["estimate"]["dhl_lanes"]) == 2
+    snap = client.post(url + "/snapshot", json={"note": "with durations"}).json()["snapshot"]
+    assert snap["estimate"]["iterations"][0]["lines"]["tooling"]["weeks"] == 6.0
+    assert snap["estimate"]["iterations"][1]["weeks_override"] == 10.0
+    assert [ln["to_country"] for ln in snap["estimate"]["dhl_lanes"]] == ["AR", "DE"]
+    assert snap["totals"]["weeks_total"] == 16.0 and snap["iterations"][1]["weeks"]["total"] == 10.0
+
+
+def test_the_mcp_guard_refuses_the_dhl_lane_and_shipping_margin_keys():
+    from motor_ai_sim import mcp_tools as T
+    for leak in ({"dhl_lanes": []}, {"ship_margin_pct": 20}, {"lane": {"price": 1.0}}, {"quoted_on": "2026-11-02"}):
+        with pytest.raises(AssertionError, match="commercial field leaked"):
+            T.assert_no_commercial(leak)

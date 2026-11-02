@@ -7,11 +7,12 @@ import {
   Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery,
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import HelpTip from '../../../../components/common/HelpTip';
 import { BigNumber, StepCard, TOUCH } from '../specWizard/ui';
 import { developmentApi, DevelopmentApiError } from '../../api';
 import {
-  buildCostSteps, editLine, formatMoney, langOf, originChip, reviewRows, setIterationSetting, setLineStatus, setSetting,
+  buildCostSteps, editLine, formatMoney, langOf, linesToCheck, originChip, reviewRows, setIterationSetting, setLineStatus, setSetting,
   sourceCounts, stepIndexOfMissing, stepLines, stepState, todayIso, txt,
   type CostComputed, type CostEstimate, type CostEstimateAnswer, type CostField, type CostItem, type CostLang, type CostLine,
   type CostSchema, type CostSnapshot, type CostStep, type LineRef, type T,
@@ -218,6 +219,8 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   };
 
   const counts = sourceCounts(estimate);
+  const toCheck = linesToCheck(estimate, schema);
+  const itemLabel = (id: string) => { const item = schema.groups.flatMap((g) => g.sections.flatMap((x) => x.items)).find((x) => x.id === id); return item ? txt(item.label, lang) : id; };
   const reviewStep = <Stack spacing={2}>
     <StepCard title={t('costEstimate.byIteration')} tip={t('costEstimate.byIterationTip')}>
       <Box sx={{ overflowX: 'auto' }}><Table size="small">
@@ -243,6 +246,13 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
         : <Stack direction="row" spacing={0.6} flexWrap="wrap" useFlexGap>{computed.missing.slice(0, 200).map((m) => { const item = schema.groups.flatMap((g) => g.sections.flatMap((x) => x.items)).find((x) => x.id === m.item); return <Chip key={`${m.iteration}-${m.item}`} size="small" variant="outlined" color="warning"
           label={`${m.iteration ? `${t('costEstimate.iterationShort', { n: m.iteration })} · ` : ''}${item ? txt(item.label, lang) : m.item}`} onClick={() => { const i = stepIndexOfMissing(steps, m); if (i >= 0) setStep(i); }} />; })}</Stack>}
     </StepCard>
+    <StepCard title={t('costEstimate.checkTitle', { count: toCheck.length })} tip={t('costEstimate.checkTip', { low: schema.scale_check?.low ?? 0.5, high: schema.scale_check?.high ?? 2 })}>
+      {toCheck.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('costEstimate.noneToCheck')}</Typography>
+        : <Stack direction="row" spacing={0.6} flexWrap="wrap" useFlexGap>{toCheck.map((c) => { const rule = schema.scale_rules[c.rule]; return <Tooltip key={`${c.iteration}-${c.item}`} title={`${t('costEstimate.checkLine', { analog: c.analog, factor: Number(c.factor.toFixed(3)) })}${rule ? ` (${txt(rule.label, lang)})` : ''}`} enterTouchDelay={0}>
+          <Chip size="small" color="warning" icon={<WarningAmberIcon />} data-testid="cost-check"
+            label={`${t('costEstimate.checkChip')} · ${c.iteration ? `${t('costEstimate.iterationShort', { n: c.iteration })} · ` : ''}${itemLabel(c.item)} · x${Number(c.factor.toFixed(2))}`}
+            onClick={() => { const i = stepIndexOfMissing(steps, { scope: c.iteration ? 'iteration' : 'project', iteration: c.iteration, group: c.group, section: '', item: c.item, reason: '' }); if (i >= 0) setStep(i); }} /></Tooltip>; })}</Stack>}
+    </StepCard>
     <StepCard title={t('costEstimate.snapshots')} tip={t('costEstimate.snapshotTip')}>
       {snapshots.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('costEstimate.noSnapshots')}</Typography>
         : <Stack spacing={0.6}>{snapshots.map((s) => <Tooltip key={s.id} title={s.diff.slice(0, 12).map((d) => d.path).join('\n') || t('costEstimate.firstSnapshot')}><Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>
@@ -255,6 +265,10 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     {conflict && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => void load()}>{t('costEstimate.reload')}</Button>}>{t('costEstimate.conflict')}</Alert>}
     {error && estimate && <Alert severity="error">{error}</Alert>}
     {report && <Alert severity="info" onClose={() => setReport(null)}>{t('costEstimate.suggested', { count: report.filled_count, analogs: report.analogs.map((a) => a.ref).join(', ') || '—' })}</Alert>}
+    {report && (report.warnings?.length ?? 0) > 0 && <Alert severity="warning" onClose={() => setReport({ ...report, warnings: [] })}>
+      {t('costEstimate.suggestWarnings', { count: new Set(report.warnings!.map((w) => `${w.where}/${w.item}`)).size })}
+      <Box component="ul" sx={{ m: 0, pl: 2.5, maxHeight: 220, overflowY: 'auto' }}>{Array.from(new Map(report.warnings!.map((w) => [`${w.item}|${w.text}`, w])).values()).slice(0, 30).map((w) => <li key={`${w.item}|${w.text}`}><Typography component="span" sx={{ fontSize: 12.5 }}>{itemLabel(w.item)}: {w.text}</Typography></li>)}</Box>
+    </Alert>}
     <Box sx={{ display: 'flex', flexDirection: wide ? 'row' : 'column', gap: wide ? 3 : 1.5, alignItems: 'flex-start', minWidth: 0 }}>
       <Box sx={{ width: wide ? 250 : '100%', flex: wide ? '0 0 250px' : undefined, position: wide ? 'sticky' : 'static', top: 8 }}>{nav}</Box>
       <Box sx={{ flex: 1, minWidth: 0, maxWidth: 1100, display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>

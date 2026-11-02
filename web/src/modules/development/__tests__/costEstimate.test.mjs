@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  buildCostSteps, editLine, formatMoney, langOf, originChip, reviewRows, setLineStatus, setSetting, sourceCounts,
+  buildCostSteps, editLine, formatMoney, langOf, linesToCheck, originChip, reviewRows, setLineStatus, setSetting, sourceCounts,
   stepIndexOfMissing, stepLines, stepState,
 } from '../costEstimate.ts';
 
@@ -105,4 +105,22 @@ test('every catalogue item has both locales, a known unit and a known scale rule
     assert.ok(schema.units[it.unit], it.id);
     if (it.analog) assert.ok(schema.scale_rules[it.analog.scale], it.id);
   }
+});
+
+test('the review marks "check" on suggested lines scaled by more than x2 or less than x0.5', () => {
+  const e = estimate(2);
+  const scaled = (factor, ref) => ({ ...e.iterations[0].lines.mech_shaft, status: 'filled', qty: 2, unit_cost: 10, source: 'analog', source_ref: ref, scale: { rule: 'active_mass', factor } });
+  e.iterations[0].lines.mech_shaft = scaled(3.6, { production: 'MID/b' });
+  e.iterations[0].lines.mech_housing = scaled(1.5, { production: 'MID/b' });
+  e.iterations[1].lines.tool_main = { ...scaled(0.4, { production: 'REF/a' }), unit: 'lot' };
+  e.iterations[1].lines.mech_hub = scaled(2.0, { production: 'MID/b' });                 // on the limit: no mark
+  e.project_lines.proj_travel_factory = { ...scaled(0.3, { project: 'other' }), unit: 'trip' };
+  const marks = linesToCheck(e, schema);
+  assert.deepEqual(marks.map((m) => [m.iteration, m.item, m.factor, m.analog]), [
+    [1, 'mech_shaft', 3.6, 'MID/b'], [2, 'tool_main', 0.4, 'REF/a'], [null, 'proj_travel_factory', 0.3, 'project other']]);
+  const steps = buildCostSteps(schema, e);
+  const m = marks[1];
+  assert.equal(steps[stepIndexOfMissing(steps, { scope: 'iteration', iteration: m.iteration, group: m.group, section: '', item: m.item, reason: '' })].id, 'it2-manufacturing');
+  // the thresholds come from the schema
+  assert.equal(linesToCheck(e, { ...schema, scale_check: { low: 0.1, high: 5 } }).length, 0);
 });

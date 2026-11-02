@@ -22,6 +22,7 @@ export interface CostSchema {
   schema_version: number; currencies: string[]; default_currency: string; units: Record<string, Bilingual>;
   scale_rules: Record<string, { basis: string | null; label: Bilingual }>; basis_fields: string[];
   settings: CostField[]; iteration_settings: CostField[]; groups: CostGroup[];
+  scale_limits?: { min: number; max: number }; scale_check?: { low: number; high: number };
 }
 export interface CostLine {
   status: LineStatus; qty: number | null; unit: string; unit_cost: number | null; currency: string;
@@ -54,7 +55,16 @@ export interface CostEstimateAnswer {
   estimate: CostEstimate; computed: CostComputed; schema: CostSchema; stored: boolean;
   linked_motors: Array<{ die: string; config: string; status: string }>;
   changes?: Array<{ path: string; was: unknown; now: unknown }>;
-  report?: { filled_count: number; skipped: Array<{ item: string; reason: string; where?: string; analog?: string }>; analogs: Array<{ ref: string; title: string }> };
+  report?: SuggestReport;
+}
+/** What a suggest did: every filled line with its analog and scale factor (`check` = factor outside `scale_check`), the
+ *  skipped lines and the warnings (an implausible price per kg, no analog inside the scale limits, no matching row). */
+export interface SuggestReport {
+  filled_count: number; check_count?: number;
+  filled: Array<{ item: string; where: string; source: LineSource; status: LineStatus; analog: string | null; factor: number | null; rule: string | null; check: boolean; price_per_kg?: number; currency?: string }>;
+  skipped: Array<{ item: string; reason: string; where?: string; analog?: string }>;
+  warnings?: Array<{ item: string; where: string; text: string }>;
+  analogs: Array<{ ref: string; title: string }>;
 }
 
 export type T = (key: string, args?: Record<string, unknown>) => string;
@@ -179,6 +189,28 @@ export function reviewRows(c: CostComputed): Array<{ key: string; iteration: num
 export function stepIndexOfMissing(steps: CostStep[], m: MissingLine): number {
   const id = m.scope === 'project' ? m.group : `it${m.iteration}-${m.group}`;
   return steps.findIndex((s) => s.id === id);
+}
+
+export interface CheckLine extends LineRef { factor: number; rule: string; analog: string; group: string }
+
+/** The review's "check" marks: filled lines whose scale factor is outside `scale_check` (default x0.5 .. x2), read from
+ *  the estimate itself so they stay after a reload. */
+export function linesToCheck(e: CostEstimate, schema: CostSchema): CheckLine[] {
+  const low = schema.scale_check?.low ?? 0.5;
+  const high = schema.scale_check?.high ?? 2;
+  const groupOf = new Map(schema.groups.flatMap((g) => g.sections.flatMap((s) => s.items.map((it) => [it.id, g.id] as const))));
+  const out: CheckLine[] = [];
+  const add = (iteration: number | null, lines: Record<string, CostLine>) => {
+    for (const [item, l] of Object.entries(lines)) {
+      const f = l.scale?.factor;
+      if (l.status !== 'filled' || l.derive || typeof f !== 'number' || !(f < low || f > high)) continue;
+      const ref = l.source_ref ?? {};
+      out.push({ iteration, item, factor: f, rule: l.scale!.rule, analog: ref.production || (ref.project ? `project ${ref.project}` : '?'), group: groupOf.get(item) ?? '' });
+    }
+  };
+  for (const it of e.iterations) add(it.index, it.lines);
+  add(null, e.project_lines);
+  return out;
 }
 
 /** How many lines of the whole estimate come from each source (the review's chips). */

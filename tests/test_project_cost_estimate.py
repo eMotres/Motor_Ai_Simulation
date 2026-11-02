@@ -271,9 +271,10 @@ def test_suggest_keeps_a_line_missing_when_the_basis_is_unknown(schema):
 def test_suggest_only_uses_the_chosen_analogs(schema):
     est = _est(schema, iterations=1)
     est["settings"]["analogs"] = ["SMALL/a"]
+    est["settings"]["basis_overrides"] = {"active_mass_kg": 18.0}      # 18 / 5 = 3.6: inside the scale limits
     new, _ = CE.suggest(est, schema, _data(), today="2026-11-02")
     assert new["iterations"][0]["lines"]["mech_housing"]["source_ref"]["production"] == "SMALL/a"
-    assert new["iterations"][0]["lines"]["mech_housing"]["unit_cost"] == 420.0
+    assert new["iterations"][0]["lines"]["mech_housing"]["unit_cost"] == 360.0
 
 
 def test_production_rows_read_motor_tooling_and_work_lines(tmp_path, monkeypatch):
@@ -291,6 +292,200 @@ def test_production_rows_read_motor_tooling_and_work_lines(tmp_path, monkeypatch
     assert [p["ref"] for p in prods] == ["SYN/a"]
     rows = {r["row_id"]: (r["list"], r["amount"], r["currency"]) for r in prods[0]["rows"]}
     assert rows == {"p1": ("motor", 120.0, "CNY"), "e1": ("extras", 50.0, "EUR"), "t1": ("tooling", 2000.0, "CNY")}
+
+
+# ── suggest quality (first real run, 2026-11-02): price per kg, scale limits, lamination match, later tooling, report ──
+# made-up numbers only; the bands are set in a schema copy so no test depends on the configured prices
+
+def _qschema(schema, **bands):
+    s = json.loads(json.dumps(schema))
+    for iid, band in bands.items():
+        s["price_per_kg_bands"]["items"][iid] = {"CNY": list(band)}
+    return s
+
+
+def _row(lst, rid, name, amount, cur="CNY", material="", **extra):
+    return {"list": lst, "row_id": rid, "name_en": name, "name_zh": "", "material": material, "amount": amount,
+            "currency": cur, **extra}
+
+
+def _prod(ref, basis, rows, updated="2026-10-01"):
+    return {"ref": ref, "title": ref, "updated_at": updated, "basis": basis, "rows": rows}
+
+
+def _qdata(target, prods):
+    return {"target_ref": "DIE-A/big", "target_basis": target, "productions": prods, "estimates": [], "tests": {}}
+
+
+def test_magnet_price_per_kg_from_a_row_priced_per_piece_per_motor_per_kg_or_per_order(schema, tmp_path, monkeypatch):
+    monkeypatch.setenv("MOTRES_PRODUCTION_ROOT", str(tmp_path / "prod"))
+    from motor_ai_sim.production import store as PS
+    # the same magnet cost written four ways: 8 pieces x 30 = 240 per motor = 600 per kg of 0.4 kg = 2400 for 10 motors
+    sheets = {"PCS": (30.0, "per piece"), "MOT": (240.0, None), "KG": (600.0, "price per kg"), "ORD": (2400.0, "whole order")}
+    for die, (price, note) in sheets.items():
+        PS.save_file(die, "a", "production.json", {"die": die, "config": "a", "order_quantity": 10, "updated_at": "2026-10-01"})
+        PS.save_file(die, "a", "parts.json", {"parts": [{"id": "m1", "name": {"en": "Magnet N52UH", "zh": ""}, "kind": "purchased"}]})
+        PS.save_file(die, "a", "bom.json", {"rows": [{"part_id": "m1", "qty_per_motor": 8}]})
+        PS.save_file(die, "a", "costs.json", {"rows": [{"part_id": "m1", "unit_price": price, "currency": "CNY", "note": note}]})
+    basis = {"magnet_mass_kg": 0.4, "active_mass_kg": 3.0, "outer_diameter_mm": 100}
+    prods = {p["ref"]: p for p in SRC.productions(basis_of=lambda d, c: dict(basis))}
+    got = {ref: (p["rows"][0]["price_per"], p["rows"][0]["amount"], p["rows"][0]["qty_per_motor"]) for ref, p in prods.items()}
+    assert got == {"PCS/a": ("piece", 240.0, 8), "MOT/a": ("motor", 240.0, 8), "KG/a": ("kg", None, 8),
+                   "ORD/a": ("order", 240.0, 8)}
+    assert prods["ORD/a"]["motors"] == 10
+    s = _qschema(schema, mag_material=(100, 5000))
+    target = {"magnet_mass_kg": 2.0, "active_mass_kg": 6.0, "outer_diameter_mm": 150}
+    for ref, prod in prods.items():
+        est = _est(schema, iterations=1)
+        new, report = CE.suggest(est, s, _qdata(target, [prod]), today="2026-11-02")
+        mag = new["iterations"][0]["lines"]["mag_material"]
+        # the price per kg is the analog's cost per motor / its OWN simulated magnet mass - whatever the row's unit
+        assert mag["status"] == "filled" and mag["source"] == "model", ref
+        assert mag["unit_cost"] == 600.0 and mag["qty"] == 4.0, ref           # 2 kg x 1.0 buy x 2 motors
+        assert mag["source_ref"]["production"] == ref
+        entry = next(f for f in report["filled"] if f["item"] == "mag_material")
+        assert entry["analog"] == ref and entry["price_per_kg"] == 600.0 and entry["factor"] is None
+
+
+def test_the_plausibility_band_refuses_a_price_per_kg_and_never_fills_it(schema):
+    s = _qschema(schema, mag_material=(100, 5000))
+    target = {"magnet_mass_kg": 2.0, "active_mass_kg": 6.0, "outer_diameter_mm": 150}
+    # 40 per motor for 1 kg of magnets = 40 per kg: below the band (a per-piece price taken as per motor)
+    cheap = _prod("CHEAP/a", {"magnet_mass_kg": 1.0, "active_mass_kg": 5.0, "outer_diameter_mm": 140},
+                  [_row("motor", "m1", "Magnet", 40.0, unit_price=40.0, qty_per_motor=12, price_per="motor")])
+    est = _est(schema, iterations=1)
+    new, report = CE.suggest(est, s, _qdata(target, [cheap]), today="2026-11-02")
+    mag = new["iterations"][0]["lines"]["mag_material"]
+    assert mag["status"] == "missing" and mag["unit_cost"] is None and mag["source"] is None
+    assert mag["qty"] == 4.0                                                # the simulated mass is still shown
+    assert "implausible price per kg from CHEAP/a: 40 CNY/kg" in mag["note"]
+    assert any(w["item"] == "mag_material" and "implausible price per kg from CHEAP/a: 40" in w["text"]
+               for w in report["warnings"])
+    assert all(f["item"] != "mag_material" for f in report["filled"])
+    assert CE.compute(new, s)["iterations"][0]["lines"]["mag_material"]["amount"] is None
+    # a second, plausible analog is used instead; the implausible one is still reported
+    fair = _prod("FAIR/b", {"magnet_mass_kg": 1.0, "active_mass_kg": 3.0, "outer_diameter_mm": 100},
+                 [_row("motor", "m1", "Magnet", 700.0)])
+    new, report = CE.suggest(est, s, _qdata(target, [cheap, fair]), today="2026-11-02")
+    mag = new["iterations"][0]["lines"]["mag_material"]
+    assert mag["status"] == "filled" and mag["unit_cost"] == 700.0 and mag["source_ref"]["production"] == "FAIR/b"
+    assert any("CHEAP/a" in w["text"] for w in report["warnings"])
+
+
+def _big_motor():
+    return {"active_mass_kg": 36.0, "magnet_mass_kg": 10.0, "copper_mass_kg": 6.0, "steel_mass_kg": 20.0,
+            "outer_diameter_mm": 400, "stack_length_mm": 90}
+
+
+def test_the_scale_limit_refuses_a_far_analog_and_falls_back_to_a_nearer_one(schema):
+    tiny = _prod("TINY/a", {"active_mass_kg": 0.15, "outer_diameter_mm": 40},
+                 [_row("motor", "s", "Shaft", 20.0), _row("motor", "h", "Housing", 50.0),
+                  _row("motor", "b", "Bolt M3 zinc-plated", 3.0)], updated="2026-10-30")
+    mid = _prod("MID/b", {"active_mass_kg": 10.0, "outer_diameter_mm": 200},
+                [_row("motor", "s", "Shaft", 300.0), _row("motor", "b", "Bolt M5 zinc-plated", 9.0)], updated="2026-09-01")
+    est = _est(schema, iterations=1)
+    new, report = CE.suggest(est, schema, _qdata(_big_motor(), [tiny, mid]), today="2026-11-02")
+    lines = new["iterations"][0]["lines"]
+    # shaft: TINY would be x240 (36 / 0.15) - refused; MID x3.6 is inside 0.25..4
+    shaft = lines["mech_shaft"]
+    assert shaft["source_ref"]["production"] == "MID/b" and shaft["scale"]["factor"] == 3.6
+    assert shaft["unit_cost"] == 1080.0
+    # housing: only TINY has one - the line stays missing, the warning names the nearest analog and its factor
+    housing = lines["mech_housing"]
+    assert housing["status"] == "missing" and housing["unit_cost"] is None
+    text = "no analog within the scale limits 0.25..4: nearest production TINY/a, scaled by active_mass x240"
+    assert text in housing["note"]
+    assert any(w["item"] == "mech_housing" and w["text"] == text for w in report["warnings"])
+    # fasteners scale 1:1 (factor 1 for both): the analog closest in diameter / active mass wins, not the newest
+    assert lines["mech_fasteners"]["source_ref"]["production"] == "MID/b" and lines["mech_fasteners"]["unit_cost"] == 9.0
+    # the bolts are fasteners, never "mechanical materials" ("zinc-plated" is not "plate")
+    assert lines["mech_materials"]["status"] == "missing"
+    # the limit comes from the schema
+    wide = json.loads(json.dumps(schema))
+    wide["scale_limits"] = {"min": 0.001, "max": 1000}
+    new, _ = CE.suggest(est, wide, _qdata(_big_motor(), [tiny]), today="2026-11-02")
+    assert new["iterations"][0]["lines"]["mech_housing"]["scale"]["factor"] == 240.0
+    bad = json.loads(json.dumps(schema))
+    bad["scale_limits"] = {"min": 2, "max": 4}
+    with pytest.raises(ValueError, match="scale_limits"):
+        CE._check_schema(bad)
+
+
+def test_lamination_sheet_matches_cores_and_grades_and_warns_when_nothing_matches(schema):
+    rows = [_row("motor", "c1", "Stator core", 200.0, material="B20AT1500"),
+            _row("motor", "c2", "Rotor core", 100.0),
+            _row("motor", "c3", "Rotor yoke", 80.0, material="10JNEX900"),
+            _row("motor", "m1", "Magnet segment N52UH", 500.0),
+            _row("motor", "m2", "Magnet holder", 40.0),
+            _row("motor", "b1", "Bolt M5 zinc-plated", 2.0),
+            _row("motor", "x1", "Stator core laser cutting", 60.0)]
+    out = {k: [r["row_id"] for r in v] for k, v in CE.assign_rows(schema, rows).items()}
+    assert out["lam_sheet"] == ["c1", "c2", "c3"]
+    assert out["mag_material"] == ["m1"] and "mag_segmentation" not in out   # the segment is the magnet itself
+    assert out["mech_holders"] == ["m2"] and out["mech_fasteners"] == ["b1"] and "mech_materials" not in out
+    assert out["lam_cut"] == ["x1"]
+    s = _qschema(schema, lam_sheet=(10, 1000))
+    analog = _prod("LAM/a", {"steel_mass_kg": 2.0, "active_mass_kg": 4.0, "outer_diameter_mm": 120}, rows)
+    est = _est(schema, iterations=1)
+    new, _ = CE.suggest(est, s, _qdata(_big_motor(), [analog]), today="2026-11-02")
+    sheet = new["iterations"][0]["lines"]["lam_sheet"]
+    # (200 + 100 + 80) per motor / (2 kg x 2.2 buy factor) = 86.3636 per bought kg; 20 kg x 2.2 x 2 motors = 88 kg
+    assert sheet["status"] == "filled" and sheet["source"] == "model"
+    assert sheet["unit_cost"] == 86.3636 and sheet["qty"] == 88.0
+    # an analog without any core / sheet row: the line stays missing with a clear warning
+    bare = _prod("BARE/a", {"steel_mass_kg": 2.0, "active_mass_kg": 4.0, "outer_diameter_mm": 120},
+                 [_row("motor", "s", "Shaft", 30.0)])
+    new, report = CE.suggest(est, s, _qdata(_big_motor(), [bare]), today="2026-11-02")
+    sheet = new["iterations"][0]["lines"]["lam_sheet"]
+    assert sheet["status"] == "missing" and sheet["qty"] == 88.0
+    assert "no analog production has a row matching lam_sheet" in sheet["note"]
+    assert any(w["item"] == "lam_sheet" and "looked for: lamination" in w["text"] for w in report["warnings"])
+
+
+def test_later_iterations_take_the_modifications_rule_once_iteration_one_tooling_is_filled(schema):
+    analog = _prod("TOOL/a", {"active_mass_kg": 12.0, "outer_diameter_mm": 200, "stack_length_mm": 60},
+                   [_row("tooling", "t1", "Stator mould", 3000.0), _row("motor", "s", "Shaft", 100.0)])
+    est = _est(schema, iterations=3)
+    est["iterations"][1]["lines"]["tool_main"].update({"status": "missing", "source": None, "derive": None})  # reset
+    new, report = CE.suggest(est, schema, _qdata(_big_motor(), [analog]), today="2026-11-02")
+    it1, it2, it3 = (it["lines"] for it in new["iterations"])
+    assert it1["tool_main"]["source"] == "analog" and it1["tool_main"]["unit_cost"] == 6000.0     # x2 by diameter
+    for later in (it2, it3):                     # never an analog of its own, always "modifications" of iteration 1
+        assert later["tool_main"]["source"] == "rule" and later["tool_main"]["derive"] == {"pct": 20.0, "from_iteration": 1}
+    assert {"item": "tool_main", "where": "iteration 2", "source": "rule", "status": "filled", "analog": None, "factor": None,
+            "rule": None, "check": False, "pct_of_iteration_1": 20.0} in report["filled"]
+    out = CE.compute(new, schema)
+    amounts = [it["lines"]["tool_main"]["amount"] for it in out["iterations"]]
+    assert amounts == [{"CNY": 6000.0}, {"CNY": 1200.0}, {"CNY": 1200.0}]
+    m1, m2, m3 = (it["manufacturing"]["CNY"] for it in out["iterations"])
+    assert m1 - m2 == pytest.approx(4800.0) and m2 == m3       # the later iterations are not a copy of iteration 1
+    again, _ = CE.suggest(new, schema, _qdata(_big_motor(), [analog]), today="2026-11-03", refresh=True)
+    assert again["iterations"][2]["lines"]["tool_main"]["derive"] == {"pct": 20.0, "from_iteration": 1}
+
+
+def test_the_report_carries_the_analog_and_factor_of_every_filled_line_and_marks_check(schema):
+    assert not CE.needs_check(schema, 2.0) and not CE.needs_check(schema, 0.5) and not CE.needs_check(schema, None)
+    assert CE.needs_check(schema, 2.01) and CE.needs_check(schema, 0.49)
+    target = {"active_mass_kg": 30.0, "outer_diameter_mm": 80, "stack_length_mm": 60}
+    analog = _prod("REF/a", {"active_mass_kg": 10.0, "outer_diameter_mm": 200, "stack_length_mm": 40},
+                   [_row("tooling", "t1", "Stator mould", 1000.0), _row("motor", "h", "Housing", 100.0),
+                    _row("tooling", "w1", "Winding mandrel", 500.0), _row("motor", "n", "PT1000", 7.0)])
+    est = _est(schema, iterations=1)
+    new, report = CE.suggest(est, schema, _qdata(target, [analog]), today="2026-11-02")
+    by_item = {f["item"]: f for f in report["filled"]}
+    assert by_item["tool_main"] == {"item": "tool_main", "where": "iteration 1", "source": "analog", "status": "filled",
+                                         "analog": "REF/a", "factor": 0.4, "rule": "outer_diameter", "check": True}
+    assert by_item["mech_housing"]["factor"] == 3.0 and by_item["mech_housing"]["check"] is True
+    assert by_item["tool_winding"]["factor"] == 1.5 and by_item["tool_winding"]["check"] is False
+    assert by_item["el_temp_sensors"]["factor"] == 1.0 and by_item["el_temp_sensors"]["rule"] == "one_to_one"
+    for f in report["filled"]:
+        assert {"analog", "factor", "rule", "check"} <= set(f)
+        assert f["status"] == "filled"
+    assert report["check_count"] == sum(1 for f in report["filled"] if f["check"]) == 2
+    assert report["scale_limits"] == [0.25, 4.0]
+    # the line itself keeps the analog and the factor (the Review step reads them from the estimate)
+    assert new["iterations"][0]["lines"]["tool_main"]["scale"]["factor"] == 0.4
+    assert new["iterations"][0]["lines"]["tool_main"]["source_ref"]["production"] == "REF/a"
 
 
 # ── diff ────────────────────────────────────────────────────────────────────────────────────────────────────────────

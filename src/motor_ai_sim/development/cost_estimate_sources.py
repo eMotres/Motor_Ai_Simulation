@@ -8,6 +8,7 @@ suggestion must never break the estimate."""
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 log = logging.getLogger(__name__)
@@ -58,9 +59,36 @@ def _name(part: Optional[dict], lang: str) -> str:
     return str(name or "") if lang == "en" else ""
 
 
-def production_rows(die: str, config: str) -> List[Dict[str, Any]]:
+#: what a motor-list price is for, read from the cost row's ``price_per`` field or its note.  The Production sheet labels
+#: the motor-list price "Price / motor", but a supplier quote is often typed per piece (a magnet segment), per kg or for
+#: the whole order - divided by the whole motor's mass, such a price gives a price per kg that is off by the piece count.
+PRICE_PER = ("motor", "piece", "kg", "order")
+_PER_KG = re.compile(r"(?:per|/)\s*kg\b|每\s*(?:公斤|千克)|/\s*(?:公斤|千克)", re.I)
+_PER_PIECE = re.compile(r"(?:per|/)\s*(?:piece|pieces|pc|pcs|pce|segment|segments|magnet|magnets|ea)\b|\beach\b"
+                        r"|每\s*(?:件|片|个|块|只)|/\s*(?:件|片|个|块|只)|单(?:件|片|个|块)价?", re.I)
+_PER_ORDER = re.compile(r"(?:per|for the|whole)\s*(?:order|lot|batch)\b|整批|总价", re.I)
+_PER_MOTOR = re.compile(r"(?:per|/)\s*(?:motor|set)\b|每\s*(?:台|套)|/\s*(?:台|套)", re.I)
+
+
+def price_per(raw: Any, note: Any, list_name: str) -> str:
+    """``motor`` | ``piece`` | ``kg`` | ``order``: an explicit ``price_per`` on the cost row, else what its note says, else
+    the sheet's own convention (motor list: per motor; tooling list: per piece)."""
+    explicit = str((raw or {}).get("price_per") or (raw or {}).get("price_unit") or "").strip().lower()
+    explicit = {"pc": "piece", "pcs": "piece", "set": "motor", "lot": "order"}.get(explicit, explicit)
+    if explicit in PRICE_PER:
+        return explicit
+    text = str(note or "")
+    for kind, rx in (("kg", _PER_KG), ("piece", _PER_PIECE), ("order", _PER_ORDER), ("motor", _PER_MOTOR)):
+        if rx.search(text):
+            return kind
+    return "piece" if list_name == "tooling" else "motor"
+
+
+def production_rows(die: str, config: str, motors: Optional[int] = None) -> List[Dict[str, Any]]:
     """The priced rows of one production: ``{list: motor | tooling | extras, row_id, name_en, name_zh, material, amount,
-    currency}``.  ``amount`` = cost per motor (motor list, work lines) or the price of the whole tooling line."""
+    currency, unit_price, qty_per_motor, price_per}``.  ``amount`` = the cost PER MOTOR (motor list, work lines: a per-piece
+    price x pieces per motor, an order price / the order's ``motors``; ``None`` for a price per kg or an order price
+    without an order quantity) or the price of the whole tooling line (price x quantity)."""
     from motor_ai_sim.production import models as PM
     from motor_ai_sim.production import store as PS
     parts = {str(p.get("id")): p for p in (PS.load_file(die, config, "parts.json") or {}).get("parts", []) if isinstance(p, dict)}
@@ -75,16 +103,29 @@ def production_rows(die: str, config: str) -> List[Dict[str, Any]]:
             part = parts.get(pid)
             if row["unit_price"] is None or (part or {}).get("kind") == "assembly" or (bom and pid not in qty):
                 continue
-            amount = float(row["unit_price"]) * (qty.get(pid, 1) if list_name == "tooling" else 1)
+            n = qty.get(pid, 1)
+            unit_price = float(row["unit_price"])
+            per = price_per(raw, row.get("note"), list_name)
+            amount: Optional[float]
+            if per == "piece":
+                amount = unit_price * n
+            elif per == "kg":
+                amount = None
+            elif per == "order":
+                amount = unit_price / motors if motors else None
+            else:
+                amount = unit_price
             out.append({"list": list_name, "row_id": pid, "name_en": _name(part, "en"), "name_zh": _name(part, "zh"),
                         "material": str((part or {}).get("material") or ""), "amount": amount,
-                        "currency": PM.normalize_currency(row["currency"])})
+                        "currency": PM.normalize_currency(row["currency"]), "unit_price": unit_price,
+                        "qty_per_motor": n, "price_per": per})
         if list_name == "motor":
             for raw in costs.get("extras") or []:
                 e = PM.normalize_extra_cost(raw)
                 if e["amount"] > 0:
                     out.append({"list": "extras", "row_id": e["id"], "name_en": _name(e, "en"), "name_zh": _name(e, "zh"),
-                                "material": "", "amount": float(e["amount"]), "currency": e["currency"]})
+                                "material": "", "amount": float(e["amount"]), "currency": e["currency"],
+                                "unit_price": float(e["amount"]), "qty_per_motor": 1, "price_per": "motor"})
     return out
 
 
@@ -102,13 +143,18 @@ def productions(basis_of=motor_basis) -> List[Dict[str, Any]]:
             if not isinstance(rec, dict) or not rec.get("die") or not rec.get("config"):
                 continue
             die, config = str(rec["die"]), str(rec["config"])
-            rows = production_rows(die, config)
+            try:
+                motors = max(0, int(rec.get("order_quantity") or 0)) or None
+            except (TypeError, ValueError):
+                motors = None
+            rows = production_rows(die, config, motors)
             if not rows:
                 continue
             title = rec.get("title") if isinstance(rec.get("title"), dict) else {}
             out.append({"ref": f"{die}/{config}", "die": die, "config": config,
                         "title": str(title.get("en") or title.get("zh") or f"{die} {config}"),
-                        "updated_at": rec.get("updated_at"), "basis": basis_of(die, config), "rows": rows})
+                        "updated_at": rec.get("updated_at"), "motors": motors, "basis": basis_of(die, config),
+                        "rows": rows})
         except Exception:                                   # noqa: BLE001 - one broken production never hides the rest
             log.warning("cost estimate: production %s unreadable", path, exc_info=True)
     return out

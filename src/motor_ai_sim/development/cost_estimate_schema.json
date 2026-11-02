@@ -120,6 +120,72 @@
   "stack_length_mm",
   "power_kw"
  ],
+ "scale_limits": {
+  "min": 0.25,
+  "max": 4.0,
+  "help": {
+   "en": "An analog is only scaled within this factor range; outside it the line stays missing.",
+   "zh-CN": "类比件只在此倍数范围内缩放；超出则该行保持缺失。"
+  }
+ },
+ "scale_check": {
+  "low": 0.5,
+  "high": 2.0,
+  "help": {
+   "en": "A suggested line scaled by a factor outside this range is marked \"check\" in the review.",
+   "zh-CN": "缩放倍数超出此范围的建议行在汇总中标记为“需核对”。"
+  }
+ },
+ "price_per_kg_bands": {
+  "help": {
+   "en": "Plausible material price per kg, per currency. A price per kg derived from an analog outside the band is never used.",
+   "zh-CN": "每种材料、每种货币的合理单价（每公斤）。由类比件推出的单价超出范围时不使用。"
+  },
+  "items": {
+   "mag_material": {
+    "CNY": [
+     200,
+     2500
+    ],
+    "EUR": [
+     25,
+     320
+    ],
+    "USD": [
+     28,
+     350
+    ]
+   },
+   "wire_purchase": {
+    "CNY": [
+     50,
+     400
+    ],
+    "EUR": [
+     6,
+     50
+    ],
+    "USD": [
+     7,
+     55
+    ]
+   },
+   "lam_sheet": {
+    "CNY": [
+     5,
+     1500
+    ],
+    "EUR": [
+     0.6,
+     190
+    ],
+    "USD": [
+     0.7,
+     210
+    ]
+   }
+  }
+ },
  "settings": [
   {
    "id": "complex",
@@ -484,7 +550,32 @@
          "electrical steel",
          "硅钢",
          "冲片",
-         "叠片"
+         "叠片",
+         "core",
+         "铁芯",
+         "铁心",
+         "电工钢",
+         "无取向",
+         "b15ahv",
+         "b20at",
+         "b20ahv",
+         "b25ahv",
+         "b27ahv",
+         "b35a",
+         "35ww",
+         "27ww",
+         "20ww",
+         "10jnex",
+         "jnex",
+         "jnhf",
+         "no20",
+         "m235",
+         "m270",
+         "hiperco",
+         "vacoflux",
+         "1j22",
+         "cobalt iron",
+         "铁钴钒"
         ],
         "scale": "steel_mass",
         "exponent": 1.0
@@ -605,7 +696,16 @@
          "ndfeb",
          "磁钢",
          "磁体",
-         "钕铁硼"
+         "钕铁硼",
+         "permanent magnet",
+         "n52",
+         "n50",
+         "n48",
+         "n45",
+         "n42",
+         "smco",
+         "sm2co17",
+         "永磁"
         ],
         "scale": "magnet_mass",
         "exponent": 1.0
@@ -628,8 +728,11 @@
        "analog": {
         "list": "motor",
         "match": [
-         "segment",
-         "分段"
+         "segmentation",
+         "segmenting",
+         "segment insulation",
+         "分段加工",
+         "分段绝缘"
         ],
         "scale": "magnet_mass",
         "exponent": 1.0
@@ -1088,7 +1191,14 @@
          "ring",
          "spacer",
          "支架",
-         "垫片"
+         "垫片",
+         "magnet holder",
+         "magnet ring",
+         "magnet sleeve",
+         "retaining ring",
+         "sleeve",
+         "磁钢挡圈",
+         "护套"
         ],
         "scale": "outer_diameter",
         "exponent": 1.0
@@ -1112,9 +1222,11 @@
         "list": "motor",
         "match": [
          "material",
+         "raw material",
          "stock",
-         "bar",
-         "plate",
+         "bar stock",
+         "round bar",
+         "plate stock",
          "原材料",
          "棒料",
          "板料"

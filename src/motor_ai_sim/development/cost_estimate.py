@@ -77,6 +77,19 @@ def _check_schema(schema: dict) -> dict:
                     raise ValueError("cost estimate schema: item %r scale rule" % iid)
     if not seen:
         raise ValueError("cost estimate schema: no items")
+    lim = schema.get("scale_limits") or {}
+    if lim and not (0 < float(lim.get("min") or 0) < 1 < float(lim.get("max") or 0)):
+        raise ValueError("cost estimate schema: scale_limits needs 0 < min < 1 < max")
+    chk = schema.get("scale_check") or {}
+    if chk and not (0 < float(chk.get("low") or 0) < 1 < float(chk.get("high") or 0)):
+        raise ValueError("cost estimate schema: scale_check needs 0 < low < 1 < high")
+    for iid, per_cur in ((schema.get("price_per_kg_bands") or {}).get("items") or {}).items():
+        if iid not in seen:
+            raise ValueError("cost estimate schema: price band for unknown item %r" % iid)
+        for cur, band in (per_cur or {}).items():
+            if cur not in currencies or not isinstance(band, list) or len(band) != 2 \
+                    or not (0 < float(band[0]) < float(band[1])):
+                raise ValueError("cost estimate schema: price band %s %s" % (iid, cur))
     return schema
 
 
@@ -639,6 +652,91 @@ def _closeness(factor: Optional[float]) -> float:
     return abs(math.log(factor)) if factor and factor > 0 else 0.0
 
 
+def scale_limits(schema: dict) -> Tuple[float, float]:
+    """The factor range an analog may be scaled by (``scale_limits`` in the schema, default 0.25..4).  Outside it the
+    analog is refused: a Ø40 shaft is never scaled x250 into a Ø400 one."""
+    lim = schema.get("scale_limits") or {}
+    return float(lim.get("min") or 0.25), float(lim.get("max") or 4.0)
+
+
+def needs_check(schema: dict, factor: Any) -> bool:
+    """A suggested line scaled by a factor outside ``scale_check`` (default 0.5..2) is marked "check" in the review."""
+    try:
+        f = float(factor)
+    except (TypeError, ValueError):
+        return False
+    chk = schema.get("scale_check") or {}
+    return f < float(chk.get("low") or 0.5) or f > float(chk.get("high") or 2.0)
+
+
+def price_band(schema: dict, item_id: str, currency: str) -> Optional[Tuple[float, float]]:
+    """The plausible price per kg of a material line in one currency (``price_per_kg_bands``), ``None`` if not set."""
+    band = (((schema.get("price_per_kg_bands") or {}).get("items") or {}).get(item_id) or {}).get(currency)
+    return (float(band[0]), float(band[1])) if band else None
+
+
+_SIZE_KEYS = ("outer_diameter_mm", "active_mass_kg")
+
+
+def size_distance(target: dict, analog: dict) -> Optional[float]:
+    """How far an analog motor is from the target in size: the mean |ln ratio| of the outer diameter and the active mass
+    (whichever both of them know); ``None`` when neither is known for both."""
+    out = []
+    for k in _SIZE_KEYS:
+        t, a = (target or {}).get(k), (analog or {}).get(k)
+        if t and a and float(t) > 0 and float(a) > 0:
+            out.append(abs(math.log(float(t) / float(a))))
+    return sum(out) / len(out) if out else None
+
+
+def _rank(distance: Optional[float], factor: Optional[float], stamp: Any) -> Tuple:
+    """Analog order: the closest in outer diameter / active mass first (unknown size last), then the scale factor closest
+    to 1, then the newest."""
+    return (1 if distance is None else 0, round(distance or 0.0, 6), round(_closeness(factor), 6), _newest_first(stamp))
+
+
+def _rows_text(rows: List[dict]) -> str:
+    """How the matching rows are priced, e.g. ``Magnet N52UH: 20 per piece x 8/motor``."""
+    out = []
+    for r in rows[:3]:
+        name = str(r.get("name_en") or r.get("name_zh") or r.get("row_id") or "row")
+        per = r.get("price_per") or ("piece" if r.get("list") == "tooling" else "motor")
+        price = r.get("unit_price", r.get("amount"))
+        out.append("%s: %s per %s x %s/motor" % (name, _fmt(price), per, _fmt(r.get("qty_per_motor") or 1)))
+    return "; ".join(out) + ("" if len(rows) <= 3 else "; +%d" % (len(rows) - 3))
+
+
+def analog_price_per_kg(rows: List[dict], analog_mass: Any, buy: float) -> Tuple[Optional[float], str]:
+    """Price per BOUGHT kg from an analog production's matching rows.  Rows priced per kg give it directly (their mean).
+    Otherwise: the rows' cost PER MOTOR (a per-piece price x pieces per motor, an order price / the order's motors - see
+    ``cost_estimate_sources.production_rows``) / (the analog's OWN simulated mass per motor x the buy factor).
+    ``(None, reason)`` when it cannot be derived."""
+    per_kg = [float(r["unit_price"]) for r in rows if r.get("price_per") == "kg" and r.get("unit_price")]
+    if per_kg:
+        return sum(per_kg) / len(per_kg), "priced per kg"
+    if any(r.get("amount") is None for r in rows):
+        return None, "a row has no cost per motor (%s)" % _rows_text(rows)
+    try:
+        mass = float(analog_mass)
+    except (TypeError, ValueError):
+        mass = 0.0
+    if mass <= 0:
+        return None, "the analog has no simulated mass"
+    per_motor = sum(float(r["amount"]) for r in rows)
+    return per_motor / (mass * buy), "%s per motor / (%s kg x %s buy factor)" % (_fmt(per_motor), _fmt(mass), _fmt(buy))
+
+
+_HINT = "suggest: "
+
+
+def _hint(line: dict, text: str) -> None:
+    """Put a suggest warning at the end of the note of a line the owner still has to fill: the previous suggest warning
+    is replaced, his own text before it is kept."""
+    own = str(line.get("note") or "").split(_HINT)[0].rstrip().rstrip(";").rstrip()
+    line["note"] = ((own + "; ") if own else "") + _HINT + text
+    line["note"] = line["note"][:_MAX_NOTE]
+
+
 def _suggestable(line: dict, refresh: bool) -> bool:
     if line.get("source") == "manual" or line.get("status") == "not_applicable":
         return False                                   # the owner's numbers and decisions are never overwritten
@@ -650,15 +748,21 @@ def _suggestable(line: dict, refresh: bool) -> bool:
 def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bool = False) -> Tuple[dict, dict]:
     """Fill the missing lines from the gathered ``data`` and return ``(new estimate, report)``.
 
-    ``data`` = ``{"target_basis": {...}, "productions": [{ref, title, updated_at, basis, rows: [{list, row_id, name_en,
-    name_zh, material, amount, currency}]}], "estimates": [{project_id, title, basis, iterations: [{index, lines}],
-    project_lines}], "tests": {production ref: {"days": n, "kinds": {...}}}}``.
+    ``data`` = ``{"target_basis": {...}, "productions": [{ref, title, updated_at, motors, basis, rows: [{list, row_id,
+    name_en, name_zh, material, amount, currency, unit_price, qty_per_motor, price_per}]}], "estimates": [{project_id,
+    title, basis, iterations: [{index, lines}], project_lines}], "tests": {production ref: {"days": n, "kinds": {...}}}}``.
+    A row's ``amount`` is its cost PER MOTOR (motor list, work lines; ``None`` for a row priced per kg) or the price of the
+    whole tooling line.
 
     Never touches a ``manual`` line or a line the owner set ``not_applicable``; with ``refresh`` it also re-suggests lines
     an earlier suggestion filled.  Order per line: (1) a ``model`` mass line - the simulation mass x buy factor x the price
-    per kg of the nearest analog production's matching rows; (2) the nearest analog PRODUCTION's matching cost / tooling
-    rows, scaled by the item's rule; (3) another project's estimate line of the same item (``test_history`` for testing,
-    ``analog`` otherwise), scaled the same way.  "Nearest" = the scale factor closest to 1, then the newest."""
+    per kg of the nearest analog production's matching rows, only when that price is inside the item's plausible band
+    (``price_per_kg_bands``); (2) the nearest analog PRODUCTION's matching cost / tooling rows, scaled by the item's rule;
+    (3) another project's estimate line of the same item (``test_history`` for testing, ``analog`` otherwise), scaled the
+    same way.  "Nearest" = the closest outer diameter / active mass, then the scale factor closest to 1, then the newest.
+    An analog whose scale factor is outside ``scale_limits`` is never used; when no analog is inside, the line stays
+    missing with a warning naming the nearest one and its factor.  The report lists every filled line with its analog and
+    factor (``check`` = factor outside ``scale_check``) and the warnings."""
     est = copy.deepcopy(estimate)
     cat = catalogue(schema)
     settings = est["settings"]
@@ -669,12 +773,20 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
     rows_by_prod = {p["ref"]: assign_rows(schema, p.get("rows") or []) for p in productions}
     estimates = [e for e in data.get("estimates") or [] if e.get("project_id") != est.get("project_id")]
     motors = float(settings.get("motors_per_iteration") or 1)
+    lo, hi = scale_limits(schema)
     filled: List[dict] = []
     skipped: List[dict] = []
+    warnings: List[dict] = []
 
-    def from_productions(item: dict) -> Optional[dict]:
+    def warn(item: dict, where: str, text: str) -> None:
+        warnings.append({"item": item["id"], "where": where, "text": text})
+
+    def from_productions(item: dict, *, model: bool) -> Tuple[List[dict], Optional[dict]]:
+        """``(usable candidates, nearest first; the nearest refused one by the scale limit)``.  A mass-model line needs
+        no scale limit (a price per kg does not grow with the motor) but the closest analog still comes first."""
         rule, exponent = item["analog"]["scale"], float(item["analog"].get("exponent") or 1.0)
-        cands = []
+        ok: List[dict] = []
+        refused: List[dict] = []
         for prod in productions:
             rows = rows_by_prod.get(prod["ref"], {}).get(item["id"]) or []
             if not rows:
@@ -683,17 +795,30 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
             if len(curs) != 1:
                 skipped.append({"item": item["id"], "analog": prod["ref"], "reason": "rows in several currencies"})
                 continue
+            if not model and any(r.get("amount") is None for r in rows):
+                skipped.append({"item": item["id"], "analog": prod["ref"], "reason": "a row is priced per kg, not per motor"})
+                continue
             factor, why, t, a = scale_factor(schema, rule, target, prod.get("basis") or {}, exponent)
             if factor is None:
                 skipped.append({"item": item["id"], "analog": prod["ref"], "reason": why})
                 continue
-            cands.append({"prod": prod, "rows": rows, "factor": factor, "t": t, "a": a, "rule": rule, "exponent": exponent,
-                          "amount": sum(float(r["amount"]) for r in rows), "currency": next(iter(curs))})
-        return min(cands, key=lambda c: (round(_closeness(c["factor"]), 6), _newest_first(c["prod"].get("updated_at"))))             if cands else None
+            cand = {"prod": prod, "rows": rows, "factor": factor, "t": t, "a": a, "rule": rule, "exponent": exponent,
+                    "amount": None if model else sum(float(r["amount"]) for r in rows), "currency": next(iter(curs)),
+                    "distance": size_distance(target, prod.get("basis") or {})}
+            if not model and not (lo <= factor <= hi):
+                refused.append(cand)
+                skipped.append({"item": item["id"], "analog": prod["ref"],
+                                "reason": "scale factor x%s outside %s..%s" % (_fmt(factor), _fmt(lo), _fmt(hi))})
+                continue
+            ok.append(cand)
+        ok.sort(key=lambda c: _rank(c["distance"], c["factor"], c["prod"].get("updated_at")))
+        nearest = min(refused, key=lambda c: _closeness(c["factor"])) if refused else None
+        return ok, nearest
 
-    def from_estimates(item: dict, group_id: str, index: Optional[int]) -> Optional[dict]:
+    def from_estimates(item: dict, group_id: str, index: Optional[int]) -> Tuple[Optional[dict], Optional[dict]]:
         rule = item.get("scale") or (item.get("analog") or {}).get("scale") or "one_to_one"
-        best = None
+        ok: List[dict] = []
+        refused: List[dict] = []
         for other in estimates:
             if index is None:
                 cands = [(None, (other.get("project_lines") or {}).get(item["id"]))]
@@ -709,16 +834,23 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
                 if factor is None:
                     skipped.append({"item": item["id"], "analog": "project " + str(other.get("project_id")), "reason": why})
                     break
-                key = (0 if k == index else 1, _closeness(factor))
-                cand = {"other": other, "iteration": k, "line": line, "factor": factor, "t": t, "a": a, "rule": rule, "key": key}
-                if best is None or key < best["key"]:
-                    best = cand
+                cand = {"other": other, "iteration": k, "line": line, "factor": factor, "t": t, "a": a, "rule": rule,
+                        "key": (0 if k == index else 1,) + _rank(size_distance(target, other.get("basis") or {}), factor, None)}
+                if not (lo <= factor <= hi):
+                    refused.append(cand)
+                    skipped.append({"item": item["id"], "analog": "project " + str(other.get("project_id")),
+                                    "reason": "scale factor x%s outside %s..%s" % (_fmt(factor), _fmt(lo), _fmt(hi))})
+                else:
+                    ok.append(cand)
                 break
-        return best
+        best = min(ok, key=lambda c: c["key"]) if ok else None
+        nearest = min(refused, key=lambda c: _closeness(c["factor"])) if refused else None
+        return best, nearest
 
     def fill(line: dict, item: dict, group_id: str, index: Optional[int], where: str) -> None:
         qrule = (item.get("qty") or {}).get("rule")
         new = None
+        info: Dict[str, Any] = {}
         if qrule == "model_mass":
             mkey = item["qty"]["mass"]
             buy = float(item["qty"].get("buy_factor") or 1.0)
@@ -727,24 +859,59 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
                 skipped.append({"item": item["id"], "where": where, "reason": "%s unknown for the target motor" % mkey})
             else:
                 qty = round(float(mass) * buy * motors, 3)
-                price = None
-                best = from_productions(item) if item.get("analog") else None
-                if best and (best["prod"].get("basis") or {}).get(mkey):
-                    price = best["amount"] / (float(best["prod"]["basis"][mkey]) * buy)
-                new = {**line, "qty": qty, "unit": item["unit"], "source": "model", "date": today, "by": "suggest",
-                       "scale": None, "derive": None,
-                       "note": "%.3f kg x %s buy factor x %d motor(s)" % (float(mass), _fmt(buy), int(motors))}
-                if price is not None:
-                    new.update({"status": "filled", "unit_cost": round(price, 4), "currency": best["currency"],
-                                "source_ref": {"production": best["prod"]["ref"], "label": _row_label(best["rows"]),
-                                               "updated_at": best["prod"].get("updated_at")}})
-                    new["note"] += "; price per kg from %s" % best["prod"]["ref"]
-                else:
-                    new.update({"status": "missing", "unit_cost": None, "source_ref": None})
-                    new["note"] += "; price per kg: no analog - enter it"
+                note = "%.3f kg x %s buy factor x %d motor(s)" % (float(mass), _fmt(buy), int(motors))
+                cands = from_productions(item, model=True)[0] if item.get("analog") else []
+                chosen = None
+                problems: List[str] = []
+                for cand in cands:
+                    ref = cand["prod"]["ref"]
+                    price, how = analog_price_per_kg(cand["rows"], (cand["prod"].get("basis") or {}).get(mkey), buy)
+                    if price is None:
+                        problems.append("price per kg from %s: %s" % (ref, how))
+                        skipped.append({"item": item["id"], "where": where, "analog": ref, "reason": problems[-1]})
+                        continue
+                    band = price_band(schema, item["id"], cand["currency"])
+                    if band is not None and not band[0] <= price <= band[1]:
+                        text = ("implausible price per kg from %s: %s %s/kg (plausible %s..%s; %s)"
+                                % (ref, _fmt(round(price, 2)), cand["currency"], _fmt(band[0]), _fmt(band[1]),
+                                   _rows_text(cand["rows"])))
+                        problems.append(text)
+                        warn(item, where, text)
+                        skipped.append({"item": item["id"], "where": where, "analog": ref, "reason": text})
+                        continue
+                    chosen = (cand, price, how)
+                    break
+                if chosen is None:
+                    if not cands and item.get("analog"):
+                        reason = ("price per kg: no analog production has a row matching %s (looked for: %s)"
+                                  % (item["id"], ", ".join(item["analog"]["match"][:10])))
+                        warn(item, where, reason)
+                    elif not cands:
+                        reason = "price per kg: no analog - enter it"
+                    else:
+                        reason = " | ".join(problems) or "price per kg: no plausible analog - enter it"
+                    line.update({"status": "missing", "qty": qty, "unit": item["unit"], "unit_cost": None, "source": None,
+                                 "source_ref": None, "scale": None, "derive": None})
+                    _hint(line, reason)
+                    skipped.append({"item": item["id"], "where": where, "reason": reason})
+                    return
+                cand, price, how = chosen
+                ref = cand["prod"]["ref"]
+                new = {**line, "status": "filled", "qty": qty, "unit": item["unit"], "unit_cost": round(price, 4),
+                       "currency": cand["currency"], "source": "model",
+                       "source_ref": {"production": ref, "label": _row_label(cand["rows"]),
+                                      "updated_at": cand["prod"].get("updated_at")},
+                       "scale": None, "derive": None, "date": today, "by": "suggest",
+                       "note": "%s; price per kg from %s (%s)" % (note, ref, how)}
+                info = {"analog": ref, "factor": None, "rule": None, "price_per_kg": round(price, 2),
+                        "currency": cand["currency"]}
+        nearest: List[Tuple[str, dict]] = []
         if new is None and item.get("analog") and qrule != "model_mass":
-            best = from_productions(item)
-            if best:
+            cands, near = from_productions(item, model=False)
+            if near:
+                nearest.append(("production " + near["prod"]["ref"], near))
+            if cands:
+                best = cands[0]
                 # motor-BOM and work-line rows cost PER MOTOR, tooling rows are the price of the whole list line
                 per_motor = best["rows"][0]["list"] != "tooling"
                 qty = motors if item["unit"] == "motor" else 1.0
@@ -759,8 +926,11 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
                                  "exponent": best["exponent"]},
                        "derive": None, "date": today, "by": "suggest",
                        "note": "%d row(s) of %s" % (len(best["rows"]), best["prod"]["ref"])}
+                info = {"analog": best["prod"]["ref"], "factor": best["factor"], "rule": best["rule"]}
         if new is None and (item.get("history") or item.get("analog")):
-            best = from_estimates(item, group_id, index)
+            best, near = from_estimates(item, group_id, index)
+            if near:
+                nearest.append(("project " + str(near["other"]["project_id"]), near))
             if best:
                 src = best["line"]
                 new = {**line, "status": "filled", "qty": src["qty"], "unit": item["unit"],
@@ -774,7 +944,16 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
                        "derive": None, "date": today, "by": "suggest",
                        "note": "project %s%s" % (best["other"]["project_id"],
                                                  "" if best["iteration"] is None else ", iteration %s" % best["iteration"])}
+                info = {"analog": "project %s" % best["other"]["project_id"], "factor": best["factor"], "rule": best["rule"]}
         if new is None:
+            if nearest:
+                name, near = min(nearest, key=lambda n: _closeness(n[1]["factor"]))
+                text = ("no analog within the scale limits %s..%s: nearest %s, scaled by %s x%s"
+                        % (_fmt(lo), _fmt(hi), name, near["rule"], _fmt(near["factor"])))
+                warn(item, where, text)
+                _hint(line, text)
+                skipped.append({"item": item["id"], "where": where, "reason": text})
+                return
             hint = _test_hint(item, group_id, data)
             if hint and hint not in (line.get("note") or ""):
                 line["note"] = ((line.get("note") or "") + ("; " if line.get("note") else "") + hint)[:_MAX_NOTE]
@@ -782,7 +961,10 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
             return
         line.clear()
         line.update(new)
-        filled.append({"item": item["id"], "where": where, "source": new["source"], "status": new["status"]})
+        filled.append({"item": item["id"], "where": where, "source": new["source"], "status": new["status"],
+                       "analog": info.get("analog"), "factor": info.get("factor"), "rule": info.get("rule"),
+                       "check": needs_check(schema, info.get("factor")),
+                       **({"price_per_kg": info["price_per_kg"], "currency": info["currency"]} if "price_per_kg" in info else {})})
 
     for it in est["iterations"]:
         index = it["index"]
@@ -792,9 +974,12 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
                 continue
             later = item.get("later")
             if index > 1 and isinstance(later, dict) and later.get("mode") == "pct_of_first":
+                # a later iteration's tool = "modifications": the % of iteration 1's line, never an analog of its own
                 line.update({"status": "filled", "source": "rule", "derive": {"pct": float(later.get("pct") or 0), "from_iteration": 1},
                              "qty": None, "unit_cost": None, "scale": None, "source_ref": None, "date": today, "by": "suggest"})
-                filled.append({"item": iid, "where": "iteration %d" % index, "source": "rule", "status": "filled"})
+                filled.append({"item": iid, "where": "iteration %d" % index, "source": "rule", "status": "filled",
+                               "analog": None, "factor": None, "rule": None, "check": False,
+                               "pct_of_iteration_1": float(later.get("pct") or 0)})
                 continue
             fill(line, item, group["id"], index, "iteration %d" % index)
     for iid, line in est["project_lines"].items():
@@ -802,8 +987,10 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
         if _suggestable(line, refresh) and not item.get("amount_rule"):
             fill(line, item, group["id"], None, "project")
     est["basis"] = _clean_basis({**target, "motor": data.get("target_ref") or ""}, schema)
-    report = {"filled": filled, "skipped": skipped, "filled_count": len(filled),
-              "analogs": [{"ref": p["ref"], "title": p.get("title") or "", "basis": p.get("basis") or {}} for p in productions],
+    report = {"filled": filled, "skipped": skipped, "warnings": warnings, "filled_count": len(filled),
+              "check_count": sum(1 for f in filled if f.get("check")), "scale_limits": [lo, hi],
+              "analogs": [{"ref": p["ref"], "title": p.get("title") or "", "basis": p.get("basis") or {},
+                           "motors": p.get("motors")} for p in productions],
               "estimates": [e.get("project_id") for e in estimates], "target_basis": target}
     return est, report
 

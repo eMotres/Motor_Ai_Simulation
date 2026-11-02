@@ -2,6 +2,7 @@ import type { CatalogController } from './controllerCatalog';
 import { parseActivity } from './stageBar';
 import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
+import type { CostEstimate, CostEstimateAnswer, CostSnapshot } from './costEstimate';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -24,6 +25,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 const p = (id: string) => `/api/projects/${enc(id)}`;
+const ce = (id: string) => `/api/admin/projects/${enc(id)}/cost-estimate`;
 
 /** The steps feed carries a light panel per computed point; its FINAL numbers are merged into the point's comparison row, so the
  *  steps table and chart read what the information panel shows (the panel itself is not kept). */
@@ -113,6 +115,12 @@ export const developmentApi = {
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
   /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
   productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
+  /** ADMIN ONLY (owner 2026-11-02): the project cost estimate (costEstimate.ts).  403 for anybody else. */
+  costEstimate: (id: string) => call<CostEstimateAnswer>('GET', ce(id)),
+  saveCostEstimate: (id: string, estimate: CostEstimate) => call<CostEstimateAnswer>('PUT', ce(id), estimate),
+  suggestCostEstimate: (id: string, revision: number, refresh = false) => call<CostEstimateAnswer>('POST', `${ce(id)}/suggest`, { revision, refresh }),
+  snapshotCostEstimate: (id: string, revision: number, note: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note }),
+  costEstimateSnapshots: async (id: string) => (await call<{ snapshots: CostSnapshot[] }>('GET', `${ce(id)}/snapshots`)).snapshots ?? [],
 };
 
 /** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */

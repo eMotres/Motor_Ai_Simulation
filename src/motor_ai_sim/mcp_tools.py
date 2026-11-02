@@ -69,7 +69,7 @@ COMMERCIAL_DENYLIST = frozenset({
 })
 COMMERCIAL_TOKENS = frozenset({
     "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",
-    "quotation", "currency", "currencies", "subtotal", "invoice", "payment",
+    "quotation", "currency", "currencies", "subtotal", "invoice", "payment", "contingency",
 })
 
 

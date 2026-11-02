@@ -334,9 +334,21 @@ def test_a_motor_that_holds_a_revision_cannot_be_deleted_retired_or_renamed(env)
         assert _cfg_path(env, DIE, cfg).is_file()
     r = client.delete(f"/api/family/die/{DIE}", params={"force": "true"}, headers=admin)
     assert r.status_code == 409 and "never deleted" in r.json()["detail"]
-    assert client.patch(f"/api/family/config/{DIE}/{CFG}", json={"name": "renamed"}, headers=admin).status_code == 409
-    assert client.patch(f"/api/family/config/{DIE}/{f'{CFG}-B'}", json={"name": "renamed"}, headers=admin).status_code == 409
+    # the FROZEN revision keeps its name; the WORKING one is renamed and its record follows (2026-11-02, config_move rename)
+    frozen = client.patch(f"/api/family/config/{DIE}/{CFG}", json={"name": "renamed"}, headers=admin)
+    assert frozen.status_code == 409 and "keeps its name" in frozen.json()["detail"], frozen.text
     assert _cfg_path(env, DIE, CFG).is_file()
+    r = client.patch(f"/api/family/config/{DIE}/{f'{CFG}-B'}", json={"name": "renamed"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert "motor_revisions" in {c["store"] for c in r.json()["changes"]}
+    lin, rev = MR.find(DIE, "renamed")
+    assert rev["rev"] == "B" and rev["renamed"][0]["from"] == f"{DIE}/{CFG}-B" and MR.find(DIE, f"{CFG}-B") is None
+    assert MR._intact(rev) is True                         # the snapshot was re-taken: only the name changed
+    r = client.patch(f"/api/family/config/{DIE}/renamed", json={"name": f"{CFG}-B"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert MR.find(DIE, f"{CFG}-B")[1]["rev"] == "B"
+    assert client.patch(f"/api/family/config/{DIE}/{f'{CFG}-B'}", json={"name": "renamed"},
+                        headers=env["eng"]).status_code in (403, 409)          # a workspace copy never renames a revision
     # a configuration with no revision is still an ordinary one
     assert client.patch(f"/api/family/config/{DIE}/{OTHER}", json={"name": "L56"}, headers=admin).status_code == 200
     assert client.delete(f"/api/family/config/{DIE}/L56", headers=admin).status_code == 200

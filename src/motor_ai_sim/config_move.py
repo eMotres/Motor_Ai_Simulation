@@ -1,4 +1,4 @@
-"""MOVE or COPY one configuration to another die: every store that names it follows.
+"""MOVE or COPY one configuration to another die, or RENAME it: every store that names it follows.
 
 2026-10-29/30: the owner's live edits changed the shared snapshot of the Erium die
 (``CIANO56 400_80 vadim 3``) under five other configurations, and the ceramic L100
@@ -16,7 +16,15 @@ instead of the die name:
   ``<catalog root>/.config_moves/<stamp> <die>~<cfg>/`` (``manifest.json`` lists them);
   the source files of a move are moved there last, not deleted.  The identity registry
   ``users.json`` is private and never copied there: the manifest lists each account's change;
-* a finished move writes one admin-audit entry (``config.move`` / ``config.copy``).
+* a finished move writes one admin-audit entry (``config.move`` / ``config.copy`` / ``config.rename``).
+
+RENAME (2026-11-02, ``POST /api/family/config/{die}/{cfg}/rename``; ``PATCH /api/family/config/{die}/{cfg}`` runs
+the same transaction): the same die, a new configuration name - the move with ``new_cfg``.  Every store below
+is retargeted ``"<die>/<old>"`` -> ``"<die>/<new>"``; besides, the configuration's ``name`` and every duty's
+``payload_file`` (``runs/<cfg>/...``) follow, the field files' ``meta["config"]``, the saved versions under
+``.history`` take the new name, and the product REVISION records follow (``motor_revisions``: the record's
+``config``, an automatic lineage title, and - when the live file still matched it - the revision snapshot
+re-taken from the renamed file).  A FROZEN revision (replaced by a newer one) is read-only and keeps its name.
 
 MOVE retargets (``"<die>/<cfg>"`` -> ``"<target>/<cfg>"``):
 
@@ -35,7 +43,11 @@ MOVE retargets (``"<die>/<cfg>"`` -> ``"<target>/<cfg>"``):
   projects         ``linked_motors``, ``motor_history``, ``grant_removal_candidates``,
                    ``project_motor_grants`` (key + ``grant_key``), the motor snapshots'
                    name and access scope, ``projects/index.json``; a ``motor.move`` audit line
-  production, motor_tests, cad_models, cad_rebuild_queue: their per-configuration folders
+  cost_estimate    ``settings.target_motor`` of every project's live cost estimate (its ``revision`` goes up,
+                   so an editor holding the old one gets a conflict instead of writing the old name back)
+  production, motor_tests, cad_models, cad_rebuild_queue: their per-configuration folders and the
+                   ``die`` / ``config`` their JSON records name
+  motor_revisions  (rename only, see above)
 
 COPY leaves the source alone and adds the copy: the file, its runs, its results and
 history rows; projects pick it up through ``development.autolink`` (a new variant of a
@@ -43,11 +55,13 @@ project's motor joins the project).  Grants, production, tests and CAD are not c
 
 Refused (``MoveBlocked``, HTTP 409): the target already has a configuration of that name
 (or rows / runs / folders under it), the dies live in different catalog layers, the
-configuration holds a product revision (a move; a copy is allowed), a data move of either
+configuration holds a product revision (a move; a copy is allowed; a rename only when the
+revision is frozen, or when the rename is a workspace-only one), a data move of either
 die is in progress, a job is running on it.
 
-Not rewritten, by design: append-only audit logs, the frozen content of project snapshots,
-job records, the stored Configure answers (their stamps change, they are recomputed),
+Not rewritten, by design: append-only audit logs, the frozen content of project snapshots and of
+cost-estimate snapshots, the rows inside the result ledgers (only their keys move), job records,
+the stored Configure answers (their stamps change, they are recomputed),
 ``derived_from`` provenance of other dies.  Reported under ``manual`` (deploy-managed, read
 only for the application): ``cooling_options.yaml`` entries of the source die, passport and
 propeller-S1 folders of the configuration.
@@ -87,6 +101,8 @@ class Ctx:
     glob_scope: bool               # the shared catalog's die: accounts / projects / production follow
     ws_roots: List[Path]
     actor: str = ""
+    new_cfg: str = ""              # a RENAME: the new configuration name (same die); "" = keep ``cfg``
+    runs_fallback: Optional[Path] = None   # the runs to copy when the die folder has none (a workspace copy-on-write)
     backup_dir: Optional[Path] = None
     undo: List[Callable[[], None]] = field(default_factory=list)
     after: List[Callable[[], None]] = field(default_factory=list)
@@ -94,13 +110,24 @@ class Ctx:
     manual: List[Dict[str, Any]] = field(default_factory=list)
     backups: List[Dict[str, str]] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self.new_cfg = str(self.new_cfg or self.cfg)
+
+    @property
+    def renaming(self) -> bool:
+        return self.new_cfg != self.cfg
+
+    @property
+    def mode(self) -> str:
+        return "copy" if self.copy else "rename" if self.renaming else "move"
+
     @property
     def old_key(self) -> str:
         return f"{self.die}/{self.cfg}"
 
     @property
     def new_key(self) -> str:
-        return f"{self.dst}/{self.cfg}"
+        return f"{self.dst}/{self.new_cfg}"
 
     def add(self, store: str, where: Any, change: str, **extra: Any) -> None:
         self.changes.append({"store": store, "where": str(where), "change": change, **extra})
@@ -108,6 +135,12 @@ class Ctx:
     def is_pair(self, die: Any, cfg: Any) -> bool:
         return (str(die or "").casefold() == self.die.casefold()
                 and str(cfg or "").casefold() == self.cfg.casefold())
+
+    def retarget(self, row: dict, die_key: str = "die", cfg_key: str = "config") -> None:
+        """Point a ``{die_key, cfg_key}`` row of this configuration at the new pair."""
+        row[die_key] = self.dst
+        if self.renaming:
+            row[cfg_key] = self.new_cfg
 
     def backup(self, path: Path, raw: Optional[bytes] = None) -> None:
         """Keep a copy of ``path`` (its bytes now, or ``raw``) in the backup folder before it is rewritten."""
@@ -149,6 +182,35 @@ def _json_rewrite(ctx: Ctx, store: str, path: Path, mutate: Callable[[Any], int]
     return True
 
 
+def _walk_records(ctx: Ctx, obj: Any) -> int:
+    """Rewrite, in place, what a JSON record of the configuration's OWN folder (production, tests, CAD) names:
+    a move rewrites every ``die`` (as ``die_rename.walk_replace``), a rename every ``config`` equal to the old
+    name in a mapping whose ``die`` is absent or the configuration's die.  Returns how many values changed."""
+    if not ctx.renaming:
+        return walk_replace(obj, ctx.die, ctx.dst)
+    n = 0
+    if isinstance(obj, dict):
+        if (isinstance(obj.get("config"), str) and obj["config"] == ctx.cfg
+                and str(obj.get("die") or ctx.die).casefold() == ctx.die.casefold()):
+            obj["config"] = ctx.new_cfg
+            n += 1
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                n += _walk_records(ctx, v)
+    elif isinstance(obj, list):
+        for v in obj:
+            if isinstance(v, (dict, list)):
+                n += _walk_records(ctx, v)
+    return n
+
+
+def _path_key(p: Path) -> str:
+    try:
+        return str(p.resolve())
+    except OSError:
+        return str(p)
+
+
 def _unique_paths(paths) -> List[Path]:
     out, seen = [], set()
     for p in paths:
@@ -188,6 +250,45 @@ def _runs(ctx: Ctx, d: Path) -> Path:
     return d / "runs" / ctx.cfg
 
 
+def _runs_new(ctx: Ctx, d: Path) -> Path:
+    return d / "runs" / ctx.new_cfg
+
+
+def _src_runs(ctx: Ctx) -> Path:
+    """The runs the configuration takes along: its own folder, else (a workspace copy-on-write of a shared /
+    published die, whose runs stay in the other layer) the fallback - copied, never moved."""
+    own = _runs(ctx, ctx.src_dir)
+    if not own.is_dir() and ctx.runs_fallback is not None and Path(ctx.runs_fallback).is_dir():
+        return Path(ctx.runs_fallback)
+    return own
+
+
+def _repoint_payloads(ctx: Ctx, doc: dict) -> int:
+    """A rename: every duty's ``payload_file`` (``runs/<cfg>/...``, die-relative) follows the new name."""
+    if not ctx.renaming:
+        return 0
+    n, old = 0, f"runs/{ctx.cfg}/"
+    for d in (doc.get("duties") or []):
+        runs = d.get("runs") if isinstance(d, dict) else None
+        for r in (runs.values() if isinstance(runs, dict) else []):
+            pf = r.get("payload_file") if isinstance(r, dict) else None
+            if isinstance(pf, str) and pf.replace("\\", "/").startswith(old):
+                r["payload_file"] = f"runs/{ctx.new_cfg}/" + pf.replace("\\", "/")[len(old):]
+                n += 1
+    return n
+
+
+def _taken(d: Path, name: str, own: str) -> Optional[str]:
+    """The configuration of die folder ``d`` that already answers to ``name`` (the stores match names
+    case-insensitively), other than ``own``; ``None`` when the name is free."""
+    if name != own and (d / f"{name}.yaml").exists():
+        return name
+    for p in (sorted(d.glob("*.yaml")) if d.is_dir() else []):
+        if p.name != "die.yaml" and p.stem.casefold() == name.casefold() and p.stem != own:
+            return p.stem
+    return None
+
+
 def _history_files(ctx: Ctx) -> List[Path]:
     h = ctx.src_dir.parent / ".history" / ctx.die
     return sorted(h.glob(f"{ctx.cfg}.*.yaml")) if h.is_dir() else []
@@ -195,17 +296,24 @@ def _history_files(ctx: Ctx) -> List[Path]:
 
 def step_files(ctx: Ctx) -> None:
     fam = ctx.fam
-    src_file, dst_file = ctx.src_dir / f"{ctx.cfg}.yaml", ctx.dst_dir / f"{ctx.cfg}.yaml"
-    if dst_file.exists():
-        raise MoveBlocked(f"die '{ctx.dst}' already has a configuration '{ctx.cfg}'")
-    src_runs, dst_runs = _runs(ctx, ctx.src_dir), _runs(ctx, ctx.dst_dir)
+    src_file, dst_file = ctx.src_dir / f"{ctx.cfg}.yaml", ctx.dst_dir / f"{ctx.new_cfg}.yaml"
+    clash = _taken(ctx.dst_dir, ctx.new_cfg, ctx.cfg if _path_key(ctx.dst_dir) == _path_key(ctx.src_dir) else "")
+    if clash:
+        raise MoveBlocked(f"die '{ctx.dst}' already has a configuration '{clash}'")
+    src_runs, dst_runs = _src_runs(ctx), _runs_new(ctx, ctx.dst_dir)
     if dst_runs.exists() and any(dst_runs.iterdir()):
-        raise MoveBlocked(f"die '{ctx.dst}' already has stored runs under runs/{ctx.cfg}")
-    verb = "copied" if ctx.copy else "moved"
-    ctx.add("catalog", src_file, f"configuration {verb} to '{ctx.dst}' (die back-reference -> '{ctx.dst}')")
+        raise MoveBlocked(f"die '{ctx.dst}' already has stored runs under runs/{ctx.new_cfg}")
+    borrowed = src_runs != _runs(ctx, ctx.src_dir)
+    verb = "copied" if ctx.copy else "renamed" if ctx.renaming else "moved"
+    if ctx.renaming:
+        k = _repoint_payloads(ctx, _copy.deepcopy(fam._load_yaml(src_file, "configuration")))
+        ctx.add("catalog", src_file, f"configuration renamed to '{ctx.new_cfg}' (file, name, {k} stored-run path(s))")
+    else:
+        ctx.add("catalog", src_file, f"configuration {verb} to '{ctx.dst}' (die back-reference -> '{ctx.dst}')")
     if src_runs.is_dir():
         n = sum(1 for p in src_runs.rglob("*") if p.is_file())
-        ctx.add("catalog", src_runs, f"stored runs {verb} to '{ctx.dst}/runs/{ctx.cfg}' ({n} file(s))")
+        ctx.add("catalog", src_runs, f"stored runs {'copied' if borrowed else verb} "
+                                     f"to '{ctx.dst}/runs/{ctx.new_cfg}' ({n} file(s))")
     hist = _history_files(ctx)
     if hist:
         ctx.add("catalog_history", hist[0].parent, f"{len(hist)} saved version(s) of '{ctx.cfg}' {verb}")
@@ -213,6 +321,9 @@ def step_files(ctx: Ctx) -> None:
         return
     doc = fam._load_yaml(src_file, "configuration")
     doc["die"] = ctx.dst
+    if ctx.renaming:
+        doc["name"] = ctx.new_cfg
+        _repoint_payloads(ctx, doc)
     fam._save_yaml(dst_file, doc)
     ctx.undo.append(lambda: _restore_bytes(dst_file, None))
     if src_runs.is_dir():
@@ -223,7 +334,7 @@ def step_files(ctx: Ctx) -> None:
         hdst = ctx.dst_dir.parent / ".history" / ctx.dst
         hdst.mkdir(parents=True, exist_ok=True)
         for f in hist:
-            q = hdst / f.name
+            q = hdst / (ctx.new_cfg + f.name[len(ctx.cfg):])
             if q.exists():
                 continue
             shutil.copy2(f, q)
@@ -231,18 +342,28 @@ def step_files(ctx: Ctx) -> None:
 
 
 def step_fields(ctx: Ctx) -> None:
-    """The stored field files (``.npz``) name their die in their own meta: the copy says the target."""
+    """The stored field files (``.npz``) name their die and configuration in their own meta: the copy says the
+    target (a move: the die, a rename: the configuration)."""
     from motor_ai_sim import duty_fields as DF
-    root = _runs(ctx, ctx.src_dir if ctx.dry_run else ctx.dst_dir)
+    root = _src_runs(ctx) if ctx.dry_run else _runs_new(ctx, ctx.dst_dir)
     if not root.is_dir():
         return
-    todo = [p for p in sorted(root.rglob("*.npz")) if p.parent.name == "fields" and DF.meta_die(p) == ctx.die]
+    if ctx.renaming:
+        todo = [p for p in sorted(root.rglob("*.npz"))
+                if p.parent.name == "fields" and DF.meta_field(p, "config") == ctx.cfg]
+        what = f"meta config -> '{ctx.new_cfg}'"
+    else:
+        todo = [p for p in sorted(root.rglob("*.npz")) if p.parent.name == "fields" and DF.meta_die(p) == ctx.die]
+        what = f"meta die -> '{ctx.dst}'"
     if todo:
-        ctx.add("duty_fields", root, f"meta die -> '{ctx.dst}' ({len(todo)} field file(s))")
+        ctx.add("duty_fields", root, f"{what} ({len(todo)} field file(s))")
     if ctx.dry_run:
         return
     for p in todo:
-        if DF.retag_meta(p, die=ctx.dst):
+        if ctx.renaming:
+            if DF.retag_meta(p, config=ctx.new_cfg):
+                ctx.undo.append(lambda p=p: DF.retag_meta(p, config=ctx.cfg))
+        elif DF.retag_meta(p, die=ctx.dst):
             ctx.undo.append(lambda p=p: DF.retag_meta(p, die=ctx.die))
 
 
@@ -270,7 +391,7 @@ def step_duty_results(ctx: Ctx) -> None:
             ctx.add("duty_results", legacy_src, f"legacy per-die rows {verb} to {legacy_dst}",
                     rows={"results": rows["results"], "history": rows["history"]})
             with DR.using_store(legacy_dst):
-                if DR.config_rows(ctx.dst, ctx.cfg)["results"]:
+                if DR.config_rows(ctx.dst, ctx.new_cfg)["results"]:
                     raise MoveBlocked(f"{legacy_dst} already has results for '{ctx.new_key}'")
             if not ctx.dry_run:
                 raw_s, raw_d = _read_bytes(legacy_src), _read_bytes(legacy_dst)
@@ -283,7 +404,7 @@ def step_duty_results(ctx: Ctx) -> None:
                     for b in ("results", "history"):
                         rows_b = ((src_doc.get(b) or {}).get(ctx.die) or {}).get(ctx.cfg)
                         if rows_b:
-                            tgt.setdefault(b, {}).setdefault(ctx.dst, {})[ctx.cfg] = _copy.deepcopy(rows_b)
+                            tgt.setdefault(b, {}).setdefault(ctx.dst, {})[ctx.new_cfg] = _copy.deepcopy(rows_b)
                     if not DR._write_all(tgt):
                         raise OSError(f"could not write {legacy_dst}")
                 ctx.undo.append(lambda p=legacy_dst, b=raw_d: _restore_bytes(p, b))
@@ -301,7 +422,7 @@ def step_duty_results(ctx: Ctx) -> None:
         with DR.using_store(store):
             rows = DR.config_rows(ctx.die, ctx.cfg)
             found = bool(rows["results"] or rows["history"])
-            if found and DR.config_rows(ctx.dst, ctx.cfg)["results"]:
+            if found and DR.config_rows(ctx.dst, ctx.new_cfg)["results"]:
                 raise MoveBlocked(f"{store} already has results for '{ctx.new_key}'")
             if not found:
                 if str(store) in always:
@@ -316,7 +437,7 @@ def step_duty_results(ctx: Ctx) -> None:
             raw = _read_bytes(store)
             ctx.backup(store, raw)
             try:
-                DR.move_config(ctx.die, ctx.cfg, ctx.dst, copy=ctx.copy)
+                DR.move_config(ctx.die, ctx.cfg, ctx.dst, copy=ctx.copy, new_cfg=ctx.new_cfg)
             except ValueError as exc:
                 raise MoveBlocked(f"{store}: {exc}")
             ctx.undo.append(lambda p=store, b=raw: _restore_bytes(p, b))
@@ -333,10 +454,14 @@ def step_context(ctx: Ctx) -> None:
         if not isinstance(doc, dict):
             return 0
         if doc.get("die") == ctx.die and doc.get("config") == ctx.cfg:
-            doc["die"] = ctx.dst
+            ctx.retarget(doc)
             n += 1
         if doc.get("released_from") == ctx.die and doc.get("released_config") == ctx.cfg:
-            doc["released_from"] = ctx.dst
+            ctx.retarget(doc, "released_from", "released_config")
+            n += 1
+        tf = doc.get("transitioned_from")
+        if isinstance(tf, dict) and tf.get("die") == ctx.die and tf.get("config") == ctx.cfg:
+            ctx.retarget(tf)
             n += 1
         return n
     files = [ctx.fam._ctx_file()] + [r / ".family_context.json" for r in ctx.ws_roots]
@@ -349,7 +474,7 @@ def step_context(ctx: Ctx) -> None:
 def step_workspace_memory(ctx: Ctx) -> None:
     if ctx.copy:
         return
-    old, new = f"{ctx.die}|{ctx.cfg}", f"{ctx.dst}|{ctx.cfg}"
+    old, new = f"{ctx.die}|{ctx.cfg}", f"{ctx.dst}|{ctx.new_cfg}"
 
     def _panel(doc):
         n = 0
@@ -372,7 +497,7 @@ def step_workspace_memory(ctx: Ctx) -> None:
             for e in (entries.values() if isinstance(entries, dict) else []):
                 src = e.get("src") if isinstance(e, dict) else None
                 if isinstance(src, dict) and ctx.is_pair(src.get("die"), src.get("config")):
-                    src["die"] = ctx.dst
+                    ctx.retarget(src)
                     n += 1
         return n
     for r in ctx.ws_roots:
@@ -394,10 +519,10 @@ def step_catalog_cards(ctx: Ctx) -> None:
         if not isinstance(m, dict):
             return 0
         if ctx.is_pair(m.get("die"), m.get("config")):
-            m["die"] = ctx.dst
+            ctx.retarget(m)
             n += 1
         if isinstance(m.get("name"), str) and m["name"].casefold() == old_name:
-            m["name"] = f"{ctx.dst} {ctx.cfg}"
+            m["name"] = f"{ctx.dst} {ctx.new_cfg}"
             n += 1
         return n
     _json_rewrite(ctx, "catalog_cards", CAT._catalog_path(),
@@ -450,8 +575,10 @@ def step_grants(ctx: Ctx) -> None:
     # users.json is a PRIVATE file (identity registry): it is never copied into the catalog's backup
     # folder.  The manifest lists every account's change, the in-memory undo restores them on a failure.
     from motor_ai_sim import users
-    hits, undo = users.move_config_in_grants(ctx.die, ctx.cfg, ctx.dst, add_for=_access_carry(ctx),
-                                             dry_run=ctx.dry_run)
+    # a rename keeps the die: whoever saw the configuration through it still does
+    carry = _access_carry(ctx) if ctx.dst != ctx.die else []
+    hits, undo = users.move_config_in_grants(ctx.die, ctx.cfg, ctx.dst, add_for=carry,
+                                             dry_run=ctx.dry_run, new_cfg=ctx.new_cfg)
     for email, what in hits:
         ctx.add("user_grants", email, what)
     if undo is not None:
@@ -464,11 +591,11 @@ def _rewrite_project(ctx: Ctx, project: dict) -> int:
     for block in ("linked_motors", "motor_history", "grant_removal_candidates"):
         for row in project.get(block) or []:
             if isinstance(row, dict) and ctx.is_pair(row.get("die"), row.get("config")):
-                row["die"] = ctx.dst
+                ctx.retarget(row)
                 n += 1
     ledger = project.get("project_motor_grants")
     if isinstance(ledger, dict):
-        old_k, new_k = M._key(ctx.die, ctx.cfg), M._key(ctx.dst, ctx.cfg)
+        old_k, new_k = M._key(ctx.die, ctx.cfg), M._key(ctx.dst, ctx.new_cfg)
         if old_k in ledger:
             if new_k in ledger:
                 raise MoveBlocked(f"project {project.get('id')} already has a grant ledger row for '{ctx.new_key}'")
@@ -485,12 +612,12 @@ def _rewrite_snapshot(ctx: Ctx, snap: Any) -> int:
     n = 0
     machine = snap.get("machine") if isinstance(snap, dict) else None
     if isinstance(machine, dict) and ctx.is_pair(machine.get("die_name"), machine.get("config_name")):
-        machine["die_name"] = ctx.dst
+        ctx.retarget(machine, "die_name", "config_name")
         n += 1
     scope = snap.get("access_scope") if isinstance(snap, dict) else None
     if (isinstance(scope, dict) and scope.get("kind") == "catalog"
             and ctx.is_pair(scope.get("die"), scope.get("config"))):
-        scope["die"] = ctx.dst
+        ctx.retarget(scope)
         scope["grant_key"] = ctx.new_key
         n += 1
     return n
@@ -545,11 +672,12 @@ def step_projects(ctx: Ctx) -> None:
                 PS.mutate_project(pid, _edit)
                 ctx.undo.append(lambda pid=pid, before=before: PS.save_json(pid, "project.json", before))
                 ctx.after.append(lambda pid=pid: PS.append_audit(
-                    pid, ctx.actor or "system", "motor.move", "motor", ctx.old_key, {"to": ctx.new_key}))
+                    pid, ctx.actor or "system", "motor.rename" if ctx.renaming else "motor.move", "motor",
+                    ctx.old_key, {"to": ctx.new_key}))
         idx_raw = _read_bytes(index_path)
         idx = PS.load_index()
         motors = idx.get("motors") if isinstance(idx, dict) else None
-        old_k, new_k = M._key(ctx.die, ctx.cfg), M._key(ctx.dst, ctx.cfg)
+        old_k, new_k = M._key(ctx.die, ctx.cfg), M._key(ctx.dst, ctx.new_cfg)
         if isinstance(motors, dict) and old_k in motors:
             if new_k in motors:
                 raise MoveBlocked(f"the project motor index already has '{ctx.new_key}'")
@@ -557,7 +685,7 @@ def step_projects(ctx: Ctx) -> None:
             if not ctx.dry_run:
                 row = motors.pop(old_k)
                 if isinstance(row, dict):
-                    row["die"] = ctx.dst
+                    ctx.retarget(row)
                 motors[new_k] = row
                 ctx.backup(index_path, idx_raw)
                 PS.save_index(idx)
@@ -573,27 +701,33 @@ def _config_folder_move(ctx: Ctx, store: str, root: Path, old_dir: Path, new_dir
         ctx.manual.append({"store": store, "where": str(old_dir),
                            "change": "not copied: the records stay with the source configuration"})
         return
-    if new_dir.exists() and any(new_dir.iterdir()):
+    # two names can share one folder slug ("L90 a" / "L90_a"): then the records are rewritten in place
+    moving = _path_key(old_dir) != _path_key(new_dir)
+    if moving and new_dir.exists() and any(new_dir.iterdir()):
         raise MoveBlocked(f"{store} folder '{new_dir}' already exists")
     jsons = [p for p in sorted(old_dir.rglob("*.json")) if "files" not in p.relative_to(old_dir).parts]
     originals = {p.relative_to(old_dir): _read_bytes(p) for p in jsons}
-    ctx.add(store, old_dir, f"folder moves to '{new_dir}'")
+    ctx.add(store, old_dir, f"folder moves to '{new_dir}'" if moving else "records keep their folder")
+    field_name = "config field" if ctx.renaming else "die field"
     for rel, raw in originals.items():
         try:
             doc = json.loads((raw or b"{}").decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             continue
-        if walk_replace(doc, ctx.die, ctx.dst):
-            ctx.add(store, old_dir / rel, "die field")
+        if _walk_records(ctx, doc):
+            ctx.add(store, old_dir / rel, field_name)
     if ctx.dry_run:
         return
     for rel, raw in originals.items():
         ctx.backup(old_dir / rel, raw)
-    new_dir.parent.mkdir(parents=True, exist_ok=True)
-    if new_dir.exists():
-        new_dir.rmdir()
-    old_dir.rename(new_dir)
-    ctx.undo.append(lambda: new_dir.rename(old_dir))
+    if moving:
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        if new_dir.exists():
+            new_dir.rmdir()
+        old_dir.rename(new_dir)
+        ctx.undo.append(lambda: new_dir.rename(old_dir))
+    else:
+        new_dir = old_dir
     from motor_ai_sim import json_store
     for rel, raw in originals.items():
         p = new_dir / rel
@@ -601,7 +735,7 @@ def _config_folder_move(ctx: Ctx, store: str, root: Path, old_dir: Path, new_dir
             doc = json.loads((raw or b"{}").decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             continue
-        if walk_replace(doc, ctx.die, ctx.dst):
+        if _walk_records(ctx, doc):
             json_store.atomic_write_json(p, doc)
             ctx.undo.append(lambda p=p, b=raw: _restore_bytes(p, b))
     if audit is not None:
@@ -617,9 +751,9 @@ def step_production(ctx: Ctx) -> None:
     slug = PR._safe_slug
     stamp = datetime.now().isoformat(timespec="seconds")
     _config_folder_move(ctx, "production", root, root / slug(ctx.die) / slug(ctx.cfg),
-                        root / slug(ctx.dst) / slug(ctx.cfg),
-                        lambda: PR.append_audit(ctx.dst, ctx.cfg, {
-                            "action": "config.move", "from": ctx.old_key, "to": ctx.new_key,
+                        root / slug(ctx.dst) / slug(ctx.new_cfg),
+                        lambda: PR.append_audit(ctx.dst, ctx.new_cfg, {
+                            "action": f"config.{ctx.mode}", "from": ctx.old_key, "to": ctx.new_key,
                             "actor": ctx.actor or "system", "time": stamp}))
 
 
@@ -632,9 +766,9 @@ def step_motor_tests(ctx: Ctx) -> None:
         return
     stamp = datetime.now().isoformat(timespec="seconds")
     _config_folder_move(ctx, "motor_tests", root, root / slug(ctx.die) / slug(ctx.cfg),
-                        root / slug(ctx.dst) / slug(ctx.cfg),
-                        lambda: MT.append_audit(ctx.dst, ctx.cfg, {
-                            "action": "config.move", "from": ctx.old_key, "to": ctx.new_key,
+                        root / slug(ctx.dst) / slug(ctx.new_cfg),
+                        lambda: MT.append_audit(ctx.dst, ctx.new_cfg, {
+                            "action": f"config.{ctx.mode}", "from": ctx.old_key, "to": ctx.new_key,
                             "who": ctx.actor or "system", "time": stamp}))
 
 
@@ -645,7 +779,7 @@ def step_cad(ctx: Ctx) -> None:
         root = Path(str(model3d.cad_root()))
     except Exception:                                       # noqa: BLE001
         return
-    old_dir, new_dir = root / ctx.die / ctx.cfg, root / ctx.dst / ctx.cfg
+    old_dir, new_dir = root / ctx.die / ctx.cfg, root / ctx.dst / ctx.new_cfg
     if old_dir.is_dir():
         if ctx.copy:
             ctx.manual.append({"store": "cad_models", "where": str(old_dir),
@@ -668,7 +802,7 @@ def step_cad(ctx: Ctx) -> None:
                         doc = json.loads((raw or b"{}").decode("utf-8"))
                     except (ValueError, UnicodeDecodeError):
                         continue
-                    if walk_replace(doc, ctx.die, ctx.dst):
+                    if _walk_records(ctx, doc):
                         json_store.atomic_write_json(new_dir / rel, doc)
                         ctx.undo.append(lambda p=new_dir / rel, b=raw: _restore_bytes(p, b))
     if ctx.copy:
@@ -680,10 +814,10 @@ def step_cad(ctx: Ctx) -> None:
         if not ctx.dry_run:
             raw = _read_bytes(old_p)
             ctx.backup(old_p, raw)
-            rec = dict(rec, die=ctx.dst)
+            rec = dict(rec, die=ctx.dst, config=ctx.new_cfg)
             RQ._write(root, rec)
             old_p.unlink()
-            new_p = Path(RQ._path(root, ctx.dst, ctx.cfg))
+            new_p = Path(RQ._path(root, ctx.dst, ctx.new_cfg))
             ctx.undo.append(lambda a=old_p, b=raw, c=new_p: (_restore_bytes(a, b), _restore_bytes(c, None)))
 
 
@@ -711,7 +845,8 @@ def step_manual(ctx: Ctx) -> None:
         from motor_ai_sim import passport_store as PP
         d = PP.store_dir() / ctx.die / ctx.cfg
         if d.is_dir():
-            note("passports", d, f"{'copy' if ctx.copy else 'move'} the folder to '{PP.store_dir() / ctx.dst / ctx.cfg}'")
+            note("passports", d, f"{'copy' if ctx.copy else 'move'} the folder to "
+                                 f"'{PP.store_dir() / ctx.dst / ctx.new_cfg}'")
     except Exception:                                       # noqa: BLE001
         log.debug("config move: passport probe failed", exc_info=True)
     try:
@@ -719,7 +854,8 @@ def step_manual(ctx: Ctx) -> None:
         for root in S1.model_dirs():
             d = root / ctx.die / ctx.cfg
             if d.is_dir():
-                note("propeller_s1", d, f"{'copy' if ctx.copy else 'move'} the folder to '{root / ctx.dst / ctx.cfg}'")
+                note("propeller_s1", d, f"{'copy' if ctx.copy else 'move'} the folder to "
+                                        f"'{root / ctx.dst / ctx.new_cfg}'")
     except Exception:                                       # noqa: BLE001
         log.debug("config move: propeller S1 probe failed", exc_info=True)
 
@@ -730,7 +866,8 @@ def step_remove_source(ctx: Ctx) -> None:
     if ctx.copy:
         return
     src_file, src_runs = ctx.src_dir / f"{ctx.cfg}.yaml", _runs(ctx, ctx.src_dir)
-    ctx.add("catalog", src_file, f"source configuration removed from '{ctx.die}' (kept in the backup folder)")
+    ctx.add("catalog", src_file, f"old name '{ctx.cfg}' removed (kept in the backup folder)" if ctx.renaming
+            else f"source configuration removed from '{ctx.die}' (kept in the backup folder)")
     if ctx.dry_run:
         return
     keep = ctx.backup_dir / "source"
@@ -751,14 +888,128 @@ def step_remove_source(ctx: Ctx) -> None:
     ctx.undo.append(_undo)
 
 
+def step_cost_estimates(ctx: Ctx) -> None:
+    """Every project's live cost estimate (``<project>/cost_estimate/estimate.json``) names the motor it prices in
+    ``settings.target_motor``.  Its ``revision`` goes up with the rewrite: an editor holding the old revision gets
+    the usual conflict instead of saving the old name back.  The estimate's snapshots are frozen: not rewritten."""
+    if ctx.copy:
+        return
+    from motor_ai_sim import json_store
+    from motor_ai_sim.development import cost_estimate_store as CS
+    from motor_ai_sim.development import store as PS
+    try:
+        projects = PS.list_projects()
+    except Exception:                                       # noqa: BLE001 - no project store: nothing to do
+        return
+
+    def _m(doc: Any) -> int:
+        settings = doc.get("settings") if isinstance(doc, dict) else None
+        target = settings.get("target_motor") if isinstance(settings, dict) else None
+        if not (isinstance(target, dict) and ctx.is_pair(target.get("die"), target.get("config"))):
+            return 0
+        ctx.retarget(target)
+        try:
+            doc["revision"] = int(doc.get("revision") or 0) + 1
+        except (TypeError, ValueError):
+            pass
+        return 1
+    for project in projects:
+        pid = str(project.get("id") or "")
+        if not PS.valid_id(pid):
+            continue
+        try:
+            path = PS._file(pid, CS.ESTIMATE)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        with (_null_cm() if ctx.dry_run else json_store.lock_for(path)):
+            if _json_rewrite(ctx, "cost_estimate", path, _m, "target motor") and not ctx.dry_run:
+                ctx.after.append(lambda pid=pid: CS.audit(pid, ctx.actor or "system", "target_motor.follow",
+                                                          {"from": ctx.old_key, "to": ctx.new_key,
+                                                           "why": f"config.{ctx.mode}"}))
+
+
+def step_motor_revisions(ctx: Ctx) -> None:
+    """RENAME only: the product revision records (``<shared>/motor_revisions/revisions.json``) name their
+    configuration.  Each record of the pair gets the new name and a ``renamed`` line; a lineage title that is
+    still the automatic ``"<die> · <cfg>"`` follows; a revision whose snapshot still matched the live file is
+    re-snapshotted from the renamed file (only its ``name`` differs), so its integrity check keeps reading
+    "intact".  A frozen revision never gets here (``preflight``)."""
+    if not ctx.renaming or ctx.copy:
+        return
+    from motor_ai_sim import json_store
+    from motor_ai_sim import motor_revisions as MR
+    try:
+        path = MR._file()
+    except Exception:                                       # noqa: BLE001
+        return
+    if not path.is_file():
+        return
+    with (_null_cm() if ctx.dry_run else MR._lock()):
+        raw = _read_bytes(path)
+        try:
+            doc = json.loads((raw or b"{}").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return
+        lineages = doc.get("lineages") if isinstance(doc, dict) else None
+        hits = [(lin, rev) for lin in ((lineages or {}).values() if isinstance(lineages, dict) else [])
+                if isinstance(lin, dict)
+                for rev in (lin.get("revisions") or []) if isinstance(rev, dict)
+                and ctx.is_pair(rev.get("die"), rev.get("config"))]
+        if not hits:
+            return
+        src_file, dst_file = ctx.src_dir / f"{ctx.cfg}.yaml", ctx.dst_dir / f"{ctx.new_cfg}.yaml"
+        stamp = MR._now()
+        resnap = []
+        for lin, rev in hits:
+            if rev.get("frozen"):
+                raise MoveBlocked(f"'{ctx.old_key}' is a frozen product revision and keeps its name")
+            what = ["record names the new configuration"]
+            ctx.retarget(rev)
+            rev.setdefault("renamed", []).append({"from": ctx.old_key, "to": ctx.new_key, "at": stamp,
+                                                  "by": ctx.actor or "system"})
+            if lin.get("title") == MR._title(ctx.die, ctx.cfg):
+                lin["title"] = MR._title(ctx.dst, ctx.new_cfg)
+                what.append("lineage title")
+            snap = rev.get("snapshot") if isinstance(rev.get("snapshot"), dict) else None
+            sp = MR.root() / "snapshots" / str(lin.get("id") or "") / str(rev.get("rev") or "") / "config.yaml"
+            try:
+                intact = bool(snap and snap.get("config_sha256") and sp.is_file() and src_file.is_file()
+                              and MR._sha(src_file) == snap["config_sha256"])
+            except OSError:
+                intact = False
+            if intact:
+                resnap.append((rev, sp))
+                what.append("snapshot re-taken from the renamed file")
+            ctx.add("motor_revisions", f"{path} [{lin.get('id')} {MR.label(rev.get('rev'))}]", "; ".join(what))
+        if ctx.dry_run:
+            return
+        ctx.backup(path, raw)
+        for rev, sp in resnap:
+            sraw = _read_bytes(sp)
+            ctx.backup(sp, sraw)
+            shutil.copyfile(dst_file, sp)
+            ctx.undo.append(lambda sp=sp, b=sraw: _restore_bytes(sp, b))
+            rev["snapshot"] = dict(rev["snapshot"], config_sha256=MR._sha(sp), retaken_at=stamp,
+                                   retaken_for=f"rename from '{ctx.cfg}'")
+        json_store.atomic_write_json(path, doc)
+        ctx.undo.append(lambda: _restore_bytes(path, raw))
+
+
 LOCAL_STEPS = (step_files, step_fields, step_duty_results, step_context, step_workspace_memory,
                step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_projects, step_production, step_motor_tests, step_cad, step_manual)
+GLOBAL_STEPS = (step_grants, step_projects, step_cost_estimates, step_production, step_motor_tests,
+                step_motor_revisions, step_cad, step_manual)
 
 
-def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool) -> None:
-    """What refuses a move before any step looks at the stores (MoveBlocked = 409)."""
-    if not copy:
+def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool, new_cfg: str = "",
+              glob_scope: bool = True) -> None:
+    """What refuses a move / rename before any step looks at the stores (MoveBlocked = 409)."""
+    renaming = bool(new_cfg) and new_cfg != cfg
+    if renaming:
+        _refuse_revision_rename(die, cfg, glob_scope)
+    elif not copy:
         from fastapi import HTTPException
         from motor_ai_sim import motor_revisions as MR
         try:
@@ -787,12 +1038,39 @@ def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool) -> None:
                               "wait for them or stop them first")
 
 
+def _refuse_revision_rename(die: str, cfg: str, glob_scope: bool) -> None:
+    """A rename and the product revision records: a FROZEN revision (replaced by a newer one) is read-only for
+    good and keeps its name; the working revision follows (``step_motor_revisions``) - but only in the shared
+    catalog's scope, the one the records describe (a workspace-only rename refuses, as before 2026-11-02)."""
+    from motor_ai_sim import motor_revisions as MR
+    try:
+        hit = MR.find(die, cfg) if MR._has_store() else None
+    except Exception:                                       # noqa: BLE001 - unreadable records: refuse, never guess
+        raise MoveBlocked(f"the product revision records could not be read; '{die}/{cfg}' is not renamed")
+    if hit is None:
+        return
+    lin, rev = hit
+    name = f"{MR.label(rev.get('rev'))} of {lin.get('title') or lin.get('id')}"
+    if rev.get("frozen"):
+        cur = (lin.get("revisions") or [{}])[-1]
+        raise MoveBlocked(f"'{die} / {cfg}' is {name}, read-only because {MR.label(cur.get('rev'))} replaced it, "
+                          "and keeps its name")
+    if not glob_scope:
+        raise MoveBlocked(f"'{die} / {cfg}' is {name} and keeps its name in a workspace copy; "
+                          "an admin renames it in the shared catalog")
+
+
 def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path, dry_run: bool,
-        copy: bool, glob_scope: bool, actor: str = "") -> Dict[str, Any]:
-    """Move (or copy) ``die/cfg`` to ``dst/cfg`` everywhere, or (``dry_run``) list where.  All or nothing."""
-    preflight(fam, die, cfg, dst, copy=copy)
+        copy: bool, glob_scope: bool, actor: str = "", new_cfg: str = "",
+        runs_fallback: Optional[Path] = None) -> Dict[str, Any]:
+    """Move (or copy) ``die/cfg`` to ``dst/cfg`` - or, with ``new_cfg`` and ``dst == die``, RENAME it to
+    ``die/new_cfg`` - everywhere, or (``dry_run``) list where.  All or nothing."""
+    if new_cfg and new_cfg != cfg and copy:
+        raise ValueError("a copy keeps the configuration name")
+    preflight(fam, die, cfg, dst, copy=copy, new_cfg=new_cfg, glob_scope=glob_scope)
     ctx = Ctx(fam=fam, die=die, cfg=cfg, dst=dst, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run,
-              copy=copy, glob_scope=glob_scope, ws_roots=workspace_roots(fam, glob_scope), actor=actor)
+              copy=copy, glob_scope=glob_scope, ws_roots=workspace_roots(fam, glob_scope), actor=actor,
+              new_cfg=new_cfg, runs_fallback=runs_fallback)
     if not dry_run:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         ctx.backup_dir = src_dir.parent.parent / ".config_moves" / f"{stamp} {die}~{cfg}"
@@ -811,7 +1089,7 @@ def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path,
             except Exception as uexc:                       # noqa: BLE001
                 failures.append(repr(uexc))
         log.error("config %s '%s/%s' -> '%s' FAILED in %s and was rolled back (%s)%s",
-                  "copy" if copy else "move", die, cfg, dst,
+                  ctx.mode, die, cfg, ctx.new_key,
                   getattr(steps[done], "__name__", "?") if done < len(steps) else "?", exc,
                   f"; rollback problems: {failures}" if failures else "")
         if failures:
@@ -835,16 +1113,17 @@ def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path,
                 log.warning("config copy: autolink failed", exc_info=True)
         try:
             from motor_ai_sim import admin_audit
-            admin_audit.record(actor or "system", "config.copy" if copy else "config.move", f"{die}/{cfg}",
-                               details={"to": f"{dst}/{cfg}", "stores": sorted({c["store"] for c in ctx.changes}),
+            admin_audit.record(actor or "system", f"config.{ctx.mode}", f"{die}/{cfg}",
+                               details={"to": ctx.new_key, "stores": sorted({c["store"] for c in ctx.changes}),
                                         "changes": len(ctx.changes), "manual": len(ctx.manual),
                                         "backup": str(ctx.backup_dir)})
         except Exception:                                   # noqa: BLE001
             log.warning("config move: audit record failed", exc_info=True)
         log.info("configuration '%s/%s' %s to '%s' (%d change(s), %d manual, backup %s)", die, cfg,
-                 "copied" if copy else "moved", dst, len(ctx.changes), len(ctx.manual), ctx.backup_dir)
-    return {"ok": True, "mode": "copy" if copy else "move", "dry_run": dry_run,
-            "from": {"die": die, "config": cfg}, "to": {"die": dst, "config": cfg},
+                 {"copy": "copied", "rename": "renamed", "move": "moved"}[ctx.mode], ctx.new_key,
+                 len(ctx.changes), len(ctx.manual), ctx.backup_dir)
+    return {"ok": True, "mode": ctx.mode, "dry_run": dry_run,
+            "from": {"die": die, "config": cfg}, "to": {"die": dst, "config": ctx.new_cfg},
             "scope": "shared catalog" if glob_scope else "workspace",
             "changes": ctx.changes, "manual": ctx.manual,
             "backup": str(ctx.backup_dir) if ctx.backup_dir else None}
@@ -855,7 +1134,7 @@ def _write_manifest(ctx: Ctx, *, status: str, error: Optional[str] = None) -> No
         return
     try:
         (ctx.backup_dir / "manifest.json").write_text(json.dumps({
-            "mode": "copy" if ctx.copy else "move", "from": ctx.old_key, "to": ctx.new_key,
+            "mode": ctx.mode, "from": ctx.old_key, "to": ctx.new_key,
             "actor": ctx.actor, "at": datetime.now().isoformat(timespec="seconds"), "status": status,
             "error": error, "changes": ctx.changes, "manual": ctx.manual, "backups": ctx.backups,
         }, indent=1, ensure_ascii=False, default=str), encoding="utf-8")

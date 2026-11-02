@@ -871,15 +871,18 @@ def config_rows(die: str, cfg: str) -> Dict[str, Any]:
     return out
 
 
-def move_config(die: str, cfg: str, new_die: str, *, copy: bool = False) -> bool:
+def move_config(die: str, cfg: str, new_die: str, *, copy: bool = False,
+                new_cfg: Optional[str] = None) -> bool:
     """Carry (or ``copy``) one configuration's rows - results and per-kind history - from
-    ``die`` to ``new_die``, same configuration name (``config_move.py``).
+    ``die/cfg`` to ``new_die/new_cfg`` (``config_move.py``: a move keeps the configuration
+    name, a rename keeps the die; ``new_cfg`` defaults to ``cfg``).
 
     Returns True when a row moved.  Refuses (``ValueError``) to merge into a configuration
-    that already has rows under ``new_die``; a write failure raises ``OSError``."""
+    that already has rows under the new pair; a write failure raises ``OSError``."""
     import copy as _copy
     die, cfg, new_die = str(die), str(cfg), str(new_die)
-    if die == new_die:
+    new_cfg = str(new_cfg) if new_cfg else cfg
+    if (die, cfg) == (new_die, new_cfg):
         return False
     with _store_write_lock():
         doc = read_all()
@@ -889,9 +892,9 @@ def move_config(die: str, cfg: str, new_die: str, *, copy: bool = False) -> bool
             src = ((node or {}).get(die) or {}).get(cfg) if isinstance(node, dict) else None
             if not src:
                 continue
-            if (node.get(new_die) or {}).get(cfg):
-                raise ValueError(f"{block} already has rows for '{new_die}/{cfg}'")
-            node.setdefault(new_die, {})[cfg] = _copy.deepcopy(src) if copy else src
+            if (node.get(new_die) or {}).get(new_cfg):
+                raise ValueError(f"{block} already has rows for '{new_die}/{new_cfg}'")
+            node.setdefault(new_die, {})[new_cfg] = _copy.deepcopy(src) if copy else src
             if not copy:
                 del node[die][cfg]
                 if not node[die]:

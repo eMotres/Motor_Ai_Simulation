@@ -786,14 +786,45 @@ const FamilyCatalog: React.FC<{
     onConfirm: () => mutate(`configuration '${cfg}' deleted`, () =>
       del(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`)),
   });
+  // Rename = one server transaction (config_move.py, rename mode): results, history, project links, customer
+  // access, cost estimate, production, tests, CAD and revision records follow the new name.  An admin sees the
+  // dry run first; any other writer renames in their own workspace through the PATCH (same transaction).
   const renameCfg = (die: string, cfg: string) => setAskText({
     title: `Rename configuration '${cfg}'`,
     label: 'New name', initial: cfg,
-    onSubmit: (name) => { if (name !== cfg) mutate(`configuration renamed to '${name}'`, () =>
-      fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })); },
+    hint: isAdmin ? 'Results, project links, customer access, production and revisions follow; you see every change first'
+                  : undefined,
+    okLabel: isAdmin ? 'Check' : undefined,
+    onSubmit: (raw) => {
+      const name = raw.trim();
+      if (!name || name === cfg) return;
+      if (!isAdmin) {
+        mutate(`configuration renamed to '${name}'`, () =>
+          fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+          }));
+        return;
+      }
+      void (async () => {
+        const url = `${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/rename`;
+        const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) };
+        let plan: MovePlan = {};
+        try {
+          const r = await fetch(`${url}?dry_run=1`, init);
+          plan = await r.json().catch(() => ({}));
+          if (!r.ok) { setMsg(`✗ ${(plan as { detail?: string }).detail ?? `HTTP ${r.status}`}`); return; }
+        } catch (e) { setMsg(`✗ checking the rename: ${e}`); return; }
+        setAskConfirm({
+          title: `Rename '${cfg}' to '${name}'?`,
+          body: configMoveSummary(plan),
+          confirmLabel: 'Rename',
+          onConfirm: () => mutate((d) => `configuration renamed to '${name}'`
+            + (d?.manual?.length ? ` - ${d.manual.length} deploy folder(s) to move by hand` : ''),
+            () => fetch(url, init)),
+        });
+      })();
+    },
   });
   const toggleDieLock = (d: Die) => {
     mutate(`die '${d.name}' ${d.locked ? 'unlocked' : 'locked'}`, () =>

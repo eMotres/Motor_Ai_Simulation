@@ -3029,49 +3029,107 @@ def _lname_fix(name: str, stack) -> Optional[str]:
 
 class ConfigRename(BaseModel):
     name: str
+    dry_run: bool = False           # list every change, write nothing (also ``?dry_run=1``; the POST route)
+
+
+def _config_rename(die: str, cfg: str, name: str, *, dry: bool, _w: dict) -> Dict[str, Any]:
+    """RENAME a configuration as one transaction (``config_move.run`` with ``new_cfg``): every store keyed by
+    ``"<die>/<cfg>"`` follows to ``"<die>/<name>"`` - the file and its ``runs/`` (``payload_file`` repointed),
+    the result ledgers, the active contexts, the workspace memories, the catalog cards and, for a shared-catalog
+    configuration, the account grants, the development projects (links, history, grant ledger, snapshots,
+    ``index.json``, the cost estimate's target motor), production, tests, CAD and the product revision records.
+
+    Scope: a verified admin (or the single-user install) renames in the layer the die lives in - the shared
+    catalog's die takes its accounts / projects / production along.  Any other writer renames in their OWN
+    workspace (a shared or published die is copied there first, its runs copied - never moved - from the other
+    layer): only that workspace's stores follow, the shared catalog's name stays what it is for everybody else."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    new = _check_name(name, "configuration")
+    _require_die_write(die, _w, cfg, "pair")
+    if new == "die":
+        raise HTTPException(422, detail="'die' is reserved")
+    if not _cfg_file(die, cfg).is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    if new == cfg:
+        return {"ok": True, "config": cfg, "mode": "rename", "dry_run": dry, "changes": [], "manual": [],
+                "from": {"die": die, "config": cfg}, "to": {"die": die, "config": cfg}, "backup": None}
+    if new.casefold() == cfg.casefold():
+        # the stores match names case-insensitively and a case-insensitive disk sees ONE file: a rename that
+        # only changes letter case would collide with itself
+        raise HTTPException(422, detail=(
+            f"'{new}' differs from '{cfg}' only in letter case; rename it to another name first, then to '{new}'"))
+    runs_fallback: Optional[Path] = None
+    if not _ws_layering() or _w.get("is_admin"):
+        if _ws_layering() and not _WS.is_verified_admin_request():
+            raise HTTPException(403, detail="only a verified signed-in admin may rename a shared configuration")
+        src_dir = _die_dir(die)
+        glob_scope = True
+        if _ws_layering():
+            layer = _classify_die_dir(src_dir)[0]
+            if layer == _WS.LAYER_PUBLISHED:
+                raise HTTPException(409, detail=(
+                    f"'{die}' is a published community die; its publisher renames it in their own workspace"))
+            glob_scope = layer == _WS.LAYER_SHARED
+    else:
+        if dry:
+            raise HTTPException(403, detail="the rename plan (dry run) is an admin action")
+        # a workspace copy never renames what a product revision record names (before the copy is made)
+        from motor_ai_sim import motor_revisions as _mr
+        _mr.refuse_rename_config(die, cfg)
+        src_dir = _ensure_writable_die(die)        # copy-on-write: the rename happens in the caller's workspace
+        glob_scope = False
+        _s = _src_die_dir(die)
+        if _s is not None and Path(str(_s)) != src_dir and (Path(str(_s)) / "runs" / cfg).is_dir():
+            runs_fallback = Path(str(_s)) / "runs" / cfg
+    if not (src_dir / f"{cfg}.yaml").is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    for p in sorted(src_dir.glob("*.yaml")):
+        if p.name != "die.yaml" and p.stem != cfg and p.stem.casefold() == new.casefold():
+            raise HTTPException(409, detail=f"configuration '{p.stem}' already exists under die '{die}'")
+    import sys as _sys
+    from motor_ai_sim import config_move as _cm
+    from motor_ai_sim.admin_audit import actor_of
+    try:
+        out = _cm.run(_sys.modules[__name__], die, cfg, die, src_dir=src_dir, dst_dir=src_dir, dry_run=dry,
+                      copy=False, glob_scope=glob_scope, actor=actor_of(_w.get("user")), new_cfg=new,
+                      runs_fallback=runs_fallback)
+    except _cm.MoveBlocked as exc:
+        raise HTTPException(409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("family: rename of '%s/%s' -> '%s' failed; rolled back", die, cfg, new)
+        bad = getattr(exc, "rollback_failures", None)
+        raise HTTPException(500, detail=(
+            f"the rename of '{die}/{cfg}' to '{new}' failed ({type(exc).__name__}: {exc}) and "
+            + (f"the rollback was INCOMPLETE ({'; '.join(bad)}) - see the backup folder under .config_moves"
+               if bad else "was rolled back; nothing was changed")))
+    out["config"] = new                            # what the PATCH always answered
+    return out
+
+
+@router.post("/config/{die}/{cfg}/rename")
+def rename_config_safe(die: str, cfg: str, req: ConfigRename, dry_run: bool = False,
+                       _w: dict = Depends(require_catalog_write)):
+    """RENAME a configuration - and everything keyed by ``"<die>/<cfg>"`` (``config_move.py``, rename mode).
+
+    Admin only, one transaction: every rewritten file is backed up under ``.config_moves/`` first, a failure
+    undoes the steps already done, a finished rename writes a ``config.rename`` admin-audit entry.  ``dry_run``
+    (body or ``?dry_run=1``) writes nothing and answers the same document: ``changes`` (every store and place)
+    and ``manual`` (deploy-managed folders to move by hand).  409 when the die already has a configuration of
+    that name (letter case ignored), a frozen product revision would be renamed, or a job is running on it."""
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="renaming a catalog configuration is an admin action")
+    return _config_rename(die, cfg, req.name, dry=bool(dry_run or req.dry_run), _w=_w)
 
 
 @router.patch("/config/{die}/{cfg}")
 def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(require_catalog_write)):
-    """Rename a configuration (its file moves with it; duties ride along)."""
-    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    new = _check_name(req.name, "configuration")
-    _require_die_write(die, _w, cfg, "pair")
-    if new == "die":
-        raise HTTPException(422, detail="'die' is reserved")
-    src = _cfg_file(die, cfg)
-    if not src.is_file():
-        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
-    if new == cfg:
-        return {"ok": True, "config": cfg}
-    from motor_ai_sim import motor_revisions as _mr
-    _mr.refuse_rename_config(die, cfg)     # the revision record names the configuration
-    # Copy-on-write BEFORE anything is unlinked or moved: a rename inside a
-    # published or shared die happens on this workspace's own copy of it.
-    _wdir = _ensure_writable_die(die)
-    src = _wdir / src.name
-    dst = _wdir / f"{new}.yaml"
-    if dst.exists():
-        raise HTTPException(409, detail=f"configuration '{new}' already exists "
-                                        f"under die '{die}'")
-    c = _load_yaml(src, "configuration")
-    c["name"] = new
-    # The stored-run sidecars live under runs/<configuration>/ — move the
-    # folder and repoint every duty's `payload_file`, or the copies would
-    # dangle and the PWM chips would open nothing.
-    _refile_config_runs(die, c, cfg, new, copy=False)
-    _save_yaml(dst, c)
-    src.unlink()
-    # Keep the active context pointing at the renamed configuration (same
-    # pattern as the upsert_duty auto-rename) — a stale context 404s inside
-    # geometry_lock_check and silently drops the config lock.
-    ctx = _read_ctx() or {}
-    if ctx.get("die") == die and ctx.get("config") == cfg:
-        import json as _json
-        ctx["config"] = new
-        _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
-    log.info("family: configuration '%s/%s' renamed to '%s'", die, cfg, new)
-    return {"ok": True, "config": new}
+    """Rename a configuration.  The SAME transaction as ``POST .../rename`` (2026-11-02: this route used to move
+    only the file, ``runs/``, the duties and the active context, orphaning the grants, projects, results,
+    production ... keyed by the old pair); an admin renames in the catalog, any other writer in their own
+    workspace.  No dry run here: the plan is the POST route's (admin)."""
+    return _config_rename(die, cfg, req.name, dry=False, _w=_w)
 
 
 class DieDuplicate(BaseModel):

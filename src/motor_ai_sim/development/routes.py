@@ -528,8 +528,11 @@ async def update_project(request: Request, project_id: str):
     allowed = {"title", "customer_org", "owner_engineer", "status", "notes"}
     if set(body) - allowed:
         raise HTTPException(status_code=422, detail="Unsupported project fields")
-    from motor_ai_sim.development import PROJECT_STATUSES
-    if "status" in body and (not (access.is_engineer(user) or role in ("owner", "engineer")) or body["status"] not in PROJECT_STATUSES):
+    from motor_ai_sim.development import status_change_allowed
+    if "status" in body and (not (access.is_engineer(user) or role in ("owner", "engineer"))
+                             or not status_change_allowed(access.is_engineer(user), str(project.get("status") or "spec"),
+                                                          str(body["status"]))):
+        # quote / prototype / production (and any change of a commercial or closed project) are MOTRES staff's
         raise HTTPException(status_code=403, detail="Engineer access required for status changes")
     if "notes" in body and not (access.is_engineer(user) or role in ("owner", "engineer")):
         raise HTTPException(status_code=403, detail="Engineer access required for notes")

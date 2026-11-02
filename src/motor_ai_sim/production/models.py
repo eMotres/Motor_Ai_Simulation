@@ -499,7 +499,27 @@ def normalize_bom_rows(raw: list, part_ids: set) -> list:
     return out
 
 
-def normalize_cost_row(raw: dict) -> dict:
+#: Currencies a cost line may carry (ISO 4217).  Amounts are never converted here: there is no exchange rate in the
+#: production module yet (stage-1 design work), so totals are kept PER CURRENCY and a mixed sheet is flagged.
+CURRENCIES = ("CNY", "EUR", "USD")
+DEFAULT_CURRENCY = "CNY"
+_CURRENCY_ALIASES = {"RMB": "CNY"}
+
+
+def normalize_currency(raw: Any, *, strict: bool = False) -> str:
+    """The ISO code of a cost line's currency; empty means ``DEFAULT_CURRENCY``.  ``strict`` (every save) refuses a code
+    outside ``CURRENCIES`` with ``ValueError``; a read keeps a stored legacy code as it is - it is then totalled on its
+    own, never added into another currency."""
+    code = str(raw or "").strip().upper()
+    code = _CURRENCY_ALIASES.get(code, code) or DEFAULT_CURRENCY
+    if code in CURRENCIES:
+        return code
+    if strict:
+        raise ValueError("currency must be one of %s, not %r" % (", ".join(CURRENCIES), str(raw)[:16]))
+    return code[:8]
+
+
+def normalize_cost_row(raw: dict, *, strict: bool = False) -> dict:
     if not isinstance(raw, dict):
         raw = {}
     pid = str(raw.get("part_id") or raw.get("bom_row_id") or "").strip()
@@ -510,7 +530,7 @@ def normalize_cost_row(raw: dict) -> dict:
             unit_price = float(price_raw)
         except (ValueError, TypeError):
             unit_price = None
-    currency = str(raw.get("currency") or "CNY").strip().upper() or "CNY"
+    currency = normalize_currency(raw.get("currency"), strict=strict)
     note = str(raw.get("note") or "").strip() or None
     return {
         "part_id": pid,
@@ -520,7 +540,7 @@ def normalize_cost_row(raw: dict) -> dict:
     }
 
 
-def normalize_extra_cost(raw: dict) -> dict:
+def normalize_extra_cost(raw: dict, *, strict: bool = False) -> dict:
     if not isinstance(raw, dict):
         raw = {}
     eid = str(raw.get("id") or _new_id("ec"))
@@ -529,19 +549,20 @@ def normalize_extra_cost(raw: dict) -> dict:
         amount = max(0.0, float(raw.get("amount") or 0.0))
     except (ValueError, TypeError):
         amount = 0.0
-    cur = str(raw.get("currency") or "CNY").strip().upper()
+    cur = normalize_currency(raw.get("currency"), strict=strict)
     note = raw.get("note")
     return {
         "id": eid,
         "name": name,
         "amount": amount,
         # a work line has the same columns as a BOM line (owner 2026-10-18): its own currency and note
-        "currency": cur if cur in ("CNY", "USD", "EUR") else "CNY",
+        "currency": cur,
         "note": str(note).strip()[:300] if note not in (None, "") else None,
     }
 
 
-def normalize_costs(raw: dict) -> dict:
+def normalize_costs(raw: dict, *, strict: bool = True) -> dict:
+    """A cost sheet as it is SAVED: every line's currency is checked (``ValueError`` on an unknown code)."""
     if not isinstance(raw, dict):
         raw = {}
     rows = raw.get("rows") or []
@@ -550,13 +571,13 @@ def normalize_costs(raw: dict) -> dict:
     norm_rows = []
     for r in rows:
         if isinstance(r, dict):
-            nr = normalize_cost_row(r)
+            nr = normalize_cost_row(r, strict=strict)
             if nr["part_id"]:
                 norm_rows.append(nr)
     extras = raw.get("extras") or []
     if not isinstance(extras, list):
         extras = []
-    norm_extras = [normalize_extra_cost(e) for e in extras if isinstance(e, dict)]
+    norm_extras = [normalize_extra_cost(e, strict=strict) for e in extras if isinstance(e, dict)]
     try:
         margin_pct = max(0.0, min(99.99, float(raw.get("margin_pct") or 0.0)))
     except (ValueError, TypeError):
@@ -570,6 +591,10 @@ def normalize_costs(raw: dict) -> dict:
 
 def compute_cost_summary(bom_rows: list[dict], cost_rows: list[dict], extras: list[dict],
                          margin_pct: float, order_quantity: int, parts: Optional[list[dict]] = None) -> dict:
+    """Totals of a cost sheet, PER CURRENCY: CNY, EUR and USD are never added into one number (there is no exchange rate
+    here).  All lines in one currency: the flat totals as before (+ ``currency``, ``mixed_currency: False`` and a one-entry
+    ``by_currency``).  Several currencies: ``mixed_currency: True``, the flat money totals ``None`` and the amounts in
+    ``by_currency`` only."""
     order_quantity = max(0, int(order_quantity or 0))
     try:
         margin_pct = max(0.0, min(99.99, float(margin_pct or 0.0)))
@@ -582,7 +607,8 @@ def compute_cost_summary(bom_rows: list[dict], cost_rows: list[dict], extras: li
         assembly_part_ids = {p["id"] for p in parts if isinstance(p, dict) and p.get("kind") == "assembly"}
 
     missing_prices_count = 0
-    parts_subtotal = 0.0
+    parts_by: dict[str, float] = {}
+    extra_by: dict[str, float] = {}
 
     for br in bom_rows:
         pid = br.get("part_id")
@@ -592,36 +618,60 @@ def compute_cost_summary(bom_rows: list[dict], cost_rows: list[dict], extras: li
         if crow is None or crow.get("unit_price") is None:
             missing_prices_count += 1
         else:
-            parts_subtotal += float(crow["unit_price"])
+            cur = normalize_currency(crow.get("currency"))
+            parts_by[cur] = parts_by.get(cur, 0.0) + float(crow["unit_price"])
 
-    extra_subtotal = sum(float(e.get("amount") or 0.0) for e in extras if isinstance(e, dict))
-    cost_per_motor = parts_subtotal + extra_subtotal
+    for e in extras:
+        if isinstance(e, dict):
+            cur = normalize_currency(e.get("currency"))
+            extra_by[cur] = extra_by.get(cur, 0.0) + float(e.get("amount") or 0.0)
+
+    order = {c: i for i, c in enumerate(CURRENCIES)}
+    currencies = sorted(set(parts_by) | set(extra_by), key=lambda c: (order.get(c, len(order)), c)) or [DEFAULT_CURRENCY]
     price_factor = 1.0 - (margin_pct / 100.0)
-    price_per_motor = (cost_per_motor / price_factor) if price_factor > 0 else cost_per_motor
-
-    order_parts_total = parts_subtotal * order_quantity
-    order_extra_total = extra_subtotal * order_quantity
-    order_cost_total = cost_per_motor * order_quantity
-    order_price_total = price_per_motor * order_quantity
+    by_currency = []
+    for cur in currencies:
+        parts_subtotal = parts_by.get(cur, 0.0)
+        extra_subtotal = extra_by.get(cur, 0.0)
+        cost_per_motor = parts_subtotal + extra_subtotal
+        price_per_motor = (cost_per_motor / price_factor) if price_factor > 0 else cost_per_motor
+        by_currency.append({
+            "currency": cur,
+            "parts_subtotal": round(parts_subtotal, 2),
+            "extra_subtotal": round(extra_subtotal, 2),
+            "cost_per_motor": round(cost_per_motor, 2),
+            "price_per_motor": round(price_per_motor, 2),
+            "order_parts_total": round(parts_subtotal * order_quantity, 2),
+            "order_extra_total": round(extra_subtotal * order_quantity, 2),
+            "order_cost_total": round(cost_per_motor * order_quantity, 2),
+            "order_price_total": round(price_per_motor * order_quantity, 2),
+        })
+    mixed = len(by_currency) > 1
 
     warnings = []
     if missing_prices_count > 0:
         warnings.append(f"{missing_prices_count} BOM item(s) have missing prices; parts subtotal is incomplete.")
+    if mixed:
+        warnings.append("Prices are in several currencies (%s); totals are per currency and never added together."
+                        % ", ".join(currencies))
 
-    return {
-        "parts_subtotal": round(parts_subtotal, 2),
-        "extra_subtotal": round(extra_subtotal, 2),
-        "cost_per_motor": round(cost_per_motor, 2),
+    money_keys = ("parts_subtotal", "extra_subtotal", "cost_per_motor", "price_per_motor", "order_parts_total",
+                  "order_extra_total", "order_cost_total", "order_price_total")
+    out = {k: (None if mixed else by_currency[0][k]) for k in money_keys}
+    out.update({
         "margin_pct": round(margin_pct, 2),
-        "price_per_motor": round(price_per_motor, 2),
         "order_quantity": order_quantity,
-        "order_parts_total": round(order_parts_total, 2),
-        "order_extra_total": round(order_extra_total, 2),
-        "order_cost_total": round(order_cost_total, 2),
-        "order_price_total": round(order_price_total, 2),
         "missing_prices_count": missing_prices_count,
         "warnings": warnings,
-    }
+        "currency": None if mixed else by_currency[0]["currency"],
+        "mixed_currency": mixed,
+        "by_currency": by_currency,
+    })
+    # the documented key order (cost lines first, then margin and price) for readers of the JSON
+    keys = ("parts_subtotal", "extra_subtotal", "cost_per_motor", "margin_pct", "price_per_motor", "order_quantity",
+            "order_parts_total", "order_extra_total", "order_cost_total", "order_price_total", "missing_prices_count",
+            "warnings", "currency", "mixed_currency", "by_currency")
+    return {k: out[k] for k in keys}
 
 
 def normalize_process_section(raw: dict, section_id: Optional[str] = None) -> dict:

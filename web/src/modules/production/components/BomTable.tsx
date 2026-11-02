@@ -41,6 +41,7 @@ import {
   buildAssemblyTree,
   calcCostSummary,
   canEditCosts,
+  canViewPrice,
   canViewCosts,
   currencyOptions,
   DEFAULT_CURRENCY,
@@ -161,6 +162,8 @@ const BomTable: React.FC<BomTableProps> = ({
   const tooling = ctx.list === 'tooling';
   const hasCostAccess = canViewCosts(ctx.role, shareCostsWithOem) || rows.some((r) => r.unit_price !== undefined);
   const canEdit = ctx.canEdit && canEditCosts(ctx.role);
+  // the margin and price rows: the factory sees the costs (when shared) but never our margin or selling price
+  const showPrice = canViewPrice(ctx.role);
 
   const [draftRows, setDraftRows] = useState<BomRow[]>(rows);
   const [costRows, setCostRows] = useState<CostRow[]>([]);
@@ -331,7 +334,7 @@ const BomTable: React.FC<BomTableProps> = ({
       if (!init) return r.unit_price !== null || (r.note && r.note.trim() !== '');
       return init.unit_price !== r.unit_price || init.currency !== r.currency || (init.note || '') !== (r.note || '');
     });
-    const marginChanged = initialCosts ? initialCosts.margin_pct !== marginPct : marginPct !== 0;
+    const marginChanged = initialCosts ? (initialCosts.margin_pct ?? 0) !== marginPct : marginPct !== 0;
     const extrasChanged = initialCosts ? JSON.stringify(initialCosts.extras) !== JSON.stringify(extras) : extras.length > 0;
 
     return bomChanged || costsChanged || marginChanged || extrasChanged;
@@ -940,7 +943,7 @@ const BomTable: React.FC<BomTableProps> = ({
                 </TableRow>
 
                 {/* Margin % */}
-                <TableRow sx={{ bgcolor: 'var(--panel)' }}>
+                {showPrice && <TableRow sx={{ bgcolor: 'var(--panel)' }}>
                   <TableCell colSpan={9} sx={{ color: 'var(--text-2)', pl: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       <span>{t('costs.marginPct')}</span>
@@ -965,10 +968,10 @@ const BomTable: React.FC<BomTableProps> = ({
                   </TableCell>
                   <TableCell align="right" sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   <TableCell colSpan={4} sx={{ color: 'var(--text-4)' }}>—</TableCell>
-                </TableRow>
+                </TableRow>}
 
                 {/* Price Per Motor */}
-                <TableRow sx={{ bgcolor: 'rgba(52, 211, 153, 0.08)' }}>
+                {showPrice && <TableRow sx={{ bgcolor: 'rgba(52, 211, 153, 0.08)' }}>
                   <TableCell colSpan={9} sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399', pl: 2 }}>
                     {t('costs.pricePerMotor')}
                   </TableCell>
@@ -980,7 +983,7 @@ const BomTable: React.FC<BomTableProps> = ({
                   </TableCell>
                   <TableCell sx={{ fontWeight: 700, color: '#34d399' }}>{summaryCurrencies}</TableCell>
                   <TableCell colSpan={3} sx={{ color: 'var(--text-4)' }}>—</TableCell>
-                </TableRow>
+                </TableRow>}
               </>
             )}
           </TableBody>

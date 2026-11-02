@@ -304,7 +304,9 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     # the solves whose inputs they are
     ("GET",    "/api/panel_settings", "user"),
     ("PUT",    "/api/panel_settings", "user"),
-    # heavy compute a signed-up engineering user may run on their own copy
+    # heavy compute a signed-up engineering user may run on their own copy.  The kernel's ``cost`` capability is the
+    # exception: admin-only like the Cost tab, refused in routes/kernel.py (refuse_admin_only) because this table gates
+    # by path, not by the capability named in the body.
     ("POST",   "/api/kernel/run", "user"),
     ("POST",   "/api/kernel/study", "user"),
     ("POST",   "/api/simulation/physics/fem_transient/cancel", "user"),

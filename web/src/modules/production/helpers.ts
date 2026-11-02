@@ -131,6 +131,10 @@ export const canViewCosts = (role: CallerRole, shareWithOem = false): boolean =>
 export const canEditCosts = (role: CallerRole): boolean =>
   role === 'owner' || role === 'engineer' || role === 'admin';
 
+/** Our margin and selling price: never the factory's (even with costs shared) nor a project viewer's (owner 2026-11-02). */
+export const canViewPrice = (role: CallerRole): boolean =>
+  role === 'owner' || role === 'engineer' || role === 'admin';
+
 // -- money ----------------------------------------------------------------------------------------------------------------
 
 /** Currency of a price line that names none. */

@@ -146,6 +146,33 @@ def test_staff_see_and_edit_a_customers_project_without_any_grant(api):
     assert pid not in [p["id"] for p in api("t-other", "GET", "/api/projects").json()["projects"]]
 
 
+def test_a_customer_owner_never_sets_a_commercial_status(api):
+    """Owner 2026-11-02: in a self-service project the owner is the customer; quote / prototype / production are MOTRES
+    staff's, and so is any change of a project already in a commercial status or closed.  The customer keeps the
+    engineering stages and may still close a project of his own before the commercial stage (the limit says
+    "close one to open another")."""
+    pid = _create(api).json()["id"]
+    patch = lambda who, status: api(who, "PATCH", f"/api/projects/{pid}", json={"status": status})
+    for status in ("quote", "prototype", "production"):
+        r = patch("t-customer", status)
+        assert r.status_code == 403, (status, r.text)
+        assert store.get_project(pid)["status"] == "spec"
+    assert patch("t-customer", "design").status_code == 200
+    assert patch("t-customer", "spec").status_code == 200
+    # staff move it to the commercial stage; from there the customer changes nothing (not back, not closed)
+    assert patch("t-eng", "quote").status_code == 200
+    for status in ("spec", "design", "prototype", "closed"):
+        assert patch("t-customer", status).status_code == 403, status
+    assert store.get_project(pid)["status"] == "quote"
+    assert patch("t-admin", "production").status_code == 200
+    assert patch("t-admin", "spec").status_code == 200
+    # closing his own pre-commercial project works; reopening it is staff's
+    assert patch("t-customer", "closed").status_code == 200
+    assert patch("t-customer", "spec").status_code == 403
+    assert patch("t-admin", "spec").status_code == 200
+    assert patch("t-customer", "unknown").status_code == 403
+
+
 def test_the_owner_fills_the_specification_and_others_cannot(api):
     pid = _create(api).json()["id"]
     spec = api("t-customer", "GET", f"/api/projects/{pid}/spec").json()

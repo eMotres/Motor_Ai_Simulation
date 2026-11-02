@@ -17,10 +17,12 @@ import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import {
-  blocksHeight, columnsFor, loadSeriesOptions, pickQuantity, quantitySeries, summary, tableBlocks, testsOfKind, unitLabel,
-  type TableBlock,
+  blocksHeight, columnsFor, computeProgress, loadSeriesOptions, missingActions, pickQuantity, quantitySeries, summary,
+  tableBlocks, testsOfKind, unitLabel, type TableBlock,
 } from '../tableModel';
-import { TEST_KINDS, type CompareRow, type TestCompare, type TestKind, type TestRecord, type TestsPayload } from '../types';
+import {
+  TEST_KINDS, type CompareRow, type CreateDutyAction, type TestCompare, type TestKind, type TestRecord, type TestsPayload,
+} from '../types';
 import SubTabs from '../../../components/common/SubTabs';
 import SeriesChart from './SeriesChart';
 import TestEditor from './TestEditor';
@@ -94,8 +96,9 @@ function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; 
   );
 }
 
-function CompareTable({ cmp, tips, canCompute, onComputed }: {
-  cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; onComputed: (msg: string) => void;
+function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
+  cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; busy: boolean;
+  onCompute: (actions: CreateDutyAction[]) => void;
 }) {
   const { t } = useTranslation('production');
   const [boxRef, wide] = useWide();
@@ -110,10 +113,11 @@ function CompareTable({ cmp, tips, canCompute, onComputed }: {
     return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
   };
   const hasLoadChart = loadSeriesOptions(cmp).length > 0;
-  const compute = async (row: CompareRow) => {
-    if (!row.action) return;
-    try { await testsApi.createDuty(row.action); onComputed(t('tests.computeDone')); }
-    catch (e) { onComputed(t('tests.errors.save', { reason: e instanceof Error ? e.message : String(e) })); }
+  const computeTip = (row: CompareRow) => {
+    const a = row.action;
+    const g = a?.body.duty.gamma_deg;
+    return [t('tests.computeTip'), g === undefined ? '' : t('tests.computeGamma', { gamma: g, source: a?.gamma_source ?? '' })]
+      .filter(Boolean).join(' · ');
   };
   return (
     <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
@@ -160,8 +164,9 @@ function CompareTable({ cmp, tips, canCompute, onComputed }: {
                         <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
                           {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
                           {canCompute && l.row.action && (
-                            <Tooltip title={t('tests.computeTip')}><Button size="small" sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: '20px', fontSize: 11 }}
-                              onClick={() => void compute(l.row)}>{t('tests.compute')}</Button></Tooltip>
+                            <Tooltip title={computeTip(l.row)}><span><Button size="small" disabled={busy}
+                              sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: '20px', fontSize: 11 }}
+                              onClick={() => onCompute([l.row.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
                           )}
                         </TableCell>
                       </TableRow>
@@ -232,6 +237,11 @@ export const TestsPanel: React.FC<{
   const [editing, setEditing] = useState<{ rec: TestRecord | null } | null>(null);
   const [toDelete, setToDelete] = useState<TestRecord | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [msgError, setMsgError] = useState(false);
+  // run ids of the solves "Compute it" queued; while any is open the panel polls the job list and refreshes when they end
+  const [pending, setPending] = useState<string[]>([]);
+  const unlisted = useRef(0);
+  const note = (text: string | null, isError = false) => { setMsg(text); setMsgError(isError); };
   const setSub = (v: TestKind) => { setSubState(v); writeSub(die, config, v); };
   const projectId = source.kind === 'project' ? source.projectId : '';
   const showAll = source.kind === 'project' ? !!source.showAll : false;
@@ -246,6 +256,40 @@ export const TestsPanel: React.FC<{
   }, [die, config, source.kind, projectId, showAll, t]);
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
 
+  const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  // "Compute it": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
+  const startCompute = async (actions: CreateDutyAction[]) => {
+    if (!actions.length || pending.length) return;
+    try {
+      const res = await testsApi.compute(die, config, actions);
+      const ids = res.jobs.filter((j) => j.state === 'queued' && j.run_id).map((j) => j.run_id as string);
+      const refused = res.jobs.find((j) => j.state === 'refused');
+      if (ids.length) { unlisted.current = 0; setPending(ids); }
+      if (refused) note(t('tests.errors.compute', { reason: refused.error ?? '' }), true);
+      else if (ids.length) note(t('tests.computing', { count: ids.length }));
+      else note(t('tests.computeNothing'));
+    } catch (e) { note(t('tests.errors.compute', { reason: reason(e) }), true); }
+  };
+  useEffect(() => {
+    if (!pending.length) return undefined;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const p = computeProgress(pending, await testsApi.jobs());
+        if (stop) return;
+        // a run the list no longer names (evicted) is not waited for for ever
+        unlisted.current = p.unlisted > 0 && p.unlisted === p.running ? unlisted.current + 1 : 0;
+        if (p.finished || unlisted.current >= 5) {
+          setPending([]);
+          await reload();
+          if (!stop) note(p.failed ? t('tests.errors.compute', { reason: p.error ?? '' }) : t('tests.computeFinished', { count: p.done }), p.failed > 0);
+        } else note(t('tests.computingProgress', { done: p.done, total: p.total }));
+      } catch { /* the next tick tries again */ }
+    };
+    const id = window.setInterval(() => void tick(), 4000);
+    return () => { stop = true; window.clearInterval(id); };
+  }, [pending, reload, t]);
+
   if (loading) return <CircularProgress size={18} />;
   if (err) return <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>;
   if (!data) return null;
@@ -255,13 +299,14 @@ export const TestsPanel: React.FC<{
 
   const setVisible = async (v: boolean) => {
     try { await testsApi.setVisibleToCustomer(die, config, v); await reload(); }
-    catch (e) { setMsg(t('tests.errors.save', { reason: e instanceof Error ? e.message : String(e) })); }
+    catch (e) { note(t('tests.errors.save', { reason: reason(e) }), true); }
   };
   const doDelete = async () => {
     if (!toDelete) return;
     try { await testsApi.remove(die, config, toDelete.id); setToDelete(null); await reload(); }
-    catch (e) { setMsg(t('tests.errors.save', { reason: e instanceof Error ? e.message : String(e) })); }
+    catch (e) { note(t('tests.errors.save', { reason: reason(e) }), true); }
   };
+  const canCompute = can.edit && isAdmin;
 
   return (
     <Box>
@@ -281,11 +326,15 @@ export const TestsPanel: React.FC<{
         )}
         {can.add && <Button size="small" variant="outlined" onClick={() => setEditing({ rec: null })}>{t('tests.add')}</Button>}
       </Box>
-      {msg && <Alert severity="info" onClose={() => setMsg(null)} sx={{ mb: 1, fontSize: 12 }}>{msg}</Alert>}
+      {msg && (
+        <Alert severity={msgError ? 'error' : 'info'} onClose={() => note(null)} sx={{ mb: 1, fontSize: 12 }}
+          icon={!msgError && pending.length ? <CircularProgress size={14} /> : undefined}>{msg}</Alert>
+      )}
       {list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
       {list.map((rec) => {
         const cmp = data.compare[rec.id];
         const s = summary(cmp);
+        const missing = canCompute ? missingActions(cmp) : [];
         const bits = [rec.date, rec.title, rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
         const cond = [rec.conditions?.ambient_c !== undefined ? `${rec.conditions.ambient_c} °C` : '',
           rec.conditions?.humidity_pct !== undefined ? `${rec.conditions.humidity_pct} % RH` : ''].filter(Boolean);
@@ -306,6 +355,12 @@ export const TestsPanel: React.FC<{
                   onClick={d && onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />;
               })}
               <Box sx={{ flex: 1 }} />
+              {missing.length > 0 && (
+                <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
+                  <span><Button size="small" variant="outlined" disabled={pending.length > 0} sx={{ fontSize: 11, py: 0, minHeight: 22 }}
+                    onClick={() => void startCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
+                </Tooltip>
+              )}
               {can.edit && (
                 <>
                   <Tooltip title={t('tests.edit')}><IconButton size="small" onClick={() => setEditing({ rec })}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
@@ -313,7 +368,7 @@ export const TestsPanel: React.FC<{
                 </>
               )}
             </Box>
-            <CompareTable cmp={cmp} tips={data.tips} canCompute={can.edit && isAdmin} onComputed={setMsg} />
+            <CompareTable cmp={cmp} tips={data.tips} canCompute={canCompute} busy={pending.length > 0} onCompute={(a) => void startCompute(a)} />
             <RawRows rec={rec} />
           </Paper>
         );

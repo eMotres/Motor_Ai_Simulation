@@ -274,7 +274,9 @@ def test_free_run_without_a_noload_duty_offers_to_create_one():
     first = out["groups"][0]["rows"][0]
     assert first["status"] == "no_model"
     body = first["action"]["body"]
-    assert body["die"] == "D" and body["duty"]["rpm"] == 5000 and body["duty"]["current_arms"] == 0
+    # 0.1 A (the duty API refuses 0; <= 0.5 A reads back as a no-load point), 0 deg, a test point
+    assert body["die"] == "D" and body["duty"]["rpm"] == 5000 and body["duty"]["current_arms"] == 0.1
+    assert body["duty"]["gamma_deg"] == 0.0 and body["duty"]["kind"] == "test"
 
 
 def test_load_rows_match_a_duty_or_offer_to_create_it():

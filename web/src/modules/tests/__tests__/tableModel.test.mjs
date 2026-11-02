@@ -158,3 +158,28 @@ t('number lists and the newest-first order of a sub-menu', () => {
     { id: 'c', kind: 'parameters', date: '2026-10-26' }];
   assert.deepEqual(M.testsOfKind(tests, 'parameters').map((x) => x.id), ['c', 'a']);
 });
+
+const act = (rpm, cur) => ({ kind: 'create_duty', body: { die: 'D', config: 'C',
+  duty: { name: `test ${rpm} rpm ${cur} A`, mode: 'motor', rpm, current_arms: cur, gamma_deg: 5, kind: 'test' } } });
+
+t('"Compute all missing": one action per point, rpm rounded to 10 and current to 0.5 A, in table order', () => {
+  const cmp = { test_id: 'x', kind: 'load', model_available: true, groups: [
+    { key: 'g1', label: 'g1', params: {}, rows: [row({ key: 'torque', status: 'no_model', action: act(1491, 13.4) }), row({ key: 'eff' })] },
+    { key: 'g2', label: 'g2', params: {}, rows: [row({ key: 'torque', status: 'no_model', action: act(1494, 13.3) })] },
+    { key: 'g3', label: 'g3', params: {}, rows: [row({ key: 'torque', status: 'no_model', action: act(2000, 13.4) })] },
+    { key: 'g4', label: 'g4', params: {}, rows: [row({ key: 'torque', status: 'no_model', action: act(1491, 13.9) })] }] };
+  assert.deepEqual(M.missingActions(cmp).map((a) => a.body.duty.name),
+    ['test 1491 rpm 13.4 A', 'test 2000 rpm 13.4 A', 'test 1491 rpm 13.9 A']);
+  assert.equal(M.actionKey(act(1491, 13.4)), M.actionKey(act(1494, 13.3)));
+  assert.deepEqual(M.missingActions(null), []);
+});
+
+t('compute progress from the job list: waits while queued / running / unlisted, reports failures', () => {
+  const jobs = [{ run_id: 'a', state: 'done' }, { run_id: 'b', state: 'running' }, { run_id: 'c', state: 'failed', error: 'boom' }];
+  const mid = M.computeProgress(['a', 'b', 'c', 'd'], jobs);
+  assert.deepEqual([mid.total, mid.done, mid.failed, mid.running, mid.unlisted, mid.finished], [4, 1, 1, 2, 1, false]);
+  assert.equal(mid.error, 'boom');
+  const end = M.computeProgress(['a', 'c'], jobs);
+  assert.deepEqual([end.done, end.failed, end.running, end.finished], [1, 1, 0, true]);
+  assert.equal(M.computeProgress([], jobs).finished, false);
+});

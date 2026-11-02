@@ -34,8 +34,23 @@ export interface TestRecord {
 
 export interface CreateDutyAction {
   kind: 'create_duty';
-  body: { die: string; config: string; duty: { name: string; mode: string; rpm: number; current_arms: number } };
+  /** where the current angle came from (EN), e.g. "duty 'rated' (100 A)" */
+  gamma_source?: string;
+  body: {
+    die: string; config: string;
+    duty: { name: string; mode: string; rpm: number; current_arms: number; gamma_deg?: number; kind?: string };
+  };
 }
+
+/** One row of `POST /api/motor-tests/{die}/{config}/compute`'s answer: the point and its queued solve. */
+export interface ComputeJob {
+  duty: string; run_id?: string; state: 'queued' | 'refused' | 'done'; position?: number; error?: string;
+  gamma_deg?: number; gamma_source?: string;
+}
+export interface ComputeResult { jobs: ComputeJob[]; skipped: Array<{ name: string; reason: string }> }
+
+/** A row of `GET /api/jobs` (only what the panel reads). */
+export interface JobRow { run_id: string; state: string; kind?: string; error?: string }
 
 export interface CompareRow {
   key: string; label: string; params: Record<string, unknown>; unit: string;

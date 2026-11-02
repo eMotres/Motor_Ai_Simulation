@@ -412,8 +412,14 @@
     "modelMissing": "No stored results for this configuration",
     "modelMissingTip": "Nothing to compare with: run and save the duties of this configuration first.",
     "compute": "Compute it",
-    "computeTip": "Adds this operating point as a duty of the configuration; run it in Simulation.",
-    "computeDone": "Duty added: run it in Simulation",
+    "computeTip": "Adds this point as a test duty and solves it (electromagnetic run, queued); the model value and the delta fill in when it finishes. Administrators only.",
+    "computeGamma": "current angle {gamma}° from {source}",
+    "computeAll": "Compute all missing ({count})",
+    "computeAllTip": "Adds the {count} missing points of this test as test duties and queues their solves (one per speed rounded to 10 rpm and current to 0.5 A). Administrators only.",
+    "computing": "Computing {count} point(s)…",
+    "computingProgress": "Computing… {done} of {total} done",
+    "computeFinished": "{count} point(s) computed",
+    "computeNothing": "Nothing to compute: the points are already in the configuration",
     "reload": "Refresh",
     "chart": {
       "measured": "Measured",
@@ -574,6 +580,7 @@
     "errors": {
       "load": "Could not load the tests: {reason}",
       "save": "Not saved: {reason}",
+      "compute": "Not computed: {reason}",
       "parse": "Line {line} not read: {text}"
     }
   }

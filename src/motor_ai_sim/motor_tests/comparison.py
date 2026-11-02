@@ -15,6 +15,7 @@ Shape (what the web and the report read)::
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 from motor_ai_sim.motor_tests import compare as C
@@ -65,14 +66,65 @@ def _scaled(value: Any, k: Optional[float]) -> Optional[float]:
     return None if v is None else (v if k is None else v * k)
 
 
+#: A no-load point is stored with this terminal current: the duty API refuses 0 A, and anything at or below
+#: ``model_source.NOLOAD_MAX_A`` is read back as a no-load point (the older bench duties carry 0.1 A the same way).
+NOLOAD_CURRENT_A = 0.1
+
+
+def gamma_for(model: Optional[Dict[str, Any]], current: float) -> tuple:
+    """``(gamma_deg, source)``: the current angle a new bench point is solved at.
+
+    In order, from the configuration's own stored operating data (nothing is invented):
+
+    1. a no-load point (<= 0.5 A) has no torque current, so 0 deg;
+    2. the stored duty NEAREST in current (log distance; the configuration's ordinary duties first, its test duties only
+       when it has no other) - the MTPA angle moves with the current, so the nearest point is the best copy;
+    3. the configuration's own ``simulation.gamma_deg`` / default-duty angle;
+    4. 0 deg.
+
+    ``source`` is a short EN phrase for the row tooltip."""
+    cur = num(current)
+    if cur is None or cur <= 0.5:
+        return 0.0, "no-load point"
+    duties = [d for d in (model or {}).get("duties") or []
+              if isinstance(d, dict) and num(d.get("gamma_deg")) is not None
+              and (num(d.get("current")) or 0) > 0.5]
+    ordinary = [d for d in duties if str(d.get("kind") or "") != "test"]
+    best, best_err = None, None
+    for d in (ordinary or duties):
+        err = abs(math.log(cur / float(d["current"])))
+        if best_err is None or err < best_err:
+            best, best_err = d, err
+    if best is not None:
+        return float(best["gamma_deg"]), "duty '%s' (%g A)" % (best.get("name"), float(best["current"]))
+    sim = num((model or {}).get("sim_gamma_deg"))
+    if sim is not None:
+        return float(sim), "the configuration's own angle"
+    return 0.0, "default 0 deg"
+
+
+def action_key(rpm: Any, current: Any) -> tuple:
+    """The point a bench row stands for, for de-duplication: rpm rounded to 10, current rounded to 0.5 A."""
+    n, i = num(rpm), num(current)
+    if n is None or i is None:
+        return (None, None)
+    return (int(round(n / 10.0)) * 10, round(round(i * 2.0) / 2.0, 1))
+
+
 def _create_duty(die: str, config: str, *, rpm: float, current: float, mode: str = "motor",
-                 name: Optional[str] = None) -> Dict[str, Any]:
-    """The body of ``POST /api/family/duty`` that adds the missing operating point (no solve; the engineer runs it)."""
-    nm = name or (f"test {int(round(rpm))} rpm" + (" no-load" if current <= 0.5 else f" {current:g} A"))
-    return {"kind": "create_duty", "body": {"die": die, "config": config,
-                                            # a bench point, not a product duty: never a preset or a public card row
-                                            "duty": {"name": nm[:60], "mode": mode, "rpm": round(float(rpm), 1),
-                                                     "current_arms": round(float(current), 2), "kind": "test"}}}
+                 name: Optional[str] = None, model: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The action that adds the missing operating point and solves it (``POST /api/motor-tests/{die}/{config}/compute``,
+    admin only).  ``body`` is the duty to create (``POST /api/family/duty``'s shape); ``gamma_deg`` comes from the
+    configuration's own stored duties (:func:`gamma_for`), ``gamma_source`` says where from."""
+    cur = float(current)
+    nm = name or (f"test {int(round(rpm))} rpm" + (" no-load" if cur <= 0.5 else f" {cur:g} A"))
+    gamma, src = gamma_for(model, cur)
+    return {"kind": "create_duty", "gamma_source": src,
+            "body": {"die": die, "config": config,
+                     # a bench point, not a product duty: never a preset or a public card row
+                     "duty": {"name": nm[:60], "mode": mode, "rpm": round(float(rpm), 1),
+                              "current_arms": round(max(cur, NOLOAD_CURRENT_A) if cur <= 0.5 else cur, 2),
+                              "gamma_deg": round(gamma, 2), "kind": "test"}}}
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +429,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     action = None
     if not refs and rows_in:
         top = max(float(r["rpm"]) for r in rows_in)
-        action = _create_duty(die, config, rpm=top, current=0.0, name=f"no-load {int(round(top))} rpm")
+        action = _create_duty(die, config, rpm=top, current=0.0, name=f"no-load {int(round(top))} rpm", model=model)
         groups.insert(0, _group("no_model", "No model point", [
             _row("no_noload", "no no-load duty in this configuration", "", None, None, status="no_model", action=action)]))
     return {"groups": groups, "fit": {"measured": fm, "model": fd}}
@@ -469,7 +521,7 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         if n is not None:
             series_pts.append(sp)
         if d is None:
-            act = (_create_duty(die, config, rpm=n, current=i) if (n and i) else None)
+            act = (_create_duty(die, config, rpm=n, current=i, model=model) if (n and i) else None)
             rows = [_row("torque", "Torque", "N·m", r.get("torque_nm"), None, tip="load", status="no_model", action=act)]
             if eff_meas is not None:
                 rows.append(_row("eff", "Efficiency", "%", eff_meas, None, tip="load", status="no_model"))

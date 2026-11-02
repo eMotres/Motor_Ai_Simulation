@@ -8,13 +8,15 @@ Production side (factory + our engineers; ``access.resolve``)::
     DELETE /api/motor-tests/{die}/{config}/tests/{test_id}     delete a test       (admin, production owner/engineer)
     PATCH  /api/motor-tests/{die}/{config}/settings            tests_visible_to_customer (admin, production owner/engineer)
     GET    /api/motor-tests/{die}/{config}/audit               the change log      (admin, production owner/engineer)
+    POST   /api/motor-tests/{die}/{config}/compute             "Compute it": add the missing bench points as TEST duties
+                                                               and queue their solve  (global admin only; compute.py)
 
 Project side (read-only, Development)::
 
     GET    /api/projects/{project_id}/motors/tests                       which linked motors have tests the caller may see
     GET    /api/projects/{project_id}/motors/tests?die=..&config=..      one motor's tests + comparison
 
-Every change is appended to ``audit.jsonl`` (who, when, action, the record before/after).  Nothing here solves.
+Every change is appended to ``audit.jsonl`` (who, when, action, the record before/after).  Only ``compute`` solves (queued).
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from motor_ai_sim.motor_tests import access as A
-from motor_ai_sim.motor_tests import comparison, model_source, models, store
+from motor_ai_sim.motor_tests import comparison, compute, model_source, models, store
 from motor_ai_sim.motor_tests.compare import TIPS
 
 router = APIRouter(prefix="/api/motor-tests", tags=["motor-tests"])
@@ -175,6 +177,32 @@ def get_audit(request: Request, die: str, config: str):
     ctx = A.resolve(request, die, config)
     A.require_edit(ctx)
     return {"audit": store.read_audit(die, config)}
+
+
+@router.post("/{die}/{config}/compute")
+async def compute_points(request: Request, die: str, config: str):
+    """"Compute it" (owner 2026-11-02): create the missing bench points as TEST duties of the configuration and queue
+    their solve.  Body ``{"actions": [<the compare table's action objects>]}``.  Global admin ONLY (a duty written here
+    lands in the shared catalog): production owners and engineers get 403.  Answers ``{"jobs": [{duty, run_id, state,
+    position | error}], "skipped": [...]}``; poll ``GET /api/jobs`` for the run ids, then reload the comparison."""
+    die, config = _names(die, config)
+    ctx = A.resolve(request, die, config)
+    if not ctx.get("admin"):
+        raise HTTPException(403, detail="Only an administrator can compute a model point.")
+    body = await _body(request)
+    actions = body.get("actions") if isinstance(body, dict) else None
+    if actions is None and isinstance(body, dict) and body.get("action") is not None:
+        actions = [body["action"]]
+    from motor_ai_sim.routes import family
+    w = family.require_catalog_write(request.headers.get("authorization"))
+    doc = family._load_yaml(family._cfg_file(die, config), "configuration")
+    points, skipped = compute.prepare(die, config, actions, model_source.collect(die, config), doc.get("duties") or [])
+    jobs = compute.create_and_queue(die, config, points, w) if points else []
+    if jobs:
+        store.append_audit(die, config, _entry(A.email(ctx["user"]), "compute", ",".join(j["duty"] for j in jobs)[:200],
+                                               {"after": {"jobs": [{"duty": j["duty"], "state": j.get("state")}
+                                                                   for j in jobs]}}))
+    return {"jobs": jobs, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------

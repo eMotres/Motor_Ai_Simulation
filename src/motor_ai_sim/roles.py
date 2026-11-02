@@ -115,8 +115,10 @@ WORKER_EXACT = ("/api/materials",)
 #: (``/die/{die}/duplicate``, ``/lock``, ``/audience`` ...) stay on the API.  The configuration move / copy
 #: (``POST /api/family/config/{die}/{cfg}/move``, ``config_move.py``) moves folders and ledgers of the shared catalog
 #: the same way, so it is the worker's too.
+#: The Tests "Compute it" (``POST /api/motor-tests/{die}/{config}/compute``) writes test duties into the shared catalog and
+#: queues their solve, so it is the worker's too (the rest of ``/api/motor-tests`` is read / write of its own store: API).
 WORKER_PATTERNS = (r"^/api/catalog/[^/]+/passport$", r"^/api/family/die/[^/]+$",
-                   r"^/api/family/config/[^/]+/[^/]+/move$")
+                   r"^/api/family/config/[^/]+/[^/]+/move$", r"^/api/motor-tests/[^/]+/[^/]+/compute$")
 #: Prefixes that stay on the API although they sit under a worker prefix (none today; the hook is here so a future
 #: carve-out is one line and a test, not an nginx regex edit).
 API_CARVE_OUTS: tuple = ()

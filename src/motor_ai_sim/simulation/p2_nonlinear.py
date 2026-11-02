@@ -752,8 +752,9 @@ class P2Nonlinear:
         """Cholesky solve of a frame plan's upper-triangle CSR (``fs`` a
         :class:`p2_frame_plan.FrameSystem`, ``data`` its values).
 
-        The analysis is redone only when ``fs`` is not the system this handle
-        last analysed (once per frame), through the ordering cache.  Raises
+        The analysis is redone only when ``fs``'s pattern is not the one this
+        handle last analysed (once per analysis window of frames), through
+        the ordering cache.  Raises
         :class:`PlanMismatch` — the caller then takes the SciPy path — when
         there is no Cholesky handle, a diagonal is not positive, or PARDISO
         fails (the handle is then dropped for the run, as in
@@ -767,13 +768,14 @@ class P2Nonlinear:
                         copy=False)
         b = s._check_b(U, rhs)
         s.iparm[11] = 0
+        pat = getattr(fs, "pattern", fs)    # frames of one window share it
         try:
-            if self._fs_analysed is not fs:
-                if fs.perm_key is None:
-                    fs.perm_key = _PermCache.key(2, fs.indptr, fs.indices)
-                if _perm_analyse(s, U, fs.perm_key):
+            if self._fs_analysed is not pat:
+                if pat.perm_key is None:
+                    pat.perm_key = _PermCache.key(2, fs.indptr, fs.indices)
+                if _perm_analyse(s, U, pat.perm_key):
                     self.spd_perm_hits += 1
-                self._fs_analysed = fs
+                self._fs_analysed = pat
                 if self._spd_pat is not None:
                     self._spd_pat.analysed = None
                 self.spd_analyses += 1

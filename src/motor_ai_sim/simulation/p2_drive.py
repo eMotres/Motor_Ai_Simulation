@@ -101,6 +101,7 @@ class P2Drive:
         self._plan_fs = None             # (Pro, free, FrameSystem)
         self._plan_const = None          # (FrameSystem, Msd, Sdt, data)
         self._plan_dead = None           # why the plan was switched off
+        self._plan_win = None            # (plan, member slip maps, systems)
         self.S_raw = None
         self.ed_ca = self.ed_cb = None
         self.pT = self.pQ = self.p_rep = self.p_mask = None
@@ -696,7 +697,7 @@ class P2Drive:
                 plan.M_rows, plan.M_cols = Mc.row.copy(), Mc.col.copy()
                 plan.K_data, plan.G_data = Kc.data.copy(), -G.data
                 self._plan = plan
-            fs = plan.frame(rr, sg)
+            fs = self._plan_window_member(plan, Pro, free, rr, sg)
             self._plan_fs = (Pro, free, fs)
         c = self._plan_const
         if c is not None and c[0] is fs and c[1] is Msd and c[2] is Sdt:
@@ -710,6 +711,46 @@ class P2Drive:
         data = fs.data(vals + [None] * (len(plan.fixed) - 4))
         self._plan_const = (fs, Msd, Sdt, data)
         return fs, data
+
+    def _plan_window_member(self, plan, Pro, free, rr, sg):
+        """This frame's system on the current analysis window, or on a new
+        window built for the shifts around it (``p2.shift_hint`` = (Pro, m,
+        step, projection), set by the frame loop; without it the window is
+        this frame alone).  Frames of one window share one PARDISO analysis."""
+        si = plan.slip_idx
+        w = self._plan_win
+        if w is not None and w[0] is plan:
+            for (r_, s_), fs in zip(w[1], w[2]):
+                if np.array_equal(r_, rr[si]) and np.array_equal(s_, sg[si]):
+                    return fs
+        maps = [(rr, sg)]
+        hint = getattr(self.p2, "shift_hint", None)
+        if _fp.WINDOW > 1 and hint is not None and hint[0] is Pro:
+            _m, _d, _proj = hint[1], hint[2], hint[3]
+            for sh in _fp.window_shifts(_m, _d, _fp.WINDOW):
+                if sh == _m:
+                    continue
+                P_s, out_s = _proj.build(sh)
+                if P_s.shape != Pro.shape:
+                    continue
+                keep = np.ones(P_s.shape[1], dtype=bool)
+                keep[np.asarray(out_s, dtype=np.int64)] = False
+                if not np.array_equal(np.flatnonzero(keep), free):
+                    continue
+                try:
+                    maps.append(_reduced_map(P_s, free))
+                except _PlanMismatch:
+                    continue
+        try:
+            systems = plan.window(maps)
+        except _PlanMismatch:
+            if len(maps) == 1:
+                raise
+            maps = maps[:1]
+            systems = plan.window(maps)
+        self._plan_win = (plan, [(m_[0][si], m_[1][si]) for m_ in maps],
+                          systems)
+        return systems[0]
 
     def _eddy_solve_plan(self, Pro, free, Ae, Ue, Msd, Sdt, rhs_e, cr, bn,
                          cn, maxit):

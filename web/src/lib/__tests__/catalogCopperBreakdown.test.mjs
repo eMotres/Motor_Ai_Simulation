@@ -18,5 +18,6 @@ test('invalid copper inputs are omitted instead of inventing a breakdown', () =>
 test('Configure copper tile presents the calculated breakdown in its tooltip', () => {
   const panel = readFileSync(new URL('../../components/compare/ConfiguratorPanel.tsx', import.meta.url), 'utf8');
   assert.match(panel, /catalogCopperBreakdown\(scaleKnobs\.I_A, result\.R_ohm, result\.P_cu_W\)/);
-  assert.match(panel, /goodHi=\{false\} tip=\{copperBreakdownTip\}/);
+  // + the PWM copper part line under a split PWM passport (owner 2026-11-02)
+  assert.match(panel, /goodHi=\{false\} tip=\{copperBreakdownTip \+ partTip\(partTile\.copper\)\}/);
 });

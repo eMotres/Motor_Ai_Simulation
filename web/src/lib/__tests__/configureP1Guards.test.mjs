@@ -36,6 +36,19 @@ test('Configure thermal attribution preserves Sine and includes PWM motor heat',
   assert.equal(H.configureMotorHeat('pwm', true, null, 12.5), null);
 });
 
+test('the PWM magnet part (split by part) is rotor heat; the rest of the extra stays on the stator', () => {
+  const pwm = H.configureMotorHeat('pwm', true, baseHeat, 12.5, 2.5);
+  assert.equal(pwm.stator_W, 9 + 10);
+  assert.equal(pwm.rotor_W, 2 + 2.5);
+  assert.equal(pwm.totalMotor_W, 23.5);                         // the same heat in total
+  assert.equal(pwm.thermalLosses.P_mag_W, 1 + 2.5);
+  assert.equal(pwm.thermalLosses.P_extra_W, 10);
+  // never more than the extra itself, never negative; Sine ignores it
+  assert.equal(H.configureMotorHeat('pwm', true, baseHeat, 1, 5).rotor_W, 3);
+  assert.equal(H.configureMotorHeat('pwm', true, baseHeat, 1, -5).rotor_W, 2);
+  assert.equal(H.configureMotorHeat('sine', true, baseHeat, 0, 5).rotor_W, 2);
+});
+
 test('loss model availability follows the model source precedence and withholds unknown totals', () => {
   assert.deepEqual(T.lossMapAvailability({}), { iron: false, copper: false, magnet: false, complete: false });
   assert.deepEqual(T.lossMapAvailability({ Pfe0_W: 2, Pmag0_W: 1, R0_ohm: 0.02, endWindFrac: 0.3 }),

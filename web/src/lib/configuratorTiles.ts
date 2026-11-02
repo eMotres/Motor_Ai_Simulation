@@ -7,7 +7,7 @@
 //   * PWM refused (outside the envelope, device limit, bus range ...): the tiles are "—".
 //   * PWM: the numbers read from the computed variant.
 // A refusal never inserts a block — it replaces values inside the tiles.
-import type { VariantReading } from './configuratorDrive';
+import type { PwmSplitState, VariantReading } from './configuratorDrive';
 
 export type DriveMode = 'sine' | 'pwm';
 
@@ -111,17 +111,63 @@ export function driveRowTiles(mode: DriveMode, drv: VariantReading | null, tjLim
   return tiles;
 }
 
-/** The extra motor loss the carrier adds over the sine point: 0 in Sine (a real zero),
- *  "—" when PWM is refused or the variant carries no value. */
-export function extraLossTile(mode: DriveMode, drv: VariantReading | null): DriveTileSpec {
-  const base = { id: EXTRA_LOSS_ID, labelKey: 'configureDrive.motorLoss', tipKey: 'configureDrive.motorLossTip',
-    unit: 'W', d: 0, goodHi: false };
+/** The WHOLE extra motor loss the carrier adds over the sine point [W] (all parts): 0 in Sine (a real zero),
+ *  null when PWM is refused or the variant carries no value.  What every total, efficiency and heat is built on. */
+export function pwmExtraW(mode: DriveMode, drv: VariantReading | null): number | null {
+  if (mode === 'sine') return 0;
+  return drv ? drv.motor_pwm_loss_W : null;
+}
+
+/** The PWM extra tile's name per machine (`pwmSplitState`): one number today; once the passport splits it by part
+ *  (owner 2026-11-02), iron / magnet / copper carry their own PWM part and this tile keeps only the remainder. */
+const EXTRA_LABEL: Record<PwmSplitState, { labelKey: string; tipKey: string }> = {
+  none: { labelKey: 'configureDrive.motorLoss', tipKey: 'configureDrive.motorLossTip' },
+  total: { labelKey: 'configureDrive.motorLossUnsplit', tipKey: 'configureDrive.motorLossUnsplitTip' },
+  parts: { labelKey: 'configureDrive.motorLossOther', tipKey: 'configureDrive.motorLossOtherTip' },
+};
+
+/** The extra motor loss tile: 0 in Sine (a real zero), "—" when PWM is refused or the variant carries no value.
+ *  With the split (`split` = 'parts') it shows only the remainder the iron / magnet / copper tiles do not carry
+ *  (`lossPartTiles`), so the tiles of the loss row never count a watt twice. */
+export function extraLossTile(mode: DriveMode, drv: VariantReading | null, split: PwmSplitState = 'none'): DriveTileSpec {
+  const base = { id: EXTRA_LOSS_ID, ...EXTRA_LABEL[split], unit: 'W', d: 0, goodHi: false };
   if (mode === 'sine') return { ...base, value: 0, blank: null };
   if (!drv) return { ...base, value: null, blank: 'refused' };
-  return drv.motor_pwm_loss_W == null
-    ? { ...base, value: null, blank: 'missing' }
-    : { ...base, value: drv.motor_pwm_loss_W, blank: null };
+  if (drv.motor_pwm_loss_W == null) return { ...base, value: null, blank: 'missing' };
+  const q = drv.motor_pwm_loss_parts_W;
+  return { ...base, value: q ? q.other : drv.motor_pwm_loss_W, blank: null };
 }
+
+/** One motor-loss tile of the breakdown (iron / copper / magnet) under the drive in use. */
+export interface LossPartTile {
+  id: 'iron' | 'copper' | 'magnet';
+  /** the sine passport's value [W] */
+  sineW: number | null;
+  /** the PWM part added to it [W]; null = none shown (Sine, refused, or a passport without the split) */
+  pwmW: number | null;
+  /** what the tile shows = sine + PWM part */
+  value: number | null;
+}
+
+const PART_OF: Record<LossPartTile['id'], 'iron' | 'copper_ac' | 'magnet'> = { iron: 'iron', copper: 'copper_ac', magnet: 'magnet' };
+
+/** The iron / copper / magnet tiles: under PWM with a split each shows its sine value + its PWM part (owner 2026-11-02:
+ *  «show the PWM loss penalty split by part»); in Sine, and on a passport without the split, the sine value alone
+ *  (the extra then sits whole in the "not split" tile). */
+export function lossPartTiles(mode: DriveMode, drv: VariantReading | null,
+                              sine: { iron: number | null; copper: number | null; magnet: number | null }): LossPartTile[] {
+  const q = mode === 'pwm' && drv && drv.motor_pwm_loss_W != null ? drv.motor_pwm_loss_parts_W : null;
+  return (['iron', 'copper', 'magnet'] as const).map((id) => {
+    const s = sine[id];
+    const fin = s != null && Number.isFinite(s) ? s : null;
+    const pwmW = q ? q[PART_OF[id]] : null;
+    return { id, sineW: fin, pwmW, value: fin == null ? null : fin + (pwmW ?? 0) };
+  });
+}
+
+/** The PWM magnet part [W] (0 in Sine and without the split) — the magnet's own heat in the thermal estimate. */
+export const pwmMagnetW = (mode: DriveMode, drv: VariantReading | null): number =>
+  (mode === 'pwm' && drv?.motor_pwm_loss_parts_W ? drv.motor_pwm_loss_parts_W.magnet : 0);
 
 /** The controller's own loss: conduction + switching + dead time of the bridge + the copper of the coil
  *  links on its board.  0 W in Sine (a real zero: there is no inverter model), the computed value in PWM,
@@ -139,15 +185,15 @@ export function controllerLossTile(mode: DriveMode, drv: VariantReading | null):
 }
 
 /** The two loss-row tiles that depend on the drive, in their fixed order. */
-export const lossTailTiles = (mode: DriveMode, drv: VariantReading | null): DriveTileSpec[] =>
-  [extraLossTile(mode, drv), controllerLossTile(mode, drv)];
+export const lossTailTiles = (mode: DriveMode, drv: VariantReading | null, split: PwmSplitState = 'none'): DriveTileSpec[] =>
+  [extraLossTile(mode, drv, split), controllerLossTile(mode, drv)];
 
 /** TOTAL LOSS = the model's motor losses + the PWM extra loss + the controller loss (the last two are
  *  0 in Sine).  null while either is unknown (PWM refused), so the tile never shows a total that
  *  leaves a part out. */
 export function totalLossShown(baseW: number | null, mode: DriveMode, drv: VariantReading | null): number | null {
   if (baseW == null || !Number.isFinite(baseW)) return null;
-  const e = extraLossTile(mode, drv).value, c = controllerLossTile(mode, drv).value;
+  const e = pwmExtraW(mode, drv), c = controllerLossTile(mode, drv).value;
   return e == null || c == null ? null : baseW + e + c;
 }
 
@@ -170,7 +216,7 @@ export function systemEfficiency(mode: DriveMode, drv: VariantReading | null, P_
  *  extra loss (the controller excluded).  Sine: the model's.  null = "—" while PWM is refused / the extra is unknown. */
 export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number | null): number | null {
   if (P_loss_W == null || !Number.isFinite(P_loss_W)) return null;
-  const e = extraLossTile(mode, drv).value;
+  const e = pwmExtraW(mode, drv);
   if (e == null) return null;
   return P_shaft_W > 0 ? (100 * P_shaft_W) / (P_shaft_W + P_loss_W + e) : 0;
 }

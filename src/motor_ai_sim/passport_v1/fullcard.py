@@ -236,40 +236,19 @@ def demag_limit(st: Mapping[str, Any], full_dir: Path, M: str, I0: float) -> Dic
 
 def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, List[Dict[str, Any]]]:
     """{carrier class: [FEM anchor, ...]} from the PWM task outputs."""
+    from motor_ai_sim.passport_v1.pwm_parts import anchor_row
     out: Dict[str, List[Dict[str, Any]]] = {}
     for p in sorted(full_dir.glob(f"pwm_{M}_*.json")):
         d = _load(p) or {}
-        if d.get("dP_harm_W") is None:
+        # the anchor (incl. the negative-dP clamp and the split by part, dP_parts)
+        row = anchor_row(d, p.stem, v_dc)
+        if row is None:
             continue
         c = d.get("controller") or {}
         f = float(c.get("f_carrier_hz") or 48e3)
         dead = float(c.get("dead_time_us") or 0.1)
         tech = "gan" if str(c.get("device", "")).startswith("IG") else "si"
         cls = "%s%d_%dns" % (tech, round(f / 1000), round(dead * 1000))
-        ss = d.get("sine_36") or {}
-        v1 = ss.get("V1_seed_peak_V")
-        row = {"tag": p.stem, "rpm": d.get("rpm"), "I": d.get("I"), "gamma": d.get("gamma"),
-               "dP_harm_W": d.get("dP_harm_W"), "harm_ref": d.get("harm_ref"),
-               "m_index": (float(v1) / (v_dc / 2.0)) if v1 else None,
-               "device": c.get("device"), "temps": d.get("temps"),
-               "steps": d.get("steps_pwm"), "wall_s": d.get("pwm_wall_s"),
-               "mesh_note": "PWM step count raises the slip ring (640+ nodes/period); the "
-                            "iron template falls back to the gmsh build (solver-flagged "
-                            "DEGRADED, shaft skin layer not resolved) — PWM and its sine "
-                            "reference share that mesh"}
-        row["point"] = d.get("point")
-        dp = float(d.get("dP_harm_W"))
-        ref = float(((d.get("harm_ref") or {}).get("P_loss_ref_W")) or 0.0)
-        if dp < 0.0:
-            # PWM − same-mesh sine reference came out NEGATIVE: the extra loss is
-            # below what this run resolves (a few watts of a ~200 W total, 4 samples
-            # per carrier read the ripple-driven losses LOW).  Stored as 0 W with the
-            # raw value and the reason beside it — never a negative loss.
-            row["dP_harm_W_raw"] = dp
-            row["dP_harm_W"] = 0.0
-            row["dP_note"] = ("FEM PWM − same-mesh sine reference = %+.1f W of %.1f W total "
-                              "(%.2f %%): below this run's resolution; stored as 0 W"
-                              % (dp, ref, 100.0 * dp / ref if ref else float("nan")))
         out.setdefault(cls, []).append(row)
     return out
 
@@ -909,6 +888,21 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
 #  HTML
 # ─────────────────────────────────────────────────────────────────────────────
 
+def pwm_loss_cell(p: Mapping[str, Any]) -> Optional[str]:
+    """The motor PWM extra loss of one point as a card cell: the total and its
+    split by part (``motor_pwm_loss_parts_W``), or "(not split)" on a passport
+    built before the split.  None = no value."""
+    t = p.get("motor_pwm_loss_W")
+    if t is None:
+        return None
+    q = p.get("motor_pwm_loss_parts_W")
+    if not isinstance(q, Mapping):
+        return "%.2f (not split)" % float(t)
+    return "%.2f (Fe %.2f · mag %.2f · Cu %.2f · other %.2f)" % (
+        float(t), float(q.get("iron") or 0.0), float(q.get("magnet") or 0.0),
+        float(q.get("copper_ac") or 0.0), float(q.get("other") or 0.0))
+
+
 def _v(d, key="value"):
     return (d or {}).get(key) if isinstance(d, dict) else d
 
@@ -1204,7 +1198,13 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
                            "extra = Si 48 kHz variant (FEM anchor at rated speed, HDF-scaled)."))
     vv = [v for v in rec["pwm_variants"] if v.get("points")]
     if vv:
-        cats, st_ = [], {"motor PWM extra": [], "inv. conduction": [], "inv. switching": [],
+        # the motor's PWM extra split by part when every bar has the split (else one bar)
+        split_ = all(isinstance(p.get("motor_pwm_loss_parts_W"), Mapping)
+                     for v in vv for p in v["points"].values()
+                     if p.get("duty") and p.get("motor_pwm_loss_W") is not None)
+        motor_ = ({"PWM iron": "iron", "PWM magnet": "magnet", "PWM copper": "copper_ac",
+                   "PWM other": "other"} if split_ else {"motor PWM extra": None})
+        cats, st_ = [], {**{k: [] for k in motor_}, "inv. conduction": [], "inv. switching": [],
                          "inv. dead time": [], "board copper": []}
         for v in vv:
             for which in ("rated", "peak"):
@@ -1214,7 +1214,9 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
                     continue
                 p = pts[0]
                 cats.append(f"{v['id']} {which}")
-                st_["motor PWM extra"].append(p.get("motor_pwm_loss_W"))
+                for name_, part_ in motor_.items():
+                    st_[name_].append(p.get("motor_pwm_loss_W") if part_ is None else
+                                      (p.get("motor_pwm_loss_parts_W") or {}).get(part_))
                 st_["inv. conduction"].append(p["inverter_loss_W"]["cond"])
                 st_["inv. switching"].append(p["inverter_loss_W"]["sw"])
                 st_["inv. dead time"].append(p["inverter_loss_W"]["dead"])
@@ -1289,7 +1291,7 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
                 continue
             inv = p["inverter_loss_W"]
             rows.append([v["id"], v["device"], f"{p['rpm']:.0f} / {p['I_A']:.1f}",
-                         p.get("motor_pwm_loss_W"), inv["cond"], inv["sw"], inv["dead"],
+                         pwm_loss_cell(p), inv["cond"], inv["sw"], inv["dead"],
                          p["tj_C"] if p.get("continuous_ok") else "(110)",
                          "yes" if p.get("continuous_ok") else "no",
                          p["eta_drive_pct"], p.get("p_cont_max_W"),
@@ -1438,7 +1440,7 @@ def compare_html(recs: Mapping[str, Mapping[str, Any]]) -> str:
                 continue
             p = pr[0]
             inv = p["inverter_loss_W"]
-            rows.append([M, v["id"], v["device"], p.get("motor_pwm_loss_W"),
+            rows.append([M, v["id"], v["device"], pwm_loss_cell(p),
                          inv["cond"] + inv["sw"] + inv["dead"],
                          p["tj_C"] if p.get("continuous_ok") else "(110) not cont.",
                          p["eta_drive_pct"],

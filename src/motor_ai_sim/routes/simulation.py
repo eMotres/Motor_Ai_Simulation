@@ -6324,6 +6324,17 @@ def get_fem_transient(
                             "P_loss_v_W": round(_pl_v, 1),
                             "T_ref_Nm": round(float(_ref.get("T_avg_Nm", 0.0)), 3),
                         }
+                        # The same totals BY PART (copper / iron / magnet /
+                        # shaft / sleeve + iron Bertotti terms) on both sides
+                        # of the matched pair, so the PWM extra loss is split
+                        # from THIS comparison (same mesh, steps, eddy method)
+                        # — passport_v1.stage3.anchor_loss_parts reads them.
+                        try:
+                            from motor_ai_sim.simulation.postproc import loss_parts
+                            _sbres["harm_ref"]["parts_ref_W"] = loss_parts(_ref)
+                            _sbres["harm_ref"]["parts_v_W"] = loss_parts(_sbres)
+                        except Exception:              # noqa: BLE001
+                            log.exception("harm_ref loss split failed (non-fatal)")
                         _sbres["dP_harm_W"] = round(_pl_v - _pl_r, 1)
                 except Exception:
                     log.exception("harm_ref reference run failed (non-fatal)")

@@ -25,9 +25,14 @@ def now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
+#: stored shapes: 1 = the old 68-line catalogue (#551, converted on read by ``cost_estimate.from_stored``), 2 = 4 lines
+VERSIONS = (1, 2)
+
+
 def load(project_id: str) -> Optional[dict]:
+    """The stored document as it is on disk (either shape); ``cost_estimate.from_stored`` reads it."""
     value = store.load_json(project_id, ESTIMATE, None)
-    return value if isinstance(value, dict) and value.get("version") == 1 else None
+    return value if isinstance(value, dict) and value.get("version") in VERSIONS else None
 
 
 def save(project_id: str, expected_revision: int, build: Callable[[Optional[dict]], dict], actor: str) -> tuple[Optional[dict], dict]:
@@ -39,7 +44,7 @@ def save(project_id: str, expected_revision: int, build: Callable[[Optional[dict
     seen: Dict[str, Any] = {}
 
     def mutate(doc: Any) -> dict:
-        previous = doc if isinstance(doc, dict) and doc.get("version") == 1 else None
+        previous = doc if isinstance(doc, dict) and doc.get("version") in VERSIONS else None
         current_rev = int((previous or {}).get("revision") or 0)
         if int(expected_revision) != current_rev:
             raise RevisionConflict(previous)

@@ -1017,9 +1017,13 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
         cogging_keys = cogging.flat_keys(cogging.for_config(die, cfg, by_duty))
     except Exception:  # noqa: BLE001 - a display number must never fail the project list
         cogging_keys = {}
+    from motor_ai_sim.duty_kind import is_test_duty
     out = []
     for duty in cfg.get("duties") or []:
         if not isinstance(duty, dict): continue
+        # a bench-test point (``kind: "test"``, e.g. the Tests "Compute it" duties) belongs to Production -> Tests only:
+        # never a row of the project's results, steps, view or snapshots (owner 2026-11-02)
+        if is_test_duty(duty): continue
         name = str(duty.get("name") or "")
         try:
             from motor_ai_sim.routes import family
@@ -1549,8 +1553,9 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
                 # A malformed reference must not break the read-only project list.
                 configure_duties = set()
         result_rows = _results(open_die, config, cfg, stored, configure_duties) if available else []
+        from motor_ai_sim.duty_kind import is_test_duty
         duty_names = [str(x.get("name")) for x in cfg.get("duties", [])
-                      if isinstance(x, dict) and x.get("name")]
+                      if isinstance(x, dict) and x.get("name") and not is_test_duty(x)]
         default_duty = duty_names[0] if duty_names else None
         configure_duty = default_duty if default_duty in configure_duties else None
         simulation_duty = next((str(row.get("duty")) for row in result_rows

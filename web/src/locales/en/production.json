@@ -27,7 +27,8 @@
     "owner": "Owner",
     "engineer": "Engineer",
     "oem": "OEM producer",
-    "admin": "Admin"
+    "admin": "Admin",
+    "viewer": "Project member (read-only)"
   },
   "col": {
     "motor": "Motor",
@@ -247,7 +248,11 @@
     "forPart": "Thread for",
     "thread": "Thread",
     "writeLang": "Write in",
-    "tip": "Write in your language; the other side reads a machine translation until a member confirms it."
+    "tip": "Write in your language; the other side reads a machine translation until a member confirms it.",
+    "viewerTip": "Discussions the team opened to the project. Read-only.",
+    "customerVisible": "Project sees it",
+    "factoryOnly": "Factory only",
+    "customerVisibleTip": "Click to open this thread to the members of the project that links this motor, or to make it factory-only again."
   },
   "proposals": {
     "none": "No proposals.",

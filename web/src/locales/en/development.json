@@ -321,7 +321,8 @@
     "motors": "Motors & results",
     "messages": "Messages",
     "notes": "Internal notes",
-    "documents": "Documents"
+    "documents": "Documents",
+    "production": "Production"
   },
   "step": "Step {current} of {total}",
   "previous": "Back",
@@ -1084,5 +1085,32 @@
     "expected": "results expected {time}",
     "ready": "Results ready",
     "server": "On the server now: {running} running, {queued} waiting"
+  },
+  "productionView": {
+    "none": "No production for the motors of this project yet.",
+    "tip": "Production of each motor linked to this project. Members read tests, visible documents and the discussions opened to them.",
+    "revision": "Rev {rev}",
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "archived": "Archived"
+    },
+    "open": "Open in Production",
+    "openTip": "Opens this motor's production (read-only for project members).",
+    "count": {
+      "tests": "Tests",
+      "testsTip": "Bench tests compared with the simulation. Click to see the comparison.",
+      "documents": "Documents",
+      "documentsTip": "Documents you may open in Production.",
+      "discussions": "Discussions",
+      "discussionsTip": "Discussion threads you may read in Production."
+    },
+    "testKind": {
+      "parameters": "Parameters",
+      "free_run": "Free-run",
+      "load": "Loads"
+    },
+    "readiness": "Parts {received}/{total} ({pct} %), late {late}",
+    "readinessTip": "Parts received for assembly."
   }
 }

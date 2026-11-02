@@ -17,7 +17,8 @@ import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
 import { downloadFile, ProductionApiError, productionApi } from '../api';
-import { callerRole, canEditRole, displayText, unackedRevisions } from '../helpers';
+import { canEditRole, displayText, productionRole, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
+import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
@@ -105,6 +106,16 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const reload = useCallback(async () => {
     try {
       const p = await productionApi.get(die, config);
+      if (p.access === 'project') {
+        // a member of the project that links this motor: read-only documents and the customer-visible threads, nothing else
+        const [documents, threads] = await Promise.all([productionApi.documents(die, config), productionApi.threads(die, config)]);
+        setProd(p);
+        setData({ ...EMPTY, documents, threads });
+        setReadiness(null);
+        setTabState((cur) => ((VIEWER_TABS as readonly string[]).includes(cur) ? cur : 'documents'));
+        setErr(null); setNda(false);
+        return;
+      }
       const [parts, bom, toolingBom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
         productionApi.parts(die, config), productionApi.bom(die, config), productionApi.bom(die, config, 'tooling').catch(() => [] as BomRow[]),
         productionApi.process(die, config),
@@ -131,7 +142,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     if (el) { scrolledTo.current = `${tab}:${itemId}`; el.scrollIntoView({ block: 'center' }); }
   }, [itemId, loading, tab, data]);
 
-  const role = prod ? callerRole(prod.members, email, isAdmin) : null;
+  const role = productionRole(prod, email, isAdmin);
   // the strip above the page names this production's motor with its title when that is short (lib/stripContext.shortTitle)
   const stripTitle = shortTitle(displayText(prod?.title, ui).text);
   // ... and the product revision of the motor ("Rev A"), which the production itself carries (no catalogue visibility needed)
@@ -148,7 +159,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   }), [die, config, role, email, ui, reload, prod?.product_type]);
   // the separate tooling / fixtures order list (owner 2026-10-19): same table, ?list=tooling
   const toolingCtx = useMemo(() => ({ ...ctx, list: 'tooling' as const }), [ctx]);
-  const visibleTabs = TABS.filter((id) => id !== 'tooling' || data.toolingBom.length > 0 || ctx.canEdit);
+  const visibleTabs = visibleProductionTabs(TABS, role, data.toolingBom.length);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
 
   return (
@@ -305,6 +316,15 @@ export const ProductionTab: React.FC = () => {
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
   const setSel = (v: { die: string; config: string } | null) => { setSelState(v); writeStore(LAST_KEY, v); };
+  // "Open in Production" from a project (lib/openProduction): the tab may already be mounted, so it listens
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<OpenProductionDetail>).detail;
+      if (d && typeof d.die === 'string' && typeof d.config === 'string') { setEntry(null); setAppEntry(null); setSel({ die: d.die, config: d.config }); }
+    };
+    window.addEventListener(OPEN_PRODUCTION_EVENT, on);
+    return () => window.removeEventListener(OPEN_PRODUCTION_EVENT, on);
+  }, []);
   // the strip under the tabs names THIS production's motor, not the live machine (lib/stripContext.ts)
   useEffect(() => {
     useTabContextStore.getState().setProduction(sel ? { die: sel.die, config: sel.config } : null);

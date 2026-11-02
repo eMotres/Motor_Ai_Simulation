@@ -43,7 +43,8 @@ def _documents(die: str, config: str, ctx: Dict[str, Any]) -> List[Dict[str, Any
         return []
     from motor_ai_sim.production import store as PS
     docs = (PS.load_file(die, config, "documents.json") or {}).get("documents", [])
-    hide_internal = not ctx.get("admin") and ctx.get("role") == "oem"
+    # the factory and a project viewer (production.project_link) never see an internal document
+    hide_internal = not ctx.get("admin") and ctx.get("role") in ("oem", "viewer")
     return [{"id": d.get("id"), "file_id": d.get("file_id"), "name": d.get("name")}
             for d in docs if isinstance(d, dict) and not (hide_internal and d.get("internal"))]
 
@@ -85,6 +86,10 @@ def get_tests(request: Request, die: str, config: str, response: Response):
     die, config = _names(die, config)
     ctx = A.resolve(request, die, config)
     response.headers["Cache-Control"] = "no-store"
+    viewer = ctx.get("viewer")
+    if viewer and viewer.get("project_role") == "customer":
+        from motor_ai_sim.development import store as DS
+        DS.append_audit(viewer["project_id"], A.email(ctx["user"]), "motor.tests.read", "motor", f"{die}/{config}")
     return _payload(die, config, can={"add": bool(ctx["can_add"]), "edit": bool(ctx["can_edit"]),
                                       "settings": bool(ctx["can_edit"])},
                     documents=_documents(die, config, ctx))

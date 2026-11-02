@@ -49,6 +49,26 @@ import os as _os
 import numpy as np
 
 ENABLED = _os.environ.get("SB_NO_FRAME_PLAN") != "1"
+#: frames per PARDISO analysis (1 = one analysis per frame, as before).
+#: The slip pattern changes every frame (14 298 of 400 752 upper entries on the
+#: L90), so one analysis serves a window of frames on the union of their
+#: patterns.  Measured, L90 cold, 650 frames: W = 1 / 2 / 3 / 4 -> wall 350 /
+#: 325 / 325 / 322 s, factor fill +0 / +6 / +11 / +13 %.  On a repeat pass the
+#: orderings are cached and only the fill is left, which W = 2 pays least.
+WINDOW = max(1, int(_os.environ.get("SB_PLAN_WINDOW", "2") or 1))
+
+
+def window_shifts(m, d, w):
+    """The ``w`` shifts of the analysis window that holds shift ``m`` when the
+    march steps by ``d``: aligned on multiples of ``w·|d|`` (on ``m``'s residue
+    class mod ``|d|``), so the same rotor positions always meet the same
+    window — and a later pass finds its ordering in the cache."""
+    d = abs(int(d)); m = int(m)
+    if w <= 1 or d == 0:
+        return [m]
+    r = m % d
+    s0 = r + ((m - r) // (w * d)) * (w * d)
+    return [s0 + k * d for k in range(w)]
 
 
 class PlanMismatch(Exception):
@@ -89,6 +109,7 @@ class ReducedPlan:
         self.n = self.nf + self.nb
         self.slip = np.zeros(self.N + self.nb, dtype=bool)
         self.slip[np.asarray(slip, dtype=np.int64)] = True
+        self.slip_idx = np.flatnonzero(self.slip[:self.N])
         self.rr0 = np.asarray(rr0, dtype=np.int64).copy()
         self.sg0 = np.asarray(sg0, dtype=float).copy()
         rrE, sgE = self._ext(self.rr0, self.sg0)
@@ -123,14 +144,25 @@ class ReducedPlan:
     def frame(self, rr, sg):
         """The frame half for this frame's map, or PlanMismatch when a dof
         outside the slip set moved (then the plan is not valid for it)."""
-        rr = np.asarray(rr, dtype=np.int64)
-        sg = np.asarray(sg, dtype=float)
+        return self.window([(rr, sg)])[0]
+
+    def window(self, maps):
+        """One pattern for several frames' maps (the union of their slip-ring
+        entries) and one :class:`FrameSystem` per map on it.  PlanMismatch
+        when any map moves a dof outside the slip set."""
         keep = ~self.slip[:self.N]
-        if (rr.shape != self.rr0.shape
-                or not np.array_equal(rr[keep], self.rr0[keep])
-                or not np.array_equal(sg[keep], self.sg0[keep])):
-            raise PlanMismatch("a dof outside the slip set changed its column")
-        return FrameSystem(self, rr, sg)
+        ext = []
+        for rr, sg in maps:
+            rr = np.asarray(rr, dtype=np.int64)
+            sg = np.asarray(sg, dtype=float)
+            if (rr.shape != self.rr0.shape
+                    or not np.array_equal(rr[keep], self.rr0[keep])
+                    or not np.array_equal(sg[keep], self.sg0[keep])):
+                raise PlanMismatch(
+                    "a dof outside the slip set changed its column")
+            ext.append(self._ext(rr, sg))
+        pat = FramePattern(self, ext)
+        return pat.members
 
     def fixed_sum(self, k, values):
         """Σ of block ``k``'s fixed entries into the run's fixed key space."""
@@ -139,40 +171,37 @@ class ReducedPlan:
                            minlength=self.F.size)
 
 
-class FrameSystem:
-    """One frame's reduced upper-triangle CSR: pattern + entry positions.
+class FramePattern:
+    """The reduced upper-triangle CSR pattern shared by one or more frames:
+    the run's fixed keys plus the union of the members' slip-ring keys.
+    ``indptr``/``indices``: rows ascending, columns ascending within a row,
+    diagonal first.  A member's entries absent from another member's frame
+    are explicit zeros there — a valid Cholesky pattern, the same answer."""
 
-    ``indptr``/``indices`` are fixed for the frame (rows ascending, columns
-    ascending within a row, diagonal first); :meth:`data` turns per-block
-    values into the CSR's ``data``.
-    """
-
-    def __init__(self, plan: ReducedPlan, rr, sg):
+    def __init__(self, plan: ReducedPlan, maps_ext):
         self.plan = plan
-        rrE, sgE = plan._ext(rr, sg)
         nn = np.int64(plan.n)
+        per = []               # per member, per block: (entry ids, key, sign)
         mk = []
-        self.mov = []          # per block: (entry ids, key, sign)
-        for mid, rows, cols in plan.moving:
-            R = rrE[rows]; C = rrE[cols]
-            # an entry mapped below the diagonal is read through its mirror
-            ok = (R >= 0) & (C >= 0) & (R <= C)
-            k = R[ok] * nn + C[ok]
-            self.mov.append((mid[ok], k, sgE[rows[ok]] * sgE[cols[ok]]))
-            mk.append(k)
+        for rrE, sgE in maps_ext:
+            mv = []
+            for mid, rows, cols in plan.moving:
+                R = rrE[rows]; C = rrE[cols]
+                # an entry mapped below the diagonal is read through its mirror
+                ok = (R >= 0) & (C >= 0) & (R <= C)
+                k = R[ok] * nn + C[ok]
+                mv.append((mid[ok], k, sgE[rows[ok]] * sgE[cols[ok]]))
+                mk.append(k)
+            per.append(mv)
         F = plan.F
         mk = np.unique(np.concatenate(mk)) if mk else np.zeros(0, np.int64)
         at = np.searchsorted(F, mk)
-        new = mk[(at >= F.size) | (F[np.minimum(at, F.size - 1)] != mk)] \
-            if F.size else mk
-        # merged sorted keys: F with the frame's new keys slotted in
+        new = mk[(at >= F.size) | (F[np.minimum(at, F.size - 1)] != mk)]             if F.size else mk
+        # merged sorted keys: F with the window's new keys slotted in
         self.posF = np.arange(F.size) + np.searchsorted(new, F)
         keys = np.empty(F.size + new.size, dtype=np.int64)
         keys[self.posF] = F
         keys[np.searchsorted(F, new) + np.arange(new.size)] = new
-        self.keys = keys
-        self.mov = [(mid, np.searchsorted(keys, k), s)
-                    for mid, k, s in self.mov]
         rows = keys // nn
         self.indices = (keys - rows * nn).astype(np.int32)
         self.indptr = np.concatenate(
@@ -183,6 +212,26 @@ class FrameSystem:
         self.perm_key = None
         if self.diag.size != self.n:
             raise PlanMismatch("reduced system has an empty diagonal entry")
+        self.members = [
+            FrameSystem(self, [(mid, np.searchsorted(keys, k), sg)
+                               for mid, k, sg in mv])
+            for mv in per]
+
+
+class FrameSystem:
+    """One frame on a :class:`FramePattern`: where its slip-ring entries go.
+    :meth:`data` turns per-block values into the pattern's CSR ``data``."""
+
+    def __init__(self, pattern: FramePattern, mov):
+        self.pattern = pattern
+        self.plan = pattern.plan
+        self.mov = mov         # per block: (entry ids, position, sign)
+        self.n = pattern.n
+        self.nnz = pattern.nnz
+        self.indices = pattern.indices
+        self.indptr = pattern.indptr
+        self.diag = pattern.diag
+        self.posF = pattern.posF
 
     def fixed_to_frame(self, fixed_sum):
         """A vector in the run's fixed key space, placed in this frame."""

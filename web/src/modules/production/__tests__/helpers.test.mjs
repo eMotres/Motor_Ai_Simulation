@@ -168,6 +168,14 @@ t('costs: permissions and summary calculation including margin and warnings', ()
   assert.equal(H.canEditCosts('admin'), true);
   assert.equal(H.canEditCosts('oem'), false);
 
+  // margin and selling price: never the factory's, even with costs shared, nor a project viewer's
+  assert.equal(H.canViewPrice('owner'), true);
+  assert.equal(H.canViewPrice('engineer'), true);
+  assert.equal(H.canViewPrice('admin'), true);
+  assert.equal(H.canViewPrice('oem'), false);
+  assert.equal(H.canViewPrice('viewer'), false);
+  assert.equal(H.canViewPrice(null), false);
+
   const bom = [
     { part_id: 'p1', qty_per_motor: 1, order_total: 10, unit_price: 100 },
     { part_id: 'p2', qty_per_motor: 2, order_total: 20, unit_price: 50 },

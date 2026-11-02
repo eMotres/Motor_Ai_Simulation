@@ -582,11 +582,11 @@ def get_bom(request: Request, die: str, config: str):
         costs.get("margin_pct", 0.0),
         order_qty,
     )
-    return {
+    return access.costs_for_caller(user, production, {
         "rows": enriched_rows,
         "costs": costs,
         "summary": summary,
-    }
+    })
 
 
 @router.put("/{die}/{config}/bom")
@@ -640,12 +640,12 @@ def get_costs(request: Request, die: str, config: str):
         costs.get("margin_pct", 0.0),
         order_qty,
     )
-    return {
+    return access.costs_for_caller(user, production, {
         "rows": rows_out,
         "extras": costs.get("extras", []),
         "margin_pct": float(costs.get("margin_pct", 0.0)),
         "summary": summary,
-    }
+    })
 
 
 @router.put("/{die}/{config}/costs")
@@ -675,10 +675,10 @@ async def save_costs(request: Request, die: str, config: str):
         costs["margin_pct"],
         order_qty,
     )
-    return {
+    return access.costs_for_caller(user, production, {
         **costs,
         "summary": summary,
-    }
+    })
 
 
 # ── procurement & project timeline ───────────────────────────────────────────

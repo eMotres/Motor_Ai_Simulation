@@ -41,6 +41,7 @@ import {
   buildAssemblyTree,
   calcCostSummary,
   canEditCosts,
+  canViewPrice,
   canViewCosts,
   currencyOptions,
   DEFAULT_CURRENCY,
@@ -161,6 +162,8 @@ const BomTable: React.FC<BomTableProps> = ({
   const tooling = ctx.list === 'tooling';
   const hasCostAccess = canViewCosts(ctx.role, shareCostsWithOem) || rows.some((r) => r.unit_price !== undefined);
   const canEdit = ctx.canEdit && canEditCosts(ctx.role);
+  // the margin and price rows: the factory sees the costs (when shared) but never our margin or selling price
+  const showPrice = canViewPrice(ctx.role);
 
   const [draftRows, setDraftRows] = useState<BomRow[]>(rows);
   const [costRows, setCostRows] = useState<CostRow[]>([]);
@@ -940,7 +943,7 @@ const BomTable: React.FC<BomTableProps> = ({
                 </TableRow>
 
                 {/* Margin % */}
-                <TableRow sx={{ bgcolor: 'var(--panel)' }}>
+                {showPrice && <TableRow sx={{ bgcolor: 'var(--panel)' }}>
                   <TableCell colSpan={9} sx={{ color: 'var(--text-2)', pl: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       <span>{t('costs.marginPct')}</span>
@@ -965,10 +968,10 @@ const BomTable: React.FC<BomTableProps> = ({
                   </TableCell>
                   <TableCell align="right" sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   <TableCell colSpan={4} sx={{ color: 'var(--text-4)' }}>—</TableCell>
-                </TableRow>
+                </TableRow>}
 
                 {/* Price Per Motor */}
-                <TableRow sx={{ bgcolor: 'rgba(52, 211, 153, 0.08)' }}>
+                {showPrice && <TableRow sx={{ bgcolor: 'rgba(52, 211, 153, 0.08)' }}>
                   <TableCell colSpan={9} sx={{ fontWeight: 800, fontSize: 13.5, color: '#34d399', pl: 2 }}>
                     {t('costs.pricePerMotor')}
                   </TableCell>
@@ -980,7 +983,7 @@ const BomTable: React.FC<BomTableProps> = ({
                   </TableCell>
                   <TableCell sx={{ fontWeight: 700, color: '#34d399' }}>{summaryCurrencies}</TableCell>
                   <TableCell colSpan={3} sx={{ color: 'var(--text-4)' }}>—</TableCell>
-                </TableRow>
+                </TableRow>}
               </>
             )}
           </TableBody>

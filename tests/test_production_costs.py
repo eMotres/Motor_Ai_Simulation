@@ -505,3 +505,72 @@ def test_process_section_tables_i18n_requirement_d(prod_env, tmp_path):
     assert en_tbl[1][2] == "+0.009 / +0.002"
     assert en_tbl[2][1] == "h6"
     assert en_tbl[2][2] == "0 / -0.016"
+
+
+def _all_keys(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _all_keys(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _all_keys(v)
+
+
+def test_oem_with_shared_costs_never_sees_margin_or_price(prod_env, setup_production_with_bom):
+    """Owner 2026-11-02: with ``share_costs_with_oem`` on the factory sees the cost rows and the cost totals, never our
+    margin or our selling price (``margin_pct``, ``price_per_motor``, ``order_price_total``) - in /bom, /costs or
+    anywhere nested in them."""
+    from motor_ai_sim.production import access
+
+    client = prod_env["client"]
+    admin = prod_env["admin"]
+    engineer = prod_env["engineer"]
+    oem_nda = prod_env["oem_nda"]
+    p1 = setup_production_with_bom["p1"]
+    client.put(
+        f"/api/production/{DIE}/{CONFIG}/costs",
+        headers=engineer,
+        json={"rows": [{"part_id": p1["id"], "unit_price": 100.0, "currency": "CNY"}], "extras": [], "margin_pct": 25.0},
+    )
+    assert client.put(f"/api/admin/production/{DIE}/{CONFIG}/share_costs", headers=admin,
+                      json={"share_costs_with_oem": True}).status_code == 200
+
+    for path in ("bom", "costs"):
+        oem = client.get(f"/api/production/{DIE}/{CONFIG}/{path}", headers=oem_nda)
+        assert oem.status_code == 200, path
+        body = oem.json()
+        leaked = set(_all_keys(body)) & access.COMMERCIAL_COST_FIELDS
+        assert not leaked, f"{path}: {sorted(leaked)}"
+        # the cost itself is still there
+        assert body["summary"]["parts_subtotal"] == 100.0
+        assert body["summary"]["cost_per_motor"] == 100.0
+        assert body["summary"]["order_cost_total"] == 5000.0
+
+        # the production engineer keeps the full view
+        full = client.get(f"/api/production/{DIE}/{CONFIG}/{path}", headers=engineer).json()
+        assert full["summary"]["margin_pct"] == 25.0
+        assert full["summary"]["price_per_motor"] == pytest.approx(133.33, abs=0.01)
+
+
+def test_cost_view_rule_single_helper():
+    """One rule for every role: admin / production owner / engineer full, the factory cost-only (and only when shared),
+    anybody else (a project viewer is never a production member) nothing."""
+    from motor_ai_sim.production import access
+
+    prod = {"members": [{"email": "e@x.test", "role": "engineer"}, {"email": "f@x.test", "role": "oem"}],
+            "share_costs_with_oem": False}
+    assert access.cost_view({"email": "a@x.test", "role": "admin"}, prod) == access.COST_VIEW_FULL
+    assert access.cost_view({"email": "e@x.test", "role": "user"}, prod) == access.COST_VIEW_FULL
+    assert access.cost_view({"email": "f@x.test", "role": "oem"}, prod) == access.COST_VIEW_NONE
+    assert access.cost_view({"email": "viewer@x.test", "role": "user"}, prod) == access.COST_VIEW_NONE
+    shared = dict(prod, share_costs_with_oem=True)
+    assert access.cost_view({"email": "f@x.test", "role": "oem"}, shared) == access.COST_VIEW_COST_ONLY
+    assert access.cost_view({"email": "viewer@x.test", "role": "user"}, shared) == access.COST_VIEW_NONE
+
+    payload = {"margin_pct": 9, "summary": {"cost_per_motor": 1, "price_per_motor": 2, "order_price_total": 3,
+                                            "by_currency": [{"currency": "CNY", "price_per_motor": 2, "cost_per_motor": 1}]}}
+    oem = access.costs_for_caller({"email": "f@x.test", "role": "oem"}, shared, payload)
+    assert oem == {"summary": {"cost_per_motor": 1, "by_currency": [{"currency": "CNY", "cost_per_motor": 1}]}}
+    assert access.costs_for_caller({"email": "viewer@x.test", "role": "user"}, shared, payload) == {}
+    assert access.costs_for_caller({"email": "e@x.test", "role": "user"}, shared, payload) is payload

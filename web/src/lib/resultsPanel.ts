@@ -61,7 +61,7 @@ export function panelRows(panel: StoredPanel | null | undefined): EmTileSpec[][]
   if (!panel || !panel.summary) return [];
   const { summary, k3dBasis } = panelSummary(panel);
   // the tiles are Configure's, in Configure's look (set, rows, decimals, colours): lib/emResultTiles.configureLook
-  return configureLook(emTileRows(summary, { k3dBasis, mech: panelMech(panel.summary), cooling: panel.cooling ?? null, cogging: panelCogging(panel) }), summary);
+  return configureLook(emTileRows(summary, { k3dBasis, mech: panelMech(panel.summary), cooling: panel.cooling ?? null, cogging: panelCogging(panel), emSource: panel.source?.em }), summary);
 }
 
 /** panel tile -> the key of the steps table's `comparison` row (and the factor to its unit): the SAME numbers the panel shows. */

@@ -793,6 +793,7 @@
     "rAt25": "At 25 °C (the bench-check view; this run was solved at {t} °C).",
     "ldTip": "Ld of THIS run.",
     "lqTip": "Lq of THIS run.",
+    "atMagnetTemp": "At magnet temperature {magT} °C.",
     "psiTip": "Magnet flux linkage of THIS run (phase, peak), measured at zero current.",
     "kvTip": "No-load KV of THIS run: rpm per volt of the fundamental back-EMF — what spinning it on the bench reads.",
     "kvTipLoaded": "Loaded KV of THIS run: rpm per volt of its terminal voltage. This run carries no no-load KV.",

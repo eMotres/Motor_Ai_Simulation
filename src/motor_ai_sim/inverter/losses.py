@@ -667,6 +667,13 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     # V_DS(I, T_j) at the POWER source pin, integrated as <i * V(i)>.
     switching_source = (switching_source or card.switching_source_default()).strip().lower()
     spice_static = (switching_source == "spice" and card.static_table() is not None)
+    # 2026-11-03: the table is held against the datasheet R_DS(on)(T_j) first;
+    # outside the tolerance the conduction (and, on its own check, the dead
+    # time) is taken from the datasheet curves and the result says so.
+    cond_check = card.static_conduction_check(t_j_c, v_gs_on) if spice_static else None
+    q3_check = card.static_third_quadrant_check(v_gs_off) if spice_static else None
+    spice_3q = spice_static and (q3_check is None or bool(q3_check["ok"]))
+    spice_static = spice_static and (cond_check is None or bool(cond_check["ok"]))
     if spice_static:
         v_fw = np.array([card.v_ds_on_spice_V(float(x), t_j_c, v_gs_on) for x in ladder])
         p_cond = (1.0 - f_dt) * n * float(np.mean(i_dev * np.interp(i_dev, ladder, v_fw)))
@@ -677,7 +684,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         p_cond = (1.0 - f_dt) * float(np.mean(i_leg ** 2)) * r_tot / n
 
     if f_dt > 0.0:
-        v_ladder = np.array([(card.v_sd_spice_V(float(x), t_j_c, v_gs_off) if spice_static
+        v_ladder = np.array([(card.v_sd_spice_V(float(x), t_j_c, v_gs_off) if spice_3q
                               else card.v_sd_V(float(x), t_j_c, v_gs_off))
                              for x in ladder])
         v_sd = np.interp(i_dev, ladder, v_ladder)
@@ -699,6 +706,9 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         energy_kind = energy_kind or e.get("switching_energy_source")
         if not notes:
             notes = list(e["notes"])
+    for chk in (cond_check, q3_check):
+        if chk is not None and not chk["ok"]:
+            notes = list(notes) + [f"{card.part}: {chk['line']}"]
     tot = np.array(e_on) + np.array(e_off) + np.array(e_fr)
     e_at = np.interp(i_dev, ladder, tot)
     p_sw = float(f_sw) * n * float(np.mean(e_at))
@@ -747,6 +757,9 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         "extrapolated": extrapolated,
         "notes": notes,
         "conduction_source": "spice_static" if spice_static else "datasheet",
+        "third_quadrant_source": "spice_static" if spice_3q else "datasheet",
+        "conduction_check": cond_check,
+        "third_quadrant_check": q3_check,
     }
 
 
@@ -1629,11 +1642,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         modulation=base.modulation)
     t_draw = min(t_j_max_seen, t_cap)
     spice_static = sw_src == "spice" and card.static_table() is not None
+    # the per-leg verdict of the SPICE-vs-datasheet check (2026-11-03): a table
+    # outside the tolerance is not used for the chart either
+    spice_3q = spice_static and all(r.get("third_quadrant_source") == "spice_static"
+                                    for r in per_leg.values())
+    spice_static = spice_static and all(r.get("conduction_source") == "spice_static"
+                                        for r in per_leg.values())
     r_ds = (float(np.mean([r["r_ds_on_mohm"] for r in per_leg.values()])) * 1e-3
             if spice_static else card.r_ds_on_ohm(t_draw, v_gs_on))
 
     def _vsd1(i_dev: float) -> float:
-        return (card.v_sd_spice_V(i_dev, t_draw, v_gs_off) if spice_static
+        return (card.v_sd_spice_V(i_dev, t_draw, v_gs_off) if spice_3q
                 else card.v_sd_V(i_dev, t_draw, v_gs_off))
 
     def _v_sd(arr: np.ndarray) -> np.ndarray:
@@ -1714,9 +1733,16 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             # 2026-09-27 uniform SPICE basis: one label for the whole loss
             # split, the fallback said as such, and the model's deviation
             "conduction_source": ("spice_static" if spice_static else "datasheet"),
+            "third_quadrant_source": ("spice_static" if spice_3q else "datasheet"),
+            "conduction_check": next((r.get("conduction_check") for r in per_leg.values()
+                                      if r.get("conduction_check")), None),
             "basis_label": (
                 (f"SPICE ({card.part} vendor model): switching"
-                 + (", conduction, dead time" if spice_static else ""))
+                 + (", conduction" if spice_static else "")
+                 + (", dead time" if spice_3q else "")
+                 + ("; conduction from the datasheet R_DS(on)(T_j) — the SPICE static "
+                    "table is outside the datasheet tolerance"
+                    if card.static_table() is not None and not spice_static else ""))
                 if sw_src == "spice" else
                 ("datasheet (explicit choice; a SPICE table exists)"
                  if card.switching_table() is not None else

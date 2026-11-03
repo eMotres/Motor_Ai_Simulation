@@ -144,7 +144,24 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
     dead = 3.0 * r["p_third_quadrant_W"]
     return {"cond": cond, "sw": sw, "dead": dead, "total": cond + sw + dead,
             "per_switch_W": r["p_total_W"] / 2.0, "notes": r["notes"],
-            "switching_basis": r.get("conduction_source"), "extrapolated": r["extrapolated"]}
+            "switching_basis": r.get("conduction_source"), "extrapolated": r["extrapolated"],
+            "conduction_basis": r.get("conduction_source"),
+            "third_quadrant_basis": r.get("third_quadrant_source"),
+            "conduction_check": r.get("conduction_check"),
+            "r_ds_on_mohm": r.get("r_ds_on_mohm")}
+
+
+def conduction_provenance(card, drv: Mapping[str, Any], t_j: float = T_J_AT_LIMIT_C) -> str:
+    """One line: which basis the bridge conduction is on, and the SPICE static
+    table's R_DS(on) against the datasheet curve at ``t_j`` (2026-11-03)."""
+    if drv.get("source") != "spice" or card.static_table() is None:
+        return ("datasheet R_DS(on)(T_j) curve, V_GS(on) %g V (%s)"
+                % (float(drv["v_gs_on"]), card.r_ds_on_note(drv["v_gs_on"])))
+    chk = card.static_conduction_check(t_j, drv["v_gs_on"])
+    if chk is None or chk["ok"]:
+        return ("SPICE static table V_DS(I, T_j) at V_GS(on) %g V; checked against the "
+                "datasheet: %s" % (float(drv["v_gs_on"]), chk["line"] if chk else "no check"))
+    return "datasheet R_DS(on)(T_j) curve (FALLBACK): %s" % chk["line"]
 
 
 def board_air_film(air_speed_ms: float, t_amb_c: float,
@@ -822,6 +839,7 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                               % v["fem_class"]),
                 "motor_pwm_fem_runs": [x.get("tag") for x in model.anchors] if model else [],
                 "inverter": drv["label"],
+                "inverter_conduction": conduction_provenance(card, drv),
                 "thermal": "board model (estimate, calibrated on the controller project's Si "
                            "ratings) — see controller.board",
                 "motor_sine": "passport loss trajectory (m = %g) + analytic mech" % m_max,

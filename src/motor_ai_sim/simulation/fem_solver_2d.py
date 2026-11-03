@@ -3345,6 +3345,8 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                     pass
             if "mat_fp" in _f:
                 wc["mat_fp"] = str(z["mat_fp"])
+            if "br_tmax_c" in _f:
+                wc["br_tmax_c"] = float(z["br_tmax_c"])
             if ((not _safe_warm_cache_enabled()
                  or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                     and wc["meta"].get("ts") == "bdf2"
@@ -3474,6 +3476,8 @@ def _warm_cache_store(wc: dict) -> None:
                 {str(k): float(v) for k, v in dict(wc["msrc"]).items()})
         if wc.get("mat_fp"):
             _extra["mat_fp"] = str(wc["mat_fp"])
+        if _br_lineage_temp_c(wc) is not None:
+            _extra["br_tmax_c"] = float(_br_lineage_temp_c(wc))
         if ((not _safe_on_wc or wc.get("safe_schema") == _SAFE_WARM_CACHE_SCHEMA)
                 and wc.get("meta", {}).get("ts") == "bdf2"
                 and wc.get("Ib_prev") is not None
@@ -3608,6 +3612,87 @@ def _seed_field_identity(meta) -> Optional[dict]:
     if not isinstance(meta, Mapping):
         return None
     return {k: v for k, v in meta.items() if k not in _SEED_FIELD_FREE_META}
+
+
+# ── A Br MAP IS NEVER CARRIED DOWN FROM A HOTTER MAGNET (owner 2026-11-03) ──
+# The carried map (`THE MAGNET CARRIED FROM A SEED OF THIS MACHINE`, below) is
+# the irreversible fraction, and the ratchet is min(): nothing ever heals.  A
+# coupled loop that STARTED hot (the card's 175 C default on a water-cooled
+# generator that settles near 100 C) ran its first pass at a knee it never
+# reaches, the ratchet burned 1.8-5 % of Br in, and every later, colder pass
+# inherited that loss: the run held 75.6 of 83.3 N·m.  A warm start is an
+# accelerator; the answer of a run must be the magnet at ITS OWN temperature.
+# So every published map carries the HOTTEST magnet temperature its lineage
+# was ratcheted at (`br_tmax_c`), and a map whose lineage was hotter than this
+# run by more than BR_CARRY_HOT_TOL_K is not carried (the eddy history still
+# is): the run de-rates a pristine magnet at its own temperature with a full
+# pre-pass.  A colder parent is carried exactly as before (min() of a hotter
+# run continues from it), so a loop that warms up — the normal case — and a
+# machine that really runs hot (its own pass ratchets) are unchanged.  A map
+# that carries no temperature (written before this rule) is carried as before.
+BR_CARRY_HOT_TOL_K = 1.0
+
+
+def _br_lineage_temp_c(wc: Any) -> Optional[float]:
+    """The hottest magnet temperature [°C] the seed's Br map was ratcheted
+    at, or ``None`` when the seed does not say (an older state)."""
+    if not isinstance(wc, Mapping):
+        return None
+    v = wc.get("br_tmax_c")
+    if v is None:
+        v = (wc.get("lib") or {}).get("br_tmax_c") if isinstance(
+            wc.get("lib"), Mapping) else None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _br_carry_hot_refusal(parent_tmax_c: Optional[float],
+                          run_temp_c: Optional[float]) -> Optional[str]:
+    """Why a seed's Br map may NOT be carried into a run at ``run_temp_c``
+    (``None`` = it may).  Unknown on either side is the legacy behaviour."""
+    if parent_tmax_c is None or run_temp_c is None:
+        return None
+    if float(parent_tmax_c) > float(run_temp_c) + BR_CARRY_HOT_TOL_K:
+        return ("the seed's Br map was ratcheted at a magnet of %.1f °C, hotter "
+                "than this run's %.1f °C: its irreversible loss belongs to that "
+                "temperature, not to this one" % (float(parent_tmax_c),
+                                                  float(run_temp_c)))
+    return None
+
+
+def _run_magnet_temp_c(magnet_temp_c: Optional[float]) -> Optional[float]:
+    """The magnet temperature a run actually solves at: the request's, else
+    the assigned card's own reference temperature (``None`` when unknown)."""
+    if magnet_temp_c is not None:
+        try:
+            f = float(magnet_temp_c)
+            return f if math.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma_t
+        asg = dict(_gma_t() or {})
+    except Exception:       # noqa: BLE001
+        asg = {}
+    try:
+        from motor_ai_sim.material_context import get_request_materials as _grm_t
+        ov = _grm_t() or {}
+        asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+        name = asg.get("magnet")
+        if not name:
+            return None
+        props = (ov.get("materials") or {}).get(str(name))
+        if isinstance(props, Mapping) and props.get("temperature_c") is not None:
+            return float(props["temperature_c"])
+        from motor_ai_sim import materials as _ml_t
+        t = getattr(_ml_t.resolve_assigned("magnet", str(name)),
+                    "temperature_c", None)
+        return None if t is None else float(t)
+    except Exception:       # noqa: BLE001 — unknown is the legacy behaviour
+        return None
 
 
 def _seed_across_steps_ok(cached_meta, wmeta) -> bool:
@@ -6432,6 +6517,9 @@ def _fem_transient_sliding_band_once(
     # this machine → the legacy slot, unchanged; nothing there either → cold,
     # and the result says which (`warm_start`).
     _lib_key = _lib_op = None
+    # the magnet temperature THIS run solves at, for the hot-parent rule on a
+    # carried Br map (`_br_carry_hot_refusal`) and the lineage it publishes
+    _run_mag_t = _run_magnet_temp_c(magnet_temp_c)
     _lib_meta = None          # the picked library entry (metadata)
     _lib_br_ok = False        # …and it may seed the Br map too
     _lib_n_same_machine = 0   # stored states of this machine discretisation
@@ -6489,6 +6577,13 @@ def _fem_transient_sliding_band_once(
             _seed_source = "library"
             _lib_br_ok = bool(demag and _lib_meta.get("br_repro_op") == _lib_op
                               and _wc_seed.get("br_val") is not None)
+            if _lib_br_ok:
+                _why_hot_lib = _br_carry_hot_refusal(
+                    _br_lineage_temp_c(_wc_seed), _run_mag_t)
+                if _why_hot_lib:
+                    _lib_br_ok = False
+                    log.info("P2 warm library: Br map not continued (%s) - "
+                             "full pre-pass", _why_hot_lib)
             log.info("P2 warm library: seed from a stored state of THIS machine "
                      "(%d stored; parent %.4g A / %.4g deg / %.0f rpm, %s; %s)",
                      _lib_n_same_machine, float(_wc_seed["I"]), float(_wc_seed["gam"]),
@@ -6617,6 +6712,10 @@ def _fem_transient_sliding_band_once(
             if (int(_dh_c.get("prepass_periods") or 0) < 1
                     or not isinstance(_dh_c.get("last_torque"), Mapping)):
                 raise ValueError("the seed carries no pre-pass history")
+            _why_hot_c = _br_carry_hot_refusal(_br_lineage_temp_c(_wc_seed),
+                                               _run_mag_t)
+            if _why_hot_c:
+                raise ValueError(_why_hot_c)
             _lib_br_pending = float(magnet_scale) * np.clip(_br_c, 0.0, 1.0)
             _dm_seeded = True
             _dm_lib_verify = True
@@ -6816,6 +6915,12 @@ def _fem_transient_sliding_band_once(
             log.info("P2 demag seed skipped (%s)", _dse)
             _dm_seeded = False; _dm_seed_from = None
             _dm_inherited_history = None
+    # the hottest magnet the seed's Br map was ratcheted at — taken HERE, where
+    # the seed is still the one the map came from; it joins this run's own
+    # temperature in the lineage this run publishes (only when a map was
+    # actually carried, `_dm_seeded`)
+    _dm_parent_tmax = (_br_lineage_temp_c(_wc_seed) if _wc_seed is not None
+                       else None)
     # Non-laminated solid conductors that ALSO carry rotating-field eddy losses
     # (in addition to magnets): the COILS (solid copper bars, stator side) and
     # the SHAFT (solid steel, rotor side).
@@ -13682,6 +13787,15 @@ def _fem_transient_sliding_band_once(
                     if _safe_warm_cache_enabled() else None)
             else:
                 _br_mat = None
+            # THE MAP'S LINEAGE TEMPERATURE (owner 2026-11-03): the hottest
+            # magnet this map has been ratcheted at — this run's own, or a
+            # carried parent's if that was hotter (`_br_carry_hot_refusal`)
+            _br_tmax_pub = None
+            if _br_pub is not None:
+                _tl_pub = [t for t in (_run_mag_t,
+                                       _dm_parent_tmax if _dm_seeded else None)
+                           if t is not None]
+                _br_tmax_pub = max(_tl_pub) if _tl_pub else None
             _dof_region_pub = None
             if _safe_warm_cache_enabled():
                 _edf_pub = np.asarray(b2.element_dofs, int)
@@ -13784,6 +13898,7 @@ def _fem_transient_sliding_band_once(
                     # a different conductor set) - see _warm_seed_accept.
                     "nsect": (1 if int(n_sectors) <= 1 else int(n_sectors)),
                     "br_val": _br_pub, "br_cen": _br_cen, "br_tag": _br_tag,
+                    "br_tmax_c": _br_tmax_pub,
                     # the materials the magnet map belongs to (a Br map is
                     # only carried onto the same magnet grade)
                     "mat_fp": str(_noload_material_fingerprint()),
@@ -14150,6 +14265,10 @@ def _fem_transient_sliding_band_once(
                 _xm_pub = {"eddy_method": str(_eddy_method),
                            "demag_seeded": bool(_dm_seeded),
                            "mat_fp": str(_noload_material_fingerprint())}
+                # the Br map's lineage temperature travels with the state
+                # (library and catalog copy; `_br_carry_hot_refusal`)
+                if _br_lineage_temp_c(_wcp) is not None:
+                    _xm_pub["br_tmax_c"] = float(_br_lineage_temp_c(_wcp))
                 if _wlib.enabled():
                     _wlib.store(_wcp, key=_lib_key, op=_lib_op,
                                 origin=("sweep" if _seed_from_previous()

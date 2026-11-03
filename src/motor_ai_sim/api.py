@@ -173,6 +173,9 @@ from motor_ai_sim import watchdog_notify as _watchdog
 async def _lifespan(_app):
     _log_redaction.install()        # again: uvicorn may have (re)built its handlers
     _run_startup_checks()
+    # New device cards of the image are copied into the live shared catalogue; never overwrites (seed_devices.py).
+    from motor_ai_sim.seed_devices import seed_new_device_cards as _seed_new_device_cards
+    _seed_new_device_cards()
     # Deploy stage 2 (docs/DEPLOY_STAGE2.md): which process is this?  Leader-only work runs in exactly one place - the
     # process that computes.  The API role (blue / green, two of them alive during a switch) never resumes a sweep.
     from motor_ai_sim import roles as _roles

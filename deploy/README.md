@@ -271,6 +271,12 @@ the `motor_config` **named volume**, and a named volume is only seeded when it
 is *empty* — so the second deploy silently produced a server with no catalog and
 no error anywhere.
 
+After the first seed, **new power-device cards** that a later release adds to the image
+(`/app/config-seed/devices/*.yaml`) are copied into `/srv/motres/shared/devices/` by the
+API/worker at boot (`src/motor_ai_sim/seed_devices.py`): only file names that do not exist
+there yet, one `seeded device card X` log line each. An existing shared card is never
+overwritten or deleted; if it differs from the image's copy a warning is logged for review.
+
 **4. Verify the migration answers the Stage 0 questions.**
 
 ```bash

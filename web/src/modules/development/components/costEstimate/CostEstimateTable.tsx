@@ -156,7 +156,8 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
     return ([['tooling', w.tooling], ['manufacturing', w.manufacturing], ['testing', w.testing], ['shipping', w.shipping]] as Array<[LineId, number | null]>)
       .filter(([id]) => id !== 'testing' || r.testingNeeded)
       .map(([id, v]) => `${t(`costEstimate.durations.${id}`)}: ${v === null ? '—' : t('costEstimate.weeksN', { n: weeksText(v) })}`)
-      .concat([t('costEstimate.durationSum', { n: weeksText(w.sum) }), w.override !== null ? t('costEstimate.weeksOverridden', { n: weeksText(w.override) }) : t('costEstimate.weeksOverrideTip')]).join('\n');
+      .concat([t('costEstimate.durationSum', { n: weeksText(w.sum) }), w.override !== null ? t('costEstimate.weeksOverridden', { n: weeksText(w.override) }) : t('costEstimate.weeksOverrideTip')])
+      .concat(w.missing.length > 0 ? [t('costEstimate.weeksMissing', { count: w.missing.length })] : []).join('\n');
   };
 
   return <Box data-testid="cost-table" sx={{ bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', p: { xs: 1, md: 2 }, minWidth: 0 }}>
@@ -206,11 +207,9 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
                     ariaLabel={`${t('costEstimate.iteration', { n: r.index })} · ${t('costEstimate.table.col.duration')}`}
                     onCommit={(n) => change(setWeeksOverride(estimate, r.index, n))} /></span>
                 </Tooltip>
-                {w.missing.length > 0 && <Typography sx={{ fontSize: 10.5, color: 'warning.main', whiteSpace: 'nowrap' }}>{t('costEstimate.weeksMissing', { count: w.missing.length })}</Typography>}
               </TableCell>
               <TableCell sx={{ ...num, fontWeight: 600 }}>
-                {money(r.total)}
-                {r.missing > 0 && <Typography sx={{ fontSize: 10.5, color: 'warning.main' }}>{t('costEstimate.missingCount', { count: r.missing })}</Typography>}
+                {r.missing > 0 ? <Tooltip title={t('costEstimate.missingCount', { count: r.missing })}><span>{money(r.total)}</span></Tooltip> : money(r.total)}
               </TableCell>
             </TableRow>;
           })}

@@ -59,7 +59,6 @@ function LineRow({ def, line, it, total, lang, t, onEdit, onWeeks }: {
       <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
         <Tooltip title={chip.tip} enterTouchDelay={0}><Chip size="small" color={CHIP_COLOR[chip.kind] ?? 'default'} variant={chip.kind === 'none' ? 'outlined' : 'filled'} label={chip.label} sx={{ height: 22, fontSize: 11 }} /></Tooltip>
       </Stack>
-      {line.status === 'missing' && needed && line.hint && <Typography sx={{ fontSize: 11.5, color: 'warning.main' }}>{line.hint}</Typography>}
     </Stack>
     <BigNumber label={def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')} unit="EUR" size="normal" min={0} value={line.amount} disabled={!needed}
       ariaLabel={`${label}: ${def.per_motor ? t('costEstimate.perMotor') : t('costEstimate.amount')}`} onChange={(n) => onEdit({ amount: n })} />
@@ -248,7 +247,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Stack direction="row" spacing={1} alignItems="center"><Typography component="h1" sx={{ fontSize: 18, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.title')}</Typography>
         <Tooltip title={t('costEstimate.adminOnlyTip')}><Chip size="small" label={t('costEstimate.adminOnly')} sx={{ height: 20, fontSize: 10.5 }} /></Tooltip></Stack>
-      <Tooltip title={t('costEstimate.totalTip')}><Typography data-testid="header-total" sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {formatMoney(computed.total)} · {t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })} · {t('costEstimate.missingCount', { count: computed.missing_count })}</Typography></Tooltip>
+      <Tooltip title={[t('costEstimate.totalTip'), computed.missing_count > 0 ? t('costEstimate.missingCount', { count: computed.missing_count }) : ''].filter(Boolean).join(' · ')}><Typography data-testid="header-total" sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {formatMoney(computed.total)} · {t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</Typography></Tooltip>
     </Box>
     <Tooltip title={t('costEstimate.view.tip')}><ButtonGroup size="small" aria-label={t('costEstimate.view.label')} data-testid="cost-view-toggle">
       {(['table', 'steps'] as CostView[]).map((v) => <Button key={v} variant={view === v ? 'contained' : 'outlined'} aria-pressed={view === v} onClick={() => pickView(v)}
@@ -271,7 +270,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
         <Box component="span" aria-hidden sx={{ width: 24, height: 24, flex: '0 0 24px', borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600,
           bgcolor: active ? 'primary.main' : st?.state === 'done' ? 'success.main' : 'transparent', color: active || st?.state === 'done' ? '#fff' : 'var(--text-3)', border: active || st?.state === 'done' ? 'none' : '2px solid var(--line)' }}>{st?.state === 'done' && !active ? <CheckIcon sx={{ fontSize: 14 }} /> : i + 1}</Box>
         <Typography component="span" sx={{ fontSize: 13.5, fontWeight: active ? 600 : 500, color: 'var(--text-0)', whiteSpace: 'nowrap' }}>{stepTitle(s)}</Typography>
-        {st && st.missing > 0 && <Typography component="span" title={t('costEstimate.missingCount', { count: st.missing })} sx={{ fontSize: 11, color: 'warning.main', ml: 'auto' }}>{st.missing}</Typography>}
+        {st && st.missing > 0 && <Typography component="span" title={t('costEstimate.missingCount', { count: st.missing })} sx={{ fontSize: 11, color: 'var(--text-3)', ml: 'auto' }}>{st.missing}</Typography>}
       </ButtonBase>;
     })}
   </Box>;
@@ -326,7 +325,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
         <Stack spacing={0.4} sx={{ flex: 1 }}>
           <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.iterationDuration')}</Typography><HelpTip title={txt(schema.durations?.help, lang)} /></Stack>
           <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.weeksN', { n: weeksText(weeks.total) })}</Typography>
-          <Typography sx={{ fontSize: 12, color: weeks.missing.length ? 'warning.main' : 'var(--text-3)' }}>{t('costEstimate.durationSum', { n: weeksText(weeks.sum) })}{weeks.missing.length ? ` · ${t('costEstimate.weeksMissing', { count: weeks.missing.length })}` : ''}</Typography>
+          <Tooltip title={weeks.missing.length ? t('costEstimate.weeksMissing', { count: weeks.missing.length }) : ''}><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('costEstimate.durationSum', { n: weeksText(weeks.sum) })}</Typography></Tooltip>
         </Stack>
         <Tooltip title={t('costEstimate.weeksOverrideTip')}><Box sx={{ width: 160 }}><BigNumber label={t('costEstimate.weeksOverride')} unit={t('costEstimate.weeksUnit')} size="normal" min={0} value={it.weeks_override ?? null}
           placeholder={weeksText(weeks.sum)} ariaLabel={`${t('costEstimate.iteration', { n: index })}: ${t('costEstimate.weeksOverride')}`}
@@ -356,7 +355,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
         <TableBody>
           {reviewRows(computed, missingWord).map((r) => <TableRow key={r.key}>
             <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('costEstimate.iteration', { n: r.iteration })}</TableCell>
-            {LINE_IDS.map((id) => <TableCell key={id} sx={{ color: r[id] === missingWord ? 'warning.main' : undefined }}>{r[id]}</TableCell>)}
+            {LINE_IDS.map((id) => <TableCell key={id} sx={{ color: r[id] === missingWord ? 'var(--text-3)' : undefined }}>{r[id]}</TableCell>)}
             <TableCell sx={{ whiteSpace: 'nowrap' }}>{reviewWeeks(r.iteration)}</TableCell>
             <TableCell sx={{ fontWeight: 600 }}>{r.original ? <Tooltip title={t('costEstimate.originalsTip', { list: r.original })}><span>{r.subtotal}</span></Tooltip> : r.subtotal}</TableCell>
           </TableRow>)}

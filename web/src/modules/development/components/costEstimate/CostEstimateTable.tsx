@@ -11,6 +11,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import AddIcon from '@mui/icons-material/Add';
+import LocalShippingOutlinedIcon from '@mui/icons-material/LocalShippingOutlined';
 import {
   acceptSuggestion, addIteration as addIterationOf, dhlDetails, editLine, formatMoney, iterationWeeks, lineNeeded, originChip, setIterationField, setLineWeeks, setSetting,
   removeIteration as removeIterationOf, setWeeksOverride, suggestionAt, tableModel, txt, weeksText, WEEKS_MAX, WEEKS_OVERRIDE_MAX,
@@ -67,7 +68,8 @@ function NumCell({ value, onCommit, suggestion, onAccept, acceptLabel = '✓', a
       '& .MuiInputBase-input::placeholder': { color: 'var(--text-3)', opacity: 1, fontStyle: 'italic' } }} />;
 }
 
-export interface CellCtx { estimate: CostEstimate; schema: CostSchema; lang: CostLang; t: T; who: string; today: string; suggestions: CostSuggestions | null; change: (next: CostEstimate) => void }
+export interface CellCtx { estimate: CostEstimate; schema: CostSchema; lang: CostLang; t: T; who: string; today: string; suggestions: CostSuggestions | null; change: (next: CostEstimate) => void;
+  /** put a manual shipping line back to automatic DHL (the page asks the server for the numbers first) */ onDhlAuto?: (ref: LineRef) => void }
 
 /** The hover text of a line cell: where its number comes from (or the suggestion / why none), the note, the weeks. */
 function cellTip(ctx: CellCtx, ref: LineRef, sug: SuggestionCell | undefined): string[] {
@@ -82,6 +84,7 @@ function cellTip(ctx: CellCtx, ref: LineRef, sug: SuggestionCell | undefined): s
     out.push(sug.source === 'dhl' ? t('costEstimate.origin.dhl', { date: sug.source_ref?.dhl?.quoted_on ?? '?', from: sug.source_ref?.dhl?.from ?? '?', to: sug.source_ref?.dhl?.to ?? '?', weight: weeksText(sug.source_ref?.dhl?.weight_kg ?? null), margin: weeksText(sug.source_ref?.dhl?.margin_pct ?? 0) }) : (sug.origin ?? ''));
   } else out.push(`${chip.label}: ${chip.tip}`);
   if (line.status === 'missing' && sug?.hint) out.push(sug.hint);
+  if (line.status === 'filled' && line.source === 'dhl' && line.hint) out.push(line.hint);      // an automatic line that could not be recomputed
   if (ref.line === 'shipping') {
     const d = line.source === 'dhl' ? line.source_ref?.dhl : line.status === 'missing' ? sug?.source_ref?.dhl : undefined;
     out.push(...(d ? dhlDetails(d, it.motors, t, excluded) : [excluded]));
@@ -107,6 +110,11 @@ function LineCell({ ctx, at, label, perMotor = false, disabled }: { ctx: CellCtx
         suggestion={sug?.amount !== undefined ? plain(sug.amount) : undefined} onAccept={sug?.amount !== undefined ? accept : undefined} acceptLabel={t('costEstimate.table.accept')}
         onCommit={(n) => change(editLine(estimate, at, { amount: n }, who, today))} unit={perMotor ? '€/m' : '€'} /></span>
     </Tooltip>
+    {at.line === 'shipping' && line.status === 'filled' && (line.source === 'dhl'
+      ? <Tooltip title={line.hint || t('costEstimate.dhl.autoOnTip')}><LocalShippingOutlinedIcon data-testid="dhl-auto-on" titleAccess={t('costEstimate.dhl.autoOnTip')} sx={{ fontSize: 17, mx: 0.4, color: line.hint ? 'warning.main' : 'primary.main' }} /></Tooltip>
+      : ctx.onDhlAuto && estimate.settings.ship_to
+        ? <Tooltip title={t('costEstimate.dhl.autoTip')}><IconButton size="small" tabIndex={-1} data-testid="dhl-auto-set" aria-label={`${aria}: ${t('costEstimate.dhl.autoTip')}`} onClick={() => ctx.onDhlAuto!(at)}
+          sx={{ p: 0.4, color: 'var(--text-4)' }}><LocalShippingOutlinedIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip> : null)}
     <Tooltip title={t('costEstimate.table.noteTip')}><IconButton size="small" tabIndex={-1} aria-label={`${aria}: ${t('costEstimate.table.noteTip')}`} onClick={(e) => setAnchor(e.currentTarget)}
       sx={{ p: 0.4, color: line.note ? 'primary.main' : 'var(--text-4)' }}><EditNoteIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
     <Popover open={!!anchor} anchorEl={anchor} onClose={() => setAnchor(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
@@ -148,7 +156,8 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
     return ([['tooling', w.tooling], ['manufacturing', w.manufacturing], ['testing', w.testing], ['shipping', w.shipping]] as Array<[LineId, number | null]>)
       .filter(([id]) => id !== 'testing' || r.testingNeeded)
       .map(([id, v]) => `${t(`costEstimate.durations.${id}`)}: ${v === null ? '—' : t('costEstimate.weeksN', { n: weeksText(v) })}`)
-      .concat([t('costEstimate.durationSum', { n: weeksText(w.sum) }), w.override !== null ? t('costEstimate.weeksOverridden', { n: weeksText(w.override) }) : t('costEstimate.weeksOverrideTip')]).join('\n');
+      .concat([t('costEstimate.durationSum', { n: weeksText(w.sum) }), w.override !== null ? t('costEstimate.weeksOverridden', { n: weeksText(w.override) }) : t('costEstimate.weeksOverrideTip')])
+      .concat(w.missing.length > 0 ? [t('costEstimate.weeksMissing', { count: w.missing.length })] : []).join('\n');
   };
 
   return <Box data-testid="cost-table" sx={{ bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', p: { xs: 1, md: 2 }, minWidth: 0 }}>
@@ -198,11 +207,9 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
                     ariaLabel={`${t('costEstimate.iteration', { n: r.index })} · ${t('costEstimate.table.col.duration')}`}
                     onCommit={(n) => change(setWeeksOverride(estimate, r.index, n))} /></span>
                 </Tooltip>
-                {w.missing.length > 0 && <Typography sx={{ fontSize: 10.5, color: 'warning.main', whiteSpace: 'nowrap' }}>{t('costEstimate.weeksMissing', { count: w.missing.length })}</Typography>}
               </TableCell>
               <TableCell sx={{ ...num, fontWeight: 600 }}>
-                {money(r.total)}
-                {r.missing > 0 && <Typography sx={{ fontSize: 10.5, color: 'warning.main' }}>{t('costEstimate.missingCount', { count: r.missing })}</Typography>}
+                {r.missing > 0 ? <Tooltip title={t('costEstimate.missingCount', { count: r.missing })}><span>{money(r.total)}</span></Tooltip> : money(r.total)}
               </TableCell>
             </TableRow>;
           })}

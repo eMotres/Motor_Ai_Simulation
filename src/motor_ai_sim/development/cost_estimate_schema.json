@@ -57,7 +57,10 @@
     "help": {"en": "Destination country (ISO code, e.g. AR) and city.", "zh-CN": "目的地国家（ISO 代码，如 AR）和城市。"}},
    {"id": "ship_margin_pct", "type": "number", "min": 0, "max": 100, "default": 20,
     "label": {"en": "Shipping margin", "zh-CN": "运费余量"},
-    "help": {"en": "% added to the DHL quote scaled to the weight.", "zh-CN": "在按重量换算的 DHL 报价上加的百分比。"}}
+    "help": {"en": "% added to the DHL quote scaled to the weight.", "zh-CN": "在按重量换算的 DHL 报价上加的百分比。"}},
+   {"id": "ship_round_eur", "type": "number", "min": 0, "max": 10000, "default": 100,
+    "label": {"en": "Round DHL up to", "zh-CN": "DHL 运费向上取整至"},
+    "help": {"en": "The DHL amount is rounded up to a multiple of this, in EUR (0 = no rounding).", "zh-CN": "DHL 金额向上取整到该欧元数的整数倍（0 = 不取整）。"}}
   ],
   "housing_factor": 1.3,
   "active_to_complete": 1.3,

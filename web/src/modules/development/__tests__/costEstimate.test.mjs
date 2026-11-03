@@ -8,6 +8,7 @@ import {
   stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
   acceptSuggestion, addIteration, blankLane, dhlDetails, dhlOrigin, iterationWeeks, laneErrors, projectWeeks, readView, removeIteration, removeLane,
   setLineWeeks, setShipTo, setWeeksOverride, suggestionAt, suggestionKey, tableModel, upsertLane, validWeeks, weeksText, writeView,
+  applyAuto, autoDhlIterations, autoKey, setDhlAuto,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -562,10 +563,76 @@ test('the suggestions are fetched again only when what they depend on changes', 
 
 test('the schema carries the durations and the shipping block in both languages', () => {
   for (const f of schema.shipping.settings) assert.ok(f.label.en && f.label['zh-CN'] && f.help.en && f.help['zh-CN'], f.id);
-  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct']);
+  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct', 'ship_round_eur']);
   assert.equal(schema.shipping.settings[0].default, 'CN Shanghai');
   assert.equal(schema.shipping.settings[2].default, 20);
+  assert.equal(schema.shipping.settings[3].default, 100, 'DHL is rounded up to whole 100 EUR by default');
   assert.ok(schema.shipping.excluded['zh-CN'] && schema.durations.help['zh-CN']);
   for (const lang of ['en', 'zh-CN']) assert.match(realT(lang)('costEstimate.weeksMissing', { count: 2 }), /2/);
   assert.equal(realT('en')('costEstimate.weeksMissing', { count: 1 }), '1 stage without weeks');
+});
+
+// ── automatic DHL shipping (owner 2026-11-03) ─────────────────────────────────────────────────────────────────────────
+
+const autoLine = (amount, extra = {}) => ({ ...blank(), status: 'filled', amount, source: 'dhl', source_ref: { dhl: { weight_kg: 85, lane_price: 20169.14, price_eur_unrounded: 1714.38, round_eur: 100 } }, weeks: 4, ...extra });
+function withShipping(line, motors = 2) {
+  const e = estimate(2);
+  e.iterations[0].motors = motors;
+  e.iterations[0].lines.shipping = line;
+  return e;
+}
+
+test('the automatic DHL line takes the server numbers; a manual line and the owner weeks are never touched', () => {
+  const e = withShipping(autoLine(1800));
+  assert.deepEqual(autoDhlIterations(e), [1]);
+  const cell = { amount: 5100, weeks: null, source_ref: { dhl: { weight_kg: 250, price_eur_unrounded: 5042.28, round_eur: 100 } }, hint: '' };
+  const got = applyAuto({ ...e, iterations: [{ ...e.iterations[0], motors: 6 }, e.iterations[1]] }, { 1: cell }).iterations[0].lines.shipping;
+  assert.deepEqual([got.amount, got.source, got.source_ref.dhl.weight_kg, got.weeks, got.hint], [5100, 'dhl', 250, 4, ''], 'weeks stay when the server gives none');
+  assert.equal(applyAuto(e, { 1: { ...cell, weeks: 7 } }).iterations[0].lines.shipping.weeks, 7);
+  // nothing differs -> the same object (no needless re-render / save)
+  assert.equal(applyAuto(e, { 1: { amount: 1800, weeks: 4, source_ref: e.iterations[0].lines.shipping.source_ref, hint: '' } }), e);
+  assert.equal(applyAuto(e, undefined), e);
+  // a manual line is never overwritten, even if the server names it
+  const manual = withShipping({ ...blank(), status: 'filled', amount: 999, source: 'manual' });
+  assert.equal(applyAuto(manual, { 1: cell }), manual);
+  assert.deepEqual(autoDhlIterations(manual), []);
+  // DHL cannot be computed: the last value stays and the hint is shown
+  const stale = applyAuto(e, { 1: { amount: null, weeks: null, source_ref: null, hint: 'no DHL quote for BR; add one' } }).iterations[0].lines.shipping;
+  assert.deepEqual([stale.amount, stale.hint], [1800, 'no DHL quote for BR; add one']);
+  assert.deepEqual(e.iterations[0].lines.shipping, autoLine(1800), 'the input is not mutated');
+});
+
+test('the preview is refetched when the motors (or anything the DHL price depends on) change, not when an amount does', () => {
+  const e = withShipping(autoLine(1800));
+  const k = autoKey(e);
+  assert.notEqual(autoKey(setIterationField(e, 1, 'motors', 6)), k);
+  assert.notEqual(autoKey(setShipTo(e, 'BR', '')), k);
+  assert.notEqual(autoKey(setSetting(e, schema, 'ship_round_eur', 0)), k);
+  assert.notEqual(autoKey(setSetting(e, schema, 'ship_margin_pct', 30)), k);
+  assert.equal(autoKey(applyAuto(e, { 1: { amount: 5100, weeks: null, source_ref: null, hint: '' } })), k, 'a recomputed amount does not trigger another preview');
+  assert.equal(autoKey(editLine(e, { iteration: 1, line: 'tooling' }, { amount: 5 }, 'me', 'd')), k);
+  assert.notEqual(suggestionKey(setSetting(e, schema, 'ship_round_eur', 0)), suggestionKey(e));
+});
+
+test('a manual shipping line can be put back to automatic DHL; nothing else can', () => {
+  const ref = { iteration: 1, line: 'shipping' };
+  const manual = withShipping({ ...blank(), status: 'filled', amount: 999, source: 'manual', by: 'me', date: 'd', note: 'kept' });
+  const next = setDhlAuto(manual, ref);
+  const line = next.iterations[0].lines.shipping;
+  assert.deepEqual([line.source, line.amount, line.source_ref, line.note, line.status], ['dhl', 999, null, 'kept', 'filled'], 'the amount stays until the server numbers arrive');
+  assert.deepEqual(manual.iterations[0].lines.shipping.source, 'manual');
+  const auto = withShipping(autoLine(1800));
+  assert.equal(setDhlAuto(auto, ref), auto, 'already automatic');
+  const empty = estimate(2);
+  assert.equal(setDhlAuto(empty, ref), empty, 'a missing line has its grey suggestion instead');
+  assert.equal(setDhlAuto(manual, { iteration: 1, line: 'tooling' }), manual, 'only shipping');
+});
+
+test('the DHL tooltip names the rounding and the unrounded quote', () => {
+  const en = realT('en');
+  const lines = dhlDetails({ ...dhlRef, price_eur_unrounded: 1736.71, round_eur: 100 }, 2, en, 'excl');
+  assert.equal(lines.at(-2), 'Quote 1736.71 EUR, rounded up to a multiple of 100 EUR.');
+  assert.equal(lines.at(-1), 'excl');
+  assert.ok(!dhlDetails({ ...dhlRef, price_eur_unrounded: 1714.38, round_eur: 0 }, 2, en, 'excl').some((l) => /multiple of/.test(l)), 'no rounding, no line');
+  for (const lang of ['en', 'zh-CN']) for (const k of ['rounded', 'autoTip', 'autoOnTip', 'autoFailed']) assert.ok(locale(lang).dhl[k], `${lang} ${k}`);
 });

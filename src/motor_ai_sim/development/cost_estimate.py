@@ -24,6 +24,9 @@ costs us («не надо до такой степени оценивать ст
   to 5 kg (motor mass = the complete mass when known, else active mass x 1.3); the price is the nearest-weight DHL quote of
   the estimate's dated lane table (``dhl_lanes``) scaled per kg, + the shipping margin (20 %), in EUR at the stored rates;
   the transit days give the shipping weeks (+1 week customs).  Duties and import VAT are NOT included.
+  The amount is rounded UP to ``settings.ship_round_eur`` (default 100 EUR; 0 = off) after margin and conversion.
+* A shipping line whose source is ``dhl`` is AUTOMATIC (owner 2026-11-03): every save recomputes it from the iteration's
+  current motors (``refresh_dhl``); a line the owner typed is never touched.
 
 This module is pure (no I/O): schema, defaults, validation, the old-shape conversion, totals, ``suggest`` over gathered
 data, and the diff.  Storage and data gathering live in ``cost_estimate_store`` / ``cost_estimate_sources``, the admin
@@ -50,7 +53,7 @@ _MAX_NOTE = 500
 _MAX_REF = 200
 FX_BASE = "EUR"
 FX_SOURCES = ("ECB", "manual")
-SHIP_SETTINGS = ("ship_from", "ship_to", "ship_margin_pct")
+SHIP_SETTINGS = ("ship_from", "ship_to", "ship_margin_pct", "ship_round_eur")
 _MAX_PLACE = 80
 
 Money = Dict[str, float]
@@ -149,7 +152,8 @@ def default_settings(schema: dict, *, linked_motors: Iterable[dict] = ()) -> dic
             "contingency_pct": float(_field(schema, "settings", "contingency_pct")["default"]),
             "display_currency": None, "target_motor": _target_from(linked_motors),
             "ship_from": str(_ship_field(schema, "ship_from")["default"]), "ship_to": None,
-            "ship_margin_pct": float(_ship_field(schema, "ship_margin_pct")["default"])}
+            "ship_margin_pct": float(_ship_field(schema, "ship_margin_pct")["default"]),
+            "ship_round_eur": float(_ship_field(schema, "ship_round_eur")["default"])}
 
 
 def default_lanes(schema: dict) -> List[dict]:
@@ -236,6 +240,7 @@ def normalize_settings(raw: Any, schema: dict, legacy: bool = False) -> dict:
             raise EstimateError("display_currency: null or one of %s" % ", ".join(schema["currencies"]))
     complex_project = bool(raw.get("complex"))
     margin_field = _ship_field(schema, "ship_margin_pct")
+    round_field = _ship_field(schema, "ship_round_eur")
     ship_from = _text(raw.get("ship_from", _ship_field(schema, "ship_from")["default"]), _MAX_PLACE)
     return {"complex": complex_project,
             "iterations": _int(raw.get("iterations", default_iterations(complex_project, schema)), "iterations",
@@ -247,7 +252,9 @@ def normalize_settings(raw: Any, schema: dict, legacy: bool = False) -> dict:
             "ship_from": ship_from,
             "ship_to": normalize_place(raw.get("ship_to"), "ship_to"),
             "ship_margin_pct": _num(raw.get("ship_margin_pct", margin_field["default"]), "ship_margin_pct",
-                                    lo=margin_field["min"], hi=margin_field["max"], allow_none=False)}
+                                    lo=margin_field["min"], hi=margin_field["max"], allow_none=False),
+            "ship_round_eur": _num(raw.get("ship_round_eur", round_field["default"]), "ship_round_eur",
+                                   lo=round_field["min"], hi=round_field["max"], allow_none=False)}
 
 
 _COUNTRY = re.compile(r"[A-Z]{2}")
@@ -334,7 +341,8 @@ def _source_ref(raw: Any, what: str) -> Optional[dict]:
         for k in ("quoted_on", "from", "to", "mode", "currency", "mass_basis", "source"):
             if dhl.get(k) not in (None, ""):
                 clean[k] = _text(dhl.get(k), _MAX_REF)
-        for k in ("lane_weight_kg", "weight_kg", "margin_pct", "price", "lane_price", "motor_mass_kg", "transit_days", "rate"):
+        for k in ("lane_weight_kg", "weight_kg", "margin_pct", "price", "lane_price", "motor_mass_kg", "transit_days", "rate",
+                  "price_eur_unrounded", "round_eur"):
             v = _num(dhl.get(k), "%s.source_ref.dhl.%s" % (what, k), hi=1e12)
             if v is not None:
                 clean[k] = v
@@ -373,7 +381,7 @@ def normalize_line(raw: Any, line_id: str, index: int, schema: dict, what: str, 
             "source": source, "source_ref": _source_ref(raw.get("source_ref"), what) if filled else None,
             "factor": factor if filled else None, "date": date[:10] if date else None,
             "by": _text(raw.get("by"), _MAX_REF) or None, "note": _text(raw.get("note")),
-            "hint": "" if filled else _text(raw.get("hint")),
+            "hint": _text(raw.get("hint")) if (not filled or source == "dhl") else "",    # an automatic DHL line keeps its last value AND says why it is stale
             "weeks": _weeks(raw.get("weeks"), what + ".weeks", schema)}
 
 
@@ -1068,6 +1076,21 @@ def pick_lane(lanes: List[dict], ship_from: str, country: str, weight: float) ->
     return min(same, key=lambda ln: (abs(float(ln["weight_kg"]) - weight), _newest_first(ln.get("quoted_on"))))
 
 
+def round_up_to(amount: float, step: float) -> float:
+    """``amount`` rounded UP to a multiple of ``step`` (owner 2026-11-03: DHL prices are rounded up to 100 EUR, 1736.71 -> 1800);
+    ``step`` 0 = no rounding (cents only)."""
+    if not step or step <= 0:
+        return round(float(amount), 2)
+    return round(float(math.ceil(round(float(amount) / step, 9)) * step), 2)
+
+
+def transit_weeks(transit_days: Any, schema: dict) -> Optional[float]:
+    """The shipping duration of a lane: transit days / 7 rounded up + the customs week; ``None`` when the lane has no days."""
+    if transit_days is None:
+        return None
+    return float(math.ceil(float(transit_days) / 7.0) + int(schema["shipping"]["customs_weeks"]))
+
+
 def dhl_suggestion(estimate: dict, it: dict, schema: dict, motor_mass_kg: Optional[float], mass_basis: str = "") -> Tuple[Optional[dict], str]:
     """The shipping line of iteration ``it`` from the estimate's DHL lane table: ``({amount (EUR), weeks, source_ref}, "")``
     or ``(None, one-line reason)``.  Weight = ``shipping_weight``; price = the nearest quote's price per kg x that weight,
@@ -1092,16 +1115,72 @@ def dhl_suggestion(estimate: dict, it: dict, schema: dict, motor_mass_kg: Option
         rate = fx_rates(estimate.get("fx")).get(lane["currency"]) or 0.0
         if not rate:
             return None, "the DHL quote is in %s and no exchange rate is known: enter it in %s" % (lane["currency"], schema["line_currency"])
-    weeks = None
-    if lane.get("transit_days") is not None:
-        weeks = float(math.ceil(float(lane["transit_days"]) / 7.0) + int(schema["shipping"]["customs_weeks"]))
+    weeks = transit_weeks(lane.get("transit_days"), schema)
+    eur = round(price / rate, 2)
+    step = settings.get("ship_round_eur")
+    step = float(_ship_field(schema, "ship_round_eur")["default"] if step is None else step)
+    amount = round_up_to(eur, step)
     to = country + ((" " + dest["city"]) if dest.get("city") else "")
     ref = {"quoted_on": lane["quoted_on"], "from": lane["from"], "to": to, "mode": lane.get("mode") or "",
            "lane_weight_kg": float(lane["weight_kg"]), "lane_price": float(lane["price"]), "currency": lane["currency"],
            "weight_kg": weight, "margin_pct": margin, "price": round(price, 2), "rate": rate,
            "motor_mass_kg": float(motor_mass_kg), "mass_basis": mass_basis, "transit_days": lane.get("transit_days"),
-           "source": lane.get("source") or ""}
-    return {"amount": round(price / rate, 2), "weeks": weeks, "source_ref": {"dhl": {k: v for k, v in ref.items() if v not in (None, "")}}}, ""
+           "source": lane.get("source") or "", "price_eur_unrounded": eur, "round_eur": step}
+    return {"amount": amount, "weeks": weeks, "source_ref": {"dhl": {k: v for k, v in ref.items() if v not in (None, "")}}}, ""
+
+
+def refresh_dhl(estimate: dict, schema: dict, motor_mass_kg: Optional[float], mass_basis: str = "", *, today: str = "") -> Tuple[dict, List[dict]]:
+    """Recompute every AUTOMATIC DHL shipping line (``source`` ``dhl``, filled) from the estimate as it is: the iteration's
+    current motors, ``ship_to`` / ``ship_from`` / margin / rounding, the lane table and the rates.  Returns ``(new estimate,
+    changes)``; the input is not touched.
+
+    * amount and ``source_ref.dhl`` follow the recomputed suggestion; the duration only when it is empty or still the one an
+      earlier DHL calculation gave (the owner's own weeks are never touched);
+    * when the value cannot be computed (no destination, lane, mass or rate) the line KEEPS its last value and gets a one-line
+      ``hint`` saying why;
+    * a shipping line of any other source (``manual``, ``converted``, ``estimate``) and every other line is left alone."""
+    est = copy.deepcopy(estimate)
+    changes: List[dict] = []
+    for it in est.get("iterations") or []:
+        line = (it.get("lines") or {}).get("shipping")
+        if not line or line.get("status") != "filled" or line.get("source") != "dhl":
+            continue
+        sug, why = dhl_suggestion(est, it, schema, motor_mass_kg, mass_basis)
+        if sug is None:
+            hint = why[:_MAX_NOTE]
+            if line.get("hint") != hint:
+                line["hint"] = hint
+                changes.append({"iteration": it["index"], "stale": True, "reason": why})
+            continue
+        ref = _source_ref(sug["source_ref"], "shipping")
+        old_ref = line.get("source_ref") or {}
+        old_weeks = transit_weeks((old_ref.get("dhl") or {}).get("transit_days"), schema)
+        weeks = line.get("weeks")
+        if sug.get("weeks") is not None and (weeks is None or (old_weeks is not None and float(weeks) == old_weeks)):
+            weeks = sug["weeks"]
+        if (line.get("amount") == sug["amount"] and old_ref == ref and line.get("weeks") == weeks and not line.get("hint")
+                and line.get("currency") == schema["line_currency"]):
+            continue
+        line.update({"amount": sug["amount"], "currency": schema["line_currency"], "source_ref": ref, "weeks": weeks, "hint": "",
+                     "factor": None})
+        if today:
+            line.update({"date": today, "by": "auto"})
+        changes.append({"iteration": it["index"], "amount": sug["amount"], "weeks": weeks,
+                        "weight_kg": ((ref or {}).get("dhl") or {}).get("weight_kg")})
+    return est, changes
+
+
+def auto_cells(before: dict, after: dict) -> Dict[str, dict]:
+    """What ``refresh_dhl`` changed, for the web (the DHL cell follows the motors count at once, before any save):
+    ``{"<iteration>": {amount, weeks, source_ref, hint}}`` for each automatic DHL line that differs."""
+    out: Dict[str, dict] = {}
+    for b, a in zip(before.get("iterations") or [], after.get("iterations") or []):
+        lb, la = b["lines"]["shipping"], a["lines"]["shipping"]
+        if la.get("source") != "dhl":
+            continue
+        if any(lb.get(k) != la.get(k) for k in ("amount", "source_ref", "weeks", "hint")):
+            out[str(a["index"])] = {k: la.get(k) for k in ("amount", "weeks", "source_ref", "hint")}
+    return out
 
 
 def _suggestable(line: dict, refresh: bool) -> bool:

@@ -1174,11 +1174,11 @@ def _shared_source(src: Any) -> bool:
 _CONFIGURE_CODE = ("routes/catalog.py", "configure_limits.py", "configure_load.py", "configure_anchor.py",
                    "propeller_s1.py", "propeller.py", "cooling_options.py", "passport_store.py", "duty_class.py",
                    "duty_results.py", "applications.py", "routes/propellers.py", "modules/motor_mass.py",
-                   "bearings.py", "duty_kind.py")
+                   "bearings.py", "duty_kind.py", "thermal_settings.py")
 
 
 #: the version of the stored Configure answers; part of every stamp (bump it to make every stored answer stale)
-CONFIGURE_STORE_VERSION = "configure-2"
+CONFIGURE_STORE_VERSION = "configure-3"
 
 
 def _configure_stamp(src: Any = None) -> str:
@@ -1223,6 +1223,8 @@ def _configure_stamp(src: Any = None) -> str:
     paths += [src / f for f in _CONFIGURE_CODE]
     # CONFIGURE_STORE_VERSION "configure-2" (2026-10-20, F1): answers stored before the permission fix held contexts
     # filtered for whoever built them - the new salt makes every one of them stale (ignored, recomputed, overwritten).
+    # "configure-3" (2026-11-03): presets carry the configuration's own cooling (``cooling_defaults`` from its
+    # ``thermal_defaults:``); answers stored before it have none and showed a jacketed machine in typed air.
     return _fsc.stamp_of(sorted({str(x) for x in paths}), dirs, salt=CONFIGURE_STORE_VERSION)
 
 

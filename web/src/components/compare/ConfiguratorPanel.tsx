@@ -63,6 +63,7 @@ import { ratedSpeedCap, loadedRatedRpm } from '../../lib/configureRatedCap';
 import { s1LoadPoint, s1ThermalAt, type S1ThermalModel } from '../../lib/s1Thermal';
 import { anchoredTemperatures, anchorLossRatios, type ThermalAnchor } from '../../lib/thermalAnchor';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
+import { configCooling } from '../../lib/configureCooling';
 import CoolingControls from '../thermal/CoolingControls';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
@@ -1563,11 +1564,17 @@ ${s1Text.text}` : '';
     return () => window.removeEventListener('cooling:changed', bump);
   }, []);
   const coolPayload = useMemo(() => (hasPropellerControls || roboticsOnly ? null : getCoolingPayload()), [coolTick, hasPropellerControls, roboticsOnly]);
+  /** The configuration's OWN cooling (its `thermal_defaults:`, 2026-11-03: a jacket-cooled generator showed the page's
+   *  typed 8 m/s air and every temperature red).  It replaces the typed cooling wherever no propeller and no robot rule
+   *  decides; a configuration that states none keeps the typed cooling exactly as before. */
+  const cfgCooling = useMemo(() => (hasPropellerControls || roboticsOnly ? null
+    : configCooling(basePreset?.cooling_defaults, (thermalGeom.statorOD_mm || 150) / 1000, airH, liqH)),
+  [hasPropellerControls, roboticsOnly, basePreset, thermalGeom]);
   /** The cooling behind the ONE temperature row — the same lumped estimate in every mode: the
-   *  propeller's film h at this rpm, still air at the natural-convection floor, or the typed
-   *  air / liquid system.  (It replaces the removed "Estimated temperatures" block,
+   *  propeller's film h at this rpm, still air at the natural-convection floor, the configuration's own
+   *  cooling, or the typed air / liquid system.  (It replaces the removed "Estimated temperatures" block,
    *  owner 2026-10-12.)  null = the point cannot be run and nothing may be shown for it. */
-  const cooling = useMemo((): { h_Wm2K: number; ambient_C: number; air_speed_ms: number | null } | null => {
+  const cooling = useMemo((): { h_Wm2K: number; ambient_C: number; air_speed_ms: number | null; film?: boolean } | null => {
     const D = (thermalGeom.statorOD_mm || 150) / 1000;
     if (propellerCoolingActive) {
       return propPoint && propPoint.h_W_m2K != null && !loadRefused
@@ -1575,6 +1582,7 @@ ${s1Text.text}` : '';
         : null;
     }
     if (optionalPropellerCooling || roboticsOnly) return { h_Wm2K: airH(0, D), ambient_C: ambient, air_speed_ms: 0 };   // still air (Robotics)
+    if (cfgCooling) return cfgCooling;
     if (coolPayload) {
       const isAir = coolPayload.cooling_mode === 'air';
       return {
@@ -1584,7 +1592,7 @@ ${s1Text.text}` : '';
       };
     }
     return null;
-  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, coolPayload]);
+  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, cfgCooling, coolPayload]);
   /** winding / magnet / housing temperatures at the knobs (null while the cooling data is not
    *  here, or while the load is refused — never numbers for a point that cannot be run) */
   /** ONE verdict for a point: the server's thermal model at (rpm, I) when it applies, else the lumped estimate - for the
@@ -1596,12 +1604,17 @@ ${s1Text.text}` : '';
     const m = thermalAnchor.cooling_mode;
     const stillAir = !propellerCoolingActive && (optionalPropellerCooling || roboticsOnly);
     if (m === 'robotics' || m === 'still') return stillAir;
-    if (m === 'air') return !propellerCoolingActive && !stillAir && coolPayload?.cooling_mode === 'air';
+    if (m === 'air') return !propellerCoolingActive && !stillAir
+      && (cfgCooling ? cfgCooling.air_speed_ms != null : coolPayload?.cooling_mode === 'air');
+    // a record solved with a stated film (manual h) anchors a configuration that states its film
+    if (m === 'manual') return !propellerCoolingActive && !stillAir && !!cfgCooling
+      && basePreset?.cooling_defaults?.kind === 'film' && Number(thermalAnchor.h_W_m2K) > 0;
     return false;
   })();
   const anchorUsable = !!thermalAnchor && !calUsable && anchorCoolingMatch && !buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const anchorHRef = thermalAnchor
-    ? airH(thermalAnchor.cooling_mode === 'air' ? thermalAnchor.air_speed_ms : 0, (thermalGeom.statorOD_mm || 150) / 1000) : 1;
+    ? (thermalAnchor.cooling_mode === 'manual' && Number(thermalAnchor.h_W_m2K) > 0 ? Number(thermalAnchor.h_W_m2K)
+      : airH(thermalAnchor.cooling_mode === 'air' ? thermalAnchor.air_speed_ms : 0, (thermalGeom.statorOD_mm || 150) / 1000)) : 1;
   /** record / page losses at the record's point: the stored point IS the record, the loss model only carries the change */
   const anchorRatios = useMemo(() => {
     if (!anchorUsable || !thermalAnchor) return null;
@@ -1663,7 +1676,8 @@ ${s1Text.text}` : '';
   const propBad = !!propLine && (loadRefused || overheats);
   const tempTiles = tempRowTiles(
     thermal && cooling ? { T_winding_C: thermal.T_winding_C, T_magnet_C: thermal.T_magnet_C, T_housing_C: thermal.T_housing_C,
-      air_speed_ms: cooling.air_speed_ms, h_W_m2K: cooling.h_Wm2K, surface_cm2: thermal.A_surface_m2 * 1e4 } : null, tLimits);
+      air_speed_ms: cooling.air_speed_ms, h_W_m2K: cooling.h_Wm2K, surface_cm2: thermal.A_surface_m2 * 1e4,
+      ambient_C: cooling.ambient_C } : null, tLimits, !!cfgCooling?.film);
   // Narrow screens (< COMPACT_BAR_MAX_PX): the knobs are on top and the numbers they move far below, so a one-line results
   // bar stays pinned to the bottom edge and follows every slider (the full tiles are unchanged on a wide screen).
   const narrow = useMediaQuery(`(max-width:${COMPACT_BAR_MAX_PX - 0.05}px)`);
@@ -1675,7 +1689,7 @@ ${s1Text.text}` : '';
   });
   const renderTemp = (t: TempTileSpec) => (
     <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
-      absLevel={t.level} plain
+      absLevel={t.level} plain width={t.width}
       tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
         air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
         surface: t.surface != null ? fmt(t.surface, 0) : '—' })}
@@ -2459,7 +2473,8 @@ ${s1Text.text}` : '';
               </ToggleButtonGroup>
             </Box>
           )}
-          {ctxDone && !hasPropellerControls && !roboticsOnly && (
+          {/* a configuration that states its own cooling (thermal_defaults) is not typed over: the row shows its film */}
+          {ctxDone && !hasPropellerControls && !roboticsOnly && !cfgCooling && (
             <CoolingControls diameterMm={thermalGeom.statorOD_mm} />
           )}
           {/* A robot: the robotics mode only - still air, one ambient field, no air speed or liquid system. */}

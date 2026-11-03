@@ -37,7 +37,8 @@ __all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "HEAT_PATHS",
            "coupled_iteration_settings", "motor_cooling_patch",
            "follow_loaded_motor", "settle_application_cooling",
            "motor_thermal_settings", "resolve_motor_settings",
-           "config_thermal_defaults", "SOURCE_WORDS", "complete_cooling",
+           "config_thermal_defaults", "thermal_defaults_of_doc",
+           "configure_cooling", "SOURCE_WORDS", "complete_cooling",
            "apply_thermal_save", "CANONICAL_COOLING"]
 
 #: The outer stator surface's boundary conditions (routes.thermal).
@@ -794,9 +795,16 @@ def config_thermal_defaults(die: str, config: str) -> Dict[str, str]:
     """
     try:
         from motor_ai_sim.routes.family import config_doc
-        blk = (config_doc(die, config) or {}).get("thermal_defaults")
+        doc = config_doc(die, config) or {}
     except Exception:  # noqa: BLE001 — a reader, not a gate
         return {}
+    return thermal_defaults_of_doc(doc, "%s %s" % (die, config))
+
+
+def thermal_defaults_of_doc(doc: Optional[Mapping[str, Any]], label: str = "") -> Dict[str, str]:
+    """:func:`config_thermal_defaults` of a configuration document already in
+    hand (Configure's presets read the die's documents once)."""
+    blk = doc.get("thermal_defaults") if isinstance(doc, Mapping) else None
     if not isinstance(blk, Mapping):
         return {}
     out: Dict[str, str] = {}
@@ -804,14 +812,54 @@ def config_thermal_defaults(die: str, config: str) -> Dict[str, str]:
         k = str(k)
         if (k not in _DEFAULT_KEYS or isinstance(v, bool)
                 or not isinstance(v, (str, int, float))):
-            log.warning("thermal_defaults of %s %s: ignored %r", die, config, k)
+            log.warning("thermal_defaults of %s: ignored %r", label, k)
             continue
         text = ("%g" % v) if isinstance(v, (int, float)) else str(v).strip()
         if k == "airSpeedSource" and text != "manual":
-            log.warning("thermal_defaults of %s %s: airSpeedSource must be manual", die, config)
+            log.warning("thermal_defaults of %s: airSpeedSource must be manual", label)
             continue
         out[k] = text
     return out
+
+
+def configure_cooling(defaults: Optional[Mapping[str, str]]) -> Optional[Dict[str, Any]]:
+    """The cooling Configure's temperature row uses for a configuration that
+    declares ``thermal_defaults:`` (2026-11-03: a jacket-cooled generator was
+    shown in 8 m/s air), or ``None`` when it declares none - the page then
+    keeps its own typed cooling exactly as before.
+
+    Built the way the Thermal tab builds it (:func:`cooling_fields` over
+    :data:`CANONICAL_COOLING`), reduced to what Configure's lumped estimate
+    reads:
+
+    * ``manual`` -> ``{"kind": "film", "h_W_m2K", "ambient_C"}``: the film h
+      at the coolant temperature, no air over the housing;
+    * ``liquid`` -> ``{"kind": "liquid", "flow_lpm", "fluid", "ambient_C"}``
+      (``ambient_C`` = the coolant inlet; the page's jacket law gives h);
+    * ``air`` (manual speed) -> ``{"kind": "air", "air_speed_ms", "ambient_C"}``.
+
+    ``robotics`` / ``none`` are not Configure coolings (the application gives
+    a robot its still air): ``None``.  A film or a flow that is not positive is
+    ``None`` too - nothing is invented for it."""
+    if not defaults:
+        return None
+    f = cooling_fields({**CANONICAL_COOLING,
+                        **{k: v for k, v in defaults.items() if k in COOLING_KEYS}})
+    mode = f.get("cooling_mode")
+    amb = float(f["ambient_temp"])
+    if mode == "manual":
+        h = float(f.get("h_conv") or 0.0)
+        return {"kind": "film", "h_W_m2K": h, "ambient_C": amb, "source": "config"} if h > 0 else None
+    if mode == "liquid":
+        q = float(f.get("flow_lpm") or 0.0)
+        if not q > 0:
+            return None
+        return {"kind": "liquid", "flow_lpm": q, "fluid": str(f.get("fluid") or "water"),
+                "ambient_C": float(f.get("fluid_temp_in_c", amb)), "source": "config"}
+    if mode == "air" and "air_speed_mps" in f:
+        return {"kind": "air", "air_speed_ms": max(0.0, float(f["air_speed_mps"])),
+                "ambient_C": amb, "source": "config"}
+    return None
 
 
 def _config_says_open(die: str, config: str) -> bool:

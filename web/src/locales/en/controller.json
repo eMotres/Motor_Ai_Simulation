@@ -655,6 +655,8 @@
     "tHousingTip": "Housing temperature.",
     "airSpeed": "Cooling air",
     "airSpeedTip": "Air speed over the motor housing.",
+    "coolantFilm": "Coolant film",
+    "coolantFilmTip": "Film coefficient on the housing and coolant temperature, from the configuration.",
     "blankLoading": "Waiting for the propeller data.",
     "blankRefused": "Withheld: the propeller load is refused.",
     "s1Line": "Continuous with {prop}: up to {rpm} rpm · {thrust} kgf · {power} W ({binding})",

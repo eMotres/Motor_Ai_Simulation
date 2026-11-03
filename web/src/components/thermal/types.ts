@@ -58,6 +58,8 @@ export interface ThermalCoolingSurface {
   heat_removed_W?: number;
   /** inner bore only: the radius the film is applied at */
   r_bore_mm?: number;
+  /** outer only, stator_od_cooling='sleeve_contact' (2026-11-03) */
+  stator_od?: ThermalStatorOdSleeve;
   /** liquid jacket: the groove's OWN film (Dittus–Boelter on the helical
    *  channel) — reported for the drawing; the solver pins the housing at the
    *  coolant outlet instead (`model`), which is what the 1e5 `h_conv` is */
@@ -484,6 +486,22 @@ export interface ThermalAirDomains {
   /** false when the insulation polygons could not be built — the liner and the
    *  enamel are then inside `wire coating` and `note` says so */
   polygons?: boolean;
+  note?: string;
+}
+
+/** The stator pressed into a round sleeve: OD iron arcs → wall → film. */
+export interface ThermalStatorOdSleeve {
+  mode?: string;
+  /** share of the OD circumference that is iron in contact, 0…1 */
+  stator_od_contact_fraction?: number;
+  contact_area_m2?: number;
+  wall_mm?: number;
+  k_sleeve_W_per_mK?: number;
+  G_contact_W_per_K?: number;
+  G_sleeve_W_per_K?: number | null;
+  G_film_W_per_K?: number;
+  G_total_W_per_K?: number;
+  t_contact_mean_c?: number | null;
   note?: string;
 }
 

@@ -66,6 +66,11 @@ FRAME_MODES = ("housed", "open")
 #: simplify") — replaces the mount W/K, mount °C, sink-or-link, link size and
 #: link material fields.  See ``cooling_models.HEAT_PATHS``.
 HEAT_PATHS = ("housing", "shaft", "both", "none")
+#: How the outer boundary reaches the stator (2026-11-03): ``direct`` (the
+#: default — the film acts on the stator's own outer contour, notch walls
+#: included) or ``sleeve_contact`` (pressed into a round sleeve: the OD iron
+#: arcs, the sleeve wall, then the film).  See ``cooling_models``.
+STATOR_OD_MODES = ("direct", "sleeve_contact")
 
 
 def _num(v: Any, default: float) -> float:
@@ -201,6 +206,12 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
         hp = heat_path_of(s)
         if hp != "none":
             out["heat_path"] = hp
+    # THE STATOR-OD SLEEVE (2026-11-03): sent only when chosen — a 'direct'
+    # request is byte-identical to the one this mapper produced before.
+    if _mode(s.get("statorOd"), STATOR_OD_MODES, "direct") == "sleeve_contact":
+        out["stator_od_cooling"] = "sleeve_contact"
+        out["od_sleeve_wall_mm"] = _num(s.get("sleeveWallMm"), 1.5)
+        out["od_sleeve_k"] = _num(s.get("sleeveK"), 160.0)
     return out
 
 
@@ -239,6 +250,16 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
     # replaced it), so a machine with no film and no bore has no door at all.
     if cool == "none" and bore == "none":
         return "no cooled surface — the heat has nowhere to leave"
+    if _mode(s.get("statorOd"), STATOR_OD_MODES, "direct") == "sleeve_contact":
+        if cool == "none":
+            return "a sleeve needs an outer film to hand its heat to"
+        if cool == "robotics" and heat_path_of(s) in ("housing", "both"):
+            return ("the robotics heat path 'housing' already models the stator "
+                    "OD contact — pick the sleeve or the housing, not both")
+        if not _num(s.get("sleeveWallMm"), 1.5) > 0:
+            return "sleeve wall must be greater than 0 mm"
+        if not _num(s.get("sleeveK"), 160.0) > 0:
+            return "sleeve conductivity must be greater than 0 W/m·K"
     return None
 
 
@@ -302,6 +323,10 @@ def cooling_words(c: Mapping[str, Any]) -> str:
         bits.append("still air down the bore")
     if str(c.get("frame") or "") == "open":
         bits.append("open frame")
+    if str(c.get("stator_od_cooling") or "direct") == "sleeve_contact":
+        bits.append("stator in a %g mm sleeve (k %g W/m·K)"
+                    % (_num(c.get("od_sleeve_wall_mm"), 1.5),
+                       _num(c.get("od_sleeve_k"), 160.0)))
     if _num(c.get("shaft_ext_length_mm"), 0.0) > 0.0:
         bits.append("%g mm of exposed shaft"
                     % _num(c.get("shaft_ext_length_mm"), 0.0))
@@ -583,7 +608,8 @@ COOLING_KEYS = (
     "propellerContextKey", "fluid", "tIn", "hConv", "flowLpm",
     "boreMode", "boreAirSpeed", "boreFluid", "boreTIn", "boreFlowLpm",
     "shaftExtMm", "shaftExtSides", "frame", "openAirSpeed",
-    "emissivity", "heatPath", "endFaces", "endFaceSides")
+    "emissivity", "heatPath", "endFaces", "endFaceSides",
+    "statorOd", "sleeveWallMm", "sleeveK")
 
 #: What a configuration's ``thermal_defaults:`` block may set.  The propeller
 #: binding is the loaded motor's own business (a default cannot name another
@@ -616,6 +642,7 @@ CANONICAL_COOLING: Dict[str, str] = {
     "frame": "housed", "openAirSpeed": "0",
     "emissivity": "0.9", "heatPath": "housing",
     "endFaces": "still", "endFaceSides": "2",
+    "statorOd": "direct", "sleeveWallMm": "1.5", "sleeveK": "160",
 }
 assert set(CANONICAL_COOLING) == set(COOLING_KEYS)
 
@@ -904,6 +931,7 @@ def solver_effective_cooling(settings: Mapping[str, Any]) -> Dict[str, str]:
         "frame": "housed", "openAirSpeed": "0",
         "emissivity": "0.9", "heatPath": heat_path_of(settings),
         "endFaces": "still", "endFaceSides": "2",
+        "statorOd": "direct", "sleeveWallMm": "1.5", "sleeveK": "160",
     }
     return {**{k: v for k, v in fill.items() if k not in settings}, **settings}
 

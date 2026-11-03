@@ -37,8 +37,13 @@ __all__ = [
     "CardError", "DeviceCard", "devices_dir", "library", "list_devices",
     "get_device", "validate_card", "write_card", "REQUIRED_BLOCKS",
     "SWITCHING_SOURCES", "FOOTPRINT_KEYS", "validate_footprint",
-    "footprint_groups",
+    "footprint_groups", "SPICE_STATIC_TOL_PCT",
 ]
+
+#: How far the SPICE static table's R_DS(on) (or V_SD) may sit from the card's
+#: datasheet value at the same T_j before the solve falls back to the
+#: datasheet curve (2026-11-03; the same 15 % the switching validation uses).
+SPICE_STATIC_TOL_PCT = 15.0
 
 
 class CardError(ValueError):
@@ -972,6 +977,93 @@ class DeviceCard:
             raise CardError(f"{self.part}: no SPICE static_table")
         return static_voltage(blk, kind="third_quadrant", i_A=i_sd_A, t_j_c=t_j_c,
                               v_gs_V=v_gs_off_V)[0]
+
+    # ── SPICE static table vs the datasheet (2026-11-03) ───────────────────
+    # A vendor-model DC sweep is only as good as the table stored on the card
+    # (a stale shared card, a sweep at the wrong pin or temperature).  Before a
+    # solve uses it for conduction, its R = V_DS/I is held against the card's
+    # own datasheet R_DS(on)(T_j) at the SAME gate voltage (the datasheet
+    # curve's V_GS — a 12 V drive has no 12 V datasheet curve, and the 12 V
+    # model channel is legitimately a few % lower) and at the datasheet's own
+    # test current, at 25 degC and at the solve's T_j.  Outside
+    # SPICE_STATIC_TOL_PCT the conduction falls back to the datasheet curve,
+    # and the result says so.  The third quadrant is checked the same way on
+    # the datasheet's table V_SD anchor(s).
+    def static_conduction_check(self, t_j_c: float, v_gs_on_V: float,
+                                tol_pct: float = SPICE_STATIC_TOL_PCT) -> Optional[Dict[str, Any]]:
+        """SPICE static R vs datasheet R_DS(on)(T_j), or ``None`` without a table."""
+        blk = self.static_table()
+        if blk is None:
+            return None
+        key = ("fwd", round(float(t_j_c), 2), round(float(v_gs_on_V), 3), float(tol_pct))
+        cache = self.__dict__.setdefault("_static_checks", {})
+        if key in cache:
+            return cache[key]
+        from motor_ai_sim.inverter.spice.table import static_voltage
+        curve = self._r_curve(v_gs_on_V)
+        g_ds = _num(curve.get("v_gs_on_V"))
+        g_ds = float(v_gs_on_V) if g_ds is None else g_ds
+        i_ref = _num((self.doc.get("r_ds_on") or {}).get("measured_at_i_d_A")) or 30.0
+        rows, notes = [], []
+        for t in sorted({25.0, float(t_j_c)}):
+            v, nt = static_voltage(blk, kind="forward", i_A=i_ref, t_j_c=t, v_gs_V=g_ds)
+            notes += [n for n in nt if n not in notes]
+            r_sp = v / i_ref
+            r_ds = self.r_ds_on_ohm(t, g_ds)
+            dev = (r_sp / r_ds - 1.0) * 100.0 if r_ds > 0 else float("inf")
+            rows.append({"t_j_c": t, "r_spice_mohm": r_sp * 1e3,
+                         "r_datasheet_mohm": r_ds * 1e3, "deviation_pct": dev})
+        worst = max(rows, key=lambda r: abs(r["deviation_pct"]))
+        ok = abs(worst["deviation_pct"]) <= float(tol_pct)
+        line = ("SPICE static R_DS(on) %.3f mOhm vs datasheet %.3f mOhm at %g degC, "
+                "V_GS %g V, %g A (%+.1f %%, tolerance %g %%)"
+                % (worst["r_spice_mohm"], worst["r_datasheet_mohm"], worst["t_j_c"], g_ds,
+                   i_ref, worst["deviation_pct"], float(tol_pct)))
+        out = {"ok": ok, "tol_pct": float(tol_pct), "v_gs_V": g_ds, "i_ref_A": i_ref,
+               "rows": rows, "worst_pct": worst["deviation_pct"], "notes": notes,
+               "line": line if ok else line + " — conduction falls back to the datasheet curve"}
+        cache[key] = out
+        return out
+
+    def static_third_quadrant_check(self, v_gs_off_V: float = 0.0,
+                                    tol_pct: float = SPICE_STATIC_TOL_PCT
+                                    ) -> Optional[Dict[str, Any]]:
+        """SPICE static V_SD vs the datasheet's TABLE V_SD anchor(s) (the
+        figure-read curves carry their own wide tolerance and are not used
+        unless the card has no table curve), or ``None`` without a table."""
+        blk = self.static_table()
+        if blk is None or not blk.get("third_quadrant"):
+            return None
+        key = ("3q", round(float(v_gs_off_V), 3), float(tol_pct))
+        cache = self.__dict__.setdefault("_static_checks", {})
+        if key in cache:
+            return cache[key]
+        curves = [c for c in (self.doc.get("third_quadrant") or {}).get("curves") or []
+                  if isinstance(c, dict) and _num(c.get("t_j_c")) is not None]
+        table = [c for c in curves if str(c.get("basis") or "") == "table"] or curves
+        rows = []
+        for c in table:
+            pts = [(v, i) for v, i in _pairs(c.get("points")) if i > 0 and v > 0]
+            if not pts:
+                continue
+            v_ds, i_ds = max(pts, key=lambda p: p[1])
+            t = float(_num(c.get("t_j_c")))
+            v_sp = self.v_sd_spice_V(i_ds, t, v_gs_off_V)
+            rows.append({"t_j_c": t, "i_A": i_ds, "v_spice_V": v_sp, "v_datasheet_V": v_ds,
+                         "deviation_pct": (v_sp / v_ds - 1.0) * 100.0})
+        if not rows:
+            cache[key] = None
+            return None
+        worst = max(rows, key=lambda r: abs(r["deviation_pct"]))
+        ok = abs(worst["deviation_pct"]) <= float(tol_pct)
+        line = ("SPICE static V_SD %.3f V vs datasheet %.3f V at %g degC, %g A (%+.1f %%, "
+                "tolerance %g %%)" % (worst["v_spice_V"], worst["v_datasheet_V"], worst["t_j_c"],
+                                     worst["i_A"], worst["deviation_pct"], float(tol_pct)))
+        out = {"ok": ok, "tol_pct": float(tol_pct), "rows": rows,
+               "worst_pct": worst["deviation_pct"],
+               "line": line if ok else line + " — dead-time conduction falls back to the datasheet curve"}
+        cache[key] = out
+        return out
 
     def e_switch(self, *, i_d_A: float, t_j_c: float, v_dc_V: float,
                  v_gs_off_V: float = 0.0,

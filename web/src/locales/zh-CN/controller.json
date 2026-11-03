@@ -655,6 +655,8 @@
     "tHousingTip": "外壳温度。",
     "airSpeed": "冷却空气",
     "airSpeedTip": "电机外壳表面的空气流速。",
+    "coolantFilm": "冷却液膜",
+    "coolantFilmTip": "外壳表面的换热系数和冷却液温度，取自该配置。",
     "blankLoading": "正在等待螺旋桨数据。",
     "blankRefused": "已隐藏：螺旋桨负载被拒绝。",
     "s1Line": "{prop} 连续运行：最高 {rpm} rpm · {thrust} kgf · {power} W（{binding}）",

@@ -241,9 +241,14 @@ export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_s
 // render on: while the cooling data is loading, or the load is refused, they read "—" (a block
 // never appears later and pushes the grid down).
 export const TEMP_ROW_IDS = ['tWinding', 'tMagnet', 'tHousing', 'airSpeed'] as const;
+/** The same row for a configuration that states a COOLANT FILM (`thermal_defaults` manual h, or a liquid jacket,
+ *  2026-11-03): the air-speed tile is replaced by "Coolant film  h W/m²K, T °C" — there is no air over the housing. */
+export const TEMP_ROW_IDS_FILM = ['tWinding', 'tMagnet', 'tHousing', 'coolantFilm'] as const;
 
 export interface TempTileSpec {
   id: string; labelKey: string; tipKey: string; unit: string; d: number;
+  /** a wider tile (the coolant film carries its temperature in the unit) */
+  width?: number;
   value: number | null;
   /** printed instead of the number: "> 200" for a temperature over its limit */
   display?: string;
@@ -264,6 +269,8 @@ export interface TempRowInput {
   air_speed_ms: number | null;
   h_W_m2K: number;
   surface_cm2: number;
+  /** the coolant temperature the film works against [°C] (only read for a coolant film) */
+  ambient_C?: number;
 }
 
 const _n = (v: number) => String(Number(v.toFixed(0)));
@@ -306,17 +313,31 @@ export function compactResultTiles(i: { T_Nm: number | null; P_kW: number | null
   ];
 }
 
-/** `null` input = nothing to show yet / refused: every tile is "—". */
-export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }): TempTileSpec[] {
+/** `null` input = nothing to show yet / refused: every tile is "—".
+ *  `film` = the configuration states a coolant film (lib/configureCooling): the fourth tile is the film, not the air. */
+export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }, film = false): TempTileSpec[] {
+  const head = tempRowHead(t, lim);
+  if (film) {
+    const T = t && t.ambient_C != null && Number.isFinite(t.ambient_C) ? t.ambient_C : null;
+    return [...head,
+      // COOLANT FILM: the stated h and the coolant temperature, in ONE tile (no caption under it)
+      { id: 'coolantFilm', labelKey: 'configurePropeller.coolantFilm', tipKey: 'configurePropeller.coolantFilmTip',
+        unit: T != null ? `W/m²K, ${_n(T)} °C` : 'W/m²K', d: 0, width: 150,
+        value: t && Number.isFinite(t.h_W_m2K) ? t.h_W_m2K : null }];
+  }
+  return [...head,
+    // COOLING AIR: the air speed over the housing (0 m/s in still air, "—" with a liquid jacket)
+    { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
+      value: t ? t.air_speed_ms : null }];
+}
+
+function tempRowHead(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }): TempTileSpec[] {
   return [
     tempTileSpec('tWinding', 'configurePropeller.tWinding', 'configurePropeller.tWindingTip', t ? t.T_winding_C : null, lim.winding_C),
     tempTileSpec('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip', t ? t.T_magnet_C : null, lim.magnet_C),
     // the housing has no limit of its own, but it can never be hotter than the winding it carries
     { ...tempTileSpec('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
       air: t ? t.air_speed_ms : null, h: t ? t.h_W_m2K : null, surface: t ? t.surface_cm2 : null },
-    // COOLING AIR: the air speed over the housing (0 m/s in still air, "—" with a liquid jacket)
-    { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
-      value: t ? t.air_speed_ms : null },
   ];
 }
 

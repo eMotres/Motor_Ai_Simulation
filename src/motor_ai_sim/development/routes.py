@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from motor_ai_sim import platform_agreement, users
 from motor_ai_sim.development import access, models, self_service, store, unread
 from motor_ai_sim.development.motors import _metric_projection
+from motor_ai_sim.development.quote_routes import quote_shared
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-projects"])
@@ -126,6 +127,8 @@ def _summary(project: dict, user: dict) -> dict:
         projection.pop("motor_history", None)
     projection["can_edit"] = bool(engineer)
     projection["can_edit_spec"] = access.can_edit_spec(user, project)
+    # the shared quote (owner 2026-11-03): only a flag here, never its numbers; it lives in GET /{id}/quote
+    projection["quote_shared"] = quote_shared(user, project)
     projection["completeness"] = models.completeness(draft.get("draft", {}))
     if engineer:
         projection["notes"] = project.get("notes", "")

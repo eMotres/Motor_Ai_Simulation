@@ -3,6 +3,7 @@ import { parseActivity } from './stageBar';
 import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
+import type { ProjectQuote, SharedQuoteMark } from './quote';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -125,6 +126,11 @@ export const developmentApi = {
   costEstimateSuggestions: (id: string, estimate: CostEstimate) => call<CostSuggestions>('POST', `${ce(id)}/suggestions`, estimate),
   snapshotCostEstimate: (id: string, revision: number, note: string, display?: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note, display_currency: display }),
   costEstimateSnapshots: async (id: string) => (await call<{ snapshots: CostSnapshot[] }>('GET', `${ce(id)}/snapshots`)).snapshots ?? [],
+  /** ADMIN ONLY (owner 2026-11-03): freeze the current revision and share it with the project's members as their quote. */
+  shareCostEstimate: (id: string, revision: number) => call<{ shared: SharedQuoteMark | null; snapshot: CostSnapshot }>('POST', `${ce(id)}/share`, { revision }),
+  unshareCostEstimate: (id: string) => call<{ shared: null }>('DELETE', `${ce(id)}/share`),
+  /** The shared quote of a project: its members and admins only (404 for anybody else, and while nothing is shared). */
+  projectQuote: (id: string) => call<ProjectQuote>('GET', `${p(id)}/quote`),
 };
 
 /** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */

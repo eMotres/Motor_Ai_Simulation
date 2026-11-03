@@ -71,6 +71,9 @@ COMMERCIAL_DENYLIST = frozenset({
     "fx", "fx_status", "rates", "converted",
     # the cost estimate's DHL quote table and shipping margin (``price`` / ``quoted_on`` inside are caught by the tokens)
     "dhl_lanes", "ship_margin_pct", "ship_round_eur",
+    # the customer's shared quote (owner 2026-11-03): its flag, mark, payment terms and display rates never leave
+    # through the MCP either (``price`` / ``quote`` / ``payment`` are also caught by the tokens)
+    "payment_terms", "quote_shared", "shared_quote", "exchange_rates", "per_eur", "total_price",
 })
 COMMERCIAL_TOKENS = frozenset({
     "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",

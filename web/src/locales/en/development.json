@@ -324,7 +324,8 @@
     "documents": "Documents",
     "production": "Production",
     "cost": "Cost estimate",
-    "quote": "Quote"
+    "quote": "Quote",
+    "timeline": "Timeline"
   },
   "step": "Step {current} of {total}",
   "previous": "Back",
@@ -1114,6 +1115,52 @@
     },
     "readiness": "Parts {received}/{total} ({pct} %), late {late}",
     "readinessTip": "Parts received for assembly."
+  },
+  "timeline": {
+    "iteration": "Iteration {n}",
+    "weeksN": "{n} wk",
+    "lanes": {
+      "tooling": "Tooling",
+      "motor": "Motor manufacturing",
+      "free_run": "Free-run test",
+      "dyno": "Dyno test",
+      "propeller": "Propeller test",
+      "shipping": "Shipping"
+    },
+    "status": {
+      "planned": "Planned",
+      "in_progress": "In progress",
+      "done": "Done",
+      "late": "Late"
+    },
+    "planSpan": "Plan {start} – {end}",
+    "forecastSpan": "Forecast {start} – {end}",
+    "readiness": "{n} % of parts received",
+    "today": "Today {date}",
+    "baselineOn": "Plan agreed on {date}.",
+    "tip": "Light bars: the plan. Solid bars: the current forecast, updated from manufacturing as parts arrive; red = late.",
+    "none": "No timeline yet.",
+    "admin": {
+      "motor": "Motor",
+      "motorAuto": "Current linked motor",
+      "motorTip": "The production of this motor moves the Tooling and Motor lanes.",
+      "startDate": "Iteration start",
+      "startTip": "Set when the iteration starts, e.g. when the payment arrives.",
+      "propeller": "Propeller test",
+      "lane": "Lane",
+      "plan_weeks": "Weeks",
+      "start": "Start",
+      "end": "End",
+      "done_date": "Done",
+      "note": "Public note",
+      "save": "Save",
+      "seed": "Create from cost estimate",
+      "seedTip": "Iterations and weeks from the cost estimate; dates and notes are kept.",
+      "baseline": "Freeze baseline",
+      "baselineTip": "Freeze the current plan: the customer's plan bars follow it from now on.",
+      "addIteration": "Add an iteration",
+      "removeIteration": "Remove the last iteration"
+    }
   },
   "customerQuote": {
     "col": {

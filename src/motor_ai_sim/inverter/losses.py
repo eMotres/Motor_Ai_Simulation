@@ -143,6 +143,11 @@ POWER_DIRECTIONS = ("motor", "generator")
 #: that model is not here — such a card is refused, never costed as a MOSFET.
 MOSFET_TECHNOLOGIES = ("sic_mosfet", "si_mosfet", "gan_hemt", "gan_fet")
 
+#: IGBT + anti-parallel diode modules (2026-11-03): their own conduction split
+#: by the current's direction, switching and two junction temperatures live
+#: in :mod:`motor_ai_sim.inverter.igbt`; the common set-up here is shared.
+IGBT_TECHNOLOGIES = ("igbt_module",)
+
 
 def standalone_coils(n_inverters: int, shift_deg: float = 30.0) -> List[Coil]:
     """Three synthetic coils per inverter (A, B, C at 0/-120/-240 deg).  With
@@ -1121,12 +1126,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         raise ControllerRefusal(str(exc), ["device"], code="unknown_device")
 
     tech = str(card.doc.get("technology") or "sic_mosfet").strip().lower()
-    if tech not in MOSFET_TECHNOLOGIES:
+    if tech not in MOSFET_TECHNOLOGIES and tech not in IGBT_TECHNOLOGIES:
         raise ControllerRefusal(
-            f"{card.part} is a {tech} card: this loss model is synchronous-"
-            "rectifying MOSFET only (reverse current in the channel); an "
-            "IGBT/diode pair needs its conduction split by the current's "
-            "direction between the IGBT and the diode, which is not modelled",
+            f"{card.part} is a {tech} card: the loss models are the synchronous-"
+            "rectifying MOSFET (" + ", ".join(MOSFET_TECHNOLOGIES) + ") and the "
+            "IGBT module with its anti-parallel diode (" + ", ".join(IGBT_TECHNOLOGIES)
+            + "); this technology is not modelled",
             ["device"], code="technology_not_modelled")
 
     n_par = int(_f(req.get("devices_parallel"), "devices_parallel", default=1,
@@ -1357,6 +1362,25 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             + f") on a {v_dc:.0f} V link — this topology cannot make the "
             "voltage this operating point needs without overmodulation or a "
             "higher bus")
+
+    if tech in IGBT_TECHNOLOGIES:
+        # IGBT/diode modules: the device model, the two-junction thermal loop
+        # and the response are inverter.igbt's; everything above is shared.
+        from motor_ai_sim.inverter.igbt import solve_igbt_controller
+        return solve_igbt_controller({
+            "req": req, "card": card, "topo": topo, "legs_spec": legs_spec,
+            "m_by_bridge": m_by_bridge, "warnings": warnings, "v_dc": v_dc,
+            "f_el": f_el, "f_sw": f_sw, "p_ac": p_ac, "pmod": pmod,
+            "direction": direction, "n_par": n_par, "eta_shaft": eta_shaft,
+            "m": m, "m_lin": m_lin, "pf": pf, "phi_deg": phi_deg,
+            "lag_deg": lag_deg, "i_leg_3ph": i_leg_3ph, "i_ph": i_ph,
+            "sd": sd, "standalone": standalone, "scheme": scheme,
+            "m_linear": m_linear, "v_machine_phase_rms": v_machine_phase_rms,
+            "v_coil_rms": v_coil_rms, "coils_per_phase": coils_per_phase,
+            "a_par": a_par, "i_coil_rms": i_coil_rms,
+            "wiring_notes": wiring_notes,
+            "set_split_out": ((set_split if a_par == 1 else "winding")
+                              if n_3ph >= 2 else None)})
 
     # ── the thermal loop ───────────────────────────────────────────────────
     plate = _build_cooling(req.get("cooling") or {})

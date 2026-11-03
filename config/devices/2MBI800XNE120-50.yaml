@@ -1,0 +1,309 @@
+# ============================================================
+# Power-device card — Fuji Electric 2MBI800XNE120-50
+# IGBT module, X series: 1200 V / 800 A, 2-in-1 (one half-bridge per module)
+# ============================================================
+# An IGBT MODULE card (technology: igbt_module) — read by
+# motor_ai_sim.inverter.igbt, NOT by the MOSFET loss model.  One module is
+# one bridge LEG (upper IGBT + its anti-parallel FWD, lower IGBT + its FWD).
+#
+# Every number is transcribed from the datasheet named below
+# (FM5F9078b, 2024/03, 10 pages).  Two kinds of number live here:
+#   basis: table   — from a numbered characteristics TABLE; exact.
+#   basis: figure  — digitised from a plotted curve.  HOW it was digitised
+#                    is stated per block:
+#                    * "vector": the curve is a vector path in the PDF; its
+#                      points were read from the path coordinates mapped
+#                      through the axis tick labels (residual < 0.5 % of
+#                      full scale).  Pages 6 (E vs I_C/I_F, E vs R_G).
+#                    * "raster": the curve is a rasterised image; it was
+#                      rendered at 500 dpi and read pixel by pixel
+#                      (+-0.02 V).  Pages 5 and 8 (V_CE(sat), V_F).
+# Points marked `estimated: true` (or listed in an `estimated` note) are
+# where curves overlap so closely on the figure that they could not be
+# separated: the value is the merged trace, split by the ordering the
+# neighbouring points show.
+#
+# Units: V, A, ohm, mOhm, degC, W, K/W, mJ, nF, uC, g.
+# ============================================================
+
+part: 2MBI800XNE120-50
+manufacturer: Fuji Electric
+family: "X series IGBT module"
+technology: igbt_module
+#: one module = one half-bridge (2-in-1): the two switch positions of ONE leg
+topology: half_bridge
+switches_per_module: 2
+package: 2in1-150x62
+package_common_name: "2-in-1 module 150 x 62 mm"
+cooling: baseplate           # copper baseplate onto a heatsink with grease
+package_size_mm:
+  source: "Datasheet p.1, Outline drawing (unit mm): 150 +-1 x 62 +-1; case 17 +-0.5, terminals 20.5 +-0.5"
+  length_mm: 150.0
+  width_mm: 62.0
+  height_mm: 20.5
+weight_g: 350               # p.1 "Weight: 350 g (typ.)"
+
+footprint:
+  package_outline_id: 2in1-150x62 (Fuji 2MBI800XNE120-50 outline)
+  outline_source: "Datasheet p.1, Outline drawing (unit mm)"
+  land_pattern_ref: null
+  land_pattern_note: >-
+    A screw-mounted baseplate module has no PCB land pattern: 4 x M5 to the
+    heatsink (mounting holes 137 +-0.3 mm apart), M6 power terminals and
+    solder-pin auxiliary terminals (outline drawing, p.1).
+  body_height_mm: 20.5
+  body_height_source: "Datasheet p.1 outline, side view: 20.5 +-0.5 mm to the terminal top (case body 17 +-0.5)"
+  top_tab_mm: null
+  top_tab_note: "a baseplate module: the cooled face is the whole bottom baseplate, there is no top tab"
+  compatibility_group: fuji_2in1_150x62
+  compatibility_basis: "this card only (no second module of this outline in the catalogue)"
+
+datasheet_revision: "FM5F9078b, 2024/03"
+datasheet_url: null
+datasheet_file: "2MBI800XNE120-50 datasheet (Fuji Electric, FM5F9078b, 2024/03, 10 pages)"
+datasheet_note: >-
+  The PDF was supplied by the owner (no URL recorded); Fuji Electric's product
+  pages are www.fujielectric.com/products/semiconductor/ (datasheet p.10).
+
+price: {amount: null, currency: EUR, quantity: null, source: null, dated: null}
+
+# ── absolute maximum ratings (p.2, T_c = 25 degC unless stated) ─────────────
+ratings:
+  source: "Datasheet p.2, Absolute maximum ratings"
+  basis: table
+  v_ces_V: 1200
+  v_ges_V: 20                 # +-20 V
+  i_c_continuous:             # "Continuous, T_c = 100 degC"
+    - {t_case_c: 100, i_a: 800}
+  i_crm_A: 1600               # repetitive peak collector current, 1 ms
+  i_f_A: 800                  # FWD forward current
+  i_frm_A: 1600               # FWD repetitive peak forward current, 1 ms
+  p_tot_W: 4050               # 1 device
+  t_vj_max_c: 175
+  t_vj_op_max_c: 175          # operating junction temperature, under switching
+  t_case_max_c: 125
+  t_stg_c: {min: -40, max: 125}
+  v_isol_Vrms: 4000           # AC 1 min
+  mounting_torque_Nm: {heatsink_M5: [2.5, 6.0], terminals_M6: [3.5, 6.0]}
+
+gate:
+  source: "Datasheet p.3, Electrical characteristics"
+  basis: table
+  v_ge_th_V: {min: 6.0, typ: 6.5, max: 7.0}    # V_CE = 20 V, I_C = 800 mA
+  r_g_internal_ohm: 1.17
+  q_g_uC: 5.5                 # V_CC 600 V, I_C 800 A, V_GE -15 -> +15 V
+  c_ies_nF: 85
+  c_oes_nF: 2.9
+  c_res_nF: 0.76
+  v_ge_static_V: {min: -20, max: 20}           # = +-V_GES (p.2)
+
+# ── IGBT on-state: V_CE(sat)(I_C, T_vj), V_GE = 15 V, CHIP ──────────────────
+igbt:
+  v_ce_sat:
+    source: >-
+      Datasheet p.5, figure "Collector current vs. Collector-Emitter voltage
+      (typ.), V_GE = 15 V / chip" — raster, digitised at 500 dpi (+-0.02 V).
+      Rows are current levels; each point is [I_C A, V_CE V].
+    basis: figure
+    v_ge_V: 15
+    level: chip
+    tolerance_V: 0.02
+    table_check: "p.3 V_CE(sat) chip at 800 A, typ: 1.45 / 1.80 / 1.90 / 1.95 V at 25 / 125 / 150 / 175 degC — the digitised curves read 1.457 / 1.815 / 1.893 / 1.964 V"
+    estimated: >-
+      At 50 and 100 A the 125/150/175 degC traces overlap into one run (+-0.03 V):
+      split by the ordering (hotter = lower V below the ~200 A crossover). At
+      150 and 200 A all four traces cross in one run (one value for all). At
+      300 A the three hot traces and at 400 A the 150/175 pair overlap, split
+      the same way.
+    curves:
+      - t_j_c: 25
+        points: [[50, 0.770], [100, 0.854], [150, 0.898], [200, 0.983], [300, 1.066],
+                 [400, 1.155], [500, 1.236], [600, 1.313], [700, 1.384], [800, 1.457],
+                 [1000, 1.592], [1200, 1.729], [1400, 1.870], [1500, 1.943]]
+      - t_j_c: 125
+        points: [[50, 0.670], [100, 0.804], [150, 0.898], [200, 0.983], [300, 1.152],
+                 [400, 1.298], [500, 1.435], [600, 1.564], [700, 1.692], [800, 1.815],
+                 [1000, 2.058], [1200, 2.305], [1400, 2.563], [1500, 2.700]]
+      - t_j_c: 150
+        points: [[50, 0.645], [100, 0.791], [150, 0.898], [200, 0.983], [300, 1.167],
+                 [400, 1.333], [500, 1.479], [600, 1.621], [700, 1.760], [800, 1.893],
+                 [1000, 2.163], [1200, 2.440], [1400, 2.731], [1500, 2.886]]
+      - t_j_c: 175
+        points: [[50, 0.620], [100, 0.778], [150, 0.898], [200, 0.983], [300, 1.182],
+                 [400, 1.355], [500, 1.512], [600, 1.668], [700, 1.818], [800, 1.964],
+                 [1000, 2.259], [1200, 2.562], [1400, 2.881], [1500, 3.055]]
+
+# ── FWD forward voltage V_F(I_F, T_vj), CHIP ────────────────────────────────
+diode:
+  v_f:
+    source: >-
+      Datasheet p.8, figure "Forward current vs. Forward voltage (typ.), chip"
+      — raster, digitised at 500 dpi (+-0.02 V).  Each point is [I_F A, V_F V].
+    basis: figure
+    level: chip
+    tolerance_V: 0.02
+    table_check: "p.3 V_F chip at 800 A, typ: 1.60 / 1.65 / 1.60 / 1.60 V at 25 / 125 / 150 / 175 degC — the digitised curves read 1.597 / 1.643 / 1.597 / 1.597 V"
+    estimated: >-
+      400-700 A: the four traces run within ~0.05 V of each other and overlap
+      in pairs (175+150, 125+25); each pair's merged trace is split by the
+      ordering below 400 A. Above 800 A the 150 and 175 degC traces cannot be
+      told apart (+-0.02 V); 125 degC is the right-most, as the 800 A table
+      value says.
+    curves:
+      - t_j_c: 25
+        points: [[25, 0.868], [50, 0.925], [100, 1.012], [150, 1.079], [200, 1.135],
+                 [300, 1.231], [400, 1.318], [500, 1.395], [600, 1.470], [700, 1.522],
+                 [800, 1.597], [1000, 1.711], [1200, 1.823], [1400, 1.929], [1500, 1.979]]
+      - t_j_c: 125
+        points: [[25, 0.697], [50, 0.770], [100, 0.882], [150, 0.970], [200, 1.047],
+                 [300, 1.170], [400, 1.285], [500, 1.380], [600, 1.470], [700, 1.564],
+                 [800, 1.643], [1000, 1.800], [1200, 1.943], [1400, 2.080], [1500, 2.148]]
+      - t_j_c: 150
+        points: [[25, 0.655], [50, 0.729], [100, 0.836], [150, 0.927], [200, 1.002],
+                 [300, 1.129], [400, 1.238], [500, 1.340], [600, 1.428], [700, 1.522],
+                 [800, 1.597], [1000, 1.769], [1200, 1.922], [1400, 2.065], [1500, 2.135]]
+      - t_j_c: 175
+        points: [[25, 0.609], [50, 0.682], [100, 0.793], [150, 0.890], [200, 0.963],
+                 [300, 1.102], [400, 1.220], [500, 1.325], [600, 1.428], [700, 1.522],
+                 [800, 1.597], [1000, 1.748], [1200, 1.889], [1400, 2.021], [1500, 2.086]]
+
+# ── module terminals (lead) resistance — DERIVED from the p.3 table ─────────
+terminals:
+  source: >-
+    Datasheet p.3: V_CE(sat) at 800 A, 25 degC is 2.45 V at the TERMINALS and
+    1.45 V at the CHIP (max 2.90 / 1.90); V_F 2.60 V terminal, 1.60 V chip
+    (max 3.05 / 2.05).  The 1.00 V difference at 800 A is the module's
+    internal path (terminals, busbars, bond wires), the same for the IGBT
+    and the FWD: R = 1.00 V / 800 A = 1.25 mOhm per switch position.
+  basis: derived
+  r_lead_mohm: 1.25
+  note: >-
+    DERIVED, not printed: a straight-line reading of two table values at one
+    current and 25 degC (no temperature coefficient is published, so none is
+    applied). The loss model adds I_rms^2 * R_lead per switch position as
+    'lead' loss — it heats the module case, not the junctions.
+
+# ── switching energies (p.4 table, p.6 figures) ─────────────────────────────
+switching:
+  source: >-
+    Datasheet p.6 figures (vector, digitised from the PDF paths), test
+    circuit of p.3/p.4: V_CC = 600 V, V_GE = +15/-15 V, R_G = +-0.5 ohm,
+    L_S = 35 nH.  Points [I A, E mJ/pulse]; the 0 A point is the curves'
+    own origin.
+  basis: figure
+  v_cc_ref_V: 600
+  v_ge_on_V: 15
+  v_ge_off_V: -15
+  r_g_ref_ohm: 0.5
+  l_s_nH: 35
+  table_check: >-
+    p.4 at 800 A, typ (mJ): E_on 41.7 / 70.2 / 81.1 / 90.4, E_off 77.6 / 92.5
+    / 94.9 / 100.5, E_rr 31.0 / 52.9 / 60.2 / 67.8 at 25 / 125 / 150 / 175
+    degC; the digitised curves read E_on 39.8 / 68.0 / 80.8 / 89.9, E_off
+    76.4 / 90.3 / 94.4 / 100.1, E_rr 30.6 / 52.6 / 59.7 / 67.4 (within 5 %).
+  scaling:
+    #: E_on, E_off ~ (V_dc / V_ref)^k_v, k_v = 1.35: the middle of the 1.3-1.4
+    #: band the IGBT application literature states for the bus dependence of
+    #: IGBT switching energy (e.g. Semikron Application Manual Power
+    #: Semiconductors, 2nd ed. 2015, sec. 3.3/5.2).  The datasheet publishes
+    #: no E = f(V_CC) figure, so this is a STATED exponent, not a fit.
+    voltage_exponent: 1.35
+    #: E_rr ~ (V_dc / V_ref)^0.6 — the diode-recovery exponent of the same
+    #: source.  Stated, not fitted.
+    voltage_exponent_rr: 0.6
+    voltage_rule: "E_on/E_off x (V_dc/600 V)^1.35, E_rr x (V_dc/600 V)^0.6 (stated exponents, Semikron Application Manual)"
+    r_g_rule: >-
+      E(R_G) = E(I, T) x E_RG(R_G, T) / E_RG(0.5 ohm, T), the ratio read off
+      the p.6 E vs R_G figures at 800 A (log-linear in R_G, linear in T).
+      E_on and E_rr follow the turn-on R_G, E_off the turn-off R_G.
+  e_on:
+    source: "p.6, E_on vs. Collector current (typ.)"
+    curves:
+      - t_j_c: 25
+        points: [[0, 0], [50, 1.53], [100, 4.38], [200, 7.98], [300, 10.63], [400, 15.18], [600, 27.50],
+                 [800, 39.82], [1000, 53.47], [1200, 72.30], [1400, 109.0], [1600, 153.8]]
+      - t_j_c: 125
+        points: [[0, 0], [50, 2.67], [100, 7.98], [200, 14.04], [300, 19.07], [400, 27.06], [600, 44.37],
+                 [800, 68.00], [1000, 95.68], [1200, 140.5], [1400, 218.9], [1600, 315.0]]
+      - t_j_c: 150
+        points: [[0, 0], [50, 5.33], [100, 9.87], [200, 17.08], [300, 21.63], [400, 30.16], [600, 52.84],
+                 [800, 80.77], [1000, 113.2], [1200, 165.1], [1400, 271.3], [1600, 391.4]]
+      - t_j_c: 175
+        points: [[0, 0], [50, 6.08], [100, 10.25], [200, 17.08], [300, 22.38], [400, 31.48], [600, 57.07],
+                 [800, 89.86], [1000, 123.5], [1200, 189.2], [1400, 310.9], [1600, 448.2]]
+  e_off:
+    source: "p.6, E_off vs. Collector current (typ.)"
+    curves:
+      - t_j_c: 25
+        points: [[0, 0], [50, 4.56], [100, 11.28], [200, 19.95], [300, 28.62], [400, 37.55], [600, 55.75],
+                 [800, 76.42], [1000, 99.67], [1200, 128.0], [1400, 163.1], [1600, 199.3]]
+      - t_j_c: 125
+        points: [[0, 0], [50, 7.84], [100, 16.59], [200, 26.68], [300, 34.16], [400, 45.41], [600, 68.10],
+                 [800, 90.30], [1000, 116.0], [1200, 139.6], [1400, 179.5], [1600, 220.1]]
+      - t_j_c: 150
+        points: [[0, 0], [50, 8.70], [100, 18.52], [200, 25.71], [300, 36.89], [400, 46.78], [600, 69.55],
+                 [800, 94.42], [1000, 118.2], [1200, 147.2], [1400, 188.0], [1600, 229.4]]
+      - t_j_c: 175
+        points: [[0, 0], [50, 8.76], [100, 18.52], [200, 27.16], [300, 37.98], [400, 49.61], [600, 74.07],
+                 [800, 100.1], [1000, 125.7], [1200, 153.7], [1400, 193.8], [1600, 234.6]]
+  e_rr:
+    source: "p.6, E_rr vs. Forward current (typ.)"
+    note: "E_rr is NOT monotonic in I_F: it peaks near 1200 A and falls after (the figure's own shape)"
+    curves:
+      - t_j_c: 25
+        points: [[0, 0], [50, 4.49], [100, 10.38], [200, 14.73], [300, 18.28], [400, 21.19], [600, 26.32],
+                 [800, 30.58], [1000, 33.22], [1200, 34.77], [1400, 35.87], [1600, 36.65]]
+      - t_j_c: 125
+        points: [[0, 0], [50, 8.79], [100, 18.44], [200, 29.88], [300, 35.44], [400, 39.10], [600, 46.72],
+                 [800, 52.59], [1000, 55.69], [1200, 56.47], [1400, 54.60], [1600, 50.43]]
+      - t_j_c: 150
+        points: [[0, 0], [50, 11.38], [100, 23.23], [200, 34.32], [300, 40.70], [400, 45.39], [600, 53.05],
+                 [800, 59.72], [1000, 64.38], [1200, 66.22], [1400, 64.07], [1600, 59.87]]
+      - t_j_c: 175
+        points: [[0, 0], [50, 14.63], [100, 28.93], [200, 39.87], [300, 47.17], [400, 52.92], [600, 61.44],
+                 [800, 67.38], [1000, 71.12], [1200, 72.13], [1400, 70.09], [1600, 66.86]]
+  r_g:
+    source: "p.6, E_on / E_off / E_rr vs. Gate resistance (typ.), V_CC 600 V, I_C = I_F = 800 A (vector)"
+    at_i_A: 800
+    r_g_ohm: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 15]
+    e_on:
+      - {t_j_c: 25,  e_mJ: [32.37, 41.00, 60.53, 91.92, 120.6, 170.7, 222.3, 301.9, 397.4]}
+      - {t_j_c: 125, e_mJ: [59.39, 70.87, 95.52, 139.0, 171.6, 232.0, 290.2, 379.0, 479.6]}
+      - {t_j_c: 150, e_mJ: [67.64, 82.43, 109.2, 154.1, 186.8, 246.8, 304.5, 401.4, 518.2]}
+      - {t_j_c: 175, e_mJ: [75.99, 89.64, 119.6, 167.0, 201.2, 262.2, 321.8, 415.7, 542.1]}
+    e_off:
+      - {t_j_c: 25,  e_mJ: [76.80, 77.40, 78.00, 79.13, 80.33, 84.89, 90.15, 99.48, 111.1]}
+      - {t_j_c: 125, e_mJ: [91.92, 92.24, 92.24, 94.01, 95.99, 100.4, 103.5, 112.0, 123.5]}
+      - {t_j_c: 150, e_mJ: [94.57, 94.65, 94.57, 96.10, 98.03, 103.0, 106.7, 115.2, 125.5]}
+      - {t_j_c: 175, e_mJ: [99.96, 100.1, 99.96, 101.4, 104.6, 110.1, 112.3, 120.9, 130.3]}
+    e_rr:
+      - {t_j_c: 25,  e_mJ: [34.14, 30.82, 28.03, 24.55, 21.86, 18.61, 16.19, 13.69, 10.85]}
+      - {t_j_c: 125, e_mJ: [57.33, 52.76, 47.11, 40.39, 36.99, 30.20, 26.77, 22.30, 18.28]}
+      - {t_j_c: 150, e_mJ: [63.82, 60.04, 54.44, 47.41, 43.92, 38.28, 33.82, 28.37, 22.90]}
+      - {t_j_c: 175, e_mJ: [74.14, 67.67, 62.28, 56.00, 52.60, 46.67, 41.38, 34.81, 28.01]}
+
+# ── thermal (p.4 table, p.8 Z_th figure) ────────────────────────────────────
+thermal:
+  source: "Datasheet p.4, Thermal resistance characteristics; p.8 Transient thermal resistance (max.) Foster table"
+  basis: table
+  #: per device (one IGBT chip set / one FWD chip set of one switch position)
+  r_th_jc_igbt_k_w: {max: 0.037}
+  r_th_jc_diode_k_w: {max: 0.044}
+  #: case to heatsink per switch position (1 IGBT + 1 FWD), with 1 W/(m.K)
+  #: thermal grease, mounted on the additional heatsink (p.4 note *1)
+  r_th_cs_k_w: {typ: 0.0167}
+  zth_foster:
+    tau_s: [0.0005, 0.0049, 0.0351, 0.0566]
+    r_igbt_k_w: [0.00099, 0.00792, 0.01176, 0.01633]
+    r_diode_k_w: [0.00118, 0.00942, 0.01398, 0.01942]
+
+switching_times_us:
+  source: "Datasheet p.3, Switching time (V_CC 600 V, I_C = I_F = 800 A, V_GE +15/-15 V, R_G +-0.5 ohm, L_S 35 nH)"
+  basis: table
+  t_d_on: {t_j_25: 0.47, t_j_125: 0.48, t_j_150: 0.49, t_j_175: 0.51}
+  t_r: {t_j_25: 0.10, t_j_125: 0.11, t_j_150: 0.12, t_j_175: 0.12}
+  t_d_off: {t_j_25: 0.45, t_j_125: 0.49, t_j_150: 0.50, t_j_175: 0.52}
+  t_f: {t_j_25: 0.08, t_j_125: 0.10, t_j_150: 0.10, t_j_175: 0.11}
+  t_rr: {t_j_25: 0.19, t_j_125: 0.29, t_j_150: 0.32, t_j_175: 0.37}
+
+switching_source: datasheet

@@ -454,6 +454,24 @@ def test_worker_follow_up_never_restarts_a_worker_that_has_a_job(st):
     assert "deploy_module.sh bbb222 bbb222 worker" in r.stdout, "the message names the follow-up command"
 
 
+def test_stale_mcp_requests_do_not_hold_the_worker(st):
+    """2026-11-03: two MCP calls 55 min old (no users, no jobs) held the drain for an hour.  live_status now reports them
+    as ``stale_requests`` (never ``requests``), and busy() reads ``requests``."""
+    _worker_world(st)
+    live = dict(IDLE, stale_total=2, modules={"mcp": {"users": 0, "requests": 0, "oldest_request_s": 0.0,
+                                                      "stale_requests": 2, "oldest_stale_s": 3294.5}})
+    r = _deploy_worker(st, live)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "worker busy" not in r.stdout and "--no-deps worker" in st.log()
+
+
+def test_a_fresh_mcp_request_still_holds_the_worker(st):
+    _worker_world(st)
+    live = dict(IDLE, requests_total=1, modules={"mcp": {"users": 0, "requests": 1, "oldest_request_s": 4.0}})
+    r = _deploy_worker(st, live, maxwait="0")
+    assert "worker busy: mcp users 0 requests 1" in r.stdout
+
+
 def test_a_request_that_slips_in_while_draining_is_waited_for(st):
     _worker_world(st)
     (st.fake / "worker_busy_once").touch()

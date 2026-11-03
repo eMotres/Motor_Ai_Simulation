@@ -41,7 +41,9 @@ def _loopback(method: str, path: str, body=None, timeout: float = 10.0) -> dict:
 
 def idle(state: dict) -> bool:
     """Nothing queued, running or in flight.  An open stream (an MCP client's server-sent-event connection,
-    ``live_status.is_stream``) is in ``streams_total``, not ``requests_total``: it is not work, so it never blocks."""
+    ``live_status.is_stream``) is in ``streams_total``, not ``requests_total``: it is not work, so it never blocks.  Nor
+    does a stale MCP request (open longer than ``live_status.mcp_stale_s()``, no client, no work behind it): it is in
+    ``stale_total``, not ``requests_total`` - the same rule ``deploy_module.sh`` ``busy()`` reads from ``requests``."""
     live = state.get("live") or {}
     jobs = live.get("jobs") or {}
     return not (jobs.get("running") or jobs.get("queued") or live.get("requests_total"))

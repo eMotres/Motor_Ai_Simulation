@@ -5002,6 +5002,8 @@ def get_fem_transient(
     inv_v_sd_v0_V:       float = 0.0,     # ← body-diode fit: threshold [V]
     inv_v_sd_rd_ohm:     float = 0.0,     # ← body-diode fit: slope in the LEG current [ohm]
     inv_dead_time_us:    float = 0.0,     # ← one dead-time window [us]
+    inv_v_on0_V:         float = 0.0,     # ← IGBT/FWD forward threshold of the conducting
+                                          #   device [V] (0 for a MOSFET — keys unchanged)
     inv_device:          str   = "",      # ← provenance: the part
     inv_devices_parallel: int  = 1,       # ← provenance: devices per switch
     inv_t_j_c:           float = 0.0,     # ← provenance: T_j the card was read at
@@ -5424,6 +5426,12 @@ def get_fem_transient(
                     % (float(v_bus), float(f_switch), float(inv_r_ds_ohm),
                        float(inv_v_sd_v0_V), float(inv_v_sd_rd_ohm),
                        float(inv_dead_time_us)))
+        # IGBT modules: the conducting device's threshold, keyed only when
+        # present so every MOSFET key stays the key it was.
+        if float(inv_v_on0_V or 0.0):
+            _inv_nonideal["v_on0_V"] = float(inv_v_on0_V)
+            _inv_nonideal["technology"] = "igbt_module"
+            _inv_key += "/von%g" % float(inv_v_on0_V)
         # Keyed only when not sine, so every key written before the choice
         # existed stays the same key (routes/coupled.py spells it the same).
         if _inv_mod != "sine":

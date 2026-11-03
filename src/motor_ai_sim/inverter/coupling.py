@@ -112,6 +112,14 @@ class DeviceDrop:
     v_sd_fit_max_err_V: float = 0.0
     v_sd_fit_span_A: float = 0.0
     v_sd_fit_from_A: float = 0.0
+    #: IGBT modules (2026-11-03): the forward THRESHOLD of the conducting
+    #: device, ``−sign(i)·v_on0`` on the pole on top of ``−i·r_ds`` — the
+    #: IGBT's V_CE0 and the FWD's V_F0 weighted by their conduction shares
+    #: (:func:`fit_device_drop`).  0 for a MOSFET, whose channel is a pure
+    #: resistance — and then nothing below changes.
+    v_on0_V: float = 0.0
+    #: ``"igbt_module"`` for an IGBT/FWD drop, "" otherwise (provenance).
+    technology: str = ""
 
     def v_sd(self, i_leg_abs: float) -> float:
         """Body-diode drop at a LEG current [V], never negative."""
@@ -119,13 +127,18 @@ class DeviceDrop:
 
     def as_dict(self) -> Dict[str, Any]:
         d = asdict(self)
+        if not self.v_on0_V and not self.technology:
+            # a MOSFET drop: the record is exactly what it was before IGBTs
+            d.pop("v_on0_V", None)
+            d.pop("technology", None)
         return {k: (round(v, 8) if isinstance(v, float) else v)
                 for k, v in d.items()}
 
 
 def fit_device_drop(card, *, t_j_c: float, n_parallel: int,
                     i_leg_peak_A: float, v_gs_on_V: float = 18.0,
-                    v_gs_off_V: float = 0.0, dead_time_s: float = 0.0
+                    v_gs_off_V: float = 0.0, dead_time_s: float = 0.0,
+                    forward_share: Optional[float] = None
                     ) -> DeviceDrop:
     """Reduce a device card to a :class:`DeviceDrop` at one junction temperature.
 
@@ -147,6 +160,10 @@ def fit_device_drop(card, *, t_j_c: float, n_parallel: int,
     tabulates, exactly as ``losses.solve_controller`` clamps them, so the two
     halves of one solve cannot be quoting the device at two temperatures.
     """
+    if getattr(card, "is_igbt", False):
+        return _fit_igbt_drop(card, t_j_c=t_j_c, n_parallel=n_parallel,
+                              i_leg_peak_A=i_leg_peak_A, dead_time_s=dead_time_s,
+                              forward_share=forward_share)
     n = max(int(n_parallel), 1)
     t_cap = float(card.t_j_curve_max_c())
     t_eval = min(float(t_j_c), t_cap)
@@ -176,6 +193,47 @@ def fit_device_drop(card, *, t_j_c: float, n_parallel: int,
         v_sd_fit_max_err_V=err,
         v_sd_fit_span_A=float(i_dev_peak),
         v_sd_fit_from_A=float(i_lo))
+
+
+def _fit_igbt_drop(card, *, t_j_c: float, n_parallel: int, i_leg_peak_A: float,
+                   dead_time_s: float, forward_share: Optional[float]) -> DeviceDrop:
+    """An IGBT module reduced to the same per-leg scalars.
+
+    Over a carrier period the conducting device is the IGBT for part of it
+    and the other position's FWD for the rest, and the pole drop is
+    ``−sign(i)·(V_0 + r·|i|)`` of whichever conducts.  Both are straight-line
+    fits to the card (0.1..1 x the peak device current, like the MOSFET
+    body diode) and they are blended by ``forward_share`` — the IGBTs' share
+    of the leg's I² from the last controller solve (0.5 before there is one,
+    stated): ``r_ds = (w·r_CE + (1−w)·r_F + R_lead)/N``,
+    ``v_on0 = w·V_CE0 + (1−w)·V_F0``.  The dead-time clamp is the FWD itself
+    (``v_sd`` = the V_F fit).  The blend is the approximation: within a
+    period the split moves with the duty, but V_CE0 and V_F0 differ by
+    ~0.1 V on a 600 V link.
+    """
+    n = max(int(n_parallel), 1)
+    t_cap = float(card.t_j_curve_max_c())
+    t_eval = min(float(t_j_c), t_cap)
+    i_dev_peak = max(abs(float(i_leg_peak_A)) / n, 1e-6)
+    ft = card.linear_fit("igbt", t_eval, i_dev_peak)
+    fd = card.linear_fit("diode", t_eval, i_dev_peak)
+    w = 0.5 if forward_share is None else min(max(float(forward_share), 0.0), 1.0)
+    r_dev = w * ft["r_ohm"] + (1.0 - w) * fd["r_ohm"] + float(card.r_lead_ohm)
+    v0 = w * ft["v0_V"] + (1.0 - w) * fd["v0_V"]
+    return DeviceDrop(
+        r_ds_ohm=max(r_dev, 0.0) / n,
+        v_sd_v0_V=float(fd["v0_V"]),
+        v_sd_rd_ohm=float(fd["r_ohm"]) / n,
+        dead_time_s=float(dead_time_s),
+        device=str(getattr(card, "part", "")),
+        t_j_c=float(t_j_c),
+        devices_parallel=n,
+        r_ds_on_mohm_device=r_dev * 1e3,
+        v_sd_fit_max_err_V=float(fd["max_err_V"]),
+        v_sd_fit_span_A=float(i_dev_peak),
+        v_sd_fit_from_A=float(fd["i_lo_A"]),
+        v_on0_V=max(float(v0), 0.0),
+        technology="igbt_module")
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +324,9 @@ def pole_error_volts(*, modulator, drop: DeviceDrop, phase: str,
         return 0.0
     s = 0.0 if i_leg_A == 0.0 else math.copysign(1.0, i_leg_A)
     out = -float(i_leg_A) * float(drop.r_ds_ohm)
+    if drop.v_on0_V:
+        # IGBT/FWD: the conducting device's threshold, against the current
+        out -= s * float(drop.v_on0_V)
     td_deg = float(drop.dead_time_s) * float(deg_per_s)
     if td_deg <= 0.0 or s == 0.0:
         return out
@@ -572,6 +633,9 @@ class InverterVoltageSource(_ExcPwm):
                 e = self.drop.dead_time_s * f_sw * (
                     self.v_dc_real_V + 2.0 * self.drop.v_sd(i_pk))
                 g[k] -= 2.0 * e / (math.pi * i_pk)
+            if self.drop.v_on0_V and i_pk > 1e-9:
+                # the IGBT/FWD threshold is the same −sign(i)·E square wave
+                g[k] -= 2.0 * float(self.drop.v_on0_V) / (math.pi * i_pk)
         self.ll_feedback_gain = feedback_gain_ll(
             g, star_delta=self.star_delta, n_parallel=self.n_parallel)
 
@@ -687,6 +751,12 @@ class InverterVoltageSource(_ExcPwm):
             "t_j_c": round(self.drop.t_j_c, 2),
             "v_sd_model_V": ("%.3f + %.5g*i_leg"
                              % (self.drop.v_sd_v0_V, self.drop.v_sd_rd_ohm)),
+            **({"technology": self.drop.technology,
+                "v_on0_V": round(self.drop.v_on0_V, 4),
+                "conducting_drop_model_V": (
+                    "sign(i)*(%.3f + %.5g*|i_leg|) — IGBT/FWD blend"
+                    % (self.drop.v_on0_V, self.drop.r_ds_ohm))}
+               if self.drop.v_on0_V else {}),
             **({"v_sd_fit_max_err_V": round(self.drop.v_sd_fit_max_err_V, 4),
                 "v_sd_fit_span_A": round(self.drop.v_sd_fit_span_A, 2)}
                if self.drop.v_sd_fit_span_A > 0.0 else {}),

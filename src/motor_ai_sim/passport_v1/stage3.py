@@ -114,6 +114,12 @@ def drive_for(card, r_g_si: Optional[float]) -> Dict[str, Any]:
     """Gate-drive request for a card: Si = the controller's UCC27289 build
     (SPICE set R_G + driver resistance), GaN = the reference-board drive."""
     tech = str(card.doc.get("technology") or "").lower()
+    if getattr(card, "is_igbt", False):
+        on, off = card.gate_reference()
+        rg = card.r_g_ref_ohm if r_g_si is None else float(r_g_si)
+        return {"tech": "IGBT", "v_gs_on": on, "v_gs_off": off, "r_g": rg,
+                "r_g_off": rg, "l_sigma": None, "source": "datasheet",
+                "label": "IGBT module: datasheet V_CE(sat)/V_F and E_on/E_off/E_rr curves"}
     if tech.startswith("gan"):
         return {"tech": "GaN", "v_gs_on": GAN_DRIVE["v_gs_on_V"], "v_gs_off": 0.0,
                 "r_g": GAN_DRIVE["r_g_ohm"], "r_g_off": None, "l_sigma": None,
@@ -134,6 +140,9 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
     from motor_ai_sim.inverter.losses import _leg_losses
     th = np.linspace(0.0, 2.0 * math.pi, 720, endpoint=False)
     i = SQ2 * float(I_rms) * np.sin(th)
+    if getattr(card, "is_igbt", False):
+        return _igbt_inverter_losses(card, drv, i=i, th=th, f_sw=f_sw, dead_s=dead_s,
+                                     v_dc=v_dc, t_j=t_j, n_par=n_par)
     r = _leg_losses(card=card, i_leg=i, n_par=n_par, f_sw=f_sw, t_j_c=t_j, v_dc=v_dc,
                     v_gs_on=drv["v_gs_on"], v_gs_off=drv["v_gs_off"], r_g=drv["r_g"],
                     dead_time_s=dead_s, e_oss_policy="included_in_eon",
@@ -145,6 +154,26 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
     return {"cond": cond, "sw": sw, "dead": dead, "total": cond + sw + dead,
             "per_switch_W": r["p_total_W"] / 2.0, "notes": r["notes"],
             "switching_basis": r.get("conduction_source"), "extrapolated": r["extrapolated"]}
+
+
+def _igbt_inverter_losses(card, drv, *, i, th, f_sw, dead_s, v_dc, t_j, n_par,
+                          m: float = 0.89, cos_phi: float = 1.0) -> Dict[str, Any]:
+    """The IGBT-module version of :func:`inverter_losses`: conduction split
+    between IGBT and FWD by the leg's own sine duty (m = 0.89, the
+    controller's README modulation, current in phase — stated), both
+    devices at ``t_j``.  ``dead`` is 0: the dead time is inside the FWD
+    conduction here."""
+    from motor_ai_sim.inverter.igbt import igbt_leg_losses
+    duty = 0.5 * (1.0 + m * np.sin(th + math.acos(max(min(cos_phi, 1.0), -1.0))))
+    r = igbt_leg_losses(card=card, i_leg=i, duty=duty, n_par=n_par, f_sw=f_sw,
+                        t_j_igbt_c=t_j, t_j_diode_c=t_j, v_dc=v_dc,
+                        r_g_on=drv.get("r_g"), r_g_off=drv.get("r_g_off"),
+                        dead_time_s=dead_s)
+    cond = 3.0 * (r["p_igbt_conduction_W"] + r["p_diode_conduction_W"] + r["p_lead_W"])
+    sw = 3.0 * (r["p_on_W"] + r["p_off_W"] + r["p_rr_W"])
+    return {"cond": cond, "sw": sw, "dead": 0.0, "total": cond + sw,
+            "per_switch_W": r["p_total_W"] / 2.0, "notes": r["notes"],
+            "switching_basis": "datasheet", "extrapolated": r["extrapolated"]}
 
 
 def board_air_film(air_speed_ms: float, t_amb_c: float,

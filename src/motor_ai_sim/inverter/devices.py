@@ -235,6 +235,11 @@ def validate_card(doc: Any) -> List[str]:
     bad: List[str] = []
     if not isinstance(doc, dict):
         return ["the card must be a YAML mapping"]
+    if str(doc.get("technology") or "").strip().lower() == "igbt_module":
+        # An IGBT module card has its own blocks (igbt / diode / switching
+        # curves / two R_th(j-c)) — inverter.igbt validates it.
+        from motor_ai_sim.inverter.igbt import validate_igbt_card
+        return validate_igbt_card(doc)
     for key in REQUIRED_BLOCKS:
         if doc.get(key) in (None, "", {}):
             bad.append(f"{key} is missing — it is required")
@@ -600,6 +605,16 @@ class DeviceCard:
 
     doc: Dict[str, Any]
     source_file: Optional[Path] = None
+
+    def __new__(cls, doc: Any = None, source_file: Optional[Path] = None):
+        # An ``igbt_module`` card is an :class:`inverter.igbt.IgbtModuleCard`
+        # (IGBT + FWD accessors), whoever builds it — the loader, the catalog
+        # envelope or a test.  Every other card is built exactly as before.
+        if (cls is DeviceCard and isinstance(doc, dict)
+                and str(doc.get("technology") or "").strip().lower() == "igbt_module"):
+            from motor_ai_sim.inverter.igbt import IgbtModuleCard
+            cls = IgbtModuleCard
+        return super().__new__(cls)
 
     def __post_init__(self) -> None:
         bad = validate_card(self.doc)

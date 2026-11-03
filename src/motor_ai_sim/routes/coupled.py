@@ -1957,6 +1957,10 @@ def _pwm_v1_first_guess(*, v_sine_peak_V: float, v_delta_deg: float,
     i_leg_pk = float(i_phase_rms_A) * math.sqrt(2.0) * k_leg
     td_fsw = drop_vals["dead_time_s"] * float(f_carrier_hz)
     e_channel = i_leg_pk * drop_vals["r_ds_ohm"]
+    v_on0 = float(getattr(drop, "v_on0_V", 0.0) or 0.0)
+    if v_on0:
+        # IGBT/FWD threshold: a -sign(i)*V0 square wave, fundamental 4/pi*V0
+        e_channel += (4.0 / math.pi) * v_on0
     e_dead = ((4.0 / math.pi) * td_fsw
               * (float(v_dc_V) + 2.0 * drop_vals["v_sd_v0_V"])
               + 2.0 * td_fsw * drop_vals["v_sd_rd_ohm"] * i_leg_pk)
@@ -3098,20 +3102,31 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
     if n_par < 1:
         raise _refuse("controller.devices_parallel must be at least 1",
                       ["controller.devices_parallel"])
+    # IGBT modules (2026-11-03): their own stated defaults — dead time, the
+    # card's +15/-15 V gate reference and its datasheet R_th(c-s).  A MOSFET
+    # card keeps exactly the defaults below.
+    _igbt = bool(getattr(card, "is_igbt", False))
+    if _igbt:
+        from motor_ai_sim.inverter.igbt import DEFAULT_DEAD_TIME_US as _IGBT_DT
+        _ge_on, _ge_off = card.gate_reference()
     dead_us = float(_pick("dead_time_us", st_set.get("dead_time_us"),
-                          CONTROLLER_DEAD_TIME_US,
+                          (_IGBT_DT if _igbt else CONTROLLER_DEAD_TIME_US),
                           "the duty's stored controller solve",
-                          "this module's stated default (the card publishes "
-                          "switching times, not a recommended dead time)"))
+                          ("the IGBT module's stated default dead time" if _igbt else
+                           "this module's stated default (the card publishes "
+                           "switching times, not a recommended dead time)")))
     if dead_us < 0.0:
         raise _refuse("controller.dead_time_us cannot be negative",
                       ["controller.dead_time_us"])
-    v_gs_on = float(_pick("v_gs_on_V", st_set.get("v_gs_on_V"), 18.0,
+    v_gs_on = float(_pick("v_gs_on_V", st_set.get("v_gs_on_V"),
+                          (_ge_on if _igbt else 18.0),
                           "the duty's stored controller solve",
                           "the card's recommended gate-on voltage"))
-    v_gs_off = float(_pick("v_gs_off_V", st_set.get("v_gs_off_V"), 0.0,
+    v_gs_off = float(_pick("v_gs_off_V", st_set.get("v_gs_off_V"),
+                           (_ge_off if _igbt else 0.0),
                            "the duty's stored controller solve",
-                           "a 0 V gate-off drive"))
+                           ("the card's gate-off reference" if _igbt
+                            else "a 0 V gate-off drive")))
     r_g = _pick("r_g_ext_ohm", st_set.get("r_g_ext_ohm"), None,
                 "the duty's stored controller solve",
                 "the datasheet's own R_G,ext")
@@ -3143,9 +3158,13 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
         src["cooling"] = "the request"
     else:
         src["cooling"] = "the module's default micro-channel coldplate"
-    r_tim = float(_pick("r_tim_k_w", st_set.get("r_tim_k_w"), DEFAULT_TIM_K_W,
+    _tim_default = DEFAULT_TIM_K_W
+    if _igbt and card.r_th_cs_k_w is not None:
+        _tim_default = float(card.r_th_cs_k_w)       # datasheet R_th(c-s)
+    r_tim = float(_pick("r_tim_k_w", st_set.get("r_tim_k_w"), _tim_default,
                         "the duty's stored controller solve",
-                        "the module's stated default thermal interface"))
+                        ("the card's R_th(c-s) (datasheet, with grease)" if _igbt else
+                         "the module's stated default thermal interface")))
 
     pmod, src["pwm_modulation"] = _controller_pwm_modulation(body)
     floor_ns = _dead_time_floor_ns(card)
@@ -3270,6 +3289,8 @@ class _ControllerLoop:
             inv_v_sd_v0_V=float(d.v_sd_v0_V),
             inv_v_sd_rd_ohm=float(d.v_sd_rd_ohm),
             inv_dead_time_us=float(d.dead_time_s) * 1e6,
+            # IGBT modules only: the conducting device's threshold
+            **({"inv_v_on0_V": float(d.v_on0_V)} if d.v_on0_V else {}),
             inv_device=str(d.device),
             inv_devices_parallel=int(d.devices_parallel),
             inv_t_j_c=float(d.t_j_c),
@@ -3287,6 +3308,8 @@ class _ControllerLoop:
                   float(self.inverter["f_carrier_hz"]),
                   float(d.r_ds_ohm), float(d.v_sd_v0_V),
                   float(d.v_sd_rd_ohm), float(d.dead_time_s) * 1e6))
+        if d.v_on0_V:                    # IGBT modules — get_fem_transient's spelling
+            key += "/von%g" % float(d.v_on0_V)
         # Suffixed only off sine — get_fem_transient's own spelling.
         mod = self._pwm_modulation()
         return key if mod == "sine" else key + "/" + mod
@@ -3372,7 +3395,10 @@ class _ControllerLoop:
                 "i_leg_rms_3ph_A") or 0.0) * math.sqrt(2.0), 1.0),
             v_gs_on_V=float(self.cfg["v_gs_on_V"]),
             v_gs_off_V=float(self.cfg["v_gs_off_V"]),
-            dead_time_s=float(self.cfg["dead_time_us"]) * 1e-6)
+            dead_time_s=float(self.cfg["dead_time_us"]) * 1e-6,
+            # IGBT modules: blend IGBT/FWD by the split this solve found
+            **({"forward_share": (out.get("conduction_direction") or {}).get(
+                "forward_share")} if getattr(self.card, "is_igbt", False) else {}))
         self.passes.append({
             "iter": int(it),
             "phase": str(phase),

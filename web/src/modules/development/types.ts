@@ -12,6 +12,8 @@ export interface ProjectSummary {
   cover_version?: string | null;
   /** an admin shared the project's quote and the caller may read it (GET /api/projects/{id}/quote); never its numbers */
   quote_shared?: boolean;
+  /** the project has a timeline and the caller may read it (GET /api/projects/{id}/timeline) */
+  timeline_ready?: boolean;
   created_at?: string; updated_at?: string;
 }
 export type Localized = string | { en?: string; 'zh-CN'?: string };

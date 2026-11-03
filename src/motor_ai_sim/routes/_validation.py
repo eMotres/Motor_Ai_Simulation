@@ -342,6 +342,15 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
             "carbon-fibre retaining ring on the rotor OD, inside the air gap; "
             "0 = none; must be thinner than the air gap"),
     },
+    # A lamination FLAG (2026-11-03): the wedge notches cut from the stator OD
+    # between the slot units.  Absent = on (every die stamped before the flag);
+    # stored only when off.  `bool` renders as a checkbox in the Geometry table.
+    "stator_outer_notches": {
+        "label": "Outer notches", "unit": "", "type": "bool",
+        "default": True, "group": "stator",
+        "description": ("Wedge notches on the stator OD between slot units; "
+                        "off = smooth OD, e.g. for submerged motors"),
+    },
 }
 
 #: Descriptions the SERVER owns outright, overriding whatever the config says.

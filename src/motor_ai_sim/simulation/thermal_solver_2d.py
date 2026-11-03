@@ -367,6 +367,17 @@ def solve_steady_thermal(
     cut_sel = wedge_cut_facets(mesh, bnd)
     if cut_sel.size:
         outer_sel = np.setdiff1d(outer_sel, cut_sel)
+    # OUTER_OD (2026-11-03): only the facets lying ON the OD circle — the iron
+    # arcs a sleeve pressed on the stator touches.  The notch walls and the
+    # OD corner fillets are left out (they touch nothing).  Both ends within
+    # 2e-4·R of the circle: the OD is a 256-gon whose chord sagitta is
+    # 7.5e-5·R, so a node the mesher inserts mid-chord still qualifies.  Used
+    # only by a surface that asks for it (``"facets": "outer_od"``); "outer"
+    # keeps the facet set every existing answer was solved on.
+    _r_od = float(r_housing_m)
+    od_sel = (outer_sel[(r_fmin[np.searchsorted(bnd, outer_sel)]
+                         >= _r_od * (1.0 - 2e-4))]
+              if (outer_sel.size and _r_od > 0.0) else np.array([], int))
 
     # BORE: the innermost CLOSED boundary of the solid mesh.  Selected by node
     # radius rather than by tag on purpose — it is the shaft bore when the shaft
@@ -447,7 +458,7 @@ def solve_steady_thermal(
 
     spec: List[Dict[str, Any]] = list(surfaces or [
         {"name": "outer", "h": float(h_conv), "t_sink": float(t_ambient)}])
-    facet_sets = {"outer": outer_sel, "bore": bore_sel}
+    facet_sets = {"outer": outer_sel, "bore": bore_sel, "outer_od": od_sel}
 
     active: List[Dict[str, Any]] = []
     for s in spec:

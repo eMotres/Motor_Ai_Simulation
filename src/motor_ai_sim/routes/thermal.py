@@ -744,7 +744,10 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                            I_phase_rms: float = 0.0, coil_temp_c: float = 25.0,
                            n_steps_per_period: int = 1, n_periods: float = 1.0,
                            mesh_size_mm: float = 1.0, min_size_mm: float = 1.0,
-                           outer_air_factor: float = 1.0):
+                           outer_air_factor: float = 1.0,
+                           stator_od_cooling: str = "direct",
+                           od_sleeve_wall_mm: float = 1.5,
+                           od_sleeve_k: float = 160.0):
     """Refuse the impossible before spending a minute of FEM on it.
 
     Returns ``(cooling_mode, bore_mode)`` normalised to lower case.
@@ -1017,7 +1020,53 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
         raise _bad("outer_air_factor", outer_air_factor, "bad_value",
                    "outer_air_factor scales the far-field air ring around the "
                    "stator and must be ≥ 1.0")
+    # ── THE STATOR-OD SLEEVE (2026-11-03) — see cooling_models ─────────────
+    _sod = _norm_stator_od(stator_od_cooling)
+    if _sod not in _STATOR_OD_MODES:
+        raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
+                   "stator_od_cooling says how the outer boundary reaches the "
+                   "stator: 'direct' (the default — the film acts on the "
+                   "stator's own outer contour, notch walls included, e.g. "
+                   "coolant flowing over the stator) or 'sleeve_contact' (the "
+                   "stator is pressed into a round sleeve: only the OD iron "
+                   "arcs touch it, then the sleeve wall, then the film)",
+                   error=f"unknown stator_od_cooling {stator_od_cooling!r}")
+    if _sod == "sleeve_contact":
+        if str(heat_path or "none").strip().lower() in ("housing", "both"):
+            raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
+                       "the robotics heat path 'housing' already puts the "
+                       "stator OD in a housing; pick one model of that contact "
+                       "— heat_path 'shaft'/'none', or stator_od_cooling "
+                       "'direct'",
+                       error="sleeve_contact and heat_path housing together")
+        if mode == "none":
+            raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
+                       "a sleeve needs a film outside it to hand the heat to; "
+                       "cooling_mode 'none' has none",
+                       error="sleeve_contact without an outer film")
+        if not math.isfinite(float(od_sleeve_wall_mm)) or not (
+                0.0 < float(od_sleeve_wall_mm) <= 50.0):
+            raise _bad("od_sleeve_wall_mm", od_sleeve_wall_mm, "bad_value",
+                       "od_sleeve_wall_mm is the sleeve's wall thickness in mm, "
+                       "greater than 0 (1–2 mm for a pressed aluminium sleeve)",
+                       error="bad sleeve wall thickness")
+        if not math.isfinite(float(od_sleeve_k)) or float(od_sleeve_k) <= 0.0:
+            raise _bad("od_sleeve_k", od_sleeve_k, "bad_value",
+                       "od_sleeve_k is the sleeve material's thermal "
+                       "conductivity in W/m·K and must be positive (aluminium "
+                       "alloys ~120–200, stainless steel ~15)",
+                       error="bad sleeve conductivity")
     return mode, bore
+
+
+#: The two ways the outer boundary reaches the stator (2026-11-03).
+_STATOR_OD_MODES = ("direct", "sleeve_contact")
+
+
+def _norm_stator_od(v: Any) -> str:
+    """``stator_od_cooling`` normalised; blank / None = 'direct'."""
+    s = str(v or "direct").strip().lower()
+    return s or "direct"
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +1260,8 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
                      heat_path="none",
                      end_faces="still", end_face_sides=2,
                      air_speed_source="manual", propeller_id="",
-                     propeller_position="") -> tuple:
+                     propeller_position="", stator_od_cooling="direct",
+                     od_sleeve_wall_mm=1.5, od_sleeve_k=160.0) -> tuple:
     """What makes two thermal requests the SAME request.
 
     Three groups, and all three are load-bearing:
@@ -1327,6 +1377,12 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
             from motor_ai_sim.simulation.cooling_models import (
                 HOUSING_REAR_FACE_SPEED_FACTOR as _RF)
             _base = _base + ("housing_end_faces", float(_RF))
+    # THE STATOR-OD SLEEVE (2026-11-03): appended only when chosen, so a
+    # 'direct' request keys on exactly the tuple it always did.
+    if _norm_stator_od(stator_od_cooling) == "sleeve_contact":
+        _base = _base + ("stator_od", "sleeve_contact",
+                         round(float(od_sleeve_wall_mm), 4),
+                         round(float(od_sleeve_k), 3))
     return _base
 
 
@@ -3944,6 +4000,14 @@ def solve_thermal_field(
     # SIX-PHASE, ONE SET OPEN (1 | 2): look up the run solved that way.  Its
     # map carries the conservative copper basis (`copper_heat_uniform_factor`).
     six_phase_open_set: Optional[int] = None,
+    # HOW THE OUTER BOUNDARY REACHES THE STATOR (2026-11-03).  'direct' (the
+    # default, bit-identical to every earlier call) = the film acts on the
+    # stator's own outer contour; 'sleeve_contact' = the stator is pressed into
+    # a round sleeve of `od_sleeve_wall_mm` / `od_sleeve_k` and only the OD's
+    # iron arcs touch it (cooling_models.sleeve_contact_path).
+    stator_od_cooling:  str = "direct",
+    od_sleeve_wall_mm:  float = 1.5,
+    od_sleeve_k:        float = 160.0,
     progress=None,
     _em_map:            Optional[Dict[str, Any]] = None,
     _em_loss_source:    Optional[Dict[str, Any]] = None,
@@ -4240,7 +4304,11 @@ def solve_thermal_field(
         slot_k=slot_k, rpm=rpm, I_phase_rms=I_phase_rms,
         coil_temp_c=coil_temp_c, n_steps_per_period=n_steps_per_period,
         n_periods=n_periods, mesh_size_mm=mesh_size_mm,
-        min_size_mm=min_size_mm, outer_air_factor=outer_air_factor)
+        min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
+        stator_od_cooling=stator_od_cooling,
+        od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k)
+    stator_od_cooling = _norm_stator_od(stator_od_cooling)
+    _sleeve_on = stator_od_cooling == "sleeve_contact"
     frame = _norm_frame(frame)
     end_faces = _norm_end_faces(end_faces)
     # The mount's temperature is the AMBIENT when the field is blank: a machine
@@ -4292,7 +4360,9 @@ def solve_thermal_field(
         mount_temp_c=mount_temp_c, heat_path=heat_path, end_faces=end_faces,
         end_face_sides=end_face_sides,
         air_speed_source=air_speed_source, propeller_id=propeller_id,
-        propeller_position=propeller_position)
+        propeller_position=propeller_position,
+        stator_od_cooling=stator_od_cooling,
+        od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k)
     # THE MAGNET TEMPERATURE, appended only when the request carries one — the
     # same rule `_field_snap_key_fields` follows, and for the same reason: with
     # no magnet temperature the key must stay byte-identical to the one every
@@ -4716,6 +4786,18 @@ def solve_thermal_field(
     except Exception as exc:  # noqa: BLE001 — a missing outline is not an answer
         log.warning("thermal: could not build the cross-section polygons (%s)", exc)
         _polys = {}
+    # THE OD CONTACT ARCS (2026-11-03), only for a sleeve: measured on this
+    # very stator polygon (closed form when the polygon is unavailable).
+    _od_contact: Dict[str, Any] = {}
+    if _sleeve_on:
+        from motor_ai_sim.cadquery_geometry import stator_od_contact as _sodc
+        _od_contact = (_sodc(g, stator=(_polys or {}).get("stator"))
+                       or _sodc(g) or {})
+        if not _od_contact:
+            raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
+                       "the stator OD contact arcs could not be measured on "
+                       "this cross-section (no stator outline)",
+                       error="no stator outline for the sleeve contact")
     tags, air_report = _retag_thermal_domains(
         verts, tris, tags, _polys, r_housing_m=R_house,
         stator_inner_m=stator_inner_m, rotor_outer_m=rotor_outer_m,
@@ -5743,6 +5825,17 @@ def solve_thermal_field(
                             "symmetry_mult": sym}]
         if _hp_housing:
             h_eff = float(_cm3.HOUSING_CONTACT_H)
+        # THE STATOR-OD SLEEVE (2026-11-03): this pass's outer film behind the
+        # sleeve wall and the OD contact arcs, as ONE whole-machine W/K that
+        # the solver spreads over the OD contact facets.  Off ('direct') this
+        # is not evaluated at all.
+        _sleeve: Dict[str, Any] = {}
+        if _sleeve_on:
+            _sleeve = _cm3.sleeve_contact_path(
+                r_od_m=R_house, stack_m=L,
+                contact_fraction=float(_od_contact["fraction"]),
+                wall_m=float(od_sleeve_wall_mm) * 1e-3,
+                k_sleeve=float(od_sleeve_k), h_out=float(h_eff))
 
         # THE END FACES, at this pass's wall temperatures.  Rebuilt every pass
         # rather than once: G = h_total(ΔT)·A·n_faces, and h_total is the whole
@@ -5975,9 +6068,13 @@ def solve_thermal_field(
                 # bridged through the LINER, not through gap air.  With the slot
                 # meshed there are no such islands and this does nothing.
                 slot_ins_k=float(k_liner), slot_ins_d_m=float(t_liner) * 1e-3,
-                surfaces=[{"name": "outer", "h": float(h_eff),
-                           "t_sink": float(t_sink),
-                           **({"node": "heat_path"} if _hp_housing else {})},
+                surfaces=[({"name": "outer", "facets": "outer_od",
+                            "G_W_per_K": float(_sleeve["G_W_per_K"]),
+                            "symmetry_mult": sym, "t_sink": float(t_sink)}
+                           if _sleeve_on else
+                           {"name": "outer", "h": float(h_eff),
+                            "t_sink": float(t_sink),
+                            **({"node": "heat_path"} if _hp_housing else {})}),
                           {"name": "bore", "h": float(h_bore),
                            "t_sink": float(t_bore_sink)}]
                 + ([{"name": "housing_end_faces", "facets": "outer",
@@ -6168,6 +6265,36 @@ def solve_thermal_field(
     bore_cooling["area_m2"] = round(float(_by_name.get("bore", {})
                                           .get("area_m2", 0.0)) * sym, 6)
     bore_cooling["r_bore_mm"] = round(r_bore_m * 1e3, 3)
+    # THE STATOR-OD SLEEVE (2026-11-03), only when chosen — a 'direct' payload
+    # is the one it always was.  `area_m2` above is then the OD contact facets
+    # the conductance was spread over (measured on the mesh).
+    if _sleeve_on and _sleeve:
+        _t_c = _by_name.get("outer", {}).get("t_mean_c")
+        cooling["stator_od"] = {
+            "mode": "sleeve_contact",
+            "stator_od_contact_fraction": round(float(_od_contact["fraction"]), 5),
+            "contact_basis": _od_contact.get("basis"),
+            "notched": bool(_od_contact.get("notched", True)),
+            "contact_arc_mm": round(float(_od_contact["contact_arc_mm"]), 4),
+            "od_circumference_mm": round(float(_od_contact["od_circumference_mm"]), 4),
+            "contact_area_m2": round(float(_sleeve["contact_area_m2"]), 8),
+            "sleeve_outer_area_m2": round(float(_sleeve["outer_area_m2"]), 8),
+            "wall_mm": round(float(od_sleeve_wall_mm), 4),
+            "k_sleeve_W_per_mK": round(float(od_sleeve_k), 4),
+            "h_contact_W_per_m2K": round(float(_sleeve["h_contact"]), 3),
+            "h_film_W_per_m2K": round(float(_sleeve["h_out"]), 4),
+            "G_contact_W_per_K": round(float(_sleeve["G_contact_W_per_K"]), 6),
+            "G_sleeve_W_per_K": (None if _sleeve["G_sleeve_W_per_K"] is None
+                                 else round(float(_sleeve["G_sleeve_W_per_K"]), 6)),
+            "G_film_W_per_K": round(float(_sleeve["G_film_W_per_K"]), 6),
+            "G_total_W_per_K": round(float(_sleeve["G_W_per_K"]), 6),
+            "t_contact_mean_c": (None if _t_c is None else round(float(_t_c), 3)),
+            "note": ("stator OD pressed into a %.2f mm sleeve (k %.0f W/m·K): "
+                     "%.1f %% of the OD is iron in contact; contact, wall and "
+                     "film in series as one conductance on the contact arcs"
+                     % (float(od_sleeve_wall_mm), float(od_sleeve_k),
+                        100.0 * float(_od_contact["fraction"]))),
+        }
 
     # ── THE HEAT PATH, as the solve measured it (2026-09-26) ────────────────
     # The body's temperature is the solve's own node; its film is re-evaluated
@@ -7531,6 +7658,24 @@ def field(
                                                       "an infinite sink — its "
                                                       "temperature does not rise "
                                                       "with the machine's heat"),
+    stator_od_cooling:  str = Query(default="direct",
+                                    description="how the outer boundary "
+                                                "reaches the stator: 'direct' "
+                                                "(default — the film acts on "
+                                                "the stator's own outer "
+                                                "contour) or 'sleeve_contact' "
+                                                "(pressed into a round sleeve: "
+                                                "OD iron arcs → sleeve wall → "
+                                                "film)"),
+    od_sleeve_wall_mm:  float = Query(default=1.5, gt=0.0, le=50.0,
+                                      description="stator_od_cooling="
+                                                  "sleeve_contact: sleeve wall "
+                                                  "thickness [mm]"),
+    od_sleeve_k:        float = Query(default=160.0, gt=0.0,
+                                      description="stator_od_cooling="
+                                                  "sleeve_contact: sleeve "
+                                                  "conductivity [W/m·K] "
+                                                  "(aluminium ~160)"),
     heat_path:          str = Query(default="none",
                                     description="cooling_mode=robotics: where "
                                                 "the heat goes by conduction — "
@@ -7646,6 +7791,12 @@ def field(
     _refuse_retired_link(mount_mode, link_preset, link_material)
     if str(heat_path or "none").strip().lower() != "none":
         _robot_kw = dict(_robot_kw, heat_path=str(heat_path).strip().lower())
+    # THE STATOR-OD SLEEVE (2026-11-03): sent on only when chosen, so a
+    # 'direct' request keys, restores and solves byte-identically.
+    if _norm_stator_od(stator_od_cooling) != "direct":
+        _robot_kw = dict(_robot_kw, stator_od_cooling=_norm_stator_od(stator_od_cooling),
+                         od_sleeve_wall_mm=float(od_sleeve_wall_mm),
+                         od_sleeve_k=float(od_sleeve_k))
 
     # ── THE LATEST ELECTROMAGNETIC RUN (2026-09-30) ─────────────────────────
     # The run's point and EM settings REPLACE what the request sent — the
@@ -7895,6 +8046,24 @@ def coupled(
     emissivity:         float = Query(default=0.9, ge=0.0, le=1.0),
     mount_g_w_per_k:    float = Query(default=0.0, ge=0.0),
     mount_temp_c: Optional[float] = Query(default=None),
+    stator_od_cooling:  str = Query(default="direct",
+                                    description="how the outer boundary "
+                                                "reaches the stator: 'direct' "
+                                                "(default — the film acts on "
+                                                "the stator's own outer "
+                                                "contour) or 'sleeve_contact' "
+                                                "(pressed into a round sleeve: "
+                                                "OD iron arcs → sleeve wall → "
+                                                "film)"),
+    od_sleeve_wall_mm:  float = Query(default=1.5, gt=0.0, le=50.0,
+                                      description="stator_od_cooling="
+                                                  "sleeve_contact: sleeve wall "
+                                                  "thickness [mm]"),
+    od_sleeve_k:        float = Query(default=160.0, gt=0.0,
+                                      description="stator_od_cooling="
+                                                  "sleeve_contact: sleeve "
+                                                  "conductivity [W/m·K] "
+                                                  "(aluminium ~160)"),
     heat_path:          str = Query(default="none",
                                     description="cooling_mode=robotics: where "
                                                 "the heat goes by conduction — "
@@ -7992,7 +8161,9 @@ def coupled(
             slot_k=slot_k, rpm=rpm, I_phase_rms=I_phase_rms,
             coil_temp_c=coil_temp_c, n_steps_per_period=n_steps_per_period,
             n_periods=n_periods, mesh_size_mm=mesh_size_mm,
-            min_size_mm=min_size_mm, outer_air_factor=outer_air_factor)
+            min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
+            heat_path=heat_path, stator_od_cooling=stator_od_cooling,
+            od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k)
 
         _cm = _auto_coil_mesh(component_mesh, mesh_size_mm, geo_ov)
         # The frame rides `_cool_kw` — which is the cache key AND the remembered
@@ -8013,6 +8184,10 @@ def coupled(
         _refuse_retired_link(mount_mode, link_preset, link_material)
         if str(heat_path or "none").strip().lower() != "none":
             _robot_kw["heat_path"] = str(heat_path).strip().lower()
+        if _norm_stator_od(stator_od_cooling) != "direct":
+            _robot_kw["stator_od_cooling"] = _norm_stator_od(stator_od_cooling)
+            _robot_kw["od_sleeve_wall_mm"] = float(od_sleeve_wall_mm)
+            _robot_kw["od_sleeve_k"] = float(od_sleeve_k)
         _source_kw = _thermal_air_source_kw(
             air_speed_source, propeller_id, propeller_position,
             propeller_context_key, mode, authorization)
@@ -8271,7 +8446,9 @@ _DC_COOLING_KEYS = (
     "bore_fluid", "bore_fluid_temp_in_c", "bore_flow_lpm",
     "shaft_ext_length_mm", "shaft_ext_sides", "frame", "open_air_speed_mps",
     "emissivity", "end_faces", "end_face_sides", "mount_g_w_per_k",
-    "mount_temp_c", "heat_path")
+    "mount_temp_c", "heat_path",
+    # the stator-OD sleeve (2026-11-03) — present only when chosen
+    "stator_od_cooling", "od_sleeve_wall_mm", "od_sleeve_k")
 
 #: …and the operating point that selects the Electromagnetic run behind it.
 _DC_POINT_KEYS = ("rpm", "I_phase_rms", "gamma_deg", "coil_temp_c")

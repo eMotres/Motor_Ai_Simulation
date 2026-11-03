@@ -10,6 +10,7 @@ import {
   Button,
   Snackbar,
   Switch,
+  Checkbox,
 } from '@mui/material';
 import ShowChartIcon    from '@mui/icons-material/ShowChart';
 import CloseIcon        from '@mui/icons-material/Close';
@@ -28,6 +29,7 @@ import HelpTip from '../common/HelpTip';
 import { useDieContext } from '../common/useDieContext';
 import { dieKeyLabel } from '../../lib/releasedContext';
 import { openGeometryHelpWindow } from '../../lib/geometryHelpWindow';
+import { flagValue } from '../../lib/geometryFlag';
 import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
 import { useTranslation } from 'react-i18next';
@@ -143,6 +145,7 @@ const optSwitchSx = {
 
 const FAMILY_API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
+
 const ParameterVariationTable: React.FC = () => {
   useTranslation('geometry'); // re-render on language change; lazy-loads the namespace
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -216,8 +219,9 @@ const ParameterVariationTable: React.FC = () => {
   useEffect(() => { void loadOptimizable(); }, [loadOptimizable]);
 
   // ── local edits (not yet sent to API) ───────────────────────────────────
-  // key → locally edited value
-  const [localValues, setLocalValues] = useState<Record<string, number>>({});
+  // key → locally edited value (a number; a boolean for a FLAG such as
+  // `stator_outer_notches`)
+  const [localValues, setLocalValues] = useState<Record<string, number | boolean>>({});
 
   // Initialise / sync local values when geometry loads from server
   // Only reset keys that are NOT dirty (i.e. not pending recalc)
@@ -238,10 +242,15 @@ const ParameterVariationTable: React.FC = () => {
 
   useEffect(() => {
     setLocalValues(prev => {
-      const next: Record<string, number> = {};
+      const next: Record<string, number | boolean> = {};
       Object.entries(geometry).forEach(([k, v]) => {
         // Keep local edit if key is dirty, otherwise follow server
         next[k] = dirtyRef.current.has(k) && prev[k] !== undefined ? prev[k] : (v as number);
+      });
+      // A dirty FLAG the server does not carry (absent = its default) keeps
+      // its local edit too.
+      dirtyRef.current.forEach((k) => {
+        if (!(k in next) && prev[k] !== undefined) next[k] = prev[k];
       });
       return next;
     });
@@ -259,34 +268,39 @@ const ParameterVariationTable: React.FC = () => {
   // The owner's warehouse table (2026-09-20): "we don't block the choice, we
   // just hint if the entered size physically isn't in stock".
   const { data: wireStockData } = useWireStock();
-  const currentWireH = localValues.wire_height ?? (geometry.wire_height as number | undefined) ?? 0;
-  const currentWireW = localValues.wire_width ?? (geometry.wire_width as number | undefined) ?? 0;
+  const currentWireH = Number(localValues.wire_height ?? (geometry.wire_height as number | undefined) ?? 0);
+  const currentWireW = Number(localValues.wire_width ?? (geometry.wire_width as number | undefined) ?? 0);
   const wireStockNote = useMemo(
     () => stockHint(currentWireH, currentWireW, wireStockData?.available_sizes ?? []),
     [currentWireH, currentWireW, wireStockData]);
 
   // ── value committed from a field → local edit buffer only (no API) ──────
-  const commitValue = useCallback((name: string, v: number) => {
+  const commitValue = useCallback((name: string, v: number | boolean) => {
     setLocalValues(prev => ({ ...prev, [name]: v }));
     setDirtyKeys(prev => {
-      // Mark dirty only if value actually changed from the server value
-      const serverVal = geometry[name] as number;
+      // Mark dirty only if value actually changed from the server value.  A
+      // FLAG the server omits means its default (the OD notches: on).
+      const serverVal = typeof v === 'boolean'
+        ? flagValue(geometry[name], parameterSchema.find(p => p.name === name)?.default)
+        : geometry[name] as number;
       const next = new Set(prev);
       if (v !== serverVal) next.add(name);
       else next.delete(name);
       return next;
     });
-  }, [geometry]);
+  }, [geometry, parameterSchema]);
 
   // ── Recalculate → send all dirty changes to API ───────────────────────
   const sendRecalculate = useCallback(async () => {
-    const pending: Record<string, number> = {};
+    const pending: Record<string, number | boolean> = {};
     dirtyKeys.forEach(k => { pending[k] = localValues[k]; });
 
+    // a FLAG rides as a boolean on the wire (the server's own type for it)
+    const body = pending as unknown as Record<string, number | string>;
     if (connectedToApi) {
-      await updateGeometryViaApi(pending);   // PUT → persists to config.yaml + rebuild
+      await updateGeometryViaApi(body);   // PUT → persists to config.yaml + rebuild
     } else {
-      updateGeometry(pending);
+      updateGeometry(body);
     }
     setDirtyKeys(new Set());
     setShowSaved(true);
@@ -518,7 +532,17 @@ const ParameterVariationTable: React.FC = () => {
                     current value (poles/segment given slots/segment: 5 or 7 —
                     owner 2026-09-20, "there are no other combinations yet"), a
                     free-typing local draft otherwise. */}
-                {(() => {
+                {param.type === 'bool' ? (
+                  // A FLAG (2026-11-03): one checkbox, the schema's tooltip on
+                  // the label.  Never a sweep variable (the server serves it
+                  // optimizable: false).
+                  <Checkbox size="small" sx={{ p: 0.25, justifySelf: 'end' }}
+                    checked={flagValue(localVal !== undefined ? localVal : geometry[param.name], param.default)}
+                    disabled={!!lockedBy}
+                    onChange={(e) => commitValue(param.name, e.target.checked)}
+                    inputProps={{ 'aria-label': param.label }}
+                    data-testid={`geometry-flag-${param.name}`} />
+                ) : (() => {
                   const dep = param.allowed_by ? Object.keys(param.allowed_by)[0] : null;
                   const depVal = dep ? Number(localValues[dep] ?? geometry[dep]) : NaN;
                   const allowed = dep && Number.isFinite(depVal)

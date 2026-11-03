@@ -994,7 +994,10 @@ _COOLING_KEYS = ("mode", "h_conv", "t_sink_c", "t_in_c", "t_out_c", "flow_lpm",
                  # still-air boundary as "fixed h" — the very bug class this
                  # whitelist is commented for further down.
                  "h_rad", "h_total", "t_wall_c", "t_film_c", "emissivity",
-                 "convection_W", "radiation_W", "regime")
+                 "convection_W", "radiation_W", "regime",
+                 # the stator-OD sleeve block (2026-11-03) — only on a map
+                 # solved with stator_od_cooling='sleeve_contact'
+                 "stator_od")
 
 #: One axial end face's block, as ``compact_thermal`` keeps it.  The per-face
 #: geometry (area, orientation, Ra/Nu) is not copied: the report asks these

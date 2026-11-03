@@ -4696,7 +4696,8 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
 # the active configuration keeps adopting the edit as before.
 
 #: Labels of the die-level shape keys a transition names (the identity keys have theirs above).
-_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)"}
+_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)",
+                                     "stator_outer_notches": "stator outer notches"}
 
 
 def _derived_slot_width(geo: dict) -> Optional[float]:
@@ -4735,6 +4736,16 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
     if dsw is not None and lsw is not None and abs(dsw - lsw) > 1e-6:
         out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
+    # The OD-notch FLAG is die-level too, but a bool (the loop above compares
+    # numbers only) and ABSENT = on on either side: a notch-free lamination is
+    # another lamination, so a configuration switched off moves to its own die
+    # exactly like any other die-defining edit.
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+    dn, ln = stator_outer_notches(die_geo), stator_outer_notches(live_geo)
+    if dn != ln:
+        out.append({"key": "stator_outer_notches",
+                    "label": _SHAPE_KEY_LABELS["stator_outer_notches"],
+                    "die": dn, "live": ln})
     return out
 
 
@@ -5118,8 +5129,13 @@ def duty_saved_geometry(duty: Optional[dict]) -> Dict[str, float]:
         sig = None
         g = duty.get("geometry")
         if isinstance(g, dict) and g:
-            return {k: v for k, v in g.items()
-                    if isinstance(v, (int, float)) and not isinstance(v, bool)}
+            out = {k: v for k, v in g.items()
+                   if isinstance(v, (int, float)) and not isinstance(v, bool)}
+            # the OD-notch flag, in the stamp's own spelling (0 = off)
+            from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+            if "stator_outer_notches" in g and not stator_outer_notches(g):
+                out["stator_outer_notches"] = 0.0
+            return out
         sig = _find_geo_sig({k: v for k, v in duty.items()
                              if k not in ("geometry", "solved_on")})
     if not sig:
@@ -5179,6 +5195,16 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
         else:
             continue
         out.append({"key": k, "scope": scope, "live": lv, "duty": sv})
+    # The OD-notch FLAG (a bool, so the numeric loop above skips it).  Only a
+    # stamp that SAYS something is compared: stamps carry it only when the
+    # notches were off, and an older stamp's silence says nothing.
+    from motor_ai_sim.geometry.motor_geometry import (STATOR_OUTER_NOTCHES,
+                                                      stator_outer_notches)
+    if STATOR_OUTER_NOTCHES in saved:
+        _sv, _lv = stator_outer_notches(saved), stator_outer_notches(live)
+        if _sv != _lv:
+            out.append({"key": STATOR_OUTER_NOTCHES, "scope": "die",
+                        "live": _lv, "duty": _sv})
     return out
 
 
@@ -6731,6 +6757,12 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
             # typed by hand, is still refused.
             canon = ov.get(k, die_geo.get(k))
             lock_name = f"die '{die}'"
+        if k == "stator_outer_notches":
+            # a lamination FLAG: absent = on, so the canonical value is the
+            # flag's meaning on the die/configuration, never "missing"
+            from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+            canon = stator_outer_notches(
+                {k: ov[k]} if k in ov else {k: die_geo.get(k)})
         if canon is None:
             # A key the stamped file never carried has a canonical value all
             # the same — what its absence MEANS (no sleeve, one wire in hand):

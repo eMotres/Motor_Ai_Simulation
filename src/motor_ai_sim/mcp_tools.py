@@ -49,6 +49,7 @@ GEOMETRY_DENYLIST = frozenset({
     "rotor_house_height", "shaft_height", "magnet_fill_down", "magnet_fill_up",
     "magnet_fill_radius", "magnet_up_gap", "rotor_hole", "magnet_down_height",
     "magnet_lamination", "stator_fillet_r", "stator_fillet_r1", "rotor_fill_r",
+    "stator_outer_notches",
     "stator_inner_radius", "rotor_outer_radius", "rotor_inner_radius",
     "slot_width", "shaft_diameter", "slot_pitch", "pole_pitch", "angle_slot",
     "angle_pole", "daxis_deg", "bh_curve", "core_loss_curves", "payload",

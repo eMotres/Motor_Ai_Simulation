@@ -1542,6 +1542,11 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
                 if _d["glive"] is None:
                     raise ValueError("no live geometry to resolve against")
                 _merged = _mgo(dict(_d["glive"]), dict(geo_override))
+                # the OD-notch flag in its stored form (absent = on), as the
+                # live object carries it: an explicit `true` is the same motor
+                from motor_ai_sim.geometry.motor_geometry import (
+                    canonical_outer_notches as _con)
+                _con(_merged)
                 # Dict equality, NOT serialized-text equality: the client
                 # sends 13 where the live object holds 13.0 — Python calls
                 # them equal, json.dumps does not, and the hash is of the

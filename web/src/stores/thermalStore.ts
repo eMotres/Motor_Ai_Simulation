@@ -47,7 +47,7 @@ import {
 } from '../components/thermal/api';
 import type { EmRunStatus } from '../components/thermal/emRun';
 import type {
-  BoreMode, CoolMode, CoupledResult, EndFaceMode, FrameMode, ThermKind,
+  BoreMode, CoolMode, CoupledResult, EndFaceMode, FrameMode, StatorOdMode, ThermKind,
   ThermView, ThermalField, ThermalMeshPayload, ThermalMeshRequest,
   ThermalRequest,
 } from '../components/thermal/api';
@@ -104,6 +104,7 @@ const COOL_MODES: readonly CoolMode[] = ['air', 'liquid', 'manual', 'none',
 const BORE_MODES: readonly BoreMode[] = ['none', 'air', 'liquid', 'still'];
 const END_FACE_MODES: readonly EndFaceMode[] = ['still', 'none'];
 const FRAME_MODES: readonly FrameMode[] = ['housed', 'open'];
+const STATOR_OD_MODES: readonly StatorOdMode[] = ['direct', 'sleeve_contact'];
 
 /** The robotics mode's ONE conduction choice (2026-09-26, owner: «let's
  *  simplify it») — replaces mount W/K, mount °C, sink-or-link, link size and link
@@ -278,6 +279,15 @@ export interface ThermalState {
   /** how many ends are exposed: '2', or '1' when one end is against a gearbox */
   endFaceSides: string;
 
+  /** how the outer boundary reaches the stator (2026-11-03) — 'direct' (the
+   *  film on the stator's own outer contour, the default) or 'sleeve_contact'
+   *  (a dry press fit into a round sleeve, e.g. a submerged motor) */
+  statorOd: StatorOdMode;
+  /** sleeve_contact: wall thickness, mm (default 1.5) */
+  sleeveWallMm: string;
+  /** sleeve_contact: wall conductivity, W/m·K (default 160 = aluminium alloy) */
+  sleeveK: string;
+
   /** iteration cap of the coupled loop */
   maxIter: string;
 
@@ -327,6 +337,7 @@ const PERSISTED: (keyof ThermalState)[] = [
   'frame', 'openAirSpeed',
   'emissivity', 'heatPath',
   'endFaces', 'endFaceSides',
+  'statorOd', 'sleeveWallMm', 'sleeveK',
   'maxIter', 'view', 'eqTemp', 'showFlux',
   // The local comparison stack rides the SAME path as every other remembered
   // field (localStorage + the server), so there is one way this tab remembers
@@ -348,6 +359,7 @@ const COOLING_PERSISTED = new Set<string>([
   'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
   'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
   'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+  'statorOd', 'sleeveWallMm', 'sleeveK',
 ]);
 
 /** Bumped every time the server's fields for a newly loaded motor are adopted.
@@ -393,6 +405,8 @@ export interface CoolingInputs {
   frame: FrameMode; openAirSpeed: string;
   emissivity: string; heatPath: HeatPath;
   endFaces: EndFaceMode; endFaceSides: string;
+  /** optional so an older caller's inputs mean 'direct' */
+  statorOd?: StatorOdMode; sleeveWallMm?: string; sleeveK?: string;
 }
 
 type CoolingRequest = Pick<ThermalRequest,
@@ -400,7 +414,8 @@ type CoolingRequest = Pick<ThermalRequest,
   | 'fluid_temp_in_c' | 'flow_lpm' | 'bore_mode' | 'bore_air_speed_mps'
   | 'bore_fluid' | 'bore_fluid_temp_in_c' | 'bore_flow_lpm'
   | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
-  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'>;
+  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'
+  | 'stator_od_cooling' | 'od_sleeve_wall_mm' | 'od_sleeve_k'>;
 
 /** The bore mode a run actually uses.  A propeller-cooled machine has a SOLID
  *  shaft (owner 2026-10-12): no bore flow, whatever a saved value from another
@@ -479,6 +494,13 @@ export function coolingFields(s0: CoolingInputs): CoolingRequest {
     end_face_sides: (robot && endFaces !== 'none')
       ? (num(s.endFaceSides, 2) === 1 ? 1 : 2) : undefined,
     heat_path: (robot && s.heatPath !== 'none') ? s.heatPath : undefined,
+    // THE STATOR-OD SLEEVE (2026-11-03): sent only when chosen — 'direct' is
+    // the router's default and keys the cache as it always did.
+    ...(s.statorOd === 'sleeve_contact' ? {
+      stator_od_cooling: 'sleeve_contact' as const,
+      od_sleeve_wall_mm: num(s.sleeveWallMm ?? '', 1.5),
+      od_sleeve_k: num(s.sleeveK ?? '', 160),
+    } : {}),
   };
 }
 
@@ -510,6 +532,14 @@ export function coolingIssue(s0: CoolingInputs): string | null {
   // no film and no bore has no door at all.
   if (outerMode === 'none' && s.boreMode === 'none')
     return 'no cooled surface — the heat has nowhere to leave';
+  // mirrors `thermal_settings.cooling_issue`
+  if (s.statorOd === 'sleeve_contact') {
+    if (outerMode === 'none') return 'a sleeve needs an outer film to hand its heat to';
+    if (outerMode === 'robotics' && (s.heatPath === 'housing' || s.heatPath === 'both'))
+      return 'the robotics heat path “housing” already models the stator OD contact — pick the sleeve or the housing, not both';
+    if (!(num(s.sleeveWallMm ?? '', 1.5) > 0)) return 'sleeve wall must be greater than 0 mm';
+    if (!(num(s.sleeveK ?? '', 160) > 0)) return 'sleeve conductivity must be greater than 0 W/m·K';
+  }
   return null;
 }
 
@@ -574,7 +604,9 @@ function panelCooling(s: ThermalState): Record<string, string> {
     'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
     'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
     // …and the robotics block (2026-09-14; the heat path since 2026-09-26).
-    'emissivity', 'heatPath', 'endFaces', 'endFaceSides'] as const;
+    'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+    // …and the stator-OD sleeve (2026-11-03).
+    'statorOd', 'sleeveWallMm', 'sleeveK'] as const;
   const out: Record<string, string> = {};
   for (const k of KEYS) {
     const v = s[k];
@@ -692,6 +724,12 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   }),
   endFaces: readMode('endFaces', END_FACE_MODES, 'still' as EndFaceMode),
   endFaceSides: readStr('endFaceSides', '2'),
+
+  // DIRECT by default, and it has to be: it is the model every stored map was
+  // solved with (the film on the stator's own outer contour).
+  statorOd: readMode('statorOd', STATOR_OD_MODES, 'direct' as StatorOdMode),
+  sleeveWallMm: readStr('sleeveWallMm', '1.5'),
+  sleeveK: readStr('sleeveK', '160'),
 
   maxIter: readStr('maxIter', '6'),
 

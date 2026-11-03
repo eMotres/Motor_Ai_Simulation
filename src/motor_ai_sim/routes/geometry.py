@@ -117,7 +117,10 @@ def get_geometry():
         # is not a machine.  See _validation.SCHEMA_FALLBACK.
         from motor_ai_sim.routes._validation import SCHEMA_FALLBACK
         for _k, _meta in SCHEMA_FALLBACK.items():
-            if _k not in out:
+            # A FLAG is not filled: its absence IS its default (the notches are
+            # stored only when off), and a filled `true` would ride on every
+            # `geo=` the browser sends and move every hash taken over it.
+            if _k not in out and _meta.get("type") != "bool":
                 out[_k] = _meta.get("min", 1)
         return out
     except Exception as e:
@@ -262,6 +265,15 @@ def _update_geometry(update: GeometryUpdateModel, request: Request = None, *,
             if value is not None and (key in geometry_section
                                       or key in SCHEMA_FALLBACK):
                 geometry_section[key] = value
+        # The notch flag is stored only when OFF (absent = on), so saving a
+        # notched machine writes the block it always wrote and every hash over
+        # it (`_geometry_fingerprint`, the passports) stays what it was.
+        # A whole-machine save (a catalogue load) that is silent on the flag
+        # is a NOTCHED stator: the previous machine's `false` must not survive.
+        from motor_ai_sim.geometry.motor_geometry import (
+            canonical_outer_notches, merge_outer_notches)
+        merge_outer_notches(geometry_section, _submitted_raw)
+        canonical_outer_notches(geometry_section)
         # Recompute the DERIVED raw fields that shadow the formulas.  The YAML
         # stores both num_seg/num_*_per_segment AND flattened num_poles/
         # num_slots/angle_* — the solver path reads the flattened ones, so a
@@ -696,7 +708,9 @@ def get_geometry_schema():
                 # is what once showed a choice as a free-text box.
                 "options": list(meta.get("options") or []),
                 "default": meta.get("default"),
-                "optimizable": bool(allow_all or name in whitelist_set),
+                # a FLAG is never a sweep / optimizer variable
+                "optimizable": bool((allow_all or name in whitelist_set)
+                                    and meta.get("type") != "bool"),
                 "hidden": bool(meta.get("hidden", False)),
                 **({"allowed_by": _allowed_by} if name == "num_poles_per_segment" else {}),
             }

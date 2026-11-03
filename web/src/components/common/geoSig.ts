@@ -21,11 +21,17 @@
  * time.  The store pushes its getter in via `setGeoSigGetter` instead.
  */
 
-/** Stable signature of a geometry parameter set: the numeric fields only, sorted. */
+/** Stable signature of a geometry parameter set: the numeric fields only, sorted.
+ *  The one flag that is a different machine, `stator_outer_notches`, is stamped
+ *  as `stator_outer_notches:0` when it is OFF and not at all when on (absent = on),
+ *  so every stamp of a notched machine is the string it always was — the same
+ *  rule as the server's `routes.presets._geo_sig`. */
 export function geoSignature(g: Record<string, unknown> | null | undefined): string {
   try {
-    return Object.entries(g || {})
-      .filter(([, v]) => typeof v === 'number')
+    const entries: Array<[string, unknown]> = Object.entries(g || {})
+      .filter(([k, v]) => typeof v === 'number' && k !== 'stator_outer_notches');
+    if (g && g.stator_outer_notches === false) entries.push(['stator_outer_notches', 0]);
+    return entries
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([k, v]) => `${k}:${v}`).join('|');
   } catch { return ''; }

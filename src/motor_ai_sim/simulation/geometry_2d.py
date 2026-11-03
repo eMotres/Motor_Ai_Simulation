@@ -250,12 +250,16 @@ def merge_geo_override(base: dict, override) -> dict:
     describe one motor, not to grow fields its consumers never asked for (a bare
     fixture stays bare).
     """
-    from motor_ai_sim.geometry.motor_geometry import derived_geometry
+    from motor_ai_sim.geometry.motor_geometry import (derived_geometry,
+                                                      merge_outer_notches)
 
     base = base or {}
     g = dict(base)
     if override:
         g.update({k: v for k, v in override.items()})
+        # a whole-lamination override silent on the OD notches IS notched — the
+        # base machine's `stator_outer_notches: false` must not survive onto it
+        merge_outer_notches(g, override)
 
     def _seg_product(d: dict, per_key: str):
         s = d.get("num_seg")

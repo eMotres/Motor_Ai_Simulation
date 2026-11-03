@@ -58,13 +58,17 @@ def _dies_dir() -> Path:
     return _ws_root() / "dies"
 
 # The keys a CONFIGURATION snapshots on top of a die — everything the stamp
-# does not fix: stack length and the whole wire stack.
+# does not fix: stack length, the whole wire stack, and (owner 2026-11-03,
+# after #563) the stator OD notches: one die, notched or smooth per
+# configuration (a submerged motor drops them).  ``stator_outer_notches`` is
+# stored in ``geometry_overrides`` only when it is OFF (absent = on).
 FREE_GEO_KEYS = (
     "motor_length",
     "wire_width", "wire_height",
     "wire_spacing_x", "wire_spacing_y",
     "num_wires_per_slot", "wire_split", "wire_parallel",
     "insulation_thickness",
+    "stator_outer_notches",
 )
 
 # What stays EDITABLE while the die is locked — the user's definition, and
@@ -87,8 +91,12 @@ FREE_GEO_KEYS = (
 #:
 #: `wire_split` stays LOCKED on purpose: a split wire is N narrower strips with
 #: spacing between them, the slot grows around them, and that is geometry.
+#:
+#: `stator_outer_notches` (owner 2026-11-03): a CONFIGURATION option on a
+#: common die — the lamination is cut from the same stamp with or without the
+#: OD notches, so a locked die never refuses it (the configuration lock does).
 EDITABLE_UNDER_DIE_LOCK = ("motor_length", "wire_height", "num_wires_per_slot",
-                           "wire_parallel")
+                           "wire_parallel", "stator_outer_notches")
 
 #: What makes a die THIS die: the stamped lamination's diameter and its
 #: slot/pole topology.  Every other geometry key is a shape the engineer may
@@ -4696,8 +4704,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
 # the active configuration keeps adopting the edit as before.
 
 #: Labels of the die-level shape keys a transition names (the identity keys have theirs above).
-_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)",
-                                     "stator_outer_notches": "stator outer notches"}
+_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)"}
 
 
 def _derived_slot_width(geo: dict) -> Optional[float]:
@@ -4736,16 +4743,9 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
     if dsw is not None and lsw is not None and abs(dsw - lsw) > 1e-6:
         out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
-    # The OD-notch FLAG is die-level too, but a bool (the loop above compares
-    # numbers only) and ABSENT = on on either side: a notch-free lamination is
-    # another lamination, so a configuration switched off moves to its own die
-    # exactly like any other die-defining edit.
-    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
-    dn, ln = stator_outer_notches(die_geo), stator_outer_notches(live_geo)
-    if dn != ln:
-        out.append({"key": "stator_outer_notches",
-                    "label": _SHAPE_KEY_LABELS["stator_outer_notches"],
-                    "die": dn, "live": ln})
+    # `stator_outer_notches` is NOT here: it is a configuration key
+    # (FREE_GEO_KEYS, owner 2026-11-03), so switching it never makes another
+    # lamination and never moves a configuration to another die.
     return out
 
 
@@ -5200,10 +5200,12 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     # notches were off, and an older stamp's silence says nothing.
     from motor_ai_sim.geometry.motor_geometry import (STATOR_OUTER_NOTCHES,
                                                       stator_outer_notches)
+    # A configuration key (FREE_GEO_KEYS): the configuration's own build, the
+    # scope its other free keys but the stack length are reported under.
     if STATOR_OUTER_NOTCHES in saved:
         _sv, _lv = stator_outer_notches(saved), stator_outer_notches(live)
         if _sv != _lv:
-            out.append({"key": STATOR_OUTER_NOTCHES, "scope": "die",
+            out.append({"key": STATOR_OUTER_NOTCHES, "scope": "winding",
                         "live": _lv, "duty": _sv})
     return out
 

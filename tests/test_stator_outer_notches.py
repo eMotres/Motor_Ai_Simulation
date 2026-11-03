@@ -209,14 +209,14 @@ def test_geometry_signature_stamps_only_an_off_flag():
     assert not _geo_sig_inputs_differ(on, on)
 
 
-def test_die_shape_diffs_see_the_flag():
+def test_the_flag_is_not_a_die_shape():
+    """A configuration option since 2026-11-03 (see test_outer_notches_per_config):
+    switching it is never another lamination."""
     from motor_ai_sim.routes.family import die_shape_diffs
     g = _geo(TRACKED / "CIANO14 30_10")
-    assert not [d for d in die_shape_diffs(g, {**g, "stator_outer_notches": True})
-                if d["key"] == "stator_outer_notches"]
-    d = [x for x in die_shape_diffs(g, {**g, "stator_outer_notches": False})
-         if x["key"] == "stator_outer_notches"]
-    assert d and d[0]["die"] is True and d[0]["live"] is False
+    for v in (True, False):
+        assert not [d for d in die_shape_diffs(g, {**g, "stator_outer_notches": v})
+                    if d["key"] == "stator_outer_notches"]
 
 
 # ── (4) validation passes OFF, and does not talk about notches ──────────────

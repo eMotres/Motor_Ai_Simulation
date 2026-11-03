@@ -89,7 +89,8 @@ _COUNT_SEGMENT_KEY = {"num_slots": "num_slots_per_segment",
                       "num_poles": "num_poles_per_segment"}
 
 
-#: The lamination flag "stator outer notches" (2026-11-03).  True (the default,
+#: The flag "stator outer notches" (2026-11-03) — a CONFIGURATION option on a
+#: common die (owner 2026-11-03, routes.family.FREE_GEO_KEYS).  True (the default,
 #: and what every die stamped before the flag means) = the wedge notches between
 #: the slot units are cut from the stator OD down to the neck (``cut_width``
 #: above the bore).  False = a smooth, full-circle OD (e.g. a submerged motor,

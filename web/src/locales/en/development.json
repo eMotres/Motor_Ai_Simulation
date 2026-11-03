@@ -323,7 +323,8 @@
     "notes": "Internal notes",
     "documents": "Documents",
     "production": "Production",
-    "cost": "Cost estimate"
+    "cost": "Cost estimate",
+    "quote": "Quote"
   },
   "step": "Step {current} of {total}",
   "previous": "Back",
@@ -1114,7 +1115,49 @@
     "readiness": "Parts {received}/{total} ({pct} %), late {late}",
     "readinessTip": "Parts received for assembly."
   },
+  "customerQuote": {
+    "col": {
+      "iteration": "Iteration",
+      "motors": "Motors",
+      "tooling": "Tooling",
+      "manufacturing": "Manufacturing",
+      "testing": "Testing",
+      "shipping": "Shipping",
+      "weeks": "Duration",
+      "price": "Iteration price"
+    },
+    "iteration": "Iteration {n}",
+    "total": "Total",
+    "weeksN": "{n} wk",
+    "lineWeeks": "{n} weeks",
+    "bench": {
+      "dyno": "Dyno",
+      "propeller": "Propeller stand",
+      "both": "Dyno and propeller stand",
+      "none": "No test bench"
+    },
+    "delivery": "Delivery",
+    "paymentTerms": "Payment terms",
+    "sharedOn": "Shared",
+    "currency": "Currency",
+    "currencyTip": "Prices are set in EUR. USD and CNY are shown at the ECB rates of {date}.",
+    "noRates": "Prices are set in EUR.",
+    "none": "No quote has been shared yet.",
+    "tip": "Prices include everything for each stage, in whole EUR. Duties and import VAT are not included."
+  },
   "costEstimate": {
+    "share": {
+      "share": "Share with customer",
+      "again": "Share again",
+      "stop": "Stop sharing",
+      "status": "Shared rev {rev} on {date}",
+      "statusTip": "The project's members see this frozen copy in the Quote tab. Later edits stay hidden until you share again.",
+      "shareTip": "Freeze the current revision and show it to the project's members as their quote.",
+      "confirm": "The project's members will see revision {rev} as their quote: prices with the contingency folded in, weeks, delivery and payment terms. Notes and sources stay internal.",
+      "notShared": "Not shared with the customer"
+    },
+    "paymentTerms": "Payment terms",
+    "paymentTermsTip": "One short line shown to the customer with the shared quote, e.g. 70 % before the start of an iteration, 30 % before shipment.",
     "title": "Cost estimate",
     "adminOnly": "Admin only",
     "adminOnlyTip": "Never shown to the customer, project viewers, the factory or agents.",

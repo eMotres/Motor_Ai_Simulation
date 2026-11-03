@@ -58,7 +58,8 @@ def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
     est = CE.default_estimate(schema, "alpha")
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 10.0,
                                "display_currency": None, "target_motor": None,
-                               "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0}
+                               "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0,
+                               "payment_terms": ""}
 
 
 def test_schema_refuses_a_fifth_line(tmp_path, schema):
@@ -402,7 +403,8 @@ def test_old_shape_is_summed_into_the_four_lines(schema):
     assert est["version"] == 2 and est["revision"] == 7
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 15.0,
                                "display_currency": None, "target_motor": {"die": "DIE-A", "config": "big"},
-                               "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0}
+                               "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0,
+                               "payment_terms": ""}
     l1, l2 = (it["lines"] for it in est["iterations"])
     assert est["iterations"][0]["bench"] == "both" and est["iterations"][0]["motors"] == 2
     assert l1["tooling"]["amount"] == 10000.0 and l1["tooling"]["source"] == "converted"

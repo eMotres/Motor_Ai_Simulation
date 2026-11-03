@@ -51,7 +51,9 @@ export interface CostIteration { index: number; motors: number; bench: Bench; li
 export interface ShipTo { country: string; city: string }
 export interface CostSettings {
   complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null;
-  ship_from?: string; ship_to?: ShipTo | null; ship_margin_pct?: number; ship_round_eur?: number; [key: string]: unknown;
+  ship_from?: string; ship_to?: ShipTo | null; ship_margin_pct?: number; ship_round_eur?: number;
+  /** one short EN line the customer sees with a shared quote (owner 2026-11-03) */
+  payment_terms?: string; [key: string]: unknown;
 }
 export interface CostMigration { from_version: number; date: string | null; dropped: string[]; note: string }
 /** Dated exchange rates, EUR base: `rates` = units of each currency per 1 EUR (effective: a manual rate wins over the ECB one). */
@@ -98,6 +100,8 @@ export interface CostEstimateAnswer {
   estimate: CostEstimate; computed: CostComputed; schema: CostSchema; stored: boolean; fx_status?: FxStatus;
   linked_motors: Array<{ die: string; config: string; status: string }>;
   changes?: Array<{ path: string; was: unknown; now: unknown }>;
+  /** what the project's members see as their quote (owner 2026-11-03); null = nothing shared */
+  shared?: { snapshot_n: number; revision: number | null; shared_at: string; shared_by: string } | null;
   report?: { filled_count: number; skipped: Array<{ iteration: number; line: LineId; reason: string }>; notes: string[];
     analogs: Record<'manufacturing' | 'tooling', { ref: string | null; factor?: number; reason?: string }>; target_mass_kg: number | null };
 }
@@ -370,7 +374,7 @@ export function fieldLabel(ref: FieldRef, schema: Pick<CostSchema, 'settings' | 
   if (ref.kind === 'setting') {
     const f = schema.settings.find((x) => x.id === ref.id);
     const ship = schema.shipping?.settings.find((x) => x.id === ref.id);
-    return f ? txt(f.label, lang) : ship ? txt(ship.label, lang) : ref.id === 'target_motor' ? t('costEstimate.targetMotor') : ref.id === 'display_currency' ? t('costEstimate.displayCurrency') : ref.id;
+    return f ? txt(f.label, lang) : ship ? txt(ship.label, lang) : ref.id === 'target_motor' ? t('costEstimate.targetMotor') : ref.id === 'display_currency' ? t('costEstimate.displayCurrency') : ref.id === 'payment_terms' ? t('costEstimate.paymentTerms') : ref.id;
   }
   if (ref.kind === 'lanes') return t('costEstimate.dhl.lanes');
   if (ref.kind === 'iterField' && ref.id === 'weeks_override') return `${it(ref.iteration)} · ${t('costEstimate.weeksOverride')}`;

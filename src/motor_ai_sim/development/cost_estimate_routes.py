@@ -18,6 +18,10 @@
                                                            and, as ``auto``, what the automatic DHL lines would become
 ``POST /api/admin/projects/{id}/cost-estimate/snapshot``   freeze the estimate with a note and the "what changed" diff
 ``GET  /api/admin/projects/{id}/cost-estimate/snapshots``  the frozen snapshots
+``POST /api/admin/projects/{id}/cost-estimate/share``      freeze the current revision (note "shared") and share it with the
+                                                           project's members as their read-only quote (``quote_routes``);
+                                                           refused while a line has no amount
+``DELETE /api/admin/projects/{id}/cost-estimate/share``    stop sharing
 
 Global admins only (``auth.require_admin``).  Never a project customer, a project viewer, a project engineer who is not an
 admin, the factory (OEM) or an MCP agent - an agent call acting for an admin is refused as well (owner rule: no price or
@@ -34,6 +38,7 @@ from motor_ai_sim.development import cost_estimate as CE
 from motor_ai_sim.development import cost_estimate_fx as FX
 from motor_ai_sim.development import cost_estimate_sources as SRC
 from motor_ai_sim.development import cost_estimate_store as CS
+from motor_ai_sim.development import cost_quote as Q
 from motor_ai_sim.development import store
 
 router = APIRouter(prefix="/api/admin/projects", tags=["admin-cost-estimate"])
@@ -72,7 +77,8 @@ def _compute(estimate: dict, schema: dict, display: Optional[str]) -> dict:
 def _payload(project: dict, estimate: dict, schema: dict, *, stored: bool, display: Optional[str] = None,
              fx_status: Optional[dict] = None, **extra: Any) -> Dict[str, Any]:
     return {"estimate": estimate, "computed": _compute(estimate, schema, display), "schema": schema, "stored": stored,
-            "fx_status": fx_status or _fx_status(estimate, None), "linked_motors": _linked(project), **extra}
+            "fx_status": fx_status or _fx_status(estimate, None), "linked_motors": _linked(project),
+            "shared": CS.load_shared(project["id"]), **extra}
 
 
 def _today() -> str:
@@ -269,8 +275,57 @@ async def snapshot_estimate(project_id: str, request: Request, admin_user: dict 
         raise HTTPException(status_code=409, detail="Save the cost estimate before freezing it.")
     if "revision" in body and _revision(body) != int(estimate.get("revision") or 0):
         raise _conflict(project, schema, estimate)
+    snap = _freeze(project, schema, estimate, note, str(body.get("display_currency") or "").strip() or None, admin_user)
+    CS.audit(project_id, _email(admin_user), "cost_estimate.snapshot",
+             {"snapshot": snap["id"], "revision": snap["revision"], "changes": len(snap["diff"])})
+    return {"snapshot": snap}
+
+
+@router.post("/{project_id}/cost-estimate/share")
+async def share_quote(project_id: str, request: Request, response: Response, admin_user: dict = Depends(_admin)):
+    """Share the CURRENT revision with the project's customer as its read-only quote (owner 2026-11-03): a snapshot with the
+    note "shared" is frozen and marked as the shared quote (a re-share replaces the mark; edits made after it stay
+    invisible to the customer until the next share).  Refused while a line has no amount."""
+    response.headers["Cache-Control"] = "no-store"
+    project = _project(project_id)
+    schema = CE.load_schema()
+    body = await _body(request)
+    estimate, stored = _current(project, schema)
+    if not stored:
+        raise HTTPException(status_code=409, detail="Save the cost estimate before sharing it.")
+    if "revision" in body and _revision(body) != int(estimate.get("revision") or 0):
+        raise _conflict(project, schema, estimate)
+    missing = Q.missing_lines(estimate)
+    if missing:
+        raise HTTPException(status_code=409, detail={
+            "code": "quote_incomplete", "missing": missing,
+            "message": "Fill every line before sharing: %d line(s) have no amount." % len(missing)})
+    snap = _freeze(project, schema, estimate, "shared", None, admin_user)
+    mark = {"snapshot_n": snap["n"], "revision": snap["revision"], "shared_at": CS.now(), "shared_by": _email(admin_user)}
+    previous = CS.set_shared(project_id, mark)
+    CS.audit(project_id, _email(admin_user), "cost_estimate.share",
+             {"snapshot": snap["id"], "revision": snap["revision"], "replaced": (previous or {}).get("snapshot_n")})
+    return {"shared": CS.load_shared(project_id), "snapshot": {k: v for k, v in snap.items() if k != "estimate"}}
+
+
+@router.delete("/{project_id}/cost-estimate/share")
+def unshare_quote(project_id: str, response: Response, admin_user: dict = Depends(_admin)):
+    """Stop sharing: the customer's quote is gone at once (the snapshot itself is kept)."""
+    response.headers["Cache-Control"] = "no-store"
+    _project(project_id)
+    previous = CS.load_shared(project_id)
+    if previous is None:
+        return {"shared": None}
+    previous = CS.set_shared(project_id, None)
+    CS.audit(project_id, _email(admin_user), "cost_estimate.unshare",
+             {"snapshot": (previous or {}).get("snapshot_n"), "revision": (previous or {}).get("revision")})
+    return {"shared": None}
+
+
+def _freeze(project: dict, schema: dict, estimate: dict, note: str, display: Optional[str], admin_user: dict) -> dict:
+    """Write the next snapshot of ``estimate`` (with the rates its numbers are computed with) and return it."""
     estimate, _status = _with_live_fx(estimate, schema)      # the snapshot keeps the rates its numbers were computed with
-    computed = _compute(estimate, schema, str(body.get("display_currency") or "").strip() or None)
+    computed = _compute(estimate, schema, display)
 
     def make(previous, n):
         prev_est = (previous or {}).get("estimate")
@@ -286,10 +341,7 @@ async def snapshot_estimate(project_id: str, request: Request, admin_user: dict 
                 "iterations": [{k: it[k] for k in it if k != "lines"} for it in computed["iterations"]],
                 "diff": changes if previous else []}
 
-    snap = CS.add_snapshot(project_id, make)
-    CS.audit(project_id, _email(admin_user), "cost_estimate.snapshot",
-             {"snapshot": snap["id"], "revision": snap["revision"], "changes": len(snap["diff"])})
-    return {"snapshot": snap}
+    return CS.add_snapshot(project["id"], make)
 
 
 @router.get("/{project_id}/cost-estimate/snapshots")

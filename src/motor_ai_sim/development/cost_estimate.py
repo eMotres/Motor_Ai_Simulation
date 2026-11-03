@@ -8,7 +8,8 @@ costs us («не надо до такой степени оценивать ст
 * EVERY AMOUNT IS IN EUR (owner 2026-11-02: «все цены в евро»): a line has no currency choice, new saves refuse any other
   currency, and an old line in another currency is converted to EUR on read (``legacy_to_eur``: at the stored or the cached
   ECB rate, source ``converted``, the original amount in the note; with no rate known the line is missing).
-* Settings: iterations, contingency % (default 10), ``display_currency`` (``None`` = EUR; the FINAL table may be shown in
+* Settings: iterations, contingency % (default 10), ``payment_terms`` (one short EN line the customer sees with a shared
+  quote, see ``cost_quote``), ``display_currency`` (``None`` = EUR; the FINAL table may be shown in
   EUR / USD / CNY at the rates below - the only place with a currency choice).  The estimate also carries dated exchange rates, ``fx`` (EUR
   base: ECB reference rates stored with their date, optionally overridden per currency by hand - a manual rate wins), and
   ``compute`` adds ``converted``: the lines and totals in the display currency at those rates.  A rate that is not known
@@ -31,7 +32,7 @@ costs us («не надо до такой степени оценивать ст
 This module is pure (no I/O): schema, defaults, validation, the old-shape conversion, totals, ``suggest`` over gathered
 data, and the diff.  Storage and data gathering live in ``cost_estimate_store`` / ``cost_estimate_sources``, the admin
 routes in ``cost_estimate_routes``.  Nothing here is ever shown to a customer, a project viewer, the factory (OEM) or an
-MCP agent.
+MCP agent; the customer sees only the whitelisted quote that ``cost_quote`` builds from a snapshot an admin shared.
 """
 from __future__ import annotations
 
@@ -55,6 +56,8 @@ FX_BASE = "EUR"
 FX_SOURCES = ("ECB", "manual")
 SHIP_SETTINGS = ("ship_from", "ship_to", "ship_margin_pct", "ship_round_eur")
 _MAX_PLACE = 80
+#: the payment terms shown to the customer with a shared quote (owner 2026-11-03), one short EN line
+MAX_PAYMENT_TERMS = 300
 
 Money = Dict[str, float]
 
@@ -153,7 +156,7 @@ def default_settings(schema: dict, *, linked_motors: Iterable[dict] = ()) -> dic
             "display_currency": None, "target_motor": _target_from(linked_motors),
             "ship_from": str(_ship_field(schema, "ship_from")["default"]), "ship_to": None,
             "ship_margin_pct": float(_ship_field(schema, "ship_margin_pct")["default"]),
-            "ship_round_eur": float(_ship_field(schema, "ship_round_eur")["default"])}
+            "ship_round_eur": float(_ship_field(schema, "ship_round_eur")["default"]), "payment_terms": ""}
 
 
 def default_lanes(schema: dict) -> List[dict]:
@@ -254,7 +257,8 @@ def normalize_settings(raw: Any, schema: dict, legacy: bool = False) -> dict:
             "ship_margin_pct": _num(raw.get("ship_margin_pct", margin_field["default"]), "ship_margin_pct",
                                     lo=margin_field["min"], hi=margin_field["max"], allow_none=False),
             "ship_round_eur": _num(raw.get("ship_round_eur", round_field["default"]), "ship_round_eur",
-                                   lo=round_field["min"], hi=round_field["max"], allow_none=False)}
+                                   lo=round_field["min"], hi=round_field["max"], allow_none=False),
+            "payment_terms": " ".join(str(raw.get("payment_terms") or "").split())[:MAX_PAYMENT_TERMS]}
 
 
 _COUNTRY = re.compile(r"[A-Z]{2}")

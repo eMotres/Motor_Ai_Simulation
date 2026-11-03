@@ -23,6 +23,7 @@ import {
   type Bench, type CostComputed, type CostEstimate, type CostEstimateAnswer, type CostField, type CostIteration, type CostLang,
   type CostLine, type CostLineDef, type CostSnapshot, type CostStep, type CostSuggestions, type CostView, type LineId, type LineRef, type T,
 } from '../../costEstimate';
+import { sharedStatus, shareIsStale } from '../../quote';
 
 /** localStorage, or null where it cannot be reached (private window, blocked site data). */
 const viewStorage = (): Storage | null => { try { return window.localStorage; } catch { return null; } };
@@ -70,7 +71,11 @@ function LineRow({ def, line, it, total, lang, t, onEdit, onWeeks }: {
   </Box>;
 }
 
-export default function CostEstimateWizard({ projectId, language, t, who }: { projectId: string; language: string; t: T; who: string }) {
+export default function CostEstimateWizard({ projectId, language, t, who, onShared }: {
+  projectId: string; language: string; t: T; who: string;
+  /** the project's quote was shared (true) or unshared (false): the page shows / hides its Quote tab */
+  onShared?: (shared: boolean) => void;
+}) {
   const lang = langOf(language);
   const wide = useMediaQuery('(min-width:900px)');
   const [answer, setAnswer] = useState<CostEstimateAnswer | null>(null);
@@ -85,6 +90,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const [snapOpen, setSnapOpen] = useState(false);
   const [snapNote, setSnapNote] = useState('');
   const [snapshots, setSnapshots] = useState<CostSnapshot[]>([]);
+  const [shareOpen, setShareOpen] = useState(false);
   const edits = useRef(0);
   const timer = useRef<number | null>(null);
   const latest = useRef<CostEstimate | null>(null);
@@ -241,12 +247,36 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     finally { setBusy(false); }
   };
 
+  /** Share the current revision with the project's members (owner 2026-11-03): pending edits are saved first, so the
+   *  customer sees exactly what is on screen; the server freezes it as a snapshot ("shared"). */
+  const share = async () => {
+    if (timer.current) { window.clearTimeout(timer.current); timer.current = null; await save(); }
+    setBusy(true);
+    try {
+      // the revision the server holds now: the save above sets `synced` at once (the render that updates `latest` may not have run)
+      const revision = Math.max(synced.current?.revision ?? 0, (latest.current ?? estimate).revision);
+      const r = await developmentApi.shareCostEstimate(projectId, revision);
+      setAnswer((a) => (a ? { ...a, shared: r.shared } : a)); setShareOpen(false); onShared?.(!!r.shared);
+      setSnapshots(await developmentApi.costEstimateSnapshots(projectId));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); setShareOpen(false); }
+    finally { setBusy(false); }
+  };
+  const unshare = async () => {
+    setBusy(true);
+    try { await developmentApi.unshareCostEstimate(projectId); setAnswer((a) => (a ? { ...a, shared: null } : a)); onShared?.(false); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  const shared = answer.shared ?? null;
+  const sharedText = sharedStatus(shared, t);
+
   const stepTitle = (s: CostStep) => s.kind === 'settings' ? t('costEstimate.steps.settings') : s.kind === 'review' ? t('costEstimate.steps.review') : t('costEstimate.iteration', { n: s.iteration });
 
   const header = <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 2 }} alignItems={{ md: 'center' }} sx={{ bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: { xs: 2, md: 3 }, py: 1.5 }}>
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Stack direction="row" spacing={1} alignItems="center"><Typography component="h1" sx={{ fontSize: 18, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.title')}</Typography>
         <Tooltip title={t('costEstimate.adminOnlyTip')}><Chip size="small" label={t('costEstimate.adminOnly')} sx={{ height: 20, fontSize: 10.5 }} /></Tooltip></Stack>
+      <Tooltip title={t('costEstimate.share.statusTip')}><Typography data-testid="share-status" sx={{ fontSize: 12.5, color: shared ? 'success.main' : 'var(--text-3)' }}>{sharedText ?? t('costEstimate.share.notShared')}</Typography></Tooltip>
       <Tooltip title={[t('costEstimate.totalTip'), computed.missing_count > 0 ? t('costEstimate.missingCount', { count: computed.missing_count }) : ''].filter(Boolean).join(' · ')}><Typography data-testid="header-total" sx={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{t('costEstimate.total')}: {formatMoney(computed.total)} · {t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</Typography></Tooltip>
     </Box>
     <Tooltip title={t('costEstimate.view.tip')}><ButtonGroup size="small" aria-label={t('costEstimate.view.label')} data-testid="cost-view-toggle">
@@ -256,6 +286,11 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     <Tooltip title={t('costEstimate.suggestTip')}><span><Button variant="contained" disabled={busy} onClick={() => void suggest(false)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{busy ? <CircularProgress size={16} /> : t('costEstimate.suggest')}</Button></span></Tooltip>
     <Tooltip title={t('costEstimate.refreshTip')}><span><Button disabled={busy} onClick={() => void suggest(true)} sx={{ textTransform: 'none', minHeight: TOUCH }}>{t('costEstimate.refresh')}</Button></span></Tooltip>
     <Tooltip title={t('costEstimate.snapshotTip')}><span><Button variant="outlined" disabled={busy || !answer.stored} onClick={() => setSnapOpen(true)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{t('costEstimate.snapshot')}</Button></span></Tooltip>
+    <Stack direction="row" spacing={0.5} alignItems="center" data-testid="cost-share">
+      <Tooltip title={t('costEstimate.share.shareTip')}><span><Button variant="outlined" color="success" disabled={busy || !answer.stored || (!!shared && !shareIsStale(shared, estimate.revision))}
+        onClick={() => setShareOpen(true)} sx={{ textTransform: 'none', borderRadius: '10px', minHeight: TOUCH }}>{shared ? t('costEstimate.share.again') : t('costEstimate.share.share')}</Button></span></Tooltip>
+      {shared && <Button size="small" disabled={busy} onClick={() => void unshare()} sx={{ textTransform: 'none', minHeight: TOUCH }}>{t('costEstimate.share.stop')}</Button>}
+    </Stack>
     <Typography role="status" sx={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 0.6, whiteSpace: 'nowrap', color: error ? 'error.main' : saving ? 'var(--text-3)' : 'success.main' }}>
       {!error && !saving && <CheckIcon sx={{ fontSize: 15 }} />}{error ? t('costEstimate.saveFailed') : saving ? t('costEstimate.saving') : t('costEstimate.saved')}
     </Typography>
@@ -306,6 +341,11 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
       </Box>
     </Stack>
     <CostShipping estimate={estimate} schema={schema} lang={lang} t={t} today={today} onChange={change} />
+    <Stack spacing={0.6} data-testid="payment-terms" sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.5 }}>
+      <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.paymentTerms')}</Typography><HelpTip title={t('costEstimate.paymentTermsTip')} /></Stack>
+      <TextField size="small" value={String(estimate.settings.payment_terms ?? '')} onChange={(e) => change(setSetting(estimate, schema, 'payment_terms', e.target.value.slice(0, 300)))}
+        inputProps={{ 'aria-label': t('costEstimate.paymentTerms'), maxLength: 300 }} />
+    </Stack>
   </StepCard>;
 
   const iterationStep = (index: number) => {
@@ -410,6 +450,11 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
         </Stack>
       </Box>
     </Box>}
+    <Dialog open={shareOpen} onClose={() => !busy && setShareOpen(false)} fullWidth maxWidth="sm">
+      <DialogTitle>{t('costEstimate.share.share')}</DialogTitle>
+      <DialogContent><Typography sx={{ fontSize: 13.5, color: 'var(--text-1)' }}>{t('costEstimate.share.confirm', { rev: estimate.revision })}</Typography></DialogContent>
+      <DialogActions><Button disabled={busy} onClick={() => setShareOpen(false)}>{t('cancel')}</Button><Button variant="contained" color="success" disabled={busy || saving} onClick={() => void share()}>{shared ? t('costEstimate.share.again') : t('costEstimate.share.share')}</Button></DialogActions>
+    </Dialog>
     <Dialog open={snapOpen} onClose={() => !busy && setSnapOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>{t('costEstimate.snapshot')}</DialogTitle>
       <DialogContent><TextField autoFocus fullWidth multiline minRows={2} sx={{ mt: 1 }} label={t('costEstimate.snapshotNote')} value={snapNote} onChange={(e) => setSnapNote(e.target.value)} inputProps={{ maxLength: 500 }} /></DialogContent>

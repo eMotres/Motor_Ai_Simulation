@@ -456,6 +456,8 @@ app.include_router(development_router)
 app.include_router(development_admin_router)
 from motor_ai_sim.development.cost_estimate_routes import router as development_cost_estimate_router
 app.include_router(development_cost_estimate_router)   # admin-only project cost estimate (owner 2026-11-02)
+from motor_ai_sim.development.quote_routes import router as development_quote_router
+app.include_router(development_quote_router)   # GET /api/projects/{id}/quote: the shared quote, project members + admins only
 app.include_router(development_motors_router)
 app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
 from motor_ai_sim.development.productions import router as development_productions_router

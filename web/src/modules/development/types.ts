@@ -10,6 +10,8 @@ export interface ProjectSummary {
   unread_messages?: number;
   /** cache key of the cover image (GET /api/projects/{id}/cover); null = the project has none */
   cover_version?: string | null;
+  /** an admin shared the project's quote and the caller may read it (GET /api/projects/{id}/quote); never its numbers */
+  quote_shared?: boolean;
   created_at?: string; updated_at?: string;
 }
 export type Localized = string | { en?: string; 'zh-CN'?: string };

@@ -15,12 +15,13 @@ import HelpTip from '../../../../components/common/HelpTip';
 import { BigNumber, StepCard, TOUCH } from '../specWizard/ui';
 import { developmentApi, DevelopmentApiError } from '../../api';
 import {
+  applyAuto, autoDhlIterations, autoKey, setDhlAuto,
   buildCostSteps, defaultDisplayCurrency, displayCurrencyOf, editLine, fieldLabel, formatMoney, fxLine, iterationSubtotal, langOf, LINE_IDS, lineNeeded, lineTotal, originChip, reconcile,
   reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, snapshotTotalText, sourceCounts, stepIndexOfMissing,
   stepState, todayIso, totalsView, txt,
   iterationWeeks, projectWeeks, readView, setLineWeeks, setWeeksOverride, suggestionKey, validWeeks, weeksText, writeView, WEEKS_OVERRIDE_MAX,
   type Bench, type CostComputed, type CostEstimate, type CostEstimateAnswer, type CostField, type CostIteration, type CostLang,
-  type CostLine, type CostLineDef, type CostSnapshot, type CostStep, type CostSuggestions, type CostView, type LineId, type T,
+  type CostLine, type CostLineDef, type CostSnapshot, type CostStep, type CostSuggestions, type CostView, type LineId, type LineRef, type T,
 } from '../../costEstimate';
 
 /** localStorage, or null where it cannot be reached (private window, blocked site data). */
@@ -99,6 +100,9 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
   const suggestionsKey = useRef('');
   const suggestionsCall = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const autoTimer = useRef<number | null>(null);
+  const autoKeyRef = useRef('');
+  const autoCall = useRef(0);
   latest.current = estimate;
   // the totals are shown in the display currency: the owner's pick, else the UI language's (en -> EUR, zh-CN -> CNY)
   const displayOf = (e: CostEstimate | null | undefined) => displayCurrencyOf(e?.settings, lang);
@@ -113,6 +117,41 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     const call = ++suggestionsCall.current;
     try { const s = await developmentApi.costEstimateSuggestions(projectId, e); if (call === suggestionsCall.current) setSuggestions(s); }
     catch { if (call === suggestionsCall.current) { setSuggestions(null); suggestionsKey.current = ''; } }
+  };
+  /** The automatic DHL shipping lines follow the iteration's motors (owner 2026-11-03): after an edit that can change them the
+   *  server's numbers (`/suggestions` -> `auto`, the same code as the save) are laid over the estimate on screen at once, without
+   *  waiting for the autosave.  Only when something they depend on changed (`autoKey`); a failure leaves the cells as they are
+   *  (the save recomputes them anyway). */
+  const refreshAuto = (e: CostEstimate) => {
+    if (autoTimer.current) window.clearTimeout(autoTimer.current);
+    if (!autoDhlIterations(e).length) { autoKeyRef.current = autoKey(e); return; }
+    const key = autoKey(e);
+    if (key === autoKeyRef.current) return;
+    autoKeyRef.current = key;
+    const call = ++autoCall.current;
+    autoTimer.current = window.setTimeout(async () => {
+      autoTimer.current = null;
+      try {
+        const s = await developmentApi.costEstimateSuggestions(projectId, latest.current ?? e);
+        if (call !== autoCall.current) return;
+        const cur = latest.current;
+        const merged = cur ? applyAuto(cur, s.auto) : null;
+        if (cur && merged && merged !== cur) { latest.current = merged; setEstimate(merged); }
+      } catch { if (call === autoCall.current) autoKeyRef.current = ''; }
+    }, 200);
+  };
+  /** A manual shipping line back to automatic DHL: only when the server can compute it (else it stays as it is and says why). */
+  const dhlAuto = async (ref: LineRef) => {
+    const base = latest.current;
+    if (!base) return;
+    const candidate = setDhlAuto(base, ref);
+    if (candidate === base) return;
+    try {
+      const s = await developmentApi.costEstimateSuggestions(projectId, candidate);
+      const cell = s.auto?.[String(ref.iteration)];
+      if (cell && cell.amount !== null && !cell.hint) { const next = applyAuto(candidate, s.auto); autoKeyRef.current = autoKey(next); change(next); }
+      else setNotice(cell?.hint || t('costEstimate.dhl.autoFailed'));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
   const pickView = (v: CostView) => {
     setView(v); viewRef.current = v; writeView(viewStorage(), who, v);
@@ -172,7 +211,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     }
   };
   const schedule = () => { if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => { timer.current = null; void save(); }, 700); };
-  const change = (next: CostEstimate) => { edits.current += 1; dirty.current = true; setEstimate(next); schedule(); };
+  const change = (next: CostEstimate) => { edits.current += 1; dirty.current = true; setEstimate(next); schedule(); refreshAuto(next); };
   /** The display currency changes the numbers on screen: save at once so they follow. */
   const changeNow = (next: CostEstimate) => {
     edits.current += 1; dirty.current = true; latest.current = next; setEstimate(next);
@@ -354,7 +393,7 @@ export default function CostEstimateWizard({ projectId, language, t, who }: { pr
     {error && estimate && <Alert severity="error">{error}</Alert>}
     {report && <Alert severity="info" onClose={() => setReport(null)}>{t('costEstimate.suggested', { count: report.filled_count, analog: report.analogs.manufacturing.ref ?? '—' })}{report.notes.length > 0 ? ` ${report.notes.join('; ')}` : ''}</Alert>}
     {view === 'table' ? <Stack spacing={2} sx={{ minWidth: 0 }}>
-      <CostEstimateTable ctx={{ estimate, schema, lang, t, who, today, suggestions, change }}
+      <CostEstimateTable ctx={{ estimate, schema, lang, t, who, today, suggestions, change, onDhlAuto: (ref) => void dhlAuto(ref) }}
         displayCurrency={estimate.settings.display_currency || 'EUR'} fxText={fxLine(estimate.fx, t)}
         onDisplayCurrency={(cur) => changeNow(setDisplayCurrency(estimate, cur === 'EUR' ? null : cur))} />
       <Box>

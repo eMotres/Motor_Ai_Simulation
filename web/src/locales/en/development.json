@@ -1265,6 +1265,10 @@
       "invalid": "Fill the marked fields.",
       "weight": "Gross weight {weight} kg = {motors} × (motor {mass} kg, {basis}, × 1.3 housing + 15 kg crate), rounded up to 5 kg.",
       "quote": "Quote: {currency} {price} for {weight} kg, {days} days, {mode}.",
+      "rounded": "Quote {price} EUR, rounded up to a multiple of {step} EUR.",
+      "autoTip": "Use DHL auto: this line then follows the motors count.",
+      "autoOnTip": "DHL auto: follows the motors count. Type a number to set it by hand.",
+      "autoFailed": "DHL cannot be computed for this line.",
       "col": {
         "from": "From",
         "to_country": "To",

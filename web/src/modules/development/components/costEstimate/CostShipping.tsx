@@ -47,7 +47,7 @@ export default function CostShipping({ estimate, schema, lang, t, today, onChang
 
   return <Stack spacing={1.25} data-testid="shipping-settings" sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.5 }}>
     <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.dhl.title')}</Typography><HelpTip title={txt(ship.excluded, lang)} /></Stack>
-    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr 1fr' } }}>
+    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr 1fr 1fr' } }}>
       <Stack spacing={0.6}>{head('ship_from')}<TextField size="small" value={estimate.settings.ship_from ?? ''} onChange={(e) => onChange(setSetting(estimate, schema, 'ship_from', e.target.value.slice(0, 80)))}
         slotProps={{ htmlInput: { 'aria-label': label('ship_from') } }} /></Stack>
       <Stack spacing={0.6}>{head('ship_to')}
@@ -63,6 +63,9 @@ export default function CostShipping({ estimate, schema, lang, t, today, onChang
       <Stack spacing={0.6}>{head('ship_margin_pct')}<TextField size="small" type="number" value={estimate.settings.ship_margin_pct ?? ''}
         onChange={(e) => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) onChange(setSetting(estimate, schema, 'ship_margin_pct', Math.min(100, Math.max(0, n)))); }}
         slotProps={{ htmlInput: { 'aria-label': label('ship_margin_pct'), min: 0, max: 100 }, input: { endAdornment: <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-3)' }}>%</Typography> } }} /></Stack>
+      <Stack spacing={0.6}>{head('ship_round_eur')}<TextField size="small" type="number" value={estimate.settings.ship_round_eur ?? ''}
+        onChange={(e) => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) onChange(setSetting(estimate, schema, 'ship_round_eur', Math.min(10000, Math.max(0, n)))); }}
+        slotProps={{ htmlInput: { 'aria-label': label('ship_round_eur'), min: 0, max: 10000 }, input: { endAdornment: <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-3)' }}>€</Typography> } }} /></Stack>
     </Box>
     <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{t('costEstimate.dhl.lanes')}</Typography><HelpTip title={t('costEstimate.dhl.lanesTip')} /></Stack>
     <Box sx={{ overflowX: 'auto', minWidth: 0 }}>

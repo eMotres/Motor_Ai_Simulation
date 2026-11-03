@@ -37,6 +37,8 @@ export interface CostSchema {
 export interface DhlRef {
   quoted_on?: string; from?: string; to?: string; mode?: string; lane_weight_kg?: number; lane_price?: number; currency?: string;
   weight_kg?: number; margin_pct?: number; price?: number; rate?: number; motor_mass_kg?: number; mass_basis?: string; transit_days?: number; source?: string;
+  /** the EUR price before it was rounded up to a multiple of `round_eur` (0 / absent = not rounded) */
+  price_eur_unrounded?: number; round_eur?: number;
 }
 export interface SourceRef { production?: string; project?: string; title?: string; iteration?: string; analog_mass_kg?: number; target_mass_kg?: number; dhl?: DhlRef }
 export interface CostLine {
@@ -49,7 +51,7 @@ export interface CostIteration { index: number; motors: number; bench: Bench; li
 export interface ShipTo { country: string; city: string }
 export interface CostSettings {
   complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null;
-  ship_from?: string; ship_to?: ShipTo | null; ship_margin_pct?: number; [key: string]: unknown;
+  ship_from?: string; ship_to?: ShipTo | null; ship_margin_pct?: number; ship_round_eur?: number; [key: string]: unknown;
 }
 export interface CostMigration { from_version: number; date: string | null; dropped: string[]; note: string }
 /** Dated exchange rates, EUR base: `rates` = units of each currency per 1 EUR (effective: a manual rate wins over the ECB one). */
@@ -84,8 +86,12 @@ export interface CostSnapshot { id: string; n: number; note: string; created_at:
 /** What Suggest WOULD put in an empty cell (a grey placeholder): an amount with its source, or why there is none; and a
  *  duration when the line's weeks are empty. */
 export interface SuggestionCell { amount?: number; source?: LineSource; source_ref?: SourceRef | null; factor?: number | null; origin?: string; hint?: string; weeks?: number }
+/** What the server would make of an AUTOMATIC DHL shipping line now (`hint` = why it could not be recomputed: it keeps its last value). */
+export interface AutoCell { amount: number | null; weeks: number | null; source_ref: SourceRef | null; hint: string }
 export interface CostSuggestions {
   cells: Record<string, Partial<Record<LineId, SuggestionCell>>>; motor_mass_kg: number | null; motor_mass_basis: string;
+  /** per iteration: the automatic DHL line as the server would recompute it (only the lines that differ) */
+  auto?: Record<string, AutoCell>;
   analogs?: Record<string, { ref: string | null; factor?: number; reason?: string }>; notes?: string[];
 }
 export interface CostEstimateAnswer {
@@ -509,8 +515,54 @@ export function dhlDetails(d: DhlRef | undefined, motors: number, t: T, excluded
   const out: string[] = [];
   if (d.weight_kg !== undefined) out.push(t('costEstimate.dhl.weight', { weight: weeksText(d.weight_kg), motors, mass: weeksText(d.motor_mass_kg ?? null), basis: d.mass_basis ?? '' }));
   if (d.lane_price !== undefined) out.push(t('costEstimate.dhl.quote', { price: String(Number(Number(d.lane_price).toFixed(2))), currency: d.currency ?? '', weight: weeksText(d.lane_weight_kg ?? null), days: d.transit_days ?? '—', mode: d.mode ?? '' }));
+  if (d.price_eur_unrounded !== undefined && Number(d.round_eur) > 0) out.push(t('costEstimate.dhl.rounded', { price: String(Number(Number(d.price_eur_unrounded).toFixed(2))), step: String(Number(d.round_eur)) }));
   out.push(excluded);
   return out;
+}
+
+// ── automatic DHL shipping (owner 2026-11-03) ─────────────────────────────────────────────────────────────────────────
+// A shipping line whose source is `dhl` follows the iteration's motors: the server recomputes it on every save, and the
+// preview endpoint (`/suggestions`, field `auto`) gives the same numbers at once so the cell changes the moment the motors do.
+
+/** The automatic DHL lines (filled, source `dhl`) of an estimate. */
+export const autoDhlIterations = (e: CostEstimate): number[] =>
+  e.iterations.filter((it) => it.lines.shipping.status === 'filled' && it.lines.shipping.source === 'dhl').map((it) => it.index);
+
+/** What an automatic line depends on: refetch the preview only when this changes (amounts of the automatic lines are NOT part of it). */
+export function autoKey(e: CostEstimate): string {
+  const s = e.settings;
+  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, s.ship_round_eur, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
+    e.iterations.map((it) => [it.index, it.motors, it.lines.shipping.status === 'filled' && it.lines.shipping.source === 'dhl'])]);
+}
+
+/** Lay the server's recomputed automatic DHL lines over the estimate on screen.  Only a line that is still automatic is
+ *  touched; the duration is taken only when the server gave one (it never overwrites the owner's weeks).  The same estimate
+ *  object comes back when nothing changes. */
+export function applyAuto(e: CostEstimate, auto: Record<string, AutoCell> | undefined): CostEstimate {
+  if (!auto) return e;
+  let next: CostEstimate | null = null;
+  for (const [key, cell] of Object.entries(auto)) {
+    const idx = e.iterations.findIndex((it) => String(it.index) === key);
+    const cur = idx < 0 ? undefined : e.iterations[idx].lines.shipping;
+    if (!cur || cur.status !== 'filled' || cur.source !== 'dhl') continue;
+    const patch: Partial<CostLine> = { hint: cell.hint ?? '' };
+    if (cell.amount !== null && cell.amount !== undefined) { patch.amount = cell.amount; patch.source_ref = cell.source_ref ?? null; patch.currency = 'EUR'; }
+    if (cell.weeks !== null && cell.weeks !== undefined) patch.weeks = cell.weeks;
+    if ((Object.keys(patch) as Array<keyof CostLine>).every((k) => same(cur[k], patch[k]))) continue;
+    next = next ?? clone(e);
+    Object.assign(next.iterations[idx].lines.shipping, patch);
+  }
+  return next ?? e;
+}
+
+/** Put a filled manual / converted shipping line back to automatic DHL: the source becomes `dhl` (the amount stays until the
+ *  server's numbers arrive - the caller then applies `applyAuto`, or drops this candidate when DHL cannot be computed). */
+export function setDhlAuto(e: CostEstimate, ref: LineRef): CostEstimate {
+  const line = lineAt(e, ref);
+  if (!line || ref.line !== 'shipping' || line.status !== 'filled' || line.source === 'dhl') return e;
+  const next = clone(e);
+  Object.assign(lineAt(next, ref)!, { source: 'dhl', source_ref: null, factor: null, hint: '' });
+  return next;
 }
 
 export function setShipTo(e: CostEstimate, country: string, city: string): CostEstimate {
@@ -552,7 +604,7 @@ export function upsertLane(e: CostEstimate, lane: DhlLane, index: number | null,
  *  lanes, the manual rates, the motors / bench of each iteration, which cells are empty). */
 export function suggestionKey(e: CostEstimate): string {
   const s = e.settings;
-  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
+  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, s.ship_round_eur, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
     e.iterations.map((it) => [it.index, it.motors, it.bench, LINE_IDS.map((id) => [it.lines[id].status === 'missing', it.lines[id].weeks === null || it.lines[id].weeks === undefined])])]);
 }
 

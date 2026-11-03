@@ -8,11 +8,14 @@
                                                            ``settings.display_currency``): the totals are also
                                                            given in it (``computed.converted``) at the estimate's dated
                                                            exchange rates (``estimate.fx``, ECB or manual)
-``PUT /api/admin/projects/{id}/cost-estimate``            save (optimistic ``revision``; 409 with the stored one)
+``PUT /api/admin/projects/{id}/cost-estimate``            save (optimistic ``revision``; 409 with the stored one); every
+                                                           automatic ``dhl`` shipping line is recomputed from the
+                                                           iteration's motors on each save
 ``POST /api/admin/projects/{id}/cost-estimate/suggest``    fill missing lines from built motors (scaled by active mass)
                                                            and other projects' estimates
 ``POST /api/admin/projects/{id}/cost-estimate/suggestions`` what suggest WOULD fill in the empty cells of the posted estimate
                                                            (the table's grey placeholders; nothing is saved)
+                                                           and, as ``auto``, what the automatic DHL lines would become
 ``POST /api/admin/projects/{id}/cost-estimate/snapshot``   freeze the estimate with a note and the "what changed" diff
 ``GET  /api/admin/projects/{id}/cost-estimate/snapshots``  the frozen snapshots
 
@@ -166,12 +169,21 @@ async def put_estimate(project_id: str, request: Request, response: Response, di
 
     live, live_status = FX.live_rates()                  # before the file lock: it may touch the network
     manual = (candidate.get("fx") or {}).get("manual") or {}
+    # the automatic DHL lines follow the iteration's motors on EVERY save (owner 2026-11-03); the motor mass is read before the lock
+    auto = any((it["lines"]["shipping"].get("status") == "filled" and it["lines"]["shipping"].get("source") == "dhl")
+               for it in candidate["iterations"])
+    ship = SRC.ship_data(candidate, schema) if auto else None
+    auto_changes: list = []
 
     def build(previous):
         # the rates follow the ECB (the stored ones are kept when it cannot be reached); only the owner's manual rates
         # come from the request
         old_fx = (_read(project, previous, schema) if previous else {}).get("fx")
-        return {**candidate, "fx": CE.merge_fx(old_fx, manual, live, schema, _today())}
+        doc = {**candidate, "fx": CE.merge_fx(old_fx, manual, live, schema, _today())}
+        if ship is not None:
+            doc, changes = CE.refresh_dhl(doc, schema, ship["motor_mass_kg"], ship["motor_mass_basis"], today=_today())
+            auto_changes[:] = changes
+        return doc
 
     try:
         previous, saved = CS.save(project_id, expected, build, _email(admin_user))
@@ -180,7 +192,8 @@ async def put_estimate(project_id: str, request: Request, response: Response, di
     old = _read(project, previous, schema) if previous else None
     changes = CE.diff(old, saved)
     CS.audit(project_id, _email(admin_user), "cost_estimate.update",
-             {"revision": saved["revision"], "changes": len(changes), "paths": [c["path"] for c in changes][:60]})
+             {"revision": saved["revision"], "changes": len(changes), "paths": [c["path"] for c in changes][:60],
+              "auto_dhl": len(auto_changes)})
     return _payload(project, saved, schema, stored=True, display=display_currency, fx_status=_fx_status(saved, live_status),
                     changes=changes)
 
@@ -238,7 +251,9 @@ async def preview_suggestions(project_id: str, request: Request, response: Respo
     candidate["fx"] = CE.merge_fx(stored.get("fx"), (candidate.get("fx") or {}).get("manual") or {}, live, schema, _today())
     data = SRC.gather(project_id, candidate, schema)
     after, report = CE.suggest(candidate, schema, data, today=_today())
-    return {"cells": CE.suggestion_cells(candidate, after), "motor_mass_kg": data.get("motor_mass_kg"),
+    refreshed, _changes = CE.refresh_dhl(candidate, schema, data.get("motor_mass_kg"), data.get("motor_mass_basis") or "")
+    return {"cells": CE.suggestion_cells(candidate, after), "auto": CE.auto_cells(candidate, refreshed),
+            "motor_mass_kg": data.get("motor_mass_kg"),
             "motor_mass_basis": data.get("motor_mass_basis") or "",
             "analogs": report.get("analogs"), "notes": report.get("notes")}
 

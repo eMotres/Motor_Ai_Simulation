@@ -1264,6 +1264,10 @@
       "none": "尚无 DHL 报价。",
       "invalid": "请填写标出的字段。",
       "weight": "毛重 {weight} kg = {motors} × （电机 {mass} kg，{basis}，× 1.3 外壳 + 15 kg 木箱），向上取整到 5 kg。",
+      "rounded": "报价 {price} 欧元，向上取整到 {step} 欧元的整数倍。",
+      "autoTip": "改为 DHL 自动：该行随电机数量变化。",
+      "autoOnTip": "DHL 自动：随电机数量变化。手动输入数字可改为手动。",
+      "autoFailed": "无法为此行计算 DHL 运费。",
       "quote": "报价：{currency} {price}，{weight} kg，{days} 天，{mode}。",
       "col": {
         "from": "发货地",

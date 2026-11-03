@@ -115,9 +115,10 @@ def other_estimates(exclude_project: str, schema: dict) -> List[Dict[str, Any]]:
     return out
 
 
-def gather(project_id: str, estimate: dict, schema: dict, *, mass_of=active_mass, ship_mass_of=None) -> Dict[str, Any]:
-    """Everything ``cost_estimate.suggest`` needs for ``project_id``: also the motor mass a shipment is weighed with
-    (``motor_mass_kg``: the complete mass when known, else the active mass x 1.3; ``motor_mass_basis`` says which)."""
+def ship_data(estimate: dict, schema: dict, *, mass_of=active_mass, ship_mass_of=None) -> Dict[str, Any]:
+    """Only what a shipment's weight needs: ``{target_mass_kg, motor_mass_kg, motor_mass_basis}`` for the estimate's target motor
+    (the complete mass when known, else the active mass x 1.3).  Cheap (no production or other-estimate scan): the save and the
+    preview of the automatic DHL lines use it."""
     from motor_ai_sim.development import cost_estimate as CE
     target = (estimate.get("settings") or {}).get("target_motor") or {}
     die, config = str(target.get("die") or ""), str(target.get("config") or "")
@@ -125,6 +126,12 @@ def gather(project_id: str, estimate: dict, schema: dict, *, mass_of=active_mass
     masses = (ship_mass_of or shipping_mass)(die, config) if die and config else {}
     motor_mass, basis = CE.motor_mass_for_shipping(masses.get("full_kg"), bool(masses.get("complete")),
                                                    masses.get("active_kg") or target_mass, schema)
-    return {"target_ref": f"{die}/{config}" if die and config else "",
-            "target_mass_kg": target_mass, "motor_mass_kg": motor_mass, "motor_mass_basis": basis,
-            "productions": productions(mass_of), "estimates": other_estimates(project_id, schema)}
+    return {"target_ref": f"{die}/{config}" if die and config else "", "target_mass_kg": target_mass,
+            "motor_mass_kg": motor_mass, "motor_mass_basis": basis}
+
+
+def gather(project_id: str, estimate: dict, schema: dict, *, mass_of=active_mass, ship_mass_of=None) -> Dict[str, Any]:
+    """Everything ``cost_estimate.suggest`` needs for ``project_id``: also the motor mass a shipment is weighed with
+    (``motor_mass_kg``: the complete mass when known, else the active mass x 1.3; ``motor_mass_basis`` says which)."""
+    ship = ship_data(estimate, schema, mass_of=mass_of, ship_mass_of=ship_mass_of)
+    return {**ship, "productions": productions(mass_of), "estimates": other_estimates(project_id, schema)}

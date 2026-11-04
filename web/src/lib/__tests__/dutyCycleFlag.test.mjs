@@ -65,11 +65,14 @@ test('the Thermal tab mounts the editor only behind the flag', () => {
   assert.equal((panel.match(/<DutyCycleEditor\s*\/>/g) || []).length, 1);
 });
 
-test('the catalog chip goes through the gate', () => {
+test('the duty-cycle chip goes through the gate wherever a duty is listed', () => {
+  // the catalog lists motors only since 2026-11-04; the point switcher of the Simulation tab is where duties are listed
   const cat = src('../../components/catalog/FamilyCatalog.tsx');
-  const calls = (cat.match(/(?<!gated)dutyCycleChip\(/g) || []).length;
-  const gated = (cat.match(/gatedDutyCycleChip\(dutyCycleChip\(/g) || []).length;
-  assert.ok(calls > 0, 'the catalog no longer chips a duty at all');
+  assert.equal((cat.match(/dutyCycleChip\(/g) || []).length, 0, 'the catalog lists no duty any more');
+  const sw = src('../../components/simulation/SimPointSwitcher.tsx');
+  const calls = (sw.match(/(?<!gated)dutyCycleChip\(/g) || []).length;
+  const gated = (sw.match(/gatedDutyCycleChip\(dutyCycleChip\(/g) || []).length;
+  assert.ok(calls > 0, 'the switcher no longer chips a duty at all');
   assert.equal(calls, gated, 'a duty chip that skips the gate');
 });
 

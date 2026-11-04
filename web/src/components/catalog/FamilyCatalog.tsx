@@ -1,12 +1,18 @@
 /**
- * FamilyCatalog — Die → Configuration → Duty.
+ * FamilyCatalog — Die → Configuration (motors only).
  *
  * One stamped lamination (die, locked) carries several buildable
- * configurations (stack length, wire, winding); each configuration runs at a
- * few named duties (mode, current, rpm, γ).  Clicking a duty applies the
- * WHOLE machine state — geometry, winding, operating point — through the
- * same endpoints the rest of the app already uses; this panel writes nothing
- * of its own into the live config.
+ * configurations (stack length, wire, winding).  A configuration button loads
+ * the configuration's default duty (`rated`) — the WHOLE machine state:
+ * geometry, winding, operating point — through the same endpoints the rest of
+ * the app already uses; this panel writes nothing of its own into the live
+ * config.
+ *
+ * The configuration's OTHER duties (operating points) are not rows here any
+ * more (owner 2026-11-04: «все duty переходят внутрь моделирования»): they
+ * appear as the point switcher of the Electromagnetic Simulation tab once the
+ * motor is loaded, together with creating, renaming, duplicating, deleting
+ * and defaulting them (components/simulation/SimPointSwitcher).
  */
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -25,11 +31,8 @@ import {
 } from '../common/PromptDialogs';
 import BatteryDialog, { type BatteryValue } from './BatteryDialog';
 import ConfigHistoryDialog from './ConfigHistoryDialog';
-import { dutyCycleChip } from '../../lib/dutySettings';
-import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
 import type { DutyTimeToLimit } from '../../lib/timeToLimitChip';
 import type { DutyContinuousRating } from '../../lib/continuousRatingChip';
-import { driveLabel } from '../../lib/dutyRuns';
 // The WHOLE load — the server half (owner) and the local half the follower in
 // ActiveFamilyStrip shares (lib/dutyLocalApply, lib/familyFollow) — lives in
 // lib/dutyApply so the strip's "reload ▶" and this ▶ can never drift.
@@ -57,10 +60,8 @@ import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { isConfigHighlighted, isConfigRecommended, isDieHighlighted } from '../../modules/development/projectFocus';
 import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
-import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
-import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
+import type { DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
-import { perSetFromTotal, setsOf } from '../../lib/perSetCurrent';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -190,45 +191,8 @@ interface Die {
   source?: string | null;
 }
 
-/** "21:24" today, "19.08 21:24" otherwise — the exact stamp lives in the tooltip. */
-const fmtWhen = (iso?: string | null) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(+d)) return '';
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  if (d.toDateString() === new Date().toDateString()) return `${hh}:${mi}`;
-  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')} ${hh}:${mi}`;
-};
-
 const fmt = (v: number | null | undefined, digits = 1) =>
   v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(digits).replace(/\.0+$/, '');
-
-/** The whole `duty_cycle:` block, as one sentence for the chip's tooltip.  The
- *  chip says WHAT the machine does; this says what that means and what the
- *  answer will be fitted at — the calibration duty decides every conductance of
- *  the network, so it is never left implicit. */
-const dutyCycleTip = (b?: Record<string, unknown> | null): string => {
-  if (!b || !Object.keys(b).length) return '';
-  const kind = String(b.kind ?? 'S1');
-  const g = (v: unknown) => (v == null || v === '' ? '—' : String(v));
-  const head =
-    kind === 'S2' ? `S2 — ONE pull of ${g(b.t_on_s)} s from the start temperature, never repeated.`
-    : kind === 'S3' ? `S3 — intermittent: ${g(b.ed_pct)} % of every ${g(b.cycle_s)} s powered, resting ${b.rest_duty == null ? 'UNPOWERED' : `at "${String(b.rest_duty)}"`}, repeated until the cycle repeats itself.`
-    : kind === 'segments' ? `An explicit segment list, repeated as one cycle: ${(Array.isArray(b.segments) ? b.segments : []).map((s) => { const e = s as Record<string, unknown>; return `${e?.duty == null ? 'unpowered' : String(e.duty)} ${g(e?.t_s)} s`; }).join(' → ')}.`
-    : 'S1 — continuous duty: the machine runs this point until it stops changing.';
-  const bits = [head];
-  if (b.duty) bits.push(`Runs "${String(b.duty)}".`);
-  bits.push(b.calibration_duty
-    ? `The lumped network is fitted to the steady map of "${String(b.calibration_duty)}".`
-    : 'The network is fitted to the configuration’s rated duty (no calibration duty stated).');
-  if (b.t_start_c != null) bits.push(`Starts at ${g(b.t_start_c)} °C.`);
-  else bits.push('Starts at the ambient.');
-  if (b.n_cycles_max != null) bits.push(`At most ${g(b.n_cycles_max)} cycles are integrated.`);
-  if (b.saved_at) bits.push(`Defined ${fmtWhen(String(b.saved_at))}.`);
-  bits.push('Solve it on the Thermal tab.');
-  return bits.join(' ');
-};
 
 const readLS = (k: string, d: any) => {
   try { const v = localStorage.getItem('sim.' + k); return v == null ? d : JSON.parse(v); }
@@ -493,17 +457,8 @@ const FamilyCatalog: React.FC<{
   // localStorage — a convenience, never state the report depends on: an empty
   // choice means the backend's rule, and every read is guarded because the
   // accessor itself can throw in a locked-down browser.
-  const picKey = (die: string, cfg: string) => `report.pictures:${die}/${cfg}`;
-  const [picDuty, setPicDuty] = useState<Record<string, string>>(() => ({}));
   const picFor = (die: string, cfg: string): string => {
-    const k = picKey(die, cfg);
-    if (k in picDuty) return picDuty[k];
-    try { return localStorage.getItem(k) ?? ''; } catch { return ''; }
-  };
-  const setPicFor = (die: string, cfg: string, v: string) => {
-    const k = picKey(die, cfg);
-    setPicDuty((m) => ({ ...m, [k]: v }));
-    try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* per-viewer nicety only */ }
+    try { return localStorage.getItem(`report.pictures:${die}/${cfg}`) ?? ''; } catch { return ''; }
   };
 
   const runExport = async (kind: 'datasheet' | 'report',
@@ -591,16 +546,6 @@ const FamilyCatalog: React.FC<{
       const role = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
       mutate((data) => `configuration '${String(data?.config || name)}' created`, () =>
         post('/api/family/config', { die, name, role }));
-    },
-  });
-  const createDuty = (die: string, cfg: string) => setAskText({
-    title: `New duty under ${die} / ${cfg}`,
-    label: 'Duty name',
-    hint: 'Captures the CURRENT Simulation point — current, rpm, γ, mode',
-    onSubmit: (name) => {
-      const mode = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
-      mutate(`duty '${name}' saved from Simulation`, () =>
-        post('/api/family/duty', { die, config: cfg, duty: { name, mode, from_current: true } }));
     },
   });
   const deleteDie = (die: Die) => {
@@ -842,31 +787,6 @@ const FamilyCatalog: React.FC<{
   };
   const editBattery = (dieName: string, c: Cfg) =>
     setBatteryFor({ die: dieName, cfg: c });
-  const renameDuty = (die: string, cfg: string, duty: string) => setAskText({
-    title: `Rename duty '${duty}' in ${die} / ${cfg}`,
-    label: 'New name', initial: duty,
-    hint: 'Operating point, targets, the recorded result, the stored runs, the solved maps and every thermal / mechanical / coupled answer follow the new name',
-    onSubmit: (name) => { if (name !== duty) mutate(`duty renamed to '${name}'`, () =>
-      fetch(`${API}/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })); },
-  });
-  const duplicateDuty = (die: string, cfg: string, duty: string) => setAskText({
-    title: `Duplicate duty '${duty}' in ${die} / ${cfg}`,
-    label: 'Name of the copy', initial: `${duty} copy`,
-    hint: 'Full copy: operating point, targets, note AND the recorded result',
-    onSubmit: (name) => mutate(`duty '${duty}' duplicated as '${name}'`,
-      () => post(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}/duplicate`,
-                 { name })),
-  });
-  const deleteDuty = (die: string, cfg: string, duty: string) => setAskConfirm({
-    title: `Delete duty '${duty}' from ${die} / ${cfg}?`,
-    body: 'Its saved operating point and recorded results go with it.',
-    onConfirm: () => mutate(`duty '${duty}' deleted`, () =>
-      del(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`)),
-  });
-
   // ── apply a duty: geometry + winding + materials + operating point, all
   //    through the EXISTING endpoints (this panel owns no write-path of its
   //    own into the live config) ─────────────────────────────────────────────
@@ -890,14 +810,6 @@ const FamilyCatalog: React.FC<{
     }
     setBusy(null);
   };
-
-  /** Make `duty` the mode the Motors row shows and loads for this configuration. */
-  const setDefaultDuty = (die: string, cfg: string, duty: string) =>
-    mutate(`default mode of '${cfg}' is now '${duty}'`, () =>
-      fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/default_duty`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duty }),
-      }));
 
   /** Editors only: the passport card / older-build line of a configuration, as tooltip text
    *  (it used to be a coloured chip in the row; the rows are uniform since 2026-10-27). */
@@ -1252,22 +1164,6 @@ const FamilyCatalog: React.FC<{
                     </Typography>
                   </Tooltip>
                 )}
-                {(c.duties?.length ?? 0) > 2 && (
-                  <Tooltip title={tx('picturesDutyTip')}>
-                    <select
-                      value={picFor(die.name, c.name)}
-                      onChange={(e) => setPicFor(die.name, c.name, e.target.value)}
-                      style={{ fontSize: 11, padding: '0 2px', marginLeft: 2,
-                               background: 'transparent', color: '#a78bfa',
-                               border: '1px solid var(--line-soft)', borderRadius: 4,
-                               maxWidth: 150 }}>
-                      <option value="">{tx('picturesAuto')}</option>
-                      {(c.duties ?? []).map((d) => (
-                        <option key={d.name} value={d.name}>{tx('picturesDuty', { duty: d.name })}</option>
-                      ))}
-                    </select>
-                  </Tooltip>
-                )}
                 {/* …and the same report as a PDF, for sending it read-only.
                     Small, because Word is the one the user asked to lead. */}
                 <Tooltip title={ringBusy(ring, `report:pdf:${die.name}/${c.name}`)
@@ -1348,17 +1244,6 @@ const FamilyCatalog: React.FC<{
                 )}
                 <Box sx={{ flex: 1 }} />
                 {canWrite && (
-                  <Tooltip title="Save the CURRENT Simulation point as a new duty here">
-                    <span>
-                      <Button size="small" variant="text" disabled={!!busy}
-                        onClick={() => createDuty(die.name, c.name)}
-                        sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, px: 0.5 }}>
-                        ＋ duty
-                      </Button>
-                    </span>
-                  </Tooltip>
-                )}
-                {canWrite && (
                   <Tooltip title={tx('deleteThisConfigurationAndItsDuties')}>
                     <span>
                       <IconButton size="small" disabled={!!busy}
@@ -1368,264 +1253,6 @@ const FamilyCatalog: React.FC<{
                   </Tooltip>
                 )}
               </Box>
-              {c.duties.length > 0 && (
-                <Box component="table" sx={{
-                  width: '100%', mt: 0.4, mb: 0.4, borderCollapse: 'collapse',
-                  tableLayout: 'fixed',
-                  '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
-                            textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
-                  '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
-                            p: '2px 6px', whiteSpace: 'nowrap',
-                            overflow: 'hidden', textOverflow: 'ellipsis',
-                            fontVariantNumeric: 'tabular-nums',
-                            borderTop: '1px solid var(--panel)' },
-                  '& th:first-of-type, & td:first-of-type': { textAlign: 'left' },
-                }}>
-                  <colgroup>
-                    <col style={{ width: '22%' }} /><col style={{ width: '6%' }} />
-                    <col style={{ width: '6%' }} /><col style={{ width: '7%' }} />
-                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
-                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
-                    <col style={{ width: '8%' }} /><col style={{ width: '6%' }} />
-                    <col style={{ width: '6%' }} /><col style={{ width: '11%' }} />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th>{tx('duty')}</th><th>kW</th><th>Nm</th><th>rpm</th>
-                      <th title={setsOf(c) === 2 ? tx('currentPerSetHead') : undefined}>
-                        {setsOf(c) === 2 ? 'A/set' : 'A'}</th>
-                      <th>V L-L</th><th>η %</th><th>{tx('ripple')}</th>
-                      <th>{tx('lossW')}</th><th>kg</th><th>KV</th>
-                      <th style={{ textAlign: 'center' }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {c.duties.map(d => {
-                      const r = d.result || {};
-                      // Result recorded on an OLDER build (the configuration's
-                      // geometry/winding/materials changed since) — show it,
-                      // but say loudly that it needs a re-run.
-                      const staleRes = !!(r.build_sig && c.build_sig
-                                          && r.build_sig !== c.build_sig);
-                      const applying = busy === `${c.name} / ${d.name}`;
-                      const isActive = active?.die === die.name
-                        && active?.config === c.name && active?.duty === d.name;
-                      return (
-                        <tr key={d.name}
-                          style={isActive ? { background: '#60a5fa14' } : undefined}>
-                          <td>
-                            <Tooltip placement="top-start"
-                              title={`${d.mode}${d.note ? ` — ${d.note}` : ''}`
-                                     + (d.saved_at ? ` · saved ${d.saved_at}` : '')
-                                     + (r.recorded_at ? ` · recorded ${r.recorded_at}` : '')
-                                     + (staleRes ? ' · ⚠ results computed on an OLDER build — load (▶), Run, then Save' : '')}>
-                              <span style={{ color: roleColor(d.mode), fontWeight: 600,
-                                             cursor: 'help' }}>
-                                {staleRes ? '⚠ ' : ''}{d.name}{(c.default_duty ?? null) === d.name ? ' ★' : ''}
-                                {/* SHORT-TIME (owner 2026-10-19): a mark for peak and the other modes;
-                                    rated is always continuous and never carries it. */}
-                                {d.name.trim().toLowerCase() !== 'rated' && shortTimeChip(d) && (
-                                  <Tooltip title={dutyLabel(d.name, d)}>
-                                    <span style={{ color: '#f59e0b', fontWeight: 400,
-                                                   fontSize: 10, marginLeft: 6 }}>
-                                      {shortTimeChip(d)}
-                                    </span>
-                                  </Tooltip>
-                                )}
-                                {d.saved_at && (
-                                  <span style={{ color: 'var(--text-4)', fontWeight: 400,
-                                                 fontSize: 10, marginLeft: 6 }}>
-                                    {fmtWhen(d.saved_at)}
-                                  </span>
-                                )}
-                              </span>
-                            </Tooltip>
-                            {/* What ELSE this point has been run on.  Badges, not
-                                buttons: there is exactly one load action (▶),
-                                and it brings every stored run with it — the
-                                Simulation panel switches between them. */}
-                            {(d.runs ?? []).filter(rn => !rn.primary).map(rn => (
-                              <Tooltip key={rn.drive} placement="top"
-                                title={`${driveLabel(rn.drive)} run of this point, stored`
-                                  + (rn.recorded_at ? ` ${rn.recorded_at}` : '')
-                                  + (rn.f_switch_hz ? ` · carrier ${(Number(rn.f_switch_hz) / 1000).toFixed(1)} kHz` : '')
-                                  + (rn.steps ? ` · ${rn.steps} steps/period` : '')
-                                  + (rn.ripple_pct != null ? ` · ripple ${Number(rn.ripple_pct).toFixed(1)} %` : '')
-                                  + (rn.stale ? ' · ⚠ solved on a different build/materials — re-run it'
-                                              : '')
-                                  + '. Press ▶ to load the duty; pick it in the Simulation run selector.'}>
-                                <span style={{
-                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
-                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
-                                  color: rn.stale ? '#f59e0b' : '#38bdf8',
-                                  border: `1px solid ${rn.stale ? '#f59e0b88' : '#38bdf855'}`,
-                                }}>
-                                  {rn.stale ? '⚠' : ''}{driveLabel(rn.drive)}
-                                </span>
-                              </Tooltip>
-                            ))}
-                            {/* WHAT THE MACHINE DOES with this point
-                                (2026-09-14).  A duty with no cycle gets no chip
-                                — saying "S1" for it would claim a continuous
-                                rating nobody wrote.  One short chip, the block
-                                itself in the tooltip (no-walls-of-text rule). */}
-                            {/* …and NOTHING at all while the duty-cycle feature
-                                is off (owner 2026-09-17) — the chip is the one
-                                place a hidden feature would still name itself
-                                in the catalog.  `lib/dutyCycleFlag`. */}
-                            {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle)) && (
-                              <Tooltip key="dc" placement="top"
-                                title={dutyCycleTip(d.duty_cycle)}>
-                                <span style={{
-                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
-                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
-                                  color: '#a78bfa', border: '1px solid #a78bfa55',
-                                }}>
-                                  {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle))}
-                                </span>
-                              </Tooltip>
-                            )}
-                          </td>
-                          {/* kW keeps its decimal even when it is .0 (user
-                              2026-08-25) — fmt() strips trailing zeros. */}
-                          <td>{d.power_kw == null || !Number.isFinite(Number(d.power_kw))
-                            ? '—' : Number(d.power_kw).toFixed(1)}</td>
-                          <td>{fmt(d.torque_nm)}</td>
-                          <td>{fmt(d.rpm, 0)}</td>
-                          {/* The current is the LINE current; Δ / Y says which
-                              connection the duty was solved with (winding
-                              current = ÷√3 in delta). */}
-                          <td title={[setsOf(c) === 2
-                              ? tx('currentBothSets', { a: fmt(d.current_arms) }) : '',
-                            d.star_delta
-                            ? (String(d.star_delta).startsWith('d')
-                                ? 'delta (Δ): line current — the winding carries ÷√3'
-                                : 'star (Y): line = winding current')
-                            : ''].filter(Boolean).join(' · ') || undefined}>
-                            {fmt(perSetFromTotal(Number(d.current_arms), setsOf(c)))}
-                            {d.star_delta && (
-                              <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 700,
-                                             color: String(d.star_delta).startsWith('d') ? '#fbbf24' : '#94a3b8' }}>
-                                {String(d.star_delta).startsWith('d') ? 'Δ' : 'Y'}
-                              </span>
-                            )}
-                          </td>
-                          {(() => {
-                            const v = Number(r.v_ll_peak_v);
-                            const b = c.battery;
-                            let col: string | undefined;
-                            let tip = '';
-                            if (b && Number.isFinite(v) && v > 0) {
-                              if (v <= b.v_min) { col = '#34d399'; tip = `needs ≥${v.toFixed(0)} V DC — fits the whole ${b.v_min}–${b.v_max} V range, margin ${(100 * (b.v_min / v - 1)).toFixed(0)}% at empty`; }
-                              else if (v <= b.v_max) { col = '#fbbf24'; tip = `needs ≥${v.toFixed(0)} V DC — fits only above ${(100 * v / b.v_max).toFixed(0)}% of the charged pack (${b.v_min}–${b.v_max} V)`; }
-                              else { col = '#f87171'; tip = `needs ≥${v.toFixed(0)} V DC — DOES NOT fit the ${b.v_min}–${b.v_max} V pack`; }
-                            }
-                            if (staleRes) col = '#fbbf24';
-                            return (
-                              <td style={col ? { color: col } : undefined}>
-                                {tip ? (
-                                  <Tooltip title={tip}><span style={{ cursor: 'help' }}>{fmt(r.v_ll_peak_v, 0)}</span></Tooltip>
-                                ) : fmt(r.v_ll_peak_v, 0)}
-                              </td>
-                            );
-                          })()}
-                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.efficiency_pct, 2)}</td>
-                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.ripple_pct)}</td>
-                          {/* TOTAL loss, the one the efficiency beside it is
-                              computed from: electromagnetic plus bearings and
-                              windage when the machine has them (2026-09-11).
-                              The tooltip splits it, so the column stays one
-                              number. */}
-                          {(() => {
-                            const loss = catalogLossDisplay(r);
-                            const tip = !loss.available ? tx('lossNotComputed')
-                              : loss.mechanicalKnown
-                                ? tx('lossElectromagneticAndMechanical', { em: fmt(loss.electromagneticW, 0), mech: fmt(loss.mechanicalW, 0) })
-                                  + (loss.mechanicalDerived ? ` — ${tx('lossMechanicalReadback')}` : '')
-                                : tx('lossElectromagneticUnknownMechanical');
-                            return <Tooltip title={tip}>
-                              <td style={staleRes ? { color: '#fbbf24' } : undefined}>
-                                {loss.available ? fmt(loss.totalW, 0) : '—'}{loss.available && !loss.mechanicalKnown ? ' *' : ''}
-                              </td>
-                            </Tooltip>;
-                          })()}
-                          <td style={staleRes ? { color: '#fbbf24' } : undefined} title={r.mass_partial ? `${tx('massPartialTip')}${r.mass_partial_reason ? ` (${r.mass_partial_reason})` : ''}` : tx('massFullTip', { active: fmt(r.mass_active_kg, 3) })}>{fmt(r.mass_kg, 2)}{r.mass_partial ? '*' : ''}</td>
-                          {/* KV instead of γ (user 2026-08-25) — rpm per volt
-                              of the recorded LINE PEAK, the same max/max
-                              convention as the Simulation tile; γ moved into
-                              the tooltip. */}
-                          <td>
-                            <Tooltip title={(r && (r as any).kv_rpm_per_v != null
-                              ? `KV as saved from the card (${Number((r as any).kv_is_noload) ? 'no-load / bench' : 'loaded'} convention). `
-                              : 'rpm / V_line_peak of the recorded run (loaded). ')
-                              + `γ = ${fmt(d.gamma_deg)}°`}>
-                              <span style={{ cursor: 'help' }}>
-                                {r && (r as any).kv_rpm_per_v != null
-                                  ? Number((r as any).kv_rpm_per_v).toFixed(1)
-                                  : (r && Number(r.v_ll_peak_v) > 0 && Number(d.rpm) > 0
-                                      ? (Number(d.rpm) / Number(r.v_ll_peak_v)).toFixed(1)
-                                      : '—')}
-                              </span>
-                            </Tooltip>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <Tooltip title={tx('loadIntoSimulation')}>
-                              <span>
-                                <IconButton size="small" disabled={!!busy}
-                                  onClick={() => applyDuty(die.name, c.name, d.name)}
-                                  sx={{ fontSize: 12, p: 0.2, color: '#34d399' }}>
-                                  {applying ? '…' : '▶'}
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            {canWrite && (c.default_duty ?? null) !== d.name && (
-                              <Tooltip title={tx('setDefaultModeTip')}>
-                                <span>
-                                  <IconButton size="small" disabled={!!busy}
-                                    onClick={() => setDefaultDuty(die.name, c.name, d.name)}
-                                    sx={{ fontSize: 12, p: 0.2, ml: 0.5, color: 'var(--text-3)' }}>☆</IconButton>
-                                </span>
-                              </Tooltip>
-                            )}
-                            {canWrite && (
-                              <Tooltip title={tx('renameDuty')}>
-                                <span>
-                                  <IconButton size="small" disabled={!!busy}
-                                    onClick={() => renameDuty(die.name, c.name, d.name)}
-                                    sx={{ fontSize: 11, p: 0.2, ml: 0.5,
-                                          color: 'var(--text-3)' }}>✎</IconButton>
-                                </span>
-                              </Tooltip>
-                            )}
-                            {canWrite && (
-                              <Tooltip title={tx('duplicateDutyFullCopyInclResult')}>
-                                <span>
-                                  <IconButton size="small" disabled={!!busy}
-                                    onClick={() => duplicateDuty(die.name, c.name, d.name)}
-                                    sx={{ fontSize: 12, p: 0.2, ml: 0.5,
-                                          color: 'var(--text-3)' }}>⧉</IconButton>
-                                </span>
-                              </Tooltip>
-                            )}
-                            {canWrite && (
-                              <Tooltip title={tx('deleteDuty')}>
-                                <span>
-                                  {/* Deliberate distance from ▶/⧉ — load and DELETE
-                                      must not be a one-pixel slip apart. */}
-                                  <IconButton size="small" disabled={!!busy}
-                                    onClick={() => deleteDuty(die.name, c.name, d.name)}
-                                    sx={{ fontSize: 12, p: 0.2, ml: 2,
-                                          color: 'var(--text-4)' }}>✕</IconButton>
-                                </span>
-                              </Tooltip>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Box>
-              )}
             </Box>
           ))}
         </Box>

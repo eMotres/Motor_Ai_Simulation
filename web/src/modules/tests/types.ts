@@ -71,7 +71,14 @@ export interface CompareGroup {
 /** A load sweep as one series over rpm (backend `comparison._load_series`): one entry per plottable quantity. */
 export interface LoadSeriesPoint { rpm: number; current?: number | null; measured: number | null; model: number | null; delta_pct?: number | null }
 export interface LoadSeriesQuantity { key: string; label: string; unit: string; tip?: string | null; points: LoadSeriesPoint[] }
-export interface LoadSeries { x: 'rpm'; quantities: LoadSeriesQuantity[] }
+/** One bench row as logged (backend `comparison._load_series`, key `points`): the numbers the per-speed plots are formed from;
+ *  `model` holds the model's own values only where a stored duty matched the row. */
+export interface LoadPlotRow {
+  rpm: number; current?: number | null; torque?: number | null; v_dc?: number | null; i_dc?: number | null;
+  t_winding?: number | null; t_magnet?: number | null; t_housing?: number | null;
+  model?: { torque?: number | null; eff_system?: number | null; t_winding?: number | null; t_magnet?: number | null };
+}
+export interface LoadSeries { x: 'rpm'; quantities: LoadSeriesQuantity[]; points?: LoadPlotRow[] }
 export interface TestCompare {
   test_id: string; kind: TestKind; model_available: boolean; groups: CompareGroup[];
   /** load records only: every bench row at once, for the chart beside the per-point tables */

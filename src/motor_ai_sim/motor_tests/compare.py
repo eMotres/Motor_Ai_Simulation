@@ -21,31 +21,31 @@ RHO_CU_20 = 0.017241
 
 #: The one-line explanations the UI puts in a tooltip (EN source; the web carries the zh mirror).
 TIPS = {
-    "cogging": ("no-load cogging peak-to-peak: model = the configuration's stored cogging block (2-D, I = 0, eddy and "
+    "cogging": ("no-load cogging peak-to-peak: simulation = the configuration's stored cogging block (I = 0, eddy and "
                 "demagnetisation off, magnets at the temperature the block states); bench = break-away by hand through a "
                 "torque meter in both directions, friction taken out"),
-    "resistance": ("model R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line "
-                   "in star (2/3 in delta), plus the stated lead cables; the phase board and the joints are not in the model"),
-    "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star); model = the incremental Ld/Lq of the lowest-current duty",
-    "ldq_amp": "3-pair amplitude sqrt(2/3 * sum dev^2) = |Lq - Ld|; the pair order is not known, so the smaller fitted value is compared with the smaller model value",
+    "resistance": ("simulated R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line "
+                   "in star (2/3 in delta), plus the stated lead cables; the phase board and the joints are not in the simulation"),
+    "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star); simulation = the incremental Ld/Lq of the lowest-current duty",
+    "ldq_amp": "3-pair amplitude sqrt(2/3 * sum dev^2) = |Lq - Ld|; the pair order is not known, so the smaller fitted value is compared with the smaller simulated value",
     "l_rotor_out": "stator without rotor: compared with a stored stator-only run when one exists",
-    "l_freq": "the model is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading",
-    "emf_peak": "model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T), x the 3-D end-effect flux factor k_flux of the configuration (Stage A; 2-D when it has no passport); measured = Vpp / 2",
-    "emf_rms": "model V_LL rms of the no-load duty, same speed, Br and 3-D scaling",
-    "loss": ("model = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
+    "l_freq": "the simulation is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading",
+    "emf_peak": "simulated V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(simulation magnet T), x the end-effect correction of the configuration (\"not corrected yet\" when it has none); measured = Vpp / 2",
+    "emf_rms": "simulated V_LL rms of the no-load duty, same speed, Br and correction",
+    "loss": ("simulation = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
-    "bearings": ("model values, not a measurement: SKF friction model of the bearings assigned to the configuration, the rotor "
+    "bearings": ("simulation values, not a measurement: SKF friction of the bearings assigned to the configuration, the rotor "
                  "weight as radial load, at the bench speed and temperature; the only measured figure is the total free-run "
                  "loss, in which the bearings are not separated"),
     "kv_kt": ("slope of V_LL peak against speed (least squares through the origin, over the rows named in the group); "
               "Kv = 1000 / slope in rpm per V of line-line PEAK; Kt = 3 * Ke per A rms of phase current "
-              "(Ke = phase rms EMF per rad/s; current on the q axis, sine EMF); the 3-D column x the factor shown"),
-    "load": ("the duty within 2 % speed and 3 % current; model torque x the 3-D torque factor (measured k_T, else k_flux); "
-             "model efficiency is the motor's at the shaft (no inverter)"),
-    "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the stored system "
-                   "(wall-to-shaft) efficiency of the controller record, never with the motor's"),
-    "weight": "model mass of the configuration's parts; the bench weighs what the record names",
+              "(Ke = phase rms EMF per rad/s; current on the q axis, sine EMF); the simulated values carry the end-effect correction"),
+    "load": ("the duty within 2 % speed and 3 % current; simulated torque x the torque factor (measured k_T, else k_flux); "
+             "simulated efficiency is the motor's at the corrected shaft power (no inverter)"),
+    "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the system efficiency of the "
+                   "stored duty (inverter x motor), never with the motor's"),
+    "weight": "simulated mass of the configuration's parts; the bench weighs what the record names",
 }
 
 

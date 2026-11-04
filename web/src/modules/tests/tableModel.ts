@@ -1,7 +1,7 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
 import type {
-  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord, TestTab,
+  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadPlotRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord, TestTab,
 } from './types';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
@@ -66,7 +66,7 @@ export function tabOfGroup(kind: TestKind, groupKey: string): TestTab {
     if (groupKey === 'inductance') return 'inductance';
   } else if (kind === 'free_run') {
     if (groupKey === 'emf_peak' || groupKey === 'emf_rms' || groupKey === 'kv_kt' || groupKey === 'kv_kt_ex') return 'constants';
-    if (groupKey === 'bearings_none' || groupKey.startsWith('bearing_')) return 'bearings';
+    if (groupKey === 'bearings_none' || groupKey === 'bearing_sum') return 'bearings';
   }
   return defaultTabOfKind(kind);
 }
@@ -107,11 +107,11 @@ export function rowNote(row: CompareRow): RowNote | null {
   if (row.key === 'emf_peak' && x.slope_flagged === true && typeof x.slope_dev_pct === 'number') {
     return { key: 'slopeFlagged', params: { pct: `${x.slope_dev_pct > 0 ? '+' : ''}${(x.slope_dev_pct as number).toFixed(1)}` } };
   }
-  // a Kv / Kt row that carries a 3-D factor says when that factor is not the configuration's own current one
+  // a Kv / Kt row that carries a correction factor says when that factor is not the configuration's own current one
   const p3 = x.end3d as { inherited?: boolean; current?: boolean } | undefined;
-  if (/_3d$/.test(row.key) && p3 && typeof x.k_3d === 'number') {
-    if (p3.inherited === true) return { key: 'inherited3d', params: {} };
-    if (p3.current === false) return { key: 'stored3d', params: {} };
+  if ((row.key === 'kv' || row.key === 'kt' || row.key === 'kv_slope') && p3 && x.corrected === true) {
+    if (p3.inherited === true) return { key: 'inheritedFactor', params: {} };
+    if (p3.current === false) return { key: 'storedFactor', params: {} };
   }
   // the remainder is the board and the joints only when the measurement is the larger one; a model above the reading
   // says so instead of filing a negative resistance on the board
@@ -195,6 +195,116 @@ export function pickQuantity(options: LoadSeriesQuantity[], key: string | null |
 export function quantitySeries(q: LoadSeriesQuantity): GroupSeries {
   return { unit: q.unit, points: q.points.map((p) => ({ rpm: p.rpm, measured: p.measured, model: p.model,
     delta: p.delta_pct ?? null, current: p.current ?? null })) };
+}
+
+// ── per-speed load plots (x = torque or current, one line per speed) ─────────────────────────────────────────────────
+
+export type LoadPlotKey = 'torque_current' | 'loss_torque' | 'eff_torque' | 'idc_torque'
+  | 't_winding_torque' | 't_magnet_torque' | 't_housing_torque';
+export interface LoadPlotSpec { key: LoadPlotKey; yUnit: string; xUnit: string; x: 'current' | 'torque' }
+/** The plots in menu order; the first is the default.  The text of each (name, axis labels) is in the locale files. */
+export const LOAD_PLOTS: readonly LoadPlotSpec[] = [
+  { key: 'torque_current', yUnit: 'N·m', xUnit: 'A', x: 'current' },
+  { key: 'loss_torque', yUnit: 'W', xUnit: 'N·m', x: 'torque' },
+  { key: 'eff_torque', yUnit: '%', xUnit: 'N·m', x: 'torque' },
+  { key: 'idc_torque', yUnit: 'A', xUnit: 'N·m', x: 'torque' },
+  { key: 't_winding_torque', yUnit: 'C', xUnit: 'N·m', x: 'torque' },
+  { key: 't_magnet_torque', yUnit: 'C', xUnit: 'N·m', x: 'torque' },
+  { key: 't_housing_torque', yUnit: 'C', xUnit: 'N·m', x: 'torque' },
+];
+
+/** The bench rows of a load record as the plots read them (rows without a finite rpm dropped). */
+export function loadPlotRows(cmp: TestCompare | undefined | null): LoadPlotRow[] {
+  return (cmp?.series?.points ?? []).filter((r) => finite(r?.rpm) !== null);
+}
+
+const speedOf = (rpm: number) => Math.round(rpm);
+
+/** True when at least one speed has two or more rows: only then the per-speed plots mean something.  A sweep over many
+ *  speeds at one current (one row per speed) keeps the chart against rpm. */
+export function isPerSpeedSweep(rows: LoadPlotRow[]): boolean {
+  const n = new Map<number, number>();
+  for (const r of rows) n.set(speedOf(r.rpm), (n.get(speedOf(r.rpm)) ?? 0) + 1);
+  return Array.from(n.values()).some((c) => c >= 2);
+}
+
+export interface SpeedPoint { x: number; y: number }
+export interface SpeedSeries { rpm: number; measured: SpeedPoint[]; model: SpeedPoint[] }
+export interface SpeedPlot { key: LoadPlotKey; yUnit: string; xUnit: string; speeds: SpeedSeries[] }
+
+const pt = (x: number | null, y: number | null): SpeedPoint | null => (x === null || y === null ? null : { x, y });
+
+/** (x, y) of one row for one plot, measured side; null when a needed value is missing (never a 0). */
+function measuredPoint(r: LoadPlotRow, key: LoadPlotKey): SpeedPoint | null {
+  const T = finite(r.torque); const I = finite(r.current); const vdc = finite(r.v_dc); const idc = finite(r.i_dc);
+  const omega = (finite(r.rpm) ?? 0) * Math.PI / 30;
+  const pIn = vdc !== null && idc !== null ? vdc * idc : null;
+  switch (key) {
+    case 'torque_current': return pt(I, T);
+    case 'loss_torque': return pt(T, pIn !== null && T !== null ? pIn - T * omega : null);
+    case 'eff_torque': return pt(T, pIn !== null && pIn > 0 && T !== null ? 100 * T * omega / pIn : null);
+    case 'idc_torque': return pt(T, idc);
+    case 't_winding_torque': return pt(T, finite(r.t_winding));
+    case 't_magnet_torque': return pt(T, finite(r.t_magnet));
+    case 't_housing_torque': return pt(T, finite(r.t_housing));
+  }
+}
+/** The model's own value of the same plot at the same x (only where the model has it; nothing is derived). */
+function modelPoint(r: LoadPlotRow, key: LoadPlotKey): SpeedPoint | null {
+  const m = r.model ?? {};
+  const T = finite(r.torque); const I = finite(r.current);
+  switch (key) {
+    case 'torque_current': return pt(I, finite(m.torque));
+    case 'eff_torque': return pt(T, finite(m.eff_system));
+    case 't_winding_torque': return pt(T, finite(m.t_winding));
+    case 't_magnet_torque': return pt(T, finite(m.t_magnet));
+    default: return null;
+  }
+}
+
+/** One plot of a load record: one series per speed (rpm rounded), rows of a speed sorted by x, straight segments between
+ *  them; the model values (where a stored duty matched) as a second set.  null when nothing can be plotted. */
+export function perSpeedSeries(rows: LoadPlotRow[], key: LoadPlotKey): SpeedPlot | null {
+  const spec = LOAD_PLOTS.find((p) => p.key === key);
+  if (!spec) return null;
+  const by = new Map<number, SpeedSeries>();
+  for (const r of rows) {
+    if (finite(r.rpm) === null) continue;
+    const rpm = speedOf(r.rpm);
+    const m = measuredPoint(r, key); const d = modelPoint(r, key);
+    if (!m && !d) continue;
+    const s = by.get(rpm) ?? { rpm, measured: [], model: [] };
+    if (m) s.measured.push(m);
+    if (d) s.model.push(d);
+    by.set(rpm, s);
+  }
+  if (!by.size) return null;
+  const speeds = Array.from(by.values()).sort((a, b) => a.rpm - b.rpm);
+  for (const s of speeds) { s.measured.sort((a, b) => a.x - b.x); s.model.sort((a, b) => a.x - b.x); }
+  return { key, yUnit: spec.yUnit, xUnit: spec.xUnit, speeds };
+}
+
+/** The plots that have data in this record (the menu), in menu order. */
+export function loadPlotOptions(rows: LoadPlotRow[]): LoadPlotKey[] {
+  return LOAD_PLOTS.filter((p) => perSpeedSeries(rows, p.key) !== null).map((p) => p.key);
+}
+
+export interface SpeedChartLine { id: string; rpm: number; model: boolean; color: number }
+/** The plot as the chart's flat data: one datum per point (x plus the value under its line's id), sorted by x, and the
+ *  lines (a speed's measured line, then its model line).  `color` indexes the speed so both sets of a speed share a hue. */
+export function speedChartData(plot: SpeedPlot): { data: Array<Record<string, number>>; lines: SpeedChartLine[] } {
+  const data: Array<Record<string, number>> = [];
+  const lines: SpeedChartLine[] = [];
+  plot.speeds.forEach((s, i) => {
+    for (const [pts, model] of [[s.measured, false], [s.model, true]] as const) {
+      if (!pts.length) continue;
+      const id = `${model ? 'd' : 'm'}${i}`;
+      lines.push({ id, rpm: s.rpm, model, color: i });
+      for (const p of pts) data.push({ x: p.x, [id]: p.y });
+    }
+  });
+  data.sort((a, b) => a.x - b.x);
+  return { data, lines };
 }
 
 /** px height of the stacked tables (24 px per line + header, 8 px between): the full-height chart beside them. */

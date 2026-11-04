@@ -209,7 +209,14 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         eff_sys = num(((ctrl or {}).get("efficiency") or {}).get("wall_to_shaft")) if isinstance(ctrl, dict) else None
         p_shaft = num(s.get("P_shaft_net_W"))
         torque = (p_shaft / (rpm * 3.141592653589793 / 30.0)) if (p_shaft is not None and rpm) else num(s.get("T_em_avg_Nm"))
+        # what the corrected efficiency is formed from (the stored rotor power and losses; nothing recomputed here)
+        inv = num(((ctrl or {}).get("efficiency") or {}).get("inverter")) if isinstance(ctrl, dict) else None
+        op_mode = str(s.get("op_mode") or d.get("mode") or "motor").lower()
+        eff_inputs = {"p_mech_w": num(s.get("P_mech_W")), "p_loss_total_w": num(s.get("P_loss_total_W")),
+                      "p_bearings_w": num(s.get("P_bearings_W")), "p_windage_w": num(s.get("P_windage_W")),
+                      "op_mode": "generator" if op_mode.startswith("gen") else "motor"}
         row = {"name": name, "mode": str(d.get("mode") or "motor"), "rpm": rpm, "current": cur, "source": src,
+               "eff_inputs": eff_inputs, "eta_inverter_pct": None if inv is None else 100.0 * inv,
                "connection": conn, "torque_nm": torque, "torque_kind": "shaft" if p_shaft is not None else "em",
                "eff_pct": None if eff is None else 100.0 * eff,
                "eff_system_pct": None if eff_sys is None else 100.0 * eff_sys, "winding_c": temps["winding_c"],

@@ -21,14 +21,15 @@ import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import {
-  blocksHeight, cmpForTab, columnsFor, computeProgress, kindOfTab, loadSeriesOptions, missingActions, pickQuantity,
-  quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type TableBlock,
+  blocksHeight, cmpForTab, columnsFor, computeProgress, isPerSpeedSweep, kindOfTab, loadPlotOptions, loadPlotRows,
+  loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity,
+  quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
 } from '../types';
 import SubTabs from '../../../components/common/SubTabs';
-import SeriesChart from './SeriesChart';
+import SeriesChart, { SpeedChart } from './SeriesChart';
 import TestEditor from './TestEditor';
 
 export type TestsSource = { kind: 'production' } | { kind: 'project'; projectId: string; showAll?: boolean };
@@ -68,6 +69,35 @@ function useWide(): [React.RefObject<HTMLDivElement | null>, boolean] {
     return () => ro.disconnect();
   }, []);
   return [ref, wide];
+}
+
+/** A load sweep with two or more rows at some speed (owner 2026-11-04): one line per speed against torque or current.
+ *  A plot selector (torque vs current by default); the model values, where the model has the point, as dashed lines. */
+function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height: number }) {
+  const { t } = useTranslation('production');
+  const rows = loadPlotRows(cmp);
+  const options = loadPlotOptions(rows);
+  const [sel, setSel] = useState<string>('torque_current');
+  const key = (options.find((k) => k === sel) ?? options[0]) as LoadPlotKey | undefined;
+  const plot = key ? perSpeedSeries(rows, key) : null;
+  if (!key || !plot) return null;
+  return (
+    <Box data-testid="tests-load-speed-series">
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, height: 24, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-2)' }}>{t('tests.series.label')}</Typography>
+        <HelpTip title={t('tests.series.tipSpeeds')} />
+        <Select size="small" value={key} onChange={(e) => setSel(String(e.target.value))}
+          sx={{ height: 24, fontSize: 11.5, minWidth: 200, '& .MuiSelect-select': { py: 0, pl: 1 } }}
+          inputProps={{ 'aria-label': t('tests.series.label') }}>
+          {options.map((o) => (
+            <MenuItem key={o} value={o} sx={{ fontSize: 12, minHeight: 28 }}>{t(`tests.series.plot.${o}`)}</MenuItem>
+          ))}
+        </Select>
+      </Box>
+      <SpeedChart key={key} plot={plot} height={height}
+        xLabel={t(key === 'torque_current' ? 'tests.series.plot.x_current' : 'tests.series.plot.x_torque')} />
+    </Box>
+  );
 }
 
 /** The chart beside a load sweep's per-point tables (owner 2026-10-27): x = rpm, a compact selector above it picks the
@@ -117,7 +147,8 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
     const params = Object.fromEntries(Object.entries(b.basisParams).filter(([, v]) => v !== null && v !== undefined));
     return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
   };
-  const hasLoadChart = loadSeriesOptions(cmp).length > 0;
+  const perSpeed = isPerSpeedSweep(loadPlotRows(cmp)) && loadPlotOptions(loadPlotRows(cmp)).length > 0;
+  const hasLoadChart = perSpeed || loadSeriesOptions(cmp).length > 0;
   const computeTip = (row: CompareRow) => {
     const a = row.action;
     const g = a?.body.duty.gamma_deg;
@@ -193,8 +224,10 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
       {hasLoadChart && (
         <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%',
           position: wide ? 'sticky' : 'static', top: 8 }}>
-          <LoadSeriesChart cmp={cmp} tips={tips}
-            height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />
+          {perSpeed
+            ? <SpeedLoadChart cmp={cmp} height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />
+            : <LoadSeriesChart cmp={cmp} tips={tips}
+              height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />}
         </Box>
       )}
     </Box>

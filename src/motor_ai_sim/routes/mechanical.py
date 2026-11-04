@@ -513,6 +513,18 @@ def _load_last() -> None:
         log.warning("could not restore the last mechanical result: %s", exc)
 
 
+def _context_dict() -> Optional[Dict[str, str]]:
+    """``{die, config, duty}`` of the catalogue point the editor has loaded, or ``None``."""
+    try:
+        from motor_ai_sim import duty_fields as _df
+        ctx = _df.active_context()
+        if ctx:
+            return {"die": ctx[0], "config": ctx[1], "duty": ctx[2]}
+    except Exception:  # noqa: BLE001 - an identity stamp never fails a solve
+        log.debug("mechanical: no point context for the last result", exc_info=True)
+    return None
+
+
 def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
                    fp: Optional[str]) -> None:
     """Park THIS answer as "what the Mechanical tab was last showing".
@@ -551,6 +563,11 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             "geometry_fingerprint": fp,
             "computed_at": _dt.datetime.now(_dt.timezone.utc)
                               .isoformat(timespec="seconds"),
+            # WHICH POINT this answer was solved for (2026-11-04) — the second
+            # witness beside the fingerprint; ``None`` = no catalogue point was
+            # loaded (or an entry stored before the stamp existed).  The same
+            # source ``duty_fields.save_active`` files the stored map under.
+            "context": _context_dict(),
         }
         _persist_last()
     except Exception as exc:  # noqa: BLE001
@@ -2719,7 +2736,9 @@ def last(
                  else bool(fp != live))
         return {"result": res, "params": e.get("params") or {},
                 "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
-                "stale_geometry": stale}
+                "stale_geometry": stale,
+                # the point it was solved for (second witness); ``None`` = unknown
+                "context": e.get("context")}
 
     out: Dict[str, Any] = {"live_geometry_fingerprint": live}
     for kind in _LAST_KINDS:

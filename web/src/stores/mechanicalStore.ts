@@ -32,7 +32,11 @@
  */
 import { create } from 'zustand';
 
-import { liveGeoSig } from '../components/common/geoSig';
+import { geoSigsDiffer, liveGeoSig } from '../components/common/geoSig';
+import { loadedPointKey, watchLoadedPoint } from '../lib/loadedPoint';
+import { mayAdopt, standingOf } from '../lib/resultOwner';
+import { IDLE_STORED, loadStoredPoint } from '../lib/storedPointResult';
+import type { StoredPoint } from '../lib/storedPointResult';
 import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
@@ -43,7 +47,7 @@ import { fetchLastThermalLight } from '../components/thermal/api';
 import type { PullMode, SymmetryMode } from '../components/mechanical/api';
 import {
   DEFAULT_BEAM, DEFAULT_CONTACTS, REF_TEMP_C, coupledPoint, fetchCriticalSpeeds,
-  fetchLastMechanical, fetchLimitSpeed, fetchMechMesh, fetchModes, fetchRotorStress,
+  fetchLastMechanical, fetchLastMechanicalLight, fetchLimitSpeed, fetchMechMesh, fetchModes, fetchRotorStress,
   readLastSecs, readMech, readSimSetting, readSimTorqueNm, writeLastSecs,
   writeMech,
 } from '../components/mechanical/api';
@@ -100,8 +104,17 @@ export function isStale(stamp: string | null, backend: boolean | null): boolean 
   if (backend === true) return true;
   const live = liveGeoSig();
   if (!stamp || !live) return false;
-  return stamp !== live;
+  // By VALUE, never as strings: the same machine reaches the store from a PUT answer and from a GET, and a stamp that
+  // differs only in float spelling (52.95 / 52.94999999999999) or in a key one side lacks is not another machine.
+  return geoSigsDiffer(stamp, live);
 }
+
+/** A `/last` entry as the adoption rule reads it (`lib/resultOwner.mayAdopt`). */
+type RestoredMech<T> = {
+  result: T; geometry_fingerprint: string | null; computed_at: string | null;
+  stale_geometry: boolean | null;
+  context?: { die?: string; config?: string; duty?: string } | null;
+};
 
 interface Slice<T> {
   data: T | null;
@@ -119,11 +132,27 @@ interface Slice<T> {
    *  number that ends up on screen afterwards is the backend's `elapsed_s`
    *  (user 2026-09-06: "need to add a computation-time indicator too"). */
   startedAt: number | null;
+  /** The catalogue point (`lib/resultOwner.pointKeyOf`) that was loaded when this
+   *  result was solved or adopted; null = none was.  The second witness beside
+   *  `geoSig`: a result whose point is not the loaded one is never kept
+   *  (`reconcile`), let alone drawn. */
+  point: string | null;
+}
+
+/** The slice for a `/last` entry that passed `mayAdopt`.  The server proved the
+ *  entry IS the loaded machine, so the client's own stamp of the machine as it is
+ *  now is the right witness for a later edit (`isStale` then flags it). */
+function restoredSlice<T>(e: RestoredMech<T>): Slice<T> {
+  return {
+    data: e.result, busy: false, err: null,
+    geoSig: liveGeoSig() || null, backendStale: false,
+    restoredAt: e.computed_at, startedAt: null, point: loadedPointKey(),
+  };
 }
 
 const EMPTY: Slice<never> = {
   data: null, busy: false, err: null, geoSig: null,
-  backendStale: null, restoredAt: null, startedAt: null,
+  backendStale: null, restoredAt: null, startedAt: null, point: null,
 };
 
 export interface MechanicalState {
@@ -135,9 +164,23 @@ export interface MechanicalState {
   modal: Slice<ModalResult>;
   rotordyn: Slice<RotordynamicsResult>;
 
+  /** The loaded point's OWN stored rotor-stress map (`duty_fields`), looked up
+   *  when a point is loaded and on every mount.  What the tab shows while the
+   *  `stress` slice holds no fresh solve of this point - never `/last`'s
+   *  other-motor answer.  A MAP only: the per-part tables come with a Solve. */
+  stored: StoredPoint;
+  /** Look the loaded point's stored result up (a read; nothing is solved). */
+  loadStored: () => Promise<void>;
+  /** Drop every result that is not the loaded point's own and look the new
+   *  point's stored result up.  Runs on every load (`watchLoadedPoint`). */
+  reconcile: () => void;
+
   /** the mesh itself: the bare cross-section drawn when nothing has been
    *  solved, and what the Build mesh button (2026-09-06) produces */
   geom: MechMeshPayload | null;
+  /** this client's geometry stamp when `geom` was requested - the mesh is only
+   *  drawn while it is still the loaded machine's (`geomFor`) */
+  geomSig: string | null;
   geomBusy: boolean;
   geomErr: string | null;
   geomStartedAt: number | null;
@@ -276,6 +319,9 @@ export interface MechanicalState {
   /** Build (or re-fetch) the rotor mesh at the current size.  NEVER called on a
    *  field edit — each build is seconds of gmsh, so it is a button. */
   loadGeometry: () => Promise<void>;
+  /** Build the mesh when the one held is not the loaded machine's (a read of the
+   *  mesher, never a solve).  A no-op while the held mesh is current or a build runs. */
+  ensureGeometry: () => Promise<void>;
   /** `hasSleeve` comes from the panel, which is the one that reads the live
    *  geometry: a machine with `sleeve_thickness = 0` has no fit to specify and
    *  the backend rejects a non-zero interference on it with a 422.  The field is
@@ -349,13 +395,26 @@ export function effectiveProofRpm(rpm1: string): number {
   return Number.isFinite(sim) && sim > 0 ? sim : 0;
 }
 
+/** Which stored-result lookup is the newest; an older one landing late is dropped. */
+let storedSeq = 0;
+
+/** The held cross-section, or `null` when it is not (provably) the loaded machine's.  Compared BY VALUE
+ *  (`geoSigsDiffer`); a mesh with no stamp or a machine with none is not shown as a mismatch. */
+export function geomFor<M>(geom: M | null, sig: string | null): M | null {
+  if (!geom) return null;
+  const live = liveGeoSig();
+  return sig && live && geoSigsDiffer(sig, live) ? null : geom;
+}
+
 export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   hydrated: false,
   stress: { ...EMPTY } as Slice<RotorStress>,
   modal: { ...EMPTY } as Slice<ModalResult>,
   rotordyn: { ...EMPTY } as Slice<RotordynamicsResult>,
+  stored: IDLE_STORED,
 
   geom: null,
+  geomSig: null,
   geomBusy: false,
   geomErr: null,
   geomStartedAt: null,
@@ -399,7 +458,9 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   refreshThermalTemps: async () => {
     try {
       const last = await fetchLastThermalLight();
-      const e = last?.field;
+      // Only THIS point's thermal answer feeds a solve here: `/last` is whichever
+      // motor was solved last, and its temperatures are a load on this rotor's fit.
+      const e = mayAdopt(last?.field, loadedPointKey()) ? last.field : null;
       // The four rotor solids, mean AND peak.  The reading of that payload is
       // in `lib/mechThermalTemps` — pure, and pinned by a node test — so the
       // request builder below and the line the panel prints cannot disagree
@@ -519,16 +580,9 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     void get().refreshThermalTemps();
     try {
       const last = await fetchLastMechanical();
-      const adopt = <T,>(cur: Slice<T>, e: { result: T; geometry_fingerprint: string | null;
-                                             computed_at: string | null;
-                                             stale_geometry: boolean | null } | null): Slice<T> =>
-        (cur.data || !e) ? cur : {
-          data: e.result, busy: false, err: null,
-          // No stamp of our own: this result was not solved by this client, so
-          // the backend's verdict is the only witness there is.
-          geoSig: null, backendStale: e.stale_geometry,
-          restoredAt: e.computed_at, startedAt: null,
-        };
+      const loaded = loadedPointKey();
+      const adopt = <T,>(cur: Slice<T>, e: RestoredMech<T> | null): Slice<T> =>
+        (cur.data || !e || !mayAdopt(e, loaded)) ? cur : restoredSlice(e);
       set({
         stress: adopt(get().stress, last.rotor_stress),
         modal: adopt(get().modal, last.modes),
@@ -552,10 +606,9 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     };
     try {
       const last = await fetchLastMechanical();
-      const adopt = <T,>(cur: Slice<T>, e: { result: T; geometry_fingerprint: string | null;
-                                             computed_at: string | null;
-                                             stale_geometry: boolean | null } | null): Slice<T> => {
-        if (!e || cur.busy) return cur;
+      const loaded = loadedPointKey();
+      const adopt = <T,>(cur: Slice<T>, e: RestoredMech<T> | null): Slice<T> => {
+        if (!e || cur.busy || !mayAdopt(e, loaded)) return cur;
         const mine = when((cur.data as { computed_at?: string } | null)?.computed_at
                           ?? cur.restoredAt);
         const theirs = when(e.computed_at);
@@ -563,11 +616,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         // carries no readable stamp at all (nothing to compare = nothing to
         // defend).  Never when the two are the same answer.
         if (!Number.isNaN(mine) && !(theirs > mine)) return cur;
-        return {
-          data: e.result, busy: false, err: null,
-          geoSig: null, backendStale: e.stale_geometry,
-          restoredAt: e.computed_at, startedAt: null,
-        };
+        return restoredSlice(e);
       };
       const prevStress = get().stress;
       const nextStress = adopt(prevStress, last.rotor_stress);
@@ -604,6 +653,47 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     }
   },
 
+  ensureGeometry: async () => {
+    const st = get();
+    if (st.geomBusy || geomFor(st.geom, st.geomSig) !== null) return;
+    await st.loadGeometry();
+  },
+
+  loadStored: async () => {
+    const key = loadedPointKey();
+    const seq = ++storedSeq;
+    if (!key) { set({ stored: IDLE_STORED }); return; }
+    const cur = get().stored;
+    // keep a ready map of the SAME point on screen while it is re-read; anything else shows the lookup
+    if (!(cur.key === key && cur.status === 'ready')) set({ stored: { key, status: 'loading' } });
+    const next = await loadStoredPoint(key, 'rotor_stress', async () => {
+      const last = await fetchLastMechanicalLight();
+      return last?.live_geometry_fingerprint ?? null;
+    });
+    // a newer lookup started, or the point moved while this was being read: this answer is not for what is loaded now
+    if (seq !== storedSeq || loadedPointKey() !== key) return;
+    set({ stored: next });
+  },
+
+  reconcile: () => {
+    const live = { point: loadedPointKey(), geoSig: liveGeoSig() };
+    const keep = <T,>(sl: Slice<T>): Slice<T> =>
+      (sl.data && standingOf({ point: sl.point, geoSig: sl.geoSig }, live) === 'foreign')
+        ? ({ ...EMPTY } as Slice<T>)
+        // a solve still running for the point just left is dropped when it lands (the guard in each solve)
+        : (!sl.data && sl.busy && sl.point !== live.point ? ({ ...EMPTY } as Slice<T>) : sl);
+    const st = get();
+    const stress = keep(st.stress), modal = keep(st.modal), rotordyn = keep(st.rotordyn);
+    if (stress !== st.stress || modal !== st.modal || rotordyn !== st.rotordyn) {
+      set({ stress, modal, rotordyn, ...(modal !== st.modal ? { modalSel: 0 } : {}) });
+    }
+    // the cross-section held is the previous motor's: not drawn (and rebuilt when the tab needs it)
+    if (geomFor(st.geom, st.geomSig) === null && st.geom) set({ geom: null, geomSig: null });
+    if (st.stored.key !== live.point) set({ stored: live.point ? { key: live.point, status: 'loading' } : IDLE_STORED });
+    // the new point's own `/last` answer, if the server still holds it, and its stored map
+    if (st.hydrated) void get().refreshLast().then(() => get().loadStored());
+  },
+
   /** The mesh: what an unsolved tab draws, and what Build mesh (re)builds.
    *
    *  Deliberately NOT called when the mesh-size field changes — user 2026-09-06
@@ -614,10 +704,13 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   loadGeometry: async () => {
     if (get().geomBusy) return;
     const t0 = Date.now();
+    // the machine this mesh is asked for - stamped at the START, so a mesh that lands after
+    // another motor was loaded is recognised as the previous one's and not drawn
+    const sig0 = liveGeoSig() || null;
     set({ geomBusy: true, geomErr: null, geomStartedAt: t0 });
     try {
       const m = await fetchMechMesh(Number(get().meshMm) || 1.5);
-      set({ geom: m });
+      set({ geom: m, geomSig: sig0 });
       noteSecs(set, get, 'mesh',
                // What it COST to build: a cache hit is not a 0.05 s mesh, and
                // an estimate taught by cache hits would say "~0 s" forever.
@@ -631,7 +724,8 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
 
   solveStress: async (hasSleeve, fresh) => {
     const s = get();
-    set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now() } });
+    const point0 = loadedPointKey();
+    set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now(), point: point0 } });
     try {
       const single = s.cases === 'single';
       // An empty (or unparseable) torque field is NOT sent: the backend then
@@ -684,9 +778,12 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         ...pullParams(s.pull, s.pullMpa),
         ...(fresh ? { fresh: true } : {}),
       });
+      // Another point was loaded while this solved: the answer is that other
+      // point's, not the one on screen - it is dropped, never drawn.
+      if (loadedPointKey() !== point0) return;
       set({ stress: { data: out, busy: false, err: null,
                       geoSig: liveGeoSig(), backendStale: false,
-                      restoredAt: null, startedAt: null } });
+                      restoredAt: null, startedAt: null, point: point0 } });
       // The field was empty and the backend resolved a torque from the last
       // run: adopt it, so the number that was actually applied is on screen and
       // the next Solve reproduces this answer instead of re-resolving.
@@ -695,13 +792,15 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
       }
       if (!out.cached) noteSecs(set, get, 'stress', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
+      if (loadedPointKey() !== point0) return;
       set({ stress: { ...EMPTY, err: msg(e) } as Slice<RotorStress> });
     }
   },
 
   solveLimitSpeed: async (hasSleeve, fresh) => {
     const s = get();
-    set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now() } });
+    const point0 = loadedPointKey();
+    set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now(), point: point0 } });
     try {
       const single = s.cases === 'single';
       const tq = Number(s.torque);
@@ -726,21 +825,26 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         ...pullParams(s.pull, s.pullMpa),
         ...(fresh ? { fresh: true } : {}),
       });
+      // Another point was loaded while this solved: the answer is that other
+      // point's, not the one on screen - it is dropped, never drawn.
+      if (loadedPointKey() !== point0) return;
       set({ stress: { data: out, busy: false, err: null,
                       geoSig: liveGeoSig(), backendStale: false,
-                      restoredAt: null, startedAt: null } });
+                      restoredAt: null, startedAt: null, point: point0 } });
       if (s.torque.trim() === '' && out.torque_nm) {
         get().set('torque', String(Math.round(out.torque_nm * 10) / 10));
       }
       if (!out.cached) noteSecs(set, get, 'stress', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
+      if (loadedPointKey() !== point0) return;
       set({ stress: { ...EMPTY, err: msg(e) } as Slice<RotorStress> });
     }
   },
 
   solveModes: async (rpm) => {
     const s = get();
-    set({ modal: { ...s.modal, busy: true, err: null, startedAt: Date.now() } });
+    const point0 = loadedPointKey();
+    set({ modal: { ...s.modal, busy: true, err: null, startedAt: Date.now(), point: point0 } });
     try {
       const out = await fetchModes({
         body: s.body, support: s.support, n: Number(s.nModes) || 12,
@@ -749,19 +853,23 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         mesh_size_mm: Number(s.meshMm) || 1.5, order: 2,
         winding_mass: true, rpm,
       });
+      if (loadedPointKey() !== point0) return;
       set({ modal: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
-                     backendStale: false, restoredAt: null, startedAt: null },
+                     backendStale: false, restoredAt: null, startedAt: null,
+                     point: point0 },
             modalSel: 0 });
       if (!out.cached) noteSecs(set, get, 'modal', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
+      if (loadedPointKey() !== point0) return;
       set({ modal: { ...EMPTY, err: msg(e) } as Slice<ModalResult> });
     }
   },
 
   solveCriticals: async (rpm) => {
     const s = get();
+    const point0 = loadedPointKey();
     set({ rotordyn: { ...s.rotordyn, busy: true, err: null,
-                      startedAt: Date.now() } });
+                      startedAt: Date.now(), point: point0 } });
     // An unparseable field falls back to its default rather than sending NaN:
     // the backend would reject it, but "bearing_span_mm=NaN" is a worse error
     // message than the number the panel is showing.
@@ -773,12 +881,19 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     });
     try {
       const out = await fetchCriticalSpeeds({ ...p, rpm, n_modes: 6, mesh_size_mm: 3.0 });
+      if (loadedPointKey() !== point0) return;
       set({ rotordyn: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
                         backendStale: false, restoredAt: null,
-                        startedAt: null } });
+                        startedAt: null, point: point0 } });
       if (!out.cached) noteSecs(set, get, 'rotordyn', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
+      if (loadedPointKey() !== point0) return;
       set({ rotordyn: { ...EMPTY, err: msg(e) } as Slice<RotordynamicsResult> });
     }
   },
 }));
+
+/* WHOSE result is on screen follows the loaded point (owner 2026-11-04).  A load - the Motors tab, the point switcher in
+   Simulation, the header strip, a second browser following - ends in one of these events; the watch collapses them to one
+   call per change of point and `reconcile` drops whatever is not the new point's own. */
+watchLoadedPoint(() => { useMechanicalStore.getState().reconcile(); });

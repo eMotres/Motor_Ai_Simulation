@@ -1499,6 +1499,27 @@ def _load_last() -> None:
         log.warning("could not restore the last thermal result: %s", exc)
 
 
+def _context_dict(die: Optional[str] = None, cfg: Optional[str] = None,
+                  duty: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """``{die, config, duty}`` of the point a solve belongs to, or ``None``.
+
+    The names the caller states win (the duty-cycle route is told which duty it
+    solved); otherwise the catalogue context the editor has loaded decides —
+    the same source ``duty_fields.save_active`` files the stored map under, so
+    the two can never name different points.
+    """
+    try:
+        if die and cfg and duty:
+            return {"die": str(die), "config": str(cfg), "duty": str(duty)}
+        from motor_ai_sim import duty_fields as _df
+        ctx = _df.active_context()
+        if ctx:
+            return {"die": ctx[0], "config": ctx[1], "duty": ctx[2]}
+    except Exception:  # noqa: BLE001 - an identity stamp never fails a solve
+        log.debug("thermal: no point context for the last result", exc_info=True)
+    return None
+
+
 def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
                    fp: Optional[str], *, duty: Optional[str] = None,
                    die: Optional[str] = None, cfg: Optional[str] = None) -> None:
@@ -1538,6 +1559,13 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             "geometry_fingerprint": fp,
             "computed_at": _dt.datetime.now(_dt.timezone.utc)
                               .isoformat(timespec="seconds"),
+            # WHICH POINT this answer was solved for (2026-11-04): ``/last``
+            # is one slot per workspace, so after a motor change the tab
+            # could not tell its own result from another motor's.  The
+            # geometry fingerprint is the first witness, this is the second;
+            # an entry without it (pickled before this field) proves nothing
+            # about the point and the tab does not adopt it for a loaded one.
+            "context": _context_dict(die, cfg, duty),
         }
         _persist_last()
     except Exception as exc:  # noqa: BLE001
@@ -8315,7 +8343,10 @@ def last(
                  else bool(fp != live))
         return {"result": res, "params": e.get("params") or {},
                 "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
-                "stale_geometry": stale}
+                "stale_geometry": stale,
+                # the point it was solved for (second witness); ``None`` =
+                # unknown (an entry stored before the stamp existed)
+                "context": e.get("context")}
 
     out: Dict[str, Any] = {"live_geometry_fingerprint": live}
     for kind in _LAST_KINDS:

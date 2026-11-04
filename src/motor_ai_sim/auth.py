@@ -300,7 +300,7 @@ _GATED: dict[tuple[str, str], str] = {
     # "Have you already computed exactly this?" — a hash lookup, no solve, but
     # it answers a question only a paying engineering user gets to ask, so it
     # rides the same tier as the run it is a pre-flight for.
-    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "user",
+    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "solve:user",
     # Rotor structural solve — same class of compute as the field solves above
     # (a gmsh mesh + an FE solve per call), so the same tier.
     ("GET",  "/api/mechanical/rotor_stress"): "solve:user",
@@ -317,7 +317,7 @@ _GATED: dict[tuple[str, str], str] = {
     # and /mesh runs the same gmsh pass the solve does, so both ride the tier of
     # the solves they serve rather than being open because they are cheaper.
     ("GET",  "/api/mechanical/last"): "user",
-    ("GET",  "/api/mechanical/mesh"): "user",
+    ("GET",  "/api/mechanical/mesh"): "solve:user",
     # Thermal, split out of the simulation router on 2026-09-07 and gated
     # IDENTICALLY to mechanical above, because it is the same bargain: /field is
     # a full EM transient plus a conduction solve, /coupled is up to twelve of
@@ -329,7 +329,7 @@ _GATED: dict[tuple[str, str], str] = {
     ("GET",  "/api/thermal/field"): "solve:user",
     ("GET",  "/api/thermal/coupled"): "solve:user",
     ("GET",  "/api/thermal/last"): "user",
-    ("GET",  "/api/thermal/mesh"): "user",
+    ("GET",  "/api/thermal/mesh"): "solve:user",
     # Which Electromagnetic run the next Solve will use (2026-09-30) — it
     # reads the caller's run store, so it rides the tier of the solve it
     # describes.
@@ -366,8 +366,8 @@ _GATED: dict[tuple[str, str], str] = {
     # a second for the whole of a solve the user is ALREADY paying the gated
     # tier for.  Gating them would mean a progress bar that 401s over a running
     # solve, i.e. the one moment the user most needs to see something.
-    ("GET",  "/api/simulation/mesh/build2d"): "user",
-    ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "user",
+    ("GET",  "/api/simulation/mesh/build2d"): "solve:user",
+    ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "solve:user",
     # The component library (product composer, stage 1): ComponentCards built read-only from the
     # existing stores - the Simulation menus' audience, like the System graph.  The per-card
     # route /api/components/{id} is in _GATED_PREFIX below.

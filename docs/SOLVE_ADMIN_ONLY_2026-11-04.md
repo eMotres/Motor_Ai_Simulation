@@ -42,7 +42,20 @@ otherwise: give the route a `solve:<old tier>` entry or review it into the list.
 
 ## Deliberately left open (reviewed)
 
-Stored-result reads (`/last`, `em_run`, `ledger_match` - a lookup that answers before any mesh), progress and cancel routes,
-cross-section preview meshes (`/api/simulation/mesh/build2d*`, `/api/thermal/mesh`, `/api/mechanical/mesh`: gmsh only, no
-physics solve), closed-form calculators (bearing fit, holder strength, propeller S1, bearing losses), the CAD rebuild request, the
-design agent, the specification assistant, reports and datasheets.
+Stored-result reads (`/last`, `em_run`), progress and cancel routes, closed-form calculators that Configure and the Mechanical
+panel call (bearing fit, holder strength, propeller S1, bearing losses), the controller schematic, the CAD rebuild request,
+the design agent, MCP `start_design`, the specification assistant, reports and datasheets.
+
+## View-only Simulations workbench (owner 2026-11-04, follow-up)
+
+«это касается только simulation; для Configure ничего не меняется».  Under the same setting:
+
+* the preview meshes of the workbench tabs (`GET /api/simulation/mesh/build2d`, `build2d_sliding_band`, `/api/thermal/mesh`,
+  `/api/mechanical/mesh`) and the Simulation tab's stored-answer lookup (`fem_transient/ledger_match`) are solve routes (admin
+  while the setting is on); no Configure, 3-D or project view calls them;
+* the tab gate `workbench` (`web/src/lib/accessUi.ts`) shows Electromagnetic, Thermal, Mechanical and Schemas only to an account
+  that `/api/me` says `canSolve`; the other tabs (Geometry, Materials, Mesh, Controller, Compare ...) keep their old gates;
+  stored points stay readable in the project views (#578).
+
+Reopening is the same single switch.  `tests/test_solve_admin_only.py` also walks every route of the compute modules
+(`COMPUTE_MODULES`): admin-only or reviewed with a reason; an unclassified router module fails the walk.

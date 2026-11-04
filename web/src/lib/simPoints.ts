@@ -41,6 +41,9 @@ export interface TreeDuty {
   primary_drive?: string;
   runs?: TreeRun[];
   duty_cycle?: Record<string, unknown> | null;
+  /** The server already compared the saved numbers with the build (the read-only project view sends this flag and
+   *  no signatures); the tree sends `result.build_sig` and the web compares. */
+  stale?: boolean;
 }
 
 /** A configuration row of the tree. */
@@ -96,6 +99,7 @@ export function drivesOf(d: TreeDuty): string[] {
 /** Was this duty's saved result — or any of its stored runs — solved on a build
  *  the configuration has since moved off? */
 export function isStale(d: TreeDuty, cfg: TreeCfg): boolean {
+  if (d.stale === true) return true;
   const sig = d.result?.build_sig;
   if (sig && cfg.build_sig && sig !== cfg.build_sig) return true;
   return (d.runs ?? []).some((r) => r?.stale === true);

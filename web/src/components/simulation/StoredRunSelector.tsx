@@ -11,10 +11,11 @@
  * Run still solves whatever source the panel is set to, as it always has.
  */
 import React, { useEffect, useState } from 'react';
-import { Box, Tooltip, CircularProgress } from '@mui/material';
+import { Box, Tooltip } from '@mui/material';
+import { RunChips } from './SimChips';
 import { activeDuty, dutyKey } from '../../lib/dutySettings';
 import {
-  RUNS_EVENT, driveLabel, dutyRuns, pickedRun, showStoredRun,
+  RUNS_EVENT, dutyRuns, pickedRun, showStoredRun,
   type StoredRunMeta,
 } from '../../lib/dutyRuns';
 
@@ -65,31 +66,7 @@ const StoredRunSelector: React.FC = () => {
           saved runs
         </Box>
       </Tooltip>
-      {runs.map(r => {
-        const on = r.drive === pick;
-        return (
-          <Tooltip key={r.drive} placement="top"
-            title={`${driveLabel(r.drive)}${r.primary ? ' — the duty’s primary result' : ''}`
-              + (r.recorded_at ? ` · ${r.recorded_at}` : '')
-              + (r.f_switch_hz ? ` · carrier ${(Number(r.f_switch_hz) / 1000).toFixed(1)} kHz` : '')
-              + (r.steps ? ` · ${r.steps} steps/period` : '')
-              + (r.ripple_pct != null ? ` · ripple ${Number(r.ripple_pct).toFixed(1)} %` : '')
-              + (r.stale ? ' · ⚠ solved on a different build/materials' : '')}>
-            <Box component="span" onClick={() => void show(r.drive)}
-              sx={{ fontSize: 10.5, fontWeight: 600, px: 0.7, py: '1px',
-                    borderRadius: '3px', cursor: busy ? 'wait' : 'pointer',
-                    lineHeight: 1.6,
-                    color: on ? '#0b1220' : (r.stale ? '#f59e0b' : '#38bdf8'),
-                    bgcolor: on ? (r.stale ? '#f59e0b' : '#38bdf8') : 'transparent',
-                    border: `1px solid ${r.stale ? '#f59e0b88' : '#38bdf866'}`,
-                    '&:hover': { borderColor: r.stale ? '#f59e0b' : '#38bdf8' } }}>
-              {busy === r.drive
-                ? <CircularProgress size={9} sx={{ color: 'inherit' }} />
-                : <>{r.stale ? '⚠' : ''}{driveLabel(r.drive)}</>}
-            </Box>
-          </Tooltip>
-        );
-      })}
+      <RunChips runs={runs} pick={pick} busy={busy} onPick={(drive) => { void show(drive); }} />
       {err && (
         <Box component="span" sx={{ fontSize: 10, color: '#fca5a5' }}>✗ {err}</Box>
       )}

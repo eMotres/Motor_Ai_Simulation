@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from motor_ai_sim import users
@@ -1772,6 +1772,42 @@ def project_motor_field(project_id: str, request: Request, die: str, config: str
     if payload is None:
         raise HTTPException(404, detail="Not computed")
     return payload
+
+
+@router.get("/sim")
+def project_motor_sim_points(project_id: str, request: Request, response: Response, die: str, config: str,
+                             show_all: bool = False):
+    """The computed POINTS of one project motor for the read-only Simulation view (owner 2026-11-04).
+
+    Same gates as the project motor list / ``/view`` (project membership, then the ordinary motor grant), GET only:
+    nothing is solved, written or activated.  Test / validation points are not offered; signatures and geometry blocks
+    never leave (``development.sim_view``).  A customer's read is audited once, here, like ``/view``."""
+    from motor_ai_sim import duty_results
+    from motor_ai_sim.development import sim_view
+    from motor_ai_sim.routes import family
+    response.headers["Cache-Control"] = "no-store"
+    user, role, open_die, cfg_name, _path, cfg, _link = _project_motor(project_id, request, die, config, show_all)
+    try:
+        stored = duty_results.get(open_die, cfg_name) or {}
+    except Exception:
+        stored = {}
+    die_doc = family._load_yaml(family._die_file(open_die), "die")
+    out = sim_view.points_for(open_die, cfg_name, cfg, die_doc, stored)
+    if role == "customer" and not access.is_engineer(user):
+        store.append_audit(project_id, str(user.get("email") or ""), "motor.sim.read", "motor", f"{open_die}/{cfg_name}")
+    return out
+
+
+@router.get("/sim/run")
+def project_motor_sim_run(project_id: str, request: Request, response: Response, die: str, config: str, duty: str,
+                          drive: str, show_all: bool = False):
+    """One stored run (summary card + waveforms) of one point of a project motor, read-only (see ``/sim``)."""
+    from motor_ai_sim.development import sim_view
+    from motor_ai_sim.routes import family
+    response.headers["Cache-Control"] = "no-store"
+    _user, _role, open_die, cfg_name, _path, cfg, _link = _project_motor(project_id, request, die, config, show_all)
+    die_doc = family._load_yaml(family._die_file(open_die), "die")
+    return sim_view.run_for(open_die, cfg_name, cfg, die_doc, duty, drive)
 
 
 @router.patch("/note")

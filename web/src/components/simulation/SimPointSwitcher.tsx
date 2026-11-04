@@ -44,6 +44,7 @@ import {
   ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
 } from '../common/PromptDialogs';
 import ConfigHistoryDialog from '../catalog/ConfigHistoryDialog';
+import { PointChips } from './SimChips';
 
 /** The duty-cycle chip ("S3 ED 25 % · 60 s") — nothing at all while the feature is off. */
 const cycleChip = (d: { duty_cycle?: Record<string, unknown> | null }): string | null =>
@@ -201,24 +202,7 @@ const SimPointSwitcher: React.FC = () => {
       <Tooltip title="Computed points of this motor. Click one to load it — its settings, charts and summary come back with nothing recomputed. The motor list loads the default point (★).">
         <Box component="span" sx={{ fontSize: 10, color: 'var(--text-4)', cursor: 'help' }}>points</Box>
       </Tooltip>
-      {layout.chips && points.map((p) => {
-        const on = p.name === d;
-        return (
-          <Tooltip key={p.name} placement="top" title={p.tip}>
-            <Box component="span" onClick={() => { if (!on) void load(p.name); }}
-              sx={{ fontSize: 10.5, fontWeight: 600, px: 0.7, py: '1px', borderRadius: '3px',
-                    cursor: busy ? 'wait' : (on ? 'default' : 'pointer'), lineHeight: 1.6,
-                    color: on ? '#0b1220' : (p.stale ? '#f59e0b' : '#34d399'),
-                    bgcolor: on ? (p.stale ? '#f59e0b' : '#34d399') : 'transparent',
-                    border: `1px solid ${p.stale ? '#f59e0b88' : '#34d39966'}`,
-                    '&:hover': { borderColor: p.stale ? '#f59e0b' : '#34d399' } }}>
-              {busy === p.name
-                ? <CircularProgress size={9} sx={{ color: 'inherit' }} />
-                : <>{p.stale ? '⚠ ' : ''}{p.name}{p.isDefault ? ' ★' : ''}</>}
-            </Box>
-          </Tooltip>
-        );
-      })}
+      {layout.chips && <PointChips points={points} loaded={d} busy={busy} onPick={(n) => { void load(n); }} />}
       {layout.controls && (
         <>
           <Tooltip title="Save the CURRENT Simulation point as a new point of this motor">

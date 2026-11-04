@@ -367,13 +367,19 @@ def solve_steady_thermal(
     cut_sel = wedge_cut_facets(mesh, bnd)
     if cut_sel.size:
         outer_sel = np.setdiff1d(outer_sel, cut_sel)
+    # …and the WHOLE outer contour, notch walls down to the bottom (owner 2026-11-04:
+    # «вода омывает весь контур статора»).  The midpoint rule alone cut the notch
+    # walls at 0.9 R and depended on the mesh: a long facet whose midpoint fell below
+    # the radius dropped out, so one stator was cooled through 0.0270 m² on the sine
+    # mesh and 0.0205 m² on the PWM mesh, and the real contour is 0.0392 m².
+    outer_sel = outer_contour_facets(mesh, bnd, outer_sel, cut_sel)
     # OUTER_OD (2026-11-03): only the facets lying ON the OD circle — the iron
     # arcs a sleeve pressed on the stator touches.  The notch walls and the
     # OD corner fillets are left out (they touch nothing).  Both ends within
     # 2e-4·R of the circle: the OD is a 256-gon whose chord sagitta is
     # 7.5e-5·R, so a node the mesher inserts mid-chord still qualifies.  Used
     # only by a surface that asks for it (``"facets": "outer_od"``); "outer"
-    # keeps the facet set every existing answer was solved on.
+    # is the whole contour above.
     _r_od = float(r_housing_m)
     od_sel = (outer_sel[(r_fmin[np.searchsorted(bnd, outer_sel)]
                          >= _r_od * (1.0 - 2e-4))]
@@ -921,6 +927,39 @@ def solve_steady_thermal(
         "heat_residual_W": q_gen - total_removed,
         "length_m": L,
     }
+
+
+def outer_contour_facets(mesh, bnd: np.ndarray, seed: np.ndarray, cut: np.ndarray) -> np.ndarray:
+    """The boundary facets connected to ``seed`` along the boundary, cut lines excluded.
+
+    Selected by connection, not by radius, so the answer does not depend on the mesh:
+    a notch wall belongs to the outer contour however long its facets are.  The cut
+    lines of a wedge are the only boundary joining the outer contour to the bore, so
+    without them the walk stays on the outer contour.  A cross-section where it would
+    still reach the bore (a cut the mesh did not recognise) keeps the seed: a film on
+    the bore would be far worse than a short wall.
+    """
+    if seed.size == 0:
+        return seed
+    walk = np.setdiff1d(bnd, cut) if cut.size else bnd
+    nodes = mesh.facets[:, walk]
+    at_node: dict[int, list[int]] = {}
+    for i, (a, b) in enumerate(nodes.T):
+        at_node.setdefault(int(a), []).append(i)
+        at_node.setdefault(int(b), []).append(i)
+    seen = np.isin(walk, seed)
+    stack = list(np.flatnonzero(seen))
+    while stack:
+        for n in nodes[:, stack.pop()]:
+            for j in at_node[int(n)]:
+                if not seen[j]:
+                    seen[j] = True
+                    stack.append(j)
+    contour = walk[seen]
+    r = np.hypot(mesh.p[0], mesh.p[1])
+    if cut.size and r[mesh.facets[:, contour]].min() <= r[mesh.facets[:, bnd]].min() * (1.0 + 1e-6):
+        return seed
+    return contour
 
 
 def wedge_cut_facets(mesh, bnd: np.ndarray, *, tol_rad: float = 2e-3) -> np.ndarray:

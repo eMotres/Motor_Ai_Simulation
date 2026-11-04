@@ -10,7 +10,7 @@ import type { SixPhaseResult } from './sixPhase';
 import React from 'react';
 import { Box, Button, Chip, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
-import { geoSignature } from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { geoSigDiffRows, staleBuildKeysText } from '../../lib/dutyGeometryDiff';
 import { canRefineRipple, quotedRipple, type RippleRefined } from '../../lib/rippleAccuracy';
 import { currentMatJson } from '../../lib/apiAuth';
@@ -843,7 +843,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // Two independent witnesses: this client's stamp, and the backend's own
   // fingerprint verdict on a restored run.  Unknown (unstamped legacy run) is
   // NOT treated as fresh — it simply cannot raise this flag on its own.
-  const geoStale = (!!s._geoSig && !!liveSig && s._geoSig !== liveSig)
+  const geoStale = (!!s._geoSig && !!liveSig && geoSigsDiffer(s._geoSig, liveSig))
                    || s._geoStaleBackend === true;
   // MATERIALS staleness (user 2026-08-25: a run with the old steel showed as
   // current after the assignment changed — "the numbers match the hardware

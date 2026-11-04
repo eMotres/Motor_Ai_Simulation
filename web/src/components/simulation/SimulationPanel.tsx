@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
-import { geoSignature } from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { windingConnections } from '../../lib/referencePassports';
 import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
@@ -1481,7 +1481,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       // would be a no-op dressed as a measurement.
       const d = String(s.drive ?? 'current');
       if (d !== 'current' && d !== 'custom_current' && d !== 'bldc_current') return null;
-      if (s._geoSig && liveGeoSig && s._geoSig !== liveGeoSig) return null;
+      if (s._geoSig && liveGeoSig && geoSigsDiffer(s._geoSig, liveGeoSig)) return null;
       const pk = Number(s.V1_seed_peak_V);
       const dl = Number(s.V1_seed_delta_deg);
       if (!(pk > 0) || !Number.isFinite(dl)) return null;

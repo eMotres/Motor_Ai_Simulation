@@ -37,6 +37,40 @@ export function geoSignature(g: Record<string, unknown> | null | undefined): str
   } catch { return ''; }
 }
 
+/** Parse a stamp back into numbers; unreadable pairs are skipped. */
+function parseStamp(sig: string): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const pair of sig.split('|')) {
+    const i = pair.indexOf(':');
+    if (i <= 0) continue;
+    const v = Number(pair.slice(i + 1));
+    if (Number.isFinite(v)) out.set(pair.slice(0, i), v);
+  }
+  return out;
+}
+
+/**
+ * Are these two stamps different MACHINES?  Never compare stamps as strings: the
+ * same geometry reaches the store from the load's PUT answer and from a GET, and
+ * a value like 52.95 against 52.94999999999999, or a key only one answer carries,
+ * made an unchanged machine read as "another build" and dimmed the dashboard on
+ * every point switch until F5 (owner 2026-11-04).  Keys BOTH stamps carry, relative
+ * tolerance 1e-6, the same rule as `dutyGeometryDiff.geoSigDiffRows` and the
+ * server's `duty_geometry_diff`.  `stator_outer_notches` is stamped only when off,
+ * so a missing key there IS a difference.
+ */
+export function geoSigsDiffer(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (a === b) return false;
+  const A = parseStamp(String(a ?? ''));
+  const B = parseStamp(String(b ?? ''));
+  if (A.has('stator_outer_notches') !== B.has('stator_outer_notches')) return true;
+  for (const [k, v] of A) {
+    const w = B.get(k);
+    if (w !== undefined && Math.abs(v - w) > 1e-6 * Math.max(1, Math.abs(w))) return true;
+  }
+  return false;
+}
+
 let _getter: (() => string) | null = null;
 
 /** motorStore registers the live-geometry reader here (see its bottom). */

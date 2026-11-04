@@ -1,6 +1,11 @@
 # Bring your own compute: user-owned compute nodes
 
 Status: design + Stage 1 implementation (2026-09-29); idle sharing (Stage 2, section 14) 2026-10-14.
+
+> **2026-11-04: not offered to users for now.** While `MOTRES_SOLVE_ADMIN_ONLY` is on (the default), only an admin
+> starts a calculation and `POST /api/nodes/jobs/submit` is closed to everybody else, so a node attached by a user has
+> nothing to run. The landing page, the account menu and `llms.txt` no longer promise it. Running the open-source code
+> on your own hardware is unaffected (Apache-2.0). The design below is kept as it was.
 Code: `src/motor_ai_sim/compute_nodes.py`, `src/motor_ai_sim/routes/compute_nodes.py`,
 `deploy/compute-worker/`, `web/src/components/auth/ComputeNodesDialog.tsx`,
 tests in `tests/test_compute_nodes.py`.

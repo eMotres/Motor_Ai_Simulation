@@ -59,6 +59,21 @@ SCOPE_DESCRIPTIONS: Dict[str, str] = {
                       "submit their specification (MOTRES engineers take it "
                       "from there)",
 }
+#: What the ``simulate`` scope reads while simulations are closed (``MOTRES_SOLVE_ADMIN_ONLY``, owner 2026-11-04).
+_SIMULATE_CLOSED_DESCRIPTION = ("Simulations are run by MOTRES engineers for now; "
+                                "this scope starts nothing for a client")
+
+
+def scope_descriptions() -> Dict[str, str]:
+    """``SCOPE_DESCRIPTIONS`` as the key dialog, the consent page and the capability list print them: the ``simulate`` line
+    follows the setting (closed -> says MOTRES runs the simulations; reopened -> the line above returns)."""
+    from motor_ai_sim import auth as _auth
+    out = dict(SCOPE_DESCRIPTIONS)
+    if _auth.solve_admin_only():
+        out["simulate"] = _SIMULATE_CLOSED_DESCRIPTION
+    return out
+
+
 TOKEN_PREFIX = "emk_"
 MAX_KEYS_PER_USER = 10
 

@@ -262,7 +262,7 @@ function App() {
     if (route.redirected) window.history.replaceState(null, '', route.href);
     if (route.activeTab) setActiveTab(route.activeTab);
   }, [setActiveTab]);
-  const { user, isAdmin, role, enforced, defaultMotor, resolved: authResolved } = useAuth();
+  const { user, isAdmin, role, enforced, defaultMotor, canSolve, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
   const { t: tr, i18n } = useTranslation('common');
   useServerLocale(i18n, useApiReady(), user?.email);
@@ -835,7 +835,7 @@ function App() {
         {/* A motor loading in the background (its tab is already open) / why it failed */}
         <FamilyLoadBanner />
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
-        {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
+        {computeHintApplies(activeTab, enforced, isAdmin, role, canSolve) && <ComputeNodesHint />}
 
         {/* ── The panel header row (owner 2026-10-30): the same row on EVERY tab - the panel's label, its sub-tabs
             (the Simulations members here; a panel's own sections come in through <HeaderTabs>) and its actions ── */}

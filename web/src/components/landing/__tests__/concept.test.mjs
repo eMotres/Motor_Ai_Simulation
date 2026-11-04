@@ -77,7 +77,7 @@ test('footer: patent pending, never patented, no application numbers', () => {
 
 test('developer links point at the deploy branch and name existing files', () => {
   assert.equal(BRANCH, 'pre-migration-freeze-2026-09-15');
-  assert.equal(DEV_LINKS.length, 5);
+  assert.equal(DEV_LINKS.length, 4);
   for (const l of DEV_LINKS) {
     assert.ok(l.href.startsWith('https://github.com/eMotres/Motor_Ai_Simulation'));
     if (l.id !== 'github') {

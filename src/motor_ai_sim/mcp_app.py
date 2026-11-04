@@ -157,21 +157,39 @@ def _run(fn, ctx, *args):
         raise _SdkToolError(f"{e}; retry after {e.retry_after} s") from e
 
 
-INSTRUCTIONS = (
-    "AeroStator (aerostator.com): permanent-magnet motor / generator catalog, "
-    "saved FEM results, draft designs from requirements and 2-D FEM "
-    "simulations on the user's own queue. Without sign-in only the public "
-    "tools work: describe_service, list_capabilities, list_calculation_types, "
-    "get_input_requirements, how_to_authenticate, start_sign_up. Everything "
-    "that touches the user's machines, drafts, jobs, simulations or projects "
-    "needs an OAuth sign-in: when an answer says authentication_required, relay "
-    "its data.user_message and let the user click Connect / Sign in in this app "
-    "(the page also offers Create account). Never ask for a password in chat. "
-    "Signed in: start with check_fit, or start_design when nothing fits; if "
-    "an answer says needs_input, ask the engineer. To ORDER a motor built to "
-    "the user's requirements: get_spec_form -> create_order -> update_spec "
-    "until needs_input is empty -> submit_spec -> get_order_status. "
-    + _t.NO_PRICE_RULE + " Read emotres://guide.")
+def instructions() -> str:
+    """The server instructions.  While simulations are closed (``MOTRES_SOLVE_ADMIN_ONLY``, owner 2026-11-04) they say that
+    MOTRES engineers run them and that ``simulate`` answers 'simulations_closed'; with the setting off the original text
+    returns - nothing to edit."""
+    closed = _t.simulations_closed()
+    head = ("AeroStator (aerostator.com): permanent-magnet motor / generator catalog, "
+            + ("saved FEM results, draft designs from requirements (simulations are run by "
+               "MOTRES engineers). "
+               if closed else
+               "saved FEM results, draft designs from requirements and 2-D FEM "
+               "simulations on the user's own queue. ")
+            + "Without sign-in only the public "
+            "tools work: describe_service, list_capabilities, list_calculation_types, "
+            "get_input_requirements, how_to_authenticate, start_sign_up. Everything "
+            "that touches the user's machines, drafts, jobs, simulations or projects "
+            "needs an OAuth sign-in: when an answer says authentication_required, relay "
+            "its data.user_message and let the user click Connect / Sign in in this app "
+            "(the page also offers Create account). Never ask for a password in chat. ")
+    signed_in = ("Signed in: start with check_fit, or start_design when nothing fits; if "
+                 "an answer says needs_input, ask the engineer. "
+                 + (_t.SIM_CLOSED_NOTE + " " if closed else ""))
+    return (head + signed_in
+            + "To ORDER a motor built to "
+            "the user's requirements: get_spec_form -> create_order -> update_spec "
+            "until needs_input is empty -> submit_spec -> get_order_status. "
+            + _t.NO_PRICE_RULE + " Read emotres://guide.")
+
+
+def __getattr__(name: str):
+    # ``INSTRUCTIONS`` stays importable (tests, older callers) and reads the setting at the time it is used.
+    if name == "INSTRUCTIONS":
+        return instructions()
+    raise AttributeError(name)
 
 
 def _register_public(srv) -> None:
@@ -236,7 +254,7 @@ def build_server():
     srv = _GatedServer(
         name="emotres",
         title="AeroStator",
-        instructions=INSTRUCTIONS,
+        instructions=instructions(),
         version="stage3-discovery",
     )
     _register_public(srv)
@@ -310,7 +328,7 @@ def build_server():
     @srv.resource("emotres://guide", name="guide", title="How to use eMotres MCP",
                   mime_type="text/markdown")
     def guide() -> str:
-        return _t.GUIDE
+        return _t.guide()
 
     return srv
 
@@ -364,7 +382,8 @@ def _register_stage3(srv) -> None:
         "use (no new laminations), scales stack length / turns / parallel paths "
         "within valid ranges, explains why, and creates a draft in the user's "
         "workspace marked as yours. Nothing saved or open is changed. Returns "
-        "design_id; next: simulate(design_id, 'em')."))
+        "design_id; next: " + ("open_in_configure(design_id) (simulate is closed for now)."
+                               if _t.simulations_closed() else "simulate(design_id, 'em').")))
     def start_design(
         requirements: Annotated[Requirements, Field(description="the engineer's requirements")],
         ctx: Context,
@@ -382,13 +401,20 @@ def _register_stage3(srv) -> None:
         return _run(_ad.get_design, ctx, design_id)
 
     @srv.tool(annotations=wr, description=(
-        "Queue a FEM simulation of a draft on the user's own job queue (scope "
-        "simulate; daily fair-use limit, 429 when used up). what: em (electromagnetic "
-        "transient) | thermal (one EM pass + one thermal solve) | coupled (EM <-> "
-        "thermal loop to steady temperatures). steps: time steps per electrical "
-        "period (optional). Returns job_id at once; the solve takes minutes — "
-        "poll get_job. Runs in the draft's own sandbox: the user's open machine "
-        "is never touched and his own runs keep their place in the queue."))
+        ("CLOSED for now. " + _t.SIM_CLOSED_NOTE +
+         " Only a MOTRES staff account can start one. Everything else works as "
+         "before: start_design, get_design, open_in_configure, the saved results "
+         "(list_machines / get_machine_performance) and the order flow "
+         "(get_spec_form ... submit_spec), after which MOTRES engineers run the "
+         "full simulation.")
+        if _t.simulations_closed() else
+        ("Queue a FEM simulation of a draft on the user's own job queue (scope "
+         "simulate; daily fair-use limit, 429 when used up). what: em (electromagnetic "
+         "transient) | thermal (one EM pass + one thermal solve) | coupled (EM <-> "
+         "thermal loop to steady temperatures). steps: time steps per electrical "
+         "period (optional). Returns job_id at once; the solve takes minutes — "
+         "poll get_job. Runs in the draft's own sandbox: the user's open machine "
+         "is never touched and his own runs keep their place in the queue.")))
     def simulate(design_id: Annotated[str, Field(description="d-… from start_design")],
                  what: Annotated[str, Field(description="em | thermal | coupled")],
                  ctx: Context,

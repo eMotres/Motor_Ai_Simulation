@@ -572,7 +572,7 @@ def test_the_prompt_knows_rated_mass_and_the_platform_facts(prompt):
     assert "initial availability expected in november 2026" in low
     assert "CIANO14 50 L15" in prompt and "CIANO28 85 L15" in prompt and "frameless kit" in low
     assert "simplified step" in low and "without an nda" in low
-    assert "advanced simulation access" in low and "prepare a ticket" in low
+    assert "motres engineers run the fem simulations" in low and "prepare a ticket" in low   # 2026-11-04: simulations are run by MOTRES
     assert "link alone gives no access" in low and "membership" in low
     assert "https://aerostator.com/mcp" in prompt and "agent key" in low
     assert "work in progress and not available yet" in low

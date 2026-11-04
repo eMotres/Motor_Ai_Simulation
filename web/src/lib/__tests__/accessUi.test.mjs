@@ -163,6 +163,16 @@ t('My compute nodes is reachable for every signed-in role, engineer included', (
   assert.ok(A.ROLE_VALUES.every((r) => A.computeNodesReachable(r !== 'anon')));
 });
 
+t('SOLVE_ADMIN_ONLY: while an account cannot start a calculation, My compute nodes and its hint are hidden', () => {
+  assert.equal(A.computeNodesReachable(true, false), false);
+  assert.equal(A.computeNodesReachable(true, true), true);
+  for (const tab of A.COMPUTE_HINT_TABS) {
+    assert.equal(A.computeHintApplies(tab, true, false, 'engineer', false), false, tab);
+    assert.equal(A.computeHintApplies(tab, true, false, 'user', false), false, tab);
+    assert.equal(A.computeHintApplies(tab, true, false, 'user', true), true, tab);
+  }
+});
+
 t('the compute hint: user and engineer on a simulation tab of an enforcing backend only', () => {
   for (const tab of A.COMPUTE_HINT_TABS) {
     assert.equal(A.computeHintApplies(tab, true, false, 'engineer'), true, tab);

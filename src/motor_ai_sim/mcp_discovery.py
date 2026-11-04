@@ -121,6 +121,23 @@ TOOL_SUMMARIES: Dict[str, str] = {
 }
 
 
+def _closed() -> bool:
+    """Simulations closed to clients (``MOTRES_SOLVE_ADMIN_ONLY``, owner 2026-11-04): the texts below follow the setting."""
+    from motor_ai_sim import mcp_tools as _t
+    return _t.simulations_closed()
+
+
+#: What the tool table says about ``simulate`` while simulations are closed.
+SIMULATE_CLOSED_SUMMARY = ("CLOSED for now: MOTRES engineers run the simulations. Answers status 'simulations_closed' "
+                           "with a user_message and queues nothing; do not retry.")
+
+
+def _purpose(name: str) -> str:
+    if name == "simulate" and _closed():
+        return SIMULATE_CLOSED_SUMMARY
+    return TOOL_SUMMARIES.get(name, "")
+
+
 def capabilities() -> Dict[str, Any]:
     from motor_ai_sim import mcp_app as _app
     tools = []
@@ -128,12 +145,12 @@ def capabilities() -> Dict[str, Any]:
         scope = _app.TOOL_SCOPES.get(name)
         tools.append({
             "name": name,
-            "purpose": TOOL_SUMMARIES.get(name, ""),
+            "purpose": _purpose(name),
             "required_scope": scope,
             "requires_auth": scope is not None,
             "read_only": name not in _app.WRITE_TOOLS,
         })
-    scopes = [{"scope": s, "description": _keys.SCOPE_DESCRIPTIONS.get(s, ""),
+    scopes = [{"scope": s, "description": _keys.scope_descriptions().get(s, ""),
                "unlocks": sorted(t for t, need in _app.TOOL_SCOPES.items() if need == s),
                "default_on_new_key": s in _keys.DEFAULT_SCOPES}
               for s in _keys.SCOPES]
@@ -243,12 +260,26 @@ def _calc_types() -> List[Dict[str, Any]]:
     ]
 
 
+#: Added to a simulation calculation type while simulations are closed.
+_CLOSED_TYPE_NOTE = ("Closed for now: MOTRES engineers run this simulation. The simulate tool answers "
+                     "'simulations_closed'; the saved results of existing machines are readable with "
+                     "get_machine_performance.")
+
+
 def calculation_types() -> Dict[str, Any]:
-    return {"calculation_types": _calc_types(),
-            "note": ("available_via 'mcp' = an agent can run it after sign-in "
-                     "with required_scope; 'web' = in the AeroStator web app "
-                     "only. Call get_input_requirements(calculation_type) for "
-                     "the inputs.")}
+    types = _calc_types()
+    note = ("available_via 'mcp' = an agent can run it after sign-in "
+            "with required_scope; 'web' = in the AeroStator web app "
+            "only. Call get_input_requirements(calculation_type) for "
+            "the inputs.")
+    if _closed():
+        for t in types:
+            if t.get("simulate_what"):
+                t["status"] = "closed_for_clients"
+                t["closed_note"] = _CLOSED_TYPE_NOTE
+        note += (" FEM simulations are run by MOTRES engineers for now: a type with status "
+                 "'closed_for_clients' is not started by a client; its saved results are read.")
+    return {"calculation_types": types, "note": note}
 
 
 def _field(name: str, unit: Optional[str], description: str, *,
@@ -342,7 +373,7 @@ def _simulate_inputs(what: str) -> Dict[str, Any]:
                    type_="integer", range=list(_ad.STEPS_RANGE)),
         ],
         "limits": "daily fair-use limit of simulations per account (429 + Retry-After when used up)",
-    }
+    } | ({"status": "closed_for_clients", "closed_note": _CLOSED_TYPE_NOTE} if _closed() else {})
 
 
 def input_requirements(calculation_type: str) -> Dict[str, Any]:
@@ -401,12 +432,18 @@ def describe_service() -> Dict[str, Any]:
     return {
         "name": SERVICE_NAME,
         "operator": OPERATOR,
-        "summary": ("Engineering service for permanent-magnet electric motors "
-                    "and generators: a catalog of FEM-characterised machines, "
-                    "draft designs from requirements, 2-D FEM "
-                    "electromagnetic, thermal and coupled simulations on the "
-                    "user's own job queue, and motor orders: a development "
-                    "project with the customer's specification."),
+        "summary": (("Engineering service for permanent-magnet electric motors "
+                     "and generators: a catalog of FEM-characterised machines "
+                     "with their saved results, draft designs from requirements, 2-D FEM "
+                     "simulations run by MOTRES engineers, and motor orders: a development "
+                     "project with the customer's specification.")
+                    if _closed() else
+                    ("Engineering service for permanent-magnet electric motors "
+                     "and generators: a catalog of FEM-characterised machines, "
+                     "draft designs from requirements, 2-D FEM "
+                     "electromagnetic, thermal and coupled simulations on the "
+                     "user's own job queue, and motor orders: a development "
+                     "project with the customer's specification.")),
         "for_whom": "engineers sizing motors / generators (aerospace, robotics, EV, marine)",
         "license": LICENSE,
         "website": L["website"],
@@ -416,8 +453,11 @@ def describe_service() -> Dict[str, Any]:
         "privacy_url": L["privacy_url"],
         "docs_url": L["docs_url"],
         "access": ("the public tools (list_capabilities) work without an "
-                   "account; machines, drafts, simulations, projects and your saved "
-                   "results need an account and an OAuth sign-in (or an agent key). "
+                   "account; " + ("machines, drafts, projects and your saved results "
+                                  if _closed() else
+                                  "machines, drafts, simulations, projects and your saved "
+                                  "results ") +
+                   "need an account and an OAuth sign-in (or an agent key). "
                    "Which catalog machines an account may see is granted per "
                    "account."),
         "data_policy": ("anonymous calls return only this public description; "
@@ -434,7 +474,7 @@ def describe_service() -> Dict[str, Any]:
 
 def _scope_rows() -> List[Dict[str, Any]]:
     from motor_ai_sim import mcp_app as _app
-    return [{"scope": s, "description": _keys.SCOPE_DESCRIPTIONS.get(s, ""),
+    return [{"scope": s, "description": _keys.scope_descriptions().get(s, ""),
              "unlocks": sorted(t for t, need in _app.TOOL_SCOPES.items() if need == s)}
             for s in _keys.SCOPES]
 
@@ -468,7 +508,8 @@ def how_to_authenticate() -> Dict[str, Any]:
         "scopes": _scope_rows(),
         "never": "never type a password into the chat; sign-in and sign-up happen only on the AeroStator page",
         "docs_url": L["docs_url"],
-        "user_message": ("To use your AeroStator machines and simulations, connect "
+        "user_message": ("To use your AeroStator machines and "
+                         + ("drafts" if _closed() else "simulations") + ", connect "
                          "AeroStator in this app (Connect / Sign in); the page that "
                          "opens lets you sign in or create an account."),
     }
@@ -664,8 +705,10 @@ def service_card(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         },
         "authentication": {
             "anonymous": ("the public tools above work without sign-in; "
-                          "machines, drafts and simulations need OAuth 2.1 "
-                          "(or an agent key)"),
+                          + ("machines, drafts and projects need OAuth 2.1 "
+                             if _closed() else
+                             "machines, drafts and simulations need OAuth 2.1 ")
+                          + "(or an agent key)"),
             "resource_metadata_url": L["resource_metadata_url"],
             "authorization_server_metadata_url": L["authorization_server_metadata_url"],
             "sign_in_url": L["sign_in_url"],
@@ -749,7 +792,8 @@ def server_card(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         "capabilities": {"tools": {}, "resources": {}},
         "authentication": {
             "type": "oauth2",
-            "required": "for user data and simulations; the public tools work without it",
+            "required": ("for user data and drafts; the public tools work without it" if _closed()
+                         else "for user data and simulations; the public tools work without it"),
             "protectedResourceMetadata": L["resource_metadata_url"],
             "authorizationServerMetadata": L["authorization_server_metadata_url"],
             "scopes": list(_keys.SCOPES),
@@ -775,8 +819,14 @@ def llms_txt(tools: List[Dict[str, Any]]) -> str:
         f"{SERVICE_NAME} is run by {OPERATOR}; the code is open source ({LICENSE}). "
         "AI agents use it through an MCP server (Model Context Protocol, "
         "streamable HTTP, stateless JSON). Without sign-in an agent can call the "
-        "public discovery tools below; machines, draft designs, FEM "
-        "simulations and motor orders need an OAuth sign-in by the user.\n\n"
+        "public discovery tools below; "
+        + ("machines, draft designs and motor orders" if _closed() else
+           "machines, draft designs, FEM simulations and motor orders")
+        + " need an OAuth sign-in by the user.\n\n"
+        + ("FEM simulations are run by MOTRES engineers for now: the simulate tool answers "
+           "'simulations_closed' and queues nothing; every other tool works as before.\n\n"
+           if _closed() else "")
+        +
         "To order a motor built to a customer's requirements, a signed-in agent "
         "calls get_spec_form, create_order, update_spec (until needs_input is "
         "empty), submit_spec and get_order_status.\n\n"

@@ -37,7 +37,7 @@
   "concept": {
     "title": "One platform, five steps",
     "sub": "Inside: what you do. Outside: what is open to everyone.",
-    "diagramAlt": "Concept diagram. The AeroStator Core motor is in the centre. Five steps lead from idea to product: design, simulation, configure, 3D model, production. An outer ring shows the open ecosystem: open source, AI agents, community modules, your own compute.",
+    "diagramAlt": "Concept diagram. The AeroStator Core motor is in the centre. Five steps lead from idea to product: design, simulation, configure, 3D model, production. An outer ring shows the open ecosystem: open source, AI agents, community modules, self-hosting.",
     "core": "AeroStator Core",
     "design": { "sub": "Geometry" },
     "simulation": { "sub": "EM · thermal · stress" },
@@ -47,18 +47,18 @@
     "open": { "title": "Open source", "sub": "Apache-2.0" },
     "agents": { "title": "AI agents", "sub": "MCP server" },
     "modules": { "title": "Modules", "sub": "Propeller, gearbox, …" },
-    "compute": { "title": "Your compute", "sub": "Bring a server" }
+    "compute": { "title": "Self-hosted", "sub": "On your computer" }
   },
   "steps": {
     "design": "Set the motor geometry for your task.",
-    "simulation": "Electromagnetic, thermal and mechanical FEM, coupled.",
+    "simulation": "Electromagnetic, thermal and mechanical FEM, coupled. Run by MOTRES engineers; you see the results.",
     "configure": "Choose a motor for your operating point, cooling, propeller, battery and controller.",
     "model3d": "Everyone can view the simplified model and download its STEP now. The full construction, tools and full STEP follow after NDA and account verification.",
     "production": "Order motors from MOTRES or take a non-exclusive manufacturing licence."
   },
   "sim": {
     "title": "Simulation",
-    "sub": "One machine, three physics, one operating point.",
+    "sub": "One machine, three physics, one operating point. Computed by MOTRES engineers.",
     "em": "Electromagnetic FEM",
     "emAlt": "Flux-density map of a permanent-magnet machine: the whole cross-section, twelve slots around fourteen magnets, coloured by |B| from 0 to 2.6 tesla, the finite-element mesh drawn over it, and the colour bar beside it.",
     "emHint": "Flux density |B| of a permanent-magnet machine cross-section solved by 2-D FEM, with the FE mesh it was solved on. The solved half is repeated to the full ring, which is the periodicity the solve itself assumed.",
@@ -71,11 +71,11 @@
   },
   "open": {
     "title": "Open and free",
-    "sub": "The software is Apache-2.0. Anyone, and their AI agents, can connect and solve their own problems.",
+    "sub": "The software is Apache-2.0. Anyone can read it, run it on their own computer and connect their AI agents.",
     "source": { "title": "Open source", "text": "Read it, fork it, run it yourself." },
-    "agents": { "title": "AI agents", "text": "An MCP server lets your agent design, simulate and configure." },
+    "agents": { "title": "AI agents", "text": "An MCP server lets your agent design and configure; MOTRES engineers run the simulations." },
     "modules": { "title": "Open modules", "text": "Propeller, gearbox, controller, battery: add yours with the Component SDK." },
-    "compute": { "title": "Your own compute", "text": "Bring your own server for heavy runs." }
+    "compute": { "title": "Self-hosted", "text": "Run the open code on your own hardware." }
   },
   "apps": {
     "title": "Applications",
@@ -88,13 +88,12 @@
   "start": {
     "title": "How to start",
     "everyone": { "title": "Everyone", "text": "Sign in with Google, then pick a motor in Configure." },
-    "engineers": { "title": "Engineers", "text": "Run your own simulations. The engineer role is given on request.", "link": "Ask for the engineer role" },
+    "engineers": { "title": "Engineers", "text": "See the full results and charts of every stored point. The engineer role is given on request.", "link": "Ask for the engineer role" },
     "developers": { "title": "Developers and agents" },
     "links": {
       "github": "Source code on GitHub",
       "sdk": "Component SDK",
       "rules": "Module contribution rules",
-      "byo": "Bring your own compute",
       "mcp": "MCP server for agents"
     }
   },

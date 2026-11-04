@@ -131,17 +131,18 @@ export function referenceOfDefault<R extends { id: string; name: string;
 export const cardSummary = (cards: number, total: number): { text: string; state: 'none' | 'partial' | 'all' } =>
   ({ text: `${cards}/${total}`, state: cards <= 0 ? 'none' : cards >= total ? 'all' : 'partial' });
 
-/** "My compute nodes" (docs/BYO_COMPUTE.md) lives in the account menu: every SIGNED-IN account reaches it - user, engineer and
- *  admin alike (the server routes /api/nodes are not role-gated, they are scoped to the caller). */
-export const computeNodesReachable = (signedIn: boolean): boolean => signedIn;
+/** "My compute nodes" (docs/BYO_COMPUTE.md) lives in the account menu: every SIGNED-IN account that may START a calculation
+ *  reaches it.  SOLVE_ADMIN_ONLY (owner 2026-11-04): a node only runs jobs its owner submits, and /api/nodes/jobs/submit is
+ *  closed to non-admins, so while the server setting is on (`canSolve` false) the entry is hidden; reopening restores it. */
+export const computeNodesReachable = (signedIn: boolean, canSolve: boolean = true): boolean => signedIn && canSolve;
 
 /** The simulation tabs that start a (heavy) FEM run; they carry the "connect your own server" line. */
 export const COMPUTE_HINT_TABS: readonly string[] = ['simulation', 'mesh', 'thermal', 'mechanical', 'controller', 'comparePoints'];
 
 /** The one-line "FEM runs are heavy; connect your own server" hint: for the user and engineer roles on an enforcing backend,
  *  on a simulation tab.  Admins (they own the platform) and the unenforced local dev backend never see it. */
-export const computeHintApplies = (tabId: string, enforced: boolean, isAdmin: boolean, role: string): boolean =>
-  enforced && !isAdmin && (role === 'user' || role === 'engineer') && COMPUTE_HINT_TABS.includes(tabId);
+export const computeHintApplies = (tabId: string, enforced: boolean, isAdmin: boolean, role: string, canSolve: boolean = true): boolean =>
+  canSolve && enforced && !isAdmin && (role === 'user' || role === 'engineer') && COMPUTE_HINT_TABS.includes(tabId);
 
 /** The window event the hint fires and the account menu answers by opening "My compute nodes". */
 export const OPEN_COMPUTE_NODES_EVENT = 'motres:open-compute-nodes';

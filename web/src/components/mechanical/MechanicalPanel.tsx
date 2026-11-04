@@ -56,6 +56,7 @@ import { pullMpaError } from '../../lib/mechPull';
  *  first part of this panel that is translated (EN + zh-CN). */
 const tx = nsT('mechanical');
 import type { MechView } from './fieldAdapters';
+import SolveGate from '../common/SolveGate';
 
 /** Tooltip on a Select: keep the hint UNDER the menu the Select opens (MUI
  *  draws tooltips at z 1500, menus at z 1300, so a hint wrapped round a Select
@@ -899,10 +900,12 @@ const MechanicalPanel: React.FC = () => {
               <Typography sx={{ ...warn }}>⚠ Thermal result stale — manual °C used</Typography>
             </Tooltip>
           )}
-          <Button variant="contained" size="small" onClick={solve} disabled={busy}
-            startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
-            {busy ? 'Solving' : 'Solve'}
-          </Button>
+          <SolveGate>
+            <Button variant="contained" size="small" onClick={solve} disabled={busy}
+              startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+              {busy ? 'Solving' : 'Solve'}
+            </Button>
+          </SolveGate>
           <SolveTimer busy={busy} startedAt={st.stress.startedAt} est={st.est.stress}
             what="stress solve" />
           {/* ── Limit speed (SF = 1) ────────────────────────────────────────
@@ -952,11 +955,13 @@ const MechanicalPanel: React.FC = () => {
             <Typography sx={{ ...lbl, color: '#93c5fd' }}>
               {historyNoticeFor(res)!.text}
               {' · '}
-              <Typography component="span" onClick={recompute}
-                sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
-                     cursor: 'pointer' }}>
-                Recompute
-              </Typography>
+              <SolveGate>
+                <Typography component="span" onClick={recompute}
+                  sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
+                       cursor: 'pointer' }}>
+                  Recompute
+                </Typography>
+              </SolveGate>
             </Typography>
           )}
           {res && (

@@ -36,6 +36,7 @@ import {
   type CouplingBlock, type CoupledRunResult,
 } from './coupledApi';
 import HelpTip from '../common/HelpTip';
+import SolveGate from '../common/SolveGate';
 
 interface TransientPayload {
   // Frontend-only stamp: the geometry signature this run was computed for.
@@ -1482,13 +1483,15 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             <Typography sx={{ fontSize: 10, color: '#93c5fd', mt: 0.25 }}>
               {historyNoticeFor(data)!.text}
               {' · '}
-              <Box component="span" role="button" tabIndex={0}
-                onClick={() => { setStale(false); run(false, true); }}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
-                sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
-                  textDecoration: 'underline' }}>
-                Recompute
-              </Box>
+<SolveGate>
+                <Box component="span" role="button" tabIndex={0}
+                  onClick={() => { setStale(false); run(false, true); }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
+                  sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
+                    textDecoration: 'underline' }}>
+                  Recompute
+                </Box>
+              </SolveGate>
               <HelpTip title="Nothing was solved: a run with exactly these inputs — geometry, materials, current, γ, rpm, mesh and drive — is already stored, so it was loaded. Recompute solves it again and replaces the stored one." />
             </Typography>
           )}
@@ -1503,13 +1506,15 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               Coupled run — loaded from history — computed{' '}
               {formatHistoryComputedAt(coupledHistory.computed_at)}
               {' · '}
-              <Box component="span" role="button" tabIndex={0}
-                onClick={() => { setStale(false); run(false, true); }}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
-                sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
-                  textDecoration: 'underline' }}>
-                Recompute
-              </Box>
+<SolveGate>
+                <Box component="span" role="button" tabIndex={0}
+                  onClick={() => { setStale(false); run(false, true); }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
+                  sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
+                    textDecoration: 'underline' }}>
+                  Recompute
+                </Box>
+              </SolveGate>
               <HelpTip title="Nothing was iterated: an EM ↔ thermal coupled loop with exactly these inputs — geometry, materials, operating point, cooling — is already stored, so it was loaded. Recompute runs the loop again and replaces the stored one." />
             </Typography>
           )}

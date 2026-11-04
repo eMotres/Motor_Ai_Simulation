@@ -1143,10 +1143,19 @@ def headline(answer: Any, d: Dict[str, Any], what: str) -> Dict[str, Any]:
 
 def simulate(p: Principal, design_id: str, what: str,
              steps: Optional[int] = None) -> Dict[str, Any]:
-    """Queue a solve of the draft on the user's queue; return the job id."""
+    """Queue a solve of the draft on the user's queue; return the job id.
+
+    SOLVE_ADMIN_ONLY (auth.py): while ``MOTRES_SOLVE_ADMIN_ONLY`` is on (the default) only an admin account starts a simulation; any
+    other account gets a clean refusal AS DATA (``status`` + ``user_message``, the web's own sentence), nothing is queued and no
+    daily-limit slot is used.  ``/mcp`` never meets the web's role gate, so this is where the rule meets the MCP."""
+    from motor_ai_sim import auth as _auth
     from motor_ai_sim import jobs as _jobs
     from motor_ai_sim import mcp_tools as _t
     from motor_ai_sim import platform_agreement as _pa
+    if _auth.solve_admin_only() and not _auth.principal_is_admin(p.email):
+        return {"status": "simulations_closed", "design_id": str(design_id or ""),
+                "user_message": _auth.SOLVE_REFUSAL,
+                "next": "relay user_message; the draft stays and can be opened in Configure (open_in_configure)"}
     needed = _pa.simulation_gate_detail(p.email)
     if needed:      # PLATFORM_AGREEMENT_AT_SIMULATION=1: new simulations need the Platform Agreement (company OR account; staff / MOTRES exempt)
         raise DesignError("agreement_required: the account has not accepted the AeroStator Platform Agreement (version %s), which "

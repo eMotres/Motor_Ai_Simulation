@@ -73,6 +73,7 @@ import {
 } from '../../lib/configuratorPropeller';
 import type { CoolingInfo, PropSummary } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchPropellerCoolingOptions, fetchPropellerThermalPoint } from '../../lib/propellerApi';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/thermal.json (docs/I18N.md).
 const tx = nsT('thermal');
@@ -1133,11 +1134,13 @@ const ThermalPanel: React.FC = () => {
             </Box>
           )}
 
-          <Button variant="contained" size="small" onClick={solve}
-            disabled={busy || !!coolErr}
-            startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
-            {busy ? 'Solving' : 'Solve'}
-          </Button>
+          <SolveGate>
+            <Button variant="contained" size="small" onClick={solve}
+              disabled={busy || !!coolErr}
+              startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+              {busy ? 'Solving' : 'Solve'}
+            </Button>
+          </SolveGate>
           <SolveTimer busy={busy} startedAt={st.field.startedAt} est={st.est.field}
             what="thermal solve" />
 
@@ -1182,11 +1185,13 @@ const ThermalPanel: React.FC = () => {
             <Typography sx={{ ...lbl, color: '#93c5fd' }}>
               {historyNoticeFor(res)!.text}
               {' · '}
-              <Typography component="span" onClick={recompute}
-                sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
-                     cursor: 'pointer' }}>
-                {tx('recompute')}
-              </Typography>
+              <SolveGate>
+                <Typography component="span" onClick={recompute}
+                  sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
+                       cursor: 'pointer' }}>
+                  {tx('recompute')}
+                </Typography>
+              </SolveGate>
             </Typography>
           )}
 

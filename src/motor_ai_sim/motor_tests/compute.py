@@ -248,6 +248,7 @@ def create_and_queue(die: str, config: str, points: List[_Point], w: Dict[str, A
     ``GET /api/jobs``).  A point that cannot be written is reported, the others go on."""
     from motor_ai_sim import jobs as _jobs
     from motor_ai_sim.routes import family as _fam
+    _jobs.require_solve_allowed()
     _jobs.require_agreement_at_simulation()
     out: List[Dict[str, Any]] = []
     for pt in points:

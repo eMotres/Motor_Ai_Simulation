@@ -100,6 +100,12 @@ for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.y
 # sign-up cases of tests/test_mcp_signup.py switch it on again (monkeypatch.delenv).  Production never sets the variable.
 os.environ.setdefault("TERMS_ACCEPTANCE_DISABLED", "1")
 
+# ── who may START a calculation (owner 2026-11-04, auth.SOLVE_ADMIN_ONLY) ─────
+# Production: ON by default (only an admin starts a simulation).  The many suites that run a solve, queue a job or call a solve route
+# as an ordinary account are about the solver, the queue or the roles, not about this rule, so the suite runs with it OFF (= the
+# behaviour before the rule); tests/test_solve_admin_only.py switches it on again and pins both states.
+os.environ.setdefault("MOTRES_SOLVE_ADMIN_ONLY", "0")
+
 # ── presets of the CLOSED motors (owner 2026-10-19) ──────────────────────────
 # The presets of the closed motors (my_40mm_last, ...) live only in the private data repository
 # (config/motor_presets_closed.json of the checkout MOTOR_AI_SIM_PRIVATE_DATA points at).  With that checkout present the

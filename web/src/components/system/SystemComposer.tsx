@@ -61,6 +61,7 @@ import SystemPalette from './SystemPalette';
 import BlockParamsDialog from './BlockParamsDialog';
 import { validateWire } from './systemComposeTypes';
 import type { ComposeNodeData, SavedGraphItem } from './systemComposeTypes';
+import SolveGate from '../common/SolveGate';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -663,17 +664,19 @@ export default function SystemComposer() {
         </TextField>
 
         {/* Run Button */}
-        <Button
-          variant="contained"
-          color="primary"
-          size="small"
-          startIcon={running ? <CircularProgress size={14} color="inherit" /> : <PlayArrowIcon />}
-          disabled={running || nodes.length === 0}
-          onClick={handleRunStudy}
-          sx={{ height: 34, fontWeight: 700, px: 1.8 }}
-        >
-          {running ? tr('system.running', { defaultValue: 'Running...' }) : tr('system.run', { defaultValue: 'Run' })}
-        </Button>
+        <SolveGate>
+          <Button
+            variant="contained"
+            color="primary"
+            size="small"
+            startIcon={running ? <CircularProgress size={14} color="inherit" /> : <PlayArrowIcon />}
+            disabled={running || nodes.length === 0}
+            onClick={handleRunStudy}
+            sx={{ height: 34, fontWeight: 700, px: 1.8 }}
+          >
+            {running ? tr('system.running', { defaultValue: 'Running...' }) : tr('system.run', { defaultValue: 'Run' })}
+          </Button>
+        </SolveGate>
 
         {/* Save Button */}
         <Button

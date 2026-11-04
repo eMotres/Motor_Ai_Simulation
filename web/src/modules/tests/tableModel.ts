@@ -1,7 +1,7 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
 import type {
-  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord,
+  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord, TestTab,
 } from './types';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
@@ -42,6 +42,56 @@ export function deltaLevel(v: number | null | undefined): 'ok' | 'warn' | 'bad' 
   return a <= 5 ? 'ok' : a <= 15 ? 'warn' : 'bad';
 }
 
+// ── tabs: a view of the comparison groups (owner 2026-11-04) ─────────────────────────────────────────────────────
+// Resistance | Inductance | Constants (Kv, Kt, EMF) | Bearings | Free-run | Loads | Parameters (everything else).  The
+// stored records and the compare payload are unchanged; these pure functions only decide where a group is SHOWN.
+
+/** The tab a record kind falls back to: where a group with no rule of its own, or a record with no group at all, lands. */
+export function defaultTabOfKind(kind: TestKind): TestTab {
+  return kind === 'load' ? 'loads' : kind === 'free_run' ? 'free_run' : 'parameters';
+}
+
+/** The record kind a new test added from a tab gets (the tab is only a view). */
+export function kindOfTab(tab: TestTab): TestKind {
+  if (tab === 'loads') return 'load';
+  if (tab === 'free_run' || tab === 'constants' || tab === 'bearings') return 'free_run';
+  return 'parameters';
+}
+
+/** THE row-to-tab mapping.  Total on purpose: a group key it does not know falls back to the record kind's default tab, so
+ *  a new row kind added on the server shows up there instead of vanishing. */
+export function tabOfGroup(kind: TestKind, groupKey: string): TestTab {
+  if (kind === 'parameters') {
+    if (groupKey === 'resistance') return 'resistance';
+    if (groupKey === 'inductance') return 'inductance';
+  } else if (kind === 'free_run') {
+    if (groupKey === 'emf_peak' || groupKey === 'emf_rms' || groupKey === 'kv_kt' || groupKey === 'kv_kt_ex') return 'constants';
+    if (groupKey === 'bearings_none' || groupKey.startsWith('bearing_')) return 'bearings';
+  }
+  return defaultTabOfKind(kind);
+}
+
+/** The tabs a record appears in: one per tab that one of its groups maps to; a record with no group at all stays in its
+ *  kind's default tab (so it, its edit / delete buttons and its raw data are always reachable). */
+export function recordTabs(kind: TestKind, cmp: TestCompare | undefined | null): TestTab[] {
+  const out = new Set<TestTab>();
+  for (const g of cmp?.groups ?? []) out.add(tabOfGroup(kind, g.key));
+  if (!out.size) out.add(defaultTabOfKind(kind));
+  return Array.from(out);
+}
+
+/** The comparison of one record restricted to the groups of one tab (the load chart belongs to the Loads tab). */
+export function cmpForTab(cmp: TestCompare | undefined | null, kind: TestKind, tab: TestTab): TestCompare | undefined {
+  if (!cmp) return undefined;
+  return { ...cmp, groups: cmp.groups.filter((g) => tabOfGroup(kind, g.key) === tab), series: tab === 'loads' ? cmp.series : null };
+}
+
+/** The records shown in one tab, newest first. */
+export function testsOfTab(tests: TestRecord[], compare: Record<string, TestCompare | undefined>, tab: TestTab): TestRecord[] {
+  return tests.filter((t) => recordTabs(t.kind, compare[t.id]).includes(tab))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
 export interface RowNote { key: string; params: Record<string, unknown> }
 
 /** The one short note a row carries next to its numbers (translated by the caller), or null. */
@@ -49,6 +99,7 @@ export function rowNote(row: CompareRow): RowNote | null {
   const x = row.extra ?? {};
   if (row.key === 'cogging_pkpk' && x.pending === true && row.measured === null) return { key: 'benchPending', params: {} };
   if (row.key === 'loss' && typeof x.unexplained_w === 'number') return { key: 'unexplained', params: { w: fmtValue(x.unexplained_w as number) } };
+  if (row.key === 'no_bearings') return { key: 'noBearings', params: {} };
   if (row.status === 'no_model' && row.action) return { key: 'noModelCompute', params: {} };
   if (row.status === 'no_model') return { key: 'noModel', params: {} };
   if (x.high_freq === true && typeof x.freq_hz === 'number') return { key: 'freqFlag', params: { hz: x.freq_hz } };

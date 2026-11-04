@@ -143,6 +143,123 @@ t('Kv / Kt rows: a flagged EMF row and a 3-D factor that is not the current one 
   assert.equal(M.fmtValue(2.016), '2.02');
 });
 
+// ── the tabs: Resistance | Inductance | Constants | Bearings | Free-run | Loads | Parameters ──────────────────────────
+
+const TABS = ['resistance', 'inductance', 'constants', 'bearings', 'free_run', 'loads', 'parameters'];
+const grp = (key, rows = [row({ key: 'r', measured: 1, model: 1 })]) => ({ key, label: key, params: {}, rows });
+const cmpOf = (kind, keys) => ({ test_id: 'x', kind, model_available: true, groups: keys.map((k) => grp(k)) });
+
+t('every group lands in exactly one tab: the row-to-tab map', () => {
+  const map = {
+    parameters: { resistance: 'resistance', inductance: 'inductance', cogging: 'parameters', lcr: 'parameters',
+      insulation: 'parameters', mass: 'parameters' },
+    free_run: { emf_peak: 'constants', emf_rms: 'constants', kv_kt: 'constants', kv_kt_ex: 'constants',
+      bearings_none: 'bearings', bearing_a: 'bearings', bearing_b: 'bearings', bearing_sum: 'bearings',
+      bearing_measured: 'bearings', bearing_share: 'bearings', loss: 'free_run', fit: 'free_run', no_model: 'free_run' },
+    load: { load_point: 'loads', no_model: 'loads' },
+  };
+  for (const [kind, groups] of Object.entries(map)) {
+    for (const [key, tab] of Object.entries(groups)) assert.equal(M.tabOfGroup(kind, key), tab, `${kind}/${key}`);
+  }
+  // the rules are per kind: a load record never lands in Constants or Resistance, whatever its group is called
+  assert.equal(M.tabOfGroup('load', 'resistance'), 'loads');
+  assert.equal(M.tabOfGroup('load', 'emf_peak'), 'loads');
+  assert.equal(M.tabOfGroup('free_run', 'resistance'), 'free_run');
+});
+
+t('a group kind nobody mapped yet falls back to its record kind default tab, never to no tab', () => {
+  assert.equal(M.tabOfGroup('parameters', 'some_new_group'), 'parameters');
+  assert.equal(M.tabOfGroup('free_run', 'some_new_group'), 'free_run');
+  assert.equal(M.tabOfGroup('load', 'some_new_group'), 'loads');
+  assert.equal(M.defaultTabOfKind('parameters'), 'parameters');
+  assert.equal(M.defaultTabOfKind('free_run'), 'free_run');
+  assert.equal(M.defaultTabOfKind('load'), 'loads');
+  for (const kind of ['parameters', 'free_run', 'load']) assert.ok(TABS.includes(M.tabOfGroup(kind, 'whatever')));
+});
+
+t('a record is reachable: it appears in every tab it has a group for, and a record with no group stays in its default tab', () => {
+  const par = cmpOf('parameters', ['resistance', 'inductance', 'cogging', 'insulation']);
+  assert.deepEqual(M.recordTabs('parameters', par).sort(), ['inductance', 'parameters', 'resistance']);
+  const fr = cmpOf('free_run', ['emf_peak', 'emf_rms', 'kv_kt', 'bearing_a', 'loss', 'fit']);
+  assert.deepEqual(M.recordTabs('free_run', fr).sort(), ['bearings', 'constants', 'free_run']);
+  assert.deepEqual(M.recordTabs('free_run', cmpOf('free_run', ['emf_peak'])), ['constants']);
+  for (const kind of ['parameters', 'free_run', 'load']) {
+    assert.deepEqual(M.recordTabs(kind, cmpOf(kind, [])), [M.defaultTabOfKind(kind)]);
+    assert.deepEqual(M.recordTabs(kind, undefined), [M.defaultTabOfKind(kind)]);
+    assert.deepEqual(M.recordTabs(kind, null), [M.defaultTabOfKind(kind)]);
+  }
+});
+
+t('nothing is lost: the groups of all tabs together are exactly the groups of the record', () => {
+  const keys = ['resistance', 'inductance', 'cogging', 'lcr', 'insulation', 'mass', 'brand_new'];
+  const cmp = cmpOf('parameters', keys);
+  const seen = [];
+  for (const tab of TABS) seen.push(...M.cmpForTab(cmp, 'parameters', tab).groups.map((g) => g.key));
+  assert.deepEqual(seen.sort(), [...keys].sort());
+  const frKeys = ['emf_peak', 'kv_kt', 'kv_kt_ex', 'bearing_a', 'bearings_none', 'loss', 'fit', 'no_model', 'brand_new'];
+  const fr = cmpOf('free_run', frKeys);
+  const seenFr = [];
+  for (const tab of TABS) seenFr.push(...M.cmpForTab(fr, 'free_run', tab).groups.map((g) => g.key));
+  assert.deepEqual(seenFr.sort(), [...frKeys].sort());
+});
+
+t('the tab view keeps the load chart only on Loads; tabs list their records newest first', () => {
+  const load = { ...cmpOf('load', ['load_point']), series: { x: 'rpm', quantities: [{ key: 'torque', label: 'T', unit: 'N', points: [] }] } };
+  assert.ok(M.cmpForTab(load, 'load', 'loads').series);
+  assert.equal(M.cmpForTab(load, 'load', 'constants').series, null);
+  assert.equal(M.cmpForTab(load, 'load', 'constants').groups.length, 0);
+  assert.equal(M.cmpForTab(undefined, 'load', 'loads'), undefined);
+  const tests = [
+    { id: 'p1', kind: 'parameters', date: '2026-01-01' }, { id: 'p2', kind: 'parameters', date: '2026-02-01' },
+    { id: 'f1', kind: 'free_run', date: '2026-03-01' }, { id: 'l1', kind: 'load', date: '2026-04-01' },
+    { id: 'e1', kind: 'free_run', date: '2026-05-01' },
+  ];
+  const compare = {
+    p1: cmpOf('parameters', ['resistance']), p2: cmpOf('parameters', ['resistance', 'insulation']),
+    f1: cmpOf('free_run', ['emf_peak', 'loss']), l1: cmpOf('load', ['load_point']), e1: undefined,
+  };
+  assert.deepEqual(M.testsOfTab(tests, compare, 'resistance').map((x) => x.id), ['p2', 'p1']);
+  assert.deepEqual(M.testsOfTab(tests, compare, 'parameters').map((x) => x.id), ['p2']);
+  assert.deepEqual(M.testsOfTab(tests, compare, 'constants').map((x) => x.id), ['f1']);
+  assert.deepEqual(M.testsOfTab(tests, compare, 'free_run').map((x) => x.id), ['e1', 'f1']);   // e1: no compare at all
+  assert.deepEqual(M.testsOfTab(tests, compare, 'loads').map((x) => x.id), ['l1']);
+  assert.deepEqual(M.testsOfTab(tests, compare, 'bearings'), []);
+  for (const rec of tests) assert.ok(TABS.some((tab) => M.testsOfTab(tests, compare, tab).includes(rec)), rec.id);
+});
+
+t('a test added from a tab gets the record kind that tab belongs to', () => {
+  assert.equal(M.kindOfTab('resistance'), 'parameters');
+  assert.equal(M.kindOfTab('inductance'), 'parameters');
+  assert.equal(M.kindOfTab('parameters'), 'parameters');
+  for (const tab of ['constants', 'bearings', 'free_run']) assert.equal(M.kindOfTab(tab), 'free_run');
+  assert.equal(M.kindOfTab('loads'), 'load');
+});
+
+t('the no-bearings empty state has its own note, not "no model point"', () => {
+  assert.equal(M.rowNote(row({ key: 'no_bearings', status: 'no_model' })).key, 'noBearings');
+});
+
+t('every tab has an English and a Chinese label and tooltip, and the bearings tooltip says model', async () => {
+  const { readFileSync } = await import('node:fs');
+  const load = (l) => JSON.parse(readFileSync(new URL(`../../../locales/${l}/production.json`, import.meta.url), 'utf8')).tests;
+  const en = load('en'); const zh = load('zh-CN');
+  for (const tab of TABS) {
+    for (const d of [en, zh]) {
+      assert.ok(d.tabs[tab], `tabs.${tab}`);
+      assert.ok(d.tabsTip[tab], `tabsTip.${tab}`);
+    }
+  }
+  assert.match(en.tabsTip.bearings, /MODEL values/);
+  assert.match(en.tabsTip.bearings, /only measured figure is the total free-run loss/);
+  assert.match(en.tabsTip.constants, /line-line peak/);
+  for (const k of ['bearings_model', 'bearings_measured', 'bearings_share']) { assert.ok(en.basis[k]); assert.ok(zh.basis[k]); }
+  for (const k of ['bearing_a', 'bearing_b', 'bearing_sum', 'bearing_measured', 'bearing_share', 'bearings_none']) {
+    assert.ok(en.group[k] && zh.group[k], k);
+  }
+  assert.match(en.group.bearing_a, /model/);
+  assert.match(en.group.bearing_sum, /model/);
+});
+
 t('pasted free-run rows in the slash format, "-" = not measured, a bad row reported by its line', () => {
   const p = M.parseRows('1000/140/80/28.3/40, 1500/240/120/42.4,\n4000/-/320/113.2, x/1', 'free_run');
   assert.deepEqual(p.rows, [

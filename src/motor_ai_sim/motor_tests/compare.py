@@ -35,6 +35,9 @@ TIPS = {
     "loss": ("model = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
+    "bearings": ("model values, not a measurement: SKF friction model of the bearings assigned to the configuration, the rotor "
+                 "weight as radial load, at the bench speed and temperature; the only measured figure is the total free-run "
+                 "loss, in which the bearings are not separated"),
     "kv_kt": ("slope of V_LL peak against speed (least squares through the origin, over the rows named in the group); "
               "Kv = 1000 / slope in rpm per V of line-line PEAK; Kt = 3 * Ke per A rms of phase current "
               "(Ke = phase rms EMF per rad/s; current on the q axis, sine EMF); the 3-D column x the factor shown"),
@@ -355,8 +358,8 @@ def noload_reference(rpm: float, refs: Sequence[Dict[str, Any]]) -> Optional[Dic
     return min(good, key=lambda r: abs(math.log(n / float(r["rpm"]))))
 
 
-def mech_loss_at(fn: Optional[Callable[[float, Optional[float]], Optional[Dict[str, float]]]], rpm: float,
-                 temp_c: Optional[float]) -> Optional[Dict[str, float]]:
+def mech_loss_at(fn: Optional[Callable[[float, Optional[float]], Optional[Dict[str, Any]]]], rpm: float,
+                 temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
     """Call the injected bearings + windage function; a failure is "not available", never zero."""
     if fn is None:
         return None

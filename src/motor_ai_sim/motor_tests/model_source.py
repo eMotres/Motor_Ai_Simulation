@@ -287,13 +287,17 @@ def mech_function(cfg_doc: Dict[str, Any], geometry: Dict[str, Any], rotor_mass_
     if not has_b and not geometry:
         return None
 
-    def f(rpm: float, temp_c: Optional[float]) -> Optional[Dict[str, float]]:
+    def f(rpm: float, temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
         t = 25.0 if temp_c is None else float(temp_c)
-        out: Dict[str, float] = {}
+        out: Dict[str, Any] = {}
         if has_b:
             res = B.machine_bearing_losses(assignment, rpm=rpm, temp_c=t, rotor_mass_kg=float(rotor_mass_kg or 0.0),
                                            geometry=geometry or None, windage_temp_c=t)
             out["bearings_w"] = float(res.get("P_bearings_W") or 0.0)
+            # each bearing end the configuration names (A and B may be different cards), straight from
+            # machine_bearing_losses: the Tests "Bearings" tab shows them one by one
+            out["ends"] = [{"end": str(b.get("end")), "card": str(b.get("bearing") or ""), "p_w": float(b.get("P_W") or 0.0)}
+                           for b in (res.get("bearings") or []) if isinstance(b, dict)]
             if res.get("windage"):
                 out["windage_w"] = float(res.get("P_windage_W") or 0.0)
         if "windage_w" not in out and geometry:

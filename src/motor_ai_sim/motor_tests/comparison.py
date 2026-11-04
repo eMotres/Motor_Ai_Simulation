@@ -458,6 +458,67 @@ def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]]
     return out
 
 
+def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The Bearings tab of a free-run test: the MODEL's bearing loss at each bench speed, and the one measured figure there is.
+
+    Model values come from ``bearings.machine_bearing_losses`` (SKF friction, rotor weight as radial load) through the
+    injected ``mech`` function: one group per bearing end the configuration names (A and B may be different cards), their
+    sum, and that sum as a share of the MEASURED total free-run loss.  The measured total (shaft power) is shown on its own:
+    the bearings are not separated in it, so no difference is formed and nothing here is a measured bearing loss.
+    A configuration without bearings gets the empty state - no number is made up."""
+    rows = [r for r in rows_in if num(r.get("rpm"))]
+    if not rows:
+        return []
+    if not (model.get("has_bearings") and model.get("mech")):
+        return [_group("bearings_none", "Bearings", [
+            _row("no_bearings", "no bearings assigned to this configuration", "", None, None, status="no_model")],
+            tip="bearings")]
+    amb = num((rec.get("conditions") or {}).get("ambient_c"))
+    per_end: Dict[str, List[Dict[str, Any]]] = {}
+    cards: Dict[str, str] = {}
+    sums: List[Dict[str, Any]] = []
+    meas: List[Dict[str, Any]] = []
+    share: List[Dict[str, Any]] = []
+    for r in rows:
+        n = float(r["rpm"])
+        t = num(r.get("temp_c")) if num(r.get("temp_c")) is not None else amb
+        m = C.mech_loss_at(model.get("mech"), n, t) or {}
+        params = {"rpm": round(n)}
+        lbl = "%d rpm" % round(n)
+        det = "model, bearing temperature %s" % ("?" if t is None else "%g C" % t)
+        ends = m.get("ends") or []
+        for e in ends:
+            per_end.setdefault(e["end"], []).append(_row("bearing_loss", lbl, "W", None, e["p_w"], tip="bearings",
+                                                         params=params, status="info", detail=det + ", " + e["card"]))
+            cards[e["end"]] = e["card"]
+        if ends:
+            pb = m.get("bearings_w")
+            sums.append(_row("bearing_loss", lbl, "W", None, pb, tip="bearings", params=params, status="info", detail=det))
+            mw = num(r.get("shaft_power_w"))
+            if mw is not None and mw > 0 and pb is not None:
+                share.append(_row("bearing_share", lbl, "%", None, 100.0 * pb / mw, tip="bearings", params=params,
+                                  status="info", detail="model bearing loss / measured total free-run loss"))
+        if num(r.get("shaft_power_w")) is not None:
+            meas.append(_row("loss_total", lbl, "W", r.get("shaft_power_w"), None, tip="bearings", params=params,
+                             status="info", detail="measured shaft power at no load: bearings, windage, iron and eddy together"))
+    out: List[Dict[str, Any]] = []
+    for end in sorted(per_end):
+        out.append(_group("bearing_" + end.lower(), "Bearing %s: %s (model)" % (end, cards.get(end, "?")), per_end[end],
+                          params={"end": end, "card": cards.get(end, "?")}, tip="bearings",
+                          basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model"))
+    if sums:
+        out.append(_group("bearing_sum", "Bearings, all (model)", sums, tip="bearings",
+                          basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model"))
+    if meas:
+        out.append(_group("bearing_measured", "Free-run loss, measured total", meas, tip="bearings",
+                          basis="measured: the total only; the bearings are not separated in it", basis_key="bearings_measured"))
+    if share:
+        out.append(_group("bearing_share", "Model bearings as a share of the measured total", share, tip="bearings",
+                          basis="model bearing loss over the measured total; not a measured bearing loss",
+                          basis_key="bearings_share"))
+    return out
+
+
 def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     rows_in = [r for r in rec.get("rows") or [] if num(r.get("rpm"))]
     rows_in.sort(key=lambda r: float(r["rpm"]))
@@ -542,6 +603,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss",
                              basis=mag_txt + ", losses 2-D (no flux factor)", basis_key="loss",
                              basis_params={"mag": mag_p or "?"}))
+    groups.extend(_bearing_groups(rows_in, rec, model))
     fm, fd = C.fit_an_bn2(fit_meas), C.fit_an_bn2(fit_model)
     if fm or fd:
         groups.append(_group("fit", "Loss fit P = a*n + b*n^2 (n in krpm)", [

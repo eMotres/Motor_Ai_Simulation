@@ -285,3 +285,74 @@ def test_the_report_rows_carry_the_new_groups_without_changes():
     assert "Kv (rpm per V line-line peak), model 3-D" in labels and "Kt per A rms phase current, model 2-D" in labels
     assert not any("rms" in l and "Kv" in l for l in labels)
     assert R._fmt(5.8) == "5.80"
+
+
+# ── the Bearings tab: model values, the measured total on its own ───────────────────────────────
+
+def _bearing_model(cards=("6010-2RZ/HC5C3", "618/8-2Z")):
+    from motor_ai_sim.motor_tests import model_source as MS
+    cfg = {"bearings": {"A": {"card": cards[0]}, "B": {"card": cards[1]}}}
+    m = _noload()
+    m["mech"] = MS.mech_function(cfg, {}, 1.5)
+    m["has_bearings"] = True
+    return m
+
+
+def test_bearing_groups_are_the_models_values_per_end_and_the_measured_total_stands_alone():
+    from motor_ai_sim import bearings as B
+    rows = [{"rpm": n, "shaft_power_w": 100.0 + 0.1 * n, "v_ll_pp_v": 2 * BENCH_SLOPE / 1000.0 * n} for n in (1000, 3000, 5000)]
+    rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"ambient_c": 25.0}, "rows": rows},
+                           who="eng@example.test")
+    g = _groups(_bearing_model(), rec)
+    assert {"bearing_a", "bearing_b", "bearing_sum", "bearing_measured", "bearing_share"} <= set(g)
+    a, b_ = _by_key_rows(g["bearing_a"], 3000), _by_key_rows(g["bearing_b"], 3000)
+    # both ends come straight from machine_bearing_losses, each with its own card
+    res = B.machine_bearing_losses({"A": {"card": "6010-2RZ/HC5C3"}, "B": {"card": "618/8-2Z"}}, rpm=3000, temp_c=25.0,
+                                   rotor_mass_kg=1.5)
+    assert a["model"] == pytest.approx(res["bearings"][0]["P_W"]) and b_["model"] == pytest.approx(res["bearings"][1]["P_W"])
+    assert g["bearing_a"]["params"]["card"] == "6010-2RZ/HC5C3" and g["bearing_b"]["params"]["card"] == "618/8-2Z"
+    assert "model" in g["bearing_a"]["label"] and g["bearing_a"]["basis_key"] == "bearings_model"
+    assert _by_key_rows(g["bearing_sum"], 3000)["model"] == pytest.approx(res["P_bearings_W"])
+    # model rows carry no measurement and no delta; the measured total carries no model and no delta
+    for grp in ("bearing_a", "bearing_b", "bearing_sum", "bearing_share"):
+        assert all(r["measured"] is None and r["delta_pct"] is None for r in g[grp]["rows"])
+    assert all(r["model"] is None and r["delta_pct"] is None for r in g["bearing_measured"]["rows"])
+    assert g["bearing_measured"]["basis_key"] == "bearings_measured" and g["bearing_share"]["basis_key"] == "bearings_share"
+
+
+def _by_key_rows(group, rpm):
+    return [r for r in group["rows"] if r["params"]["rpm"] == rpm][0]
+
+
+def test_bearing_share_is_the_model_over_the_measured_total_and_needs_that_total():
+    rows = [{"rpm": 3000, "shaft_power_w": 600.0, "v_ll_pp_v": 900.0}, {"rpm": 4000, "v_ll_pp_v": 1200.0}]
+    rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"ambient_c": 25.0}, "rows": rows},
+                           who="eng@example.test")
+    g = _groups(_bearing_model(), rec)
+    pb = _by_key_rows(g["bearing_sum"], 3000)["model"]
+    assert _by_key_rows(g["bearing_share"], 3000)["model"] == pytest.approx(100.0 * pb / 600.0)
+    assert [r["params"]["rpm"] for r in g["bearing_share"]["rows"]] == [3000]          # no measured total at 4000: no share
+    assert [r["params"]["rpm"] for r in g["bearing_measured"]["rows"]] == [3000]
+    assert len(g["bearing_sum"]["rows"]) == 2
+
+
+def test_no_bearing_assignment_gives_the_empty_state_and_no_number():
+    g = _groups(_noload(), _bench(low_row=False))
+    assert "bearing_a" not in g and "bearing_sum" not in g and "bearing_share" not in g
+    row = g["bearings_none"]["rows"][0]
+    assert row["key"] == "no_bearings" and row["model"] is None and row["status"] == "no_model"
+
+
+def test_every_group_a_free_run_test_emits_has_a_tab():
+    """The web maps a group key to a tab (``tableModel.tabOfGroup``); an unknown key falls back to the Free-run tab so it
+    cannot vanish.  This list is what the server emits today: a NEW group key fails here, which is the prompt to decide its
+    tab (and to add it to the mapping test in ``tableModel.test.mjs``) instead of letting it land in Free-run by accident."""
+    rows = [{"rpm": n, "shaft_power_w": 100.0 + 0.1 * n, "v_ll_pp_v": 2 * BENCH_SLOPE / 1000.0 * n,
+             "v_ll_rms_v": BENCH_SLOPE / 1000.0 * n / math.sqrt(2.0)} for n in (1000, 2000, 3000, 4000, 5000)]
+    rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"ambient_c": 25.0}, "rows": rows},
+                           who="eng@example.test")
+    emitted = set(_groups(_bearing_model(), rec)) | set(_groups(_noload(), rec)) | set(_groups(_bearing_model(), _bench()))
+    empty = set(_groups(model_source.from_docs({}, {"duties": []}, {}, LIB), rec))
+    known = {"emf_peak", "emf_rms", "kv_kt", "kv_kt_ex", "loss", "fit", "no_model",
+             "bearing_a", "bearing_b", "bearing_sum", "bearing_measured", "bearing_share", "bearings_none"}
+    assert (emitted | empty) <= known, (emitted | empty) - known

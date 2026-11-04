@@ -1100,6 +1100,9 @@ def _thermal_payload(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "T_min": float(np.min(t)), "T_max": float(np.max(t)),
         "part_names": meta.get("part_names") or {},
         "outlines": _thermal_outlines(d),
+        # a sector answer is stored as the sector (the live tab tiles it on arrival); the count rides along so the Thermal tab
+        # can do the same - 1 for a full-ring record and for one written before the count was kept
+        "n_sectors": int(meta.get("n_sectors") or 1),
     }
     views = ["temp"]
     hf = d.get("heat_flux_per_tri")

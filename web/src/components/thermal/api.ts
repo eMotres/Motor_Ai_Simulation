@@ -239,6 +239,10 @@ export interface LastEntry<T> {
   /** the BACKEND's own verdict, from its fingerprint of the machine this was
    *  solved on against the live one.  `null` = UNKNOWN, never "fine". */
   stale_geometry: boolean | null;
+  /** The catalogue point (`{die, config, duty}`) the answer was solved for - the
+   *  second witness beside the fingerprint (2026-11-04).  `null` / absent =
+   *  unknown (stored before the stamp, or no catalogue point was loaded). */
+  context?: { die?: string; config?: string; duty?: string } | null;
 }
 
 export interface LastThermal {

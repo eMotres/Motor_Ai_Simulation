@@ -94,5 +94,5 @@ export function liveGeoSig(): string {
 export function geoStaleAgainstLive(stamp: string | null | undefined): boolean {
   const live = liveGeoSig();
   if (!stamp || !live) return false;
-  return stamp !== live;
+  return geoSigsDiffer(stamp, live);   // by value, never as strings (see geoSigsDiffer)
 }

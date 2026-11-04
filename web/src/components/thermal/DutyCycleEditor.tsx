@@ -280,6 +280,10 @@ const DutyCycleEditor: React.FC = () => {
         const r = e.result;
         if (r.die !== ctx.die || r.configuration !== ctx.config
             || r.duty !== ctx.duty) return;
+        // …and only of THIS machine: the names alone match a point rebuilt on
+        // another geometry.  A proven match is the licence; unknown is not
+        // (the same rule as `/last`, lib/resultOwner.mayAdopt).
+        if (e.stale_geometry !== false) return;
         setRes(r);
         setRestoredAt(e.computed_at);
       } catch { /* a tab that has never solved a cycle is the normal state */ }

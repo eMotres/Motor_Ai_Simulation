@@ -24,7 +24,7 @@ import {
   Paper, Select, TextField, Tooltip, Typography,
 } from '@mui/material';
 
-import { effectiveProofRpm, isStale, useMechanicalStore } from '../../stores/mechanicalStore';
+import { effectiveProofRpm, geomFor, isStale, useMechanicalStore } from '../../stores/mechanicalStore';
 import {
   thermalTempsLine, thermalTempsTip, thermalTempsInUse,
 } from '../../lib/mechThermalTemps';
@@ -40,6 +40,7 @@ import BearingsSection from './BearingsSection';
 import BearingFitSection from './BearingFitSection';
 import { SolveTimer, solvedIn } from './SolveTimer';
 import StressMap, { GeometryMap } from './StressMap';
+import StoredPointMap from '../common/StoredPointMap';
 import {
   CONTACT_LABEL, CONTACT_PAIRS, LOADS_LABEL, PART_LABEL, REF_TEMP_C, SEAT_SURFACE,
   caseKeys, coupledPoint, fmt, fmtSecs, pickCase, readSimSetting, sfAccent,
@@ -382,8 +383,20 @@ const MechanicalPanel: React.FC = () => {
   // coupled loop files its own rotor-stress step as the last mechanical result,
   // and `hydrate` only ever runs once per session (2026-09-10).
   const refreshLast = st.refreshLast;
-  useEffect(() => { void hydrate().then(() => refreshLast()); },
-            [hydrate, refreshLast]);
+  const loadStored = st.loadStored;
+  useEffect(() => { void hydrate().then(() => refreshLast()).then(() => loadStored()); },
+            [hydrate, refreshLast, loadStored]);
+
+  /* The rotor drawn while nothing of this point is solved is THIS motor's: a mesh
+     built for the previous machine is not drawn (`geomFor`, compared by value) and is
+     rebuilt - the mesher, never a solve - once the geometry has settled. */
+  const geomShown = geomFor(geom, st.geomSig);
+  const ensureGeometry = st.ensureGeometry;
+  useEffect(() => {
+    if (res || geomShown || geomBusy || geomErr) return;
+    const id = window.setTimeout(() => { void ensureGeometry(); }, 600);
+    return () => window.clearTimeout(id);
+  }, [res, geomShown, geomBusy, geomErr, liveGeometry, ensureGeometry]);
 
   // The Electromagnetic tab may be edited while this tab is open; pick its rpm up
   // whenever this panel is (re)mounted rather than freezing the first read.
@@ -1217,14 +1230,20 @@ const MechanicalPanel: React.FC = () => {
           empty tab used to be one sentence on a blank page; it is now the same
           viewer with the same camera showing the cross-section that Solve will
           colour in, so pressing Solve fills the picture instead of creating it. */}
+      {/* With no fresh solve of the loaded point: ITS OWN stored stress map if it
+          has one, else only this motor's rotor and one line saying nothing is
+          computed for the point.  Never another motor's result (owner
+          2026-11-04) - the store drops those before they get here. */}
       {!res && (
         <Paper sx={{ p: 1.25, bgcolor: 'var(--panel)' }}>
-          {!err && (
-            <Typography sx={{ ...lbl, mb: 0.75, display: 'block' }}>
-              Nothing solved for this machine yet — press Solve to size the retaining sleeve.
-            </Typography>
-          )}
-          <GeometryMap mesh={geom} busy={geomBusy || busy} error={geomErr} />
+          <StoredPointMap stored={st.stored} what="mechanical">
+            {!err && st.stored.status === 'idle' && (
+              <Typography sx={{ ...lbl, mb: 0.75, display: 'block' }}>
+                Nothing solved for this machine yet — press Solve to size the retaining sleeve.
+              </Typography>
+            )}
+            <GeometryMap mesh={geomShown} busy={geomBusy || busy} error={geomErr} />
+          </StoredPointMap>
         </Paper>
       )}
       {!res && localTable}

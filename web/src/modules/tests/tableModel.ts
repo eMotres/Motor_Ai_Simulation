@@ -107,11 +107,11 @@ export function rowNote(row: CompareRow): RowNote | null {
   if (row.key === 'emf_peak' && x.slope_flagged === true && typeof x.slope_dev_pct === 'number') {
     return { key: 'slopeFlagged', params: { pct: `${x.slope_dev_pct > 0 ? '+' : ''}${(x.slope_dev_pct as number).toFixed(1)}` } };
   }
-  // a Kv / Kt row that carries a 3-D factor says when that factor is not the configuration's own current one
+  // a Kv / Kt row that carries a correction factor says when that factor is not the configuration's own current one
   const p3 = x.end3d as { inherited?: boolean; current?: boolean } | undefined;
-  if (/_3d$/.test(row.key) && p3 && typeof x.k_3d === 'number') {
-    if (p3.inherited === true) return { key: 'inherited3d', params: {} };
-    if (p3.current === false) return { key: 'stored3d', params: {} };
+  if ((row.key === 'kv' || row.key === 'kt' || row.key === 'kv_slope') && p3 && x.corrected === true) {
+    if (p3.inherited === true) return { key: 'inheritedFactor', params: {} };
+    if (p3.current === false) return { key: 'storedFactor', params: {} };
   }
   // the remainder is the board and the joints only when the measurement is the larger one; a model above the reading
   // says so instead of filing a negative resistance on the board

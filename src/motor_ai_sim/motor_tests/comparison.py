@@ -35,30 +35,33 @@ def _row(key: str, label: str, unit: str, measured: Any = None, model: Any = Non
 def _group(key: str, label: str, rows: List[Dict[str, Any]], *, params: Optional[Dict[str, Any]] = None,
            tip: Optional[str] = None, basis: Optional[str] = None, basis_key: Optional[str] = None,
            basis_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """``basis`` = the one line (EN) saying what the model values of the group are (temperature, 2-D / 3-D);
+    """``basis`` = the one line (EN) saying what the model values of the group are (temperature, correction);
     ``basis_key`` / ``basis_params`` are what the web translates (``tests.basis.<key>``)."""
     return {"key": key, "label": label, "params": params or {}, "tip": tip, "basis": basis, "basis_key": basis_key,
             "basis_params": basis_params or {}, "rows": rows}
 
 
 def _k3(model: Dict[str, Any], what: str = "flux") -> tuple:
-    """``(k, clause, source)``: the 3-D end-effect factor a model value carries and the words for the row detail.
+    """``(k, clause, source)``: the end-effect correction factor a simulation value carries and the words for the detail.
 
-    ``flux`` = voltages / EMF (Stage A k_flux); ``torque`` = torque, Kt (the measured k_T, else k_flux).  No passport:
-    ``(None, "2-D, no 3-D passport")`` - the 2-D value stays and says so."""
+    ``flux`` = voltages / EMF (Stage A k_flux); ``torque`` = torque, Kt and the shaft power (the measured k_T, else
+    k_flux).  The configuration has no factor: ``(None, "not corrected yet", None)`` - the uncorrected value stays and
+    says so (the one exception to "one simulation value", owner 2026-11-04)."""
     f = model.get("end3d") or {}
     k = f.get("k_flux") if what == "flux" else f.get("k_torque")
     if k is None:
-        return None, "2-D, no 3-D passport", None
+        return None, "not corrected yet", None
     if what == "flux":
         src = f.get("source") or "Stage A"
     elif f.get("torque_basis") == "3-D":
         src = "measured k_T"
     else:
         src = "Stage A flux factor"
+    clause = "corrected"
     if f.get("inherited"):
         src += ", earlier geometry"
-    return float(k), "3-D \u00d7%.3f (%s)" % (float(k), src), src
+        clause += ", factor of an earlier geometry"
+    return float(k), clause, src
 
 
 def _scaled(value: Any, k: Optional[float]) -> Optional[float]:
@@ -142,8 +145,8 @@ def _weight_row(p: Dict[str, Any], model: Dict[str, Any]) -> Dict[str, Any]:
     what = p.get("what")
     if ms is not None and not ms.get("partial") and num(ms.get("full_kg")) is not None:
         src = str(ms.get("source") or "")
-        words = {"cad_stated": "Model: Fusion CAD mass" + (" (%s)" % ms["cad_source"] if ms.get("cad_source") else ""),
-                 "cad_bom": "Model: full motor, CAD bill of materials"}.get(src, "Model: full motor mass")
+        words = {"cad_stated": "Simulation: Fusion CAD mass" + (" (%s)" % ms["cad_source"] if ms.get("cad_source") else ""),
+                 "cad_bom": "Simulation: full motor, CAD bill of materials"}.get(src, "Simulation: full motor mass")
         return _row("weight", "Weight: %s" % what, "g", p.get("mass_g"), 1000.0 * float(ms["full_kg"]), tip="weight",
                     params={"what": what, "model_scope": "full"}, detail=words,
                     extra={"mass_source": src, "mass_scope": "full"})
@@ -151,10 +154,10 @@ def _weight_row(p: Dict[str, Any], model: Dict[str, Any]) -> Dict[str, Any]:
     if akg is None:
         akg = num(model.get("mass_kg"))
     if ms is not None or akg is not None:
-        why = str((ms or {}).get("partial_reason") or "no CAD model mass for this configuration")
+        why = str((ms or {}).get("partial_reason") or "no CAD mass for this configuration")
         r = _row("weight", "Weight: %s" % what, "g", p.get("mass_g"), None if akg is None else 1000.0 * akg,
                  tip="weight", params={"what": what, "model_scope": "active"}, status="info",
-                 detail="Model: active parts only - %s; no delta, the bench weighs the whole motor" % why,
+                 detail="Simulation: active parts only - %s; no delta, the bench weighs the whole motor" % why,
                  extra={"mass_source": str((ms or {}).get("source") or "active_only"), "mass_scope": "active"})
         r["delta_pct"] = None
         return r
@@ -187,7 +190,7 @@ def _resistance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
                                 "leads_mohm": None if res["leads_ohm"] is None else res["leads_ohm"] * 1000,
                                 "remaining_mohm": None if res["remaining_ohm"] is None else res["remaining_ohm"] * 1000,
                                 "temp_c": t, "not_modelled": res["not_modelled"]}))
-        rows.append(_row("r_winding", "winding only (model)", "mOhm", None, res["winding_ohm"] * 1000,
+        rows.append(_row("r_winding", "winding only (simulation)", "mOhm", None, res["winding_ohm"] * 1000,
                          tip="resistance", status="info"))
         if res["leads_ohm"] is not None:
             rows.append(_row("r_leads", "leads (2 in series)", "mOhm", None, res["leads_ohm"] * 1000,
@@ -224,7 +227,7 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
         if ref:
             ld, lq = C.model_ldq_line(ref["ld_mh"], ref["lq_mh"], ref.get("connection") or "star")
             rows.append(_row("l_mean_rotor_out", "L line-line, mean (no rotor)", "uH", meas, (ld + lq) * 1000,
-                             tip="l_rotor_out", detail=f"duty '{ref['duty']}', 2-D", extra=freq_flag))
+                             tip="l_rotor_out", detail=f"duty '{ref['duty']}'", extra=freq_flag))
         else:
             rows.append(_row("l_mean_rotor_out", "L line-line, mean (no rotor)", "uH", meas, None,
                              tip="l_rotor_out", detail="no stator-only run stored", extra=freq_flag))
@@ -236,7 +239,7 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
                 ld, lq = C.model_ldq_line(ref["ld_mh"], ref["lq_mh"], ref.get("connection") or "star")
                 lo, hi = sorted((ld * 1000.0, lq * 1000.0))
                 det = (f"duty '{ref['duty']}'" + (f" at {ref['current']:g} A" if ref.get("current") is not None else "")
-                       + f", {ref.get('method') or 'stored'} Ld/Lq, 2-D")
+                       + f", {ref.get('method') or 'stored'} Ld/Lq")
             else:
                 lo = hi = None
                 det = "no stored Ld/Lq"
@@ -255,7 +258,7 @@ def _inductance(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str
     return _group("inductance", "Inductance" + (f" at {freq:g} Hz" if freq else "") + (", no rotor" if rotor_out else ""),
                   rows, params={"freq_hz": freq, "rotor": "out" if rotor_out else "in"},
                   tip="l_freq" if freq_flag["high_freq"] else "ldq_sum",
-                  basis="2-D, no end-winding inductance, no 3-D flux factor on L", basis_key="inductance")
+                  basis="no end-winding inductance", basis_key="inductance")
 
 
 def _cogging(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -277,7 +280,7 @@ def _cogging(rec: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str, A
                  extra={"pending": bool(cg.get("pending")), "bench_magnet_temp_c": cg.get("magnet_temp_c"),
                         "model_magnet_temp_c": ref.get("magnet_temp_c")})]
     return _group("cogging", "No-load cogging", rows, tip="cogging",
-                  basis="2-D, I = 0, eddy and demagnetisation off, no skew or 3-D factor", basis_key="cogging")
+                  basis="I = 0, eddy and demagnetisation off, no skew", basis_key="cogging")
 
 
 def _info_groups(rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -359,9 +362,9 @@ def _slope_fit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, Any],
              excluded: List[float]) -> List[Dict[str, Any]]:
-    """The Kv / Kt rows of one slope fit: bench | model 2-D and model 3-D, each with the difference from the bench.
+    """The Kv / Kt rows of one slope fit: bench | simulation (corrected), with the difference from the bench.
 
-    3-D: the flux factor multiplies the EMF slope (so Kv, a reciprocal, divides by it); Kt carries the torque factor
+    Correction: the flux factor multiplies the EMF slope (so Kv, a reciprocal, divides by it); Kt carries the torque factor
     (measured k_T, else the flux factor), exactly as the load rows do."""
     b_pk, b_rms, m_pk = fit["b_pk"], fit["b_rms"], fit["m_pk"]
     if b_pk is None and b_rms is not None:
@@ -392,16 +395,11 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     def add(key: str, label: str, unit: str, bench_v: float, model_name: str, factor: Optional[float],
             divide: bool, clause: str, more: Optional[Dict[str, Any]] = None) -> None:
         m2 = None if md is None else md[model_name]
-        for variant in ("2d", "3d"):
-            if variant == "3d" and (factor is None or m2 is None):
-                continue
-            mv = m2 if variant == "2d" else (m2 / float(factor) if divide else m2 * float(factor))
-            x = {**base, **(more or {}), "variant": variant, "model_2d": m2,
-                 "k_3d": None if variant == "2d" else float(factor)}
-            det = det_b + "; model " + ("2-D" if variant == "2d" else clause)
-            out.append(_row("%s_%s" % (key, variant), "%s, model %s" % (label, "2-D" if variant == "2d" else "3-D"),
-                            unit, bench_v, mv, tip="kv_kt", detail=det, extra=x,
-                            status=None if m2 is not None else "no_model"))
+        corrected = factor is not None and m2 is not None
+        mv = m2 if not corrected else (m2 / float(factor) if divide else m2 * float(factor))
+        x = {**base, **(more or {}), "corrected": factor is not None}
+        out.append(_row(key, label, unit, bench_v, mv, tip="kv_kt", detail=det_b + "; simulation, " + clause, extra=x,
+                        status=None if m2 is not None else "no_model"))
 
     add("kv_slope", "EMF slope, V_LL peak per 1000 rpm", "V/krpm", b["slope_peak"], "slope_peak", k_flux, False, flux_clause)
     add("kv", "Kv (rpm per V line-line peak)", "rpm/V", b["kv"], "kv", k_flux, True, flux_clause)
@@ -462,7 +460,7 @@ def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: D
     """The Bearings tab of a free-run test: ONE group, the MODEL's total loss of all bearings at each bench speed.
 
     Values come from ``bearings.machine_bearing_losses`` (SKF friction, rotor weight as radial load) through the injected
-    ``mech`` function; the group is labelled from the cards ("Bearings, 2 x CARD (model)" when every end uses the same
+    ``mech`` function; the group is labelled from the cards ("Bearings, 2 x CARD (simulation)" when every end uses the same
     card, else the card names joined).  It is a model value, never a measured bearing loss (the measured total stays in
     the Free-run tab).  A configuration without bearings gets the empty state - no number is made up."""
     rows = [r for r in rows_in if num(r.get("rpm"))]
@@ -483,15 +481,15 @@ def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: D
         for e in ends:
             cards[e["end"]] = e["card"]
         if ends:
-            det = "model, bearing temperature %s" % ("?" if t is None else "%g C" % t)
+            det = "simulation, bearing temperature %s" % ("?" if t is None else "%g C" % t)
             sums.append(_row("bearing_loss", "%d rpm" % round(n), "W", None, m.get("bearings_w"), tip="bearings",
                              params={"rpm": round(n)}, status="info", detail=det))
     if not sums:
         return []
     names = [cards[e] for e in sorted(cards)]
     cards_txt = "%d x %s" % (len(names), names[0]) if len(set(names)) == 1 else " + ".join(names)
-    return [_group("bearing_sum", "Bearings, %s (model)" % cards_txt, sums, params={"cards": cards_txt}, tip="bearings",
-                   basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model")]
+    return [_group("bearing_sum", "Bearings, %s (simulation)" % cards_txt, sums, params={"cards": cards_txt}, tip="bearings",
+                   basis="simulation: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model")]
 
 
 def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
@@ -528,11 +526,11 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
                f" -> {('?' if t_mag is None else f'{t_mag:.0f}')} C ({t_src}), Br ratio {ratio:.3f}")
         extra = {"magnet_temp_c": t_mag, "magnet_temp_source": t_src, "br_ratio": ratio, "ref_duty": ref["duty"],
                  "ref_rpm": ref["rpm"]}
-        # the EMF carries the 3-D end-effect flux factor; the 2-D value stays beside it in ``extra``
+        # the EMF carries the end-effect flux factor (corrected value only)
         emf_det = det + ", " + k_clause
         slope_in[-1].update({"m_pk": emf["peak"]})
-        emf_x = {**extra, "k_3d": k_flux, "model_2d": emf["peak"]}
-        rms_x = {**extra, "k_3d": k_flux, "model_2d": emf["rms"]}
+        emf_x = {**extra, "corrected": k_flux is not None}
+        rms_x = dict(emf_x)
         emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, _scaled(emf["peak"], k_flux), tip="emf_peak", params=params,
                              detail=emf_det, extra=emf_x))
         rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), _scaled(emf["rms"], k_flux), tip="emf_rms",
@@ -560,7 +558,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         mag = "%.0f" % lo if round(lo) == round(hi) else "%.0f-%.0f" % (lo, hi)
         mag_txt, mag_p = "magnets at %s C" % mag, mag
     else:
-        mag_txt, mag_p = "magnets at the model temperature", None
+        mag_txt, mag_p = "magnets at the simulation temperature", None
     basis_emf = mag_txt + ", " + k_clause
     emf_key = "emf_3d" if k_flux is not None else "emf_2d"
     emf_bp = {"mag": mag_p or "?", "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or ""}
@@ -576,7 +574,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     groups.extend(_kv_kt_groups(slope_in, emf_rows, model, mag_p or "?"))
     if loss_rows:
         groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss",
-                             basis=mag_txt + ", losses 2-D (no flux factor)", basis_key="loss",
+                             basis=mag_txt, basis_key="loss",
                              basis_params={"mag": mag_p or "?"}))
     groups.extend(_bearing_groups(rows_in, rec, model))
     fm, fd = C.fit_an_bn2(fit_meas), C.fit_an_bn2(fit_model)
@@ -590,7 +588,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     if not refs and rows_in:
         top = max(float(r["rpm"]) for r in rows_in)
         action = _create_duty(die, config, rpm=top, current=0.0, name=f"no-load {int(round(top))} rpm", model=model)
-        groups.insert(0, _group("no_model", "No model point", [
+        groups.insert(0, _group("no_model", "No simulation point", [
             _row("no_noload", "no no-load duty in this configuration", "", None, None, status="no_model", action=action)]))
     return {"groups": groups, "fit": {"measured": fm, "model": fd}}
 
@@ -599,13 +597,53 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
 # loads
 # ---------------------------------------------------------------------------
 
+def _duty_eff_pct(inp: Optional[Dict[str, Any]], k: float) -> Optional[float]:
+    """Shaft efficiency (%) of one stored duty on the CORRECTED rotor power ``|P_mech| * k``; the losses stay as stored.
+
+    The same arithmetic as ``web/src/lib/dutyEfficiency.ts`` (motor: shaft out over electrical in; generator: electrical
+    out over shaft in; bearings and windage move the shaft power when the duty stores them).  ``inp`` = the duty's
+    ``eff_inputs`` (``p_mech_w``, ``p_loss_total_w``, ``p_bearings_w``, ``p_windage_w``, ``op_mode``).  A duty that lacks
+    the rotor power or the total loss gives None - never the uncorrected value."""
+    if not isinstance(inp, dict):
+        return None
+    pm_raw, loss = num(inp.get("p_mech_w")), num(inp.get("p_loss_total_w"))
+    if pm_raw is None or loss is None or loss < 0:
+        return None
+    pm = abs(pm_raw) * float(k)
+    if pm <= 0:
+        return None
+    brg, wind = num(inp.get("p_bearings_w")), num(inp.get("p_windage_w"))
+    gen = inp.get("op_mode") == "generator"
+    p_elec = max(0.0, pm - loss) if gen else pm + loss
+    if brg is None and wind is None:
+        return 100.0 * (p_elec / pm if gen else pm / p_elec)
+    extra = (brg or 0.0) + (wind or 0.0)
+    p_shaft = pm + extra if gen else max(0.0, pm - extra)
+    if gen:
+        return 100.0 * (p_elec / p_shaft if p_shaft > 0 else 0.0)
+    return 100.0 * (p_shaft / p_elec if p_elec > 0 else 0.0)
+
+
+def _duty_effs(d: Dict[str, Any], k: Optional[float]) -> tuple:
+    """``(motor efficiency %, system efficiency %)`` of a stored duty as the Tests tab shows them.
+
+    With a correction factor both are recomputed on the corrected shaft power (system = the stored inverter efficiency
+    x the corrected motor efficiency); a duty that lacks what is needed gives None for that value.  Without a factor the
+    stored, uncorrected values are returned (the row says "not corrected yet")."""
+    if k is None:
+        return num(d.get("eff_pct")), num(d.get("eff_system_pct"))
+    eff = _duty_eff_pct(d.get("eff_inputs"), k)
+    inv = num(d.get("eta_inverter_pct"))
+    return eff, (None if (eff is None or inv is None) else eff * inv / 100.0)
+
+
 def _eff_system_row(measured: float, model: Optional[float], det: str) -> Dict[str, Any]:
     """DC link in, shaft out (inverter x motor): against the stored system efficiency, else information, no delta."""
     if num(model) is None:
         return _row("eff_system", "System efficiency (DC in, shaft out)", "%", measured, None, tip="eff_system",
-                    status="info", detail=(det + ", " if det else "") + "no stored system efficiency")
+                    status="info", detail=(det + ", " if det else "") + "no system efficiency from the stored duty")
     return _row("eff_system", "System efficiency (DC in, shaft out)", "%", measured, model, tip="eff_system",
-                detail=det + ", controller wall-to-shaft")
+                detail=det + ", inverter x motor")
 
 
 # the quantities a load sweep can be plotted against rpm: (key, EN label, unit, tip); the web translates
@@ -701,12 +739,14 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         kt, kt_clause, kt_src = _k3(model, "torque")
         rows = [_row("torque", "Torque" + (" (shaft)" if d.get("torque_kind") == "shaft" else " (EM)"), "N·m",
                      r.get("torque_nm"), _scaled(d.get("torque_nm"), kt), tip="load", detail=det + ", " + kt_clause,
-                     extra={"k_3d": kt, "model_2d": d.get("torque_nm")}),
+                     extra={"corrected": kt is not None}),
                 ]
+        d_eff, d_eff_sys = _duty_effs(d, kt)
         if eff_meas is not None:
-            rows.append(_row("eff", "Efficiency", "%", eff_meas, d.get("eff_pct"), tip="load", detail=det))
+            rows.append(_row("eff", "Efficiency", "%", eff_meas, d_eff, tip="load", detail=det + ", " + kt_clause,
+                             extra={"corrected": kt is not None}))
         if eff_sys is not None:
-            rows.append(_eff_system_row(eff_sys, d.get("eff_system_pct"), det))
+            rows.append(_eff_system_row(eff_sys, d_eff_sys, det + ", " + kt_clause))
         if num(r.get("temp_winding_c")) is not None:
             rows.append(_row("t_winding", "Winding temperature", "C", r.get("temp_winding_c"), d.get("winding_c"),
                              tip="load", detail=det + (f", {d['temps_source']} steady state" if d.get("temps_source") else ""),
@@ -715,20 +755,21 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             rows.append(_row("t_magnet", "Magnet temperature", "C", r.get("temp_magnet_c"), d.get("magnet_c"),
                              tip="load", detail=det, extra={"duration_s": r.get("duration_s")}))
         groups.append(_group("load_point", label, rows, params={**params, "duty": d["name"]}, tip="load",
-                             basis="torque " + kt_clause + ", efficiency and temperatures 2-D",
+                             basis="torque and efficiency on the corrected shaft power" if kt is not None
+                             else "not corrected yet",
                              basis_key="load_3d" if kt is not None else "load_2d",
                              basis_params={"k": None if kt is None else "%.3f" % kt, "src": kt_src or ""}))
         # the model side of the same row, for the chart (the very numbers of the table rows above)
         t_mod = _scaled(d.get("torque_nm"), kt)
         sp["torque"] = (t_meas, t_mod)
-        sp["eff"] = (eff_meas, d.get("eff_pct"))
-        sp["eff_system"] = (eff_sys, d.get("eff_system_pct"))
+        sp["eff"] = (eff_meas, d_eff)
+        sp["eff_system"] = (eff_sys, d_eff_sys)
         sp["p_shaft"] = (sp["p_shaft"][0], None if (t_mod is None or omega is None) else t_mod * omega)
         sp["t_winding"] = (r.get("temp_winding_c"), d.get("winding_c"))
         sp["t_magnet"] = (r.get("temp_magnet_c"), d.get("magnet_c"))
         if n is not None:
             plot_rows[-1]["model"] = {k: num(v) for k, v in (
-                ("torque", t_mod), ("eff_system", d.get("eff_system_pct")),
+                ("torque", t_mod), ("eff_system", d_eff_sys),
                 ("t_winding", d.get("winding_c")), ("t_magnet", d.get("magnet_c"))) if num(v) is not None}
     return {"groups": groups, "fit": None, "series": _load_series(series_pts, plot_rows)}
 

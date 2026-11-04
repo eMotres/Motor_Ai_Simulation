@@ -127,17 +127,17 @@ t('row notes: unexplained loss, no model point (with the compute action), freque
   assert.equal(M.rowNote(row({})), null);
 });
 
-t('Kv / Kt rows: a flagged EMF row and a 3-D factor that is not the current one say so, a clean row says nothing', () => {
+t('Kv / Kt rows: a flagged EMF row and a correction factor that is not the current one say so, a clean row says nothing', () => {
   const flagged = row({ key: 'emf_peak', measured: 523, model: 540, extra: { in_slope: true, slope_flagged: true, slope_dev_pct: -4.04 } });
   assert.deepEqual(M.rowNote(flagged), { key: 'slopeFlagged', params: { pct: '-4.0' } });
   assert.equal(M.rowNote(row({ key: 'emf_peak', extra: { in_slope: true, slope_flagged: false, slope_dev_pct: 0.2 } })), null);
-  const inh = row({ key: 'kv_3d', measured: 5.8, model: 6.77, extra: { k_3d: 0.9502, end3d: { inherited: true, current: true } } });
-  assert.equal(M.rowNote(inh).key, 'inherited3d');
-  assert.equal(M.rowNote(row({ key: 'kt_3d', extra: { k_3d: 0.95, end3d: { inherited: false, current: false } } })).key, 'stored3d');
-  assert.equal(M.rowNote(row({ key: 'kt_3d', extra: { k_3d: 0.95, end3d: { inherited: false, current: true } } })), null);
-  // the 2-D rows never carry the 3-D note, and Kv / Kt rows form no speed series (no chart)
-  assert.equal(M.rowNote(row({ key: 'kv_2d', extra: { k_3d: null, end3d: { inherited: true } } })), null);
-  const g = { key: 'kv_kt', label: 'x', params: { n: 6 }, rows: [row({ key: 'kv_2d', measured: 5.8, model: 6.44, delta_pct: 11 })] };
+  const inh = row({ key: 'kv', measured: 5.8, model: 6.77, extra: { corrected: true, end3d: { inherited: true, current: true } } });
+  assert.equal(M.rowNote(inh).key, 'inheritedFactor');
+  assert.equal(M.rowNote(row({ key: 'kt', extra: { corrected: true, end3d: { inherited: false, current: false } } })).key, 'storedFactor');
+  assert.equal(M.rowNote(row({ key: 'kt', extra: { corrected: true, end3d: { inherited: false, current: true } } })), null);
+  // an uncorrected row never carries the factor note, and Kv / Kt rows form no speed series (no chart)
+  assert.equal(M.rowNote(row({ key: 'kv', extra: { corrected: false, end3d: { inherited: true } } })), null);
+  const g = { key: 'kv_kt', label: 'x', params: { n: 6 }, rows: [row({ key: 'kv', measured: 5.8, model: 6.44, delta_pct: 11 })] };
   assert.equal(M.seriesOf(g), null);
   assert.equal(M.fmtValue(5.8), '5.80');
   assert.equal(M.fmtValue(2.016), '2.02');
@@ -238,7 +238,7 @@ t('the no-bearings empty state has its own note, not "no model point"', () => {
   assert.equal(M.rowNote(row({ key: 'no_bearings', status: 'no_model' })).key, 'noBearings');
 });
 
-t('every tab has an English and a Chinese label and tooltip, and the bearings tooltip says model', async () => {
+t('every tab has an English and a Chinese label and tooltip, and the bearings tooltip says simulation', async () => {
   const { readFileSync } = await import('node:fs');
   const load = (l) => JSON.parse(readFileSync(new URL(`../../../locales/${l}/production.json`, import.meta.url), 'utf8')).tests;
   const en = load('en'); const zh = load('zh-CN');
@@ -248,7 +248,7 @@ t('every tab has an English and a Chinese label and tooltip, and the bearings to
       assert.ok(d.tabsTip[tab], `tabsTip.${tab}`);
     }
   }
-  assert.match(en.tabsTip.bearings, /MODEL values/);
+  assert.match(en.tabsTip.bearings, /SIMULATION values/);
   assert.match(en.tabsTip.bearings, /only measured figure is the total free-run loss/);
   assert.match(en.tabsTip.constants, /line-line peak/);
   assert.ok(en.basis.bearings_model && zh.basis.bearings_model);
@@ -256,7 +256,13 @@ t('every tab has an English and a Chinese label and tooltip, and the bearings to
   for (const k of ['bearing_sum', 'bearings_none']) {
     assert.ok(en.group[k] && zh.group[k], k);
   }
-  assert.match(en.group.bearing_sum, /model/);
+  assert.match(en.group.bearing_sum, /simulation/);
+  // one simulation value: no 2-D / 3-D / model wording and no "×k" in any visible Tests text, EN or zh-CN
+  const all = (o) => Object.values(o).flatMap((v) => (typeof v === 'string' ? [v] : all(v)));
+  for (const text of all(en)) assert.doesNotMatch(text, /2-D|3-D|model|×\{k\}/i, text);
+  for (const text of all(zh)) assert.doesNotMatch(text, /模型|二维|三维|2-D|3-D|×\{k\}/, text);
+  assert.equal(en.col.model, 'Simulation');
+  assert.equal(zh.col.model, '仿真');
 });
 
 t('pasted free-run rows in the slash format, "-" = not measured, a bad row reported by its line', () => {

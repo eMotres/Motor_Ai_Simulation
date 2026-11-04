@@ -161,28 +161,30 @@ def _lsq(pts):
     return sum(n * v for n, v in pts) / sum(n * n for n, _ in pts)
 
 
-def test_kv_kt_rows_bench_model_2d_and_3d_each_with_its_difference():
+def test_kv_kt_rows_are_bench_and_the_corrected_simulation_with_its_difference():
     g = _groups(_noload(end3d={"k_flux": 0.9502}))
     rows = _by_key(g["kv_kt"])
-    assert list(rows) == ["kv_slope_2d", "kv_slope_3d", "kv_2d", "kv_3d", "kt_2d", "kt_3d"]       # one Kv, no rms Kv
+    assert list(rows) == ["kv_slope", "kv", "kt"]                  # one row per quantity, one Kv, no rms Kv
     # all six bench rows, the low one included
     pts = [(n, (0.96 if n == 3036 else 1.0) * BENCH_SLOPE / 1000.0 * n) for n in BENCH_RPM]
     s_all = 1000 * _lsq(pts)
     b = C.kv_ke_kt(s_all)
-    assert rows["kv_slope_2d"]["measured"] == pytest.approx(s_all)
-    assert rows["kv_2d"]["measured"] == pytest.approx(b["kv"]) and rows["kt_2d"]["measured"] == pytest.approx(b["kt"])
-    # model 2-D: the stored no-load duty at the bench magnet temperature (65 C = the duty's own, ratio 1)
-    assert rows["kv_slope_2d"]["model"] == pytest.approx(MODEL_SLOPE)
+    assert rows["kv_slope"]["measured"] == pytest.approx(s_all)
+    assert rows["kv"]["measured"] == pytest.approx(b["kv"]) and rows["kt"]["measured"] == pytest.approx(b["kt"])
+    # the stored no-load duty at the bench magnet temperature (65 C = the duty's own, ratio 1), with the flux factor on the
+    # EMF slope: Kv divides by it, Kt multiplies (k_T absent -> the flux factor)
     m2 = C.kv_ke_kt(MODEL_SLOPE)
-    assert rows["kv_2d"]["model"] == pytest.approx(m2["kv"]) and rows["kt_2d"]["model"] == pytest.approx(m2["kt"])
-    assert rows["kv_2d"]["delta_pct"] == pytest.approx(100 * (m2["kv"] / b["kv"] - 1))
-    # model 3-D: the flux factor on the EMF slope, Kv divides by it, Kt multiplies (k_T absent -> the flux factor)
-    assert rows["kv_slope_3d"]["model"] == pytest.approx(MODEL_SLOPE * 0.9502)
-    assert rows["kv_3d"]["model"] == pytest.approx(m2["kv"] / 0.9502)
-    assert rows["kt_3d"]["model"] == pytest.approx(m2["kt"] * 0.9502)
-    assert rows["kt_3d"]["delta_pct"] == pytest.approx(100 * (m2["kt"] * 0.9502 / b["kt"] - 1))
-    assert rows["kt_2d"]["unit"] == "N·m/A" and rows["kv_2d"]["unit"] == "rpm/V"
-    assert rows["kt_3d"]["tip"] == "kv_kt" and g["kv_kt"]["tip"] == "kv_kt"
+    assert rows["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE * 0.9502)
+    assert rows["kv"]["model"] == pytest.approx(m2["kv"] / 0.9502)
+    assert rows["kt"]["model"] == pytest.approx(m2["kt"] * 0.9502)
+    assert rows["kv"]["delta_pct"] == pytest.approx(100 * (m2["kv"] / 0.9502 / b["kv"] - 1))
+    assert rows["kt"]["delta_pct"] == pytest.approx(100 * (m2["kt"] * 0.9502 / b["kt"] - 1))
+    assert rows["kt"]["unit"] == "N·m/A" and rows["kv"]["unit"] == "rpm/V"
+    assert rows["kt"]["tip"] == "kv_kt" and g["kv_kt"]["tip"] == "kv_kt"
+    assert rows["kv"]["extra"]["corrected"] is True
+    for grp in g.values():                                          # no 2-D / 3-D wording anywhere in the visible text
+        for text in [grp["label"], grp.get("basis") or ""] + [r["label"] + " " + r["detail"] for r in grp["rows"]]:
+            assert "2-D" not in text and "3-D" not in text and "\u00d7" not in text, text
     assert "kv_kt" in __import__("motor_ai_sim.motor_tests.compare", fromlist=["TIPS"]).TIPS
 
 
@@ -196,13 +198,13 @@ def test_the_low_bench_row_is_flagged_on_its_emf_row_and_the_slope_is_reported_b
     assert all(emf[n]["extra"]["slope_flagged"] is False and emf[n]["extra"]["in_slope"] for n in emf if n != 3036)
     # off by default: group 1 has ALL six rows; group 2 repeats the fit without the flagged one
     all_rows, ex = _by_key(g["kv_kt"]), _by_key(g["kv_kt_ex"])
-    assert all_rows["kv_2d"]["extra"]["n_rows"] == 6 and all_rows["kv_2d"]["extra"]["excluded_rpm"] == []
-    assert ex["kv_2d"]["extra"]["n_rows"] == 5 and ex["kv_2d"]["extra"]["excluded_rpm"] == [3036.0]
+    assert all_rows["kv"]["extra"]["n_rows"] == 6 and all_rows["kv"]["extra"]["excluded_rpm"] == []
+    assert ex["kv"]["extra"]["n_rows"] == 5 and ex["kv"]["extra"]["excluded_rpm"] == [3036.0]
     assert "3036" in g["kv_kt_ex"]["label"] and g["kv_kt_ex"]["params"] == {"rpm": "3036"}
-    assert ex["kv_slope_2d"]["measured"] == pytest.approx(BENCH_SLOPE) and ex["kt_2d"]["measured"] == pytest.approx(C.kv_ke_kt(BENCH_SLOPE)["kt"])
-    assert all_rows["kv_slope_2d"]["measured"] < BENCH_SLOPE                       # the low row pulls the slope down
+    assert ex["kv_slope"]["measured"] == pytest.approx(BENCH_SLOPE) and ex["kt"]["measured"] == pytest.approx(C.kv_ke_kt(BENCH_SLOPE)["kt"])
+    assert all_rows["kv_slope"]["measured"] < BENCH_SLOPE                       # the low row pulls the slope down
     # the model is fitted over the same rows (here it is exactly proportional to speed)
-    assert all_rows["kv_slope_2d"]["model"] == pytest.approx(MODEL_SLOPE) == pytest.approx(ex["kv_slope_2d"]["model"])
+    assert all_rows["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE * 0.9502) == pytest.approx(ex["kv_slope"]["model"])
     assert "Kv" in g["kv_kt"]["label"] and g["kv_kt"]["basis_key"] == "kv_3d" and g["kv_kt_ex"]["basis_key"] == "kv_ex_3d"
 
 
@@ -210,42 +212,45 @@ def test_a_clean_sweep_gets_one_group_and_no_flag():
     g = _groups(_noload(), _bench(low_row=False))
     assert "kv_kt_ex" not in g and "kv_kt" in g
     assert not any(r["extra"]["slope_flagged"] for r in g["emf_peak"]["rows"])
-    assert _by_key(g["kv_kt"])["kv_slope_2d"]["measured"] == pytest.approx(BENCH_SLOPE)
+    assert _by_key(g["kv_kt"])["kv_slope"]["measured"] == pytest.approx(BENCH_SLOPE)
 
 
-def test_without_a_passport_only_the_2d_rows_and_they_say_so():
+def test_without_a_passport_the_value_stays_and_says_not_corrected_yet():
     g = _groups(_noload())
-    assert list(_by_key(g["kv_kt"])) == ["kv_slope_2d", "kv_2d", "kt_2d"]
-    assert g["kv_kt"]["basis_key"] == "kv_2d" and g["kv_kt"]["basis"].endswith("2-D, no 3-D passport")
+    rows = _by_key(g["kv_kt"])
+    assert list(rows) == ["kv_slope", "kv", "kt"]
+    assert g["kv_kt"]["basis_key"] == "kv_2d" and g["kv_kt"]["basis"].endswith("not corrected yet")
+    assert rows["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE) and rows["kv"]["extra"]["corrected"] is False
+    assert rows["kv"]["detail"].endswith("not corrected yet")
 
 
 def test_the_measured_torque_factor_goes_on_kt_and_is_named():
     g = _groups(_noload(end3d={"k_flux": 0.95, "k_T": 0.98}))
     rows = _by_key(g["kv_kt"])
-    assert rows["kt_3d"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kt"] * 0.98)
-    assert "measured k_T" in rows["kt_3d"]["detail"]
-    assert rows["kv_3d"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kv"] / 0.95)
-    assert rows["kt_3d"]["extra"]["end3d"]["k_torque"] == pytest.approx(0.98)
+    assert rows["kt"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kt"] * 0.98)
+    assert rows["kt"]["extra"]["end3d"]["torque_basis"] == "3-D"
+    assert rows["kv"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kv"] / 0.95)
+    assert rows["kt"]["extra"]["end3d"]["k_torque"] == pytest.approx(0.98)
 
 
-def test_the_3d_factor_provenance_is_carried_inherited_stored_or_current():
-    cur = _by_key(_groups(_noload(end3d={"k_flux": 0.9502, "adopted_utc": "2026-10-02T10:00:00Z"}))["kv_kt"])["kv_3d"]
+def test_the_factor_provenance_is_carried_inherited_stored_or_current():
+    cur = _by_key(_groups(_noload(end3d={"k_flux": 0.9502, "adopted_utc": "2026-10-02T10:00:00Z"}))["kv_kt"])["kv"]
     p = cur["extra"]["end3d"]
     assert p["inherited"] is False and p["stale"] is False and p["current"] is True and p["date"] == "2026-10-02"
     inh = _by_key(_groups(_noload(end3d={"k_flux": 0.9502, "inherited": True,
-                                          "inherited_note": "coefficient of an EARLIER geometry"}))["kv_kt"])["kv_3d"]
+                                          "inherited_note": "coefficient of an EARLIER geometry"}))["kv_kt"])["kv"]
     assert inh["extra"]["end3d"]["inherited"] is True and inh["extra"]["end3d"]["stale"] is True
-    assert "earlier geometry" in inh["detail"] and inh["extra"]["end3d"]["inherited_note"].startswith("coefficient")
-    stored = _by_key(_groups(_noload(stored={"k_flux": 0.9502}))["kv_kt"])["kv_3d"]
+    assert "factor of an earlier geometry" in inh["detail"] and inh["extra"]["end3d"]["inherited_note"].startswith("coefficient")
+    stored = _by_key(_groups(_noload(stored={"k_flux": 0.9502}))["kv_kt"])["kv"]
     assert stored["extra"]["end3d"]["current"] is False and stored["extra"]["end3d"]["stale"] is True
-    assert "stored with the duty" in stored["detail"]
+    assert stored["extra"]["end3d"]["current"] is False
     # nothing is recomputed: the factor is the one given
-    assert inh["extra"]["k_3d"] == 0.9502
+    assert inh["extra"]["end3d"]["k_flux"] == 0.9502 and inh["extra"]["corrected"] is True
 
 
 def test_delta_connection_names_the_per_winding_factor():
-    star = _by_key(_groups(_noload())["kv_kt"])["kt_2d"]["extra"]
-    delta = _by_key(_groups(_noload(star_delta="delta"))["kv_kt"])["kt_2d"]["extra"]
+    star = _by_key(_groups(_noload())["kv_kt"])["kt"]["extra"]
+    delta = _by_key(_groups(_noload(star_delta="delta"))["kv_kt"])["kt"]["extra"]
     assert star["connection"] == "star" and star["winding_a_factor"] == 1.0
     assert delta["connection"] == "delta" and delta["winding_a_factor"] == pytest.approx(math.sqrt(3.0))
 
@@ -254,8 +259,8 @@ def test_the_bench_constants_stand_without_a_model_point():
     m = model_source.from_docs({}, {"winding": {"star_delta": "star"}, "duties": []}, {}, LIB)
     g = _groups(m)
     rows = _by_key(g["kv_kt"])
-    assert rows["kv_2d"]["measured"] is not None and rows["kv_2d"]["model"] is None
-    assert rows["kv_2d"]["status"] == "no_model" and rows["kt_2d"]["delta_pct"] is None
+    assert rows["kv"]["measured"] is not None and rows["kv"]["model"] is None
+    assert rows["kv"]["status"] == "no_model" and rows["kt"]["delta_pct"] is None
 
 
 def test_one_row_or_no_voltage_gives_no_kv_group():
@@ -272,7 +277,7 @@ def test_kv_is_formed_from_the_peak_even_when_only_rms_was_read():
     rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"magnet_temp_c": 65.0},
                             "rows": [{"rpm": n, "v_ll_rms_v": BENCH_SLOPE / 1000.0 * n / math.sqrt(2.0)}
                                      for n in (1000, 2000, 3000, 4000)]}, who="eng@example.test")
-    r = _by_key(_groups(_noload(), rec)["kv_kt"])["kv_2d"]
+    r = _by_key(_groups(_noload(), rec)["kv_kt"])["kv"]
     assert r["measured"] == pytest.approx(C.kv_ke_kt(BENCH_SLOPE)["kv"])        # rpm per V of PEAK, not of rms
     assert all("rms" not in k for k in _by_key(_groups(_noload(), rec)["kv_kt"]))
 
@@ -282,7 +287,7 @@ def test_the_report_rows_carry_the_new_groups_without_changes():
     rec = _bench()
     cmp_ = comparison.compare_record(rec, _noload(end3d={"k_flux": 0.9502}), "D", "C")
     labels = [r["label"] for g in cmp_["groups"] for r in g["rows"] if g["key"].startswith("kv_kt")]
-    assert "Kv (rpm per V line-line peak), model 3-D" in labels and "Kt per A rms phase current, model 2-D" in labels
+    assert "Kv (rpm per V line-line peak)" in labels and "Kt per A rms phase current" in labels
     assert not any("rms" in l and "Kv" in l for l in labels)
     assert R._fmt(5.8) == "5.80"
 
@@ -313,7 +318,7 @@ def test_bearings_tab_is_one_model_group_the_total_of_all_bearings():
                                    rotor_mass_kg=1.5)
     assert _by_key_rows(g["bearing_sum"], 3000)["model"] == pytest.approx(res["P_bearings_W"])
     # two different cards: both names; it stays a model value (no measurement, no delta)
-    assert g["bearing_sum"]["label"] == "Bearings, 6010-2RZ/HC5C3 + 618/8-2Z (model)"
+    assert g["bearing_sum"]["label"] == "Bearings, 6010-2RZ/HC5C3 + 618/8-2Z (simulation)"
     assert g["bearing_sum"]["basis_key"] == "bearings_model"
     assert all(r["measured"] is None and r["delta_pct"] is None for r in g["bearing_sum"]["rows"])
     assert len(g["bearing_sum"]["rows"]) == 3
@@ -324,7 +329,7 @@ def test_bearings_label_says_2_x_card_when_both_ends_use_the_same_card():
     rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"ambient_c": 25.0}, "rows": rows},
                            who="eng@example.test")
     g = _groups(_bearing_model(("6010-2RZ/HC5C3", "6010-2RZ/HC5C3")), rec)
-    assert g["bearing_sum"]["label"] == "Bearings, 2 x 6010-2RZ/HC5C3 (model)"
+    assert g["bearing_sum"]["label"] == "Bearings, 2 x 6010-2RZ/HC5C3 (simulation)"
     assert g["bearing_sum"]["params"]["cards"] == "2 x 6010-2RZ/HC5C3"
 
 

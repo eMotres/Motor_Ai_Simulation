@@ -54,3 +54,18 @@ t('the geometry signature stamps only an OFF flag', () => {
   const keys = off.split('|').map((p) => p.split(':')[0]);
   assert.deepEqual(keys, [...keys].sort());
 });
+
+t('stamps of one machine do not differ; another machine does', () => {
+  const { geoSigsDiffer: d } = G;
+  const a = 'air_gap:0.65|rotor_inner_radius:52.94999999999999|stator_outer_radius:100';
+  assert.equal(d(a, a), false);
+  // the same geometry through another route: float noise, a key only one side has
+  assert.equal(d(a, 'air_gap:0.65|rotor_inner_radius:52.95|stator_outer_radius:100'), false);
+  assert.equal(d(a, a + '|wire_parallel:1'), false);
+  // a real change, however small above the tolerance
+  assert.equal(d(a, 'air_gap:0.66|rotor_inner_radius:52.95|stator_outer_radius:100'), true);
+  // the notch flag is stamped only when off, so absent against present IS a change
+  assert.equal(d(a, a + '|stator_outer_notches:0'), true);
+  // unknown is not "changed"
+  assert.equal(d(a, ''), false);
+});

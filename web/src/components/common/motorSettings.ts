@@ -8,7 +8,7 @@
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
-import { geoSignature, liveGeoSig } from './geoSig';
+import { geoSigsDiffer, geoSignature, liveGeoSig } from './geoSig';
 
 // [localStorage suffix, preset key].  localStorage values are JSON-encoded.
 const MESH_MAP: [string, string][] = [
@@ -64,7 +64,7 @@ export function readSimMetrics(): Record<string, number> | undefined {
     // later re-checks.  A stamp mismatch means "not this machine": drop the
     // metrics and let the backend fall back to a deterministic recompute.
     const live = liveGeoSig();
-    if (s._geoSig && live && s._geoSig !== live) {
+    if (s._geoSig && live && geoSigsDiffer(s._geoSig, live)) {
       console.warn('[stale] sim.lastSummary was solved on a different machine — '
         + 'saving this motor WITHOUT metrics rather than with another motor\'s');
       return undefined;

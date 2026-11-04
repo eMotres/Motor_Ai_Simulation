@@ -23,7 +23,7 @@ import SummaryTable        from './SummaryTable';
 import StoredRunSelector   from './StoredRunSelector';
 import SimPointSwitcher    from './SimPointSwitcher';
 import { useMotorStore }   from '../../stores/motorStore';
-import { geoSignature }    from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { applyS1AsOperatingPoint, s1AutoSetPlan, s1AutoSetNoticeText }
                             from './coupledApi';
 import type { TransientSummary } from './SummaryTable';
@@ -159,7 +159,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
     () => geoSignature(liveGeometry as Record<string, unknown>), [liveGeometry]);
   const summaryStale = !appliedSummary && !!transientSummary && (
     ((transientSummary as any)._geoSig != null
-      && (transientSummary as any)._geoSig !== liveGeoSig)
+      && geoSigsDiffer((transientSummary as any)._geoSig, liveGeoSig))
     || (transientSummary as any)._geoStaleBackend === true);
   // "vs applied point" delta chip removed (user request 2026-08-20): the
   // header line had no room for it and the η delta was routinely nonsense

@@ -19,7 +19,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
-import { geoSignature } from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 // THE REQUEST BODY of an Electromagnetic run — shared with the Thermal tab,
 // which builds the same one when it has to make the run its own solve was
@@ -382,7 +382,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const geoSig = useMemo(() => geoSignature(geometry as Record<string, unknown>),
                          [geometry]);
   const geoStale = !!data && (
-    (data._geoSig != null && data._geoSig !== geoSig)
+    (data._geoSig != null && geoSigsDiffer(data._geoSig, geoSig))
     || data.stale_geometry === true);
 
   // Poll the backend /progress endpoint so we can show a live "Computing X/N

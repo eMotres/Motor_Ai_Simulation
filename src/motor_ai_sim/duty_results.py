@@ -996,7 +996,8 @@ _COOLING_KEYS = ("mode", "h_conv", "t_sink_c", "t_in_c", "t_out_c", "flow_lpm",
                  "h_rad", "h_total", "t_wall_c", "t_film_c", "emissivity",
                  "convection_W", "radiation_W", "regime",
                  # the stator-OD sleeve block (2026-11-03) — only on a map
-                 # solved with stator_od_cooling='sleeve_contact'
+                 # solved with stator_od_cooling='sleeve_contact' or
+                 # 'sleeve_channels'
                  "stator_od")
 
 #: One axial end face's block, as ``compact_thermal`` keeps it.  The per-face

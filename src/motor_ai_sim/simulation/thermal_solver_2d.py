@@ -89,6 +89,7 @@ def solve_steady_thermal(
     volume_sinks: Optional[Sequence[Dict[str, Any]]] = None,
     lumped_nodes: Optional[Sequence[Dict[str, Any]]] = None,
     node_links: Optional[Sequence[Dict[str, Any]]] = None,
+    od_contour: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return the solved sub-mesh, its temperature field and its heat budget.
 
@@ -192,6 +193,11 @@ def solve_steady_thermal(
     node reports ``q_W``, and ``node_links`` the heat each link carries a → b,
     in the same wedge watts as everything else.  No links and no ``q_W`` is
     the 2026-09-26 behaviour bit for bit.
+
+    ``od_contour`` (2026-11-04) is ``{"opening_spans_rad": [(theta_mid,
+    theta_half), ...], "arc_r_min_m": float}``: it adds the facet sets
+    ``"od_contour_arcs"`` and ``"od_contour_notches"`` (``od_contour_split``) for
+    a surface to act on.  Absent, nothing about the solve changes.
 
     ``surfaces[i]["t_mean_c"]`` (2026-09-14) is the AREA-MEAN WALL TEMPERATURE of
     that surface, ∫T dA / A over the facets the film acts on — the surface-side
@@ -465,6 +471,13 @@ def solve_steady_thermal(
     spec: List[Dict[str, Any]] = list(surfaces or [
         {"name": "outer", "h": float(h_conv), "t_sink": float(t_ambient)}])
     facet_sets = {"outer": outer_sel, "bore": bore_sel, "outer_od": od_sel}
+    # THE OD CONTOUR, split by the stator polygon (2026-11-04), only when asked.
+    if od_contour is not None:
+        _arcs, _notches = od_contour_split(
+            mesh, outer_sel, od_contour.get("opening_spans_rad") or (),
+            arc_r_min_m=float(od_contour.get("arc_r_min_m") or 0.0))
+        facet_sets["od_contour_arcs"] = _arcs
+        facet_sets["od_contour_notches"] = _notches
 
     active: List[Dict[str, Any]] = []
     for s in spec:
@@ -1006,6 +1019,35 @@ def wedge_cut_facets(mesh, bnd: np.ndarray, *, tol_rad: float = 2e-3) -> np.ndar
     radial = np.abs(r0 - r1) > 0.25 * np.hypot(p[0][fn[0]] - p[0][fn[1]],
                                                p[1][fn[0]] - p[1][fn[1]])
     return bnd[(on_lo | on_hi) & radial]
+
+
+def od_contour_split(mesh, contour: np.ndarray, opening_spans_rad, *,
+                     arc_r_min_m: float = 0.0) -> "tuple[np.ndarray, np.ndarray]":
+    """The stator's outer contour (``outer_contour_facets``) as ``(arcs, notches)``,
+    split by the stator POLYGON so the two wetted areas do not follow the mesh.
+
+    A radius test on the facets would: "outer_od" wants both ends within 2e-4·R of
+    the circle, and the OD of a coarse mesh is a polyline whose inserted nodes need
+    not be (measured on one builder path: 12 of 54 arc facets).  Here the polygon's
+    notch openings ``(theta_mid, theta_half)`` decide: the midpoint's ANGLE inside
+    an opening is a notch facet (walls, root, corner fillets), and so is a midpoint
+    below ``arc_r_min_m`` (half the measured notch depth under the OD): a
+    parallel-walled notch runs outside its opening's angle as it deepens, and no
+    chord of the OD ever sags that far.  Any other facet is an arc.  The two sets
+    partition the contour by construction.
+    """
+    empty = np.array([], int)
+    if contour.size == 0:
+        return empty, empty
+    mx = mesh.p[0][mesh.facets[:, contour]].mean(axis=0)
+    my = mesh.p[1][mesh.facets[:, contour]].mean(axis=0)
+    th = np.arctan2(my, mx)
+    in_notch = np.hypot(mx, my) < float(arc_r_min_m)
+    for mid, half in opening_spans_rad:
+        # the tolerance keeps a radial wall exactly on the opening's edge in
+        in_notch |= (np.abs(np.angle(np.exp(1j * (th - float(mid)))))
+                     <= float(half) + 1e-6)
+    return contour[~in_notch], contour[in_notch]
 
 
 def _domain_boundary_flux(p: np.ndarray, t: np.ndarray, flux: np.ndarray,

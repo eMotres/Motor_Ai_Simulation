@@ -3,7 +3,8 @@ import { parseActivity } from './stageBar';
 import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
-import type { ProjectQuote, SharedQuoteMark } from './quote';
+import type { ProjectQuote, SharedQuoteMark } from './quote';
+import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
 import type { AdminTimeline, ProjectTimeline, TimelineDoc } from './timeline';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
@@ -108,6 +109,12 @@ export const developmentApi = {
     call<MotorView>('GET', `${p(id)}/motors/view?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
   motorField: (id: string, die: string, config: string, duty: string, kind: FieldKind, showAll = false) =>
     call<StoredField>('GET', `${p(id)}/motors/field?die=${enc(die)}&config=${enc(config)}&duty=${enc(duty)}&kind=${kind}${showAll ? '&show_all=true' : ''}`),
+  /** The computed POINTS of one project motor for the read-only Simulation view (GET only; nothing is solved or activated). */
+  motorSimPoints: (id: string, die: string, config: string, showAll = false) =>
+    call<SimStoredPoints>('GET', `${p(id)}/motors/sim?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
+  /** One stored run (summary + waveforms) of one point, read-only. */
+  motorSimRun: (id: string, die: string, config: string, duty: string, drive: string, showAll = false) =>
+    call<SimStoredRun>('GET', `${p(id)}/motors/sim/run?die=${enc(die)}&config=${enc(config)}&duty=${enc(duty)}&drive=${enc(drive)}${showAll ? '&show_all=true' : ''}`),
   /** Staff only: mark / unmark the variant's report as checked (members may download it only then). */
   setReportReviewed: (id: string, die: string, config: string, value: boolean) => call<unknown>('PATCH', `${p(id)}/motors/report_reviewed`, { die, config, value }),
   /** Staff only: THE recommended variant of the project (setting it clears the previous one). */

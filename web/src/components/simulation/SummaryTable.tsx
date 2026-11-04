@@ -462,6 +462,10 @@ interface Props {
   // the Optimize tab already uses the new point), flag the result as stale so the
   // Sim numbers aren't mistaken for the current point.
   liveOp?: { current?: number; gamma?: number; connection?: string; rpm?: number };
+  /** READ-ONLY (owner 2026-11-04): a stored card shown to a project member.  Nothing is compared with the workbench
+   *  (live geometry, materials, operating point), nothing is fetched, written or offered: no Compare, Recompute or
+   *  Refine ripple. */
+  readOnly?: boolean;
 }
 
 /** Short label of a run's torque method (its own stored label). */
@@ -528,7 +532,7 @@ const Cell: React.FC<{
   return tooltip ? <Tooltip title={tooltip} placement="top">{cell}</Tooltip> : cell;
 };
 
-const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
+const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, readOnly = false }) => {
   useTranslation('results'); // re-render on language change; lazy-loads the namespace
   // Hook FIRST — the empty-state early-return below must not sit between the
   // component entry and a hook call.
@@ -617,7 +621,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
     // second answer computed from today's assignment would contradict the
     // efficiency stored beside them.  The fetch stays for runs solved before
     // 2026-09-08 — see the cells' tooltip, which says which one is on screen.
-    if (!(sumRpm > 0) || runCarriesMech) { setMech(null); return; }
+    if (readOnly || !(sumRpm > 0) || runCarriesMech) { setMech(null); return; }
     const ac = new AbortController();
     void fetchBearingLosses({ rpm: sumRpm, rotorMassKg: sumMass,
                               signal: ac.signal })
@@ -634,7 +638,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       window.removeEventListener('family-changed', on);
       window.removeEventListener('family-context-changed', on);
     };
-  }, [sumRpm, sumMass, runCarriesMech]);
+  }, [sumRpm, sumMass, runCarriesMech, readOnly]);
 
   const [apply3d, setApply3dState] = React.useState<boolean>(() => {
     // ON unless the user switched it off (user 2026-09-03): the machine's
@@ -658,12 +662,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             {tx('simulationSummaryRealFemResults')}
           </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
+          {!readOnly && <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
             <AddToCompareButton />
-          </Box>
+          </Box>}
         </Box>
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-          {loading
+          {readOnly ? 'No summary is stored for this run.' : loading
             ? 'Computing transient FEM — summary will appear when the run completes…'
             : 'No transient data yet — press “Run Simulation” in the left panel.'}
         </Typography>
@@ -750,7 +754,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // cells apply, stamp WHICH buttons were pressed, and publish.  A plain
   // localStorage write keyed to render values — deterministic, no effect
   // ordering games around the early return above.
-  try {
+  if (!readOnly) try {
     const view: any = {
       ...s,
       R_phase_ohm: s.R_phase_ohm != null ? s.R_phase_ohm * rf : s.R_phase_ohm,
@@ -843,14 +847,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // Two independent witnesses: this client's stamp, and the backend's own
   // fingerprint verdict on a restored run.  Unknown (unstamped legacy run) is
   // NOT treated as fresh — it simply cannot raise this flag on its own.
-  const geoStale = (!!s._geoSig && !!liveSig && geoSigsDiffer(s._geoSig, liveSig))
-                   || s._geoStaleBackend === true;
+  const geoStale = !readOnly && ((!!s._geoSig && !!liveSig && geoSigsDiffer(s._geoSig, liveSig))
+                   || s._geoStaleBackend === true);
   // MATERIALS staleness (user 2026-08-25: a run with the old steel showed as
   // current after the assignment changed — "the numbers match the hardware
   // that was there before").  The run's grades are in its own mass rows
   // ("Stator core (B15AHV950M)"); the live ones are what the next run will
   // use (currentMatJson — the same payload the solve carries).
-  const matDiffs: string[] = (() => {
+  const matDiffs: string[] = readOnly ? [] : (() => {
     try {
       const j = currentMatJson();
       if (!j) return [];
@@ -997,7 +1001,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             layers run; a ripple whose ring check failed is marked and refined
             only on request — the same point at >= 3 layers/side, nothing about
             the machine's mesh or the duty changes. */}
-        {canRefineRipple(s) && (
+        {!readOnly && canRefineRipple(s) && (
           <>
             <Tooltip title={tx('rippleNotAccurateTip', {
               err: s.ripple_self_check_rel != null ? fmt(s.ripple_self_check_rel * 100, 0) : '>5',
@@ -1026,9 +1030,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         )}
         {/* Snapshot THIS design as a comparison point (Compare tab). Sits next to
             the numbers it captures, so it is obvious what gets saved. */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
+        {!readOnly && <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
           <AddToCompareButton />
-        </Box>
+        </Box>}
         {/* Operating-point text removed (user: "remove it — it's clear without it",
             the panel inputs above already say it).  The line SURVIVES as the
             carrier of the warnings: stale ⚠, non-converged, snapped steps,

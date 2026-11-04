@@ -220,7 +220,12 @@ def principal_is_admin(email: str) -> bool:
         return False
     if ident == ADMIN_OWNER or ident in _ADMIN_EMAILS:
         return True
-    return _registry_role(ident) == "admin"
+    try:                                    # a read-only look: never provision an account from a permission question
+        from motor_ai_sim import users as _users
+        rec = _users._load().get(ident)
+    except Exception:                       # noqa: BLE001 - unreadable registry = not an admin (fail closed)
+        return False
+    return bool(rec) and str(rec.get("role") or "") == "admin" and not rec.get("disabled")
 
 
 def solve_refusal_body(your_role: str = "") -> dict:

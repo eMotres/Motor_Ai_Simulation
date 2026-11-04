@@ -459,13 +459,12 @@ def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]]
 
 
 def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The Bearings tab of a free-run test: the MODEL's bearing loss at each bench speed, and the one measured figure there is.
+    """The Bearings tab of a free-run test: ONE group, the MODEL's total loss of all bearings at each bench speed.
 
-    Model values come from ``bearings.machine_bearing_losses`` (SKF friction, rotor weight as radial load) through the
-    injected ``mech`` function: one group per bearing end the configuration names (A and B may be different cards), their
-    sum, and that sum as a share of the MEASURED total free-run loss.  The measured total (shaft power) is shown on its own:
-    the bearings are not separated in it, so no difference is formed and nothing here is a measured bearing loss.
-    A configuration without bearings gets the empty state - no number is made up."""
+    Values come from ``bearings.machine_bearing_losses`` (SKF friction, rotor weight as radial load) through the injected
+    ``mech`` function; the group is labelled from the cards ("Bearings, 2 x CARD (model)" when every end uses the same
+    card, else the card names joined).  It is a model value, never a measured bearing loss (the measured total stays in
+    the Free-run tab).  A configuration without bearings gets the empty state - no number is made up."""
     rows = [r for r in rows_in if num(r.get("rpm"))]
     if not rows:
         return []
@@ -474,49 +473,25 @@ def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: D
             _row("no_bearings", "no bearings assigned to this configuration", "", None, None, status="no_model")],
             tip="bearings")]
     amb = num((rec.get("conditions") or {}).get("ambient_c"))
-    per_end: Dict[str, List[Dict[str, Any]]] = {}
     cards: Dict[str, str] = {}
     sums: List[Dict[str, Any]] = []
-    meas: List[Dict[str, Any]] = []
-    share: List[Dict[str, Any]] = []
     for r in rows:
         n = float(r["rpm"])
         t = num(r.get("temp_c")) if num(r.get("temp_c")) is not None else amb
         m = C.mech_loss_at(model.get("mech"), n, t) or {}
-        params = {"rpm": round(n)}
-        lbl = "%d rpm" % round(n)
-        det = "model, bearing temperature %s" % ("?" if t is None else "%g C" % t)
         ends = m.get("ends") or []
         for e in ends:
-            per_end.setdefault(e["end"], []).append(_row("bearing_loss", lbl, "W", None, e["p_w"], tip="bearings",
-                                                         params=params, status="info", detail=det + ", " + e["card"]))
             cards[e["end"]] = e["card"]
         if ends:
-            pb = m.get("bearings_w")
-            sums.append(_row("bearing_loss", lbl, "W", None, pb, tip="bearings", params=params, status="info", detail=det))
-            mw = num(r.get("shaft_power_w"))
-            if mw is not None and mw > 0 and pb is not None:
-                share.append(_row("bearing_share", lbl, "%", None, 100.0 * pb / mw, tip="bearings", params=params,
-                                  status="info", detail="model bearing loss / measured total free-run loss"))
-        if num(r.get("shaft_power_w")) is not None:
-            meas.append(_row("loss_total", lbl, "W", r.get("shaft_power_w"), None, tip="bearings", params=params,
-                             status="info", detail="measured shaft power at no load: bearings, windage, iron and eddy together"))
-    out: List[Dict[str, Any]] = []
-    for end in sorted(per_end):
-        out.append(_group("bearing_" + end.lower(), "Bearing %s: %s (model)" % (end, cards.get(end, "?")), per_end[end],
-                          params={"end": end, "card": cards.get(end, "?")}, tip="bearings",
-                          basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model"))
-    if sums:
-        out.append(_group("bearing_sum", "Bearings, all (model)", sums, tip="bearings",
-                          basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model"))
-    if meas:
-        out.append(_group("bearing_measured", "Free-run loss, measured total", meas, tip="bearings",
-                          basis="measured: the total only; the bearings are not separated in it", basis_key="bearings_measured"))
-    if share:
-        out.append(_group("bearing_share", "Model bearings as a share of the measured total", share, tip="bearings",
-                          basis="model bearing loss over the measured total; not a measured bearing loss",
-                          basis_key="bearings_share"))
-    return out
+            det = "model, bearing temperature %s" % ("?" if t is None else "%g C" % t)
+            sums.append(_row("bearing_loss", "%d rpm" % round(n), "W", None, m.get("bearings_w"), tip="bearings",
+                             params={"rpm": round(n)}, status="info", detail=det))
+    if not sums:
+        return []
+    names = [cards[e] for e in sorted(cards)]
+    cards_txt = "%d x %s" % (len(names), names[0]) if len(set(names)) == 1 else " + ".join(names)
+    return [_group("bearing_sum", "Bearings, %s (model)" % cards_txt, sums, params={"cards": cards_txt}, tip="bearings",
+                   basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model")]
 
 
 def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
@@ -648,12 +623,16 @@ _SERIES_QUANTITIES = (
 )
 
 
-def _load_series(points: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _load_series(points: List[Dict[str, Any]], plot_rows: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """All rows of a load record at once, for the chart beside the per-point tables (read-only, additive).
 
     ``points`` = one dict per bench row: ``{"rpm", "current", "<quantity key>": (measured, model)}``.  A quantity that no
     row has (neither measured nor modelled) is dropped; inside a quantity a row with neither value is skipped, a
-    missing value stays ``None`` (the chart never draws it as 0).  Rows are sorted by rpm."""
+    missing value stays ``None`` (the chart never draws it as 0).  Rows are sorted by rpm.
+
+    ``plot_rows`` (additive key ``points``) = the raw bench numbers of every row (rpm, phase current, torque, DC link,
+    temperatures) and, only where a stored duty matched, the model's own values (``model``): the web groups them by speed
+    and plots torque / loss / efficiency / DC current against torque or current.  Nothing is derived or invented here."""
     quantities = []
     for key, label, unit, tip in _SERIES_QUANTITIES:
         pts = []
@@ -670,12 +649,13 @@ def _load_series(points: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         quantities.append({"key": key, "label": label, "unit": unit, "tip": tip, "points": pts})
     if not quantities:
         return None
-    return {"x": "rpm", "quantities": quantities}
+    return {"x": "rpm", "quantities": quantities, "points": list(plot_rows or [])}
 
 
 def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     groups = []
     series_pts: List[Dict[str, Any]] = []
+    plot_rows: List[Dict[str, Any]] = []
     duties = model.get("duties") or []
     for r in rec.get("rows") or []:
         n, i = num(r.get("rpm")), num(r.get("i_phase_a"))
@@ -705,6 +685,9 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             "t_housing": (r.get("temp_housing_c"), None)}
         if n is not None:
             series_pts.append(sp)
+            plot_rows.append({"rpm": n, "current": i, "torque": t_meas, "v_dc": v_dc, "i_dc": i_dc,
+                              "t_winding": num(r.get("temp_winding_c")), "t_magnet": num(r.get("temp_magnet_c")),
+                              "t_housing": num(r.get("temp_housing_c")), "model": {}})
         if d is None:
             act = (_create_duty(die, config, rpm=n, current=i, model=model) if (n and i) else None)
             rows = [_row("torque", "Torque", "N·m", r.get("torque_nm"), None, tip="load", status="no_model", action=act)]
@@ -743,7 +726,11 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         sp["p_shaft"] = (sp["p_shaft"][0], None if (t_mod is None or omega is None) else t_mod * omega)
         sp["t_winding"] = (r.get("temp_winding_c"), d.get("winding_c"))
         sp["t_magnet"] = (r.get("temp_magnet_c"), d.get("magnet_c"))
-    return {"groups": groups, "fit": None, "series": _load_series(series_pts)}
+        if n is not None:
+            plot_rows[-1]["model"] = {k: num(v) for k, v in (
+                ("torque", t_mod), ("eff_system", d.get("eff_system_pct")),
+                ("t_winding", d.get("winding_c")), ("t_magnet", d.get("magnet_c"))) if num(v) is not None}
+    return {"groups": groups, "fit": None, "series": _load_series(series_pts, plot_rows)}
 
 
 # ---------------------------------------------------------------------------

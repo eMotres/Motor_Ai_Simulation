@@ -181,7 +181,12 @@
     "model3dNone": "The 3-D model has no geometry for these parts.",
     "model3dLost": "3-D view lost - reload the page",
     "document": "Process document",
-    "kinds": {"fits": "Fits", "assembly": "Assembly", "winding": "Winding", "tests": "Tests"},
+    "kinds": {
+      "fits": "Fits",
+      "assembly": "Assembly",
+      "winding": "Winding",
+      "tests": "Tests"
+    },
     "docTitle": "Process document",
     "docTip": "Generated from the assembly and test steps: the steps in the graph's numbering, each with its process sections (n.1, n.2 ...).",
     "view": "View",
@@ -462,7 +467,21 @@
         "t_winding": "Winding temperature",
         "t_magnet": "Magnet temperature",
         "t_housing": "Housing temperature"
-      }
+      },
+      "plot": {
+        "torque_current": "Torque vs current",
+        "loss_torque": "Loss vs torque",
+        "eff_torque": "System efficiency vs torque",
+        "idc_torque": "DC current vs torque",
+        "t_winding_torque": "Winding temperature vs torque",
+        "t_magnet_torque": "Magnet temperature vs torque",
+        "t_housing_torque": "Housing temperature vs torque",
+        "x_current": "Iq / phase current as logged, A",
+        "x_torque": "Torque, N·m"
+      },
+      "modelSuffix": "model",
+      "tipSpeeds": "One line per speed, straight segments between the rows. Solid = as logged, dashed = model where the model has that point.",
+      "rpm": "{rpm} rpm"
     },
     "basis": {
       "emf_3d": "magnets at {mag} °C, 3-D ×{k} ({src})",
@@ -478,9 +497,7 @@
       "kv_2d": "all {n} rows, magnets at {mag} °C, 2-D (no 3-D passport)",
       "kv_ex_3d": "without {rpm} rpm, {n} rows, magnets at {mag} °C, 3-D ×{k} ({src})",
       "kv_ex_2d": "without {rpm} rpm, {n} rows, magnets at {mag} °C, 2-D (no 3-D passport)",
-      "bearings_model": "model: SKF friction, rotor weight as the radial load; not measured",
-      "bearings_measured": "measured: the total only; the bearings are not separated in it",
-      "bearings_share": "model bearing loss over the measured total; not a measured bearing loss"
+      "bearings_model": "model: SKF friction, rotor weight as the radial load; not measured"
     },
     "note": {
       "unexplained": "unexplained {w} W",
@@ -509,11 +526,7 @@
       "kv_kt": "Kv / Kt from the EMF slope, all {n} rows",
       "kv_kt_ex": "Kv / Kt without {rpm} rpm (flagged)",
       "bearings_none": "Bearings",
-      "bearing_a": "Bearing A: {card} (model)",
-      "bearing_b": "Bearing B: {card} (model)",
-      "bearing_sum": "Bearings, all (model)",
-      "bearing_measured": "Free-run loss, measured total",
-      "bearing_share": "Model bearings as a share of the measured total",
+      "bearing_sum": "Bearings, {cards} (model)",
       "no_model": "No model point"
     },
     "row": {

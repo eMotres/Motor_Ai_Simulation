@@ -154,8 +154,7 @@ t('every group lands in exactly one tab: the row-to-tab map', () => {
     parameters: { resistance: 'resistance', inductance: 'inductance', cogging: 'parameters', lcr: 'parameters',
       insulation: 'parameters', mass: 'parameters' },
     free_run: { emf_peak: 'constants', emf_rms: 'constants', kv_kt: 'constants', kv_kt_ex: 'constants',
-      bearings_none: 'bearings', bearing_a: 'bearings', bearing_b: 'bearings', bearing_sum: 'bearings',
-      bearing_measured: 'bearings', bearing_share: 'bearings', loss: 'free_run', fit: 'free_run', no_model: 'free_run' },
+      bearings_none: 'bearings', bearing_sum: 'bearings', loss: 'free_run', fit: 'free_run', no_model: 'free_run' },
     load: { load_point: 'loads', no_model: 'loads' },
   };
   for (const [kind, groups] of Object.entries(map)) {
@@ -180,7 +179,7 @@ t('a group kind nobody mapped yet falls back to its record kind default tab, nev
 t('a record is reachable: it appears in every tab it has a group for, and a record with no group stays in its default tab', () => {
   const par = cmpOf('parameters', ['resistance', 'inductance', 'cogging', 'insulation']);
   assert.deepEqual(M.recordTabs('parameters', par).sort(), ['inductance', 'parameters', 'resistance']);
-  const fr = cmpOf('free_run', ['emf_peak', 'emf_rms', 'kv_kt', 'bearing_a', 'loss', 'fit']);
+  const fr = cmpOf('free_run', ['emf_peak', 'emf_rms', 'kv_kt', 'bearing_sum', 'loss', 'fit']);
   assert.deepEqual(M.recordTabs('free_run', fr).sort(), ['bearings', 'constants', 'free_run']);
   assert.deepEqual(M.recordTabs('free_run', cmpOf('free_run', ['emf_peak'])), ['constants']);
   for (const kind of ['parameters', 'free_run', 'load']) {
@@ -196,7 +195,7 @@ t('nothing is lost: the groups of all tabs together are exactly the groups of th
   const seen = [];
   for (const tab of TABS) seen.push(...M.cmpForTab(cmp, 'parameters', tab).groups.map((g) => g.key));
   assert.deepEqual(seen.sort(), [...keys].sort());
-  const frKeys = ['emf_peak', 'kv_kt', 'kv_kt_ex', 'bearing_a', 'bearings_none', 'loss', 'fit', 'no_model', 'brand_new'];
+  const frKeys = ['emf_peak', 'kv_kt', 'kv_kt_ex', 'bearing_sum', 'bearings_none', 'loss', 'fit', 'no_model', 'brand_new'];
   const fr = cmpOf('free_run', frKeys);
   const seenFr = [];
   for (const tab of TABS) seenFr.push(...M.cmpForTab(fr, 'free_run', tab).groups.map((g) => g.key));
@@ -252,11 +251,11 @@ t('every tab has an English and a Chinese label and tooltip, and the bearings to
   assert.match(en.tabsTip.bearings, /MODEL values/);
   assert.match(en.tabsTip.bearings, /only measured figure is the total free-run loss/);
   assert.match(en.tabsTip.constants, /line-line peak/);
-  for (const k of ['bearings_model', 'bearings_measured', 'bearings_share']) { assert.ok(en.basis[k]); assert.ok(zh.basis[k]); }
-  for (const k of ['bearing_a', 'bearing_b', 'bearing_sum', 'bearing_measured', 'bearing_share', 'bearings_none']) {
+  assert.ok(en.basis.bearings_model && zh.basis.bearings_model);
+  assert.equal(en.basis.bearings_measured, undefined);
+  for (const k of ['bearing_sum', 'bearings_none']) {
     assert.ok(en.group[k] && zh.group[k], k);
   }
-  assert.match(en.group.bearing_a, /model/);
   assert.match(en.group.bearing_sum, /model/);
 });
 
@@ -315,4 +314,57 @@ t('compute progress from the job list: waits while queued / running / unlisted, 
   const end = M.computeProgress(['a', 'c'], jobs);
   assert.deepEqual([end.done, end.failed, end.running, end.finished], [1, 1, 0, true]);
   assert.equal(M.computeProgress([], jobs).finished, false);
+});
+
+// ── per-speed load plots ────────────────────────────────────────────────────────────────────────────────────────
+const SWEEP = [
+  { rpm: 1000, current: 32, torque: 48, v_dc: 540, i_dc: 11 },
+  { rpm: 2000, current: 64, torque: 80.96, v_dc: 540, i_dc: 34.9 },
+  { rpm: 1000, current: 59, torque: 81.7, v_dc: 540, i_dc: 18.4 },
+  { rpm: 2000, current: 40, torque: 40.08, v_dc: 540, i_dc: 17.2 },
+];
+
+t('two-speed sweep: one series per speed, sorted by x, never joined across speeds', () => {
+  assert.equal(M.isPerSpeedSweep(SWEEP), true);
+  const plot = M.perSpeedSeries(SWEEP, 'torque_current');
+  assert.deepEqual(plot.speeds.map((s) => s.rpm), [1000, 2000]);
+  assert.deepEqual(plot.speeds[0].measured, [{ x: 32, y: 48 }, { x: 59, y: 81.7 }]);
+  assert.deepEqual(plot.speeds[1].measured, [{ x: 40, y: 40.08 }, { x: 64, y: 80.96 }]);
+  assert.equal(plot.speeds[0].model.length, 0);                                // no model value is invented
+  const { data, lines } = M.speedChartData(plot);
+  assert.equal(lines.length, 2);
+  assert.deepEqual(data.map((d) => d.x), [32, 40, 59, 64]);
+});
+
+t('loss and system efficiency are formed from the DC link and the shaft power, per speed, against torque', () => {
+  const loss = M.perSpeedSeries(SWEEP, 'loss_torque');
+  const eff = M.perSpeedSeries(SWEEP, 'eff_torque');
+  const at = (plot, rpm, x) => plot.speeds.find((s) => s.rpm === rpm).measured.find((p) => p.x === x).y;
+  assert.ok(Math.abs(at(loss, 1000, 81.7) - 1380) < 1);
+  assert.ok(Math.abs(at(loss, 2000, 80.96) - 1890) < 1);
+  assert.equal(at(eff, 1000, 81.7).toFixed(1), '86.1');
+  assert.equal(at(eff, 2000, 80.96).toFixed(1), '90.0');
+  assert.equal(M.perSpeedSeries(SWEEP, 'idc_torque').speeds[1].measured[1].y, 34.9);
+  assert.deepEqual(M.perSpeedSeries(SWEEP, 'idc_torque').speeds[0].measured.map((p) => p.x), [48, 81.7]);
+});
+
+t('the plot menu lists only plots with data; a missing value is a gap, not 0; speeds group by rounded rpm', () => {
+  assert.deepEqual(M.loadPlotOptions(SWEEP), ['torque_current', 'loss_torque', 'eff_torque', 'idc_torque']);
+  const rows = [{ rpm: 1000.2, current: 10, torque: 5 }, { rpm: 999.8, current: 20, torque: 9, i_dc: 3, v_dc: 50, t_winding: 40 }];
+  assert.equal(M.isPerSpeedSweep(rows), true);
+  assert.deepEqual(M.loadPlotOptions(rows), ['torque_current', 'loss_torque', 'eff_torque', 'idc_torque', 't_winding_torque']);
+  const p = M.perSpeedSeries(rows, 'loss_torque');
+  assert.equal(p.speeds.length, 1);
+  assert.equal(p.speeds[0].measured.length, 1);                                // the row without a DC link is a gap
+  assert.equal(M.perSpeedSeries(rows, 'unknown'), null);
+});
+
+t('the model side shows only where the stored duty gave a value; one row per speed keeps the rpm chart', () => {
+  const rows = [{ rpm: 1000, current: 50, torque: 10, model: { torque: 11 } }, { rpm: 1000, current: 60, torque: 12 }];
+  const p = M.perSpeedSeries(rows, 'torque_current');
+  assert.deepEqual(p.speeds[0].model, [{ x: 50, y: 11 }]);
+  assert.deepEqual(M.speedChartData(p).lines.map((l) => [l.id, l.model]), [['m0', false], ['d0', true]]);
+  assert.equal(M.isPerSpeedSweep([{ rpm: 1000 }, { rpm: 2000 }, { rpm: 3000 }]), false);
+  assert.deepEqual(M.loadPlotRows({ series: { x: 'rpm', quantities: [], points: [{ rpm: 1 }, { rpm: NaN }] } }), [{ rpm: 1 }]);
+  assert.deepEqual(M.loadPlotRows(null), []);
 });

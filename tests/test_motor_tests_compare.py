@@ -333,6 +333,11 @@ def test_a_load_sweep_carries_every_row_as_a_series_for_the_chart():
     assert [(p["rpm"], p["measured"]) for p in q["t_housing"]["points"]] == [(1000, 31.0), (3030, 45.0)]
     assert "t_winding" not in q and "t_magnet" not in q                           # nothing measured or modelled: dropped
     assert all(p["measured"] is not None or p["model"] is not None for x in q.values() for p in x["points"])
+    # the raw rows for the per-speed plots (torque / loss / efficiency against torque or current), model only where matched
+    pts = out["series"]["points"]
+    assert [(p["rpm"], p["current"], p["torque"], p["v_dc"], p["i_dc"]) for p in pts] == [
+        (1000, 50, 10.0, 48.0, 20.0), (3030, 101, 29.0, None, None), (2000, 70, 20.0, None, None)]
+    assert pts[1]["model"]["torque"] == 30.0 and pts[0]["model"] == {} and pts[2]["model"] == {}
     # no rows with anything to plot -> no series at all; the other kinds do not carry one
     assert comparison.compare_record(_record("load", rows=[{"rpm": 1000}]), _model(), "D", "C")["series"] is None
     assert "series" not in comparison.compare_record(_free_run_rec(), _model(), "D", "C")

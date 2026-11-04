@@ -181,7 +181,12 @@
     "model3dNone": "三维模型中没有这些零件的几何体。",
     "model3dLost": "三维视图已丢失，请刷新页面",
     "document": "工艺文件",
-    "kinds": {"fits": "配合", "assembly": "装配", "winding": "绕线", "tests": "测试"},
+    "kinds": {
+      "fits": "配合",
+      "assembly": "装配",
+      "winding": "绕线",
+      "tests": "测试"
+    },
     "docTitle": "工艺文件",
     "docTip": "由装配和测试步骤生成：步骤编号与流程图一致，每步附其工艺章节（n.1、n.2 …）。",
     "view": "查看",
@@ -462,7 +467,21 @@
         "t_winding": "绕组温度",
         "t_magnet": "磁钢温度",
         "t_housing": "机壳温度"
-      }
+      },
+      "plot": {
+        "torque_current": "转矩与电流",
+        "loss_torque": "损耗与转矩",
+        "eff_torque": "系统效率与转矩",
+        "idc_torque": "直流电流与转矩",
+        "t_winding_torque": "绕组温度与转矩",
+        "t_magnet_torque": "磁钢温度与转矩",
+        "t_housing_torque": "机壳温度与转矩",
+        "x_current": "Iq / 相电流（按记录），A",
+        "x_torque": "转矩，N·m"
+      },
+      "modelSuffix": "模型",
+      "tipSpeeds": "每个转速一条线，各行之间为直线段。实线 = 记录值，虚线 = 模型有该点时的模型值。",
+      "rpm": "{rpm} rpm"
     },
     "basis": {
       "emf_3d": "磁钢 {mag} °C，三维 ×{k}（{src}）",
@@ -478,9 +497,7 @@
       "kv_2d": "全部 {n} 行，磁钢 {mag} °C，二维（无三维护照）",
       "kv_ex_3d": "不含 {rpm} rpm，{n} 行，磁钢 {mag} °C，三维 ×{k}（{src}）",
       "kv_ex_2d": "不含 {rpm} rpm，{n} 行，磁钢 {mag} °C，二维（无三维护照）",
-      "bearings_model": "模型：SKF 摩擦，转子重量作径向载荷；非实测",
-      "bearings_measured": "实测：仅总损耗；其中轴承未分离",
-      "bearings_share": "模型轴承损耗占实测总损耗之比；不是实测的轴承损耗"
+      "bearings_model": "模型：SKF 摩擦，转子重量作径向载荷；非实测"
     },
     "note": {
       "unexplained": "无法解释 {w} W",
@@ -509,11 +526,7 @@
       "kv_kt": "由反电动势斜率得到的 Kv / Kt，全部 {n} 行",
       "kv_kt_ex": "不含 {rpm} rpm 的 Kv / Kt（已标记）",
       "bearings_none": "轴承",
-      "bearing_a": "轴承 A：{card}（模型）",
-      "bearing_b": "轴承 B：{card}（模型）",
-      "bearing_sum": "全部轴承（模型）",
-      "bearing_measured": "空载损耗，实测总值",
-      "bearing_share": "模型轴承损耗占实测总值之比",
+      "bearing_sum": "轴承，{cards}（模型）",
       "no_model": "无模型点"
     },
     "row": {

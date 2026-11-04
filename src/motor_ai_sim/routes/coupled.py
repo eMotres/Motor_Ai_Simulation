@@ -484,6 +484,226 @@ def _magnet_reference_temp_c() -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# WHERE THE LOOP STARTS (owner 2026-11-03: "catalog motor = warm start")
+# ---------------------------------------------------------------------------
+# A water-cooled generator's loop with no temperatures in the body started at
+# the magnet card's own 175 °C.  Its first pass at full load demagnetised the
+# magnets (1.8-5 % of Br) at a temperature the machine never reaches — it
+# settles far lower — and the run then held 75.6 of 83.3 N·m.  The engineer had
+# to type 110 / 120 °C by hand.  The start is now, in this order:
+#
+#   1. ``override``     — the body's own ``coil_temp_c`` / ``magnet_temp_c``,
+#                         exactly as before (the Simulation panel sends the
+#                         values its fields show);
+#   2. ``stored_warm``  — the temperatures of THIS configuration's last
+#                         converged coupled record: the same duty, else the
+#                         stored duty whose operating point is nearest;
+#   3. ``estimate``     — the cooling sink (coolant inlet on a liquid jacket,
+#                         else the ambient) plus START_MAGNET_RISE_K for the
+#                         magnets and START_COIL_RISE_K for the winding, each
+#                         capped START_LIMIT_MARGIN_K below the part's limit.
+#
+# Never the card's reference temperature or a material maximum as a blind
+# default.  The rises are deliberately modest: a start BELOW the settled
+# temperature only costs a pass or two of warming up, while a start above it
+# is the case that demagnetised (the solver's carried Br map is now refused
+# from a hotter parent too — `fem_solver_2d._br_carry_hot_refusal`).  40 K /
+# 60 K are a first guess for a loaded machine's mean magnet / winding rise over
+# its sink, never a result: the loop moves from there to its own fixed point.
+START_MAGNET_RISE_K = 40.0
+START_COIL_RISE_K = 60.0
+START_LIMIT_MARGIN_K = 10.0
+#: the fallback sink when the cooling block names no temperature at all — the
+#: Thermal tab's own default ambient (`thermal_settings.cooling_fields`)
+START_SINK_DEFAULT_C = 40.0
+
+
+def _start_sink_c(cooling: Optional[Dict[str, Any]]) -> Tuple[float, str]:
+    """``(the cooling sink temperature [°C], what it is)``: the coolant inlet
+    of a liquid jacket, else the ambient air."""
+    c = cooling if isinstance(cooling, dict) else {}
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    if str(c.get("cooling_mode") or "").lower() == "liquid":
+        t = _num(c.get("fluid_temp_in_c"))
+        if t is not None:
+            return t, "coolant inlet"
+    t = _num(c.get("ambient_temp"))
+    if t is not None:
+        return t, "ambient"
+    return START_SINK_DEFAULT_C, "default ambient"
+
+
+def _start_magnet_limit_c() -> Optional[float]:
+    """The assigned magnet's maximum working temperature (the one rule the
+    time-to-limit and the report use), or ``None``."""
+    try:
+        from motor_ai_sim.routes.thermal import _assignments
+        name = (_assignments() or {}).get("magnet")
+        if not name:
+            return None
+        lim, _why = _ttl.magnet_card_limit(str(name))
+        return None if lim is None else float(lim)
+    except Exception:  # noqa: BLE001 — a limit read never fails a run
+        return None
+
+
+def _stored_warm_start(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The last CONVERGED coupled record of this configuration to start from:
+    the same duty first, else the stored duty nearest in operating point.
+    ``None`` off the catalogue or when nothing usable is stored.  Never raises.
+    """
+    try:
+        from motor_ai_sim import duty_results as _dr
+        from motor_ai_sim import winding_limit as _wl
+        die, cfg = _wl.solved_config(body)
+        if not (die and cfg):
+            return None
+        ctx = _dr.active_context()
+        duty = str(body.get("duty") or body.get("for_duty") or "").strip()
+        if not duty and ctx and (str(ctx[0]), str(ctx[1])) == (die, cfg):
+            duty = str(ctx[2])
+        rows = _dr.get(die, cfg) or {}
+    except Exception:  # noqa: BLE001
+        log.debug("coupled: stored warm start lookup failed", exc_info=True)
+        return None
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    def _usable(e: Any) -> bool:
+        return (isinstance(e, dict) and e.get("converged") is True
+                and not e.get("runaway") and _num(e.get("coil_temp_c")) is not None)
+
+    cands = [(str(d), kinds["coupled"]) for d, kinds in rows.items()
+             if isinstance(kinds, dict) and _usable(kinds.get("coupled"))]
+    if not cands:
+        return None
+    pick = next(((d, e) for d, e in cands if duty and d == duty), None)
+    basis = "same duty"
+    if pick is None:
+        i_req = _num(body.get("I_phase_rms"))
+        rpm_req = _num(body.get("rpm"))
+        if i_req is None and rpm_req is None:
+            return None
+
+        def _dist(item: Tuple[str, Dict[str, Any]]) -> Optional[float]:
+            pt = item[1].get("point") or {}
+            d = 0.0
+            seen = False
+            for want, have in ((i_req, _num(pt.get("I_phase_rms"))),
+                               (rpm_req, _num(pt.get("rpm")))):
+                if want is None:
+                    continue
+                if have is None:
+                    return None
+                d += abs(have - want) / max(abs(want), 1.0)
+                seen = True
+            return d if seen else None
+
+        scored = [(s, it) for it in cands for s in (_dist(it),) if s is not None]
+        if not scored:
+            return None
+        pick = min(scored, key=lambda x: x[0])[1]
+        basis = "nearest stored point"
+    d, e = pick
+    return {"coil_temp_c": float(_num(e.get("coil_temp_c"))),
+            "magnet_temp_c": _num(e.get("magnet_temp_c")),
+            "die": die, "config": cfg, "duty": d, "basis": basis,
+            "computed_at": e.get("computed_at")}
+
+
+def _coupled_start_temperatures(body: Dict[str, Any],
+                                cooling: Optional[Dict[str, Any]]
+                                ) -> Dict[str, Any]:
+    """The loop's starting pair and where each half came from.
+
+    ``{"coil_temp_c", "magnet_temp_c", "source", "coil_source",
+    "magnet_source", "note", ...}`` — ``source`` is ``override`` /
+    ``stored_warm`` / ``estimate`` when both halves agree, else ``mixed``.
+    ``magnet_temp_c`` stays ``None`` (``magnet_source`` ``none``) on a machine
+    with no magnet card that can be evaluated at a temperature, exactly as
+    before: the loop then leaves the magnet alone.
+    """
+    out: Dict[str, Any] = {}
+    # 1. THE BODY'S OWN VALUES — unchanged parsing (`_f`, `float`).
+    coil_ovr = body.get("coil_temp_c") is not None
+    mag_ovr = body.get("magnet_temp_c") is not None
+    has_card = mag_ovr or _magnet_reference_temp_c() is not None
+    stored = None
+    if not coil_ovr or (has_card and not mag_ovr):
+        stored = _stored_warm_start(body)
+    sink, sink_what = _start_sink_c(cooling)
+
+    if coil_ovr:
+        out["coil_temp_c"] = _f(body, "coil_temp_c", 120.0)
+        out["coil_source"] = "override"
+    elif stored is not None:
+        out["coil_temp_c"] = round(float(stored["coil_temp_c"]), 1)
+        out["coil_source"] = "stored_warm"
+    else:
+        t = sink + START_COIL_RISE_K
+        lim = _winding_limit_for(body)
+        if lim is not None:
+            t = max(sink, min(t, float(lim) - START_LIMIT_MARGIN_K))
+        out["coil_temp_c"] = round(t, 1)
+        out["coil_source"] = "estimate"
+
+    if mag_ovr:
+        out["magnet_temp_c"] = float(body["magnet_temp_c"])
+        out["magnet_source"] = "override"
+    elif not has_card:
+        out["magnet_temp_c"] = None
+        out["magnet_source"] = "none"
+    elif stored is not None and stored.get("magnet_temp_c") is not None:
+        out["magnet_temp_c"] = round(float(stored["magnet_temp_c"]), 1)
+        out["magnet_source"] = "stored_warm"
+    else:
+        t = sink + START_MAGNET_RISE_K
+        lim = _start_magnet_limit_c()
+        if lim is not None:
+            t = max(sink, min(t, float(lim) - START_LIMIT_MARGIN_K))
+        out["magnet_temp_c"] = round(t, 1)
+        out["magnet_source"] = "estimate"
+
+    srcs = {out["coil_source"]} | ({out["magnet_source"]}
+                                   if out["magnet_source"] != "none" else set())
+    out["source"] = srcs.pop() if len(srcs) == 1 else "mixed"
+    if "estimate" in (out["coil_source"], out["magnet_source"]):
+        out["sink_c"] = round(float(sink), 2)
+        out["sink"] = sink_what
+        out["rise_K"] = {"coil": START_COIL_RISE_K, "magnet": START_MAGNET_RISE_K}
+    if stored is not None and "stored_warm" in (out["coil_source"],
+                                                out["magnet_source"]):
+        out["stored"] = {k: stored.get(k) for k in
+                         ("die", "config", "duty", "basis", "computed_at")}
+    bits = []
+    for part, key in (("coil", "coil_temp_c"), ("magnet", "magnet_temp_c")):
+        s = out[part + "_source"]
+        if s == "none":
+            continue
+        what = {"override": "as requested",
+                "stored_warm": "from the last converged coupled run of duty %r"
+                               % ((stored or {}).get("duty")),
+                "estimate": "%s %.1f °C + %.0f K" % (
+                    sink_what, sink, START_COIL_RISE_K if part == "coil"
+                    else START_MAGNET_RISE_K)}[s]
+        bits.append("%s %.1f °C (%s)" % (part, float(out[key]), what))
+    out["note"] = "loop started at " + ", ".join(bits)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # THE DRIVE — a sinusoid, or the inverter (2026-09-14)
 # ---------------------------------------------------------------------------
 # WHY (PWM study 2026-09-13 §2.9, the study's own most important conclusion):
@@ -5672,9 +5892,13 @@ def _run(body: Dict[str, Any],
     runaway_c = float(RUNAWAY_C or _RUNAWAY_FALLBACK_C)
 
     # ── the starting pair ───────────────────────────────────────────────────
-    t_coil = _f(body, "coil_temp_c", 120.0)
-    t_mag = body.get("magnet_temp_c")
-    t_mag = float(t_mag) if t_mag is not None else _magnet_reference_temp_c()
+    # Override > the stored warm state of this configuration > sink + rise
+    # (owner 2026-11-03, `_coupled_start_temperatures`); never the card's
+    # reference temperature as a blind default.
+    start_block = _coupled_start_temperatures(body, cooling)
+    t_coil = float(start_block["coil_temp_c"])
+    t_mag = start_block["magnet_temp_c"]
+    log.info("coupled: %s", start_block["note"])
     rpm_eff = _effective_rpm(body.get("rpm"))
     # ── WHICH DRIVE, and the inverter behind it ─────────────────────────────
     # Resolved here, once, and BEFORE the lock is taken: an incomplete inverter
@@ -7744,6 +7968,9 @@ def _run(body: Dict[str, Any],
             else all(_h.get("steady_state") is True for _h in history)),
         "coil_temp_c": round(float(em_at[0]), 2),
         "magnet_temp_c": (None if em_at[1] is None else round(float(em_at[1]), 2)),
+        # WHERE THE LOOP STARTED and why (owner 2026-11-03): override /
+        # stored_warm / estimate (`_coupled_start_temperatures`)
+        "start": dict(start_block),
         # THE REGIME, when this duty has one (2026-09-16).  The temperatures
         # above are the ones the last electromagnetic run was solved at, and on
         # an impulse duty they ARE this block's cycle temperatures — the loop

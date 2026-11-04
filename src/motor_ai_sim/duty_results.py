@@ -1827,6 +1827,11 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         # which pass's map the hottest magnet is (audit 2026-10-27, claim 2)
         **({"magnet_temp_max_pass": str(c["magnet_temp_max_pass"])}
            if c.get("magnet_temp_max_pass") else {}),
+        # where the loop STARTED and why (owner 2026-11-03): override /
+        # stored_warm / estimate
+        **({"start": _pick(c["start"], ("source", "coil_temp_c", "magnet_temp_c",
+                                        "coil_source", "magnet_source"))}
+           if isinstance(c.get("start"), dict) and c["start"] else {}),
         "bearing_temp_c": _f(c.get("bearing_temp_c")),
         "bearing_temp_source": c.get("bearing_temp_source"),
         "P_bearings_W": _f(c.get("P_bearings_W")),

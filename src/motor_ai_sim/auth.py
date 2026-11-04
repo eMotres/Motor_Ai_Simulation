@@ -255,6 +255,14 @@ _GATED: dict[tuple[str, str], str] = {
     ("POST", "/api/coupled/run"): "user",
     ("POST", "/api/coupled/cancel"): "user",
     ("GET",  "/api/coupled/last"): "user",
+    # Added 2026-11-04 (read-only Simulation view audit): three more solves that were NOT in this table although each
+    # starts the same class of work as its siblings - /coupled/continuous_rating and /coupled/constants_20c queue a
+    # coupled / cold electromagnetic pass, /mechanical/limit_speed a structural solve, /physics/harm_screening an FEM
+    # transient.  Same tier as the routes beside them; nothing is widened and nobody who could use them loses them.
+    ("POST", "/api/coupled/continuous_rating"): "user",
+    ("POST", "/api/coupled/constants_20c"): "user",
+    ("POST", "/api/mechanical/limit_speed"): "user",
+    ("GET",  "/api/simulation/physics/harm_screening"): "user",
     # NOT listed, and that is the decision, not an oversight (2026-09-07):
     #   GET /api/mechanical/progress
     #   GET /api/thermal/progress

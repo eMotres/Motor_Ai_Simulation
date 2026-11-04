@@ -340,6 +340,185 @@ def _row_magnet_temp(row: Dict[str, Any], rec: Dict[str, Any], rows: List[Dict[s
     return None, "unknown"
 
 
+def _fmt_rpms(rpms: List[float]) -> str:
+    return ", ".join("%d" % round(x) for x in rpms)
+
+
+def _slope_fit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Bench and model line-line PEAK EMF slopes (V per 1000 rpm, least squares through the origin) over ``rows``.
+
+    ``b_rms`` (bench rms readings) is used only when no peak was read at all (peak = rms x sqrt(2)); no rms constant is
+    ever shown (owner 2026-11-04: one Kv, per V of line-line peak)."""
+    def sl(pts):
+        f = C.slope_through_origin(pts)
+        return None if f is None else {**f, "krpm": 1000.0 * f["slope"]}
+    return {"b_pk": sl([(r["rpm"], r["pk"]) for r in rows if r["pk"] is not None]),
+            "b_rms": sl([(r["rpm"], r["rms"]) for r in rows if r["rms"] is not None]),
+            "m_pk": sl([(r["rpm"], r["m_pk"]) for r in rows if r["m_pk"] is not None])}
+
+
+def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, Any],
+             excluded: List[float]) -> List[Dict[str, Any]]:
+    """The Kv / Kt rows of one slope fit: bench | model 2-D and model 3-D, each with the difference from the bench.
+
+    3-D: the flux factor multiplies the EMF slope (so Kv, a reciprocal, divides by it); Kt carries the torque factor
+    (measured k_T, else the flux factor), exactly as the load rows do."""
+    b_pk, b_rms, m_pk = fit["b_pk"], fit["b_rms"], fit["m_pk"]
+    if b_pk is None and b_rms is not None:
+        b_pk = {**b_rms, "krpm": b_rms["krpm"] * math.sqrt(2.0)}
+    if b_pk is None:
+        return []
+    b = C.kv_ke_kt(b_pk["krpm"])
+    md = None if m_pk is None else C.kv_ke_kt(m_pk["krpm"])
+    f3 = model.get("end3d") or {}
+    k_flux, k_t = f3.get("k_flux"), f3.get("k_torque")
+    k_t = k_t if k_t is not None else k_flux
+    flux_clause = _k3(model, "flux")[1]
+    torque_clause = _k3(model, "torque")[1]
+    used = [r["rpm"] for r in rows]
+    prov = {"k_flux": k_flux, "k_torque": k_t, "torque_basis": f3.get("torque_basis"), "source": f3.get("source"),
+            "inherited": bool(f3.get("inherited")), "inherited_note": f3.get("inherited_note"), "date": f3.get("date"),
+            "current": f3.get("current", True), "stale": bool(f3.get("stale"))}
+    base = {"n_rows": len(rows), "rpms": used, "excluded_rpm": excluded, "scatter_pct": b_pk["rmse_pct"],
+            "bench_slope_v_per_krpm": b["slope_peak"], "bench_ke": b["ke"], "end3d": prov,
+            "model_ke": None if md is None else md["ke"]}
+    det_b = "bench: %d rows (%s rpm), line through the origin, scatter %.1f %%" % (
+        len(rows), _fmt_rpms(used) if len(used) <= 8 else "%d-%d" % (round(min(used)), round(max(used))),
+        b_pk["rmse_pct"])
+    if excluded:
+        det_b += "; left out: %s rpm" % _fmt_rpms(excluded)
+    out: List[Dict[str, Any]] = []
+
+    def add(key: str, label: str, unit: str, bench_v: float, model_name: str, factor: Optional[float],
+            divide: bool, clause: str, more: Optional[Dict[str, Any]] = None) -> None:
+        m2 = None if md is None else md[model_name]
+        for variant in ("2d", "3d"):
+            if variant == "3d" and (factor is None or m2 is None):
+                continue
+            mv = m2 if variant == "2d" else (m2 / float(factor) if divide else m2 * float(factor))
+            x = {**base, **(more or {}), "variant": variant, "model_2d": m2,
+                 "k_3d": None if variant == "2d" else float(factor)}
+            det = det_b + "; model " + ("2-D" if variant == "2d" else clause)
+            out.append(_row("%s_%s" % (key, variant), "%s, model %s" % (label, "2-D" if variant == "2d" else "3-D"),
+                            unit, bench_v, mv, tip="kv_kt", detail=det, extra=x,
+                            status=None if m2 is not None else "no_model"))
+
+    add("kv_slope", "EMF slope, V_LL peak per 1000 rpm", "V/krpm", b["slope_peak"], "slope_peak", k_flux, False, flux_clause)
+    add("kv", "Kv (rpm per V line-line peak)", "rpm/V", b["kv"], "kv", k_flux, True, flux_clause)
+    delta = str(model.get("connection") or "star").lower().startswith("d")
+    add("kt", "Kt per A rms phase current", "N·m/A", b["kt"], "kt", k_t, False, torque_clause,
+        {"connection": "delta" if delta else "star", "winding_a_factor": math.sqrt(3.0) if delta else 1.0})
+    return out
+
+
+def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]], model: Dict[str, Any],
+                  mag_p: str) -> List[Dict[str, Any]]:
+    """Kv and Kt from the SLOPE of the line-line EMF against speed - never from one point (owner 2026-11-04).
+
+    Group 1 uses every row that carries a voltage.  A row whose V/n sits more than ``compare.SLOPE_FLAG_PCT`` from the
+    median of the others is FLAGGED on its EMF row (never dropped); group 2, shown only then, repeats the fit without the
+    flagged rows, so both slopes are always reported and the exclusion is visible.  The bench constants need no model;
+    the model columns come from the same rows (each scaled to its own magnet temperature)."""
+    rows = [r for r in slope_in if r["pk"] is not None or r["rms"] is not None]
+    if len(rows) < 2:
+        return []
+    pk_rows = [r for r in rows if r["pk"] is not None]
+    flags = C.flag_slope_outliers([(r["rpm"], r["pk"]) for r in pk_rows])
+    flag_of = {id(r): f for r, f in zip(pk_rows, flags)}
+    flagged = [r for r in pk_rows if flag_of[id(r)]["flagged"]]
+    # which rows entered the slope, and how far each sits from the others, on the EMF rows themselves
+    for r in rows:
+        f = flag_of.get(id(r))
+        row = emf_rows[r["i"]]
+        row["extra"].update({"in_slope": True, "slope_dev_pct": None if f is None else f["dev_pct"],
+                             "slope_flagged": bool(f and f["flagged"])})
+        if f and f["flagged"]:
+            row["detail"] = (row["detail"] + "; " if row["detail"] else "") + \
+                "V/n %+.1f %% from the median of the other rows (flagged; still in the Kv / Kt fit)" % f["dev_pct"]
+    k_flux, k_clause, k_src = _k3(model, "flux")
+    kp = {"mag": mag_p, "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or ""}
+    out: List[Dict[str, Any]] = []
+    rows_all = _kv_rows(_slope_fit(rows), rows, model, excluded=[])
+    if not rows_all:
+        return []
+    out.append(_group("kv_kt", "Kv / Kt from the EMF slope, all %d rows" % len(rows), rows_all, params={"n": len(rows)},
+                      tip="kv_kt", basis="all %d rows, slope through the origin, magnets at %s C, %s" % (
+                          len(rows), mag_p, k_clause),
+                      basis_key="kv_3d" if k_flux is not None else "kv_2d", basis_params={"n": len(rows), **kp}))
+    keep = [r for r in rows if r not in flagged]
+    if flagged and len(keep) >= 2:
+        ex = [r["rpm"] for r in flagged]
+        rows_ex = _kv_rows(_slope_fit(keep), keep, model, excluded=ex)
+        if rows_ex:
+            out.append(_group("kv_kt_ex", "Kv / Kt without %s rpm (flagged)" % _fmt_rpms(ex), rows_ex,
+                              params={"rpm": _fmt_rpms(ex)}, tip="kv_kt",
+                              basis="flagged rows left out, %d rows, magnets at %s C, %s" % (len(keep), mag_p, k_clause),
+                              basis_key="kv_ex_3d" if k_flux is not None else "kv_ex_2d",
+                              basis_params={"n": len(keep), "rpm": _fmt_rpms(ex), **kp}))
+    return out
+
+
+def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The Bearings tab of a free-run test: the MODEL's bearing loss at each bench speed, and the one measured figure there is.
+
+    Model values come from ``bearings.machine_bearing_losses`` (SKF friction, rotor weight as radial load) through the
+    injected ``mech`` function: one group per bearing end the configuration names (A and B may be different cards), their
+    sum, and that sum as a share of the MEASURED total free-run loss.  The measured total (shaft power) is shown on its own:
+    the bearings are not separated in it, so no difference is formed and nothing here is a measured bearing loss.
+    A configuration without bearings gets the empty state - no number is made up."""
+    rows = [r for r in rows_in if num(r.get("rpm"))]
+    if not rows:
+        return []
+    if not (model.get("has_bearings") and model.get("mech")):
+        return [_group("bearings_none", "Bearings", [
+            _row("no_bearings", "no bearings assigned to this configuration", "", None, None, status="no_model")],
+            tip="bearings")]
+    amb = num((rec.get("conditions") or {}).get("ambient_c"))
+    per_end: Dict[str, List[Dict[str, Any]]] = {}
+    cards: Dict[str, str] = {}
+    sums: List[Dict[str, Any]] = []
+    meas: List[Dict[str, Any]] = []
+    share: List[Dict[str, Any]] = []
+    for r in rows:
+        n = float(r["rpm"])
+        t = num(r.get("temp_c")) if num(r.get("temp_c")) is not None else amb
+        m = C.mech_loss_at(model.get("mech"), n, t) or {}
+        params = {"rpm": round(n)}
+        lbl = "%d rpm" % round(n)
+        det = "model, bearing temperature %s" % ("?" if t is None else "%g C" % t)
+        ends = m.get("ends") or []
+        for e in ends:
+            per_end.setdefault(e["end"], []).append(_row("bearing_loss", lbl, "W", None, e["p_w"], tip="bearings",
+                                                         params=params, status="info", detail=det + ", " + e["card"]))
+            cards[e["end"]] = e["card"]
+        if ends:
+            pb = m.get("bearings_w")
+            sums.append(_row("bearing_loss", lbl, "W", None, pb, tip="bearings", params=params, status="info", detail=det))
+            mw = num(r.get("shaft_power_w"))
+            if mw is not None and mw > 0 and pb is not None:
+                share.append(_row("bearing_share", lbl, "%", None, 100.0 * pb / mw, tip="bearings", params=params,
+                                  status="info", detail="model bearing loss / measured total free-run loss"))
+        if num(r.get("shaft_power_w")) is not None:
+            meas.append(_row("loss_total", lbl, "W", r.get("shaft_power_w"), None, tip="bearings", params=params,
+                             status="info", detail="measured shaft power at no load: bearings, windage, iron and eddy together"))
+    out: List[Dict[str, Any]] = []
+    for end in sorted(per_end):
+        out.append(_group("bearing_" + end.lower(), "Bearing %s: %s (model)" % (end, cards.get(end, "?")), per_end[end],
+                          params={"end": end, "card": cards.get(end, "?")}, tip="bearings",
+                          basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model"))
+    if sums:
+        out.append(_group("bearing_sum", "Bearings, all (model)", sums, tip="bearings",
+                          basis="model: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model"))
+    if meas:
+        out.append(_group("bearing_measured", "Free-run loss, measured total", meas, tip="bearings",
+                          basis="measured: the total only; the bearings are not separated in it", basis_key="bearings_measured"))
+    if share:
+        out.append(_group("bearing_share", "Model bearings as a share of the measured total", share, tip="bearings",
+                          basis="model bearing loss over the measured total; not a measured bearing loss",
+                          basis_key="bearings_share"))
+    return out
+
+
 def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     rows_in = [r for r in rec.get("rows") or [] if num(r.get("rpm"))]
     rows_in.sort(key=lambda r: float(r["rpm"]))
@@ -350,6 +529,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     fit_meas, fit_model = [], []
     k_flux, k_clause, k_src = _k3(model, "flux")
     temps_used: List[float] = []
+    slope_in: List[Dict[str, Any]] = []      # one entry per bench row: what the Kv / Kt slope is fitted to
     for r in rows_in:
         n = float(r["rpm"])
         ref = C.noload_reference(n, refs)
@@ -357,6 +537,8 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         params = {"rpm": round(n)}
         lbl = "%d rpm" % round(n)
         vpk_meas = None if num(r.get("v_ll_pp_v")) is None else float(r["v_ll_pp_v"]) / 2.0
+        slope_in.append({"i": len(emf_rows), "rpm": n, "pk": vpk_meas, "rms": num(r.get("v_ll_rms_v")),
+                         "m_pk": None})
         if ref is None:
             emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, None, tip="emf_peak", params=params))
             rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), None, tip="emf_rms", params=params))
@@ -373,6 +555,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
                  "ref_rpm": ref["rpm"]}
         # the EMF carries the 3-D end-effect flux factor; the 2-D value stays beside it in ``extra``
         emf_det = det + ", " + k_clause
+        slope_in[-1].update({"m_pk": emf["peak"]})
         emf_x = {**extra, "k_3d": k_flux, "model_2d": emf["peak"]}
         rms_x = {**extra, "k_3d": k_flux, "model_2d": emf["rms"]}
         emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, _scaled(emf["peak"], k_flux), tip="emf_peak", params=params,
@@ -415,10 +598,12 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     if any(r.get("measured") is not None for r in rms_rows):
         groups.append(_group("emf_rms", "EMF line-line rms", rms_rows, tip="emf_rms", basis=basis_emf,
                              basis_key=emf_key, basis_params=emf_bp))
+    groups.extend(_kv_kt_groups(slope_in, emf_rows, model, mag_p or "?"))
     if loss_rows:
         groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss",
                              basis=mag_txt + ", losses 2-D (no flux factor)", basis_key="loss",
                              basis_params={"mag": mag_p or "?"}))
+    groups.extend(_bearing_groups(rows_in, rec, model))
     fm, fd = C.fit_an_bn2(fit_meas), C.fit_an_bn2(fit_model)
     if fm or fd:
         groups.append(_group("fit", "Loss fit P = a*n + b*n^2 (n in krpm)", [

@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from motor_ai_sim.motor_tests.compare import num
+from motor_ai_sim.motor_tests.compare import num, summary_magnet_temp_c
 
 log = logging.getLogger(__name__)
 
@@ -114,19 +114,27 @@ def grade_points(card: Optional[str], library: Dict[str, Any]) -> Dict[str, Any]
     return {"card": card, "grade": grade, "temp_c": num(raw.get("temperature_c")), "points": sorted(set(pts))}
 
 
-def factors_from_end3d(end3d: Optional[Dict[str, Any]], source: str = "Stage A") -> Dict[str, Any]:
+def factors_from_end3d(end3d: Optional[Dict[str, Any]], source: str = "Stage A", *, current: bool = True) -> Dict[str, Any]:
     """The 3-D end-effect factors a comparison applies, from a passport block (``end3d``).
 
     ``k_flux`` (voltages / EMF) is the Stage A flux factor, accepted in (0.5, 1.0] exactly as the report does;
-    ``k_torque`` (torque, Kt) is ``end3d_factors.torque_factor`` (the measured k_T, else k_flux).  Both None = 2-D."""
+    ``k_torque`` (torque, Kt) is ``end3d_factors.torque_factor`` (the measured k_T, else k_flux).  Both None = 2-D.
+
+    Provenance only, nothing recomputed: ``inherited`` (the passport belongs to an earlier geometry) with its
+    ``inherited_note`` and the passport ``date``; ``current`` False = the block is the one stored with a duty, not the
+    configuration's present passport; ``stale`` = either of the two."""
     from motor_ai_sim import end3d_factors as E
     e = end3d if isinstance(end3d, dict) else {}
     k = num(e.get("k_flux"))
     if k is None or not (0.5 < k <= 1.0):
-        return {"k_flux": None, "k_torque": None, "torque_basis": E.BASIS_2D, "source": None, "inherited": False}
+        return {"k_flux": None, "k_torque": None, "torque_basis": E.BASIS_2D, "source": None, "inherited": False,
+                "inherited_note": None, "date": None, "current": bool(current), "stale": False}
     kt, basis = E.torque_factor(e)
+    inherited = bool(e.get("inherited"))
+    when = str(e.get("adopted_utc") or e.get("generated_utc") or "")[:10] or None
     return {"k_flux": k, "k_torque": kt if kt is not None else k, "torque_basis": basis, "source": source,
-            "inherited": bool(e.get("inherited"))}
+            "inherited": inherited, "inherited_note": (str(e["inherited_note"]) if e.get("inherited_note") else None),
+            "date": when, "current": bool(current), "stale": inherited or not current}
 
 
 def end3d_from_summaries(cfg_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -166,7 +174,7 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
     if isinstance(end3d, dict):
         factors = factors_from_end3d(end3d, "Stage A")
     else:
-        factors = factors_from_end3d(end3d_from_summaries(cfg_doc), "Stage A, stored with the duty")
+        factors = factors_from_end3d(end3d_from_summaries(cfg_doc), "Stage A, stored with the duty", current=False)
     winding = cfg_doc.get("winding") if isinstance(cfg_doc.get("winding"), dict) else {}
     connection = str(winding.get("star_delta") or "star").lower()
     duties: List[Dict[str, Any]] = []
@@ -187,7 +195,11 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         conn = str(s.get("star_delta") or s.get("connection") or connection).lower()
         card = _magnet_card(cfg_doc, d)
         mag = grade_points(card, library)
-        mag_t = num(s.get("magnet_temp_c")) or num(s.get("magnet_temp_C")) or mag.get("temp_c")
+        # the temperature the run was SOLVED at: its own stamp (magnet_temp_used_c, what no-load points store), else the
+        # older spellings, else the card's quoted temperature (2026-11-04: reading only magnet_temp_c took the card's
+        # 150 C for a point solved at 50 C and put the model EMF ~13 % high)
+        _mt = summary_magnet_temp_c(s)
+        mag_t = _mt if _mt is not None else mag.get("temp_c")
         if magnet is None and card:
             magnet = mag
         temps = _temps(stored)
@@ -275,13 +287,17 @@ def mech_function(cfg_doc: Dict[str, Any], geometry: Dict[str, Any], rotor_mass_
     if not has_b and not geometry:
         return None
 
-    def f(rpm: float, temp_c: Optional[float]) -> Optional[Dict[str, float]]:
+    def f(rpm: float, temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
         t = 25.0 if temp_c is None else float(temp_c)
-        out: Dict[str, float] = {}
+        out: Dict[str, Any] = {}
         if has_b:
             res = B.machine_bearing_losses(assignment, rpm=rpm, temp_c=t, rotor_mass_kg=float(rotor_mass_kg or 0.0),
                                            geometry=geometry or None, windage_temp_c=t)
             out["bearings_w"] = float(res.get("P_bearings_W") or 0.0)
+            # each bearing end the configuration names (A and B may be different cards), straight from
+            # machine_bearing_losses: the Tests "Bearings" tab shows them one by one
+            out["ends"] = [{"end": str(b.get("end")), "card": str(b.get("bearing") or ""), "p_w": float(b.get("P_W") or 0.0)}
+                           for b in (res.get("bearings") or []) if isinstance(b, dict)]
             if res.get("windage"):
                 out["windage_w"] = float(res.get("P_windage_W") or 0.0)
         if "windage_w" not in out and geometry:

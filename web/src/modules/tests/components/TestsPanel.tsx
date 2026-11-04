@@ -2,6 +2,10 @@
  *  measured | model | delta %, one short note per row and the explanation in tooltips; a group whose rows are a series over
  *  speed gets a measured-vs-model chart to its right (stacked below ~900 px).
  *
+ *  Sub-menus (owner 2026-11-04): Resistance, Inductance, Constants (Kv, Kt, EMF), Bearings, Free-run, Loads, and
+ *  Parameters for the rest (insulation, hipot, surge, cogging, LCR, weight, dimensions).  A tab is only a view of the
+ *  comparison groups (tableModel.tabOfGroup); the stored records are unchanged.
+ *
  *  Production: the factory adds tests, engineers / admins edit and delete them (every change audited on the server).
  *  Development (project motor view): read-only, behind the configuration's "visible to customer" flag for customers. */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,11 +21,11 @@ import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import {
-  blocksHeight, columnsFor, computeProgress, loadSeriesOptions, missingActions, pickQuantity, quantitySeries, summary,
-  tableBlocks, testsOfKind, unitLabel, type TableBlock,
+  blocksHeight, cmpForTab, columnsFor, computeProgress, kindOfTab, loadSeriesOptions, missingActions, pickQuantity,
+  quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type TableBlock,
 } from '../tableModel';
 import {
-  TEST_KINDS, type CompareRow, type CreateDutyAction, type TestCompare, type TestKind, type TestRecord, type TestsPayload,
+  TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
 } from '../types';
 import SubTabs from '../../../components/common/SubTabs';
 import SeriesChart from './SeriesChart';
@@ -30,13 +34,14 @@ import TestEditor from './TestEditor';
 export type TestsSource = { kind: 'production' } | { kind: 'project'; projectId: string; showAll?: boolean };
 
 const SUB_KEY = (die: string, config: string) => `tests.sub.v1:${die}|${config}`;
-function readSub(die: string, config: string): TestKind {
+function readSub(die: string, config: string): TestTab {
   try {
     const v = window.localStorage.getItem(SUB_KEY(die, config));
-    return v && (TEST_KINDS as readonly string[]).includes(v) ? (v as TestKind) : 'parameters';
-  } catch { return 'parameters'; }
+    if (v === 'load') return 'loads';                       // the remembered tab of the three-tab layout
+    return v && (TEST_TABS as readonly string[]).includes(v) ? (v as TestTab) : 'resistance';
+  } catch { return 'resistance'; }
 }
-function writeSub(die: string, config: string, v: TestKind) {
+function writeSub(die: string, config: string, v: TestTab) {
   try { window.localStorage.setItem(SUB_KEY(die, config), v); } catch { /* storage off */ }
 }
 
@@ -233,7 +238,7 @@ export const TestsPanel: React.FC<{
   const [data, setData] = useState<TestsPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sub, setSubState] = useState<TestKind>(() => readSub(die, config));
+  const [sub, setSubState] = useState<TestTab>(() => readSub(die, config));
   const [editing, setEditing] = useState<{ rec: TestRecord | null } | null>(null);
   const [toDelete, setToDelete] = useState<TestRecord | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -242,7 +247,7 @@ export const TestsPanel: React.FC<{
   const [pending, setPending] = useState<string[]>([]);
   const unlisted = useRef(0);
   const note = (text: string | null, isError = false) => { setMsg(text); setMsgError(isError); };
-  const setSub = (v: TestKind) => { setSubState(v); writeSub(die, config, v); };
+  const setSub = (v: TestTab) => { setSubState(v); writeSub(die, config, v); };
   const projectId = source.kind === 'project' ? source.projectId : '';
   const showAll = source.kind === 'project' ? !!source.showAll : false;
 
@@ -294,7 +299,7 @@ export const TestsPanel: React.FC<{
   if (err) return <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>;
   if (!data) return null;
   const can = data.can;
-  const list = testsOfKind(data.tests, sub);
+  const list = testsOfTab(data.tests, data.compare, sub);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
 
   const setVisible = async (v: boolean) => {
@@ -312,7 +317,8 @@ export const TestsPanel: React.FC<{
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <SubTabs value={sub} onChange={setSub} ariaLabel={t('tests.tab')}
-          items={TEST_KINDS.map((k) => ({ id: k, tip: t(`tests.subTip.${k}`), label: `${t(`tests.sub.${k}`)} (${testsOfKind(data.tests, k).length})` }))} />
+          items={TEST_TABS.map((k) => ({ id: k, tip: t(`tests.tabsTip.${k}`),
+            label: `${t(`tests.tabs.${k}`)} (${testsOfTab(data.tests, data.compare, k).length})` }))} />
         <Box sx={{ flex: 1 }} />
         {!data.model.available && (
           <Tooltip title={t('tests.modelMissingTip')}><Chip size="small" label={t('tests.modelMissing')} sx={{ fontSize: 11 }} /></Tooltip>
@@ -332,7 +338,7 @@ export const TestsPanel: React.FC<{
       )}
       {list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
       {list.map((rec) => {
-        const cmp = data.compare[rec.id];
+        const cmp = cmpForTab(data.compare[rec.id], rec.kind, sub);       // only this tab's groups
         const s = summary(cmp);
         const missing = canCompute ? missingActions(cmp) : [];
         const bits = [rec.date, rec.title, rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
@@ -374,7 +380,7 @@ export const TestsPanel: React.FC<{
         );
       })}
       {editing && (
-        <TestEditor open die={die} config={config} kind={editing.rec?.kind ?? sub} record={editing.rec}
+        <TestEditor open die={die} config={config} kind={editing.rec?.kind ?? kindOfTab(sub)} record={editing.rec}
           documents={(data.documents ?? []).map((d) => ({ id: d.id, name: d.name }))}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void reload(); }} />
       )}

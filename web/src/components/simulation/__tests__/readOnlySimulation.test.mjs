@@ -139,6 +139,20 @@ test('the live tab keeps its own behaviour: the switcher and the run selector st
 
 test('the project motor row offers the view only to non-staff, with a stored point', () => {
   const src = read('../../../modules/development/MotorOpenActions.tsx');
-  assert.match(src, /canOpenReadOnlySimulation\(\{ staff: engineer, hasPoint: viewDuty != null \}\)/);
+  assert.match(src, /canOpenReadOnlySimulation\(\{ staff: liveSimulation, hasPoint: viewDuty != null \}\)/);
   assert.match(src, /t\('simView\.button'\)/);
+});
+
+test('an account that cannot start a calculation gets the view, never the live tab (global engineer included)', () => {
+  const src = read('../../../modules/development/MotorOpenActions.tsx');
+  // the live doors need staff AND canSolve; the view is for everybody else
+  assert.match(src, /const liveSimulation = engineer && canSolve;/);
+  assert.match(src, /liveSimulation && <Button[\s\S]*?openSimulation\(availability\.simulationDuty!\)/);
+  assert.match(src, /liveSimulation && availability\.loadDuty/);
+  assert.doesNotMatch(src, /[?{] engineer &&/);
+  const door = (engineer, canSolve, hasPoint) => canOpenReadOnlySimulation({ staff: engineer && canSolve, hasPoint });
+  assert.equal(door(true, false, true), true);     // global engineer, setting on: View simulation
+  assert.equal(door(true, true, true), false);     // admin / setting off: the live tab's own door
+  assert.equal(door(false, true, true), true);     // customer: as before
+  assert.equal(door(true, false, false), false);   // no stored point: nothing to view
 });

@@ -7,6 +7,7 @@ import type { ProjectMotor } from './types';
 import { motorLinkAvailability } from './motorAvailability';
 import { ReadOnlySimulationDialog } from '../../components/simulation/ReadOnlySimulationView';
 import { canOpenReadOnlySimulation } from '../../lib/simReadOnly';
+import { useAuth } from '../../contexts/AuthContext';
 
 /** The open buttons of one project motor row.  Configure has no button here (owner 2026-10-28): a click on the row itself
  *  opens the motor in Configure (DevelopmentPage -> lib/openProjectMotor), so a second "Open in Configure" only repeated it.
@@ -14,22 +15,27 @@ import { canOpenReadOnlySimulation } from '../../lib/simReadOnly';
 export function MotorOpenActions({ motor, duty, allowMotorDefault = false, engineer, t, projectId, showAll = false }: { motor: ProjectMotor; duty?: string; allowMotorDefault?: boolean; engineer: boolean; t: (key: string) => string; projectId?: string; projectTitle?: string; showAll?: boolean }) {
   const [error, setError] = useState('');
   const [viewOpen, setViewOpen] = useState(false);
+  // The live Simulation tab (and its "Open in Simulation" door) belongs to an account that can START a calculation: staff while the
+  // server setting MOTRES_SOLVE_ADMIN_ONLY is off, and admins.  Every other account - a global engineer included - gets the
+  // read-only view of the stored points instead, since the workbench tabs are hidden for it (owner 2026-11-04).
+  const { canSolve } = useAuth();
+  const liveSimulation = engineer && canSolve;
   useEffect(() => { setError(''); }, [motor.die, motor.config]);
   const availability = motorLinkAvailability(motor, duty, allowMotorDefault);
   // Everyone who works on the project may LOOK at its computed points in the Simulation view (owner 2026-11-04); only the
   // owner runs.  Staff keep the live tab's own door above.  The view is read-only on the server too (GET only).
   const stored = duty ? motor.results?.find((item) => item.duty === duty) : motor.results?.find((item) => item.has_result === true);
   const viewDuty = stored?.has_result === true && typeof stored.duty === 'string' && stored.duty.trim() ? stored.duty : null;
-  const showView = !!projectId && motor.available !== false && canOpenReadOnlySimulation({ staff: engineer, hasPoint: viewDuty != null });
+  const showView = !!projectId && motor.available !== false && canOpenReadOnlySimulation({ staff: liveSimulation, hasPoint: viewDuty != null });
   const openSimulation = (targetDuty: string) => {
     setError('');
     void applyCatalogDuty(motor.die, motor.config, targetDuty, canWriteServer(), () => useUIStore.getState().setActiveTab('simulation' as never)).catch(() => setError(t('configureFailed')));
   };
   return <>
     {availability.simulationDuty
-      ? engineer && <Button size="small" onClick={() => openSimulation(availability.simulationDuty!)}>{t('openSimulation')}</Button>
+      ? liveSimulation && <Button size="small" onClick={() => openSimulation(availability.simulationDuty!)}>{t('openSimulation')}</Button>
       : <>
-        {engineer && availability.loadDuty && <Tooltip title={t('loadSimulationTip')}><Button size="small" onClick={() => openSimulation(availability.loadDuty!)}>{t('loadSimulation')}</Button></Tooltip>}
+        {liveSimulation && availability.loadDuty && <Tooltip title={t('loadSimulationTip')}><Button size="small" onClick={() => openSimulation(availability.loadDuty!)}>{t('loadSimulation')}</Button></Tooltip>}
         <Tooltip title={t('notComputedTip')}><Chip size="small" label={t('notComputed')} sx={{ color: 'var(--text-4)', bgcolor: 'var(--panel-2)' }} /></Tooltip>
       </>}
     {showView && <>

@@ -45,6 +45,7 @@ import { listDevices, getTopologies, solveController, getLast, postSchematic,
          type ThermalCoolingByMode } from './controllerApi';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/controller.json (docs/I18N.md).
 const tx = nsT('controller');
@@ -525,12 +526,16 @@ const ControllerPanel: React.FC = () => {
             <Chip size="small" label={tx('fromHistory')} sx={{ fontSize: 10, height: 20 }} />
           </Tooltip>
         )}
-        <Button size="small" variant="contained" disabled={busy || !device}
-          onClick={() => void solve(false)} sx={{ textTransform: 'none' }}>
-          {busy ? 'Solving…' : 'Solve'}</Button>
-        <Button size="small" variant="outlined" disabled={busy || !device}
-          onClick={() => void solve(true)} sx={{ textTransform: 'none', fontSize: 11 }}>
-          {tx('recompute')}</Button>
+        <SolveGate>
+          <Button size="small" variant="contained" disabled={busy || !device}
+            onClick={() => void solve(false)} sx={{ textTransform: 'none' }}>
+            {busy ? 'Solving…' : 'Solve'}</Button>
+        </SolveGate>
+        <SolveGate>
+          <Button size="small" variant="outlined" disabled={busy || !device}
+            onClick={() => void solve(true)} sx={{ textTransform: 'none', fontSize: 11 }}>
+            {tx('recompute')}</Button>
+        </SolveGate>
         <Button size="small" variant="outlined" disabled={!res}
           onClick={addRow} sx={{ textTransform: 'none', fontSize: 11 }}>
           + Add to comparison</Button>

@@ -30,6 +30,7 @@ import { apply3dToSummary } from '../../lib/apply3d';
 import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/results.json (docs/I18N.md).
 const tx = nsT('results');
@@ -1010,12 +1011,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
               <Chip size="small" color={refine.error ? 'error' : 'warning'} variant="outlined"
                 label={tx('rippleNotAccurate')} sx={{ fontSize: 10, height: 18 }}/>
             </Tooltip>
-            <Button size="small" variant="outlined" color="warning"
-              disabled={refine.busy || stale}
-              onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-refine-ripple')); } catch { /* SSR */ } }}
-              sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6, textTransform: 'none' }}>
-              {refine.busy ? tx('refiningRipple') : tx('refineRipple')}
-            </Button>
+            <SolveGate>
+              <Button size="small" variant="outlined" color="warning"
+                disabled={refine.busy || stale}
+                onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-refine-ripple')); } catch { /* SSR */ } }}
+                sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6, textTransform: 'none' }}>
+                {refine.busy ? tx('refiningRipple') : tx('refineRipple')}
+              </Button>
+            </SolveGate>
           </>
         )}
         {quotedRipple(s).refined && (
@@ -1052,12 +1055,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
                 placement="top">
                 <span style={{ marginLeft: 6, cursor: 'help' }}>{tx('staleBuild')}</span>
               </Tooltip>
-              <Button size="small" variant="outlined" color="warning"
-                onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-rerun')); } catch { /* SSR */ } }}
-                sx={{ ml: 0.75, fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6,
-                      textTransform: 'none' }}>
-                {tx('recompute')}
-              </Button>
+              <SolveGate>
+                <Button size="small" variant="outlined" color="warning"
+                  onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-rerun')); } catch { /* SSR */ } }}
+                  sx={{ ml: 0.75, fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6,
+                        textTransform: 'none' }}>
+                  {tx('recompute')}
+                </Button>
+              </SolveGate>
             </>
           )}
           {(matStale || (opStale && !geoStale)) && (

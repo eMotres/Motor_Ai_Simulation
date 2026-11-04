@@ -62,6 +62,12 @@ t('only a gate refusal has a reason key', () => {
   assert.equal(A.refusalReasonKey(403, null), null);
 });
 
+t('a refused solve (SOLVE_ADMIN_ONLY) has its own one-line reason, even though the gate also names the admin role', () => {
+  const body = { detail: 'Simulations are run by MOTRES for now.', code: 'solve.admin_only', params: {}, required_role: 'admin', your_role: 'engineer' };
+  assert.equal(A.refusalReasonKey(403, body), 'refused.solveClosed');
+  assert.equal(A.refusalReasonKey(403, { ...body, code: 'http.403' }), 'refused.admin');
+});
+
 const refs = [
   { id: 'cat:1', name: 'CIANO14 40 new L12', card: { die: 'CIANO14 40 new', config: 'L12' } },
   { id: 'cat:2', name: 'CIANO14 40 new L20', card: null },

@@ -100,6 +100,8 @@ export function refusalReasonKey(status: number, body: unknown): string | null {
   const b = (body && typeof body === 'object') ? body as Record<string, unknown> : null;
   if (!b || typeof b.required_role !== 'string') return null;
   if (status === 401) return 'refused.signIn';
+  // SOLVE_ADMIN_ONLY: starting a calculation is closed to everybody but an admin for now (server setting, owner 2026-11-04)
+  if (status === 403 && b.code === 'solve.admin_only') return 'refused.solveClosed';
   if (status === 403) return b.required_role === 'admin' ? 'refused.admin' : 'refused.forbidden';
   return null;
 }

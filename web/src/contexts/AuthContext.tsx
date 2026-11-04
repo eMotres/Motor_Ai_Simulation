@@ -58,6 +58,10 @@ export interface AuthState {
   /** The motor (die + configuration) an admin chose for this account: Configure
    *  opens on it until the user has a choice of his own.  null = none set. */
   defaultMotor: { die: string; config: string } | null;
+  /** May this session START a calculation?  From `/api/me` `canSolve`: false for a non-admin while the server setting
+   *  MOTRES_SOLVE_ADMIN_ONLY is on (the default, owner 2026-11-04).  Run / Solve buttons are disabled with one tooltip
+   *  (components/common/SolveGate); the server refuses the call anyway.  True until `/api/me` says otherwise. */
+  canSolve: boolean;
   /** Which provider answers the in-app help chat right now (from `/api/me`; the kind only, never a key).  The chat shows a notice
    *  above its input when it is Gemini (free tier: Google may use the messages). */
   supportProvider: 'gemini' | 'anthropic' | 'none';
@@ -82,7 +86,7 @@ export interface AuthState {
 
 const AuthCtx = createContext<AuthState>({
   user: null, loading: false, enabled: true, role: 'anon', isAdmin: false, enforced: false,
-  defaultMotor: null, supportProvider: 'none', resolved: false,
+  defaultMotor: null, canSolve: true, supportProvider: 'none', resolved: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
@@ -127,6 +131,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [enforced, setEnforced] = useState<boolean>(false);
   const [defaultMotor, setDefaultMotor] = useState<{ die: string; config: string } | null>(null);
   const [supportProvider, setSupportProvider] = useState<'gemini' | 'anthropic' | 'none'>('none');
+  const [canSolve, setCanSolve] = useState<boolean>(true);
   // Flipped by the first /api/me answer we actually APPLY — never by the
   // store-busy or provisional paths, both of which come back in a moment.
   const [resolved, setResolved] = useState<boolean>(false);
@@ -202,6 +207,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setRole(j.role ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
       setDefaultMotor(j.defaultMotor && j.defaultMotor.die && j.defaultMotor.config
         ? { die: String(j.defaultMotor.die), config: String(j.defaultMotor.config) } : null);
+      setCanSolve(j.canSolve !== false);
       setSupportProvider(j.supportProvider === 'gemini' || j.supportProvider === 'anthropic' ? j.supportProvider : 'none');
       setResolved(true);
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
@@ -304,7 +310,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = useCallback(async () => getStoredToken(), []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, defaultMotor, supportProvider, resolved, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, defaultMotor, canSolve, supportProvider, resolved, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn}
         initialMode={loginOpts.mode} initialTab={loginOpts.tab} returnTo={loginOpts.returnTo} />

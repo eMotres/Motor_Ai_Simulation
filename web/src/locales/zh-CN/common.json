@@ -257,8 +257,10 @@
   "refused": {
     "admin": "此操作需要管理员账号——您的账号可在“电机”中打开电机，并在“配置”中调整。",
     "signIn": "请登录后使用此功能。",
-    "forbidden": "您的账号无权执行此操作。"
+    "forbidden": "您的账号无权执行此操作。",
+    "solveClosed": "目前仿真计算由 MOTRES 负责运行。"
   },
+  "solveClosed": "目前仿真计算由 MOTRES 负责运行。",
   "card": {
     "badge": "档案",
     "tip": "完整性能档案 · {date}",

@@ -73,10 +73,12 @@ import { runNoticeFor, type RunNotice } from '../../lib/runNotice';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
 import { useTranslation } from 'react-i18next';
+import { useCanSolve } from '../common/SolveGate';
 import { nsT } from '../../i18n/nsT';
 import { storedGapLayers, storedMeshFields } from '../../lib/meshSettings';
 import { narrowSplitColumn, narrowSplitOuter } from '../../lib/narrowLayout';
 import { geoKeyHash } from '../../lib/endWindingPin';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/simulation.json (docs/I18N.md).
 const tx = nsT('simulation');
@@ -1229,7 +1231,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }
   };
 
+  const canSolve = useCanSolve();
   const launchRun = (fresh: boolean, chargeMaxOnce = false) => {
+    if (!canSolve) return;   // SOLVE_ADMIN_ONLY: the one choke point of every launch in this tab (auto-runs, Max charge, Re-run)
     setFreshRun(fresh);
     setCancelledRun(false);
     setAskResume(false);
@@ -3062,28 +3066,30 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               Stop Simulation
             </Button>
           ) : (
-            <Button
-              fullWidth
-              variant="contained"
-              disabled={fitBusy || !!magTempWhy}
-              onClick={() => {
-                if (cancelledRun) { setAskResume(true); return; }
-                if (drive === 'current' && targetKind !== 'off') { void fitAndRun(); return; }
-                launchRun(true);
-              }}
-              startIcon={<PlayArrowIcon />}
-              sx={{
-                py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,
-                textTransform: 'none', borderRadius: 2,
-                bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' },
-                boxShadow: '0 2px 12px rgba(37,99,235,0.4)',
-              }}
-            >
-              {fitBusy ? 'Fitting current…'
-                : drive === 'current' && targetKind !== 'off'
-                  ? `Fit ${Number(targetValue.toFixed(1))} Nm & Run`
-                  : runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation'}
-            </Button>
+            <SolveGate fullWidth>
+              <Button
+                fullWidth
+                variant="contained"
+                disabled={fitBusy || !!magTempWhy}
+                onClick={() => {
+                  if (cancelledRun) { setAskResume(true); return; }
+                  if (drive === 'current' && targetKind !== 'off') { void fitAndRun(); return; }
+                  launchRun(true);
+                }}
+                startIcon={<PlayArrowIcon />}
+                sx={{
+                  py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,
+                  textTransform: 'none', borderRadius: 2,
+                  bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' },
+                  boxShadow: '0 2px 12px rgba(37,99,235,0.4)',
+                }}
+              >
+                {fitBusy ? 'Fitting current…'
+                  : drive === 'current' && targetKind !== 'off'
+                    ? `Fit ${Number(targetValue.toFixed(1))} Nm & Run`
+                    : runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation'}
+              </Button>
+            </SolveGate>
           )}
           {fitMsg && (
             <Typography sx={{ fontSize: 10.5, textAlign: 'center', mt: 0.5,

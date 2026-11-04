@@ -6,6 +6,9 @@
     "email_domain_unknown_suggest": "域名 {domain} 不存在，请检查邮箱地址（您是不是想输入 {suggestion}？）。"
   },
   "rate_limited": "请求过于频繁——请稍后再试。",
+  "solve": {
+    "admin_only": "目前仿真计算由 MOTRES 负责运行。"
+  },
   "material": {
     "unknown": "未知材料：{name}"
   },

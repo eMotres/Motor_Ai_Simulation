@@ -257,8 +257,10 @@
   "refused": {
     "admin": "This needs an admin account — your account opens motors in Motors and tunes them in Configure.",
     "signIn": "Sign in to use this feature.",
-    "forbidden": "Your account is not allowed to do this."
+    "forbidden": "Your account is not allowed to do this.",
+    "solveClosed": "Simulations are run by MOTRES for now."
   },
+  "solveClosed": "Simulations are run by MOTRES for now.",
   "card": {
     "badge": "card",
     "tip": "Full passport card · {date}",

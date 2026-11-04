@@ -262,7 +262,7 @@ function App() {
     if (route.redirected) window.history.replaceState(null, '', route.href);
     if (route.activeTab) setActiveTab(route.activeTab);
   }, [setActiveTab]);
-  const { user, isAdmin, role, enforced, defaultMotor, resolved: authResolved } = useAuth();
+  const { user, isAdmin, role, enforced, defaultMotor, canSolve, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
   const { t: tr, i18n } = useTranslation('common');
   useServerLocale(i18n, useApiReady(), user?.email);
@@ -563,7 +563,7 @@ function App() {
   const geometryActiveViewer = <><Suspense fallback={<TabLoading />}><UnifiedActiveMotorScene /></Suspense><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer' | 'development'; showViewer: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'workbench' | 'admin' | 'producer' | 'designer' | 'development'; showViewer: boolean;
     /** true: mounted from the start and display-toggled; 'visited': mounted on the first visit, then kept */
     keepMounted?: boolean | 'visited';
     render: () => React.ReactNode;
@@ -685,7 +685,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer, designer: designerAllowed, development: developmentAllowed }))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, canSolve, producer, designer: designerAllowed, development: developmentAllowed }))
     .sort((a, b) => a.order - b.order);
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.

@@ -60,6 +60,13 @@ SOLVE_ROUTES = {
     ("POST", "/api/motor-tests/DIE/CFG/compute"): None,
     ("GET", "/api/static3d/mesh"): None,
     ("POST", "/api/static3d/solve"): "admin",
+    # VIEW-ONLY SIMULATIONS (owner 2026-11-04): the preview meshes of the Electromagnetic / Thermal / Mechanical tabs and the Simulation
+    # tab's stored-answer lookup (no Configure, 3-D or project view calls them)
+    ("GET", "/api/simulation/mesh/build2d"): "user",
+    ("GET", "/api/simulation/mesh/build2d_sliding_band"): "user",
+    ("GET", "/api/thermal/mesh"): "user",
+    ("GET", "/api/mechanical/mesh"): "user",
+    ("GET", "/api/simulation/physics/fem_transient/ledger_match"): "user",
     # already admin through the prefix list (kept admin whatever the setting says)
     ("POST", "/api/optimization/scan"): "admin",
     ("POST", "/api/optimization/refine"): "admin",
@@ -75,11 +82,9 @@ SOLVE_ROUTES = {
 READS = {
     ("GET", "/api/thermal/last"): "user", ("GET", "/api/mechanical/last"): "user", ("GET", "/api/coupled/last"): "user",
     ("GET", "/api/thermal/em_run"): "user", ("GET", "/api/thermal/duty_cycle/last"): "user",
-    ("GET", "/api/simulation/physics/fem_transient/ledger_match"): "user",       # a lookup: it answers before any mesh or solve
     ("GET", "/api/simulation/physics/fem_transient/progress"): None, ("GET", "/api/mechanical/progress"): None,
     ("GET", "/api/thermal/progress"): None, ("GET", "/api/coupled/progress"): None,
     ("POST", "/api/simulation/physics/fem_transient/cancel"): "user", ("POST", "/api/coupled/cancel"): "user",
-    ("GET", "/api/simulation/mesh/build2d"): "user", ("GET", "/api/thermal/mesh"): "user", ("GET", "/api/mechanical/mesh"): "user",
     ("GET", "/api/family/tree"): None, ("GET", "/api/family/context"): None,
     ("GET", "/api/motor-view/DIE/CFG"): None, ("GET", "/api/motor-view/DIE/CFG/DUTY/field/em"): None,
     ("GET", "/api/catalog/some_motor/passport"): None, ("GET", "/api/catalog/some_motor/configure_context"): None,
@@ -88,106 +93,205 @@ READS = {
     ("GET", "/api/production/DIE/CFG"): None, ("GET", "/api/motor-tests/DIE/CFG"): None,
     ("POST", "/api/motor-tests/DIE/CFG/tests"): None,                             # add a bench test record: data, not a solve
     ("GET", "/api/controller/point"): None, ("POST", "/api/controller/schematic"): None, ("GET", "/api/controller/last"): None,
+    # NOT TOUCHED (owner 2026-11-04: Configure stays as it is): Configure's own server calls and the calculators beside them
     ("GET", "/api/mechanical/bearing_fit"): None, ("GET", "/api/mechanical/holder_strength"): None, ("GET", "/api/bearings/losses"): None,
-    ("GET", "/api/propellers/p1/s1"): None,
+    ("GET", "/api/propellers/p1/s1"): None, ("GET", "/api/propellers/p1/series"): None, ("GET", "/api/propellers/p1/point"): None,
+    ("GET", "/api/catalog/some_motor/configure_load"): None, ("GET", "/api/geometry/mesh2d"): None, ("GET", "/api/wires/stock"): None,
+    ("GET", "/api/family/payload/DIE/CFG"): None, ("POST", "/api/family/activate"): None, ("GET", "/api/bearings/library"): None,
+    # left open, not Simulation (listed in the PR): the controller schematic, the design agent, CAD rebuild, the CAD bundle
+    ("POST", "/api/controller/schematic"): None, ("POST", "/api/design-agent/conversations"): None,
+    ("POST", "/api/family/config/DIE/CFG/cad_rebuild"): None, ("GET", "/api/freecad/export"): "user",
     ("GET", "/api/jobs"): None, ("GET", "/api/system/graph"): "engineer",
 }
 
-#: REVIEWED (2026-11-04): worker-served routes that read stored data, preview, report progress, cancel, or write a store - none
-#: starts a calculation.  Every other worker-served route must be an admin route while the setting is on.
-REVIEWED_NOT_A_SOLVE = frozenset({
-    "GET /api/catalog/{motor_id}/passport",
-    "GET /api/config",
-    "GET /api/controller/cooling_from_thermal",
-    "GET /api/controller/devices",
-    "GET /api/controller/devices/{part}",
-    "GET /api/controller/devices/{part}/image",
-    "GET /api/controller/history",
-    "GET /api/controller/last",
-    "GET /api/controller/point",
-    "POST /api/controller/schematic",
-    "GET /api/controller/settings",
-    "GET /api/controller/thermal_cooling",
-    "GET /api/controller/topologies",
-    "POST /api/coupled/cancel",
-    "GET /api/coupled/last",
-    "GET /api/coupled/progress",
-    "POST /api/family/config/{die}/{cfg}/move",
-    "POST /api/family/config/{die}/{cfg}/rename",
-    "DELETE /api/family/die/{die}",
-    "PATCH /api/family/die/{die}",
-    "GET /api/family/report/progress",
-    "GET /api/family/report/{die}/{cfg}",
-    "GET /api/geometry",
-    "GET /api/geometry/constraints",
-    "GET /api/geometry/dimension_sheet",
-    "GET /api/geometry/mesh",
-    "GET /api/geometry/mesh2d",
-    "GET /api/geometry/mesh_extruded",
-    "GET /api/geometry/optimizable",
-    "GET /api/geometry/pointcloud",
-    "GET /api/geometry/schema",
-    "GET /api/geometry/summary",
-    "GET /api/geometry/validation",
-    "GET /api/history",
-    "DELETE /api/history/{key}",
-    "POST /api/history/{key}/load",
-    "GET /api/jobs",
-    "GET /api/jobs/{run_id}",
-    "POST /api/jobs/{run_id}/cancel",
-    "GET /api/kernel/capabilities",
-    "GET /api/materials",
-    "GET /api/mechanical/bearing_fit",
-    "GET /api/mechanical/holder_strength",
-    "GET /api/mechanical/last",
-    "GET /api/mechanical/materials",
-    "GET /api/mechanical/mesh",
-    "GET /api/mechanical/progress",
-    "GET /api/mesh/config",
-    "GET /api/optimization/auto/status",
-    "GET /api/optimization/descent/progress",
-    "GET /api/optimization/doe/progress",
-    "GET /api/optimization/refine/progress",
-    "GET /api/optimization/saved",
-    "GET /api/optimization/saved/{sid}",
-    "GET /api/optimization/scan/progress",
-    "GET /api/optimization/surrogate",
-    "GET /api/optimization/variables",
-    "GET /api/parts",
-    "PATCH /api/parts",
-    "GET /api/sims/saved",
-    "GET /api/simulation/cogging/{die}/{cfg}",
-    "PUT /api/simulation/cogging/{die}/{cfg}",
-    "GET /api/simulation/config",
-    "GET /api/simulation/mesh/build2d",
-    "GET /api/simulation/mesh/build2d_sliding_band",
-    "POST /api/simulation/physics/fem_transient/cancel",
-    "GET /api/simulation/physics/fem_transient/ledger_match",
-    "GET /api/simulation/physics/fem_transient/progress",
-    "GET /api/simulation/physics/field_busy",
-    "GET /api/simulation/result/{job_id}",
-    "GET /api/simulation/status",
-    "GET /api/static3d/field",
-    "GET /api/static3d/geometry",
-    "GET /api/static3d/machine",
-    "GET /api/static3d/passport",
-    "GET /api/static3d/solve/progress",
-    "GET /api/static3d/solves",
-    "GET /api/system/graph",
-    "GET /api/system/graphs",
-    "POST /api/system/graphs/validate",
-    "DELETE /api/system/graphs/{name}",
-    "GET /api/system/graphs/{name}",
-    "PUT /api/system/graphs/{name}",
-    "POST /api/system/validate",
-    "GET /api/thermal/duty_cycle/last",
-    "GET /api/thermal/em_run",
-    "GET /api/thermal/heat_paths/last",
-    "GET /api/thermal/last",
-    "GET /api/thermal/mesh",
-    "GET /api/thermal/progress",
-    "GET /api/winding/config",
-    "PATCH /api/winding/config",
+#: REVIEWED (2026-11-04): routes in the compute areas (the compute worker's paths, the compute modules below) that are NOT a calculation
+#: started on request, or that were deliberately left open (owner 2026-11-04: only the Simulations workbench is view-only; Configure and
+#: its calculators are untouched).  key -> why.  Every other route in those areas must be an admin route while the setting is on.
+REVIEWED_NOT_A_SOLVE = {
+    "GET /api/bearings/library": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/bearings/losses": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/catalog": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/cards": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/cards/{kind}": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/cards/{kind}/card": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/cards/{kind}/used_by": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/references": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/{motor_id}/configure_context": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "PATCH /api/catalog/{motor_id}/configure_limits": "writes the configuration's slider limits, computes nothing",
+    "GET /api/catalog/{motor_id}/configure_load": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/catalog/{motor_id}/passport": "CONFIGURE/catalog: stored answers and reference cards (configure_load is built once per input version and stored)",
+    "GET /api/components": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/components/materials": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/components/materials/{material_id}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/components/{component_id}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/controller/cooling_from_thermal": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controller/devices": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controller/devices/{part}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controller/devices/{part}/image": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controller/history": "reads a stored result",
+    "GET /api/controller/last": "reads a stored result",
+    "GET /api/controller/point": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "POST /api/controller/schematic": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "GET /api/controller/settings": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controller/thermal_cooling": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controller/topologies": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controllers/catalog": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controllers/catalog/{controller_id}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/controllers/{controller_id}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "POST /api/coupled/cancel": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/coupled/last": "reads a stored result",
+    "GET /api/coupled/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/design-agent/conversations": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "POST /api/design-agent/conversations": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "DELETE /api/design-agent/conversations/{cid}": "the agent's stored conversations / status",
+    "GET /api/design-agent/conversations/{cid}": "the agent's stored conversations / status",
+    "POST /api/design-agent/conversations/{cid}/messages": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "GET /api/design-agent/status": "the agent's stored conversations / status",
+    "GET /api/family/config/{die}/{cfg}/cad_params": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "PUT /api/family/config/{die}/{cfg}/cad_params": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "POST /api/family/config/{die}/{cfg}/cad_params/import": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "POST /api/family/config/{die}/{cfg}/cad_rebuild": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "POST /api/family/config/{die}/{cfg}/move": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "POST /api/family/config/{die}/{cfg}/rename": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "DELETE /api/family/die/{die}": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "PATCH /api/family/die/{die}": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "GET /api/family/die/{die}/part_tree": "catalog folder move / rename (worker route), CAD rebuild request (not physics); computes nothing",
+    "GET /api/family/report/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/family/report/{die}/{cfg}": "builds the report document from stored results (users generate their own reports)",
+    "GET /api/freecad/export": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "POST /api/freecad/import": "parameter table of the loaded machine / import into the caller's workspace copy",
+    "POST /api/fusion/import": "parameter table of the loaded machine / import into the caller's workspace copy",
+    "GET /api/fusion/params.csv": "parameter table of the loaded machine / import into the caller's workspace copy",
+    "GET /api/fusion/params.json": "parameter table of the loaded machine / import into the caller's workspace copy",
+    "GET /api/geometry": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/constraints": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/dimension_sheet": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/mesh": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/mesh2d": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/mesh_extruded": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/optimizable": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/pointcloud": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/schema": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/summary": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/geometry/validation": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/history": "job list / progress / cancel / history of runs that already exist",
+    "DELETE /api/history/{key}": "job list / progress / cancel / history of runs that already exist",
+    "POST /api/history/{key}/load": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/jobs": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/jobs/{run_id}": "job list / progress / cancel / history of runs that already exist",
+    "POST /api/jobs/{run_id}/cancel": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/kernel/capabilities": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/materials": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/mechanical/bearing_fit": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/mechanical/holder_strength": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/mechanical/last": "reads a stored result",
+    "GET /api/mechanical/materials": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/mechanical/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/mesh/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/model3d/downloads": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/models": "stored 3-D model files and listings (NDA rules apply)",
+    "POST /api/model3d/trace": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/bom.csv": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/bom.xlsx": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/model.fcstd": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/model.glb": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/model.step": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/params.csv": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/parts": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/simplified.glb": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/simplified.json": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/simplified.step": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/model3d/{die}/{config}/simplified_view.glb": "stored 3-D model files and listings (NDA rules apply)",
+    "GET /api/motor-view/{die}/{cfg}": "reads the stored results of a motor",
+    "GET /api/motor-view/{die}/{cfg}/{duty}/field/{kind}": "reads the stored results of a motor",
+    "GET /api/nodes": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/heartbeat": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/jobs/lease": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "GET /api/nodes/jobs/mine": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/jobs/{run_id}/complete": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/jobs/{run_id}/fail": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/jobs/{run_id}/progress": "job list / progress / cancel / history of runs that already exist",
+    "POST /api/nodes/jobs/{run_id}/release": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "PUT /api/nodes/prefs": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "GET /api/nodes/shared-runs": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "GET /api/nodes/worker/{fname}": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "DELETE /api/nodes/{nid}": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "GET /api/nodes/{nid}/history": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/{nid}/revoke": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "PUT /api/nodes/{nid}/share": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "POST /api/nodes/{nid}/share/stop": "compute-node management or the node agent's own bearer (job submit is a solve route)",
+    "GET /api/optimization/auto/status": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/optimization/descent/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/optimization/doe/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/optimization/refine/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/optimization/saved": "reads a stored result",
+    "GET /api/optimization/saved/{sid}": "reads a stored result",
+    "GET /api/optimization/scan/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/optimization/surrogate": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "GET /api/optimization/variables": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/parts": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "PATCH /api/parts": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/pipeline/status": "stub (503, not wired)",
+    "GET /api/pipeline/stl/{component}": "stub (503, not wired)",
+    "GET /api/pipeline/stream": "stub (503, not wired)",
+    "GET /api/pipeline/validate": "stub (503, not wired)",
+    "GET /api/presets": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/presets/{preset_id}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/propellers": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/propellers/cooling-options": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/propellers/{prop_id}": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/propellers/{prop_id}/point": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/propellers/{prop_id}/s1": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/propellers/{prop_id}/series": "CONFIGURE-side calculator, left open (owner 2026-11-04: Configure and its calculators are untouched)",
+    "GET /api/sims/saved": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/simulation/cogging/{die}/{cfg}": "reads a stored result",
+    "PUT /api/simulation/cogging/{die}/{cfg}": "reads a stored result",
+    "GET /api/simulation/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "POST /api/simulation/physics/fem_transient/cancel": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/simulation/physics/fem_transient/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/simulation/physics/field_busy": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/simulation/result/{job_id}": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/simulation/status": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/static3d/field": "reads a stored result",
+    "GET /api/static3d/geometry": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "GET /api/static3d/machine": "left open: Configure's own call or a non-Simulation tab (owner 2026-11-04: only the Simulations workbench is view-only)",
+    "GET /api/static3d/passport": "reads a stored result",
+    "GET /api/static3d/solve/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/static3d/solves": "reads a stored result",
+    "GET /api/sweep/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/system/graph": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/system/graphs": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "POST /api/system/graphs/validate": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "DELETE /api/system/graphs/{name}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/system/graphs/{name}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "PUT /api/system/graphs/{name}": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "POST /api/system/validate": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/thermal/duty_cycle/last": "reads a stored result",
+    "GET /api/thermal/em_run": "reads a stored result",
+    "GET /api/thermal/heat_paths/last": "reads a stored result",
+    "GET /api/thermal/last": "reads a stored result",
+    "GET /api/thermal/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/winding/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "PATCH /api/winding/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
+    "GET /api/wires/stock": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+}
+
+#: Router modules whose routes are data, accounts or admin screens - they compute nothing on request.  A route in a module that is in
+#: neither this set nor COMPUTE_MODULES FAILS the walk: a new router must be classified.
+DATA_MODULES = frozenset({
+    "account", "account_data", "activity", "admin", "admin_analytics", "admin_analytics_accounts", "agent_designs", "agent_keys",
+    "auth_local", "cluster", "comm_prefs", "data_sharing", "erp_export", "family", "legal", "live", "mcp_discovery", "messages",
+    "motor_revisions", "my_motors", "nda", "newsletter", "oauth", "panel_settings", "platform_agreement", "public_motors", "support",
+    "verification", "worker_state", "modules",
+})
+#: Router modules that can compute: every route in them is admin-only or reviewed above.
+COMPUTE_MODULES = frozenset({
+    "simulation", "thermal", "mechanical", "coupled", "controller", "controller_catalog", "bearings", "propellers", "optimization",
+    "static3d", "kernel", "pipeline", "freecad", "fusion", "geometry", "system_graph", "design_agent", "compute_nodes", "cogging",
+    "construction", "components", "report", "model3d", "catalog", "catalog_cards", "motor_view", "history", "jobs_api", "presets",
+    "saved_sims", "sweep_config", "wire_stock",
 })
 
 
@@ -394,34 +498,67 @@ def test_mcp_simulate_is_refused_as_data_for_a_non_admin_and_passes_the_no_price
 _SUBMITS = re.compile(r"queue\(\)\s*\.\s*submit|\.queued\(|\badmit\(|\bCN\.submit\(|solve_pool|run_in_pool")
 
 
-def test_every_route_that_can_start_a_solve_is_admin_only_or_reviewed(env):
-    """The no-slip-through net.  Candidates: everything the compute worker serves (``roles.WORKER_PREFIXES`` + patterns - the
-    deploy's own list of "routes that compute") and any endpoint whose own source submits a job.  Each must be an admin route while
-    the setting is on, or be named in REVIEWED_NOT_A_SOLVE above."""
+def _module_of(endpoint):
+    mod = getattr(endpoint, "__module__", "") or ""
+    if mod.startswith("motor_ai_sim.routes."):
+        return mod.rsplit(".", 1)[-1]
+    return None          # api.py, development.*, production.*, motor_tests.*, digest.*, directory.*, owner_report.*: data screens
+
+
+def test_every_route_that_can_compute_is_admin_only_or_reviewed(env):
+    """The no-slip-through net.  Candidates: everything the compute worker serves (``roles.WORKER_PREFIXES`` + patterns - the deploy's own
+    list of "routes that compute"), every route of a COMPUTE module, and any endpoint whose own source submits a job.  Each must be an
+    admin route while the setting is on, or be named in REVIEWED_NOT_A_SOLVE with its reason.  A router module in neither list fails."""
     from motor_ai_sim.api import app
-    seen, offenders = set(), []
+    seen, offenders, unknown = set(), [], set()
     for r in app.routes:
         methods = getattr(r, "methods", None)
-        if not methods or not str(getattr(r, "path", "")).startswith("/"):
-            continue
+        if not methods or not str(getattr(r, "path", "")).startswith("/") or str(r.path).startswith("/api/admin/"):
+            continue                              # /api/admin/*: every route carries require_admin in the route itself
         ep = getattr(r, "endpoint", None)
+        mod = _module_of(ep)
+        if mod is not None and mod not in COMPUTE_MODULES and mod not in DATA_MODULES:
+            unknown.add(mod)
         try:
             src = inspect.getsource(ep) if ep is not None else ""
         except (OSError, TypeError):
             src = ""
-        candidate = roles.is_worker_path(r.path) or bool(_SUBMITS.search(src))
+        candidate = roles.is_worker_path(r.path) or (mod in COMPUTE_MODULES) or bool(_SUBMITS.search(src))
         for m in sorted(methods - {"HEAD", "OPTIONS"}):
             key = f"{m} {r.path}"
             seen.add(key)
             if candidate and auth.required_role(m, r.path) != "admin" and key not in REVIEWED_NOT_A_SOLVE:
                 offenders.append(key)
-    assert not offenders, ("these routes can start work and have no solve tier (add ``solve:<old tier>`` in auth._GATED, or review "
-                           "them into REVIEWED_NOT_A_SOLVE): %s" % offenders)
-    stale = sorted(REVIEWED_NOT_A_SOLVE - seen)
+    assert not unknown, f"new router module(s) {sorted(unknown)}: add to DATA_MODULES (computes nothing) or COMPUTE_MODULES (decide each route)"
+    assert not offenders, ("these routes can compute and have no solve tier (add ``solve:<old tier>`` in auth._GATED, or review "
+                           "them into REVIEWED_NOT_A_SOLVE with a reason): %s" % offenders)
+    stale = sorted(set(REVIEWED_NOT_A_SOLVE) - seen)
     assert not stale, f"REVIEWED_NOT_A_SOLVE names routes that no longer exist: {stale}"
 
 
 def test_a_reviewed_route_is_never_a_solve_route(env):
-    for key in REVIEWED_NOT_A_SOLVE:
+    for key, why in REVIEWED_NOT_A_SOLVE.items():
         method, path = key.split(" ", 1)
-        assert not auth.is_solve_route(method, path), key
+        assert why and not auth.is_solve_route(method, path), key
+
+
+# -- MCP: every tool has a decision ---------------------------------------------------------------------------------------------
+
+#: tool -> what it does for a non-admin while the setting is on.  A tool in the MCP tables with no entry FAILS the test below.
+MCP_DECISIONS = {
+    "start_design": "left",            # a draft by calculation: NOT the Simulations workbench, left open (owner 2026-11-04)
+    "simulate": "closed",
+    "list_catalog": "read", "get_catalog_entry": "read", "list_machines": "read", "get_machine_performance": "read",
+    "check_fit": "read",               # compares saved duty results with the requirements: "Nothing is simulated"
+    "get_design": "read", "get_job": "read", "get_design_result": "read", "open_in_configure": "read",
+    "get_spec_form": "order", "get_order_status": "order", "create_order": "order", "update_spec": "order", "submit_spec": "order",
+}
+
+
+def test_every_mcp_tool_has_a_view_only_decision():
+    from motor_ai_sim import mcp_app
+    tools = set(mcp_app.TOOL_SCOPES) | set(mcp_app.PUBLIC_TOOLS)
+    public = set(mcp_app.PUBLIC_TOOLS)
+    missing = sorted(t for t in tools - public if t not in MCP_DECISIONS)
+    assert not missing, f"MCP tools without a view-only decision (closed / read / order): {missing}"
+    assert sorted(t for t in MCP_DECISIONS if t not in tools) == []

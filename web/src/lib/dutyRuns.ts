@@ -23,6 +23,8 @@
 // solve would have written them, so the charts, the summary card and the
 // charging card show it with nothing recomputed.
 
+import { dutyKey } from './dutySettings';
+
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 export type Drive = 'current' | 'voltage' | 'pwm_voltage' | 'bldc_current'
@@ -231,4 +233,19 @@ export function applyStoredRun(run: StoredRun, opts?: { settings?: boolean }): v
       window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
     }
   } catch { /* SSR/no-window */ }
+}
+
+/**
+ * Show one stored run of a duty on screen and remember the pick — the single
+ * implementation behind the run chips (StoredRunSelector) and the point
+ * switcher, which keeps the chosen excitation when the point changes.
+ * Throws a one-line reason when the run's waveforms are gone from disk.
+ */
+export async function showStoredRun(duty: { die: string; config: string; duty: string },
+                                    drive: string): Promise<void> {
+  const k = dutyKey(duty.die, duty.config, duty.duty);
+  const run = await getDutyRun(k, duty.die, duty.config, duty.duty, drive);
+  if (!run?.payload) throw new Error('its waveforms are gone from disk — re-run and save');
+  applyStoredRun(run);
+  setPickedRun(k, drive);
 }

@@ -21,6 +21,7 @@ import FemAnimationViewer  from './FemAnimationViewer';
 import TransientCharts     from './TransientCharts';
 import SummaryTable        from './SummaryTable';
 import StoredRunSelector   from './StoredRunSelector';
+import SimPointSwitcher    from './SimPointSwitcher';
 import { useMotorStore }   from '../../stores/motorStore';
 import { geoSignature }    from '../common/geoSig';
 import { applyS1AsOperatingPoint, s1AutoSetPlan, s1AutoSetNoticeText }
@@ -220,6 +221,10 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
             above a /physics fetch whose analytic MMF / B_r / loss estimates were
             all rendered into display:none Papers. */}
         <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: 'var(--ok-bg)', color: '#4ade80' }}/>
+        {/* The motor's computed POINTS (its duties): load one, charts included,
+            with nothing solved.  The run chips beside it then belong to the
+            chosen point.  Renders nothing for a motor with a single point. */}
+        <SimPointSwitcher />
         {/* Which of this duty's SAVED runs is on screen (sine / PWM / BLDC).
             Renders nothing until the loaded duty has more than one. */}
         <StoredRunSelector />

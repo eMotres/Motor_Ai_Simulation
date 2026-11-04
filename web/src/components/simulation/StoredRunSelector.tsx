@@ -14,8 +14,8 @@ import React, { useEffect, useState } from 'react';
 import { Box, Tooltip, CircularProgress } from '@mui/material';
 import { activeDuty, dutyKey } from '../../lib/dutySettings';
 import {
-  RUNS_EVENT, applyStoredRun, driveLabel, dutyRuns, getDutyRun, pickedRun,
-  setPickedRun, type StoredRunMeta,
+  RUNS_EVENT, driveLabel, dutyRuns, pickedRun, showStoredRun,
+  type StoredRunMeta,
 } from '../../lib/dutyRuns';
 
 const StoredRunSelector: React.FC = () => {
@@ -50,11 +50,7 @@ const StoredRunSelector: React.FC = () => {
     if (busy) return;
     setBusy(drive); setErr(null);
     try {
-      const k = dutyKey(duty.die, duty.config, duty.duty);
-      const run = await getDutyRun(k, duty.die, duty.config, duty.duty, drive);
-      if (!run?.payload) throw new Error('its waveforms are gone from disk — re-run and save');
-      applyStoredRun(run);
-      setPickedRun(k, drive);
+      await showStoredRun(duty, drive);
       setPick(drive);
     } catch (e: any) {
       setErr(String(e?.message ?? e));

@@ -4,7 +4,8 @@
  *   Ø <diameter>
  *     🔒 die (stamped lamination, real cross-section)
  *        configuration (stack · wire · turns · connection · steel · magnet)
- *           duty table (kW/Nm/rpm/A/V/η/ripple/loss/kg/γ) → ▶ load / 📥 record / ✕
+ *           → loads its default duty (rated); the other computed points
+ *             appear in the Electromagnetic Simulation tab's point switcher
  *
  * Every motor lives as a die with configurations and duties — the legacy
  * card/preset catalog was migrated into this structure (2026-08-19); the

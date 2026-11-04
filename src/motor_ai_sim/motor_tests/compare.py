@@ -12,7 +12,7 @@ Conventions
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 #: Copper: alpha = 0.00393 1/K about 20 C, i.e. R(T) / R(T0) = (234.5 + T) / (234.5 + T0).
 CU_T0 = 234.5
@@ -35,6 +35,9 @@ TIPS = {
     "loss": ("model = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
+    "kv_kt": ("slope of V_LL peak against speed (least squares through the origin, over the rows named in the group); "
+              "Kv = 1000 / slope in rpm per V of line-line PEAK; Kt = 3 * Ke per A rms of phase current "
+              "(Ke = phase rms EMF per rad/s; current on the q axis, sine EMF); the 3-D column x the factor shown"),
     "load": ("the duty within 2 % speed and 3 % current; model torque x the 3-D torque factor (measured k_T, else k_flux); "
              "model efficiency is the motor's at the shaft (no inverter)"),
     "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the stored system "
@@ -196,6 +199,80 @@ def emf_model_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Dict[st
     k = float(rpm) / r0 * float(ratio)
     pk, rms = num(ref.get("v_ll_peak")), num(ref.get("v_ll_rms"))
     return {"peak": None if pk is None else pk * k, "rms": None if rms is None else rms * k}
+
+
+# ---------------------------------------------------------------------------
+# EMF slope, Kv, Ke, Kt
+# ---------------------------------------------------------------------------
+
+#: A bench row whose V/n differs from the median of the OTHER rows by more than this (percent) is flagged (shown, never
+#: dropped); at least ``SLOPE_FLAG_MIN_ROWS`` rows are needed for the others to mean anything.
+SLOPE_FLAG_PCT = 3.0
+SLOPE_FLAG_MIN_ROWS = 4
+
+
+def summary_magnet_temp_c(s: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The magnet temperature a stored EM run was SOLVED at, from its summary, or None.
+
+    ``magnet_temp_used_c`` is the run's own stamp (``routes.simulation._magnet_temperature_stamp``: the typed or coupled
+    temperature, else its card's); ``magnet_temp_c`` / ``magnet_temp_C`` are the older spellings.  The first one present
+    wins; 0 C is a temperature, not "missing"."""
+    s = s if isinstance(s, dict) else {}
+    for key in ("magnet_temp_used_c", "magnet_temp_c", "magnet_temp_C"):
+        v = num(s.get(key))
+        if v is not None:
+            return v
+    return None
+
+
+def slope_through_origin(points: Sequence[Tuple[Any, Any]]) -> Optional[Dict[str, float]]:
+    """Least squares V = s * n through the origin (EMF is zero at standstill): ``{"slope", "n", "rmse_pct"}`` with the
+    slope in V per rpm.  At least two points at a positive speed; None otherwise (one point is a ratio, not a slope)."""
+    pts = [(float(n), float(v)) for n, v in points if num(n) is not None and num(v) is not None and float(n) > 0]
+    if len(pts) < 2:
+        return None
+    sxx = sum(n * n for n, _ in pts)
+    s = sum(n * v for n, v in pts) / sxx
+    if s <= 0:
+        return None
+    rmse = math.sqrt(sum((v - s * n) ** 2 for n, v in pts) / len(pts))
+    mean_v = sum(v for _, v in pts) / len(pts)
+    return {"slope": s, "n": float(len(pts)), "rmse_pct": 100.0 * rmse / mean_v if mean_v else float("nan")}
+
+
+def kv_ke_kt(slope_peak_v_per_krpm: float) -> Dict[str, float]:
+    """The speed / torque constants from the slope of the line-line PEAK EMF against speed.
+
+    * ``kv`` = 1000 / slope (rpm per V of line-line PEAK; the one Kv, as for every motor: it sizes the DC voltage);
+    * ``ke`` = phase rms EMF per mechanical rad/s = slope_peak / 1000 * (30 / pi) / sqrt(3) / sqrt(2)  [V s/rad];
+    * ``kt`` = 3 * ke  [N m per A rms].  Torque of a sine-fed machine on the q axis is T = 3 E_rms I_rms / omega, which is
+      the app's Kt = T_em / I_rms (``report`` Kt_Nm_per_Arms) and the card's Kv (``passport_v1.card.kv_rpm_per_V_line``)
+      read the other way round.  I is the terminal ("phase") current the app takes as input: in delta the per-winding
+      Kt is sqrt(3) larger (the app's ``Kt_Nm_per_A_line`` is this one).
+    """
+    sp = float(slope_peak_v_per_krpm)
+    ke = sp / 1000.0 * (30.0 / math.pi) / math.sqrt(3.0) / math.sqrt(2.0)
+    return {"slope_peak": sp, "kv": 1000.0 / sp, "ke": ke, "kt": 3.0 * ke}
+
+
+def flag_slope_outliers(points: Sequence[Tuple[Any, Any]], *, pct: float = SLOPE_FLAG_PCT,
+                        min_rows: int = SLOPE_FLAG_MIN_ROWS) -> List[Dict[str, Any]]:
+    """For each ``(rpm, V)`` row: ``{"rpm", "dev_pct", "flagged"}``, ``dev_pct`` = how far its V/n sits from the median V/n of
+    the OTHER rows (percent, negative = below).  Rows are only flagged - never removed here; with fewer than
+    ``min_rows`` usable rows nothing is flagged (``dev_pct`` None)."""
+    pts = [(i, float(n), float(v)) for i, (n, v) in enumerate(points)
+           if num(n) is not None and num(v) is not None and float(n) > 0]
+    out: List[Dict[str, Any]] = [{"rpm": num(n), "dev_pct": None, "flagged": False} for n, _ in points]
+    if len(pts) < min_rows:
+        return out
+    for i, n, v in pts:
+        others = sorted(vv / nn for j, nn, vv in pts if j != i)
+        k = len(others)
+        med = others[k // 2] if k % 2 else 0.5 * (others[k // 2 - 1] + others[k // 2])
+        if med > 0:
+            dev = 100.0 * ((v / n) / med - 1.0)
+            out[i] = {"rpm": n, "dev_pct": dev, "flagged": abs(dev) > pct}
+    return out
 
 
 # ---------------------------------------------------------------------------

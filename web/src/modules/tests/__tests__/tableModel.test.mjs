@@ -127,6 +127,22 @@ t('row notes: unexplained loss, no model point (with the compute action), freque
   assert.equal(M.rowNote(row({})), null);
 });
 
+t('Kv / Kt rows: a flagged EMF row and a 3-D factor that is not the current one say so, a clean row says nothing', () => {
+  const flagged = row({ key: 'emf_peak', measured: 523, model: 540, extra: { in_slope: true, slope_flagged: true, slope_dev_pct: -4.04 } });
+  assert.deepEqual(M.rowNote(flagged), { key: 'slopeFlagged', params: { pct: '-4.0' } });
+  assert.equal(M.rowNote(row({ key: 'emf_peak', extra: { in_slope: true, slope_flagged: false, slope_dev_pct: 0.2 } })), null);
+  const inh = row({ key: 'kv_3d', measured: 5.8, model: 6.77, extra: { k_3d: 0.9502, end3d: { inherited: true, current: true } } });
+  assert.equal(M.rowNote(inh).key, 'inherited3d');
+  assert.equal(M.rowNote(row({ key: 'kt_3d', extra: { k_3d: 0.95, end3d: { inherited: false, current: false } } })).key, 'stored3d');
+  assert.equal(M.rowNote(row({ key: 'kt_3d', extra: { k_3d: 0.95, end3d: { inherited: false, current: true } } })), null);
+  // the 2-D rows never carry the 3-D note, and Kv / Kt rows form no speed series (no chart)
+  assert.equal(M.rowNote(row({ key: 'kv_2d', extra: { k_3d: null, end3d: { inherited: true } } })), null);
+  const g = { key: 'kv_kt', label: 'x', params: { n: 6 }, rows: [row({ key: 'kv_2d', measured: 5.8, model: 6.44, delta_pct: 11 })] };
+  assert.equal(M.seriesOf(g), null);
+  assert.equal(M.fmtValue(5.8), '5.80');
+  assert.equal(M.fmtValue(2.016), '2.02');
+});
+
 t('pasted free-run rows in the slash format, "-" = not measured, a bad row reported by its line', () => {
   const p = M.parseRows('1000/140/80/28.3/40, 1500/240/120/42.4,\n4000/-/320/113.2, x/1', 'free_run');
   assert.deepEqual(p.rows, [

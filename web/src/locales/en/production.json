@@ -455,7 +455,11 @@
       "resistance": "R_phase at {from} °C scaled to {to} °C",
       "inductance": "2-D: no end-winding inductance, no 3-D factor on L",
       "fit": "least squares through the origin, n in krpm",
-      "cogging": "2-D, I = 0, eddy and demagnetisation off, no skew or 3-D factor"
+      "cogging": "2-D, I = 0, eddy and demagnetisation off, no skew or 3-D factor",
+      "kv_3d": "all {n} rows, magnets at {mag} °C, 3-D ×{k} ({src})",
+      "kv_2d": "all {n} rows, magnets at {mag} °C, 2-D (no 3-D passport)",
+      "kv_ex_3d": "without {rpm} rpm, {n} rows, magnets at {mag} °C, 3-D ×{k} ({src})",
+      "kv_ex_2d": "without {rpm} rpm, {n} rows, magnets at {mag} °C, 2-D (no 3-D passport)"
     },
     "note": {
       "unexplained": "unexplained {w} W",
@@ -464,7 +468,10 @@
       "freqFlag": "{hz} Hz vs low-frequency model",
       "remaining": "{mohm} mΩ board and joints",
       "modelAbove": "model {mohm} mΩ above the reading",
-      "benchPending": "bench value pending"
+      "benchPending": "bench value pending",
+      "slopeFlagged": "{pct} % from the other rows",
+      "inherited3d": "3-D factor of an earlier geometry",
+      "stored3d": "3-D factor stored with the duty"
     },
     "group": {
       "resistance": "Resistance at {temp_c} °C",
@@ -477,6 +484,8 @@
       "emf_rms": "EMF line-line rms",
       "loss": "No-load loss (shaft power)",
       "fit": "Loss fit P = a·n + b·n² (n in krpm)",
+      "kv_kt": "Kv / Kt from the EMF slope, all {n} rows",
+      "kv_kt_ex": "Kv / Kt without {rpm} rpm (flagged)",
       "no_model": "No model point"
     },
     "row": {
@@ -503,7 +512,13 @@
       "eff": "Efficiency",
       "eff_system": "System efficiency (DC in, shaft out)",
       "t_winding": "Winding temperature",
-      "t_magnet": "Magnet temperature"
+      "t_magnet": "Magnet temperature",
+      "kv_slope_2d": "EMF slope, V line-line peak per 1000 rpm, model 2-D",
+      "kv_slope_3d": "EMF slope, V line-line peak per 1000 rpm, model 3-D",
+      "kv_2d": "Kv (rpm per V line-line peak), model 2-D",
+      "kv_3d": "Kv (rpm per V line-line peak), model 3-D",
+      "kt_2d": "Kt per A rms phase current, model 2-D",
+      "kt_3d": "Kt per A rms phase current, model 3-D"
     },
     "tip": {
       "resistance": "Model R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line in star (2/3 in delta), plus the stated lead cables. The phase board and the joints are not in the model.",
@@ -513,6 +528,7 @@
       "l_freq": "The model is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading.",
       "emf_peak": "Model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T), x the 3-D end-effect flux factor of the configuration (Stage A; 2-D when it has no passport). Measured = Vpp / 2.",
       "emf_rms": "Model V_LL rms of the no-load duty, same speed, Br and 3-D scaling.",
+      "kv_kt": "Slope of V line-line peak against speed, least squares through the origin over the rows named in the group. Kv = 1000 / slope, rpm per V of line-line peak. Kt = 3·Ke per A rms of phase current (Ke = phase rms EMF per rad/s; sine EMF, current on the q axis). 3-D = the factor shown.",
       "loss": "Model = core (hysteresis ~n, eddy ~n², excess ~n^1.5) + solid eddy (~n²) of the no-load duty, x (Br ratio)², + bearings (SKF) + windage. The rest of the measured power is unexplained.",
       "fit": "Least squares P = a·n + b·n² through the origin, n in krpm.",
       "load": "The duty within 2 % speed and 3 % current. Model torque x the 3-D torque factor (measured k_T, else the flux factor). Model efficiency is the motor’s at the shaft (no inverter).",

@@ -52,6 +52,16 @@ export function rowNote(row: CompareRow): RowNote | null {
   if (row.status === 'no_model' && row.action) return { key: 'noModelCompute', params: {} };
   if (row.status === 'no_model') return { key: 'noModel', params: {} };
   if (x.high_freq === true && typeof x.freq_hz === 'number') return { key: 'freqFlag', params: { hz: x.freq_hz } };
+  // an EMF row far from the others stays in the Kv / Kt slope and says so (the slope without it is the second group)
+  if (row.key === 'emf_peak' && x.slope_flagged === true && typeof x.slope_dev_pct === 'number') {
+    return { key: 'slopeFlagged', params: { pct: `${x.slope_dev_pct > 0 ? '+' : ''}${(x.slope_dev_pct as number).toFixed(1)}` } };
+  }
+  // a Kv / Kt row that carries a 3-D factor says when that factor is not the configuration's own current one
+  const p3 = x.end3d as { inherited?: boolean; current?: boolean } | undefined;
+  if (/_3d$/.test(row.key) && p3 && typeof x.k_3d === 'number') {
+    if (p3.inherited === true) return { key: 'inherited3d', params: {} };
+    if (p3.current === false) return { key: 'stored3d', params: {} };
+  }
   // the remainder is the board and the joints only when the measurement is the larger one; a model above the reading
   // says so instead of filing a negative resistance on the board
   if (row.key === 'r_ll_mean' && typeof x.remaining_mohm === 'number') {

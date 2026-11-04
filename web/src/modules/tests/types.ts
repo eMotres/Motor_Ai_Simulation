@@ -73,6 +73,13 @@ export interface TestCompare {
   series?: LoadSeries | null;
 }
 
+/** The 3-D end-effect factor a comparison applied and where it came from (nothing is recomputed in the Tests section):
+ *  `inherited` = a passport of an earlier geometry, `current` false = the one stored with a duty, `stale` = either. */
+export interface End3dProvenance {
+  k_flux: number | null; k_torque: number | null; source: string | null;
+  inherited?: boolean; inherited_note?: string | null; date?: string | null; current?: boolean; stale?: boolean;
+}
+
 export interface TestsPayload {
   die: string; config: string;
   settings: { tests_visible_to_customer?: boolean };
@@ -80,7 +87,7 @@ export interface TestsPayload {
   tests: TestRecord[];
   compare: Record<string, TestCompare>;
   model: { available: boolean; duties: number; noload: string[]; magnet?: string | null; has_bearings: boolean;
-    end3d?: { k_flux: number | null; k_torque: number | null; source: string | null } | null };
+    end3d?: End3dProvenance | null };
   tips: Record<string, string>;
   documents?: Array<{ id: string; file_id: string; name: string }>;
 }

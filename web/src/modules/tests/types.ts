@@ -6,8 +6,8 @@ export const TEST_KINDS: readonly TestKind[] = ['parameters', 'free_run', 'load'
 
 /** The sub-menus of the Tests section (owner 2026-11-04).  A tab is a VIEW of the comparison groups, not a record kind:
  *  the stored records and the data model are unchanged (see `tabOfGroup` in tableModel.ts). */
-export type TestTab = 'resistance' | 'inductance' | 'bearings' | 'free_run' | 'loads' | 'parameters';
-export const TEST_TABS: readonly TestTab[] = ['resistance', 'inductance', 'bearings', 'free_run', 'loads', 'parameters'];
+export type TestTab = 'power' | 'resistance' | 'inductance' | 'bearings' | 'free_run' | 'loads' | 'parameters';
+export const TEST_TABS: readonly TestTab[] = ['power', 'resistance', 'inductance', 'bearings', 'free_run', 'loads', 'parameters'];
 
 export interface TestConditions {
   ambient_c?: number; humidity_pct?: number; rotor?: 'in' | 'out'; state?: string; temp_point?: string;

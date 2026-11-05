@@ -2,6 +2,7 @@
  *  measured | model | delta %, one short note per row and the explanation in tooltips; a group whose rows are a series over
  *  speed gets a measured-vs-model chart to its right (stacked below ~900 px).
  *
+ *  Sub-menus (owner 2026-11-05): Power lists the load tests by name and highest power; a row opens the test in Loads.
  *  Sub-menus (owner 2026-11-04): Resistance, Inductance, Constants (Kv, Kt, EMF), Bearings, Free-run, Loads, and
  *  Parameters for the rest (insulation, hipot, surge, cogging, LCR, weight, dimensions).  A tab is only a view of the
  *  comparison groups (tableModel.tabOfGroup); the stored records are unchanged.
@@ -23,7 +24,7 @@ import { testsApi } from '../api';
 import {
   blocksHeight, cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  normalizeTab, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  normalizeTab, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
@@ -338,6 +339,11 @@ export const TestsPanel: React.FC<{
   const can = data.can;
   const list = testsOfTab(data.tests, data.compare, sub);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
+  const power = powerSummary(data.tests);
+  const openTest = (id: string) => {
+    setSub('loads');
+    window.setTimeout(() => document.getElementById(`test-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
 
   const setVisible = async (v: boolean) => {
     try { await testsApi.setVisibleToCustomer(die, config, v); await reload(); }
@@ -355,7 +361,7 @@ export const TestsPanel: React.FC<{
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <SubTabs value={sub} onChange={setSub} ariaLabel={t('tests.tab')}
           items={TEST_TABS.map((k) => ({ id: k, tip: t(`tests.tabsTip.${k}`),
-            label: `${t(`tests.tabs.${k}`)} (${testsOfTab(data.tests, data.compare, k).length})` }))} />
+            label: `${t(`tests.tabs.${k}`)} (${k === 'power' ? power.length : testsOfTab(data.tests, data.compare, k).length})` }))} />
         <Box sx={{ flex: 1 }} />
         {!data.model.available && (
           <Tooltip title={t('tests.modelMissingTip')}><Chip size="small" label={t('tests.modelMissing')} sx={{ fontSize: 11 }} /></Tooltip>
@@ -373,7 +379,39 @@ export const TestsPanel: React.FC<{
         <Alert severity={msgError ? 'error' : 'info'} onClose={() => note(null)} sx={{ mb: 1, fontSize: 12 }}
           icon={!msgError && pending.length ? <CircularProgress size={14} /> : undefined}>{msg}</Alert>
       )}
-      {list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
+      {sub === 'power' && (power.length === 0
+        ? <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>
+        : (
+          <Paper variant="outlined" sx={{ bgcolor: 'var(--panel)', overflowX: 'auto' }} data-testid="tests-power">
+            <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={head}>{t('tests.power.test')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.max')}<HelpTip title={t('tests.power.maxTip')} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.torque')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.speed')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.efficiency')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.coil')}</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {power.map((l) => (
+                  <TableRow key={l.id} hover onClick={() => openTest(l.id)} sx={{ cursor: 'pointer' }}>
+                    <TableCell sx={{ ...cell, color: 'var(--text-0)' }}>{[l.date, l.title].filter(Boolean).join(' · ')}</TableCell>
+                    <TableCell sx={{ ...num, fontWeight: 700 }} align="right">{l.powerKw.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.torque.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{Math.round(l.rpm)}</TableCell>
+                    <TableCell sx={num} align="right">{l.effPct === null ? '—' : l.effPct.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.tempC === null ? '—' : Math.round(l.tempC)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Paper>
+        ))}
+      {sub !== 'power' && list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
       {list.map((rec) => {
         const cmp = cmpForTab(data.compare[rec.id], rec.kind, sub);       // only this tab's groups
         const s = summary(cmp);
@@ -382,7 +420,7 @@ export const TestsPanel: React.FC<{
         const cond = [rec.conditions?.ambient_c !== undefined ? `${rec.conditions.ambient_c} °C` : '',
           rec.conditions?.humidity_pct !== undefined ? `${rec.conditions.humidity_pct} % RH` : ''].filter(Boolean);
         return (
-          <Paper key={rec.id} variant="outlined" sx={{ p: 1, mb: 1.2, bgcolor: 'var(--panel)' }}>
+          <Paper key={rec.id} id={`test-${rec.id}`} variant="outlined" sx={{ p: 1, mb: 1.2, bgcolor: 'var(--panel)', scrollMarginTop: 60 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap', mb: 0.5 }}>
               <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{bits.join(' · ')}</Typography>
               {cond.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{cond.join(' · ')}</Typography>}

@@ -436,3 +436,30 @@ t('Constants is merged into Parameters: Kv / Kt on top, an old `constants` tab v
   assert.equal(M.testsOfTab(tests, compare, 'parameters').length, 2);            // the parameters test and the free-run Kv / Kt
   assert.equal(M.kindOfTab('parameters'), 'parameters');
 });
+
+t('power list: load tests only, each at its row of highest torque x speed, highest power first', () => {
+  const tests = [
+    { id: 'a', kind: 'load', date: '2026-11-05', title: 'Low', rows: [{ rpm: 1000, torque_nm: 50, v_dc_v: 600, i_dc_a: 10 }, { rpm: 2000, torque_nm: 100, v_dc_v: 600, i_dc_a: 39 }] },
+    { id: 'b', kind: 'load', date: '2026-11-05', title: 'High', rows: [{ rpm: 3000, torque_nm: 120, temp_winding_c: 78, eff_pct: 90.5 }] },
+    { id: 'c', kind: 'parameters', date: '2026-11-05', title: 'No power', rows: [{ rpm: 3000, torque_nm: 500 }] },
+    { id: 'd', kind: 'load', date: '2026-11-05', title: 'No torque', rows: [{ rpm: 3000, eff_pct: 90 }] },
+  ];
+  const r = M.powerSummary(tests);
+  assert.deepEqual(r.map((l) => l.id), ['b', 'a']);
+  assert.ok(Math.abs(r[0].powerKw - 37.7) < 0.05);
+  assert.equal(r[0].effPct, 90.5);
+  assert.equal(r[0].tempC, 78);
+  assert.equal(r[1].rpm, 2000);
+  assert.ok(Math.abs(r[1].effPct - 89.5) < 0.1);       // shaft over DC when motoring
+  assert.equal(r[1].tempC, null);
+});
+
+t('efficiency reads the smaller power over the larger, so a generator row with DC below shaft stays under 100 %', () => {
+  const [l] = M.powerSummary([{ id: 'g', kind: 'load', date: '', title: '', rows: [{ rpm: 3000, torque_nm: 100, v_dc_v: 600, i_dc_a: 47.6 }] }]);
+  assert.ok(l.effPct > 90 && l.effPct < 91);
+});
+
+t('the power tab is a known tab and a test added from it is a load test', () => {
+  assert.equal(M.normalizeTab('power'), 'power');
+  assert.equal(M.kindOfTab('power'), 'load');
+});

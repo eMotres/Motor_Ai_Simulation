@@ -62,7 +62,7 @@ export function normalizeTab(v: unknown, fallback: TestTab = 'resistance'): Test
 
 /** The record kind a new test added from a tab gets (the tab is only a view). */
 export function kindOfTab(tab: TestTab): TestKind {
-  if (tab === 'loads') return 'load';
+  if (tab === 'loads' || tab === 'power') return 'load';
   if (tab === 'free_run' || tab === 'bearings') return 'free_run';
   return 'parameters';
 }
@@ -503,4 +503,38 @@ export function parseNumberList(text: string): Array<number | null> {
     const v = Number(s.replace(',', '.'));
     return Number.isFinite(v) ? v : null;
   });
+}
+
+/** One line of the Power sub-menu (owner 2026-11-05): a load test by its name and its highest power. */
+export interface PowerLine {
+  id: string; date: string; title: string; rpm: number; torque: number; powerKw: number;
+  effPct: number | null; tempC: number | null;
+}
+
+/** Efficiency of a row, in either direction: DC over shaft for a generator, shaft over DC for a motor, so the smaller over the larger.
+ *  The row's own stored value wins. */
+function rowEfficiency(row: Record<string, unknown>, shaftW: number): number | null {
+  if (typeof row.eff_pct === 'number') return row.eff_pct;
+  const dc = Number(row.v_dc_v) * Number(row.i_dc_a);
+  if (!(dc > 0)) return null;
+  return (100 * Math.min(dc, shaftW)) / Math.max(dc, shaftW);
+}
+
+/** The load tests with torque and speed, each at its row of highest torque x speed, highest power first. */
+export function powerSummary(tests: TestRecord[]): PowerLine[] {
+  const out: PowerLine[] = [];
+  for (const t of tests) {
+    if (t.kind !== 'load') continue;
+    let best: PowerLine | null = null;
+    for (const raw of (t.rows ?? []) as unknown as Array<Record<string, unknown>>) {
+      const rpm = Number(raw.rpm), torque = Number(raw.torque_nm);
+      if (!(rpm > 0) || !(torque > 0)) continue;
+      const shaftW = (torque * rpm * Math.PI) / 30;
+      if (best && shaftW / 1000 <= best.powerKw) continue;
+      best = { id: t.id, date: t.date, title: t.title ?? '', rpm, torque, powerKw: shaftW / 1000, effPct: rowEfficiency(raw, shaftW),
+        tempC: typeof raw.temp_winding_c === 'number' ? raw.temp_winding_c : null };
+    }
+    if (best) out.push(best);
+  }
+  return out.sort((a, b) => b.powerKw - a.powerKw);
 }

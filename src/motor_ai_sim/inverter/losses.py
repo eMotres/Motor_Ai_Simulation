@@ -1569,14 +1569,19 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         bridges_out.append(d)
 
     # ── DC link ────────────────────────────────────────────────────────────
-    states, currents = [], []
+    states, currents, avg_states = [], [], []
     for b in topo.bridges:
         st = setups[b.id]
         for lg in b.legs:
             spec = legs_spec[(b.id, lg.name)]
             states.append(wf.switch_states(st, u, spec["v_phase_deg"]))
+            avg_states.append(wf.switch_average(st, u, spec["v_phase_deg"]))
             currents.append(leg_current[(b.id, lg.name)])
-    dc = wf.dc_link_current(states, currents)
+    # the bus MEAN takes the cell-exact on-times (the grid-snapped `states`
+    # bias it at low modulation) and the bridge's own loss; the ripple stays
+    # on the pulses
+    dc = wf.dc_link_current(states, currents, mean_states=avg_states,
+                            p_loss_W=p_total, v_dc_V=v_dc)
     # Which way the leg current flows through its switch: forward (first
     # quadrant) while the conducting switch carries it drain->source, REVERSE
     # (third quadrant — the channel in synchronous rectification, the diode

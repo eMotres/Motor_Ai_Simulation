@@ -940,13 +940,18 @@ def solve_igbt_controller(ctx: Dict[str, Any]) -> Dict[str, Any]:
     t_j_max = max(tj_t, tj_d)
 
     # ── DC link ────────────────────────────────────────────────────────────
-    states, currents = [], []
+    states, avg_states, currents = [], [], []
     for b in topo.bridges:
         for lg in b.legs:
             spec = legs_spec[(b.id, lg.name)]
             states.append(wf.switch_states(setups[b.id], u, spec["v_phase_deg"]))
+            avg_states.append(wf.switch_average(setups[b.id], u, spec["v_phase_deg"]))
             currents.append(leg_current[(b.id, lg.name)])
-    dc = wf.dc_link_current(states, currents)
+    # the bus MEAN takes the cell-exact on-times (grid-snapped states bias it
+    # at low modulation) plus the bridge's own loss; the ripple stays on the
+    # pulses
+    dc = wf.dc_link_current(states, currents, mean_states=avg_states,
+                            p_loss_W=p_total, v_dc_V=v_dc)
 
     # ── limits ─────────────────────────────────────────────────────────────
     limits = _limit_rows(card=card, v_dc_V=v_dc, t_case_mod_c=t_mod,

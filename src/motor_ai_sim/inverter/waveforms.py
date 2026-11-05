@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 __all__ = ["ModulatorSetup", "carrier_reference", "leg_duty", "switch_states",
+           "switch_average",
            "leg_terminal_voltage", "dc_link_current", "dead_time_error_V",
            "coil_waveforms", "dead_samples_for"]
 
@@ -128,6 +129,34 @@ def switch_states(setup: ModulatorSetup, u: np.ndarray, phase_deg: float,
     return (ref > carrier_reference(setup, u)).astype(float)
 
 
+def switch_average(setup: ModulatorSetup, u: np.ndarray, phase_deg: float,
+                   third_harmonic: float = 0.0) -> np.ndarray:
+    """Fraction of each grid cell ``[u_j, u_j + du)`` the HIGH side is on.
+
+    :func:`switch_states` snaps every edge to a grid sample, which rounds each
+    pulse to a multiple of ``1/samples_per_carrier``.  That rounding is not
+    random against the signal: at a small modulation index the duty swings by
+    less than a few grid steps and the staircase passes the fundamental with a
+    gain above 1 (+6 % at m = 0.1 on 24 samples per carrier, 0.5 % at m = 0.9).
+    Here the reference-minus-carrier difference is taken at both ends of the
+    cell and the crossing is placed by linear interpolation, so the cell's
+    on-time is exact to second order whatever the grid.  The window is
+    periodic, like the grid.
+    """
+    du = 1.0 / u.size
+    g0 = (2.0 * leg_duty(setup, u, phase_deg, third_harmonic) - 1.0
+          - carrier_reference(setup, u))
+    u1 = u + du
+    g1 = (2.0 * leg_duty(setup, u1, phase_deg, third_harmonic) - 1.0
+          - carrier_reference(setup, u1))
+    both_on = (g0 > 0.0) & (g1 > 0.0)
+    cross = (g0 > 0.0) != (g1 > 0.0)
+    span = np.where(cross, np.abs(g0 - g1), 1.0)
+    # the on-part of a crossing cell: the positive end's share of the span
+    frac = np.where(g0 > 0.0, g0, g1) / span
+    return np.where(both_on, 1.0, np.where(cross, np.clip(frac, 0.0, 1.0), 0.0))
+
+
 def dead_samples_for(setup: ModulatorSetup) -> int:
     """How many grid samples one dead-time window occupies.
 
@@ -183,13 +212,36 @@ def dead_time_error_V(setup: ModulatorSetup, i_leg: np.ndarray,
 
 
 def dc_link_current(states: Sequence[np.ndarray],
-                    currents: Sequence[np.ndarray]) -> Dict[str, float]:
+                    currents: Sequence[np.ndarray], *,
+                    mean_states: Optional[Sequence[np.ndarray]] = None,
+                    p_loss_W: float = 0.0,
+                    v_dc_V: float = 0.0) -> Dict[str, float]:
     """DC-link current from the switching functions — mean, rms, capacitor rms.
 
     ``i_dc = sum(s_leg * i_leg)`` is exact for an ideal two-level bridge: the
     high-side switch either connects the leg to the positive rail or it does
     not.  The capacitor carries whatever the bus does not, so
     ``I_cap,rms = sqrt(I_dc,rms^2 - I_dc,mean^2)``.
+
+    Two things are kept apart because the grid treats them differently:
+
+    * the RIPPLE (capacitor rms, peak-to-peak) needs the pulses, so it comes
+      from the binary ``states`` as they are — it resolves only what the grid
+      resolves;
+    * the MEAN is a power balance and must not depend on the grid.  Snapping
+      each edge to a grid sample rounds the pulses and biases the mean at a
+      small modulation index, so when ``mean_states`` (the cell-exact
+      :func:`switch_average`) is given the mean is taken from it, each cell's
+      on-time paired with the leg current at the MIDDLE of the cell (the
+      current array is sampled at the cell start).
+
+    ``p_loss_W`` is the bridge's own dissipation.  The product above is the
+    power at the AC terminals; the devices' conduction, switching and
+    dead-time diode losses are drawn from the link on top of it in either
+    direction (motor: link -> machine + loss; generator: machine -> link
+    minus the loss, a more positive current in both), so the mean carries
+    ``p_loss_W / v_dc_V`` as a DC term.  A constant moves the mean and the
+    rms, not the capacitor rms or the peak-to-peak.
     """
     tot = None
     for s, i in zip(states, currents):
@@ -198,10 +250,20 @@ def dc_link_current(states: Sequence[np.ndarray],
     if tot is None:
         return {"i_dc_mean_A": 0.0, "i_dc_rms_A": 0.0, "i_cap_rms_A": 0.0,
                 "i_dc_pp_A": 0.0}
-    mean = float(np.mean(tot))
-    rms = float(np.sqrt(np.mean(tot ** 2)))
-    return {"i_dc_mean_A": mean, "i_dc_rms_A": rms,
-            "i_cap_rms_A": float(math.sqrt(max(rms ** 2 - mean ** 2, 0.0))),
+    cap = float(np.std(tot))
+    if mean_states is not None:
+        acc = None
+        for s, i in zip(mean_states, currents):
+            term = s * 0.5 * (i + np.roll(i, -1))
+            acc = term if acc is None else acc + term
+        mean = float(np.mean(acc))
+    else:
+        mean = float(np.mean(tot))
+    if p_loss_W and v_dc_V > 0.0:
+        mean += float(p_loss_W) / float(v_dc_V)
+    return {"i_dc_mean_A": mean,
+            "i_dc_rms_A": float(math.sqrt(cap ** 2 + mean ** 2)),
+            "i_cap_rms_A": cap,
             "i_dc_pp_A": float(np.max(tot) - np.min(tot))}
 
 

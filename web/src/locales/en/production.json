@@ -120,6 +120,53 @@
     "lineTotalTooling": "Line total (qty x price)",
     "toolingTip": "Tooling / fixtures order list: quantities are totals, no price is multiplied by the number of motors; prices follow the same access rule as the motor BOM."
   },
+  "bomExcel": {
+    "upload": "Upload Excel",
+    "download": "Download Excel",
+    "tip": "Upload .xlsx: name and quantity columns are required. Parts match by ID or exact name; parts not in the file stay, blank cells keep their values.",
+    "saveFirst": "Save your edits first.",
+    "title": "Upload {name}",
+    "apply": "Apply",
+    "row": "Row {row}",
+    "action": "Action",
+    "changes": "Changes",
+    "summary": "New: {added}. Changed: {changed}. Same: {same}.",
+    "applied": "Applied. New: {added}, changed: {changed}. The file is in Documents, internal.",
+    "hasErrors": "Correct the file and upload it again; nothing is applied while it has errors.",
+    "missing": "Not in the file, stay in the list: {names}",
+    "ignored": "Columns not read: {names}",
+    "actionValue": {
+      "new": "New",
+      "update": "Change",
+      "same": "Same"
+    },
+    "field": {
+      "qty": "Quantity",
+      "kind": "Type",
+      "name_en": "Name EN",
+      "name_zh": "Name ZH",
+      "material": "Material",
+      "spec": "Specification",
+      "currency": "Currency",
+      "note": "Note"
+    },
+    "error": {
+      "not_xlsx": "This is not an .xlsx file. Save an old .xls file as .xlsx first.",
+      "file_too_large": "The file is too large (10 MB at most).",
+      "too_many_rows": "Too many rows (2000 at most).",
+      "no_header": "No header row found: it needs a part name column and a quantity column.",
+      "missing_name": "No part name",
+      "missing_qty": "New part without a quantity",
+      "bad_qty": "The quantity must be a whole number above zero",
+      "qty_not_whole": "The BOM stores whole quantities only",
+      "bad_kind": "Unknown type: use made, purchased or consumable",
+      "bad_price": "The price must be a number, zero or above",
+      "bad_currency": "The currency must be CNY, EUR or USD",
+      "unknown_part_id": "No such part ID in this list",
+      "duplicate_part": "The same part appears twice in the file",
+      "ambiguous_name": "Several parts have this name: use the Part ID column"
+    }
+  },
   "costs": {
     "title": "Cost breakdown & pricing",
     "unitPrice": "Price / motor",

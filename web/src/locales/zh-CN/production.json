@@ -120,6 +120,53 @@
     "lineTotalTooling": "单项合计（数量 × 单价）",
     "toolingTip": "工装/夹具订购清单：数量为总数，价格不乘以电机台数；价格的查看权限与电机物料清单相同。"
   },
+  "bomExcel": {
+    "upload": "上传 Excel",
+    "download": "下载 Excel",
+    "tip": "上传 .xlsx：必须有零件名称列和数量列。按 ID 或完全相同的名称匹配零件；文件中没有的零件保留，空白单元格保留原值。",
+    "saveFirst": "请先保存您的修改。",
+    "title": "上传 {name}",
+    "apply": "应用",
+    "row": "第 {row} 行",
+    "action": "操作",
+    "changes": "变更",
+    "summary": "新增：{added}。变更：{changed}。相同：{same}。",
+    "applied": "已应用。新增：{added}，变更：{changed}。文件已存入文档（内部）。",
+    "hasErrors": "请修改文件后重新上传；文件有错误时不会应用任何内容。",
+    "missing": "文件中没有，保留在清单中：{names}",
+    "ignored": "未读取的列：{names}",
+    "actionValue": {
+      "new": "新增",
+      "update": "变更",
+      "same": "相同"
+    },
+    "field": {
+      "qty": "数量",
+      "kind": "类型",
+      "name_en": "英文名称",
+      "name_zh": "中文名称",
+      "material": "材料",
+      "spec": "规格",
+      "currency": "币种",
+      "note": "备注"
+    },
+    "error": {
+      "not_xlsx": "这不是 .xlsx 文件。请先将旧的 .xls 文件另存为 .xlsx。",
+      "file_too_large": "文件过大（最大 10 MB）。",
+      "too_many_rows": "行数过多（最多 2000 行）。",
+      "no_header": "未找到表头：需要零件名称列和数量列。",
+      "missing_name": "缺少零件名称",
+      "missing_qty": "新零件缺少数量",
+      "bad_qty": "数量必须是大于零的整数",
+      "qty_not_whole": "物料清单只保存整数数量",
+      "bad_kind": "未知类型：请使用自制、外购或辅料",
+      "bad_price": "价格必须是不小于零的数字",
+      "bad_currency": "币种必须是 CNY、EUR 或 USD",
+      "unknown_part_id": "此清单中没有该零件 ID",
+      "duplicate_part": "同一零件在文件中出现两次",
+      "ambiguous_name": "多个零件同名：请使用零件 ID 列"
+    }
+  },
   "costs": {
     "title": "成本明细与定价",
     "unitPrice": "单价 / 每台",

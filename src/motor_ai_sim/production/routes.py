@@ -19,10 +19,11 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 
 from motor_ai_sim import auth, model3d, users
-from motor_ai_sim.production import store, models, access, unread, project_link
+from motor_ai_sim.production import bom_xlsx, store, models, access, unread, project_link
 from motor_ai_sim.production.access import (
     require_member, require_member_with_full_view,
     require_editor, require_editor_with_full_view,
@@ -602,6 +603,88 @@ async def save_bom(request: Request, die: str, config: str):
     _touch(die, config)
     _audit(_email(user), die, config, "update", "bom", "bom" + (":" + list_name if list_name else ""), {"rows": cleaned})
     return {}
+
+
+@router.get("/{die}/{config}/bom.xlsx")
+def export_bom_xlsx(request: Request, die: str, config: str):
+    """The list as Excel, for editors: it carries the prices and imports back unchanged.  With no rows yet it is the empty template."""
+    user, _production = require_editor_with_full_view(request, die, config)
+    list_name = _list_name(request)
+    data = bom_xlsx.build_workbook(store.load_file(die, config, "parts.json").get("parts", []),
+                                   store.load_file(die, config, _bom_file(list_name)).get("rows", []),
+                                   store.load_file(die, config, _costs_file(list_name)).get("rows", []), list_name)
+    _audit(_email(user), die, config, "download", "bom_xlsx", "bom" + (":" + list_name if list_name else ""), {})
+    name = f"{die}_{config}_{list_name or 'BOM'}.xlsx"
+    return Response(content=data, media_type=bom_xlsx.XLSX_MEDIA_TYPE,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+@router.post("/{die}/{config}/bom/import")
+async def import_bom_xlsx(request: Request, die: str, config: str):
+    """Multipart ``file`` (.xlsx).  Without ``plan_id``: the preview, nothing is written.  With the ``plan_id`` of that preview: apply it."""
+    user, production = require_editor_with_full_view(request, die, config)
+    if not access.can_edit_costs(user, production):
+        raise HTTPException(status_code=403, detail="Editor access required")
+    list_name = _list_name(request)
+    form = await request.form()
+    uploaded = form.get("file")
+    if uploaded is None or not hasattr(uploaded, "read"):
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    data = await uploaded.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    # the file is parsed and translated off the event loop: a long BOM must not stall the other requests
+    return await run_in_threadpool(_import_bom_file, user, production, die, config, list_name, data,
+                                   str(uploaded.filename or "BOM.xlsx"), str(form.get("plan_id") or ""))
+
+
+def _import_bom_file(user: dict, production: dict, die: str, config: str, list_name: str, data: bytes, filename: str, plan_id: str) -> dict:
+    who = _email(user)
+    bom_file, costs_file = _bom_file(list_name), _costs_file(list_name)
+    bom_before = store.load_file(die, config, bom_file).get("rows", [])
+    costs_before = store.load_file(die, config, costs_file)
+    plan = bom_xlsx.build_plan(
+        bom_xlsx.parse_workbook(data), store.load_file(die, config, "parts.json").get("parts", []), bom_before,
+        store.load_file(die, config, _bom_file("" if list_name else "tooling")).get("rows", []),
+        costs_before.get("rows", []), list_name)
+    if not plan_id:
+        return bom_xlsx.public_plan(plan)
+    if plan_id != plan["plan_id"]:
+        raise HTTPException(status_code=409, detail={"code": "stale_preview", "message": "The BOM or the file changed after the preview; upload the file again."})
+    if plan["errors"]:
+        raise HTTPException(status_code=422, detail={"code": "bom_file_errors", "message": "The file has errors; nothing was applied."})
+    if not plan["summary"]["new"] and not plan["summary"]["update"]:
+        return bom_xlsx.public_plan(plan)
+
+    texts = bom_xlsx.translate_texts(plan)
+    part_events: list = []
+
+    def _mutate_parts(d: dict) -> None:                     # returns None: the store would save a returned value as the file
+        part_events.extend(bom_xlsx.apply_to_parts(d, plan, texts, die, config))
+    store.mutate_file(die, config, "parts.json", _mutate_parts)
+    store.mutate_file(die, config, bom_file, lambda d: bom_xlsx.apply_to_bom(d, plan, _list_order_qty(production, list_name)))
+    costs_changed = bom_xlsx.changes_costs(plan)
+    if costs_changed:
+        store.mutate_file(die, config, costs_file, lambda d: bom_xlsx.apply_to_costs(d, plan))
+
+    # the file as uploaded stays with the production; internal, because it may carry prices the factory never sees
+    file_id = secrets.token_urlsafe(16)
+    store.save_uploaded_file(die, config, file_id, data)
+    doc = models.normalize_document({"internal": True}, file_id, who, filename)
+    store.mutate_file(die, config, "documents.json", lambda d: d.setdefault("documents", []).append(doc))
+    _touch(die, config)
+
+    source = {"source": "excel", "document": doc["id"]}
+    list_key = ":" + list_name if list_name else ""
+    _audit(who, die, config, "create", "document", doc["id"], {"doc": doc})
+    for action, part_id, snapshot in part_events:
+        _audit(who, die, config, action, "part", part_id, {**snapshot, **source})
+    _audit(who, die, config, "update", "bom", "bom" + list_key,
+           {"rows": store.load_file(die, config, bom_file).get("rows", []), "before": bom_before, **source})
+    if costs_changed:
+        _audit(who, die, config, "update", "costs", "costs" + list_key,
+               {"costs": store.load_file(die, config, costs_file), "before": costs_before, **source})
+    return {**bom_xlsx.public_plan(plan), "applied": True, "document_id": doc["id"]}
 
 
 # ── costs ────────────────────────────────────────────────────────────────────

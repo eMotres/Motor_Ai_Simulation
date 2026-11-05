@@ -91,6 +91,24 @@ export interface BomRow {
   procurement?: ProcurementLine | null;
 }
 
+export interface BomImportChange {
+  field: 'qty' | 'kind' | 'name_en' | 'name_zh' | 'material' | 'spec' | 'unit_price' | 'currency' | 'note';
+  old: string | number | null;
+  new: string | number | null;
+}
+
+/** What an uploaded Excel file would change; POST .../bom/import. */
+export interface BomImportPlan {
+  plan_id: string;
+  sheet: string;
+  skipped_rows: number;
+  ignored_columns: string[];
+  rows: Array<{ row: number; action: 'new' | 'update' | 'same'; part_id: string | null; name: string; changes: BomImportChange[] }>;
+  errors: Array<{ row: number; code: string; value: string }>;
+  missing: Array<{ part_id: string; name: string }>;
+  summary: { new: number; update: number; same: number; missing: number; errors: number };
+}
+
 export type ProcurementStatus =
   | 'received'
   | 'partial'

@@ -33,6 +33,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import PartName from './PartName';
+import BomExcel from './BomExcel';
 import { useContentLang } from './BilingualText';
 import { ExtraDetailPanel, PartDetailPanel } from './PartCard';
 import { AssemblyGraph } from './AssemblyGraph';
@@ -528,7 +529,12 @@ const BomTable: React.FC<BomTableProps> = ({
       {view === 'table' && (
         <>
       {/* Add Part bar for editors */}
-      {canEdit && <AddPart die={ctx.die} config={ctx.config} list={ctx.list} onDone={() => { onPartChanged?.(); ctx.reload(); }} />}
+      {canEdit && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <AddPart die={ctx.die} config={ctx.config} list={ctx.list} onDone={() => { onPartChanged?.(); ctx.reload(); }} />
+          <BomExcel ctx={ctx} hasUnsavedEdits={dirty} onDone={() => { onPartChanged?.(); ctx.reload(); }} />
+        </Box>
+      )}
 
       {/* Main BOM Table */}
       {/* overflow 'clip' (not 'hidden'): keeps the rounded corners without becoming a scroll box, so the header can stick */}

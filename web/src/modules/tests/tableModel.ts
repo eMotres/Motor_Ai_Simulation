@@ -1,7 +1,7 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
 import type {
-  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadPlotRow, LoadSeriesQuantity, TestCompare, TestKind, TestRecord, TestTab,
+  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadPlotRow, LoadSeriesQuantity, SimulationCurve, TestCompare, TestKind, TestRecord, TestTab,
 } from './types';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
@@ -228,8 +228,26 @@ export function isPerSpeedSweep(rows: LoadPlotRow[]): boolean {
   return Array.from(n.values()).some((c) => c >= 2);
 }
 
+/** The record's simulation curves, cleaned: a finite rpm, points with finite numbers only (a missing value stays null). */
+export function simulationCurves(cmp: TestCompare | undefined | null): SimulationCurve[] {
+  const out: SimulationCurve[] = [];
+  for (const c of cmp?.series?.simulation_curves ?? []) {
+    const rpm = finite(c?.rpm);
+    if (rpm === null) continue;
+    const points = (c.points ?? []).map((p) => ({ current_a: finite(p?.current_a), torque_nm: finite(p?.torque_nm),
+      loss_w: finite(p?.loss_w), eff_system_pct: finite(p?.eff_system_pct), i_dc_a: finite(p?.i_dc_a) }));
+    if (points.length) out.push({ rpm, points });
+  }
+  return out;
+}
+
+/** The plots of a record are per speed when some speed has two rows, or when it carries simulation curves. */
+export function usesSpeedPlots(rows: LoadPlotRow[], curves: SimulationCurve[]): boolean {
+  return curves.length > 0 || isPerSpeedSweep(rows);
+}
+
 export interface SpeedPoint { x: number; y: number }
-export interface SpeedSeries { rpm: number; measured: SpeedPoint[]; model: SpeedPoint[] }
+export interface SpeedSeries { rpm: number; measured: SpeedPoint[]; model: SpeedPoint[]; simulation: SpeedPoint[] }
 export interface SpeedPlot { key: LoadPlotKey; yUnit: string; xUnit: string; speeds: SpeedSeries[] }
 
 const pt = (x: number | null, y: number | null): SpeedPoint | null => (x === null || y === null ? null : { x, y });
@@ -261,45 +279,72 @@ function modelPoint(r: LoadPlotRow, key: LoadPlotKey): SpeedPoint | null {
     default: return null;
   }
 }
+/** One point of a simulation curve for one plot; the temperature plots have none. */
+function curvePoint(p: SimulationCurve['points'][number], key: LoadPlotKey): SpeedPoint | null {
+  switch (key) {
+    case 'torque_current': return pt(finite(p.current_a), finite(p.torque_nm));
+    case 'loss_torque': return pt(finite(p.torque_nm), finite(p.loss_w));
+    case 'eff_torque': return pt(finite(p.torque_nm), finite(p.eff_system_pct));
+    case 'idc_torque': return pt(finite(p.torque_nm), finite(p.i_dc_a));
+    default: return null;
+  }
+}
 
 /** One plot of a load record: one series per speed (rpm rounded), rows of a speed sorted by x, straight segments between
- *  them; the model values (where a stored duty matched) as a second set.  null when nothing can be plotted. */
-export function perSpeedSeries(rows: LoadPlotRow[], key: LoadPlotKey): SpeedPlot | null {
+ *  them; the model values (where a stored duty matched) as a second set and the record's simulation curves as a third (a
+ *  point with a missing x or y is skipped, never a 0).  A speed that only a curve has is still listed.  null when nothing
+ *  can be plotted. */
+export function perSpeedSeries(rows: LoadPlotRow[], key: LoadPlotKey, curves: SimulationCurve[] = []): SpeedPlot | null {
   const spec = LOAD_PLOTS.find((p) => p.key === key);
   if (!spec) return null;
   const by = new Map<number, SpeedSeries>();
+  const at = (rpm: number) => {
+    const s = by.get(rpm) ?? { rpm, measured: [], model: [], simulation: [] };
+    by.set(rpm, s);
+    return s;
+  };
   for (const r of rows) {
     if (finite(r.rpm) === null) continue;
-    const rpm = speedOf(r.rpm);
     const m = measuredPoint(r, key); const d = modelPoint(r, key);
     if (!m && !d) continue;
-    const s = by.get(rpm) ?? { rpm, measured: [], model: [] };
+    const s = at(speedOf(r.rpm));
     if (m) s.measured.push(m);
     if (d) s.model.push(d);
-    by.set(rpm, s);
+  }
+  for (const c of curves) {
+    const pts = c.points.flatMap((p) => { const q = curvePoint(p, key); return q ? [q] : []; });
+    if (pts.length) at(speedOf(c.rpm)).simulation.push(...pts);
   }
   if (!by.size) return null;
   const speeds = Array.from(by.values()).sort((a, b) => a.rpm - b.rpm);
-  for (const s of speeds) { s.measured.sort((a, b) => a.x - b.x); s.model.sort((a, b) => a.x - b.x); }
+  for (const s of speeds) for (const l of [s.measured, s.model, s.simulation]) l.sort((a, b) => a.x - b.x);
   return { key, yUnit: spec.yUnit, xUnit: spec.xUnit, speeds };
 }
 
 /** The plots that have data in this record (the menu), in menu order. */
-export function loadPlotOptions(rows: LoadPlotRow[]): LoadPlotKey[] {
-  return LOAD_PLOTS.filter((p) => perSpeedSeries(rows, p.key) !== null).map((p) => p.key);
+export function loadPlotOptions(rows: LoadPlotRow[], curves: SimulationCurve[] = []): LoadPlotKey[] {
+  return LOAD_PLOTS.filter((p) => perSpeedSeries(rows, p.key, curves) !== null).map((p) => p.key);
 }
 
-export interface SpeedChartLine { id: string; rpm: number; model: boolean; color: number }
+/** `measured` = the bench line; `model` = stored-duty points (hollow dots); `simulation` = a simulation curve (dashed, no
+ *  dots).  `label` is what the legend names: a stored-duty point set is "point" when the same speed also has a curve. */
+export interface SpeedChartLine {
+  id: string; rpm: number; kind: 'measured' | 'model' | 'simulation'; label: 'measured' | 'simulation' | 'point'; color: number;
+}
 /** The plot as the chart's flat data: one datum per point (x plus the value under its line's id), sorted by x, and the
- *  lines (a speed's measured line, then its model line).  `color` indexes the speed so both sets of a speed share a hue. */
+ *  lines per speed (bench, stored-duty points, simulation curve).  `color` indexes the speed so all sets of a speed share a
+ *  hue; the lines have different x values, so the chart joins each line over the gaps (connectNulls). */
 export function speedChartData(plot: SpeedPlot): { data: Array<Record<string, number>>; lines: SpeedChartLine[] } {
   const data: Array<Record<string, number>> = [];
   const lines: SpeedChartLine[] = [];
   plot.speeds.forEach((s, i) => {
-    for (const [pts, model] of [[s.measured, false], [s.model, true]] as const) {
+    const sets: Array<[SpeedPoint[], SpeedChartLine['kind'], string, SpeedChartLine['label']]> = [
+      [s.measured, 'measured', 'm', 'measured'], [s.model, 'model', 'd', s.simulation.length ? 'point' : 'simulation'],
+      [s.simulation, 'simulation', 's', 'simulation']];
+    for (const [pts, kind, prefix, label] of sets) {
       if (!pts.length) continue;
-      const id = `${model ? 'd' : 'm'}${i}`;
-      lines.push({ id, rpm: s.rpm, model, color: i });
+      const id = `${prefix}${i}`;
+      lines.push({ id, rpm: s.rpm, kind, label, color: i });
       for (const p of pts) data.push({ x: p.x, [id]: p.y });
     }
   });

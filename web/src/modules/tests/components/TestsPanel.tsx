@@ -21,8 +21,8 @@ import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import {
-  blocksHeight, cmpForTab, columnsFor, computeProgress, isPerSpeedSweep, kindOfTab, loadPlotOptions, loadPlotRows,
-  loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity,
+  blocksHeight, cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows,
+  loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
   quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
@@ -76,16 +76,19 @@ function useWide(): [React.RefObject<HTMLDivElement | null>, boolean] {
 function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height: number }) {
   const { t } = useTranslation('production');
   const rows = loadPlotRows(cmp);
-  const options = loadPlotOptions(rows);
+  const curves = simulationCurves(cmp);
+  const note = cmp?.series?.simulation_note ?? '';
+  const options = loadPlotOptions(rows, curves);
   const [sel, setSel] = useState<string>('torque_current');
   const key = (options.find((k) => k === sel) ?? options[0]) as LoadPlotKey | undefined;
-  const plot = key ? perSpeedSeries(rows, key) : null;
+  const plot = key ? perSpeedSeries(rows, key, curves) : null;
   if (!key || !plot) return null;
   return (
     <Box data-testid="tests-load-speed-series">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, height: 24, mb: 0.5 }}>
         <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-2)' }}>{t('tests.series.label')}</Typography>
         <HelpTip title={t('tests.series.tipSpeeds')} />
+        {note && <HelpTip title={note} />}
         <Select size="small" value={key} onChange={(e) => setSel(String(e.target.value))}
           sx={{ height: 24, fontSize: 11.5, minWidth: 200, '& .MuiSelect-select': { py: 0, pl: 1 } }}
           inputProps={{ 'aria-label': t('tests.series.label') }}>
@@ -147,7 +150,9 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
     const params = Object.fromEntries(Object.entries(b.basisParams).filter(([, v]) => v !== null && v !== undefined));
     return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
   };
-  const perSpeed = isPerSpeedSweep(loadPlotRows(cmp)) && loadPlotOptions(loadPlotRows(cmp)).length > 0;
+  const plotRows = loadPlotRows(cmp);
+  const plotCurves = simulationCurves(cmp);
+  const perSpeed = usesSpeedPlots(plotRows, plotCurves) && loadPlotOptions(plotRows, plotCurves).length > 0;
   const hasLoadChart = perSpeed || loadSeriesOptions(cmp).length > 0;
   const computeTip = (row: CompareRow) => {
     const a = row.action;

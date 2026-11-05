@@ -369,8 +369,56 @@ t('the model side shows only where the stored duty gave a value; one row per spe
   const rows = [{ rpm: 1000, current: 50, torque: 10, model: { torque: 11 } }, { rpm: 1000, current: 60, torque: 12 }];
   const p = M.perSpeedSeries(rows, 'torque_current');
   assert.deepEqual(p.speeds[0].model, [{ x: 50, y: 11 }]);
-  assert.deepEqual(M.speedChartData(p).lines.map((l) => [l.id, l.model]), [['m0', false], ['d0', true]]);
+  assert.deepEqual(M.speedChartData(p).lines.map((l) => [l.id, l.kind]), [['m0', 'measured'], ['d0', 'model']]);
   assert.equal(M.isPerSpeedSweep([{ rpm: 1000 }, { rpm: 2000 }, { rpm: 3000 }]), false);
   assert.deepEqual(M.loadPlotRows({ series: { x: 'rpm', quantities: [], points: [{ rpm: 1 }, { rpm: NaN }] } }), [{ rpm: 1 }]);
   assert.deepEqual(M.loadPlotRows(null), []);
+});
+
+// -- simulation curves on the per-speed plots -----------------------------------------------------------------------
+const CURVES = [
+  { rpm: 1000, points: [{ current_a: 20, torque_nm: 30, loss_w: 700, eff_system_pct: 85, i_dc_a: 7 },
+    { current_a: 45, torque_nm: 66, loss_w: 1100, eff_system_pct: 87, i_dc_a: 15 },
+    { current_a: 70, torque_nm: 95, i_dc_a: 22 }, { torque_nm: 99, loss_w: null }] },
+  { rpm: 3000, points: [{ current_a: 30, torque_nm: 40, loss_w: 900, eff_system_pct: 92, i_dc_a: 20 }] },
+];
+
+t('a curve is drawn per speed in the plot mapping, points with a missing x or y are skipped and never 0', () => {
+  const cur = M.simulationCurves({ series: { x: 'rpm', quantities: [], simulation_curves: [{ rpm: NaN, points: [{ torque_nm: 1 }] }, ...CURVES] } });
+  assert.equal(cur.length, 2);                                                          // the curve without a finite rpm is dropped
+  const tc = M.perSpeedSeries(SWEEP, 'torque_current', cur);
+  assert.deepEqual(tc.speeds.find((s) => s.rpm === 1000).simulation,
+    [{ x: 20, y: 30 }, { x: 45, y: 66 }, { x: 70, y: 95 }]);                          // x current_a, y torque_nm
+  const loss = M.perSpeedSeries(SWEEP, 'loss_torque', cur).speeds.find((s) => s.rpm === 1000).simulation;
+  assert.deepEqual(loss, [{ x: 30, y: 700 }, { x: 66, y: 1100 }]);                      // the points with no loss_w are skipped
+  assert.deepEqual(M.perSpeedSeries(SWEEP, 'eff_torque', cur).speeds.find((s) => s.rpm === 1000).simulation,
+    [{ x: 30, y: 85 }, { x: 66, y: 87 }]);
+  assert.deepEqual(M.perSpeedSeries(SWEEP, 'idc_torque', cur).speeds.find((s) => s.rpm === 1000).simulation,
+    [{ x: 30, y: 7 }, { x: 66, y: 15 }, { x: 95, y: 22 }]);
+  assert.ok(M.perSpeedSeries(SWEEP, 't_winding_torque', cur) === null);                 // temperature plots: no curve, no bench data
+});
+
+t('a speed that only a curve has is still listed; curves alone give a plot menu', () => {
+  const cur = M.simulationCurves({ series: { simulation_curves: CURVES } });
+  const p = M.perSpeedSeries(SWEEP, 'torque_current', cur);
+  assert.deepEqual(p.speeds.map((s) => s.rpm), [1000, 2000, 3000]);
+  assert.equal(p.speeds[2].measured.length, 0); assert.equal(p.speeds[2].simulation.length, 1);
+  assert.deepEqual(M.loadPlotOptions([], cur), ['torque_current', 'loss_torque', 'eff_torque', 'idc_torque']);
+  assert.equal(M.usesSpeedPlots([], cur), true);
+  assert.equal(M.usesSpeedPlots([{ rpm: 1 }, { rpm: 2 }], []), false);
+  assert.equal(M.usesSpeedPlots(SWEEP, []), true);
+});
+
+t('curve x values that differ from the bench rows still give one continuous line per set (own ids, sorted data)', () => {
+  const cur = M.simulationCurves({ series: { simulation_curves: [CURVES[0]] } });
+  const { data, lines } = M.speedChartData(M.perSpeedSeries(SWEEP, 'torque_current', cur));
+  assert.deepEqual(lines.map((l) => [l.id, l.kind, l.label, l.color]),
+    [['m0', 'measured', 'measured', 0], ['s0', 'simulation', 'simulation', 0], ['m1', 'measured', 'measured', 1]]);
+  assert.deepEqual(data.map((d) => d.x), [20, 32, 40, 45, 59, 64, 70]);                   // one datum per point, no x shared
+  for (const d of data) assert.equal(Object.keys(d).length, 2);                           // x + exactly one value: the chart joins over the gaps
+  assert.ok(data.every((d) => Object.values(d).every(Number.isFinite)));                  // no null, no 0 placeholder
+  // a stored-duty point set at a speed that also has a curve is named as a point, not as the simulation
+  const rows = [{ rpm: 1000, current: 50, torque: 10, model: { torque: 11 } }, { rpm: 1000, current: 60, torque: 12 }];
+  const l2 = M.speedChartData(M.perSpeedSeries(rows, 'torque_current', cur)).lines;
+  assert.deepEqual(l2.map((l) => [l.kind, l.label]), [['measured', 'measured'], ['model', 'point'], ['simulation', 'simulation']]);
 });

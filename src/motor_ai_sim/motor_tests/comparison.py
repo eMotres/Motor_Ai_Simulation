@@ -347,16 +347,44 @@ def _fmt_rpms(rpms: List[float]) -> str:
     return ", ".join("%d" % round(x) for x in rpms)
 
 
-def _slope_fit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Bench and model line-line PEAK EMF slopes (V per 1000 rpm, least squares through the origin) over ``rows``.
+_BENCH_SOURCE_TEXT = {
+    "fundamental": "bench voltage: fundamental, line-line peak",
+    "rms": "bench voltage: rms reading x sqrt(2)",
+    "pp": "bench voltage: half the peak-to-peak (includes the harmonics, approximate)",
+}
 
-    ``b_rms`` (bench rms readings) is used only when no peak was read at all (peak = rms x sqrt(2)); no rms constant is
-    ever shown (owner 2026-11-04: one Kv, per V of line-line peak)."""
+#: The bench voltage the Kv / Kt slope is fitted to, in order of preference: the fundamental as read (peak), the rms reading
+#: times sqrt(2) (a sine's peak), half the peak-to-peak of the waveform (includes the harmonics, so approximate).
+BENCH_SOURCES = ("fundamental", "rms", "pp")
+
+
+def _bench_voltage(r: Dict[str, Any], source: str) -> Optional[float]:
+    if source == "fundamental":
+        return r.get("fund")
+    if source == "rms":
+        return None if r.get("rms") is None else float(r["rms"]) * math.sqrt(2.0)
+    return r.get("pk")
+
+
+def _pick_bench_source(rows: List[Dict[str, Any]]) -> Optional[str]:
+    """The first source in :data:`BENCH_SOURCES` that at least two rows carry (a slope needs two); one source per record, so
+    the fit never mixes a fundamental with a waveform peak."""
+    for src in BENCH_SOURCES:
+        if sum(1 for r in rows if _bench_voltage(r, src) is not None) >= 2:
+            return src
+    return None
+
+
+def _slope_fit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Bench and simulated line-line EMF slopes (V per 1000 rpm, least squares through the origin) over ``rows``.
+
+    The bench slope is on the voltage ``r["v"]`` the caller chose (:func:`_pick_bench_source`): the peak of the fundamental
+    (or its stand-ins); the simulated slope on ``m_pk``.  No rms constant is ever shown: one Kv, per V of line-line peak of
+    the fundamental."""
     def sl(pts):
         f = C.slope_through_origin(pts)
         return None if f is None else {**f, "krpm": 1000.0 * f["slope"]}
-    return {"b_pk": sl([(r["rpm"], r["pk"]) for r in rows if r["pk"] is not None]),
-            "b_rms": sl([(r["rpm"], r["rms"]) for r in rows if r["rms"] is not None]),
+    return {"b_pk": sl([(r["rpm"], r["v"]) for r in rows if r.get("v") is not None]),
             "m_pk": sl([(r["rpm"], r["m_pk"]) for r in rows if r["m_pk"] is not None])}
 
 
@@ -366,9 +394,7 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
 
     Correction: the flux factor multiplies the EMF slope (so Kv, a reciprocal, divides by it); Kt carries the torque factor
     (measured k_T, else the flux factor), exactly as the load rows do."""
-    b_pk, b_rms, m_pk = fit["b_pk"], fit["b_rms"], fit["m_pk"]
-    if b_pk is None and b_rms is not None:
-        b_pk = {**b_rms, "krpm": b_rms["krpm"] * math.sqrt(2.0)}
+    b_pk, m_pk = fit["b_pk"], fit["m_pk"]
     if b_pk is None:
         return []
     b = C.kv_ke_kt(b_pk["krpm"])
@@ -388,6 +414,11 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     det_b = "bench: %d rows (%s rpm), line through the origin, scatter %.1f %%" % (
         len(rows), _fmt_rpms(used) if len(used) <= 8 else "%d-%d" % (round(min(used)), round(max(used))),
         b_pk["rmse_pct"])
+    src = rows[0].get("src") if rows else None
+    det_b += "; " + _BENCH_SOURCE_TEXT.get(src, "bench voltage: line-line peak")
+    m_src = next((r.get("m_src") for r in rows if r.get("m_src")), None)
+    if m_src == "waveform peak":
+        det_b += "; simulation from the waveform peak (no fundamental stored)"
     if excluded:
         det_b += "; left out: %s rpm" % _fmt_rpms(excluded)
     out: List[Dict[str, Any]] = []
@@ -417,11 +448,15 @@ def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]]
     median of the others is FLAGGED on its EMF row (never dropped); group 2, shown only then, repeats the fit without the
     flagged rows, so both slopes are always reported and the exclusion is visible.  The bench constants need no model;
     the model columns come from the same rows (each scaled to its own magnet temperature)."""
-    rows = [r for r in slope_in if r["pk"] is not None or r["rms"] is not None]
-    if len(rows) < 2:
+    source = _pick_bench_source(slope_in)
+    if source is None:
         return []
-    pk_rows = [r for r in rows if r["pk"] is not None]
-    flags = C.flag_slope_outliers([(r["rpm"], r["pk"]) for r in pk_rows])
+    for r in slope_in:
+        r["v"] = _bench_voltage(r, source)
+        r["src"] = source
+    rows = [r for r in slope_in if r["v"] is not None]
+    pk_rows = rows
+    flags = C.flag_slope_outliers([(r["rpm"], r["v"]) for r in pk_rows])
     flag_of = {id(r): f for r, f in zip(pk_rows, flags)}
     flagged = [r for r in pk_rows if flag_of[id(r)]["flagged"]]
     # which rows entered the slope, and how far each sits from the others, on the EMF rows themselves
@@ -511,7 +546,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         lbl = "%d rpm" % round(n)
         vpk_meas = None if num(r.get("v_ll_pp_v")) is None else float(r["v_ll_pp_v"]) / 2.0
         slope_in.append({"i": len(emf_rows), "rpm": n, "pk": vpk_meas, "rms": num(r.get("v_ll_rms_v")),
-                         "m_pk": None})
+                         "fund": num(r.get("v_ll_fund_pk_v")), "m_pk": None, "m_src": None})
         if ref is None:
             emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, None, tip="emf_peak", params=params))
             rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), None, tip="emf_rms", params=params))
@@ -528,7 +563,10 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
                  "ref_rpm": ref["rpm"]}
         # the EMF carries the end-effect flux factor (corrected value only)
         emf_det = det + ", " + k_clause
-        slope_in[-1].update({"m_pk": emf["peak"]})
+        # the simulated slope is formed on the FUNDAMENTAL; an older stored no-load run without one falls back to its waveform
+        # peak and says so
+        slope_in[-1].update({"m_pk": emf["fund"] if emf["fund"] is not None else emf["peak"],
+                             "m_src": "fundamental" if emf["fund"] is not None else "waveform peak"})
         emf_x = {**extra, "corrected": k_flux is not None}
         rms_x = dict(emf_x)
         emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, _scaled(emf["peak"], k_flux), tip="emf_peak", params=params,

@@ -406,7 +406,6 @@
     "tabs": {
       "resistance": "电阻",
       "inductance": "电感",
-      "constants": "常数",
       "bearings": "轴承",
       "free_run": "空载运行",
       "loads": "负载",
@@ -415,11 +414,10 @@
     "tabsTip": {
       "resistance": "绕组线间电阻：台架与仿真。",
       "inductance": "绕组电感 Ld 和 Lq：台架与仿真。",
-      "constants": "Kv（rpm 每伏线电压峰值）、Kt（N·m 每安有效值）和反电动势，来自空载试验：台架与仿真。",
       "bearings": "各转速下的轴承损耗。这些是仿真值（SKF 摩擦，以转子重量为载荷），不是测量值；唯一的实测数是空载总损耗，其中轴承并未分离。",
       "free_run": "空载旋转试验：各转速下的空载损耗及其拟合。",
       "loads": "负载试验：工作点的转矩、效率和温度。",
-      "parameters": "其余静态检查：绝缘、耐压、匝间冲击、齿槽转矩、LCR、重量和尺寸。"
+      "parameters": "先显示由空载反电动势斜率得出的 Kv 和 Kt，然后是电机的其他参数：台架与仿真。"
     },
     "add": "添加测试",
     "edit": "编辑",
@@ -637,7 +635,8 @@
       "magnet_temp_c": "磁钢 °C",
       "rpm_set": "设定 rpm",
       "temp_housing_c": "机壳 °C",
-      "temp_magnet_c": "磁钢 °C"
+      "temp_magnet_c": "磁钢 °C",
+      "v_ll_fund_pk_v": "基波峰值 V"
     },
     "errors": {
       "load": "无法加载测试：{reason}",

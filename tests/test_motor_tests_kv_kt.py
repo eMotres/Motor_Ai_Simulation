@@ -353,3 +353,97 @@ def test_every_group_a_free_run_test_emits_has_a_tab():
     known = {"emf_peak", "emf_rms", "kv_kt", "kv_kt_ex", "loss", "fit", "no_model",
              "bearing_sum", "bearings_none"}
     assert (emitted | empty) <= known, (emitted | empty) - known
+
+
+# ── ONE Kv and Kt (owner 2026-11-05) ────────────────────────────────────────────────────────────
+
+def test_kt_follows_kv_exactly_and_the_reference_pair_agrees():
+    from motor_ai_sim import kv_kt as K
+    assert K.KT_TIMES_KV == pytest.approx(3.0 / math.sqrt(2.0) * 30.0 / (math.sqrt(3.0) * math.pi))
+    assert K.KT_TIMES_KV == pytest.approx(11.695, abs=0.0005)
+    assert K.kt_from_kv(6.02) == pytest.approx(1.94, abs=0.005)               # the G2 reference: no-load Kv 6.02 -> Kt 1.94
+    assert K.kv_from_kt(K.kt_from_kv(6.02)) == pytest.approx(6.02)
+    assert K.kt_from_kv(6.02, delta=True) == pytest.approx(K.kt_from_kv(6.02) * math.sqrt(3.0))   # per winding amp
+    assert K.kt_per_line_amp(6.02) == pytest.approx(K.kt_from_kv(6.02))
+    assert K.kt_from_kv(None) is None and K.kt_from_kv(0) is None and K.kt_from_kv(float("nan")) is None
+    # the bench helper uses the same formula
+    assert C.kv_ke_kt(1000.0 / 6.02)["kt"] == pytest.approx(K.kt_from_kv(6.02))
+    # 83 N*m at 49 A in the simulation is a different quantity, Kt at load
+    assert 83.0 / 49.0 == pytest.approx(1.70, abs=0.01) and 83.0 / 49.0 < K.kt_from_kv(6.02)
+
+
+def test_noload_constants_of_a_stored_summary_with_the_waveform_peak_fallback():
+    from motor_ai_sim import kv_kt as K
+    new = K.noload_constants({"KV_noload_rpm_per_V_line": 6.02, "KV_rpm_per_V_line": 5.5, "star_delta": "star"})
+    assert new["source"] == "fundamental" and new["kv"] == 6.02 and new["kt"] == pytest.approx(1.9428, abs=1e-4)
+    old = K.noload_constants({"KV_rpm_per_V_line": 5.5})                          # an older run: only the loaded peak
+    assert old["source"] == "waveform peak" and old["kv"] == 5.5 and old["kt"] == pytest.approx(K.kt_from_kv(5.5))
+    corrected = K.noload_constants({"KV_noload_rpm_per_V_line": 6.02}, k_flux=0.9502)
+    assert corrected["kv"] == pytest.approx(6.02 / 0.9502) and corrected["kt"] == pytest.approx(K.kt_from_kv(6.02 / 0.9502))
+    assert K.noload_constants({}) == {"kv": None, "kt": None, "kt_line": None, "source": None}
+    delta = K.noload_constants({"KV_noload_rpm_per_V_line": 6.02, "star_delta": "delta"})
+    assert delta["kt"] == pytest.approx(delta["kt_line"] * math.sqrt(3.0))
+
+
+def _fund_rec(**cols):
+    rows = []
+    for n in (1000, 2000, 3000, 4000, 5000, 6000):
+        row = {"rpm": n}
+        for key, f in cols.items():
+            row[key] = f(n)
+        rows.append(row)
+    return models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"magnet_temp_c": 65.0}, "rows": rows},
+                            who="eng@example.test")
+
+
+def test_the_bench_slope_prefers_the_fundamental_then_rms_then_half_the_peak_to_peak():
+    slope = 166.6667                                  # V line-line peak of the fundamental per 1000 rpm: Kv 6.0
+    fund = lambda n: slope / 1000.0 * n
+    rms = lambda n: slope / 1000.0 * n / math.sqrt(2.0)
+    pp = lambda n: 2 * 1.05 * slope / 1000.0 * n       # a waveform with harmonics: its peak sits 5 % above the fundamental
+    m = _noload()
+    both = _by_key(_groups(m, _fund_rec(v_ll_fund_pk_v=fund, v_ll_rms_v=lambda n: 2 * rms(n), v_ll_pp_v=pp))["kv_kt"])
+    assert both["kv"]["measured"] == pytest.approx(6.0, abs=0.001) and "fundamental" in both["kv"]["detail"]
+    only_rms = _by_key(_groups(m, _fund_rec(v_ll_rms_v=rms, v_ll_pp_v=pp))["kv_kt"])
+    assert only_rms["kv"]["measured"] == pytest.approx(6.0, abs=0.001)             # rms x sqrt(2), not the waveform peak
+    assert "rms" in only_rms["kv"]["detail"] and only_rms["kt"]["measured"] == pytest.approx(1.9493, abs=0.001)
+    only_pp = _by_key(_groups(m, _fund_rec(v_ll_pp_v=pp))["kv_kt"])
+    assert only_pp["kv"]["measured"] == pytest.approx(6.0 / 1.05, abs=0.001)
+    assert "approximate" in only_pp["kv"]["detail"]
+    # Kt always comes from Kv
+    from motor_ai_sim import kv_kt as K
+    for rows in (both, only_rms, only_pp):
+        assert rows["kt"]["measured"] == pytest.approx(K.kt_from_kv(rows["kv"]["measured"]))
+    # one source per record: a single fundamental reading is not a slope, so the next source is used
+    one = _fund_rec(v_ll_rms_v=rms)
+    one["rows"][0]["v_ll_fund_pk_v"] = 166.0
+    assert "rms" in _by_key(_groups(m, one)["kv_kt"])["kv"]["detail"]
+
+
+def test_old_records_without_the_new_field_and_the_validation_of_the_new_one():
+    rec = _bench()                                                    # a record saved before the field existed
+    assert all("v_ll_fund_pk_v" not in r for r in rec["rows"])
+    assert "kv_kt" in _groups(_noload(), rec)
+    ok = models.normalize({"kind": "free_run", "date": "2026-01-15", "rows": [{"rpm": 1000, "v_ll_fund_pk_v": 166.7}]},
+                          who="eng@example.test")
+    assert ok["rows"][0]["v_ll_fund_pk_v"] == 166.7
+    for bad in (-1, 1e9, float("nan"), "abc"):
+        with pytest.raises(models.TestInputError):
+            models.normalize({"kind": "free_run", "date": "2026-01-15", "rows": [{"rpm": 1000, "v_ll_fund_pk_v": bad}]},
+                             who="eng@example.test")
+
+
+def test_the_simulated_slope_uses_the_stored_fundamental_and_an_older_run_falls_back_to_its_peak():
+    s = {"rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": MODEL_SLOPE * 3.0 * 1.05, "V1_LL_V": MODEL_SLOPE * 3.0,
+         "V_line_rms_V": MODEL_SLOPE * 3.0 / math.sqrt(2.0), "magnet_temp_used_c": 65.0}
+    m = model_source.from_docs({}, _cfg(s), {}, LIB)
+    assert m["noload"][0]["v_ll_fund_peak"] == MODEL_SLOPE * 3.0
+    rows = _by_key(_groups(m)["kv_kt"])
+    assert rows["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE)                 # the fundamental, not the 5 % higher peak
+    assert "waveform peak" not in rows["kv"]["detail"]
+    old = {k: v for k, v in s.items() if k != "V1_LL_V"}
+    rows_old = _by_key(_groups(model_source.from_docs({}, _cfg(old), {}, LIB))["kv_kt"])
+    assert rows_old["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE * 1.05)      # still works, and says where it came from
+    assert "waveform peak" in rows_old["kv"]["detail"]
+    for r in list(rows.values()) + list(rows_old.values()):
+        assert "2-D" not in r["detail"] and "3-D" not in r["detail"]

@@ -47,7 +47,7 @@ class TestInputError(ValueError):
 # (key, min, max) per numeric field; None = unbounded on that side
 _RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "rpm": (0, 300000), "rpm_set": (0, 300000), "rpm_actual": (0, 300000),
-    "shaft_power_w": (-1e7, 1e7), "v_ll_pp_v": (0, 1e5), "v_ll_rms_v": (0, 1e5),
+    "shaft_power_w": (-1e7, 1e7), "v_ll_pp_v": (0, 1e5), "v_ll_rms_v": (0, 1e5), "v_ll_fund_pk_v": (0, 1e5),
     "temp_c": (-80, 450), "magnet_temp_c": (-80, 450), "winding_temp_c": (-80, 450), "ambient_c": (-80, 120),
     "temp_winding_c": (-80, 450), "temp_housing_c": (-80, 450), "temp_magnet_c": (-80, 450),
     "humidity_pct": (0, 100), "torque_nm": (-1e6, 1e6), "i_phase_a": (0, 1e5), "v_dc_v": (0, 1e5),
@@ -59,7 +59,8 @@ _RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "length_mm": (0, 1e6), "awg": (-3, 46), "area_mm2": (0, 1e4), "count": (0, 100), "value": (None, None),
 }
 
-FREE_RUN_KEYS = ("rpm_set", "rpm", "shaft_power_w", "v_ll_pp_v", "v_ll_rms_v", "temp_c", "magnet_temp_c")
+# v_ll_fund_pk_v (optional): the line-line PEAK of the FUNDAMENTAL as read by a spectrum / power analyser
+FREE_RUN_KEYS = ("rpm_set", "rpm", "shaft_power_w", "v_ll_pp_v", "v_ll_rms_v", "v_ll_fund_pk_v", "temp_c", "magnet_temp_c")
 LOAD_KEYS = ("rpm", "torque_nm", "i_phase_a", "v_dc_v", "i_dc_a", "eff_pct", "temp_winding_c", "temp_housing_c",
              "temp_magnet_c", "duration_s")
 CURVE_KEYS = ("current_a", "torque_nm", "loss_w", "eff_system_pct", "i_dc_a")

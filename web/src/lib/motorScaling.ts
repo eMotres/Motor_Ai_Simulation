@@ -27,6 +27,7 @@
 // (AC copper −70 % on the Ø40 at the slot's last row); a per-row field model
 // is the planned replacement (docs/PASSPORT_ALGORITHM.md §6.3).
 
+import { ktFromKv } from './kvKt.ts';
 export interface Passport {
   N0: number;          // base turns (num_wires_per_slot)
   L0_mm: number;       // base lamination length (motor_length)
@@ -316,7 +317,10 @@ export interface ScaledResult {
   /** Torque constant [N·m/A rms] at the operating point — measured T over the
       operating current, saturation included (the bench number a controller
       datasheet quotes is the low-current limit of this). */
+  /** Kt, one definition: from the KV shown beside it (N·m per A rms of phase current, sine current) */
   Kt_Nm_per_A: number | null;
+  /** torque per ampere at this load, T / I: a different quantity from Kt */
+  Kt_load_Nm_per_A: number | null;
   /** Saturation coefficient [%]: measured T over the linear extrapolation of
    *  the lightest measured point (null without the sweep). */
   saturation_pct: number | null;
@@ -616,7 +620,8 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     Vline_rms_V: (Vphase * Math.sqrt(3)) / Math.SQRT2,
     psi_pm_mWb: psi,
     Km_Nm_sqrtW: Km,
-    Kt_Nm_per_A: k.I_A > 1e-9 ? Tk / k.I_A : null,
+    Kt_Nm_per_A: ktFromKv(KV),
+    Kt_load_Nm_per_A: k.I_A > 1e-9 ? Tk / k.I_A : null,
     kt_km_basis: kTmeas != null ? '3-D' : (kEnd != null && kEnd0 != null ? '3-D flux' : '2-D'),
     Km_per_mass: mass > 0 ? Km / mass : 0,
     // Inductance scales with the square of the series turns and (to first

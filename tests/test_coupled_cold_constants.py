@@ -276,20 +276,24 @@ def test_the_report_prints_the_four_catalogue_constants():
     # KV and Kt / Km carry the block's 3-D factor (no measured k_T → the
     # flux factor), recomputed from two_d so any stored rule reads the same.
     assert "58.71" in cells["KV, no load [rpm/V]"]
-    assert "0.185" in cells["Torque constant Kt [N·m/A rms]"]
+    # ONE Kt: from the no-load KV above (11.695 / 58.71); T / I at the load is a different row, named so
+    assert "0.1992" in cells["Torque constant Kt [N·m/A rms]"]
+    LOAD = "Torque per ampere at this load, T / I [N·m/A rms]"
+    assert "0.185" in cells[LOAD]
     assert "0.37" in cells["Motor constant Km [N·m/√W]"]
     notes = {r[0]: r[2] for r in rows}
-    assert "k_T not measured" in notes["Torque constant Kt [N·m/A rms]"]
+    assert "no-load KV" in notes["Torque constant Kt [N·m/A rms]"]
+    assert "k_T not measured" in notes[LOAD]
     # …a block written under #90 (plain 2-D, no Kt in k3d) reads the same
     blk90 = dict(BLOCK, k3d={"psi_pm_Wb": 0.00925,
                              "KV_noload_rpm_per_V_line": 58.71},
                  torque_basis="2-D", k_torque=None)
     c90 = {r[0]: r[1] for r in cold_constant_rows({"constants_20c": blk90})}
-    assert "0.185" in c90["Torque constant Kt [N·m/A rms]"]
+    assert "0.1992" in c90["Torque constant Kt [N·m/A rms]"] and "0.185" in c90[LOAD]
     # …and a block with a MEASURED k_T prints 2-D × k_T
     blk = dict(BLOCK, k_torque=0.98, torque_basis="3-D")
     cells2 = {r[0]: r[1] for r in cold_constant_rows({"constants_20c": blk})}
-    assert "0.196" in cells2["Torque constant Kt [N·m/A rms]"]
+    assert "0.1992" in cells2["Torque constant Kt [N·m/A rms]"] and "0.196" in cells2[LOAD]
     # …and the point they were taken at is part of the answer.
     assert any(r[0] == "…measured at" for r in rows)
     assert cold_constants_of({"constants_20c": dict(BLOCK)}) is not None
@@ -354,7 +358,8 @@ def test_the_datasheet_carries_the_same_four_when_a_duty_has_them(tmp_path):
         coupled={"peak": {"constants_20c": dict(BLOCK)}}))
     assert "KV at 20 °C (rpm/V)" in with_
     # the block's 3-D factor (k_flux here), recomputed from two_d
-    assert with_["Kt at 20 °C (N·m/A rms)"] == pytest.approx(0.185, abs=1e-9)
+    from motor_ai_sim.kv_kt import KT_TIMES_KV
+    assert with_["Kt at 20 °C (N·m/A rms)"] == pytest.approx(KT_TIMES_KV / 58.71, abs=1e-4)   # ONE Kt: from the KV
     assert with_["Km at 20 °C (N·m/√W)"] == pytest.approx(0.37, abs=1e-9)
     # no mass_info: the full mass is unknown here, so the row is over the ACTIVE mass and says so
     assert "Km per mass at 20 °C (N·m/(√W·kg))" not in with_

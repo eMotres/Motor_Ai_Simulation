@@ -2824,6 +2824,12 @@ ${s1Text.text}` : '';
                 labelColor="#60a5fa" valueColor="#60a5fa"
                 tip={tx('configure.ktTip')} />
             )}
+            {!coldConstantsUnavailable && result.Kt_load_Nm_per_A != null && (
+              <MetricTile label={tx('configure.ktLoad')}
+                value={result.Kt_load_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_load_Nm_per_A ?? result.Kt_load_Nm_per_A} goodHi
+                labelColor="#60a5fa" valueColor="#60a5fa"
+                tip={tx('configure.ktLoadTip')} />
+            )}
             <MetricTile label={coldConstantsUnavailable ? tx('configure.km20c') : tx('configure.km')}
               value={coldConstantsUnavailable ? null : result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
               blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}

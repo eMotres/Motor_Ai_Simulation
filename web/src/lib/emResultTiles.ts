@@ -11,6 +11,7 @@ import { tempTileSpec, type TempTileSpec } from './configuratorTiles';
 import { tempLimits, judgeTemps, type TempLimits } from './configuratorPropeller';
 import { shaftBalance } from './shaftBalance';
 import { hasSleeve } from './hasSleeve.ts';
+import { ktFromKv } from './kvKt.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
 import { quotedRipple, type RippleRefined } from './rippleAccuracy.ts';
@@ -575,14 +576,20 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
 
   // ── 7 KV · Kt · Km · Km/mass (the controller-facing constants, in blue) ───
   const kvNl = num(s.KV_noload_rpm_per_V_line);
-  const kt = num(s.T_em_avg_Nm) != null && (num(s.I_phase_rms_A) ?? 0) > 0
+  // ONE Kt (owner 2026-11-05): from the KV shown beside it, so the two always agree.  T / I at this load is a different
+  // quantity and has its own tile.
+  const deltaConn = String(s.star_delta ?? 'star').toLowerCase().startsWith('d');
+  const kt = ktFromKv(kvNl ?? num(s.KV_rpm_per_V_line), deltaConn);
+  const ktLoad = num(s.T_em_avg_Nm) != null && (num(s.I_phase_rms_A) ?? 0) > 0
     ? (num(s.T_em_avg_Nm) as number) / (num(s.I_phase_rms_A) as number) : null;
   const blue = { labelColor: '#60a5fa', valueColor: '#60a5fa' } as const;
   const r7 = row(
     tile({ id: 'kv', labelKey: 'configure.kvNoLoad', tipKey: kvNl != null ? 'emTiles.kvTip' : 'emTiles.kvTipLoaded',
       ...magnetTempTip(kvNl != null ? probeMagnetTempC(s) : voltageMagnetTempC(s, view.emSource)), unit: 'rpm/V', d: 1, value: kvNl ?? num(s.KV_rpm_per_V_line), ...blue }),
-    tile({ id: 'kt', labelKey: 'configure.kt', tipKey: 'emTiles.ktTip', tipExtraKeys: k3d, unit: 'N·m/A',
+    tile({ id: 'kt', labelKey: 'configure.kt', tipKey: kvNl != null ? 'emTiles.ktTip' : 'emTiles.ktTipPeak', unit: 'N·m/A',
       d: kt != null && Math.abs(kt) < 0.1 ? 4 : 3, value: kt, ...blue }),
+    tile({ id: 'ktLoad', labelKey: 'configure.ktLoad', tipKey: 'emTiles.ktLoadTip', tipExtraKeys: k3d, unit: 'N·m/A',
+      d: ktLoad != null && Math.abs(ktLoad) < 0.1 ? 4 : 3, value: ktLoad, ...blue }),
     tile({ id: 'km', labelKey: 'configure.km', tipKey: 'emTiles.kmTip', tipExtraKeys: k3d, unit: 'N·m/√W', d: 3,
       value: num(s.Km_Nm_sqrtW), ...blue }),
     tile({ id: 'kmPerMass', labelKey: pm('km').full ? 'configure.kmPerMass' : 'configure.kmPerMassActive',

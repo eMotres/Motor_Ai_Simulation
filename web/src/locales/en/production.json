@@ -406,7 +406,6 @@
     "tabs": {
       "resistance": "Resistance",
       "inductance": "Inductance",
-      "constants": "Constants",
       "bearings": "Bearings",
       "free_run": "Free-run",
       "loads": "Loads",
@@ -415,11 +414,10 @@
     "tabsTip": {
       "resistance": "Winding resistance, line-line: bench and simulation.",
       "inductance": "Winding inductance, Ld and Lq: bench and simulation.",
-      "constants": "Kv (rpm per V line-line peak), Kt (N·m per A rms) and the EMF, from the free-run tests: bench and simulation.",
       "bearings": "Bearing loss by speed. These are SIMULATION values (SKF friction, rotor weight as the load), not measurements; the only measured figure is the total free-run loss, in which the bearings are not separated.",
       "free_run": "No-load spin test: the no-load loss at each speed and its fit.",
       "loads": "Load tests: torque, efficiency and temperatures at an operating point.",
-      "parameters": "The rest of the static checks: insulation, hipot, surge, cogging, LCR, weight and dimensions."
+      "parameters": "Kv and Kt from the free-run EMF slope first, then the other parameters of the machine: bench and simulation."
     },
     "add": "Add test",
     "edit": "Edit",
@@ -637,7 +635,8 @@
       "magnet_temp_c": "T mag °C",
       "rpm_set": "rpm set",
       "temp_housing_c": "T hous °C",
-      "temp_magnet_c": "T mag °C"
+      "temp_magnet_c": "T mag °C",
+      "v_ll_fund_pk_v": "Vfund pk"
     },
     "errors": {
       "load": "Could not load the tests: {reason}",

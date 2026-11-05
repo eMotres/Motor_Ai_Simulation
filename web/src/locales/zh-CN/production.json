@@ -459,6 +459,13 @@
       "efficiency": "效率，%",
       "coil": "线圈，°C"
     },
+    "video": {
+      "label": "视频 {n}",
+      "loading": "正在加载 {pct} %",
+      "failed": "此视频无法在此播放；请用箭头下载。",
+      "download": "下载视频",
+      "close": "关闭视频"
+    },
     "tabs": {
       "power": "功率",
       "resistance": "电阻",

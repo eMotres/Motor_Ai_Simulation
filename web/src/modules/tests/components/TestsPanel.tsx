@@ -21,10 +21,11 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
+import TestVideos from './TestVideos';
 import {
   cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  normalizeTab, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  isVideoName, normalizeTab, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
@@ -332,7 +333,8 @@ export const TestsPanel: React.FC<{
   die: string; config: string; source: TestsSource;
   /** production document download (the panel itself never fetches files) */
   onOpenDocument?: (fileId: string, name: string) => void;
-}> = ({ die, config, source, onOpenDocument }) => {
+  onLoadDocument?: (fileId: string, onProgress: (fraction: number) => void) => Promise<Blob>;
+}> = ({ die, config, source, onOpenDocument, onLoadDocument }) => {
   const { t } = useTranslation('production');
   // "Compute it" adds a duty to the SHARED configuration: only an admin's catalog write lands there (anybody else's would
   // be a copy in their own workspace), so the button is the admin's
@@ -481,6 +483,9 @@ export const TestsPanel: React.FC<{
         const s = summary(cmp);
         const missing = canCompute ? missingActions(cmp) : [];
         const bits = [rec.date, rec.title, rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
+        // what the caller may see: an internal document of a test is not listed for the factory or a project viewer
+        const docs = (rec.documents ?? []).flatMap((id) => { const d = docName.get(id); return d ? [d] : []; });
+        const videos = onLoadDocument ? docs.filter((d) => isVideoName(d.name)) : [];
         const cond = [rec.conditions?.ambient_c !== undefined ? `${rec.conditions.ambient_c} °C` : '',
           rec.conditions?.humidity_pct !== undefined ? `${rec.conditions.humidity_pct} % RH` : ''].filter(Boolean);
         return (
@@ -494,11 +499,10 @@ export const TestsPanel: React.FC<{
                 <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{rec.operator || rec.created_by}</Typography>
               </Tooltip>
               {rec.note && <Tooltip title={rec.note}><NotesIcon sx={{ fontSize: 16, color: 'var(--text-3)' }} /></Tooltip>}
-              {(rec.documents ?? []).map((id) => {
-                const d = docName.get(id);
-                return <Chip key={id} size="small" label={d?.name ?? id} sx={{ height: 18, fontSize: 10.5 }}
-                  onClick={d && onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />;
-              })}
+              {docs.filter((d) => !videos.includes(d)).map((d) => (
+                <Chip key={d.id} size="small" label={d.name} sx={{ height: 18, fontSize: 10.5 }}
+                  onClick={onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />
+              ))}
               <Box sx={{ flex: 1 }} />
               {missing.length > 0 && (
                 <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
@@ -513,6 +517,7 @@ export const TestsPanel: React.FC<{
                 </>
               )}
             </Box>
+            {videos.length > 0 && onLoadDocument && <TestVideos videos={videos} load={onLoadDocument} onDownload={onOpenDocument} />}
             <CompareTable cmp={cmp} tips={data.tips} canCompute={canCompute} busy={pending.length > 0} onCompute={(a) => void startCompute(a)} />
             <RawRows rec={rec} />
           </Paper>

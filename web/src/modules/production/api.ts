@@ -53,6 +53,25 @@ export async function downloadFile(die: string, config: string, fileId: string, 
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** One production file into memory, with the fraction received so far (a test's video on its card). */
+export async function fetchFileBlob(die: string, config: string, fileId: string, onProgress?: (fraction: number) => void): Promise<Blob> {
+  const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+  if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
+  const total = Number(r.headers.get('content-length')) || 0;
+  if (!r.body || !total || !onProgress) return r.blob();
+  const reader = r.body.getReader();
+  const parts: BlobPart[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    onProgress(Math.min(1, got / total));
+  }
+  return new Blob(parts);
+}
+
 /** The BOM or tooling list as Excel (editors): with no rows yet it is the empty template. */
 export async function downloadBomXlsx(die: string, config: string, list?: 'tooling'): Promise<void> {
   const r = await fetch(`${API}${base(die, config)}/bom.xlsx${lq(list)}`);

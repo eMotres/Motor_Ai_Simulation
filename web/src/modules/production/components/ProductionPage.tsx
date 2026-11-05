@@ -16,7 +16,7 @@ import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
-import { downloadFile, ProductionApiError, productionApi } from '../api';
+import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
 import { canEditRole, displayText, productionRole, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
@@ -235,7 +235,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} />}
           {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
-            onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }} />}
+            onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
+            onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}

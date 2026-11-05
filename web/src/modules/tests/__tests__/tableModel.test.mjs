@@ -511,3 +511,13 @@ t('a column head drops the bracket, in both languages; a name without one stays'
   assert.equal(M.shortHead('系统效率（直流输入，轴输出）'), '系统效率');
   assert.equal(M.shortHead('Torque'), 'Torque');
 });
+
+t('a video is told by its file name; a sheet or a note is not one, and the type follows the file', () => {
+  assert.equal(M.isVideoName('2026-11-05_G2_33kW_3000rpm_video.mp4'), true);
+  assert.equal(M.isVideoName('clip.MOV'), true);
+  assert.equal(M.isVideoName('table.png'), false);
+  assert.equal(M.isVideoName(null), false);
+  assert.equal(M.videoMime('a.webm'), 'video/webm');
+  assert.equal(M.videoMime('a.mov'), 'video/mp4');
+});
+

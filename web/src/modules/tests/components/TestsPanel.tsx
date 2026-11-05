@@ -28,7 +28,7 @@ import {
   isVideoName, normalizeTab, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
-  TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
+  TEST_TABS, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
 } from '../types';
 import SubTabs from '../../../components/common/SubTabs';
 import SeriesChart, { SpeedChart } from './SeriesChart';
@@ -99,7 +99,7 @@ function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height:
         </Select>
       </Box>
       <SpeedChart key={key} plot={plot} height={height}
-        xLabel={t(key === 'torque_current' ? 'tests.series.plot.x_current' : 'tests.series.plot.x_torque')} />
+        xLabel={t(key.endsWith('_time') ? 'tests.series.plot.x_time' : key === 'torque_current' ? 'tests.series.plot.x_current' : 'tests.series.plot.x_torque')} />
     </Box>
   );
 }
@@ -135,10 +135,7 @@ function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; 
   );
 }
 
-function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
-  cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; busy: boolean;
-  onCompute: (actions: CreateDutyAction[]) => void;
-}) {
+function CompareTable({ cmp, tips }: { cmp: TestCompare | undefined; tips: Record<string, string> }) {
   const { t } = useTranslation('production');
   const [boxRef, wide] = useWide();
   const blocks = tableBlocks(cmp);
@@ -153,18 +150,11 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
   };
   const table = loadTable(blocks);
   const tableBasis = table ? Array.from(new Set(table.points.map((p) => basisText(p.block)).filter(Boolean))).join(' · ') : '';
-  const tableExtra = !!table && table.points.some((p) => pointNotes(p.cells).length > 0
-    || (canCompute && Object.values(p.cells).some((l) => l.row.action)));
+  const tableExtra = !!table && table.points.some((p) => pointNotes(p.cells).length > 0);
   const plotRows = loadPlotRows(cmp);
   const plotCurves = simulationCurves(cmp);
   const perSpeed = usesSpeedPlots(plotRows, plotCurves) && loadPlotOptions(plotRows, plotCurves).length > 0;
   const hasLoadChart = perSpeed || loadSeriesOptions(cmp).length > 0;
-  const computeTip = (row: CompareRow) => {
-    const a = row.action;
-    const g = a?.body.duty.gamma_deg;
-    return [t('tests.computeTip'), g === undefined ? '' : t('tests.computeGamma', { gamma: g, source: a?.gamma_source ?? '' })]
-      .filter(Boolean).join(' · ');
-  };
   return (
     <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
       <Box sx={hasLoadChart ? { flex: wide ? '0 0 48%' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
@@ -195,7 +185,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
             </TableHead>
             <TableBody>
               {table.points.map(({ block, cells }, pointIndex) => {
-                const action = Object.values(cells).find((l) => l.row.action)?.row;
                 return (
                   <TableRow key={pointIndex}>
                     <TableCell sx={{ ...cell, color: 'var(--text-1)' }}>{label(block, 'group')}</TableCell>
@@ -214,11 +203,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
                     {tableExtra && (
                       <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
                         {ownNotes(table, cells).map((n) => t(`tests.note.${n.key}`, n.params)).join(' · ')}
-                        {canCompute && action?.action && (
-                          <Tooltip title={computeTip(action)}><span><Button size="small" disabled={busy}
-                            sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: `${TABLE_ROW_PX - 2}px`, fontSize: 10.5 }}
-                            onClick={() => onCompute([action.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
-                        )}
                       </TableCell>
                     )}
                   </TableRow>
@@ -269,11 +253,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
                         <TableCell sx={{ ...num, width: 48, fontWeight: 700, color: l.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l.delta}</TableCell>
                         <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
                           {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
-                          {canCompute && l.row.action && (
-                            <Tooltip title={computeTip(l.row)}><span><Button size="small" disabled={busy}
-                              sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: `${TABLE_ROW_PX - 2}px`, fontSize: 10.5 }}
-                              onClick={() => onCompute([l.row.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
-                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -345,9 +324,10 @@ export const TestsPanel: React.FC<{
   const [sub, setSubState] = useState<TestTab>(() => readSub(die, config));
   const [editing, setEditing] = useState<{ rec: TestRecord | null } | null>(null);
   const [toDelete, setToDelete] = useState<TestRecord | null>(null);
+  const [toCompute, setToCompute] = useState<CreateDutyAction[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgError, setMsgError] = useState(false);
-  // run ids of the solves "Compute it" queued; while any is open the panel polls the job list and refreshes when they end
+  // run ids of the solves "Compute all missing" queued; while any is open the panel polls the job list and refreshes when they end
   const [pending, setPending] = useState<string[]>([]);
   const unlisted = useRef(0);
   const note = (text: string | null, isError = false) => { setMsg(text); setMsgError(isError); };
@@ -366,7 +346,7 @@ export const TestsPanel: React.FC<{
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
 
   const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
-  // "Compute it": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
+  // "Compute all missing": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
   const startCompute = async (actions: CreateDutyAction[]) => {
     if (!actions.length || pending.length) return;
     try {
@@ -507,7 +487,7 @@ export const TestsPanel: React.FC<{
               {missing.length > 0 && (
                 <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
                   <span><Button size="small" variant="outlined" disabled={pending.length > 0} sx={{ fontSize: 11, py: 0, minHeight: 22 }}
-                    onClick={() => void startCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
+                    onClick={() => setToCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
                 </Tooltip>
               )}
               {can.edit && (
@@ -518,7 +498,7 @@ export const TestsPanel: React.FC<{
               )}
             </Box>
             {videos.length > 0 && onLoadDocument && <TestVideos videos={videos} load={onLoadDocument} onDownload={onOpenDocument} />}
-            <CompareTable cmp={cmp} tips={data.tips} canCompute={canCompute} busy={pending.length > 0} onCompute={(a) => void startCompute(a)} />
+            <CompareTable cmp={cmp} tips={data.tips} />
             <RawRows rec={rec} />
           </Paper>
         );
@@ -528,6 +508,13 @@ export const TestsPanel: React.FC<{
           documents={(data.documents ?? []).map((d) => ({ id: d.id, name: d.name }))}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void reload(); }} />
       )}
+      <Dialog open={!!toCompute} onClose={() => setToCompute(null)}>
+        <DialogContent sx={{ fontSize: 13 }}>{t('tests.computeAllConfirm', { count: toCompute?.length ?? 0 })}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setToCompute(null)}>{t('tests.editor.cancel')}</Button>
+          <Button onClick={() => { const a = toCompute ?? []; setToCompute(null); void startCompute(a); }}>{t('tests.computeAllYes')}</Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={!!toDelete} onClose={() => setToDelete(null)}>
         <DialogContent sx={{ fontSize: 13 }}>{t('tests.deleteConfirm')}</DialogContent>
         <DialogActions>

@@ -541,3 +541,17 @@ def test_a_record_without_a_cogging_entry_gets_no_cogging_group():
     rec = models.normalize({"kind": "parameters", "date": "2026-10-31", "title": "r",
                             "resistance": {"temp_c": 21.7, "pairs": [{"pair": "1-2", "value_mohm": 140}]}}, who="t@x")
     assert not [g for g in comparison.compare_record(rec, model, "d", "c")["groups"] if g["key"] == "cogging"]
+
+
+def test_system_efficiency_of_a_generator_row_stays_under_100_and_a_timed_row_says_its_minute():
+    # 100 N*m at 3000 rpm = 31416 W on the shaft, 600 V x 47.6 A = 28560 W on the DC link: generating
+    row = {"rpm": 3000, "torque_nm": 100.0, "v_dc_v": 600.0, "i_dc_a": 47.6, "time_min": 12}
+    rec = _record("load", rows=[row])
+    cmp = comparison.compare_record(rec, _model(), "D", "C")
+    group = cmp["groups"][0]
+    rows = {r["key"]: r for r in group["rows"]}
+    assert rows["eff_system"]["measured"] == pytest.approx(28560 / (100 * 3000 * math.pi / 30) * 100)
+    assert rows["eff_system"]["measured"] < 100
+    assert group["label"].startswith("12 min · 3000 rpm")
+    assert cmp["series"]["points"][0]["time_min"] == 12
+

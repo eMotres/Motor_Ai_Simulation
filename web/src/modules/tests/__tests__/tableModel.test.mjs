@@ -121,7 +121,7 @@ t('a load sweep series: cleaned, sorted by rpm, gaps stay null, empty quantities
 
 t('row notes: unexplained loss, no model point (with the compute action), frequency flag', () => {
   assert.deepEqual(M.rowNote(row({ key: 'loss', extra: { unexplained_w: 412.4 } })), { key: 'unexplained', params: { w: '412.4' } });
-  assert.equal(M.rowNote(row({ status: 'no_model', action: { kind: 'create_duty', body: {} } })).key, 'noModelCompute');
+  assert.equal(M.rowNote(row({ status: 'no_model', action: { kind: 'create_duty', body: {} } })).key, 'noModel');
   assert.equal(M.rowNote(row({ status: 'no_model' })).key, 'noModel');
   assert.deepEqual(M.rowNote(row({ extra: { high_freq: true, freq_hz: 1000 } })), { key: 'freqFlag', params: { hz: 1000 } });
   assert.equal(M.rowNote(row({})), null);
@@ -519,5 +519,24 @@ t('a video is told by its file name; a sheet or a note is not one, and the type 
   assert.equal(M.isVideoName(null), false);
   assert.equal(M.videoMime('a.webm'), 'video/webm');
   assert.equal(M.videoMime('a.mov'), 'video/mp4');
+});
+
+t('a timed run plots against time, the time plots come first; a sweep without times does not list them', () => {
+  const rows = [{ rpm: 3000, torque: 111.42, t_winding: 126.58, time_min: 4 }, { rpm: 3000, torque: 103.4, t_winding: 160.02, time_min: 44 }];
+  const opts = M.loadPlotOptions(rows);
+  assert.deepEqual(opts.slice(0, 3), ['t_winding_time', 'torque_time', 'power_time']);
+  const temp = M.perSpeedSeries(rows, 't_winding_time');
+  assert.deepEqual(temp.speeds[0].measured, [{ x: 4, y: 126.58 }, { x: 44, y: 160.02 }]);
+  assert.equal(temp.xUnit, 'min');
+  const power = M.perSpeedSeries(rows, 'power_time');
+  assert.ok(Math.abs(power.speeds[0].measured[1].y - 32.48) < 0.01);
+  assert.deepEqual(M.loadPlotOptions([{ rpm: 3000, torque: 1, t_winding: 2 }, { rpm: 3000, torque: 3, t_winding: 4 }]), ['t_winding_torque']);
+});
+
+t('a generator row: system efficiency stays under 100 % and its loss is positive', () => {
+  const rows = [{ rpm: 3000, torque: 100, v_dc: 600, i_dc: 47.6 }, { rpm: 3000, torque: 60, v_dc: 600, i_dc: 28 }];
+  const eff = M.perSpeedSeries(rows, 'eff_torque').speeds[0].measured;
+  assert.ok(eff.every((q) => q.y > 80 && q.y < 100));
+  assert.ok(M.perSpeedSeries(rows, 'loss_torque').speeds[0].measured.every((q) => q.y > 0));
 });
 

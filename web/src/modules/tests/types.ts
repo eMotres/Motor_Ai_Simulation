@@ -77,7 +77,7 @@ export interface LoadSeriesQuantity { key: string; label: string; unit: string; 
  *  `model` holds the model's own values only where a stored duty matched the row. */
 export interface LoadPlotRow {
   rpm: number; current?: number | null; torque?: number | null; v_dc?: number | null; i_dc?: number | null;
-  t_winding?: number | null; t_magnet?: number | null; t_housing?: number | null;
+  t_winding?: number | null; t_magnet?: number | null; t_housing?: number | null; time_min?: number | null;
   model?: { torque?: number | null; eff_system?: number | null; t_winding?: number | null; t_magnet?: number | null };
 }
 /** One simulation curve of a load record (backend `simulation_curves`): the owner's own points at one speed, not duties. */

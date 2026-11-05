@@ -480,8 +480,9 @@
         "x_torque": "Torque, N·m"
       },
       "modelSuffix": "simulation",
-      "tipSpeeds": "One line per speed, straight segments between the rows. Solid = as logged, dashed = simulation where the simulation has that point.",
-      "rpm": "{rpm} rpm"
+      "tipSpeeds": "One line per speed, straight segments between the rows. Solid = as logged, dashed = Simulation (hollow dots = simulation points of a stored duty).",
+      "rpm": "{rpm} rpm",
+      "pointSuffix": "simulation point"
     },
     "basis": {
       "emf_3d": "magnets at {mag} °C",

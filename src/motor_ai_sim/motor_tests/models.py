@@ -36,6 +36,8 @@ from motor_ai_sim.motor_tests import KINDS
 MAX_ROWS = 500
 MAX_TEXT = 300
 MAX_NOTE = 4000
+MAX_CURVES = 8
+MAX_CURVE_POINTS = 200
 
 
 class TestInputError(ValueError):
@@ -52,6 +54,7 @@ _RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "i_dc_a": (-1e5, 1e5), "eff_pct": (0, 100), "duration_s": (0, 1e7),
     "value_mohm": (0, 1e9), "value_uh": (0, 1e9), "rotor_angle_deg": (-720, 720), "freq_hz": (0, 1e8),
     "level_v": (0, 1e4), "voltage_v": (0, 1e6), "resistance_mohm": (0, 1e12), "leakage_ma": (0, 1e5),
+    "current_a": (0, 1e5), "loss_w": (-1e7, 1e7), "eff_system_pct": (0, 100),
     "time_s": (0, 1e6), "mass_g": (0, 1e8), "value_mm": (0, 1e6), "nominal_mm": (0, 1e6),
     "length_mm": (0, 1e6), "awg": (-3, 46), "area_mm2": (0, 1e4), "count": (0, 100), "value": (None, None),
 }
@@ -59,6 +62,7 @@ _RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
 FREE_RUN_KEYS = ("rpm_set", "rpm", "shaft_power_w", "v_ll_pp_v", "v_ll_rms_v", "temp_c", "magnet_temp_c")
 LOAD_KEYS = ("rpm", "torque_nm", "i_phase_a", "v_dc_v", "i_dc_a", "eff_pct", "temp_winding_c", "temp_housing_c",
              "temp_magnet_c", "duration_s")
+CURVE_KEYS = ("current_a", "torque_nm", "loss_w", "eff_system_pct", "i_dc_a")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PAIR_RE = re.compile(r"^[A-Za-z0-9]{1,4}\s*-\s*[A-Za-z0-9]{1,4}$")
 
@@ -254,6 +258,41 @@ def _rows(raw: Dict[str, Any], keys, required: Tuple[str, ...]) -> List[Dict[str
     return rows
 
 
+def _curves(v: Any) -> List[Dict[str, Any]]:
+    """The simulation curves of a load record: ``[{"rpm", "points": [{current_a, torque_nm, loss_w, eff_system_pct,
+    i_dc_a}]}]`` (any point field may be missing).  They are the owner's own simulation points for the Tests charts;
+    they are not stored duties and never become duties."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise TestInputError("simulation_curves: a list is expected")
+    if len(v) > MAX_CURVES:
+        raise TestInputError(f"simulation_curves: at most {MAX_CURVES} curves")
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for i, c in enumerate(v):
+        w = f"simulation_curves[{i}]"
+        if not isinstance(c, dict):
+            raise TestInputError(f"{w}: an object is expected")
+        rpm = _num(c.get("rpm"), "rpm", w, required=True)
+        if round(rpm) in seen:
+            raise TestInputError(f"{w}.rpm: {rpm:g} rpm is given twice")
+        seen.add(round(rpm))
+        pts_raw = c.get("points")
+        if not isinstance(pts_raw, list) or not pts_raw:
+            raise TestInputError(f"{w}.points: a non-empty list is expected")
+        if len(pts_raw) > MAX_CURVE_POINTS:
+            raise TestInputError(f"{w}.points: at most {MAX_CURVE_POINTS} points")
+        pts = []
+        for j, p in enumerate(pts_raw):
+            pt = _nums(p, CURVE_KEYS, f"{w}.points[{j}]")
+            if not pt:
+                raise TestInputError(f"{w}.points[{j}]: enter at least one value")
+            pts.append(pt)
+        out.append({"rpm": rpm, "points": pts})
+    return out
+
+
 def normalize(raw: Any, *, who: str, previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A clean record from a request body; ``previous`` keeps id / created_* on an edit."""
     if not isinstance(raw, dict):
@@ -288,12 +327,25 @@ def normalize(raw: Any, *, who: str, previous: Optional[Dict[str, Any]] = None) 
     leads = _leads(raw.get("leads"))
     if leads:
         rec["leads"] = leads
+    if kind != "load" and (raw.get("simulation_curves") or raw.get("simulation_note")):
+        raise TestInputError("simulation_curves: only a load test carries simulation curves")
     if kind == "parameters":
         rec.update(_parameters(raw))
     elif kind == "free_run":
         rec["rows"] = _rows(raw, FREE_RUN_KEYS, ("rpm",))
     else:
         rec["rows"] = _rows(raw, LOAD_KEYS, ("rpm",))
+        # the curves are not part of the form: a save that does not send them keeps the ones already stored
+        if "simulation_curves" in raw:
+            curves = _curves(raw.get("simulation_curves"))
+        else:
+            curves = list((previous or {}).get("simulation_curves") or [])
+        if curves:
+            rec["simulation_curves"] = curves
+        note = (_text(raw.get("simulation_note"), "simulation_note") if "simulation_note" in raw
+                else str((previous or {}).get("simulation_note") or ""))
+        if curves and note:
+            rec["simulation_note"] = note
     if previous:
         rec["created_by"], rec["created_at"] = previous.get("created_by"), previous.get("created_at")
         rec["updated_by"], rec["updated_at"] = who, now()

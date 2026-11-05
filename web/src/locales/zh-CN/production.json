@@ -480,8 +480,9 @@
         "x_torque": "转矩，N·m"
       },
       "modelSuffix": "仿真",
-      "tipSpeeds": "每个转速一条线，各行之间为直线段。实线 = 记录值，虚线 = 仿真有该点时的仿真值。",
-      "rpm": "{rpm} rpm"
+      "tipSpeeds": "每个转速一条线，各行之间为直线段。实线 = 记录值，虚线 = 仿真（空心点 = 已存工况的仿真点）。",
+      "rpm": "{rpm} rpm",
+      "pointSuffix": "仿真点"
     },
     "basis": {
       "emf_3d": "磁钢 {mag} °C",

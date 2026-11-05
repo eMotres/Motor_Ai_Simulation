@@ -661,7 +661,8 @@ _SERIES_QUANTITIES = (
 )
 
 
-def _load_series(points: List[Dict[str, Any]], plot_rows: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+def _load_series(points: List[Dict[str, Any]], plot_rows: Optional[List[Dict[str, Any]]] = None,
+                 curves: Optional[List[Dict[str, Any]]] = None, note: str = "") -> Optional[Dict[str, Any]]:
     """All rows of a load record at once, for the chart beside the per-point tables (read-only, additive).
 
     ``points`` = one dict per bench row: ``{"rpm", "current", "<quantity key>": (measured, model)}``.  A quantity that no
@@ -685,9 +686,15 @@ def _load_series(points: List[Dict[str, Any]], plot_rows: Optional[List[Dict[str
             continue
         pts.sort(key=lambda q: q["rpm"])
         quantities.append({"key": key, "label": label, "unit": unit, "tip": tip, "points": pts})
-    if not quantities:
+    if not quantities and not curves:
         return None
-    return {"x": "rpm", "quantities": quantities, "points": list(plot_rows or [])}
+    out = {"x": "rpm", "quantities": quantities, "points": list(plot_rows or [])}
+    if curves:
+        # the record's own simulation curves (never stored duties), passed through as stored
+        out["simulation_curves"] = curves
+        if note:
+            out["simulation_note"] = note
+    return out
 
 
 def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
@@ -771,7 +778,8 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             plot_rows[-1]["model"] = {k: num(v) for k, v in (
                 ("torque", t_mod), ("eff_system", d_eff_sys),
                 ("t_winding", d.get("winding_c")), ("t_magnet", d.get("magnet_c"))) if num(v) is not None}
-    return {"groups": groups, "fit": None, "series": _load_series(series_pts, plot_rows)}
+    return {"groups": groups, "fit": None, "series": _load_series(series_pts, plot_rows, rec.get("simulation_curves"),
+                                           str(rec.get("simulation_note") or ""))}
 
 
 # ---------------------------------------------------------------------------

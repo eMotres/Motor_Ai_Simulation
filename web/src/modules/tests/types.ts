@@ -34,6 +34,8 @@ export interface TestRecord {
   cogging?: { pkpk_nm?: number | null; magnet_temp_c?: number | null; pending?: boolean };
   dimensions?: Array<{ what: string; value_mm: number; nominal_mm?: number }>;
   rows?: Array<Record<string, number>>;
+  /** load tests: kept by the server on an edit, not shown in the form */
+  simulation_curves?: SimulationCurve[]; simulation_note?: string;
   created_by?: string; created_at?: string; updated_by?: string; updated_at?: string;
 }
 
@@ -78,7 +80,17 @@ export interface LoadPlotRow {
   t_winding?: number | null; t_magnet?: number | null; t_housing?: number | null;
   model?: { torque?: number | null; eff_system?: number | null; t_winding?: number | null; t_magnet?: number | null };
 }
-export interface LoadSeries { x: 'rpm'; quantities: LoadSeriesQuantity[]; points?: LoadPlotRow[] }
+/** One simulation curve of a load record (backend `simulation_curves`): the owner's own points at one speed, not duties. */
+export interface SimulationCurve {
+  rpm: number;
+  points: Array<{ current_a?: number | null; torque_nm?: number | null; loss_w?: number | null;
+    eff_system_pct?: number | null; i_dc_a?: number | null }>;
+}
+export interface LoadSeries {
+  x: 'rpm'; quantities: LoadSeriesQuantity[]; points?: LoadPlotRow[];
+  /** additive: the record's simulation curves and the one line saying what they include */
+  simulation_curves?: SimulationCurve[]; simulation_note?: string;
+}
 export interface TestCompare {
   test_id: string; kind: TestKind; model_available: boolean; groups: CompareGroup[];
   /** load records only: every bench row at once, for the chart beside the per-point tables */

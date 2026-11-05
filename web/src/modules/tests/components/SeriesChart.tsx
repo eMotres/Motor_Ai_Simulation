@@ -64,8 +64,9 @@ export const SpeedChart: React.FC<{ plot: SpeedPlot; xLabel: string; height?: nu
   const { t } = useTranslation('production');
   const { data, lines } = React.useMemo(() => speedChartData(plot), [plot]);
   const yu = unitLabel(plot.yUnit);
-  const name = (l: { rpm: number; model: boolean }) =>
-    t('tests.series.rpm', { rpm: l.rpm }) + (l.model ? `, ${t('tests.series.modelSuffix')}` : '');
+  const name = (l: { rpm: number; kind: string; label: string }) =>
+    t('tests.series.rpm', { rpm: l.rpm }) + (l.kind === 'measured' ? ''
+      : `, ${t(l.label === 'point' ? 'tests.series.pointSuffix' : 'tests.series.modelSuffix')}`);
   const tip = ({ active, payload }: { active?: boolean; payload?: ReadonlyArray<{ dataKey?: unknown; value?: unknown; payload?: { x?: number } }> }) => {
     const hit = active && payload ? payload.find((e) => typeof e.value === 'number' && typeof e.payload?.x === 'number') : undefined;
     const l = hit ? lines.find((q) => q.id === hit.dataKey) : undefined;
@@ -90,9 +91,10 @@ export const SpeedChart: React.FC<{ plot: SpeedPlot; xLabel: string; height?: nu
           <Legend verticalAlign="top" height={20} iconSize={10} wrapperStyle={{ fontSize: 11 }} />
           {lines.map((l) => (
             <Line key={l.id} type="linear" dataKey={l.id} name={name(l)} stroke={SPEED_COLORS[l.color % SPEED_COLORS.length]}
-              strokeWidth={1.6} strokeDasharray={l.model ? '5 3' : undefined}
-              dot={{ r: 2.5, fill: l.model ? 'var(--panel)' : SPEED_COLORS[l.color % SPEED_COLORS.length],
-                stroke: SPEED_COLORS[l.color % SPEED_COLORS.length] }}
+              strokeWidth={1.6} strokeDasharray={l.kind === 'measured' ? undefined : '5 3'}
+              dot={l.kind === 'simulation' ? false
+                : { r: 2.5, fill: l.kind === 'model' ? 'var(--panel)' : SPEED_COLORS[l.color % SPEED_COLORS.length],
+                  stroke: SPEED_COLORS[l.color % SPEED_COLORS.length] }}
               connectNulls isAnimationActive={false} />
           ))}
         </LineChart>

@@ -618,7 +618,26 @@ export function isVideoName(name: string | null | undefined): boolean {
   return /\.(mp4|m4v|mov|webm)$/i.test(name ?? '');
 }
 
-/** The type a stored video plays as: the file API serves every file as plain bytes. */
-export function videoMime(name: string): string {
-  return /\.webm$/i.test(name) ? 'video/webm' : 'video/mp4';
+/** A document a browser can show on the test card as a picture, by its file name. */
+export function isPictureName(name: string | null | undefined): boolean {
+  return /\.(png|jpe?g|webp|gif)$/i.test(name ?? '');
+}
+
+/** The type a stored picture or video opens as: the file API serves every file as plain bytes. */
+export function mediaMime(name: string): string {
+  if (/\.webm$/i.test(name)) return 'video/webm';
+  if (/\.png$/i.test(name)) return 'image/png';
+  if (/\.webp$/i.test(name)) return 'image/webp';
+  if (/\.gif$/i.test(name)) return 'image/gif';
+  if (/\.jpe?g$/i.test(name)) return 'image/jpeg';
+  return 'video/mp4';
+}
+
+/** A test's documents by how the card shows them: pictures on one line, videos on the next, the rest as plain files. */
+export function testFiles<T extends { name: string }>(docs: T[]): { pictures: T[]; videos: T[]; other: T[] } {
+  return {
+    pictures: docs.filter((d) => isPictureName(d.name)),
+    videos: docs.filter((d) => isVideoName(d.name)),
+    other: docs.filter((d) => !isPictureName(d.name) && !isVideoName(d.name)),
+  };
 }

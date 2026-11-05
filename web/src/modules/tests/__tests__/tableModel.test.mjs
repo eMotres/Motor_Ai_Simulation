@@ -517,8 +517,8 @@ t('a video is told by its file name; a sheet or a note is not one, and the type 
   assert.equal(M.isVideoName('clip.MOV'), true);
   assert.equal(M.isVideoName('table.png'), false);
   assert.equal(M.isVideoName(null), false);
-  assert.equal(M.videoMime('a.webm'), 'video/webm');
-  assert.equal(M.videoMime('a.mov'), 'video/mp4');
+  assert.equal(M.mediaMime('a.webm'), 'video/webm');
+  assert.equal(M.mediaMime('a.mov'), 'video/mp4');
 });
 
 t('a timed run plots against time, the time plots come first; a sweep without times does not list them', () => {
@@ -538,5 +538,15 @@ t('a generator row: system efficiency stays under 100 % and its loss is positive
   const eff = M.perSpeedSeries(rows, 'eff_torque').speeds[0].measured;
   assert.ok(eff.every((q) => q.y > 80 && q.y < 100));
   assert.ok(M.perSpeedSeries(rows, 'loss_torque').speeds[0].measured.every((q) => q.y > 0));
+});
+
+t('a test card sorts its files: pictures, videos, the rest; the type follows the file', () => {
+  const docs = ['sheet.JPG', 'table.png', 'run.mp4', 'note.md', 'plots.pdf'].map((name) => ({ name }));
+  const f = M.testFiles(docs);
+  assert.deepEqual(f.pictures.map((d) => d.name), ['sheet.JPG', 'table.png']);
+  assert.deepEqual(f.videos.map((d) => d.name), ['run.mp4']);
+  assert.deepEqual(f.other.map((d) => d.name), ['note.md', 'plots.pdf']);
+  assert.equal(M.mediaMime('sheet.JPG'), 'image/jpeg');
+  assert.equal(M.mediaMime('table.png'), 'image/png');
 });
 

@@ -459,12 +459,14 @@
       "efficiency": "Efficiency, %",
       "coil": "Coil, °C"
     },
-    "video": {
-      "label": "Video {n}",
+    "media": {
+      "video": "Video {n}",
+      "picture": "Picture {n}",
       "loading": "Loading {pct} %",
-      "failed": "This video did not play here; download it with the arrow.",
-      "download": "Download the video",
-      "close": "Close the video"
+      "failed": "This file did not open here; download it with the arrow.",
+      "download": "Download the file",
+      "close": "Close",
+      "fullSize": "Open at full size in a new tab"
     },
     "tabs": {
       "power": "Power",

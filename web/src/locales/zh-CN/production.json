@@ -459,12 +459,14 @@
       "efficiency": "效率，%",
       "coil": "线圈，°C"
     },
-    "video": {
-      "label": "视频 {n}",
+    "media": {
+      "video": "视频 {n}",
+      "picture": "图片 {n}",
       "loading": "正在加载 {pct} %",
-      "failed": "此视频无法在此播放；请用箭头下载。",
-      "download": "下载视频",
-      "close": "关闭视频"
+      "failed": "此文件无法在此打开；请用箭头下载。",
+      "download": "下载文件",
+      "close": "关闭",
+      "fullSize": "在新标签页中以完整尺寸打开"
     },
     "tabs": {
       "power": "功率",

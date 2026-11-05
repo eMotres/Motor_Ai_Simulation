@@ -94,3 +94,31 @@ def test_controller_dc_link_matches_power_balance_at_default_grid(direction, m, 
     p_loss = out["losses"]["total_W"]
     expect = ((p_ac + p_loss) if direction == "motor" else -(p_ac - p_loss)) / V_DC
     assert out["dc_link"]["i_dc_mean_A"] == pytest.approx(expect, abs=0.15)
+
+
+# Two real coupled PWM controller points (24 slots, 14 pole pairs, 540 V,
+# 2 us dead time, SVPWM 10 kHz, IGBT module): the stored bus mean was 20.3 A
+# and 35.4 A against P/Vdc of 18.13 A and 34.61 A.  The grid-snapped states
+# gave +11.9 % and +2.3 % (43 and 21 carriers per period, 24 samples each);
+# the second happened to sit on (P + P_loss)/Vdc because the loss it left out
+# (0.9 A) and the snapping bias (+0.8 A) cancelled.
+_REAL = [  # rpm, f_el, m, P_ac, I_phase_rms, stored cap rms, stored pp
+    (1000, 233.333, 0.443, 9792.5, 48.8484, 27.1, 75.8),
+    (2000, 466.667, 0.8163, 18690.8, 48.4, 27.3, 68.4),
+]
+
+
+@pytest.mark.parametrize("rpm,f_el,m,p_ac,i_rms,cap,pp", _REAL)
+def test_real_coupled_points_balance_and_ripple_unchanged(rpm, f_el, m, p_ac, i_rms, cap, pp):
+    out = lo.solve_controller(dict(
+        num_slots=24, num_poles=28, single_layer=False, star_delta="star",
+        device="2MBI800XNE120-50", devices_parallel=1, v_dc_V=V_DC,
+        i_phase_rms_A=i_rms, p_ac_W=p_ac, f_elec_hz=f_el, f_carrier_hz=F_SW,
+        modulation_index=m, topology="one_3ph", dead_time_us=2.0,
+        pwm_modulation="svpwm", r_g_ext_ohm=0.5, r_g_off_ext_ohm=0.5))
+    dc = out["dc_link"]
+    p_loss = out["losses"]["total_W"]
+    assert dc["i_dc_mean_A"] == pytest.approx((p_ac + p_loss) / V_DC, abs=0.06)
+    assert dc["i_dc_mean_A"] - p_loss / V_DC == pytest.approx(p_ac / V_DC, rel=3e-3)
+    assert dc["i_cap_rms_A"] == pytest.approx(cap, abs=0.05)
+    assert dc["i_dc_pp_A"] == pytest.approx(pp, abs=0.05)

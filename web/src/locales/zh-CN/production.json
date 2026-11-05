@@ -450,7 +450,17 @@
       "free_run": "空载旋转试验：各转速下的反电动势和空载损耗。",
       "load": "负载试验：工作点的转矩、效率和温度。"
     },
+    "power": {
+      "test": "测试",
+      "max": "最大功率，kW",
+      "maxTip": "测试各行中转矩 x 转速的最大值；稳定连续运行值可能更低。",
+      "torque": "转矩，N·m",
+      "speed": "转速，rpm",
+      "efficiency": "效率，%",
+      "coil": "线圈，°C"
+    },
     "tabs": {
+      "power": "功率",
       "resistance": "电阻",
       "inductance": "电感",
       "bearings": "轴承",
@@ -459,6 +469,7 @@
       "parameters": "参数"
     },
     "tabsTip": {
+      "power": "负载测试按名称列出，并显示各自的最高功率。",
       "resistance": "绕组线间电阻：台架与仿真。",
       "inductance": "绕组电感 Ld 和 Lq：台架与仿真。",
       "bearings": "各转速下的轴承损耗。这些是仿真值（SKF 摩擦，以转子重量为载荷），不是测量值；唯一的实测数是空载总损耗，其中轴承并未分离。",
@@ -474,6 +485,7 @@
     "visible": "客户可见",
     "visibleTip": "向使用此电机的项目客户显示这些测试及对比。默认关闭。",
     "col": {
+      "point": "工况点",
       "quantity": "物理量",
       "measured": "实测",
       "model": "仿真",

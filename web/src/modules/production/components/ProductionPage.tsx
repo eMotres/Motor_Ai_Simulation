@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, Typography } from '@mui/material';
 import SubTabs from '../../../components/common/SubTabs';
 import { HeaderTabs } from '../../../components/common/PanelHeader';
 import { useTranslation } from 'react-i18next';
@@ -27,7 +27,7 @@ import DigestSettings from '../../../components/digest/DigestSettings';
 import { productionUnreadKey } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type {
-  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
+  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, Revision, Thread,
 } from '../types';
 
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
@@ -73,7 +73,6 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const unreadDiscussion = unreadCounts?.productions[productionUnreadKey(die, config)] ?? 0;
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
-  const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
   // a shared link (since= / ids=) opens the Documents sub-tab; "Clear" / "Show all" drops its filter for this visit
   const [link, setLink] = useState<ProductionLink | null>(linkProp);
   const [tab, setTabState] = useState<TabId>(() => {
@@ -111,21 +110,18 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
         const [documents, threads] = await Promise.all([productionApi.documents(die, config), productionApi.threads(die, config)]);
         setProd(p);
         setData({ ...EMPTY, documents, threads });
-        setReadiness(null);
         setTabState((cur) => ((VIEWER_TABS as readonly string[]).includes(cur) ? cur : 'documents'));
         setErr(null); setNda(false);
         return;
       }
-      const [parts, bom, toolingBom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
+      const [parts, bom, toolingBom, process, documents, threads, proposals, revisions] = await Promise.all([
         productionApi.parts(die, config), productionApi.bom(die, config), productionApi.bom(die, config, 'tooling').catch(() => [] as BomRow[]),
         productionApi.process(die, config),
         productionApi.documents(die, config), productionApi.threads(die, config), productionApi.proposals(die, config),
         productionApi.revisions(die, config),
-        productionApi.procurement(die, config).catch(() => null),
       ]);
       setProd(p);
       setData({ parts, bom, toolingBom, process, documents, threads, proposals, revisions });
-      if (proc?.summary) setReadiness(proc.summary);
       setErr(null);
       setNda(false);
     } catch (e) {
@@ -184,59 +180,6 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           <SubTabs value={tab} onChange={setTab} ariaLabel={t('title')}
             items={visibleTabs.map((id) => ({ id, label: id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : id === 'discussion' && unreadDiscussion > 0 ? `${t('tabs.discussion')} (${unreadDiscussion})` : t(`tabs.${id}`) }))} />
         </HeaderTabs>
-      )}
-
-      {/* Top Readiness Summary Bar */}
-      {prod && readiness && !loading && (
-        <Paper
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 1.5,
-            px: 2,
-            py: 1,
-            mb: 1.5,
-            bgcolor: readiness.ready_for_assembly ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
-            border: `1px solid ${readiness.ready_for_assembly ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-            borderRadius: 1.5,
-          }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>
-              {t('procurement.summary', {
-                received: readiness.parts_received_count,
-                total: readiness.parts_total_count,
-                pct: Math.round(readiness.received_pct),
-                late: readiness.late_count,
-                assemblyStatus: readiness.ready_for_assembly
-                  ? `✓ ${t('procurement.readyForAssembly')}`
-                  : `✗ ${t('procurement.notReadyForAssembly')}`,
-              })}
-            </Typography>
-            {readiness.at_risk_count > 0 && (
-              <Chip
-                size="small"
-                label={`${readiness.at_risk_count} ${t('procurement.status.at_risk')}`}
-                sx={{
-                  height: 20,
-                  fontSize: 11,
-                  bgcolor: 'rgba(245, 158, 11, 0.15)',
-                  color: '#f59e0b',
-                  border: '1px solid rgba(245, 158, 11, 0.4)',
-                }}
-              />
-            )}
-          </Box>
-          {readiness.assembly_warnings && readiness.assembly_warnings.length > 0 && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography sx={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>
-                ⚠️ {readiness.assembly_warnings[0].message}
-              </Typography>
-            </Box>
-          )}
-        </Paper>
       )}
 
       {loading && <Box sx={{ display: 'flex', gap: 1.5, color: 'var(--text-3)', py: 3 }}><CircularProgress size={18} /><Typography sx={{ fontSize: 13 }}>{t('loading')}</Typography></Box>}

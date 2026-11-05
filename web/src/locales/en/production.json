@@ -450,7 +450,17 @@
       "free_run": "No-load spin test: EMF and the no-load loss at each speed.",
       "load": "Load tests: torque, efficiency and temperatures at an operating point."
     },
+    "power": {
+      "test": "Test",
+      "max": "Max power, kW",
+      "maxTip": "Highest torque x speed among the rows of the test; a settled continuous value can be lower.",
+      "torque": "Torque, N·m",
+      "speed": "Speed, rpm",
+      "efficiency": "Efficiency, %",
+      "coil": "Coil, °C"
+    },
     "tabs": {
+      "power": "Power",
       "resistance": "Resistance",
       "inductance": "Inductance",
       "bearings": "Bearings",
@@ -459,6 +469,7 @@
       "parameters": "Parameters"
     },
     "tabsTip": {
+      "power": "The load tests by name, each at its highest power.",
       "resistance": "Winding resistance, line-line: bench and simulation.",
       "inductance": "Winding inductance, Ld and Lq: bench and simulation.",
       "bearings": "Bearing loss by speed. These are SIMULATION values (SKF friction, rotor weight as the load), not measurements; the only measured figure is the total free-run loss, in which the bearings are not separated.",
@@ -474,6 +485,7 @@
     "visible": "Visible to customer",
     "visibleTip": "Show these tests and the comparison to the customers of the projects that use this motor. Off by default.",
     "col": {
+      "point": "Point",
       "quantity": "Quantity",
       "measured": "Measured",
       "model": "Simulation",

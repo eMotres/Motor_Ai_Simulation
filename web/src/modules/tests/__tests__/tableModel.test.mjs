@@ -116,7 +116,7 @@ t('a load sweep series: cleaned, sorted by rpm, gaps stay null, empty quantities
   assert.deepEqual(s, { unit: 'A', points: [{ rpm: 1200, measured: 20, model: null, delta: null, current: null }] });
   assert.deepEqual(M.loadSeriesOptions({ test_id: 'a', kind: 'free_run', model_available: true, groups: [] }), []);   // no series block
   assert.deepEqual(M.loadSeriesOptions(null), []);
-  assert.equal(M.blocksHeight([{ lines: [1, 2, 3] }, { lines: [1, 2] }]), (3 + 2) * 24 + 8 + (2 + 2) * 24 + 8);
+  assert.equal(M.blocksHeight([{ lines: [1, 2, 3] }, { lines: [1, 2] }]), (3 + 2) * M.TABLE_ROW_PX + 8 + (2 + 2) * M.TABLE_ROW_PX + 8);
 });
 
 t('row notes: unexplained loss, no model point (with the compute action), frequency flag', () => {
@@ -435,4 +435,79 @@ t('Constants is merged into Parameters: Kv / Kt on top, an old `constants` tab v
   const compare = { p: cmpOf('parameters', ['cogging']), f: fr };
   assert.equal(M.testsOfTab(tests, compare, 'parameters').length, 2);            // the parameters test and the free-run Kv / Kt
   assert.equal(M.kindOfTab('parameters'), 'parameters');
+});
+
+t('power list: load tests only, each at its row of highest torque x speed, highest power first', () => {
+  const tests = [
+    { id: 'a', kind: 'load', date: '2026-11-05', title: 'Low', rows: [{ rpm: 1000, torque_nm: 50, v_dc_v: 600, i_dc_a: 10 }, { rpm: 2000, torque_nm: 100, v_dc_v: 600, i_dc_a: 39 }] },
+    { id: 'b', kind: 'load', date: '2026-11-05', title: 'High', rows: [{ rpm: 3000, torque_nm: 120, temp_winding_c: 78, eff_pct: 90.5 }] },
+    { id: 'c', kind: 'parameters', date: '2026-11-05', title: 'No power', rows: [{ rpm: 3000, torque_nm: 500 }] },
+    { id: 'd', kind: 'load', date: '2026-11-05', title: 'No torque', rows: [{ rpm: 3000, eff_pct: 90 }] },
+  ];
+  const r = M.powerSummary(tests);
+  assert.deepEqual(r.map((l) => l.id), ['b', 'a']);
+  assert.ok(Math.abs(r[0].powerKw - 37.7) < 0.05);
+  assert.equal(r[0].effPct, 90.5);
+  assert.equal(r[0].tempC, 78);
+  assert.equal(r[1].rpm, 2000);
+  assert.ok(Math.abs(r[1].effPct - 89.5) < 0.1);       // shaft over DC when motoring
+  assert.equal(r[1].tempC, null);
+});
+
+t('efficiency reads the smaller power over the larger, so a generator row with DC below shaft stays under 100 %', () => {
+  const [l] = M.powerSummary([{ id: 'g', kind: 'load', date: '', title: '', rows: [{ rpm: 3000, torque_nm: 100, v_dc_v: 600, i_dc_a: 47.6 }] }]);
+  assert.ok(l.effPct > 90 && l.effPct < 91);
+});
+
+t('the power tab is a known tab and a test added from it is a load test', () => {
+  assert.equal(M.normalizeTab('power'), 'power');
+  assert.equal(M.kindOfTab('power'), 'load');
+});
+
+t('load points fold into one table: a row per point, a column per quantity, Simulation columns only where a point has them', () => {
+  const r = (key, measured, model = null) => ({ key, label: key, params: {}, unit: '', measured, model, delta_pct: null, status: 'ok', extra: {} });
+  const g = (label, rows) => ({ key: 'load_point', label, params: {}, rows });
+  const blocks = M.tableBlocks({ test_id: 'a', kind: 'load', model_available: true, groups: [
+    g('1000 rpm', [r('torque', 100), r('eff', 85, 86)]), g('2000 rpm', [r('torque', 101), r('eff', 90)]),
+    { key: 'other', label: 'x', params: {}, rows: [r('z', 1)] }] });
+  const table = M.loadTable(blocks);
+  assert.deepEqual(table.columns.map((c) => [c.key, c.hasModel]), [['torque', false], ['eff', true]]);
+  assert.equal(table.points.length, 2);
+  assert.equal(table.points[1].cells.eff.measured, M.fmtValue(90));
+  assert.deepEqual(M.otherBlocks(blocks).map((b) => b.key), ['other']);
+  assert.equal(M.loadTable(M.otherBlocks(blocks)), null);
+});
+
+t('table height follows the compact row', () => {
+  assert.equal(M.blocksHeight([{ lines: [1, 2] }]), (2 + 2) * M.TABLE_ROW_PX + 8);
+});
+
+t('the folded load table counts one row per point; a note shared by two quantities of a point shows once', () => {
+  const r = (key) => ({ key, label: key, params: {}, unit: '', measured: 1, model: null, delta_pct: null, status: 'no_model', extra: {} });
+  const g = (label) => ({ key: 'load_point', label, params: {}, rows: [r('torque'), r('eff')] });
+  const blocks = M.tableBlocks({ test_id: 'a', kind: 'load', model_available: true, groups: [g('a'), g('b'), g('c')] });
+  assert.equal(M.foldedHeight(blocks), 4 * M.TABLE_ROW_PX + 8);
+  const cells = { x: { note: { key: 'n1', params: {} } }, y: { note: { key: 'n1', params: {} } }, z: { note: null } };
+  assert.deepEqual(M.pointNotes(cells).map((n) => n.key), ['n1']);
+});
+
+t('a note every point has is said once above the column; a note of one point stays on its row', () => {
+  const r = (key, tag) => ({ note: { key: tag, params: { key } } });
+  const shared = { note: { key: 'no_point', params: {} } };
+  const table = { columns: [], points: [{ cells: { a: shared, b: r('b', 'flag') } }, { cells: { a: shared } }] };
+  assert.deepEqual(M.commonNotes(table).map((n) => n.key), ['no_point']);
+  assert.deepEqual(M.ownNotes(table, table.points[0].cells).map((n) => n.key), ['flag']);
+  assert.deepEqual(M.ownNotes(table, table.points[1].cells), []);
+});
+
+t('a long load table is capped at the height of the tallest chart', () => {
+  const r = { key: 'torque', label: 't', params: {}, unit: '', measured: 1, model: null, delta_pct: null, status: 'no_model', extra: {} };
+  const groups = Array.from({ length: 45 }, () => ({ key: 'load_point', label: 'p', params: {}, rows: [r] }));
+  assert.equal(M.foldedHeight(M.tableBlocks({ test_id: 'a', kind: 'load', model_available: true, groups })), M.LOAD_TABLE_MAX_PX + 8);
+});
+
+t('a column head drops the bracket, in both languages; a name without one stays', () => {
+  assert.equal(M.shortHead('System efficiency (DC in, shaft out)'), 'System efficiency');
+  assert.equal(M.shortHead('系统效率（直流输入，轴输出）'), '系统效率');
+  assert.equal(M.shortHead('Torque'), 'Torque');
 });

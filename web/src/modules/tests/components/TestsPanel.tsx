@@ -2,6 +2,7 @@
  *  measured | model | delta %, one short note per row and the explanation in tooltips; a group whose rows are a series over
  *  speed gets a measured-vs-model chart to its right (stacked below ~900 px).
  *
+ *  Sub-menus (owner 2026-11-05): Power lists the load tests by name and highest power; a row opens the test in Loads.
  *  Sub-menus (owner 2026-11-04): Resistance, Inductance, Constants (Kv, Kt, EMF), Bearings, Free-run, Loads, and
  *  Parameters for the rest (insulation, hipot, surge, cogging, LCR, weight, dimensions).  A tab is only a view of the
  *  comparison groups (tableModel.tabOfGroup); the stored records are unchanged.
@@ -21,9 +22,9 @@ import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import {
-  blocksHeight, cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows,
+  cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  normalizeTab, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  normalizeTab, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
@@ -46,10 +47,10 @@ function writeSub(die: string, config: string, v: TestTab) {
 }
 
 const LEVEL_COLOR: Record<string, string> = { ok: '#22c55e', warn: '#f59e0b', bad: '#f87171' };
-// compact table (owner 2026-10-27): ~24 px rows, small font, numbers right-aligned in tabular figures
-const cell = { fontSize: 11.5, py: 0, px: 0.7, height: 24, lineHeight: '24px', borderBottom: '1px solid var(--line-soft)' } as const;
+// compact table (owner 2026-10-27, tighter 2026-11-05): 20 px rows, small font, numbers right-aligned in tabular figures
+const cell = { fontSize: 11, py: 0, px: 0.5, height: TABLE_ROW_PX, lineHeight: `${TABLE_ROW_PX}px`, borderBottom: '1px solid var(--line-soft)' } as const;
 const num = { ...cell, fontVariantNumeric: 'tabular-nums' } as const;
-const head = { ...cell, fontSize: 10.5, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
+const head = { ...cell, fontSize: 10, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
 
 /** Wide = the box is at least this many px: table and chart side by side; below it they stack. */
 export const SIDE_BY_SIDE_MIN_PX = 900;
@@ -149,6 +150,10 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
     const params = Object.fromEntries(Object.entries(b.basisParams).filter(([, v]) => v !== null && v !== undefined));
     return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
   };
+  const table = loadTable(blocks);
+  const tableBasis = table ? Array.from(new Set(table.points.map((p) => basisText(p.block)).filter(Boolean))).join(' · ') : '';
+  const tableExtra = !!table && table.points.some((p) => pointNotes(p.cells).length > 0
+    || (canCompute && Object.values(p.cells).some((l) => l.row.action)));
   const plotRows = loadPlotRows(cmp);
   const plotCurves = simulationCurves(cmp);
   const perSpeed = usesSpeedPlots(plotRows, plotCurves) && loadPlotOptions(plotRows, plotCurves).length > 0;
@@ -162,12 +167,72 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
   return (
     <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
       <Box sx={hasLoadChart ? { flex: wide ? '0 0 48%' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
-      {blocks.map((b) => {
+      {table && (
+        <Box sx={{ mb: 1, overflow: 'auto', maxHeight: LOAD_TABLE_MAX_PX }} data-testid="tests-load-table">
+          <Table size="small" stickyHeader sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={head}>
+                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
+                    {t('tests.col.point')}
+                    {tableBasis && <HelpTip title={tableBasis} />}
+                  </Box>
+                </TableCell>
+                {table.columns.map((c) => (
+                  <React.Fragment key={c.key}>
+                    <TableCell sx={head} align="right">
+                      <Tooltip arrow placement="top" enterTouchDelay={0} title={[label(c.row, 'row'), tipText(c.row.tip), c.row.detail].filter(Boolean).join(' · ')}>
+                        <span>{shortHead(label(c.row, 'row'))}{c.row.unit ? `, ${unitLabel(c.row.unit)}` : ''}</span>
+                      </Tooltip>
+                    </TableCell>
+                    {c.hasModel && <TableCell sx={head} align="right">{t('tests.col.model')}</TableCell>}
+                    {c.hasModel && <TableCell sx={head} align="right">{t('tests.col.delta')}</TableCell>}
+                  </React.Fragment>
+                ))}
+                {tableExtra && <TableCell sx={{ ...head, fontWeight: 400, color: 'var(--text-3)' }}>{commonNotes(table).map((n) => t(`tests.note.${n.key}`, n.params)).join(' · ')}</TableCell>}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {table.points.map(({ block, cells }, pointIndex) => {
+                const action = Object.values(cells).find((l) => l.row.action)?.row;
+                return (
+                  <TableRow key={pointIndex}>
+                    <TableCell sx={{ ...cell, color: 'var(--text-1)' }}>{label(block, 'group')}</TableCell>
+                    {table.columns.map((c) => {
+                      const l = cells[c.key];
+                      return (
+                        <React.Fragment key={c.key}>
+                          <TableCell sx={num} align="right">{l?.measured ?? '—'}</TableCell>
+                          {c.hasModel && <TableCell sx={num} align="right">{l?.model ?? '—'}</TableCell>}
+                          {c.hasModel && (
+                            <TableCell sx={{ ...num, fontWeight: 700, color: l?.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l?.delta ?? '—'}</TableCell>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {tableExtra && (
+                      <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
+                        {ownNotes(table, cells).map((n) => t(`tests.note.${n.key}`, n.params)).join(' · ')}
+                        {canCompute && action?.action && (
+                          <Tooltip title={computeTip(action)}><span><Button size="small" disabled={busy}
+                            sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: `${TABLE_ROW_PX - 2}px`, fontSize: 10.5 }}
+                            onClick={() => onCompute([action.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
+                        )}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Box>
+      )}
+      {otherBlocks(blocks).map((b) => {
         const basis = basisText(b);
         return (
-          <Box key={b.key} sx={{ mb: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0, height: 24, bgcolor: 'var(--panel-2)', px: 0.7 }}>
-              <Typography noWrap sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0, maxWidth: '70%' }}>
+          <Box key={b.key} sx={{ mb: 0.6 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0, height: TABLE_ROW_PX, bgcolor: 'var(--panel-2)', px: 0.5 }}>
+              <Typography noWrap sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0, maxWidth: '70%' }}>
                 {label(b, 'group')}
               </Typography>
               {b.tip && <HelpTip title={tipText(b.tip)} />}
@@ -205,7 +270,7 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
                           {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
                           {canCompute && l.row.action && (
                             <Tooltip title={computeTip(l.row)}><span><Button size="small" disabled={busy}
-                              sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: '20px', fontSize: 11 }}
+                              sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: `${TABLE_ROW_PX - 2}px`, fontSize: 10.5 }}
                               onClick={() => onCompute([l.row.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
                           )}
                         </TableCell>
@@ -216,8 +281,8 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
               </Box>
               {b.series && (
                 <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0 }}>
-                  {/* the chart runs the full height of its table (owner 2026-10-27): one 24 px row per line + the header */}
-                  <SeriesChart series={b.series} height={wide ? Math.max(190, (b.lines.length + 1) * 24) : 190} />
+                  {/* the chart runs the full height of its table (owner 2026-10-27): one row per line + the header */}
+                  <SeriesChart series={b.series} height={wide ? Math.max(190, (b.lines.length + 1) * TABLE_ROW_PX) : 190} />
                 </Box>
               )}
             </Box>
@@ -229,9 +294,9 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
         <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%',
           position: wide ? 'sticky' : 'static', top: 8 }}>
           {perSpeed
-            ? <SpeedLoadChart cmp={cmp} height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />
+            ? <SpeedLoadChart cmp={cmp} height={wide ? Math.min(520, Math.max(220, foldedHeight(blocks))) : 240} />
             : <LoadSeriesChart cmp={cmp} tips={tips}
-              height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />}
+              height={wide ? Math.min(520, Math.max(220, foldedHeight(blocks))) : 240} />}
         </Box>
       )}
     </Box>
@@ -338,6 +403,11 @@ export const TestsPanel: React.FC<{
   const can = data.can;
   const list = testsOfTab(data.tests, data.compare, sub);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
+  const power = powerSummary(data.tests);
+  const openTest = (id: string) => {
+    setSub('loads');
+    window.setTimeout(() => document.getElementById(`test-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
 
   const setVisible = async (v: boolean) => {
     try { await testsApi.setVisibleToCustomer(die, config, v); await reload(); }
@@ -355,7 +425,7 @@ export const TestsPanel: React.FC<{
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <SubTabs value={sub} onChange={setSub} ariaLabel={t('tests.tab')}
           items={TEST_TABS.map((k) => ({ id: k, tip: t(`tests.tabsTip.${k}`),
-            label: `${t(`tests.tabs.${k}`)} (${testsOfTab(data.tests, data.compare, k).length})` }))} />
+            label: `${t(`tests.tabs.${k}`)} (${k === 'power' ? power.length : testsOfTab(data.tests, data.compare, k).length})` }))} />
         <Box sx={{ flex: 1 }} />
         {!data.model.available && (
           <Tooltip title={t('tests.modelMissingTip')}><Chip size="small" label={t('tests.modelMissing')} sx={{ fontSize: 11 }} /></Tooltip>
@@ -373,7 +443,39 @@ export const TestsPanel: React.FC<{
         <Alert severity={msgError ? 'error' : 'info'} onClose={() => note(null)} sx={{ mb: 1, fontSize: 12 }}
           icon={!msgError && pending.length ? <CircularProgress size={14} /> : undefined}>{msg}</Alert>
       )}
-      {list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
+      {sub === 'power' && (power.length === 0
+        ? <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>
+        : (
+          <Paper variant="outlined" sx={{ bgcolor: 'var(--panel)', overflowX: 'auto' }} data-testid="tests-power">
+            <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={head}>{t('tests.power.test')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.max')}<HelpTip title={t('tests.power.maxTip')} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.torque')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.speed')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.efficiency')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.coil')}</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {power.map((l) => (
+                  <TableRow key={l.id} hover onClick={() => openTest(l.id)} sx={{ cursor: 'pointer' }}>
+                    <TableCell sx={{ ...cell, color: 'var(--text-0)' }}>{[l.date, l.title].filter(Boolean).join(' · ')}</TableCell>
+                    <TableCell sx={{ ...num, fontWeight: 700 }} align="right">{l.powerKw.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.torque.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{Math.round(l.rpm)}</TableCell>
+                    <TableCell sx={num} align="right">{l.effPct === null ? '—' : l.effPct.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.tempC === null ? '—' : Math.round(l.tempC)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Paper>
+        ))}
+      {sub !== 'power' && list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
       {list.map((rec) => {
         const cmp = cmpForTab(data.compare[rec.id], rec.kind, sub);       // only this tab's groups
         const s = summary(cmp);
@@ -382,7 +484,7 @@ export const TestsPanel: React.FC<{
         const cond = [rec.conditions?.ambient_c !== undefined ? `${rec.conditions.ambient_c} °C` : '',
           rec.conditions?.humidity_pct !== undefined ? `${rec.conditions.humidity_pct} % RH` : ''].filter(Boolean);
         return (
-          <Paper key={rec.id} variant="outlined" sx={{ p: 1, mb: 1.2, bgcolor: 'var(--panel)' }}>
+          <Paper key={rec.id} id={`test-${rec.id}`} variant="outlined" sx={{ p: 1, mb: 1.2, bgcolor: 'var(--panel)', scrollMarginTop: 60 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap', mb: 0.5 }}>
               <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{bits.join(' · ')}</Typography>
               {cond.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{cond.join(' · ')}</Typography>}

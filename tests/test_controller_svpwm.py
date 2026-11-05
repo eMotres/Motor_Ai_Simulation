@@ -364,12 +364,12 @@ def test_device_currents_and_losses_are_the_sine_modulators(mod):
 @pytest.mark.parametrize("mod", INJECTED)
 def test_the_dc_link_mean_is_the_same_power_the_ripple_is_the_modulations(mod):
     """sum(v0 * i) = v0 * sum(i) = 0: the injection moves no mean power, so
-    the bus mean is P/V_dc for both on a grid fine enough to resolve it."""
+    the bus mean is (P + P_loss)/V_dc for both, on any grid."""
     a = lo.solve_controller(_req(samples_per_carrier=400))
     b = lo.solve_controller(_req(samples_per_carrier=400, pwm_modulation=mod))
-    p_over_v = 272.2e3 / V_DC
-    assert a["dc_link"]["i_dc_mean_A"] == pytest.approx(p_over_v, rel=2e-3)
-    assert b["dc_link"]["i_dc_mean_A"] == pytest.approx(p_over_v, rel=2e-3)
+    for out in (a, b):
+        p_over_v = (272.2e3 + out["losses"]["total_W"]) / V_DC
+        assert out["dc_link"]["i_dc_mean_A"] == pytest.approx(p_over_v, rel=2e-3)
 
 
 @pytest.mark.parametrize("mod", INJECTED)

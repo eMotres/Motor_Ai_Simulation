@@ -366,9 +366,14 @@ export function speedChartData(plot: SpeedPlot): { data: Array<Record<string, nu
   return { data, lines };
 }
 
-/** px height of the stacked tables (24 px per line + header, 8 px between): the full-height chart beside them. */
+/** Height of one table row, px. */
+export const TABLE_ROW_PX = 20;
+/** A long load table scrolls inside this height, as tall as the tallest chart beside it. */
+export const LOAD_TABLE_MAX_PX = 520;
+
+/** px height of the stacked tables (one row per line + header, 8 px between): the full-height chart beside them. */
 export function blocksHeight(blocks: Array<{ lines: unknown[] }>): number {
-  return blocks.reduce((h, b) => h + (b.lines.length + 2) * 24 + 8, 0);
+  return blocks.reduce((h, b) => h + (b.lines.length + 2) * TABLE_ROW_PX + 8, 0);
 }
 
 export interface TableBlock {
@@ -537,4 +542,66 @@ export function powerSummary(tests: TestRecord[]): PowerLine[] {
     if (best) out.push(best);
   }
   return out.sort((a, b) => b.powerKw - a.powerKw);
+}
+
+const LOAD_POINT_GROUP = 'load_point';
+
+/** One quantity of the load table: a column for the bench value, and for Simulation and the difference where any point has them. */
+export interface LoadColumn { key: string; row: CompareRow; hasModel: boolean }
+export interface LoadTable { columns: LoadColumn[]; points: Array<{ block: TableBlock; cells: Record<string, RowLine> }> }
+
+/** The load points of a test as ONE table, owner 2026-11-05 ("more compact"): a row per point, a column per quantity, instead of a small
+ *  table per point.  Null when the blocks hold no load point; the other groups stay as they are. */
+export function loadTable(blocks: TableBlock[]): LoadTable | null {
+  const points = blocks.filter((b) => b.key.startsWith(LOAD_POINT_GROUP));
+  if (!points.length) return null;
+  const columns = new Map<string, LoadColumn>();
+  const rows = points.map((block) => {
+    const cells: Record<string, RowLine> = {};
+    for (const line of block.lines) {
+      cells[line.row.key] = line;
+      const col = columns.get(line.row.key) ?? { key: line.row.key, row: line.row, hasModel: false };
+      col.hasModel = col.hasModel || line.row.model != null;
+      columns.set(line.row.key, col);
+    }
+    return { block, cells };
+  });
+  return { columns: Array.from(columns.values()), points: rows };
+}
+
+/** A quantity's name for a column head: what stands in brackets goes to the tooltip, it only widens the column. */
+export function shortHead(text: string): string {
+  return text.replace(/\s*[(（].*[)）]\s*$/, '');
+}
+
+/** The blocks shown as their own small tables: everything but the load points. */
+export function otherBlocks(blocks: TableBlock[]): TableBlock[] {
+  return blocks.filter((b) => !b.key.startsWith(LOAD_POINT_GROUP));
+}
+
+/** px height of everything in the table column once the load points are folded: the chart beside it follows this. */
+export function foldedHeight(blocks: TableBlock[]): number {
+  const table = loadTable(blocks);
+  return (table ? Math.min(LOAD_TABLE_MAX_PX, (table.points.length + 1) * TABLE_ROW_PX) + 8 : 0) + blocksHeight(otherBlocks(blocks));
+}
+
+const noteId = (n: RowNote) => `${n.key}|${JSON.stringify(n.params ?? {})}`;
+
+/** The notes of one point, each once: a point's quantities often share one note. */
+export function pointNotes(cells: Record<string, RowLine>): RowNote[] {
+  const seen = new Map<string, RowNote>();
+  for (const l of Object.values(cells)) if (l.note) seen.set(noteId(l.note), l.note);
+  return Array.from(seen.values());
+}
+
+/** The notes every point has: said once above the column, not repeated on each row. */
+export function commonNotes(table: LoadTable): RowNote[] {
+  return pointNotes(table.points[0].cells).filter((n) =>
+    table.points.every((p) => pointNotes(p.cells).some((m) => noteId(m) === noteId(n))));
+}
+
+/** The notes of a point that the whole table does not share. */
+export function ownNotes(table: LoadTable, cells: Record<string, RowLine>): RowNote[] {
+  const common = new Set(commonNotes(table).map(noteId));
+  return pointNotes(cells).filter((n) => !common.has(noteId(n)));
 }

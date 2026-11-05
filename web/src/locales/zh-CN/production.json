@@ -485,6 +485,7 @@
     "visible": "客户可见",
     "visibleTip": "向使用此电机的项目客户显示这些测试及对比。默认关闭。",
     "col": {
+      "point": "工况点",
       "quantity": "物理量",
       "measured": "实测",
       "model": "仿真",

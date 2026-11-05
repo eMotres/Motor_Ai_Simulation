@@ -485,6 +485,7 @@
     "visible": "Visible to customer",
     "visibleTip": "Show these tests and the comparison to the customers of the projects that use this motor. Off by default.",
     "col": {
+      "point": "Point",
       "quantity": "Quantity",
       "measured": "Measured",
       "model": "Simulation",

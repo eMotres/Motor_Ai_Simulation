@@ -3,9 +3,10 @@
 import type {
   CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadPlotRow, LoadSeriesQuantity, SimulationCurve, TestCompare, TestKind, TestRecord, TestTab,
 } from './types';
+import { TEST_TABS } from './types.ts';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
-export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c'] as const;
+export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c', 'v_ll_fund_pk_v'] as const;
 export const LOAD_COLUMNS = ['rpm', 'torque_nm', 'i_phase_a', 'v_dc_v', 'i_dc_a', 'eff_pct', 'temp_winding_c', 'duration_s'] as const;
 
 export function columnsFor(kind: TestKind): readonly string[] {
@@ -51,10 +52,18 @@ export function defaultTabOfKind(kind: TestKind): TestTab {
   return kind === 'load' ? 'loads' : kind === 'free_run' ? 'free_run' : 'parameters';
 }
 
+/** A remembered or linked tab value, read safely: the retired `constants` tab (merged into Parameters, owner 2026-11-05) and the
+ *  old `load` value map to today's tabs; anything unknown gives `fallback`. */
+export function normalizeTab(v: unknown, fallback: TestTab = 'resistance'): TestTab {
+  if (v === 'constants') return 'parameters';
+  if (v === 'load') return 'loads';
+  return typeof v === 'string' && (TEST_TABS as readonly string[]).includes(v) ? (v as TestTab) : fallback;
+}
+
 /** The record kind a new test added from a tab gets (the tab is only a view). */
 export function kindOfTab(tab: TestTab): TestKind {
   if (tab === 'loads') return 'load';
-  if (tab === 'free_run' || tab === 'constants' || tab === 'bearings') return 'free_run';
+  if (tab === 'free_run' || tab === 'bearings') return 'free_run';
   return 'parameters';
 }
 
@@ -65,7 +74,7 @@ export function tabOfGroup(kind: TestKind, groupKey: string): TestTab {
     if (groupKey === 'resistance') return 'resistance';
     if (groupKey === 'inductance') return 'inductance';
   } else if (kind === 'free_run') {
-    if (groupKey === 'emf_peak' || groupKey === 'emf_rms' || groupKey === 'kv_kt' || groupKey === 'kv_kt_ex') return 'constants';
+    if (groupKey === 'emf_peak' || groupKey === 'emf_rms' || groupKey === 'kv_kt' || groupKey === 'kv_kt_ex') return 'parameters';
     if (groupKey === 'bearings_none' || groupKey === 'bearing_sum') return 'bearings';
   }
   return defaultTabOfKind(kind);
@@ -80,10 +89,15 @@ export function recordTabs(kind: TestKind, cmp: TestCompare | undefined | null):
   return Array.from(out);
 }
 
+const KV_KT_GROUPS = ['kv_kt', 'kv_kt_ex'];
+
 /** The comparison of one record restricted to the groups of one tab (the load chart belongs to the Loads tab). */
 export function cmpForTab(cmp: TestCompare | undefined | null, kind: TestKind, tab: TestTab): TestCompare | undefined {
   if (!cmp) return undefined;
-  return { ...cmp, groups: cmp.groups.filter((g) => tabOfGroup(kind, g.key) === tab), series: tab === 'loads' ? cmp.series : null };
+  const groups = cmp.groups.filter((g) => tabOfGroup(kind, g.key) === tab);
+  // Kv and Kt stay at the top of Parameters (the free-run EMF groups follow them)
+  if (tab === 'parameters') groups.sort((a, b) => Number(!KV_KT_GROUPS.includes(a.key)) - Number(!KV_KT_GROUPS.includes(b.key)));
+  return { ...cmp, groups, series: tab === 'loads' ? cmp.series : null };
 }
 
 /** The records shown in one tab, newest first. */

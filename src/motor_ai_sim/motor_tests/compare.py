@@ -39,7 +39,7 @@ TIPS = {
                  "weight as radial load, at the bench speed and temperature; the only measured figure is the total free-run "
                  "loss, in which the bearings are not separated"),
     "kv_kt": ("slope of V_LL peak against speed (least squares through the origin, over the rows named in the group); "
-              "Kv = 1000 / slope in rpm per V of line-line PEAK; Kt = 3 * Ke per A rms of phase current "
+              "Kv = 1000 / slope in rpm per V of line-line peak of the FUNDAMENTAL; Kt = 3 * Ke per A rms of phase current "
               "(Ke = phase rms EMF per rad/s; current on the q axis, sine EMF); the simulated values carry the end-effect correction"),
     "load": ("the duty within 2 % speed and 3 % current; simulated torque x the torque factor (measured k_T, else k_flux); "
              "simulated efficiency is the motor's at the corrected shaft power (no inverter)"),
@@ -195,13 +195,16 @@ def br_ratio(points: Sequence[Tuple[float, float]], test_temp_c: Optional[float]
 
 
 def emf_model_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Dict[str, Optional[float]]:
-    """V_LL peak and rms at ``rpm`` from a no-load reference point: EMF is proportional to speed and to Br."""
+    """V_LL waveform peak, rms and FUNDAMENTAL peak at ``rpm`` from a no-load reference point: EMF is proportional to speed
+    and to Br.  ``fund`` is None for an older stored run that carries no fundamental (the waveform peak then stands in for
+    it, flagged by the caller)."""
     r0 = num(ref.get("rpm"))
     if not r0:
-        return {"peak": None, "rms": None}
+        return {"peak": None, "rms": None, "fund": None}
     k = float(rpm) / r0 * float(ratio)
-    pk, rms = num(ref.get("v_ll_peak")), num(ref.get("v_ll_rms"))
-    return {"peak": None if pk is None else pk * k, "rms": None if rms is None else rms * k}
+    pk, rms, fund = num(ref.get("v_ll_peak")), num(ref.get("v_ll_rms")), num(ref.get("v_ll_fund_peak"))
+    return {"peak": None if pk is None else pk * k, "rms": None if rms is None else rms * k,
+            "fund": None if fund is None else fund * k}
 
 
 # ---------------------------------------------------------------------------
@@ -244,18 +247,17 @@ def slope_through_origin(points: Sequence[Tuple[Any, Any]]) -> Optional[Dict[str
 
 
 def kv_ke_kt(slope_peak_v_per_krpm: float) -> Dict[str, float]:
-    """The speed / torque constants from the slope of the line-line PEAK EMF against speed.
+    """The speed / torque constants from the slope of the line-line PEAK of the FUNDAMENTAL EMF against speed.
 
-    * ``kv`` = 1000 / slope (rpm per V of line-line PEAK; the one Kv, as for every motor: it sizes the DC voltage);
+    * ``kv`` = 1000 / slope (rpm per V of line-line peak of the fundamental);
     * ``ke`` = phase rms EMF per mechanical rad/s = slope_peak / 1000 * (30 / pi) / sqrt(3) / sqrt(2)  [V s/rad];
-    * ``kt`` = 3 * ke  [N m per A rms].  Torque of a sine-fed machine on the q axis is T = 3 E_rms I_rms / omega, which is
-      the app's Kt = T_em / I_rms (``report`` Kt_Nm_per_Arms) and the card's Kv (``passport_v1.card.kv_rpm_per_V_line``)
-      read the other way round.  I is the terminal ("phase") current the app takes as input: in delta the per-winding
-      Kt is sqrt(3) larger (the app's ``Kt_Nm_per_A_line`` is this one).
+    * ``kt`` = :func:`motor_ai_sim.kv_kt.kt_from_kv` (= 3 * ke), N m per A rms of phase current, sine current on the q axis.
     """
+    from motor_ai_sim import kv_kt as K
     sp = float(slope_peak_v_per_krpm)
+    kv = 1000.0 / sp
     ke = sp / 1000.0 * (30.0 / math.pi) / math.sqrt(3.0) / math.sqrt(2.0)
-    return {"slope_peak": sp, "kv": 1000.0 / sp, "ke": ke, "kt": 3.0 * ke}
+    return {"slope_peak": sp, "kv": kv, "ke": ke, "kt": K.kt_from_kv(kv)}
 
 
 def flag_slope_outliers(points: Sequence[Tuple[Any, Any]], *, pct: float = SLOPE_FLAG_PCT,

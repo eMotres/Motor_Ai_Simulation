@@ -23,7 +23,7 @@ import { testsApi } from '../api';
 import {
   blocksHeight, cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  normalizeTab, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
@@ -38,8 +38,7 @@ const SUB_KEY = (die: string, config: string) => `tests.sub.v1:${die}|${config}`
 function readSub(die: string, config: string): TestTab {
   try {
     const v = window.localStorage.getItem(SUB_KEY(die, config));
-    if (v === 'load') return 'loads';                       // the remembered tab of the three-tab layout
-    return v && (TEST_TABS as readonly string[]).includes(v) ? (v as TestTab) : 'resistance';
+    return normalizeTab(v);                                 // also maps the retired `constants` and `load` values
   } catch { return 'resistance'; }
 }
 function writeSub(die: string, config: string, v: TestTab) {

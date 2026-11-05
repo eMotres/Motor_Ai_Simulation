@@ -255,6 +255,8 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
             if p_solid is None:
                 p_solid = (num(s.get("P_mag_W")) or 0.0) + (num(s.get("P_shaft_W")) or 0.0) + (num(s.get("P_sleeve_W")) or 0.0)
             noload.append({"duty": name, "rpm": rpm, "v_ll_peak": vpk, "v_ll_rms": num(s.get("V_line_rms_V")),
+                           # the fundamental of the line-line voltage (older stored runs have none or 0: no fundamental)
+                           "v_ll_fund_peak": (num(s.get("V1_LL_V")) or None),
                            "hyst": hy, "eddy": ed, "excess": ex, "p_core": num(s.get("P_core_W")),
                            "p_solid": p_solid, "magnet_temp_c": mag_t})
     cog = cfg_doc.get("cogging") if isinstance(cfg_doc.get("cogging"), dict) else None

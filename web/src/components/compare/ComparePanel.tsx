@@ -32,6 +32,7 @@ import { partMaxLabel } from './resultRows';
 import { shownMass, perMass } from '../../lib/fullMass';
 import { SharedComparisonTable, type SharedComparisonColumn } from './SharedComparisonTable';
 import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } from './comparisonModel';
+import { ktFromKv } from '../../lib/kvKt';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -200,10 +201,15 @@ const RESULT_COLS: ResultCol[] = [
   { key: 'mass_total_kg',        label: 'Active mass', unit: 'kg',     d: 3, better: 'lo' },
   { key: 'mass_active_kg',       label: 'EM-active',   unit: 'kg',     d: 3, better: 'lo' },
   { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
-  { key: 'KV_rpm_per_V_line',    label: 'KV (line)',   unit: 'rpm/V',  d: 1 },
+  // ONE KV (owner 2026-11-05): the no-load fundamental; an older snapshot with only the waveform-peak KV keeps working.
+  { key: 'KV_rpm_per_V_line',    label: 'KV (line)',   unit: 'rpm/V',  d: 1,
+    derive: r => Number(r.KV_noload_rpm_per_V_line ?? r.KV_rpm_per_V_line) },
   // Kt beside KV (both are THE controller-facing constants). Derived, so every
   // stored snapshot gets it retroactively; I=0 rows show '—' (T/0 is not a Kt).
   { key: 'Kt_Nm_per_A',          label: 'Kt',          unit: 'N·m/A',  d: 3, better: 'hi',
+    derive: r => ktFromKv(Number(r.KV_noload_rpm_per_V_line ?? r.KV_rpm_per_V_line),
+      String(r.star_delta ?? 'star').toLowerCase().startsWith('d')) ?? NaN },
+  { key: 'Kt_load_Nm_per_A',     label: 'Kt at load',  unit: 'N·m/A',  d: 3, better: 'hi',
     derive: r => Number(r.T_em_avg_Nm) / Number(r.I_phase_rms_A) },
   // …then the loss breakdown behind its total.
   { key: 'P_core_W',             label: 'Fe loss',     unit: 'W',      d: 1, better: 'lo' },

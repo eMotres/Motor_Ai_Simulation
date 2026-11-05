@@ -12076,8 +12076,18 @@ def em_torque_rows(em: Dict[str, Any],
     _dl = str(_g(em, "star_delta") or "star").lower().startswith("d")
     _kt = _g(em, "Kt_Nm_per_A_line") if (_dl and _g(em, "Kt_Nm_per_A_line") is not None) \
         else _g(em, "Kt_Nm_per_Arms")
-    # Kt carries the same factor as the torque above (owner 2026-09-30).
+    # ONE Kt (owner 2026-11-05): N·m per A rms of phase current, sine current, formed from the no-load KV above
+    # (Kt = 11.695 / KV), so the two always agree.  T/I at this operating point is a different quantity and is named so.
+    from motor_ai_sim import kv_kt as _KK
+    _kk2 = _KK.noload_constants(em)
+    _kk3 = _KK.noload_constants(em, k3d) if k3d else None
+    _kk_line = "kt_line" if _dl else "kt"
     tp.append(["Torque constant Kt [N·m/A rms" + (", line" if _dl else "")
+               + "]" + _sine_tail,
+               _fmt(_kk2[_kk_line], 4),
+               (_fmt(_kk3[_kk_line], 4) if _kk3 and _kk3[_kk_line] is not None else "—") if k3d else "—"])
+    # Kt carries the same factor as the torque above (owner 2026-09-30) - the torque per ampere AT THIS LOAD.
+    tp.append(["Torque per ampere at this load, T / I [N·m/A rms" + (", line" if _dl else "")
                + "]" + _sine_tail,
                _fmt(_kt, 4),
                (_fmt(_numf(_kt) * _ktq, 4) if (_ktq and _numf(_kt) is not None)
@@ -12201,10 +12211,14 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]], em: Optional[Dict[str, Any
       "per LINE volt; %s%s"
       % (str(c.get("kv_note") or "the no-load probe"),
          "; KV goes as 1/flux, so it is ÷ k_3d" if k3 else ""))
+    from motor_ai_sim import kv_kt as _KK
     R("Torque constant Kt [N·m/A rms]",
+      _KK.kt_per_line_amp(_v("KV_noload_rpm_per_V_line")), 4, "",
+      "from the no-load KV above, Kt = %s / KV, per LINE amp" % _fmt(_KK.KT_TIMES_KV, 3)
+      + (" — in delta the winding carries I_line/√3" if delta else ""))
+    R("Torque per ampere at this load, T / I [N·m/A rms]",
       _ct["kt_line_Nm_per_A"], 4, "",
-      ("per LINE amp — in delta the winding carries I_line/√3" if delta
-       else "per line amp, which in star is the winding's") + _tail_t)
+      "per LINE amp, a different quantity from Kt (saturation and the load angle are inside it)" + _tail_t)
     R("Motor constant Km [N·m/√W]", _ct["km_Nm_sqrtW"], 3, "",
       "torque per root watt of copper, at 20 °C copper" + _tail_t)
     # THE PER-MASS FIGURES ARE OVER THE FULL MASS (owner 2026-10-20): the stored per-mass number is Km over the ACTIVE mass of
@@ -12402,11 +12416,18 @@ def em_constant_rows(em: Dict[str, Any],
             rows.append(["Ld, star-equivalent", _inc_missing, _inc_missing_note])
             rows.append(["Lq, star-equivalent", _inc_missing, _inc_missing_note])
         rows.append(["Saliency Lq/Ld", _inc_missing, _inc_missing_note])
-    R("Torque constant Kt" + (" per winding A" if _delta else ""),
-      _km(_g(em, "Kt_Nm_per_Arms")), 4, "N·m/A rms",
-      "at this operating point" + _kt_tail)
+    from motor_ai_sim import kv_kt as _KK
+    _kvk = _KK.noload_constants(em, _numf(_g(em, "end3d.k_flux")))
+    R("Torque constant Kt" + (" per winding A" if _delta else ""), _kvk["kt"], 4, "N·m/A rms",
+      "from the no-load KV, Kt = %s / KV" % _fmt(_KK.KT_TIMES_KV, 3))
     if _delta:
-        R("Torque constant Kt per line A", _km(_g(em, "Kt_Nm_per_A_line")), 4,
+        R("Torque constant Kt per line A", _kvk["kt_line"], 4,
+          "N·m/A rms", "what the inverter is rated against; from the no-load KV")
+    R("Torque per ampere at this load, T / I" + (" per winding A" if _delta else ""),
+      _km(_g(em, "Kt_Nm_per_Arms")), 4, "N·m/A rms",
+      "a different quantity from Kt: saturation and the load angle are inside it" + _kt_tail)
+    if _delta:
+        R("Torque per ampere at this load, T / I per line A", _km(_g(em, "Kt_Nm_per_A_line")), 4,
           "N·m/A rms", "what the inverter is rated against" + _kt_tail)
     R("Motor constant Km", _km(_g(em, "Km_Nm_sqrtW")), 3, "N·m/√W",
       "torque per root watt of copper" + _kt_tail)
@@ -18983,6 +19004,12 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         dl = str(_e(c, "star_delta") or "star").lower().startswith("d")
         v = _e(c, "Kt_Nm_per_A_line") if dl else None
         return _numf(v if v is not None else _e(c, "Kt_Nm_per_Arms"))
+
+    def _kt_nl(c):
+        # ONE Kt (owner 2026-11-05): from the no-load KV of the same column, per line amp
+        from motor_ai_sim import kv_kt as _KK
+        return _KK.noload_constants(c.get("em") if isinstance(c.get("em"), dict) else {},
+                                    _numf(_e(c, "end3d.k_flux")))["kt_line"]
     # THE NO-LOAD KV IS A MACHINE FIGURE, not a duty's (reviewer 2026-09-14):
     # the solver probes ψ_PM at the magnet CARD's temperature, so the row reads
     # the same under every column and a reader comparing duties needs to know
@@ -19009,7 +19036,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         return (v * k) if (v is not None and k) else v
     _any_k = any(torque_factor_3d(c["em"]) for c in cols)
     _kt_lbl = ", 3-D" if _any_k else ", 2-D"
-    R("Kt, line current [N·m/A rms%s]" % _kt_lbl + _sine_tail,
+    R("Kt, line current, from the no-load KV [N·m/A rms]" + _sine_tail, _kt_nl, 4)
+    R("Torque per ampere at this load, T / I, line current [N·m/A rms%s]" % _kt_lbl + _sine_tail,
       lambda c: _ktmul(c, _kt(c)), 4)
     if any(_six_cols):
         R("Kt per set current, both sets energised [N·m/A rms%s]" % _kt_lbl + _sine_tail,

@@ -11,6 +11,7 @@
 //     value it carried lives in a tile, the part-mass row is the last row of the same tiles, and the
 //     efficiency is the ONE shaft efficiency (bearings + windage in), not the electromagnetic one.
 import test from 'node:test';
+import { KT_TIMES_KV } from '../kvKt.ts';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -104,7 +105,7 @@ t('the run maps onto Configure\'s rows and tiles, in Configure\'s order', () => 
     ['dcBusMin', 'vLinePeak', 'vPhasePeak', 'vLineRms', 'vPhaseRms', 'currDensity'],
     ['phaseSection', 'fillFactor', 'leadCable', 'rPhase', 'rLineLine', 'turnsCoil'],
     ['ld', 'lq', 'psiPm', 'lqLd', 'bGapMean', 'lxy', 'iSet', 'vSet'],
-    ['kv', 'kt', 'km', 'kmPerMass', 'rotorInertia'],
+    ['kv', 'kt', 'ktLoad', 'km', 'kmPerMass', 'rotorInertia'],
     ['demagKoef', 'brCorner', 'saturationKoef', 'totalKoef', 'end3d'],
     ['part0', 'part1', 'part2', 'part3'],
   ]);
@@ -167,8 +168,9 @@ t('every value is a field of the summary (or an arithmetic of fields on the same
   assert.deepEqual([one(rows, 'end3d').value, one(rows, 'end3d').display, one(rows, 'end3d').level], [0.962, '×0.962', 'warn']);
   assert.equal(one(rows, 'kv').value, 950);                                 // the no-load KV when the run has one
   assert.equal(one(rows, 'kv').tipKey, 'emTiles.kvTip');
-  near(one(rows, 'kt').value, 0.42 / 14, 'Kt');                             // T / I phase RMS, measured here
+  near(one(rows, 'kt').value, KT_TIMES_KV / 950, 'Kt');                      // ONE Kt: from the KV beside it, always consistent
   assert.equal(one(rows, 'kt').d, 4);
+  near(one(rows, 'ktLoad').value, 0.42 / 14, 'Kt at load');                  // T / I phase RMS at this load, named as such
   assert.equal(one(rows, 'km').value, 0.021);
   assert.equal(one(rows, 'kmPerMass').value, 0.0175);
   near(one(rows, 'demagKoef').value, 99.6, 'demag');                        // 100 − loss_pct
@@ -455,7 +457,7 @@ t('every tile of the OLD card has a home in the one panel (nothing dropped silen
     'R line-line': 'rLineLine', 'Turns/coil': 'turnsCoil',
     'Ld': 'ld', 'Lq': 'lq', 'psi_PM': 'psiPm', 'B gap mean': 'bGapMean', 'Lq/Ld': 'lqLd', 'L_xy': 'lxy',
     'Per set': 'iSet',                   // + vSet
-    'KV': 'kv', 'Kt': 'kt', 'Km': 'km', 'Km/mass': 'kmPerMass', 'Rotor inertia': 'rotorInertia',
+    'KV': 'kv', 'Kt': 'kt', 'Kt at load': 'ktLoad', 'Km': 'km', 'Km/mass': 'kmPerMass', 'Rotor inertia': 'rotorInertia',
     'Demag koef': 'demagKoef', 'Br corner': 'brCorner', 'Saturation koef': 'saturationKoef',
     '3D end-effect': 'end3d', 'Total koef': 'totalKoef',
   };

@@ -576,16 +576,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
     try { localStorage.setItem('sim.r25', v ? '1' : '0'); } catch { /* quota */ }
   };
 
-  // KV view: loaded (terminal voltage of THIS run) vs no-load (from ψ_PM —
-  // the spun-motor bench figure).  Both are in the summary; the button only
-  // picks which one the KV cell shows.
-  const [kvNl, setKvNlState] = React.useState<boolean>(() => {
-    try { return localStorage.getItem('sim.kvNoload') === '1'; } catch { return false; }
-  });
-  const setKvNl = (v: boolean) => {
-    setKvNlState(v);
-    try { localStorage.setItem('sim.kvNoload', v ? '1' : '0'); } catch { /* quota */ }
-  };
+  // ONE KV (owner 2026-11-05): the no-load fundamental (from ψ_PM — the spun-motor bench figure).  A run that predates
+  // the no-load stamp falls back to its waveform-peak KV, which the cell's tooltip says; the waveform peak stays a voltage.
+  const kvNl = true;
 
   // ── THE MECHANICAL HALF OF THE LOSS PICTURE ──────────────────────────────
   // The transient solve knows nothing about bearings — they are not in the
@@ -959,22 +952,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
             </Button>
           </span>
         </Tooltip>
-        {/* KV: loaded ↔ no-load.  No-load comes free from the run's cached
-            ψ_PM (fundamental back-EMF) — no separate I=0 simulation. */}
-        <Tooltip title={s.KV_noload_rpm_per_V_line == null
-          ? 'This run predates the no-load-KV stamp — re-run to enable.'
-          : (kvNl
-              ? 'Showing NO-LOAD KV — rpm per volt of back-EMF (fundamental, from the run\'s cached ψ_PM probe): what spinning the motor on the bench reads. Free of the IR/IL drop and load saturation inside the loaded KV. Click for loaded KV.'
-              : 'Showing LOADED KV — rpm per volt of this run\'s terminal voltage (includes IR/IL drop and saturation). Click for the no-load (bench) KV, computed from ψ_PM with no extra solve.')}>
-          <span>
-            <Button size="small" variant={kvNl && s.KV_noload_rpm_per_V_line != null ? 'contained' : 'outlined'}
-              disabled={s.KV_noload_rpm_per_V_line == null}
-              onClick={() => setKvNl(!kvNl)}
-              sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, textTransform: 'none' }}>
-              {kvNl && s.KV_noload_rpm_per_V_line != null ? 'KV no-load' : 'KV loaded'}
-            </Button>
-          </span>
-        </Tooltip>
+        {s.KV_noload_rpm_per_V_line == null && (
+          <Tooltip title="This run predates the no-load KV stamp: KV is formed from the waveform peak of its terminal voltage. Re-run for the fundamental.">
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>KV: from waveform peak</Typography>
+          </Tooltip>
+        )}
         {/* Torque method of THIS run (its own label — an older run keeps its
             hybrid label) and the ripple self-check badge. */}
         {s.torque_method && (

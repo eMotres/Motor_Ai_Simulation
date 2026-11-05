@@ -605,3 +605,13 @@ export function ownNotes(table: LoadTable, cells: Record<string, RowLine>): RowN
   const common = new Set(commonNotes(table).map(noteId));
   return pointNotes(cells).filter((n) => !common.has(noteId(n)));
 }
+
+/** A document a browser can play on the test card, by its file name. */
+export function isVideoName(name: string | null | undefined): boolean {
+  return /\.(mp4|m4v|mov|webm)$/i.test(name ?? '');
+}
+
+/** The type a stored video plays as: the file API serves every file as plain bytes. */
+export function videoMime(name: string): string {
+  return /\.webm$/i.test(name) ? 'video/webm' : 'video/mp4';
+}

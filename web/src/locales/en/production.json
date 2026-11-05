@@ -459,6 +459,13 @@
       "efficiency": "Efficiency, %",
       "coil": "Coil, °C"
     },
+    "video": {
+      "label": "Video {n}",
+      "loading": "Loading {pct} %",
+      "failed": "This video did not play here; download it with the arrow.",
+      "download": "Download the video",
+      "close": "Close the video"
+    },
     "tabs": {
       "power": "Power",
       "resistance": "Resistance",

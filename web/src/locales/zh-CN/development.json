@@ -352,6 +352,7 @@
   },
   "saveBeforeSubmit": "请先成功保存草稿，再提交。",
   "submitBlocked": "提交需要处理",
+  "submitDone": "规格已提交，版本 {version}。我们将在“消息”中回复。",
   "submitFailed": "提交失败，请检查必填项。",
   "validationError": "请填写此项，或标记为“尚不清楚”。",
   "requiredMissing": "必填项",

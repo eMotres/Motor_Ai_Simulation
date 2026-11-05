@@ -1,5 +1,5 @@
 import type { CatalogController } from './controllerCatalog';
-import { parseActivity } from './stageBar';
+import { parseActivity } from './stageBarModel';
 import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';

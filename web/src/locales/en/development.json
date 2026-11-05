@@ -352,6 +352,7 @@
   },
   "saveBeforeSubmit": "Save the draft successfully before submitting.",
   "submitBlocked": "Submission needs attention",
+  "submitDone": "Specification submitted as version {version}. We will reply in Messages.",
   "submitFailed": "Submission failed. Please review the required fields.",
   "validationError": "Please complete this field or mark it as not known yet.",
   "requiredMissing": "Required field",

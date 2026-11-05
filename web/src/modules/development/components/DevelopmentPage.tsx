@@ -114,6 +114,7 @@ export default function DevelopmentPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [submitError, setSubmitError] = useState<string[]>([]);
+  const [submittedVersion, setSubmittedVersion] = useState<{ project: string; version: number } | null>(null);
   const [submitConflict, setSubmitConflict] = useState(false);
   const [catalog, setCatalog] = useState<CatalogController[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -428,7 +429,7 @@ export default function DevelopmentPage() {
     if (!selected || !spec) return;
     const missing = [...requiredFieldIds(sections, draftRef.current), ...invertedWindowFieldIds(sections, draftRef.current)];    if (missing.length) {      setSubmitError(missing.map((id) => `${label(sections.flatMap((s) => s.fields).find((f) => f.id === id)?.short_label ?? id)}: ${tr('validationError')}`));      setFieldErrors(Object.fromEntries(missing.map((id) => [id, tr('validationError')])));      revealField(missing[0]);      return;    }
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-    setBusy(true); setSubmitError([]); setSubmitConflict(false); setFieldErrors({});
+    setBusy(true); setSubmitError([]); setSubmitConflict(false); setFieldErrors({}); setSubmittedVersion(null);
     const token = projectToken.current;
     const project = selected.id;
     let requestSubmitted = false;
@@ -438,6 +439,7 @@ export default function DevelopmentPage() {
       if (typeof result.revision === 'number') revisionRef.current = result.revision;
       else { const refreshed = await developmentApi.spec(project); if (projectToken.current !== token) return; revisionRef.current = refreshed.revision; saveCoordinator.setRevision(project, refreshed.revision); }
       setSpec((old) => old ? { ...old, version: result.version, completeness: result.completeness, revision: (result as any).revision ?? old.revision } : old);
+      setSubmittedVersion({ project, version: result.version });
       await loadSpecHistory(project, token);
     } catch (e) {
       const body = e instanceof DevelopmentApiError ? e.body as { detail?: unknown } : null;
@@ -608,7 +610,7 @@ export default function DevelopmentPage() {
       {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecWizard key={selected.id} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}
         project={selected} step={step} onStep={showCard} completeness={completeness} saving={saving} saveError={saveError}
         onRetrySave={() => void enqueueSave(selected.id, draftRef.current, projectToken.current).catch(() => {})} onReloadDraft={() => void reloadDraft()}
-        submitError={submitError} submitConflict={submitConflict} submitBusy={busy || saving} onSubmit={() => void onSubmitSpec()}
+        submitError={submitError} submitConflict={submitConflict} submittedVersion={submittedVersion?.project === selected.id ? submittedVersion.version : null} submitBusy={busy || saving} onSubmit={() => void onSubmitSpec()}
         reveal={reveal} messages={messages} onOpenFieldReview={openFieldReview}
         env={{ tr, lang, draft: draftRef.current, profile, spec, steps: sections, canEditSpec, busy, migrationBusy, updateDraft, fields, fieldErrors }}
         history={<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} />}

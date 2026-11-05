@@ -486,11 +486,37 @@ async def create_project(request: Request):
     return _summary(create_project_for(user, body), user)
 
 
+def _require_data_agreement(user: dict) -> None:
+    """A customer sees the Platform Agreement (AI training on FREE data) before a project starts and before its specification goes to us,
+    owner 2026-11-05: MOTRES runs the simulations for now, so the gate at a job start alone would never reach a customer.  Same switch,
+    same 428 and same dialog as the simulation gate; staff and MOTRES's own accounts are never gated."""
+    platform_agreement.require_agreement_at_simulation(_email(user), user.get("role") or "")
+
+
+def _notify_staff(subject: str, project_id: str, user: dict) -> None:
+    """One internal mail when a customer opens a project or submits a specification, so no request waits for the daily report.  Staff's own
+    actions send nothing, and mail trouble never blocks the customer."""
+    if access.is_engineer(user):
+        return
+    try:
+        from motor_ai_sim import auth_email as E, nda
+        to = nda.admin_address()
+        if not to:
+            return
+        project = store.get_project(project_id) or {}
+        body = "\n".join((subject, "", f"Project: {project.get('title') or project_id}", f"Company: {project.get('customer_org') or '-'}",
+                          f"Account: {_email(user)}", "", f"{E.app_url()}/projects/{project_id}/specification", ""))
+        E.send(to, f"[AeroStator] {subject}: {project.get('title') or project_id}", body, kind="project-admin")
+    except Exception:                                       # noqa: BLE001 - never block the customer
+        log.warning("project mail to staff failed for %s", project_id, exc_info=True)
+
+
 def create_project_for(user: dict, body: dict, *, audit_details: dict | None = None) -> dict:
     """The work of ``POST /api/projects`` for a resolved caller (the web session, or an MCP agent acting for its owner -
     ``spec_order.create_order``): the stored project record.  Raises ``HTTPException`` (428 agreement, 429 limit, 422, 409)."""
     staff = access.is_engineer(user)
     platform_agreement.require_accepted(user)
+    _require_data_agreement(user)
     if not staff:
         # a customer cannot choose the members, the status or the engineer in charge
         body = {"title": body.get("title"), "customer_org": body.get("customer_org")}
@@ -522,6 +548,7 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     # the audit row is what the owner's daily report lists ("project created by the customer")
     store.append_audit(project_id, _email(user), "create", "project", project_id,
                        ({} if staff else {"self_service": True}) | dict(audit_details or {}))
+    _notify_staff("New customer project", project_id, user)
     return project
 
 
@@ -756,6 +783,7 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
     (403, 428 agreement, 409 stale revision, 422 incomplete with ``errors`` + ``completeness``)."""
     user, _, _ = access.spec_editor_for(user, project_id)
     platform_agreement.require_accepted(user)
+    _require_data_agreement(user)
     extra = dict(audit_details or {})
     if isinstance(raw_revision, bool) or not isinstance(raw_revision, int) or raw_revision < 0:
         raise HTTPException(status_code=422, detail="revision must be a non-negative integer")
@@ -801,6 +829,7 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
         store.append_audit(project_id, _email(user), "submit", "spec_version", str(number),
                            {"revision": expected, "completeness": models.completeness(draft)} | extra)
         submitted.update({"version": version, "current": current})
+    _notify_staff(f"Specification v{submitted['version']['version']} submitted", project_id, user)
     return submitted
 
 

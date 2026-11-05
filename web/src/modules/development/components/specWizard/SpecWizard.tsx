@@ -18,7 +18,7 @@ export interface SpecWizardProps {
   onStep: (index: number) => void;
   completeness?: Completeness;
   saving: boolean; saveError: string; onRetrySave: () => void; onReloadDraft: () => void;
-  submitError: string[]; submitConflict: boolean; submitBusy: boolean; onSubmit: () => void;
+  submitError: string[]; submitConflict: boolean; submittedVersion?: number | null; submitBusy: boolean; onSubmit: () => void;
   /** a field to open (a submit error, a review link): the wizard goes to its step, opens its group and focuses it */
   reveal: { field: string; n: number } | null;
   messages: ProjectThreadMessage[];
@@ -130,7 +130,7 @@ export default function SpecWizard(p: SpecWizardProps) {
             <Tooltip title={tr('sectionReview')}><IconButton aria-label={`${tr('sectionReview')}: ${tr(current.title)}`} onClick={() => p.onOpenFieldReview(`section:${current.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', minWidth: TOUCH, minHeight: TOUCH }}><ChatBubbleOutlineIcon sx={{ fontSize: 18 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 11, ml: 0.3 }}>{sectionComments.length}</Box>}</IconButton></Tooltip>
           </Stack>}
           {isReview
-            ? <ReviewStep env={stepEnv} completeness={completeness} submitErrors={p.submitError} submitConflict={p.submitConflict} onReload={p.onReloadDraft} onSubmit={p.onSubmit} submitBusy={p.submitBusy || saving}
+            ? <ReviewStep env={stepEnv} completeness={completeness} submitErrors={p.submitError} submitConflict={p.submitConflict} submittedVersion={p.submittedVersion} onReload={p.onReloadDraft} onSubmit={p.onSubmit} submitBusy={p.submitBusy || saving}
               openComments={openComments} onOpenComment={p.onOpenFieldReview} onReveal={reveal} history={p.history} />
             : <StepBody env={stepEnv} step={current} />}
         </Box>

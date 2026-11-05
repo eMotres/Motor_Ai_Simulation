@@ -9,8 +9,8 @@ import { TOUCH } from './ui';
 
 /** The review before submit: a summary card per step with large values and an Edit link, a soft "Still open" card for what
  *  is missing or marked "answer later", the open comments, the version history and the submit button. */
-export default function ReviewStep({ env, completeness, submitErrors, submitConflict, onReload, onSubmit, submitBusy, openComments, onOpenComment, onReveal, history }: {
-  env: StepEnv; completeness?: Completeness; submitErrors: string[]; submitConflict: boolean; onReload: () => void; onSubmit: () => void; submitBusy: boolean;
+export default function ReviewStep({ env, completeness, submitErrors, submitConflict, submittedVersion, onReload, onSubmit, submitBusy, openComments, onOpenComment, onReveal, history }: {
+  env: StepEnv; completeness?: Completeness; submitErrors: string[]; submitConflict: boolean; submittedVersion?: number | null; onReload: () => void; onSubmit: () => void; submitBusy: boolean;
   openComments: ProjectThreadMessage[]; onOpenComment: (ref: string) => void; onReveal: (fieldId: string) => void; history: React.ReactNode;
 }) {
   const { tr, lang, draft, steps, canEditSpec, profile } = env;
@@ -28,6 +28,7 @@ export default function ReviewStep({ env, completeness, submitErrors, submitConf
       {canSubmitSpec(canEditSpec) && <Tooltip title={<>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={submitBusy} onClick={onSubmit} sx={{ minHeight: 52, px: 3.5, fontSize: 16, fontWeight: 600, textTransform: 'none', borderRadius: '12px' }}>{tr(openCount ? 'wizard.review.submitOpen' : 'wizard.review.submit', { count: openCount })}</Button></span></Tooltip>}
     </Stack>
     <DeliveryConflict env={env} />
+    {submittedVersion != null && <Alert severity="success" data-testid="spec-submitted">{tr('submitDone', { version: submittedVersion })}</Alert>}
     {submitErrors.map((x, i) => <Alert key={i} severity="error" action={i === 0 && submitConflict ? <Button color="inherit" size="small" onClick={onReload}>{tr('reloadDraft')}</Button> : undefined}>{x}</Alert>)}
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 2, alignItems: 'start' }}>
       {cards.map(({ step, index, items }) => <Paper key={step.id} component="section" elevation={0} aria-label={tr(step.title)} sx={{ p: '20px', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', boxShadow: 'none', minWidth: 0 }}>

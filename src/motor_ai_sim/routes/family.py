@@ -2379,6 +2379,7 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                "can_write": _can_write}
         if not _hit[1] and _acc["mode"] == MODE_GRANTED:
             res["note"] = "no motors granted yet — ask the vendor"
+            res["note_code"] = "no_motors_granted"          # the page shows its own "start a project" line (owner 2026-11-06)
         return res
 
     for _e in _entries:
@@ -2565,6 +2566,7 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.
         res["note"] = "no motors granted yet — ask the vendor"
+        res["note_code"] = "no_motors_granted"
     return res
 
 

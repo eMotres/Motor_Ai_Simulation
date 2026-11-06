@@ -684,7 +684,10 @@
               "required": true,
               "required_unless_value": {
                 "property": "supply_type",
-                "equals": "dc_source"
+                "equals_any": [
+                  "dc_source",
+                  "ac_mains"
+                ]
               },
               "min": 0
             },
@@ -767,11 +770,18 @@
                     "en": "DC power source",
                     "zh-CN": "直流电源"
                   }
+                },
+                {
+                  "value": "ac_mains",
+                  "label": {
+                    "en": "AC mains",
+                    "zh-CN": "交流市电"
+                  }
                 }
               ],
               "help": {
-                "en": "Battery (chemistry, cells, cell voltages) or a DC power source with one voltage. Nothing stored for the other choice is removed. Not stated = battery.",
-                "zh-CN": "电池（化学体系、串联节数、单体电压）或单一电压的直流电源。另一选项已存的数据不会被删除。未填写即按电池处理。"
+                "en": "Battery (chemistry, cells, cell voltages), a DC power source with one voltage, or AC mains (line-line voltage and frequency). Nothing stored for the other choices is removed. Not stated = battery.",
+                "zh-CN": "电池（化学体系、串联节数、单体电压）、单一电压的直流电源，或交流市电（线电压和频率）。其他选项已存的数据不会被删除。未填写即按电池处理。"
               }
             },
             {
@@ -796,11 +806,59 @@
                 "en": "The worst-case (lowest) voltage the DC source holds under load. One value.",
                 "zh-CN": "直流电源带载时的最不利（最低）电压，仅填一个值。"
               }
+            },
+            {
+              "id": "ac_line_voltage_V",
+              "label": {
+                "en": "Mains voltage, line-line (rms)",
+                "zh-CN": "市电线电压（有效值）"
+              },
+              "type": "number",
+              "unit": "V",
+              "required": false,
+              "required_if_value": {
+                "property": "supply_type",
+                "equals": "ac_mains"
+              },
+              "min": 1,
+              "max": 20000,
+              "short_label": {
+                "en": "Mains voltage",
+                "zh-CN": "市电电压"
+              },
+              "help": {
+                "en": "The line-to-line rms voltage of the AC mains that feeds the drive, for example 400 V. A converter between the mains and the motor is part of the drive.",
+                "zh-CN": "给驱动供电的交流市电线电压（有效值），例如 400 V。市电与电机之间的变频器属于驱动部分。"
+              }
+            },
+            {
+              "id": "ac_frequency_Hz",
+              "label": {
+                "en": "Mains frequency",
+                "zh-CN": "市电频率"
+              },
+              "type": "number",
+              "unit": "Hz",
+              "required": false,
+              "required_if_value": {
+                "property": "supply_type",
+                "equals": "ac_mains"
+              },
+              "min": 1,
+              "max": 1000,
+              "short_label": {
+                "en": "Mains frequency",
+                "zh-CN": "市电频率"
+              },
+              "help": {
+                "en": "The frequency of the AC mains, for example 50 or 60 Hz.",
+                "zh-CN": "交流市电的频率，例如 50 或 60 Hz。"
+              }
             }
           ],
           "help": {
-            "en": "Choose Battery (chemistry, cells in series, cell voltages; the pack voltages follow) or a DC power source (one voltage). One block for the whole project.",
-            "zh-CN": "选择电池（化学体系、串联节数、单体电压；电池组电压随之计算）或直流电源（单一电压）。整个项目共用一个供电块。"
+            "en": "Choose Battery (chemistry, cells in series, cell voltages; the pack voltages follow), a DC power source (one voltage) or AC mains (line-line voltage and frequency). One block for the whole project.",
+            "zh-CN": "选择电池（化学体系、串联节数、单体电压；电池组电压随之计算）、直流电源（单一电压）或交流市电（线电压和频率）。整个项目共用一个供电块。"
           },
           "short_label": {
             "en": "Power supply",

@@ -86,3 +86,63 @@ def test_mail_trouble_never_blocks_the_customer(path, monkeypatch):
         raise OSError("smtp down")
     monkeypatch.setattr(E, "send", boom)
     assert _project()["id"]
+
+
+def _save(project_id, draft, revision, *, tolerant=True):
+    return routes.save_spec_for(USER, project_id, {"draft": draft, "revision": revision, "schema_version": 2}, tolerant=tolerant)
+
+
+def test_one_bad_value_is_set_aside_and_every_other_field_still_saves(path):
+    pid = _project()["id"]
+    draft = {"schema_version": 2, "mission_profile": [], "mission_profile_status": "missing", "production": {},
+             "fields": {"load_inertia_kg_m2": {"status": "filled", "value": -5}, "startup_mode": {"status": "filled", "value": "loaded"}}}
+    saved = _save(pid, draft, 0)
+    assert saved["rejected"] == [{"field": "load_inertia_kg_m2", "path": "load_inertia_kg_m2", "message": "value outside allowed range"}]
+    stored = store.load_json(pid, "draft.json", None)
+    assert "load_inertia_kg_m2" not in stored["draft"]["fields"]                       # the bad value is not stored ...
+    assert stored["draft"]["fields"]["startup_mode"]["value"] == "loaded"                # ... and the rest is
+    assert "rejected" not in stored                                                      # the refusal is an answer, not data
+    # the next autosave carries the bad value again: it is refused again, nothing typed elsewhere is lost
+    draft["fields"]["startup_mode"] = {"status": "filled", "value": "unloaded"}
+    again = _save(pid, draft, saved["revision"])
+    assert [r["field"] for r in again["rejected"]] == ["load_inertia_kg_m2"] and again["draft"]["fields"]["startup_mode"]["value"] == "unloaded"
+    # a corrected value saves; a stored good value stays when a later bad one is refused
+    draft["fields"]["load_inertia_kg_m2"] = {"status": "filled", "value": 0.35}
+    fixed = _save(pid, draft, again["revision"])
+    assert fixed["rejected"] == [] and fixed["draft"]["fields"]["load_inertia_kg_m2"]["value"] == 0.35
+    draft["fields"]["load_inertia_kg_m2"] = {"status": "filled", "value": -1}
+    kept = _save(pid, draft, fixed["revision"])
+    assert kept["draft"]["fields"]["load_inertia_kg_m2"]["value"] == 0.35 and kept["rejected"][0]["field"] == "load_inertia_kg_m2"
+
+
+def test_agents_through_the_order_tools_still_get_a_strict_422(path):
+    pid = _project()["id"]
+    body = {"draft": {"schema_version": 2, "mission_profile": [], "mission_profile_status": "missing", "production": {},
+                      "fields": {"load_inertia_kg_m2": {"status": "filled", "value": -5}}}, "revision": 0, "schema_version": 2}
+    with pytest.raises(HTTPException) as strict:
+        routes.save_spec_for(USER, pid, body)
+    assert strict.value.status_code == 422 and "load_inertia_kg_m2" in strict.value.detail
+
+
+def test_submitting_the_same_specification_twice_makes_no_second_version_and_no_second_mail(path):
+    import copy
+    pid = _project()["id"]
+    _fill(pid)
+    path["mails"].clear()
+    first = routes.submit_spec_for(USER, pid, 1)
+    assert first["version"]["version"] == 1 and "unchanged" not in first and len(path["mails"]) == 1
+    wrapper = store.load_json(pid, "draft.json", None)
+    again = routes.submit_spec_for(USER, pid, wrapper["revision"])
+    assert again["unchanged"] is True and again["version"]["version"] == 1
+    assert len(path["mails"]) == 1                                                       # staff are not told twice
+    assert [v["version"] for v in routes._versions(pid)] == [1]
+    state = routes._submitted_state(pid, store.load_json(pid, "draft.json", None))
+    assert state["version"] == 1 and state["unchanged"] is True and state["submitted_at"]
+    # a changed specification can be submitted again, as version 2, with its own mail
+    current = store.load_json(pid, "draft.json", None)
+    changed = copy.deepcopy(current["draft"])
+    changed["fields"]["startup_mode"] = {"value": "loaded", "status": "filled"}
+    saved = routes.save_spec_for(USER, pid, {"draft": changed, "revision": current["revision"], "schema_version": 2})
+    assert routes._submitted_state(pid, store.load_json(pid, "draft.json", None))["unchanged"] is False
+    second = routes.submit_spec_for(USER, pid, saved["revision"])
+    assert second["version"]["version"] == 2 and "unchanged" not in second and len(path["mails"]) == 2

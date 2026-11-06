@@ -8,14 +8,12 @@ CUSTOMER_STATUSES = ("spec", "design", "simulation")
 
 
 def status_change_allowed(staff: bool, current: str, new: str) -> bool:
-    """May the caller move a project from ``current`` to ``new``?  Staff: any known status.  Anybody else: only between the
-    engineering stages, plus closing a project that is still in one of them (the self-service limit answers "close one
-    to open another"); never into, out of or within a commercial status, and never reopening a closed project."""
+    """May the caller move a project from ``current`` to ``new``?  Staff: any known status.  Anybody else (owner 2026-11-06: the
+    stage is MOTRES's to move): only closing a project that is still in an engineering stage (the self-service limit answers
+    "close one to open another"); never any other stage, and never reopening a closed project."""
     if new not in PROJECT_STATUSES:
         return False
     if staff or new == current:
         return True
-    if current not in CUSTOMER_STATUSES:
-        return False
-    return new in CUSTOMER_STATUSES or new == "closed"
+    return current in CUSTOMER_STATUSES and new == "closed"
 MEMBER_ROLES = ("customer", "engineer", "owner")

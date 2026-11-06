@@ -133,7 +133,7 @@ def _summary(project: dict, user: dict) -> dict:
     # the project timeline (owner 2026-11-03): only a flag here; plan and forecast live in GET /{id}/timeline
     projection["timeline_ready"] = timeline_ready(user, project)
     projection["completeness"] = models.completeness(draft.get("draft", {}))
-    if engineer:
+    if access.is_engineer(user):         # the internal notes are MOTRES staff's: a customer who owns the project never gets them (owner 2026-11-06)
         projection["notes"] = project.get("notes", "")
     # Only expose the current caller's member record to customers.
     if not access.is_engineer(user):
@@ -573,9 +573,9 @@ async def update_project(request: Request, project_id: str):
     if "status" in body and (not (access.is_engineer(user) or role in ("owner", "engineer"))
                              or not status_change_allowed(access.is_engineer(user), str(project.get("status") or "spec"),
                                                           str(body["status"]))):
-        # quote / prototype / production (and any change of a commercial or closed project) are MOTRES staff's
+        # the stage of a project is MOTRES staff's; a customer owner may only close his own open project (owner 2026-11-06)
         raise HTTPException(status_code=403, detail="Engineer access required for status changes")
-    if "notes" in body and not (access.is_engineer(user) or role in ("owner", "engineer")):
+    if "notes" in body and not access.is_engineer(user):
         raise HTTPException(status_code=403, detail="Engineer access required for notes")
     if "owner_engineer" in body and not access.is_engineer(user):
         raise HTTPException(status_code=403, detail="Admin or engineer access required")
@@ -622,7 +622,8 @@ def get_spec(request: Request, project_id: str):
             pass
     return {"draft": _customer_spec({"draft": stored_draft})["draft"] if not access.is_engineer(user) else stored_draft,
             "revision": wrapper.get("revision", 0), "version": wrapper.get("version"), "schema_version": schema_version,
-            "schema": models.schema(int(schema_version)), "completeness": models.completeness(wrapper.get("draft", {})), "versions": [_customer_spec(v) for v in versions]}
+            "schema": models.schema(int(schema_version)), "completeness": models.completeness(wrapper.get("draft", {})), "versions": [_customer_spec(v) for v in versions],
+            "submitted": _submitted_state(project_id, wrapper)}
 
 
 @router.post("/{project_id}/spec/migration/preview")
@@ -707,13 +708,40 @@ async def put_spec(request: Request, project_id: str):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
-    saved = save_spec_for(user, project_id, body)
+    saved = save_spec_for(user, project_id, body, tolerant=True)
     response_draft = saved["draft"] if access.is_engineer(user) else _customer_spec({"draft": saved["draft"]})["draft"]
     return {"draft": response_draft, "revision": saved["revision"], "version": saved.get("version"), "schema_version": saved.get("schema_version", 1),
-            "completeness": models.completeness(saved["draft"])}
+            "completeness": models.completeness(saved["draft"]), "rejected": saved.get("rejected", [])}
 
 
-def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dict | None = None) -> dict:
+def _normalize_tolerant(raw: Any, version: int, stored: dict, tolerant: bool) -> tuple[dict, list[dict]]:
+    """``models.normalize_draft`` that, when ``tolerant``, does not let one bad value block the whole save: an answer the schema
+    refuses (``load_inertia_kg_m2: value outside allowed range``) is put back to what is already stored for that field (or left out),
+    the rest is saved, and the refusals come back as ``[{field, path, message}]`` so the page can show each at its own field.
+    Only top-level answers can be set aside; any other fault (the mission table, the draft shape) still raises."""
+    rejected: list[dict] = []
+    work = copy.deepcopy(raw)
+    for _ in range(24):
+        try:
+            return models.normalize_draft(work, schema_version=version), rejected
+        except ValueError as exc:
+            message = str(exc)
+            head = re.match(r"[A-Za-z0-9_]+", message)
+            field_id = head.group(0) if head else ""
+            area = next((k for k in ("fields", "production") if isinstance(work, dict) and isinstance(work.get(k), dict) and field_id in work[k]), None)
+            if not tolerant or area is None or any(item["field"] == field_id for item in rejected):
+                raise
+            path, _, text = message.partition(": ")
+            kept = (stored.get(area) or {}).get(field_id) if isinstance(stored, dict) else None
+            if kept is None:
+                del work[area][field_id]
+            else:
+                work[area][field_id] = copy.deepcopy(kept)
+            rejected.append({"field": field_id, "path": path if text else field_id, "message": text or message})
+    raise ValueError("too many invalid fields")
+
+
+def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dict | None = None, tolerant: bool = False) -> dict:
     """The work of ``PUT /{id}/spec`` for a resolved caller: normalise ``body["draft"]`` and save it under the optimistic
     ``body["revision"]``.  Returns the saved draft wrapper; raises ``HTTPException`` (403 not the spec editor, 409 stale
     revision / schema, 422 invalid draft).  The MCP order tools (``spec_order``) write through here."""
@@ -743,7 +771,7 @@ def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dic
             result["version_conflict"] = persisted_version
             return
         try:
-            draft = models.normalize_draft(body.get("draft"), schema_version=persisted_version)
+            draft, result["rejected"] = _normalize_tolerant(body.get("draft"), persisted_version, current.get("draft", {}), tolerant)
         except (ValueError, TypeError) as exc:
             result["validation_error"] = str(exc)
             return
@@ -761,7 +789,9 @@ def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dic
         raise HTTPException(status_code=422, detail=result["validation_error"])
     saved = result["saved"]
     store.append_audit(project_id, _email(user), "autosave", "spec_draft", "draft",
-                       {"revision": saved["revision"]} | dict(audit_details or {}))
+                       {"revision": saved["revision"]} | ({"rejected": [item["field"] for item in result["rejected"]]} if result.get("rejected") else {})
+                       | dict(audit_details or {}))
+    saved["rejected"] = result.get("rejected", [])                  # the answer to the caller only: never written to draft.json
     return saved
 
 
@@ -774,7 +804,34 @@ async def submit_spec(request: Request, project_id: str):
     submitted = submit_spec_for(user, project_id, raw_revision)
     return {"version": submitted["version"]["version"], "spec": _customer_spec(submitted["version"]),
             "revision": submitted["current"]["revision"],
-            "completeness": models.completeness(submitted["version"]["draft"])}
+            "completeness": models.completeness(submitted["version"]["draft"]),
+            "unchanged": bool(submitted.get("unchanged")), "submitted_at": submitted["version"].get("created_at")}
+
+
+def _spec_content(draft: Any) -> str:
+    """What makes two drafts the same specification: everything but the provenance bookkeeping."""
+    content = copy.deepcopy(draft) if isinstance(draft, dict) else {}
+    content.pop("provenance", None)
+    return json.dumps(content, sort_keys=True, ensure_ascii=False)
+
+
+def _latest_version_record(project_id: str) -> dict | None:
+    version_dir = store.path_for(project_id) / "spec"
+    numbers = [int(m.group(1)) for file in version_dir.glob("v*.json") if (m := re.fullmatch(r"v(\d+)\.json", file.name))]
+    return store.load_json(project_id, f"spec/v{max(numbers)}.json", None) if numbers else None
+
+
+def _submitted_state(project_id: str, wrapper: dict) -> dict | None:
+    """The newest submitted version and whether the working draft still equals it (``None`` = never submitted)."""
+    latest = _latest_version_record(project_id)
+    if not isinstance(latest, dict):
+        return None
+    try:
+        same = _spec_content(latest.get("draft")) == _spec_content(models.normalize_draft(
+            wrapper.get("draft", {}), schema_version=int(wrapper.get("schema_version", wrapper.get("draft", {}).get("schema_version", 1)))))
+    except (ValueError, TypeError):
+        same = False
+    return {"version": latest.get("version"), "submitted_at": latest.get("created_at"), "unchanged": same}
 
 
 def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_details: dict | None = None) -> dict:
@@ -810,6 +867,11 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
             store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "errors": errors} | extra)
             raise HTTPException(status_code=422, detail={"message": "Specification is incomplete", "errors": errors,
                                                          "completeness": models.completeness(draft)})
+        latest = _latest_version_record(project_id)
+        if isinstance(latest, dict) and _spec_content(latest.get("draft")) == _spec_content(draft):
+            # nothing changed since the last submitted version: no new version, no second mail to staff (owner 2026-11-06)
+            store.append_audit(project_id, _email(user), "submit_unchanged", "spec_version", str(latest.get("version")), {"revision": expected} | extra)
+            return {"version": latest, "current": current, "unchanged": True}
         index = store.load_json(project_id, "spec/index.json", {"versions": []})
         versions = index.get("versions", [])
         version_dir = store.path_for(project_id) / "spec"
@@ -829,7 +891,8 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
         store.append_audit(project_id, _email(user), "submit", "spec_version", str(number),
                            {"revision": expected, "completeness": models.completeness(draft)} | extra)
         submitted.update({"version": version, "current": current})
-    _notify_staff(f"Specification v{submitted['version']['version']} submitted", project_id, user)
+    if not submitted.get("unchanged"):
+        _notify_staff(f"Specification v{submitted['version']['version']} submitted", project_id, user)
     return submitted
 
 

@@ -767,7 +767,7 @@ def simulation_gate_detail(email: Any, role: Any = "") -> Optional[dict]:
     if sc["exempt"] or _latest((sc["key"], sc["account_key"])) or LT.agreement_accepted(email):
         return None
     return {"code": CODE, "version": LT.AGREEMENT_PUBLIC_VERSION, "at": "simulation",
-            "message": "Accept the AeroStator Platform Agreement (version %s) to start a simulation." % LT.AGREEMENT_PUBLIC_VERSION}
+            "message": "Accept the AeroStator Platform Agreement (version %s) to continue." % LT.AGREEMENT_PUBLIC_VERSION}
 
 
 def require_agreement_at_simulation(email: Any, role: Any = "") -> None:

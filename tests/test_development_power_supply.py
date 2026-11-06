@@ -31,7 +31,7 @@ def test_schema_is_additive_and_version_unchanged():
     props = [p["id"] for p in _field("2_1")["properties"]]
     assert props[:8] == ["chemistry", "series_cells", "voltage_min_V", "voltage_nominal_V", "voltage_max_V",
                          "cell_voltage_min_V", "cell_voltage_nominal_V", "cell_voltage_max_V"]
-    assert props[8:] == ["supply_type", "dc_source_V"]
+    assert props[8:] == ["supply_type", "dc_source_V", "ac_line_voltage_V", "ac_frequency_Hz"]
     assert "supply_type" not in [p["id"] for p in models._field_map(1)["2_1"][1]["properties"]]
 
 
@@ -94,3 +94,35 @@ def test_a_dc_source_voltage_is_the_supply_for_the_controller_check_and_the_repo
     assert req["battery"] == {"v_min": 48.0, "v_nom": 48.0, "v_max": 48.0, "cells": None, "chemistry": None}
     battery = report_customer.customer_battery({"v_nom": 700, "cells": 100}, req)
     assert (battery["v_min"], battery["v_nom"], battery["v_max"]) == (48.0, 48.0, 48.0) and battery["source"] == "customer"
+
+
+def test_ac_mains_needs_the_line_voltage_and_the_frequency():
+    """Owner 2026-11-06: a pump on AC mains with a frequency converter has a choice of its own: line-line voltage and frequency."""
+    def errors(value):
+        d = models.normalize_draft(_supply(value))
+        return sorted(e["field"] for e in models.validation_errors(d) if e["field"].startswith("2_1"))
+    assert errors({"supply_type": "ac_mains"}) == ["2_1.ac_frequency_Hz", "2_1.ac_line_voltage_V"]
+    assert errors({"supply_type": "ac_mains", "ac_line_voltage_V": 400}) == ["2_1.ac_frequency_Hz"]
+    assert errors({"supply_type": "ac_mains", "ac_line_voltage_V": 400, "ac_frequency_Hz": 50}) == []        # no battery voltage asked
+    assert _complete({"supply_type": "ac_mains", "ac_line_voltage_V": 400, "ac_frequency_Hz": 50})
+    assert not _complete({"supply_type": "ac_mains", "voltage_nominal_V": 710})
+    for bad in ({"supply_type": "ac_mains", "ac_line_voltage_V": 0}, {"supply_type": "ac_mains", "ac_frequency_Hz": 0},
+                {"supply_type": "ac_mains", "ac_frequency_Hz": 5000}, {"supply_type": "ac_mains", "ac_line_voltage_V": "400 V"}):
+        with pytest.raises(ValueError):
+            models.normalize_draft(_supply(bad))
+
+
+def test_old_supply_answers_load_unchanged_and_stay_complete():
+    for old in ({"voltage_nominal_V": 48}, {"supply_type": "dc_source", "dc_source_V": 48},
+                {"supply_type": "battery", "voltage_nominal_V": 710}):
+        assert _complete(old)
+        assert models.normalize_draft(_supply(old))["fields"]["2_1"]["value"] == old
+    stored = {"supply_type": "ac_mains", "ac_line_voltage_V": 400, "ac_frequency_Hz": 50, "chemistry": "NMC", "voltage_nominal_V": 710}
+    assert models.normalize_draft(_supply(stored))["fields"]["2_1"]["value"] == stored                      # nothing for the other choices is removed
+
+
+def test_ac_mains_is_no_battery_for_the_controller_check_and_the_report():
+    draft = _supply({"supply_type": "ac_mains", "ac_line_voltage_V": 400, "ac_frequency_Hz": 50, "voltage_max_V": 806})
+    assert controller_catalog._battery_max_V(draft) is None
+    req = report_customer.requirements_from_draft(draft, "project specification")
+    assert "battery" not in req and req["ac_mains"] == {"v_line_line": 400.0, "frequency_Hz": 50.0}

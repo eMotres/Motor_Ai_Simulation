@@ -10,7 +10,6 @@ import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import HelpTip from '../../../components/common/HelpTip';
-import { useAuth } from '../../../contexts/AuthContext';
 import { NARROW } from '../../../lib/narrowLayout';
 import { developmentApi, downloadProjectDocument, downloadProjectDocumentsZip } from '../api';
 import type { DocumentFolder, ProjectDocument } from '../types';
@@ -30,9 +29,8 @@ interface Props {
 export default function ProjectDocuments({ projectId, language, t, onCoverChange }: Props) {
   const [docs, setDocs] = useState<ProjectDocument[]>([]);
   const [canEdit, setCanEdit] = useState(false);
-  const { isAdmin, role } = useAuth();
   // the INTERNAL switch is MOTRES staff's: a customer-side owner uploads and archives, but never sees or ticks it
-  const showInternal = canEdit && (isAdmin || role === 'engineer');
+  const [showInternal, setShowInternal] = useState(false);   // the server says who is MOTRES staff: a customer never marks or sees internal
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<DocumentFolder | 'all'>('all');
   const [busy, setBusy] = useState('');
@@ -51,6 +49,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       if (projectRef.current !== id) return;
       setDocs(list.documents);
       setCanEdit(list.can_edit);
+      setShowInternal(!!list.is_staff);
       const version = list.cover_version ?? null;
       if (version !== coverVersion.current) { coverVersion.current = version; onCoverChange?.(version); }
     } catch (e) { if (projectRef.current === id) setError(msg(e)); }

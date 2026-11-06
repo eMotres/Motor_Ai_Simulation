@@ -1,29 +1,21 @@
-"""The Nomex liner counts as vacuum impregnated: k 0.25 W/(m K), fitted on the bench (owner 2026-11-06)."""
-import pathlib
-
+"""Nomex stays dry for every motor; the impregnated liner is a card of its own (owner 2026-11-06)."""
 import pytest
-import yaml
+
+from motor_ai_sim import materials as M
+from motor_ai_sim.report import current_density_limit
 
 
-def _card():
-    root = pathlib.Path(__file__).resolve().parents[1]
-    lib = yaml.safe_load((root / "config" / "materials_library.yaml").read_text(encoding="utf-8"))
-
-    def find(x):
-        if isinstance(x, dict):
-            if "Nomex" in x:
-                return x["Nomex"]
-            for v in x.values():
-                r = find(v)
-                if r:
-                    return r
-        return None
-
-    return find(lib)
+def test_nomex_keeps_the_dry_value():
+    assert M.get_insulator("Nomex").thermal_conductivity == pytest.approx(0.14)
 
 
-def test_nomex_is_the_impregnated_value_and_says_where_it_came_from():
-    c = _card()
-    assert c["thermal_conductivity"] == pytest.approx(0.25)
-    assert c["prov"]["thermal_conductivity"]["type"] == "derived"
-    assert "0.14" in c["prov"]["thermal_conductivity"]["note"] or "0.139" in c["prov"]["thermal_conductivity"]["note"]
+def test_the_impregnated_card_is_the_fitted_value():
+    card = M.get_insulator("Nomex_impregnated")
+    assert card.thermal_conductivity == pytest.approx(0.25)
+    assert card.specific_heat == pytest.approx(M.get_insulator("Nomex").specific_heat)
+
+
+def test_the_impregnated_liner_still_counts_as_organic():
+    dry, _ = current_density_limit("liquid", {"slot_insulation": "Nomex"})
+    wet, _ = current_density_limit("liquid", {"slot_insulation": "Nomex_impregnated"})
+    assert wet == dry

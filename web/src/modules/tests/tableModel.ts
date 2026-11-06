@@ -532,17 +532,19 @@ function rowEfficiency(row: Record<string, unknown>, shaftW: number): number | n
   return (100 * Math.min(dc, shaftW)) / Math.max(dc, shaftW);
 }
 
-/** The load tests with torque and speed, each at its row of highest torque x speed, highest power first. */
+/** The load tests with torque and speed, highest power first: a logged run (rows with minutes) at its last row, what it settled at; any other test at its row of highest torque x speed. */
 export function powerSummary(tests: TestRecord[]): PowerLine[] {
   const out: PowerLine[] = [];
   for (const t of tests) {
     if (t.kind !== 'load') continue;
     let best: PowerLine | null = null;
-    for (const raw of (t.rows ?? []) as unknown as Array<Record<string, unknown>>) {
+    const rows = (t.rows ?? []) as unknown as Array<Record<string, unknown>>;
+    const logged = rows.length > 1 && rows.every((r) => finite(r.time_min) !== null);
+    for (const raw of rows) {
       const rpm = Number(raw.rpm), torque = Number(raw.torque_nm);
       if (!(rpm > 0) || !(torque > 0)) continue;
       const shaftW = (torque * rpm * Math.PI) / 30;
-      if (best && shaftW / 1000 <= best.powerKw) continue;
+      if (!logged && best && shaftW / 1000 <= best.powerKw) continue;
       best = { id: t.id, date: t.date, title: t.title ?? '', rpm, torque, powerKw: shaftW / 1000, effPct: rowEfficiency(raw, shaftW),
         tempC: typeof raw.temp_winding_c === 'number' ? raw.temp_winding_c : null };
     }

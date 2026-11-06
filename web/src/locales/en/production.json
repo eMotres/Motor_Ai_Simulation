@@ -453,7 +453,7 @@
     "power": {
       "test": "Test",
       "max": "Max power, kW",
-      "maxTip": "Highest torque x speed among the rows of the test; a settled continuous value can be lower.",
+      "maxTip": "Torque x speed: the last row of a logged run, what it settled at; the highest row of any other test.",
       "torque": "Torque, N·m",
       "speed": "Speed, rpm",
       "efficiency": "Efficiency, %",

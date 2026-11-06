@@ -550,3 +550,19 @@ t('a test card sorts its files: pictures, videos, the rest; the type follows the
   assert.equal(M.mediaMime('table.png'), 'image/png');
 });
 
+t('the load table has Power right after Torque, with the simulation side and the same difference; raw rows give it too', () => {
+  const r = (key, measured, model = null, delta_pct = null) => ({ key, label: key, params: {}, unit: '', measured, model, delta_pct, status: 'ok', extra: {} });
+  const blocks = M.tableBlocks({ test_id: 'a', kind: 'load', model_available: true, groups: [
+    { key: 'load_point', label: '3000 rpm', params: { rpm: 3000 }, rows: [r('torque', 100, 110, 10), r('eff', 90)] },
+    { key: 'load_point', label: 'no speed', params: {}, rows: [r('torque', 5)] }] });
+  const table = M.loadTable(blocks);
+  assert.deepEqual(table.columns.map((c) => c.key), ['torque', 'shaft_power', 'eff']);
+  const p = table.points[0].cells.shaft_power;
+  assert.ok(Math.abs(p.row.measured - 31.416) < 0.001 && Math.abs(p.row.model - 34.558) < 0.001);
+  assert.equal(p.row.delta_pct, 10);
+  assert.equal(p.row.action, null);
+  assert.equal(table.points[1].cells.shaft_power, undefined);
+  assert.ok(Math.abs(M.rawPowerKw({ rpm: 3006, torque_nm: 105.01 }) - 33.056) < 0.001);
+  assert.equal(M.rawPowerKw({ rpm: 3006 }), null);
+});
+

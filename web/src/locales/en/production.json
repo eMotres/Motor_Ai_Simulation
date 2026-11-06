@@ -599,6 +599,7 @@
       "no_model": "No simulation point"
     },
     "row": {
+      "shaft_power": "Power",
       "r_ll_mean": "R line-line, mean of {n}",
       "r_winding": "winding only (simulation)",
       "r_leads": "leads (2 in series)",
@@ -629,6 +630,7 @@
       "kt": "Kt per A rms phase current"
     },
     "tip": {
+      "shaft_power": "Torque x speed, calculated from the bench row.",
       "resistance": "Simulated R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line in star (2/3 in delta), plus the stated lead cables. The phase board and the joints are not in the simulation.",
       "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star). Simulation = the incremental Ld/Lq of the lowest-current duty.",
       "ldq_amp": "3-pair amplitude √(2/3·Σdev²) = |Lq − Ld|. The pair order on the rotor is not known, so the smaller fitted value is compared with the smaller simulation value.",
@@ -690,6 +692,7 @@
       "cancel": "Cancel"
     },
     "cols": {
+      "power_kw": "kW",
       "rpm": "rpm",
       "shaft_power_w": "W",
       "v_ll_pp_v": "Vpp",

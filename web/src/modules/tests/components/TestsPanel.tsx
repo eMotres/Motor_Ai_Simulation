@@ -26,7 +26,7 @@ import TestMedia from './TestMedia';
 import {
   cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  normalizeTab, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  normalizeTab, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
@@ -289,7 +289,8 @@ function RawRows({ rec }: { rec: TestRecord }) {
   const [open, setOpen] = useState(false);
   if (!rec.rows?.length) return null;
   const cols = Array.from(new Set([...columnsFor(rec.kind), ...rec.rows.flatMap((r) => Object.keys(r))]))
-    .filter((c) => rec.rows!.some((r) => r[c] !== undefined));
+    .filter((c) => rec.rows!.some((r) => r[c] !== undefined))
+    .flatMap((c) => (c === 'torque_nm' ? [c, 'power_kw'] : [c]));
   return (
     <Box sx={{ mt: 0.5 }}>
       <Button size="small" onClick={() => setOpen((v) => !v)} sx={{ fontSize: 11, textTransform: 'none' }}>
@@ -300,7 +301,7 @@ function RawRows({ rec }: { rec: TestRecord }) {
           <TableHead><TableRow>{cols.map((c) => <TableCell key={c} sx={head} align="right">{t(`tests.cols.${c}`, { defaultValue: c })}</TableCell>)}</TableRow></TableHead>
           <TableBody>
             {rec.rows.map((r, i) => (
-              <TableRow key={i}>{cols.map((c) => <TableCell key={c} sx={cell} align="right">{r[c] ?? '—'}</TableCell>)}</TableRow>
+              <TableRow key={i}>{cols.map((c) => <TableCell key={c} sx={cell} align="right">{c === 'power_kw' ? (rawPowerKw(r)?.toFixed(2) ?? '—') : r[c] ?? '—'}</TableCell>)}</TableRow>
             ))}
           </TableBody>
         </Table>

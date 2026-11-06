@@ -3402,12 +3402,12 @@ insulator:
       - {"id": "nomex410", "doc": "DuPont Nomex Type 410 technical data sheet (PDF 2000-05), Table IV: density 0.87 g/cc and k 0.123 W/mK at 0.13 mm, 0.95 / 0.143 at 0.18 mm, 0.96 / 0.139 at 0.25 mm (k at 150 C)", "url": "https://www.wshampshire.com/wp-content/uploads/type_410_data_sheet.pdf", "read": "2026-09-29"}
     prov:
       density: {"type": "datasheet", "src": "nomex410", "note": "880 ~ 0.87 g/cc of the 0.13 mm grade (matches); 0.25 mm is 0.96"}
-      thermal_conductivity: {"type": "datasheet", "src": "nomex410", "note": "0.14 = 0.139-0.143 of the 0.18-0.25 mm grades at 150 C (matches)"}
+      thermal_conductivity: {"type": "derived", "src": "nomex410", "note": "0.25 = vacuum impregnated liner, owner 2026-11-06, fit 0.25 +/- 0.05 to the G2 bench 3000 rpm thermal run; the dry paper of the sheet is 0.139-0.143 at 150 C"}
       specific_heat: {"type": "estimate", "note": "1200 not in the Nomex 410 sheet", "verify": true, "source": "none"}
-    description: "Nomex 410 aramid paper — slot liner (ground-wall insulation)."
+    description: "Nomex 410 aramid paper, vacuum impregnated — slot liner (ground-wall insulation)."
     sigma: 0.0
     density: 880             # kg/m³  (pressed calendered aramid paper)
-    thermal_conductivity: 0.14   # W/(m·K)
+    thermal_conductivity: 0.25   # W/(m·K), vacuum impregnated; dry datasheet 0.14
     specific_heat: 1200          # J/(kg·K)
     permeability: 1.0
 

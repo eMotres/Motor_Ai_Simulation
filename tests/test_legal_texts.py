@@ -28,16 +28,16 @@ ANNA, BOB, LONE = "anna@example.com", "bob@example.com", "solo@solo-works.exampl
 PW = "correct horse battery"
 client = TestClient(app)
 
-#: SHA-256 of the texts as served (``{{version}}`` = v0.5), EN and zh-CN.  Change a text -> publish a NEW version (docs/LEGAL_TEXTS.md) and re-pin.
+#: SHA-256 of the texts as served (``{{version}}`` = v0.6), EN and zh-CN.  Change a text -> publish a NEW version (docs/LEGAL_TEXTS.md) and re-pin.
 PINNED = {
-    ("terms", "en"): "de132ddae0e0905da22b2bbbd1fa56320524711d48288b46d29e79a5fe5b874b",
-    ("terms", "zh-CN"): "897425220be12b256a550362092e1c2ad0c04f5a795f8b52b0860ca2713ff431",
-    ("privacy", "en"): "7a5b2c4c08f1ce869ac02dc29f153c4d6a6feca56c1f743be7c5f1d7a4ef4b7c",
-    ("privacy", "zh-CN"): "7e2dab53efb14e5e693d034fbed433aa5583774f823e87c6f51cbaf352062af3",
-    ("platform-agreement", "en"): "f94fbcb931178503026586e251f17ffba798a8d979ed3674a8a3b3f1adec0dda",
-    ("platform-agreement", "zh-CN"): "4bf7ef6b4d9d983e64a0960635632404aaf790bdb83ba91c852d059e12f21c8f",
-    ("schedules", "en"): "d9fb3af886573582c1ff66a73e3eb91d576d85bfdcaefa35902bc23da9dc2e8f",
-    ("schedules", "zh-CN"): "c9730cc4dea3fb463d2e93ebd6a844ab6969910b34692fdb772620b99e917b94",
+    ("terms", "en"): "0ee143d923411146866dcfc25d46e8f6d66e8da95d92bf0c6434a4fc23c60d9b",
+    ("terms", "zh-CN"): "e203a84d5adf75ec9f0661b6a6bb18806372efc8fb89d1657d17dc1a669ad09e",
+    ("privacy", "en"): "bad7bc33c4719ecbb2d3b2ad5ea97416b5b5b8efc3cfcaf61be7d0eb65b034b8",
+    ("privacy", "zh-CN"): "9d5dc6984fc2604009f2cbe386acc4572cd975105561f0b0a4642f80d9f1f7b5",
+    ("platform-agreement", "en"): "eb4feb83f4736076d54235e4c579372060c457340c5bdd2a2819aa96ed786ad4",
+    ("platform-agreement", "zh-CN"): "e8b510aa67e3a1b91c0f06d07ff5389cb7bc900e45988a0706a0aefa6fadb9f1",
+    ("schedules", "en"): "c966242ce791a9406b4009a03c45324a49154d532a39797df0fce05d445406ca",
+    ("schedules", "zh-CN"): "09e3cb621790842ea6f9919bdc45076f82655c54f7e4d633b13e85c92135ca34",
 }
 
 
@@ -104,9 +104,9 @@ def test_the_four_texts_are_served_verbatim_with_the_version_filled_and_their_ha
         r = client.get(f"/api/legal/{doc}")                                   # no sign-in
         assert r.status_code == 200, doc
         j = r.json()
-        assert j["doc"] == doc and j["version"] == "v0.5" and j["lang"] == "en"
+        assert j["doc"] == doc and j["version"] == "v0.6" and j["lang"] == "en"
         assert j["sha256"] == hashlib.sha256(j["text"].encode("utf-8")).hexdigest()
-        assert "{{version}}" not in j["text"] and "Version v0.5." in j["text"]
+        assert "{{version}}" not in j["text"] and "Version v0.6." in j["text"]
         assert j["text"].startswith("# ")
     terms = client.get("/api/legal/terms").json()["text"]
     assert "**In short:**" in terms and "MOTRES may use the engineering data you supply after accepting to train its own AI models" in terms
@@ -144,7 +144,7 @@ def test_chinese_mirror_is_served_and_is_not_the_english_text():
         zh = client.get(f"/api/legal/{doc}", params={"lang": "zh-CN"})
         assert zh.status_code == 200, doc
         j = zh.json()
-        assert j["lang"] == "zh-CN" and j["version"] == "v0.5" and any("一" <= c <= "鿿" for c in j["text"])
+        assert j["lang"] == "zh-CN" and j["version"] == "v0.6" and any("一" <= c <= "鿿" for c in j["text"])
         assert j["sha256"] != LT.read(doc, "en")["sha256"] and "{{version}}" not in j["text"]
         assert "{{#" not in j["text"] and "{{/" not in j["text"]                  # the conditional markers are stripped in Chinese too
         assert client.get(f"/api/legal/{doc}", params={"lang": "zh-cn"}).json()["sha256"] == j["sha256"]
@@ -192,7 +192,7 @@ def test_signup_with_the_box_records_a_terms_only_line_with_the_hashes_of_the_te
     assert r.status_code == 202, r.text
     (rec,) = lines(env)
     assert rec["user"] == "new1@example.com" and rec["source"] == "signup" and rec["lang"] == "zh-CN" and rec["kind"] == "terms"
-    assert (rec["terms_version"], rec["privacy_version"], rec["agreement_public_version"]) == ("v0.5", "v0.5", "v0.5")
+    assert (rec["terms_version"], rec["privacy_version"], rec["agreement_public_version"]) == ("v0.6", "v0.6", "v0.6")
     assert rec["labels"] == {"accept": "I use AeroStator for business and accept the Terms of Use and the Privacy Policy."}
     for absent in ("country", "capacity", "business_name", "forum_variant", "historical_opt_in", "mode"):        # no agreement fields
         assert absent not in rec, absent
@@ -277,7 +277,7 @@ def test_existing_account_status_then_accept_records_a_terms_only_line_source_ex
     h = env["h"](ANNA)
     assert client.get("/api/legal/status").status_code == 401
     st = client.get("/api/legal/status", headers=h).json()
-    assert st["version"] == "v0.5" and st["required"] is True and st["accepted_version"] is None
+    assert st["version"] == "v0.6" and st["required"] is True and st["accepted_version"] is None
     assert st["agreement"] == {"accepted": False, "mode": None, "accepted_at": None} and "required_from" not in st
     # not ticked / wrong version -> 422, nothing recorded
     assert client.post("/api/legal/accept", json={}, headers=h).status_code == 422
@@ -418,7 +418,7 @@ def test_deletion_pseudonymises_the_lines_and_keeps_the_proof(env):
     gone = next(r for r in after if r["id"] == before["gone@example.com"]["id"])
     assert "gone@example.com" not in json.dumps(gone) and "198.51.100.9" not in json.dumps(gone)
     assert gone["user"] == AL.subject_hash("gone@example.com") and gone["ip"] and gone["ip"] != "198.51.100.9"
-    assert gone["text_sha256"] == before["gone@example.com"]["text_sha256"] and gone["terms_version"] == "v0.5"   # the proof stays
+    assert gone["text_sha256"] == before["gone@example.com"]["text_sha256"] and gone["terms_version"] == "v0.6"   # the proof stays
     assert next(r for r in after if r["user"] == "stays@example.com")["ip"] == "198.51.100.10"
     assert LT.records("gone@example.com") == []
 
@@ -434,7 +434,7 @@ def test_the_data_export_carries_the_accounts_own_lines(env):
             d = json.loads(zf.read("terms_acceptances.json"))
     finally:
         z.unlink()
-    assert [r["user"] for r in d["acceptances"]] == ["mine@example.com"] and d["current_version"] == "v0.5"
+    assert [r["user"] for r in d["acceptances"]] == ["mine@example.com"] and d["current_version"] == "v0.6"
 
 
 # -- training_allowed: company -> account -> terms -> fail-closed ------------------------------------------------------------

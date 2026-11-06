@@ -457,6 +457,8 @@
       "torque": "Torque, N·m",
       "speed": "Speed, rpm",
       "efficiency": "Efficiency, %",
+      "j": "J, A/mm²",
+      "jTip": "Current density: phase current rms over the bare copper section of its paths. The test note says if the current was measured.",
       "coil": "Coil, °C"
     },
     "media": {
@@ -622,6 +624,7 @@
       "torque": "Torque",
       "eff": "Efficiency",
       "eff_system": "System efficiency",
+      "j_coil": "Current density",
       "t_winding": "Winding temperature",
       "t_magnet": "Magnet temperature",
       "no_bearings": "no bearings assigned to this configuration",
@@ -700,6 +703,7 @@
       "temp_c": "T °C",
       "torque_nm": "N·m",
       "i_phase_a": "I A",
+      "j_a_mm2": "J A/mm²",
       "v_dc_v": "Vdc",
       "i_dc_a": "Idc",
       "eff_pct": "η %",

@@ -783,6 +783,8 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
                 rows.append(_row("eff", "Efficiency", "%", eff_meas, None, tip="load", status="no_model"))
             if eff_sys is not None:
                 rows.append(_eff_system_row(eff_sys, None, ""))
+            if num(r.get("j_a_mm2")) is not None:
+                rows.append(_row("j_coil", "Current density", "A/mm²", r.get("j_a_mm2"), None, tip="load", status="no_model"))
             groups.append(_group("load_point", label, rows, params=params, tip="load"))
             continue
         det = f"duty '{d['name']}' ({d['rpm']:g} rpm, {d['current']:g} A)"
@@ -804,6 +806,8 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         if num(r.get("temp_magnet_c")) is not None:
             rows.append(_row("t_magnet", "Magnet temperature", "C", r.get("temp_magnet_c"), d.get("magnet_c"),
                              tip="load", detail=det, extra={"duration_s": r.get("duration_s")}))
+        if num(r.get("j_a_mm2")) is not None:
+            rows.append(_row("j_coil", "Current density", "A/mm²", r.get("j_a_mm2"), None, tip="load", status="no_model"))
         groups.append(_group("load_point", label, rows, params={**params, "duty": d["name"]}, tip="load",
                              basis="torque and efficiency on the corrected shaft power" if kt is not None
                              else "not corrected yet",

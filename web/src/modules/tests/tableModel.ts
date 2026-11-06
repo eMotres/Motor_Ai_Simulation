@@ -7,7 +7,7 @@ import { TEST_TABS } from './types.ts';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
 export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c', 'v_ll_fund_pk_v'] as const;
-export const LOAD_COLUMNS = ['rpm', 'torque_nm', 'i_phase_a', 'v_dc_v', 'i_dc_a', 'eff_pct', 'temp_winding_c', 'duration_s', 'time_min'] as const;
+export const LOAD_COLUMNS = ['rpm', 'torque_nm', 'i_phase_a', 'v_dc_v', 'i_dc_a', 'eff_pct', 'temp_winding_c', 'duration_s', 'time_min', 'j_a_mm2'] as const;
 
 export function columnsFor(kind: TestKind): readonly string[] {
   return kind === 'load' ? LOAD_COLUMNS : FREE_RUN_COLUMNS;
@@ -520,7 +520,7 @@ export function parseNumberList(text: string): Array<number | null> {
 /** One line of the Power sub-menu (owner 2026-11-05): a load test by its name and its highest power. */
 export interface PowerLine {
   id: string; date: string; title: string; rpm: number; torque: number; powerKw: number;
-  effPct: number | null; tempC: number | null;
+  effPct: number | null; tempC: number | null; jAmm2: number | null;
 }
 
 /** Efficiency of a row, in either direction: DC over shaft for a generator, shaft over DC for a motor, so the smaller over the larger.
@@ -546,7 +546,8 @@ export function powerSummary(tests: TestRecord[]): PowerLine[] {
       const shaftW = (torque * rpm * Math.PI) / 30;
       if (!logged && best && shaftW / 1000 <= best.powerKw) continue;
       best = { id: t.id, date: t.date, title: t.title ?? '', rpm, torque, powerKw: shaftW / 1000, effPct: rowEfficiency(raw, shaftW),
-        tempC: typeof raw.temp_winding_c === 'number' ? raw.temp_winding_c : null };
+        tempC: typeof raw.temp_winding_c === 'number' ? raw.temp_winding_c : null,
+        jAmm2: finite(raw.j_a_mm2) };
     }
     if (best) out.push(best);
   }

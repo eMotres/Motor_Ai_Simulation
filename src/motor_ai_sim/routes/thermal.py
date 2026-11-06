@@ -4665,9 +4665,9 @@ def solve_thermal_field(
     # effective conductivity rather than meshing thin strips:
     #     k_eff = h_slot / (h_slot/k_winding + t_liner/k_liner)   (series, ≤ k_winding)
     # k_winding = the slot_k param (Cu + enamel + air, transverse).  Effect:
-    # Nomex (k≈0.14) → strong barrier → HOTTER windings;  AlN ceramic (k≈170) →
+    # impregnated Nomex (k≈0.25) → strong barrier → HOTTER windings;  AlN ceramic (k≈170) →
     # negligible barrier → k_eff≈k_winding (cooler).  The real liner trade-off.
-    k_liner = _thermal_k("insulator", mats.get("slot_insulation"), 0.14)
+    k_liner = _thermal_k("insulator", mats.get("slot_insulation"), 0.25)
     t_liner = float(g.get("insulation_thickness", 0.2))    # mm  (liner thickness)
     h_slot  = float(g.get("slot_height", 14.0))            # mm  (winding radial extent)
     # Winding bulk transverse k FROM THE ACTUAL WIRE STACK — a volume-weighted

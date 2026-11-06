@@ -41,7 +41,7 @@ const T_CU_REF_C = 20.0;
 const RUNAWAY_C = 600.0;
 const FIXED_POINT_TOL_K = 0.01;
 const FIXED_POINT_MAX_IT = 400;
-const K_IRON = 25.0, K_SLOT = 1.4, K_INS = 0.2, K_GAP = 0.06;
+const K_IRON = 25.0, K_SLOT = 1.4, K_INS = 0.25, K_GAP = 0.06;
 const LOSS_GROUPS = ['cu_ac', 'fe_stator', 'fe_rotor', 'rotor_eddy', 'pwm_extra'] as const;
 
 function bracket(xs: readonly number[], x: number): [number, number] {

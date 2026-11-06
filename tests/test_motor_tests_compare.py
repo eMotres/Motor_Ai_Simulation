@@ -555,3 +555,11 @@ def test_system_efficiency_of_a_generator_row_stays_under_100_and_a_timed_row_sa
     assert group["label"].startswith("12 min · 3000 rpm")
     assert cmp["series"]["points"][0]["time_min"] == 12
 
+
+def test_a_load_row_keeps_its_current_density_and_shows_it():
+    rec = _record("load", rows=[{"rpm": 3000, "torque_nm": 103.4, "time_min": 44, "j_a_mm2": 18.8}])
+    assert rec["rows"][0]["j_a_mm2"] == pytest.approx(18.8)
+    cmp = comparison.compare_record(rec, _model(), "D", "C")
+    rows = {r["key"]: r for r in cmp["groups"][0]["rows"]}
+    assert rows["j_coil"]["measured"] == pytest.approx(18.8)
+    assert rows["j_coil"]["unit"] == "A/mm²"

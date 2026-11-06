@@ -448,6 +448,9 @@ export const TestsPanel: React.FC<{
                   <TableCell sx={head} align="right">{t('tests.power.torque')}</TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.speed')}</TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.efficiency')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.j')}<HelpTip title={t('tests.power.jTip')} /></Box>
+                  </TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.coil')}</TableCell>
                 </TableRow>
               </TableHead>
@@ -459,6 +462,7 @@ export const TestsPanel: React.FC<{
                     <TableCell sx={num} align="right">{l.torque.toFixed(1)}</TableCell>
                     <TableCell sx={num} align="right">{Math.round(l.rpm)}</TableCell>
                     <TableCell sx={num} align="right">{l.effPct === null ? '—' : l.effPct.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.jAmm2 === null ? '—' : l.jAmm2.toFixed(1)}</TableCell>
                     <TableCell sx={num} align="right">{l.tempC === null ? '—' : Math.round(l.tempC)}</TableCell>
                   </TableRow>
                 ))}

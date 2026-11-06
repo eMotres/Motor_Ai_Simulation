@@ -457,6 +457,8 @@
       "torque": "转矩，N·m",
       "speed": "转速，rpm",
       "efficiency": "效率，%",
+      "j": "J，A/mm²",
+      "jTip": "电流密度：相电流有效值除以各支路裸铜截面。测试备注说明电流是否为实测值。",
       "coil": "线圈，°C"
     },
     "media": {
@@ -622,6 +624,7 @@
       "torque": "转矩",
       "eff": "效率",
       "eff_system": "系统效率",
+      "j_coil": "电流密度",
       "t_winding": "绕组温度",
       "t_magnet": "磁钢温度",
       "no_bearings": "此配置未指定轴承",
@@ -700,6 +703,7 @@
       "temp_c": "T °C",
       "torque_nm": "N·m",
       "i_phase_a": "I A",
+      "j_a_mm2": "J A/mm²",
       "v_dc_v": "Vdc",
       "i_dc_a": "Idc",
       "eff_pct": "η %",

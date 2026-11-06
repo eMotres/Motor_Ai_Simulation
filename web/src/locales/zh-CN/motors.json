@@ -8,7 +8,9 @@
   "noMotorsAssigned": "您的账户尚未分配任何电机。请联系 MOTRES 申请访问权限。",
   "startProject": {
     "text": "这里还没有电机。请新建项目，描述您需要的电机。",
-    "button": "新建项目"
+    "button": "新建项目",
+    "textBack": "这里还没有电机。您的规格书在“项目”中。",
+    "buttonBack": "打开项目"
   },
   "lossNotComputed": "该工况未计算损耗。",
   "lossElectromagneticAndMechanical": "电磁损耗 {em} W + 轴承与风摩损耗 {mech} W",

@@ -232,6 +232,8 @@ export default function DevelopmentPage() {
     setSelected(null); setSpec(null); setProjects([]); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setVersions([]); setCompareVersions(null);
     setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setSubmitError([]); setFieldErrors({});
     draftRef.current = { ...DEFAULT_DRAFT }; revisionRef.current = 0;
+    // this reset cancels an open already in flight: a project link not yet opened must survive it (the link used to land on the list)
+    if (linkTarget.current) { try { sessionStorage.setItem('development.openProject', linkTarget.current.id); } catch { /* storage blocked */ } }
     if (user?.email) void refreshProjects();
   }, [user?.email, refreshProjects]);
   const loadProject = useCallback(async (p: ProjectSummary, requestedEpoch?: number): Promise<boolean> => {

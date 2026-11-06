@@ -51,7 +51,7 @@ _RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "temp_c": (-80, 450), "magnet_temp_c": (-80, 450), "winding_temp_c": (-80, 450), "ambient_c": (-80, 120),
     "temp_winding_c": (-80, 450), "temp_housing_c": (-80, 450), "temp_magnet_c": (-80, 450),
     "humidity_pct": (0, 100), "torque_nm": (-1e6, 1e6), "i_phase_a": (0, 1e5), "v_dc_v": (0, 1e5),
-    "i_dc_a": (-1e5, 1e5), "eff_pct": (0, 100), "duration_s": (0, 1e7),
+    "i_dc_a": (-1e5, 1e5), "eff_pct": (0, 100), "duration_s": (0, 1e7), "time_min": (0, 1e6),
     "value_mohm": (0, 1e9), "value_uh": (0, 1e9), "rotor_angle_deg": (-720, 720), "freq_hz": (0, 1e8),
     "level_v": (0, 1e4), "voltage_v": (0, 1e6), "resistance_mohm": (0, 1e12), "leakage_ma": (0, 1e5),
     "current_a": (0, 1e5), "loss_w": (-1e7, 1e7), "eff_system_pct": (0, 100),
@@ -62,7 +62,7 @@ _RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
 # v_ll_fund_pk_v (optional): the line-line PEAK of the FUNDAMENTAL as read by a spectrum / power analyser
 FREE_RUN_KEYS = ("rpm_set", "rpm", "shaft_power_w", "v_ll_pp_v", "v_ll_rms_v", "v_ll_fund_pk_v", "temp_c", "magnet_temp_c")
 LOAD_KEYS = ("rpm", "torque_nm", "i_phase_a", "v_dc_v", "i_dc_a", "eff_pct", "temp_winding_c", "temp_housing_c",
-             "temp_magnet_c", "duration_s")
+             "temp_magnet_c", "duration_s", "time_min")
 CURVE_KEYS = ("current_a", "torque_nm", "loss_w", "eff_system_pct", "i_dc_a")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PAIR_RE = re.compile(r"^[A-Za-z0-9]{1,4}\s*-\s*[A-Za-z0-9]{1,4}$")

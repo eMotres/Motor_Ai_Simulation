@@ -676,11 +676,11 @@ def _duty_effs(d: Dict[str, Any], k: Optional[float]) -> tuple:
 
 
 def _eff_system_row(measured: float, model: Optional[float], det: str) -> Dict[str, Any]:
-    """DC link in, shaft out (inverter x motor): against the stored system efficiency, else information, no delta."""
+    """Between the DC link and the shaft (inverter x machine): against the stored system efficiency, else information, no delta."""
     if num(model) is None:
-        return _row("eff_system", "System efficiency (DC in, shaft out)", "%", measured, None, tip="eff_system",
+        return _row("eff_system", "System efficiency", "%", measured, None, tip="eff_system",
                     status="info", detail=(det + ", " if det else "") + "no system efficiency from the stored duty")
-    return _row("eff_system", "System efficiency (DC in, shaft out)", "%", measured, model, tip="eff_system",
+    return _row("eff_system", "System efficiency", "%", measured, model, tip="eff_system",
                 detail=det + ", inverter x motor")
 
 
@@ -689,7 +689,7 @@ def _eff_system_row(measured: float, model: Optional[float], det: str) -> Dict[s
 _SERIES_QUANTITIES = (
     ("torque", "Torque", "N·m", "load"),
     ("eff", "Efficiency", "%", "load"),
-    ("eff_system", "System efficiency (DC in, shaft out)", "%", "eff_system"),
+    ("eff_system", "System efficiency", "%", "eff_system"),
     ("i_dc", "DC current", "A", "load"),
     ("p_dc", "DC power", "W", "load"),
     ("p_shaft", "Shaft power", "W", "load"),
@@ -744,6 +744,9 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         n, i = num(r.get("rpm")), num(r.get("i_phase_a"))
         params = {"rpm": None if n is None else round(n), "current": i}
         label = "%s rpm" % ("?" if n is None else f"{n:.0f}") + ("" if i is None else f" · {i:g} A")
+        t_min = num(r.get("time_min"))                      # minutes from the start of a logged run
+        if t_min is not None:
+            label = f"{t_min:g} min · {label}"
         d = C.match_duty(n, i, duties)
         # eff_pct = the motor's efficiency as the bench gives it: compared with the model's motor efficiency at the
         # shaft.  An efficiency formed from the DC link (torque * omega / (V_dc * I_dc)) includes the inverter: it is
@@ -752,9 +755,11 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         eff_meas = num(r.get("eff_pct"))
         eff_sys = None
         if num(r.get("torque_nm")) is not None and n and num(r.get("v_dc_v")) and num(r.get("i_dc_a")):
-            p_in = float(r["v_dc_v"]) * float(r["i_dc_a"])
+            # the smaller power over the larger: shaft over DC when motoring, DC over shaft when generating
+            p_in = abs(float(r["v_dc_v"]) * float(r["i_dc_a"]))
             if p_in > 0:
-                eff_sys = 100.0 * float(r["torque_nm"]) * n * 3.141592653589793 / 30.0 / p_in
+                p_mech = abs(float(r["torque_nm"])) * n * 3.141592653589793 / 30.0
+                eff_sys = 100.0 * min(p_in, p_mech) / max(p_in, p_mech)
         omega = None if not n else n * 3.141592653589793 / 30.0
         t_meas = num(r.get("torque_nm"))
         v_dc, i_dc = num(r.get("v_dc_v")), num(r.get("i_dc_a"))
@@ -768,7 +773,7 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             "t_housing": (r.get("temp_housing_c"), None)}
         if n is not None:
             series_pts.append(sp)
-            plot_rows.append({"rpm": n, "current": i, "torque": t_meas, "v_dc": v_dc, "i_dc": i_dc,
+            plot_rows.append({"rpm": n, "current": i, "torque": t_meas, "v_dc": v_dc, "i_dc": i_dc, "time_min": t_min,
                               "t_winding": num(r.get("temp_winding_c")), "t_magnet": num(r.get("temp_magnet_c")),
                               "t_housing": num(r.get("temp_housing_c")), "model": {}})
         if d is None:

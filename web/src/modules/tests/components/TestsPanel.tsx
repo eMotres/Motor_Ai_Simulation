@@ -16,19 +16,20 @@ import {
 } from '@mui/material';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import NotesIcon from '@mui/icons-material/Notes';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
-import TestVideos from './TestVideos';
+import TestMedia from './TestMedia';
 import {
   cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  isVideoName, normalizeTab, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  normalizeTab, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
-  TEST_TABS, type CompareRow, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
+  TEST_TABS, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
 } from '../types';
 import SubTabs from '../../../components/common/SubTabs';
 import SeriesChart, { SpeedChart } from './SeriesChart';
@@ -99,7 +100,7 @@ function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height:
         </Select>
       </Box>
       <SpeedChart key={key} plot={plot} height={height}
-        xLabel={t(key === 'torque_current' ? 'tests.series.plot.x_current' : 'tests.series.plot.x_torque')} />
+        xLabel={t(key.endsWith('_time') ? 'tests.series.plot.x_time' : key === 'torque_current' ? 'tests.series.plot.x_current' : 'tests.series.plot.x_torque')} />
     </Box>
   );
 }
@@ -135,10 +136,7 @@ function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; 
   );
 }
 
-function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
-  cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; busy: boolean;
-  onCompute: (actions: CreateDutyAction[]) => void;
-}) {
+function CompareTable({ cmp, tips }: { cmp: TestCompare | undefined; tips: Record<string, string> }) {
   const { t } = useTranslation('production');
   const [boxRef, wide] = useWide();
   const blocks = tableBlocks(cmp);
@@ -153,18 +151,11 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
   };
   const table = loadTable(blocks);
   const tableBasis = table ? Array.from(new Set(table.points.map((p) => basisText(p.block)).filter(Boolean))).join(' · ') : '';
-  const tableExtra = !!table && table.points.some((p) => pointNotes(p.cells).length > 0
-    || (canCompute && Object.values(p.cells).some((l) => l.row.action)));
+  const tableExtra = !!table && table.points.some((p) => pointNotes(p.cells).length > 0);
   const plotRows = loadPlotRows(cmp);
   const plotCurves = simulationCurves(cmp);
   const perSpeed = usesSpeedPlots(plotRows, plotCurves) && loadPlotOptions(plotRows, plotCurves).length > 0;
   const hasLoadChart = perSpeed || loadSeriesOptions(cmp).length > 0;
-  const computeTip = (row: CompareRow) => {
-    const a = row.action;
-    const g = a?.body.duty.gamma_deg;
-    return [t('tests.computeTip'), g === undefined ? '' : t('tests.computeGamma', { gamma: g, source: a?.gamma_source ?? '' })]
-      .filter(Boolean).join(' · ');
-  };
   return (
     <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
       <Box sx={hasLoadChart ? { flex: wide ? '0 0 48%' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
@@ -195,7 +186,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
             </TableHead>
             <TableBody>
               {table.points.map(({ block, cells }, pointIndex) => {
-                const action = Object.values(cells).find((l) => l.row.action)?.row;
                 return (
                   <TableRow key={pointIndex}>
                     <TableCell sx={{ ...cell, color: 'var(--text-1)' }}>{label(block, 'group')}</TableCell>
@@ -214,11 +204,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
                     {tableExtra && (
                       <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
                         {ownNotes(table, cells).map((n) => t(`tests.note.${n.key}`, n.params)).join(' · ')}
-                        {canCompute && action?.action && (
-                          <Tooltip title={computeTip(action)}><span><Button size="small" disabled={busy}
-                            sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: `${TABLE_ROW_PX - 2}px`, fontSize: 10.5 }}
-                            onClick={() => onCompute([action.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
-                        )}
                       </TableCell>
                     )}
                   </TableRow>
@@ -269,11 +254,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
                         <TableCell sx={{ ...num, width: 48, fontWeight: 700, color: l.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l.delta}</TableCell>
                         <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
                           {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
-                          {canCompute && l.row.action && (
-                            <Tooltip title={computeTip(l.row)}><span><Button size="small" disabled={busy}
-                              sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: `${TABLE_ROW_PX - 2}px`, fontSize: 10.5 }}
-                              onClick={() => onCompute([l.row.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
-                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -345,9 +325,16 @@ export const TestsPanel: React.FC<{
   const [sub, setSubState] = useState<TestTab>(() => readSub(die, config));
   const [editing, setEditing] = useState<{ rec: TestRecord | null } | null>(null);
   const [toDelete, setToDelete] = useState<TestRecord | null>(null);
+  const [toCompute, setToCompute] = useState<CreateDutyAction[] | null>(null);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggleTest = (id: string) => setExpanded((was) => {
+    const now = new Set(was);
+    if (!now.delete(id)) now.add(id);
+    return now;
+  });
   const [msg, setMsg] = useState<string | null>(null);
   const [msgError, setMsgError] = useState(false);
-  // run ids of the solves "Compute it" queued; while any is open the panel polls the job list and refreshes when they end
+  // run ids of the solves "Compute all missing" queued; while any is open the panel polls the job list and refreshes when they end
   const [pending, setPending] = useState<string[]>([]);
   const unlisted = useRef(0);
   const note = (text: string | null, isError = false) => { setMsg(text); setMsgError(isError); };
@@ -366,7 +353,7 @@ export const TestsPanel: React.FC<{
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
 
   const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
-  // "Compute it": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
+  // "Compute all missing": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
   const startCompute = async (actions: CreateDutyAction[]) => {
     if (!actions.length || pending.length) return;
     try {
@@ -408,6 +395,7 @@ export const TestsPanel: React.FC<{
   const power = powerSummary(data.tests);
   const openTest = (id: string) => {
     setSub('loads');
+    setExpanded((was) => new Set(was).add(id));
     window.setTimeout(() => document.getElementById(`test-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
 
@@ -482,44 +470,59 @@ export const TestsPanel: React.FC<{
         const cmp = cmpForTab(data.compare[rec.id], rec.kind, sub);       // only this tab's groups
         const s = summary(cmp);
         const missing = canCompute ? missingActions(cmp) : [];
-        const bits = [rec.date, rec.title, rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
+        const details = [rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
+        const isOpen = expanded.has(rec.id);
         // what the caller may see: an internal document of a test is not listed for the factory or a project viewer
         const docs = (rec.documents ?? []).flatMap((id) => { const d = docName.get(id); return d ? [d] : []; });
-        const videos = onLoadDocument ? docs.filter((d) => isVideoName(d.name)) : [];
+        const files = testFiles(docs);
+        const plain = onLoadDocument ? files.other : docs;
         const cond = [rec.conditions?.ambient_c !== undefined ? `${rec.conditions.ambient_c} °C` : '',
           rec.conditions?.humidity_pct !== undefined ? `${rec.conditions.humidity_pct} % RH` : ''].filter(Boolean);
         return (
-          <Paper key={rec.id} id={`test-${rec.id}`} variant="outlined" sx={{ p: 1, mb: 1.2, bgcolor: 'var(--panel)', scrollMarginTop: 60 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap', mb: 0.5 }}>
-              <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{bits.join(' · ')}</Typography>
-              {cond.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{cond.join(' · ')}</Typography>}
+          <Paper key={rec.id} id={`test-${rec.id}`} variant="outlined" sx={{ px: 1, py: 0.5, mb: 0.6, bgcolor: 'var(--panel)', scrollMarginTop: 60 }}>
+            {/* one structure for every test (owner 2026-11-05): the name on one line opens the test; under it pictures, then videos, then the rest */}
+            <Box role="button" tabIndex={0} aria-expanded={isOpen} data-testid="test-header" onClick={() => toggleTest(rec.id)}
+              onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleTest(rec.id); } }}
+              sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minHeight: 26, cursor: 'pointer' }}>
+              <ExpandMoreIcon sx={{ fontSize: 18, color: 'var(--text-3)', flexShrink: 0, transform: isOpen ? 'none' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
+              <Typography noWrap sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)', minWidth: 0 }}>{[rec.date, rec.title].filter(Boolean).join(' · ')}</Typography>
               {s.worst !== null && <Chip size="small" label={`Δ ${s.worst > 0 ? '+' : ''}${s.worst.toFixed(1)} %`}
-                sx={{ height: 18, fontSize: 10.5 }} />}
-              <Tooltip title={[t('tests.by', { who: rec.operator || rec.created_by || '' }), rec.created_at, rec.updated_by ? `${rec.updated_by} ${rec.updated_at ?? ''}` : ''].filter(Boolean).join(' · ')}>
-                <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{rec.operator || rec.created_by}</Typography>
-              </Tooltip>
-              {rec.note && <Tooltip title={rec.note}><NotesIcon sx={{ fontSize: 16, color: 'var(--text-3)' }} /></Tooltip>}
-              {docs.filter((d) => !videos.includes(d)).map((d) => (
-                <Chip key={d.id} size="small" label={d.name} sx={{ height: 18, fontSize: 10.5 }}
-                  onClick={onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />
-              ))}
+                sx={{ height: 18, fontSize: 10.5, flexShrink: 0 }} />}
               <Box sx={{ flex: 1 }} />
-              {missing.length > 0 && (
-                <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
-                  <span><Button size="small" variant="outlined" disabled={pending.length > 0} sx={{ fontSize: 11, py: 0, minHeight: 22 }}
-                    onClick={() => void startCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
-                </Tooltip>
-              )}
               {can.edit && (
-                <>
+                <Box sx={{ display: 'flex', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                   <Tooltip title={t('tests.edit')}><IconButton size="small" onClick={() => setEditing({ rec })}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
                   <Tooltip title={t('tests.delete')}><IconButton size="small" onClick={() => setToDelete(rec)}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
-                </>
+                </Box>
               )}
             </Box>
-            {videos.length > 0 && onLoadDocument && <TestVideos videos={videos} load={onLoadDocument} onDownload={onOpenDocument} />}
-            <CompareTable cmp={cmp} tips={data.tips} canCompute={canCompute} busy={pending.length > 0} onCompute={(a) => void startCompute(a)} />
-            <RawRows rec={rec} />
+            {isOpen && (
+              <Box sx={{ pt: 0.5 }}>
+                {onLoadDocument && files.pictures.length > 0 && <TestMedia kind="picture" files={files.pictures} load={onLoadDocument} onDownload={onOpenDocument} />}
+                {onLoadDocument && files.videos.length > 0 && <TestMedia kind="video" files={files.videos} load={onLoadDocument} onDownload={onOpenDocument} />}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap', mb: 0.5 }}>
+                  {details.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{details.join(' · ')}</Typography>}
+                  {cond.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{cond.join(' · ')}</Typography>}
+                  <Tooltip title={[t('tests.by', { who: rec.operator || rec.created_by || '' }), rec.created_at, rec.updated_by ? `${rec.updated_by} ${rec.updated_at ?? ''}` : ''].filter(Boolean).join(' · ')}>
+                    <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{rec.operator || rec.created_by}</Typography>
+                  </Tooltip>
+                  {rec.note && <Tooltip title={rec.note}><NotesIcon sx={{ fontSize: 16, color: 'var(--text-3)' }} /></Tooltip>}
+                  {plain.map((d) => (
+                    <Chip key={d.id} size="small" label={d.name} sx={{ height: 18, fontSize: 10.5 }}
+                      onClick={onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />
+                  ))}
+                  <Box sx={{ flex: 1 }} />
+                  {missing.length > 0 && (
+                    <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
+                      <span><Button size="small" variant="outlined" disabled={pending.length > 0} sx={{ fontSize: 11, py: 0, minHeight: 22 }}
+                        onClick={() => setToCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
+                    </Tooltip>
+                  )}
+                </Box>
+                <CompareTable cmp={cmp} tips={data.tips} />
+                <RawRows rec={rec} />
+              </Box>
+            )}
           </Paper>
         );
       })}
@@ -528,6 +531,13 @@ export const TestsPanel: React.FC<{
           documents={(data.documents ?? []).map((d) => ({ id: d.id, name: d.name }))}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void reload(); }} />
       )}
+      <Dialog open={!!toCompute} onClose={() => setToCompute(null)}>
+        <DialogContent sx={{ fontSize: 13 }}>{t('tests.computeAllConfirm', { count: toCompute?.length ?? 0 })}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setToCompute(null)}>{t('tests.editor.cancel')}</Button>
+          <Button onClick={() => { const a = toCompute ?? []; setToCompute(null); void startCompute(a); }}>{t('tests.computeAllYes')}</Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={!!toDelete} onClose={() => setToDelete(null)}>
         <DialogContent sx={{ fontSize: 13 }}>{t('tests.deleteConfirm')}</DialogContent>
         <DialogActions>

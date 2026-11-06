@@ -7,7 +7,7 @@ import { TEST_TABS } from './types.ts';
 
 /** Columns of a pasted row, in the order a bench sheet gives them. */
 export const FREE_RUN_COLUMNS = ['rpm', 'shaft_power_w', 'v_ll_pp_v', 'v_ll_rms_v', 'temp_c', 'v_ll_fund_pk_v'] as const;
-export const LOAD_COLUMNS = ['rpm', 'torque_nm', 'i_phase_a', 'v_dc_v', 'i_dc_a', 'eff_pct', 'temp_winding_c', 'duration_s'] as const;
+export const LOAD_COLUMNS = ['rpm', 'torque_nm', 'i_phase_a', 'v_dc_v', 'i_dc_a', 'eff_pct', 'temp_winding_c', 'duration_s', 'time_min'] as const;
 
 export function columnsFor(kind: TestKind): readonly string[] {
   return kind === 'load' ? LOAD_COLUMNS : FREE_RUN_COLUMNS;
@@ -114,7 +114,6 @@ export function rowNote(row: CompareRow): RowNote | null {
   if (row.key === 'cogging_pkpk' && x.pending === true && row.measured === null) return { key: 'benchPending', params: {} };
   if (row.key === 'loss' && typeof x.unexplained_w === 'number') return { key: 'unexplained', params: { w: fmtValue(x.unexplained_w as number) } };
   if (row.key === 'no_bearings') return { key: 'noBearings', params: {} };
-  if (row.status === 'no_model' && row.action) return { key: 'noModelCompute', params: {} };
   if (row.status === 'no_model') return { key: 'noModel', params: {} };
   if (x.high_freq === true && typeof x.freq_hz === 'number') return { key: 'freqFlag', params: { hz: x.freq_hz } };
   // an EMF row far from the others stays in the Kv / Kt slope and says so (the slope without it is the second group)
@@ -213,11 +212,14 @@ export function quantitySeries(q: LoadSeriesQuantity): GroupSeries {
 
 // ── per-speed load plots (x = torque or current, one line per speed) ─────────────────────────────────────────────────
 
-export type LoadPlotKey = 'torque_current' | 'loss_torque' | 'eff_torque' | 'idc_torque'
+export type LoadPlotKey = 't_winding_time' | 'torque_time' | 'power_time' | 'torque_current' | 'loss_torque' | 'eff_torque' | 'idc_torque'
   | 't_winding_torque' | 't_magnet_torque' | 't_housing_torque';
-export interface LoadPlotSpec { key: LoadPlotKey; yUnit: string; xUnit: string; x: 'current' | 'torque' }
+export interface LoadPlotSpec { key: LoadPlotKey; yUnit: string; xUnit: string; x: 'current' | 'torque' | 'time' }
 /** The plots in menu order; the first is the default.  The text of each (name, axis labels) is in the locale files. */
 export const LOAD_PLOTS: readonly LoadPlotSpec[] = [
+  { key: 't_winding_time', yUnit: 'C', xUnit: 'min', x: 'time' },
+  { key: 'torque_time', yUnit: 'N·m', xUnit: 'min', x: 'time' },
+  { key: 'power_time', yUnit: 'kW', xUnit: 'min', x: 'time' },
   { key: 'torque_current', yUnit: 'N·m', xUnit: 'A', x: 'current' },
   { key: 'loss_torque', yUnit: 'W', xUnit: 'N·m', x: 'torque' },
   { key: 'eff_torque', yUnit: '%', xUnit: 'N·m', x: 'torque' },
@@ -270,11 +272,16 @@ const pt = (x: number | null, y: number | null): SpeedPoint | null => (x === nul
 function measuredPoint(r: LoadPlotRow, key: LoadPlotKey): SpeedPoint | null {
   const T = finite(r.torque); const I = finite(r.current); const vdc = finite(r.v_dc); const idc = finite(r.i_dc);
   const omega = (finite(r.rpm) ?? 0) * Math.PI / 30;
-  const pIn = vdc !== null && idc !== null ? vdc * idc : null;
+  const pIn = vdc !== null && idc !== null ? Math.abs(vdc * idc) : null;
+  const pShaft = T !== null ? Math.abs(T) * omega : null;
+  const t = finite(r.time_min);
   switch (key) {
+    case 't_winding_time': return pt(t, finite(r.t_winding));
+    case 'torque_time': return pt(t, T);
+    case 'power_time': return pt(t, pShaft !== null ? pShaft / 1000 : null);
     case 'torque_current': return pt(I, T);
-    case 'loss_torque': return pt(T, pIn !== null && T !== null ? pIn - T * omega : null);
-    case 'eff_torque': return pt(T, pIn !== null && pIn > 0 && T !== null ? 100 * T * omega / pIn : null);
+    case 'loss_torque': return pt(T, pIn !== null && pShaft !== null ? Math.abs(pIn - pShaft) : null);
+    case 'eff_torque': return pt(T, pIn !== null && pIn > 0 && pShaft !== null ? 100 * Math.min(pIn, pShaft) / Math.max(pIn, pShaft) : null);
     case 'idc_torque': return pt(T, idc);
     case 't_winding_torque': return pt(T, finite(r.t_winding));
     case 't_magnet_torque': return pt(T, finite(r.t_magnet));
@@ -611,7 +618,26 @@ export function isVideoName(name: string | null | undefined): boolean {
   return /\.(mp4|m4v|mov|webm)$/i.test(name ?? '');
 }
 
-/** The type a stored video plays as: the file API serves every file as plain bytes. */
-export function videoMime(name: string): string {
-  return /\.webm$/i.test(name) ? 'video/webm' : 'video/mp4';
+/** A document a browser can show on the test card as a picture, by its file name. */
+export function isPictureName(name: string | null | undefined): boolean {
+  return /\.(png|jpe?g|webp|gif)$/i.test(name ?? '');
+}
+
+/** The type a stored picture or video opens as: the file API serves every file as plain bytes. */
+export function mediaMime(name: string): string {
+  if (/\.webm$/i.test(name)) return 'video/webm';
+  if (/\.png$/i.test(name)) return 'image/png';
+  if (/\.webp$/i.test(name)) return 'image/webp';
+  if (/\.gif$/i.test(name)) return 'image/gif';
+  if (/\.jpe?g$/i.test(name)) return 'image/jpeg';
+  return 'video/mp4';
+}
+
+/** A test's documents by how the card shows them: pictures on one line, videos on the next, the rest as plain files. */
+export function testFiles<T extends { name: string }>(docs: T[]): { pictures: T[]; videos: T[]; other: T[] } {
+  return {
+    pictures: docs.filter((d) => isPictureName(d.name)),
+    videos: docs.filter((d) => isVideoName(d.name)),
+    other: docs.filter((d) => !isPictureName(d.name) && !isVideoName(d.name)),
+  };
 }

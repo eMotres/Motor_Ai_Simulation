@@ -459,12 +459,14 @@
       "efficiency": "Efficiency, %",
       "coil": "Coil, °C"
     },
-    "video": {
-      "label": "Video {n}",
+    "media": {
+      "video": "Video {n}",
+      "picture": "Picture {n}",
       "loading": "Loading {pct} %",
-      "failed": "This video did not play here; download it with the arrow.",
-      "download": "Download the video",
-      "close": "Close the video"
+      "failed": "This file did not open here; download it with the arrow.",
+      "download": "Download the file",
+      "close": "Close",
+      "fullSize": "Open at full size in a new tab"
     },
     "tabs": {
       "power": "Power",
@@ -503,10 +505,9 @@
     "by": "by {who}",
     "modelMissing": "No stored results for this configuration",
     "modelMissingTip": "Nothing to compare with: run and save the duties of this configuration first.",
-    "compute": "Compute it",
-    "computeTip": "Adds this point as a test duty and solves it (electromagnetic run, queued); the simulation value and the delta fill in when it finishes. Administrators only.",
-    "computeGamma": "current angle {gamma}° from {source}",
     "computeAll": "Compute all missing ({count})",
+    "computeAllConfirm": "Queue {count} simulation runs?",
+    "computeAllYes": "Compute",
     "computeAllTip": "Adds the {count} missing points of this test as test duties and queues their solves (one per speed rounded to 10 rpm and current to 0.5 A). Administrators only.",
     "computing": "Computing {count} point(s)…",
     "computingProgress": "Computing… {done} of {total} done",
@@ -533,6 +534,9 @@
         "t_housing": "Housing temperature"
       },
       "plot": {
+        "t_winding_time": "Winding temperature vs time",
+        "torque_time": "Torque vs time",
+        "power_time": "Shaft power vs time",
         "torque_current": "Torque vs current",
         "loss_torque": "Loss vs torque",
         "eff_torque": "System efficiency vs torque",
@@ -540,6 +544,7 @@
         "t_winding_torque": "Winding temperature vs torque",
         "t_magnet_torque": "Magnet temperature vs torque",
         "t_housing_torque": "Housing temperature vs torque",
+        "x_time": "Time from the start, min",
         "x_current": "Iq / phase current as logged, A",
         "x_torque": "Torque, N·m"
       },
@@ -567,7 +572,6 @@
     "note": {
       "unexplained": "unexplained {w} W",
       "noModel": "no simulation point",
-      "noModelCompute": "no simulation point: compute it",
       "freqFlag": "{hz} Hz vs low-frequency simulation",
       "remaining": "{mohm} mΩ board and joints",
       "modelAbove": "simulation {mohm} mΩ above the reading",
@@ -616,7 +620,7 @@
       "no_noload": "no no-load duty in this configuration",
       "torque": "Torque",
       "eff": "Efficiency",
-      "eff_system": "System efficiency (DC in, shaft out)",
+      "eff_system": "System efficiency",
       "t_winding": "Winding temperature",
       "t_magnet": "Magnet temperature",
       "no_bearings": "no bearings assigned to this configuration",
@@ -637,7 +641,7 @@
       "loss": "Simulation = core (hysteresis ~n, eddy ~n², excess ~n^1.5) + solid eddy (~n²) of the no-load duty, x (Br ratio)², + bearings (SKF) + windage. The rest of the measured power is unexplained.",
       "fit": "Least squares P = a·n + b·n² through the origin, n in krpm.",
       "load": "The duty within 2 % speed and 3 % current. Simulated torque is corrected by the torque factor (measured k_T, else the flux factor); simulated efficiency is the motor’s at the corrected shaft power (no inverter), system efficiency adds the stored inverter efficiency. A value shown as \"not corrected yet\" has no factor for this configuration.",
-      "eff_system": "Torque·ω / (V_dc·I_dc) includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
+      "eff_system": "Shaft power over DC power when motoring, DC over shaft when generating; it includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
       "weight": "Simulated mass of the configuration’s parts; the bench weighs what the record names.",
       "cogging": "No-load cogging peak-to-peak. Simulation = the configuration’s stored cogging (I = 0, eddy and demagnetisation off, magnets at the stated temperature). Bench = break-away by hand through a torque meter in both directions, friction taken out."
     },
@@ -697,6 +701,7 @@
       "i_dc_a": "Idc",
       "eff_pct": "η %",
       "temp_winding_c": "T wind °C",
+      "time_min": "t min",
       "duration_s": "t s",
       "magnet_temp_c": "T mag °C",
       "rpm_set": "rpm set",

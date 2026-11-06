@@ -557,6 +557,21 @@ const LOAD_POINT_GROUP = 'load_point';
 export interface LoadColumn { key: string; row: CompareRow; hasModel: boolean }
 export interface LoadTable { columns: LoadColumn[]; points: Array<{ block: TableBlock; cells: Record<string, RowLine> }> }
 
+const kwOf = (torque: number, rpm: number) => (Math.abs(torque) * rpm * Math.PI) / 30 / 1000;
+
+/** Shaft power from the torque row of a load point (owner 2026-11-05: a column right after Torque); at one speed its difference is the torque's. */
+function powerRow(torque: CompareRow, rpm: number): CompareRow {
+  return { ...torque, key: 'shaft_power', label: 'Power', params: {}, unit: 'kW', tip: 'shaft_power', detail: undefined, action: null,
+    measured: torque.measured === null ? null : kwOf(torque.measured, rpm),
+    model: torque.model === null ? null : kwOf(torque.model, rpm) };
+}
+
+/** The shaft power of a raw bench row, kW; null without a torque or a speed. */
+export function rawPowerKw(row: Record<string, unknown>): number | null {
+  const torque = finite(row.torque_nm); const rpm = finite(row.rpm);
+  return torque === null || rpm === null ? null : kwOf(torque, rpm);
+}
+
 /** The load points of a test as ONE table, owner 2026-11-05 ("more compact"): a row per point, a column per quantity, instead of a small
  *  table per point.  Null when the blocks hold no load point; the other groups stay as they are. */
 export function loadTable(blocks: TableBlock[]): LoadTable | null {
@@ -565,7 +580,9 @@ export function loadTable(blocks: TableBlock[]): LoadTable | null {
   const columns = new Map<string, LoadColumn>();
   const rows = points.map((block) => {
     const cells: Record<string, RowLine> = {};
-    for (const line of block.lines) {
+    const rpm = finite(block.params.rpm);
+    const lines = block.lines.flatMap((l) => (l.row.key === 'torque' && rpm !== null ? [l, rowLine(powerRow(l.row, rpm))] : [l]));
+    for (const line of lines) {
       cells[line.row.key] = line;
       const col = columns.get(line.row.key) ?? { key: line.row.key, row: line.row, hasModel: false };
       col.hasModel = col.hasModel || line.row.model != null;

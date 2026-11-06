@@ -118,9 +118,15 @@ _MARKER_LINE = re.compile(r"^[ \t]*\{\{[#/](?:if|unless)\b[^}]*\}\}[ \t]*\n", re
 
 # -- the texts ----------------------------------------------------------------
 
-def legal_dir() -> Path:
+def legal_dir(root: Path | None = None) -> Path:
+    """The approved texts: ``config/legal`` in a checkout, ``config-seed/legal`` in the deployed image, which has no ``config/``."""
     env = (os.environ.get("MOTRES_LEGAL_TEXTS_DIR") or "").strip()      # tests only
-    return Path(env) if env else Path(__file__).resolve().parents[2] / "config" / "legal"
+    if env:
+        return Path(env)
+    base = root or Path(__file__).resolve().parents[2]
+    seed = base / "config-seed" / "legal"
+    repo = base / "config" / "legal"
+    return repo if repo.is_dir() or not seed.is_dir() else seed
 
 
 def norm_lang(lang: Any) -> str:

@@ -566,3 +566,12 @@ t('the load table has Power right after Torque, with the simulation side and the
   assert.equal(M.rawPowerKw({ rpm: 3006 }), null);
 });
 
+t('the power list takes a logged run at its last row, what it settled at, and any other test at its highest row', () => {
+  const run = { id: 'r', kind: 'load', date: '', title: '', rows: [{ rpm: 3000, torque_nm: 111.42, time_min: 4 }, { rpm: 3000, torque_nm: 103.4, time_min: 44, temp_winding_c: 160.02, eff_pct: 90 }] };
+  const [l] = M.powerSummary([run]);
+  assert.ok(Math.abs(l.powerKw - 32.48) < 0.01);
+  assert.equal(l.tempC, 160.02);
+  assert.equal(l.effPct, 90);
+  const sweep = { id: 's', kind: 'load', date: '', title: '', rows: [{ rpm: 3000, torque_nm: 111.42 }, { rpm: 3000, torque_nm: 103.4 }] };
+  assert.ok(Math.abs(M.powerSummary([sweep])[0].powerKw - 35.0) < 0.05);
+});

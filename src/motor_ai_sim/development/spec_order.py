@@ -156,10 +156,10 @@ def _condition_text(spec: dict) -> str | None:
         return f"required when 3_1.cooling_medium is {spec['required_when_cooling_medium']}"
     if isinstance(spec.get("required_if_value"), dict):
         r = spec["required_if_value"]
-        return f"required when {r.get('property')} is {r.get('equals')}"
+        return f"required when {r.get('property')} is {r.get('equals_any') and ' or '.join(map(str, r['equals_any'])) or r.get('equals')}"
     if isinstance(spec.get("required_unless_value"), dict):
         r = spec["required_unless_value"]
-        return f"not required when {r.get('property')} is {r.get('equals')}"
+        return f"not required when {r.get('property')} is {r.get('equals_any') and ' or '.join(map(str, r['equals_any'])) or r.get('equals')}"
     return None
 
 

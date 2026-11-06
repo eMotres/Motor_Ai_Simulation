@@ -180,6 +180,9 @@
       "battery": "Battery",
       "dc_source": "DC power source",
       "reviewDc": "DC source {value} V",
+      "ac_mains": "AC mains",
+      "reviewAcVolts": "AC mains {value} V line-line",
+      "reviewAcHz": "{value} Hz",
       "legacyPoint": "Earlier per-point voltage: {value}"
     },
     "controllerLimits": {
@@ -222,6 +225,10 @@
       "submit": "Submit specification",
       "submitOpen": "Submit with {count} open",
       "edit": "Edit",
+      "submittedLine": "Submitted: version {version}, {date}.",
+      "submittedChanged": "Submitted: version {version}, {date}. Newer changes are not submitted yet.",
+      "noChanges": "Submitted, no changes since version {version}",
+      "noChangesTip": "Change an answer to submit a new version.",
       "stillOpen": "Still open",
       "later": "Answer later",
       "at": "at",
@@ -352,6 +359,7 @@
   },
   "saveBeforeSubmit": "Save the draft successfully before submitting.",
   "submitBlocked": "Submission needs attention",
+  "submitDone": "Specification submitted as version {version}. We will reply in Messages.",
   "submitFailed": "Submission failed. Please review the required fields.",
   "validationError": "Please complete this field or mark it as not known yet.",
   "requiredMissing": "Required field",
@@ -599,6 +607,16 @@
     "duty": "Duty"
   },
   "projectStatusTip": "Stages: Specification > Design > Simulation > Quote > Prototype > Production > Closed.",
+  "projectStatusTipCustomer": "The stage of your project. MOTRES moves it on as the work goes.",
+  "statusCustomerQuote": "With MOTRES",
+  "closeProject": "Close project",
+  "agreementNeeded": "Accept the data agreement to open a project.",
+  "saveRejected": {
+    "title": "Not saved: {fields}. Everything else is saved.",
+    "range": "The value is outside the allowed range.",
+    "number": "Enter a number.",
+    "other": "This value was not accepted."
+  },
   "versionView": {
     "label": "Versions",
     "latest": "Latest",

@@ -2,6 +2,7 @@
 import React from 'react';
 import { Box, Chip, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
 import UnreadBadge from '../../../components/common/UnreadBadge';
+import { useAuth } from '../../../contexts/AuthContext';
 import CardMotorThumb, { CARD_THUMB_SIZE, useDieIndex } from '../../../components/common/CardMotorThumb';
 import { projectCardMotor } from '../../../lib/cardMotor';
 import { NARROW } from '../../../lib/narrowLayout';
@@ -23,7 +24,8 @@ export interface ProjectOverviewProps {
 
 const numbers = (p: ProjectSummary) => {
   const c = p.completeness;
-  return { filled: c?.filled_required ?? c?.filled ?? 0, total: c?.total_required ?? c?.required ?? 0 };
+  // the ONE progress number (owner 2026-11-06): required fields ANSWERED; "Answer later" is not answered
+  return { filled: c?.answered ?? c?.filled_required ?? c?.filled ?? 0, total: c?.total_required ?? c?.required ?? 0 };
 };
 
 /** Enter / Space open the item like a click (rows and cards are not links). */
@@ -48,6 +50,9 @@ const Bar: React.FC<{ filled: number; total: number }> = ({ filled, total }) => 
 
 const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unread, email, language, onOpen, t }) => {
   const dieIndex = useDieIndex(mode === 'cards');   // the catalog's dies, for the motor picture of each card
+  const { isAdmin, role } = useAuth();
+  // a customer never reads the name of the commercial stage (no price talk while designing)
+  const statusLabel = (status: string) => !(isAdmin || role === 'engineer') && status === 'quote' ? t('statusCustomerQuote') : t(`status.${status}`);
   if (mode === 'list') {
     return (
       <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
@@ -71,7 +76,7 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
                 <TableRow key={p.id} hover tabIndex={0} sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)} onKeyDown={keyOpen(() => onOpen(p))}>
                   <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.title}<UnreadBadge count={n} /></TableCell>
                   <TableCell sx={{ color: 'var(--text-2)' }}>{p.customer_org}</TableCell>
-                  <TableCell align="center"><Chip size="small" label={t(`status.${p.status}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} /></TableCell>
+                  <TableCell align="center"><Chip size="small" label={statusLabel(p.status)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} /></TableCell>
                   <TableCell>
                     <Tooltip title={t('completeness', { filled: c.filled, total: c.total })}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -101,7 +106,7 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
             sx={{ position: 'relative', p: 1.8, minHeight: corner ? 108 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'start' }}>
               <Typography sx={{ flex: 1, fontWeight: 700, color: 'var(--text-0)' }}>{p.title}<UnreadBadge count={n} /></Typography>
-              <Chip size="small" label={t(`status.${p.status}`)} />
+              <Chip size="small" label={statusLabel(p.status)} />
             </Box>
             <Box sx={{ pr: corner ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
               <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>

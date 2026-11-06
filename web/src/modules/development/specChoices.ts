@@ -1,5 +1,6 @@
 import type { LoadDraft, LoadType } from './missionProfileState';
 import type { SchemaSuggestion } from './types';
+import { decimalNumber } from '../../lib/decimalText.ts';
 
 /** The specification's switches and menus (owner 2026-10-25): every standard choice is a menu, cooling and the
  *  load are switches, and every value stays one number. Pure helpers so the page and the tests share them. */
@@ -35,7 +36,7 @@ export function suggestionValue(list: Suggestion[] | undefined, text: string, nu
   const match = suggestionOptions(list, 'en').find((o) => o.labels.includes(trimmed));
   if (match) return numeric ? Number(match.value) : match.value;
   if (!numeric) return text;
-  const n = Number(trimmed);
+  const n = decimalNumber(trimmed);                 // a decimal comma counts
   return Number.isFinite(n) ? n : undefined;
 }
 

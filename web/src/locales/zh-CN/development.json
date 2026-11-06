@@ -180,6 +180,9 @@
       "battery": "电池",
       "dc_source": "直流电源",
       "reviewDc": "直流电源 {value} V",
+      "ac_mains": "交流市电",
+      "reviewAcVolts": "交流市电 {value} V（线电压）",
+      "reviewAcHz": "{value} Hz",
       "legacyPoint": "此前按工作点填写的电压：{value}"
     },
     "controllerLimits": {
@@ -222,6 +225,10 @@
       "submit": "提交规格",
       "submitOpen": "带 {count} 项待办提交",
       "edit": "编辑",
+      "submittedLine": "已提交：版本 {version}，{date}。",
+      "submittedChanged": "已提交：版本 {version}，{date}。之后的修改尚未提交。",
+      "noChanges": "已提交，自版本 {version} 以来无修改",
+      "noChangesTip": "修改任一答案后即可提交新版本。",
       "stillOpen": "待完成",
       "later": "稍后回答",
       "at": "于",
@@ -352,6 +359,7 @@
   },
   "saveBeforeSubmit": "请先成功保存草稿，再提交。",
   "submitBlocked": "提交需要处理",
+  "submitDone": "规格已提交，版本 {version}。我们将在“消息”中回复。",
   "submitFailed": "提交失败，请检查必填项。",
   "validationError": "请填写此项，或标记为“尚不清楚”。",
   "requiredMissing": "必填项",
@@ -599,6 +607,16 @@
     "duty": "工况"
   },
   "projectStatusTip": "阶段：规格 > 设计 > 仿真 > 报价 > 原型 > 生产 > 已关闭。",
+  "projectStatusTipCustomer": "您项目所处的阶段，由 MOTRES 随工作进展更新。",
+  "statusCustomerQuote": "MOTRES 处理中",
+  "closeProject": "关闭项目",
+  "agreementNeeded": "请先接受数据协议，再创建项目。",
+  "saveRejected": {
+    "title": "未保存：{fields}。其余内容均已保存。",
+    "range": "该值超出允许范围。",
+    "number": "请输入数字。",
+    "other": "该值未被接受。"
+  },
   "versionView": {
     "label": "版本",
     "latest": "最新",

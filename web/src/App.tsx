@@ -298,11 +298,15 @@ function App() {
   // Production for /production/..., Development for /projects/... - open that tab; the page itself reads the link from the address
   // bar (ProductionTab, DevelopmentPage).  Root has already checked on the server that the caller is a production member.
   const deepLink = useRef(parseAppLink(window.location.pathname, window.location.search));
+  // set when the link has moved the tab: the first-screen rule of a standard account (below) must not move it back (the staff mail's
+  // /projects/<id>/specification link used to land on Motors: both effects ran in one commit and the later one won)
+  const deepLinkApplied = useRef(false);
   useEffect(() => {
     const link = deepLink.current;
     if (!link || !authResolved || !signedIn) return;
     if (link.kind === 'production' ? !producer : !developmentAllowed) return;
     deepLink.current = null;
+    deepLinkApplied.current = true;
     setActiveTab((link.kind === 'production' ? 'production' : 'development') as never);
   }, [authResolved, signedIn, producer, developmentAllowed, setActiveTab]);
   // The owner's daily report links to Admin sections (/?tab=admin&section=digests&draft=...): open the Admin tab once the account is
@@ -545,6 +549,7 @@ function App() {
   useEffect(() => {
     if (!authResolved || !signedIn || !standardUser || landedRef.current) return;
     landedRef.current = true;
+    if (deepLinkApplied.current || deepLink.current) return;      // a link to a page names the first screen
     // a motor card on the landing page ("Open in Configure") counts as a choice made there
     const fromLanding = consumeOpenInConfigure();
     setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor || fromLanding));
@@ -855,7 +860,7 @@ function App() {
               field animation survive navigating away and back.  Each body has its
               own Suspense: a lazy tab still loading never blanks the others. */}
           {tabs.map((t) => (
-            t.keepMounted && (t.keepMounted === true || visitedTabs.has(t.id)) ? (
+            t.keepMounted && (t.keepMounted === true || visitedTabs.has(t.id) || activeTab === t.id) ? (
               <Box key={t.id} sx={{ height: '100%', display: activeTab === t.id ? 'block' : 'none' }}>
                 <ErrorBoundary label={t.label}><Suspense fallback={<TabLoading />}>{t.render()}</Suspense></ErrorBoundary>
               </Box>

@@ -1,5 +1,5 @@
 import type { CatalogController } from './controllerCatalog';
-import { parseActivity } from './stageBar';
+import { parseActivity } from './stageBarModel';
 import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
@@ -68,7 +68,7 @@ export const developmentApi = {
   migrationPreview: (id: string) => call<{ preview: { draft: Record<string, unknown>; source_sha256: string; source_revision: number; requires_acknowledgement: boolean; issues: Array<{ code: string; message?: string }> }; revision: number }>('POST', `${p(id)}/spec/migration/preview`, {}),
   migrationApply: (id: string, body: { revision: number; source_sha256: string; acknowledge_point: boolean }) => call<{ draft: Record<string, unknown>; revision: number; schema_version: number; completeness: SpecState['completeness'] }>('POST', `${p(id)}/spec/migration/apply`, body),
   saveDraft: (id: string, draft: Record<string, unknown>, revision: number) => call<SpecState>('PUT', `${p(id)}/spec`, { draft, revision, schema_version: Number(draft.schema_version ?? 2) }),
-  submitSpec: (id: string, revision: number) => call<{ version: number; revision: number; spec: Record<string, unknown>; completeness: SpecState['completeness'] }>('POST', `${p(id)}/spec/submit`, { revision }),
+  submitSpec: (id: string, revision: number) => call<{ version: number; revision: number; spec: Record<string, unknown>; completeness: SpecState['completeness']; unchanged?: boolean; submitted_at?: string | null }>('POST', `${p(id)}/spec/submit`, { revision }),
   versions: (id: string) => call<{ versions: SpecState['versions'] }>('GET', `${p(id)}/spec/versions`),
   version: (id: string, n: number) => call<SpecSnapshot>('GET', `${p(id)}/spec/versions/${n}`),
   thread: async (id: string) => (await call<{ messages: ProjectThreadMessage[] }>('GET', `${p(id)}/thread`)).messages,

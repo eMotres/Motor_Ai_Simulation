@@ -24,6 +24,7 @@ import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
 import MotorThumbnail from './MotorThumbnail';
+import StartProject from './StartProject';
 import MotorRevisionText from '../common/MotorRevisionText';
 import {
   TextPromptDialog, ConfirmDialog,
@@ -342,6 +343,7 @@ const FamilyCatalog: React.FC<{
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — an empty page tells that user nothing.
   const [note, setNote] = useState<string | null>(null);
+  const [noteCode, setNoteCode] = useState<string | null>(null);
   // The tree comes through lib/familyTree: every Ø section on the Motors tab
   // is one of these, and each used to fetch the 900 KB tree for itself
   // (2026-09-13).  `fresh` after a mutation or a `family-changed` event.
@@ -353,6 +355,7 @@ const FamilyCatalog: React.FC<{
       // registered account); the UI's = may write the SHARED config (admin / local dev).
       setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
       setNote(typeof t.note === 'string' ? t.note : null);
+      setNoteCode(typeof t.note_code === 'string' ? t.note_code : null);
       const c = await (await fetch(`${API}/api/family/context`, { cache: 'no-store' })).json();
       setActive(c?.active ? c : null);
       setLoadFailed(false); setTreeLoaded(true);
@@ -866,6 +869,7 @@ const FamilyCatalog: React.FC<{
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
           {(() => {
             const line = emptyCatalogLine({ loaded: treeLoaded, failed: loadFailed, note, canWrite });
+            if (line === 'note' && noteCode === 'no_motors_granted') return <StartProject />;
             return line === 'loading' ? tx('catalogLoading')
               : line === 'note' ? note
               : line === 'noMotors' ? tx('noMotorsAssigned')

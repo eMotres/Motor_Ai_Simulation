@@ -176,11 +176,12 @@ export function controllerLimitsLine(limits: ControllerLimits, t: (key: string, 
   return t('wizard.controllerLimits.from', { parts: parts.join(t('wizard.controllerLimits.join')) });
 }
 
-/** The battery's maximum voltage: the stated pack maximum, else cells x the cell maximum; a DC power source states its voltage. */
+/** The battery's maximum voltage: the stated pack maximum, else cells x the cell maximum; a DC power source states its voltage; AC mains has none. */
 export function batteryMaxV(draft: SpecDraft): number | null {
   const value = record(record((draft.fields as Record<string, unknown> | undefined)?.['2_1']).value);
   const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null);
   if (value.supply_type === 'dc_source') return num(value.dc_source_V);
+  if (value.supply_type === 'ac_mains') return null;          // AC mains is no DC window: nothing to compare with the controller's supply maximum
   const top = num(value.voltage_max_V);
   if (top !== null) return top;
   const cells = num(value.series_cells), cell = num(value.cell_voltage_max_V);

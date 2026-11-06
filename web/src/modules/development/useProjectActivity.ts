@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { developmentApi } from './api';
 import { createActivityPoller } from './projectActivity';
-import { EMPTY_ACTIVITY, readSeen, writeSeen, type ActivityData } from './stageBar';
+import { EMPTY_ACTIVITY, readSeen, writeSeen, type ActivityData } from './stageBarModel';
 
 const storage = (): Storage | null => { try { return window.localStorage; } catch { return null; } };
 

@@ -10,6 +10,8 @@
 //
 // Pure (no imports): web/src/lib/__tests__/configuratorBattery.test.mjs imports this file.
 
+import { decimalNumber } from './decimalText.ts';
+
 export type CellType = 'NMC' | 'LFP';
 export type BatteryField = 'cells' | 'min' | 'nom' | 'max';
 export interface BatteryLike {
@@ -26,7 +28,7 @@ export function batteryFieldText(b: BatteryLike, field: BatteryField): string {
 
 /** Apply one field edit without losing invalid text or the last finite numeric value. */
 export function editBatteryField(b: BatteryLike, field: BatteryField, raw: string): BatteryLike {
-  const value = raw.trim() === '' ? NaN : Number(raw);
+  const value = decimalNumber(raw);                 // a comma is the decimal point
   return {
     ...b,
     ...(Number.isFinite(value) ? { [field]: value } : {}),
@@ -38,7 +40,7 @@ export function editBatteryField(b: BatteryLike, field: BatteryField, raw: strin
 export function batteryFieldNumber(b: BatteryLike, field: BatteryField): number | null {
   const raw = batteryFieldText(b, field);
   if (raw.trim() === '') return null;
-  const value = Number(raw);
+  const value = decimalNumber(raw);
   return Number.isFinite(value) ? value : null;
 }
 

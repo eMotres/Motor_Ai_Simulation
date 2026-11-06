@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Box, Button, Checkbox, Chip, FormControlLabel, MenuItem, Paper, Select, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
+import { useAuth } from '../../contexts/AuthContext';
 import HelpTip from '../common/HelpTip';
 import { digestApi } from './digestApi';
 import { isListed, settingsChange, toggleChosen, type DigestSettingsView, type DigestTarget } from './digestModel';
@@ -14,6 +15,8 @@ const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
 
 const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
   const { t } = useTranslation('common');
+  const { isAdmin, role } = useAuth();
+  const staff = isAdmin || role === 'engineer';           // "Approve first" waits for the owner in Admin: not an option a customer is offered
   const key = target.kind === 'project' ? target.id : `${target.die}|${target.config}`;
   const [view, setView] = useState<DigestSettingsView | null>(null);
   const [open, setOpen] = useState(false);
@@ -44,7 +47,7 @@ const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
     <Paper variant="outlined" sx={PANEL} data-testid="digest-settings">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-1)' }}>{t('digest.title')}</Typography>
-        <HelpTip title={t('digest.tip')} />
+        <HelpTip title={t(staff ? 'digest.tip' : 'digest.tipCustomer')} />
         <Chip size="small" label={t(`digest.mode.${view.mode}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700 }} />
         {view.mode !== 'off' && <Chip size="small" label={t(`digest.frequency.${view.frequency}`)} sx={{ height: 18, fontSize: 10.5 }} />}
         {view.mode !== 'off' && <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{t('digest.recipientsCount', { count: view.will_receive.length })}</Typography>}
@@ -60,7 +63,7 @@ const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
             <Select size="small" value={view.mode} disabled={busy} onChange={(e) => void save({ mode: String(e.target.value) })} inputProps={{ 'aria-label': t('digest.modeLabel') }}>
               <MenuItem value="auto">{t('digest.mode.auto')}</MenuItem>
-              <MenuItem value="approve">{t('digest.mode.approve')}</MenuItem>
+              {(staff || view.mode === 'approve') && <MenuItem value="approve">{t('digest.mode.approve')}</MenuItem>}
               <MenuItem value="off">{t('digest.mode.off')}</MenuItem>
             </Select>
             <Select size="small" value={view.frequency} disabled={busy || view.mode === 'off'} onChange={(e) => void save({ frequency: String(e.target.value) })} inputProps={{ 'aria-label': t('digest.frequencyLabel') }}>

@@ -147,18 +147,18 @@ def test_staff_see_and_edit_a_customers_project_without_any_grant(api):
 
 
 def test_a_customer_owner_never_sets_a_commercial_status(api):
-    """Owner 2026-11-02: in a self-service project the owner is the customer; quote / prototype / production are MOTRES
-    staff's, and so is any change of a project already in a commercial status or closed.  The customer keeps the
-    engineering stages and may still close a project of his own before the commercial stage (the limit says
-    "close one to open another")."""
+    """Owner 2026-11-06: the stage of a project is MOTRES staff's to move.  A customer owner changes no stage; he may only close
+    a project of his own that is still in an engineering stage (the limit says "close one to open another")."""
     pid = _create(api).json()["id"]
     patch = lambda who, status: api(who, "PATCH", f"/api/projects/{pid}", json={"status": status})
     for status in ("quote", "prototype", "production"):
         r = patch("t-customer", status)
         assert r.status_code == 403, (status, r.text)
         assert store.get_project(pid)["status"] == "spec"
-    assert patch("t-customer", "design").status_code == 200
-    assert patch("t-customer", "spec").status_code == 200
+    for status in ("design", "simulation"):
+        assert patch("t-customer", status).status_code == 403, status
+    assert store.get_project(pid)["status"] == "spec"
+    assert patch("t-customer", "spec").status_code == 200            # the stage it already has: nothing to change
     # staff move it to the commercial stage; from there the customer changes nothing (not back, not closed)
     assert patch("t-eng", "quote").status_code == 200
     for status in ("spec", "design", "prototype", "closed"):
@@ -202,3 +202,30 @@ def test_the_owner_report_names_a_self_service_project():
     own = sources._project_audit_text({"action": "create", "entity": "project", "entity_id": "p", "details": {"self_service": True}})
     staff = sources._project_audit_text({"action": "create", "entity": "project", "entity_id": "p", "details": {}})
     assert own[0] == "project created by the customer (self-service)" and staff[0] == "project created"
+
+
+def test_internal_notes_are_staffs_in_both_directions(api):
+    """Owner 2026-11-06: a customer who creates a project is its OWNER, but the internal notes are MOTRES staff's: the customer neither
+    reads them (detail, list, and the answer to his own PATCH) nor writes them; staff keep both."""
+    pid = _create(api).json()["id"]
+    assert api("t-eng", "PATCH", f"/api/projects/{pid}", json={"notes": "wiring looks risky"}).status_code == 200
+    for who, sees in (("t-customer", False), ("t-eng", True), ("t-admin", True)):
+        detail = api(who, "GET", f"/api/projects/{pid}").json()
+        listed = next(p for p in api(who, "GET", "/api/projects").json()["projects"] if p["id"] == pid)
+        assert ("notes" in detail) is sees and ("notes" in listed) is sees, who
+        assert sees or "wiring looks risky" not in json.dumps([detail, listed])
+    denied = api("t-customer", "PATCH", f"/api/projects/{pid}", json={"notes": "my note"})
+    assert denied.status_code == 403
+    assert store.get_project(pid)["notes"] == "wiring looks risky"
+    ok = api("t-customer", "PATCH", f"/api/projects/{pid}", json={"title": "Renamed by the owner"})
+    assert ok.status_code == 200 and "notes" not in ok.json()
+    assert api("t-admin", "PATCH", f"/api/projects/{pid}", json={"notes": "second"}).json()["notes"] == "second"
+
+
+def test_the_project_status_is_read_only_for_a_customer_and_staff_keep_it(api):
+    pid = _create(api).json()["id"]
+    for status in ("design", "simulation", "quote", "no-such-stage"):
+        assert api("t-customer", "PATCH", f"/api/projects/{pid}", json={"status": status}).status_code == 403, status
+    assert store.get_project(pid)["status"] == "spec"
+    assert api("t-eng", "PATCH", f"/api/projects/{pid}", json={"status": "simulation"}).json()["status"] == "simulation"
+    assert api("t-admin", "PATCH", f"/api/projects/{pid}", json={"status": "spec"}).json()["status"] == "spec"

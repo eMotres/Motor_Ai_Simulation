@@ -478,6 +478,7 @@
   "digest": {
     "title": "Updates by e-mail",
     "tip": "A short e-mail saying what changed. Auto: sent by itself every day at 06:00 Slovenian time. Approve: drafted, and sent only after the owner approves the text in Admin, Digests. Off: nothing. A day with no changes sends nothing.",
+    "tipCustomer": "A short e-mail saying what changed. Auto: sent by itself every day at 06:00 Slovenian time. Off: nothing. A day with no changes sends nothing.",
     "change": "Settings",
     "hide": "Hide",
     "loadFailed": "Updates by e-mail: {reason}",
@@ -709,7 +710,7 @@
       "error": "Could not save. Try again."
     },
     "agreement": {
-      "title": "Platform Agreement: needed to simulate",
+      "title": "Platform Agreement",
       "point1": "Simulation is free (FREE mode).",
       "point2": "In FREE mode MOTRES may train its own AI on the engineering data you supply from now on. Personal data is never used.",
       "point3": "That cannot be undone, even if you later order the motor or switch to PRIVATE.",
@@ -719,7 +720,7 @@
       "modeFree": "FREE: free simulation; MOTRES may train its AI on my engineering data.",
       "modePrivate": "Ask for PRIVATE (paid): no AI training; our team will contact me.",
       "privateNote": "Our team will contact you about PRIVATE. Until then your data are not used for AI training.",
-      "privateDone": "Our team will contact you about PRIVATE. You can simulate now; your data are not used for AI training.",
+      "privateDone": "Our team will contact you about PRIVATE. Until then your data are not used for AI training. You can continue.",
       "continue": "Continue",
       "accept": "Accept",
       "cancel": "Cancel",

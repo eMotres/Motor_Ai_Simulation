@@ -103,28 +103,38 @@ def test_declared_oversize_body_is_refused_before_reading(client, monkeypatch):
 
 def test_internal_documents_are_hidden_from_customers(client):
     public = upload(client, name="public.pdf").json()
-    secret = upload(client, name="internal.step", internal="true").json()
+    secret = upload(client, who="t-admin", name="internal.step", internal="true").json()
     assert secret["internal"] is True
-    staff = client.get("/api/projects/ciano/documents", headers=hdr("t-owner")).json()["documents"]
+    staff = client.get("/api/projects/ciano/documents", headers=hdr("t-admin")).json()["documents"]
     assert {d["id"] for d in staff} == {public["id"], secret["id"]}
+    # a customer who owns the project is still the customer side
+    owner = client.get("/api/projects/ciano/documents", headers=hdr("t-owner")).json()
+    assert [d["id"] for d in owner["documents"]] == [public["id"]] and owner["can_edit"] is True and owner["is_staff"] is False
+    assert client.get("/api/projects/ciano/documents/%s/download" % secret["id"], headers=hdr("t-owner")).status_code == 404
+    assert client.patch("/api/projects/ciano/documents/%s" % secret["id"], headers=hdr("t-owner"), json={"internal": False}).status_code == 403
+    assert client.patch("/api/projects/ciano/documents/%s" % public["id"], headers=hdr("t-owner"), json={"internal": True}).status_code == 403
+    assert upload(client, name="mine.step", internal="true").json()["internal"] is False
+    public2 = [d["id"] for d in client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"] if d["name"] == "mine.step"]
+    assert len(public2) == 1
+    client.delete("/api/projects/ciano/documents/%s" % public2[0], headers=hdr("t-owner"))
     cust = client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"]
     assert [d["id"] for d in cust] == [public["id"]]
     assert client.get("/api/projects/ciano/documents/%s/download" % secret["id"], headers=hdr("t-customer")).status_code == 404
-    assert client.get("/api/projects/ciano/documents/%s/download" % secret["id"], headers=hdr("t-owner")).status_code == 200
+    assert client.get("/api/projects/ciano/documents/%s/download" % secret["id"], headers=hdr("t-admin")).status_code == 200
 
 
 def test_patch_internal_folder_revision_with_audit(client, tmp_path):
     doc = upload(client, name="notes.pdf").json()
     url = "/api/projects/ciano/documents/%s" % doc["id"]
-    r = client.patch(url, headers=hdr("t-owner"), json={"internal": True, "folder": "bom", "revision": "C"})
+    r = client.patch(url, headers=hdr("t-admin"), json={"internal": True, "folder": "bom", "revision": "C"})
     assert r.status_code == 200 and (r.json()["internal"], r.json()["folder"], r.json()["revision"]) == (True, "bom", "C")
     assert client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"] == []
     assert client.patch(url, headers=hdr("t-owner"), json={"folder": "nope"}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={"internal": "yes"}).status_code == 422
+    assert client.patch(url, headers=hdr("t-admin"), json={"internal": "yes"}).status_code == 422
     assert client.patch(url, headers=hdr("t-owner"), json={"revision": "r" * 41}).status_code == 422
     assert client.patch(url, headers=hdr("t-owner"), json={}).status_code == 422
     assert client.patch(url, headers=hdr("t-customer"), json={"internal": False}).status_code == 403
-    assert client.patch("/api/projects/ciano/documents/doc-missing", headers=hdr("t-owner"), json={"internal": False}).status_code == 404
+    assert client.patch("/api/projects/ciano/documents/doc-missing", headers=hdr("t-admin"), json={"internal": False}).status_code == 404
     assert "document.update" in audit_actions(tmp_path)
 
 
@@ -176,7 +186,7 @@ def test_zip_holds_only_visible_files_in_folders(client, tmp_path):
     a = upload(client, name="board.kicad_pro", data=b"kicad").json()
     upload(client, name="bom.csv", data=b"ref,qty\nR1,2\n", revision="A")
     upload(client, name="bom.csv", data=b"ref,qty\nR1,3\n")                              # same name twice
-    upload(client, name="hidden.step", data=b"secret", internal="true")
+    upload(client, who="t-admin", name="hidden.step", data=b"secret", internal="true")
     gone = upload(client, name="archived.pdf", data=b"old").json()
     client.delete("/api/projects/ciano/documents/%s" % gone["id"], headers=hdr("t-owner"))
     assert client.get("/api/projects/ciano/documents.zip").status_code == 401
@@ -193,7 +203,7 @@ def test_zip_holds_only_visible_files_in_folders(client, tmp_path):
     assert listed == ["MANIFEST.txt", "bom/bom (2).csv", "bom/bom.csv", "kicad/board.kicad_pro"]
     assert z.read("kicad/board.kicad_pro") == b"kicad" and a["sha256"] in z.read("MANIFEST.txt").decode()
     assert "@" not in z.read("MANIFEST.txt").decode()
-    _z, staff = names("t-owner")
+    _z, staff = names("t-admin")
     assert "3d/hidden.step" in staff and "docs/archived.pdf" not in staff
     log = [json.loads(x) for x in (tmp_path / "downloads.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [row["kind"] for row in log] == ["project_documents_zip", "project_documents_zip"]

@@ -104,4 +104,4 @@ export interface ProjectDocument {
   id: string; name: string; folder: DocumentFolder; revision: string; internal: boolean; size: number; sha256: string;
   uploader: string; uploaded_at: string; archived: boolean; archived_at?: string | null; is_cover?: boolean;
 }
-export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; max_bytes: number; cover_version?: string | null }
+export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; is_staff?: boolean; max_bytes: number; cover_version?: string | null }

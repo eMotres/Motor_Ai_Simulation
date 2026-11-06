@@ -1706,10 +1706,24 @@ async def create_thread(request: Request, die: str, config: str):
     user, _production = require_member_with_full_view(request, die, config)
     body = await _json_or_form(request)
     part_id = body.get("part_id") if isinstance(body, dict) else None
-    thread = models.normalize_thread({"part_id": part_id})
-    store.mutate_file(die, config, "threads.json", lambda d: d.setdefault("threads", []).append(thread))
-    _touch(die, config)
-    _audit(_email(user), die, config, "create", "thread", thread["id"], {"thread": thread})
+    # one thread per part and one general: a page holding an old list reuses the thread instead of hiding messages in a second one
+    made: dict = {}
+
+    def mut(d):
+        rows = d.setdefault("threads", [])
+        for row in rows:
+            if isinstance(row, dict) and (row.get("part_id") or None) == (part_id or None):
+                made["thread"] = row
+                return
+        made["thread"] = models.normalize_thread({"part_id": part_id})
+        made["new"] = True
+        rows.append(made["thread"])
+
+    store.mutate_file(die, config, "threads.json", mut)
+    thread = made["thread"]
+    if made.get("new"):
+        _touch(die, config)
+        _audit(_email(user), die, config, "create", "thread", thread["id"], {"thread": thread})
     return thread
 
 

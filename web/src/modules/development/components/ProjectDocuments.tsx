@@ -10,6 +10,7 @@ import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import HelpTip from '../../../components/common/HelpTip';
+import { useAuth } from '../../../contexts/AuthContext';
 import { NARROW } from '../../../lib/narrowLayout';
 import { developmentApi, downloadProjectDocument, downloadProjectDocumentsZip } from '../api';
 import type { DocumentFolder, ProjectDocument } from '../types';
@@ -29,6 +30,9 @@ interface Props {
 export default function ProjectDocuments({ projectId, language, t, onCoverChange }: Props) {
   const [docs, setDocs] = useState<ProjectDocument[]>([]);
   const [canEdit, setCanEdit] = useState(false);
+  const { isAdmin, role } = useAuth();
+  // the INTERNAL switch is MOTRES staff's: a customer-side owner uploads and archives, but never sees or ticks it
+  const showInternal = canEdit && (isAdmin || role === 'engineer');
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<DocumentFolder | 'all'>('all');
   const [busy, setBusy] = useState('');
@@ -134,7 +138,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
           <TableCell>{t('documents.colName')}</TableCell><TableCell>{t('documents.colCategory')}</TableCell>
           <TableCell>{t('documents.colRevision')}</TableCell><TableCell align="right">{t('documents.colSize')}</TableCell>
           <TableCell>{t('documents.colUploader')}</TableCell><TableCell>{t('documents.colDate')}</TableCell>
-          {canEdit && <TableCell><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{t('documents.colInternal')}<HelpTip title={t('documents.internalTip')} /></Box></TableCell>}
+          {showInternal && <TableCell><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{t('documents.colInternal')}<HelpTip title={t('documents.internalTip')} /></Box></TableCell>}
           <TableCell />
         </TableRow></TableHead>
         <TableBody>
@@ -153,7 +157,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
             <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{formatBytes(d.size, language)}</TableCell>
             <TableCell>{d.uploader || t('documents.member')}</TableCell>
             <TableCell sx={{ whiteSpace: 'nowrap' }}>{dateOf(d.uploaded_at)}</TableCell>
-            {canEdit && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
+            {showInternal && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
             <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
               <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => void run(() => downloadProjectDocument(projectId, d))}><DownloadIcon fontSize="small" /></IconButton></Tooltip>
               {canEdit && !d.archived && (d.is_cover
@@ -164,7 +168,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
                 : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
             </TableCell>
           </TableRow>)}
-          {!shown.length && <TableRow><TableCell colSpan={canEdit ? 8 : 7}>
+          {!shown.length && <TableRow><TableCell colSpan={showInternal ? 8 : 7}>
             <Stack alignItems="center" sx={{ py: 3, color: 'var(--text-3)' }}>
               <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>
             </Stack>

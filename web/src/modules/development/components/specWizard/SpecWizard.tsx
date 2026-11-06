@@ -18,6 +18,10 @@ export interface SpecWizardProps {
   onStep: (index: number) => void;
   completeness?: Completeness;
   saving: boolean; saveError: string; onRetrySave: () => void; onReloadDraft: () => void;
+  /** answers the last save set aside, named (the rest of the form is saved); '' = none */
+  rejectedNote?: string;
+  /** the newest submitted version, kept for good: its number and date, and whether the draft changed since */
+  submittedInfo?: { version: number; at: string | null; changed: boolean } | null;
   submitError: string[]; submitConflict: boolean; submittedVersion?: number | null; submitBusy: boolean; onSubmit: () => void;
   /** a field to open (a submit error, a review link): the wizard goes to its step, opens its group and focuses it */
   reveal: { field: string; n: number } | null;
@@ -130,12 +134,13 @@ export default function SpecWizard(p: SpecWizardProps) {
             <Tooltip title={tr('sectionReview')}><IconButton aria-label={`${tr('sectionReview')}: ${tr(current.title)}`} onClick={() => p.onOpenFieldReview(`section:${current.id}`)} sx={{ color: sectionComments.length ? 'primary.main' : 'var(--text-4)', minWidth: TOUCH, minHeight: TOUCH }}><ChatBubbleOutlineIcon sx={{ fontSize: 18 }} />{sectionComments.length > 0 && <Box component="span" sx={{ fontSize: 11, ml: 0.3 }}>{sectionComments.length}</Box>}</IconButton></Tooltip>
           </Stack>}
           {isReview
-            ? <ReviewStep env={stepEnv} completeness={completeness} submitErrors={p.submitError} submitConflict={p.submitConflict} submittedVersion={p.submittedVersion} onReload={p.onReloadDraft} onSubmit={p.onSubmit} submitBusy={p.submitBusy || saving}
+            ? <ReviewStep env={stepEnv} completeness={completeness} submitErrors={p.submitError} submitConflict={p.submitConflict} submittedVersion={p.submittedVersion} submittedInfo={p.submittedInfo} onReload={p.onReloadDraft} onSubmit={p.onSubmit} submitBusy={p.submitBusy || saving}
               openComments={openComments} onOpenComment={p.onOpenFieldReview} onReveal={reveal} history={p.history} />
             : <StepBody env={stepEnv} step={current} />}
         </Box>
         {p.banner}
         {!isReview && p.submitError.length > 0 && <Alert severity="error"><Typography sx={{ fontWeight: 700, fontSize: 12 }}>{tr('submitBlocked')}</Typography>{p.submitError.map((x, i) => <Typography key={`${i}-${x}`} sx={{ fontSize: 12 }}>• {x}</Typography>)}</Alert>}
+        {p.rejectedNote && <Alert severity="warning" data-testid="save-rejected">{p.rejectedNote}</Alert>}
         {saveError && <Alert severity="error" action={<><Button color="inherit" size="small" onClick={p.onRetrySave}>{tr('retrySave')}</Button><Button color="inherit" size="small" onClick={p.onReloadDraft}>{tr('reloadDraft')}</Button></>}>{tr('saveFailed', { reason: saveError })}</Alert>}
         <Stack direction="row" alignItems="center" spacing={1.5} sx={{ position: 'sticky', bottom: 0, zIndex: 2, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: 1.5, py: 1, boxShadow: '0 -4px 12px rgba(0,0,0,.06)' }}>
           <Button variant="outlined" disabled={!back} onClick={() => onStep(step - 1)} sx={{ minHeight: 48, px: 2.5, textTransform: 'none', borderRadius: '12px' }}>{tr('previous')}</Button>

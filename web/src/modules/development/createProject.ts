@@ -21,5 +21,7 @@ export function createErrorText(e: unknown, t: (key: string, args?: Record<strin
   if (status === 429 && detail && typeof detail === 'object' && detail.code === 'project_limit') {
     return t('projectLimit', { count: typeof detail.limit === 'number' ? detail.limit : 5 });
   }
+  // the data agreement is accepted at New project (owner 2026-11-05); a cancelled dialog says so, not "to start a simulation"
+  if (status === 428 && detail && typeof detail === 'object' && detail.code === 'agreement_required') return t('agreementNeeded');
   return e instanceof Error ? e.message : String(e);
 }

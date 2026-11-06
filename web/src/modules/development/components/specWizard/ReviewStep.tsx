@@ -4,30 +4,37 @@ import { canSubmitSpec } from '../../submitFailure';
 import type { StepEnv } from './env';
 import { reviewItems, localized } from './reviewSummary';
 import { stillOpen } from './steps';
+import { fieldRequired } from '../../wizardState';
 import DeliveryConflict from './DeliveryConflict';
 import { TOUCH } from './ui';
 
 /** The review before submit: a summary card per step with large values and an Edit link, a soft "Still open" card for what
  *  is missing or marked "answer later", the open comments, the version history and the submit button. */
-export default function ReviewStep({ env, completeness, submitErrors, submitConflict, submittedVersion, onReload, onSubmit, submitBusy, openComments, onOpenComment, onReveal, history }: {
-  env: StepEnv; completeness?: Completeness; submitErrors: string[]; submitConflict: boolean; submittedVersion?: number | null; onReload: () => void; onSubmit: () => void; submitBusy: boolean;
+export default function ReviewStep({ env, completeness, submitErrors, submitConflict, submittedVersion, submittedInfo, onReload, onSubmit, submitBusy, openComments, onOpenComment, onReveal, history }: {
+  env: StepEnv; completeness?: Completeness; submitErrors: string[]; submitConflict: boolean; submittedVersion?: number | null; submittedInfo?: { version: number; at: string | null; changed: boolean } | null; onReload: () => void; onSubmit: () => void; submitBusy: boolean;
   openComments: ProjectThreadMessage[]; onOpenComment: (ref: string) => void; onReveal: (fieldId: string) => void; history: React.ReactNode;
 }) {
   const { tr, lang, draft, steps, canEditSpec, profile } = env;
   const fieldSteps = steps.filter((s) => s.kind !== 'review');
-  const open = stillOpen(fieldSteps, draft);
   const fieldOf = (id: string) => fieldSteps.flatMap((s) => s.fields).find((f) => f.id === id);
-  const openCount = (completeness?.unknown ?? 0) + (completeness?.missing ?? 0) + (completeness?.invalid ?? 0);
+  // ONE count (owner 2026-11-06): the open REQUIRED fields.  The counts line, the Submit label and the "Still open" list all come from this
+  // list; an optional field marked "answer later" is not part of what blocks or counts.
+  const open = stillOpen(fieldSteps, draft).filter((o) => { const f = fieldOf(o.fieldId); return !!f && fieldRequired(f, draft) && !f.handled_by; });
+  const openIn = (state: string) => open.filter((o) => o.state === state).length;
+  const openCount = open.length;
+  const submittedDate = submittedInfo?.at ? new Date(submittedInfo.at).toLocaleDateString(lang === 'zh-CN' ? 'zh-CN' : 'en-GB', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+  const noChanges = !!submittedInfo && !submittedInfo.changed;
   const cards = fieldSteps.map((step) => ({ step, index: steps.indexOf(step), items: reviewItems(step, draft, { lang, t: tr, profile }) })).filter((c) => c.items.length > 0);
   return <Stack spacing={2.5} sx={{ minWidth: 0 }}>
     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-end' }}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography component="h1" tabIndex={-1} sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 700, color: 'var(--text-0)', outline: 'none' }}>{tr(openCount ? 'wizard.review.headingOpen' : 'wizard.review.headingReady')}</Typography>
-        <Typography role="status" sx={{ fontSize: 14, color: 'var(--text-2)', mt: 0.5 }}>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: completeness?.unknown ?? 0, missing: completeness?.missing ?? 0, invalid: completeness?.invalid ?? 0 })}</Typography>
+        <Typography role="status" sx={{ fontSize: 14, color: 'var(--text-2)', mt: 0.5 }}>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: openIn('unknown'), missing: openIn('missing'), invalid: openIn('invalid') })}</Typography>
       </Box>
-      {canSubmitSpec(canEditSpec) && <Tooltip title={<>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={submitBusy} onClick={onSubmit} sx={{ minHeight: 52, px: 3.5, fontSize: 16, fontWeight: 600, textTransform: 'none', borderRadius: '12px' }}>{tr(openCount ? 'wizard.review.submitOpen' : 'wizard.review.submit', { count: openCount })}</Button></span></Tooltip>}
+      {canSubmitSpec(canEditSpec) && <Tooltip title={noChanges ? tr('wizard.review.noChangesTip') : <>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={submitBusy || noChanges} onClick={onSubmit} sx={{ minHeight: 52, px: 3.5, fontSize: 16, fontWeight: 600, textTransform: 'none', borderRadius: '12px' }}>{noChanges ? tr('wizard.review.noChanges', { version: submittedInfo!.version }) : tr(openCount ? 'wizard.review.submitOpen' : 'wizard.review.submit', { count: openCount })}</Button></span></Tooltip>}
     </Stack>
     <DeliveryConflict env={env} />
+    {submittedInfo && <Alert severity={noChanges ? 'success' : 'info'} data-testid="spec-submitted-state">{tr(noChanges ? 'wizard.review.submittedLine' : 'wizard.review.submittedChanged', { version: submittedInfo.version, date: submittedDate })}</Alert>}
     {submittedVersion != null && <Alert severity="success" data-testid="spec-submitted">{tr('submitDone', { version: submittedVersion })}</Alert>}
     {submitErrors.map((x, i) => <Alert key={i} severity="error" action={i === 0 && submitConflict ? <Button color="inherit" size="small" onClick={onReload}>{tr('reloadDraft')}</Button> : undefined}>{x}</Alert>)}
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 2, alignItems: 'start' }}>

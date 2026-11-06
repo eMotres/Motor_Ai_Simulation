@@ -64,7 +64,13 @@ import { createErrorText, createPayload, createReady } from '../createProject';
   import DigestSettings from '../../../components/digest/DigestSettings';
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost';
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
-const completenessNumbers = (c?: Completeness) => ({ filled: c?.filled_required ?? c?.filled ?? 0, total: c?.total_required ?? c?.required ?? 0 });
+/** The ONE progress number everywhere (owner 2026-11-06): the required fields ANSWERED of all required.  A field marked "Answer later" is not
+ *  answered; `filled_required` of the API counts it, so it is only the fallback of an answer that has no `answered`. */
+const completenessNumbers = (c?: Completeness) => ({ filled: c?.answered ?? c?.filled_required ?? c?.filled ?? 0, total: c?.total_required ?? c?.required ?? 0 });
+/** The customer-side words of a refused value (the server's text is English and technical). */
+const rejectedText = (tr: (key: string) => string, message: string) => /outside allowed range/.test(message) ? tr('saveRejected.range') : /number required/.test(message) ? tr('saveRejected.number') : tr('saveRejected.other');
+/** The submitted version of a loaded specification: its number, its date and the revision at which the draft equals it (null = changed since). */
+const submittedFrom = (project: string, sp: SpecState) => sp.submitted ? { project, version: sp.submitted.version, at: sp.submitted.submitted_at ?? null, atRevision: sp.submitted.unchanged ? sp.revision : null } : null;
 const normaliseDraft = (value: unknown): SpecDraft => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ...DEFAULT_DRAFT, fields: {}, production: {} };
   const d = value as SpecDraft;
@@ -72,7 +78,9 @@ const normaliseDraft = (value: unknown): SpecDraft => {
 };
 /** Project list, specification wizard and collaboration views for the Development tab. */
 export default function DevelopmentPage() {
-  const { t: tr, i18n } = useTranslation('development');
+  // 'controller' too: the Supply step's battery block reads it (useTranslation suspends until a namespace is loaded; asking for it here
+  // makes that wait happen when the page opens, not in the middle of a click on the Supply step after a reload)
+  const { t: tr, i18n } = useTranslation(['development', 'controller']);
   const { user, isAdmin, role } = useAuth();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selected, setSelected] = useState<ProjectSummary | null>(null);
@@ -116,6 +124,18 @@ export default function DevelopmentPage() {
   const [submitError, setSubmitError] = useState<string[]>([]);
   const [submittedVersion, setSubmittedVersion] = useState<{ project: string; version: number } | null>(null);
   const [submitConflict, setSubmitConflict] = useState(false);
+  // the newest submitted version, kept for good (loaded with the specification): shown on the Review page after a reload too
+  const [submitted, setSubmitted] = useState<{ project: string; version: number; at: string | null; atRevision: number | null } | null>(null);
+  // answers the server refused at the last save (one bad value never blocks the rest): field id -> customer-side reason
+  const [rejected, setRejected] = useState<Record<string, string>>({});
+  const saveResultRef = useRef<(project: string, result: SpecState) => void>(() => {});
+  // "New project" asked from another page (a new account's first screen)
+  useEffect(() => {
+    const open = () => { try { sessionStorage.removeItem('development.newProject'); } catch { /* storage blocked */ } setCreateOpen(true); };
+    try { if (sessionStorage.getItem('development.newProject')) open(); } catch { /* storage blocked */ }
+    window.addEventListener('development:new-project', open);
+    return () => window.removeEventListener('development:new-project', open);
+  }, []);
   const [catalog, setCatalog] = useState<CatalogController[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<ProjectThreadMessage[]>([]);
@@ -174,7 +194,11 @@ export default function DevelopmentPage() {
   const completeCounts = completenessNumbers(completeness);
   const draftRef = useRef<SpecDraft>(DEFAULT_DRAFT);
   const revisionRef = useRef(0);
-  const saveCoordinator = useMemo(() => createDraftSaveCoordinator<SpecDraft>(async (project, draft, revision) => developmentApi.saveDraft(project, draft as Record<string, unknown>, revision)), []);
+  const saveCoordinator = useMemo(() => createDraftSaveCoordinator<SpecDraft>(async (project, draft, revision) => {
+    const result = await developmentApi.saveDraft(project, draft as Record<string, unknown>, revision);
+    saveResultRef.current(project, result);
+    return result;
+  }), []);
   const saveFailed = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectToken = useRef('');
@@ -222,7 +246,7 @@ export default function DevelopmentPage() {
     if (openEpoch !== projectOpenEpochRef.current) return true;
     const identityEpoch = projectEpochRef.current;
     setSelected(p); setView('specification'); setStep(0); setSpec(null); setMessages([]); setMotors([]); setSnapshots([]); setShowAllVersions(false); setPendingProjectStatus(null); setError(''); setBusy(false); setLinkOpen(false); setUnlinkTarget(null); setHistoryDetail(null); motorLoadEpochRef.current += 1; setSubmitError([]);
-    setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setMessageFieldRef('');
+    setReloadPreview(null); setMigrationOpen(false); setMigrationPreview(null); setMigrationAck(false); setFieldReviewOpen(false); setReviewField(''); setReviewComment('');    setVersions([]); setCompareVersions(null); setVersionA(null); setVersionB(null); setFieldErrors({}); setRejected({}); setSubmitted(null); setMessageFieldRef('');
     const token = `${p.id}:${Date.now()}`; projectToken.current = token; currentProjectRef.current = p.id;
     try {
       const [detail, sp] = await Promise.all([developmentApi.get(p.id), developmentApi.spec(p.id)]);
@@ -233,7 +257,7 @@ export default function DevelopmentPage() {
         setSchema(versionSchema);
       }
       const loadedDraft = { ...normaliseDraft(sp.draft), schema_version: sp.schema_version ?? 1 };
-      setSelected(detail); setSpec({ ...sp, draft: loadedDraft });
+      setSelected(detail); setSpec({ ...sp, draft: loadedDraft }); setSubmitted(submittedFrom(p.id, sp));
       draftRef.current = loadedDraft; revisionRef.current = sp.revision; saveCoordinator.setRevision(p.id, sp.revision);
       return true;
     } catch (e) {
@@ -264,12 +288,12 @@ export default function DevelopmentPage() {
   }, [user?.email, loading, projects, selected, loadProject]);
   useEffect(() => {
     if (!pendingView || !selected || !spec || selected.id !== pendingView.project) return;
-    const next = restorableView(pendingView, sections.map((item) => item.id), canEditProject);
+    const next = restorableView(pendingView, sections.map((item) => item.id), canManageGlobally);
     setPendingView(null);
     setStep(next.step);
     if (next.view === 'specification') { setView('specification'); if (next.step > 0) showCard(next.step); } else void openTab(next.view);
     restoringView.current = false;
-  }, [pendingView, selected, spec, sections.length, canEditProject]);
+  }, [pendingView, selected, spec, sections.length, canManageGlobally]);
   useEffect(() => {
     const identity = user?.email;
     if (!identity || viewRestoredFor.current !== identity || restoringView.current || pendingView) return;
@@ -378,9 +402,9 @@ export default function DevelopmentPage() {
     const { fresh, project } = reloadPreview;
     const draft = { ...normaliseDraft(fresh.draft), schema_version: fresh.schema_version ?? 1 };
     draftRef.current = draft; revisionRef.current = fresh.revision; saveCoordinator.setRevision(project, fresh.revision);
-    saveFailed.current = false; setSaveError(''); setSaving(false); setFieldErrors({}); setSubmitError([]);
+    saveFailed.current = false; setSaveError(''); setSaving(false); setFieldErrors({}); setRejected({}); setSubmitError([]);
     if (fresh.schema) setSchema(fresh.schema);
-    setSpec({ ...fresh, draft }); setReloadPreview(null);
+    setSpec({ ...fresh, draft }); setSubmitted(submittedFrom(project, fresh)); setReloadPreview(null);
   };
   const requestMigrationPreview = async () => {
     if (!selected || !spec || !canEditSpec || (spec.schema_version ?? 1) >= 2) return;
@@ -440,6 +464,7 @@ export default function DevelopmentPage() {
       else { const refreshed = await developmentApi.spec(project); if (projectToken.current !== token) return; revisionRef.current = refreshed.revision; saveCoordinator.setRevision(project, refreshed.revision); }
       setSpec((old) => old ? { ...old, version: result.version, completeness: result.completeness, revision: (result as any).revision ?? old.revision } : old);
       setSubmittedVersion({ project, version: result.version });
+      setSubmitted({ project, version: result.version, at: result.submitted_at ?? null, atRevision: typeof result.revision === 'number' ? result.revision : revisionRef.current });
       await loadSpecHistory(project, token);
     } catch (e) {
       const body = e instanceof DevelopmentApiError ? e.body as { detail?: unknown } : null;
@@ -510,9 +535,9 @@ export default function DevelopmentPage() {
     if (!link || !selected || !spec || selected.id !== link.id) return;
     linkTarget.current = null;
     const wanted: ViewTab = link.view ?? (link.die ? 'motors' : 'specification');
-    const next: ViewTab = wanted === 'notes' && !canEditProject ? 'specification' : wanted;
+    const next: ViewTab = wanted === 'notes' && !canManageGlobally ? 'specification' : wanted;
     if (next === 'specification') setView('specification'); else void openTab(next);
-  }, [selected, spec, canEditProject]);
+  }, [selected, spec, canManageGlobally]);
   const changeShowAllVersions = (value: boolean) => {
     setShowAllVersions(value);
     showAllVersionsRef.current = value;
@@ -574,8 +599,18 @@ export default function DevelopmentPage() {
     catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); } finally { if (projectToken.current === token) setBusy(false); }
   };
   const postFieldReview = async () => {    if (!selected || !reviewField || !reviewComment.trim()) return;    const id = selected.id, token = projectToken.current;    const rowId = reviewField.startsWith('mission_profile:') ? reviewField.slice('mission_profile:'.length) : undefined;    setBusy(true); setError('');    try {      if (canEditSpec) await flushSave();      if (projectToken.current !== token || currentProjectRef.current !== id) return;      await developmentApi.postMessage(id, reviewComment.trim(), reviewField, { revision: revisionRef.current, row_id: rowId });      const thread = await developmentApi.thread(id);      if (projectToken.current === token && currentProjectRef.current === id) { setReviewComment(''); setMessages(thread); }    }    catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); }    finally { if (projectToken.current === token) setBusy(false); }  };  const resolveReviewMessage = async (messageId: string, resolved: boolean) => {    if (!selected) return;    const id = selected.id, token = projectToken.current;    try { await developmentApi.resolveMessage(id, messageId, resolved); const thread = await developmentApi.thread(id); if (projectToken.current === token && currentProjectRef.current === id) setMessages(thread); }    catch (e) { if (projectToken.current === token) setError(e instanceof Error ? e.message : String(e)); }  };  const reviewRefs = (ref: string) => { const card = ref.startsWith('section:') ? sections.find((item) => stepCommentRefs(item).includes(ref)) : undefined; return card ? stepCommentRefs(card) : [ref]; };  const openFieldReview = (fieldRef: string) => {    setReviewField(fieldRef);    setFieldReviewOpen(true);  };
-  const fields = useSpecFields({ tr, lang, draftRef, updateDraft, spec, steps: sections, profile, canEditSpec, busy, migrationBusy, fieldErrors, messages, catalog, openFieldReview });
+  const fields = useSpecFields({ tr, lang, draftRef, updateDraft, spec, steps: sections, profile, canEditSpec, busy, migrationBusy, fieldErrors: { ...fieldErrors, ...rejected }, messages, catalog, openFieldReview });
   const { label, sectionTitle } = fields;
+  // a customer never reads the name of the commercial stage (no price talk while designing)
+  const statusText = (status: string) => !canManageGlobally && status === 'quote' ? tr('statusCustomerQuote') : tr(`status.${status}`);
+  // the answers the server set aside at the last save, named at the top of the form; the rest of the form is saved
+  saveResultRef.current = (project, result) => {
+    if (currentProjectRef.current !== project) return;
+    setRejected(Object.fromEntries((result.rejected ?? []).map((item) => [item.field, rejectedText(tr, item.message)])));
+  };
+  const rejectedNote = Object.keys(rejected).length
+    ? tr('saveRejected.title', { fields: Object.keys(rejected).map((id) => { const f = sections.flatMap((s) => s.fields).find((x) => x.id === id); return f ? label(f.short_label ?? f.label) : id; }).join(', ') })
+    : '';
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
     <HeaderRight tab="development"><HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} /><Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button></HeaderRight>
@@ -584,7 +619,7 @@ export default function DevelopmentPage() {
     <CreateDialog open={createOpen} busy={busy} staff={canManageGlobally} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)', [NARROW]: { flex: '1 1 100%' } }}>{selected.title}</Typography></Tooltip>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr('projectStatusTip')} />{canEditProject && allowedProjectStatuses(canManageGlobally, selected.status).length > 1 ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{allowedProjectStatuses(canManageGlobally, selected.status).map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {tr(`status.${selected.status}`)}</Typography>}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)', [NARROW]: { flex: '1 1 100%' } }}>{selected.title}</Typography></Tooltip>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr(canManageGlobally ? 'projectStatusTip' : 'projectStatusTipCustomer')} />{canManageGlobally && allowedProjectStatuses(canManageGlobally, selected.status).length > 1 ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{allowedProjectStatuses(canManageGlobally, selected.status).map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {statusText(selected.status)}</Typography>}{!canManageGlobally && canEditProject && ['spec', 'design', 'simulation'].includes(selected.status) && <Button size="small" disabled={busy} onClick={() => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, 'closed'))}>{tr('closeProject')}</Button>}</Box>
     {selected.cover_version && <ProjectCover projectId={selected.id} version={selected.cover_version} height={140} alt={selected.title} sx={{ mb: 1.5 }} />}
     {canEditSpec && <DigestSettings target={{ kind: 'project', id: selected.id }} />}
     
@@ -596,7 +631,7 @@ export default function DevelopmentPage() {
         { id: 'messages', label: projectUnread(selected) > 0 ? <Tooltip title={tr('unread.tip', { count: projectUnread(selected) })}><span>{tr('tabs.messages')} <Chip size="small" color="primary" label={unreadLabel(projectUnread(selected))} sx={{ height: 16, fontSize: 10, ml: 0.5 }} /></span></Tooltip> : tr('tabs.messages') },
         { id: 'documents' as const, label: tr('tabs.documents') },
         ...(hasProductionView(productions) ? [{ id: 'production' as const, label: tr('tabs.production') }] : []),
-        ...(canEditProject ? [{ id: 'notes' as const, label: tr('tabs.notes') }] : []),
+        ...(canManageGlobally ? [{ id: 'notes' as const, label: tr('tabs.notes') }] : []),
         // the quote an admin shared (owner 2026-11-03): read-only, for the project's members (the server decides who may read it)
         // the project timeline (owner 2026-11-03): read-only for the project's members, edited by admins
         ...(selected.timeline_ready || isAdmin ? [{ id: 'timeline' as const, label: tr('tabs.timeline') }] : []),
@@ -610,9 +645,10 @@ export default function DevelopmentPage() {
       {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecWizard key={selected.id} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}
         project={selected} step={step} onStep={showCard} completeness={completeness} saving={saving} saveError={saveError}
         onRetrySave={() => void enqueueSave(selected.id, draftRef.current, projectToken.current).catch(() => {})} onReloadDraft={() => void reloadDraft()}
+        rejectedNote={rejectedNote} submittedInfo={submitted?.project === selected.id ? { version: submitted.version, at: submitted.at, changed: submitted.atRevision === null || spec.revision !== submitted.atRevision || saving } : null}
         submitError={submitError} submitConflict={submitConflict} submittedVersion={submittedVersion?.project === selected.id ? submittedVersion.version : null} submitBusy={busy || saving} onSubmit={() => void onSubmitSpec()}
         reveal={reveal} messages={messages} onOpenFieldReview={openFieldReview}
-        env={{ tr, lang, draft: draftRef.current, profile, spec, steps: sections, canEditSpec, busy, migrationBusy, updateDraft, fields, fieldErrors }}
+        env={{ tr, lang, draft: draftRef.current, profile, spec, steps: sections, canEditSpec, busy, migrationBusy, updateDraft, fields, fieldErrors: { ...fieldErrors, ...rejected } }}
         history={<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} />}
         banner={canEditSpec && (spec.schema_version ?? 1) < 2 ? <Alert severity="warning" action={<Button color="inherit" size="small" disabled={migrationBusy || saving} onClick={() => void requestMigrationPreview()}>{tr('migration.action')}</Button>}>{tr('migration.body')}</Alert> : null}
         assistant={(docked) => <SpecAssistantPanel projectId={selected.id} schema={schema} lang={lang} docked={docked} beforeApply={flushSave} onApplied={() => { void reloadDraft(); }} />} />}
@@ -675,7 +711,7 @@ export default function DevelopmentPage() {
     {view === 'quote' && selected.quote_shared && <ProjectQuote key={selected.id} projectId={selected.id} t={tr} />}
     {view === 'cost' && isAdmin && <CostEstimateWizard key={selected.id} projectId={selected.id} language={i18n.language} t={tr} who={user?.email ?? 'admin'}
       onShared={(value) => setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, quote_shared: value } : cur))} />}
-    {view === 'notes' && canEditProject && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
+    {view === 'notes' && canManageGlobally && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
     <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
     <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />
     <Dialog open={!!unlinkTarget} onClose={() => !busy && setUnlinkTarget(null)}><DialogTitle>{tr('unlink')} {unlinkTarget?.die} / {unlinkTarget?.config}?</DialogTitle><DialogContent>{tr('unlinkConfirm')}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setUnlinkTarget(null)}>{tr('cancel')}</Button><Button color="error" disabled={busy} onClick={() => void confirmUnlink()}>{tr('unlink')}</Button></DialogActions></Dialog>

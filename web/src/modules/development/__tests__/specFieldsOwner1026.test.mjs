@@ -34,7 +34,7 @@ test('the pre-submit save failure says WHY in one line', () => {
 test('only people who can edit the specification see the submit button; its tooltip says what it does', () => {
   assert.equal(canSubmitSpec(true), true);
   assert.equal(canSubmitSpec(false), false);
-  assert.match(page, /canSubmitSpec\(canEditSpec\) && <Tooltip title=\{<>\{tr\('wizard\.submitTip'\)\}<br \/>\{tr\('wizard\.reviewHint'\)\}<\/>\}>/);
+  assert.match(page, /canSubmitSpec\(canEditSpec\) && <Tooltip title=\{noChanges \? tr\('wizard\.review\.noChangesTip'\) : <>\{tr\('wizard\.submitTip'\)\}<br \/>\{tr\('wizard\.reviewHint'\)\}<\/>\}>/);
   // the grey "Unknown answers stay visible..." help line is gone from the card (it lives in the button tooltip)
   assert.doesNotMatch(page, /<Box><HelpTip title=\{tr\('wizard\.reviewHint'\)\} \/><\/Box>/);
   // a 409 offers the Reload action

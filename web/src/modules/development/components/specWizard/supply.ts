@@ -1,12 +1,13 @@
 /** The power supply block of the wizard (field 2_1, owner 2026-10-27): ONE block for the whole project, a choice of a battery
  *  (chemistry, cells in series, cell voltages - the pack voltages follow) or a DC power source (one voltage).  Pure functions,
- *  tested in node.  The stored answer only gains `supply_type` and `dc_source_V`; nothing stored for the other choice is removed
+ *  tested in node.  The stored answer only gains `supply_type`, `dc_source_V` and, for AC mains (owner 2026-11-06), `ac_line_voltage_V`
+ *  and `ac_frequency_Hz`; nothing stored for the other choices is removed
  *  or rewritten, and nothing is written on load.  The per-point DC voltage of earlier key points stays in the data, unshown. */
 import { keyPointsStored } from '../../keyPoints.ts';
 import type { SpecDraft } from '../../wizardState.ts';
 import { formatNumber } from './operatingPoints.ts';
 
-export type SupplyType = 'battery' | 'dc_source';
+export type SupplyType = 'battery' | 'dc_source' | 'ac_mains';
 type Translate = (key: string, args?: Record<string, unknown>) => string;
 
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
@@ -15,7 +16,8 @@ const blank = (v: unknown) => v === undefined || v === null || (typeof v === 'st
 
 /** Not stated = battery (every earlier answer is a battery). */
 export function supplyType(value: unknown): SupplyType {
-  return rec(value).supply_type === 'dc_source' ? 'dc_source' : 'battery';
+  const type = rec(value).supply_type;
+  return type === 'dc_source' || type === 'ac_mains' ? type : 'battery';
 }
 /** The answer with the supply type chosen; every other stored value is kept. */
 export function withSupplyType(value: unknown, type: SupplyType): Record<string, unknown> {
@@ -24,6 +26,13 @@ export function withSupplyType(value: unknown, type: SupplyType): Record<string,
 /** The answer with the DC source voltage typed (a cleared box stores nothing). */
 export function withDcSourceV(value: unknown, volts: unknown): Record<string, unknown> {
   return { ...rec(value), supply_type: 'dc_source', dc_source_V: typeof volts === 'number' && Number.isFinite(volts) ? volts : '' };
+}
+
+/** The answer with the AC mains values typed (the line-line voltage and / or the frequency; a cleared box stores nothing). */
+export function withAcMains(value: unknown, patch: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...rec(value), supply_type: 'ac_mains' };
+  for (const [key, raw] of Object.entries(patch)) next[key] = typeof raw === 'number' && Number.isFinite(raw) ? raw : '';
+  return next;
 }
 
 /** The supply block holds no value at all. */
@@ -52,6 +61,10 @@ export function supplySummary(value: unknown, t: Translate): string {
   if (supplyType(v) === 'dc_source') {
     const volts = num(v.dc_source_V);
     return volts === null ? '' : t('wizard.supply.reviewDc', { value: formatNumber(volts) });
+  }
+  if (supplyType(v) === 'ac_mains') {
+    const volts = num(v.ac_line_voltage_V), hz = num(v.ac_frequency_Hz);
+    return [volts === null ? '' : t('wizard.supply.reviewAcVolts', { value: formatNumber(volts) }), hz === null ? '' : t('wizard.supply.reviewAcHz', { value: formatNumber(hz) })].filter(Boolean).join(', ');
   }
   const cells = num(v.series_cells), cell = (k: string) => num(v[k]);
   const pack = ([['voltage_min_V', 'cell_voltage_min_V'], ['voltage_nominal_V', 'cell_voltage_nominal_V'], ['voltage_max_V', 'cell_voltage_max_V']] as const)

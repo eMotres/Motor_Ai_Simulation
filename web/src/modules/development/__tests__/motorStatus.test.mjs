@@ -27,8 +27,8 @@ test('project status remains pending until explicitly accepted and only for matc
 
 test('status Select: a customer never gets a commercial status; staff get all (owner 2026-11-02)', () => {
   assert.deepEqual(allowedProjectStatuses(true, 'spec'), ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed']);
-  assert.deepEqual(allowedProjectStatuses(false, 'spec'), ['spec', 'design', 'simulation', 'closed']);
-  for (const s of ['quote', 'prototype', 'production']) assert.ok(!allowedProjectStatuses(false, 'design').includes(s));
+  assert.deepEqual(allowedProjectStatuses(false, 'spec'), ['spec']);                       // a customer moves no stage (owner 2026-11-06)
+  for (const s of ['quote', 'prototype', 'production', 'simulation']) assert.ok(!allowedProjectStatuses(false, 'design').includes(s));
   assert.deepEqual(allowedProjectStatuses(false, 'quote'), ['quote']);
   assert.deepEqual(allowedProjectStatuses(false, 'closed'), ['closed']);
 });

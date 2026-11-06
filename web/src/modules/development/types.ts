@@ -26,7 +26,11 @@ export interface SchemaField { id: string; suggestions?: SchemaSuggestion[]; lab
 export interface SchemaSection { id: string; title: Localized; fields?: SchemaField[]; kind?: string; mission_profile?: boolean; production?: boolean }
 export interface DevelopmentSchema { schema_version?: number; sections: SchemaSection[] }
 export interface SpecVersion { version: number; author_display_name?: string; created_at?: string }
-export interface SpecState { draft: Record<string, unknown>; revision: number; schema_version?: number; schema?: DevelopmentSchema; completeness: Completeness; versions?: SpecVersion[]; version?: number }
+export interface SpecState { draft: Record<string, unknown>; revision: number; schema_version?: number; schema?: DevelopmentSchema; completeness: Completeness; versions?: SpecVersion[]; version?: number;
+  /** answers the last save set aside (one bad value never blocks the others): the field and the server's reason */
+  rejected?: Array<{ field: string; path?: string; message: string }>;
+  /** the newest submitted version, its date, and whether the working draft still equals it (null = never submitted) */
+  submitted?: { version: number; submitted_at?: string | null; unchanged: boolean } | null }
 export interface SpecSnapshot { version: number; schema_version?: number; schema?: DevelopmentSchema; author_display_name?: string; created_at?: string; spec?: Record<string, unknown>; draft?: Record<string, unknown> }
 export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string; /** not read by the caller yet (server flag) */ unread?: boolean }
 export interface ResultProvenance {

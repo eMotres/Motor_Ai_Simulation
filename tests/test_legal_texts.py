@@ -581,3 +581,13 @@ def test_the_web_routes_and_the_mail_links_agree():
     # Root.tsx routes the same paths (legalLogic.matchLegalPage is node-tested)
     root = (_ROOT / "web" / "src" / "Root.tsx").read_text(encoding="utf-8")
     assert "matchLegalPage(path)" in root and re.search(r"<LegalPage kind=\{legalKind\}", root)
+
+
+def test_the_texts_are_found_in_the_deployed_image_layout(tmp_path, monkeypatch):
+    # the production image has config-seed/ and no config/: the live site served 404 and recorded empty hashes
+    monkeypatch.delenv("MOTRES_LEGAL_TEXTS_DIR", raising=False)
+    (tmp_path / "config-seed" / "legal").mkdir(parents=True)
+    assert LT.legal_dir(tmp_path) == tmp_path / "config-seed" / "legal"
+    (tmp_path / "config" / "legal").mkdir(parents=True)
+    assert LT.legal_dir(tmp_path) == tmp_path / "config" / "legal"
+

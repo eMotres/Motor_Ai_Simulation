@@ -68,8 +68,9 @@ click-through for gate 1, the short simulation-start dialog for gate 2 which say
 ## For the dataset export
 
 Two lists come from `python -m motor_ai_sim.dataset_exclusions` and `GET /api/admin/dataset/exclusions` (admin): the **deny-list** keys
-(`companies`, `emails`, `workspace_ids`, `project_ids`, `motors`, `productions`, `acceptance_ids`: whatever belongs to a client whose newest
-acceptance is PRIVATE; unchanged) and, since owner decision D10 (2026-10-31), the **allow-list** under `"training"`. A record may be trained on
+(`companies`, `emails`, `workspace_ids`, `project_ids`, `motors`, `productions`, `acceptance_ids`: whatever belongs to a client on PRIVATE, by
+the click-through record, the account's agreement line of the short dialog or a hold in force; a project with any PRIVATE member is listed,
+agreement 2.4) and, since owner decision D10 (2026-10-31), the **allow-list** under `"training"`. A record may be trained on
 only if it is covered by the allow-list; absent = NOT eligible.
 
 ```json

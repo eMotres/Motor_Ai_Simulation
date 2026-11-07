@@ -891,29 +891,41 @@ def dataset_exclusions() -> dict:
 
     Unlike :func:`training_allowed` this is NOT fail-closed: an account or company with no acceptance, or with a FREE one, is not
     listed, so before anybody accepts anything every list is empty and the dataset behaves exactly as before.  Only the NEWEST
-    acceptance counts (a later FREE one removes a company again).  Attribution:
+    acceptance counts (a later FREE one removes a company again).  PRIVATE reaches this list three ways: a company or account record of
+    the click-through (``platform_agreement_acceptances.jsonl``), the account's own agreement line of the short dialog
+    (``legal_texts``, ``terms_acceptances.jsonl``), and a no-training hold in force (:func:`hold_state`: it wins over a later FREE line
+    until it is released).  Attribution:
 
-    * ``companies``   directory company ids whose newest acceptance (key ``company:<id>``) is PRIVATE.
+    * ``companies``   directory company ids whose newest acceptance (key ``company:<id>``) is PRIVATE or that are on a hold.
     * ``emails``      every address of a person CONFIRMED in such a company (their newest confirmed affiliation, as :func:`company_of`
-                      files it), and every account whose own ``user:<email>`` acceptance is PRIVATE.  Where a company has a record
-                      it decides, else the account's own record (the same priority as :func:`scope_of`).
+                      files it), and every account whose own record or agreement line is PRIVATE or that is on a hold.  The account's
+                      own PRIVATE line or hold always lists it; otherwise a company record decides, else the account's own record (the
+                      same priority as :func:`scope_of`), else its FREE agreement line.
     * ``workspace_ids`` ``workspace.workspace_id(e-mail)`` of each listed address.
-    * ``project_ids`` a development project belongs to the customer side: if any non-staff OWNER member has a recorded acceptance,
-                      the project is listed iff one of those owners is PRIVATE; else (staff-owned project, or an owner who accepted
-                      nothing) it is listed iff ANY non-staff member is PRIVATE.  A FREE owner's project with a PRIVATE guest
-                      member is therefore NOT listed (the owning company decided).
+    * ``project_ids`` every development project with a listed non-staff member, whoever owns it: where permissions conflict the most
+                      restrictive one applies (agreement 2.4).
     * ``motors``      the die/config pairs linked to a listed project (current links and the link history), and the motor of a
                       production whose non-staff owner member is listed.  Compare die/config case-insensitively.
     * ``productions`` the productions of those motors, plus any production whose non-staff owner member is listed.
-    * ``acceptance_ids`` ids of the agreement records (every version) filed under a listed company / account: their signed PDFs
-                      and register lines name the client and must not reach the dataset either.
+    * ``acceptance_ids`` ids of the agreement records (every version) filed under a listed company / account, of the listed accounts'
+                      lines in ``terms_acceptances.jsonl`` and of their holds: their signed PDFs and register lines name the client and
+                      must not reach the dataset either.
     * ``training``    the ALLOW-list (owner D10, :func:`training_allowlist`): the opposite polarity - only what is listed there may be
                       trained on; an account, company or project that is absent is not eligible.  The keys above are unchanged.
 
     Staff (admin / engineer accounts), MOTRES's own company and own domains are never listed.  A store that cannot be read raises
     (the caller must not mistake that for an empty list)."""
+    from motor_ai_sim import legal_texts as LT
+    for store_file in (LT.acceptances_path(), holds_path()):           # their readers answer "nothing" on an error: never an empty list here
+        if store_file.exists():
+            store_file.open("rb").close()
     newest = _newest_by_key()
-    private_keys = {k for k, r in newest.items() if str(r.get("mode") or "").upper() == "PRIVATE"}
+    holds = active_holds()
+    terms_lines = LT.records()
+    own_line = {_norm_email(r.get("user")): r for r in sorted((r for r in terms_lines if LT.is_agreement_line(r)), key=lambda r: float(r.get("ts") or 0))}
+    own_private = {e for e, r in own_line.items() if "@" in e and LT.line_mode(r) == "PRIVATE"}
+    private_keys = ({k for k, r in newest.items() if str(r.get("mode") or "").upper() == "PRIVATE"} | set(holds)
+                    | {"user:%s" % e for e in own_private})
     companies = sorted(k[8:] for k in private_keys if k.startswith("company:"))
     out: dict[str, Any] = {"generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                            "companies": companies, "emails": [], "workspace_ids": [], "project_ids": [], "motors": [], "productions": [],
@@ -956,13 +968,13 @@ def dataset_exclusions() -> dict:
         c = comps.get(comp_of_email.get(e))
         return bool(c and _is_own_company(dict(id=c.get("id"), name=c.get("legal_name"), reg_no=c.get("reg_no"))))
 
-    def mode_of(e: str) -> Optional[str]:
-        """Mode of the acceptance in force for this address (company record first, then the account's), None = none."""
-        for k in (("company:" + comp_of_email[e]) if e in comp_of_email else "", "user:" + e):
-            r = newest.get(k) if k else None
-            if r:
-                return str(r.get("mode") or "").upper()
-        return None
+    def on_private(e: str) -> bool:
+        """A hold or the account's own PRIVATE line lists it at once; else the company record decides, then the account's record."""
+        ckey, ukey = ("company:" + comp_of_email[e]) if e in comp_of_email else "", "user:" + e
+        if ukey in holds or (ckey and ckey in holds) or e in own_private:
+            return True
+        r = (newest.get(ckey) if ckey else None) or newest.get(ukey)
+        return bool(r) and str(r.get("mode") or "").upper() == "PRIVATE"
 
     from motor_ai_sim.development import store as PS
     projects = PS.list_projects()
@@ -971,23 +983,17 @@ def dataset_exclusions() -> dict:
             if isinstance(m, dict) and _norm_email(m.get("email")):
                 known.add(_norm_email(m["email"]))
 
-    emails = sorted(e for e in known if e and not exempt(e) and mode_of(e) == "PRIVATE")
+    emails = sorted(e for e in known if e and not exempt(e) and on_private(e))
     private_emails = set(emails)
 
     def member_emails(doc: dict, roles: Optional[tuple] = None) -> list[str]:
         return [_norm_email(m.get("email")) for m in doc.get("members") or []
                 if isinstance(m, dict) and _norm_email(m.get("email")) and (roles is None or m.get("role") in roles)]
 
-    def side_private(doc: dict) -> bool:
-        owners = [e for e in member_emails(doc, ("owner",)) if not exempt(e)]
-        if any(mode_of(e) for e in owners):
-            return any(e in private_emails for e in owners)
-        return any(e in private_emails for e in member_emails(doc) if not exempt(e))
-
     motors: dict[tuple[str, str], dict] = {}
     project_ids = []
     for p in projects:
-        if not side_private(p):
+        if not any(e in private_emails for e in member_emails(p)):
             continue
         project_ids.append(str(p.get("id")))
         for row in list(p.get("linked_motors") or []) + list(p.get("motor_history") or []):
@@ -1015,6 +1021,9 @@ def dataset_exclusions() -> dict:
     acceptance_ids = sorted(str(r.get("id")) for r in _rows() if r.get("id")
                             and (str(r.get("key") or "")[8:] in companies if str(r.get("key") or "").startswith("company:")
                                  else str(r.get("key") or "")[5:] in private_emails))
+    acceptance_ids = sorted(set(acceptance_ids) | {str(r.get("id")) for r in terms_lines if r.get("id") and _norm_email(r.get("user")) in private_emails}
+                            | {str(r.get("id")) for r in _hold_rows() if r.get("id") and (str(r.get("key") or "")[8:] in companies
+                                                                                          or str(r.get("key") or "")[5:] in private_emails)})
 
     from motor_ai_sim.workspace import workspace_id
     sort_key = lambda r: (r["die"].casefold(), r["config"].casefold())

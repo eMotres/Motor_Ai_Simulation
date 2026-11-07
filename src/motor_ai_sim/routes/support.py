@@ -91,7 +91,7 @@ import os
 import re
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Header, Request
 from fastapi.responses import JSONResponse
@@ -906,15 +906,22 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
     return sp + support_context.render_for_model(context or {}, role=role)
 
 
-def _mock_reply(messages: list[dict]) -> str:
+_UNAVAILABLE_REPLY = {
+    "en": "The assistant is not available right now. Please write to support@aerostator.com and we will answer you there.",
+    "zh-CN": "助手暂时无法使用。请发送邮件至 support@aerostator.com，我们会通过邮件回复您。",
+}
+
+
+def _mock_reply(messages: list[dict], lang: Any = "") -> str:
+    """The answer when no provider is switched on: one friendly line in the language of the screen (else of the question)."""
     last = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-    return (
-        "⚠️ Demo mode — the AI assistant isn't switched on for this server yet "
-        "(no API key configured). Once it's enabled I'll answer questions about the "
-        "Configurator, motor parameters, the catalog and how the app works.\n\n"
-        + (f'You asked: "{last[:200]}".\n\n' if last else "")
-        + "In the meantime, write to support@aerostator.com."
-    )
+    zh = str(lang).lower().startswith("zh") if lang else any("\u4e00" <= c <= "\u9fff" for c in last)
+    return _UNAVAILABLE_REPLY["zh-CN" if zh else "en"]
+
+
+def _ui_lang(body: dict) -> Any:
+    ctx = body.get("context")
+    return body.get("lang") or (ctx.get("lang") if isinstance(ctx, dict) else "")
 
 
 def _visitor_turn(messages: list[dict]) -> str:
@@ -1032,8 +1039,9 @@ def chat(request: Request, body: dict = Body(default={}),
 
     eff = _effective()
     provider = eff["provider"]
+    ui_lang = _ui_lang(body)
     if provider == "none":
-        return deliver(_mock_reply(messages), "mock")
+        return deliver(_mock_reply(messages, ui_lang), "mock")
 
     ctx = {} if anon else support_context.sanitize_context(body.get("context"))
     sp = build_system_prompt(role, anon=anon, context=ctx, authorization=authorization)
@@ -1041,7 +1049,7 @@ def chat(request: Request, body: dict = Body(default={}),
         if provider == "gemini":
             g = eff["gemini"]
             if not g["key"]:
-                return deliver(_mock_reply(messages), "mock")
+                return deliver(_mock_reply(messages, ui_lang), "mock")
             text = _call_provider(
                 lambda: _gemini_reply(messages, g["key"], g["model"], sp))
             return deliver(text or "(no reply)", "gemini", model=g["model"])
@@ -1049,7 +1057,7 @@ def chat(request: Request, body: dict = Body(default={}),
         a = eff["anthropic"]
         client = _anthropic_client(a["key"])
         if client is None:
-            return deliver(_mock_reply(messages), "mock")
+            return deliver(_mock_reply(messages, ui_lang), "mock")
         resp = _call_provider(lambda: client.messages.create(
             model=a["model"], max_tokens=2048, system=sp, messages=messages))
         text = next((b.text for b in resp.content if b.type == "text"), "")

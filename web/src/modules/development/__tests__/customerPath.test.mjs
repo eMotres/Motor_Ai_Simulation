@@ -119,5 +119,8 @@ test('keys asked for by the screens exist in both languages', () => {
 test('on a phone the chat bubble keeps off the Back / Next bar, and a label tooltip never takes a click meant for what lies under it', () => {
   assert.match(read('../../../components/support/SupportWidget.tsx'), /body:has\(\[data-wizard-bar\]\) &/);
   assert.match(read('../components/specWizard/SpecWizard.tsx'), /<Stack data-wizard-bar /);
+  // ... and above the Send of the floating specification assistant
+  assert.match(read('../../../components/support/SupportWidget.tsx'), /'body:has\(\[data-assistant-floating\]\) &': \{ bottom: 112 \}/);
+  assert.match(read('../components/SpecAssistantPanel.tsx'), /docked \? \{\} : \{ 'data-assistant-floating': '' \}/);
   assert.match(read('../components/specWizard/useSpecFields.tsx'), /const labelRow = [^\n]*<Tooltip disableInteractive /);
 });

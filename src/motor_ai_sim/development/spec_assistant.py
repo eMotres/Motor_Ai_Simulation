@@ -33,6 +33,12 @@ MAX_TURNS = 20
 MAX_CHARS = 2000
 MAX_MARKERS = 3
 ASSUMED_TAG = {"en": "(assumed, to confirm)", "zh-CN": "（假设，待确认）"}
+REPLIES = {
+    "unavailable": {"en": "The assistant is not available right now. You can fill in the form yourself.", "zh-CN": "助手暂时无法使用，您可以直接填写表单。"},
+    "failed": {"en": "Sorry - I could not answer just now. Please try again in a minute.", "zh-CN": "抱歉，暂时无法回答，请稍后再试。"},
+    "see_below": {"en": "(see the proposal below)", "zh-CN": "（请查看下方建议）"},
+    "no_reply": {"en": "(no reply)", "zh-CN": "（无回复）"},
+}
 #: Commercial fields: the model never hears of them, not even to ask (owner: no price or quote talk with a customer during design).
 HIDDEN_FROM_MODEL = frozenset({"6_3", "target_price"})
 
@@ -337,13 +343,12 @@ def turn(project_id: str, project: dict, user: dict, raw_messages: Any, raw_lang
     try:
         text, source, model = complete(messages, SPEC_PROMPT + "\n\n" + context)
     except AssistantUnavailable:
-        return {"reply": "The assistant is not switched on for this server yet.", "proposals": [], "source": "mock"}
+        return {"reply": REPLIES["unavailable"][lang], "proposals": [], "source": "mock"}
     except Exception as exc:                                  # noqa: BLE001 - a provider failure is an answer, not a 500
         log.warning("spec assistant: provider call failed (%s: %s)", type(exc).__name__, str(exc)[:160])
-        return {"reply": "Sorry - I could not answer just now. Please try again in a minute.",
-                "proposals": [], "source": "error"}
+        return {"reply": REPLIES["failed"][lang], "proposals": [], "source": "error"}
     clean, found = parse_proposals(text)
     stored = take_proposals(project_id, found, lang) if found else []
     if not clean:
-        clean = "(see the proposal below)" if stored else "(no reply)"
+        clean = REPLIES["see_below" if stored else "no_reply"][lang]
     return {"reply": clean, "proposals": P.with_current(project_id, stored), "source": source, "model": model}

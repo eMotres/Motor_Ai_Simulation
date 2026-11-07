@@ -62,7 +62,6 @@ const SupportWidget: React.FC = () => {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [demo, setDemo] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // tickets
@@ -97,8 +96,7 @@ const SupportWidget: React.FC = () => {
     const next = addUserMessage(flowRef.current, text);
     setFlow(next); setInput(''); setSending(true); setFailed(false);
     try {
-      const reply = await askAssistant(next.msgs, user ? context() : undefined);
-      setDemo(reply.source === 'mock');
+      const reply = await askAssistant(next.msgs, user ? context() : undefined, i18n.resolvedLanguage ?? i18n.language);
       setFlow((f) => receiveReply(f, reply));
     } catch {
       setFailed(true);
@@ -121,6 +119,8 @@ const SupportWidget: React.FC = () => {
             boxShadow: '0 4px 16px rgba(0,0,0,0.4)', '&:hover': { bgcolor: '#1d4ed8' },
             // on a phone the specification's Back / Next bar fills the bottom of the screen: the bubble sits above it, never over Next
             [NARROW]: { 'body:has([data-wizard-bar]) &': { bottom: 112 } },
+            // the floating specification assistant has its input and Send at the bottom right: the bubble sits above them
+            'body:has([data-assistant-floating]) &': { bottom: 112 },
           }}
         >
           <ChatBubbleOutlineIcon />
@@ -186,9 +186,6 @@ const SupportWidget: React.FC = () => {
             )}
             {failed && (
               <Typography sx={{ ...BODY, color: '#f87171' }} role="alert">{t('failed')}</Typography>
-            )}
-            {demo && (
-              <Typography sx={{ ...BODY, color: '#fbbf24', textAlign: 'center', mt: 0.5 }}>{t('demo')}</Typography>
             )}
           </Box>
           {/* every assistant says it is one (Terms of Use); when the help chat runs on the Gemini API free tier it also says that Google

@@ -275,6 +275,9 @@ def test_provider_failure_and_missing_provider_are_answers(env, monkeypatch):
         raise A.AssistantUnavailable("none")
     monkeypatch.setattr(A, "complete", none)
     assert _turn()["source"] == "mock"
+    for lang in ("en", "zh-CN"):
+        out = A.turn("alpha", store.get_project("alpha"), {"email": "x@example.com"}, [{"role": "user", "content": "hi"}], lang, can_apply=True)
+        assert out["reply"] == A.REPLIES["unavailable"][lang] and "API key" not in out["reply"] and "server" not in out["reply"]
 
 
 def test_daily_cap_blocks_before_the_provider(env, monkeypatch):

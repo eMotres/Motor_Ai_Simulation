@@ -23,7 +23,7 @@
     "ownerApplies": "The project owner applies this proposal.",
     "recalc": "Recalculations: {what}",
     "now": "Now: {value}",
-    "notConfigured": "The assistant is not switched on for this server yet.",
+    "notConfigured": "The assistant is not available right now. You can fill in the form yourself.",
     "closed": "The assistant is not open for this account.",
     "failed": "The assistant could not answer. Try again in a minute.",
     "stale": "The specification changed meanwhile. Reload the form and apply again.",

@@ -1,5 +1,6 @@
 {
   "aiNotice": "人工智能助手——回答可能有误。",
+  "assistantUnavailable": "助手暂时无法使用。",
   "unreadMessagesTip": "{count} 条未读消息",
   "tabs": {
     "motors": "电机",

@@ -420,6 +420,25 @@ def test_a_custom_admin_prompt_replaces_the_default_for_everyone(env, monkeypatc
     assert P.NO_PRICE_RULE in sp                                     # and the owner's rule on money
 
 
+def _no_provider(monkeypatch):
+    monkeypatch.setattr(support, "_effective", lambda: {
+        "provider": "none", "gemini": {"key": "", "model": "m", "key_source": "none"},
+        "anthropic": {"key": "", "model": "m", "key_source": "none"}})
+
+
+@pytest.mark.parametrize("body,zh", [
+    ({"lang": "zh-CN"}, True), ({"lang": "en"}, False), ({"context": {"lang": "zh-CN"}}, True),
+    ({"messages": [{"role": "user", "content": "这台电机的扭矩是多少？"}]}, True), ({}, False)])
+def test_without_a_provider_the_reply_is_one_friendly_line_in_the_language_of_the_screen(env, monkeypatch, body, zh):
+    _no_provider(monkeypatch)
+    payload = {"messages": [{"role": "user", "content": "torque?"}], **body}
+    r = client.post("/api/support/chat", json=payload, headers=env["client"]).json()
+    assert r["source"] == "mock" and "support@aerostator.com" in r["reply"]
+    assert r["reply"] == support._UNAVAILABLE_REPLY["zh-CN" if zh else "en"]
+    for word in ("API key", "api key", "Demo", "密钥", "演示", "torque?"):
+        assert word not in r["reply"], word
+
+
 # ── 5. the prompt describes Configure as it is ───────────────────────────────
 
 def _leaf_strings(d):

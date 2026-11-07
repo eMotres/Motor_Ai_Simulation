@@ -1,5 +1,6 @@
 {
   "aiNotice": "AI assistant — answers can be wrong.",
+  "assistantUnavailable": "The assistant is not available right now.",
   "unreadMessagesTip": "{count} unread messages",
   "tabs": {
     "motors": "Motors",

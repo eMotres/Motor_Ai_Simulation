@@ -245,7 +245,7 @@ export default function DesignerTab() {
               </Typography>
             )}
             {status && !status.configured && (
-              <Typography sx={{ fontSize: 11, color: '#fbbf24', mt: 0.5 }}>The server has no API key for the assistant yet.</Typography>
+              <Typography sx={{ fontSize: 11, color: '#fbbf24', mt: 0.5 }}>{tc('assistantUnavailable')}</Typography>
             )}
           </Box>
         </Box>

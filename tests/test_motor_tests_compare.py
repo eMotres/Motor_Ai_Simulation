@@ -291,6 +291,20 @@ def test_load_rows_match_a_duty_or_offer_to_create_it():
     assert miss["rows"][0]["action"]["body"]["duty"]["rpm"] == 1000.0
 
 
+def test_a_row_without_a_simulation_point_keeps_everything_the_bench_measured():
+    rec = _record("load", rows=[{"rpm": 1000, "i_phase_a": 50, "torque_nm": 10.0, "eff_pct": 90.0, "temp_winding_c": 62.0,
+                                 "temp_magnet_c": 40.0, "j_a_mm2": 9.8, "time_min": 5.0, "duration_s": 300}])
+    group = comparison.compare_record(rec, _model(), "D", "C")["groups"][0]
+    rows = {r["key"]: r for r in group["rows"]}
+    assert {"torque", "eff", "t_winding", "t_magnet", "j_coil"} <= set(rows)
+    assert rows["t_winding"]["measured"] == 62.0 and rows["t_winding"]["model"] is None and rows["t_winding"]["status"] == "no_model"
+    assert rows["t_magnet"]["measured"] == 40.0 and rows["t_winding"]["extra"]["duration_s"] == 300
+    assert group["params"]["point"] == group["label"] == "5 min · 1000 rpm · 50 A"    # what the web's tests.group.load_point prints
+    # a row with no temperature gets no empty temperature row
+    bare = comparison.compare_record(_record("load", rows=[{"rpm": 1000, "torque_nm": 10.0}]), _model(), "D", "C")["groups"][0]
+    assert [r["key"] for r in bare["rows"]] == ["torque"] and bare["params"]["point"] == "1000 rpm"
+
+
 
 def test_a_dc_side_efficiency_is_the_system_efficiency_never_compared_with_the_motor():
     # 30 N*m at 3000 rpm = 9424.8 W shaft; 48 V x 220 A = 10560 W DC in -> 89.25 % system efficiency

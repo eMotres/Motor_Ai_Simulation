@@ -40,6 +40,8 @@
   "yourCompany": "Your company (optional)",
   "projectLimit": "You can have up to {count} open projects. Close one to start another.",
   "projectTitle": "Project title",
+  "renameProject": "Rename project",
+  "renameProjectTip": "A name set here stays; it no longer follows the specification.",
   "customerOrg": "Customer organisation",
   "projectId": "Project ID (slug)",
   "create": "Create project",

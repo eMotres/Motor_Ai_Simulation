@@ -27,6 +27,8 @@ export interface SchemaSection { id: string; title: Localized; fields?: SchemaFi
 export interface DevelopmentSchema { schema_version?: number; sections: SchemaSection[] }
 export interface SpecVersion { version: number; author_display_name?: string; created_at?: string }
 export interface SpecState { draft: Record<string, unknown>; revision: number; schema_version?: number; schema?: DevelopmentSchema; completeness: Completeness; versions?: SpecVersion[]; version?: number;
+  /** the project's name after this save (a project we name follows its specification) */
+  project_title?: string;
   /** answers the last save set aside (one bad value never blocks the others): the field and the server's reason */
   rejected?: Array<{ field: string; path?: string; message: string }>;
   /** the newest submitted version, its date, and whether the working draft still equals it (null = never submitted) */

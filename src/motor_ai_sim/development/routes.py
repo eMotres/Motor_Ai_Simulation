@@ -493,6 +493,12 @@ def _require_data_agreement(user: dict) -> None:
     platform_agreement.require_agreement_at_simulation(_email(user), user.get("role") or "")
 
 
+def _mail_who(project: dict, user: dict) -> str:
+    """Whose project a staff mail is about, for its subject: the company given with the project, the account's company, else its e-mail."""
+    company = project.get("customer_org") or (platform_agreement.company_of(_email(user)) or {}).get("name")
+    return " ".join(str(company or _email(user)).split())[:80]
+
+
 def _notify_staff(subject: str, project_id: str, user: dict) -> None:
     """One internal mail when a customer opens a project or submits a specification, so no request waits for the daily report.  Staff's own
     actions send nothing, and mail trouble never blocks the customer."""
@@ -506,7 +512,7 @@ def _notify_staff(subject: str, project_id: str, user: dict) -> None:
         project = store.get_project(project_id) or {}
         body = "\n".join((subject, "", f"Project: {project.get('title') or project_id}", f"Company: {project.get('customer_org') or '-'}",
                           f"Account: {_email(user)}", "", f"{E.app_url()}/projects/{project_id}/specification", ""))
-        E.send(to, f"[AeroStator] {subject}: {project.get('title') or project_id}", body, kind="project-admin")
+        E.send(to, f"[AeroStator] {subject}: {project.get('title') or project_id}, {_mail_who(project, user)}", body, kind="project-admin")
     except Exception:                                       # noqa: BLE001 - never block the customer
         log.warning("project mail to staff failed for %s", project_id, exc_info=True)
 
@@ -720,7 +726,8 @@ async def put_spec(request: Request, project_id: str):
     saved = save_spec_for(user, project_id, body, tolerant=True)
     response_draft = saved["draft"] if access.is_engineer(user) else _customer_spec({"draft": saved["draft"]})["draft"]
     return {"draft": response_draft, "revision": saved["revision"], "version": saved.get("version"), "schema_version": saved.get("schema_version", 1),
-            "completeness": models.completeness(saved["draft"]), "rejected": saved.get("rejected", [])}
+            "completeness": models.completeness(saved["draft"]), "rejected": saved.get("rejected", []),
+            "project_title": saved.get("project_title")}
 
 
 def _normalize_tolerant(raw: Any, version: int, stored: dict, tolerant: bool) -> tuple[dict, list[dict]]:
@@ -802,6 +809,7 @@ def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dic
                        {"revision": saved["revision"]} | ({"rejected": [item["field"] for item in result["rejected"]]} if result.get("rejected") else {})
                        | dict(audit_details or {}))
     saved["rejected"] = result.get("rejected", [])                  # the answer to the caller only: never written to draft.json
+    saved["project_title"] = (store.get_project(project_id) or {}).get("title")   # likewise: the name this save may just have given it
     return saved
 
 

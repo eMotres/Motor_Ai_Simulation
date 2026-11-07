@@ -256,3 +256,25 @@ def test_only_staff_rename_and_their_name_stays(api):
     assert api("t-admin", "PATCH", f"/api/projects/{pid}", json={"title": "Staff name"}).json()["title"] == "Staff name"
     self_service.refresh_title(pid, {"fields": {"1_1": {"value": "Pump"}}})
     assert store.get_project(pid)["title"] == "Staff name"
+
+
+def test_the_name_says_what_the_key_points_say_now_not_the_point_that_was_removed(api):
+    stale = {"value": {"torque_Nm": 100, "speed_rpm": 1500}, "status": "filled"}       # 1_4 keeps its value while no usable point is left
+    base = {"1_1": {"value": "Pump"}, "1_2": {"value": "Motor, one direction"}, "1_4": stale}
+    row = {"row_id": "a", "name": "Peak", "torque_Nm": 200, "speed_rpm": 3000, "duration_s": None}
+    assert self_service.spec_title({"fields": {**base, "key_points": {"value": [row], "status": "filled"}}}) == "Pump motor, 200 N·m, 3000 rpm"
+    assert self_service.spec_title({"fields": {**base, "key_points": {"value": [], "status": "missing"}}}) == "Pump motor"
+    assert self_service.spec_title({"fields": {**base, "key_points": {"value": [row], "status": "not_known_yet"}}}) == "Pump motor"
+    # the continuous point of several, the same one the rest of the system reads
+    peak = {**row, "duration_s": 30}
+    cont = {"row_id": "b", "name": "Continuous", "torque_Nm": 80, "speed_rpm": 2500, "duration_s": "continuous"}
+    assert self_service.spec_title({"fields": {**base, "key_points": {"value": [peak, cont], "status": "filled"}}}) == "Pump motor, 80 N·m, 2500 rpm"
+    # no key points stored: the old answer still names it, unless it was taken back
+    assert self_service.spec_title({"fields": base}) == "Pump motor, 100 N·m, 1500 rpm"
+    assert self_service.spec_title({"fields": {**base, "1_4": {**stale, "status": "not_known_yet"}}}) == "Pump motor"
+    # nothing left to name it after: back to the first name, the removed point never stays
+    pid = _create(api).json()["id"]
+    self_service.refresh_title(pid, {"fields": {"1_4": stale}})
+    assert store.get_project(pid)["title"] == "100 N·m, 1500 rpm"
+    self_service.refresh_title(pid, {"fields": {"1_4": stale, "key_points": {"value": [], "status": "missing"}}})
+    assert store.get_project(pid)["title"] == self_service.NEW_PROJECT_TITLE

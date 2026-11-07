@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { Button, Dialog, DialogContent, DialogTitle, IconButton, Tooltip } from '@mui/material';
+import { Suspense, useEffect, useState } from 'react';
+import { Button, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, Tooltip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import { NARROW } from '../../lib/narrowLayout';
 import { testsApi } from '../tests/api';
 import TestsPanel from '../tests/components/TestsPanel';
 import type { ProjectMotor } from './types';
@@ -36,13 +37,15 @@ export function ProjectMotorTests({ projectId, motor, showAll, t }: {
   if (!has) return null;
   return <>
     <Tooltip title={t('motorTests.tip')}><Button size="small" onClick={() => setOpen(true)}>{t('motorTests.button')}</Button></Tooltip>
-    <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="lg">
+    <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="lg"
+      sx={{ [NARROW]: { '& .MuiDialog-paper': { m: 1, width: 'calc(100% - 16px)' }, '& .MuiDialogContent-root': { px: 1 } } }}>
       <DialogTitle sx={{ fontSize: 15, display: 'flex', alignItems: 'center' }}>
         <span style={{ flex: 1 }}>{t('motorTests.button')} · {die} / {motor.config}</span>
         <IconButton size="small" onClick={() => setOpen(false)}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
       </DialogTitle>
       <DialogContent>
-        {open && <TestsPanel die={motor.die} config={motor.config} source={{ kind: 'project', projectId, showAll }} />}
+        {/* its own boundary: the panel's language file loads on the first open, and the wait stays inside this dialog, not over the whole page */}
+        {open && <Suspense fallback={<CircularProgress size={18} />}><TestsPanel die={motor.die} config={motor.config} source={{ kind: 'project', projectId, showAll }} /></Suspense>}
       </DialogContent>
     </Dialog>
   </>;

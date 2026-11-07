@@ -40,6 +40,8 @@
   "yourCompany": "您的公司（可选）",
   "projectLimit": "最多可同时有 {count} 个进行中的项目。请先关闭一个再新建。",
   "projectTitle": "项目标题",
+  "renameProject": "重命名项目",
+  "renameProjectTip": "此处设置的名称会保留，不再随规格变化。",
   "customerOrg": "客户组织",
   "projectId": "项目 ID（短标识）",
   "create": "创建项目",

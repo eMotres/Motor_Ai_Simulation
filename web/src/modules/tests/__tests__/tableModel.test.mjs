@@ -605,3 +605,11 @@ t('power and torque per mass need a mass', () => {
   assert.equal(M.perMass(32.5, null), null);
   assert.equal(M.perMass(32.5, 0), null);
 });
+
+t('Tests opens on Power when there is a load test to list, else on Resistance', () => {
+  const load = { id: 'a', kind: 'load', date: '', title: '', rows: [{ rpm: 3000, torque_nm: 100 }] };
+  assert.equal(M.defaultTab([load]), 'power');
+  assert.equal(M.defaultTab([{ id: 'p', kind: 'parameters', date: '', title: '', rows: [] }]), 'resistance');
+  assert.equal(M.defaultTab([{ ...load, rows: [] }]), 'resistance');   // nothing the Power list could show
+  assert.equal(M.defaultTab([]), 'resistance');
+});

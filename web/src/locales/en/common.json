@@ -72,7 +72,7 @@
     "toggle": "Share my data with the AeroStator dataset",
     "on": "On since {time}",
     "off": "Off",
-    "textVersion": "Consent text {version}",
+    "privateBlocked": "Not available on PRIVATE: your data stay out of the dataset.",
     "saveError": "The choice was not saved: {message}",
     "close": "Close"
   },

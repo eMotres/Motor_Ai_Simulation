@@ -91,6 +91,8 @@ def accept(request: Request, body: dict = Body(default={}), authorization: Optio
               details={"mode": r["mode"], "version": r["version"], "record": r["id"], "company": r["company"],
                        "private_pending_payment": r["private_pending_payment"]})
     if r["mode"] == "PRIVATE":
+        from motor_ai_sim import data_sharing as DS
+        DS.withdraw_for_private(who["id"], ip=ip, record_id=r["id"])
         PA.notify_private_request(who["id"], key=r["key"], company=r["company"], record_id=r["id"], version=r["version"],
                                   country=r["country"], source="company_dialog")
     return {"ok": True, "record_id": r["id"], "version": r["version"], "mode": r["mode"],

@@ -876,6 +876,27 @@ def public_record(r: dict) -> dict:
 
 # -- a PRIVATE request reaches the team -------------------------------------------
 
+def account_on_private(email: Any) -> bool:
+    """Is this account on PRIVATE now?  The same reading as the deny-list of :func:`dataset_exclusions`: a hold in force or the account's own
+    PRIVATE agreement line first, else the company record, else the account's record."""
+    from motor_ai_sim import legal_texts as LT
+    email = _norm_email(email)
+    if not email:
+        return False
+    company = company_of(email)
+    ckey, ukey = ("company:%s" % company["id"]) if company else "", "user:%s" % email
+    holds = active_holds()
+    if ukey in holds or (ckey and ckey in holds):
+        return True
+    own = [r for r in LT.records(email) if LT.is_agreement_line(r)]
+    if own and LT.line_mode(max(own, key=lambda r: float(r.get("ts") or 0))) == "PRIVATE":
+        return True
+    newest = _newest_by_key()
+    r = (newest.get(ckey) if ckey else None) or newest.get(ukey)
+    return bool(r) and str(r.get("mode") or "").upper() == "PRIVATE"
+
+
+
 def notify_private_request(email: str, *, key: str, company: Any, record_id: str, version: str, country: Any = "", capacity: Any = "",
                            source: str = "", hold: Optional[bool] = None) -> None:
     """The dialogs tell the person that our team will contact them, so a request must reach the team at once: an audit line (Admin > Logs)

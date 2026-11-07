@@ -113,8 +113,10 @@ def accept_agreement(request: Request, body: dict = Body(default={}), authorizat
         raise HTTPException(status_code=503, detail="The acceptance could not be stored; nothing was accepted. Try again later.")
     out = {"ok": True, "record_id": r["id"], "mode": mode, "status": LT.status_for(email, role)}
     if mode == "PRIVATE":
+        from motor_ai_sim import data_sharing as DS
         from motor_ai_sim import platform_agreement as PA
         out["hold"] = _hold_private(email, r["id"])
+        DS.withdraw_for_private(email, ip=_ip(request), record_id=r["id"])
         if not PA.scope_of(email, role)["exempt"]:              # staff's own tries send nothing, like a staff project
             PA.notify_private_request(email, key=PA.hold_key(email=email), company=r.get("business_name"), record_id=r["id"],
                                       version=r["agreement_public_version"], country=r.get("country"), capacity=r.get("capacity"),

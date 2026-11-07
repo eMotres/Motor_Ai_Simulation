@@ -72,7 +72,7 @@
     "toggle": "将我的数据共享至 AeroStator 数据集",
     "on": "自 {time} 起开启",
     "off": "关闭",
-    "textVersion": "同意文本 {version}",
+    "privateBlocked": "PRIVATE 模式不可用：您的数据不会进入数据集。",
     "saveError": "未能保存您的选择：{message}",
     "close": "关闭"
   },

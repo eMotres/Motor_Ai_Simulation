@@ -251,6 +251,17 @@ def test_a_hold_lists_the_account_or_company_until_it_is_released(env):
     assert out["companies"] == [env["acme"]["id"]] and out["emails"] == sorted([ANN, BOB]) and "acme-1" in out["project_ids"]
 
 
+def test_account_on_private_reads_like_the_list(env):
+    build_world(env)
+    assert not any(PA.account_on_private(e) for e in (ANN, LONE, FREE1))
+    accept(env, "company:" + env["acme"]["id"], "PRIVATE")
+    account_line(LONE, "PRIVATE")
+    PA.record_hold("user:" + GUEST, kind="hold", actor=ADMIN)
+    listed = set(PA.dataset_exclusions()["emails"])
+    for e in (ANN, BOB, LONE, FREE1, GUEST):
+        assert PA.account_on_private(e) is (e in listed), e
+
+
 def test_staff_and_motres_private_lines_are_never_listed(env):
     account_line(ENG, "PRIVATE")
     account_line(OWN, "PRIVATE")

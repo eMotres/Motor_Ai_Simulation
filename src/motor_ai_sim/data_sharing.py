@@ -23,6 +23,9 @@ Enforcement (:func:`filter_for_dataset`, the single gate in front of any dataset
   company / e-mail are scrubbed from every string.
 
 A withdrawal stops future inclusion; a dataset release already published cannot be recalled (said so in the consent text).
+
+The consent never covers PRIVATE data (Terms of Use 3.5): an account on PRIVATE cannot give it (:class:`PrivateModeRefused`), a consent given
+earlier is withdrawn when the account asks for PRIVATE (:func:`withdraw_for_private`), and the export filter refuses such an owner's records.
 """
 from __future__ import annotations
 
@@ -50,6 +53,15 @@ created_by updated_by""".split())
 HARD_TAGS = frozenset({"restricted", "nda", "confidential"})
 REMOVED = "[removed]"
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+
+class PrivateModeRefused(ValueError):
+    """An account on PRIVATE cannot consent to the shared dataset (Terms of Use 3.5)."""
+
+
+def on_private(email: str) -> bool:
+    from motor_ai_sim import platform_agreement as PA
+    return PA.account_on_private(email)
 
 
 def _norm(email) -> str:
@@ -115,13 +127,15 @@ def set_consent(email: str, consent: bool, *, source: str, ip: str = "", record_
 
     The audit line is written FIRST: if it cannot be written (OSError) nothing changes.  Unchanged value -> no new line, unless
     ``log_unchanged`` (the NDA dialog records the decision it was given even when it equals the default).  KeyError for an
-    unknown account."""
+    unknown account, :class:`PrivateModeRefused` for a yes from an account on PRIVATE (a withdrawal always works)."""
     from motor_ai_sim import users as U
     email = _norm(email)
     consent = consent is True
     with _LOCK:
         if U.get_user(email) is None:
             raise KeyError(email)
+        if consent and on_private(email):
+            raise PrivateModeRefused(email)
         old = U.get_data_sharing(email)
         if old["consent"] == consent and old["version"] == CONSENT_VERSION and not log_unchanged:
             return old
@@ -130,6 +144,16 @@ def set_consent(email: str, consent: bool, *, source: str, ip: str = "", record_
                            user=email, consent=consent, previous=old["consent"], version=CONSENT_VERSION, source=source,
                            record_id=record_id, ip=ip or ""))
         return U.set_data_sharing(email, consent, CONSENT_VERSION, _iso(now))
+
+
+def withdraw_for_private(email: str, *, ip: str = "", record_id: str = "") -> None:
+    """The account just asked for PRIVATE: a consent given earlier ends now.  A failure is logged, never raised (the export filter refuses the
+    data of an account on PRIVATE anyway)."""
+    try:
+        if state(email)["consent"] is True:
+            set_consent(email, False, source="private_mode", ip=ip, record_id=record_id)
+    except (OSError, KeyError) as e:
+        log.error("data-sharing: the consent of an account on PRIVATE was not withdrawn (%s)", type(e).__name__)
 
 
 def consent_at(email: str, ts: float) -> bool:
@@ -213,6 +237,11 @@ def decide(rec: dict, *, _events_cache: Optional[dict] = None) -> tuple[bool, st
         return False, "customer_without_owner"
     if state(owner)["consent"] is not True:
         return False, "no_consent"
+    cache = _events_cache if _events_cache is not None else {}
+    if ("private", owner) not in cache:
+        cache[("private", owner)] = on_private(owner)
+    if cache[("private", owner)]:
+        return False, "private_mode"
     ts = _created_ts(rec)
     if ts is None:
         return False, "creation_time_unknown"

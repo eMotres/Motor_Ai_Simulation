@@ -126,7 +126,7 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
   }
   const cards = openProposals(proposals);
   return (
-    <Paper elevation={docked ? 0 : 6} data-testid="spec-assistant" sx={docked
+    <Paper elevation={docked ? 0 : 6} data-testid="spec-assistant" {...(docked ? {} : { 'data-assistant-floating': '' })} sx={docked
       ? { position: 'sticky', top: 8, alignSelf: 'flex-start', flex: '0 0 360px', width: 360, height: 'calc(100vh - 120px)', minHeight: 420, display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px' }
       : { position: 'fixed', right: 0, top: 64, bottom: 8, width: { xs: '100vw', sm: 380 }, zIndex: 1190, display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px 0 0 8px' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.8, borderBottom: '1px solid var(--line-soft)' }}>
@@ -142,6 +142,7 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
             const action = cardAction(p, canApply);
             return (
               <Box key={c.id} data-testid="spec-proposal" sx={{ border: '1px solid var(--line)', borderLeft: '3px solid #3b82f6', borderRadius: 1, p: 1, bgcolor: 'var(--panel-2)' }}>
+                <Typography data-testid="spec-proposal-ai" sx={{ fontSize: 11, fontWeight: 700, color: 'text.secondary' }}>{t('specAssistant.aiSuggestion')}</Typography>
                 <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{c.title}</Typography>
                 <Typography sx={{ fontSize: 13 }}>{c.proposed}</Typography>
                 {c.current && <Typography sx={{ fontSize: 11.5, color: 'text.secondary' }}>{t('specAssistant.now', { value: c.current })}</Typography>}
@@ -160,7 +161,7 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
           })}
         </Box>
       )}
-      <Box sx={{ flex: 1, overflowY: 'auto', p: 1.2, minHeight: 0 }}>
+      <Box sx={{ flex: 1, overflowY: 'auto', p: 1.2, pb: docked ? 1.2 : 7, minHeight: 0 }}>
         {messages.length === 0 && (
           <Box>
             <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mb: 1 }}>{t('specAssistant.intro')}</Typography>

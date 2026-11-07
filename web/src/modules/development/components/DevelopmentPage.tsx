@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import type { Completeness, DevelopmentSchema, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, ProjectSummary, ProjectThreadMessage, SpecSnapshot, SpecState } from '../types';
   import { canApplyMigrationPreview, migrationS1Candidate, type MigrationPreviewView } from '../migrationPresentation';
   import { formatDiffLabel, formatDiffValue, semanticSpecificationDiff } from '../specificationDiff';
-  import { createDraftSaveCoordinator, invertedWindowFieldIds, requiredFieldIds, wizardCompleteness, withSpecDefaults, type SpecDraft } from '../wizardState';
+  import { createDraftSaveCoordinator, invertedWindowFieldIds, mergeDraftAfterApply, requiredFieldIds, wizardCompleteness, withSpecDefaults, type SpecDraft } from '../wizardState';
   import type { CatalogController } from '../controllerCatalog';
   import { submitFailureKind, submitFailureKey } from '../submitFailure';
   import { MotorOpenActions } from '../MotorOpenActions';
@@ -407,6 +407,29 @@ export default function DevelopmentPage() {
       if (projectToken.current === token && currentProjectRef.current === project) setReloadPreview({ project, token, fresh });
     } catch { if (projectToken.current === token) setError(tr('reloadFailed')); }
   };
+  // Apply of an assistant proposal: the server's draft moved on, not the person's.  The form follows it without a question, whatever was typed
+  // meanwhile stays and is saved on top at the new revision.
+  const applyBaseRef = useRef<SpecDraft | null>(null);
+  const flushBeforeApply = useCallback(async () => { await flushSave(); applyBaseRef.current = draftRef.current; }, [flushSave]);
+  const reloadAfterApply = async () => {
+    if (!selected) return;
+    const project = selected.id, token = projectToken.current;
+    try {
+      const fresh = await developmentApi.spec(project);
+      if (!isCurrentProject(project, token)) return;
+      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+      await saveCoordinator.flush().catch(() => {});
+      if (!isCurrentProject(project, token)) return;
+      const server = { ...normaliseDraft(fresh.draft), schema_version: fresh.schema_version ?? 1 };
+      const { draft, unsaved } = mergeDraftAfterApply(applyBaseRef.current ?? draftRef.current, draftRef.current, server);
+      draftRef.current = draft; revisionRef.current = fresh.revision; saveCoordinator.setRevision(project, fresh.revision);
+      saveFailed.current = false; setSaveError(''); setSaving(false);
+      if (!unsaved) { setFieldErrors({}); setRejected({}); setSubmitError([]); }
+      if (fresh.schema) setSchema(fresh.schema);
+      setSpec({ ...fresh, draft }); setSubmitted(submittedFrom(project, fresh));
+      if (unsaved) void enqueueSave(project, draft, token).catch(() => {});
+    } catch { if (projectToken.current === token) setError(tr('reloadFailed')); }
+  };
   const confirmReload = () => {
     if (!reloadPreview || reloadPreview.token !== projectToken.current || reloadPreview.project !== currentProjectRef.current) return;
     const { fresh, project } = reloadPreview;
@@ -678,7 +701,7 @@ export default function DevelopmentPage() {
         env={{ tr, lang, draft: draftRef.current, profile, spec, steps: sections, canEditSpec, busy, migrationBusy, updateDraft, fields, fieldErrors: { ...fieldErrors, ...rejected } }}
         history={<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} />}
         banner={canEditSpec && (spec.schema_version ?? 1) < 2 ? <Alert severity="warning" action={<Button color="inherit" size="small" disabled={migrationBusy || saving} onClick={() => void requestMigrationPreview()}>{tr('migration.action')}</Button>}>{tr('migration.body')}</Alert> : null}
-        assistant={(docked) => <SpecAssistantPanel projectId={selected.id} schema={schema} lang={lang} docked={docked} beforeApply={flushSave} onApplied={() => { void reloadDraft(); }} />} />}
+        assistant={(docked) => <SpecAssistantPanel projectId={selected.id} schema={schema} lang={lang} docked={docked} beforeApply={flushBeforeApply} onApplied={() => { void reloadAfterApply(); }} />} />}
     </Box>}
     {view === 'motors' && <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Box sx={{ flex: 1 }}><HelpTip title={tr('motorsTip')} /></Box>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>

@@ -8,7 +8,6 @@
   "placeholder": "询问本应用的问题…",
   "send": "发送消息",
   "thinking": "正在思考…",
-  "demo": "演示模式：此服务器尚未配置 AI 助手。",
   "failed": "抱歉，我暂时无法回答。请稍后重试，或写信给 support@aerostator.com。",
   "draft": {
     "heading": "给团队的工单",

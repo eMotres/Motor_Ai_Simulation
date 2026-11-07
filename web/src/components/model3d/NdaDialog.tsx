@@ -40,6 +40,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   const [intake, setIntake] = useState<IntakeForm>(emptyIntake());      // for the applicant verification that follows the signature
   const [accepted, setAccepted] = useState(false);
   const [typed, setTyped] = useState('');
+  const [privateMode, setPrivateMode] = useState(false);   // the account is on PRIVATE: no consent box, one short line
   const [share, setShare] = useState(false);          // optional dataset consent, separate from the NDA; starts at the current choice
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -52,7 +53,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
     let live = true;
     setCur(null); setLoadErr(null); setTried(false); setSrvErr(null); setSrvFields({});
     fetch(`${API}/api/data-sharing/mine`).then((r) => (r.ok ? r.json() : null))
-      .then((j: { consent?: boolean } | null) => { if (live) setShare(j?.consent === true); }).catch(() => { /* default: unticked */ });
+      .then((j: { consent?: boolean; private?: boolean } | null) => { if (live) { setShare(j?.consent === true && j?.private !== true); setPrivateMode(j?.private === true); } }).catch(() => { /* default: unticked */ });
     (async () => {
       try {
         const r = await fetch(`${API}/api/nda/current?lang=${lang}`);
@@ -213,7 +214,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
                 label={t('nda.accept')} />
               {err('accept') && <Typography sx={{ fontSize: 11, color: 'error.main', ml: 3.5 }}>{err('accept')}</Typography>}
             </Box>
-            <DataSharingConsent checked={share} onChange={setShare} disabled={busy} />
+            <DataSharingConsent checked={share} onChange={setShare} disabled={busy} privateMode={privateMode} />
             <TextField size="small" required label={t('nda.typeName')} value={typed} onChange={(e) => setTyped(e.target.value)}
               error={!!err('typed_name')} helperText={err('typed_name')} autoComplete="off" />
             {srvErr && <Alert severity="error" sx={{ fontSize: 12 }}>{srvErr}</Alert>}

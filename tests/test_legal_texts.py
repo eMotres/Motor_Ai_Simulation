@@ -368,6 +368,62 @@ def test_accept_agreement_private_records_mode_private_and_places_the_hold(env):
     assert PA.training_eligibility(LONE) is None and PA.training_allowed(LONE) is False
 
 
+def test_a_private_request_never_records_the_earlier_data_box(env):
+    (env["tmp"] / "legal").mkdir(exist_ok=True)
+    body = {**AGREE, "mode": "PRIVATE", "historical_opt_in": True, "accept_label": "A", "election_label": "E"}
+    h = env["h"](ANNA)
+    assert client.post("/api/legal/accept-agreement", json=body, headers=h).status_code == 200
+    (rec,) = lines(env)
+    assert rec["historical_opt_in"] is False and "election" not in rec["labels"] and rec["labels"]["accept"] == "A"
+    rows = dict((r["label"], r["value"]) for r in client.get("/api/legal/mine", headers=h).json()["acceptances"][0]["rows"])
+    assert rows["Earlier data (section 7.9)"] == "Not included" and "Election label shown" not in rows
+
+
+def test_an_old_private_line_with_the_box_ticked_is_shown_as_not_included(env):
+    rows = dict(LT.record_view({"user": ANNA, "mode": "PRIVATE", "capacity": "business", "historical_opt_in": True, "labels": {"election": "E"}}))
+    assert rows["Earlier data (section 7.9)"] == "Not included" and "Election label shown" not in rows
+    rows = dict(LT.record_view({"user": ANNA, "mode": "FREE", "capacity": "business", "historical_opt_in": True, "labels": {"election": "E"}}))
+    assert rows["Earlier data (section 7.9)"] == "Included from the account's creation" and rows["Election label shown"] == "E"
+
+
+def test_a_private_request_reaches_the_team_by_mail_and_audit_and_never_the_customer(env):
+    (env["tmp"] / "legal").mkdir(exist_ok=True)
+    env["mp"].setenv("NDA_NOTIFY_EMAIL", "team@example.com")
+    r = client.post("/api/legal/accept-agreement", json={**AGREE, "mode": "PRIVATE"}, headers=env["h"](ANNA))
+    assert r.status_code == 200
+    assert [m[0] for m in env["outbox"]] == ["team@example.com"]                          # the staff address only, nothing to the customer
+    to, subject, body = env["outbox"][0]
+    assert subject == "[AeroStator] PRIVATE requested: Acme GmbH"
+    assert ANNA in body and lines(env)[0]["id"] in body and "No-training hold: placed" in body and "fee" not in body.lower()
+    rows = client.get("/api/admin/audit?limit=20", headers=env["h"](ADMIN)).json()["entries"]
+    (row,) = [x for x in rows if x["action"] == "agreement.private_request"]
+    assert row["actor"] == ANNA and row["subject"] == ANNA and row["details"]["record"] == lines(env)[0]["id"]
+    # a second click records and mails nothing more
+    assert client.post("/api/legal/accept-agreement", json={**AGREE, "mode": "PRIVATE"}, headers=env["h"](ANNA)).json()["already"] is True
+    assert len(env["outbox"]) == 1
+
+
+def test_free_and_staff_acceptances_send_no_private_mail(env):
+    (env["tmp"] / "legal").mkdir(exist_ok=True)
+    env["mp"].setenv("NDA_NOTIFY_EMAIL", "team@example.com")
+    assert client.post("/api/legal/accept-agreement", json=AGREE, headers=env["h"](ANNA)).status_code == 200
+    assert client.post("/api/legal/accept-agreement", json={**AGREE, "mode": "PRIVATE"}, headers=env["h"](ENG)).status_code == 200
+    assert client.post("/api/legal/accept-agreement", json={**AGREE, "mode": "PRIVATE"}, headers=env["h"](OWN)).status_code == 200
+    assert env["outbox"] == []
+
+
+def test_mail_trouble_never_blocks_a_private_request_and_the_audit_line_stays(env):
+    (env["tmp"] / "legal").mkdir(exist_ok=True)
+    env["mp"].setenv("NDA_NOTIFY_EMAIL", "team@example.com")
+
+    def boom(*a, **kw):
+        raise OSError("smtp down")
+    env["mp"].setattr(env["E"], "send", boom)
+    assert client.post("/api/legal/accept-agreement", json={**AGREE, "mode": "PRIVATE"}, headers=env["h"](ANNA)).status_code == 200
+    rows = client.get("/api/admin/audit?limit=20", headers=env["h"](ADMIN)).json()["entries"]
+    assert any(x["action"] == "agreement.private_request" for x in rows)
+
+
 def test_accept_agreement_switch_free_to_private_adds_a_line_and_a_hold(env):
     h = env["h"](ANNA)
     import types

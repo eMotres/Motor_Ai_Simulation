@@ -54,10 +54,10 @@ export async function listMyTickets(): Promise<Ticket[]> {
 
 /** Ask the in-app assistant. The backend proxies to the provider (key stays server-side);
  *  `context` is the sanitised session snapshot the model reads as hidden text. */
-export async function askAssistant(messages: ChatMsg[], context?: Record<string, unknown>): Promise<ChatReply> {
+export async function askAssistant(messages: ChatMsg[], context?: Record<string, unknown>, lang?: string): Promise<ChatReply> {
   const r = await fetch(`${API}/api/support/chat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, ...(context ? { context } : {}) }),
+    body: JSON.stringify({ messages, ...(context ? { context } : {}), ...(lang ? { lang } : {}) }),
   });
   let body: unknown = null;
   try { body = await r.json(); } catch { body = null; }

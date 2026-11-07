@@ -1,5 +1,6 @@
 {
   "aiNotice": "AI assistant — answers can be wrong.",
+  "assistantUnavailable": "The assistant is not available right now.",
   "unreadMessagesTip": "{count} unread messages",
   "tabs": {
     "motors": "Motors",
@@ -72,7 +73,7 @@
     "toggle": "Share my data with the AeroStator dataset",
     "on": "On since {time}",
     "off": "Off",
-    "textVersion": "Consent text {version}",
+    "privateBlocked": "Not available on PRIVATE: your data stay out of the dataset.",
     "saveError": "The choice was not saved: {message}",
     "close": "Close"
   },

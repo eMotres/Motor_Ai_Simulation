@@ -312,11 +312,11 @@ def test_the_block_rides_in_the_prompt_of_the_right_caller(cat):
     assert "TICKET_DRAFT" in user
 
 
-def test_the_visitor_text_says_free_and_instant_not_invitation_or_pricing():
+def test_the_visitor_text_says_no_approval_not_invitation_or_pricing():
     from motor_ai_sim.routes import support
     note = support.VISITOR_NOTE
     low = note.lower()
-    assert "free" in low and "sign-up is instant" in low and "create account" in low
+    assert "signing up needs no\napproval" in low and "create account" in low
     assert "invitation" not in low and "pricing" not in low
     from motor_ai_sim import support_prompt as P
     assert "invitation" not in P.USER_PROMPT.lower() and "pricing" not in P.USER_PROMPT.lower()

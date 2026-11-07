@@ -8,7 +8,7 @@ import { DataSharingScope } from '../common/DataSharingConsent';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 
-interface State { consent: boolean; version: string; time: string; current_version: string }
+interface State { consent: boolean; version: string; time: string; current_version: string; private?: boolean }
 
 const DataSharingDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const { t } = useTranslation('common');
@@ -43,16 +43,18 @@ const DataSharingDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ o
         {!st && !err && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={22} /></Box>}
         {st && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-            <Switch size="small" checked={st.consent} disabled={busy} onChange={(_, v) => void toggle(v)}
+            <Switch size="small" checked={st.consent} disabled={busy || (st.private === true && !st.consent)} onChange={(_, v) => void toggle(v)}
               inputProps={{ 'aria-label': t('dataSharing.toggle') }} />
             <Typography sx={{ fontSize: 13, flex: 1 }}>{t('dataSharing.toggle')}</Typography>
-            <HelpTip title={<DataSharingScope />} />
+            <HelpTip title={<>
+              <DataSharingScope />
+              <Box component="span" sx={{ display: 'block', mt: 0.5 }}>{st.current_version}</Box>
+            </>} />
           </Box>
         )}
         {st && (
-          <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 0.5 }}>
-            {st.consent ? t('dataSharing.on', { time: st.time.replace('T', ' ').replace('Z', ' UTC') }) : t('dataSharing.off')}
-            {' · '}{t('dataSharing.textVersion', { version: st.current_version })}
+          <Typography data-testid="data-sharing-line" sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 0.5 }}>
+            {st.private ? t('dataSharing.privateBlocked') : st.consent ? t('dataSharing.on', { time: st.time.replace('T', ' ').replace('Z', ' UTC') }) : t('dataSharing.off')}
           </Typography>
         )}
         {err && <Alert severity="error" sx={{ fontSize: 12, mt: 1 }}>{err}</Alert>}

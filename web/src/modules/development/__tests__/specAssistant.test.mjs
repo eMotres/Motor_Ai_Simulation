@@ -2,6 +2,7 @@
 // Apply, the chat history sent to the server, the Apply error mapping (synthetic data only).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   applyFailure, cardAction, cardView, formatProposalValue, historyForServer, langOf, openProposals, recalcText,
 } from '../specAssistant.ts';
@@ -27,6 +28,13 @@ const recalc = (kind) => ({
     : { en: 'coupled thermal + mechanics of the key points', 'zh-CN': '关键工作点的热-机械耦合重算' } });
 const proposal = (extra = {}) => ({ id: 'p-1', field_id: '4_8', value: { balance_grade: 'G2.5', runout_mm: 0.05 }, reason: 'typical (assumed, to confirm)',
   recalc: recalc('thermal_mechanics'), by: 'assistant', created_at: '2026-10-27T10:00:00Z', status: 'open', ...extra });
+
+test('every proposal card is labelled as an AI suggestion, in both languages', () => {
+  const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+  assert.match(read('../components/SpecAssistantPanel.tsx'), /data-testid="spec-proposal"[\s\S]{0,300}specAssistant\.aiSuggestion/);
+  assert.ok(JSON.parse(read('../../../locales/en/development.json')).specAssistant.aiSuggestion.startsWith('AI suggestion'));
+  assert.ok(JSON.parse(read('../../../locales/zh-CN/development.json')).specAssistant.aiSuggestion.startsWith('AI 建议'));
+});
 
 test('a structured value shows labelled properties with units and hides ui_hidden ones', () => {
   assert.equal(formatProposalValue(schema, '4_8', { balance_grade: 'G2.5', runout_mm: 0.05, note: 'x' }, 'en'), 'Balance grade: G2.5; Runout: 0.05 mm');

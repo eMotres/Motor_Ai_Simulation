@@ -14,8 +14,9 @@
 * ``POST /api/admin/agreement/holds``         admin: ``{email | company_id, action: hold|release, note, reference}`` - "PRIVATE request received"
                                               (agreement section 3.4): the client's data leave the training allow-list at once
 
-Nothing here sends e-mail (owner rule: no outside message without his OK on the text); the admin notice is the audit line
-``agreement.accept``, which the live activity feed shows.
+Nothing here mails a customer (owner rule: no outside message without his OK on the text); the admin notice is the audit line
+``agreement.accept``, which the live activity feed shows, and a PRIVATE request also sends the internal staff mail
+(``platform_agreement.notify_private_request``).
 """
 from __future__ import annotations
 
@@ -89,6 +90,11 @@ def accept(request: Request, body: dict = Body(default={}), authorization: Optio
     AA.record(who["id"], "agreement.accept", r["key"], subject=who["id"],
               details={"mode": r["mode"], "version": r["version"], "record": r["id"], "company": r["company"],
                        "private_pending_payment": r["private_pending_payment"]})
+    if r["mode"] == "PRIVATE":
+        from motor_ai_sim import data_sharing as DS
+        DS.withdraw_for_private(who["id"], ip=ip, record_id=r["id"])
+        PA.notify_private_request(who["id"], key=r["key"], company=r["company"], record_id=r["id"], version=r["version"],
+                                  country=r["country"], source="company_dialog")
     return {"ok": True, "record_id": r["id"], "version": r["version"], "mode": r["mode"],
             "private_pending_payment": r["private_pending_payment"],
             "status": PA.status_for(who["id"], role, is_admin=bool(who.get("is_admin")))}

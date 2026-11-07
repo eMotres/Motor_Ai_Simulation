@@ -3,7 +3,7 @@
 // acceptance).  Short on purpose: one heading, the key points as five short lines with links to the full texts, then the fields: the
 // mode (FREE or "Ask for PRIVATE (paid)", nothing preselected), the capacity (agreement 2.3), the country, the business name, the
 // acceptance box (its sentence carries the FREE exchange and its irreversibility, or the PRIVATE no-training promise), and the optional,
-// unticked box for the data entered before today (7.9).  PRIVATE also places the no-training hold (server) and says that our team will
+// unticked box for the data entered before today (7.9; FREE only, a PRIVATE request has no such box).  PRIVATE also places the no-training hold (server) and says that our team will
 // contact the person.  Wording: common.json legal.agreement.* and legal.accept.*; the server records everything with the hashes
 // (POST /api/legal/accept-agreement, source "simulation_start").
 import React, { useEffect, useMemo, useState } from 'react';
@@ -14,7 +14,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { acceptAgreement, fetchCountries, fetchLegalStatus } from '../../lib/legalApi';
 import {
-  AGREEMENT_CHOICES, CAPACITIES, agreementComplete, asksBusinessName, emptyAgreementForm, forumVariant, type AgreementChoice,
+  AGREEMENT_CHOICES, CAPACITIES, agreementComplete, asksBusinessName, asksEarlierData, emptyAgreementForm, forumVariant, type AgreementChoice,
   type AgreementForm, type Capacity, type LegalLang,
 } from '../../lib/legalLogic';
 import { agreementLabels } from '../../lib/legalLabels';
@@ -89,7 +89,10 @@ const SimulationAgreementDialog: React.FC<{ open: boolean; version?: string; onC
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <FormControl component="fieldset" required disabled={busy} data-testid="sim-agreement-mode">
             <FormLabel component="legend" sx={{ fontSize: fs, color: 'var(--text-2)' }}>{t('legal.agreement.modeLabel')}</FormLabel>
-            <RadioGroup value={mode} onChange={(e) => setForm({ ...form, mode: e.target.value as AgreementChoice })}>
+            <RadioGroup value={mode} onChange={(e) => {
+              const next = e.target.value as AgreementChoice;
+              setForm({ ...form, mode: next, earlier: asksEarlierData(next) ? form.earlier : false });
+            }}>
               {AGREEMENT_CHOICES.map((m) => (
                 <FormControlLabel key={m} value={m} data-testid={`sim-agreement-mode-${m}`} sx={{ alignItems: 'flex-start', mr: 0, '& .MuiRadio-root': { py: 0.25 } }}
                   control={<Radio size="small" />}
@@ -149,14 +152,16 @@ const SimulationAgreementDialog: React.FC<{ open: boolean; version?: string; onC
                 ) : t('legal.accept.chooseCapacity')}
               </Typography>
             )} />
-          <FormControlLabel disabled={busy} sx={{ mr: 0, alignItems: 'flex-start', '& .MuiCheckbox-root': { py: 0.25 } }}
-            control={<Checkbox size="small" checked={form.earlier} onChange={(e) => setForm({ ...form, earlier: e.target.checked })}
-              inputProps={{ 'data-testid': 'terms-earlier' } as React.InputHTMLAttributes<HTMLInputElement>} />}
-            label={(
-              <Typography component="span" sx={{ fontSize: fs, color: 'var(--text-2)', lineHeight: 1.4, pt: 0.35, display: 'block' }}>
-                {t('legal.accept.earlier')} <span style={{ color: 'var(--text-3)' }}>{t('legal.accept.optional')}</span>
-              </Typography>
-            )} />
+          {asksEarlierData(mode) && (
+            <FormControlLabel disabled={busy} sx={{ mr: 0, alignItems: 'flex-start', '& .MuiCheckbox-root': { py: 0.25 } }}
+              control={<Checkbox size="small" checked={form.earlier} onChange={(e) => setForm({ ...form, earlier: e.target.checked })}
+                inputProps={{ 'data-testid': 'terms-earlier' } as React.InputHTMLAttributes<HTMLInputElement>} />}
+              label={(
+                <Typography component="span" sx={{ fontSize: fs, color: 'var(--text-2)', lineHeight: 1.4, pt: 0.35, display: 'block' }}>
+                  {t('legal.accept.earlier')} <span style={{ color: 'var(--text-3)' }}>{t('legal.accept.optional')}</span>
+                </Typography>
+              )} />
+          )}
         </Box>
         {err && <Alert severity="error" sx={{ fontSize: 12.5, mt: 1.5 }}>{err}</Alert>}
       </DialogContent>

@@ -318,6 +318,34 @@ export function specificationDiff(a: unknown, b: unknown): Array<{ path: string;
 }
 
 
+/** The form after an assistant proposal was applied on the server: the server's draft, plus whatever the person typed since the last save
+ *  (`base` is the draft as saved just before Apply, `local` the form now).  `unsaved` = there is typed text to save on top; the same object
+ *  for `base` and `local` means nothing was typed.  Typed text wins over the proposal on the same field: it is never lost. */
+export function mergeDraftAfterApply(base: SpecDraft, local: SpecDraft, server: SpecDraft): { draft: SpecDraft; unsaved: boolean } {
+  if (local === base) return { draft: server, unsaved: false };
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const areas = ['fields', 'production'];
+  const draft: SpecDraft = { ...server };
+  let unsaved = false;
+  for (const area of areas) {
+    const b = (base[area] ?? {}) as Record<string, unknown>;
+    const l = (local[area] ?? {}) as Record<string, unknown>;
+    const out = { ...((server[area] ?? {}) as Record<string, unknown>) };
+    for (const key of new Set([...Object.keys(b), ...Object.keys(l)])) {
+      if (same(b[key], l[key])) continue;
+      unsaved = true;
+      if (key in l) out[key] = l[key]; else delete out[key];
+    }
+    (draft as Record<string, unknown>)[area] = out;
+  }
+  for (const key of Object.keys(local)) {
+    if (areas.includes(key) || same(base[key], local[key])) continue;
+    unsaved = true;
+    (draft as Record<string, unknown>)[key] = local[key];
+  }
+  return { draft, unsaved };
+}
+
 /** Serializes draft writes, rejects stale project tokens, and advances revision only after a successful save. */
 export function createDraftSaveCoordinator<T>(save: (project: string, draft: T, revision: number) => Promise<{ revision: number }>) {
   let queue: Promise<void> = Promise.resolve();

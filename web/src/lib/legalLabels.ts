@@ -3,7 +3,7 @@
 // simulation-start dialog send it along.
 import type { TFunction } from 'i18next';
 import {
-  acceptLabelText, signupLabelText, type AcceptLabels, type AcceptStrings, type AgreementForm, type SignupStrings,
+  acceptLabelText, asksEarlierData, signupLabelText, type AcceptLabels, type AcceptStrings, type AgreementForm, type SignupStrings,
 } from './legalLogic';
 
 /** `t` must be bound to the `common` namespace.  The sentence beside the sign-up box ("I use AeroStator for business and accept ..."). */
@@ -23,6 +23,6 @@ export function termsLineLabel(t: TFunction): string {
 export function agreementLabels(t: TFunction, form: AgreementForm): AcceptLabels {
   const out: AcceptLabels = {};
   if (form.capacity && form.mode) out.accept = acceptLabelText(t('legal.accept', { returnObjects: true }) as unknown as AcceptStrings, form.capacity, form.mode);
-  out.election = String(t('legal.accept.earlier'));
+  if (asksEarlierData(form.mode)) out.election = String(t('legal.accept.earlier'));
   return out;
 }

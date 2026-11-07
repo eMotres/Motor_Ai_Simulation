@@ -103,8 +103,9 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
     except Exception:                                       # noqa: BLE001
         ip = "?"
     try:
+        from motor_ai_sim import data_sharing as _DS
         r = N.sign(user=who["id"], email=who["id"], fields=fields, cur=cur, ip=ip, user_agent=request.headers.get("user-agent", ""),
-                   data_sharing=body.get("data_sharing") is True)
+                   data_sharing=body.get("data_sharing") is True and not _DS.on_private(who["id"]))    # Terms of Use 3.5
     except OSError as e:
         log.error("nda: cannot store the signature (%s)", e)
         raise HTTPException(status_code=503, detail="The signature could not be stored; nothing was signed. Try again later.")

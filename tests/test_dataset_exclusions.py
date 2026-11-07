@@ -1,5 +1,6 @@
 """Dataset exclusion list (platform_agreement.dataset_exclusions, `python -m motor_ai_sim.dataset_exclusions`,
-GET /api/admin/dataset/exclusions): everything that belongs to a client whose newest acceptance is PRIVATE.
+GET /api/admin/dataset/exclusions): everything that belongs to a client on PRIVATE: the click-through record, the account's agreement
+line of the short dialog, or a no-training hold.
 
 Synthetic data only: a throwaway users file, legal / directory / projects / production stores.  Nothing is mailed, no solver.
 """
@@ -29,9 +30,11 @@ client = TestClient(app)
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     from motor_ai_sim import auth
+    from motor_ai_sim import comm_prefs as CP
     from motor_ai_sim import users as U
     from motor_ai_sim.directory import service as D
 
+    monkeypatch.setattr(CP, "_ROOT", tmp_path)
     legal = tmp_path / "legal"
     legal.mkdir()
     monkeypatch.setenv("MOTRES_LEGAL_ROOT", str(legal))
@@ -87,7 +90,7 @@ def build_world(env):
     project("acme-1", [(ANN, "owner"), (BOB, "customer")], motors=[("CIANO28 85", "A1")], history=[("CIANO28 85", "OLD")])
     project("acme-by-staff", [(ENG, "owner"), (BOB, "customer")], motors=[("DIE-X", "cfg")])
     project("free-1", [(FREE1, "owner")], motors=[("FREE DIE", "f")])
-    project("mixed", [(FREE1, "owner"), (BOB, "customer")], motors=[("MIXED DIE", "m")])   # FREE owner decides: not excluded
+    project("mixed", [(FREE1, "owner"), (BOB, "customer")], motors=[("MIXED DIE", "m")])   # a PRIVATE member: the most restrictive wins
     project("motres-only", [(ENG, "owner"), (OWN, "engineer")], motors=[("OWN DIE", "o")])
     production("CIANO28 85", "A1", [(ENG, "owner")])
     production("FREE DIE", "f", [(FREE1, "owner")])
@@ -111,13 +114,13 @@ def test_private_company_lists_people_workspaces_projects_motors_productions(env
     assert out["emails"] == sorted([ANN, BOB])
     assert len(out["acceptance_ids"]) == 1                                   # the PRIVATE record of Acme, not the FREE one of Free Co
     assert out["workspace_ids"] == sorted(workspace_id(e) for e in (ANN, BOB))
-    # acme-1 (owner Ann) and acme-by-staff (staff owner, non-staff member Bob) -> listed; the FREE owner's mixed project is not
-    assert out["project_ids"] == ["acme-1", "acme-by-staff"]
+    # acme-1 (owner Ann), acme-by-staff (staff owner, member Bob) and mixed (FREE owner, member Bob; agreement 2.4) -> listed
+    assert out["project_ids"] == ["acme-1", "acme-by-staff", "mixed"]
     assert {(m["die"], m["config"]) for m in out["motors"]} == {("CIANO28 85", "A1"), ("CIANO28 85", "OLD"), ("DIE-X", "cfg"),
-                                                                  ("LOOSE DIE", "l")}
+                                                                  ("LOOSE DIE", "l"), ("MIXED DIE", "m")}
     assert {(m["die"], m["config"]) for m in out["productions"]} == {("CIANO28 85", "A1"), ("LOOSE DIE", "l")}
     blob = json.dumps({k: v for k, v in out.items() if k != "training"})
-    assert ENG not in blob and OWN not in blob and FREE1 not in blob and "FREE DIE" not in blob and "MIXED DIE" not in blob
+    assert ENG not in blob and OWN not in blob and FREE1 not in blob and "FREE DIE" not in blob
 
 
 def test_a_later_free_acceptance_removes_the_company(env):
@@ -171,7 +174,7 @@ def test_cli_prints_the_json(env, tmp_path):
     r = subprocess.run([sys.executable, "-m", "motor_ai_sim.dataset_exclusions"], capture_output=True, text=True, env=e, timeout=120)
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert out["emails"] == sorted([ANN, BOB]) and out["project_ids"] == ["acme-1", "acme-by-staff"]
+    assert out["emails"] == sorted([ANN, BOB]) and out["project_ids"] == ["acme-1", "acme-by-staff", "mixed"]
 
 
 def test_admin_route(env):
@@ -183,10 +186,91 @@ def test_admin_route(env):
     assert r.status_code == 200 and r.json()["companies"] == [env["acme"]["id"]] and set(r.json()) == set(EMPTY) | {"generated", "training"}
 
 
-def test_owner_without_any_acceptance_falls_back_to_the_members(env):
-    """Documented rule: the owner decides only when he has a recorded acceptance; else any non-staff PRIVATE member does."""
+def test_a_private_member_lists_the_project_whoever_owns_it(env):
+    """Agreement 2.4: where permissions conflict the most restrictive one applies, so a FREE owner does not lift a PRIVATE member."""
     build_world(env)
     accept(env, "company:" + env["acme"]["id"], "PRIVATE")
     assert "mixed" in PA.dataset_exclusions()["project_ids"]                # FREE1's company never accepted anything
     accept(env, "company:" + env["freeco"]["id"], "FREE")
-    assert "mixed" not in PA.dataset_exclusions()["project_ids"]
+    assert "mixed" in PA.dataset_exclusions()["project_ids"]
+
+
+def account_line(email, mode, *, capacity="business"):
+    """An account's agreement line, as the short dialog records it (never a click-through record)."""
+    from motor_ai_sim import legal_texts as LT
+    return LT.record_acceptance(email, source="simulation_start", mode=mode, country="DE", business_name="Acme Drones Ltd", capacity=capacity)
+
+
+def test_the_account_dialog_private_line_lists_the_account_its_workspace_and_projects(env):
+    """The way a customer really asks for PRIVATE: no click-through record, no company, only the line of the dialog."""
+    project("solo-1", [(LONE, "owner")], motors=[("SOLO DIE", "s")])
+    project("by-staff", [(ENG, "owner"), (LONE, "customer")], motors=[("STAFF DIE", "t")])
+    project("other", [(FREE1, "owner")], motors=[("FREE DIE", "f")])
+    rec = account_line(LONE, "PRIVATE")
+    assert not (env["legal"] / "platform_agreement_acceptances.jsonl").exists()
+    out = PA.dataset_exclusions()
+    assert out["emails"] == [LONE] and out["workspace_ids"] == [workspace_id(LONE)] and out["companies"] == []
+    assert out["project_ids"] == ["by-staff", "solo-1"]
+    assert {m["die"] for m in out["motors"]} == {"SOLO DIE", "STAFF DIE"}
+    assert rec["id"] in out["acceptance_ids"]
+    assert FREE1 not in out["emails"] and "other" not in out["project_ids"]
+    r = client.get("/api/admin/dataset/exclusions", headers=env["admin"])
+    assert r.status_code == 200 and r.json()["emails"] == [LONE]
+
+
+def test_a_free_line_lists_nobody_and_a_later_free_line_removes_the_account(env):
+    account_line(LONE, "FREE")
+    assert PA.dataset_exclusions()["emails"] == []
+    account_line(LONE, "PRIVATE")
+    assert PA.dataset_exclusions()["emails"] == [LONE]
+    account_line(LONE, "FREE")
+    assert PA.dataset_exclusions()["emails"] == []
+
+
+def test_the_own_private_line_wins_over_a_free_company_and_a_private_company_over_a_free_line(env):
+    accept(env, "company:" + env["freeco"]["id"], "FREE")
+    account_line(FREE1, "PRIVATE")
+    assert PA.dataset_exclusions()["emails"] == [FREE1]
+    accept(env, "company:" + env["acme"]["id"], "PRIVATE")
+    account_line(ANN, "FREE")
+    assert ANN in PA.dataset_exclusions()["emails"]
+
+
+def test_a_hold_lists_the_account_or_company_until_it_is_released(env):
+    build_world(env)
+    project("solo-1", [(LONE, "owner")], motors=[("SOLO DIE", "s")])
+    h = PA.record_hold("user:" + LONE, kind="hold", actor=ADMIN)
+    out = PA.dataset_exclusions()
+    assert out["emails"] == [LONE] and out["project_ids"] == ["solo-1"] and h["id"] in out["acceptance_ids"]
+    account_line(LONE, "FREE")                                              # a FREE line does not lift a hold in force
+    assert PA.dataset_exclusions()["emails"] == [LONE]
+    PA.record_hold("user:" + LONE, kind="release", actor=ADMIN)
+    assert PA.dataset_exclusions()["emails"] == []
+    PA.record_hold("company:" + env["acme"]["id"], kind="hold", actor=ADMIN)
+    out = PA.dataset_exclusions()
+    assert out["companies"] == [env["acme"]["id"]] and out["emails"] == sorted([ANN, BOB]) and "acme-1" in out["project_ids"]
+
+
+def test_account_on_private_reads_like_the_list(env):
+    build_world(env)
+    assert not any(PA.account_on_private(e) for e in (ANN, LONE, FREE1))
+    accept(env, "company:" + env["acme"]["id"], "PRIVATE")
+    account_line(LONE, "PRIVATE")
+    PA.record_hold("user:" + GUEST, kind="hold", actor=ADMIN)
+    listed = set(PA.dataset_exclusions()["emails"])
+    for e in (ANN, BOB, LONE, FREE1, GUEST):
+        assert PA.account_on_private(e) is (e in listed), e
+
+
+def test_staff_and_motres_private_lines_are_never_listed(env):
+    account_line(ENG, "PRIVATE")
+    account_line(OWN, "PRIVATE")
+    out = PA.dataset_exclusions()
+    assert out["emails"] == [] and out["workspace_ids"] == [] and out["project_ids"] == []
+
+
+def test_an_unreadable_store_raises_and_never_reads_as_an_empty_list(env):
+    from motor_ai_sim import legal_texts as LT
+    LT.acceptances_path().mkdir(parents=True)                               # a directory: opening it fails
+    with pytest.raises(OSError):
+        PA.dataset_exclusions()

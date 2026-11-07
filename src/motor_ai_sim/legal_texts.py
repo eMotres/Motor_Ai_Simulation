@@ -32,7 +32,8 @@ Acceptance record, append-only, one JSON line per acceptance, next to ``users.js
                                                 country (where the business is established, required), capacity (agreement section 2.3:
                                                 business | sole_trader | other, required), business_name (required for ``business``,
                                                 optional otherwise), historical_opt_in (section 7.9: the optional box for the data the
-                                                account entered before it accepted), forum_variant (A | B: B for CN / HK, section 13)
+                                                account entered before it accepted; a FREE election, always false on a PRIVATE line),
+                                                forum_variant (A | B: B for CN / HK, section 13)
 
 A ``terms`` line (sign-up, the "updated terms" banner) is NOT an agreement acceptance: it has no capacity, so ``training_eligibility`` and
 the simulation gate ignore it.  Lines of the first v0.4 release (#525) carry a capacity and a country but no ``kind`` / ``mode``: they are
@@ -290,7 +291,8 @@ def record_acceptance(email: str, *, source: str, country: str = "", business_na
     A Terms-only source (:data:`TERMS_SOURCES`) records the versions, hashes, labels and source and nothing about a capacity: country,
     capacity, business name, earlier-data election and mode are not stored (they were not asked).  Source ``simulation_start`` records
     the account agreement: the ``mode`` (FREE | PRIVATE), the capacity, the country (:class:`CompanyError` when missing or not on the
-    list), the business name (required for ``business``) and the earlier-data election ``historical_opt_in`` (section 7.9)."""
+    list), the business name (required for ``business``) and the earlier-data election ``historical_opt_in`` (section 7.9, FREE only: a
+    PRIVATE request trains on nothing, so the election and its label are never recorded on it)."""
     email = _norm(email)
     if not email:
         raise ValueError("no account")
@@ -315,8 +317,10 @@ def record_acceptance(email: str, *, source: str, country: str = "", business_na
                ip=str(ip or ""), user_agent=str(user_agent or "")[:300])
     if agreement:
         rec.update(mode=mode, private_pending_payment=mode == "PRIVATE", ai_training_allowed=mode == "FREE" and capacity in TRAINING_CAPACITIES,
-                   country=country, capacity=capacity, business_name=business_name, historical_opt_in=historical_opt_in is True,
+                   country=country, capacity=capacity, business_name=business_name, historical_opt_in=historical_opt_in is True and mode == "FREE",
                    forum_variant=forum_variant(country))
+        if mode == "PRIVATE":
+            rec["labels"].pop("election", None)
     with _LOCK:
         ensure_private_dir(acceptances_path().parent)
         with open_private(acceptances_path(), "a") as fh:
@@ -419,16 +423,17 @@ def record_view(rec: dict) -> list[tuple[str, str]]:
     labels = rec.get("labels") if isinstance(rec.get("labels"), dict) else {}
     cap = str(rec.get("capacity") or "")
     mode = str(rec.get("mode") or "").upper()
+    included = rec.get("historical_opt_in") is True and mode != "PRIVATE"      # a PRIVATE request never includes earlier data, also on an old line
     rows = [("Account", rec.get("user")), ("Accepted (UTC)", rec.get("iso")),
             ("Agreement mode", {"FREE": "FREE", "PRIVATE": "PRIVATE (requested; our team agrees the fee)"}.get(mode, "")),
             ("Capacity", CAPACITY_LABELS.get(cap, cap)),
             ("Business name", rec.get("business_name")), ("Country of establishment", rec.get("country")),
             ("Forum (agreement section 13)", FORUM_LABELS.get(str(rec.get("forum_variant") or ""), "")),
-            ("Earlier data (section 7.9)", ("Included from the account's creation" if rec.get("historical_opt_in") else "Not included")
+            ("Earlier data (section 7.9)", ("Included from the account's creation" if included else "Not included")
              if "historical_opt_in" in rec else ""),
             ("Terms of Use / Privacy / Agreement version", rec.get("terms_version")), ("Interface language", rec.get("lang")),
             ("Route", rec.get("source")), ("IP address", rec.get("ip")), ("Acceptance label shown", labels.get("accept")),
-            ("Election label shown", labels.get("election"))]
+            ("Election label shown", "" if mode == "PRIVATE" else labels.get("election"))]
     rows += [("%s SHA-256" % k.replace("_", " ").capitalize(), sha.get(k)) for k in HASH_KEYS.values()]
     rows.append(("Record ID", rec.get("id")))
     return [(k, str(v)) for k, v in rows if v not in (None, "")]

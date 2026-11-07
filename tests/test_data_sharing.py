@@ -249,6 +249,60 @@ def _flat(o, p=""):
     return out
 
 
+# -- PRIVATE (Terms of Use 3.5: the consent never covers PRIVATE data) ------------------
+
+def _on_private(env, email=USER):
+    from motor_ai_sim import platform_agreement as PA
+    PA.record_hold(PA.hold_key(email=email), kind="hold", actor="admin@example.com")
+
+
+def test_a_private_account_cannot_switch_it_on_but_can_switch_it_off(env):
+    assert put(env, "user", True).json()["consent"] is True                   # given before the account went PRIVATE
+    _on_private(env)
+    mine = client.get("/api/data-sharing/mine", headers=env["user"]).json()
+    assert mine["private"] is True and mine["consent"] is True
+    assert put(env, "user", False).json()["consent"] is False                 # a withdrawal always works
+    r = put(env, "user", True)
+    assert r.status_code == 409 and U.get_data_sharing(USER)["consent"] is False
+    assert [a["consent"] for a in audit(env)] == [True, False]                # the refused yes leaves no line
+    assert client.get("/api/data-sharing/mine", headers=env["free"]).json()["private"] is False
+
+
+def test_the_nda_tick_of_a_private_account_records_no_consent(env):
+    _on_private(env)
+    assert sign(env, data_sharing=True).status_code == 200
+    assert records(env)[-1]["data_sharing"]["consent"] is False and U.get_data_sharing(USER)["consent"] is False
+
+
+def test_the_export_filter_refuses_a_private_owner_even_with_an_old_consent(env):
+    assert put(env, "user", True).status_code == 200
+    rec = {"owner": USER, "created": "2999-01-01T00:00:00Z", "torque": 1}
+    assert DS.decide(rec)[0] is True
+    _on_private(env)
+    assert DS.decide(rec) == (False, "private_mode")
+
+
+def test_asking_for_private_withdraws_the_consent(env, monkeypatch, tmp_path):
+    from motor_ai_sim import comm_prefs as CP
+    from motor_ai_sim import legal_texts as LT
+    monkeypatch.setattr(CP, "_ROOT", tmp_path)
+    assert put(env, "user", True).json()["consent"] is True
+    r = client.post("/api/legal/accept-agreement", headers=env["user"], json={
+        "accept_agreement": True, "agreement_version": LT.AGREEMENT_PUBLIC_VERSION, "mode": "PRIVATE", "capacity": "business",
+        "country": "DE", "business_name": "Acme GmbH"})
+    assert r.status_code == 200
+    assert U.get_data_sharing(USER)["consent"] is False and audit(env)[-1]["source"] == "private_mode"
+    assert put(env, "user", True).status_code == 409
+
+
+def test_the_dialog_shows_one_short_line_and_no_bare_version_on_private():
+    src = (REPO / "web/src/components/auth/DataSharingDialog.tsx").read_text(encoding="utf-8")
+    assert "dataSharing.privateBlocked" in src and "st.private === true && !st.consent" in src and "dataSharing.textVersion" not in src
+    en = json.loads((REPO / "web/src/locales/en/common.json").read_text(encoding="utf-8"))["dataSharing"]["privateBlocked"]
+    zh = json.loads((REPO / "web/src/locales/zh-CN/common.json").read_text(encoding="utf-8"))["dataSharing"]["privateBlocked"]
+    assert len(en) < 70 and len(zh) < 40 and "PRIVATE" in en and "PRIVATE" in zh
+
+
 def test_consent_text_exists_in_en_and_zh_cn_with_the_same_keys_and_the_version():
     en = json.loads((REPO / "web/src/locales/en/common.json").read_text(encoding="utf-8"))["dataSharing"]
     zh = json.loads((REPO / "web/src/locales/zh-CN/common.json").read_text(encoding="utf-8"))["dataSharing"]

@@ -19,8 +19,9 @@ export const DataSharingScope: React.FC = () => {
   );
 };
 
-const DataSharingConsent: React.FC<{ checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }> = ({ checked, onChange, disabled }) => {
+const DataSharingConsent: React.FC<{ checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; privateMode?: boolean }> = ({ checked, onChange, disabled, privateMode }) => {
   const { t } = useTranslation('common');
+  if (privateMode) return <Typography data-testid="data-sharing-private" sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>{t('dataSharing.privateBlocked')}</Typography>;
   return (
     <Box data-testid="data-sharing-consent">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

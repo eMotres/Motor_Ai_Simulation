@@ -55,7 +55,8 @@ test('the draft card: editable type, title and description; Send and Dismiss', (
 
 test('Send goes through the confirm flow with the context; nothing is filed from the chat call', () => {
   assert.match(widget, /runConfirm\(flowRef\.current, submitTicket, context\(\), setFlow\)/);
-  assert.match(widget, /askAssistant\(next\.msgs, user \? context\(\) : undefined\)/);
+  assert.match(widget, /askAssistant\(next\.msgs, user \? context\(\) : undefined, i18n\.resolvedLanguage \?\? i18n\.language\)/);
+  assert.doesNotMatch(widget, /t\('demo'\)/);
   assert.match(widget, /installFailedCallRecorder\(/);
   assert.ok(!/submitTicket\(/.test(widget.replace('runConfirm(flowRef.current, submitTicket', '')), 'submitTicket is only reachable through runConfirm');
 });

@@ -71,6 +71,18 @@ def env(tmp_path, monkeypatch):
     return dict(legal=legal, company=comp, admin=h(ADMIN), eng=h(ENG), c1=h(CUST1), c2=h(CUST2), lone=h(LONE), own=h(OWN), tmp=tmp_path)
 
 
+def test_a_company_private_acceptance_mails_only_the_staff_address(env, monkeypatch):
+    from motor_ai_sim import auth_email as E
+    sent = []
+    install(env["legal"], V1)
+    monkeypatch.setenv("NDA_NOTIFY_EMAIL", "team@example.com")
+    monkeypatch.setattr(E, "send", lambda to, subject, body, *, block=False, **kw: sent.append((to, subject)) or True)
+    assert accept(env, "c1", mode="PRIVATE").status_code == 200
+    assert len(sent) == 1 and sent[0][0] == "team@example.com" and "PRIVATE requested" in sent[0][1]
+    rows = client.get("/api/admin/audit?limit=20", headers=env["admin"]).json()["entries"]
+    assert any(x["action"] == "agreement.private_request" for x in rows)
+
+
 def accept(env, who="c1", **over):
     body = {**GOOD, "version": V1, **over}
     return client.post("/api/agreement/accept", json=body, headers=env[who])

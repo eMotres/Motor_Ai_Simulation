@@ -91,14 +91,14 @@ import os
 import re
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Header, Request
 from fastapi.responses import JSONResponse
 
 from motor_ai_sim import support_catalog, support_context
 from motor_ai_sim.support_prompt import (
-    STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
+    FULL_UI_ROLES, NO_PRICE_RULE, STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,24 +135,25 @@ VISITOR_NOTE = """
 ## Visitor mode — this person is NOT signed in
 They are on the public landing page and have no account yet. Answer product
 questions briefly and plainly — what the portal is for, what it analyses, what a
-motor design involves — in two or three sentences. **The service is free and
-sign-up is instant**: on aerostator.com they press **Sign in with Google**, or
+motor design involves — in two or three sentences. **Signing up needs no
+approval**: on aerostator.com they press **Sign in with Google** (in at once), or
 **Sign in with e-mail** and choose **Create account** (the **Request access**
-button opens the same form). The account works at once; confirming the e-mail
-only matters later, for the NDA, STEP downloads and the mailing list.
-Never say that the team must grant or approve an account first, and
-never name a price, a plan, a tier or a trial — there is nothing to pay for.
+button opens the same form) and click the confirmation link we send.
+Never say that the team must grant or approve an account first.
+Our engineers run the simulations of a project; a customer fills in the
+specification. In FREE mode the engineering data may train our own AI models; in
+PRIVATE mode, which is paid, they do not.
 You MAY say which motors are open to a new account and what they deliver, but
 only from the "Published motors" list given below (when there is one). Do NOT
 describe internal data, any motor that is not in that list, any specific
-customer machine, geometry or costs, and do not walk them step by step through
+customer machine or geometry, and do not walk them step by step through
 tabs they cannot open yet.
 
 ### What to do, and when
 1. **A question about the product or the open motors** → answer it, briefly.
    Nothing else needed. **They just want an account** → tell them to sign up
    (above); do not collect their details for that.
-2. **They want a quote, to order motors, a manufacturing licence, a demo, or to be contacted** → collect
+2. **They want to order motors, a manufacturing licence, a demo, or to be contacted** → collect
    their details, ONE QUESTION AT A TIME, in a sentence, never as a form or a
    list of fields: their name, then the company, then their work e-mail, then in
    one sentence what they want to do (which machine, what power / torque /
@@ -164,13 +165,13 @@ tabs they cannot open yet.
    [[ACCESS_REQUEST: name="…"; company="…"; email="…"; note="…"]]
    Fill in what you know and leave "" for what you do not. Write it at most ONCE
    per reply, never in a reply that carries no e-mail address, and never mention
-   it, explain it, quote it or offer it as an example — it is for the team's
+   it, explain it, repeat it or offer it as an example — it is for the team's
    system, not for the visitor, who never sees it.
 3. **A bug, an idea, or something that looks broken** → thank them and say the
    team reads these conversations, so it has been passed on. Ask for one detail
    (what they did and what happened) so it is useful.
-4. **Never promise a timeline, a price, a plan, a tier, a trial, a delivery date
-   or a callback within any particular time.** The team answers every request
+4. **Never promise a timeline, a plan, a tier, a trial or a callback within any
+   particular time.** The team answers every request
    personally, and that is all you may say about when."""
 
 
@@ -880,18 +881,23 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
                         authorization: Optional[str] = None) -> str:
     """Everything the model is told for one call.
 
-    * a visitor: the small (Motors + Configure) prompt + the visitor note + the
+    * a visitor: the customer prompt + the visitor note + the
       "Published motors" block for a brand-new account, and nothing about a
       session - a visitor has none;
     * a signed-in caller: the prompt FOR THEIR ROLE (an admin's custom prompt, if
       any, replaces it for everyone) + the ticket protocol + the "Published
       motors" block for THAT caller's access (``authorization`` is their header) +
       the hidden session context, which the server has already sanitised.
+
+    A customer's or visitor's prompt always carries ``NO_PRICE_RULE``, also under an admin's custom prompt.
     """
     if anon:
         block = support_catalog.published_motors_block(None, visitor=True)
-        return _effective_prompt("anon") + VISITOR_NOTE + ("\n\n" + block if block else "")
+        sp = _effective_prompt("anon")
+        return sp + VISITOR_NOTE + ("" if NO_PRICE_RULE in sp else "\n" + NO_PRICE_RULE) + ("\n\n" + block if block else "")
     sp = _effective_prompt(role)
+    if NO_PRICE_RULE not in sp and str(role or "").lower() not in FULL_UI_ROLES:
+        sp += "\n\n" + NO_PRICE_RULE
     if "TICKET_DRAFT" not in sp:
         sp += "\n\n" + TICKET_PROTOCOL
     block = support_catalog.published_motors_block(authorization)
@@ -900,15 +906,22 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
     return sp + support_context.render_for_model(context or {}, role=role)
 
 
-def _mock_reply(messages: list[dict]) -> str:
+_UNAVAILABLE_REPLY = {
+    "en": "The assistant is not available right now. Please write to support@aerostator.com and we will answer you there.",
+    "zh-CN": "助手暂时无法使用。请发送邮件至 support@aerostator.com，我们会通过邮件回复您。",
+}
+
+
+def _mock_reply(messages: list[dict], lang: Any = "") -> str:
+    """The answer when no provider is switched on: one friendly line in the language of the screen (else of the question)."""
     last = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-    return (
-        "⚠️ Demo mode — the AI assistant isn't switched on for this server yet "
-        "(no API key configured). Once it's enabled I'll answer questions about the "
-        "Configurator, motor parameters, the catalog and how the app works.\n\n"
-        + (f'You asked: "{last[:200]}".\n\n' if last else "")
-        + "In the meantime, write to support@aerostator.com."
-    )
+    zh = str(lang).lower().startswith("zh") if lang else any("\u4e00" <= c <= "\u9fff" for c in last)
+    return _UNAVAILABLE_REPLY["zh-CN" if zh else "en"]
+
+
+def _ui_lang(body: dict) -> Any:
+    ctx = body.get("context")
+    return body.get("lang") or (ctx.get("lang") if isinstance(ctx, dict) else "")
 
 
 def _visitor_turn(messages: list[dict]) -> str:
@@ -1026,8 +1039,9 @@ def chat(request: Request, body: dict = Body(default={}),
 
     eff = _effective()
     provider = eff["provider"]
+    ui_lang = _ui_lang(body)
     if provider == "none":
-        return deliver(_mock_reply(messages), "mock")
+        return deliver(_mock_reply(messages, ui_lang), "mock")
 
     ctx = {} if anon else support_context.sanitize_context(body.get("context"))
     sp = build_system_prompt(role, anon=anon, context=ctx, authorization=authorization)
@@ -1035,7 +1049,7 @@ def chat(request: Request, body: dict = Body(default={}),
         if provider == "gemini":
             g = eff["gemini"]
             if not g["key"]:
-                return deliver(_mock_reply(messages), "mock")
+                return deliver(_mock_reply(messages, ui_lang), "mock")
             text = _call_provider(
                 lambda: _gemini_reply(messages, g["key"], g["model"], sp))
             return deliver(text or "(no reply)", "gemini", model=g["model"])
@@ -1043,7 +1057,7 @@ def chat(request: Request, body: dict = Body(default={}),
         a = eff["anthropic"]
         client = _anthropic_client(a["key"])
         if client is None:
-            return deliver(_mock_reply(messages), "mock")
+            return deliver(_mock_reply(messages, ui_lang), "mock")
         resp = _call_provider(lambda: client.messages.create(
             model=a["model"], max_tokens=2048, system=sp, messages=messages))
         text = next((b.text for b in resp.content if b.type == "text"), "")

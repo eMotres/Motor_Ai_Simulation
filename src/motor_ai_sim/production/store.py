@@ -125,6 +125,32 @@ def save_uploaded_file(die: str, config: str, file_id: str, data: bytes) -> Path
     return dest
 
 
+def save_uploaded_stream(die: str, config: str, file_id: str, chunks, limit: int) -> int:
+    """Write ``chunks`` (an iterator of bytes) to the production's files without holding the file in memory; returns its size.
+
+    A file over ``limit`` bytes, or an empty one, is removed again and ``ValueError`` is raised ("too_large" / "empty"), so a
+    refused upload never leaves bytes behind."""
+    if not valid_file_id(file_id):
+        raise ValueError("invalid file id")
+    dest = file_dir(die, config) / file_id
+    size = 0
+    try:
+        with dest.open("wb") as stream:
+            for chunk in chunks:
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError("too_large")
+                stream.write(chunk)
+        if size == 0:
+            raise ValueError("empty")
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    from motor_ai_sim.private_files import chmod_private
+    chmod_private(dest)
+    return size
+
+
 _FILE_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 

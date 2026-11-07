@@ -696,6 +696,7 @@ def _require_die_access(die: str, authorization, cfg: Optional[str] = None,
     if _ws_layering():
         lay = _die_layer(die)
         if lay == _WS.LAYER_WORKSPACE:
+            _require_config_visible(acc, die, cfg, style)
             return acc
         if lay == _WS.LAYER_PUBLISHED:
             if acc["mode"] == MODE_ANONYMOUS:
@@ -1397,6 +1398,16 @@ def _src_die_dir(die: str) -> Optional[Path]:
     return _WS.source_die_dir(str(die))
 
 
+def _src_runs_dir(die: str, cfg: str) -> Optional[Path]:
+    """The stored runs of ``cfg`` in that other layer, when this caller may read them, else ``None``."""
+    from motor_ai_sim.motor_access import read_through_allowed
+    src = _src_die_dir(die)
+    if src is None or not read_through_allowed(str(die), str(cfg)):
+        return None
+    runs = Path(str(src)) / "runs" / str(cfg)
+    return runs if runs.is_dir() else None
+
+
 def _under_workspace(p: Path) -> bool:
     if not _ws_layering():
         return True
@@ -1436,7 +1447,10 @@ def _run_path(die: str, rel: str) -> Path:
         return w
     src = _src_die_dir(die)
     if src is not None and (src / str(rel)).is_file():
-        return src / str(rel)
+        # ``runs/<configuration>/<file>``: another layer's file opens only for its own configuration's reader
+        parts = Path(str(rel)).parts
+        if len(parts) >= 3 and parts[0] == "runs" and _src_runs_dir(die, parts[1]) is not None:
+            return src / str(rel)
     return w
 
 
@@ -1847,9 +1861,9 @@ def _refile_config_runs(die: str, cfg_doc: dict, old_cfg: str, new_cfg: str,
         # the sidecars are still over there, so the workspace takes a COPY under
         # the new name rather than leaving the renamed duties pointing at
         # nothing.  Never a move — the file is not this workspace's to take.
-        _s = _src_die_dir(die)
-        if _s is not None and (_s / "runs" / old_cfg).is_dir():
-            src, copy = _s / "runs" / old_cfg, True
+        _s = _src_runs_dir(die, old_cfg)
+        if _s is not None:
+            src, copy = _s, True
     if src.is_dir():
         dst.parent.mkdir(parents=True, exist_ok=True)
         if copy:
@@ -2936,8 +2950,8 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
         raise HTTPException(404, detail=f"die '{die}' not found")
     if name == "die":
         raise HTTPException(422, detail="'die' is reserved")
-    if _cfg_file(die, name).exists() and may_see_config(
-            catalog_access(_w.get("authorization")), die, name):
+    _acc = catalog_access(_w.get("authorization"))
+    if _cfg_file(die, name).exists() and config_allowed(_acc, die, name):
         # (a PRIVATE configuration the caller cannot see does not "exist" for
         # them: the save lands in their own workspace, never on the hidden one)
         raise HTTPException(409, detail=f"configuration '{name}' already exists "
@@ -2946,6 +2960,11 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
         raise HTTPException(422, detail="role must be 'motor' or 'generator'")
     live = _live_cfg()
     name, doc = _config_doc_from_live(die, name, req.role, live)
+    own = _caller_config_name(die, name, _w.get("authorization"))
+    if own != name:
+        if _cfg_file(die, own).exists() and config_allowed(_acc, die, own):
+            raise HTTPException(409, detail=f"configuration '{own}' already exists under die '{die}'")
+        name = doc["name"] = own
     _save_yaml(_cfg_file(die, name), doc)
     log.info("family: configuration '%s/%s' created from the live machine",
              die, name)
@@ -2974,7 +2993,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
     # carries the correction so the UI can show what happened.
     _fixed = _lname_fix(name, geo.get("motor_length"))
     if _fixed:
-        if _cfg_file(die, _fixed).exists() and may_see_config(
+        if _cfg_file(die, _fixed).exists() and config_allowed(
                 catalog_access(None), die, _fixed):
             raise HTTPException(409, detail=(
                 f"the live stack is {geo.get('motor_length'):g} mm, so this "
@@ -3089,10 +3108,14 @@ def _config_rename(die: str, cfg: str, name: str, *, dry: bool, _w: dict) -> Dic
         src_dir = _ensure_writable_die(die)        # copy-on-write: the rename happens in the caller's workspace
         glob_scope = False
         _s = _src_die_dir(die)
-        if _s is not None and Path(str(_s)) != src_dir and (Path(str(_s)) / "runs" / cfg).is_dir():
-            runs_fallback = Path(str(_s)) / "runs" / cfg
+        if _s is not None and Path(str(_s)) != src_dir:
+            runs_fallback = _src_runs_dir(die, cfg)
     if not (src_dir / f"{cfg}.yaml").is_file():
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    new = _caller_config_name(die, new, _w.get("authorization"))
+    if new == cfg:
+        return {"ok": True, "config": cfg, "mode": "rename", "dry_run": dry, "changes": [], "manual": [],
+                "from": {"die": die, "config": cfg}, "to": {"die": die, "config": cfg}, "backup": None}
     for p in sorted(src_dir.glob("*.yaml")):
         if p.name != "die.yaml" and p.stem != cfg and p.stem.casefold() == new.casefold():
             raise HTTPException(409, detail=f"configuration '{p.stem}' already exists under die '{die}'")
@@ -3223,8 +3246,9 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     src = _cfg_file(die, cfg)
     if not src.is_file():
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    new = _caller_config_name(die, new, _w.get("authorization"))
     dst = _cfg_file(die, new)
-    if dst.exists():
+    if dst.exists() and config_allowed(catalog_access(_w.get("authorization")), die, new):
         raise HTTPException(409, detail=f"configuration '{new}' already exists "
                                         f"under die '{die}'")
     c = _load_yaml(src, "configuration")
@@ -3733,6 +3757,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     # "⚠ name ≠ stack" chip instead of silently keeping a wrong name.
     if _defined_build or _build_adopted:
         _fixn = _lname_fix(cfg, (c.get("geometry_overrides") or {}).get("motor_length"))
+        if _fixn:
+            _fixn = _caller_config_name(die, _fixn, _w.get("authorization"))
         if _fixn and not _cfg_file(die, _fixn).exists():
             _oldn, cfg = cfg, _fixn
             c["name"] = cfg
@@ -4463,6 +4489,33 @@ def _unique_config_name(die: str, base: str) -> str:
     return _unique_name(lambda n: _cfg_file(die, n).exists(), base)
 
 
+def _caller_config_name(die: str, requested: str, authorization: Optional[str] = None) -> str:
+    """The name a new configuration of ``die`` is saved under for this caller.
+
+    A die that is also in a catalog layer can hold configurations the caller may not see, and its stores are keyed by name.
+    So a non-admin's own variant of such a die always carries the account's suffix, the die-naming rule of 2026-10-26:
+    ``"fast"`` -> ``"fast vadim"``, ``"fast vadim"`` stays.  ALWAYS, not only on a clash: an answer that changed only for a
+    taken name would tell the caller the name is taken.  A die wholly the caller's own has nothing behind it and keeps the
+    requested name, and so does an admin, whose writes land in the catalog and who sees every name in it."""
+    acc = catalog_access(authorization)
+    src = _src_die_dir(die) if _ws_layering() and not acc.get("is_admin") else None
+    if src is None:
+        return requested
+    src = Path(str(src))
+    layer = _classify_die_dir(src)[0]
+    if layer == _WS.LAYER_PUBLISHED and src.parent.name == _WS.workspace().id:
+        return requested                                    # the caller's own publication
+    from motor_ai_sim import die_names as _dn
+    profile, ident = _acting_account(authorization)
+    suffix = _dn.user_suffix(profile, ident)
+    hidden = {f.stem.casefold() for f in src.glob("*.yaml")
+              if f.name != "die.yaml" and not may_see_config_file(acc, die, f.stem, f, layer=layer)}
+    tagged = re.fullmatch(rf"(.*\S) {re.escape(suffix)}(?: \d+)?", requested, re.IGNORECASE)
+    if tagged and requested.casefold() not in hidden:
+        return requested
+    return _dn.variant_name(tagged.group(1) if tagged else requested, suffix, lambda n: n.casefold() in hidden)
+
+
 def _die_transition_name(source_die: str, die_geo: dict, live_geo: dict,
                          diffs: list) -> str:
     """The auto-transition's target name, before the collision number.
@@ -4590,7 +4643,7 @@ def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
     under a numeric-suffixed name rather than overwriting it).  Returns the
     name it landed under in ``dst_die``."""
     c = _load_yaml(_cfg_file(src_die, cfg), "configuration")
-    dst_name = _unique_config_name(dst_die, cfg)
+    dst_name = _unique_config_name(dst_die, _caller_config_name(dst_die, cfg))
     c["die"] = dst_die
     try:
         _repick_config_winding(
@@ -4603,9 +4656,7 @@ def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
     _save_yaml(_cfg_file(dst_die, dst_name), c)
     src_runs = _runs_dir(src_die, cfg)
     if not src_runs.is_dir():
-        _s = _src_die_dir(src_die)
-        if _s is not None and (_s / "runs" / cfg).is_dir():
-            src_runs = _s / "runs" / cfg
+        src_runs = _src_runs_dir(src_die, cfg) or src_runs
     if src_runs.is_dir():
         import shutil as _sh
         dst_runs = _runs_dir(dst_die, dst_name)

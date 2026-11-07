@@ -662,12 +662,13 @@ def get(die: str, cfg: str) -> Dict[str, Dict[str, Any]]:
     have not re-solved still show the author's.
     """
     try:
-        from motor_ai_sim.motor_access import hidden_for_request
+        from motor_ai_sim.motor_access import hidden_for_request, read_through_allowed
         if hidden_for_request(str(die), str(cfg)):
             return {}      # a PRIVATE configuration the caller has no grant for
         out: Dict[str, Dict[str, Any]] = {}
-        for p in _fallback_stores(die):
-            out.update(_node(_read_store(p), die, cfg))
+        if read_through_allowed(str(die), str(cfg)):
+            for p in _fallback_stores(die):
+                out.update(_node(_read_store(p), die, cfg))
         out.update(_node(read_all().get("results") or {}, die, cfg))
         return out
     except Exception:                                       # noqa: BLE001
@@ -762,10 +763,16 @@ def index(die: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     try:
-        for p in store_paths(die):
+        from motor_ai_sim.motor_access import read_through_allowed
+        memo: Dict[str, bool] = {}
+        for p in _fallback_stores(die):
             for cfg, duties in _die_configs(_read_store(p), die).items():
-                node = out.setdefault(cfg, {})
-                node.update(duties)
+                if cfg not in memo:
+                    memo[cfg] = read_through_allowed(str(die), cfg)
+                if memo[cfg]:
+                    out.setdefault(cfg, {}).update(duties)
+        for cfg, duties in _die_configs(_read_store(store_path()), die).items():
+            out.setdefault(cfg, {}).update(duties)
     except Exception:                                       # noqa: BLE001
         return {}
     return out

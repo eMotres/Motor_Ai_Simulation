@@ -685,7 +685,7 @@ const FamilyCatalog: React.FC<{
     title: `Duplicate '${cfg}' under ${die}`,
     label: 'Name of the copy', initial: `${cfg} copy`,
     hint: 'Copies the build, winding, materials, battery and EVERY duty (with results)',
-    onSubmit: (name) => mutate(`configuration '${cfg}' duplicated as '${name}'`,
+    onSubmit: (name) => mutate((d) => `configuration '${cfg}' duplicated as '${String(d?.config || name)}'`,
       () => post(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/duplicate`,
                  { name })),
   });
@@ -747,7 +747,7 @@ const FamilyCatalog: React.FC<{
       const name = raw.trim();
       if (!name || name === cfg) return;
       if (!isAdmin) {
-        mutate(`configuration renamed to '${name}'`, () =>
+        mutate((d) => `configuration renamed to '${String(d?.config || name)}'`, () =>
           fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }),

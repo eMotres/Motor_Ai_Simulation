@@ -886,6 +886,168 @@ def test_an_admin_copy_in_the_shared_catalog_still_joins_the_project(env, linked
     assert client.get(f"/api/family/payload/{DIE}/Lteam", headers=env["plain"]).status_code == 200
 
 
+# ── own variants of a catalog die: their names, and what a name opens ────────
+
+def _shared_store_rows(env) -> None:
+    """Stored answers of both configurations in the shared layer: result rows, a field file, a run sidecar."""
+    import gzip
+
+    import numpy as np
+
+    from motor_ai_sim import duty_fields as DF
+    from motor_ai_sim.routes import family as fam
+    shared = env["tmp"] / "srv" / "shared"
+    rows = {c: {DUTY: {"thermal": {"T_winding_max_C": 111.0}}} for c in (PUB, PRIV)}
+    (shared / ".duty_results.json").write_text(json.dumps({"results": {DIE: rows}}), encoding="utf-8")
+    for c in (PUB, PRIV):
+        fields = shared / "dies" / DIE / "runs" / c / DF._duty_stem(DUTY) / "fields"
+        fields.mkdir(parents=True)
+        np.savez(fields / "em.npz", meta=json.dumps({"duty": DUTY}), vertices=np.zeros((3, 2), dtype=np.float32))
+        run = shared / "dies" / DIE / fam._run_rel(c, DUTY, "sine")
+        run.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(run, "wb") as f:
+            f.write(json.dumps({"name": DUTY, "drive": "sine", "payload": {"marker": c}}).encode("utf-8"))
+
+
+def _workspace_die(env, who_email: str) -> Path:
+    from motor_ai_sim import workspace as WS
+    return Path(str(WS.workspace_for_identity(who_email).root)) / "dies" / DIE
+
+
+def _copy_made_earlier(env, who: str, email: str) -> None:
+    """A workspace file under the private configuration's name, as a copy from before the naming rule left it."""
+    _fork_die(env, who)
+    d = _workspace_die(env, email)
+    doc = yaml.safe_load((d / f"{PUB}.yaml").read_text(encoding="utf-8"))
+    doc["name"] = PRIV
+    (d / f"{PRIV}.yaml").write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+
+def _skip_unless_layered(env) -> None:
+    if not env["layered"]:
+        pytest.skip("workspace copies exist only with layering")
+
+
+@pytest.mark.parametrize("forked", [False, True])
+def test_an_own_variant_gets_the_same_kind_of_answer_for_every_name(env, forked):
+    _skip_unless_layered(env)
+    if forked:
+        _fork_die(env, "eng")
+    answers = {name: client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": name}, headers=env["eng"])
+               for name in (PRIV, NOSUCH)}
+    for name, r in answers.items():
+        assert r.status_code == 200, r.text
+        assert r.json()["config"] == f"{name} eng"
+    assert answers[PRIV].json().keys() == answers[NOSUCH].json().keys()
+
+
+@pytest.mark.parametrize("name", ["Lmine eng", "Lmine eng 3"])
+def test_a_name_with_the_account_suffix_stays_as_asked(env, name):
+    _skip_unless_layered(env)
+    r = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": name}, headers=env["eng"])
+    assert r.status_code == 200 and r.json()["config"] == name
+    assert (_workspace_die(env, ENG) / f"{name}.yaml").is_file()
+
+
+def test_a_repeated_name_is_still_refused_as_taken(env):
+    _skip_unless_layered(env)
+    url = f"/api/family/config/{DIE}/{PUB}/duplicate"
+    assert client.post(url, json={"name": "Lmine"}, headers=env["eng"]).status_code == 200
+    assert client.post(url, json={"name": "Lmine"}, headers=env["eng"]).status_code == 409
+
+
+def test_create_and_rename_follow_the_same_rule(env):
+    _skip_unless_layered(env)
+    _fork_die(env, "eng")
+    made = client.post("/api/family/config", json={"die": DIE, "name": PRIV}, headers=env["eng"])
+    assert made.status_code == 200, made.text
+    assert made.json()["config"].endswith(" eng") and made.json()["config"] != PRIV
+    r = client.patch(f"/api/family/config/{DIE}/Lfirst eng", json={"name": PRIV + "b"}, headers=env["eng"])
+    assert r.status_code == 200, r.text
+    assert r.json()["config"] == f"{PRIV}b eng"
+    assert not (_workspace_die(env, ENG) / f"{PRIV}.yaml").exists()
+
+
+def test_a_die_wholly_the_accounts_own_keeps_the_asked_name(env):
+    _skip_unless_layered(env)
+    assert client.post(f"/api/family/die/{DIE}/duplicate", json={"name": "MY OWN DIE"}, headers=env["eng"]).status_code == 200
+    r = client.post(f"/api/family/config/MY OWN DIE/{PUB}/duplicate", json={"name": PRIV}, headers=env["eng"])
+    assert r.status_code == 200 and r.json()["config"] == PRIV
+    assert client.get(f"/api/family/payload/MY OWN DIE/{PRIV}", headers=env["eng"]).status_code == 200
+
+
+def test_an_admin_names_a_catalog_copy_exactly(env):
+    _skip_unless_layered(env)
+    r = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": "Lteam"}, headers=env["admin"])
+    assert r.status_code == 200 and r.json()["config"] == "Lteam"
+
+
+def test_a_workspace_copy_of_the_die_opens_no_stored_answer_of_a_private_name(env):
+    _skip_unless_layered(env)
+    _shared_store_rows(env)
+    _fork_die(env, "eng")
+    h = env["eng"]
+    for url in (f"/api/family/duty_results/{DIE}/{PRIV}", f"/api/family/duty_fields/{DIE}/{PRIV}",
+                f"/api/model3d/{DIE}/{PRIV}/simplified_view.glb"):
+        assert client.get(url, headers=h).status_code == 404, url
+    assert PRIV not in {m["config"] for m in client.get("/api/model3d/models", headers=h).json()["models"]}
+
+
+def test_a_copy_made_earlier_under_a_private_name_opens_only_itself(env):
+    from motor_ai_sim import duty_fields as DF
+    from motor_ai_sim import duty_results as DR
+    from motor_ai_sim import motor_access as MA
+    from motor_ai_sim import workspace as WS
+    from motor_ai_sim.auth import caller_identity
+    from motor_ai_sim.routes import family as fam
+    _skip_unless_layered(env)
+    _shared_store_rows(env)
+    _copy_made_earlier(env, "eng", ENG)
+    h = env["eng"]
+    # the file itself is the account's own and still opens
+    assert client.get(f"/api/family/payload/{DIE}/{PRIV}", headers=h).status_code == 200
+    r = client.get(f"/api/family/duty_results/{DIE}/{PRIV}", headers=h)
+    assert r.status_code == 200 and "111" not in r.text and "thermal" not in json.dumps(r.json().get("duties", [{}])[0].get("kinds", {}))
+    fields = client.get(f"/api/family/duty_fields/{DIE}/{PRIV}", headers=h)
+    assert fields.status_code == 200 and fields.json().get("duties", fields.json().get("fields", {})) in ({}, [])
+    assert PRIV not in {m["config"] for m in client.get("/api/model3d/models", headers=h).json()["models"]}
+    assert client.get(f"/api/model3d/{DIE}/{PRIV}/simplified_view.glb", headers=h).status_code == 404
+    with WS.use_workspace(WS.workspace_for_identity(ENG)), WS.use_caller(caller_identity(h["Authorization"])):
+        assert DR.get(DIE, PRIV) == {} and PRIV not in DR.index(DIE) and DF.have(DIE, PRIV) == {}
+        assert fam._read_run_payload(DIE, fam._run_rel(PRIV, DUTY, "sine")) is None
+        assert MA.read_through_allowed(DIE, PUB) and not MA.read_through_allowed(DIE, PRIV)
+
+
+def test_a_visible_configuration_still_reads_through_after_the_fork(env):
+    from motor_ai_sim import duty_fields as DF
+    from motor_ai_sim import duty_results as DR
+    from motor_ai_sim import workspace as WS
+    from motor_ai_sim.auth import caller_identity
+    from motor_ai_sim.routes import family as fam
+    _skip_unless_layered(env)
+    _shared_store_rows(env)
+    _fork_die(env, "eng")
+    h = env["eng"]
+    assert "thermal" in client.get(f"/api/family/duty_results/{DIE}/{PUB}", headers=h).text
+    assert PUB in {m["config"] for m in client.get("/api/model3d/models", headers=h).json()["models"]}
+    with WS.use_workspace(WS.workspace_for_identity(ENG)), WS.use_caller(caller_identity(h["Authorization"])):
+        assert DR.get(DIE, PUB)[DUTY]["thermal"]["T_winding_max_C"] == 111.0 and PUB in DR.index(DIE)
+        assert DF.have(DIE, PUB)
+        assert fam._read_run_payload(DIE, fam._run_rel(PUB, DUTY, "sine"))
+    # the account holding the grant opens both, fork or no fork
+    _fork_die(env, "granted")
+    g = env["granted"]
+    assert "thermal" in client.get(f"/api/family/duty_results/{DIE}/{PUB}", headers=g).text
+    assert PRIV in {m["config"] for m in client.get("/api/model3d/models", headers=g).json()["models"]}
+
+
+def test_the_card_of_a_private_configuration_stays_hidden_after_the_fork(env):
+    _skip_unless_layered(env)
+    _fork_die(env, "eng")
+    assert [m["id"] for m in client.get("/api/catalog", headers=env["eng"]).json()["motors"]] == ["cat_pub"]
+    assert client.get("/api/catalog/cat_priv/passport", headers=env["eng"]).status_code == 404
+
+
 def _sim_get(route: str, cfg: str, hdr: dict, project_id: str = PROJECT):
     params = {"die": DIE, "config": cfg}
     if route == "sim/run":

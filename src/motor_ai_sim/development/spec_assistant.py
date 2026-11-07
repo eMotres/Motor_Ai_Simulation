@@ -32,6 +32,8 @@ MAX_TURNS = 20
 MAX_CHARS = 2000
 MAX_MARKERS = 3
 ASSUMED_TAG = {"en": "(assumed, to confirm)", "zh-CN": "（假设，待确认）"}
+#: Commercial fields: the model never hears of them, not even to ask (owner: no price or quote talk with a customer during design).
+HIDDEN_FROM_MODEL = frozenset({"6_3", "target_price"})
 
 
 # ── access ───────────────────────────────────────────────────────────────────
@@ -190,6 +192,8 @@ def build_context(project: dict, wrapper: dict, proposals: list[dict], *, lang: 
             continue
         for f in section["fields"]:
             fid = f["id"]
+            if fid in HIDDEN_FROM_MODEL:
+                continue
             label = _lab(f.get("short_label") or f.get("label"), lang)
             if P.refusal(fid, section["id"]):
                 customer.append(f"{fid} {label}")

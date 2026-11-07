@@ -495,7 +495,7 @@ def test_the_customer_prompts_say_what_the_app_does_now(prompt):
     for stale in ("nothing to pay", "free to use", "november 2026", "works immediately", "works at once", "sign-up is instant", "production batch"):
         assert stale not in low, stale
     assert "engineers run the simulations" in low and "confirmation link" in low
-    assert "FREE" in prompt and "PRIVATE" in prompt and "train our" in low or "train its own" in low
+    assert "FREE" in prompt and "PRIVATE" in prompt and ("train our" in low or "train its own" in low)
     assert "paid" in low
 
 

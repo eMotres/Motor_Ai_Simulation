@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from motor_ai_sim import auth, users
 from motor_ai_sim.development import spec_assistant as A, spec_proposals as P, store
 from motor_ai_sim.development.routes import router as dev_router
-from motor_ai_sim.development.spec_assistant_prompt import SPEC_PROMPT
+from motor_ai_sim.development.spec_assistant_prompt import NO_PRICE_RULE as P_NO_PRICE_RULE, SPEC_PROMPT
 from motor_ai_sim.development.spec_assistant_routes import router
 
 H = {"Authorization": "Bearer dev"}
@@ -186,8 +186,7 @@ def test_invalid_markers_are_dropped_not_raised(env):
 
 def test_prompt_carries_the_owner_rules():
     low = SPEC_PROMPT.lower()
-    assert "never discuss prices" in low and "budgets" in low and "quotes" in low
-    assert "customer decisions" in low and "section 6" in low and "mass target" in low
+    assert P_NO_PRICE_RULE in SPEC_PROMPT and "customer decisions" in low and "section 6" in low and "mass target" in low
     assert "(assumed, to confirm)" in SPEC_PROMPT
     assert "one field" in low and "short" in low and "chinese" in low
     assert "you never change the specification" in low
@@ -200,7 +199,7 @@ def test_context_lists_missing_fields_with_shapes_and_hides_customer_decisions(e
     assert "\n2_1 " in req and "voltage_nominal_V: number [V]" in req       # a required field with its shape
     assert "\n1_1 " not in req and "1_1 Application = " in ctx              # a filled field is listed as filled
     assert "\n4_8 " in ctx.split("OPTIONAL fields")[1] and "balance_grade: string e.g. G6.3/G2.5" in ctx
-    assert "6_3" in ctx.split("CUSTOMER DECISIONS")[1] and "\n6_3 " not in ctx
+    assert "6_1" in ctx.split("CUSTOMER DECISIONS")[1] and "6_3" not in ctx and "target_price" not in ctx
     assert "CANNOT apply" in ctx
     zh = A.build_context(store.get_project("alpha"), _wrapper(), [], lang="zh-CN", can_apply=True)
     assert "Chinese (zh-CN)" in zh and "CAN apply" in zh and "电池" in zh
@@ -218,7 +217,7 @@ def test_turn_stores_the_proposal_and_strips_the_marker(env, monkeypatch):
     out = _turn()
     assert out["reply"] == "Runout first. Proposal below." and out["source"] == "gemini"
     assert seen["messages"][0]["role"] == "user" and "single most important missing field" in seen["messages"][0]["content"]
-    assert "SPECIFICATION CONTEXT" in seen["system"] and "never discuss prices" in seen["system"].lower()
+    assert "SPECIFICATION CONTEXT" in seen["system"] and P_NO_PRICE_RULE in seen["system"]
     assert len(out["proposals"]) == 1 and out["proposals"][0]["current"]["status"] == "missing"
     assert out["proposals"][0]["reason"].endswith("(assumed, to confirm)")
     # a second turn knows the open proposal and does not need the kickoff

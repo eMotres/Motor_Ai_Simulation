@@ -452,6 +452,13 @@
     },
     "power": {
       "test": "Test",
+      "mode": "Type",
+      "motor": "Motor",
+      "generator": "Generator",
+      "vDc": "DC voltage, V",
+      "iDc": "DC current, A",
+      "iPhase": "Phase current, A",
+      "iPhaseTip": "As entered in the test; its note says what was measured.",
       "max": "Max power, kW",
       "maxTip": "Torque x speed: the last row of a logged run, what it settled at; the highest row of any other test.",
       "torque": "Torque, N·m",
@@ -480,7 +487,7 @@
       "parameters": "Parameters"
     },
     "tabsTip": {
-      "power": "The load tests by name, each at its highest power.",
+      "power": "The load tests by name: a logged run at its last row, any other test at its highest power.",
       "resistance": "Winding resistance, line-line: bench and simulation.",
       "inductance": "Winding inductance, Ld and Lq: bench and simulation.",
       "bearings": "Bearing loss by speed. These are SIMULATION values (SKF friction, rotor weight as the load), not measurements; the only measured figure is the total free-run loss, in which the bearings are not separated.",

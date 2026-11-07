@@ -519,7 +519,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     _require_data_agreement(user)
     if not staff:
         # a customer cannot choose the members, the status or the engineer in charge
-        body = {"title": body.get("title"), "customer_org": body.get("customer_org")}
+        # nor the name: we name the project from its specification (owner 2026-11-07)
+        body = {"title": self_service.NEW_PROJECT_TITLE, "customer_org": body.get("customer_org")}
         if self_service.limit_reached(user):
             limit = self_service.limit_of(user)          # this account's own limit (default or admin override)
             raise HTTPException(status_code=429, detail={
@@ -528,12 +529,16 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     requested_id = str(body.get("id") or "").strip().lower()
     if requested_id and not store.valid_id(requested_id):
         raise HTTPException(status_code=422, detail="id must be a lowercase slug")
-    ids = iter([requested_id]) if requested_id else self_service.candidate_ids(str(body.get("title") or ""))
+    if requested_id:
+        ids = iter([requested_id])
+    else:
+        ids = self_service.candidate_ids(str(body.get("title") or "") if staff else self_service.new_project_seed())
     project = None
     for project_id in ids:
         try:
             project = models.project_record(project_id, body, _email(user))
             if not staff:
+                project["auto_title"] = True
                 project["owner_engineer"] = ""           # nobody is in charge yet; Motres staff see every project and pick it up
             store.create_project(project)
             break
@@ -579,6 +584,8 @@ async def update_project(request: Request, project_id: str):
         raise HTTPException(status_code=403, detail="Engineer access required for notes")
     if "owner_engineer" in body and not access.is_engineer(user):
         raise HTTPException(status_code=403, detail="Admin or engineer access required")
+    if "title" in body and not access.is_engineer(user):
+        raise HTTPException(status_code=403, detail="Engineer access required for the project name")
     for key in ("title", "customer_org", "owner_engineer", "notes"):
         if key in body and not isinstance(body[key], str):
             raise HTTPException(status_code=422, detail=f"{key} must be text")
@@ -587,6 +594,8 @@ async def update_project(request: Request, project_id: str):
 
     def mutate(d):
         d.update(body)
+        if "title" in body:
+            d["auto_title"] = False                     # a name staff gave stays
         d["updated_at"] = models.now()
     from motor_ai_sim.development.motors import transaction
     with transaction():
@@ -788,6 +797,7 @@ def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dic
     if result.get("validation_error") is not None:
         raise HTTPException(status_code=422, detail=result["validation_error"])
     saved = result["saved"]
+    self_service.refresh_title(project_id, saved.get("draft") or {})
     store.append_audit(project_id, _email(user), "autosave", "spec_draft", "draft",
                        {"revision": saved["revision"]} | ({"rejected": [item["field"] for item in result["rejected"]]} if result.get("rejected") else {})
                        | dict(audit_details or {}))

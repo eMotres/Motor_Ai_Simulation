@@ -6850,6 +6850,13 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
 
 # ── per-duty solver results ──────────────────────────────────────────────────
 
+def _sees_server_paths(authorization: Optional[str]) -> bool:
+    """Where a store sits on the server is for the staff, to find a file; a customer's listing does not carry it."""
+    from motor_ai_sim import platform_agreement as _PA
+    who = _auth.caller_identity(authorization)
+    return bool(who.get("is_admin")) or _PA.is_staff(who.get("role"))
+
+
 @router.get("/duty_results/{die}/{cfg}")
 def duty_results(die: str, cfg: str, response: Response,
                  authorization: str = Header(default=None)):
@@ -6899,7 +6906,7 @@ def duty_results(die: str, cfg: str, response: Response,
             "results": e,
         })
     return {"die": die, "config": cfg, "duties": duties,
-            "store": str(dr.store_path()),
+            **({"store": str(dr.store_path())} if _sees_server_paths(authorization) else {}),
             "active_duty": (ctx[2] if (ctx and ctx[0] == die and ctx[1] == cfg)
                             else None)}
 
@@ -6934,6 +6941,9 @@ def duty_fields(die: str, cfg: str, response: Response,
     _load_yaml(_cfg_file(die, cfg), "configuration")
     stored = dfl.have(die, cfg)
     ctx = dfl.active_context()
+    paths = _sees_server_paths(authorization)
+    if not paths:
+        stored = {duty: [{k: v for k, v in r.items() if k != "path"} for r in rows] for duty, rows in stored.items()}
     return {
         "die": die, "config": cfg,
         "duties": [{"duty": duty,
@@ -6942,7 +6952,7 @@ def duty_fields(die: str, cfg: str, response: Response,
                     "fields": rows}
                    for duty, rows in sorted(stored.items())],
         "kinds": list(dfl.KINDS),
-        "root": str(dfl._dies_dir() / die / "runs" / cfg),
+        **({"root": str(dfl._dies_dir() / die / "runs" / cfg)} if paths else {}),
         "active_duty": (ctx[2] if (ctx and ctx[0] == die and ctx[1] == cfg)
                         else None),
     }

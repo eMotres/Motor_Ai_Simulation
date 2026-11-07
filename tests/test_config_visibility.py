@@ -1048,6 +1048,30 @@ def test_the_card_of_a_private_configuration_stays_hidden_after_the_fork(env):
     assert client.get("/api/catalog/cat_priv/passport", headers=env["eng"]).status_code == 404
 
 
+def test_a_customers_result_listings_carry_no_server_path(env):
+    """The listing itself stays whole for everybody; only staff get where the files sit."""
+    import numpy as np
+
+    from motor_ai_sim import duty_fields as DF
+    from motor_ai_sim import users as U
+    U.create_user("customer@example.com", "password-customer", role="user", name="Customer")
+    U.set_motor_grants("customer@example.com", all_motors=False, dies=[DIE])
+    fields = env["dies_dir"] / DIE / "runs" / PUB / DF._duty_stem(DUTY) / "fields"
+    fields.mkdir(parents=True)
+    np.savez(fields / "em.npz", meta=json.dumps({"duty": DUTY}), vertices=np.zeros((3, 2), dtype=np.float32))
+    res, fld = f"/api/family/duty_results/{DIE}/{PUB}", f"/api/family/duty_fields/{DIE}/{PUB}"
+    customer = {"Authorization": f"Bearer {U.issue_token('customer@example.com')}"}
+    for url, gone in ((res, "store"), (fld, "root")):
+        r = client.get(url, headers=customer)
+        assert r.status_code == 200 and gone not in r.json(), url
+        assert str(env["tmp"]) not in r.text and str(env["tmp"]).replace("\\", "\\\\") not in r.text, url
+    assert client.get(fld, headers=customer).json()["duties"][0]["kinds"] == ["em"]
+    for who in ("admin", "eng"):
+        assert "store" in client.get(res, headers=env[who]).json(), who
+        listing = client.get(fld, headers=env[who]).json()
+        assert "root" in listing and "path" in listing["duties"][0]["fields"][0], who
+
+
 def _sim_get(route: str, cfg: str, hdr: dict, project_id: str = PROJECT):
     params = {"die": DIE, "config": cfg}
     if route == "sim/run":

@@ -464,6 +464,7 @@
       "powerPerMass": "kW/kg",
       "torquePerMass": "N·m/kg",
       "mass_weighed": "按整机称重质量：{kg} kg。",
+      "mass_stated": "按负责人给出的整机质量，未称重：{kg} kg。",
       "mass_cad": "按 CAD 整机质量，未称重：{kg} kg。",
       "mass_active": "仅按有效部件质量，无整机 CAD 质量：{kg} kg。",
       "massNone": "此电机暂无质量数据。",

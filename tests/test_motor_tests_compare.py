@@ -570,6 +570,8 @@ def test_the_per_mass_columns_prefer_the_weighed_motor_then_cad_then_active():
                          {"date": "2026-11-05", "conditions": {"rotor": "out"}, "weight": [{"what": "stator, bare", "mass_g": 3351.5}]}]}
     cad = {"mass": {"full_kg": 9.72, "active_kg": 7.33, "partial": False}}
     assert comparison.motor_mass(weighed, cad) == {"kg": 9.4, "basis": "weighed"}
+    stated = {"tests": [{"date": "2026-11-02", "conditions": {"rotor": "in"}, "weight": [{"what": "motor, owner's figure, not weighed", "mass_g": 9000.0}]}]}
+    assert comparison.motor_mass(stated, cad) == {"kg": 9.0, "basis": "stated"}
     assert comparison.motor_mass({"tests": []}, cad) == {"kg": 9.72, "basis": "cad"}
     assert comparison.motor_mass({"tests": []}, {"mass": {"full_kg": 2.23, "active_kg": 2.23, "partial": True}}) == {"kg": 2.23, "basis": "active"}
     assert comparison.motor_mass({"tests": []}, {}) is None

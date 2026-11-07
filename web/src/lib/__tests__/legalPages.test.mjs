@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   TERMS_VERSION, LEGAL_PAGES, PAGE_DOCS, matchLegalPage, isLegalPath, legalPath, resolveLegalUrl, safeHref, parseInline, inlineText,
   parseLegalMarkdown, displayText, headingId, inShort, signupPayload, signupLabelText, signupAllowed, showTermsHint, isTermsRequired,
-  termsLineVisible, emptyAgreementForm, agreementComplete, agreementPayload, forumVariant, asksBusinessName, acceptLabelText,
+  termsLineVisible, emptyAgreementForm, agreementComplete, agreementPayload, asksEarlierData, forumVariant, asksBusinessName, acceptLabelText,
 } from '../legalLogic.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -174,6 +174,23 @@ test('the agreement form: nothing preselected, the mode / capacity / country / b
   assert.deepEqual(['CN', 'hk', ' HK ', 'SI', 'DE', 'MO', 'TW', ''].map(forumVariant), ['B', 'B', 'B', 'A', 'A', 'A', 'A', 'A']);
 });
 
+test('the earlier-data box is a FREE election: never asked, sent or labelled for PRIVATE', () => {
+  const f = { mode: 'PRIVATE', capacity: 'business', country: 'DE', business: 'Motor GmbH', ticked: true, earlier: true };
+  const out = agreementPayload(f, 'v0.4', 'en', { accept: 'A', election: 'E' });
+  assert.equal(out.historical_opt_in, false);
+  assert.equal(out.election_label, undefined);
+  assert.equal(out.accept_label, 'A');
+  const free = agreementPayload({ ...f, mode: 'FREE' }, 'v0.4', 'en', { accept: 'A', election: 'E' });
+  assert.equal(free.historical_opt_in, true);
+  assert.equal(free.election_label, 'E');
+  assert.equal(asksEarlierData('PRIVATE'), false);
+  assert.equal(asksEarlierData('FREE'), true);
+  assert.equal(asksEarlierData(''), true);
+  const dlg = readFileSync(new URL('../../components/agreement/SimulationAgreementDialog.tsx', import.meta.url), 'utf8');
+  assert.match(dlg, /\{asksEarlierData\(mode\) && \(/);
+  assert.match(dlg, /earlier: asksEarlierData\(next\) \? form\.earlier : false/);
+});
+
 test('the agreement request: country upper-cased, the name of "neither" never sent, the earlier-data election and labels as shown', () => {
   const f = { mode: 'FREE', capacity: 'business', country: ' de ', business: '  Motor GmbH ', ticked: true, earlier: false };
   assert.deepEqual(agreementPayload(f, 'v0.4', 'en'), {
@@ -183,8 +200,8 @@ test('the agreement request: country upper-cased, the name of "neither" never se
   assert.equal(agreementPayload({ ...f, capacity: 'other' }, 'v0.4', 'en').business_name, '');
   assert.equal(agreementPayload({ ...f, capacity: 'sole_trader', business: ' Solo ' }, 'v0.4', 'en').business_name, 'Solo');
   const pr = agreementPayload({ ...f, mode: 'PRIVATE', earlier: true }, 'v0.4', 'zh-CN', { accept: 'A', election: 'E' });
-  assert.equal(pr.mode, 'PRIVATE'); assert.equal(pr.historical_opt_in, true); assert.equal(pr.lang, 'zh-CN');
-  assert.equal(pr.accept_label, 'A'); assert.equal(pr.election_label, 'E');
+  assert.equal(pr.mode, 'PRIVATE'); assert.equal(pr.historical_opt_in, false); assert.equal(pr.lang, 'zh-CN');
+  assert.equal(pr.accept_label, 'A'); assert.equal(pr.election_label, undefined);
   const none = agreementPayload({ ...f, ticked: 'yes' }, 'v0.4', 'en');                                       // only a literal true is consent
   assert.equal(none.accept_agreement, false); assert.equal(none.agreement_version, '');
   assert.equal(emptyAgreementForm().earlier, false);

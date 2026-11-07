@@ -368,6 +368,24 @@ def test_accept_agreement_private_records_mode_private_and_places_the_hold(env):
     assert PA.training_eligibility(LONE) is None and PA.training_allowed(LONE) is False
 
 
+def test_a_private_request_never_records_the_earlier_data_box(env):
+    (env["tmp"] / "legal").mkdir(exist_ok=True)
+    body = {**AGREE, "mode": "PRIVATE", "historical_opt_in": True, "accept_label": "A", "election_label": "E"}
+    h = env["h"](ANNA)
+    assert client.post("/api/legal/accept-agreement", json=body, headers=h).status_code == 200
+    (rec,) = lines(env)
+    assert rec["historical_opt_in"] is False and "election" not in rec["labels"] and rec["labels"]["accept"] == "A"
+    rows = dict((r["label"], r["value"]) for r in client.get("/api/legal/mine", headers=h).json()["acceptances"][0]["rows"])
+    assert rows["Earlier data (section 7.9)"] == "Not included" and "Election label shown" not in rows
+
+
+def test_an_old_private_line_with_the_box_ticked_is_shown_as_not_included(env):
+    rows = dict(LT.record_view({"user": ANNA, "mode": "PRIVATE", "capacity": "business", "historical_opt_in": True, "labels": {"election": "E"}}))
+    assert rows["Earlier data (section 7.9)"] == "Not included" and "Election label shown" not in rows
+    rows = dict(LT.record_view({"user": ANNA, "mode": "FREE", "capacity": "business", "historical_opt_in": True, "labels": {"election": "E"}}))
+    assert rows["Earlier data (section 7.9)"] == "Included from the account's creation" and rows["Election label shown"] == "E"
+
+
 def test_a_private_request_reaches_the_team_by_mail_and_audit_and_never_the_customer(env):
     (env["tmp"] / "legal").mkdir(exist_ok=True)
     env["mp"].setenv("NDA_NOTIFY_EMAIL", "team@example.com")

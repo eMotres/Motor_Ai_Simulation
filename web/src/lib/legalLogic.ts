@@ -268,6 +268,11 @@ export function asksBusinessName(capacity: Capacity | ''): boolean {
   return capacity === 'business' || capacity === 'sole_trader';
 }
 
+/** The optional box for earlier data (agreement 7.9) is a FREE election: PRIVATE trains on nothing, so it is neither asked nor recorded. */
+export function asksEarlierData(mode: AgreementChoice | ''): boolean {
+  return mode !== 'PRIVATE';
+}
+
 /** The dialog may be accepted: a mode is chosen, a capacity is chosen, a country is chosen, a `business` capacity names its business AND
  *  the box is ticked. */
 export function agreementComplete(f: AgreementForm): boolean {
@@ -292,10 +297,10 @@ export function agreementPayload(f: AgreementForm, version: string, lang: string
   const ticked = f.ticked === true;
   const out: AgreementPayload = {
     accept_agreement: ticked, agreement_version: ticked ? version : '', mode: f.mode, capacity: f.capacity, country: f.country.trim().toUpperCase(),
-    business_name: asksBusinessName(f.capacity) ? f.business.trim() : '', historical_opt_in: f.earlier === true, lang,
+    business_name: asksBusinessName(f.capacity) ? f.business.trim() : '', historical_opt_in: asksEarlierData(f.mode) && f.earlier === true, lang,
   };
   if (labels.accept) out.accept_label = labels.accept;
-  if (labels.election) out.election_label = labels.election;
+  if (labels.election && asksEarlierData(f.mode)) out.election_label = labels.election;
   return out;
 }
 

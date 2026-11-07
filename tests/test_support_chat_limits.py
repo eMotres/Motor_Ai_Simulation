@@ -297,8 +297,8 @@ def test_the_visitor_note_says_what_a_visitor_needs(env):
     note = support.VISITOR_NOTE
     assert "Request access" in note
     assert "support@aerostator.com" in note
-    # owner 2026-10-19: free, instant sign-up; nothing about invitations or prices
-    assert "free" in note and "sign-up is instant" in note and "Create account" in note
+    # sign-up needs no approval; nothing about invitations or prices
+    assert "needs no\napproval" in note and "Create account" in note
     assert "invitation" not in note.lower() and "pricing" not in note.lower()
     for forbidden in ("customer machine", "internal data", "Published motors"):
         assert forbidden in note, "the note must fence internal data explicitly"
@@ -308,15 +308,15 @@ def test_the_visitor_note_says_what_a_visitor_needs(env):
 
 def test_the_prompt_no_longer_sells_a_plan():
     """It said "Pro ($19/mo)", "Team ($99/mo)", "save up to 3 designs" and
-    "start exploring for free". None of that exists: the service is free, with
-    no plans, tiers or prices (owner 2026-10-19), and sign-up is instant."""
+    "start exploring for free". None of that exists: no plans, tiers or prices
+    (owner 2026-10-19), and sign-up needs no approval."""
     p = support.SYSTEM_PROMPT
     for stale in ("$19", "$99", "Pro (", "Team (", "up to 3 designs",
                   "My designs", "for free", "Free —"):
         assert stale not in p, f"the stale plan text is back: {stale!r}"
     assert "support@aerostator.com" in p
     assert "invitation" not in p.lower() and "pricing" not in p.lower()
-    assert "free to use" in p and "Request access" in p
+    assert "Signing up needs no approval" in p and "Request access" in p
 
 
 def test_the_prompt_names_the_tabs_the_app_actually_has():

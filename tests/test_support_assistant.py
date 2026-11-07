@@ -11,7 +11,7 @@ What is pinned here (no test touches a real provider; the model is a recorder):
 * CONTEXT SANITISATION - only whitelisted keys, no secret-looking keys, no
   token / cookie / e-mail in any string, no query string in a failed call's path,
   bounded size; the identity and the build come from the server;
-* the PROMPT FOR THE ROLE - a regular account's prompt knows three tabs (Motors, Configure, 3D model), staff's
+* the PROMPT FOR THE ROLE - a regular account's prompt knows four tabs (Motors, Configure, 3D model, Projects), staff's
   knows all of them (held to ``web/src/App.tsx``), a visitor gets the small one
   plus the visitor note and never a session;
 * the prompt's Configure description - every label in bold is a string the
@@ -370,12 +370,13 @@ def test_model_view_keeps_only_the_whitelisted_ui_state():
     assert full["configure"]["knobs"]["speed_rpm"] == 8000 and full["machine"]["name"] == "L12"
 
 
-def test_a_regular_account_gets_the_three_tab_prompt(env):
+def test_a_regular_account_gets_the_four_tab_prompt(env):
     chat(headers=env["client"])
     sp = _system_of_last_call(env)
     assert sp.startswith(P.USER_PROMPT)
     assert "TICKET_DRAFT" in sp, "a signed-in user gets the ticket protocol"
-    assert "exactly THREE tabs" in sp and "**3D model**" in sp
+    assert "exactly FOUR tabs" in sp and "**3D model**" in sp and "**Projects**" in sp
+    assert "THREE" not in sp
     assert R.missing_tab_mentions(sp) == [], "the user prompt names a tab the account has not got"
     for gone in ("**Geometry**", "**Mesh**", "**Electromagnetic**", "**Optimization**", "**Cost**"):
         assert gone not in sp, gone
@@ -416,6 +417,7 @@ def test_a_custom_admin_prompt_replaces_the_default_for_everyone(env, monkeypatc
     chat(headers=env["client"])
     sp = _system_of_last_call(env)
     assert sp.startswith("CUSTOM PROMPT") and "TICKET_DRAFT" in sp   # the protocol is still appended
+    assert P.NO_PRICE_RULE in sp                                     # and the owner's rule on money
 
 
 # ── 5. the prompt describes Configure as it is ───────────────────────────────
@@ -474,15 +476,27 @@ def test_the_configure_section_has_no_stale_controls():
 
 def test_the_prompts_keep_the_commercial_rules():
     for p in (P.USER_PROMPT, P.STAFF_PROMPT):
-        # owner 2026-10-19: the service is FREE and sign-up is instant - no invitation, no pricing talk
-        assert "support@aerostator.com" in p and "free to use" in p and "sign up at once" in p
+        # sign-up needs no approval; no invitation, no pricing talk
+        assert "support@aerostator.com" in p and "Signing up needs no approval" in p
         assert "invitation" not in p.lower() and "pricing" not in p.lower()
-        assert "NEVER name a price" in p and "Never invent a price" in p
         assert "SAME language" in p
         assert "Never discuss how this assistant itself is built" in p
         assert "$19" not in p and "free tier" not in p.lower()
         assert "datasheet / Configure is the source" in p
-    assert "Never promise a fix, a date or a price" in P.TICKET_PROTOCOL
+    assert P.NO_PRICE_RULE in P.USER_PROMPT and "Never invent a price" in P.STAFF_PROMPT
+    assert "Never promise a fix or a date" in P.TICKET_PROTOCOL
+
+
+@pytest.mark.parametrize("prompt", [P.USER_PROMPT, support.VISITOR_NOTE])
+def test_the_customer_prompts_say_what_the_app_does_now(prompt):
+    """The check of 2026-11-07: no "nothing to pay for" against a paid PRIVATE, no availability date, no "works immediately" for an e-mail
+    account (the sign-in waits for the confirmation link), and engineers run the simulations; FREE data train our models, PRIVATE data do not."""
+    low = prompt.lower()
+    for stale in ("nothing to pay", "free to use", "november 2026", "works immediately", "works at once", "sign-up is instant", "production batch"):
+        assert stale not in low, stale
+    assert "engineers run the simulations" in low and "confirmation link" in low
+    assert "FREE" in prompt and "PRIVATE" in prompt and "train our" in low or "train its own" in low
+    assert "paid" in low
 
 
 # ── 6. the example exchanges ─────────────────────────────────────────────────
@@ -569,7 +583,6 @@ def test_the_prompt_knows_rated_mass_and_the_platform_facts(prompt):
     # the full mass is the mass shown; the active mass is separate
     assert "full motor mass" in low and "active mass" in low
     # public motors, 3-D, advanced simulation, production link, MCP, co-development
-    assert "initial availability expected in november 2026" in low
     assert "CIANO14 50 L15" in prompt and "CIANO28 85 L15" in prompt and "frameless kit" in low
     assert "simplified step" in low and "without an nda" in low
     assert "motres engineers run the fem simulations" in low and "prepare a ticket" in low   # 2026-11-04: simulations are run by MOTRES

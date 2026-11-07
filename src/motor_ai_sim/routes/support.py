@@ -98,7 +98,7 @@ from fastapi.responses import JSONResponse
 
 from motor_ai_sim import support_catalog, support_context
 from motor_ai_sim.support_prompt import (
-    STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
+    FULL_UI_ROLES, NO_PRICE_RULE, STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,24 +135,25 @@ VISITOR_NOTE = """
 ## Visitor mode — this person is NOT signed in
 They are on the public landing page and have no account yet. Answer product
 questions briefly and plainly — what the portal is for, what it analyses, what a
-motor design involves — in two or three sentences. **The service is free and
-sign-up is instant**: on aerostator.com they press **Sign in with Google**, or
+motor design involves — in two or three sentences. **Signing up needs no
+approval**: on aerostator.com they press **Sign in with Google** (in at once), or
 **Sign in with e-mail** and choose **Create account** (the **Request access**
-button opens the same form). The account works at once; confirming the e-mail
-only matters later, for the NDA, STEP downloads and the mailing list.
-Never say that the team must grant or approve an account first, and
-never name a price, a plan, a tier or a trial — there is nothing to pay for.
+button opens the same form) and click the confirmation link we send.
+Never say that the team must grant or approve an account first.
+Our engineers run the simulations of a project; a customer fills in the
+specification. In FREE mode the engineering data may train our own AI models; in
+PRIVATE mode, which is paid, they do not.
 You MAY say which motors are open to a new account and what they deliver, but
 only from the "Published motors" list given below (when there is one). Do NOT
 describe internal data, any motor that is not in that list, any specific
-customer machine, geometry or costs, and do not walk them step by step through
+customer machine or geometry, and do not walk them step by step through
 tabs they cannot open yet.
 
 ### What to do, and when
 1. **A question about the product or the open motors** → answer it, briefly.
    Nothing else needed. **They just want an account** → tell them to sign up
    (above); do not collect their details for that.
-2. **They want a quote, to order motors, a manufacturing licence, a demo, or to be contacted** → collect
+2. **They want to order motors, a manufacturing licence, a demo, or to be contacted** → collect
    their details, ONE QUESTION AT A TIME, in a sentence, never as a form or a
    list of fields: their name, then the company, then their work e-mail, then in
    one sentence what they want to do (which machine, what power / torque /
@@ -169,8 +170,8 @@ tabs they cannot open yet.
 3. **A bug, an idea, or something that looks broken** → thank them and say the
    team reads these conversations, so it has been passed on. Ask for one detail
    (what they did and what happened) so it is useful.
-4. **Never promise a timeline, a price, a plan, a tier, a trial, a delivery date
-   or a callback within any particular time.** The team answers every request
+4. **Never promise a timeline, a plan, a tier, a trial or a callback within any
+   particular time.** The team answers every request
    personally, and that is all you may say about when."""
 
 
@@ -880,18 +881,23 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
                         authorization: Optional[str] = None) -> str:
     """Everything the model is told for one call.
 
-    * a visitor: the small (Motors + Configure) prompt + the visitor note + the
+    * a visitor: the customer prompt + the visitor note + the
       "Published motors" block for a brand-new account, and nothing about a
       session - a visitor has none;
     * a signed-in caller: the prompt FOR THEIR ROLE (an admin's custom prompt, if
       any, replaces it for everyone) + the ticket protocol + the "Published
       motors" block for THAT caller's access (``authorization`` is their header) +
       the hidden session context, which the server has already sanitised.
+
+    A customer's or visitor's prompt always carries ``NO_PRICE_RULE``, also under an admin's custom prompt.
     """
     if anon:
         block = support_catalog.published_motors_block(None, visitor=True)
-        return _effective_prompt("anon") + VISITOR_NOTE + ("\n\n" + block if block else "")
+        sp = _effective_prompt("anon")
+        return sp + VISITOR_NOTE + ("" if NO_PRICE_RULE in sp else "\n" + NO_PRICE_RULE) + ("\n\n" + block if block else "")
     sp = _effective_prompt(role)
+    if NO_PRICE_RULE not in sp and str(role or "").lower() not in FULL_UI_ROLES:
+        sp += "\n\n" + NO_PRICE_RULE
     if "TICKET_DRAFT" not in sp:
         sp += "\n\n" + TICKET_PROTOCOL
     block = support_catalog.published_motors_block(authorization)

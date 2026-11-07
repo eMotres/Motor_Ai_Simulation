@@ -142,6 +142,7 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
             const action = cardAction(p, canApply);
             return (
               <Box key={c.id} data-testid="spec-proposal" sx={{ border: '1px solid var(--line)', borderLeft: '3px solid #3b82f6', borderRadius: 1, p: 1, bgcolor: 'var(--panel-2)' }}>
+                <Typography data-testid="spec-proposal-ai" sx={{ fontSize: 11, fontWeight: 700, color: 'text.secondary' }}>{t('specAssistant.aiSuggestion')}</Typography>
                 <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{c.title}</Typography>
                 <Typography sx={{ fontSize: 13 }}>{c.proposed}</Typography>
                 {c.current && <Typography sx={{ fontSize: 11.5, color: 'text.secondary' }}>{t('specAssistant.now', { value: c.current })}</Typography>}

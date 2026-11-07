@@ -17,6 +17,7 @@
     "placeholder": "输入你的回答",
     "send": "发送",
     "working": "思考中…",
+    "aiSuggestion": "AI 建议，请核对",
     "apply": "应用",
     "dismiss": "忽略",
     "ownerApplies": "该建议由项目负责人应用。",

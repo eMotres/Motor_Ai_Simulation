@@ -53,7 +53,23 @@ def test_with_the_agreement_the_project_opens_and_staff_get_one_mail(path, monke
     assert project["status"] == "spec"
     (to, subject, body), = path["mails"]
     assert to == "owner@motres-staff.test" and "New customer project" in subject and "New project" in subject
+    assert "Some company" in subject                         # whose project: a subject of "New project" alone says nothing to staff
     assert ANNA in body and f"/projects/{project['id']}/specification" in body
+
+
+def test_the_mail_subject_falls_back_to_the_account_when_no_company_is_given(path):
+    routes.create_project_for(USER, {"customer_org": ""})
+    (_to, subject, _body), = path["mails"]
+    assert ANNA in subject and "New project" in subject
+
+
+def test_a_save_answers_with_the_name_it_gave_the_project(path):
+    pid = _project()["id"]
+    draft = {"schema_version": 2, "mission_profile": [], "mission_profile_status": "missing", "production": {},
+             "fields": {"1_1": {"status": "filled", "value": "Pump"}}}
+    saved = _save(pid, draft, 0)
+    assert saved["project_title"] == "Pump" == store.get_project(pid)["title"]
+    assert "project_title" not in store.load_json(pid, "draft.json", None)           # the answer, not data
 
 
 def test_submit_is_gated_too_and_tells_staff(path, monkeypatch):

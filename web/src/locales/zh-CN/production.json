@@ -612,7 +612,8 @@
       "kv_kt_ex": "不含 {rpm} rpm 的 Kv / Kt（已标记）",
       "bearings_none": "轴承",
       "bearing_sum": "轴承，{cards}（仿真）",
-      "no_model": "无仿真点"
+      "no_model": "无仿真点",
+      "load_point": "{point}"
     },
     "row": {
       "shaft_power": "功率",

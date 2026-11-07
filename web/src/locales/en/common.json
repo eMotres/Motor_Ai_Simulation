@@ -20,7 +20,8 @@
     "model3d": "3D model",
     "production": "Production",
     "admin": "Admin",
-    "development": "Projects"
+    "development": "Projects",
+    "designer": "Designer"
   },
   "status": {
     "connected": "Connected",

@@ -572,6 +572,11 @@ export function powerSummary(tests: TestRecord[]): PowerLine[] {
   return out.sort((a, b) => b.powerKw - a.powerKw);
 }
 
+/** The tab Tests opens on when the viewer has not chosen one yet: Power when there is a load test to list. */
+export function defaultTab(tests: TestRecord[]): TestTab {
+  return powerSummary(tests).length ? 'power' : 'resistance';
+}
+
 const LOAD_POINT_GROUP = 'load_point';
 
 /** One quantity of the load table: a column for the bench value, and for Simulation and the difference where any point has them. */

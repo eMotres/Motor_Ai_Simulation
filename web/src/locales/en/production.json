@@ -612,7 +612,8 @@
       "kv_kt_ex": "Kv / Kt without {rpm} rpm (flagged)",
       "bearings_none": "Bearings",
       "bearing_sum": "Bearings, {cards} (simulation)",
-      "no_model": "No simulation point"
+      "no_model": "No simulation point",
+      "load_point": "{point}"
     },
     "row": {
       "shaft_power": "Power",

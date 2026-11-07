@@ -23,6 +23,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
+import { NARROW } from '../../lib/narrowLayout';
 import { useUIStore } from '../../stores/uiStore';
 import { APP_VERSION, APP_GIT_SHA } from '../../lib/version';
 import { askAssistant, submitTicket, listMyTickets, type Ticket } from '../../lib/support';
@@ -118,6 +119,8 @@ const SupportWidget: React.FC = () => {
             position: 'fixed', bottom: 20, right: 20, zIndex: 1300,
             width: 52, height: 52, bgcolor: '#2563eb', color: '#fff',
             boxShadow: '0 4px 16px rgba(0,0,0,0.4)', '&:hover': { bgcolor: '#1d4ed8' },
+            // on a phone the specification's Back / Next bar fills the bottom of the screen: the bubble sits above it, never over Next
+            [NARROW]: { 'body:has([data-wizard-bar]) &': { bottom: 112 } },
           }}
         >
           <ChatBubbleOutlineIcon />

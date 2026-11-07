@@ -93,3 +93,31 @@ test('every new key has its zh-CN mirror', () => {
   assert.doesNotMatch(get(en('common'), 'legal.agreement.privateDone'), /simulate/i);
   assert.doesNotMatch(get(en('common'), 'legal.agreement.title'), /simulate/i);
 });
+
+const page = () => read('../components/DevelopmentPage.tsx');
+
+test('the project page resets only when the account changed: a replayed effect never throws the customer out to the list', () => {
+  // StrictMode replays every effect of a subtree coming back from a Suspense fallback; the reset must see that nothing changed
+  assert.match(page(), /const identity = user\?\.email \?\? '';\s+if \(resetForIdentity\.current === identity\) return;\s+resetForIdentity\.current = identity;\s+if \(saveTimer\.current\)/);
+  // and the first open of Tests waits inside its dialog, not over the whole page
+  assert.match(read('../ProjectMotorTests.tsx'), /<Suspense fallback=[^>]*\/>}><TestsPanel /);
+});
+
+test('the name a save gave the project goes to the page and the list; only staff get the rename control', () => {
+  assert.match(page(), /const name = result\.project_title;[\s\S]{0,200}setSelected\([\s\S]{0,200}setProjects\(/);
+  assert.match(page(), /\{canManageGlobally && <Tooltip title=\{tr\('renameProjectTip'\)\}>/);
+  assert.match(page(), /developmentApi\.update\(id, \{ title: name \}\)/);
+});
+
+test('keys asked for by the screens exist in both languages', () => {
+  const keys = { common: ['tabs.designer'], production: ['tests.group.load_point'], development: ['renameProject', 'renameProjectTip'] };
+  for (const [ns, list] of Object.entries(keys)) for (const key of list) {
+    assert.ok(get(en(ns), key), `EN ${ns}.${key}`); assert.ok(get(zh(ns), key), `zh-CN ${ns}.${key}`);
+  }
+});
+
+test('on a phone the chat bubble keeps off the Back / Next bar, and a label tooltip never takes a click meant for what lies under it', () => {
+  assert.match(read('../../../components/support/SupportWidget.tsx'), /body:has\(\[data-wizard-bar\]\) &/);
+  assert.match(read('../components/specWizard/SpecWizard.tsx'), /<Stack data-wizard-bar /);
+  assert.match(read('../components/specWizard/useSpecFields.tsx'), /const labelRow = [^\n]*<Tooltip disableInteractive /);
+});

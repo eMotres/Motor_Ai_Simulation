@@ -20,7 +20,8 @@
     "model3d": "3D 模型",
     "production": "生产",
     "admin": "管理",
-    "development": "项目"
+    "development": "项目",
+    "designer": "设计器"
   },
   "status": {
     "connected": "已连接",

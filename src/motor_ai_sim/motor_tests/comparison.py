@@ -767,6 +767,7 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         t_min = num(r.get("time_min"))                      # minutes from the start of a logged run
         if t_min is not None:
             label = f"{t_min:g} min · {label}"
+        params["point"] = label                             # the web's tests.group.load_point: the point as it stands (time and current are optional)
         d = C.match_duty(n, i, duties)
         # eff_pct = the motor's efficiency as the bench gives it: compared with the model's motor efficiency at the
         # shaft.  An efficiency formed from the DC link (torque * omega / (V_dc * I_dc)) includes the inverter: it is
@@ -803,6 +804,13 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
                 rows.append(_row("eff", "Efficiency", "%", eff_meas, None, tip="load", status="no_model"))
             if eff_sys is not None:
                 rows.append(_eff_system_row(eff_sys, None, ""))
+            # no simulation point changes nothing about what the bench measured: the same quantities as the branch below
+            if num(r.get("temp_winding_c")) is not None:
+                rows.append(_row("t_winding", "Winding temperature", "C", r.get("temp_winding_c"), None, tip="load", status="no_model",
+                                 extra={"duration_s": r.get("duration_s")}))
+            if num(r.get("temp_magnet_c")) is not None:
+                rows.append(_row("t_magnet", "Magnet temperature", "C", r.get("temp_magnet_c"), None, tip="load", status="no_model",
+                                 extra={"duration_s": r.get("duration_s")}))
             if num(r.get("j_a_mm2")) is not None:
                 rows.append(_row("j_coil", "Current density", "A/mm²", r.get("j_a_mm2"), None, tip="load", status="no_model"))
             groups.append(_group("load_point", label, rows, params=params, tip="load"))

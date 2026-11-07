@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import AddIcon from '@mui/icons-material/Add';
   import ArrowBackIcon from '@mui/icons-material/ArrowBack';
   import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+  import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
   import HelpTip from '../../../components/common/HelpTip';
   import ViewModeToggle, { useViewMode } from '../../../components/common/ViewModeToggle';
   import { VIEW_MODE_KEYS } from '../../../lib/viewMode';
@@ -98,6 +99,7 @@ export default function DevelopmentPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [renameTo, setRenameTo] = useState<string | null>(null);   // the rename dialog of staff: open while not null
   const [title, setTitle] = useState('');
   const [org, setOrg] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -220,7 +222,13 @@ export default function DevelopmentPage() {
     } catch (e) { if (epoch === projectEpochRef.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (epoch === projectEpochRef.current) setLoading(false); }
   }, []);
+  // Only when the account really changed.  An effect also re-runs without any change (React's StrictMode replays every effect of a
+  // subtree that comes back from a Suspense fallback): that replay used to run this reset and throw the customer out to the project list.
+  const resetForIdentity = useRef<string | null>(null);
   useEffect(() => {
+    const identity = user?.email ?? '';
+    if (resetForIdentity.current === identity) return;
+    resetForIdentity.current = identity;
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     projectEpochRef.current += 1;
     projectOpenEpochRef.current += 1;
@@ -578,6 +586,18 @@ export default function DevelopmentPage() {
     }
     catch (e) { setError(createErrorText(e, tr)); } finally { setBusy(false); }
   };
+  const submitRename = async () => {
+    const name = renameTo?.trim();
+    if (!selected || !name) return;
+    const id = selected.id; const token = projectToken.current;
+    setBusy(true); setError('');
+    try {
+      const updated = await developmentApi.update(id, { title: name });
+      if (!isCurrentProject(id, token)) return;
+      setSelected(updated); setProjects((list) => list.map((p) => (p.id === id ? { ...p, title: updated.title } : p))); setRenameTo(null);
+    } catch (e) { if (isCurrentProject(id, token)) setError(e instanceof Error ? e.message : String(e)); }
+    finally { if (isCurrentProject(id, token)) setBusy(false); }
+  };
   const submitInvite = async () => {
     if (!selected) return;
     setBusy(true); setError('');
@@ -608,6 +628,11 @@ export default function DevelopmentPage() {
   // the answers the server set aside at the last save, named at the top of the form; the rest of the form is saved
   saveResultRef.current = (project, result) => {
     if (currentProjectRef.current !== project) return;
+    const name = result.project_title;
+    if (name) {   // we name the project from its specification: the name on the page and in the list follows at once
+      setSelected((cur) => (cur && cur.id === project && cur.title !== name ? { ...cur, title: name } : cur));
+      setProjects((list) => (list.some((p) => p.id === project && p.title !== name) ? list.map((p) => (p.id === project ? { ...p, title: name } : p)) : list));
+    }
     setRejected(Object.fromEntries((result.rejected ?? []).map((item) => [item.field, rejectedText(tr, item.message)])));
   };
   const rejectedNote = Object.keys(rejected).length
@@ -621,7 +646,7 @@ export default function DevelopmentPage() {
     <CreateDialog open={createOpen} busy={busy} staff={canManageGlobally} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, flex: 1, color: 'var(--text-0)', [NARROW]: { flex: '1 1 100%' } }}>{selected.title}</Typography></Tooltip>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr(canManageGlobally ? 'projectStatusTip' : 'projectStatusTipCustomer')} />{canManageGlobally && allowedProjectStatuses(canManageGlobally, selected.status).length > 1 ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{allowedProjectStatuses(canManageGlobally, selected.status).map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {statusText(selected.status)}</Typography>}{!canManageGlobally && canEditProject && ['spec', 'design', 'simulation'].includes(selected.status) && <Button size="small" disabled={busy} onClick={() => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, 'closed'))}>{tr('closeProject')}</Button>}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1, minWidth: 0, [NARROW]: { flex: '1 1 100%' } }}><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, color: 'var(--text-0)' }}>{selected.title}</Typography></Tooltip>{canManageGlobally && <Tooltip title={tr('renameProjectTip')}><IconButton size="small" data-testid="rename-project" aria-label={tr('renameProject')} disabled={busy} onClick={() => setRenameTo(selected.title)} sx={{ color: 'var(--text-3)' }}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>}</Box>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr(canManageGlobally ? 'projectStatusTip' : 'projectStatusTipCustomer')} />{canManageGlobally && allowedProjectStatuses(canManageGlobally, selected.status).length > 1 ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{allowedProjectStatuses(canManageGlobally, selected.status).map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {statusText(selected.status)}</Typography>}{!canManageGlobally && canEditProject && ['spec', 'design', 'simulation'].includes(selected.status) && <Button size="small" disabled={busy} onClick={() => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, 'closed'))}>{tr('closeProject')}</Button>}</Box>
     {selected.cover_version && <ProjectCover projectId={selected.id} version={selected.cover_version} height={140} alt={selected.title} sx={{ mb: 1.5 }} />}
     {canEditSpec && <DigestSettings target={{ kind: 'project', id: selected.id }} />}
     
@@ -714,6 +739,7 @@ export default function DevelopmentPage() {
     {view === 'cost' && isAdmin && <CostEstimateWizard key={selected.id} projectId={selected.id} language={i18n.language} t={tr} who={user?.email ?? 'admin'}
       onShared={(value) => setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, quote_shared: value } : cur))} />}
     {view === 'notes' && canManageGlobally && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
+    <RenameDialog value={renameTo} busy={busy} onChange={setRenameTo} onClose={() => setRenameTo(null)} onSubmit={() => void submitRename()} t={tr} />
     <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
     <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />
     <Dialog open={!!unlinkTarget} onClose={() => !busy && setUnlinkTarget(null)}><DialogTitle>{tr('unlink')} {unlinkTarget?.die} / {unlinkTarget?.config}?</DialogTitle><DialogContent>{tr('unlinkConfirm')}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setUnlinkTarget(null)}>{tr('cancel')}</Button><Button color="error" disabled={busy} onClick={() => void confirmUnlink()}>{tr('unlink')}</Button></DialogActions></Dialog>
@@ -744,6 +770,8 @@ export default function DevelopmentPage() {
 }
 /** Staff name the customer organisation and the id; a customer gives a title and (optionally) its company - the server generates the id. */
 function CreateDialog({ open, busy, staff, title, org, id, onTitle, onOrg, onId, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{t('newProject')}<HelpTip title={t(staff ? 'newProjectTipStaff' : 'newProjectTip')} /></DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}>{staff && <TextField label={t('projectTitle')} value={title} onChange={(e) => onTitle(e.target.value)} autoFocus inputProps={{ maxLength: 120 }} />}<TextField label={staff ? t('customerOrg') : t('yourCompany')} value={org} onChange={(e) => onOrg(e.target.value)} inputProps={{ maxLength: 120 }} />{staff && <TextField label={t('projectId')} value={id} onChange={(e) => onId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} />}</Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !createReady(staff, { title, org, id })} onClick={onSubmit}>{t('create')}</Button></DialogActions></Dialog>; }
+/** Staff give a project its name; from then on it no longer follows the specification (the server clears `auto_title`). */
+function RenameDialog({ value, busy, onChange, onClose, onSubmit, t }: { value: string | null; busy: boolean; onChange: (v: string) => void; onClose: () => void; onSubmit: () => void; t: (key: string) => string }) { return <Dialog open={value !== null} onClose={() => !busy && onClose()} fullWidth maxWidth="xs"><DialogTitle>{t('renameProject')}</DialogTitle><DialogContent><TextField label={t('projectTitle')} value={value ?? ''} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && value?.trim()) { e.preventDefault(); onSubmit(); } }} autoFocus fullWidth inputProps={{ maxLength: 120 }} sx={{ mt: 1 }} /></DialogContent><DialogActions><Button disabled={busy} onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !value?.trim()} onClick={onSubmit}>{t('save')}</Button></DialogActions></Dialog>; }
 function InviteDialog({ open, busy, email, role, onEmail, onRole, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
 function snapshotSourceLabel(source: string, t: (key: string) => string): string { return t(snapshotSourceKey(source) ?? 'snapshots.sourceOther'); }
 function LinkDialog({ open, busy, picker, onClose, onSubmit, onRestore, t }: { open: boolean; busy: boolean; picker: { this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }; onClose: () => void; onSubmit: (item: ProjectMotorPickerItem) => void; onRestore: (item: ProjectMotorPickerItem) => void; t: (key: string, args?: Record<string, unknown>) => string }) {

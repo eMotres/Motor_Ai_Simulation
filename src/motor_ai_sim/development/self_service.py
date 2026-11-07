@@ -15,7 +15,7 @@ import re
 import secrets
 import unicodedata
 
-from motor_ai_sim.development import access, project_limits, store
+from motor_ai_sim.development import access, models, project_limits, store
 
 #: Open (not closed) projects one account may own unless an admin set an override (project_limits.py).  Staff are not limited:
 #: they create projects for customers.
@@ -49,6 +49,22 @@ def _number(value) -> str:
     return f"{number:g}" if number > 0 else ""
 
 
+def _title_point(draft: dict) -> dict:
+    """The point a project is named after, from what the specification says NOW.  Stored key points are the truth: the point the rest of
+    the system reads as continuous, else the first row while the list is half typed.  ``1_4`` keeps its old value when no usable point is
+    left ("a half-typed list never wipes the old values"), so it is read only while no key points are stored."""
+    fields = (draft or {}).get("fields") or {}
+    if models.key_points_stored(draft or {}):
+        if fields[models.KEY_POINTS_FIELD].get("status") == "not_known_yet":
+            return {}
+        rows = _value(fields, models.KEY_POINTS_FIELD)
+        rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        return models.derive_continuous_peak(rows)[0] or (rows[0] if rows else {})
+    answer = fields.get("1_4")
+    point = answer.get("value") if isinstance(answer, dict) and answer.get("status") != "not_known_yet" else None
+    return point if isinstance(point, dict) else {}
+
+
 def spec_title(draft: dict) -> str:
     """"Vehicle traction motor, 100 N·m, 1500 rpm": the application, motor or generator, and the continuous point.
     Empty while the specification names neither the application nor a point."""
@@ -58,10 +74,7 @@ def spec_title(draft: dict) -> str:
     machine = "generator" if kind.startswith("generator") else ("motor" if kind.startswith("motor") else "")
     if machine and machine in application.lower():
         machine = ""
-    point = _value(fields, "1_4")
-    if not (isinstance(point, dict) and _number(point.get("torque_Nm"))):
-        rows = _value(fields, "key_points")
-        point = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
+    point = _title_point(draft)
     torque, speed = _number(point.get("torque_Nm")), _number(point.get("speed_rpm"))
     parts = [" ".join(x for x in (application, machine) if x)]
     if torque:
@@ -77,8 +90,8 @@ def refresh_title(project_id: str, draft: dict) -> None:
         project = store.get_project(project_id)
         if not project or not project.get("auto_title"):
             return
-        title = spec_title(draft)
-        if not title or title == project.get("title"):
+        title = spec_title(draft) or NEW_PROJECT_TITLE      # nothing left to name it after: not the point that was removed
+        if title == project.get("title"):
             return
 
         def mutate(current: dict) -> None:

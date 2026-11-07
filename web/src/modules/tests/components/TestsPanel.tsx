@@ -20,11 +20,12 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import NotesIcon from '@mui/icons-material/Notes';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
+import { NARROW } from '../../../lib/narrowLayout';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import TestMedia from './TestMedia';
 import {
-  cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
+  cmpForTab, columnsFor, computeProgress, defaultTab, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
   normalizeTab, perMass, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
@@ -38,11 +39,12 @@ import TestEditor from './TestEditor';
 export type TestsSource = { kind: 'production' } | { kind: 'project'; projectId: string; showAll?: boolean };
 
 const SUB_KEY = (die: string, config: string) => `tests.sub.v1:${die}|${config}`;
-function readSub(die: string, config: string): TestTab {
+/** The tab this viewer last chose for this motor; null = never chose one (the panel then opens on `defaultTab`). */
+function readSub(die: string, config: string): TestTab | null {
   try {
     const v = window.localStorage.getItem(SUB_KEY(die, config));
-    return normalizeTab(v);                                 // also maps the retired `constants` and `load` values
-  } catch { return 'resistance'; }
+    return v === null ? null : normalizeTab(v);             // also maps the retired `constants` and `load` values
+  } catch { return null; }
 }
 function writeSub(die: string, config: string, v: TestTab) {
   try { window.localStorage.setItem(SUB_KEY(die, config), v); } catch { /* storage off */ }
@@ -53,6 +55,10 @@ const LEVEL_COLOR: Record<string, string> = { ok: '#22c55e', warn: '#f59e0b', ba
 const cell = { fontSize: 11, py: 0, px: 0.5, height: TABLE_ROW_PX, lineHeight: `${TABLE_ROW_PX}px`, borderBottom: '1px solid var(--line-soft)' } as const;
 const num = { ...cell, fontVariantNumeric: 'tabular-nums' } as const;
 const head = { ...cell, fontSize: 10, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
+// the name column of a table wider than its box stays put while the numbers scroll; on a phone it is narrow and wraps ('&&' beats the table's nowrap)
+const nameNarrow = { [NARROW]: { '&&': { whiteSpace: 'normal', minWidth: 92, maxWidth: 124, height: 'auto', lineHeight: 1.25, py: 0.25 } } } as const;
+const nameCell = { position: 'sticky', left: 0, zIndex: 1, bgcolor: 'var(--panel)', ...nameNarrow } as const;
+const nameHead = { position: 'sticky', left: 0, zIndex: 3, ...nameNarrow } as const;
 
 /** Wide = the box is at least this many px: table and chart side by side; below it they stack. */
 export const SIDE_BY_SIDE_MIN_PX = 900;
@@ -158,13 +164,14 @@ function CompareTable({ cmp, tips }: { cmp: TestCompare | undefined; tips: Recor
   const hasLoadChart = perSpeed || loadSeriesOptions(cmp).length > 0;
   return (
     <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
-      <Box sx={hasLoadChart ? { flex: wide ? '0 0 48%' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
+      {/* as wide as its columns (the temperatures are the last of them), up to a share that leaves the chart room */}
+      <Box sx={hasLoadChart ? { flex: wide ? '0 1 auto' : '1 1 auto', maxWidth: wide ? '62%' : undefined, minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
       {table && (
         <Box sx={{ mb: 1, overflow: 'auto', maxHeight: LOAD_TABLE_MAX_PX }} data-testid="tests-load-table">
           <Table size="small" stickyHeader sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
             <TableHead>
               <TableRow>
-                <TableCell sx={head}>
+                <TableCell sx={{ ...head, ...nameHead }}>
                   <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
                     {t('tests.col.point')}
                     {tableBasis && <HelpTip title={tableBasis} />}
@@ -188,7 +195,7 @@ function CompareTable({ cmp, tips }: { cmp: TestCompare | undefined; tips: Recor
               {table.points.map(({ block, cells }, pointIndex) => {
                 return (
                   <TableRow key={pointIndex}>
-                    <TableCell sx={{ ...cell, color: 'var(--text-1)' }}>{label(block, 'group')}</TableCell>
+                    <TableCell sx={{ ...cell, ...nameCell, color: 'var(--text-1)' }}>{label(block, 'group')}</TableCell>
                     {table.columns.map((c) => {
                       const l = cells[c.key];
                       return (
@@ -323,7 +330,7 @@ export const TestsPanel: React.FC<{
   const [data, setData] = useState<TestsPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sub, setSubState] = useState<TestTab>(() => readSub(die, config));
+  const [chosenSub, setSubState] = useState<TestTab | null>(() => readSub(die, config));
   const [editing, setEditing] = useState<{ rec: TestRecord | null } | null>(null);
   const [toDelete, setToDelete] = useState<TestRecord | null>(null);
   const [toCompute, setToCompute] = useState<CreateDutyAction[] | null>(null);
@@ -391,6 +398,7 @@ export const TestsPanel: React.FC<{
   if (err) return <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>;
   if (!data) return null;
   const can = data.can;
+  const sub = chosenSub ?? defaultTab(data.tests);
   const list = testsOfTab(data.tests, data.compare, sub);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
   const power = powerSummary(data.tests);
@@ -444,7 +452,7 @@ export const TestsPanel: React.FC<{
             <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={head}>{t('tests.power.test')}</TableCell>
+                  <TableCell sx={{ ...head, ...nameHead }}>{t('tests.power.test')}</TableCell>
                   <TableCell sx={head}>{t('tests.power.mode')}</TableCell>
                   <TableCell sx={head} align="right">
                     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.max')}<HelpTip title={t('tests.power.maxTip')} /></Box>
@@ -472,7 +480,7 @@ export const TestsPanel: React.FC<{
               <TableBody>
                 {power.map((l) => (
                   <TableRow key={l.id} hover onClick={() => openTest(l.id)} sx={{ cursor: 'pointer' }}>
-                    <TableCell sx={{ ...cell, color: 'var(--text-0)' }}>{[l.date, l.title].filter(Boolean).join(' · ')}</TableCell>
+                    <TableCell sx={{ ...cell, ...nameCell, color: 'var(--text-0)' }}>{[l.date, l.title].filter(Boolean).join(' · ')}</TableCell>
                     <TableCell sx={cell}>{l.mode ? t(`tests.power.${l.mode}`) : '—'}</TableCell>
                     <TableCell sx={{ ...num, fontWeight: 700 }} align="right">{l.powerKw.toFixed(1)}</TableCell>
                     <TableCell sx={num} align="right">{perMass(l.powerKw, data.motor_mass?.kg)?.toFixed(2) ?? '—'}</TableCell>

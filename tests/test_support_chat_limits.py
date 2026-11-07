@@ -224,7 +224,7 @@ def test_a_refusal_is_not_charged_to_the_caller(env, monkeypatch):
 
 # ── the signed-in caller meets none of it ────────────────────────────────────
 
-def test_a_signed_in_user_is_never_limited(env):
+def test_a_signed_in_user_is_not_held_to_the_visitor_limits(env):
     for i in range(support.ANON_BURST_MAX * 3):
         r = ask(ip="198.51.100.4", headers=env["client"])
         assert r.status_code == 200, f"message {i + 1}"
@@ -235,6 +235,75 @@ def test_a_signed_in_user_is_never_limited(env):
 def test_the_owner_is_never_limited(env):
     for _ in range(support.ANON_BURST_MAX + 5):
         assert ask(ip="198.51.100.4", headers=env["admin"]).status_code == 200
+
+
+def _spy_provider(monkeypatch) -> list:
+    """A configured provider that records each call and spends nothing."""
+    calls = []
+    monkeypatch.setattr(support, "_effective", lambda: {
+        "provider": "gemini", "gemini": {"key": "k", "model": "m", "key_source": "test"},
+        "anthropic": {"key": "", "model": "m", "key_source": "none"}})
+    monkeypatch.setattr(support, "_gemini_reply", lambda *a, **k: calls.append(1) or "an answer")
+    return calls
+
+
+def test_an_account_has_a_daily_cap_and_the_refusal_costs_nothing(env, monkeypatch):
+    monkeypatch.setenv("SUPPORT_ACCOUNT_DAY_MAX", "3")
+    calls = _spy_provider(monkeypatch)
+    for _ in range(3):
+        assert ask(headers=env["client"]).status_code == 200
+    r = ask(headers=env["client"])
+    assert r.status_code == 429 and r.json()["source"] == "rate_limited" and r.json()["limit"] == "account_day"
+    assert "support@aerostator.com" in r.json()["reply"] and int(r.headers["Retry-After"]) > 0
+    assert len(calls) == 3
+
+
+def test_the_cap_is_per_account_and_comes_back_the_next_day(env, monkeypatch):
+    from motor_ai_sim import users as U
+    monkeypatch.setenv("SUPPORT_ACCOUNT_DAY_MAX", "1")
+    U.create_user("second@example.com", "password-second", role="user", name="Second")
+    assert ask(headers=env["client"]).status_code == 200
+    assert ask(headers=env["client"]).status_code == 429
+    assert ask(headers={"Authorization": f"Bearer {U.issue_token('second@example.com')}"}).status_code == 200
+    today = 1_800_000_000.0
+    assert support._charge_account("third@example.com", now=today) is True
+    assert support._charge_account("third@example.com", now=today) is False
+    assert support._charge_account("third@example.com", now=today + 86400) is True
+
+
+@pytest.mark.parametrize("role", ["admin", "engineer"])
+def test_staff_have_no_daily_cap(env, monkeypatch, role):
+    from motor_ai_sim import users as U
+    monkeypatch.setenv("SUPPORT_ACCOUNT_DAY_MAX", "1")
+    U.create_user("staff@example.com", "password-staff", role=role, name="Staff")
+    h = {"Authorization": f"Bearer {U.issue_token('staff@example.com')}"}
+    for _ in range(3):
+        assert ask(headers=h).status_code == 200
+
+
+def test_the_refusal_speaks_the_language_of_the_page(env, monkeypatch):
+    monkeypatch.setenv("SUPPORT_ACCOUNT_DAY_MAX", "0")
+    msg = [{"role": "user", "content": "hello"}]
+    zh = client.post("/api/support/chat", json={"messages": msg, "context": {"lang": "zh-CN"}}, headers=env["client"])
+    en = client.post("/api/support/chat", json={"messages": msg, "context": {"lang": "en"}}, headers=env["client"])
+    assert zh.status_code == en.status_code == 429
+    assert "午夜" in zh.json()["reply"] and "midnight" in en.json()["reply"]
+
+
+def test_the_counter_stores_no_address(env):
+    assert ask(headers=env["client"]).status_code == 200
+    assert CLIENT not in support._account_usage_file().read_text(encoding="utf-8")
+
+
+def test_a_broken_counter_never_blocks_the_chat(env, monkeypatch):
+    from motor_ai_sim import json_store
+    monkeypatch.setattr(json_store, "mutate_json", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    assert ask(headers=env["client"]).status_code == 200
+
+
+def test_a_visitor_is_not_charged_to_any_account(env):
+    assert ask(ip="198.51.100.40").status_code == 200
+    assert not support._account_usage_file().exists()
 
 
 # ── what an anonymous conversation may carry ─────────────────────────────────

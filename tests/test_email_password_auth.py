@@ -118,9 +118,9 @@ def test_register_verify_login_round_trip(env):
     assert _login().status_code == 403                  # correct pw, not yet proven
     tok = _token_from(env["outbox"][-1], "verify")
     assert env["outbox"][-1]["to"] == NEW
-    assert client.post("/api/auth/verify", json={"token": tok}).status_code == 200
+    assert client.post("/api/auth/verify", json={"token": tok, "password": PW}).status_code == 200
     # single use
-    assert client.post("/api/auth/verify", json={"token": tok}).status_code == 400
+    assert client.post("/api/auth/verify", json={"token": tok, "password": PW}).status_code == 400
     r = _login()
     assert r.status_code == 200, r.text
     me = client.get("/api/me", headers={"Authorization": f"Bearer {r.json()['token']}"})
@@ -209,6 +209,86 @@ def test_reset_sets_new_password_and_revokes_sessions(env):
     # link is single-use
     again = client.post("/api/auth/reset/confirm", json={"token": tok, "password": "another new secret"})
     assert again.status_code == 400
+
+
+def _agent_access(email):
+    """An agent key and an OAuth grant of the account, plus the checks that they still open."""
+    from motor_ai_sim import agent_keys as K
+    from motor_ai_sim import oauth as O
+    token, _ = K.create_key(email)
+    access_token = f"{O.ACCESS_PREFIX}g1_tok"
+    O._mutate(lambda d: d["grants"].update({"g1": {
+        "id": "g1", "owner": email, "client_id": "c", "client_name": "App", "scopes": [], "created_at": 1.0,
+        "access_hash": O._h(access_token), "access_exp": 9e12, "refresh_exp": 9e12, "revoked_at": None}}))
+    return {"key": lambda: K.verify(f"Bearer {token}")[1], "grant": lambda: O.verify_access(access_token)[1]}
+
+
+def _other_account_access(email):
+    from motor_ai_sim import agent_keys as K
+    token, _ = K.create_key(email)
+    return lambda: K.verify(f"Bearer {token}")[1]
+
+
+@pytest.fixture()
+def agent_dir(env):
+    env["mp"].setenv("MCP_KEYS_DIR", str(env["tmp"]))
+
+
+def test_changing_the_password_ends_everything_but_the_session_making_the_change(env, agent_dir):
+    U = env["U"]
+    U.create_user("other@example.com", "password-other", role="user", name="Other")
+    other = _other_account_access("other@example.com")
+    here = _login(ADMIN, "password-admin", ip="198.51.100.11").json()["token"]
+    elsewhere = _login(ADMIN, "password-admin", ip="198.51.100.12").json()["token"]
+    access = _agent_access(ADMIN)
+    assert access["key"]() == "ok" and access["grant"]() == "ok"
+    r = client.post("/api/auth/password", json={"old_password": "password-admin", "new_password": "a brand new secret"},
+                    headers={"Authorization": f"Bearer {here}"})
+    assert r.status_code == 200, r.text
+    assert U.verify_token(here).reason == "ok"
+    assert U.verify_token(elsewhere).reason == "revoked"
+    assert access["key"]() != "ok" and access["grant"]() == "revoked"
+    assert other() == "ok"                                                 # another account's key is untouched
+    assert _login(ADMIN, "a brand new secret", ip="198.51.100.13").status_code == 200
+
+
+def test_a_refused_password_change_ends_nothing(env, agent_dir):
+    U = env["U"]
+    here = _login(ADMIN, "password-admin", ip="198.51.100.14").json()["token"]
+    elsewhere = _login(ADMIN, "password-admin", ip="198.51.100.15").json()["token"]
+    access = _agent_access(ADMIN)
+    h = {"Authorization": f"Bearer {here}"}
+    assert client.post("/api/auth/password", json={"old_password": "wrong", "new_password": "a brand new secret"}, headers=h).status_code == 403
+    assert client.post("/api/auth/password", json={"old_password": "password-admin", "new_password": "short"}, headers=h).status_code == 422
+    assert U.verify_token(elsewhere).reason == "ok" and access["key"]() == "ok" and access["grant"]() == "ok"
+
+
+@pytest.mark.parametrize("route", ["json", "form"])
+def test_a_reset_ends_every_session_key_and_grant(env, agent_dir, route):
+    _smtp_on(env)
+    U = env["U"]
+    old = _login(ADMIN, "password-admin", ip="198.51.100.16").json()["token"]
+    access = _agent_access(ADMIN)
+    client.post("/api/auth/reset/request", json={"email": ADMIN})
+    tok = _token_from(env["outbox"][-1], "reset")
+    if route == "json":
+        ok = client.post("/api/auth/reset/confirm", json={"token": tok, "password": "a brand new secret"})
+    else:
+        ok = client.post("/api/auth/link/reset", data={"id": tok, "password": "a brand new secret", "password2": "a brand new secret"})
+    assert ok.status_code == 200, ok.text
+    assert U.verify_token(old).reason == "revoked"
+    assert access["key"]() != "ok" and access["grant"]() == "revoked"
+
+
+def test_an_admin_set_password_ends_the_accounts_access(env, agent_dir):
+    U = env["U"]
+    U.create_user("other@example.com", "password-other", role="user", name="Other")
+    theirs = _login("other@example.com", "password-other", ip="198.51.100.17").json()["token"]
+    access = _agent_access("other@example.com")
+    r = client.patch("/api/auth/users/other@example.com", json={"password": "a brand new secret"}, headers=_admin_h())
+    assert r.status_code == 200, r.text
+    assert U.verify_token(theirs).reason == "revoked"
+    assert access["key"]() != "ok" and access["grant"]() == "revoked"
 
 
 def test_links_are_purpose_bound_and_expire(env):

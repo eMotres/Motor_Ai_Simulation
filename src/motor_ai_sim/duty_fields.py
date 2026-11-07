@@ -228,8 +228,9 @@ def _runs_roots(die: str, cfg: str) -> List[Path]:
                 roots = [shared]
                 if own != shared:
                     roots.append(own)
+            from motor_ai_sim.motor_access import read_through_allowed
             src = _ws.source_die_dir(str(die))
-            if src is not None:
+            if src is not None and read_through_allowed(str(die), str(cfg)):
                 p = Path(str(src)) / "runs" / str(cfg)
                 if p not in roots:
                     roots.append(p)

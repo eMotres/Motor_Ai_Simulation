@@ -2,10 +2,10 @@
 
 Why: a visitor in China (2026-10-15) clicked the confirmation link but the single-page app (a ~1.2 MB bundle) aborted mid-transfer on
 the China -> Germany link, so the browser-side confirmation call was never made.  The link now opens a server route that
-confirms the address itself and answers with one of these tiny pages (EN + zh-CN), so it works in any in-app browser (WeChat, QQ),
-on a slow line, and with scripts disabled.  The forms are plain HTML POSTs.
+answers with one of these tiny pages (EN + zh-CN), so it works in any in-app browser (WeChat, QQ), on a slow line, and with scripts
+disabled.  The forms are plain HTML POSTs.
 
-Pages: ``verified`` (confirmed, or already confirmed), ``invalid`` (expired / used / forged, with a resend form), ``reset_form``
+Pages: ``confirm_form`` (the password, then the address is confirmed), ``verified`` (confirmed, or already confirmed), ``invalid`` (expired / used / forged, with a resend form), ``reset_form``
 (new password + repeat), ``reset_done``, ``sent`` (the generic answer after a resend request).  Every dynamic value is escaped.
 """
 from __future__ import annotations
@@ -21,6 +21,12 @@ sohu.com aliyun.com aliyun.cn 139.com 189.cn wo.cn 21cn.com tom.com 263.net yaho
 STRINGS = {
     "en": {
         "brand": "AeroStator",
+        "confirm_title": "Confirm your e-mail",
+        "confirm_head": "Confirm your e-mail",
+        "confirm_text": "Enter your AeroStator password to confirm {email}.",
+        "confirm_pw": "Password",
+        "confirm_go": "Confirm",
+        "confirm_new_text": "This is not the password of this sign-up. If you want it for {email}, type it twice: it replaces the earlier one.",
         "ok_title": "E-mail confirmed",
         "ok_head": "E-mail confirmed ✓",
         "already_head": "Already confirmed ✓",
@@ -39,7 +45,7 @@ STRINGS = {
         "sent_text": "If this address can be used, we sent it a new link. Not there? Look in the spam folder.",
         "reset_title": "Set a new password",
         "reset_head": "Set a new password",
-        "reset_text": "Choose a new password for {email}. Setting it signs out every other session.",
+        "reset_text": "Choose a new password for {email}. Setting it signs out every session and disconnects its agent keys and AI apps.",
         "pw": "New password (at least 10 characters)",
         "pw2": "Repeat the new password",
         "reset_go": "Set password",
@@ -54,6 +60,12 @@ STRINGS = {
     },
     "zh-CN": {
         "brand": "AeroStator",
+        "confirm_title": "确认您的邮箱",
+        "confirm_head": "确认您的邮箱",
+        "confirm_text": "请输入您的 AeroStator 密码以确认 {email}。",
+        "confirm_pw": "密码",
+        "confirm_go": "确认",
+        "confirm_new_text": "这不是此次注册使用的密码。如果您想为 {email} 使用它，请输入两次，它将取代之前的密码。",
         "ok_title": "邮箱已确认",
         "ok_head": "邮箱已确认 ✓",
         "already_head": "邮箱已确认 ✓",
@@ -72,7 +84,7 @@ STRINGS = {
         "sent_text": "如果该地址可用，我们已向其发送新链接。没收到？请查看垃圾邮件文件夹。",
         "reset_title": "设置新密码",
         "reset_head": "设置新密码",
-        "reset_text": "请为 {email} 设置新密码。设置后其他所有登录会话将退出。",
+        "reset_text": "请为 {email} 设置新密码。设置后所有登录会话将退出，代理密钥和已连接的 AI 应用也将断开。",
         "pw": "新密码（至少 10 个字符）",
         "pw2": "再次输入新密码",
         "reset_go": "设置密码",
@@ -132,6 +144,28 @@ def _page(lang: str, title: str, body: str, switch_url: str = "") -> str:
             '<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>%s</title><style>%s</style></head>'
             '<body><main><div class="card">%s<p class="brand">%s</p>%s</div></main></body></html>'
             % (lang, _e(title), _CSS, sw, s["brand"], body))
+
+
+def confirm_form(lang: str, *, email: str, action: str, fields: dict, new_password: bool = False, error: str = "",
+                 switch_url: str = "") -> str:
+    """The page a confirmation link opens: opening it changes nothing, the POST of this form confirms.  ``fields`` are the hidden
+    inputs that identify the link.  ``new_password``: the password entered is not this sign-up's, so ask for it twice."""
+    lang = norm_lang(lang)
+    s = STRINGS[lang]
+    hidden = "".join('<input type="hidden" name="%s" value="%s">' % (_e(k), _e(v)) for k, v in fields.items())
+    err = '<p class="err" role="alert">%s</p>' % _e(error) if error else ""
+    if new_password:
+        text = s["confirm_new_text"]
+        inputs = ('<label for="p1">%s</label><input id="p1" name="password" type="password" required minlength="10" autocomplete="new-password">'
+                  '<label for="p2">%s</label><input id="p2" name="password2" type="password" required minlength="10" autocomplete="new-password">'
+                  '<p class="muted">%s</p>' % (_e(s["pw"]), _e(s["pw2"]), _e(s["policy_hint"])))
+    else:
+        text = s["confirm_text"]
+        inputs = ('<label for="p1">%s</label><input id="p1" name="password" type="password" required autocomplete="current-password">'
+                  % _e(s["confirm_pw"]))
+    body = ('<h1>%s</h1><p>%s</p>%s<form method="post" action="%s">%s%s<button type="submit">%s</button></form>'
+            % (_e(s["confirm_head"]), _e(text.format(email=email)), err, _e(action), hidden, inputs, _e(s["confirm_go"])))
+    return _page(lang, s["confirm_title"], body, switch_url)
 
 
 def verified(lang: str, email: str, *, already: bool = False, open_url: str, signin_url: str, continue_url: str = "", switch_url: str = "",

@@ -1,8 +1,8 @@
 """The links in the account mails open small SERVER-rendered pages: no JavaScript, no external asset, EN + zh-CN, idempotent.
 
 Why (2026-10-15): a visitor in China clicked the confirmation link but the single-page app's 1.2 MB bundle aborted on the China ->
-Germany line, so the browser-side confirmation never ran.  Everything here is plain HTTP + HTML: GET to confirm, an HTML form POST to
-set a password or ask for a new link.  Temp store only; no real mail.
+Germany line, so the browser-side confirmation never ran.  Everything here is plain HTTP + HTML: GET opens a page and changes nothing,
+an HTML form POST confirms, sets a password or asks for a new link.  Temp store only; no real mail.
 """
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ LINK = "/api/auth/link"
 
 def sid_of(mail, kind="verify"):
     return _token_from(mail, kind)
+
+
+def confirm(sid, password=PW, **kw):
+    return client.post(f"{LINK}/verify", data={"id": sid, "password": password}, **kw)
 
 
 def assert_light(page: str):
@@ -77,44 +81,127 @@ def test_the_link_confirms_on_the_server_and_a_second_click_is_harmless(env):
     _register()
     assert _login().status_code == 403                                     # not confirmed yet (this PR does not change that)
     sid = sid_of(env["outbox"][-1])
-    r = client.get(f"{LINK}/v/{sid}")
+    form = client.get(f"{LINK}/v/{sid}")
+    assert form.status_code == 200 and '<form method="post" action="/api/auth/link/verify">' in form.text
+    assert f'name="id" value="{sid}"' in form.text and NEW in form.text and 'autocomplete="current-password"' in form.text
+    assert_light(form.text)
+    r = confirm(sid)
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
     assert "E-mail confirmed" in r.text and NEW in r.text and 'href="http://localhost:5173/"' in r.text
     assert "signin=1" in r.text and 'lang="en"' in r.text
     assert_light(r.text)
     assert env["U"].is_verified(env["U"].get_user(NEW))
     assert _login().status_code == 200
-    # a mail scanner opened it first / the user clicks twice: same page, "already confirmed", nothing breaks
-    again = client.get(f"{LINK}/v/{sid}")
-    assert again.status_code == 200 and "Already confirmed" in again.text and NEW in again.text
-    assert_light(again.text)
+    # the user clicks twice or submits twice: "already confirmed", nothing breaks
+    for again in (client.get(f"{LINK}/v/{sid}"), confirm(sid)):
+        assert again.status_code == 200 and "Already confirmed" in again.text and NEW in again.text
+        assert_light(again.text)
     # the page cannot be framed or cached and sends no referrer; only inline style is allowed
     h = r.headers
     assert h["cache-control"] == "no-store" and h["x-frame-options"] == "DENY" and h["referrer-policy"] == "no-referrer"
     assert "default-src 'none'" in h["content-security-policy"] and "script" not in h["content-security-policy"]
 
 
+def test_opening_the_link_changes_nothing(env):
+    _smtp_on(env)
+    _register()
+    U, sid = env["U"], sid_of(env["outbox"][-1])
+    t = U.issue_link_token(NEW, "verify")
+    for _ in range(3):                                                     # a mail scanner, a preview, the person
+        assert "<form" in client.get(f"{LINK}/v/{sid}").text
+        assert "<form" in client.get(f"{LINK}/verify", params={"t": t}).text
+        assert client.head(f"{LINK}/v/{sid}").status_code in (200, 405)
+    assert not U.is_verified(U.get_user(NEW)) and _login().status_code == 403
+    assert "E-mail confirmed" in confirm(sid).text                         # the link is still good
+
+
+def test_the_reader_of_the_mail_decides_the_password(env):
+    _smtp_on(env)
+    _register(pw="the first registrant's secret")
+    U, sid = env["U"], sid_of(env["outbox"][-1])
+    mine = "the mailbox owner's secret"
+    # a password that is not this sign-up's confirms nothing and changes nothing: it is asked for twice
+    asked = confirm(sid, mine)
+    assert asked.status_code == 200 and 'name="password2"' in asked.text and not U.is_verified(U.get_user(NEW))
+    assert_light(asked.text)
+    assert _login(pw="the first registrant's secret").status_code == 403
+    typo = client.post(f"{LINK}/verify", data={"id": sid, "password": mine, "password2": "something else entirely"})
+    assert "do not match" in typo.text and not U.is_verified(U.get_user(NEW))
+    weak = client.post(f"{LINK}/verify", data={"id": sid, "password": "short", "password2": "short"})
+    assert 'role="alert"' in weak.text and not U.is_verified(U.get_user(NEW))
+    done = client.post(f"{LINK}/verify", data={"id": sid, "password": mine, "password2": mine})
+    assert "E-mail confirmed" in done.text and U.is_verified(U.get_user(NEW))
+    assert _login(pw=mine).status_code == 200
+    assert _login(pw="the first registrant's secret", ip="203.0.113.6").status_code == 401
+
+
+def test_an_empty_form_confirms_nothing(env):
+    _smtp_on(env)
+    _register()
+    r = confirm(sid_of(env["outbox"][-1]), "")
+    assert r.status_code == 200 and "<form" in r.text and not env["U"].is_verified(env["U"].get_user(NEW))
+
+
+def test_invites_and_listed_ndas_wait_for_the_confirmation(env, monkeypatch):
+    from motor_ai_sim import nda_preapproval as NP
+    from motor_ai_sim.development import routes as DR
+    seen = []
+    monkeypatch.setattr(DR, "claim_pending_invites", lambda email: seen.append(("invite", email)) or [])
+    monkeypatch.setattr(NP, "apply", lambda email: seen.append(("nda", email)))
+    _smtp_on(env)
+    _register()
+    sid = sid_of(env["outbox"][-1])
+    assert _login().status_code == 403
+    client.get(f"{LINK}/v/{sid}")
+    assert _login().status_code == 403 and seen == []
+    confirm(sid)
+    assert seen == []                                                      # the confirmation itself claims nothing either
+    assert _login().status_code == 200 and seen == [("invite", NEW), ("nda", NEW)]
+
+
+def test_the_json_endpoint_needs_the_password_too(env):
+    _smtp_on(env)
+    _register()
+    U, sid = env["U"], sid_of(env["outbox"][-1])
+    for body in ({"token": sid}, {"token": sid, "password": "not the password at all"}):
+        r = client.post("/api/auth/verify", json=body)
+        assert r.status_code == 403 and r.json()["code"] == "auth.verify_password", r.text
+    assert not U.is_verified(U.get_user(NEW))
+    assert client.post("/api/auth/verify", json={"token": sid, "password": PW}).status_code == 200
+
+
 def test_zh_rendering_by_account_language_accept_language_query_and_provider(env):
     _smtp_on(env)
     client.post("/api/auth/register", json={"email": "zh1@gmail.com", "password": PW, "name": "Z", "lang": "zh-CN"},
                 headers={"X-Forwarded-For": "203.0.113.51"})
-    r = client.get(f"{LINK}/v/{sid_of(env['outbox'][-1])}")                # stored language zh-CN
+    sid = sid_of(env["outbox"][-1])
+    form = client.get(f"{LINK}/v/{sid}")                                   # stored language zh-CN
+    assert 'lang="zh-CN"' in form.text and "确认您的邮箱" in form.text
+    assert "English" in form.text and "?lang=en" in form.text              # the switch to the other language
+    assert_light(form.text)
+    r = confirm(sid)
     assert 'lang="zh-CN"' in r.text and "邮箱已确认 ✓" in r.text and "打开 AeroStator" in r.text and 'href="http://localhost:5173/zh-cn/"' in r.text
-    assert "English" in r.text and "?lang=en" in r.text                    # the switch to the other language
     assert_light(r.text)
+    assert "输入两次" in confirm(sid_of_new(env, "zh3@gmail.com", "zh-CN"), "someone else's secret").text
     # a stored "en" does not beat a Chinese browser (the sign-up form always sends the interface language)
     client.post("/api/auth/register", json={"email": "zh2@gmail.com", "password": PW, "name": "Z", "lang": "en"},
                 headers={"X-Forwarded-For": "203.0.113.52"})
-    r = client.get(f"{LINK}/v/{sid_of(env['outbox'][-1])}", headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+    r = confirm(sid_of(env["outbox"][-1]), headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
     assert "邮箱已确认" in r.text
     client.post("/api/auth/register", json={"email": "en1@gmail.com", "password": PW, "name": "E", "lang": "en"},
                 headers={"X-Forwarded-For": "203.0.113.53"})
     sid = sid_of(env["outbox"][-1])
-    assert "E-mail confirmed" in client.get(f"{LINK}/v/{sid}", headers={"Accept-Language": "en-US,en;q=0.9"}).text
+    assert "E-mail confirmed" in confirm(sid, headers={"Accept-Language": "en-US,en;q=0.9"}).text
     assert "邮箱已确认" in client.get(f"{LINK}/v/{sid}?lang=zh").text      # explicit choice (the spent link: "already confirmed")
     # a Chinese mail provider with nothing else to go on
     assert LP.pick_lang(email="x@163.com") == "zh-CN" and LP.pick_lang(email="x@gmail.com") == "en"
     assert LP.pick_lang(query="en", stored="zh-CN", email="x@qq.com") == "en"
+
+
+def sid_of_new(env, email, lang):
+    client.post("/api/auth/register", json={"email": email, "password": PW, "name": "Z", "lang": lang},
+                headers={"X-Forwarded-For": "203.0.113.54"})
+    return sid_of(env["outbox"][-1])
 
 
 def test_expired_unknown_and_forged_links_show_the_resend_page(env):
@@ -127,13 +214,14 @@ def test_expired_unknown_and_forged_links_show_the_resend_page(env):
         assert r.status_code == 200 and 'method="post"' in r.text and 'action="/api/auth/link/resend"' in r.text
         assert "expired" in r.text and not U.is_verified(U.get_user(NEW)), sid
         assert_light(r.text)
+        assert "expired" in confirm(sid).text and not U.is_verified(U.get_user(NEW)), sid   # the form's POST likewise
     # an expired link of a known account prefills the address
     assert f'value="{NEW}"' in client.get(f"{LINK}/v/{old}").text
     # the resend form is a plain POST and mails a new link; the answer is the same page whoever is asked about
     n = len(env["outbox"])
     r = client.post(f"{LINK}/resend", data={"email": NEW, "kind": "verify"})
     assert r.status_code == 200 and "Check your inbox" in r.text and len(env["outbox"]) == n + 1
-    assert client.get(f"{LINK}/v/{sid_of(env['outbox'][-1])}").text.count("E-mail confirmed") >= 1
+    assert "E-mail confirmed" in confirm(sid_of(env["outbox"][-1])).text
     r2 = client.post(f"{LINK}/resend", data={"email": "nobody@example.com", "kind": "verify"})
     assert r2.status_code == 200 and "Check your inbox" in r2.text and len(env["outbox"]) == n + 1
     assert client.post(f"{LINK}/resend", data={"email": "not an address"}).status_code == 200
@@ -155,16 +243,19 @@ def test_the_old_long_links_still_confirm_and_are_idempotent(env):
     _register()
     U = env["U"]
     t = U.issue_link_token(NEW, "verify")                                   # what an old mail carried
-    r = client.get(f"{LINK}/verify", params={"t": t})
+    form = client.get(f"{LINK}/verify", params={"t": t, "continue": "abc"})
+    assert form.status_code == 200 and f'name="t" value="{t}"' in form.text and 'name="continue" value="abc"' in form.text
+    r = client.post(f"{LINK}/verify", data={"t": t, "password": PW})
     assert r.status_code == 200 and "E-mail confirmed" in r.text and U.is_verified(U.get_user(NEW))
     assert "Already confirmed" in client.get(f"{LINK}/verify", params={"t": t}).text
+    assert "Already confirmed" in client.post(f"{LINK}/verify", data={"t": t, "password": PW}).text
     bad = client.get(f"{LINK}/verify", params={"t": t[:-3] + "xyz"})
     assert "expired" in bad.text and 'action="/api/auth/link/resend"' in bad.text
     assert "expired" in client.get(f"{LINK}/verify").text
     # the JSON endpoints of the single-page app still work with either kind of token
     _register(email="j@example.com", ip="203.0.113.60")
-    assert client.post("/api/auth/verify", json={"token": sid_of(env["outbox"][-1])}).status_code == 200
-    assert client.post("/api/auth/verify", json={"token": sid_of(env["outbox"][-1])}).status_code == 400
+    assert client.post("/api/auth/verify", json={"token": sid_of(env["outbox"][-1]), "password": PW}).status_code == 200
+    assert client.post("/api/auth/verify", json={"token": sid_of(env["outbox"][-1]), "password": PW}).status_code == 400
 
 
 def test_nginx_redirects_the_old_spa_links_before_any_javascript():
@@ -241,7 +332,7 @@ def test_change_of_address_and_admin_edit_burn_the_old_short_links(env):
     assert r.status_code == 202
     assert "expired" in client.get(f"{LINK}/v/{old}").text                  # the old address's link is dead
     new = sid_of(env["outbox"][-1])
-    assert env["outbox"][-1]["to"] == "d.xu@movigor.com" and "E-mail confirmed" in client.get(f"{LINK}/v/{new}").text
+    assert env["outbox"][-1]["to"] == "d.xu@movigor.com" and "E-mail confirmed" in confirm(new).text
 
 
 def test_page_budget_for_every_page_in_both_languages():
@@ -252,10 +343,11 @@ def test_page_budget_for_every_page_in_both_languages():
                   LP.invalid(lang, kind="verify", email="a@b.com", action="/api/auth/link/resend", switch_url="/x"),
                   LP.invalid(lang, kind="reset", email="a@b.com", action="/api/auth/link/resend"),
                   LP.sent(lang, open_url="https://aerostator.com/"),
+                  LP.confirm_form(lang, email="a@b.com", action="/api/auth/link/verify", fields={"t": "x" * 400}, new_password=True, error="boom"),
                   LP.reset_form(lang, email="a@b.com", action="/api/auth/link/reset", fields={"t": "x" * 400}, error="boom <b>"),
                   LP.reset_done(lang, signin_url="https://aerostator.com/?signin=1", open_url="https://aerostator.com/")]
     for pg in pages:
         assert len(pg.encode("utf-8")) < 10_000 and "<script" not in pg.lower()
-    assert "boom &lt;b&gt;" in pages[4] and "<b>" not in pages[4]                              # every dynamic value is escaped
+    assert "boom &lt;b&gt;" in pages[5] and "<b>" not in pages[5]                              # every dynamic value is escaped
     x = LP.verified("en", '"><script>alert(1)</script>', open_url="/", signin_url="/")
     assert "<script>" not in x and "&lt;script&gt;" in x

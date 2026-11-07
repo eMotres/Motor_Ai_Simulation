@@ -42,10 +42,14 @@ instead of at the door:
     ``ANON_MAX_CHARS`` before it is spent on a provider call.
 
 Over a cap the caller gets a polite canned reply with 429 and NO provider call,
-and one line reaches the log.  A signed-in caller is never counted or capped —
-the counters are keyed on "no credentials presented" and nothing else.  They are
-in-memory (one API process) and thread-safe; a restart forgives everyone, which
-is the right failure for a limit whose job is to bound a bill, not to punish.
+and one line reaches the log.  These counters are keyed on "no credentials
+presented" and nothing else.  They are in-memory (one API process) and
+thread-safe; a restart forgives everyone, which is the right failure for a limit
+whose job is to bound a bill, not to punish.
+
+SIGNED-IN CALLERS (2026-11-07) spend the same key, so each account outside the
+staff has ``ACCOUNT_DAY_MAX`` messages per UTC day.  That counter lives in a file
+beside ``users.json``: it holds across a deploy and across the API processes.
 
 WHERE A VISITOR'S WORDS GO (2026-09-17, the owner's question: "how will the
 messages they write to the bot reach us?").  Two things happen to an
@@ -700,6 +704,8 @@ ANON_DAY_MAX = 40
 #: And the whole anonymous audience per day — the ceiling on the bill even if
 #: the traffic arrives from a thousand addresses.
 ANON_GLOBAL_DAY_MAX = 500
+#: Per signed-in account outside the staff, per UTC day (``SUPPORT_ACCOUNT_DAY_MAX``).  Far above a working day's questions.
+ACCOUNT_DAY_MAX = 100
 #: What an anonymous conversation may carry into a provider call.
 ANON_MAX_TURNS = 6
 ANON_MAX_CHARS = 1000
@@ -710,12 +716,13 @@ _CAP_ENV = {
     "burst": "SUPPORT_ANON_BURST_MAX",
     "day": "SUPPORT_ANON_DAY_MAX",
     "global": "SUPPORT_ANON_GLOBAL_DAY_MAX",
+    "account_day": "SUPPORT_ACCOUNT_DAY_MAX",
 }
 
 
 def _cap(name: str) -> int:
     default = {"burst": ANON_BURST_MAX, "day": ANON_DAY_MAX,
-               "global": ANON_GLOBAL_DAY_MAX}[name]
+               "global": ANON_GLOBAL_DAY_MAX, "account_day": ACCOUNT_DAY_MAX}[name]
     raw = os.environ.get(_CAP_ENV[name], "").strip()
     if not raw:
         return default
@@ -857,6 +864,64 @@ def _charge_anonymous(ip: str, now: Optional[float] = None) -> Optional[str]:
                 if not v or now - v[-1] > _DAY_S:
                     _ip_hits.pop(k, None)
         return None
+
+
+#: What an account reads over its daily cap, in the language it works in.
+_ACCOUNT_LIMIT_REPLIES = {
+    "en": ("You have used today's questions to the assistant for your account. They come back at midnight UTC. "
+           "If it can't wait, write to support@aerostator.com — we answer every request personally."),
+    "zh-CN": ("您的账户今天向助手提问的次数已用完，将在 UTC 午夜恢复。"
+              "如有急事，请发邮件至 support@aerostator.com，我们会亲自回复每一个请求。"),
+}
+
+
+def _account_usage_file():
+    from pathlib import Path
+
+    from motor_ai_sim import users as U
+    return Path(U._USERS_FILE).parent / ".support_account_day.json"
+
+
+def _charge_account(ident: str, now: Optional[float] = None) -> bool:
+    """Check AND record one message of a signed-in account, atomically: ``False`` when it is over today's cap (a refusal is not
+    recorded).  Only a hash of the address is stored and only today's rows are kept.  A store that cannot be read or written
+    never blocks the chat."""
+    import hashlib
+
+    from motor_ai_sim import json_store
+    day = time.strftime("%Y-%m-%d", time.gmtime(time.time() if now is None else now))
+    key = hashlib.sha256(str(ident).strip().lower().encode("utf-8")).hexdigest()
+    cap = _cap("account_day")
+    allowed = {"ok": False}
+
+    def _mut(doc):
+        rows = doc.get("counts") if isinstance(doc, dict) and doc.get("day") == day else None
+        rows = rows if isinstance(rows, dict) else {}
+        n = int(rows.get(key) or 0)
+        if n < cap:
+            rows[key] = n + 1
+            allowed["ok"] = True
+        return {"day": day, "counts": rows}
+    try:
+        json_store.mutate_json(_account_usage_file(), _mut, default={})
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("support: the per-account counter is unavailable (%s) - the message goes through", type(e).__name__)
+        return True
+    return allowed["ok"]
+
+
+def _account_limit_reply(request: Optional[Request], ident: str, context) -> str:
+    from motor_ai_sim import link_pages as LP
+    from motor_ai_sim import users as U
+    wanted = context.get("lang") if isinstance(context, dict) else ""
+    lang = LP.pick_lang(query=str(wanted or ""), stored=str((U.get_user(ident) or {}).get("lang") or ""),
+                        accept_language=(request.headers.get("accept-language", "") if request else ""), email=ident)
+    return _ACCOUNT_LIMIT_REPLIES[lang]
+
+
+def _seconds_to_utc_midnight(now: Optional[float] = None) -> int:
+    now = time.time() if now is None else now
+    return max(1, int(_DAY_S - now % _DAY_S))
 
 
 def _caller_role(authorization: Optional[str]) -> str:
@@ -1021,9 +1086,19 @@ def chat(request: Request, body: dict = Body(default={}),
     deliver = lambda reply, source, **kw: _deliver(          # noqa: E731
         reply, source, anon=anon, messages=messages, ip=ip, ua=ua, **kw)
 
-    # The limiter sits in front of the provider call and nowhere else: it must
-    # bound what is SPENT, so a signed-in user never meets it and a refusal
-    # never reaches the provider.
+    # The limiters sit in front of the provider call and nowhere else: they must
+    # bound what is SPENT, and a refusal never reaches the provider.
+    from motor_ai_sim import platform_agreement as _PA
+    if not anon and not _PA.is_staff(role):
+        from motor_ai_sim.auth import caller_identity
+        ident = str(caller_identity(authorization).get("id") or "")
+        if ident and not _charge_account(ident):
+            logger.warning("support: signed-in chat REFUSED (account_day)")
+            return JSONResponse(
+                status_code=429,
+                content=deliver(_account_limit_reply(request, ident, body.get("context")), "rate_limited", limit="account_day"),
+                headers={"Retry-After": str(_seconds_to_utc_midnight())},
+            )
     if anon:
         hit = _charge_anonymous(ip)
         if hit is not None:

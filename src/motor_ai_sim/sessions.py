@@ -236,8 +236,9 @@ def revoke(sid: str) -> Optional[dict]:
         return rec
 
 
-def revoke_all(email: str) -> int:
-    """Revoke every live session of an account → how many were revoked."""
+def revoke_all(email: str, *, keep_sid: str = "") -> int:
+    """Revoke every live session of an account → how many were revoked.
+    ``keep_sid``: the one session that stays (the one changing its own password)."""
     email = _norm(email)
     with _LOCK:
         try:
@@ -247,7 +248,7 @@ def revoke_all(email: str) -> int:
         n = 0
         for sid, rec in d.items():
             if isinstance(rec, dict) and _norm(rec.get("email")) == email \
-                    and not rec.get("revoked"):
+                    and not rec.get("revoked") and not (keep_sid and sid == keep_sid):
                 rec["revoked"] = True
                 rec["revoked_at"] = time.time()
                 n += 1

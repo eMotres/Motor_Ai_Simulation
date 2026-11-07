@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import {
   decodeJwtPayload, googleExchange, loadGis, GisUnreachableError, passwordLogin,
-  registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset, resendVerification, changeSignupEmail, ApiErr,
+  registerAccount, confirmPageUrl, requestPasswordReset, confirmPasswordReset, resendVerification, changeSignupEmail, ApiErr,
   pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
   GOOGLE_CLIENT_ID, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
@@ -135,22 +135,9 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
       setResetToken(link.token); setMode('reset'); setErr(null); setInfo(null);
       return;
     }
-    setMode('signin'); setBusy(true); setErr(null);
-    // A sign-up started in an AI app's authorization window: the server
-    // resumes that authorization only from the link's own continuation, bound
-    // to this address.  Anything else must not stay on a consent page.
-    void verifyEmail(link.token, continuation)
-      .then((j) => {
-        const onConsent = window.location.pathname === '/agent-consent';
-        if (onConsent && !j.return_to) { window.location.replace('/?signin=1'); return; }
-        if (j.return_to && `${window.location.pathname}${window.location.search}` !== j.return_to) {
-          window.location.replace(j.return_to); return;
-        }
-        if (j.email) setEmail(j.email);
-        setInfo(t('auth.info.emailConfirmed'));
-      })
-      .catch((e: Error) => setErr(e.message))
-      .finally(() => setBusy(false));
+    // The address is confirmed on the server's page, with the password.  A sign-up started in an AI app's authorization window
+    // resumes from there, by the link's own continuation.
+    window.location.replace(confirmPageUrl(link.token, continuation));
   }, [open, initialMode, initialTab]);
 
   // The Google script is fetched HERE and nowhere else: on the click, with a

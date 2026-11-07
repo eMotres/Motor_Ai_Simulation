@@ -473,8 +473,8 @@ def new_revision(lineage_id: str, *, reason: str, who: dict, actor: str, new_die
             target = (new_die_name, new_cfg)
         else:
             cfg_name = config_name or family._unique_config_name(die, f"{base}-{nxt}")
-            family.duplicate_config(die, cfg, family.ConfigDuplicate(name=family._check_name(cfg_name, "configuration")), who)
-            target = (die, family._check_name(cfg_name, "configuration"))
+            out = family.duplicate_config(die, cfg, family.ConfigDuplicate(name=family._check_name(cfg_name, "configuration")), who)
+            target = (die, str(out.get("config") or family._check_name(cfg_name, "configuration")))
             created_cfg_only = target
         locked_now: Dict[str, bool] = {}
         try:

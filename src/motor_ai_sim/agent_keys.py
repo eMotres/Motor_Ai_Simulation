@@ -197,6 +197,23 @@ def revoke_key(owner: str, kid: str) -> bool:
     return hit["ok"]
 
 
+def revoke_all_keys(owner: str) -> int:
+    """Revoke every active key of an account (its password changed) → how many were revoked."""
+    owner = (owner or "").strip().lower()
+    hit = {"n": 0}
+
+    def _mut(d):
+        for rec in ((d or {}).get("keys") or {}).values():
+            if rec.get("owner") == owner and not rec.get("revoked_at"):
+                rec["revoked_at"] = _now()
+                hit["n"] += 1
+        return d
+
+    if store_path().is_file():
+        mutate_json(store_path(), _mut, default={})
+    return hit["n"]
+
+
 #: last_used_at is written at most this often per key (a write per call would
 #: turn every MCP request into a file rewrite).
 _TOUCH_EVERY_S = 60.0

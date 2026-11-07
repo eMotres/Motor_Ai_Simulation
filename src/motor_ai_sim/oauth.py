@@ -711,6 +711,25 @@ def list_grants(owner: str) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda r: -(r.get("created_at") or 0))
 
 
+def revoke_all_grants(owner: str) -> int:
+    """Revoke every grant of an account and drop its unspent authorization codes and approved requests (its password changed)
+    → how many grants were revoked."""
+    owner = (owner or "").strip().lower()
+    hit = {"n": 0}
+
+    def _fn(d):
+        for g in d["grants"].values():
+            if g.get("owner") == owner and not g.get("revoked_at"):
+                g["revoked_at"] = _now()
+                hit["n"] += 1
+        for tbl in ("codes", "requests"):
+            for k in [k for k, r in d[tbl].items() if isinstance(r, dict) and r.get("owner") == owner]:
+                d[tbl].pop(k, None)
+    if store_path().is_file():
+        _mutate(_fn)
+    return hit["n"]
+
+
 def revoke_grant(owner: str, gid: str) -> bool:
     owner = (owner or "").strip().lower()
     hit = {"ok": False}

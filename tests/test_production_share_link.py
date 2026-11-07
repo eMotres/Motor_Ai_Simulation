@@ -109,13 +109,13 @@ def test_the_return_path_survives_register_and_confirmation(env):
     sid = _token_from(env["outbox"][-1], "verify")
     # the mailed link stays short and carries no path (it is not a redirect; only the stored value is used)
     assert "production" not in env["outbox"][-1]["body"]
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert page.status_code == 200 and "E-mail confirmed" in page.text
     assert f'href="{APP}{nxt}"' in _plain(page.text)
     assert f"{APP}{nxt}&signin=1" in _plain(page.text)                  # the second button opens the sign-in dialog on it
     assert "Open the page you came for" in page.text
     assert env["U"].is_verified(env["U"].get_user(NEW))
-    # a mail scanner clicked first / the person clicks again: still lands on the page
+    # the person clicks again: still lands on the page
     again = client.get(f"{LINK}/v/{sid}")
     assert "Already confirmed" in again.text and f'href="{APP}{nxt}"' in _plain(again.text)
 
@@ -131,7 +131,7 @@ def test_digest_deep_links_survive_register_and_confirmation(env, nxt):
     _smtp_on(env)
     assert _register_next(nxt).status_code == 202
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert page.status_code == 200 and "E-mail confirmed" in page.text
     assert f'href="{APP}{nxt}"' in _plain(page.text)
     assert f"{APP}{nxt}{'&' if '?' in nxt else '?'}signin=1" in _plain(page.text)
@@ -141,7 +141,8 @@ def test_zh_cn_page_has_the_label(env):
     _smtp_on(env)
     _register_next(PATH)
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}?lang=zh")
+    assert 'action="/api/auth/link/verify?lang=zh-CN"' in client.get(f"{LINK}/v/{sid}?lang=zh").text   # the choice carries over
+    page = client.post(f"{LINK}/verify?lang=zh-CN", data={"id": sid, "password": PW})
     assert "打开您要访问的页面" in page.text and f'href="{APP}{PATH}"' in _plain(page.text)
 
 
@@ -153,7 +154,7 @@ def test_a_hostile_return_path_is_ignored_and_the_signup_still_works(env, hostil
     _smtp_on(env)
     assert _register_next(hostile).status_code == 202
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert page.status_code == 200 and "E-mail confirmed" in page.text
     assert "evil" not in page.text and "production" not in page.text and "Open the page you came for" not in page.text
     assert f'href="{APP}/"' in page.text                                    # plain home, as before
@@ -167,7 +168,7 @@ def test_a_poisoned_stored_value_is_revalidated_when_the_page_is_built(env):
     users[NEW]["short_links"][0]["nx"] = "https://evil.example/x"            # as if the store had been edited
     (env["tmp"] / "users.json").write_text(json.dumps(users))
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert "evil" not in page.text and f'href="{APP}/"' in page.text
 
 
@@ -178,7 +179,7 @@ def test_resend_keeps_the_return_path(env):
                     headers={"X-Forwarded-For": "203.0.113.5"})
     assert r.status_code == 202
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert (PATH + "?since=2026-10-19") in _plain(page.text)
 
 
@@ -206,7 +207,7 @@ def test_too_many_query_fields_never_break_the_signup_or_the_resend(env):
         headers={"X-Forwarded-For": "203.0.113.5"})
     assert r.status_code == 202, r.text
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert page.status_code == 200 and "E-mail confirmed" in page.text
     assert "Open the page you came for" not in page.text and f'href="{APP}/"' in page.text   # signed up, no return path
     assert env["U"].is_verified(env["U"].get_user(NEW))
@@ -216,7 +217,7 @@ def test_without_a_return_path_nothing_changes(env):
     _smtp_on(env)
     _register()
     sid = _token_from(env["outbox"][-1], "verify")
-    page = client.get(f"{LINK}/v/{sid}")
+    page = client.post(f"{LINK}/verify", data={"id": sid, "password": PW})
     assert f'href="{APP}/"' in page.text and "Open the page you came for" not in page.text
 
 
@@ -313,7 +314,7 @@ def test_an_invited_email_that_registers_lands_with_access(prod, env):
     _smtp_on(env)
     mail = "invited.later@example.com"
     assert _register_next(PATH, email=mail, ip="203.0.113.77").status_code == 202
-    client.get(f"{LINK}/v/{_token_from(env['outbox'][-1], 'verify')}")
+    client.post(f"{LINK}/verify", data={"id": _token_from(env["outbox"][-1], "verify"), "password": PW})
     tok = client.post("/api/auth/login", json={"email": mail, "password": PW},
                       headers={"X-Forwarded-For": "203.0.113.77"}).json()["token"]
     hdr = {"Authorization": f"Bearer {tok}"}
@@ -323,7 +324,7 @@ def test_an_invited_email_that_registers_lands_with_access(prod, env):
     assert docs.status_code == 200 and len(docs.json()["documents"]) == 2
     # a stranger who registers through the same link gets the page but not the data
     assert _register_next(PATH, email="x.stranger@example.com", ip="203.0.113.78").status_code == 202
-    client.get(f"{LINK}/v/{_token_from(env['outbox'][-1], 'verify')}")
+    client.post(f"{LINK}/verify", data={"id": _token_from(env["outbox"][-1], "verify"), "password": PW})
     tok2 = client.post("/api/auth/login", json={"email": "x.stranger@example.com", "password": PW},
                        headers={"X-Forwarded-For": "203.0.113.78"}).json()["token"]
     h2 = {"Authorization": f"Bearer {tok2}"}

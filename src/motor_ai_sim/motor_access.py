@@ -369,7 +369,9 @@ def set_die_access(die: str, *, visibility: str, clients: Optional[list] = None)
 #
 # Three deliberate edges:
 #   * the caller's OWN workspace copy of a die is theirs (layering on, layer
-#     ``workspace``): the status guards the SHARED catalog, like every grant;
+#     ``workspace``): a file there is theirs, the status guards the SHARED catalog,
+#     like every grant.  What the layers BEHIND the workspace hold under that name
+#     is not theirs by the name alone (:func:`read_through_allowed`);
 #   * the PUBLISHED (community) layer is open to every registered account, so
 #     there only ``private`` hides a configuration (the route settles the die);
 #   * an unreadable file is treated as PRIVATE (fail closed), a MISSING file is
@@ -495,7 +497,10 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
         return True
     lay = _die_layer_of(die, layer)
     if lay == "workspace":
-        return True                             # the caller's own copy is theirs
+        if _own_workspace_file(die, cfg, path):
+            return True                         # the caller's own copy is theirs
+        # no copy here: the name can only mean what the layers behind hold
+        return all(config_visible(access, d, cfg, p, layer=l) for d, p, l in _config_behind(die, cfg))
     if config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset()):
         return True
     status = file_visibility(path) if path is not None else config_visibility(die, cfg)
@@ -510,6 +515,60 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
             hit = _die_open_memo[str(die)] = die_open(access, die)
         return hit
     return die_open(access, die)
+
+
+def _own_workspace_file(die: str, cfg: str, path=None) -> bool:
+    try:
+        from motor_ai_sim.routes import family as _fam
+        return Path(str(path) if path is not None else _fam._dies_dir() / str(die) / f"{cfg}.yaml").is_file()
+    except Exception:                           # noqa: BLE001 - bad name: nothing of theirs
+        return False
+
+
+def _config_behind(die: str, cfg: str) -> list:
+    """``[(die as that layer addresses it, file, layer)]``: the configuration files the layers BEHIND the caller's workspace
+    hold under this name.  The shared die of the plain name counts even when the caller's catalog does not resolve it,
+    because the shared result ledgers are keyed by that name all the same."""
+    try:
+        from motor_ai_sim import workspace as _WS
+        from motor_ai_sim.routes import family as _fam
+        out = []
+        src = _WS.source_die_dir(str(die))
+        if src is not None:
+            out.append((str(die), Path(str(src)) / f"{cfg}.yaml", str(_fam._classify_die_dir(Path(str(src)))[0])))
+        plain = _WS.split_published_label(str(die))[0]
+        shared = Path(str(_WS.shared_root())) / "dies" / plain / f"{cfg}.yaml"
+        if all(row[1] != shared for row in out):
+            out.append((plain, shared, _WS.LAYER_SHARED))
+        return [row for row in out if row[1].is_file()]
+    except Exception:                           # noqa: BLE001 - a bad name holds nothing
+        return []
+
+
+def _reads_as_process() -> bool:
+    """No caller to refuse: a CLI, a bare background thread, or a stored answer filtered per request afterwards."""
+    return _PROCESS_VIEW.get() or not request_is_bound()
+
+
+def read_through_allowed(die: str, cfg: str, access: Optional[dict] = None) -> bool:
+    """May the current caller read what the layers behind their workspace STORE for ``<die>/<cfg>`` (results, fields, run
+    sidecars)?  Those stores are keyed by name, so the workspace's own copy of that name proves nothing: only a configuration
+    behind it that the caller may see opens them.  A die the caller reads straight from a shared layer has passed the ordinary
+    gate already (``config_visible``)."""
+    if _reads_as_process():
+        return True
+    acc = access if access is not None else catalog_access(None)
+    if acc.get("is_admin") or _die_layer_of(str(die)) != "workspace":
+        return True
+    behind = _config_behind(str(die), str(cfg))
+    return bool(behind) and all(config_visible(acc, d, str(cfg), p, layer=l) for d, p, l in behind)
+
+
+def namesake_hidden(access: dict, die: str, cfg: str) -> bool:
+    """Does a layer behind the caller's workspace hold a configuration of this name that the caller may not see?"""
+    if access.get("is_admin") or _die_layer_of(str(die)) != "workspace":
+        return False
+    return not all(config_visible(access, d, str(cfg), p, layer=l) for d, p, l in _config_behind(str(die), str(cfg)))
 
 
 def config_index() -> dict:
@@ -550,8 +609,30 @@ def hidden_config_names(access: dict) -> set:
     if access.get("is_admin"):
         return set()
     memo: dict = {}
-    return {k for k, (die, cfg, path, layer) in config_index().items()
-            if not config_visible(access, die, cfg, path, layer=layer, _die_open_memo=memo)}
+    hidden = {k for k, (die, cfg, path, layer) in config_index().items()
+              if not config_visible(access, die, cfg, path, layer=layer, _die_open_memo=memo)}
+    return hidden | _hidden_behind_workspace(access)
+
+
+def _hidden_behind_workspace(access: dict) -> set:
+    """The same names for a die the caller has a workspace copy of: the copy holds only what it may see, and a catalog card
+    names the configuration behind it."""
+    out: set = set()
+    try:
+        from motor_ai_sim import workspace as _WS
+        from motor_ai_sim.routes import family as _fam
+        for e in _fam._iter_die_entries():
+            die = str(e["name"])
+            src = _WS.source_die_dir(die) if str(e.get("layer") or "") == "workspace" else None
+            if src is None:
+                continue
+            for f in Path(str(src)).glob("*.yaml"):
+                if f.name != "die.yaml" and not config_visible(
+                        access, die, f.stem, f, layer=str(_fam._classify_die_dir(Path(str(src)))[0])):
+                    out.add(f"{die} {f.stem}".casefold())
+    except Exception:                           # noqa: BLE001 - a listing, never fatal
+        pass
+    return out
 
 
 def drop_private_config_cards(cards: list, access: dict) -> list:
@@ -586,7 +667,11 @@ def may_see_config(access: dict, die: str, cfg: Optional[str]) -> bool:
     """
     if not may_see_die(access, die):
         return False
-    return not cfg or config_visible(access, die, cfg)
+    if not cfg:
+        return True
+    # What this question opens is often keyed by the name in a shared store (a built 3-D model, a catalog card), so a
+    # workspace copy under the name of a configuration hidden from the caller does not answer it.
+    return config_visible(access, die, cfg) and not namesake_hidden(access, die, cfg)
 
 
 def config_allowed(access: dict, die: str, cfg: Optional[str]) -> bool:

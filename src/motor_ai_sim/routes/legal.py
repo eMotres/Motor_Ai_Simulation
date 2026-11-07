@@ -85,7 +85,7 @@ def accept_agreement(request: Request, body: dict = Body(default={}), authorizat
     """The Platform Agreement at the start of a simulation (owner 2026-11-01).  The label of the box carries the FREE exchange and the
     irreversibility sentence (or, for PRIVATE, the no-training sentence); the mode is chosen explicitly.  PRIVATE records the acceptance
     with mode PRIVATE AND places the no-training hold on the account at once (platform_agreement holds, agreement section 3.4): the
-    account may then simulate, its data are held out of training, and the team contacts the person about the fee."""
+    account may then simulate, its data are held out of training, and the team hears of it at once (audit line + internal staff mail)."""
     email, role = _caller(authorization)
     body = body if isinstance(body, dict) else {}
     if body.get("accept_agreement") is not True or str(body.get("agreement_version") or "").strip() != LT.AGREEMENT_PUBLIC_VERSION:
@@ -113,7 +113,12 @@ def accept_agreement(request: Request, body: dict = Body(default={}), authorizat
         raise HTTPException(status_code=503, detail="The acceptance could not be stored; nothing was accepted. Try again later.")
     out = {"ok": True, "record_id": r["id"], "mode": mode, "status": LT.status_for(email, role)}
     if mode == "PRIVATE":
+        from motor_ai_sim import platform_agreement as PA
         out["hold"] = _hold_private(email, r["id"])
+        if not PA.scope_of(email, role)["exempt"]:              # staff's own tries send nothing, like a staff project
+            PA.notify_private_request(email, key=PA.hold_key(email=email), company=r.get("business_name"), record_id=r["id"],
+                                      version=r["agreement_public_version"], country=r.get("country"), capacity=r.get("capacity"),
+                                      source=r["source"], hold=out["hold"])
     return out
 
 

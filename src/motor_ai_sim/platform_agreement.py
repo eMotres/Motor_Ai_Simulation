@@ -874,6 +874,32 @@ def public_record(r: dict) -> dict:
                                   "ip", "text_sha256")}
 
 
+# -- a PRIVATE request reaches the team -------------------------------------------
+
+def notify_private_request(email: str, *, key: str, company: Any, record_id: str, version: str, country: Any = "", capacity: Any = "",
+                           source: str = "", hold: Optional[bool] = None) -> None:
+    """The dialogs tell the person that our team will contact them, so a request must reach the team at once: an audit line (Admin > Logs)
+    and the internal staff mail of a new project.  Nothing goes to the customer.  Mail trouble never blocks the acceptance."""
+    from motor_ai_sim import admin_audit as AA
+    who = " ".join(str(company or email).split())[:80]
+    AA.record(email, "agreement.private_request", key, subject=email,
+              details={"record": record_id, "version": version, "company": who, "country": country, "capacity": capacity, "source": source,
+                       "no_training_hold": hold})
+    try:
+        from motor_ai_sim import auth_email as E
+        to = N.admin_address()
+        if not to:
+            return
+        rows = [("Company", who), ("Account", email), ("Country", country), ("Capacity", capacity), ("Agreement version", version),
+                ("Record", record_id)]
+        if hold is not None:
+            rows.append(("No-training hold", "placed" if hold else "NOT placed: place it in Admin"))
+        body = "\n".join(["PRIVATE requested", ""] + ["%s: %s" % (k, v) for k, v in rows if v] + ["", E.app_url(), ""])
+        E.send(to, "[AeroStator] PRIVATE requested: %s" % who, body, kind="project-admin")
+    except Exception:                                                  # noqa: BLE001 - never block the customer
+        log.warning("platform_agreement: staff mail about a PRIVATE request failed", exc_info=True)
+
+
 # -- the dataset exclusion list -------------------------------------------------
 
 def _newest_by_key() -> dict[str, dict]:

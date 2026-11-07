@@ -57,6 +57,7 @@ const AdminAuditSection: React.FC = () => {
                     <span>{r.action}</span>
                   </Tooltip>
                   {r.break_glass && <Chip label="break-glass" size="small" sx={{ ml: 1, height: 16, fontSize: 9, color: '#fbbf24' }} />}
+                  {r.action === 'agreement.private_request' && <Chip label="our team contacts" size="small" sx={{ ml: 1, height: 16, fontSize: 9, color: '#fbbf24' }} />}
                 </TableCell>
                 <TableCell sx={{ color: 'var(--text-2)' }}>{r.target}</TableCell>
               </TableRow>

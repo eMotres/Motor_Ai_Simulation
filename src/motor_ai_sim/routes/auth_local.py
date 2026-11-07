@@ -49,7 +49,7 @@ from motor_ai_sim import users as U
 from motor_ai_sim import admin_audit as _AA
 from motor_ai_sim import email_domain as ED
 from motor_ai_sim.api_errors import ApiError
-from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
+from motor_ai_sim.auth import require_admin, resolve_user_detail
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -99,6 +99,15 @@ def _ip(request: Optional[Request]) -> str:
     from a trusted proxy (``motor_ai_sim.client_ip``, env TRUSTED_PROXIES)."""
     from motor_ai_sim import client_ip as _cip
     return _cip.from_request(request) or "?"
+
+
+def _revoke_access(email: str, keep_sid: str = "") -> dict:
+    """The password of an account changed: everything that was signed in or authorized under the old one ends - its sessions
+    (but ``keep_sid``, the session making the change), its agent keys and its OAuth grants."""
+    from motor_ai_sim import agent_keys as K
+    from motor_ai_sim import oauth as O
+    return {"sessions": S.revoke_all(email, keep_sid=keep_sid), "agent_keys": K.revoke_all_keys(email),
+            "oauth_grants": O.revoke_all_grants(email)}
 
 
 def _locked(email: str, ip: str) -> None:
@@ -524,11 +533,11 @@ def reset_confirm(req: ResetReq, request: Request):
         raise HTTPException(422, detail=str(e))
     except KeyError:
         raise HTTPException(400, detail="this link is invalid")
-    n = S.revoke_all(email)
+    n = _revoke_access(email)
     E.LOGIN_ACCOUNT.clear(email)
     S.record_event("password_reset", email=email, reason=f"revoked {n}",
                    ip=_ip(request), path="/api/auth/reset/confirm")
-    log.info("auth: password reset for %s, %d session(s) revoked", email, n)
+    log.info("auth: password reset for %s, revoked %s", email, n)
     return {"ok": True, "email": email}
 
 
@@ -765,7 +774,7 @@ def link_reset_submit(request: Request, id: str = Form(""), t: str = Form(""), p
         U.reset_password(email, password)
     except (U.PasswordPolicyError, KeyError):
         return _invalid_page(request, "reset", email)
-    n = S.revoke_all(email)
+    n = _revoke_access(email)
     E.LOGIN_ACCOUNT.clear(email)
     S.record_event("password_reset", email=email, reason=f"revoked {n}", ip=_ip(request), path="/api/auth/link/reset")
     home, signin = _urls(lang)
@@ -968,6 +977,7 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
         before = (U.get_user(email) or {}).get("role", "user")
         if req.password is not None:
             U.set_password(email, req.password)
+            _revoke_access(email)
         if req.nda_signed is not None:
             _AA.record(_AA.actor_of(_admin), "user.nda", str(email), subject=str(email),
                        details={"signed": req.nda_signed, "date": req.nda_date})
@@ -1013,9 +1023,12 @@ class SelfPassword(BaseModel):
 
 
 @router.post("/password")
-def change_password(req: SelfPassword,
+def change_password(req: SelfPassword, request: Request,
                     authorization: str = Header(default=None)):
-    me = resolve_user(authorization)
+    """Change the caller's own password.  Every other session, agent key and OAuth grant of the account ends; the session making
+    the change stays signed in."""
+    det = resolve_user_detail(authorization)
+    me = det["user"]
     if me is None or not me.get("email"):
         raise HTTPException(401, detail="sign in first")
     if U.check_login(me["email"], req.old_password) is None:
@@ -1025,7 +1038,11 @@ def change_password(req: SelfPassword,
         U.set_password(me["email"], req.new_password)
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
-    return {"ok": True}
+    n = _revoke_access(me["email"], keep_sid=det["sid"] or "")
+    ip, ua = _who(request)
+    S.record_event("password_changed", email=me["email"], sid=det["sid"] or "", reason=f"revoked {n}",
+                   ip=ip, user_agent=ua, path="/api/auth/password")
+    return {"ok": True, "revoked": n}
 
 
 # ── sessions (own) ───────────────────────────────────────────────────────────

@@ -627,9 +627,10 @@ def test_a_registered_user_saves_a_duty_into_their_own_workspace(
 
 def test_a_registered_user_creates_a_die_in_their_own_workspace(
         env, shared_is_read_only):
-    new = "BOBS DIE 30"
+    new = "BOBS DIE 30 bob"
     r = client.post("/api/family/die", headers=env["b"], json={"name": new})
     assert r.status_code == 200, r.text
+    assert r.json()["die"] == new
     assert (_ws_die(env, B, die=new) / "die.yaml").is_file()
     assert not (env["shared"] / "dies" / new).exists()
     # …and it is B's alone: the admin's catalog does not grow a die B made.

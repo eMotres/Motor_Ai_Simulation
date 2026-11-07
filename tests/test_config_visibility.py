@@ -601,7 +601,8 @@ def test_duplicating_a_die_does_not_copy_the_hidden_configuration(env):
     r = client.post(f"/api/family/die/{DIE}/duplicate", json={"name": "COPY OF CFGVIS"}, headers=env["eng"])
     assert r.status_code == 200, r.text
     assert r.json()["configs"] == [PUB]
-    ws_dies = list((env["tmp"] / "srv" / "workspaces").glob("*/dies/COPY OF CFGVIS/*.yaml"))
+    assert r.json()["die"] == "COPY OF CFGVIS eng"
+    ws_dies = list((env["tmp"] / "srv" / "workspaces").glob("*/dies/COPY OF CFGVIS eng/*.yaml"))
     assert sorted(p.stem for p in ws_dies if p.stem != "die") == [PUB]
     r = client.post(f"/api/family/die/{DIE}/duplicate", json={"name": "COPY OF CFGVIS ADMIN"}, headers=env["admin"])
     assert r.status_code == 200 and sorted(r.json()["configs"]) == [PUB, PRIV]
@@ -970,10 +971,107 @@ def test_create_and_rename_follow_the_same_rule(env):
 
 def test_a_die_wholly_the_accounts_own_keeps_the_asked_name(env):
     _skip_unless_layered(env)
-    assert client.post(f"/api/family/die/{DIE}/duplicate", json={"name": "MY OWN DIE"}, headers=env["eng"]).status_code == 200
-    r = client.post(f"/api/family/config/MY OWN DIE/{PUB}/duplicate", json={"name": PRIV}, headers=env["eng"])
+    made = client.post(f"/api/family/die/{DIE}/duplicate", json={"name": "MY OWN DIE"}, headers=env["eng"])
+    assert made.status_code == 200 and made.json()["die"] == "MY OWN DIE eng"
+    r = client.post(f"/api/family/config/MY OWN DIE eng/{PUB}/duplicate", json={"name": PRIV}, headers=env["eng"])
     assert r.status_code == 200 and r.json()["config"] == PRIV
-    assert client.get(f"/api/family/payload/MY OWN DIE/{PRIV}", headers=env["eng"]).status_code == 200
+    assert client.get(f"/api/family/payload/MY OWN DIE eng/{PRIV}", headers=env["eng"]).status_code == 200
+
+
+# ── die names: the answer never depends on a die the caller cannot see ───────
+
+HIDDEN_DIE = "HIDDEN 30"
+
+
+def _hidden_die(env, name: str = HIDDEN_DIE) -> Path:
+    """A shared die the non-admin accounts hold no grant for."""
+    _skip_unless_layered(env)
+    d = env["dies_dir"] / name
+    d.mkdir()
+    (d / "die.yaml").write_text(_die_doc(name), encoding="utf-8")
+    (d / f"{PUB}.yaml").write_text(_cfg_doc(name, PUB, True), encoding="utf-8")
+    return d
+
+
+def _make_die(env, how: str, name: str, who: str = "eng"):
+    if how == "create":
+        return client.post("/api/family/die", json={"name": name}, headers=env[who])
+    if how == "duplicate":
+        return client.post(f"/api/family/die/{DIE}/duplicate", json={"name": name}, headers=env[who])
+    if how == "save_as_new":
+        return client.post("/api/family/save_as_new_die", json={"name": name, "config": "Lnew", "duty": DUTY}, headers=env[who])
+    assert how == "rename"
+    own = client.post("/api/family/die", json={"name": f"OWN {name} eng"}, headers=env[who])
+    assert own.status_code == 200, own.text
+    return client.patch(f"/api/family/die/OWN {name} eng", json={"name": name}, headers=env[who])
+
+
+@pytest.mark.parametrize("how", ["create", "duplicate", "save_as_new", "rename"])
+def test_a_hidden_die_name_answers_like_a_free_one(env, how, monkeypatch):
+    from motor_ai_sim.routes import family as fam
+    # (the save's duty step reads the live build of this throwaway catalog; the name is settled before it)
+    monkeypatch.setattr(fam, "upsert_duty", lambda *a, **k: {"config": "Lnew"})
+    hidden_dir = _hidden_die(env)
+    before = sorted(p.name for p in hidden_dir.iterdir())
+    hidden, free = _make_die(env, how, HIDDEN_DIE), _make_die(env, how, "FREE 30")
+    assert hidden.status_code == free.status_code == 200, hidden.text + free.text
+    assert hidden.json()["die"] == f"{HIDDEN_DIE} eng" and free.json()["die"] == "FREE 30 eng"
+    assert hidden.json().keys() == free.json().keys()
+    own = Path(_workspace_die(env, ENG)).parent
+    assert (own / f"{HIDDEN_DIE} eng" / "die.yaml").is_file()
+    assert not (own / HIDDEN_DIE).exists(), "an account's die never takes the name of a catalog die it cannot see"
+    assert sorted(p.name for p in hidden_dir.iterdir()) == before
+
+
+def test_a_hidden_die_stays_closed_to_the_account_that_asked_its_name(env):
+    _hidden_die(env)
+    assert _make_die(env, "create", HIDDEN_DIE).status_code == 200
+    assert client.get(f"/api/family/payload/{HIDDEN_DIE}/{PUB}", headers=env["eng"]).status_code == 404
+    assert HIDDEN_DIE not in [d["name"] for d in client.get("/api/family/tree", headers=env["eng"]).json()["dies"]]
+
+
+@pytest.mark.parametrize("how", ["create", "duplicate", "save_as_new"])
+def test_the_duplicate_check_still_refuses_a_name_the_caller_can_see(env, how):
+    _skip_unless_layered(env)
+    catalog = _make_die(env, how, DIE)                                      # a catalog die the account is granted
+    assert catalog.status_code == 409 and "already exists" in catalog.json()["detail"]
+    assert client.post("/api/family/die", json={"name": "MINE 30"}, headers=env["eng"]).status_code == 200
+    own = _make_die(env, how, "MINE 30 eng")                                # its own die
+    assert own.status_code == 409 and "already exists" in own.json()["detail"]
+    again = _make_die(env, how, "MINE 30")                                  # asked without the suffix: the same own die
+    assert again.status_code == 409 and "MINE 30 eng" in again.json()["detail"]
+
+
+def test_a_name_with_the_account_suffix_stays_as_asked_for_a_die(env):
+    _skip_unless_layered(env)
+    for name in ("MINE eng", "MINE eng 3"):
+        r = client.post("/api/family/die", json={"name": name}, headers=env["eng"])
+        assert r.status_code == 200 and r.json()["die"] == name
+
+
+def test_a_catalog_die_under_the_accounts_own_suffix_is_never_shadowed(env):
+    hidden_dir = _hidden_die(env, "HIDDEN 30 eng")
+    r = client.post("/api/family/die", json={"name": HIDDEN_DIE}, headers=env["eng"])
+    assert r.status_code == 200 and r.json()["die"] == "HIDDEN 30 eng 2"
+    own = Path(_workspace_die(env, ENG)).parent
+    assert not (own / hidden_dir.name).exists()
+
+
+def test_an_admin_names_a_die_exactly_and_is_told_it_exists(env):
+    _hidden_die(env)
+    assert client.post("/api/family/die", json={"name": "ADMIN 30"}, headers=env["admin"]).json()["die"] == "ADMIN 30"
+    taken = client.post("/api/family/die", json={"name": HIDDEN_DIE}, headers=env["admin"])
+    assert taken.status_code == 409 and "already exists" in taken.json()["detail"]
+    duplicate = client.post(f"/api/family/die/{DIE}/duplicate", json={"name": HIDDEN_DIE}, headers=env["admin"])
+    assert duplicate.status_code == 409
+
+
+def test_a_hidden_catalog_die_with_a_grant_counts_as_seen(env):
+    _hidden_die(env)
+    from motor_ai_sim import users as U
+    U.set_motor_grants(ENG, all_motors=False, dies=[DIE, HIDDEN_DIE])
+    r = client.post("/api/family/die", json={"name": HIDDEN_DIE}, headers=env["eng"])
+    assert r.status_code == 409 and "already exists" in r.json()["detail"]
 
 
 def test_an_admin_names_a_catalog_copy_exactly(env):

@@ -293,14 +293,14 @@ def test_admin_deletes_a_published_die_by_moving_it_to_trash(env):
     from motor_ai_sim import workspace as W
 
     # A publishes a die out of their own workspace (the ordinary flow).
-    r = client.post("/api/family/die", headers=env["a"], json={"name": "ALICEDIE 30"})
+    r = client.post("/api/family/die", headers=env["a"], json={"name": "ALICEDIE 30 alice"})
     assert r.status_code == 200, r.text
-    rp = client.post("/api/family/publish/ALICEDIE 30", headers=env["a"], json={})
+    rp = client.post("/api/family/publish/ALICEDIE 30 alice", headers=env["a"], json={})
     assert rp.status_code == 200, rp.text
     label = rp.json()["label"]
     assert label.endswith(f"· by {A_NAME}")
 
-    pub_dir = env["published"] / env["ids"][A] / "ALICEDIE 30"
+    pub_dir = env["published"] / env["ids"][A] / "ALICEDIE 30 alice"
     assert pub_dir.is_dir()
 
     rd = client.delete(f"/api/family/die/{label}", headers=env["admin"])
@@ -310,7 +310,7 @@ def test_admin_deletes_a_published_die_by_moving_it_to_trash(env):
     # not unlinked — moved aside, reversibly
     assert not pub_dir.exists()
     trash = env["published"] / ".trash" / env["ids"][A]
-    moved = list(trash.glob("ALICEDIE 30-*"))
+    moved = list(trash.glob("ALICEDIE 30 alice-*"))
     assert len(moved) == 1, "expected exactly one trashed copy"
     assert (moved[0] / "die.yaml").is_file()
 
@@ -319,15 +319,15 @@ def test_admin_deletes_a_published_die_by_moving_it_to_trash(env):
 
 
 def test_non_admin_cannot_delete_someone_elses_published_die(env):
-    r = client.post("/api/family/die", headers=env["a"], json={"name": "ALICEDIE2 30"})
+    r = client.post("/api/family/die", headers=env["a"], json={"name": "ALICEDIE2 30 alice"})
     assert r.status_code == 200, r.text
-    label = client.post("/api/family/publish/ALICEDIE2 30",
+    label = client.post("/api/family/publish/ALICEDIE2 30 alice",
                         headers=env["a"], json={}).json()["label"]
 
     rd = client.delete(f"/api/family/die/{label}", headers=env["b"])
     assert rd.status_code == 403, rd.text
     assert "catalog admin" in rd.json()["detail"]
-    assert (env["published"] / env["ids"][A] / "ALICEDIE2 30").is_dir()
+    assert (env["published"] / env["ids"][A] / "ALICEDIE2 30 alice").is_dir()
 
 
 # ── workspace layer: unchanged, and honest about a shadowed shared die ───────

@@ -537,7 +537,7 @@ const FamilyCatalog: React.FC<{
       title: 'New die from the current geometry',
       label: 'Die name',
       initial,
-      onSubmit: (name) => mutate(`die '${name}' created`,
+      onSubmit: (name) => mutate((d) => `die '${String(d?.die || name)}' created`,
         () => post('/api/family/die', { name })),
     });
   };
@@ -664,7 +664,7 @@ const FamilyCatalog: React.FC<{
     // transaction; `manual` lists deploy files it cannot rewrite - say so, they are the operator's to move.
     onSubmit: (name) => { if (name !== die) mutate((data) => {
       const manual = Array.isArray(data?.manual) ? data.manual.length : 0;
-      return `die renamed to '${name}'` + (manual ? ` - ${manual} deploy file(s) still name '${die}'` : '');
+      return `die renamed to '${String(data?.die || name)}'` + (manual ? ` - ${manual} deploy file(s) still name '${die}'` : '');
     }, () =>
       fetch(`${API}/api/family/die/${encodeURIComponent(die)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -677,7 +677,7 @@ const FamilyCatalog: React.FC<{
       title: `Duplicate die '${die}'`,
       label: 'Name of the copy', initial,
       hint: 'Copies the stamped geometry + EVERY configuration with its duties and results; the copy starts unlocked',
-      onSubmit: (name) => mutate(`die '${die}' duplicated as '${name}'`,
+      onSubmit: (name) => mutate((d) => `die '${die}' duplicated as '${String(d?.die || name)}'`,
         () => post(`/api/family/die/${encodeURIComponent(die)}/duplicate`, { name })),
     });
   };

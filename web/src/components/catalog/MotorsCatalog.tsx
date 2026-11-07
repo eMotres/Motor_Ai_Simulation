@@ -144,7 +144,8 @@ const MotorsCatalog: React.FC = () => {
           body: JSON.stringify({ name }),
         });
         if (!r.ok) { setDieMsg(`\u2717 ${(await r.json()).detail ?? `HTTP ${r.status}`}`); return; }
-        setDieMsg(`\u2713 die '${name}' created`);
+        const made = await r.json().catch(() => null);
+        setDieMsg(`\u2713 die '${String(made?.die || name)}' created`);
         window.dispatchEvent(new CustomEvent('family-changed'));
       } catch (e) { setDieMsg(`\u2717 ${e}`); }
     },

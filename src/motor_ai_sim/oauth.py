@@ -44,6 +44,13 @@ REQUEST_TTL_S = 900               # pending consent: 15 min
 SIGNUP_REQUEST_TTL_S = 1800       # 30 min
 SIGNUP_MAX_AGE_S = 3600           # 1 h
 MAX_CLIENTS = 500                 # DCR is anonymous: cap the table
+#: A full table makes room only from clients at least this old, with no live grant and no authorization in progress.  A fresh
+#: registration is about to be used.  The per-IP limit (20 an hour, auth_email.OAUTH_REGISTER_IP) times this age stays under
+#: MAX_CLIENTS, so one address cannot keep the table full on its own.
+CLIENT_EVICT_MIN_AGE_S = 24 * 3600
+#: Pending consents across the whole server, each rewriting this store.  Fifteen minutes at the per-IP limit is 30 of them;
+#: real use is a few.  Above the cap a new authorization is refused, the pending ones stay.
+MAX_PENDING_REQUESTS = 1000
 CONSENT_PATH = "/agent-consent"
 _RID_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 
@@ -233,11 +240,14 @@ def register_client(meta: Dict[str, Any]) -> Dict[str, Any]:
 
     def _fn(d):
         if len(d["clients"]) >= MAX_CLIENTS:
-            # drop the oldest client that holds no live grant
+            # drop the oldest client that nothing is using
             live = {g.get("client_id") for g in d["grants"].values()
                     if not g.get("revoked_at")}
+            live |= {r.get("client_id") for r in d["requests"].values()}
+            live |= {r.get("client_id") for r in d["codes"].values()}
             idle = sorted((c for c in d["clients"].values()
-                           if c["client_id"] not in live),
+                           if c["client_id"] not in live
+                           and now - (c.get("client_id_issued_at") or 0) >= CLIENT_EVICT_MIN_AGE_S),
                           key=lambda c: c.get("client_id_issued_at") or 0)
             if not idle:
                 raise OAuthError("temporarily_unavailable", "client table full", 503)
@@ -328,7 +338,13 @@ def start_authorization(q: Dict[str, str]) -> str:
            "scopes": scope, "code_challenge": chal,
            "resource": q.get("resource") or resource_url(),
            "created_at": _now(), "expires_at": _now() + REQUEST_TTL_S}
-    _mutate(lambda d: d["requests"].__setitem__(rid, rec))
+
+    def _fn(d):
+        now = _now()
+        if sum(1 for r in d["requests"].values() if (r.get("expires_at") or 0) >= now) >= MAX_PENDING_REQUESTS:
+            raise back("temporarily_unavailable", "too many authorizations in progress; try again in a few minutes")
+        d["requests"][rid] = rec
+    _mutate(_fn)
     return rid
 
 

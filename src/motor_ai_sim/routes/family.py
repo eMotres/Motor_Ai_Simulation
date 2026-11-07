@@ -6174,10 +6174,13 @@ def get_config_coil(die: str, cfg: str, authorization: str = Header(default=None
     """The configuration's own coil keys (``coil_overrides``), the die's values
     beside them, and the coil + k_end this configuration is billed at."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization, cfg)
+    _require_die_access(die, authorization, cfg, "pair")
     d = _load_yaml(_die_file(die), "die")
-    c = _load_yaml(_cfg_file(die, cfg), "configuration")
-    return _config_coil_view(die, cfg, d, c)
+    cfile = _cfg_file(die, cfg)
+    if not cfile.is_file():
+        # the words the app-wide gate (motor_access._config_path_check) gives a hidden configuration on this path
+        raise HTTPException(404, detail=_config_missing_detail(die, cfg, "pair"))
+    return _config_coil_view(die, cfg, d, _load_yaml(cfile, "configuration"))
 
 
 def set_config_coil(die: str, cfg: str, values: Dict[str, Any], *, source: str = "form") -> Dict[str, Any]:
@@ -6187,6 +6190,10 @@ def set_config_coil(die: str, cfg: str, values: Dict[str, Any], *, source: str =
     check here: the callers make it.  422 for an unknown key or a value out of
     range (nothing is written), 423 for a locked configuration."""
     from motor_ai_sim import coil_build as _cb
+    # the files first: a bad value must not answer differently for a missing configuration than the gate does for a hidden one
+    d = _load_yaml(_die_file(die), "die")
+    cfile = _cfg_file(die, cfg)
+    c = _load_yaml(cfile, "configuration")
     bad, clean = [], {}
     for k, v in (values or {}).items():
         if k not in _cb.CONFIG_COIL_KEYS:
@@ -6203,9 +6210,6 @@ def set_config_coil(die: str, cfg: str, values: Dict[str, Any], *, source: str =
             clean[k] = val
     if bad:
         raise HTTPException(422, detail={"error": "invalid coil values", "invalid_parameters": bad})
-    d = _load_yaml(_die_file(die), "die")
-    cfile = _cfg_file(die, cfg)
-    c = _load_yaml(cfile, "configuration")
     if c.get("locked") is True and clean:
         raise HTTPException(423, detail={
             "error": "configuration is locked", "die": die, "config": cfg,

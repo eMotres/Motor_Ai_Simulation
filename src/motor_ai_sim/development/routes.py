@@ -126,6 +126,10 @@ def _summary(project: dict, user: dict) -> dict:
         projection.pop("project_motor_grants", None)
         projection.pop("grant_removal_candidates", None)
         projection.pop("motor_history", None)
+    if not access.is_engineer(user):
+        # who holds a project grant, by address: a grant exists only for an account, so these ledgers are staff's
+        projection.pop("project_motor_grants", None)
+        projection.pop("grant_removal_candidates", None)
     projection["can_edit"] = bool(engineer)
     projection["can_edit_spec"] = access.can_edit_spec(user, project)
     # the shared quote (owner 2026-11-03): only a flag here, never its numbers; it lives in GET /{id}/quote
@@ -1194,7 +1198,12 @@ async def add_member(request: Request, project_id: str):
     entry, found = _apply_member(project_id, email, role)
     account = found
     store.append_audit(project_id, _email(user), "invite", "member", email, {"role": role, "pending": not bool(account)})
-    return {"member": entry if account else None, "pending": not bool(account)}
+    answer = {"invited": True, "email": email, "role": role}
+    if access.is_engineer(user):
+        # staff already see members and pending invites side by side; for anybody else the answer is the same whether the
+        # address has an account or not
+        answer.update(member=entry if account else None, pending=not bool(account))
+    return answer
 
 
 @router.delete("/{project_id}/members")

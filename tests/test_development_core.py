@@ -526,6 +526,53 @@ def test_pending_invite_requires_explicit_reinvite_after_account_creation(projec
     assert not store.get_project("alpha")["pending_invites"]
 
 
+def _invite_as(project_root, monkeypatch, inviter_role):
+    """A project owner of the given account role, an address with an account and one without."""
+    monkeypatch.setattr(auth, "resolve_user", lambda token: {"email": "eng@example.test", "role": inviter_role} if token else None)
+    known = {"known@example.test": {"email": "known@example.test", "email_verified": True}}
+    monkeypatch.setattr(users, "get_user", lambda email: known.get(email, {"email": email, "email_verified": True}
+                                                                  if email == "eng@example.test" else None))
+    store.create_project(make_project(members=[{"email": "eng@example.test", "role": "owner"}]))
+    app = FastAPI(); app.include_router(router)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer dev"}
+    return lambda email: client.post("/api/projects/alpha/members", headers=headers, json={"email": email, "role": "customer"})
+
+
+def test_a_project_owner_gets_one_answer_whether_the_address_has_an_account_or_not(project_root, monkeypatch):
+    invite = _invite_as(project_root, monkeypatch, "user")
+    known, unknown = invite("known@example.test"), invite("nobody@example.test")
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == {"invited": True, "email": "known@example.test", "role": "customer"}
+    assert unknown.json() == {"invited": True, "email": "nobody@example.test", "role": "customer"}
+    project = store.get_project("alpha")                                   # the invitations themselves still work as before
+    assert {"email": "known@example.test", "role": "customer"} in project["members"]
+    assert [m["email"] for m in project["pending_invites"]] == ["nobody@example.test"]
+
+
+def test_a_project_owner_reads_no_account_list_from_the_project(project_root, monkeypatch):
+    invite = _invite_as(project_root, monkeypatch, "user")
+    assert invite("known@example.test").status_code == 200
+    assert invite("nobody@example.test").status_code == 200
+    project = store.get_project("alpha")
+    project["project_motor_grants"] = {"DIE::A": {"grant_key": "DIE/A", "emails": ["known@example.test"]}}
+    project["grant_removal_candidates"] = [{"email": "known@example.test", "die": "DIE", "config": "A", "reason": "x"}]
+    store.save_json("alpha", "project.json", project)
+    app = FastAPI(); app.include_router(router)
+    view = TestClient(app).get("/api/projects/alpha", headers={"Authorization": "Bearer dev"})
+    assert view.status_code == 200
+    assert "known@example.test" not in view.text and "nobody@example.test" not in view.text
+    assert view.json()["can_edit"] is True                                 # still the project's owner
+
+
+@pytest.mark.parametrize("staff", ["engineer", "admin"])
+def test_staff_still_see_whether_an_invite_is_pending(project_root, monkeypatch, staff):
+    invite = _invite_as(project_root, monkeypatch, staff)
+    known, unknown = invite("known@example.test").json(), invite("nobody@example.test").json()
+    assert known["pending"] is False and known["member"]["email"] == "known@example.test"
+    assert unknown["pending"] is True and unknown["member"] is None
+
+
 def test_concurrent_submit_endpoint_has_one_winner(project_root, monkeypatch):
     current = {"email": "eng@example.test", "role": "user"}
     monkeypatch.setattr(auth, "resolve_user", lambda token: dict(current) if token else None)

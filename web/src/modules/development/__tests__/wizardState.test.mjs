@@ -66,6 +66,46 @@ t('serialized autosaves advance revision and never write a stale project token',
   assert.equal(writes.length, 2);
 });
 
+t('after Apply the form takes the server draft silently when nothing was typed', () => {
+  const base = { schema_version: 2, fields: { a: { value: 1 } }, production: {} };
+  const server = { schema_version: 2, fields: { a: { value: 1 }, b: { value: 'pump' } }, production: {} };
+  const out = W.mergeDraftAfterApply(base, base, server);
+  assert.equal(out.unsaved, false);
+  assert.equal(out.draft, server);
+});
+
+t('after Apply text typed meanwhile stays, on top of the applied value, and is marked for saving', () => {
+  const base = { schema_version: 2, fields: { a: { value: 1 } }, production: { tests: { value: 'x' } }, mission_profile: [] };
+  const local = { schema_version: 2, fields: { a: { value: 1 }, note: { value: 'Please keep it quiet' } }, production: {}, mission_profile: [{ id: 1 }] };
+  const server = { schema_version: 2, fields: { a: { value: 1 }, b: { value: 'pump' } }, production: { tests: { value: 'x' }, other: { value: 2 } }, mission_profile: [] };
+  const out = W.mergeDraftAfterApply(base, local, server);
+  assert.equal(out.unsaved, true);
+  assert.deepEqual(out.draft.fields, { a: { value: 1 }, b: { value: 'pump' }, note: { value: 'Please keep it quiet' } });
+  assert.deepEqual(out.draft.production, { other: { value: 2 } });      // the field cleared by hand stays cleared, the server's other one comes in
+  assert.deepEqual(out.draft.mission_profile, [{ id: 1 }]);
+});
+
+t('after Apply text typed into the proposed field wins over the proposal', () => {
+  const base = { fields: { b: { value: 'old' } } };
+  const local = { fields: { b: { value: 'mine' } } };
+  const out = W.mergeDraftAfterApply(base, local, { fields: { b: { value: 'pump' } } });
+  assert.equal(out.unsaved, true);
+  assert.deepEqual(out.draft.fields.b, { value: 'mine' });
+});
+
+t('an equal copy of the saved draft counts as nothing typed', () => {
+  const base = { fields: { a: { value: 1 } }, production: {} };
+  const out = W.mergeDraftAfterApply(base, JSON.parse(JSON.stringify(base)), { fields: { a: { value: 1 }, b: { value: 2 } }, production: {} });
+  assert.equal(out.unsaved, false);
+  assert.deepEqual(out.draft.fields.b, { value: 2 });
+});
+
+t('the assistant Apply reloads without the review dialog, which stays for a real conflict', () => {
+  const page = readFileSync(new URL('../components/DevelopmentPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /beforeApply=\{flushBeforeApply\} onApplied=\{\(\) => \{ void reloadAfterApply\(\); \}\}/);
+  assert.match(page, /onReloadDraft=\{\(\) => void reloadDraft\(\)\}/);
+});
+
 t('failed autosave prevents the submit callback from running', async () => {
   const coordinator = W.createDraftSaveCoordinator(async () => { throw new Error('conflict'); });
   coordinator.setRevision('alpha', 7);

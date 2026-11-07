@@ -85,7 +85,19 @@ def _dump(path: Path, obj: Any) -> None:
 
 
 def _snap(work: Path, M: str) -> Dict[str, Any]:
-    return json.load(open(work / "out" / M / "snapshot.json", encoding="utf-8"))
+    snap = json.load(open(work / "out" / M / "snapshot.json", encoding="utf-8"))
+    from motor_ai_sim.passport_v1 import psimap as _PM
+    _PM.set_winding_basis(snap)
+    return snap
+
+
+def _refuse_winding_basis(snap: Dict[str, Any], task: str) -> None:
+    """Route-based tasks hand the TERMINAL current to a route that divides by sqrt(3)
+    itself; the snapshot of a delta machine holds the winding current, so these tasks
+    are not adapted yet and refuse (fail closed)."""
+    if snap.get("current_basis"):
+        raise SystemExit("%s: not adapted to the delta winding-current basis "
+                         "(snapshot current_basis) - not computed" % task)
 
 
 def _state(work: Path, M: str) -> Dict[str, Any]:
@@ -169,6 +181,7 @@ def task_coupled(work: Path, a) -> None:
     rd = snap["rated_duty"]
     from motor_ai_sim.material_context import set_request_materials
     from motor_ai_sim.routes import coupled as cp
+    _refuse_winding_basis(snap, "coupled")
     from motor_ai_sim.routes import simulation as sim
     from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
     set_request_materials({"assignment": _materials(snap), "materials": {}})
@@ -276,6 +289,7 @@ def task_cooling(work: Path, a) -> None:
     if a.prop:
         sd["propeller"] = a.prop
     snap = _snap(work, M)
+    _refuse_winding_basis(snap, "cooling")
     # The loop's thermal half reads the speed from the SHARED config (coupled
     # _preflight refuses a mismatch): this task's private copy is set to the study
     # speed before anything loads it.
@@ -406,6 +420,7 @@ def task_propanchor(work: Path, a) -> None:
     from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
     M, n, pid = a.machine, float(a.rpm), str(a.prop)
     snap = _snap(work, M)
+    _refuse_winding_basis(snap, "propanchor")
     cfg = str(_mspec(M)["config"])
     hm, st, _ = _hot_map(work, M)
     lp = st.get("loss_plan3") or st.get("loss_plan2") or st["loss_plan"]
@@ -643,6 +658,7 @@ def _route_kw(snap, *, I, g, rpm, Tm, Tc, steps):
 def task_pwm(work: Path, a) -> None:
     M, point = a.machine, a.point
     snap = _snap(work, M)
+    _refuse_winding_basis(snap, "pwm")
     hm, st, _ = _hot_map(work, M)
     from motor_ai_sim.passport_v1 import psimap as PM
     from motor_ai_sim.routes import simulation as sim
@@ -796,7 +812,8 @@ def task_demagseq(work: Path, a) -> None:
     steps = S.loss_steps(snap)
     b = S._base(snap, st, static=False)
     lp = st.get("loss_plan2") or st["loss_plan"]
-    vlim = PM.v_phase_limit(float(lp["v_dc"]), float((_mspec(M).get("controller") or {}).get("m")
+    vlim = PM.v_phase_limit(float(lp["v_dc"]), float(lp.get("m")
+                                                     or (_mspec(M).get("controller") or {}).get("m")
                                                      or 0.89))
     g_r, how_r = hm.operating_gamma(I0, n0, float(lp["R_hot_ohm"]), vlim)
     lv = [m for m in st["hot_mtpa"] if abs(m["fI"] - fI) < 1e-9]

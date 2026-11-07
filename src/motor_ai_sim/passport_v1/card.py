@@ -258,6 +258,7 @@ def loss_check_rows(recs, st, R_hot: float, snap) -> List[Dict[str, Any]]:
 def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                  machine_meta: Mapping[str, Any]) -> Dict[str, Any]:
     recs = load_records(od)
+    PM.set_winding_basis(snap)
     pp = int(round(float(snap["geometry"]["num_poles"]))) // 2
     I0 = float(snap["rated_duty"]["current_arms"])
     n0 = float(snap["rated_duty"]["rpm"])

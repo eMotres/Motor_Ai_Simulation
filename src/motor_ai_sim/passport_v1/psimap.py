@@ -36,9 +36,29 @@ def omega_e(rpm: float, pole_pairs: int) -> float:
     return 2.0 * math.pi * float(rpm) / 60.0 * int(pole_pairs)
 
 
+#: Winding-voltage factor of the snapshot the process works on: 1 for a star
+#: machine; sqrt(3) for a delta machine run on the WINDING basis (see
+#: :func:`set_winding_basis`), where the winding carries the LINE voltage.
+_WINDING_V_FACTOR = 1.0
+
+
+def set_winding_basis(snap: Any) -> None:
+    """Adopt the snapshot's current basis for :func:`v_phase_limit`.
+
+    A delta machine's snapshot is on the WINDING basis (``snap["current_basis"]``,
+    written by ``passport_pilot prepare``): currents are the winding's
+    (terminal / sqrt(3), what the route hands the solver), so psi, R, i_d, i_q and
+    the voltage the map computes are the winding's too, and the winding sees the
+    line-to-line voltage: limit m·V_dc (= sqrt(3) x the star phase limit)."""
+    global _WINDING_V_FACTOR
+    cb = (snap or {}).get("current_basis") if isinstance(snap, dict) else None
+    _WINDING_V_FACTOR = SQ3 if (cb and cb.get("delta")) else 1.0
+
+
 def v_phase_limit(v_dc: float, m: float) -> float:
-    """Linear-SVPWM phase-voltage PEAK limit: m·V_dc/√3 (spec 3.5)."""
-    return float(m) * float(v_dc) / SQ3
+    """Linear-SVPWM phase-voltage PEAK limit: m·V_dc/√3 (spec 3.5); on the
+    delta WINDING basis the winding voltage is the line voltage, m·V_dc."""
+    return float(m) * float(v_dc) / SQ3 * _WINDING_V_FACTOR
 
 
 # ─────────────────────────────────────────────────────────────────────────────

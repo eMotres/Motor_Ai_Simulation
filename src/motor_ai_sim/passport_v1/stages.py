@@ -79,6 +79,8 @@ def _audit(snap) -> bool:
 
 
 def _base(snap, st, static: bool = True):
+    from motor_ai_sim.passport_v1 import psimap as _PM
+    _PM.set_winding_basis(snap)
     b = J.base_kwargs(snap, daxis_deg=st.get("daxis_deg"))
     if static and st.get("gap_layers_static") is not None:
         # The deployed gap rule's level for the STATIC sampling of THIS
@@ -293,6 +295,7 @@ def pole_pairs(snap) -> int:
 
 def hot_map(R, snap, st):
     from motor_ai_sim.passport_v1 import psimap as PM
+    PM.set_winding_basis(snap)
     pts = PM.points_from_records(R.done.values(), "hot")
     return PM.PsiMap.build(pts, pole_pairs(snap), mtpa=PM.mtpa_table(st["hot_mtpa"]),
                            fixed_gamma=st.get("fixed_gamma_deg"))
@@ -638,7 +641,8 @@ def stage_loss2(R, snap, st) -> None:
     I0, n0 = _I0(snap), _n0(snap)
     hm = hot_map(R, snap, st)
     Rh = R_hot(R, st)
-    m = M_MARGIN_CONTROLLER
+    # a spec's plan.m_margin (stated controller margin) wins over the Ø40 controller's 0.89
+    m = float((snap.get("plan") or {}).get("m_margin") or M_MARGIN_CONTROLLER)
     vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m)
     I_pk, I_pk_src = _peak_current(snap, st)
     lp0 = st["loss_plan"]

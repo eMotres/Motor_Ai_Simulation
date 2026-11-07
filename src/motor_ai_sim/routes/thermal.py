@@ -747,7 +747,8 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                            outer_air_factor: float = 1.0,
                            stator_od_cooling: str = "direct",
                            od_sleeve_wall_mm: float = 1.5,
-                           od_sleeve_k: float = 160.0):
+                           od_sleeve_k: float = 160.0,
+                           od_channel_flow_lpm: Optional[float] = None):
     """Refuse the impossible before spending a minute of FEM on it.
 
     Returns ``(cooling_mode, bore_mode)`` normalised to lower case.
@@ -1027,11 +1028,28 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                    "stator_od_cooling says how the outer boundary reaches the "
                    "stator: 'direct' (the default — the film acts on the "
                    "stator's own outer contour, notch walls included, e.g. "
-                   "coolant flowing over the stator) or 'sleeve_contact' (the "
+                   "coolant flowing over the stator), 'sleeve_contact' (the "
                    "stator is pressed into a round sleeve: only the OD iron "
-                   "arcs touch it, then the sleeve wall, then the film)",
+                   "arcs touch it, then the sleeve wall, then the film) or "
+                   "'sleeve_channels' (the same sleeve, plus seawater at "
+                   "od_channel_flow_lpm through the notches it closes)",
                    error=f"unknown stator_od_cooling {stator_od_cooling!r}")
-    if _sod == "sleeve_contact":
+    if _sod == "sleeve_channels":
+        _ch_q = od_channel_flow_lpm
+        if (_ch_q is None or not math.isfinite(float(_ch_q))
+                or float(_ch_q) <= 0.0):
+            raise _bad("od_channel_flow_lpm", od_channel_flow_lpm, "bad_value",
+                       "od_channel_flow_lpm is the total seawater flow through "
+                       "the stator OD notches in L/min and must be positive "
+                       "(stator_od_cooling='sleeve_contact' is the no-flow case)",
+                       error="sleeve_channels without a positive flow")
+        if mode == "robotics":
+            raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
+                       "seawater through the OD notches beside a machine in "
+                       "still air is not one machine: use the cooling_mode of "
+                       "the film the sleeve sits in (manual, liquid or air)",
+                       error="sleeve_channels with cooling_mode robotics")
+    if _sod in ("sleeve_contact", "sleeve_channels"):
         if str(heat_path or "none").strip().lower() in ("housing", "both"):
             raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
                        "the robotics heat path 'housing' already puts the "
@@ -1060,13 +1078,113 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
 
 
 #: The two ways the outer boundary reaches the stator (2026-11-03).
-_STATOR_OD_MODES = ("direct", "sleeve_contact")
+_STATOR_OD_MODES = ("direct", "sleeve_contact", "sleeve_channels")
 
 
 def _norm_stator_od(v: Any) -> str:
     """``stator_od_cooling`` normalised; blank / None = 'direct'."""
     s = str(v or "direct").strip().lower()
     return s or "direct"
+
+
+def stator_od_channel_geometry(geo: Dict[str, Any], *, stator=None) -> Dict[str, Any]:
+    """The measured notches of a stator that can carry channel water, or a 422.
+
+    Called before the conduction solve, and by the coupled route before it
+    spends an electromagnetic run on a machine the mode cannot solve."""
+    from motor_ai_sim.cadquery_geometry import stator_od_notches
+    n = stator_od_notches(geo, stator=stator) or {}
+    if n.get("notched") is False:
+        raise _bad("stator_od_cooling", "sleeve_channels", "bad_value",
+                   "stator_od_cooling 'sleeve_channels' sends water through the "
+                   "stator OD notches, and this stator has none "
+                   "(stator_outer_notches is false).  Use 'sleeve_contact' for a "
+                   "smooth OD, or a configuration with the notches on.",
+                   error="sleeve_channels on a smooth stator OD")
+    if not n.get("n_notches"):
+        raise _bad("stator_od_cooling", "sleeve_channels", "bad_value",
+                   "the stator OD notches could not be measured on this "
+                   "cross-section (no one-piece stator outline)",
+                   error="no notch outline for the channel water")
+    return n
+
+
+def _od_channel_report(*, channel: Dict[str, Any], notches: Dict[str, Any],
+                       surface: Dict[str, Any], sym: int, channel_w: float,
+                       arc_w: float, t_in_c: float, arc_area_mesh_m2: float,
+                       arc_area_m2: float) -> Dict[str, Any]:
+    """What ``cooling.outer.stator_od`` adds for ``sleeve_channels`` (2026-11-04).
+
+    The watts are the solver's; the water rise is their energy balance, and the
+    mean the film acted against is the solved node (``t_bulk_mean_c``), so the
+    payload can check the one against the other (``bulk_mean_error_K``)."""
+    m_cp = float(channel["m_cp_W_per_K"])
+    rise = channel_w / m_cp if m_cp > 0.0 else 0.0
+    t_bulk = surface.get("t_sink_c")
+    t_wall = surface.get("t_mean_c")
+    a_mesh = float(surface.get("area_m2") or 0.0) * sym
+    a_poly = float(channel["iron_area_m2"])
+    warnings: List[str] = []
+    if t_wall is not None and t_in_c + rise > float(t_wall):
+        warnings.append(
+            "the water leaves hotter than the notch wall's mean: at this low "
+            "flow (NTU %.2f) the mean of inlet and outlet overstates what the "
+            "channels remove" % float(channel["ntu"]))
+    for _nm, _am, _ap in (("notch walls", a_mesh, a_poly),
+                          ("OD contact arcs", arc_area_mesh_m2, arc_area_m2)):
+        if _ap > 0.0 and abs(_am - _ap) > 0.05 * _ap:
+            warnings.append(
+                "the mesh's facets on the %s (%.4f m²) differ from the stator "
+                "polygon's (%.4f m²) by over 5 %%" % (_nm, _am, _ap))
+    return {
+        "flow_lpm": round(float(channel["flow_lpm"]), 4),
+        "fluid": "seawater (fixed properties, about 35 °C)",
+        "fluid_props": {k: round(float(v), 9) for k, v in channel["props"].items()},
+        "n_notches": int(channel["n_notches"]),
+        "notch_area_mm2": round(float(notches["area_per_notch_mm2"]), 3),
+        "notch_area_total_mm2": round(float(notches["area_total_mm2"]), 3),
+        "notch_depth_mm": round(float(notches["depth_mm"]), 3),
+        "iron_perimeter_per_notch_mm": round(
+            float(notches["iron_perimeter_per_notch_mm"]), 3),
+        "sleeve_width_per_notch_mm": round(
+            float(notches["sleeve_width_per_notch_mm"]), 3),
+        "wetted_perimeter_per_notch_mm": round(
+            float(notches["wetted_perimeter_per_notch_mm"]), 3),
+        "hydraulic_diameter_mm": round(float(channel["hydraulic_diameter_m"]) * 1e3, 3),
+        "notch_basis": notches.get("basis"),
+        "velocity_mps": round(float(channel["velocity_mps"]), 5),
+        "re": round(float(channel["re"]), 1),
+        "pr": round(float(channel["pr"]), 4),
+        "gz": round(float(channel["gz"]), 2),
+        "nu": round(float(channel["nu"]), 3),
+        "regime": channel["regime"],
+        "h_channel_W_per_m2K": round(float(channel["h_W_per_m2K"]), 2),
+        "G_channel_film_W_per_K": round(float(channel["G_film_W_per_K"]), 4),
+        "ntu": round(float(channel["ntu"]), 4),
+        "channel_iron_area_m2": round(a_poly, 6),
+        "channel_iron_area_mesh_m2": round(a_mesh, 6),
+        "arc_area_mesh_m2": round(float(arc_area_mesh_m2), 6),
+        "t_in_c": round(float(t_in_c), 3),
+        "t_out_c": round(float(t_in_c) + rise, 3),
+        "water_rise_K": round(rise, 4),
+        "t_bulk_mean_c": (None if t_bulk is None else round(float(t_bulk), 4)),
+        "bulk_mean_error_K": (None if t_bulk is None else round(
+            abs(float(t_bulk) - (float(t_in_c) + 0.5 * rise)), 6)),
+        "t_notch_wall_mean_c": (None if t_wall is None else round(float(t_wall), 3)),
+        "channel_heat_removed_W": round(float(channel_w), 3),
+        "arc_heat_removed_W": round(float(arc_w), 3),
+        "intake_momentum_drag_estimate_N": round(float(channel["intake_drag_N"]), 3),
+        "intake_momentum_drag_speed_mps": float(channel["drag_speed_mps"]),
+        "intake_momentum_drag_note": (
+            "estimate only: rho·Q·V, the stream brought from rest to the vessel "
+            "speed and no thrust recovered at the outlet; no duct losses"),
+        "assumptions": (
+            "laminar Sieder-Tate (viscosity ratio 1), Gnielinski with its "
+            "entrance factor from Re 4000, linear between; D_h = 4A/P with P = "
+            "iron + sleeve side, the film on the iron only; flow shared equally; "
+            "no heat from the sleeve wall into the channel water; no buoyancy"),
+        "warnings": warnings,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1261,7 +1379,8 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
                      end_faces="still", end_face_sides=2,
                      air_speed_source="manual", propeller_id="",
                      propeller_position="", stator_od_cooling="direct",
-                     od_sleeve_wall_mm=1.5, od_sleeve_k=160.0) -> tuple:
+                     od_sleeve_wall_mm=1.5, od_sleeve_k=160.0,
+                     od_channel_flow_lpm=None) -> tuple:
     """What makes two thermal requests the SAME request.
 
     Three groups, and all three are load-bearing:
@@ -1383,6 +1502,11 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
         _base = _base + ("stator_od", "sleeve_contact",
                          round(float(od_sleeve_wall_mm), 4),
                          round(float(od_sleeve_k), 3))
+    elif _norm_stator_od(stator_od_cooling) == "sleeve_channels":
+        _base = _base + ("stator_od", "sleeve_channels",
+                         round(float(od_sleeve_wall_mm), 4),
+                         round(float(od_sleeve_k), 3),
+                         round(float(od_channel_flow_lpm), 4))
     return _base
 
 
@@ -4036,6 +4160,9 @@ def solve_thermal_field(
     stator_od_cooling:  str = "direct",
     od_sleeve_wall_mm:  float = 1.5,
     od_sleeve_k:        float = 160.0,
+    # 'sleeve_channels' (2026-11-04): TOTAL seawater flow through the OD notches
+    # under that sleeve [L/min] (cooling_models.od_channel_path).
+    od_channel_flow_lpm: Optional[float] = None,
     progress=None,
     _em_map:            Optional[Dict[str, Any]] = None,
     _em_loss_source:    Optional[Dict[str, Any]] = None,
@@ -4334,9 +4461,11 @@ def solve_thermal_field(
         n_periods=n_periods, mesh_size_mm=mesh_size_mm,
         min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
         stator_od_cooling=stator_od_cooling,
-        od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k)
+        od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k,
+        od_channel_flow_lpm=od_channel_flow_lpm)
     stator_od_cooling = _norm_stator_od(stator_od_cooling)
-    _sleeve_on = stator_od_cooling == "sleeve_contact"
+    _channels_on = stator_od_cooling == "sleeve_channels"
+    _sleeve_on = stator_od_cooling == "sleeve_contact" or _channels_on
     frame = _norm_frame(frame)
     end_faces = _norm_end_faces(end_faces)
     # The mount's temperature is the AMBIENT when the field is blank: a machine
@@ -4390,7 +4519,8 @@ def solve_thermal_field(
         air_speed_source=air_speed_source, propeller_id=propeller_id,
         propeller_position=propeller_position,
         stator_od_cooling=stator_od_cooling,
-        od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k)
+        od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k,
+        od_channel_flow_lpm=od_channel_flow_lpm)
     # THE MAGNET TEMPERATURE, appended only when the request carries one — the
     # same rule `_field_snap_key_fields` follows, and for the same reason: with
     # no magnet temperature the key must stay byte-identical to the one every
@@ -4826,6 +4956,11 @@ def solve_thermal_field(
                        "the stator OD contact arcs could not be measured on "
                        "this cross-section (no stator outline)",
                        error="no stator outline for the sleeve contact")
+    # THE NOTCHES AS WATER CHANNELS (2026-11-04), measured on the same polygon.
+    _od_notches: Dict[str, Any] = {}
+    if _channels_on:
+        _od_notches = stator_od_channel_geometry(
+            g, stator=(_polys or {}).get("stator"))
     tags, air_report = _retag_thermal_domains(
         verts, tris, tags, _polys, r_housing_m=R_house,
         stator_inner_m=stator_inner_m, rotor_outer_m=rotor_outer_m,
@@ -5811,6 +5946,19 @@ def solve_thermal_field(
     from motor_ai_sim.simulation.thermal_solver_2d import solve_steady_thermal
     MAX_PASSES = 4
     OUTLET_TOL_C = 0.5
+    # THE CHANNEL FILM AND ITS WATER (2026-11-04): fixed properties and a given
+    # flow, so one film for every pass.  The water is a node of the solve (its
+    # G = 2·ṁ·cp): no pass exists for it, and none is added.
+    _od_channel: Dict[str, Any] = {}
+    if _channels_on:
+        _od_channel = _cm3.od_channel_path(
+            n_notches=int(_od_notches["n_notches"]),
+            area_per_notch_m2=float(_od_notches["area_per_notch_mm2"]) * 1e-6,
+            iron_perimeter_per_notch_m=(
+                float(_od_notches["iron_perimeter_per_notch_mm"]) * 1e-3),
+            sleeve_width_per_notch_m=(
+                float(_od_notches["sleeve_width_per_notch_mm"]) * 1e-3),
+            stack_m=L, flow_lpm=float(od_channel_flow_lpm))
     # The passes the bar will NAME (it does not lengthen for them — they share
     # one step): a machine with no coolant outlet solves exactly once.
     _n_passes = MAX_PASSES if _iterating else 1
@@ -5864,6 +6012,10 @@ def solve_thermal_field(
                 contact_fraction=float(_od_contact["fraction"]),
                 wall_m=float(od_sleeve_wall_mm) * 1e-3,
                 k_sleeve=float(od_sleeve_k), h_out=float(h_eff))
+        # The channel water comes in at the outer boundary's sink (the jacket's
+        # inlet, when the outer film is a jacket held at its own outlet).
+        _t_ch_in = (float(fluid_temp_in_c) if cooling_mode == "liquid"
+                    else float(t_sink))
 
         # THE END FACES, at this pass's wall temperatures.  Rebuilt every pass
         # rather than once: G = h_total(ΔT)·A·n_faces, and h_total is the whole
@@ -5983,6 +6135,11 @@ def solve_thermal_field(
                                        "symmetry_mult": sym})
         _sinks_pass = (list(_sinks) + _ef_sinks + _gf_sinks + _bn_sinks
                        + _rch_sinks)
+        if _channels_on:
+            _nodes_pass = list(_nodes_pass) + [{
+                "name": "od_channel_water",
+                "G_W_per_K": float(_od_channel["G_bulk_W_per_K"]),
+                "t_sink_c": _t_ch_in, "symmetry_mult": sym}]
 
         if gap is None:
             # The air gap, once.  Properties at a STATED gap temperature: the
@@ -6096,7 +6253,13 @@ def solve_thermal_field(
                 # bridged through the LINER, not through gap air.  With the slot
                 # meshed there are no such islands and this does nothing.
                 slot_ins_k=float(k_liner), slot_ins_d_m=float(t_liner) * 1e-3,
-                surfaces=[({"name": "outer", "facets": "outer_od",
+                od_contour=({"opening_spans_rad": _od_notches["opening_spans_rad"],
+                             "arc_r_min_m": (R_house - 0.5e-3
+                                             * float(_od_notches["depth_mm"]))}
+                            if _channels_on else None),
+                surfaces=[({"name": "outer",
+                            "facets": ("od_contour_arcs" if _channels_on
+                                       else "outer_od"),
                             "G_W_per_K": float(_sleeve["G_W_per_K"]),
                             "symmetry_mult": sym, "t_sink": float(t_sink)}
                            if _sleeve_on else
@@ -6105,6 +6268,10 @@ def solve_thermal_field(
                             **({"node": "heat_path"} if _hp_housing else {})}),
                           {"name": "bore", "h": float(h_bore),
                            "t_sink": float(t_bore_sink)}]
+                + ([{"name": "od_channels", "facets": "od_contour_notches",
+                     "h": float(_od_channel["h_W_per_m2K"]),
+                     "t_sink": _t_ch_in, "node": "od_channel_water"}]
+                   if _channels_on else [])
                 + ([{"name": "housing_end_faces", "facets": "outer",
                      "G_W_per_K": float(_hfe["G_W_per_K"]),
                      "symmetry_mult": sym,
@@ -6274,6 +6441,18 @@ def solve_thermal_field(
                     area_m2=_s["area_face_m2"], char_len_m=_s["char_len_m"],
                     emissivity=emissivity, orientation="vertical",
                     n_faces=_ef_n, name=_s["label"]))
+    # THE CHANNELS (2026-11-04) are a second door of the same OD: the outer film
+    # and any jacket outlet above saw the arcs' watts only, and from here on
+    # `_outer_w` is what crosses the OD, so every budget and network reading it
+    # closes without knowing there are two paths.  `stator_od` keeps them apart.
+    _arc_w = _outer_w
+    _od_ch_s = _by_name.get("od_channels") or {}
+    _od_ch_w = float(_od_ch_s.get("heat_removed_W") or 0.0) * sym
+    if _channels_on and not int(_od_ch_s.get("n_facets") or 0):
+        raise _bad("stator_od_cooling", stator_od_cooling, "bad_value",
+                   "the mesh of this cross-section carries no notch facets for "
+                   "the channel water to act on", error="no notch facets")
+    _outer_w = _arc_w + _od_ch_w
     _gap_w = float(th.get("gap_heat_W", 0.0)) * sym
     _bridge_w = float(th.get("slot_bridge_W", 0.0)) * sym
     _coil_w = float(th.get("coil_boundary_W", 0.0)) * sym
@@ -6299,7 +6478,7 @@ def solve_thermal_field(
     if _sleeve_on and _sleeve:
         _t_c = _by_name.get("outer", {}).get("t_mean_c")
         cooling["stator_od"] = {
-            "mode": "sleeve_contact",
+            "mode": stator_od_cooling,
             "stator_od_contact_fraction": round(float(_od_contact["fraction"]), 5),
             "contact_basis": _od_contact.get("basis"),
             "notched": bool(_od_contact.get("notched", True)),
@@ -6323,6 +6502,14 @@ def solve_thermal_field(
                      % (float(od_sleeve_wall_mm), float(od_sleeve_k),
                         100.0 * float(_od_contact["fraction"]))),
         }
+        if _channels_on:
+            cooling["stator_od"].update(_od_channel_report(
+                channel=_od_channel, notches=_od_notches,
+                surface=_od_ch_s, sym=sym, channel_w=_od_ch_w, arc_w=_arc_w,
+                t_in_c=_t_ch_in,
+                arc_area_mesh_m2=float(_by_name.get("outer", {})
+                                       .get("area_m2", 0.0)) * sym,
+                arc_area_m2=float(_sleeve["contact_area_m2"])))
 
     # ── THE HEAT PATH, as the solve measured it (2026-09-26) ────────────────
     # The body's temperature is the solve's own node; its film is re-evaluated
@@ -6776,6 +6963,19 @@ def solve_thermal_field(
               # the bearing holders off the stator and the rotor's own
               # channels (2026-10-19) leave the mesh like every path above
               - _bn_stator_w - _rch_w_mag - _rch_w_iron)
+    # THE CHANNEL MODE's heat balance (2026-11-04), stated beside its two paths.
+    if _channels_on and "stator_od" in cooling:
+        cooling["stator_od"]["heat_balance"] = {
+            "losses_W": round(_gen_w, 3),
+            "channel_W": round(_od_ch_w, 3), "arc_W": round(_arc_w, 3),
+            "other_paths_W": round(_gen_w - _od_ch_w - _arc_w - _resid, 3),
+            "residual_W": round(_resid, 4),
+            "residual_pct": (round(100.0 * _resid / _gen_w, 5)
+                             if abs(_gen_w) > 1e-9 else None),
+            "closes": bool(abs(_resid) <= max(1e-3 * abs(_gen_w), 1e-3)),
+            "note": ("every watt the map makes leaves through the arcs, the "
+                     "channels or the paths named elsewhere in this budget "
+                     "(bore, gap stream, bearings, faces, shaft ends)")}
 
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
@@ -6931,7 +7131,11 @@ def solve_thermal_field(
     _p_node_gen_w = _p_brg_in if _brg_at_nodes else 0.0
     _bn_sources = (_bh.node_sources(bearing_node_blk.get("delta"), _p_node_gen_w)
                    if (_brg_at_nodes and _bn_on) else None)
+    # (`housing_W` is the whole OD; only this mode carries the two lines of it.)
+    _sod_budget = ({"od_arcs_W": round(_arc_w, 3),
+                    "od_channels_W": round(_od_ch_w, 3)} if _channels_on else {})
     heat_budget = {
+        **_sod_budget,
         "rotor_heat_split": rotor_heat_split,
         "stator_heat_split": stator_heat_split,
         "losses_W": round(_gen_w, 2),
@@ -7691,10 +7895,12 @@ def field(
                                                 "reaches the stator: 'direct' "
                                                 "(default — the film acts on "
                                                 "the stator's own outer "
-                                                "contour) or 'sleeve_contact' "
+                                                "contour), 'sleeve_contact' "
                                                 "(pressed into a round sleeve: "
                                                 "OD iron arcs → sleeve wall → "
-                                                "film)"),
+                                                "film) or 'sleeve_channels' "
+                                                "(the same, plus seawater through "
+                                                "the notches the sleeve closes)"),
     od_sleeve_wall_mm:  float = Query(default=1.5, gt=0.0, le=50.0,
                                       description="stator_od_cooling="
                                                   "sleeve_contact: sleeve wall "
@@ -7704,6 +7910,10 @@ def field(
                                                   "sleeve_contact: sleeve "
                                                   "conductivity [W/m·K] "
                                                   "(aluminium ~160)"),
+    od_channel_flow_lpm: Optional[float] = Query(
+        default=None, gt=0.0,
+        description="stator_od_cooling=sleeve_channels: TOTAL seawater flow "
+                    "through the stator OD notches [L/min]; required there"),
     heat_path:          str = Query(default="none",
                                     description="cooling_mode=robotics: where "
                                                 "the heat goes by conduction — "
@@ -7825,6 +8035,8 @@ def field(
         _robot_kw = dict(_robot_kw, stator_od_cooling=_norm_stator_od(stator_od_cooling),
                          od_sleeve_wall_mm=float(od_sleeve_wall_mm),
                          od_sleeve_k=float(od_sleeve_k))
+    if _norm_stator_od(stator_od_cooling) == "sleeve_channels":
+        _robot_kw = dict(_robot_kw, od_channel_flow_lpm=od_channel_flow_lpm)
 
     # ── THE LATEST ELECTROMAGNETIC RUN (2026-09-30) ─────────────────────────
     # The run's point and EM settings REPLACE what the request sent — the
@@ -8079,10 +8291,12 @@ def coupled(
                                                 "reaches the stator: 'direct' "
                                                 "(default — the film acts on "
                                                 "the stator's own outer "
-                                                "contour) or 'sleeve_contact' "
+                                                "contour), 'sleeve_contact' "
                                                 "(pressed into a round sleeve: "
                                                 "OD iron arcs → sleeve wall → "
-                                                "film)"),
+                                                "film) or 'sleeve_channels' "
+                                                "(the same, plus seawater through "
+                                                "the notches the sleeve closes)"),
     od_sleeve_wall_mm:  float = Query(default=1.5, gt=0.0, le=50.0,
                                       description="stator_od_cooling="
                                                   "sleeve_contact: sleeve wall "
@@ -8092,6 +8306,10 @@ def coupled(
                                                   "sleeve_contact: sleeve "
                                                   "conductivity [W/m·K] "
                                                   "(aluminium ~160)"),
+    od_channel_flow_lpm: Optional[float] = Query(
+        default=None, gt=0.0,
+        description="stator_od_cooling=sleeve_channels: TOTAL seawater flow "
+                    "through the stator OD notches [L/min]; required there"),
     heat_path:          str = Query(default="none",
                                     description="cooling_mode=robotics: where "
                                                 "the heat goes by conduction — "
@@ -8191,7 +8409,8 @@ def coupled(
             n_periods=n_periods, mesh_size_mm=mesh_size_mm,
             min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
             heat_path=heat_path, stator_od_cooling=stator_od_cooling,
-            od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k)
+            od_sleeve_wall_mm=od_sleeve_wall_mm, od_sleeve_k=od_sleeve_k,
+            od_channel_flow_lpm=od_channel_flow_lpm)
 
         _cm = _auto_coil_mesh(component_mesh, mesh_size_mm, geo_ov)
         # The frame rides `_cool_kw` — which is the cache key AND the remembered
@@ -8216,6 +8435,8 @@ def coupled(
             _robot_kw["stator_od_cooling"] = _norm_stator_od(stator_od_cooling)
             _robot_kw["od_sleeve_wall_mm"] = float(od_sleeve_wall_mm)
             _robot_kw["od_sleeve_k"] = float(od_sleeve_k)
+        if _norm_stator_od(stator_od_cooling) == "sleeve_channels":
+            _robot_kw["od_channel_flow_lpm"] = od_channel_flow_lpm
         _source_kw = _thermal_air_source_kw(
             air_speed_source, propeller_id, propeller_position,
             propeller_context_key, mode, authorization)
@@ -8479,7 +8700,8 @@ _DC_COOLING_KEYS = (
     "emissivity", "end_faces", "end_face_sides", "mount_g_w_per_k",
     "mount_temp_c", "heat_path",
     # the stator-OD sleeve (2026-11-03) — present only when chosen
-    "stator_od_cooling", "od_sleeve_wall_mm", "od_sleeve_k")
+    "stator_od_cooling", "od_sleeve_wall_mm", "od_sleeve_k",
+    "od_channel_flow_lpm")
 
 #: …and the operating point that selects the Electromagnetic run behind it.
 _DC_POINT_KEYS = ("rpm", "I_phase_rms", "gamma_deg", "coil_temp_c")

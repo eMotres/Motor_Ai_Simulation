@@ -389,9 +389,12 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("POST", "/api/family/config/{die}/{cfg}/move"),
     # the safe rename: the same admin-only 403 before any name resolves, tested below
     ("POST", "/api/family/config/{die}/{cfg}/rename"),
-    # a project motor's read-only Simulation view: project membership, then the ordinary configuration gate in
-    # development.motors._project_motor; the same 404 for a hidden motor and a missing one, tested below
+    # a project motor's read-only routes: project membership, then the ordinary configuration gate in
+    # development.motors; the same 404 for a hidden motor and a missing one, tested below
     ("GET", "/api/projects/{project_id}/motors/sim"), ("GET", "/api/projects/{project_id}/motors/sim/run"),
+    ("GET", "/api/projects/{project_id}/motors/view"), ("GET", "/api/projects/{project_id}/motors/field"),
+    ("GET", "/api/projects/{project_id}/motors/report"), ("GET", "/api/projects/{project_id}/motors/points"),
+    ("GET", "/api/projects/{project_id}/motors/tests"),
 }
 NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog configuration
     ("POST", "/api/family/save_as_new_die"), ("POST", "/api/optimization/saved"),
@@ -400,16 +403,12 @@ NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog conf
     # project motor links: gated by project membership PLUS the ordinary motor gate (tests/test_development_*.py,
     # tests/test_motor_view.py access matrices)
     ("DELETE", "/api/admin/projects/{project_id}/motors"), ("DELETE", "/api/projects/{project_id}/motors"),
-    ("GET", "/api/projects/{project_id}/motors/points"), ("GET", "/api/projects/{project_id}/motors/view"),
-    ("GET", "/api/projects/{project_id}/motors/field"), ("PATCH", "/api/projects/{project_id}/motors/note"),
+    ("PATCH", "/api/projects/{project_id}/motors/note"),
     ("PATCH", "/api/projects/{project_id}/motors/status"), ("POST", "/api/projects/{project_id}/motors"),
     ("PATCH", "/api/projects/{project_id}/motors/report_reviewed"), ("PATCH", "/api/projects/{project_id}/motors/recommended"),
-    ("GET", "/api/projects/{project_id}/motors/report"),
     # activity digest settings of a PRODUCTION (die + config name a production, not a catalog configuration): admin only
     # (tests/test_digest.py::test_production_settings_are_admin_only)
     ("GET", "/api/digest/settings/production/{die}/{config}"), ("PUT", "/api/digest/settings/production/{die}/{config}"),
-    # project motor tests: the same project + motor gate, then the customer flag (tests/test_motor_tests_routes.py)
-    ("GET", "/api/projects/{project_id}/motors/tests"),
 }
 
 
@@ -856,12 +855,15 @@ def test_project_sim_refuses_a_stranger_to_the_project(env, project, route):
                      _sim_get(route, NOSUCH, env["plain"], "nosuchproject"), PRIV)
 
 
-def test_the_project_sim_exemption_from_the_path_gate_is_those_two_routes_only():
+def test_the_project_motor_exemption_from_the_path_gate_is_those_routes_only():
     from motor_ai_sim import motor_access as MA
-    assert MA._project_sim_route("/api/projects/p1/motors/sim") and MA._project_sim_route("/api/projects/p1/motors/sim/run")
-    assert not MA._project_sim_route("/api/projects/p1/motors/view")
+    for tail in ("sim", "sim/run", "view", "field", "report", "points", "tests"):
+        assert MA._project_motor_route(f"/api/projects/p1/motors/{tail}"), tail
+    assert not MA._project_motor_route("/api/projects/p1/motors/picker")
+    assert not MA._project_motor_route("/api/projects/p1/other/motors/view")
     # a catalog read whose die + configuration happen to spell the same tail keeps the app-wide gate
-    assert not MA._project_sim_route("/api/family/payload/motors/sim")
+    assert not MA._project_motor_route("/api/family/payload/motors/sim")
+    assert not MA._project_motor_route("/api/family/payload/motors/view")
 
 
 @pytest.mark.parametrize("route", ["sim", "sim/run"])
@@ -873,6 +875,75 @@ def test_project_sim_serves_the_accounts_that_may_see_the_configuration(env, pro
         assert body["config"] == PRIV and [d["name"] for d in body["duties"]] == [DUTY]
     else:
         assert body["duty"] == DUTY and body["summary"]["T_em_avg_Nm"] == 1.5
+
+
+# ── a project motor's other read-only routes ─────────────────────────────────
+
+PROJECT_MOTOR_READS = ("view", "field", "report", "points", "tests")
+NOT_LINKED = "Motor variant not found in this project"
+
+
+def _motor_get(route: str, cfg: str, hdr: dict, project_id: str = PROJECT):
+    params = {"die": DIE, "config": cfg}
+    if route == "field":
+        params.update(duty=DUTY, kind="em")
+    return client.get(f"/api/projects/{project_id}/motors/{route}", params=params, headers=hdr)
+
+
+@pytest.mark.parametrize("route", PROJECT_MOTOR_READS)
+def test_project_motor_read_refuses_a_member_who_may_not_see_the_configuration(env, project, route):
+    for who in ("plain", "eng"):
+        hidden = _motor_get(route, PRIV, env[who])
+        assert hidden.status_code == 404 and hidden.json()["detail"] == NOT_LINKED, (who, hidden.text)
+        _same_as_missing(hidden, _motor_get(route, NOSUCH, env[who]), PRIV)
+        assert PRIV not in hidden.text, who
+
+
+@pytest.mark.parametrize("route", PROJECT_MOTOR_READS)
+def test_project_motor_read_refuses_a_stranger_to_the_project(env, project, route):
+    # the configuration grant does not open somebody else's project
+    for hdr in (project["outsider"], _closed_account()):
+        for cfg in (PUB, PRIV):
+            r = _motor_get(route, cfg, hdr)
+            assert r.status_code == 404 and r.json()["detail"] == "Project not found", r.text
+            _same_as_missing(r, _motor_get(route, NOSUCH, hdr), cfg)
+    # an unknown project answers a hidden name like any other
+    _same_as_missing(_motor_get(route, PRIV, env["plain"], "nosuchproject"),
+                     _motor_get(route, NOSUCH, env["plain"], "nosuchproject"), PRIV)
+
+
+@pytest.mark.parametrize("route", PROJECT_MOTOR_READS)
+def test_project_motor_read_refuses_anonymous(env, project, route):
+    for cfg in (PUB, PRIV):
+        r = _motor_get(route, cfg, {})
+        assert r.status_code in (401, 404), r.text
+        _same_as_missing(r, _motor_get(route, NOSUCH, {}), cfg)
+
+
+#: what an account that may see the motor is answered on the test catalog (no field map stored; for a customer, the report
+#: not yet reviewed and the tests not yet shown)
+_ALLOWED = {"view": (200, None), "field": (404, "Not computed"), "report": (200, None), "points": (200, None),
+            "tests": (200, None)}
+_CUSTOMER = {**_ALLOWED, "report": (403, None), "tests": (404, "No tests")}
+
+
+def _assert_answer(resp, want, who) -> None:
+    status, detail = want
+    assert resp.status_code == status, (who, resp.status_code, resp.text[:300])
+    if detail:
+        assert resp.json()["detail"] == detail, (who, resp.text)
+
+
+@pytest.mark.parametrize("route", PROJECT_MOTOR_READS)
+def test_project_motor_read_serves_the_accounts_that_may_see_the_configuration(env, project, route):
+    for who in ("granted", "admin"):
+        _assert_answer(_motor_get(route, PRIV, env[who]), _ALLOWED[route], who)
+    # the public sibling is untouched for the members who may not see the private one
+    _assert_answer(_motor_get(route, PUB, env["eng"]), _ALLOWED[route], "eng")
+    r = _motor_get(route, PUB, env["plain"])
+    _assert_answer(r, _CUSTOMER[route], "plain")
+    if route == "report":
+        assert r.json()["detail"]["code"] == "report_not_reviewed"
 
 
 # ── 3-D model ────────────────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Optional
@@ -687,11 +688,14 @@ SELF_GATED_PREFIXES = (
 SELF_GATED_SUFFIXES = ("/part_materials",)
 
 
-def _project_sim_route(path: str) -> bool:
-    """A project motor's read-only Simulation view.  ``development.motors._project_motor`` gates it (project membership,
-    then the ordinary configuration gate on the LINKED motor) and answers a hidden motor exactly like one the project
-    does not have; a refusal here would name the configuration and so tell the two apart."""
-    return path.startswith("/api/projects/") and path.endswith(("/motors/sim", "/motors/sim/run"))
+_PROJECT_MOTOR_READ = re.compile(r"/api/projects/[^/]+/motors/(?:view|field|report|points|tests|sim|sim/run)")
+
+
+def _project_motor_route(path: str) -> bool:
+    """A project motor's read-only routes.  ``development.motors`` gates them (project membership, then the ordinary
+    configuration gate on the LINKED motor) and answers a hidden motor exactly like one the project does not have; a
+    refusal here would name the configuration and so tell the two apart."""
+    return _PROJECT_MOTOR_READ.fullmatch(path) is not None
 
 
 def request_is_bound() -> bool:
@@ -751,7 +755,7 @@ def _config_path_check(request) -> None:
     if request.method not in ("GET", "HEAD"):
         return
     path = request.url.path
-    if path.startswith(SELF_GATED_PREFIXES) or path.endswith(SELF_GATED_SUFFIXES) or _project_sim_route(path):
+    if path.startswith(SELF_GATED_PREFIXES) or path.endswith(SELF_GATED_SUFFIXES) or _project_motor_route(path):
         return
     from fastapi import HTTPException
     acc = catalog_access(request.headers.get("authorization"))

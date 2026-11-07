@@ -1,11 +1,11 @@
 /** Discussion: a general thread and one thread per part; messages carry attachments and the original/translation toggle. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Chip, Divider, MenuItem, Paper, TextField, Typography } from '@mui/material';
+import { Box, Button, Chip, Divider, MenuItem, Paper, TextField, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import HelpTip from '../../../components/common/HelpTip';
 import { downloadFile, productionApi } from '../api';
-import { activeThreads, initialThreadKey, makeBilingual } from '../helpers';
+import { activeThreads, initialThreadKey, makeBilingual, threadChoices } from '../helpers';
 import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadLabel } from '../../../lib/unreadMessages';
 import { pageVisible } from '../../../lib/pageVisible';
 import type { Lang, Part, ProdCtx, Thread } from '../types';
@@ -33,7 +33,10 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
 
   const thread = useMemo(() => threads.find((x) => (x.part_id ?? '') === sel) ?? null, [threads, sel]);
   const active = useMemo(() => activeThreads(threads), [threads]);
-  const partName = (id: string) => { const p = parts.find((x) => x.id === id); return p ? (p.name.en || p.name.zh) : id; };
+  // a project viewer (owner 2026-11-02) reads the customer-visible threads only and writes nothing
+  const viewer = ctx.role === 'viewer';
+  const choices = useMemo(() => threadChoices(threads, parts, viewer), [threads, parts, viewer]);
+  const partName = (id: string) => choices.find((c) => c.key === id)?.label ?? id;
   const sorted = useMemo(() => [...(thread?.messages ?? [])].sort((a, b) => a.created_at.localeCompare(b.created_at)), [thread]);
 
   useEffect(() => { const on = () => setVisibleTick((n) => n + 1); document.addEventListener('visibilitychange', on); return () => document.removeEventListener('visibilitychange', on); }, []);
@@ -69,9 +72,17 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField select size="small" label={t('discussion.thread')} value={sel} onChange={(e) => setSel(e.target.value)} sx={{ minWidth: 240 }}>
           <MenuItem value="">{t('discussion.general')}{badge(unreadOf(threads.find((x) => !x.part_id)).length)}</MenuItem>
-          {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}{badge(unreadOf(threads.find((x) => x.part_id === p.id)).length)}</MenuItem>)}
+          {choices.map((c) => <MenuItem key={c.key} value={c.key}>{c.label}{badge(unreadOf(threads.find((x) => x.part_id === c.key)).length)}</MenuItem>)}
         </TextField>
-        <HelpTip title={t('discussion.tip')} />
+        <HelpTip title={t(viewer ? 'discussion.viewerTip' : 'discussion.tip')} />
+        {ctx.canEdit && thread && (
+          <Tooltip title={t('discussion.customerVisibleTip')}>
+            <Chip size="small" clickable variant={thread.customer_visible ? 'filled' : 'outlined'} color={thread.customer_visible ? 'primary' : 'default'}
+              label={t(thread.customer_visible ? 'discussion.customerVisible' : 'discussion.factoryOnly')}
+              onClick={() => { void productionApi.setThreadCustomerVisible(ctx.die, ctx.config, thread.id, !thread.customer_visible)
+                .then(() => ctx.reload()).catch((e) => setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) }))); }} />
+          </Tooltip>
+        )}
       </Box>
       {active.length > 0 && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
@@ -106,7 +117,8 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
         </Paper>
         </React.Fragment>
       ))}
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      {err && viewer && <Typography sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
+      {!viewer && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
         <BilingualInput label={t('discussion.write')} value={text} lang={lang} multiline onChange={(v, l) => { setText(v); setLang(l); }} />
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
@@ -114,7 +126,7 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
           <Button size="small" variant="contained" disabled={busy || !text.trim()} sx={{ textTransform: 'none' }} onClick={() => void send()}>{t('discussion.send')}</Button>
           {err && <Typography sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
         </Box>
-      </Box>
+      </Box>}
     </Box>
   );
 };

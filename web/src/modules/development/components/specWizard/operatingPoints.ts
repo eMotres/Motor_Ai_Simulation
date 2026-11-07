@@ -5,6 +5,7 @@ import { CONTINUOUS, deriveContinuousPeak, effectiveKeyPoints, keyPointsStored, 
 import { maximumSpeedRpm } from '../../speedLimits.ts';
 import type { SpecDraft } from '../../wizardState.ts';
 import { isUntouchedDefaults, profileDefaultRows, type WizardProfile } from './profile.ts';
+import { parseDecimal } from '../../../../lib/decimalText.ts';
 
 /** Duration presets of a timed point, in seconds (the "Other" chip opens a free input). */
 export const DURATION_PRESETS = [10, 30, 60] as const;
@@ -61,15 +62,8 @@ export function formatSig(n: number | null | undefined, digits = 6): string {
   const whole = Math.floor(Math.log10(Math.abs(n))) + 1;       // never drop integer digits: 1234567 stays 1234567
   return String(Number(n.toPrecision(Math.min(21, Math.max(digits, whole)))));
 }
-/** Typed text -> a number, 'empty' (cleared) or 'partial' (a half-typed "-", "." or "1e": nothing is written yet).  A comma
- *  counts as the decimal point. */
-export function parseDecimal(text: string): number | 'empty' | 'partial' {
-  const s = text.trim().replace(',', '.');
-  if (s === '') return 'empty';
-  if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return 'partial';
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 'partial';
-}
+/** Typed text -> a number, 'empty' or 'partial': one helper for every number box (lib/decimalText.ts), a comma is the decimal point. */
+export { parseDecimal };
 export type PowerUnit = 'W' | 'kW';
 /** kW from 1000 W up, else W (the box keeps the unit the user picked). */
 export const autoPowerUnit = (watts: number | null): PowerUnit => watts !== null && Math.abs(watts) >= 1000 ? 'kW' : 'W';

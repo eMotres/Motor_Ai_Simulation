@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 
 from motor_ai_sim.motor_tests import comparison
-from motor_ai_sim.motor_tests.compare import num
+from motor_ai_sim.motor_tests.compare import num, summary_magnet_temp_c
 
 log = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ def _solve_kwargs(point: Dict[str, Any], pay: Dict[str, Any], ref: Optional[Dict
     coil = num(s.get("coil_temp_C"))
     if coil is not None:
         kw["coil_temp_c"] = coil
-    mag = num(s.get("magnet_temp_c")) if num(s.get("magnet_temp_c")) is not None else num(s.get("magnet_temp_C"))
+    mag = summary_magnet_temp_c(s)
     if mag is not None:
         kw["magnet_temp_c"] = mag
     return kw
@@ -248,6 +248,7 @@ def create_and_queue(die: str, config: str, points: List[_Point], w: Dict[str, A
     ``GET /api/jobs``).  A point that cannot be written is reported, the others go on."""
     from motor_ai_sim import jobs as _jobs
     from motor_ai_sim.routes import family as _fam
+    _jobs.require_solve_allowed()
     _jobs.require_agreement_at_simulation()
     out: List[Dict[str, Any]] = []
     for pt in points:

@@ -395,6 +395,8 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
         return f"variant unlinked: {eid}", "motors"
     if action == "motor.autolink":
         return f"variant auto-linked: {eid}", "motors"
+    if action == "motor.autolink_skipped":
+        return f"variant not auto-linked ({det.get('reason') or 'ambiguous source'}): {eid}", "motors"
     if action == "motor.status":
         return f"variant {eid} is now {det.get('new') or 'updated'}", "motors"
     if action == "motor.note":

@@ -208,9 +208,13 @@ def _kv_kt(rated: Dict[str, Any]) -> Optional[str]:
     r = rated.get("result") if isinstance(rated.get("result"), dict) else {}
     kv = _n(r.get("kv_rpm_per_v"), 1)
     t, i = _f(rated.get("torque_nm")), _f(rated.get("current_arms"))
-    kt = _n(abs(t) / i, 3) if (t and i) else None
+    from motor_ai_sim.kv_kt import kt_from_kv
+    # ONE Kt (owner 2026-11-05): from the KV, per A rms of phase current; T / I at the rated point is "Kt at load"
+    kt = _n(kt_from_kv(_f(r.get("kv_rpm_per_v"))), 3)
+    kt_load = _n(abs(t) / i, 3) if (t and i) else None
     return _join([f"KV {kv} rpm/V" if kv else None,
-                  f"Kt {kt} N·m/A rms (T/I at the rated point)" if kt else None], ", ") or None
+                  f"Kt {kt} N·m/A rms (from KV)" if kt else None,
+                  f"Kt at load {kt_load} N·m/A rms (T/I at the rated point)" if kt_load else None], ", ") or None
 
 
 def _mass(c: Dict[str, Any], rated: Dict[str, Any], mass: Optional[Dict[str, Any]] = None) -> Optional[str]:

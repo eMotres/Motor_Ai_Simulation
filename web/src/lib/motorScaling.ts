@@ -27,6 +27,7 @@
 // (AC copper −70 % on the Ø40 at the slot's last row); a per-row field model
 // is the planned replacement (docs/PASSPORT_ALGORITHM.md §6.3).
 
+import { ktFromKv } from './kvKt.ts';
 export interface Passport {
   N0: number;          // base turns (num_wires_per_slot)
   L0_mm: number;       // base lamination length (motor_length)
@@ -182,11 +183,27 @@ export interface PackSpec {
 export interface PwmVariantPoint {
   rpm?: number; I_A?: number;
   motor_pwm_loss_W?: number | null;
+  /** the same extra loss BY PART (owner 2026-11-02), summing to `motor_pwm_loss_W`; absent on a passport
+   *  built before the split (Configure then shows the total as one "not split" tile) */
+  motor_pwm_loss_parts_W?: PwmLossParts | null;
   inverter_loss_W?: { cond?: number | null; sw?: number | null; dead?: number | null } | number | null;
   tj_C?: number | null;
   eta_drive_pct?: number | null;
   eta_shaft_pct?: number | null;
   p_cont_max_W?: number | null;
+  [k: string]: unknown;
+}
+
+/** The motor's PWM extra loss by part [W]: laminated iron, magnet eddy, copper (DC-resistance ripple + AC), and the
+ *  explicit remainder (shaft / sleeve eddy, rounding, or what an anchor could not split). */
+export interface PwmLossParts { iron: number; magnet: number; copper_ac: number; other: number; }
+
+/** The variant-level record of the split (passport_v1.stage3.PwmModel.parts_block). */
+export interface PwmLossPartsBlock {
+  keys?: string[];
+  anchors?: { tag?: string | null; rpm?: number | null; I_A?: number | null; mode?: string | null }[];
+  modes?: string[];
+  basis?: string | null;
   [k: string]: unknown;
 }
 
@@ -205,6 +222,8 @@ export interface PwmVariant {
   i_board_limit_A?: Record<string, number> | null;
   bus_v?: { min?: number | null; nom?: number | null; max?: number | null } | null;
   provenance?: string | Record<string, unknown> | null;
+  /** how the motor PWM extra loss was split by part (absent = not split) */
+  motor_pwm_loss_parts?: PwmLossPartsBlock | null;
   points: Record<string, PwmVariantPoint>;
 }
 
@@ -298,7 +317,10 @@ export interface ScaledResult {
   /** Torque constant [N·m/A rms] at the operating point — measured T over the
       operating current, saturation included (the bench number a controller
       datasheet quotes is the low-current limit of this). */
+  /** Kt, one definition: from the KV shown beside it (N·m per A rms of phase current, sine current) */
   Kt_Nm_per_A: number | null;
+  /** torque per ampere at this load, T / I: a different quantity from Kt */
+  Kt_load_Nm_per_A: number | null;
   /** Saturation coefficient [%]: measured T over the linear extrapolation of
    *  the lightest measured point (null without the sweep). */
   saturation_pct: number | null;
@@ -598,7 +620,8 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     Vline_rms_V: (Vphase * Math.sqrt(3)) / Math.SQRT2,
     psi_pm_mWb: psi,
     Km_Nm_sqrtW: Km,
-    Kt_Nm_per_A: k.I_A > 1e-9 ? Tk / k.I_A : null,
+    Kt_Nm_per_A: ktFromKv(KV),
+    Kt_load_Nm_per_A: k.I_A > 1e-9 ? Tk / k.I_A : null,
     kt_km_basis: kTmeas != null ? '3-D' : (kEnd != null && kEnd0 != null ? '3-D flux' : '2-D'),
     Km_per_mass: mass > 0 ? Km / mass : 0,
     // Inductance scales with the square of the series turns and (to first

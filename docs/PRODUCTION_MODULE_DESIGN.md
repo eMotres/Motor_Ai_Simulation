@@ -208,6 +208,8 @@ All routes require a signed-in caller. Reads fail NDA gate with 403 `nda_require
 | DELETE | `/api/production/{die}/{config}/parts/{part_id}` | owner/engineer/admin | Delete part |
 | GET | `/api/production/{die}/{config}/bom` | members / admin | BOM rows |
 | PUT | `/api/production/{die}/{config}/bom` | owner/engineer/admin | Replace BOM rows |
+| GET | `/api/production/{die}/{config}/bom.xlsx` | owner/engineer/admin | The list as Excel (with prices); empty template with no rows |
+| POST | `/api/production/{die}/{config}/bom/import` | owner/engineer/admin | Multipart `file` (.xlsx): preview; with `plan_id`: apply |
 | GET | `/api/production/{die}/{config}/process` | members / admin | Process sections |
 | PUT | `/api/production/{die}/{config}/process` | owner/engineer/admin | Replace process sections |
 | POST | `/api/production/{die}/{config}/documents` | owner/engineer/admin | Upload document |
@@ -226,6 +228,21 @@ All routes require a signed-in caller. Reads fail NDA gate with 403 `nda_require
 | POST | `/api/production/{die}/{config}/revisions/{rev_number}/ack` | oem / owner / engineer / admin | Acknowledge revision |
 | POST | `/api/production/{die}/{config}/translate/retry` | members / admin | Retry pending translation |
 | POST | `/api/production/{die}/{config}/translate/confirm` | members / admin | Confirm/edit translation |
+
+### BOM list to and from Excel (owner 2026-11-05)
+
+`POST .../bom/import` reads an `.xlsx` (10 MB, 2000 rows at most; `?list=tooling` for the tooling list).  Without `plan_id` it returns a preview
+and writes nothing; with the `plan_id` of that preview it applies it.  A plan that changed since the preview gets 409, a file with any row error
+gets 422 and applies nothing.  `production/bom_xlsx.py` holds the parser and the accepted column names (EN, ZH, RU); name and quantity are required.
+
+- Parts match by the `Part ID` column, or else by the exact name (EN or ZH, any case) among the parts of this list.  No fuzzy matching.
+- An import never deletes: a part not in the file stays and is listed as `missing`; a blank cell keeps the stored value.
+- Quantities are whole numbers above zero (the BOM stores integers); anything else is a row error, never rounded.
+- Prices: a "Price / motor" column is stored as it is; a "Unit price" column is the price of one piece, so on the motor list it is multiplied by the
+  quantity per motor.  On the tooling list the stored price is per piece.
+- New part names are not machine-translated; material and specification are, each distinct text once.
+- The uploaded file is kept in Documents as internal (it may carry prices).  The audit keeps the rows and costs before and after.
+- `GET .../bom.xlsx` gives the list in the same format; it imports back with no changes.  With no rows yet it is the empty template.
 
 ### Tooling / fixtures order list (owner 2026-10-19)
 

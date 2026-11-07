@@ -35,7 +35,7 @@ const fmt = (v: number, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 const numField = (label: string, value: string, onChange: (e: any) => void, step = 0.05, width = 66, error?: string, tip?: string, disabled?: boolean) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
     <Tip title={tip}><Typography sx={{ ...LABEL, color: error ? '#f87171' : LABEL.color }}>{label}</Typography></Tip>
-    <input type="number" aria-label={label} aria-invalid={!!error} value={value} step={step} onChange={onChange} disabled={disabled}
+    <input type="text" inputMode={step >= 1 ? 'numeric' : 'decimal'} autoComplete="off" aria-label={label} aria-invalid={!!error} value={value} onChange={onChange} disabled={disabled}
       style={{ width, background: 'transparent', border: `1px solid ${error ? '#f87171' : 'var(--line)'}`, borderRadius: 4, color: 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
     {error && <Typography role="alert" sx={{ color: '#f87171', fontSize: 10, lineHeight: 1.15, maxWidth: width + 18 }}>{error}</Typography>}
   </Box>

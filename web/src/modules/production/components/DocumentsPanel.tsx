@@ -79,7 +79,8 @@ const DocumentsPanel: React.FC<{
   return (
     <Box>
       {/* the process document, generated from the assembly and test steps (owner 2026-10-18); its sections are edited here */}
-      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.25, mb: 1.5 }}>
+      {/* a project viewer (owner 2026-11-02) reads the visible documents only: no process document, no ZIP of everything */}
+      {ctx.role !== 'viewer' && <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.25, mb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           {canDownloadProductionDocuments(ctx.role) && <Button size="small" variant="contained" disabled={zipBusy} sx={{ textTransform: 'none' }}
             startIcon={zipBusy ? <CircularProgress size={14} color="inherit" /> : undefined} onClick={() => void downloadZip()}>
@@ -100,7 +101,7 @@ const DocumentsPanel: React.FC<{
             {showSections ? t('process.hideSections', 'Hide sections') : t('process.editSections', 'Edit process sections')}</Button>}
         </Box>
         {showSections && <Box sx={{ mt: 1.25 }}><ProcessView sections={sections} ctx={ctx} /></Box>}
-      </Paper>
+      </Paper>}
       {ctx.canEdit && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
           <TextField select size="small" label={t('docs.forPart')} value={partId} onChange={(e) => setPartId(e.target.value)} sx={{ minWidth: 200 }}>

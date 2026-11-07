@@ -1182,6 +1182,7 @@ def admit(kind: str, *, priority: Priority = Priority.DUTY, run_id: str = "",
     if current_run_id() is not None:
         yield None
         return
+    require_solve_allowed()
     rec = make_record(kind, priority=priority, run_id=run_id, body=body, target=target)
     q = queue()
     q.submit(rec, None, block=True)          # returns once admitted
@@ -1283,6 +1284,16 @@ def body_run_id(prefix: str) -> Callable[[Dict[str, Any]], str]:
     return _extract
 
 
+def require_solve_allowed() -> None:
+    """SOLVE_ADMIN_ONLY (auth.py, owner 2026-11-04): while ``MOTRES_SOLVE_ADMIN_ONLY`` is on (the default) only an admin STARTS a
+    compute job - HTTP 403 ``solve.admin_only`` for any other caller.  The role gate in front of the routes already refuses them;
+    this is the second lock at the queue's own door, for a path that never meets the middleware (an in-process call, a route added
+    without a tier).  A call without a resolved caller (a CLI run, a test, a background thread) is never refused here.  Jobs that are
+    already inside the queue (``current_run_id()``) are not touched: nothing running or queued is cancelled."""
+    from motor_ai_sim import auth as _auth
+    _auth.refuse_solve_unless_admin(_WSP.caller())
+
+
 def require_agreement_at_simulation() -> None:
     """The Platform Agreement at the START of a simulation (owner 2026-11-01, platform_agreement.py): while env
     ``PLATFORM_AGREEMENT_AT_SIMULATION=1`` a non-staff, non-MOTRES account with neither a company acceptance nor its own agreement
@@ -1318,6 +1329,7 @@ def queued(kind: str, *, priority: Priority = Priority.DUTY,
         def _wrapped(*a, **kw):
             if current_run_id() is not None or (skip is not None and skip(kw)):
                 return fn(*a, **kw)
+            require_solve_allowed()
             require_agreement_at_simulation()
             rid = (str(run_id_from(kw) or "") if run_id_from is not None
                    else str(kw.get("run_id") or ""))

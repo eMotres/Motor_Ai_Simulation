@@ -60,11 +60,18 @@ TOOL_SCOPES: Dict[str, str] = {
     "get_job": "simulate",
     "get_design_result": "machines:read",
     "open_in_configure": "machines:read",
+    # The order flow (owner 2026-11-02, development.spec_order): requirements ->
+    # a development project with a filled, submitted specification.
+    "get_spec_form": "projects:read",
+    "get_order_status": "projects:read",
+    "create_order": "projects:write",
+    "update_spec": "projects:write",
+    "submit_spec": "projects:write",
 }
 
 #: Stage-3 tools that change something (a draft, a queued job) — every other
 #: tool carries ``readOnlyHint: true``.
-WRITE_TOOLS = frozenset({"start_design", "simulate"})
+WRITE_TOOLS = frozenset({"start_design", "simulate", "create_order", "update_spec", "submit_spec"})
 
 _server = None
 _http_app = None
@@ -142,25 +149,47 @@ def _run(fn, ctx, *args):
     from mcp.server.mcpserver.exceptions import ToolError as _SdkToolError
     from motor_ai_sim import agent_designs as _ad
     try:
-        return fn(_principal_from(ctx), *args)
+        # every signed-in tool answer passes the no-price guard (mcp_tools NO-PRICE RULE) before it leaves
+        return _t.no_commercial(fn(_principal_from(ctx), *args))
     except (_t.ToolError, _ad.DesignError) as e:
         raise _SdkToolError(str(e)) from e
     except _ad.QuotaExceeded as e:
         raise _SdkToolError(f"{e}; retry after {e.retry_after} s") from e
 
 
-INSTRUCTIONS = (
-    "AeroStator (aerostator.com): permanent-magnet motor / generator catalog, "
-    "saved FEM results, draft designs from requirements and 2-D FEM "
-    "simulations on the user's own queue. Without sign-in only the public "
-    "tools work: describe_service, list_capabilities, list_calculation_types, "
-    "get_input_requirements, how_to_authenticate, start_sign_up. Everything "
-    "that touches the user's machines, drafts, jobs or simulations needs an "
-    "OAuth sign-in: when an answer says authentication_required, relay its "
-    "data.user_message and let the user click Connect / Sign in in this app "
-    "(the page also offers Create account). Never ask for a password in chat. "
-    "Signed in: start with check_fit, or start_design when nothing fits; if "
-    "an answer says needs_input, ask the engineer. Read emotres://guide.")
+def instructions() -> str:
+    """The server instructions.  While simulations are closed (``MOTRES_SOLVE_ADMIN_ONLY``, owner 2026-11-04) they say that
+    MOTRES engineers run them and that ``simulate`` answers 'simulations_closed'; with the setting off the original text
+    returns - nothing to edit."""
+    closed = _t.simulations_closed()
+    head = ("AeroStator (aerostator.com): permanent-magnet motor / generator catalog, "
+            + ("saved FEM results, draft designs from requirements (simulations are run by "
+               "MOTRES engineers). "
+               if closed else
+               "saved FEM results, draft designs from requirements and 2-D FEM "
+               "simulations on the user's own queue. ")
+            + "Without sign-in only the public "
+            "tools work: describe_service, list_capabilities, list_calculation_types, "
+            "get_input_requirements, how_to_authenticate, start_sign_up. Everything "
+            "that touches the user's machines, drafts, jobs, simulations or projects "
+            "needs an OAuth sign-in: when an answer says authentication_required, relay "
+            "its data.user_message and let the user click Connect / Sign in in this app "
+            "(the page also offers Create account). Never ask for a password in chat. ")
+    signed_in = ("Signed in: start with check_fit, or start_design when nothing fits; if "
+                 "an answer says needs_input, ask the engineer. "
+                 + (_t.SIM_CLOSED_NOTE + " " if closed else ""))
+    return (head + signed_in
+            + "To ORDER a motor built to "
+            "the user's requirements: get_spec_form -> create_order -> update_spec "
+            "until needs_input is empty -> submit_spec -> get_order_status. "
+            + _t.NO_PRICE_RULE + " Read emotres://guide.")
+
+
+def __getattr__(name: str):
+    # ``INSTRUCTIONS`` stays importable (tests, older callers) and reads the setting at the time it is used.
+    if name == "INSTRUCTIONS":
+        return instructions()
+    raise AttributeError(name)
 
 
 def _register_public(srv) -> None:
@@ -173,14 +202,14 @@ def _register_public(srv) -> None:
         "PUBLIC (no sign-in). What AeroStator is: summary, operator, licence "
         "(Apache-2.0), website, MCP endpoint, terms, privacy and docs links."))
     def describe_service() -> Dict[str, Any]:
-        return _d.describe_service()
+        return _t.no_commercial(_d.describe_service())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). The full tool catalogue: name, one-line purpose, "
         "required scope, whether it needs sign-in, read-only or not; and what "
         "each scope unlocks."))
     def list_capabilities() -> Dict[str, Any]:
-        return _d.capabilities()
+        return _t.no_commercial(_d.capabilities())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). The calculation types AeroStator supports (fit "
@@ -189,7 +218,7 @@ def _register_public(srv) -> None:
         "map, mechanics, inverter losses, 3-D end effect, optimization) and "
         "the tools that run them."))
     def list_calculation_types() -> Dict[str, Any]:
-        return _d.calculation_types()
+        return _t.no_commercial(_d.calculation_types())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). Required and optional inputs of one calculation "
@@ -199,7 +228,7 @@ def _register_public(srv) -> None:
         calculation_type: Annotated[str, Field(description="id from list_calculation_types, e.g. design_from_requirements")],
     ) -> Dict[str, Any]:
         try:
-            return _d.input_requirements(calculation_type)
+            return _t.no_commercial(_d.input_requirements(calculation_type))
         except ValueError as e:
             raise _SdkToolError(str(e)) from e
 
@@ -208,7 +237,7 @@ def _register_public(srv) -> None:
         "scopes and what each unlocks, the sign-up URL and the API-key "
         "alternative, plus a user_message to relay."))
     def how_to_authenticate() -> Dict[str, Any]:
-        return _d.how_to_authenticate()
+        return _t.no_commercial(_d.how_to_authenticate())
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). For a user with no AeroStator account: the "
@@ -217,7 +246,7 @@ def _register_public(srv) -> None:
         "never in chat. Easiest path: Connect / Sign in in the AI app, then "
         "'Create account' on the page that opens."))
     def start_sign_up() -> Dict[str, Any]:
-        return _d.start_sign_up()
+        return _t.no_commercial(_d.start_sign_up())
 
 
 def build_server():
@@ -225,7 +254,7 @@ def build_server():
     srv = _GatedServer(
         name="emotres",
         title="AeroStator",
-        instructions=INSTRUCTIONS,
+        instructions=instructions(),
         version="stage3-discovery",
     )
     _register_public(srv)
@@ -294,11 +323,12 @@ def build_server():
                             max_mass_kg, cooling, limit)
 
     _register_stage3(srv)
+    _register_orders(srv)
 
     @srv.resource("emotres://guide", name="guide", title="How to use eMotres MCP",
                   mime_type="text/markdown")
     def guide() -> str:
-        return _t.GUIDE
+        return _t.guide()
 
     return srv
 
@@ -352,7 +382,8 @@ def _register_stage3(srv) -> None:
         "use (no new laminations), scales stack length / turns / parallel paths "
         "within valid ranges, explains why, and creates a draft in the user's "
         "workspace marked as yours. Nothing saved or open is changed. Returns "
-        "design_id; next: simulate(design_id, 'em')."))
+        "design_id; next: " + ("open_in_configure(design_id) (simulate is closed for now)."
+                               if _t.simulations_closed() else "simulate(design_id, 'em').")))
     def start_design(
         requirements: Annotated[Requirements, Field(description="the engineer's requirements")],
         ctx: Context,
@@ -370,13 +401,20 @@ def _register_stage3(srv) -> None:
         return _run(_ad.get_design, ctx, design_id)
 
     @srv.tool(annotations=wr, description=(
-        "Queue a FEM simulation of a draft on the user's own job queue (scope "
-        "simulate; daily fair-use limit, 429 when used up). what: em (electromagnetic "
-        "transient) | thermal (one EM pass + one thermal solve) | coupled (EM <-> "
-        "thermal loop to steady temperatures). steps: time steps per electrical "
-        "period (optional). Returns job_id at once; the solve takes minutes — "
-        "poll get_job. Runs in the draft's own sandbox: the user's open machine "
-        "is never touched and his own runs keep their place in the queue."))
+        ("CLOSED for now. " + _t.SIM_CLOSED_NOTE +
+         " Only a MOTRES staff account can start one. Everything else works as "
+         "before: start_design, get_design, open_in_configure, the saved results "
+         "(list_machines / get_machine_performance) and the order flow "
+         "(get_spec_form ... submit_spec), after which MOTRES engineers run the "
+         "full simulation.")
+        if _t.simulations_closed() else
+        ("Queue a FEM simulation of a draft on the user's own job queue (scope "
+         "simulate; daily fair-use limit, 429 when used up). what: em (electromagnetic "
+         "transient) | thermal (one EM pass + one thermal solve) | coupled (EM <-> "
+         "thermal loop to steady temperatures). steps: time steps per electrical "
+         "period (optional). Returns job_id at once; the solve takes minutes — "
+         "poll get_job. Runs in the draft's own sandbox: the user's open machine "
+         "is never touched and his own runs keep their place in the queue.")))
     def simulate(design_id: Annotated[str, Field(description="d-… from start_design")],
                  what: Annotated[str, Field(description="em | thermal | coupled")],
                  ctx: Context,
@@ -407,6 +445,110 @@ def _register_stage3(srv) -> None:
     def open_in_configure(design_id: Annotated[str, Field(description="d-… from start_design")],
                           ctx: Context) -> Dict[str, Any]:
         return _run(_ad.open_in_configure, ctx, design_id)
+
+
+def _order(fn, ctx, *args, client: bool = False):
+    """Call a ``development.spec_order`` body as the credential's owner; a caller
+    mistake (``OrderError``) becomes a tool error the agent can read."""
+    from mcp.server.mcpserver.exceptions import ToolError as _SdkToolError
+    from motor_ai_sim.development import spec_order as _so
+    p = _principal_from(ctx)
+    try:
+        user = _so.user_for(p.email)
+        if client:
+            return fn(user, *args, client=p.client_name or p.credential_id)
+        return fn(user, *args)
+    except _so.OrderError as e:
+        raise _SdkToolError(str(e)) from e
+
+
+_ORDER_FLOW = (" Flow: get_spec_form -> create_order -> update_spec until "
+               "needs_input is empty -> submit_spec -> get_order_status.")
+_LANG = "en (default) or zh-CN: the language of labels and help"
+
+
+def _register_orders(srv) -> None:
+    """The order flow (scopes projects:read / projects:write): a customer's
+    requirements -> a development project with a submitted specification."""
+    from motor_ai_sim.development import spec_order as _so
+    ro = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                         idempotentHint=True, openWorldHint=False)
+    wr = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                         idempotentHint=False, openWorldHint=False)
+
+    @srv.tool(annotations=ro, description=(
+        "The motor specification form, generated from the live schema: sections, "
+        "field ids, labels, types, units, required flags, choices (load_type, "
+        "cooling_medium, ...), which fields accept not_known_yet, the key point "
+        "and mission phase row shapes, and how to fill it. Read it before "
+        "create_order." + _ORDER_FLOW))
+    def get_spec_form(ctx: Context,
+                      lang: Annotated[Optional[str], Field(description=_LANG)] = "en") -> Dict[str, Any]:
+        return _order(lambda _user, lg: _so.spec_form(lg), ctx, lang)
+
+    @srv.tool(annotations=wr, description=(
+        "ORDER a motor: open a development project owned by the signed-in user "
+        "(scope projects:write) with a title, the customer's organisation and the "
+        "application, and optionally save a first draft of the specification "
+        "from answers {field_id: value | 'not_known_yet'} (flat 'field.property' "
+        "keys work too). Returns project_id, revision, link, completeness and "
+        "needs_input [{field, label, unit, reason}]: ask the user for each one, "
+        "never invent a value. status 'agreement_required' or 'project_limit' "
+        "carries a user_message to relay." + _ORDER_FLOW))
+    def create_order(
+        title: Annotated[str, Field(min_length=1, max_length=120, description="project title, e.g. '7-inch drone motor'")],
+        ctx: Context,
+        customer_org: Annotated[Optional[str], Field(max_length=120, description="the customer's company / organisation")] = None,
+        application: Annotated[Optional[str], Field(max_length=500, description="what the motor drives (saved as field 1_1)")] = None,
+        answers: Annotated[Optional[Dict[str, Any]], Field(description="first answers {field_id: answer} (see get_spec_form)")] = None,
+        lang: Annotated[Optional[str], Field(description=_LANG)] = "en",
+    ) -> Dict[str, Any]:
+        return _order(_so.create_order, ctx, title, customer_org, application, answers, lang, client=True)
+
+    @srv.tool(annotations=wr, description=(
+        "Merge answers into the specification draft of one of the user's projects "
+        "(only the project owner may). revision = the revision the last answer "
+        "gave (optimistic lock; status 'conflict' returns the current one). "
+        "Numbers in the field's unit (N·m, rpm, V, W, degC, mm, kg, s); '400 V' "
+        "is read for a field in V, other units are refused with a message. Each "
+        "field is validated on its own: accepted / rejected [{field, reason}]. "
+        "Returns the new revision, completeness, needs_input and which "
+        "recalculations the changes trigger." + _ORDER_FLOW))
+    def update_spec(
+        project_id: Annotated[str, Field(min_length=1, max_length=64, description="project_id from create_order / get_order_status")],
+        revision: Annotated[int, Field(ge=0, description="revision from the last answer")],
+        answers: Annotated[Dict[str, Any], Field(description="{field_id: answer}; 'not_known_yet' marks a field not known yet, null clears it")],
+        ctx: Context,
+        lang: Annotated[Optional[str], Field(description=_LANG)] = "en",
+    ) -> Dict[str, Any]:
+        return _order(_so.update_spec, ctx, project_id, revision, answers, lang, client=True)
+
+    @srv.tool(annotations=wr, description=(
+        "Submit the specification when needs_input is empty (every required "
+        "field answered or marked not_known_yet): a new specification version is "
+        "created and MOTRES engineers take it from there - they review it, run "
+        "the full simulation and contact the user in the project's messages. "
+        "status 'incomplete' lists needs_input; 'conflict' gives the current "
+        "revision. Returns spec_version and next_steps in plain words."))
+    def submit_spec(
+        project_id: Annotated[str, Field(min_length=1, max_length=64, description="project_id")],
+        revision: Annotated[int, Field(ge=0, description="revision from the last answer")],
+        ctx: Context,
+        lang: Annotated[Optional[str], Field(description=_LANG)] = "en",
+    ) -> Dict[str, Any]:
+        return _order(_so.submit_spec, ctx, project_id, revision, lang, client=True)
+
+    @srv.tool(annotations=ro, description=(
+        "The signed-in user's OWN development projects: stage in plain words, "
+        "specification completeness, draft revision and last submitted version, "
+        "linked motors (names only) and unread messages. With project_id: that "
+        "project with its current answers and needs_input."))
+    def get_order_status(
+        ctx: Context,
+        project_id: Annotated[Optional[str], Field(max_length=64, description="one project (optional)")] = None,
+        lang: Annotated[Optional[str], Field(description=_LANG)] = "en",
+    ) -> Dict[str, Any]:
+        return _order(_so.order_status, ctx, project_id, lang)
 
 
 def get_server():

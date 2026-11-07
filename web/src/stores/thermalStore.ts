@@ -25,7 +25,11 @@
  */
 import { create } from 'zustand';
 
-import { liveGeoSig } from '../components/common/geoSig';
+import { geoSigsDiffer, liveGeoSig } from '../components/common/geoSig';
+import { loadedPointKey, watchLoadedPoint } from '../lib/loadedPoint';
+import { mayAdopt, standingOf } from '../lib/resultOwner';
+import { IDLE_STORED, loadStoredPoint } from '../lib/storedPointResult';
+import type { StoredPoint } from '../lib/storedPointResult';
 import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
@@ -41,13 +45,13 @@ import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
 // `solveCoupled` below, which refuse in place of what used to chain one).
 import { registerThermalPanelBlock } from '../components/simulation/coupledApi';
 import {
-  fetchCoupled, fetchEmRun, fetchLastThermal, fetchThermalField,
+  fetchCoupled, fetchEmRun, fetchLastThermal, fetchLastThermalLight, fetchThermalField,
   fetchThermalMesh, fetchMeshParams, isNoEmRun, readLastSecs, readTherm,
   refusalReason, writeLastSecs, writeTherm,
 } from '../components/thermal/api';
 import type { EmRunStatus } from '../components/thermal/emRun';
 import type {
-  BoreMode, CoolMode, CoupledResult, EndFaceMode, FrameMode, ThermKind,
+  BoreMode, CoolMode, CoupledResult, EndFaceMode, FrameMode, StatorOdMode, ThermKind,
   ThermView, ThermalField, ThermalMeshPayload, ThermalMeshRequest,
   ThermalRequest,
 } from '../components/thermal/api';
@@ -104,6 +108,7 @@ const COOL_MODES: readonly CoolMode[] = ['air', 'liquid', 'manual', 'none',
 const BORE_MODES: readonly BoreMode[] = ['none', 'air', 'liquid', 'still'];
 const END_FACE_MODES: readonly EndFaceMode[] = ['still', 'none'];
 const FRAME_MODES: readonly FrameMode[] = ['housed', 'open'];
+const STATOR_OD_MODES: readonly StatorOdMode[] = ['direct', 'sleeve_contact'];
 
 /** The robotics mode's ONE conduction choice (2026-09-26, owner: «let's
  *  simplify it») — replaces mount W/K, mount °C, sink-or-link, link size and link
@@ -146,11 +151,23 @@ interface Slice<T> {
    *  the backend has said nothing yet.  What ends up on screen afterwards is
    *  the backend's own `elapsed_s`. */
   startedAt: number | null;
+  /** The catalogue point (`lib/resultOwner.pointKeyOf`) that was loaded when this
+   *  result was solved or adopted; null = none was.  The second witness beside
+   *  `geoSig`: a result whose point is not the loaded one is never kept
+   *  (`reconcile`), let alone drawn. */
+  point: string | null;
 }
 
 const EMPTY: Slice<never> = {
   data: null, busy: false, err: null, geoSig: null,
-  backendStale: null, restoredAt: null, startedAt: null,
+  backendStale: null, restoredAt: null, startedAt: null, point: null,
+};
+
+/** A `/last` entry as the adoption rule reads it (`lib/resultOwner.mayAdopt`). */
+type RestoredEntry<T> = {
+  result: T; geometry_fingerprint: string | null; computed_at: string | null;
+  stale_geometry: boolean | null;
+  context?: { die?: string; config?: string; duty?: string } | null;
 };
 
 export interface ThermalState {
@@ -175,6 +192,18 @@ export interface ThermalState {
   field: Slice<ThermalField>;
   coupled: Slice<CoupledResult>;
 
+  /** The loaded point's OWN stored temperature map (`duty_fields`), looked up
+   *  when a point is loaded and on every mount.  What the tab shows while the
+   *  `field` slice holds no fresh solve of this point - never `/last`'s
+   *  other-motor answer.  A MAP only: the component table and the heat budget
+   *  come with a Solve. */
+  stored: StoredPoint;
+  /** Look the loaded point's stored result up (a read; nothing is solved). */
+  loadStored: () => Promise<void>;
+  /** Drop every result that is not the loaded point's own and look the new
+   *  point's stored result up.  Runs on every load (`watchLoadedPoint`). */
+  reconcile: () => void;
+
   /** The refusal's own sentence, non-null exactly when the last Solve (or the
    *  coupled loop) came back `no_electromagnetic_run` — there is no current
    *  Electromagnetic result to heat this point with.  This tab NEVER makes
@@ -196,6 +225,9 @@ export interface ThermalState {
   /** the mesh itself: the bare cross-section drawn when nothing has been
    *  solved, and what the Build mesh button produces */
   geom: ThermalMeshPayload | null;
+  /** this client's geometry stamp when `geom` was requested - the mesh is only
+   *  drawn while it is still the loaded machine's (`geomFor`) */
+  geomSig: string | null;
   geomBusy: boolean;
   geomErr: string | null;
   geomStartedAt: number | null;
@@ -278,6 +310,15 @@ export interface ThermalState {
   /** how many ends are exposed: '2', or '1' when one end is against a gearbox */
   endFaceSides: string;
 
+  /** how the outer boundary reaches the stator (2026-11-03) — 'direct' (the
+   *  film on the stator's own outer contour, the default) or 'sleeve_contact'
+   *  (a dry press fit into a round sleeve, e.g. a submerged motor) */
+  statorOd: StatorOdMode;
+  /** sleeve_contact: wall thickness, mm (default 1.5) */
+  sleeveWallMm: string;
+  /** sleeve_contact: wall conductivity, W/m·K (default 160 = aluminium alloy) */
+  sleeveK: string;
+
   /** iteration cap of the coupled loop */
   maxIter: string;
 
@@ -312,6 +353,9 @@ export interface ThermalState {
    *  called on a field edit — each build is seconds of the mesher, so it is a
    *  button. */
   loadGeometry: () => Promise<void>;
+  /** Build the mesh when the one held is not the loaded machine's (a read of the
+   *  mesher, never a solve).  A no-op while the held mesh is current or a build runs. */
+  ensureGeometry: () => Promise<void>;
   /** `fresh` (2026-09-22, the History notice's Recompute): ignore a stored
    *  history answer and solve again, even for byte-identical inputs. */
   solveField: (fresh?: boolean) => Promise<void>;
@@ -327,6 +371,7 @@ const PERSISTED: (keyof ThermalState)[] = [
   'frame', 'openAirSpeed',
   'emissivity', 'heatPath',
   'endFaces', 'endFaceSides',
+  'statorOd', 'sleeveWallMm', 'sleeveK',
   'maxIter', 'view', 'eqTemp', 'showFlux',
   // The local comparison stack rides the SAME path as every other remembered
   // field (localStorage + the server), so there is one way this tab remembers
@@ -348,6 +393,7 @@ const COOLING_PERSISTED = new Set<string>([
   'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
   'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
   'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+  'statorOd', 'sleeveWallMm', 'sleeveK',
 ]);
 
 /** Bumped every time the server's fields for a newly loaded motor are adopted.
@@ -393,6 +439,8 @@ export interface CoolingInputs {
   frame: FrameMode; openAirSpeed: string;
   emissivity: string; heatPath: HeatPath;
   endFaces: EndFaceMode; endFaceSides: string;
+  /** optional so an older caller's inputs mean 'direct' */
+  statorOd?: StatorOdMode; sleeveWallMm?: string; sleeveK?: string;
 }
 
 type CoolingRequest = Pick<ThermalRequest,
@@ -400,7 +448,8 @@ type CoolingRequest = Pick<ThermalRequest,
   | 'fluid_temp_in_c' | 'flow_lpm' | 'bore_mode' | 'bore_air_speed_mps'
   | 'bore_fluid' | 'bore_fluid_temp_in_c' | 'bore_flow_lpm'
   | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
-  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'>;
+  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'
+  | 'stator_od_cooling' | 'od_sleeve_wall_mm' | 'od_sleeve_k'>;
 
 /** The bore mode a run actually uses.  A propeller-cooled machine has a SOLID
  *  shaft (owner 2026-10-12): no bore flow, whatever a saved value from another
@@ -479,6 +528,13 @@ export function coolingFields(s0: CoolingInputs): CoolingRequest {
     end_face_sides: (robot && endFaces !== 'none')
       ? (num(s.endFaceSides, 2) === 1 ? 1 : 2) : undefined,
     heat_path: (robot && s.heatPath !== 'none') ? s.heatPath : undefined,
+    // THE STATOR-OD SLEEVE (2026-11-03): sent only when chosen — 'direct' is
+    // the router's default and keys the cache as it always did.
+    ...(s.statorOd === 'sleeve_contact' ? {
+      stator_od_cooling: 'sleeve_contact' as const,
+      od_sleeve_wall_mm: num(s.sleeveWallMm ?? '', 1.5),
+      od_sleeve_k: num(s.sleeveK ?? '', 160),
+    } : {}),
   };
 }
 
@@ -510,6 +566,14 @@ export function coolingIssue(s0: CoolingInputs): string | null {
   // no film and no bore has no door at all.
   if (outerMode === 'none' && s.boreMode === 'none')
     return 'no cooled surface — the heat has nowhere to leave';
+  // mirrors `thermal_settings.cooling_issue`
+  if (s.statorOd === 'sleeve_contact') {
+    if (outerMode === 'none') return 'a sleeve needs an outer film to hand its heat to';
+    if (outerMode === 'robotics' && (s.heatPath === 'housing' || s.heatPath === 'both'))
+      return 'the robotics heat path “housing” already models the stator OD contact — pick the sleeve or the housing, not both';
+    if (!(num(s.sleeveWallMm ?? '', 1.5) > 0)) return 'sleeve wall must be greater than 0 mm';
+    if (!(num(s.sleeveK ?? '', 160) > 0)) return 'sleeve conductivity must be greater than 0 W/m·K';
+  }
   return null;
 }
 
@@ -574,7 +638,9 @@ function panelCooling(s: ThermalState): Record<string, string> {
     'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
     'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
     // …and the robotics block (2026-09-14; the heat path since 2026-09-26).
-    'emissivity', 'heatPath', 'endFaces', 'endFaceSides'] as const;
+    'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+    // …and the stator-OD sleeve (2026-11-03).
+    'statorOd', 'sleeveWallMm', 'sleeveK'] as const;
   const out: Record<string, string> = {};
   for (const k of KEYS) {
     const v = s[k];
@@ -623,6 +689,17 @@ registerThermalPanelBlock(() => {
   return out;
 });
 
+/** Which stored-result lookup is the newest; an older one landing late is dropped. */
+let storedSeq = 0;
+
+/** The held cross-section, or `null` when it is not (provably) the loaded machine's.  Compared BY VALUE
+ *  (`geoSigsDiffer`); a mesh with no stamp or a machine with none is not shown as a mismatch. */
+export function geomFor<M>(geom: M | null, sig: string | null): M | null {
+  if (!geom) return null;
+  const live = liveGeoSig();
+  return sig && live && geoSigsDiffer(sig, live) ? null : geom;
+}
+
 export const useThermalStore = create<ThermalState>()((set, get) => ({
   hydrated: false,
   serverSettingsLoaded: false,
@@ -632,11 +709,13 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   coolingApp: null,
   field: { ...EMPTY } as Slice<ThermalField>,
   coupled: { ...EMPTY } as Slice<CoupledResult>,
+  stored: IDLE_STORED,
   emMissing: null,
   emMissingReason: null,
   emRun: null,
 
   geom: null,
+  geomSig: null,
   geomBusy: false,
   geomErr: null,
   geomStartedAt: null,
@@ -692,6 +771,12 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   }),
   endFaces: readMode('endFaces', END_FACE_MODES, 'still' as EndFaceMode),
   endFaceSides: readStr('endFaceSides', '2'),
+
+  // DIRECT by default, and it has to be: it is the model every stored map was
+  // solved with (the film on the stator's own outer contour).
+  statorOd: readMode('statorOd', STATOR_OD_MODES, 'direct' as StatorOdMode),
+  sleeveWallMm: readStr('sleeveWallMm', '1.5'),
+  sleeveK: readStr('sleeveK', '160'),
 
   maxIter: readStr('maxIter', '6'),
 
@@ -837,17 +922,19 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     set({ serverSettingsLoaded: true });
     try {
       const last = await fetchLastThermal();
+      // Only THIS point's own answer is adopted (`mayAdopt`): `/last` is the
+      // workspace's last solve of ANY motor, and drawing another motor's map -
+      // even dimmed under a warning - was the bug (owner 2026-11-04).
+      const loaded = loadedPointKey();
       const adopt = <T,>(cur: Slice<T>,
-                         e: { result: T; geometry_fingerprint: string | null;
-                              computed_at: string | null;
-                              stale_geometry: boolean | null } | null,
+                         e: RestoredEntry<T> | null,
                          tile: (r: T) => T): Slice<T> =>
-        (cur.data || !e?.result) ? cur : {
+        (cur.data || !e?.result || !mayAdopt(e, loaded)) ? cur : {
           data: tile(e.result), busy: false, err: null,
-          // No stamp of our own: this result was not solved by this client, so
-          // the backend's verdict is the only witness there is.
-          geoSig: null, backendStale: e.stale_geometry,
-          restoredAt: e.computed_at, startedAt: null,
+          // The server proved this IS the loaded machine, so this client's own
+          // stamp of the machine as it is now is the witness for a later edit.
+          geoSig: liveGeoSig() || null, backendStale: false,
+          restoredAt: e.computed_at, startedAt: null, point: loaded,
         };
       // A field solved before 2026-09-09 17:09 carries no `n_sectors` (only
       // the mesh preview did), so the tiler would leave it a quarter of a
@@ -893,20 +980,19 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
         const n = Math.max(1, Math.round(Number(mb.n_sectors ?? mb.nSectors ?? 1) || 1));
         return tileFullRing({ ...p, n_sectors: n, symmetry_mult: n } as never) as P;
       };
+      const loaded = loadedPointKey();
       const adopt = <T,>(cur: Slice<T>,
-                         e: { result: T; geometry_fingerprint: string | null;
-                              computed_at: string | null;
-                              stale_geometry: boolean | null } | null,
+                         e: RestoredEntry<T> | null,
                          tile: (r: T) => T): Slice<T> => {
-        if (!e?.result || cur.busy) return cur;
+        if (!e?.result || cur.busy || !mayAdopt(e, loaded)) return cur;
         const mine = when((cur.data as { computed_at?: string } | null)?.computed_at
                           ?? cur.restoredAt);
         const theirs = when(e.computed_at);
         if (!Number.isNaN(mine) && !(theirs > mine)) return cur;
         return {
           data: tile(e.result), busy: false, err: null,
-          geoSig: null, backendStale: e.stale_geometry,
-          restoredAt: e.computed_at, startedAt: null,
+          geoSig: liveGeoSig() || null, backendStale: false,
+          restoredAt: e.computed_at, startedAt: null, point: loaded,
         };
       };
       set({
@@ -919,6 +1005,45 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     }
   },
 
+  ensureGeometry: async () => {
+    const st = get();
+    if (st.geomBusy || geomFor(st.geom, st.geomSig) !== null) return;
+    await st.loadGeometry();
+  },
+
+  loadStored: async () => {
+    const key = loadedPointKey();
+    const seq = ++storedSeq;
+    if (!key) { set({ stored: IDLE_STORED }); return; }
+    const cur = get().stored;
+    // keep a ready map of the SAME point on screen while it is re-read; anything else shows the lookup
+    if (!(cur.key === key && cur.status === 'ready')) set({ stored: { key, status: 'loading' } });
+    const next = await loadStoredPoint(key, 'thermal', async () => {
+      const last = await fetchLastThermalLight();
+      return last?.live_geometry_fingerprint ?? null;
+    });
+    // a newer lookup started, or the point moved while this was being read: this answer is not for what is loaded now
+    if (seq !== storedSeq || loadedPointKey() !== key) return;
+    set({ stored: next });
+  },
+
+  reconcile: () => {
+    const live = { point: loadedPointKey(), geoSig: liveGeoSig() };
+    const keep = <T,>(sl: Slice<T>): Slice<T> =>
+      (sl.data && standingOf({ point: sl.point, geoSig: sl.geoSig }, live) === 'foreign')
+        ? ({ ...EMPTY } as Slice<T>)
+        // a solve still running for the point just left is dropped when it lands (the guard in each solve)
+        : (!sl.data && sl.busy && sl.point !== live.point ? ({ ...EMPTY } as Slice<T>) : sl);
+    const st = get();
+    const field = keep(st.field), coupled = keep(st.coupled);
+    if (field !== st.field || coupled !== st.coupled) set({ field, coupled });
+    // the cross-section held is the previous motor's: not drawn (and rebuilt when the tab needs it)
+    if (geomFor(st.geom, st.geomSig) === null && st.geom) set({ geom: null, geomSig: null });
+    if (st.stored.key !== live.point) set({ stored: live.point ? { key: live.point, status: 'loading' } : IDLE_STORED });
+    // the new point's own `/last` answer, if the server still holds it, and its stored map
+    if (st.hydrated) void get().refreshLast().then(() => get().loadStored());
+  },
+
   loadGeometry: async () => {
     // A build already running is not re-entered — unless its flag is STALE
     // (a request the API restart cut off never resolves, and a flag stuck
@@ -926,6 +1051,9 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // is impossible to click', 2026-09-07).
     if (get().geomBusy && Date.now() - (get().geomStartedAt ?? 0) < 180_000) return;
     const t0 = Date.now();
+    // the machine this mesh is asked for - stamped at the START, so a mesh that lands after
+    // another motor was loaded is recognised as the previous one's and not drawn
+    const sig0 = liveGeoSig() || null;
     set({ geomBusy: true, geomErr: null, geomStartedAt: t0 });
     try {
       // Tiled here, once: a sector mesh drawn as it comes back is a quarter of
@@ -933,7 +1061,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       const mesh = await fetchMeshParams();
       set({ meshCfg: mesh });
       const m = tileFullRing(await fetchThermalMesh(mesh));
-      set({ geom: m });
+      set({ geom: m, geomSig: sig0 });
       noteSecs(set, get, 'mesh',
                // What it COST to build: a cache hit is not a 0.05 s mesh, and
                // an estimate taught by cache hits would say "~0 s" forever.
@@ -947,21 +1075,26 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
 
   solveField: async (fresh) => {
     const s = get();
+    const point0 = loadedPointKey();
     // Never send a boundary condition that cannot be solved (a liquid loop with
     // no pump, no cooled surface at all): the panel disables Solve on the same
     // verdict, and this is the second lock on the same door.
     const bad = coolingIssue(s) ?? propellerContextIssue(s)
       ?? fieldsBlockIssue(s);
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
-    set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
+    set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now(), point: point0 },
           emMissing: null, emMissingReason: null });
     try {
       // The mesh block is still read for the panel's mesh line; the solve
       // itself runs on the EM run's own mesh.
       try { set({ meshCfg: await fetchMeshParams() }); } catch { /* display only */ }
       const out = tileFullRing(await fetchThermalField(buildRequest(s, fresh)));
+      // Another point was loaded while this solved: the answer is that other
+      // point's, not the one on screen - it is dropped, never drawn.
+      if (loadedPointKey() !== point0) return;
       set({ field: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
-                     backendStale: false, restoredAt: null, startedAt: null },
+                     backendStale: false, restoredAt: null, startedAt: null,
+                     point: point0 },
             ...(out.em_run ? { emRun: { ok: true, em_run: out.em_run } } : {}) });
       if (!out.cached) noteSecs(set, get, 'field', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
@@ -970,6 +1103,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // Solve just STOPS: the panel reads `emMissing` and shows one line and
       // a link to the Electromagnetic tab. Every other error is the user's to
       // read as before.
+      if (loadedPointKey() !== point0) return;
       if (isNoEmRun(e)) {
         set({ field: { ...s.field, busy: false, err: null, startedAt: null },
               emMissing: msg(e), emMissingReason: refusalReason(e),
@@ -990,10 +1124,11 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
    *  `emMissing`, exactly as the field Solve's does. */
   solveCoupled: async () => {
     const s = get();
+    const point0 = loadedPointKey();
     const bad = coolingIssue(s) ?? propellerContextIssue(s)
       ?? fieldsBlockIssue(s);
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
-    set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
+    set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now(), point: point0 },
           emMissing: null, emMissingReason: null });
     try {
       try { set({ meshCfg: await fetchMeshParams() }); } catch { /* display only */ }
@@ -1004,11 +1139,14 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
         max_iter: Math.min(12, Math.max(1, Math.round(num(s.maxIter, 6)))),
       });
       const out: CoupledResult = { ...raw, field: tileFullRing(raw.field) };
+      if (loadedPointKey() !== point0) return;
       set({ coupled: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
-                       backendStale: false, restoredAt: null, startedAt: null },
+                       backendStale: false, restoredAt: null, startedAt: null,
+                       point: point0 },
             ...(out.em_run ? { emRun: { ok: true, em_run: out.em_run } } : {}) });
       if (!out.cached) noteSecs(set, get, 'coupled', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
+      if (loadedPointKey() !== point0) return;
       if (isNoEmRun(e)) {
         set({ coupled: { ...s.coupled, busy: false, err: null, startedAt: null },
               emMissing: msg(e), emMissingReason: refusalReason(e),
@@ -1088,6 +1226,11 @@ function adoptFollowAnswer(answer: unknown): void {
   st.setPropellerCooling(f.airSpeedSource, f.propellerId, f.propellerContextKey);
 }
 registerThermalFollow(adoptFollowAnswer);
+
+/* WHOSE result is on screen follows the loaded point (owner 2026-11-04).  A load - the Motors tab, the point switcher in
+   Simulation, the header strip, a second browser following - ends in one of these events; the watch collapses them to one
+   call per change of point and `reconcile` drops whatever is not the new point's own. */
+watchLoadedPoint(() => { useThermalStore.getState().reconcile(); });
 
 /** Why the cooling fields must not be used for a solve right now, or `null`. */
 function fieldsBlockIssue(s: ThermalState): string | null {

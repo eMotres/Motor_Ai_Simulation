@@ -160,7 +160,7 @@ def _cfg_doc():
         {"name": "rated", "rpm": 3000, "current_arms": 100, "summary": {
             "rpm": 3000, "I_phase_rms_A": 100, "R_phase_ohm": R_PHASE_20C, "coil_temp_C": 20.0,
             "Ld_mH": 0.045, "Lq_mH": 0.060, "T_em_avg_Nm": 30.0, "efficiency": 0.95, "mass_total_kg": 9.0,
-            "V_line_peak_V": 400.0}},
+            "V_line_peak_V": 400.0, "P_mech_W": 30.0 * 3000 * math.pi / 30.0, "P_loss_total_W": 500.0}},
         {"name": "no-load 3000", "rpm": 3000, "current_arms": 0, "summary": {
             "rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": 120.0, "V_line_rms_V": 84.0,
             "P_core_terms": {"stator": {"hysteresis_W": 200.0, "eddy_W": 100.0, "excess_W": 50.0},
@@ -333,6 +333,11 @@ def test_a_load_sweep_carries_every_row_as_a_series_for_the_chart():
     assert [(p["rpm"], p["measured"]) for p in q["t_housing"]["points"]] == [(1000, 31.0), (3030, 45.0)]
     assert "t_winding" not in q and "t_magnet" not in q                           # nothing measured or modelled: dropped
     assert all(p["measured"] is not None or p["model"] is not None for x in q.values() for p in x["points"])
+    # the raw rows for the per-speed plots (torque / loss / efficiency against torque or current), model only where matched
+    pts = out["series"]["points"]
+    assert [(p["rpm"], p["current"], p["torque"], p["v_dc"], p["i_dc"]) for p in pts] == [
+        (1000, 50, 10.0, 48.0, 20.0), (3030, 101, 29.0, None, None), (2000, 70, 20.0, None, None)]
+    assert pts[1]["model"]["torque"] == 30.0 and pts[0]["model"] == {} and pts[2]["model"] == {}
     # no rows with anything to plot -> no series at all; the other kinds do not carry one
     assert comparison.compare_record(_record("load", rows=[{"rpm": 1000}]), _model(), "D", "C")["series"] is None
     assert "series" not in comparison.compare_record(_free_run_rec(), _model(), "D", "C")
@@ -354,23 +359,23 @@ def test_free_run_emf_carries_the_stage_a_flux_factor_and_says_so():
     pk = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
     rms = [r for r in g["emf_rms"]["rows"] if r["params"]["rpm"] == 3000][0]
     assert pk["model"] == pytest.approx(120.0 * 1.125 * 0.95)
-    assert pk["extra"]["model_2d"] == pytest.approx(120.0 * 1.125) and pk["extra"]["k_3d"] == 0.95
+    assert pk["extra"]["corrected"] is True and "model_2d" not in pk["extra"] and "k_3d" not in pk["extra"]
     assert rms["model"] == pytest.approx(84.0 * 1.125 * 0.95)
-    assert "Br ratio 1.125" in pk["detail"] and "3-D ×0.950 (Stage A)" in pk["detail"]
-    assert g["emf_peak"]["basis"] == "magnets at 60 C, 3-D ×0.950 (Stage A)"
-    # losses stay 2-D (the flux factor is not applied) and the group says so
+    assert "Br ratio 1.125" in pk["detail"] and pk["detail"].endswith("corrected")
+    assert g["emf_peak"]["basis"] == "magnets at 60 C, corrected"
+    # losses are not scaled by the flux factor
     loss = [r for r in g["loss"]["rows"] if r["params"]["rpm"] == 3000][0]
     assert loss["extra"]["em_w"] == pytest.approx((210 + 105 + 52 + 40) * 1.125 ** 2)
-    assert "losses 2-D" in g["loss"]["basis"]
+    assert "2-D" not in g["loss"]["basis"] and "3-D" not in g["loss"]["basis"]
 
 
-def test_without_a_passport_the_2d_value_stays_and_says_so():
+def test_without_a_factor_the_value_stays_and_says_not_corrected_yet():
     out = comparison.compare_record(_free_run_rec(), _model(), "D", "C")
     g = {x["key"]: x for x in out["groups"]}
     pk = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
-    assert pk["model"] == pytest.approx(120.0 * 1.125) and pk["extra"]["k_3d"] is None
-    assert pk["detail"].endswith("2-D, no 3-D passport")
-    assert g["emf_peak"]["basis"].endswith("2-D, no 3-D passport")
+    assert pk["model"] == pytest.approx(120.0 * 1.125) and pk["extra"]["corrected"] is False
+    assert pk["detail"].endswith("not corrected yet")
+    assert g["emf_peak"]["basis"].endswith("not corrected yet")
 
 
 def test_the_passport_stored_with_a_duty_is_used_when_none_is_resolved():
@@ -386,16 +391,42 @@ def test_torque_carries_the_torque_factor_k_t_else_the_flux_factor():
     rec = _record("load", rows=[{"rpm": 3000, "i_phase_a": 100, "torque_nm": 29.0}])
     flux = model_source.from_docs({}, _cfg_doc(), {}, LIB, end3d={"k_flux": 0.95})
     t = comparison.compare_record(rec, flux, "D", "C")["groups"][0]["rows"][0]
-    assert t["model"] == pytest.approx(30.0 * 0.95) and "flux factor" in t["detail"] and t["extra"]["model_2d"] == 30.0
+    assert t["model"] == pytest.approx(30.0 * 0.95) and t["detail"].endswith("corrected") and t["extra"]["corrected"] is True
     meas = model_source.from_docs({}, _cfg_doc(), {}, LIB, end3d={"k_flux": 0.95, "k_T": 0.98})
     t = comparison.compare_record(rec, meas, "D", "C")["groups"][0]["rows"][0]
-    assert t["model"] == pytest.approx(30.0 * 0.98) and "measured k_T" in t["detail"]
+    assert t["model"] == pytest.approx(30.0 * 0.98) and t["detail"].endswith("corrected")
     grp = comparison.compare_record(rec, meas, "D", "C")["groups"][0]
-    assert grp["basis"].startswith("torque 3-D ×0.980")
-    # the efficiency is not scaled
+    assert grp["basis"] == "torque and efficiency on the corrected shaft power"
+    # the motor efficiency is formed on the corrected shaft power (T * omega * k_T), the stored losses as they are
     rec2 = _record("load", rows=[{"rpm": 3000, "i_phase_a": 100, "torque_nm": 29.0, "eff_pct": 94.0}])
     eff = comparison.compare_record(rec2, meas, "D", "C")["groups"][0]["rows"][1]
-    assert eff["model"] == pytest.approx(95.0)
+    pm = 30.0 * 3000 * math.pi / 30.0 * 0.98
+    assert eff["model"] == pytest.approx(100.0 * pm / (pm + 500.0)) and eff["model"] < 95.0
+    # without a factor the stored (uncorrected) efficiency stays, and the row says so
+    plain = comparison.compare_record(rec2, _model(), "D", "C")["groups"][0]["rows"][1]
+    assert plain["model"] == pytest.approx(95.0) and plain["detail"].endswith("not corrected yet")
+    # a factor but a duty that lacks the rotor power or the losses: no value, never the uncorrected one
+    doc = _cfg_doc()
+    del doc["duties"][0]["summary"]["P_mech_W"]
+    bare = model_source.from_docs({}, doc, {}, LIB, end3d={"k_flux": 0.95, "k_T": 0.98})
+    none = comparison.compare_record(rec2, bare, "D", "C")["groups"][0]["rows"][1]
+    assert none["model"] is None
+
+
+def test_generator_efficiency_is_formed_on_the_corrected_shaft_power():
+    # T 87.43 N*m (uncorrected) at 3023 rpm, factor 0.9502: corrected shaft power 26.30 kW, terminal power 25.01 kW,
+    # total loss 1289 W -> 95.1 %, not the 95.34 % of the uncorrected rotor power
+    omega = 3023 * math.pi / 30.0
+    doc = {"winding": {"star_delta": "star"}, "duties": [{"name": "gen", "rpm": 3023, "current_arms": 60, "mode": "generator",
+           "summary": {"rpm": 3023, "I_phase_rms_A": 60, "T_em_avg_Nm": 87.43, "op_mode": "generator",
+                       "P_mech_W": 87.43 * omega, "P_loss_total_W": 1289.0, "efficiency": 0.9534}}]}
+    rec = _record("load", rows=[{"rpm": 3023, "i_phase_a": 60, "torque_nm": 80.0, "eff_pct": 95.0}])
+    m = model_source.from_docs({}, doc, {}, LIB, end3d={"k_flux": 0.9502})
+    eff = comparison.compare_record(rec, m, "D", "C")["groups"][0]["rows"][1]
+    assert eff["key"] == "eff" and eff["model"] == pytest.approx(95.1, abs=0.05)
+    assert abs(eff["model"] - 95.34) > 0.2
+    # the chart's model side carries the same number
+    assert comparison.compare_record(rec, m, "D", "C")["series"]["quantities"][1]["points"][0]["model"] == pytest.approx(eff["model"])
 
 
 def test_inductance_and_resistance_take_no_flux_factor():
@@ -408,8 +439,8 @@ def test_inductance_and_resistance_take_no_flux_factor():
     g = {x["key"]: x for x in comparison.compare_record(rec, m, "D", "C")["groups"]}
     assert g["resistance"]["rows"][0]["model"] == pytest.approx(19.424, abs=0.001)
     ls = {r["key"]: r for r in g["inductance"]["rows"]}
-    assert ls["l_sum"]["model"] == pytest.approx(105.0) and ls["l_sum"]["detail"].endswith("2-D")
-    assert g["inductance"]["basis"].startswith("2-D")
+    assert ls["l_sum"]["model"] == pytest.approx(105.0) and "2-D" not in ls["l_sum"]["detail"]
+    assert g["inductance"]["basis"] == "no end-winding inductance"
 
 
 def test_resolve_end3d_looks_the_passport_up_by_the_configuration_geometry(monkeypatch):
@@ -510,3 +541,37 @@ def test_a_record_without_a_cogging_entry_gets_no_cogging_group():
     rec = models.normalize({"kind": "parameters", "date": "2026-10-31", "title": "r",
                             "resistance": {"temp_c": 21.7, "pairs": [{"pair": "1-2", "value_mohm": 140}]}}, who="t@x")
     assert not [g for g in comparison.compare_record(rec, model, "d", "c")["groups"] if g["key"] == "cogging"]
+
+
+def test_system_efficiency_of_a_generator_row_stays_under_100_and_a_timed_row_says_its_minute():
+    # 100 N*m at 3000 rpm = 31416 W on the shaft, 600 V x 47.6 A = 28560 W on the DC link: generating
+    row = {"rpm": 3000, "torque_nm": 100.0, "v_dc_v": 600.0, "i_dc_a": 47.6, "time_min": 12}
+    rec = _record("load", rows=[row])
+    cmp = comparison.compare_record(rec, _model(), "D", "C")
+    group = cmp["groups"][0]
+    rows = {r["key"]: r for r in group["rows"]}
+    assert rows["eff_system"]["measured"] == pytest.approx(28560 / (100 * 3000 * math.pi / 30) * 100)
+    assert rows["eff_system"]["measured"] < 100
+    assert group["label"].startswith("12 min · 3000 rpm")
+    assert cmp["series"]["points"][0]["time_min"] == 12
+
+
+def test_a_load_row_keeps_its_current_density_and_shows_it():
+    rec = _record("load", rows=[{"rpm": 3000, "torque_nm": 103.4, "time_min": 44, "j_a_mm2": 18.8}])
+    assert rec["rows"][0]["j_a_mm2"] == pytest.approx(18.8)
+    cmp = comparison.compare_record(rec, _model(), "D", "C")
+    rows = {r["key"]: r for r in cmp["groups"][0]["rows"]}
+    assert rows["j_coil"]["measured"] == pytest.approx(18.8)
+    assert rows["j_coil"]["unit"] == "A/mm²"
+
+
+def test_the_per_mass_columns_prefer_the_weighed_motor_then_cad_then_active():
+    weighed = {"tests": [{"date": "2026-10-26", "conditions": {"rotor": "in"}, "weight": [{"what": "motor as photographed", "mass_g": 9400.0}]},
+                         {"date": "2026-11-05", "conditions": {"rotor": "out"}, "weight": [{"what": "stator, bare", "mass_g": 3351.5}]}]}
+    cad = {"mass": {"full_kg": 9.72, "active_kg": 7.33, "partial": False}}
+    assert comparison.motor_mass(weighed, cad) == {"kg": 9.4, "basis": "weighed"}
+    stated = {"tests": [{"date": "2026-11-02", "conditions": {"rotor": "in"}, "weight": [{"what": "motor, owner's figure, not weighed", "mass_g": 9000.0}]}]}
+    assert comparison.motor_mass(stated, cad) == {"kg": 9.0, "basis": "stated"}
+    assert comparison.motor_mass({"tests": []}, cad) == {"kg": 9.72, "basis": "cad"}
+    assert comparison.motor_mass({"tests": []}, {"mass": {"full_kg": 2.23, "active_kg": 2.23, "partial": True}}) == {"kg": 2.23, "basis": "active"}
+    assert comparison.motor_mass({"tests": []}, {}) is None

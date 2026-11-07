@@ -21,8 +21,9 @@ import FemAnimationViewer  from './FemAnimationViewer';
 import TransientCharts     from './TransientCharts';
 import SummaryTable        from './SummaryTable';
 import StoredRunSelector   from './StoredRunSelector';
+import SimPointSwitcher    from './SimPointSwitcher';
 import { useMotorStore }   from '../../stores/motorStore';
-import { geoSignature }    from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { applyS1AsOperatingPoint, s1AutoSetPlan, s1AutoSetNoticeText }
                             from './coupledApi';
 import type { TransientSummary } from './SummaryTable';
@@ -158,7 +159,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
     () => geoSignature(liveGeometry as Record<string, unknown>), [liveGeometry]);
   const summaryStale = !appliedSummary && !!transientSummary && (
     ((transientSummary as any)._geoSig != null
-      && (transientSummary as any)._geoSig !== liveGeoSig)
+      && geoSigsDiffer((transientSummary as any)._geoSig, liveGeoSig))
     || (transientSummary as any)._geoStaleBackend === true);
   // "vs applied point" delta chip removed (user request 2026-08-20): the
   // header line had no room for it and the η delta was routinely nonsense
@@ -220,6 +221,10 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
             above a /physics fetch whose analytic MMF / B_r / loss estimates were
             all rendered into display:none Papers. */}
         <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: 'var(--ok-bg)', color: '#4ade80' }}/>
+        {/* The motor's computed POINTS (its duties): load one, charts included,
+            with nothing solved.  The run chips beside it then belong to the
+            chosen point.  Renders nothing for a motor with a single point. */}
+        <SimPointSwitcher />
         {/* Which of this duty's SAVED runs is on screen (sine / PWM / BLDC).
             Renders nothing until the loaded duty has more than one. */}
         <StoredRunSelector />

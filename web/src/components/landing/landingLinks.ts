@@ -12,14 +12,13 @@ export function docUrl(path: string): string {
   return `${REPO_URL}/blob/${BRANCH}/${path.replace(/^\/+/, '')}`;
 }
 
-export interface DevLink { id: 'github' | 'sdk' | 'rules' | 'byo' | 'mcp'; href: string }
+export interface DevLink { id: 'github' | 'sdk' | 'rules' | 'mcp'; href: string }
 
 /** Links for developers and AI agents, in the order shown. */
 export const DEV_LINKS: DevLink[] = [
   { id: 'github', href: REPO_URL },
   { id: 'sdk', href: docUrl('docs/COMPONENT_SDK.md') },
   { id: 'rules', href: docUrl('docs/MODULE_CONTRIBUTION_RULES.md') },
-  { id: 'byo', href: docUrl('docs/BYO_COMPUTE.md') },
   { id: 'mcp', href: docUrl('docs/MCP_DISCOVERY.md') },
 ];
 

@@ -16,7 +16,7 @@ import math
 import os
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
@@ -169,43 +169,178 @@ def _default_rpm() -> float:
         return 0.0
 
 
-def _default_torque_nm() -> tuple:
-    """(mean torque of the last Simulation run, where it came from).
+def _loaded_machine() -> Optional[Tuple[str, str, Optional[str]]]:
+    """``(die, configuration, duty or None)`` the editor has loaded in THIS workspace, else ``None``.
 
-    User 2026-09-07: "also add torque on the rotor, let all the forces act".
-    The torque is a RESULT, not a setting, so it is read from the last transient
-    the Simulation tab produced — never invented here, and never typed into a
-    default in a panel (the standing rule that every physics value comes from
-    the Simulation tab).
+    Read off the catalog context (``.family_context.json``, per workspace), the same record every
+    Load / Save writes, so it names the machine whose geometry the live routes build."""
+    try:
+        from motor_ai_sim.routes import family
+        ctx = family._read_ctx() or {}
+    except Exception:  # noqa: BLE001 - nothing loaded is the ordinary case
+        return None
+    die, cfg = str(ctx.get("die") or "").strip(), str(ctx.get("config") or "").strip()
+    if not die or not cfg:
+        return None
+    return die, cfg, (str(ctx.get("duty") or "").strip() or None)
 
-    Two lookups, in this order, and the source string says which answered:
 
-      * ``presets._last_transient_summary()`` — the persisted last run, guarded
-        by the geometry fingerprint, i.e. THIS machine's torque;
-      * the in-memory ``_last_transient_ref`` — whatever ran last in this
-        process, whichever machine it was.  Reported as `stale` so the panel can
-        show it next to an editable field rather than pretend it is this rotor's.
+def _machine_config_doc(die: str, config: str) -> Optional[Dict[str, Any]]:
+    """The configuration yaml of ``die/config`` (read through the catalog layers), ``None`` when absent."""
+    try:
+        from motor_ai_sim.routes import family
+        p = family._cfg_file(die, config)
+        if not p.is_file():
+            return None
+        return family._load_yaml(p, "configuration")
+    except Exception:  # noqa: BLE001 - an unreadable configuration has no torque to give
+        return None
 
-    ``(None, "none")`` when nothing has been run: the caller then solves the
-    centrifugal case alone rather than a made-up torque.
+
+def _same_name(a: Optional[str], b: Optional[str]) -> bool:
+    return str(a or "").strip().casefold() == str(b or "").strip().casefold()
+
+
+def _resolve_machine(die: Optional[str] = None, config: Optional[str] = None,
+                     duty: Optional[str] = None) -> tuple:
+    """``((die, config) or None, duty entry or None, note)`` of the machine a mechanics request is about.
+
+    ``die``/``config`` given: that machine (its duty from ``duty``, else the loaded context's duty when the
+    loaded machine IS that one).  Nothing given: the machine loaded in this workspace.  A configuration with
+    several duties and none named has no single operating point: no duty, and the note says so."""
+    loaded = _loaded_machine()
+    if die:
+        if not config:
+            return (str(die), ""), None, f"no configuration named for die '{die}'"
+        machine = (str(die), str(config))
+        if duty is None and loaded and _same_name(loaded[0], die) and _same_name(loaded[1], config):
+            duty = loaded[2]
+    elif loaded:
+        machine, duty = (loaded[0], loaded[1]), (duty or loaded[2])
+    else:
+        return None, None, "no machine is loaded"
+    label = f"{machine[0]}/{machine[1]}"
+    doc = _machine_config_doc(*machine)
+    if doc is None:
+        return machine, None, f"configuration '{label}' not found"
+    duties = [d for d in (doc.get("duties") or []) if isinstance(d, dict) and d.get("name")]
+    if duty:
+        entry = next((d for d in duties if str(d.get("name")) == str(duty)), None)
+        if entry is None:
+            return machine, None, f"'{label}' has no duty '{duty}'"
+        return machine, entry, ""
+    if len(duties) == 1:
+        return machine, duties[0], ""
+    if not duties:
+        return machine, None, f"'{label}' has no duty"
+    return machine, None, f"'{label}' has {len(duties)} duties and none is named"
+
+
+def _torque_of_block(block: Any) -> Optional[float]:
+    """The shaft torque a stored result block carries: the 2-D mean x the 3-D end-effect factor when the
+    block has one (what the Electromagnetic tab shows), else the plain mean.  ``None`` when there is none."""
+    if not isinstance(block, dict):
+        return None
+    t = None
+    for key in ("T_em_avg_Nm", "T_avg_Nm"):
+        try:
+            v = float(block.get(key))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v != 0.0:
+            t = v
+            break
+    if t is None:
+        return None
+    e3 = block.get("end3d")
+    try:
+        k = float((e3 or {}).get("k_flux")) if isinstance(e3, dict) else None
+    except (TypeError, ValueError):
+        k = None
+    if k is not None and math.isfinite(k) and k > 0.0:
+        t *= k
+    return abs(t)
+
+
+def _machine_torque_nm(die: Optional[str] = None, config: Optional[str] = None,
+                       duty: Optional[str] = None) -> tuple:
+    """(electromagnetic torque of THE MACHINE ASKED ABOUT, where it came from) - never another machine's.
+
+    2026-11-02 (bug: a generator's rotor stress was solved with the torque of another machine of the same
+    die): the default used to be "the last Simulation run" - the persisted last transient (guarded only by
+    the geometry fingerprint, which says nothing about the winding) and then the in-memory last run of the
+    PROCESS, whichever machine that was.  Now the torque is read from the machine's own catalogue entry, in
+    this order:
+
+      * the duty's saved electromagnetic result (``summary`` / ``result`` in the configuration yaml);
+      * the duty's own last kernel run filed under it (``duty_results`` ``em_run``);
+      * the duty's operating point (``torque_nm``, its target / rated torque).
+
+    ``(None, reason)`` when the machine has none: the caller refuses rather than guessing.
     """
+    machine, entry, note = _resolve_machine(die, config, duty)
+    if machine is None or entry is None:
+        return None, note or "no duty"
+    name = str(entry.get("name"))
+    label = f"{machine[0]}/{machine[1]}/{name}"
+    for key in ("summary", "result"):
+        t = _torque_of_block(entry.get(key))
+        if t is not None:
+            return t, f"{label} saved result"
     try:
-        from motor_ai_sim.routes.presets import _last_transient_summary
-        res = _last_transient_summary() or {}
-        v = res.get("T_avg_Nm")
-        if v is not None and float(v) != 0.0:
-            return abs(float(v)), "last run"
-    except Exception:  # noqa: BLE001 - a missing run is not an error
+        from motor_ai_sim import duty_results as _DR
+        row = ((_DR.get(machine[0], machine[1]) or {}).get(name) or {}).get("em_run") or {}
+        t = _torque_of_block(row.get("numbers"))
+        if t is not None:
+            return t, f"{label} last run"
+    except Exception:  # noqa: BLE001 - no stored run is not an error
         pass
     try:
-        from motor_ai_sim.routes.simulation import _last_transient_ref
-        res = (_last_transient_ref.get("result") or {})
-        v = res.get("T_avg_Nm")
-        if v is not None and float(v) != 0.0:
-            return abs(float(v)), "last run (another geometry)"
-    except Exception:  # noqa: BLE001
+        v = float(entry.get("torque_nm"))
+        if math.isfinite(v) and v != 0.0:
+            return abs(v), f"{label} duty point"
+    except (TypeError, ValueError):
         pass
-    return None, "none"
+    return None, f"{label} has no stored torque"
+
+
+def _no_torque_422(reason: str, value: Any = None) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={"error": "no torque for this machine; give torque_nm",
+                "invalid_parameters": [{
+                    "field": "torque_nm", "value": value, "kind": "missing",
+                    "message": (f"no torque for this machine ({reason}); give torque_nm, "
+                                "or ask for loads=centrifugal")}]})
+
+
+def _resolve_torque(load_mode: str, torque_nm: Optional[float]) -> tuple:
+    """``(torque, source, load_mode)`` for a live rotor solve: the given torque, else the loaded machine's own.
+
+    Raises the 422 when the load selection needs a torque and this machine has none - never a torque of
+    another machine.  The one downgrade left is the caller's own statement: ``torque_nm=0`` with
+    ``loads=both`` solves the centrifugal case and the answer says so (``loads`` vs ``loads_requested``)."""
+    if torque_nm is not None:
+        torque = float(torque_nm)
+        if not math.isfinite(torque):
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "torque_nm is not a finite number",
+                        "invalid_parameters": [{
+                            "field": "torque_nm", "value": torque_nm,
+                            "kind": "bad_value",
+                            "message": "pass a finite torque in N·m"}]})
+        if torque == 0.0 and load_mode == "both":
+            return 0.0, "given", "centrifugal"
+        if torque == 0.0 and load_mode == "torque":
+            raise _no_torque_422("torque_nm = 0", torque_nm)
+        return torque, "given", load_mode
+    if load_mode == "centrifugal":
+        return 0.0, "none", load_mode         # no torque acts: nothing to look up
+    torque, source = _machine_torque_nm()
+    if not torque:
+        raise _no_torque_422(source, torque_nm)
+    return float(torque), source, load_mode
 
 
 def _f_switch(explicit: Optional[float] = None) -> Optional[float]:
@@ -378,6 +513,18 @@ def _load_last() -> None:
         log.warning("could not restore the last mechanical result: %s", exc)
 
 
+def _context_dict() -> Optional[Dict[str, str]]:
+    """``{die, config, duty}`` of the catalogue point the editor has loaded, or ``None``."""
+    try:
+        from motor_ai_sim import duty_fields as _df
+        ctx = _df.active_context()
+        if ctx:
+            return {"die": ctx[0], "config": ctx[1], "duty": ctx[2]}
+    except Exception:  # noqa: BLE001 - an identity stamp never fails a solve
+        log.debug("mechanical: no point context for the last result", exc_info=True)
+    return None
+
+
 def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
                    fp: Optional[str]) -> None:
     """Park THIS answer as "what the Mechanical tab was last showing".
@@ -416,6 +563,11 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             "geometry_fingerprint": fp,
             "computed_at": _dt.datetime.now(_dt.timezone.utc)
                               .isoformat(timespec="seconds"),
+            # WHICH POINT this answer was solved for (2026-11-04) — the second
+            # witness beside the fingerprint; ``None`` = no catalogue point was
+            # loaded (or an entry stored before the stamp existed).  The same
+            # source ``duty_fields.save_active`` files the stored map under.
+            "context": _context_dict(),
         }
         _persist_last()
     except Exception as exc:  # noqa: BLE001
@@ -788,8 +940,9 @@ def rotor_stress(
                     "and react it at the shaft bore, held tangentially"),
     torque_nm: Optional[float] = Query(
         default=None, ge=-1e6, le=1e6,
-        description="electromagnetic torque, N·m; default = the mean torque of "
-                    "the last Simulation run on this machine"),
+        description="electromagnetic torque, N·m; default = the loaded duty's "
+                    "own stored torque (saved result, its last run, its duty "
+                    "point); none = 422 unless loads=centrifugal"),
     rotor_temp_c: float = Query(
         default=20.0, ge=-273.15, le=1000.0,
         description="rotor core / magnet / shaft temperature, °C. 20 = the "
@@ -927,36 +1080,9 @@ def rotor_stress(
                         "message": "loads must be 'centrifugal', 'torque' or "
                                    "'both'"}]})
     loads_requested = load_mode
-    if torque_nm is None:
-        torque, torque_source = _default_torque_nm()
-    else:
-        torque, torque_source = float(torque_nm), "given"
-    if torque is not None and not math.isfinite(torque):
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "torque_nm is not a finite number",
-                    "invalid_parameters": [{
-                        "field": "torque_nm", "value": torque_nm,
-                        "kind": "bad_value",
-                        "message": "pass a finite torque in N·m"}]})
-    if load_mode in ("torque", "both") and not torque:
-        if load_mode == "torque":
-            # Asked for the torque case and there is no torque: say so rather
-            # than solving something else and calling it what was asked for.
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "no electromagnetic torque to apply",
-                        "invalid_parameters": [{
-                            "field": "torque_nm", "value": torque_nm,
-                            "kind": "missing",
-                            "message": ("pass ?torque_nm=, or run the "
-                                        "Simulation tab once — the default is "
-                                        "that run's mean torque")}]})
-        # loads=both is the DEFAULT, so a machine that has never been run must
-        # still get its centrifugal answer.  Downgraded, and the response says
-        # so under `loads` vs `loads_requested`.
-        load_mode = "centrifugal"
-        torque = 0.0
+    # The torque is THIS machine's (2026-11-02): given, else the loaded duty's own stored torque, else a 422 —
+    # never the last run of the process, which may be another machine of the same die.
+    torque, torque_source, load_mode = _resolve_torque(load_mode, torque_nm)
 
     try:
         cspec = ctc.parse_contacts(contacts)
@@ -1361,8 +1487,8 @@ def limit_speed(
         default=None, ge=-1e6, le=1e6,
         description="electromagnetic torque, N·m, HELD CONSTANT across the "
                     "whole search (it is the duty's torque, not a function of "
-                    "speed); default = the mean torque of the last Simulation "
-                    "run on this machine"),
+                    "speed); default = the loaded duty's own stored torque, "
+                    "as /rotor_stress"),
     rotor_temp_c: float = Query(default=20.0, ge=-273.15, le=1000.0),
     sleeve_temp_c: float = Query(default=20.0, ge=-273.15, le=1000.0),
     magnet_temp_c: Optional[float] = Query(default=None, ge=-273.15, le=1000.0),
@@ -1446,31 +1572,8 @@ def limit_speed(
                         "message": "symmetry must be 'full' or 'sector'"}]})
 
     loads_requested = load_mode
-    if torque_nm is None:
-        torque, torque_source = _default_torque_nm()
-    else:
-        torque, torque_source = float(torque_nm), "given"
-    if torque is not None and not math.isfinite(torque):
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "torque_nm is not a finite number",
-                    "invalid_parameters": [{
-                        "field": "torque_nm", "value": torque_nm,
-                        "kind": "bad_value",
-                        "message": "pass a finite torque in N·m"}]})
-    if load_mode in ("torque", "both") and not torque:
-        if load_mode == "torque":
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "no electromagnetic torque to apply",
-                        "invalid_parameters": [{
-                            "field": "torque_nm", "value": torque_nm,
-                            "kind": "missing",
-                            "message": ("pass ?torque_nm=, or run the "
-                                        "Simulation tab once — the default is "
-                                        "that run's mean torque")}]})
-        load_mode = "centrifugal"
-        torque = 0.0
+    # THIS machine's torque, or a 422 (2026-11-02) — the same resolution as /rotor_stress.
+    torque, torque_source, load_mode = _resolve_torque(load_mode, torque_nm)
 
     try:
         cspec = ctc.parse_contacts(contacts)
@@ -1998,11 +2101,14 @@ def run_rotor_stress_at(temps: Dict[str, float],
         factor, interference, mesh size and contact set the user last chose):
         ``rpm1`` when the panel is in single-speed mode and ``rpm`` otherwise,
         ``osf``, ``interf``, ``meshMm``, ``contacts``, ``cases``, ``loads``,
-        ``torque``, and ``rotorTempC`` / ``sleeveTempC`` as the two fallbacks;
+        and ``rotorTempC`` / ``sleeveTempC`` as the two fallbacks — NOT the
+        panel's ``torque`` box (2026-11-02): it holds whatever was typed for the
+        machine loaded at the time, and the panel is per user, not per machine;
       * the ROUTE's own defaults — including its two resolutions that are not
         panel fields at all: ``rpm=None`` becomes ``simulation.rpm``, and
-        ``torque_nm=None`` becomes the mean torque of the last Simulation run
-        (the standing rule that the operating point comes from that tab).
+        ``torque_nm=None`` becomes the loaded duty's own stored torque (its
+        saved result, its last run, its duty point) or a 422 — never the last
+        run of the process, which may be another machine.
 
     ``authorization`` may be passed to read that user's panel settings instead
     of the shared entry.  The material / geometry overrides are NOT resolved
@@ -2069,12 +2175,9 @@ def run_rotor_stress_at(temps: Dict[str, float],
         # In single-speed mode the ONE speed solved is the proof rpm, exactly as
         # the panel sends it; `None` here is the route's own `simulation.rpm`.
         rpm = _panel_float(ps, "rpm1" if single else "rpm")
+    # The torque is the caller's or the MACHINE's own (2026-11-02), never the
+    # panel's box: the route resolves None to the loaded duty's stored torque.
     torque_nm = route_params.get("torque_nm")
-    if torque_nm is None:
-        t = _panel_float(ps, "torque")
-        # An empty or zero torque box is NOT a torque: leaving it None is what
-        # makes the route read the last Simulation run instead.
-        torque_nm = t if (t is not None and t != 0.0) else None
 
     contacts = route_params.get("contacts")
     if contacts is None:
@@ -2633,7 +2736,9 @@ def last(
                  else bool(fp != live))
         return {"result": res, "params": e.get("params") or {},
                 "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
-                "stale_geometry": stale}
+                "stale_geometry": stale,
+                # the point it was solved for (second witness); ``None`` = unknown
+                "context": e.get("context")}
 
     out: Dict[str, Any] = {"live_geometry_fingerprint": live}
     for kind in _LAST_KINDS:
@@ -2760,11 +2865,27 @@ def mesh(
 # Bearing fit & Holder strength routes (Mechanical module)
 # ---------------------------------------------------------------------------
 
-def _resolve_die_diameter(die: Optional[str] = None) -> float:
-    """Estimate motor stator outer diameter [mm] from geometry or die name."""
+def _is_loaded_machine(die: Optional[str], config: Optional[str] = None) -> bool:
+    """Is ``die``/``config`` the machine loaded in this workspace?  No die named = the loaded one."""
+    if not die:
+        return True
+    loaded = _loaded_machine()
+    return bool(loaded and _same_name(loaded[0], die)
+                and (config is None or _same_name(loaded[1], config)))
+
+
+def _resolve_die_diameter(die: Optional[str] = None, config: Optional[str] = None) -> float:
+    """Estimate motor stator outer diameter [mm] from geometry or die name.
+
+    The LIVE geometry only when the request is about the loaded machine (2026-11-02): a named die that is
+    not loaded is read from its own ``die.yaml``, never from whatever machine is on screen."""
     try:
-        from motor_ai_sim.services.geometry_service import get_current_geometry
-        g = get_current_geometry().to_dict()
+        if _is_loaded_machine(die, config):
+            from motor_ai_sim.services.geometry_service import get_current_geometry
+            g = get_current_geometry().to_dict()
+        else:
+            from motor_ai_sim.routes import family
+            g = dict(family._load_yaml(family._die_file(str(die)), "die").get("geometry") or {})
         r_so = g.get("stator_outer_radius")
         if r_so and float(r_so) > 0:
             return float(r_so) * 2.0
@@ -2786,7 +2907,7 @@ def _resolve_bearing_card(
     """Resolve bearing card name from request, machine config, or motor size."""
     if bearing and bearing.strip():
         return bearing.strip()
-    dia = _resolve_die_diameter(die)
+    dia = _resolve_die_diameter(die, config)
     if dia <= 50.0:
         return "618/8-2Z"
     return "61811-2Z"
@@ -2814,6 +2935,7 @@ def get_bearing_fit(
     thrust_n: float = Query(default=49.05, ge=0.0),
     radial_load_n: float = Query(default=0.0, ge=0.0),
     hub_od: Optional[float] = Query(default=None, ge=1.0),
+    duty: Optional[str] = Query(default=None, description="the duty whose speed is the default rpm"),
     authorization: Optional[str] = Header(default=None),
 ):
     """Closed-form bearing fit vs temperature curve, Lamé contact pressure,
@@ -2823,7 +2945,25 @@ def get_bearing_fit(
     _gate_config(die, config, authorization)
     from motor_ai_sim.bearing_fit import bearing_fit_analysis
     brg_card = _resolve_bearing_card(bearing, die, config)
-    speed = float(rpm) if rpm is not None and rpm > 0 else max(_default_rpm(), 5000.0)
+    if rpm is not None and rpm > 0:
+        speed = float(rpm)
+    elif _is_loaded_machine(die, config):
+        speed = max(_default_rpm(), 5000.0)
+    else:
+        # A named machine that is not loaded: ITS duty's speed, never the loaded machine's (2026-11-02).
+        _m, _entry, _note = _resolve_machine(die, config, duty)
+        try:
+            _r = float((_entry or {}).get("rpm"))
+        except (TypeError, ValueError):
+            _r = float("nan")
+        if not (math.isfinite(_r) and _r > 0):
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "no speed for this machine; give rpm",
+                        "invalid_parameters": [{
+                            "field": "rpm", "value": rpm, "kind": "missing",
+                            "message": f"no speed for this machine ({_note or 'its duty has no rpm'}); give rpm"}]})
+        speed = max(_r, 5000.0)
 
     try:
         res = bearing_fit_analysis(
@@ -2856,17 +2996,27 @@ def get_holder_strength(
     t_working: float = Query(default=70.0),
     motor_dia: Optional[float] = Query(default=None, ge=5.0),
     bearing: Optional[str] = None,
+    duty: Optional[str] = Query(default=None, description="the duty whose torque is the default torque_nm"),
     authorization: Optional[str] = Header(default=None),
 ):
-    """Holder strength assessment under axial thrust (49 N / 5 kg) and torque (1 N*m),
+    """Holder strength assessment under axial thrust (49 N / 5 kg) and torque,
     combined with bearing press-fit preload. Reports AVERAGED stresses and safety factors
     for both Front and Back holders across every motor family.
+
+    ``torque_nm`` omitted: the torque of THE MACHINE ASKED ABOUT (``die``/``config``/``duty``, else the loaded
+    one) — its saved result, its last run, its duty point — or a 422 (2026-11-02).  Never the last run of the
+    process (another machine) and never a made-up 1 N·m.
     """
     _gate_config(die, config, authorization)
     from motor_ai_sim.holder_strength import assess_holder_strength
 
-    d_motor = float(motor_dia) if motor_dia is not None and motor_dia > 0 else _resolve_die_diameter(die)
-    tq = float(torque_nm) if torque_nm is not None else _default_torque_nm()[0] or 1.0
+    d_motor = float(motor_dia) if motor_dia is not None and motor_dia > 0 else _resolve_die_diameter(die, config)
+    if torque_nm is not None:
+        tq, tq_source = float(torque_nm), "given"
+    else:
+        tq, tq_source = _machine_torque_nm(die, config, duty)
+        if not tq:
+            raise _no_torque_422(tq_source, torque_nm)
     brg_card = _resolve_bearing_card(bearing, die, config)
 
     try:
@@ -2881,6 +3031,7 @@ def get_holder_strength(
         )
         res["die"] = die
         res["config"] = config
+        res["torque_source"] = tq_source
         return res
     except Exception as exc:
         log.exception("Error in holder_strength endpoint: %s", exc)

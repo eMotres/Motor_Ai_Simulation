@@ -88,6 +88,9 @@ def anchor_from_record(duty: str, entry: Optional[Mapping[str, Any]]) -> Optiona
         "duty": duty,
         "cooling_mode": str(pt.get("cooling_mode") or outer.get("mode") or ""),
         "air_speed_ms": _first(outer.get("air_speed_mps"), pt.get("air_speed_mps")) or 0.0,
+        # the record's housing film when it was stated as one (``manual`` cooling): the page's film h is
+        # referred to it (G_housing * h / h_ref); None for every other cooling
+        "h_W_m2K": _first(pt.get("h_conv"), outer.get("h_conv")),
         "ambient_C": amb,
         "point": {"rpm": rpm, "I_A": cur},
         "drive": str(c.get("drive") or t.get("drive") or "sine"),

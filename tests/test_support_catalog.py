@@ -78,7 +78,7 @@ def test_a_continuous_rated_point_and_the_peak_are_quoted():
     assert "limited by the winding (200 °C)" in t and "cooling: propeller tmotor_p13x4_4 slipstream, 40 °C" in t
     assert "Peak: 14400 rpm, 48.8 A rms, 0.66 N·m, 1 kW" in t
     assert "short-time: 1 min 31 s from cold (winding 200 °C)" in t
-    assert "KV 821 rpm/V" in t and "Kt 0.013 N·m/A rms" in t
+    assert "KV 821 rpm/V" in t and "Kt 0.014 N·m/A rms (from KV)" in t and "Kt at load 0.013 N·m/A rms" in t
     assert "full motor mass 0.123 kg" in t and "battery 6S NMC 22.2 V nominal (18–25.2 V)" in t
     assert "propeller (drone) motor" in t
     assert "prop_0" in t and "prop_7" in t and "prop_8" not in t and "(+3 more)" in t

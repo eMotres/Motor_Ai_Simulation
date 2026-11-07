@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import type { CoggingView } from '../../lib/coggingTile';
 import { LABEL, MetricTile, TileRow, LeadCableTile } from '../common/ResultTiles';
-import { configureLook, emTileRows, emTempLimits, emWarning, type EmCooling, type EmMech, type EmTileSpec, type EmTileSummary } from '../../lib/emResultTiles';
+import { configureLook, emTileRows, emTempLimits, emWarning, tileTooltip, type EmCooling, type EmMech, type EmTileSpec, type EmTileSummary } from '../../lib/emResultTiles';
 
 const tx = nsT('controller');   // the tile labels and tooltips (EN source, ZH mirror — docs/I18N.md)
 
@@ -28,17 +28,18 @@ const EmResultTiles: React.FC<{
   cogging?: CoggingView | null;
   /** 'configure' = exactly the ordinary Configure's tile set, row order, decimals and colours (stored points); default = the FEM card with its engineering extras */
   look?: 'configure';
-}> = ({ summary: s, rf, k3dBasis, mech, cooling, cogging, look }) => {
+  /** a stored point: where its EM numbers come from (names the magnet temperature the voltage tiles are at) */
+  emSource?: 'coupled' | 'em_run';
+}> = ({ summary: s, rf, k3dBasis, mech, cooling, cogging, look, emSource }) => {
   useTranslation('controller');   // subscribe + lazy-load the namespace
-  const all = emTileRows(s, { rf, k3dBasis, mech, cooling, cogging });
+  const all = emTileRows(s, { rf, k3dBasis, mech, cooling, cogging, emSource });
   const rows = look === 'configure' ? configureLook(all, s) : all;
   const warn = emWarning(s);
   const lim = emTempLimits(s);
   const hasTemps = s.coupling?.coil_temp_c != null || s.coupling?.magnet_temp_c != null;
   const renderTile = (t: EmTileSpec) => {
     if (t.kind === 'leadCable') return <LeadCableTile key={t.id} section_mm2={t.value as number} />;
-    const tip = [t.tipKey ? tx(t.tipKey, t.tipVars) : '', ...(t.tipExtraKeys ?? []).map((k) => tx(k, t.tipVars)), ...(t.tipParts ?? []).map((p) => tx(p.key, p.args)), t.tipText ?? '']
-      .filter((x) => !!x).join(' ');
+    const tip = tileTooltip(t, tx);
     return (
       <MetricTile key={t.id} label={t.label ?? tx(t.labelKey as string)} value={t.value} display={t.display}
         unit={t.unit} d={t.d} base={t.value ?? 0} plain absLevel={t.level} width={t.width}

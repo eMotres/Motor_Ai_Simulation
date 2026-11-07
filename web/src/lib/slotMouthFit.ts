@@ -13,7 +13,13 @@
  * and the half-sector wedge leaves cut_x_max = (r_in + cut)·sin(slot_angle/2).
  * cut_x >= cut_x_max  <=>  slot-mouth fill radius <= 0: the neighbouring slot
  * cutters collide and the stator would be drawn with a lobe (owner 2026-10-15).
+ *
+ * A stator WITHOUT outer notches (`stator_outer_notches: false`, 2026-11-03)
+ * has no wedge: what can collide is the two neighbouring slot POCKETS, so the
+ * pair is the pocket's outer wall cut_x − tooth2 against r_in·sin(slot_angle/2)
+ * — cut_width and tooth2 play no part (same as the server).
  */
+import { flagValue } from './geometryFlag.ts';
 
 export const STRIP_GAP_FACTOR = 2.0;   // winding.STRIP_GAP_FACTOR
 
@@ -45,17 +51,19 @@ export function slotMouthLimit(geo: Record<string, unknown> | null | undefined):
   const tw = num(geo.tooth_width), t2w = num(geo.tooth2_width);
   const ww = num(geo.wire_width), dx = num(geo.wire_spacing_x);
   const ins = num(geo.insulation_thickness), cw = num(geo.cut_width);
+  const notched = flagValue(geo.stator_outer_notches);
   if (ns == null || od == null || ct == null || sh == null || tw == null || t2w == null
-      || ww == null || dx == null || ins == null || cw == null || ns < 2) return null;
+      || ww == null || dx == null || ins == null || (notched && cw == null) || ns < 2) return null;
   const innerR = od / 2 - ct - sh;
   if (innerR <= 0) return null;
   let split = Math.round(num(geo.wire_split) ?? 1);
   if (split < 1) split = 1;
   const gap = STRIP_GAP_FACTOR * dx;
   const column = split <= 1 ? ww : split * ww + (split - 1) * gap;
-  const cutX = tw / 2 + 2 * ins + column + dx + t2w;
   const half = Math.max(1, Math.floor(Math.round(ns) / 2));
-  const cutXMax = (innerR + cw) * Math.sin((Math.PI / 180) * (360 / half / 2));
+  const sinHalf = Math.sin((Math.PI / 180) * (360 / half / 2));
+  const cutX = tw / 2 + 2 * ins + column + dx + (notched ? t2w : 0);
+  const cutXMax = notched ? (innerR + (cw as number)) * sinHalf : innerR * sinHalf;
   const turns = Math.round(num(geo.num_wires_per_slot) ?? 0);
   const over = cutX - cutXMax;
   const feasible = over < -1e-9;

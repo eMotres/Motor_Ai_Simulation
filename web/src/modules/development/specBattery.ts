@@ -1,4 +1,5 @@
 import { PRESET, type BatteryField, type BatteryLike, type CellType } from '../../lib/configuratorBattery.ts';
+import { decimalNumber } from '../../lib/decimalText.ts';
 
 /** Specification 2_1 <-> the shared battery block (Configure's BatteryInputs).
  *
@@ -64,7 +65,7 @@ function deriveCells(next: Record<string, unknown>, volts: ReadonlyArray<'min' |
  *    - the cell count typed: stored; every pack with a stored cell voltage follows, a stated pack alone stays. */
 export function specBatteryFieldEdit(value: Record<string, unknown>, field: BatteryField, raw: string, allowed: Set<string>): Record<string, unknown> {
   if (!allowed.has(CELL_PROP[field])) return value;
-  const parsed = raw.trim() === '' ? NaN : Number(raw);
+  const parsed = decimalNumber(raw);                // a comma is the decimal point
   const next: Record<string, unknown> = { ...value, [CELL_PROP[field]]: Number.isFinite(parsed) ? parsed : '' };
   return derivePack(next, field === 'cells' ? VOLTS : [field], allowed, false);
 }

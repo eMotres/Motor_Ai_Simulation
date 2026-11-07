@@ -27,7 +27,8 @@
     "owner": "Owner",
     "engineer": "Engineer",
     "oem": "OEM producer",
-    "admin": "Admin"
+    "admin": "Admin",
+    "viewer": "Project member (read-only)"
   },
   "col": {
     "motor": "Motor",
@@ -119,6 +120,53 @@
     "lineTotalTooling": "Line total (qty x price)",
     "toolingTip": "Tooling / fixtures order list: quantities are totals, no price is multiplied by the number of motors; prices follow the same access rule as the motor BOM."
   },
+  "bomExcel": {
+    "upload": "Upload Excel",
+    "download": "Download Excel",
+    "tip": "Upload .xlsx: name and quantity columns are required. Parts match by ID or exact name; parts not in the file stay, blank cells keep their values.",
+    "saveFirst": "Save your edits first.",
+    "title": "Upload {name}",
+    "apply": "Apply",
+    "row": "Row {row}",
+    "action": "Action",
+    "changes": "Changes",
+    "summary": "New: {added}. Changed: {changed}. Same: {same}.",
+    "applied": "Applied. New: {added}, changed: {changed}. The file is in Documents, internal.",
+    "hasErrors": "Correct the file and upload it again; nothing is applied while it has errors.",
+    "missing": "Not in the file, stay in the list: {names}",
+    "ignored": "Columns not read: {names}",
+    "actionValue": {
+      "new": "New",
+      "update": "Change",
+      "same": "Same"
+    },
+    "field": {
+      "qty": "Quantity",
+      "kind": "Type",
+      "name_en": "Name EN",
+      "name_zh": "Name ZH",
+      "material": "Material",
+      "spec": "Specification",
+      "currency": "Currency",
+      "note": "Note"
+    },
+    "error": {
+      "not_xlsx": "This is not an .xlsx file. Save an old .xls file as .xlsx first.",
+      "file_too_large": "The file is too large (10 MB at most).",
+      "too_many_rows": "Too many rows (2000 at most).",
+      "no_header": "No header row found: it needs a part name column and a quantity column.",
+      "missing_name": "No part name",
+      "missing_qty": "New part without a quantity",
+      "bad_qty": "The quantity must be a whole number above zero",
+      "qty_not_whole": "The BOM stores whole quantities only",
+      "bad_kind": "Unknown type: use made, purchased or consumable",
+      "bad_price": "The price must be a number, zero or above",
+      "bad_currency": "The currency must be CNY, EUR or USD",
+      "unknown_part_id": "No such part ID in this list",
+      "duplicate_part": "The same part appears twice in the file",
+      "ambiguous_name": "Several parts have this name: use the Part ID column"
+    }
+  },
   "costs": {
     "title": "Cost breakdown & pricing",
     "unitPrice": "Price / motor",
@@ -180,7 +228,12 @@
     "model3dNone": "The 3-D model has no geometry for these parts.",
     "model3dLost": "3-D view lost - reload the page",
     "document": "Process document",
-    "kinds": {"fits": "Fits", "assembly": "Assembly", "winding": "Winding", "tests": "Tests"},
+    "kinds": {
+      "fits": "Fits",
+      "assembly": "Assembly",
+      "winding": "Winding",
+      "tests": "Tests"
+    },
     "docTitle": "Process document",
     "docTip": "Generated from the assembly and test steps: the steps in the graph's numbering, each with its process sections (n.1, n.2 ...).",
     "view": "View",
@@ -247,7 +300,11 @@
     "forPart": "Thread for",
     "thread": "Thread",
     "writeLang": "Write in",
-    "tip": "Write in your language; the other side reads a machine translation until a member confirms it."
+    "tip": "Write in your language; the other side reads a machine translation until a member confirms it.",
+    "viewerTip": "Discussions the team opened to the project. Read-only.",
+    "customerVisible": "Project sees it",
+    "factoryOnly": "Factory only",
+    "customerVisibleTip": "Click to open this thread to the members of the project that links this motor, or to make it factory-only again."
   },
   "proposals": {
     "none": "No proposals.",
@@ -393,6 +450,58 @@
       "free_run": "No-load spin test: EMF and the no-load loss at each speed.",
       "load": "Load tests: torque, efficiency and temperatures at an operating point."
     },
+    "power": {
+      "test": "Test",
+      "mode": "Type",
+      "motor": "Motor",
+      "generator": "Generator",
+      "vDc": "DC voltage, V",
+      "iDc": "DC current, A",
+      "iPhase": "Phase current, A",
+      "iPhaseTip": "As entered in the test; its note says what was measured.",
+      "max": "Max power, kW",
+      "maxTip": "Torque x speed: the last row of a logged run, what it settled at; the highest row of any other test.",
+      "powerPerMass": "kW/kg",
+      "torquePerMass": "N·m/kg",
+      "mass_weighed": "On the whole motor as weighed: {kg} kg.",
+      "mass_stated": "On the whole motor, owner's figure, not weighed: {kg} kg.",
+      "mass_cad": "On the whole motor from CAD, not weighed: {kg} kg.",
+      "mass_active": "On the active parts only, no CAD mass of the whole motor: {kg} kg.",
+      "massNone": "No mass for this motor yet.",
+      "torque": "Torque, N·m",
+      "speed": "Speed, rpm",
+      "efficiency": "Efficiency, %",
+      "j": "J, A/mm²",
+      "jTip": "Current density: phase current rms over the bare copper section of its paths. The test note says if the current was measured.",
+      "coil": "Coil, °C"
+    },
+    "media": {
+      "video": "Video {n}",
+      "picture": "Picture {n}",
+      "loading": "Loading {pct} %",
+      "failed": "This file did not open here; download it with the arrow.",
+      "download": "Download the file",
+      "close": "Close",
+      "fullSize": "Open at full size in a new tab"
+    },
+    "tabs": {
+      "power": "Power",
+      "resistance": "Resistance",
+      "inductance": "Inductance",
+      "bearings": "Bearings",
+      "free_run": "Free-run",
+      "loads": "Loads",
+      "parameters": "Parameters"
+    },
+    "tabsTip": {
+      "power": "The load tests by name: a logged run at its last row, any other test at its highest power.",
+      "resistance": "Winding resistance, line-line: bench and simulation.",
+      "inductance": "Winding inductance, Ld and Lq: bench and simulation.",
+      "bearings": "Bearing loss by speed. These are SIMULATION values (SKF friction, rotor weight as the load), not measurements; the only measured figure is the total free-run loss, in which the bearings are not separated.",
+      "free_run": "No-load spin test: the no-load loss at each speed and its fit.",
+      "loads": "Load tests: torque, efficiency and temperatures at an operating point.",
+      "parameters": "Kv and Kt from the free-run EMF slope first, then the other parameters of the machine: bench and simulation."
+    },
     "add": "Add test",
     "edit": "Edit",
     "delete": "Delete",
@@ -401,9 +510,10 @@
     "visible": "Visible to customer",
     "visibleTip": "Show these tests and the comparison to the customers of the projects that use this motor. Off by default.",
     "col": {
+      "point": "Point",
       "quantity": "Quantity",
       "measured": "Measured",
-      "model": "Model",
+      "model": "Simulation",
       "delta": "Δ %"
     },
     "rawData": "Raw data",
@@ -411,10 +521,9 @@
     "by": "by {who}",
     "modelMissing": "No stored results for this configuration",
     "modelMissingTip": "Nothing to compare with: run and save the duties of this configuration first.",
-    "compute": "Compute it",
-    "computeTip": "Adds this point as a test duty and solves it (electromagnetic run, queued); the model value and the delta fill in when it finishes. Administrators only.",
-    "computeGamma": "current angle {gamma}° from {source}",
     "computeAll": "Compute all missing ({count})",
+    "computeAllConfirm": "Queue {count} simulation runs?",
+    "computeAllYes": "Compute",
     "computeAllTip": "Adds the {count} missing points of this test as test duties and queues their solves (one per speed rounded to 10 rpm and current to 0.5 A). Administrators only.",
     "computing": "Computing {count} point(s)…",
     "computingProgress": "Computing… {done} of {total} done",
@@ -423,12 +532,12 @@
     "reload": "Refresh",
     "chart": {
       "measured": "Measured",
-      "model": "Model",
+      "model": "Simulation",
       "rpm": "rpm"
     },
     "series": {
       "label": "Plot",
-      "tip": "x = rpm. Dots = measured, dashed line = model where the model has that point. Pick the quantity to plot.",
+      "tip": "x = rpm. Dots = measured, dashed line = simulation where the simulation has that point. Pick the quantity to plot.",
       "q": {
         "torque": "Torque",
         "eff": "Efficiency",
@@ -439,27 +548,54 @@
         "t_winding": "Winding temperature",
         "t_magnet": "Magnet temperature",
         "t_housing": "Housing temperature"
-      }
+      },
+      "plot": {
+        "t_winding_time": "Winding temperature vs time",
+        "torque_time": "Torque vs time",
+        "power_time": "Shaft power vs time",
+        "torque_current": "Torque vs current",
+        "loss_torque": "Loss vs torque",
+        "eff_torque": "System efficiency vs torque",
+        "idc_torque": "DC current vs torque",
+        "t_winding_torque": "Winding temperature vs torque",
+        "t_magnet_torque": "Magnet temperature vs torque",
+        "t_housing_torque": "Housing temperature vs torque",
+        "x_time": "Time from the start, min",
+        "x_current": "Iq / phase current as logged, A",
+        "x_torque": "Torque, N·m"
+      },
+      "modelSuffix": "simulation",
+      "tipSpeeds": "One line per speed, straight segments between the rows. Solid = as logged, dashed = Simulation (hollow dots = simulation points of a stored duty).",
+      "rpm": "{rpm} rpm",
+      "pointSuffix": "simulation point"
     },
     "basis": {
-      "emf_3d": "magnets at {mag} °C, 3-D ×{k} ({src})",
-      "emf_2d": "magnets at {mag} °C, 2-D (no 3-D passport)",
-      "loss": "magnets at {mag} °C, losses 2-D",
-      "load_3d": "torque 3-D ×{k} ({src}); efficiency and temperatures 2-D",
-      "load_2d": "torque 2-D (no 3-D passport)",
+      "emf_3d": "magnets at {mag} °C",
+      "emf_2d": "magnets at {mag} °C, not corrected yet",
+      "loss": "magnets at {mag} °C",
+      "load_3d": "torque and efficiency on the corrected shaft power",
+      "load_2d": "not corrected yet",
       "resistance": "R_phase at {from} °C scaled to {to} °C",
-      "inductance": "2-D: no end-winding inductance, no 3-D factor on L",
+      "inductance": "no end-winding inductance",
       "fit": "least squares through the origin, n in krpm",
-      "cogging": "2-D, I = 0, eddy and demagnetisation off, no skew or 3-D factor"
+      "cogging": "I = 0, eddy and demagnetisation off, no skew",
+      "kv_3d": "all {n} rows, magnets at {mag} °C",
+      "kv_2d": "all {n} rows, magnets at {mag} °C, not corrected yet",
+      "kv_ex_3d": "without {rpm} rpm, {n} rows, magnets at {mag} °C",
+      "kv_ex_2d": "without {rpm} rpm, {n} rows, magnets at {mag} °C, not corrected yet",
+      "bearings_model": "simulation: SKF friction, rotor weight as the radial load; not measured"
     },
     "note": {
       "unexplained": "unexplained {w} W",
-      "noModel": "no model point",
-      "noModelCompute": "no model point: compute it",
-      "freqFlag": "{hz} Hz vs low-frequency model",
+      "noModel": "no simulation point",
+      "freqFlag": "{hz} Hz vs low-frequency simulation",
       "remaining": "{mohm} mΩ board and joints",
-      "modelAbove": "model {mohm} mΩ above the reading",
-      "benchPending": "bench value pending"
+      "modelAbove": "simulation {mohm} mΩ above the reading",
+      "benchPending": "bench value pending",
+      "slopeFlagged": "{pct} % from the other rows",
+      "noBearings": "no bearings assigned: set them in Mechanical, Shaft and bearings",
+      "inheritedFactor": "correction factor of an earlier geometry",
+      "storedFactor": "correction factor stored with the duty"
     },
     "group": {
       "resistance": "Resistance at {temp_c} °C",
@@ -472,11 +608,16 @@
       "emf_rms": "EMF line-line rms",
       "loss": "No-load loss (shaft power)",
       "fit": "Loss fit P = a·n + b·n² (n in krpm)",
-      "no_model": "No model point"
+      "kv_kt": "Kv / Kt from the EMF slope, all {n} rows",
+      "kv_kt_ex": "Kv / Kt without {rpm} rpm (flagged)",
+      "bearings_none": "Bearings",
+      "bearing_sum": "Bearings, {cards} (simulation)",
+      "no_model": "No simulation point"
     },
     "row": {
+      "shaft_power": "Power",
       "r_ll_mean": "R line-line, mean of {n}",
-      "r_winding": "winding only (model)",
+      "r_winding": "winding only (simulation)",
       "r_leads": "leads (2 in series)",
       "r_pair": "R {pair}",
       "l_sum": "Ld + Lq (3-pair mean)",
@@ -496,24 +637,32 @@
       "no_noload": "no no-load duty in this configuration",
       "torque": "Torque",
       "eff": "Efficiency",
-      "eff_system": "System efficiency (DC in, shaft out)",
+      "eff_system": "System efficiency",
+      "j_coil": "Current density",
       "t_winding": "Winding temperature",
-      "t_magnet": "Magnet temperature"
+      "t_magnet": "Magnet temperature",
+      "no_bearings": "no bearings assigned to this configuration",
+      "kv_slope": "EMF slope, V line-line peak per 1000 rpm",
+      "kv": "Kv (rpm per V line-line peak)",
+      "kt": "Kt per A rms phase current"
     },
     "tip": {
-      "resistance": "Model R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line in star (2/3 in delta), plus the stated lead cables. The phase board and the joints are not in the model.",
-      "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star). Model = the incremental Ld/Lq of the lowest-current duty.",
-      "ldq_amp": "3-pair amplitude √(2/3·Σdev²) = |Lq − Ld|. The pair order on the rotor is not known, so the smaller fitted value is compared with the smaller model value.",
+      "shaft_power": "Torque x speed, calculated from the bench row.",
+      "resistance": "Simulated R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line in star (2/3 in delta), plus the stated lead cables. The phase board and the joints are not in the simulation.",
+      "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star). Simulation = the incremental Ld/Lq of the lowest-current duty.",
+      "ldq_amp": "3-pair amplitude √(2/3·Σdev²) = |Lq − Ld|. The pair order on the rotor is not known, so the smaller fitted value is compared with the smaller simulation value.",
       "l_rotor_out": "Stator without rotor: compared with a stored stator-only run when one exists.",
-      "l_freq": "The model is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading.",
-      "emf_peak": "Model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T), x the 3-D end-effect flux factor of the configuration (Stage A; 2-D when it has no passport). Measured = Vpp / 2.",
-      "emf_rms": "Model V_LL rms of the no-load duty, same speed, Br and 3-D scaling.",
-      "loss": "Model = core (hysteresis ~n, eddy ~n², excess ~n^1.5) + solid eddy (~n²) of the no-load duty, x (Br ratio)², + bearings (SKF) + windage. The rest of the measured power is unexplained.",
+      "l_freq": "The simulation is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading.",
+      "emf_peak": "Simulated V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(simulation magnet T), x the end-effect correction of the configuration (shown as \"not corrected yet\" when it has none). Measured = Vpp / 2.",
+      "emf_rms": "Simulated V_LL rms of the no-load duty, same speed, Br and correction.",
+      "bearings": "Simulation values, not a measurement: SKF friction of the bearings assigned to the configuration, the rotor weight as the radial load, at the bench speed and temperature. The only measured figure is the total free-run loss, in which the bearings are not separated.",
+      "kv_kt": "Slope of V line-line peak against speed, least squares through the origin over the rows named in the group. Kv = 1000 / slope, rpm per V of line-line peak. Kt = 3·Ke per A rms of phase current (Ke = phase rms EMF per rad/s; sine EMF, current on the q axis). The simulated values carry the end-effect correction of the configuration.",
+      "loss": "Simulation = core (hysteresis ~n, eddy ~n², excess ~n^1.5) + solid eddy (~n²) of the no-load duty, x (Br ratio)², + bearings (SKF) + windage. The rest of the measured power is unexplained.",
       "fit": "Least squares P = a·n + b·n² through the origin, n in krpm.",
-      "load": "The duty within 2 % speed and 3 % current. Model torque x the 3-D torque factor (measured k_T, else the flux factor). Model efficiency is the motor’s at the shaft (no inverter).",
-      "eff_system": "Torque·ω / (V_dc·I_dc) includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
-      "weight": "Model mass of the configuration’s parts; the bench weighs what the record names.",
-      "cogging": "No-load cogging peak-to-peak. Model = the configuration’s stored cogging (2-D, I = 0, eddy and demagnetisation off, magnets at the stated temperature). Bench = break-away by hand through a torque meter in both directions, friction taken out."
+      "load": "The duty within 2 % speed and 3 % current. Simulated torque is corrected by the torque factor (measured k_T, else the flux factor); simulated efficiency is the motor’s at the corrected shaft power (no inverter), system efficiency adds the stored inverter efficiency. A value shown as \"not corrected yet\" has no factor for this configuration.",
+      "eff_system": "Shaft power over DC power when motoring, DC over shaft when generating; it includes the inverter: compared only with the stored system (wall-to-shaft) efficiency of the controller record, never with the motor’s.",
+      "weight": "Simulated mass of the configuration’s parts; the bench weighs what the record names.",
+      "cogging": "No-load cogging peak-to-peak. Simulation = the configuration’s stored cogging (I = 0, eddy and demagnetisation off, magnets at the stated temperature). Bench = break-away by hand through a torque meter in both directions, friction taken out."
     },
     "editor": {
       "titleAdd": "Add test: {kind}",
@@ -560,6 +709,7 @@
       "cancel": "Cancel"
     },
     "cols": {
+      "power_kw": "kW",
       "rpm": "rpm",
       "shaft_power_w": "W",
       "v_ll_pp_v": "Vpp",
@@ -567,15 +717,18 @@
       "temp_c": "T °C",
       "torque_nm": "N·m",
       "i_phase_a": "I A",
+      "j_a_mm2": "J A/mm²",
       "v_dc_v": "Vdc",
       "i_dc_a": "Idc",
       "eff_pct": "η %",
       "temp_winding_c": "T wind °C",
+      "time_min": "t min",
       "duration_s": "t s",
       "magnet_temp_c": "T mag °C",
       "rpm_set": "rpm set",
       "temp_housing_c": "T hous °C",
-      "temp_magnet_c": "T mag °C"
+      "temp_magnet_c": "T mag °C",
+      "v_ll_fund_pk_v": "Vfund pk"
     },
     "errors": {
       "load": "Could not load the tests: {reason}",

@@ -69,6 +69,11 @@ esac
 ctr_api() { echo "deploy-api-$ACTIVE-1"; }
 api_get() { "$DOCKER" exec "$(ctr_api)" python -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8001$1',timeout=10).read().decode())"; }
 api_call() { "$DOCKER" exec "$(ctr_api)" python -c "import json,urllib.request as u;r=u.Request('http://127.0.0.1:8001$2',data=json.dumps($3).encode(),method='$1',headers={'Content-Type':'application/json'});u.urlopen(r,timeout=10)"; }
+# busy() and `worker idle` count jobs, users and requests in flight - never an open stream (an MCP client's
+# server-sent-event connection to /mcp stays open as long as the AI app is connected): live_status keeps those apart as
+# `streams`, so a connected-but-idle AI app does not hold a deploy.  A tool call that starts a solve is a queued job.
+# An MCP request open longer than live_status.mcp_stale_s() (15 min; nginx cuts /mcp at 120 s) is `stale_requests`, not
+# `requests` (2026-11-03: two such calls held a drain for an hour) - busy() and `worker idle` ignore it alike.
 busy() {   # prints what is busy; exit 0 = busy
   api_get /api/admin/live | "$PYTHON" -c "
 import json, sys

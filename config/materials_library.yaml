@@ -3410,6 +3410,18 @@ insulator:
     thermal_conductivity: 0.14   # W/(m·K)
     specific_heat: 1200          # J/(kg·K)
     permeability: 1.0
+  Nomex_impregnated:
+    # Owner 2026-11-06: the motors of the CR-HF-75 project only; the others stay on Nomex.
+    prov:
+      thermal_conductivity: {"type": "derived", "note": "0.25 +/- 0.05, fit to the G2 bench 3000 rpm thermal run, vacuum impregnated liner; dry Nomex is 0.14"}
+      density: {"type": "estimate", "note": "as dry Nomex; the resin in the paper is not counted"}
+      specific_heat: {"type": "estimate", "note": "as dry Nomex", "verify": true, "source": "none"}
+    description: "Nomex 410 aramid paper, vacuum impregnated — slot liner (ground-wall insulation). Motors of the CR-HF-75 project only."
+    sigma: 0.0
+    density: 880             # kg/m³
+    thermal_conductivity: 0.25   # W/(m·K)
+    specific_heat: 1200          # J/(kg·K)
+    permeability: 1.0
 
   Al2O3:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:

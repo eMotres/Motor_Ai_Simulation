@@ -63,7 +63,7 @@ test('Development links load only on explicit clicks; customers are gated and hi
   const actions = readFileSync(new URL('../MotorOpenActions.tsx', import.meta.url), 'utf8');
   const admin = readFileSync(new URL('../../../components/admin/sections/ProjectsSection.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(actions, /openConfigure/);                                          // the row click opens Configure (owner 2026-10-28)
-  assert.match(actions, /availability\.simulationDuty[\s\S]*\? engineer && <Button/);
+  assert.match(actions, /availability\.simulationDuty[\s\S]*\? liveSimulation && <Button/);
   assert.match(source, /onRowClick=\{\(r\) => \{ if \(!r\.history\) void openProjectMotor\(/);
   assert.match(actions, /onClick=\{\(\) => openSimulation\(/);
   assert.match(source, /r\.history \? null : <MotorOpenActions/);                          // history rows carry no open actions

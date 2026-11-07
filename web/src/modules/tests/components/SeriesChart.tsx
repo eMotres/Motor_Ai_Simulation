@@ -4,7 +4,7 @@
 import React from 'react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
 import { useTranslation } from 'react-i18next';
-import { fmtDelta, fmtValue, unitLabel, type GroupSeries, type SeriesPoint } from '../tableModel';
+import { fmtDelta, fmtValue, speedChartData, unitLabel, type GroupSeries, type SeriesPoint, type SpeedPlot } from '../tableModel';
 
 export const MEASURED_COLOR = '#38bdf8';
 export const MODEL_COLOR = '#f59e0b';
@@ -50,6 +50,53 @@ export const SeriesChart: React.FC<{ series: GroupSeries; height?: number }> = (
             <Line type="monotone" dataKey="model" name={t('tests.chart.model')} stroke={MODEL_COLOR} strokeWidth={1.6}
               strokeDasharray="5 3" dot={modelN === 1 ? { r: 2.5, fill: MODEL_COLOR } : false} connectNulls isAnimationActive={false} />
           )}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+/** One colour per speed (the model line of a speed shares its hue and is dashed). */
+export const SPEED_COLORS = ['#38bdf8', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#f87171', '#facc15', '#2dd4bf'];
+
+/** A load test's plot with one line per speed: straight segments, x and y from the chosen plot; a one-line tooltip. */
+export const SpeedChart: React.FC<{ plot: SpeedPlot; xLabel: string; height?: number }> = ({ plot, xLabel, height = 190 }) => {
+  const { t } = useTranslation('production');
+  const { data, lines } = React.useMemo(() => speedChartData(plot), [plot]);
+  const yu = unitLabel(plot.yUnit);
+  const name = (l: { rpm: number; kind: string; label: string }) =>
+    t('tests.series.rpm', { rpm: l.rpm }) + (l.kind === 'measured' ? ''
+      : `, ${t(l.label === 'point' ? 'tests.series.pointSuffix' : 'tests.series.modelSuffix')}`);
+  const tip = ({ active, payload }: { active?: boolean; payload?: ReadonlyArray<{ dataKey?: unknown; value?: unknown; payload?: { x?: number } }> }) => {
+    const hit = active && payload ? payload.find((e) => typeof e.value === 'number' && typeof e.payload?.x === 'number') : undefined;
+    const l = hit ? lines.find((q) => q.id === hit.dataKey) : undefined;
+    if (!hit || !l) return null;
+    return (
+      <div style={{ background: 'var(--panel)', border: '1px solid var(--line-soft)', borderRadius: 4, padding: '3px 8px',
+        fontSize: 11.5, color: 'var(--text-1)', whiteSpace: 'nowrap' }}>
+        {name(l)}: {fmtValue(hit.value as number)} {yu} · {fmtValue(hit.payload?.x)} {unitLabel(plot.xUnit)}
+      </div>
+    );
+  };
+  return (
+    <div style={{ width: '100%', height, minWidth: 0 }} data-testid="tests-speed-chart">
+      <ResponsiveContainer>
+        <LineChart data={data} margin={{ top: 6, right: 12, bottom: 14, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" />
+          <XAxis dataKey="x" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: 10 }}
+            label={{ value: xLabel, position: 'insideBottom', offset: -8, fontSize: 10 }} />
+          <YAxis tick={{ fontSize: 10 }} width={52} domain={['auto', 'auto']}
+            label={{ value: yu, angle: -90, position: 'insideLeft', fontSize: 10, offset: 12 }} />
+          <RcTooltip content={tip} />
+          <Legend verticalAlign="top" height={20} iconSize={10} wrapperStyle={{ fontSize: 11 }} />
+          {lines.map((l) => (
+            <Line key={l.id} type="linear" dataKey={l.id} name={name(l)} stroke={SPEED_COLORS[l.color % SPEED_COLORS.length]}
+              strokeWidth={1.6} strokeDasharray={l.kind === 'measured' ? undefined : '5 3'}
+              dot={l.kind === 'simulation' ? false
+                : { r: 2.5, fill: l.kind === 'model' ? 'var(--panel)' : SPEED_COLORS[l.color % SPEED_COLORS.length],
+                  stroke: SPEED_COLORS[l.color % SPEED_COLORS.length] }}
+              connectNulls isAnimationActive={false} />
+          ))}
         </LineChart>
       </ResponsiveContainer>
     </div>

@@ -37,7 +37,8 @@ __all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "HEAT_PATHS",
            "coupled_iteration_settings", "motor_cooling_patch",
            "follow_loaded_motor", "settle_application_cooling",
            "motor_thermal_settings", "resolve_motor_settings",
-           "config_thermal_defaults", "SOURCE_WORDS", "complete_cooling",
+           "config_thermal_defaults", "thermal_defaults_of_doc",
+           "configure_cooling", "SOURCE_WORDS", "complete_cooling",
            "apply_thermal_save", "CANONICAL_COOLING"]
 
 #: The outer stator surface's boundary conditions (routes.thermal).
@@ -66,6 +67,11 @@ FRAME_MODES = ("housed", "open")
 #: simplify") — replaces the mount W/K, mount °C, sink-or-link, link size and
 #: link material fields.  See ``cooling_models.HEAT_PATHS``.
 HEAT_PATHS = ("housing", "shaft", "both", "none")
+#: How the outer boundary reaches the stator (2026-11-03): ``direct`` (the
+#: default — the film acts on the stator's own outer contour, notch walls
+#: included) or ``sleeve_contact`` (pressed into a round sleeve: the OD iron
+#: arcs, the sleeve wall, then the film).  See ``cooling_models``.
+STATOR_OD_MODES = ("direct", "sleeve_contact")
 
 
 def _num(v: Any, default: float) -> float:
@@ -201,6 +207,12 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
         hp = heat_path_of(s)
         if hp != "none":
             out["heat_path"] = hp
+    # THE STATOR-OD SLEEVE (2026-11-03): sent only when chosen — a 'direct'
+    # request is byte-identical to the one this mapper produced before.
+    if _mode(s.get("statorOd"), STATOR_OD_MODES, "direct") == "sleeve_contact":
+        out["stator_od_cooling"] = "sleeve_contact"
+        out["od_sleeve_wall_mm"] = _num(s.get("sleeveWallMm"), 1.5)
+        out["od_sleeve_k"] = _num(s.get("sleeveK"), 160.0)
     return out
 
 
@@ -239,6 +251,16 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
     # replaced it), so a machine with no film and no bore has no door at all.
     if cool == "none" and bore == "none":
         return "no cooled surface — the heat has nowhere to leave"
+    if _mode(s.get("statorOd"), STATOR_OD_MODES, "direct") == "sleeve_contact":
+        if cool == "none":
+            return "a sleeve needs an outer film to hand its heat to"
+        if cool == "robotics" and heat_path_of(s) in ("housing", "both"):
+            return ("the robotics heat path 'housing' already models the stator "
+                    "OD contact — pick the sleeve or the housing, not both")
+        if not _num(s.get("sleeveWallMm"), 1.5) > 0:
+            return "sleeve wall must be greater than 0 mm"
+        if not _num(s.get("sleeveK"), 160.0) > 0:
+            return "sleeve conductivity must be greater than 0 W/m·K"
     return None
 
 
@@ -302,6 +324,10 @@ def cooling_words(c: Mapping[str, Any]) -> str:
         bits.append("still air down the bore")
     if str(c.get("frame") or "") == "open":
         bits.append("open frame")
+    if str(c.get("stator_od_cooling") or "direct") == "sleeve_contact":
+        bits.append("stator in a %g mm sleeve (k %g W/m·K)"
+                    % (_num(c.get("od_sleeve_wall_mm"), 1.5),
+                       _num(c.get("od_sleeve_k"), 160.0)))
     if _num(c.get("shaft_ext_length_mm"), 0.0) > 0.0:
         bits.append("%g mm of exposed shaft"
                     % _num(c.get("shaft_ext_length_mm"), 0.0))
@@ -583,7 +609,8 @@ COOLING_KEYS = (
     "propellerContextKey", "fluid", "tIn", "hConv", "flowLpm",
     "boreMode", "boreAirSpeed", "boreFluid", "boreTIn", "boreFlowLpm",
     "shaftExtMm", "shaftExtSides", "frame", "openAirSpeed",
-    "emissivity", "heatPath", "endFaces", "endFaceSides")
+    "emissivity", "heatPath", "endFaces", "endFaceSides",
+    "statorOd", "sleeveWallMm", "sleeveK")
 
 #: What a configuration's ``thermal_defaults:`` block may set.  The propeller
 #: binding is the loaded motor's own business (a default cannot name another
@@ -616,6 +643,7 @@ CANONICAL_COOLING: Dict[str, str] = {
     "frame": "housed", "openAirSpeed": "0",
     "emissivity": "0.9", "heatPath": "housing",
     "endFaces": "still", "endFaceSides": "2",
+    "statorOd": "direct", "sleeveWallMm": "1.5", "sleeveK": "160",
 }
 assert set(CANONICAL_COOLING) == set(COOLING_KEYS)
 
@@ -767,9 +795,16 @@ def config_thermal_defaults(die: str, config: str) -> Dict[str, str]:
     """
     try:
         from motor_ai_sim.routes.family import config_doc
-        blk = (config_doc(die, config) or {}).get("thermal_defaults")
+        doc = config_doc(die, config) or {}
     except Exception:  # noqa: BLE001 — a reader, not a gate
         return {}
+    return thermal_defaults_of_doc(doc, "%s %s" % (die, config))
+
+
+def thermal_defaults_of_doc(doc: Optional[Mapping[str, Any]], label: str = "") -> Dict[str, str]:
+    """:func:`config_thermal_defaults` of a configuration document already in
+    hand (Configure's presets read the die's documents once)."""
+    blk = doc.get("thermal_defaults") if isinstance(doc, Mapping) else None
     if not isinstance(blk, Mapping):
         return {}
     out: Dict[str, str] = {}
@@ -777,14 +812,54 @@ def config_thermal_defaults(die: str, config: str) -> Dict[str, str]:
         k = str(k)
         if (k not in _DEFAULT_KEYS or isinstance(v, bool)
                 or not isinstance(v, (str, int, float))):
-            log.warning("thermal_defaults of %s %s: ignored %r", die, config, k)
+            log.warning("thermal_defaults of %s: ignored %r", label, k)
             continue
         text = ("%g" % v) if isinstance(v, (int, float)) else str(v).strip()
         if k == "airSpeedSource" and text != "manual":
-            log.warning("thermal_defaults of %s %s: airSpeedSource must be manual", die, config)
+            log.warning("thermal_defaults of %s: airSpeedSource must be manual", label)
             continue
         out[k] = text
     return out
+
+
+def configure_cooling(defaults: Optional[Mapping[str, str]]) -> Optional[Dict[str, Any]]:
+    """The cooling Configure's temperature row uses for a configuration that
+    declares ``thermal_defaults:`` (2026-11-03: a jacket-cooled generator was
+    shown in 8 m/s air), or ``None`` when it declares none - the page then
+    keeps its own typed cooling exactly as before.
+
+    Built the way the Thermal tab builds it (:func:`cooling_fields` over
+    :data:`CANONICAL_COOLING`), reduced to what Configure's lumped estimate
+    reads:
+
+    * ``manual`` -> ``{"kind": "film", "h_W_m2K", "ambient_C"}``: the film h
+      at the coolant temperature, no air over the housing;
+    * ``liquid`` -> ``{"kind": "liquid", "flow_lpm", "fluid", "ambient_C"}``
+      (``ambient_C`` = the coolant inlet; the page's jacket law gives h);
+    * ``air`` (manual speed) -> ``{"kind": "air", "air_speed_ms", "ambient_C"}``.
+
+    ``robotics`` / ``none`` are not Configure coolings (the application gives
+    a robot its still air): ``None``.  A film or a flow that is not positive is
+    ``None`` too - nothing is invented for it."""
+    if not defaults:
+        return None
+    f = cooling_fields({**CANONICAL_COOLING,
+                        **{k: v for k, v in defaults.items() if k in COOLING_KEYS}})
+    mode = f.get("cooling_mode")
+    amb = float(f["ambient_temp"])
+    if mode == "manual":
+        h = float(f.get("h_conv") or 0.0)
+        return {"kind": "film", "h_W_m2K": h, "ambient_C": amb, "source": "config"} if h > 0 else None
+    if mode == "liquid":
+        q = float(f.get("flow_lpm") or 0.0)
+        if not q > 0:
+            return None
+        return {"kind": "liquid", "flow_lpm": q, "fluid": str(f.get("fluid") or "water"),
+                "ambient_C": float(f.get("fluid_temp_in_c", amb)), "source": "config"}
+    if mode == "air" and "air_speed_mps" in f:
+        return {"kind": "air", "air_speed_ms": max(0.0, float(f["air_speed_mps"])),
+                "ambient_C": amb, "source": "config"}
+    return None
 
 
 def _config_says_open(die: str, config: str) -> bool:
@@ -904,6 +979,7 @@ def solver_effective_cooling(settings: Mapping[str, Any]) -> Dict[str, str]:
         "frame": "housed", "openAirSpeed": "0",
         "emissivity": "0.9", "heatPath": heat_path_of(settings),
         "endFaces": "still", "endFaceSides": "2",
+        "statorOd": "direct", "sleeveWallMm": "1.5", "sleeveK": "160",
     }
     return {**{k: v for k, v in fill.items() if k not in settings}, **settings}
 

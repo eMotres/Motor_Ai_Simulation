@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, Production, Revision, TranslationStatus,
+  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, Production, Revision, Thread, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -129,6 +129,10 @@ export const canViewCosts = (role: CallerRole, shareWithOem = false): boolean =>
   role === 'owner' || role === 'engineer' || role === 'admin' || (role === 'oem' && shareWithOem);
 
 export const canEditCosts = (role: CallerRole): boolean =>
+  role === 'owner' || role === 'engineer' || role === 'admin';
+
+/** Our margin and selling price: never the factory's (even with costs shared) nor a project viewer's (owner 2026-11-02). */
+export const canViewPrice = (role: CallerRole): boolean =>
   role === 'owner' || role === 'engineer' || role === 'admin';
 
 // -- money ----------------------------------------------------------------------------------------------------------------
@@ -276,7 +280,22 @@ export function errorInfo(status: number, body: unknown): { code: string | null;
 export const safeFileName = (name: string): string => name.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'file';
 
 /** Only a known production member or administrator can start the bundle request. */
-export const canDownloadProductionDocuments = (role: CallerRole): boolean => role !== null;
+export const canDownloadProductionDocuments = (role: CallerRole): boolean => role !== null && role !== 'viewer';
+
+/** The sub-tabs a project viewer may open (owner 2026-11-02): documents, tests, discussion - never BOM, costs, parts, process. */
+export const VIEWER_TABS = ['documents', 'tests', 'discussion'] as const;
+
+/** The caller's role in a production: the derived 'viewer' when the server answered through the project link. */
+export function productionRole(prod: { members: readonly Member[]; access?: 'project' } | null, email: string, isAdmin: boolean): CallerRole {
+  if (!prod) return null;
+  return prod.access === 'project' ? 'viewer' : callerRole(prod.members, email, isAdmin);
+}
+
+/** Which of ``tabs`` the caller sees: a viewer only VIEWER_TABS; the tooling list only when it has rows or the caller edits it. */
+export function visibleProductionTabs<T extends string>(tabs: readonly T[], role: CallerRole, toolingRows: number): T[] {
+  if (role === 'viewer') return tabs.filter((id) => (VIEWER_TABS as readonly string[]).includes(id));
+  return tabs.filter((id) => id !== 'tooling' || toolingRows > 0 || canEditRole(role));
+}
 
 /** Relative route shared by the production ZIP client and its contract tests. */
 export const productionDocumentsZipPath = (die: string, config: string, lang: Lang): string =>
@@ -725,3 +744,10 @@ export function activeThreads(threads: readonly { part_id: string | null; messag
 
 /** The thread the Discussion tab opens on: one with unread messages, else the newest active one, else the general thread. */
 export const initialThreadKey = (threads: Parameters<typeof activeThreads>[0]): string => activeThreads(threads)[0]?.key ?? '';
+
+/** The part threads the thread picker offers: every part for a member; for a project viewer (no parts list) only the threads it
+ *  received, named by the part name the server attached. */
+export function threadChoices(threads: readonly Thread[], parts: readonly Part[], viewer: boolean): { key: string; label: string }[] {
+  if (!viewer) return parts.map((p) => ({ key: p.id, label: p.name.en || p.name.zh }));
+  return threads.filter((t) => !!t.part_id).map((t) => ({ key: t.part_id as string, label: t.part_name?.en || t.part_name?.zh || (t.part_id as string) }));
+}

@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, productionDocumentsZipPath, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
-  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
+  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
   ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
@@ -49,6 +49,36 @@ export async function downloadFile(die: string, config: string, fileId: string, 
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
   a.href = url; a.download = safeFileName(name);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** One production file into memory, with the fraction received so far (a test's video on its card). */
+export async function fetchFileBlob(die: string, config: string, fileId: string, onProgress?: (fraction: number) => void): Promise<Blob> {
+  const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+  if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
+  const total = Number(r.headers.get('content-length')) || 0;
+  if (!r.body || !total || !onProgress) return r.blob();
+  const reader = r.body.getReader();
+  const parts: BlobPart[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    onProgress(Math.min(1, got / total));
+  }
+  return new Blob(parts);
+}
+
+/** The BOM or tooling list as Excel (editors): with no rows yet it is the empty template. */
+export async function downloadBomXlsx(die: string, config: string, list?: 'tooling'): Promise<void> {
+  const r = await fetch(`${API}${base(die, config)}/bom.xlsx${lq(list)}`);
+  if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = safeFileName(`${die}_${config}_${list ?? 'BOM'}.xlsx`);
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
@@ -146,6 +176,13 @@ export const productionApi = {
 
   bom: async (die: string, config: string, list?: 'tooling') => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom${lq(list)}`), 'rows'),
   saveBom: (die: string, config: string, rows: BomRow[], list?: 'tooling') => call<unknown>('PUT', `${base(die, config)}/bom${lq(list)}`, { rows }),
+  /** Without planId: the preview, nothing is written.  With the plan_id of that preview: apply it. */
+  importBom: (die: string, config: string, file: File, list?: 'tooling', planId?: string) => {
+    const f = new FormData();
+    f.append('file', file, file.name);
+    if (planId) f.append('plan_id', planId);
+    return call<BomImportPlan>('POST', `${base(die, config)}/bom/import${lq(list)}`, f);
+  },
 
   assembly: (die: string, config: string) =>
     call<{ tree: AssemblyTree; parts: Part[]; costs: Record<string, number> }>('GET', `${base(die, config)}/assembly`),
@@ -189,6 +226,9 @@ export const productionApi = {
 
   threads: async (die: string, config: string) => unwrapList<Thread>(await call('GET', `${base(die, config)}/threads`), 'threads'),
   /** The caller has seen the thread up to message `upTo` (the server never moves the mark back). */
+  /** editors: open a thread to the members of the project that links this motor, or make it factory-only again */
+  setThreadCustomerVisible: (die: string, config: string, threadId: string, customerVisible: boolean) =>
+    call<Thread>('PATCH', `${base(die, config)}/threads/${enc(threadId)}`, { customer_visible: customerVisible }),
   markThreadRead: (die: string, config: string, threadId: string, upTo: string) =>
     call<{ last_read_id: string; unread: number }>('POST', `${base(die, config)}/threads/${enc(threadId)}/read`, { up_to: upTo }),
   createThread: (die: string, config: string, partId: string | null) =>

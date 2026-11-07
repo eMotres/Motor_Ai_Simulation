@@ -5,7 +5,7 @@ Gerber / drill / pick-and-place zips, BOM, 3-D STEP models, PDF drawings, images
 
 * upload      multipart, members with write rights (project owner / engineer, global engineer / admin); the file is streamed to
               ``<project>/documents/files/<file_id>``, never held in memory; up to ``models.DOCUMENT_MAX_BYTES`` (200 MB);
-* list        every project member; a document marked ``internal`` and an archived one are listed for staff only;
+* list        every project member; a document marked ``internal`` is listed for MOTRES staff only, an archived one for those who may edit;
 * download    every project member (same visibility); each download - and the archive - is written to the traced download log
               (``model3d.log_download``) and to the project audit;
 * patch       ``internal`` / ``folder`` / ``revision`` (and ``archived: false`` to restore);
@@ -52,9 +52,14 @@ def _email(user: dict) -> str:
 
 
 def _staff(user: dict, role: str | None) -> bool:
-    """Staff side of a project: global admin / engineer and the project's owner / engineer (the rule of ``_summary``).
-    Customer-side members do not see internal or archived documents."""
-    return access.is_engineer(user) or role in ("owner", "engineer")
+    """MOTRES staff: global admin / engineer (the rule of the project notes and stage).  A customer who creates a project is its
+    ``owner``, so a project role never makes staff: internal documents stay hidden from the customer side."""
+    return access.is_engineer(user)
+
+
+def _can_edit(user: dict, role: str | None) -> bool:
+    """Who may upload, relabel and archive: staff and the project's owner / engineer."""
+    return _staff(user, role) or role in ("owner", "engineer")
 
 
 def _public(row: dict, staff: bool) -> dict:
@@ -76,7 +81,7 @@ def _public(row: dict, staff: bool) -> dict:
 def _visible(rows: list[dict], staff: bool, include_archived: bool = False) -> list[dict]:
     if staff:
         return [r for r in rows if include_archived or not r.get("archived")]
-    return [r for r in rows if not r.get("internal") and not r.get("archived")]
+    return [r for r in rows if not r.get("internal") and (include_archived or not r.get("archived"))]
 
 
 def _audit(project_id: str, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
@@ -131,11 +136,12 @@ def _log_download(request: Request, user: dict, project_id: str, *, kind: str, f
 @router.get("/{project_id}/documents")
 def list_documents(request: Request, project_id: str, archived: bool = False):
     user, _project, role, staff = _context(request, project_id)
-    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and staff))
+    can_edit = _can_edit(user, role)
+    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and can_edit))
     cover = (store.get_project(project_id) or {}).get("cover")
     cover = cover if isinstance(cover, dict) else {}
     return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id")) for r in rows],
-            "folders": list(models.DOCUMENT_FOLDERS), "can_edit": bool(staff), "max_bytes": models.DOCUMENT_MAX_BYTES,
+            "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
             "cover_version": cover.get("version")}
 
 
@@ -147,7 +153,7 @@ def _flag(value: Any) -> bool:
 async def upload_document(request: Request, project_id: str):
     """One file per request (``file``), with optional ``folder`` (kicad | fabrication | bom | 3d | docs; guessed from the name when
     omitted), ``revision`` and ``internal``."""
-    user, _project, _role, _staff_flag = _context(request, project_id, edit=True)
+    user, _project, _role, staff_flag = _context(request, project_id, edit=True)
     try:
         declared = int(request.headers.get("content-length") or 0)
     except ValueError:
@@ -188,7 +194,7 @@ async def upload_document(request: Request, project_id: str):
             raise HTTPException(status_code=400, detail="Empty file")
         raise HTTPException(status_code=400, detail="Invalid upload")
     row = models.normalize_document(file_id, _email(user), str(uploaded.filename or "unnamed"), folder=folder, revision=revision,
-                                    internal=_flag(form.get("internal")), size=size, sha256=sha256,
+                                    internal=staff_flag and _flag(form.get("internal")), size=size, sha256=sha256,
                                     content_type=str(getattr(uploaded, "content_type", "") or ""))
     try:
         store.mutate_documents(project_id, lambda rows: rows.append(row))
@@ -203,13 +209,15 @@ async def upload_document(request: Request, project_id: str):
 @router.patch("/{project_id}/documents/{doc_id}")
 async def patch_document(request: Request, project_id: str, doc_id: str):
     """``internal`` (hidden from customer-side members), ``folder``, ``revision``; ``archived: false`` restores an archived document."""
-    user, _project, _role, _staff_flag = _context(request, project_id, edit=True)
+    user, _project, _role, staff_flag = _context(request, project_id, edit=True)
     body = await request.json()
     allowed = ("internal", "folder", "revision", "archived")
     if not isinstance(body, dict) or not any(k in body for k in allowed):
         raise HTTPException(status_code=422, detail="internal, folder, revision or archived expected")
     changes: dict[str, Any] = {}
     if "internal" in body:
+        if not staff_flag:
+            raise HTTPException(status_code=403, detail="Only MOTRES staff mark a document internal")
         if not isinstance(body["internal"], bool):
             raise HTTPException(status_code=422, detail="internal: true | false expected")
         changes["internal"] = body["internal"]
@@ -284,8 +292,8 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 @router.get("/{project_id}/documents/{doc_id}/download")
 def download_document(request: Request, project_id: str, doc_id: str):
     """One document, streamed from disk.  Staff may also fetch an archived one."""
-    user, _project, _role, staff = _context(request, project_id)
-    row = _find(project_id, doc_id, staff, include_archived=staff)
+    user, _project, role, staff = _context(request, project_id)
+    row = _find(project_id, doc_id, staff, include_archived=_can_edit(user, role))
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")

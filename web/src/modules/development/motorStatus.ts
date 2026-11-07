@@ -18,6 +18,15 @@ export function visibleProjectVersions(motors: ProjectMotor[], snapshots: Projec
   }))] : visible;
 }
 
+export const PROJECT_STATUSES: readonly ProjectStatus[] = ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed'];
+
+/** The statuses the status Select offers - the server's rule (development.status_change_allowed): staff every status; a customer
+ *  none (owner 2026-11-06: the stage is MOTRES's to move), so just the current one.  Closing an own open project is a button of
+ *  its own on the page, not a menu entry. */
+export function allowedProjectStatuses(staff: boolean, current: ProjectStatus): ProjectStatus[] {
+  return staff ? [...PROJECT_STATUSES] : [current];
+}
+
 export interface PendingProjectStatus {
   projectId: string;
   current: ProjectStatus;

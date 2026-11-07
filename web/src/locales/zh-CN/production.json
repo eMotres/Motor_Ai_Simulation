@@ -27,7 +27,8 @@
     "owner": "负责人",
     "engineer": "工程师",
     "oem": "OEM 生产方",
-    "admin": "管理员"
+    "admin": "管理员",
+    "viewer": "项目成员（只读）"
   },
   "col": {
     "motor": "电机",
@@ -119,6 +120,53 @@
     "lineTotalTooling": "单项合计（数量 × 单价）",
     "toolingTip": "工装/夹具订购清单：数量为总数，价格不乘以电机台数；价格的查看权限与电机物料清单相同。"
   },
+  "bomExcel": {
+    "upload": "上传 Excel",
+    "download": "下载 Excel",
+    "tip": "上传 .xlsx：必须有零件名称列和数量列。按 ID 或完全相同的名称匹配零件；文件中没有的零件保留，空白单元格保留原值。",
+    "saveFirst": "请先保存您的修改。",
+    "title": "上传 {name}",
+    "apply": "应用",
+    "row": "第 {row} 行",
+    "action": "操作",
+    "changes": "变更",
+    "summary": "新增：{added}。变更：{changed}。相同：{same}。",
+    "applied": "已应用。新增：{added}，变更：{changed}。文件已存入文档（内部）。",
+    "hasErrors": "请修改文件后重新上传；文件有错误时不会应用任何内容。",
+    "missing": "文件中没有，保留在清单中：{names}",
+    "ignored": "未读取的列：{names}",
+    "actionValue": {
+      "new": "新增",
+      "update": "变更",
+      "same": "相同"
+    },
+    "field": {
+      "qty": "数量",
+      "kind": "类型",
+      "name_en": "英文名称",
+      "name_zh": "中文名称",
+      "material": "材料",
+      "spec": "规格",
+      "currency": "币种",
+      "note": "备注"
+    },
+    "error": {
+      "not_xlsx": "这不是 .xlsx 文件。请先将旧的 .xls 文件另存为 .xlsx。",
+      "file_too_large": "文件过大（最大 10 MB）。",
+      "too_many_rows": "行数过多（最多 2000 行）。",
+      "no_header": "未找到表头：需要零件名称列和数量列。",
+      "missing_name": "缺少零件名称",
+      "missing_qty": "新零件缺少数量",
+      "bad_qty": "数量必须是大于零的整数",
+      "qty_not_whole": "物料清单只保存整数数量",
+      "bad_kind": "未知类型：请使用自制、外购或辅料",
+      "bad_price": "价格必须是不小于零的数字",
+      "bad_currency": "币种必须是 CNY、EUR 或 USD",
+      "unknown_part_id": "此清单中没有该零件 ID",
+      "duplicate_part": "同一零件在文件中出现两次",
+      "ambiguous_name": "多个零件同名：请使用零件 ID 列"
+    }
+  },
   "costs": {
     "title": "成本明细与定价",
     "unitPrice": "单价 / 每台",
@@ -180,7 +228,12 @@
     "model3dNone": "三维模型中没有这些零件的几何体。",
     "model3dLost": "三维视图已丢失，请刷新页面",
     "document": "工艺文件",
-    "kinds": {"fits": "配合", "assembly": "装配", "winding": "绕线", "tests": "测试"},
+    "kinds": {
+      "fits": "配合",
+      "assembly": "装配",
+      "winding": "绕线",
+      "tests": "测试"
+    },
     "docTitle": "工艺文件",
     "docTip": "由装配和测试步骤生成：步骤编号与流程图一致，每步附其工艺章节（n.1、n.2 …）。",
     "view": "查看",
@@ -247,7 +300,11 @@
     "forPart": "话题所属零件",
     "thread": "话题",
     "writeLang": "书写语言",
-    "tip": "请用您的语言书写；对方阅读机器翻译，直至成员确认。"
+    "tip": "请用您的语言书写；对方阅读机器翻译，直至成员确认。",
+    "viewerTip": "团队向项目开放的讨论。只读。",
+    "customerVisible": "项目可见",
+    "factoryOnly": "仅工厂",
+    "customerVisibleTip": "点击将此讨论向关联此电机的项目成员开放，或再次设为仅工厂可见。"
   },
   "proposals": {
     "none": "暂无建议。",
@@ -393,6 +450,58 @@
       "free_run": "空载旋转试验：各转速下的反电动势和空载损耗。",
       "load": "负载试验：工作点的转矩、效率和温度。"
     },
+    "power": {
+      "test": "测试",
+      "mode": "类型",
+      "motor": "电动机",
+      "generator": "发电机",
+      "vDc": "直流电压，V",
+      "iDc": "直流电流，A",
+      "iPhase": "相电流，A",
+      "iPhaseTip": "按测试中填写的值；备注说明测量内容。",
+      "max": "最大功率，kW",
+      "maxTip": "转矩 x 转速：记录运行取最后一行（稳定值）；其他测试取最大的一行。",
+      "powerPerMass": "kW/kg",
+      "torquePerMass": "N·m/kg",
+      "mass_weighed": "按整机称重质量：{kg} kg。",
+      "mass_stated": "按负责人给出的整机质量，未称重：{kg} kg。",
+      "mass_cad": "按 CAD 整机质量，未称重：{kg} kg。",
+      "mass_active": "仅按有效部件质量，无整机 CAD 质量：{kg} kg。",
+      "massNone": "此电机暂无质量数据。",
+      "torque": "转矩，N·m",
+      "speed": "转速，rpm",
+      "efficiency": "效率，%",
+      "j": "J，A/mm²",
+      "jTip": "电流密度：相电流有效值除以各支路裸铜截面。测试备注说明电流是否为实测值。",
+      "coil": "线圈，°C"
+    },
+    "media": {
+      "video": "视频 {n}",
+      "picture": "图片 {n}",
+      "loading": "正在加载 {pct} %",
+      "failed": "此文件无法在此打开；请用箭头下载。",
+      "download": "下载文件",
+      "close": "关闭",
+      "fullSize": "在新标签页中以完整尺寸打开"
+    },
+    "tabs": {
+      "power": "功率",
+      "resistance": "电阻",
+      "inductance": "电感",
+      "bearings": "轴承",
+      "free_run": "空载运行",
+      "loads": "负载",
+      "parameters": "参数"
+    },
+    "tabsTip": {
+      "power": "负载测试按名称列出，并显示各自的最高功率。",
+      "resistance": "绕组线间电阻：台架与仿真。",
+      "inductance": "绕组电感 Ld 和 Lq：台架与仿真。",
+      "bearings": "各转速下的轴承损耗。这些是仿真值（SKF 摩擦，以转子重量为载荷），不是测量值；唯一的实测数是空载总损耗，其中轴承并未分离。",
+      "free_run": "空载旋转试验：各转速下的空载损耗及其拟合。",
+      "loads": "负载试验：工作点的转矩、效率和温度。",
+      "parameters": "先显示由空载反电动势斜率得出的 Kv 和 Kt，然后是电机的其他参数：台架与仿真。"
+    },
     "add": "添加测试",
     "edit": "编辑",
     "delete": "删除",
@@ -401,9 +510,10 @@
     "visible": "客户可见",
     "visibleTip": "向使用此电机的项目客户显示这些测试及对比。默认关闭。",
     "col": {
+      "point": "工况点",
       "quantity": "物理量",
       "measured": "实测",
-      "model": "模型",
+      "model": "仿真",
       "delta": "Δ %"
     },
     "rawData": "原始数据",
@@ -411,10 +521,9 @@
     "by": "由 {who}",
     "modelMissing": "此配置没有已保存的结果",
     "modelMissingTip": "没有可对比的数据：请先运行并保存此配置的工况。",
-    "compute": "计算",
-    "computeTip": "将此点添加为测试工况并求解（电磁计算，排队运行）；完成后模型值和偏差自动填入。仅限管理员。",
-    "computeGamma": "电流角 {gamma}°，来自 {source}",
     "computeAll": "计算全部缺失点（{count}）",
+    "computeAllConfirm": "排队运行 {count} 个仿真？",
+    "computeAllYes": "计算",
     "computeAllTip": "将此测试的 {count} 个缺失点添加为测试工况并排队求解（转速按 10 rpm、电流按 0.5 A 取整去重）。仅限管理员。",
     "computing": "正在计算 {count} 个点…",
     "computingProgress": "计算中… 已完成 {done}/{total}",
@@ -423,12 +532,12 @@
     "reload": "刷新",
     "chart": {
       "measured": "实测",
-      "model": "模型",
+      "model": "仿真",
       "rpm": "转速"
     },
     "series": {
       "label": "曲线",
-      "tip": "横轴为转速。圆点为实测值，虚线为模型值（模型有该点时）。选择要绘制的量。",
+      "tip": "横轴为转速。圆点为实测值，虚线为仿真值（仿真有该点时）。选择要绘制的量。",
       "q": {
         "torque": "转矩",
         "eff": "效率",
@@ -439,27 +548,54 @@
         "t_winding": "绕组温度",
         "t_magnet": "磁钢温度",
         "t_housing": "机壳温度"
-      }
+      },
+      "plot": {
+        "t_winding_time": "绕组温度随时间变化",
+        "torque_time": "转矩随时间变化",
+        "power_time": "轴功率随时间变化",
+        "torque_current": "转矩与电流",
+        "loss_torque": "损耗与转矩",
+        "eff_torque": "系统效率与转矩",
+        "idc_torque": "直流电流与转矩",
+        "t_winding_torque": "绕组温度与转矩",
+        "t_magnet_torque": "磁钢温度与转矩",
+        "t_housing_torque": "机壳温度与转矩",
+        "x_time": "从开始算起的时间，min",
+        "x_current": "Iq / 相电流（按记录），A",
+        "x_torque": "转矩，N·m"
+      },
+      "modelSuffix": "仿真",
+      "tipSpeeds": "每个转速一条线，各行之间为直线段。实线 = 记录值，虚线 = 仿真（空心点 = 已存工况的仿真点）。",
+      "rpm": "{rpm} rpm",
+      "pointSuffix": "仿真点"
     },
     "basis": {
-      "emf_3d": "磁钢 {mag} °C，三维 ×{k}（{src}）",
-      "emf_2d": "磁钢 {mag} °C，二维（无三维护照）",
-      "loss": "磁钢 {mag} °C，损耗为二维",
-      "load_3d": "转矩三维 ×{k}（{src}）；效率和温度为二维",
-      "load_2d": "转矩二维（无三维护照）",
+      "emf_3d": "磁钢 {mag} °C",
+      "emf_2d": "磁钢 {mag} °C，尚未修正",
+      "loss": "磁钢 {mag} °C",
+      "load_3d": "转矩和效率按修正后的轴功率",
+      "load_2d": "尚未修正",
       "resistance": "相电阻由 {from} °C 换算到 {to} °C",
-      "inductance": "二维：不含端部绕组电感，电感不乘三维系数",
+      "inductance": "不含端部绕组电感",
       "fit": "过原点最小二乘，n 单位 krpm",
-      "cogging": "2-D，I = 0，不计涡流和退磁，无斜极或 3-D 系数"
+      "cogging": "I = 0，不计涡流和退磁，无斜极",
+      "kv_3d": "全部 {n} 行，磁钢 {mag} °C",
+      "kv_2d": "全部 {n} 行，磁钢 {mag} °C，尚未修正",
+      "kv_ex_3d": "不含 {rpm} rpm，{n} 行，磁钢 {mag} °C",
+      "kv_ex_2d": "不含 {rpm} rpm，{n} 行，磁钢 {mag} °C，尚未修正",
+      "bearings_model": "仿真：SKF 摩擦，转子重量作径向载荷；非实测"
     },
     "note": {
       "unexplained": "无法解释 {w} W",
-      "noModel": "无模型点",
-      "noModelCompute": "无模型点：请计算",
-      "freqFlag": "{hz} Hz，模型为低频",
+      "noModel": "无仿真点",
+      "freqFlag": "{hz} Hz，仿真为低频",
       "remaining": "{mohm} mΩ 相位板和接头",
-      "modelAbove": "模型比读数高 {mohm} mΩ",
-      "benchPending": "台架值待测"
+      "modelAbove": "仿真比读数高 {mohm} mΩ",
+      "benchPending": "台架值待测",
+      "slopeFlagged": "与其余各行相差 {pct} %",
+      "noBearings": "未指定轴承：请在“机械，轴和轴承”中设置",
+      "inheritedFactor": "修正系数来自早期几何",
+      "storedFactor": "修正系数随工况保存"
     },
     "group": {
       "resistance": "{temp_c} °C 时的电阻",
@@ -472,11 +608,16 @@
       "emf_rms": "线反电动势有效值",
       "loss": "空载损耗（轴功率）",
       "fit": "损耗拟合 P = a·n + b·n²（n 单位 krpm）",
-      "no_model": "无模型点"
+      "kv_kt": "由反电动势斜率得到的 Kv / Kt，全部 {n} 行",
+      "kv_kt_ex": "不含 {rpm} rpm 的 Kv / Kt（已标记）",
+      "bearings_none": "轴承",
+      "bearing_sum": "轴承，{cards}（仿真）",
+      "no_model": "无仿真点"
     },
     "row": {
+      "shaft_power": "功率",
       "r_ll_mean": "线间电阻，{n} 组平均",
-      "r_winding": "仅绕组（模型）",
+      "r_winding": "仅绕组（仿真）",
       "r_leads": "引线（2 根串联）",
       "r_pair": "R {pair}",
       "l_sum": "Ld + Lq（3 组平均）",
@@ -496,24 +637,32 @@
       "no_noload": "此配置没有空载工况",
       "torque": "转矩",
       "eff": "效率",
-      "eff_system": "系统效率（直流输入，轴输出）",
+      "eff_system": "系统效率",
+      "j_coil": "电流密度",
       "t_winding": "绕组温度",
-      "t_magnet": "磁钢温度"
+      "t_magnet": "磁钢温度",
+      "no_bearings": "此配置未指定轴承",
+      "kv_slope": "反电动势斜率，线电压峰值每 1000 rpm",
+      "kv": "Kv（rpm 每伏线电压峰值）",
+      "kt": "Kt 每安相电流有效值"
     },
     "tip": {
-      "resistance": "模型相电阻按其线圈温度，用 (234.5 + T) 换算到实测温度；星形接法线间 ×2（三角形 2/3），再加上所记录的引线。相位板和接头不在模型中。",
-      "ldq_sum": "3 组线间电感平均 = Ld + Lq（星形）。模型取电流最小工况的增量 Ld/Lq。",
-      "ldq_amp": "3 组幅值 √(2/3·Σdev²) = |Lq − Ld|。转子上的线对顺序未知，因此较小的拟合值与较小的模型值对比。",
+      "shaft_power": "转矩 x 转速，由测试行计算得出。",
+      "resistance": "仿真相电阻按其线圈温度，用 (234.5 + T) 换算到实测温度；星形接法线间 ×2（三角形 2/3），再加上所记录的引线。相位板和接头不在仿真中。",
+      "ldq_sum": "3 组线间电感平均 = Ld + Lq（星形）。仿真取电流最小工况的增量 Ld/Lq。",
+      "ldq_amp": "3 组幅值 √(2/3·Σdev²) = |Lq − Ld|。转子上的线对顺序未知，因此较小的拟合值与较小的仿真值对比。",
       "l_rotor_out": "无转子定子：如有已保存的仅定子计算则与之对比。",
-      "l_freq": "模型为低频增量值；在 kHz 下铁芯和磁钢中的涡流会降低测量值。",
-      "emf_peak": "空载工况的模型线电压峰值 × 转速比 × Br(试验磁钢温度) / Br(模型磁钢温度) × 配置的三维端部效应磁通系数（Stage A；无三维护照时为二维）。实测 = Vpp / 2。",
-      "emf_rms": "空载工况的模型线电压有效值，转速、Br 和三维换算相同。",
-      "loss": "模型 = 铁损（磁滞 ~n，涡流 ~n²，附加 ~n^1.5）+ 实体涡流（~n²），× (Br 比)²，+ 轴承（SKF）+ 风摩。其余实测功率为无法解释部分。",
+      "l_freq": "仿真为低频增量值；在 kHz 下铁芯和磁钢中的涡流会降低测量值。",
+      "emf_peak": "空载工况的仿真线电压峰值 × 转速比 × Br(试验磁钢温度) / Br(仿真磁钢温度) × 配置的端部效应修正（无修正系数时显示“尚未修正”）。实测 = Vpp / 2。",
+      "emf_rms": "空载工况的仿真线电压有效值，转速、Br 和修正相同。",
+      "bearings": "仿真值，不是测量值：配置所指定轴承的 SKF 摩擦，以转子重量作径向载荷，取台架转速和温度。唯一的实测数是空载总损耗，其中轴承并未分离。",
+      "kv_kt": "线电压峰值对转速的斜率，过原点最小二乘，取组内所列各行。Kv = 1000 / 斜率，单位为 rpm 每伏线电压峰值。Kt = 3·Ke，单位为 N·m 每安相电流有效值（Ke = 每 rad/s 的相电势有效值；正弦反电势，电流在 q 轴）。仿真值已含配置的端部效应修正。",
+      "loss": "仿真 = 铁损（磁滞 ~n，涡流 ~n²，附加 ~n^1.5）+ 实体涡流（~n²），× (Br 比)²，+ 轴承（SKF）+ 风摩。其余实测功率为无法解释部分。",
       "fit": "过原点最小二乘 P = a·n + b·n²，n 单位 krpm。",
-      "load": "转速相差 2 % 且电流相差 3 % 以内的工况。模型转矩 × 三维转矩系数（实测 k_T，否则为磁通系数）。模型效率为电机轴端效率（不含逆变器）。",
-      "eff_system": "转矩·ω / (V_dc·I_dc) 包含逆变器：只与控制器记录中已保存的系统（直流到轴）效率对比，从不与电机效率对比。",
-      "weight": "配置零件的模型质量；台架称量记录中所写的对象。",
-      "cogging": "空载齿槽转矩峰峰值。模型 = 配置中保存的齿槽转矩（2-D，I = 0，不计涡流和退磁，磁钢温度按记录）。台架 = 通过扭矩仪手动双向转动转子，扣除摩擦。"
+      "load": "转速相差 2 % 且电流相差 3 % 以内的工况。仿真转矩按转矩系数修正（实测 k_T，否则为磁通系数）；仿真效率为电机在修正后轴功率下的轴端效率（不含逆变器），系统效率再乘以保存的逆变器效率。显示“尚未修正”的值表示该配置还没有修正系数。",
+      "eff_system": "电动时为轴功率比直流功率，发电时为直流功率比轴功率；包含逆变器：只与控制器记录中已保存的系统（直流到轴）效率对比，从不与电机效率对比。",
+      "weight": "配置零件的仿真质量；台架称量记录中所写的对象。",
+      "cogging": "空载齿槽转矩峰峰值。仿真 = 配置中保存的齿槽转矩（I = 0，不计涡流和退磁，磁钢温度按记录）。台架 = 通过扭矩仪手动双向转动转子，扣除摩擦。"
     },
     "editor": {
       "titleAdd": "添加测试：{kind}",
@@ -560,6 +709,7 @@
       "cancel": "取消"
     },
     "cols": {
+      "power_kw": "kW",
       "rpm": "rpm",
       "shaft_power_w": "W",
       "v_ll_pp_v": "Vpp",
@@ -567,15 +717,18 @@
       "temp_c": "T °C",
       "torque_nm": "N·m",
       "i_phase_a": "I A",
+      "j_a_mm2": "J A/mm²",
       "v_dc_v": "Vdc",
       "i_dc_a": "Idc",
       "eff_pct": "η %",
       "temp_winding_c": "绕组 °C",
+      "time_min": "t min",
       "duration_s": "t s",
       "magnet_temp_c": "磁钢 °C",
       "rpm_set": "设定 rpm",
       "temp_housing_c": "机壳 °C",
-      "temp_magnet_c": "磁钢 °C"
+      "temp_magnet_c": "磁钢 °C",
+      "v_ll_fund_pk_v": "基波峰值 V"
     },
     "errors": {
       "load": "无法加载测试：{reason}",

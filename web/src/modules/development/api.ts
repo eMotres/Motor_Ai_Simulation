@@ -1,6 +1,11 @@
 import type { CatalogController } from './controllerCatalog';
-import { parseActivity } from './stageBar';
+import { parseActivity } from './stageBarModel';
 import { finalComparison } from '../../lib/resultsPanel';
+import type { ProjectProductionEntry } from './projectProductions';
+import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
+import type { ProjectQuote, SharedQuoteMark } from './quote';
+import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
+import type { AdminTimeline, ProjectTimeline, TimelineDoc } from './timeline';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -23,6 +28,10 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 const p = (id: string) => `/api/projects/${enc(id)}`;
+const ce = (id: string) => `/api/admin/projects/${enc(id)}/cost-estimate`;
+const tl = (id: string) => `/api/admin/projects/${enc(id)}/timeline`;
+/** `?display_currency=` - the UI language's currency, for the cost estimate's converted totals. */
+const dq = (display?: string) => (display ? `?display_currency=${enc(display)}` : '');
 
 /** The steps feed carries a light panel per computed point; its FINAL numbers are merged into the point's comparison row, so the
  *  steps table and chart read what the information panel shows (the panel itself is not kept). */
@@ -52,14 +61,14 @@ export const developmentApi = {
     return Array.isArray(data?.controllers) ? data!.controllers! : [];
   },
   schema: (version?: number) => call<DevelopmentSchema>('GET', `/api/projects/schema${version ? `?version=${version}` : ''}`),
-  create: (v: { id?: string; title: string; customer_org: string; owner_engineer?: string }) => call<ProjectSummary>('POST', '/api/projects', v),
+  create: (v: { id?: string; title?: string; customer_org: string; owner_engineer?: string }) => call<ProjectSummary>('POST', '/api/projects', v),
   get: (id: string) => call<ProjectSummary>('GET', p(id)),
   update: (id: string, v: Partial<Pick<ProjectSummary, 'title' | 'customer_org' | 'owner_engineer' | 'status' | 'notes'>>) => call<ProjectSummary>('PATCH', p(id), v),
   spec: (id: string) => call<SpecState>('GET', `${p(id)}/spec`),
   migrationPreview: (id: string) => call<{ preview: { draft: Record<string, unknown>; source_sha256: string; source_revision: number; requires_acknowledgement: boolean; issues: Array<{ code: string; message?: string }> }; revision: number }>('POST', `${p(id)}/spec/migration/preview`, {}),
   migrationApply: (id: string, body: { revision: number; source_sha256: string; acknowledge_point: boolean }) => call<{ draft: Record<string, unknown>; revision: number; schema_version: number; completeness: SpecState['completeness'] }>('POST', `${p(id)}/spec/migration/apply`, body),
   saveDraft: (id: string, draft: Record<string, unknown>, revision: number) => call<SpecState>('PUT', `${p(id)}/spec`, { draft, revision, schema_version: Number(draft.schema_version ?? 2) }),
-  submitSpec: (id: string, revision: number) => call<{ version: number; revision: number; spec: Record<string, unknown>; completeness: SpecState['completeness'] }>('POST', `${p(id)}/spec/submit`, { revision }),
+  submitSpec: (id: string, revision: number) => call<{ version: number; revision: number; spec: Record<string, unknown>; completeness: SpecState['completeness']; unchanged?: boolean; submitted_at?: string | null }>('POST', `${p(id)}/spec/submit`, { revision }),
   versions: (id: string) => call<{ versions: SpecState['versions'] }>('GET', `${p(id)}/spec/versions`),
   version: (id: string, n: number) => call<SpecSnapshot>('GET', `${p(id)}/spec/versions/${n}`),
   thread: async (id: string) => (await call<{ messages: ProjectThreadMessage[] }>('GET', `${p(id)}/thread`)).messages,
@@ -100,6 +109,12 @@ export const developmentApi = {
     call<MotorView>('GET', `${p(id)}/motors/view?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
   motorField: (id: string, die: string, config: string, duty: string, kind: FieldKind, showAll = false) =>
     call<StoredField>('GET', `${p(id)}/motors/field?die=${enc(die)}&config=${enc(config)}&duty=${enc(duty)}&kind=${kind}${showAll ? '&show_all=true' : ''}`),
+  /** The computed POINTS of one project motor for the read-only Simulation view (GET only; nothing is solved or activated). */
+  motorSimPoints: (id: string, die: string, config: string, showAll = false) =>
+    call<SimStoredPoints>('GET', `${p(id)}/motors/sim?die=${enc(die)}&config=${enc(config)}${showAll ? '&show_all=true' : ''}`),
+  /** One stored run (summary + waveforms) of one point, read-only. */
+  motorSimRun: (id: string, die: string, config: string, duty: string, drive: string, showAll = false) =>
+    call<SimStoredRun>('GET', `${p(id)}/motors/sim/run?die=${enc(die)}&config=${enc(config)}&duty=${enc(duty)}&drive=${enc(drive)}${showAll ? '&show_all=true' : ''}`),
   /** Staff only: mark / unmark the variant's report as checked (members may download it only then). */
   setReportReviewed: (id: string, die: string, config: string, value: boolean) => call<unknown>('PATCH', `${p(id)}/motors/report_reviewed`, { die, config, value }),
   /** Staff only: THE recommended variant of the project (setting it clears the previous one). */
@@ -110,6 +125,28 @@ export const developmentApi = {
   linkMotor: (id: string, die: string, config: string) => call<unknown>('POST', `${p(id)}/motors`, { die, config }),
   unlinkMotor: (id: string, die: string, config: string) => call<unknown>('DELETE', `${p(id)}/motors?die=${enc(die)}&config=${enc(config)}`),
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
+  /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
+  productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
+  /** ADMIN ONLY (owner 2026-11-02): the project cost estimate (costEstimate.ts).  403 for anybody else. */
+  costEstimate: (id: string, display?: string) => call<CostEstimateAnswer>('GET', ce(id) + dq(display)),
+  saveCostEstimate: (id: string, estimate: CostEstimate, display?: string) => call<CostEstimateAnswer>('PUT', ce(id) + dq(display), estimate),
+  suggestCostEstimate: (id: string, revision: number, refresh = false, display?: string) => call<CostEstimateAnswer>('POST', `${ce(id)}/suggest${dq(display)}`, { revision, refresh }),
+  /** What Suggest WOULD put in the empty cells of the estimate on screen (the table's grey placeholders); nothing is saved. */
+  costEstimateSuggestions: (id: string, estimate: CostEstimate) => call<CostSuggestions>('POST', `${ce(id)}/suggestions`, estimate),
+  snapshotCostEstimate: (id: string, revision: number, note: string, display?: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note, display_currency: display }),
+  costEstimateSnapshots: async (id: string) => (await call<{ snapshots: CostSnapshot[] }>('GET', `${ce(id)}/snapshots`)).snapshots ?? [],
+  /** ADMIN ONLY (owner 2026-11-03): freeze the current revision and share it with the project's members as their quote. */
+  shareCostEstimate: (id: string, revision: number) => call<{ shared: SharedQuoteMark | null; snapshot: CostSnapshot }>('POST', `${ce(id)}/share`, { revision }),
+  unshareCostEstimate: (id: string) => call<{ shared: null }>('DELETE', `${ce(id)}/share`),
+  /** The shared quote of a project: its members and admins only (404 for anybody else, and while nothing is shared). */
+  projectQuote: (id: string) => call<ProjectQuote>('GET', `${p(id)}/quote`),
+  /** The project timeline (owner 2026-11-03): its members and admins only (404 for anybody else, and while there is none). */
+  projectTimeline: (id: string) => call<ProjectTimeline>('GET', `${p(id)}/timeline`),
+  /** ADMIN ONLY: the stored timeline, the computed lanes and the customer view; save / create from the cost estimate / freeze. */
+  adminTimeline: (id: string) => call<AdminTimeline>('GET', tl(id)),
+  saveTimeline: (id: string, body: Pick<TimelineDoc, 'revision' | 'production' | 'iterations'>) => call<AdminTimeline>('PUT', tl(id), body),
+  seedTimeline: (id: string, revision: number) => call<AdminTimeline>('POST', `${tl(id)}/seed`, { revision }),
+  timelineBaseline: (id: string, revision: number) => call<AdminTimeline>('POST', `${tl(id)}/baseline`, { revision }),
 };
 
 /** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */

@@ -79,6 +79,7 @@ Windows workstation, so a value proven there is the value that ships.
 | `GOOGLE_CLIENT_ID` | *(empty)* | Google sign-in. Must equal the frontend's `VITE_GOOGLE_CLIENT_ID`, and the production origin must be listed under *Authorized JavaScript origins* in the Google console **before** cutover. |
 | `ADMIN_EMAILS` | — | comma-separated, always admin, overrides `users.json` |
 | `AUTH_ENFORCE` | `1` in the image | `1` = real tiers; `0` = everyone is admin (dev only) |
+| `MOTRES_SOLVE_ADMIN_ONLY` | `1` (closed) | **who may START a calculation** (owner 2026-11-04). `1` (default) = only an admin starts a simulation: every solve route (EM / thermal / mechanical / coupled / kernel / cogging / PWM + Ld-Lq probe / controller solve / own-compute submit / the Tests "Compute it" / the System graph run / the MCP `simulate` tool) answers a non-admin `403 solve.admin_only` "Simulations are run by MOTRES for now."; reads of stored results stay open. `0` / `false` / `no` / `off` = every route is back at the tier it had before the rule. Read per call; a restart of the API and the worker is all it takes. See `docs/SOLVE_ADMIN_ONLY_2026-11-04.md`. |
 | `PUBLIC_EXHIBIT` | `1` | `1` = the anonymous public exhibit (tree + geometry + report of the passported dies) — the workstation default. **`0` on any internet-facing host**: no credentials ⇒ 401 on every `/api` route but `/api/health`, `/api/me` (anonymous shape, so the SPA renders its login screen) and `/api/auth/login|google|logout`. Registered accounts are unaffected — grants still decide what each sees. |
 | `CATALOG_GRANT_ALL_REGISTERED` | *(unset)* | **leave it unset on this server.** Unset = a registered account sees exactly the dies it was granted, plus whatever anyone has published; `1` = every signed-in account sees the whole shared catalog. The grant posture below says why. |
 | `ALLOWED_ORIGINS` | *(empty)* | extra CORS origins. Only needed if the frontend is served from a **different** origin than the API; the same-origin nginx default needs nothing. |
@@ -270,6 +271,12 @@ This is an explicit one-shot on purpose. The old compose seeded `config/` into
 the `motor_config` **named volume**, and a named volume is only seeded when it
 is *empty* — so the second deploy silently produced a server with no catalog and
 no error anywhere.
+
+After the first seed, **new power-device cards** that a later release adds to the image
+(`/app/config-seed/devices/*.yaml`) are copied into `/srv/motres/shared/devices/` by the
+API/worker at boot (`src/motor_ai_sim/seed_devices.py`): only file names that do not exist
+there yet, one `seeded device card X` log line each. An existing shared card is never
+overwritten or deleted; if it differs from the image's copy a warning is logged for review.
 
 **4. Verify the migration answers the Stage 0 questions.**
 

@@ -12,7 +12,9 @@ the configuration yaml (beside ``battery`` / ``bearings``) and shown wherever a 
 HOW IT IS COMPUTED (one rule, no second method):
 
 * the sliding-band P2 transient, current drive at EXACTLY I = 0 (no armature field, nothing to rotate the d-axis for:
-  ``daxis_deg`` is given, so no calibration solve is paid for), eddy and rotor eddy OFF, demagnetisation OFF;
+  the machine's own ``daxis_deg`` is given when it is known, so no calibration solve is paid for; when nothing is known
+  the solver's own calibration on file is used - never a guessed 0, which the solver refuses on a topology calibrated
+  elsewhere), eddy and rotor eddy OFF, demagnetisation OFF;
 * the iron is RE-CONVERGED at every rotor position (the project's Newton saturation solve, ``frozen_nu=False``).
   FROZEN PERMEABILITY (``frozen_nu=True``: saturation converged once at the first position and held) was tried first
   (the orchestrator's brief) and REJECTED as the default on evidence (2026-10-26, 40 mm 12s/14p, 2 mm mesh): it
@@ -403,6 +405,17 @@ def _default_duty(cfg_doc: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _first_daxis(*candidates: Any) -> Optional[float]:
+    """The first finite angle among ``candidates`` (blank / absent / not a number = not known), else None."""
+    for v in candidates:
+        try:
+            if v not in (None, "") and math.isfinite(float(v)):
+                return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def machine_from_config(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any],
                         overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Everything a no-load run needs about ONE catalogued machine, from its two yaml documents.
@@ -440,14 +453,8 @@ def machine_from_config(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any],
     # The d-axis the machine is calibrated to (its duty's saved summary, else the Simulation-tab pin).  At I = 0 the
     # d-axis has no physical role, but the solver refuses a pin more than 15 deg from the topology's calibration on
     # file (fem_solver_2d d-axis guard) - so the run pins THIS machine's own value, not 0 (G2-L40 24s/28p: 60 deg).
-    daxis = None
-    for v in (((duty or {}).get("summary") or {}).get("daxis_deg"), m_duty.get("sim.daxisDeg")):
-        try:
-            if v not in (None, "") and math.isfinite(float(v)):
-                daxis = float(v)
-                break
-        except (TypeError, ValueError):
-            continue
+    # Nothing known = None: the run then leaves the d-axis to the solver's own calibration (``run``), never 0.
+    daxis = _first_daxis(((duty or {}).get("summary") or {}).get("daxis_deg"), m_duty.get("sim.daxisDeg"))
     assignment = {str(k): str(v) for k, v in (cfg_doc.get("materials") or {}).items() if v}
     for k, v in _ABSENT_MATERIALS.items():
         assignment.setdefault(k, v)
@@ -485,11 +492,15 @@ def machine_live(geo_override: Optional[Mapping[str, Any]] = None) -> Dict[str, 
     mesh = dict(vals)
     mesh.update(component_mesh_mm={}, iron_template=True, geo_mesh=True, pole_copy=False)
     wind = cfg.get("winding") or {}
+    # The d-axis the same way as a catalogued machine (``machine_from_config``): the Simulation tab's pin of the live
+    # configuration, else None = the solver's own calibration.  The live route used to leave it out, so the run pinned
+    # 0 deg and the solver refused it on a topology calibrated to 60 deg (422 "pin 0 vs 60", 2026-11-01).
+    daxis = _first_daxis((cfg.get("simulation") or {}).get("daxis_deg"))
     return {
         "die": None, "config": None, "geo_override": (dict(geo_override) if geo_override else None),
         "geo_resolved": geo, "num_slots": slots, "num_poles": poles,
         "connection": wind.get("connection") or None, "star_delta": str(wind.get("star_delta") or "star"),
-        "mesh": mesh, "mesh_source": "machine Mesh settings", "end_winding_factor": 0.0, "rpm": None,
+        "mesh": mesh, "mesh_source": "machine Mesh settings", "end_winding_factor": 0.0, "rpm": None, "daxis_deg": daxis,
         "assignment": None, "magnet_card": (cfg.get("materials") or {}).get("magnet"), "live": True,
     }
 
@@ -556,7 +567,9 @@ def run(machine: Mapping[str, Any], *, magnet_temp_c: Optional[float] = None, fr
     sectors = _clamp_sectors(int(mesh.get("n_sectors", -1)), slots, poles)
     kw: Dict[str, Any] = dict(
         n_steps_per_period=steps, sampling_purpose="cogging_quality", n_periods=1.0,
-        gamma_deg=0.0, I_phase_rms=0.0, daxis_deg=float(machine.get("daxis_deg") or 0.0),
+        # the machine's own d-axis when known; None = the solver's calibration on file (a pin of 0 deg on a topology
+        # calibrated to 60 deg is refused by the solver's d-axis guard).  At I = 0 it has no effect on the torque.
+        gamma_deg=0.0, I_phase_rms=0.0, daxis_deg=_first_daxis(machine.get("daxis_deg")),
         connection=machine.get("connection"), star_delta=machine.get("star_delta") or "star",
         mesh_size_mm=float(mesh["mesh_size_mm"]), min_size_mm=float(mesh["min_size_mm"]),
         outer_air_factor=float(mesh["outer_air_factor"]), gap_layers=float(mesh["gap_layers"]),

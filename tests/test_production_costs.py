@@ -505,3 +505,132 @@ def test_process_section_tables_i18n_requirement_d(prod_env, tmp_path):
     assert en_tbl[1][2] == "+0.009 / +0.002"
     assert en_tbl[2][1] == "h6"
     assert en_tbl[2][2] == "0 / -0.016"
+
+
+def _all_keys(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _all_keys(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _all_keys(v)
+
+
+def test_oem_with_shared_costs_never_sees_margin_or_price(prod_env, setup_production_with_bom):
+    """Owner 2026-11-02: with ``share_costs_with_oem`` on the factory sees the cost rows and the cost totals, never our
+    margin or our selling price (``margin_pct``, ``price_per_motor``, ``order_price_total``) - in /bom, /costs or
+    anywhere nested in them."""
+    from motor_ai_sim.production import access
+
+    client = prod_env["client"]
+    admin = prod_env["admin"]
+    engineer = prod_env["engineer"]
+    oem_nda = prod_env["oem_nda"]
+    p1 = setup_production_with_bom["p1"]
+    client.put(
+        f"/api/production/{DIE}/{CONFIG}/costs",
+        headers=engineer,
+        json={"rows": [{"part_id": p1["id"], "unit_price": 100.0, "currency": "CNY"}], "extras": [], "margin_pct": 25.0},
+    )
+    assert client.put(f"/api/admin/production/{DIE}/{CONFIG}/share_costs", headers=admin,
+                      json={"share_costs_with_oem": True}).status_code == 200
+
+    for path in ("bom", "costs"):
+        oem = client.get(f"/api/production/{DIE}/{CONFIG}/{path}", headers=oem_nda)
+        assert oem.status_code == 200, path
+        body = oem.json()
+        leaked = set(_all_keys(body)) & access.COMMERCIAL_COST_FIELDS
+        assert not leaked, f"{path}: {sorted(leaked)}"
+        # the cost itself is still there
+        assert body["summary"]["parts_subtotal"] == 100.0
+        assert body["summary"]["cost_per_motor"] == 100.0
+        assert body["summary"]["order_cost_total"] == 5000.0
+
+        # the production engineer keeps the full view
+        full = client.get(f"/api/production/{DIE}/{CONFIG}/{path}", headers=engineer).json()
+        assert full["summary"]["margin_pct"] == 25.0
+        assert full["summary"]["price_per_motor"] == pytest.approx(133.33, abs=0.01)
+
+
+def test_mixed_currencies_are_totalled_per_currency_never_summed(prod_env, setup_production_with_bom):
+    """CNY, EUR and USD lines were added into one number.  Now: one currency -> the flat totals as before; several ->
+    ``mixed_currency: True``, flat money totals None and the amounts per currency in ``by_currency``."""
+    client = prod_env["client"]
+    engineer = prod_env["engineer"]
+    p1, p2, p3 = (setup_production_with_bom[k]["id"] for k in ("p1", "p2", "p3"))
+    body = {
+        "rows": [
+            {"part_id": p1, "unit_price": 100.0, "currency": "CNY"},
+            {"part_id": p2, "unit_price": 20.0, "currency": "eur"},
+            {"part_id": p3, "unit_price": 30.0, "currency": "RMB"},       # alias of CNY
+        ],
+        "extras": [{"id": "ec_x", "name": {"en": "Packaging", "zh": "包装", "src_lang": "en"}, "amount": 5.0, "currency": "USD"}],
+        "margin_pct": 20.0,
+    }
+    put = client.put(f"/api/production/{DIE}/{CONFIG}/costs", headers=engineer, json=body)
+    assert put.status_code == 200, put.text
+    assert [r["currency"] for r in put.json()["rows"]] == ["CNY", "EUR", "CNY"]
+    for res in (put, client.get(f"/api/production/{DIE}/{CONFIG}/costs", headers=engineer),
+                client.get(f"/api/production/{DIE}/{CONFIG}/bom", headers=engineer)):
+        s = res.json()["summary"]
+        assert s["mixed_currency"] is True and s["currency"] is None
+        assert s["cost_per_motor"] is None and s["parts_subtotal"] is None and s["order_price_total"] is None
+        by = {c["currency"]: c for c in s["by_currency"]}
+        assert list(by) == ["CNY", "EUR", "USD"]
+        assert by["CNY"]["parts_subtotal"] == 130.0 and by["CNY"]["extra_subtotal"] == 0.0
+        assert by["EUR"]["cost_per_motor"] == 20.0 and by["EUR"]["price_per_motor"] == 25.0
+        assert by["USD"]["extra_subtotal"] == 5.0 and by["USD"]["order_cost_total"] == 250.0
+        assert any("several currencies" in w for w in s["warnings"])
+
+    # an unknown code is refused loudly, never stored
+    bad = dict(body, rows=[{"part_id": p1, "unit_price": 1.0, "currency": "XYZ"}])
+    r = client.put(f"/api/production/{DIE}/{CONFIG}/costs", headers=engineer, json=bad)
+    assert r.status_code == 422 and "currency" in r.text
+    bad_extra = dict(body, extras=[{"id": "e", "name": {"en": "Labour", "zh": "人工", "src_lang": "en"}, "amount": 1.0, "currency": "GBP"}])
+    assert client.put(f"/api/production/{DIE}/{CONFIG}/costs", headers=engineer, json=bad_extra).status_code == 422
+    assert {r["currency"] for r in store.load_file(DIE, CONFIG, "costs.json")["rows"]} == {"CNY", "EUR"}
+
+    # back to one currency: the flat totals as before
+    one = dict(body, rows=[{"part_id": p1, "unit_price": 100.0, "currency": "CNY"}], extras=[])
+    s = client.put(f"/api/production/{DIE}/{CONFIG}/costs", headers=engineer, json=one).json()["summary"]
+    assert s["mixed_currency"] is False and s["currency"] == "CNY"
+    assert s["parts_subtotal"] == 100.0 and s["price_per_motor"] == 125.0
+    assert len(s["by_currency"]) == 1 and s["by_currency"][0]["cost_per_motor"] == 100.0
+
+
+def test_currency_normalisation():
+    assert models.normalize_currency(None) == "CNY"
+    assert models.normalize_currency(" usd ") == "USD"
+    assert models.normalize_currency("RMB") == "CNY"
+    with pytest.raises(ValueError):
+        models.normalize_currency("JPY", strict=True)
+    # a stored legacy code is read as it is and totalled on its own
+    assert models.normalize_currency("JPY") == "JPY"
+    s = models.compute_cost_summary([{"part_id": "a"}, {"part_id": "b"}],
+                                    [{"part_id": "a", "unit_price": 1.0, "currency": "JPY"},
+                                     {"part_id": "b", "unit_price": 2.0, "currency": "CNY"}], [], 0.0, 1)
+    assert s["mixed_currency"] is True and [c["currency"] for c in s["by_currency"]] == ["CNY", "JPY"]
+
+
+def test_cost_view_rule_single_helper():
+    """One rule for every role: admin / production owner / engineer full, the factory cost-only (and only when shared),
+    anybody else (a project viewer is never a production member) nothing."""
+    from motor_ai_sim.production import access
+
+    prod = {"members": [{"email": "e@x.test", "role": "engineer"}, {"email": "f@x.test", "role": "oem"}],
+            "share_costs_with_oem": False}
+    assert access.cost_view({"email": "a@x.test", "role": "admin"}, prod) == access.COST_VIEW_FULL
+    assert access.cost_view({"email": "e@x.test", "role": "user"}, prod) == access.COST_VIEW_FULL
+    assert access.cost_view({"email": "f@x.test", "role": "oem"}, prod) == access.COST_VIEW_NONE
+    assert access.cost_view({"email": "viewer@x.test", "role": "user"}, prod) == access.COST_VIEW_NONE
+    shared = dict(prod, share_costs_with_oem=True)
+    assert access.cost_view({"email": "f@x.test", "role": "oem"}, shared) == access.COST_VIEW_COST_ONLY
+    assert access.cost_view({"email": "viewer@x.test", "role": "user"}, shared) == access.COST_VIEW_NONE
+
+    payload = {"margin_pct": 9, "summary": {"cost_per_motor": 1, "price_per_motor": 2, "order_price_total": 3,
+                                            "by_currency": [{"currency": "CNY", "price_per_motor": 2, "cost_per_motor": 1}]}}
+    oem = access.costs_for_caller({"email": "f@x.test", "role": "oem"}, shared, payload)
+    assert oem == {"summary": {"cost_per_motor": 1, "by_currency": [{"currency": "CNY", "cost_per_motor": 1}]}}
+    assert access.costs_for_caller({"email": "viewer@x.test", "role": "user"}, shared, payload) == {}
+    assert access.costs_for_caller({"email": "e@x.test", "role": "user"}, shared, payload) is payload

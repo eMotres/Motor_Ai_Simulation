@@ -96,14 +96,14 @@ test('the stored point keeps full precision and every other stored key (includin
 });
 
 // ── 2. power supply ────────────────────────────────────────────────────────────────────────────────────────────────────
-test('schema: 2_1 gains supply_type and dc_source_V only (additive); the battery properties are unchanged', () => {
+test('schema: 2_1 gains supply_type, dc_source_V and the AC mains values only (additive); the battery properties are unchanged', () => {
   const f = fieldOf('2_1');
   assert.equal(schema.schema_version, 2);
   const ids = f.properties.map((p) => p.id);
   assert.deepEqual(ids.slice(0, 8), ['chemistry', 'series_cells', 'voltage_min_V', 'voltage_nominal_V', 'voltage_max_V', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V']);
-  assert.deepEqual(ids.slice(8), ['supply_type', 'dc_source_V']);
-  assert.deepEqual(f.properties.find((p) => p.id === 'supply_type').options.map((o) => o.value), ['battery', 'dc_source']);
-  for (const p of f.properties.filter((x) => ['supply_type', 'dc_source_V'].includes(x.id))) { assert.ok(p.label.en && p.label['zh-CN']); }
+  assert.deepEqual(ids.slice(8), ['supply_type', 'dc_source_V', 'ac_line_voltage_V', 'ac_frequency_Hz']);
+  assert.deepEqual(f.properties.find((p) => p.id === 'supply_type').options.map((o) => o.value), ['battery', 'dc_source', 'ac_mains']);
+  for (const p of f.properties.filter((x) => ['supply_type', 'dc_source_V', 'ac_line_voltage_V', 'ac_frequency_Hz'].includes(x.id))) { assert.ok(p.label.en && p.label['zh-CN']); }
   assert.ok(f.short_label.en === 'Power supply' && f.short_label['zh-CN']);
 });
 

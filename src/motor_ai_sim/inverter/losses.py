@@ -143,6 +143,11 @@ POWER_DIRECTIONS = ("motor", "generator")
 #: that model is not here — such a card is refused, never costed as a MOSFET.
 MOSFET_TECHNOLOGIES = ("sic_mosfet", "si_mosfet", "gan_hemt", "gan_fet")
 
+#: IGBT + anti-parallel diode modules (2026-11-03): their own conduction split
+#: by the current's direction, switching and two junction temperatures live
+#: in :mod:`motor_ai_sim.inverter.igbt`; the common set-up here is shared.
+IGBT_TECHNOLOGIES = ("igbt_module",)
+
 
 def standalone_coils(n_inverters: int, shift_deg: float = 30.0) -> List[Coil]:
     """Three synthetic coils per inverter (A, B, C at 0/-120/-240 deg).  With
@@ -667,6 +672,13 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     # V_DS(I, T_j) at the POWER source pin, integrated as <i * V(i)>.
     switching_source = (switching_source or card.switching_source_default()).strip().lower()
     spice_static = (switching_source == "spice" and card.static_table() is not None)
+    # 2026-11-03: the table is held against the datasheet R_DS(on)(T_j) first;
+    # outside the tolerance the conduction (and, on its own check, the dead
+    # time) is taken from the datasheet curves and the result says so.
+    cond_check = card.static_conduction_check(t_j_c, v_gs_on) if spice_static else None
+    q3_check = card.static_third_quadrant_check(v_gs_off) if spice_static else None
+    spice_3q = spice_static and (q3_check is None or bool(q3_check["ok"]))
+    spice_static = spice_static and (cond_check is None or bool(cond_check["ok"]))
     if spice_static:
         v_fw = np.array([card.v_ds_on_spice_V(float(x), t_j_c, v_gs_on) for x in ladder])
         p_cond = (1.0 - f_dt) * n * float(np.mean(i_dev * np.interp(i_dev, ladder, v_fw)))
@@ -677,7 +689,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         p_cond = (1.0 - f_dt) * float(np.mean(i_leg ** 2)) * r_tot / n
 
     if f_dt > 0.0:
-        v_ladder = np.array([(card.v_sd_spice_V(float(x), t_j_c, v_gs_off) if spice_static
+        v_ladder = np.array([(card.v_sd_spice_V(float(x), t_j_c, v_gs_off) if spice_3q
                               else card.v_sd_V(float(x), t_j_c, v_gs_off))
                              for x in ladder])
         v_sd = np.interp(i_dev, ladder, v_ladder)
@@ -699,6 +711,9 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         energy_kind = energy_kind or e.get("switching_energy_source")
         if not notes:
             notes = list(e["notes"])
+    for chk in (cond_check, q3_check):
+        if chk is not None and not chk["ok"]:
+            notes = list(notes) + [f"{card.part}: {chk['line']}"]
     tot = np.array(e_on) + np.array(e_off) + np.array(e_fr)
     e_at = np.interp(i_dev, ladder, tot)
     p_sw = float(f_sw) * n * float(np.mean(e_at))
@@ -747,6 +762,9 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         "extrapolated": extrapolated,
         "notes": notes,
         "conduction_source": "spice_static" if spice_static else "datasheet",
+        "third_quadrant_source": "spice_static" if spice_3q else "datasheet",
+        "conduction_check": cond_check,
+        "third_quadrant_check": q3_check,
     }
 
 
@@ -1108,12 +1126,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         raise ControllerRefusal(str(exc), ["device"], code="unknown_device")
 
     tech = str(card.doc.get("technology") or "sic_mosfet").strip().lower()
-    if tech not in MOSFET_TECHNOLOGIES:
+    if tech not in MOSFET_TECHNOLOGIES and tech not in IGBT_TECHNOLOGIES:
         raise ControllerRefusal(
-            f"{card.part} is a {tech} card: this loss model is synchronous-"
-            "rectifying MOSFET only (reverse current in the channel); an "
-            "IGBT/diode pair needs its conduction split by the current's "
-            "direction between the IGBT and the diode, which is not modelled",
+            f"{card.part} is a {tech} card: the loss models are the synchronous-"
+            "rectifying MOSFET (" + ", ".join(MOSFET_TECHNOLOGIES) + ") and the "
+            "IGBT module with its anti-parallel diode (" + ", ".join(IGBT_TECHNOLOGIES)
+            + "); this technology is not modelled",
             ["device"], code="technology_not_modelled")
 
     n_par = int(_f(req.get("devices_parallel"), "devices_parallel", default=1,
@@ -1345,6 +1363,25 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "voltage this operating point needs without overmodulation or a "
             "higher bus")
 
+    if tech in IGBT_TECHNOLOGIES:
+        # IGBT/diode modules: the device model, the two-junction thermal loop
+        # and the response are inverter.igbt's; everything above is shared.
+        from motor_ai_sim.inverter.igbt import solve_igbt_controller
+        return solve_igbt_controller({
+            "req": req, "card": card, "topo": topo, "legs_spec": legs_spec,
+            "m_by_bridge": m_by_bridge, "warnings": warnings, "v_dc": v_dc,
+            "f_el": f_el, "f_sw": f_sw, "p_ac": p_ac, "pmod": pmod,
+            "direction": direction, "n_par": n_par, "eta_shaft": eta_shaft,
+            "m": m, "m_lin": m_lin, "pf": pf, "phi_deg": phi_deg,
+            "lag_deg": lag_deg, "i_leg_3ph": i_leg_3ph, "i_ph": i_ph,
+            "sd": sd, "standalone": standalone, "scheme": scheme,
+            "m_linear": m_linear, "v_machine_phase_rms": v_machine_phase_rms,
+            "v_coil_rms": v_coil_rms, "coils_per_phase": coils_per_phase,
+            "a_par": a_par, "i_coil_rms": i_coil_rms,
+            "wiring_notes": wiring_notes,
+            "set_split_out": ((set_split if a_par == 1 else "winding")
+                              if n_3ph >= 2 else None)})
+
     # ── the thermal loop ───────────────────────────────────────────────────
     plate = _build_cooling(req.get("cooling") or {})
     r_tim = _f((req.get("r_tim_k_w")), "r_tim_k_w", default=DEFAULT_TIM_K_W)
@@ -1532,14 +1569,19 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         bridges_out.append(d)
 
     # ── DC link ────────────────────────────────────────────────────────────
-    states, currents = [], []
+    states, currents, avg_states = [], [], []
     for b in topo.bridges:
         st = setups[b.id]
         for lg in b.legs:
             spec = legs_spec[(b.id, lg.name)]
             states.append(wf.switch_states(st, u, spec["v_phase_deg"]))
+            avg_states.append(wf.switch_average(st, u, spec["v_phase_deg"]))
             currents.append(leg_current[(b.id, lg.name)])
-    dc = wf.dc_link_current(states, currents)
+    # the bus MEAN takes the cell-exact on-times (the grid-snapped `states`
+    # bias it at low modulation) and the bridge's own loss; the ripple stays
+    # on the pulses
+    dc = wf.dc_link_current(states, currents, mean_states=avg_states,
+                            p_loss_W=p_total, v_dc_V=v_dc)
     # Which way the leg current flows through its switch: forward (first
     # quadrant) while the conducting switch carries it drain->source, REVERSE
     # (third quadrant — the channel in synchronous rectification, the diode
@@ -1629,11 +1671,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         modulation=base.modulation)
     t_draw = min(t_j_max_seen, t_cap)
     spice_static = sw_src == "spice" and card.static_table() is not None
+    # the per-leg verdict of the SPICE-vs-datasheet check (2026-11-03): a table
+    # outside the tolerance is not used for the chart either
+    spice_3q = spice_static and all(r.get("third_quadrant_source") == "spice_static"
+                                    for r in per_leg.values())
+    spice_static = spice_static and all(r.get("conduction_source") == "spice_static"
+                                        for r in per_leg.values())
     r_ds = (float(np.mean([r["r_ds_on_mohm"] for r in per_leg.values()])) * 1e-3
             if spice_static else card.r_ds_on_ohm(t_draw, v_gs_on))
 
     def _vsd1(i_dev: float) -> float:
-        return (card.v_sd_spice_V(i_dev, t_draw, v_gs_off) if spice_static
+        return (card.v_sd_spice_V(i_dev, t_draw, v_gs_off) if spice_3q
                 else card.v_sd_V(i_dev, t_draw, v_gs_off))
 
     def _v_sd(arr: np.ndarray) -> np.ndarray:
@@ -1714,9 +1762,16 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             # 2026-09-27 uniform SPICE basis: one label for the whole loss
             # split, the fallback said as such, and the model's deviation
             "conduction_source": ("spice_static" if spice_static else "datasheet"),
+            "third_quadrant_source": ("spice_static" if spice_3q else "datasheet"),
+            "conduction_check": next((r.get("conduction_check") for r in per_leg.values()
+                                      if r.get("conduction_check")), None),
             "basis_label": (
                 (f"SPICE ({card.part} vendor model): switching"
-                 + (", conduction, dead time" if spice_static else ""))
+                 + (", conduction" if spice_static else "")
+                 + (", dead time" if spice_3q else "")
+                 + ("; conduction from the datasheet R_DS(on)(T_j) — the SPICE static "
+                    "table is outside the datasheet tolerance"
+                    if card.static_table() is not None and not spice_static else ""))
                 if sw_src == "spice" else
                 ("datasheet (explicit choice; a SPICE table exists)"
                  if card.switching_table() is not None else

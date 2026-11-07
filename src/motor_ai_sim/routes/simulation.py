@@ -1542,6 +1542,11 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
                 if _d["glive"] is None:
                     raise ValueError("no live geometry to resolve against")
                 _merged = _mgo(dict(_d["glive"]), dict(geo_override))
+                # the OD-notch flag in its stored form (absent = on), as the
+                # live object carries it: an explicit `true` is the same motor
+                from motor_ai_sim.geometry.motor_geometry import (
+                    canonical_outer_notches as _con)
+                _con(_merged)
                 # Dict equality, NOT serialized-text equality: the client
                 # sends 13 where the live object holds 13.0 — Python calls
                 # them equal, json.dumps does not, and the hash is of the
@@ -4997,6 +5002,8 @@ def get_fem_transient(
     inv_v_sd_v0_V:       float = 0.0,     # ← body-diode fit: threshold [V]
     inv_v_sd_rd_ohm:     float = 0.0,     # ← body-diode fit: slope in the LEG current [ohm]
     inv_dead_time_us:    float = 0.0,     # ← one dead-time window [us]
+    inv_v_on0_V:         float = 0.0,     # ← IGBT/FWD forward threshold of the conducting
+                                          #   device [V] (0 for a MOSFET — keys unchanged)
     inv_device:          str   = "",      # ← provenance: the part
     inv_devices_parallel: int  = 1,       # ← provenance: devices per switch
     inv_t_j_c:           float = 0.0,     # ← provenance: T_j the card was read at
@@ -5419,6 +5426,12 @@ def get_fem_transient(
                     % (float(v_bus), float(f_switch), float(inv_r_ds_ohm),
                        float(inv_v_sd_v0_V), float(inv_v_sd_rd_ohm),
                        float(inv_dead_time_us)))
+        # IGBT modules: the conducting device's threshold, keyed only when
+        # present so every MOSFET key stays the key it was.
+        if float(inv_v_on0_V or 0.0):
+            _inv_nonideal["v_on0_V"] = float(inv_v_on0_V)
+            _inv_nonideal["technology"] = "igbt_module"
+            _inv_key += "/von%g" % float(inv_v_on0_V)
         # Keyed only when not sine, so every key written before the choice
         # existed stays the same key (routes/coupled.py spells it the same).
         if _inv_mod != "sine":
@@ -6324,6 +6337,17 @@ def get_fem_transient(
                             "P_loss_v_W": round(_pl_v, 1),
                             "T_ref_Nm": round(float(_ref.get("T_avg_Nm", 0.0)), 3),
                         }
+                        # The same totals BY PART (copper / iron / magnet /
+                        # shaft / sleeve + iron Bertotti terms) on both sides
+                        # of the matched pair, so the PWM extra loss is split
+                        # from THIS comparison (same mesh, steps, eddy method)
+                        # — passport_v1.stage3.anchor_loss_parts reads them.
+                        try:
+                            from motor_ai_sim.simulation.postproc import loss_parts
+                            _sbres["harm_ref"]["parts_ref_W"] = loss_parts(_ref)
+                            _sbres["harm_ref"]["parts_v_W"] = loss_parts(_sbres)
+                        except Exception:              # noqa: BLE001
+                            log.exception("harm_ref loss split failed (non-fatal)")
                         _sbres["dP_harm_W"] = round(_pl_v - _pl_r, 1)
                 except Exception:
                     log.exception("harm_ref reference run failed (non-fatal)")

@@ -54,7 +54,8 @@ def test_a_plain_user_creates_a_project_and_is_its_owner(api):
     r = _create(api, customer_org="Drone Co")
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["id"] == "7-inch-high-pitch-prop-motor" and out["status"] == "spec"
+    assert out["id"].startswith("project-") and out["status"] == "spec"
+    assert out["title"] == self_service.NEW_PROJECT_TITLE        # we name it, not the customer
     assert out["can_edit_spec"] is True                          # the owner fills the requirements
     stored = store.get_project(out["id"])
     assert stored["members"] == [{"email": CUSTOMER, "role": "owner"}]
@@ -70,25 +71,25 @@ def test_a_customer_cannot_choose_members_status_or_engineer(api):
                 members=[{"email": ENGINEER, "role": "owner"}])
     assert r.status_code == 200
     project = store.get_project(r.json()["id"])
-    assert project["id"] == "7-inch-high-pitch-prop-motor"       # the id is generated, not taken from the body
+    assert project["id"].startswith("project-") and project["id"] != "chosen-id"   # generated, not taken from the body
     assert project["status"] == "spec" and project["owner_engineer"] == ""
     assert project["members"] == [{"email": CUSTOMER, "role": "owner"}]
 
 
-def test_ids_are_unique_slugs_and_survive_a_non_latin_title(api):
+def test_ids_are_unique_and_a_customers_words_are_not_in_them(api):
     from motor_ai_sim.development import project_limits
     project_limits.set_override(CUSTOMER, "unlimited")                # the default of 2 would stop the third
     ids = [_create(api, title="Gonzalo motor!").json()["id"] for _ in range(3)]
-    assert ids == ["gonzalo-motor", "gonzalo-motor-2", "gonzalo-motor-3"]
+    assert len(set(ids)) == 3 and all(store.valid_id(i) and "gonzalo" not in i for i in ids)
     zh = _create(api, who="t-other", title="七寸高螺距电机").json()["id"]
-    assert store.valid_id(zh) and zh == "project"
+    assert store.valid_id(zh) and zh.startswith("project-")
     assert self_service.slug_from_title("  Ünïcode — Motor / 7\" ") == "unicode-motor-7"
     assert len(self_service.slug_from_title("x" * 200)) <= 48
 
 
-def test_title_is_required(api):
-    assert api("t-customer", "POST", "/api/projects", json={"title": "   "}).status_code == 422
-    assert api("t-customer", "POST", "/api/projects", json={}).status_code == 422
+def test_a_customer_needs_no_title_and_staff_still_do(api):
+    assert api("t-customer", "POST", "/api/projects", json={}).status_code == 200
+    assert api("t-admin", "POST", "/api/projects", json={"id": "x-1", "title": "   "}).status_code == 422
 
 
 def test_unsigned_request_is_refused(api):
@@ -146,6 +147,33 @@ def test_staff_see_and_edit_a_customers_project_without_any_grant(api):
     assert pid not in [p["id"] for p in api("t-other", "GET", "/api/projects").json()["projects"]]
 
 
+def test_a_customer_owner_never_sets_a_commercial_status(api):
+    """Owner 2026-11-06: the stage of a project is MOTRES staff's to move.  A customer owner changes no stage; he may only close
+    a project of his own that is still in an engineering stage (the limit says "close one to open another")."""
+    pid = _create(api).json()["id"]
+    patch = lambda who, status: api(who, "PATCH", f"/api/projects/{pid}", json={"status": status})
+    for status in ("quote", "prototype", "production"):
+        r = patch("t-customer", status)
+        assert r.status_code == 403, (status, r.text)
+        assert store.get_project(pid)["status"] == "spec"
+    for status in ("design", "simulation"):
+        assert patch("t-customer", status).status_code == 403, status
+    assert store.get_project(pid)["status"] == "spec"
+    assert patch("t-customer", "spec").status_code == 200            # the stage it already has: nothing to change
+    # staff move it to the commercial stage; from there the customer changes nothing (not back, not closed)
+    assert patch("t-eng", "quote").status_code == 200
+    for status in ("spec", "design", "prototype", "closed"):
+        assert patch("t-customer", status).status_code == 403, status
+    assert store.get_project(pid)["status"] == "quote"
+    assert patch("t-admin", "production").status_code == 200
+    assert patch("t-admin", "spec").status_code == 200
+    # closing his own pre-commercial project works; reopening it is staff's
+    assert patch("t-customer", "closed").status_code == 200
+    assert patch("t-customer", "spec").status_code == 403
+    assert patch("t-admin", "spec").status_code == 200
+    assert patch("t-customer", "unknown").status_code == 403
+
+
 def test_the_owner_fills_the_specification_and_others_cannot(api):
     pid = _create(api).json()["id"]
     spec = api("t-customer", "GET", f"/api/projects/{pid}/spec").json()
@@ -175,3 +203,56 @@ def test_the_owner_report_names_a_self_service_project():
     own = sources._project_audit_text({"action": "create", "entity": "project", "entity_id": "p", "details": {"self_service": True}})
     staff = sources._project_audit_text({"action": "create", "entity": "project", "entity_id": "p", "details": {}})
     assert own[0] == "project created by the customer (self-service)" and staff[0] == "project created"
+
+
+def test_internal_notes_are_staffs_in_both_directions(api):
+    """Owner 2026-11-06: a customer who creates a project is its OWNER, but the internal notes are MOTRES staff's: the customer neither
+    reads them (detail, list, and the answer to his own PATCH) nor writes them; staff keep both."""
+    pid = _create(api).json()["id"]
+    assert api("t-eng", "PATCH", f"/api/projects/{pid}", json={"notes": "wiring looks risky"}).status_code == 200
+    for who, sees in (("t-customer", False), ("t-eng", True), ("t-admin", True)):
+        detail = api(who, "GET", f"/api/projects/{pid}").json()
+        listed = next(p for p in api(who, "GET", "/api/projects").json()["projects"] if p["id"] == pid)
+        assert ("notes" in detail) is sees and ("notes" in listed) is sees, who
+        assert sees or "wiring looks risky" not in json.dumps([detail, listed])
+    denied = api("t-customer", "PATCH", f"/api/projects/{pid}", json={"notes": "my note"})
+    assert denied.status_code == 403
+    assert store.get_project(pid)["notes"] == "wiring looks risky"
+    ok = api("t-customer", "PATCH", f"/api/projects/{pid}", json={"customer_org": "Acme"})
+    assert ok.status_code == 200 and "notes" not in ok.json()
+    assert api("t-admin", "PATCH", f"/api/projects/{pid}", json={"notes": "second"}).json()["notes"] == "second"
+
+
+def test_the_project_status_is_read_only_for_a_customer_and_staff_keep_it(api):
+    pid = _create(api).json()["id"]
+    for status in ("design", "simulation", "quote", "no-such-stage"):
+        assert api("t-customer", "PATCH", f"/api/projects/{pid}", json={"status": status}).status_code == 403, status
+    assert store.get_project(pid)["status"] == "spec"
+    assert api("t-eng", "PATCH", f"/api/projects/{pid}", json={"status": "simulation"}).json()["status"] == "simulation"
+    assert api("t-admin", "PATCH", f"/api/projects/{pid}", json={"status": "spec"}).json()["status"] == "spec"
+
+
+def test_we_name_a_customers_project_from_its_specification(api):
+    project = _create(api, title="demo").json()
+    assert project["title"] == self_service.NEW_PROJECT_TITLE and project["id"].startswith("project-")
+    draft = {"fields": {"1_1": {"value": "Vehicle traction"}, "1_2": {"value": "Motor with regeneration"},
+                        "1_4": {"value": {"torque_Nm": 100, "speed_rpm": 1500}}}}
+    assert self_service.spec_title(draft) == "Vehicle traction motor, 100 N·m, 1500 rpm"
+    self_service.refresh_title(project["id"], draft)
+    assert store.get_project(project["id"])["title"] == "Vehicle traction motor, 100 N·m, 1500 rpm"
+
+
+def test_the_name_says_generator_and_uses_the_first_point_and_waits_for_data():
+    points = {"fields": {"1_1": {"value": "Hydrofoil"}, "1_2": {"value": "Generator"},
+                         "key_points": {"value": [{"torque_Nm": 159, "speed_rpm": 3000}]}}}
+    assert self_service.spec_title(points) == "Hydrofoil generator, 159 N·m, 3000 rpm"
+    assert self_service.spec_title({"fields": {"1_1": {"value": "Pump motor"}, "1_2": {"value": "Motor, one direction"}}}) == "Pump motor"
+    assert self_service.spec_title({"fields": {}}) == ""
+
+
+def test_only_staff_rename_and_their_name_stays(api):
+    pid = _create(api).json()["id"]
+    assert api("t-customer", "PATCH", f"/api/projects/{pid}", json={"title": "Mine"}).status_code == 403
+    assert api("t-admin", "PATCH", f"/api/projects/{pid}", json={"title": "Staff name"}).json()["title"] == "Staff name"
+    self_service.refresh_title(pid, {"fields": {"1_1": {"value": "Pump"}}})
+    assert store.get_project(pid)["title"] == "Staff name"

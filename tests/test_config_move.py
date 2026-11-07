@@ -200,7 +200,8 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(CO, "_FILE", co)
     linked = []
     monkeypatch.setattr(fam, "_autolink_new_config",
-                        lambda die, cfg, w=None, copied_from=None: linked.append((die, cfg, copied_from)))
+                        lambda die, cfg, w=None, copied_from=None, source_config=None:
+                        linked.append((die, cfg, copied_from, source_config)))
     monkeypatch.setenv("ADMIN_AUDIT_FILE", str(t / "admin_audit.jsonl"))
     world_linked.clear()
     world_linked.extend([linked])
@@ -322,7 +323,7 @@ def test_copy_leaves_the_source_alone(world):
     assert DR.history(DST, CFG, DUTY, "thermal") and DR.history(SRC, CFG, DUTY, "thermal")
     assert (world / "users.json").read_bytes() == users_before
     assert _read_json(world / "ws" / ".family_context.json")["die"] == SRC
-    assert world_linked[0] == [(DST, CFG, SRC)]                               # projects pick it up via autolink
+    assert world_linked[0] == [(DST, CFG, SRC, CFG)]                          # projects pick it up via autolink (source = SRC/CFG)
     assert {m["store"] for m in out["manual"]} >= {"production", "cad_models"}
 
 

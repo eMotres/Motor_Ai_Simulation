@@ -118,7 +118,7 @@ def consent_info(rid: str, authorization: Optional[str] = Header(default=None)):
         raise HTTPException(e.status, detail=e.description)
     from motor_ai_sim import agent_keys as _keys
     return info | {"account": owner,
-                   "scope_descriptions": dict(_keys.SCOPE_DESCRIPTIONS)}
+                   "scope_descriptions": _keys.scope_descriptions()}
 
 
 class Decision(BaseModel):

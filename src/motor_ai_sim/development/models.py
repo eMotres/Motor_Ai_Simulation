@@ -280,8 +280,8 @@ def _normalize_answer(answer: Any, field: dict, field_id: str) -> dict:
                 raise ValueError(f"{field_id}.{key}: value outside allowed range")
             if prop["type"] == "string" and (not isinstance(item, str) or not item.strip()):
                 raise ValueError(f"{field_id}.{key}: non-empty text required")
-            if field_id == "2_1" and key == "supply_type" and item not in ("battery", "dc_source"):
-                raise ValueError("2_1.supply_type: battery or dc_source")
+            if field_id == "2_1" and key == "supply_type" and item not in ("battery", "dc_source", "ac_mains"):
+                raise ValueError("2_1.supply_type: battery, dc_source or ac_mains")
             if prop["type"] == "boolean" and not isinstance(item, bool):
                 raise ValueError(f"{field_id}.{key}: boolean required")
             if prop["type"] == "array":
@@ -726,7 +726,11 @@ def _choice_holds(rule: Any, value: Any) -> bool:
     """Requirements that follow another property of the same answer (the power supply, 2_1): `required_if_value` makes a
     property required while the named property holds the given choice, `required_unless_value` drops a required property
     while it does.  The same rule as the web's `propertyRequired` (wizardState.ts)."""
-    return isinstance(rule, dict) and isinstance(value, dict) and value.get(rule.get("property")) == rule.get("equals")
+    if not (isinstance(rule, dict) and isinstance(value, dict)):
+        return False
+    current = value.get(rule.get("property"))
+    any_of = rule.get("equals_any")
+    return current in any_of if isinstance(any_of, list) else current == rule.get("equals")
 
 
 def _field_required(field: dict, draft: dict) -> bool:

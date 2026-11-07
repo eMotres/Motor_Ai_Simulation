@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import {
   STAGE_ORDER, parseActivity, projectPercent, readSeen, segmentFill, stageAria, stageTooltip, stagesForMotor, summaryLine, summaryTooltip,
   variantEndText, variantPercent, writeSeen,
-} from '../stageBar.ts';
+} from '../stageBarModel.ts';
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const en = JSON.parse(read('../../../locales/en/development.json'));

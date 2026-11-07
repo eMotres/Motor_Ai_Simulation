@@ -19,7 +19,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
-import { geoSignature } from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 // THE REQUEST BODY of an Electromagnetic run — shared with the Thermal tab,
 // which builds the same one when it has to make the run its own solve was
@@ -36,6 +36,7 @@ import {
   type CouplingBlock, type CoupledRunResult,
 } from './coupledApi';
 import HelpTip from '../common/HelpTip';
+import SolveGate from '../common/SolveGate';
 
 interface TransientPayload {
   // Frontend-only stamp: the geometry signature this run was computed for.
@@ -255,6 +256,11 @@ interface Props {
   // confirm the winner at the requested resolution.  Consumed by the parent
   // after the run so the button does not latch.
   chargeMax?: boolean;
+  /** READ-ONLY (owner 2026-11-04): the stored run in `payloadOverride` is drawn and NOTHING else happens - no solve, no
+   *  progress poll, no restore from the workbench's localStorage, no history / recompute / refine controls, no
+   *  comparison with the live geometry.  The project members' Simulation view uses it. */
+  readOnly?: boolean;
+  payloadOverride?: unknown;
 }
 
 /* `readMeshSetting` / `readSimSetting` lived here until 2026-09-08 and read the
@@ -330,11 +336,13 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false, readOnly = false, payloadOverride = null }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
-  const [data,  setData]  = useState<TransientPayload | null>(null);
+  const [data,  setData]  = useState<TransientPayload | null>(() => (readOnly ? (payloadOverride as TransientPayload | null) : null));
+  // read-only: the shown run follows the prop, never the workbench
+  useEffect(() => { if (readOnly) setData((payloadOverride as TransientPayload | null) ?? null); }, [readOnly, payloadOverride]);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   // …and publish every change of it to the Run button.  This panel renders
@@ -352,6 +360,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // the rail when there is one), and not a line buried in a tooltip.
   const [regimeNotice, setRegimeNotice] = useState<string | null>(null);
   useEffect(() => {
+    if (readOnly) return;                 // not the workbench's run rail
     window.dispatchEvent(new CustomEvent('sim:run-notice',
       { detail: { message: error ?? regimeNotice } }));
   }, [error, regimeNotice]);
@@ -381,8 +390,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const geometry = useMotorStore(s => s.geometry);
   const geoSig = useMemo(() => geoSignature(geometry as Record<string, unknown>),
                          [geometry]);
-  const geoStale = !!data && (
-    (data._geoSig != null && data._geoSig !== geoSig)
+  const geoStale = !readOnly && !!data && (
+    (data._geoSig != null && geoSigsDiffer(data._geoSig, geoSig))
     || data.stale_geometry === true);
 
   // Poll the backend /progress endpoint so we can show a live "Computing X/N
@@ -393,6 +402,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // solve is in flight.  Cadence backs off to 1.5 s when idle to stay cheap;
   // tightens to 350 ms while a solve is running so the counter advances live.
   useEffect(() => {
+    if (readOnly) return;                 // a read-only view never asks the solver anything
     let alive = true;
     let misses = 0;
     let timer = 0;
@@ -454,6 +464,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // animation twin sharing the run_id is cancelled too, but the next run
   // isn't).
   useEffect(() => {
+    if (readOnly) return;
     const onStop = () => {
       abortRef.current?.abort();
       fetch(`${API}/api/simulation/physics/fem_transient/cancel?run_id=${runNonce}`,
@@ -715,6 +726,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const refineRef = useRef(refineRipple);
   refineRef.current = refineRipple;
   useEffect(() => {
+    if (readOnly) return;
     const on = () => { void refineRef.current(); };
     window.addEventListener('sim-refine-ripple', on);
     return () => window.removeEventListener('sim-refine-ripple', on);
@@ -825,6 +837,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const mountedRef = useRef(false);
   const handledNonceRef = useRef(runNonce);   // the runNonce we've already acted on
   useEffect(() => {
+    if (readOnly) return;                 // the stored run arrives as a prop; nothing is restored, nothing is solved
     if (!mountedRef.current) {
       mountedRef.current = true;
       handledNonceRef.current = runNonce;      // remember the mount nonce — never recompute it
@@ -926,6 +939,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // solve), and a legitimately foreign run just keeps its banner.
   const staleRecheckRef = useRef<{ n: number; sig: string }>({ n: 0, sig: '' });
   useEffect(() => {
+    if (readOnly) return;
     const restored = !!data && (data as { restored?: boolean }).restored === true;
     if (!restored || data?.stale_geometry !== true) {
       staleRecheckRef.current = { n: 0, sig: geoSig };
@@ -943,6 +957,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, geoSig]);
   useEffect(() => {
+    if (readOnly) return;
     const onStorage = (e: StorageEvent) => {
       if (e.key !== LAST_KEY || !e.newValue || busyRef.current) return;
       try {
@@ -961,6 +976,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // path everywhere else is careful to avoid.  Nothing is solved: the payload
   // is a run that finished minutes or days ago (lib/dutyRuns.ts).
   useEffect(() => {
+    if (readOnly) return;
     const onRestored = (e: Event) => {
       if (busyRef.current) return;            // a solve in flight owns the panel
       const d = (e as CustomEvent).detail?.payload as TransientPayload | undefined;
@@ -1463,17 +1479,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               that can answer from a store instead of solving.  The condition
               is unchanged (a stored run whose parameters are byte-identical
               to this one was found — user, 2026-09-05), only the words. */}
-          {!geoStale && historyNoticeFor(data) && !busy && (
+          {!readOnly && !geoStale && historyNoticeFor(data) && !busy && (
             <Typography sx={{ fontSize: 10, color: '#93c5fd', mt: 0.25 }}>
               {historyNoticeFor(data)!.text}
               {' · '}
-              <Box component="span" role="button" tabIndex={0}
-                onClick={() => { setStale(false); run(false, true); }}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
-                sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
-                  textDecoration: 'underline' }}>
-                Recompute
-              </Box>
+<SolveGate>
+                <Box component="span" role="button" tabIndex={0}
+                  onClick={() => { setStale(false); run(false, true); }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
+                  sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
+                    textDecoration: 'underline' }}>
+                  Recompute
+                </Box>
+              </SolveGate>
               <HelpTip title="Nothing was solved: a run with exactly these inputs — geometry, materials, current, γ, rpm, mesh and drive — is already stored, so it was loaded. Recompute solves it again and replaces the stored one." />
             </Typography>
           )}
@@ -1483,18 +1501,20 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               above (e.g. a Start-fresh EM solve whose coupled call still hit
               its own history). Same Recompute: `fresh` already rides the one
               request both calls share. */}
-          {coupledHistory && !busy && (
+          {!readOnly && coupledHistory && !busy && (
             <Typography sx={{ fontSize: 10, color: '#93c5fd', mt: 0.25 }}>
               Coupled run — loaded from history — computed{' '}
               {formatHistoryComputedAt(coupledHistory.computed_at)}
               {' · '}
-              <Box component="span" role="button" tabIndex={0}
-                onClick={() => { setStale(false); run(false, true); }}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
-                sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
-                  textDecoration: 'underline' }}>
-                Recompute
-              </Box>
+<SolveGate>
+                <Box component="span" role="button" tabIndex={0}
+                  onClick={() => { setStale(false); run(false, true); }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
+                  sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
+                    textDecoration: 'underline' }}>
+                  Recompute
+                </Box>
+              </SolveGate>
               <HelpTip title="Nothing was iterated: an EM ↔ thermal coupled loop with exactly these inputs — geometry, materials, operating point, cooling — is already stored, so it was loaded. Recompute runs the loop again and replaces the stored one." />
             </Typography>
           )}
@@ -1576,14 +1596,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             predates `run_history`; the coupled kind is `run_history`-backed)
             and two different questions ("which EM waveform" vs "which
             EM+thermal loop"). */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+        {!readOnly && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
           <HistoryPopover label="EM transient runs" disabled={busy}
             list={listLedgerHistory} onLoad={loadLedgerHistory}
             onDelete={deleteLedgerHistory} />
           <HistoryPopover label="coupled runs" disabled={busy}
             list={listCoupledHistory} onLoad={loadCoupledHistory}
             onDelete={deleteCoupledHistory} />
-        </Box>
+        </Box>}
       </Box>
 
       {/* Live progress strip — appears the INSTANT a recompute starts (not
@@ -1604,9 +1624,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       {!data && !busy && !error && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'center',
           p: 3, border: '1px dashed var(--panel)', borderRadius: 1 }}>
-          Press <b>Run Simulation</b> (left panel) to launch a transient FEM
-          sweep over one electrical period.<br/>
-          {steps} steps/period.
+          {readOnly
+            ? 'No waveforms are stored for this run.'
+            : <>Press <b>Run Simulation</b> (left panel) to launch a transient FEM
+              sweep over one electrical period.<br/>
+              {steps} steps/period.</>}
         </Typography>
       )}
 

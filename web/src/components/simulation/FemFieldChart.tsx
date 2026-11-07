@@ -27,7 +27,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 import type { FemPayload } from './fem-types';
 import { tileFullRing } from './fem-types';
 import { useMotorStore } from '../../stores/motorStore';
-import { geoSignature } from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { matOverrideReady } from '../../lib/apiAuth';
 import { EDDY_DEFAULT_STEPS } from '../../lib/eddySteps';
 import { nsT } from '../../i18n/nsT';
@@ -219,7 +219,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       if (!f?.vertices?.length || !f?.triangles?.length || !f?.demag_coef_per_tri?.length) return null;
       // Another machine's run is never shown as this one's (the same rule the
       // summary card applies to its numbers).
-      if (t._geoSig != null && t._geoSig !== geoSig) return null;
+      if (t._geoSig != null && geoSigsDiffer(t._geoSig, geoSig)) return null;
       // The run solves the machine's natural wedge; its magnet count against
       // the pole count says how many copies make the ring.
       const nMag = Number(f.mag_domains?.length ?? 0);

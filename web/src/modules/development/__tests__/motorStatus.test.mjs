@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptedProjectStatus, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus.ts';
+import { acceptedProjectStatus, allowedProjectStatuses, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus.ts';
 
 test('current-only hides trials and history; show-all includes both', () => {
   const motors = [{ die: 'A', config: 'current' }, { die: 'A', config: 'trial', status: 'trial' }];
@@ -23,4 +23,12 @@ test('project status remains pending until explicitly accepted and only for matc
   assert.equal(cancelled, null);
   assert.equal(pendingStatusForProject(cancelled, 'p1'), null);
   assert.equal(proposeProjectStatus('p1', 'design', 'design'), null);
+});
+
+test('status Select: a customer never gets a commercial status; staff get all (owner 2026-11-02)', () => {
+  assert.deepEqual(allowedProjectStatuses(true, 'spec'), ['spec', 'design', 'simulation', 'quote', 'prototype', 'production', 'closed']);
+  assert.deepEqual(allowedProjectStatuses(false, 'spec'), ['spec']);                       // a customer moves no stage (owner 2026-11-06)
+  for (const s of ['quote', 'prototype', 'production', 'simulation']) assert.ok(!allowedProjectStatuses(false, 'design').includes(s));
+  assert.deepEqual(allowedProjectStatuses(false, 'quote'), ['quote']);
+  assert.deepEqual(allowedProjectStatuses(false, 'closed'), ['closed']);
 });

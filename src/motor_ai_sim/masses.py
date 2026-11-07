@@ -123,7 +123,8 @@ def cad_coil_length(p: Any, geo: Dict[str, Any] | None, coil: Dict[str, Any]) ->
 
 def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = "auto", *,
                        die: Optional[str] = None, config: Optional[str] = None,
-                       cad_overrides: Optional[Dict[str, Any]] = None) -> float:
+                       cad_overrides: Optional[Dict[str, Any]] = None,
+                       coil_overrides: Optional[Dict[str, Any]] = None) -> float:
     """Canonical end-winding length factor  k_end = (active + end-turns) / active.
 
     SINGLE SOURCE — the copper MASS, phase RESISTANCE and copper LOSS must all scale
@@ -137,14 +138,16 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = 
       R = 0.6 x wire width, size-aware overhang and leads; no CAD profile is read), with the
       same layer geometry as ``cad/motor_templates/segmented_flatwire/coil.py``,
       k_end = mean turn / (2·L).  Explicit ``wire_beng_r`` / ``coil_straight_extra`` /
-      ``coil_lead_total`` in the geometry are per-die overrides.  Every geometry edit moves
-      it (tests/test_end_winding_coil_shape.py).
+      ``coil_lead_total`` in the geometry are per-die overrides; a configuration's own
+      ``coil_overrides`` (``wire_beng_r`` / ``coil_straight_extra``) win over the die's.
+      Every geometry edit moves it (tests/test_end_winding_coil_shape.py).
       "semicircle" / "legacy": the idealised flat semicircle around the wound tooth,
           k_end = (π·(bundle_width/2 + tooth_width/2) + L_stack) / L_stack,
       a named comparison only — never a fallback.
 
-    ``die`` / ``config`` / ``cad_overrides`` name the machine whose lead edits (Geometry >
-    Full) apply; default: the caller's machine (``coil_build.context_machine``)."""
+    ``die`` / ``config`` / ``cad_overrides`` / ``coil_overrides`` name the machine whose lead
+    edits (Geometry > Full) and coil keys apply; default: the caller's machine
+    (``coil_build.context_machine``)."""
     L = float(getattr(p, "stack_length", 0.0))
     if L <= 0:
         return 1.0
@@ -155,17 +158,18 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None, method: str = 
     if method not in ("auto", "cad_coil"):
         raise ValueError("unknown end-winding method %r (auto | cad_coil | semicircle)" % method)
     from motor_ai_sim.coil_build import coil_parameters
-    coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides)
+    coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides, coil_overrides=coil_overrides)
     d = cad_coil_length(p, geo, coil)
     return d["mean_turn_length_mm"] / (2.0 * L * 1e3)
 
 
 def cad_coil_dimensions(p: Any, geo: Dict[str, Any] | None = None, *, die: Optional[str] = None,
-                        config: Optional[str] = None, cad_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        config: Optional[str] = None, cad_overrides: Optional[Dict[str, Any]] = None,
+                        coil_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Breakdown of the built tooth coil (``cad_coil_length``) with its parameters' source, and two comparisons beside it: the
     semicircle and the CIANO14 40 template rules (what a die without its own CAD profile was billed at until 2026-10-30)."""
     from motor_ai_sim.coil_build import coil_parameters, template_coil_parameters
-    coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides)
+    coil = coil_parameters(geo, die=die, config=config, cad_overrides=cad_overrides, coil_overrides=coil_overrides)
     d: Dict[str, Any] = dict(cad_coil_length(p, geo, coil))
     L_mm = d["stack_length_mm"]
     k_cad = d["mean_turn_length_mm"] / (2.0 * L_mm) if L_mm > 0 else 1.0
@@ -175,7 +179,8 @@ def cad_coil_dimensions(p: Any, geo: Dict[str, Any] | None = None, *, die: Optio
     d.update(k_end_cad=k_cad, k_end_semicircle=k_semi, k_end_template=k_tmpl,
              delta_k_end_pct=(k_cad - k_semi) / k_semi * 100.0 if k_semi > 0 else 0.0,
              coil_source=coil.get("source"), coil_profile=coil.get("profile"), coil_kind=coil.get("kind"),
-             coil_typed=list(coil.get("typed") or []))
+             coil_typed=list(coil.get("typed") or []), coil_config_keys=list(coil.get("config_keys") or []),
+             coil_die=coil.get("die"), coil_config=coil.get("config"))
     return d
 
 
@@ -317,7 +322,28 @@ _AREA_KEYS = (
     # The retaining ring's own section, and it also moves the mechanical gap —
     # so it must split the cache like any other geometry knob.
     "sleeve_thickness",
+    # The stator OD with or without the wedge notches (absent = on): the stator
+    # section differs by the notch area.  Keyed through `_area_key`, which
+    # reads absence as on, so every existing key is unchanged.
+    "stator_outer_notches",
 )
+
+
+def _area_key(geo: Dict[str, Any]) -> tuple:
+    """The section-cache key of ``geo``.  ``stator_outer_notches`` enters as
+    its MEANING (absent = on = None, off = False), so a notched machine keys
+    exactly as it did before the flag existed and a notch-free one never
+    shares its entry."""
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+    out = []
+    for k in _AREA_KEYS:
+        if k == "stator_outer_notches":
+            if stator_outer_notches(geo):
+                continue
+            out.append((k, False))
+            continue
+        out.append((k, _area_key_val(geo.get(k))))
+    return tuple(out)
 
 
 def _area_key_val(v):
@@ -348,7 +374,7 @@ def cad_areas_m2(geo: Dict[str, Any]) -> Optional[Dict[str, float]]:
     optimizer is entitled to propose): the caller falls back to the parametric
     sections and records that it did.
     """
-    key = tuple((k, _area_key_val(geo.get(k))) for k in _AREA_KEYS)
+    key = _area_key(geo)
     if key in _AREA_CACHE:
         return _AREA_CACHE[key]
     areas: Optional[Dict[str, float]] = None
@@ -407,7 +433,7 @@ def slot_fill_from_cad(geo: Dict[str, Any]) -> Optional[Dict[str, float]]:
     copper, insulation and air.  Returns None when the CAD cannot build the
     cross-section (the caller then simply does not show a fill).
     """
-    key = tuple((k, _area_key_val(geo.get(k))) for k in _AREA_KEYS)
+    key = _area_key(geo)
     if key in _SLOT_CACHE:
         return _SLOT_CACHE[key]
     out: Optional[Dict[str, float]] = None

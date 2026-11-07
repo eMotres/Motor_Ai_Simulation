@@ -80,6 +80,25 @@ propeller-S1 folders of the configuration.
 configuration is not the target die (non-empty: duty saves there answer 409); `stale_duties` = duties whose saved
 build differs from the target build.
 
+### Rename (2026-11-02) — `POST /api/family/config/{die}/{cfg}/rename {"name": ...}`
+
+The same transaction with the die kept and a new configuration name (`config_move.run(..., new_cfg=...)`):
+every store above is retargeted `"<die>/<old>"` -> `"<die>/<new>"`, plus the configuration's `name` and
+`payload_file`s, the field files' `meta.config`, the `.history` file names, the project cost estimate's
+`settings.target_motor` (revision + 1) and the product revision records (`motor_revisions`: the working revision
+follows; its snapshot is re-taken from the renamed file when the live file still matched it; a FROZEN revision
+keeps its name, 409). Admin only, `?dry_run=1`, a worker route; the answer has `mode: "rename"`.
+
+`PATCH /api/family/config/{die}/{cfg} {"name"}` runs the same transaction (it is not merely refused when other
+stores name the pair: the catalog's Rename button and older clients keep working, and no code path renames a
+configuration the old way any more). An admin renames in the layer the die lives in; any other writer renames in
+their own workspace copy only (copy-on-write first, the shared runs copied, never moved; shared stores untouched;
+a configuration that holds a revision refuses there). A name already used in the die, letter case ignored, is
+409; a rename that only changes letter case is 422 (rename through another name).
+
+Not covered: the automatic L-number rename inside a duty save (`upsert_duty`, "the L-number follows the stack")
+still moves only the file, runs and context.
+
 ## 3. A duty save from another lamination saves on the die it is
 
 2026-10-30 04:24-04:40 the owner changed wire_width 7 → 7.5 (stack 90, 15 turns, wire_height 1.0) on

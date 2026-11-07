@@ -79,6 +79,10 @@ export type EndFaceMode = 'still' | 'none';
  *  end turns plus the axial channels between neighbouring coils sit in the
  *  propeller wash. */
 export type FrameMode = 'housed' | 'open';
+/** How the outer boundary reaches the stator (2026-11-03): 'direct' = the film
+ *  acts on the stator's own outer contour (today's model); 'sleeve_contact' =
+ *  pressed into a round sleeve: OD iron arcs → sleeve wall → film. */
+export type StatorOdMode = 'direct' | 'sleeve_contact';
 
 /** Which quantity the map draws.  Two, because the thermal solve produces
  *  exactly two fields: the temperature it solved for and the heat flux that
@@ -171,6 +175,11 @@ export interface ThermalRequest {
    *  'housing' | 'shaft' | 'both'; omitted = 'none' (still air + radiation
    *  everywhere).  Replaces the retired mount_mode / link_* fields. */
   heat_path?: 'housing' | 'shaft' | 'both';
+  /** 2026-11-03: sent only as 'sleeve_contact' (omitted = 'direct', the
+   *  router's default), with the sleeve's wall [mm] and conductivity [W/m·K]. */
+  stator_od_cooling?: 'sleeve_contact';
+  od_sleeve_wall_mm?: number;
+  od_sleeve_k?: number;
 
   /** effective in-slot conductivity, W/m·K — omitted means the solver's own
    *  default, which is what this tab always sends today.  There is deliberately
@@ -230,6 +239,10 @@ export interface LastEntry<T> {
   /** the BACKEND's own verdict, from its fingerprint of the machine this was
    *  solved on against the live one.  `null` = UNKNOWN, never "fine". */
   stale_geometry: boolean | null;
+  /** The catalogue point (`{die, config, duty}`) the answer was solved for - the
+   *  second witness beside the fingerprint (2026-11-04).  `null` / absent =
+   *  unknown (stored before the stamp, or no catalogue point was loaded). */
+  context?: { die?: string; config?: string; duty?: string } | null;
 }
 
 export interface LastThermal {

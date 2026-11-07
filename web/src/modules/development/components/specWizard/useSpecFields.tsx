@@ -23,7 +23,8 @@ import MissionProfileEditor from '../MissionProfileEditor';
 import { MissionProfile, SuggestField } from './SpecInputs';
 import { hiddenAirflowModes, wizardNaturalAirflow, type WizardProfile } from './profile';
 import { answerPresent } from './steps';
-import { legacyPointVoltages, legacyVoltageText, supplyEmpty, supplyType, withDcSourceV, withSupplyType, type SupplyType } from './supply';
+import { DecimalField } from './ui';
+import { legacyPointVoltages, legacyVoltageText, supplyEmpty, supplyType, withAcMains, withDcSourceV, withSupplyType, type SupplyType } from './supply';
 import { missionLocks, readableRange } from './operatingPoints';
 import type { ProjectThreadMessage, SpecState } from '../../types';
 import type { WizardStep } from './steps';
@@ -74,7 +75,11 @@ export function useSpecFields(c: SpecFieldsContext) {
     const options = shape.options ?? [];
     const text = (v: unknown) => v == null ? '' : String(v);
     const unitAdornment = (unit: string) => <InputAdornment position="end" sx={{ alignSelf: 'stretch', height: 'auto', maxHeight: 'none', ml: 1, mr: -1.75, px: 1, borderLeft: '1px solid var(--line)', borderRadius: '0 8px 8px 0', bgcolor: 'var(--app-bg)', color: 'var(--text-3)', '& .MuiTypography-root': { fontSize: 11 } }}>{unit}</InputAdornment>;
-    const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <TextField size="small" fullWidth type={type === 'number' ? 'number' : type === 'date' || unit === 'date' ? 'date' : 'text'} multiline={!!shape.multiline && type !== 'number'} minRows={shape.multiline && type !== 'number' ? 2 : undefined} placeholder={shape.placeholder} value={text(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`, min: type === 'number' ? shape.min : undefined, max: type === 'number' ? shape.max : undefined, step: type === 'number' ? 'any' : undefined }} InputProps={unit && unit !== 'date' ? { endAdornment: unitAdornment(unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onChange={(e) => update(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} />;
+    // a number box takes a decimal comma (DecimalField, one helper for the whole form); out of the schema's min / max it shows in error at once
+    const outOfRange = (v: unknown) => { const n = typeof v === 'number' ? v : NaN; return Number.isFinite(n) && ((shape.min !== undefined && n < shape.min) || (shape.max !== undefined && n > shape.max)); };
+    const input = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => type === 'number'
+      ? <DecimalField size="small" fullWidth placeholder={shape.placeholder} value={v as number | string | null | undefined} error={outOfRange(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`, 'aria-invalid': outOfRange(v) || undefined }} InputProps={unit && unit !== 'date' ? { endAdornment: unitAdornment(unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onValue={update as (next: number | '') => void} />
+      : <TextField size="small" fullWidth type={type === 'date' || unit === 'date' ? 'date' : 'text'} multiline={!!shape.multiline} minRows={shape.multiline ? 2 : undefined} placeholder={shape.placeholder} value={text(v)} inputProps={{ 'aria-label': `${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}` }} InputProps={unit && unit !== 'date' ? { endAdornment: unitAdornment(unit) } : undefined} disabled={!canEditSpec || busy || migrationBusy || locked} onChange={(e) => update(e.target.value)} />;
     // a standard choice is a menu (schema `suggestions`): the localized label shows, the EN value is stored, any other text is kept
     const suggest = (v: unknown, update: (next: unknown) => void, type: string, unit?: string) => <SuggestField key={`${keyPrefix}-${lang}`} excluded={shape.excluded} suggestions={shape.suggestions!} value={v} onChange={update} lang={lang} numeric={type === 'number'} disabled={!canEditSpec || busy || migrationBusy || locked} ariaLabel={`${label(shape.short_label ?? shape.label)}${unit ? ` (${unit})` : ''}`} placeholder={shape.placeholder} multiline={!!shape.multiline && type !== 'number'} endAdornment={unit && unit !== 'date' ? unitAdornment(unit) : undefined} minWidth={optionsMinWidth(shape.suggestions as never)} />;
     if (shape.allow_range) {
@@ -141,7 +146,7 @@ export function useSpecFields(c: SpecFieldsContext) {
   };
   const fieldMessages = (f: SpecificationField, answer: { value?: unknown; status?: string }, required: boolean) => <>
     {answer.status !== 'not_known_yet' && invertedPairs(f, answer.value).length > 0 && <Typography role="alert" data-testid="inverted-window" sx={{ color: 'error.main', fontSize: 11 }}>{tr('wizard.windowInverted')}</Typography>}
-    {fieldErrors[f.id] && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('validationError')}</Typography>}
+    {fieldErrors[f.id] && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{fieldErrors[f.id]}</Typography>}
     {required && !fieldAnswerComplete(f, { ...answer, not_known_yet: answer.status === 'not_known_yet' } as FieldAnswer) && <Typography role="alert" sx={{ color: 'error.main', fontSize: 11 }}>{tr('requiredMissing')}</Typography>}
   </>;
   /** "from catalogue <id>, page N (stated)" for a value that still holds the catalogue controller's value. */
@@ -239,8 +244,11 @@ export function useSpecFields(c: SpecFieldsContext) {
     const type = supplyType(obj);
     const locked = !canEditSpec || busy || migrationBusy || unknown;
     const dcProp = f.properties!.find((p) => p.id === 'dc_source_V');
+    // AC mains (owner 2026-11-06): the line-line voltage and the frequency; offered only when the schema has both
+    const acProps = ['ac_line_voltage_V', 'ac_frequency_Hz'].map((id) => f.properties!.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+    const hasAc = choice && acProps.length === 2;
     const pack = ['voltage_min_V', 'voltage_nominal_V', 'voltage_max_V'].map((id) => f.properties!.find((p) => p.id === id)!).filter(Boolean);
-    const handled = new Set(['chemistry', 'series_cells', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V', 'supply_type', 'dc_source_V', ...pack.map((p) => p.id)]);
+    const handled = new Set(['chemistry', 'series_cells', 'cell_voltage_min_V', 'cell_voltage_nominal_V', 'cell_voltage_max_V', 'supply_type', 'dc_source_V', 'ac_line_voltage_V', 'ac_frequency_Hz', ...pack.map((p) => p.id)]);
     // an earlier per-point voltage is shown once, in the tooltip, while the block is still empty
     const legacy = supplyEmpty(obj) ? legacyVoltageText(legacyPointVoltages(draftRef.current)) : '';
     const tips = [...(type === 'battery' ? [tr('wizard.packStated')] : []), ...(legacy ? [tr('wizard.supply.legacyPoint', { value: legacy })] : [])];
@@ -250,10 +258,15 @@ export function useSpecFields(c: SpecFieldsContext) {
       {choice && <>
         {head}
         <ToggleButtonGroup exclusive size="small" value={type} disabled={locked} aria-label={label(f.short_label ?? f.label)} onChange={(_, v: SupplyType | null) => { if (v) setAnswer(f, withSupplyType(obj, v)); }} sx={{ mb: 1.25 }}>
-          {(['battery', 'dc_source'] as SupplyType[]).map((v) => <ToggleButton key={v} value={v} sx={{ px: 1.75, py: 0.6, minHeight: 36, fontSize: 13, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText', '&:hover': { bgcolor: 'primary.dark' } } }}>{tr(`wizard.supply.${v}`)}</ToggleButton>)}
+          {(['battery', 'dc_source', ...(hasAc ? ['ac_mains'] : [])] as SupplyType[]).map((v) => <ToggleButton key={v} value={v} sx={{ px: 1.75, py: 0.6, minHeight: 36, fontSize: 13, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText', '&:hover': { bgcolor: 'primary.dark' } } }}>{tr(`wizard.supply.${v}`)}</ToggleButton>)}
         </ToggleButtonGroup>
       </>}
-      {choice && type === 'dc_source' && dcProp ? <Box sx={{ maxWidth: 260, minWidth: 0 }}>
+      {hasAc && type === 'ac_mains' ? <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', maxWidth: 560, minWidth: 0 }}>
+        {acProps.map((p) => <Box key={p.id} sx={{ flex: '1 1 220px', minWidth: 0 }}>
+          {propLabel(p, false)}
+          {renderTypedValue(p, obj[p.id], (value) => setAnswer(f, withAcMains(obj, { [p.id]: value })), `${f.id}-${p.id}`, unknown)}
+        </Box>)}
+      </Box> : choice && type === 'dc_source' && dcProp ? <Box sx={{ maxWidth: 260, minWidth: 0 }}>
         {propLabel(dcProp, false)}
         {renderTypedValue(dcProp, obj.dc_source_V, (value) => setAnswer(f, withDcSourceV(obj, value)), `${f.id}-dc_source_V`, unknown)}
       </Box> : <>

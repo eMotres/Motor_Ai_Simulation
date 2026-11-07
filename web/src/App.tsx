@@ -262,7 +262,7 @@ function App() {
     if (route.redirected) window.history.replaceState(null, '', route.href);
     if (route.activeTab) setActiveTab(route.activeTab);
   }, [setActiveTab]);
-  const { user, isAdmin, role, enforced, defaultMotor, resolved: authResolved } = useAuth();
+  const { user, isAdmin, role, enforced, defaultMotor, canSolve, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
   const { t: tr, i18n } = useTranslation('common');
   useServerLocale(i18n, useApiReady(), user?.email);
@@ -298,11 +298,15 @@ function App() {
   // Production for /production/..., Development for /projects/... - open that tab; the page itself reads the link from the address
   // bar (ProductionTab, DevelopmentPage).  Root has already checked on the server that the caller is a production member.
   const deepLink = useRef(parseAppLink(window.location.pathname, window.location.search));
+  // set when the link has moved the tab: the first-screen rule of a standard account (below) must not move it back (the staff mail's
+  // /projects/<id>/specification link used to land on Motors: both effects ran in one commit and the later one won)
+  const deepLinkApplied = useRef(false);
   useEffect(() => {
     const link = deepLink.current;
     if (!link || !authResolved || !signedIn) return;
     if (link.kind === 'production' ? !producer : !developmentAllowed) return;
     deepLink.current = null;
+    deepLinkApplied.current = true;
     setActiveTab((link.kind === 'production' ? 'production' : 'development') as never);
   }, [authResolved, signedIn, producer, developmentAllowed, setActiveTab]);
   // The owner's daily report links to Admin sections (/?tab=admin&section=digests&draft=...): open the Admin tab once the account is
@@ -545,6 +549,7 @@ function App() {
   useEffect(() => {
     if (!authResolved || !signedIn || !standardUser || landedRef.current) return;
     landedRef.current = true;
+    if (deepLinkApplied.current || deepLink.current) return;      // a link to a page names the first screen
     // a motor card on the landing page ("Open in Configure") counts as a choice made there
     const fromLanding = consumeOpenInConfigure();
     setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor || fromLanding));
@@ -563,7 +568,7 @@ function App() {
   const geometryActiveViewer = <><Suspense fallback={<TabLoading />}><UnifiedActiveMotorScene /></Suspense><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer' | 'development'; showViewer: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'workbench' | 'admin' | 'producer' | 'designer' | 'development'; showViewer: boolean;
     /** true: mounted from the start and display-toggled; 'visited': mounted on the first visit, then kept */
     keepMounted?: boolean | 'visited';
     render: () => React.ReactNode;
@@ -685,7 +690,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer, designer: designerAllowed, development: developmentAllowed }))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, canSolve, producer, designer: designerAllowed, development: developmentAllowed }))
     .sort((a, b) => a.order - b.order);
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.
@@ -835,7 +840,7 @@ function App() {
         {/* A motor loading in the background (its tab is already open) / why it failed */}
         <FamilyLoadBanner />
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
-        {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
+        {computeHintApplies(activeTab, enforced, isAdmin, role, canSolve) && <ComputeNodesHint />}
 
         {/* ── The panel header row (owner 2026-10-30): the same row on EVERY tab - the panel's label, its sub-tabs
             (the Simulations members here; a panel's own sections come in through <HeaderTabs>) and its actions ── */}
@@ -855,7 +860,7 @@ function App() {
               field animation survive navigating away and back.  Each body has its
               own Suspense: a lazy tab still loading never blanks the others. */}
           {tabs.map((t) => (
-            t.keepMounted && (t.keepMounted === true || visitedTabs.has(t.id)) ? (
+            t.keepMounted && (t.keepMounted === true || visitedTabs.has(t.id) || activeTab === t.id) ? (
               <Box key={t.id} sx={{ height: '100%', display: activeTab === t.id ? 'block' : 'none' }}>
                 <ErrorBoundary label={t.label}><Suspense fallback={<TabLoading />}>{t.render()}</Suspense></ErrorBoundary>
               </Box>

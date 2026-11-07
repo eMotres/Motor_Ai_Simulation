@@ -2,6 +2,11 @@
  *  measured | model | delta %, one short note per row and the explanation in tooltips; a group whose rows are a series over
  *  speed gets a measured-vs-model chart to its right (stacked below ~900 px).
  *
+ *  Sub-menus (owner 2026-11-05): Power lists the load tests by name and highest power; a row opens the test in Loads.
+ *  Sub-menus (owner 2026-11-04): Resistance, Inductance, Constants (Kv, Kt, EMF), Bearings, Free-run, Loads, and
+ *  Parameters for the rest (insulation, hipot, surge, cogging, LCR, weight, dimensions).  A tab is only a view of the
+ *  comparison groups (tableModel.tabOfGroup); the stored records are unchanged.
+ *
  *  Production: the factory adds tests, engineers / admins edit and delete them (every change audited on the server).
  *  Development (project motor view): read-only, behind the configuration's "visible to customer" flag for customers. */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,40 +16,43 @@ import {
 } from '@mui/material';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import NotesIcon from '@mui/icons-material/Notes';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
+import TestMedia from './TestMedia';
 import {
-  blocksHeight, columnsFor, computeProgress, loadSeriesOptions, missingActions, pickQuantity, quantitySeries, summary,
-  tableBlocks, testsOfKind, unitLabel, type TableBlock,
+  cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
+  loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
+  normalizeTab, perMass, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
-  TEST_KINDS, type CompareRow, type CreateDutyAction, type TestCompare, type TestKind, type TestRecord, type TestsPayload,
+  TEST_TABS, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
 } from '../types';
 import SubTabs from '../../../components/common/SubTabs';
-import SeriesChart from './SeriesChart';
+import SeriesChart, { SpeedChart } from './SeriesChart';
 import TestEditor from './TestEditor';
 
 export type TestsSource = { kind: 'production' } | { kind: 'project'; projectId: string; showAll?: boolean };
 
 const SUB_KEY = (die: string, config: string) => `tests.sub.v1:${die}|${config}`;
-function readSub(die: string, config: string): TestKind {
+function readSub(die: string, config: string): TestTab {
   try {
     const v = window.localStorage.getItem(SUB_KEY(die, config));
-    return v && (TEST_KINDS as readonly string[]).includes(v) ? (v as TestKind) : 'parameters';
-  } catch { return 'parameters'; }
+    return normalizeTab(v);                                 // also maps the retired `constants` and `load` values
+  } catch { return 'resistance'; }
 }
-function writeSub(die: string, config: string, v: TestKind) {
+function writeSub(die: string, config: string, v: TestTab) {
   try { window.localStorage.setItem(SUB_KEY(die, config), v); } catch { /* storage off */ }
 }
 
 const LEVEL_COLOR: Record<string, string> = { ok: '#22c55e', warn: '#f59e0b', bad: '#f87171' };
-// compact table (owner 2026-10-27): ~24 px rows, small font, numbers right-aligned in tabular figures
-const cell = { fontSize: 11.5, py: 0, px: 0.7, height: 24, lineHeight: '24px', borderBottom: '1px solid var(--line-soft)' } as const;
+// compact table (owner 2026-10-27, tighter 2026-11-05): 20 px rows, small font, numbers right-aligned in tabular figures
+const cell = { fontSize: 11, py: 0, px: 0.5, height: TABLE_ROW_PX, lineHeight: `${TABLE_ROW_PX}px`, borderBottom: '1px solid var(--line-soft)' } as const;
 const num = { ...cell, fontVariantNumeric: 'tabular-nums' } as const;
-const head = { ...cell, fontSize: 10.5, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
+const head = { ...cell, fontSize: 10, fontWeight: 700, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' } as const;
 
 /** Wide = the box is at least this many px: table and chart side by side; below it they stack. */
 export const SIDE_BY_SIDE_MIN_PX = 900;
@@ -63,6 +71,38 @@ function useWide(): [React.RefObject<HTMLDivElement | null>, boolean] {
     return () => ro.disconnect();
   }, []);
   return [ref, wide];
+}
+
+/** A load sweep with two or more rows at some speed (owner 2026-11-04): one line per speed against torque or current.
+ *  A plot selector (torque vs current by default); the model values, where the model has the point, as dashed lines. */
+function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height: number }) {
+  const { t } = useTranslation('production');
+  const rows = loadPlotRows(cmp);
+  const curves = simulationCurves(cmp);
+  const note = cmp?.series?.simulation_note ?? '';
+  const options = loadPlotOptions(rows, curves);
+  const [sel, setSel] = useState<string>('torque_current');
+  const key = (options.find((k) => k === sel) ?? options[0]) as LoadPlotKey | undefined;
+  const plot = key ? perSpeedSeries(rows, key, curves) : null;
+  if (!key || !plot) return null;
+  return (
+    <Box data-testid="tests-load-speed-series">
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, height: 24, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-2)' }}>{t('tests.series.label')}</Typography>
+        <HelpTip title={t('tests.series.tipSpeeds')} />
+        {note && <HelpTip title={note} />}
+        <Select size="small" value={key} onChange={(e) => setSel(String(e.target.value))}
+          sx={{ height: 24, fontSize: 11.5, minWidth: 200, '& .MuiSelect-select': { py: 0, pl: 1 } }}
+          inputProps={{ 'aria-label': t('tests.series.label') }}>
+          {options.map((o) => (
+            <MenuItem key={o} value={o} sx={{ fontSize: 12, minHeight: 28 }}>{t(`tests.series.plot.${o}`)}</MenuItem>
+          ))}
+        </Select>
+      </Box>
+      <SpeedChart key={key} plot={plot} height={height}
+        xLabel={t(key.endsWith('_time') ? 'tests.series.plot.x_time' : key === 'torque_current' ? 'tests.series.plot.x_current' : 'tests.series.plot.x_torque')} />
+    </Box>
+  );
 }
 
 /** The chart beside a load sweep's per-point tables (owner 2026-10-27): x = rpm, a compact selector above it picks the
@@ -96,10 +136,7 @@ function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; 
   );
 }
 
-function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
-  cmp: TestCompare | undefined; tips: Record<string, string>; canCompute: boolean; busy: boolean;
-  onCompute: (actions: CreateDutyAction[]) => void;
-}) {
+function CompareTable({ cmp, tips }: { cmp: TestCompare | undefined; tips: Record<string, string> }) {
   const { t } = useTranslation('production');
   const [boxRef, wide] = useWide();
   const blocks = tableBlocks(cmp);
@@ -112,22 +149,76 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
     const params = Object.fromEntries(Object.entries(b.basisParams).filter(([, v]) => v !== null && v !== undefined));
     return t(`tests.basis.${b.basisKey}`, { ...params, defaultValue: b.basis ?? '' });
   };
-  const hasLoadChart = loadSeriesOptions(cmp).length > 0;
-  const computeTip = (row: CompareRow) => {
-    const a = row.action;
-    const g = a?.body.duty.gamma_deg;
-    return [t('tests.computeTip'), g === undefined ? '' : t('tests.computeGamma', { gamma: g, source: a?.gamma_source ?? '' })]
-      .filter(Boolean).join(' · ');
-  };
+  const table = loadTable(blocks);
+  const tableBasis = table ? Array.from(new Set(table.points.map((p) => basisText(p.block)).filter(Boolean))).join(' · ') : '';
+  const tableExtra = !!table && table.points.some((p) => pointNotes(p.cells).length > 0);
+  const plotRows = loadPlotRows(cmp);
+  const plotCurves = simulationCurves(cmp);
+  const perSpeed = usesSpeedPlots(plotRows, plotCurves) && loadPlotOptions(plotRows, plotCurves).length > 0;
+  const hasLoadChart = perSpeed || loadSeriesOptions(cmp).length > 0;
   return (
     <Box ref={boxRef} sx={hasLoadChart ? { display: 'flex', flexDirection: wide ? 'row' : 'column', gap: 1.2, alignItems: 'flex-start' } : undefined}>
       <Box sx={hasLoadChart ? { flex: wide ? '0 0 48%' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%' } : undefined}>
-      {blocks.map((b) => {
+      {table && (
+        <Box sx={{ mb: 1, overflow: 'auto', maxHeight: LOAD_TABLE_MAX_PX }} data-testid="tests-load-table">
+          <Table size="small" stickyHeader sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={head}>
+                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
+                    {t('tests.col.point')}
+                    {tableBasis && <HelpTip title={tableBasis} />}
+                  </Box>
+                </TableCell>
+                {table.columns.map((c) => (
+                  <React.Fragment key={c.key}>
+                    <TableCell sx={head} align="right">
+                      <Tooltip arrow placement="top" enterTouchDelay={0} title={[label(c.row, 'row'), tipText(c.row.tip), c.row.detail].filter(Boolean).join(' · ')}>
+                        <span>{shortHead(label(c.row, 'row'))}{c.row.unit ? `, ${unitLabel(c.row.unit)}` : ''}</span>
+                      </Tooltip>
+                    </TableCell>
+                    {c.hasModel && <TableCell sx={head} align="right">{t('tests.col.model')}</TableCell>}
+                    {c.hasModel && <TableCell sx={head} align="right">{t('tests.col.delta')}</TableCell>}
+                  </React.Fragment>
+                ))}
+                {tableExtra && <TableCell sx={{ ...head, fontWeight: 400, color: 'var(--text-3)' }}>{commonNotes(table).map((n) => t(`tests.note.${n.key}`, n.params)).join(' · ')}</TableCell>}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {table.points.map(({ block, cells }, pointIndex) => {
+                return (
+                  <TableRow key={pointIndex}>
+                    <TableCell sx={{ ...cell, color: 'var(--text-1)' }}>{label(block, 'group')}</TableCell>
+                    {table.columns.map((c) => {
+                      const l = cells[c.key];
+                      return (
+                        <React.Fragment key={c.key}>
+                          <TableCell sx={num} align="right">{l?.measured ?? '—'}</TableCell>
+                          {c.hasModel && <TableCell sx={num} align="right">{l?.model ?? '—'}</TableCell>}
+                          {c.hasModel && (
+                            <TableCell sx={{ ...num, fontWeight: 700, color: l?.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l?.delta ?? '—'}</TableCell>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {tableExtra && (
+                      <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
+                        {ownNotes(table, cells).map((n) => t(`tests.note.${n.key}`, n.params)).join(' · ')}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Box>
+      )}
+      {otherBlocks(blocks).map((b) => {
         const basis = basisText(b);
         return (
-          <Box key={b.key} sx={{ mb: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0, height: 24, bgcolor: 'var(--panel-2)', px: 0.7 }}>
-              <Typography noWrap sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0, maxWidth: '70%' }}>
+          <Box key={b.key} sx={{ mb: 0.6 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0, height: TABLE_ROW_PX, bgcolor: 'var(--panel-2)', px: 0.5 }}>
+              <Typography noWrap sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0, maxWidth: '70%' }}>
                 {label(b, 'group')}
               </Typography>
               {b.tip && <HelpTip title={tipText(b.tip)} />}
@@ -163,11 +254,6 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
                         <TableCell sx={{ ...num, width: 48, fontWeight: 700, color: l.level ? LEVEL_COLOR[l.level] : 'var(--text-3)' }} align="right">{l.delta}</TableCell>
                         <TableCell sx={{ ...cell, color: 'var(--text-3)' }}>
                           {l.note && <span>{t(`tests.note.${l.note.key}`, l.note.params)}</span>}
-                          {canCompute && l.row.action && (
-                            <Tooltip title={computeTip(l.row)}><span><Button size="small" disabled={busy}
-                              sx={{ ml: 0.5, py: 0, minHeight: 0, lineHeight: '20px', fontSize: 11 }}
-                              onClick={() => onCompute([l.row.action as CreateDutyAction])}>{t('tests.compute')}</Button></span></Tooltip>
-                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -176,8 +262,8 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
               </Box>
               {b.series && (
                 <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0 }}>
-                  {/* the chart runs the full height of its table (owner 2026-10-27): one 24 px row per line + the header */}
-                  <SeriesChart series={b.series} height={wide ? Math.max(190, (b.lines.length + 1) * 24) : 190} />
+                  {/* the chart runs the full height of its table (owner 2026-10-27): one row per line + the header */}
+                  <SeriesChart series={b.series} height={wide ? Math.max(190, (b.lines.length + 1) * TABLE_ROW_PX) : 190} />
                 </Box>
               )}
             </Box>
@@ -188,8 +274,10 @@ function CompareTable({ cmp, tips, canCompute, busy, onCompute }: {
       {hasLoadChart && (
         <Box sx={{ flex: wide ? '1 1 0' : '1 1 auto', minWidth: 0, width: wide ? undefined : '100%',
           position: wide ? 'sticky' : 'static', top: 8 }}>
-          <LoadSeriesChart cmp={cmp} tips={tips}
-            height={wide ? Math.min(520, Math.max(220, blocksHeight(blocks))) : 240} />
+          {perSpeed
+            ? <SpeedLoadChart cmp={cmp} height={wide ? Math.min(520, Math.max(220, foldedHeight(blocks))) : 240} />
+            : <LoadSeriesChart cmp={cmp} tips={tips}
+              height={wide ? Math.min(520, Math.max(220, foldedHeight(blocks))) : 240} />}
         </Box>
       )}
     </Box>
@@ -201,7 +289,8 @@ function RawRows({ rec }: { rec: TestRecord }) {
   const [open, setOpen] = useState(false);
   if (!rec.rows?.length) return null;
   const cols = Array.from(new Set([...columnsFor(rec.kind), ...rec.rows.flatMap((r) => Object.keys(r))]))
-    .filter((c) => rec.rows!.some((r) => r[c] !== undefined));
+    .filter((c) => rec.rows!.some((r) => r[c] !== undefined))
+    .flatMap((c) => (c === 'torque_nm' ? [c, 'power_kw'] : [c]));
   return (
     <Box sx={{ mt: 0.5 }}>
       <Button size="small" onClick={() => setOpen((v) => !v)} sx={{ fontSize: 11, textTransform: 'none' }}>
@@ -212,7 +301,7 @@ function RawRows({ rec }: { rec: TestRecord }) {
           <TableHead><TableRow>{cols.map((c) => <TableCell key={c} sx={head} align="right">{t(`tests.cols.${c}`, { defaultValue: c })}</TableCell>)}</TableRow></TableHead>
           <TableBody>
             {rec.rows.map((r, i) => (
-              <TableRow key={i}>{cols.map((c) => <TableCell key={c} sx={cell} align="right">{r[c] ?? '—'}</TableCell>)}</TableRow>
+              <TableRow key={i}>{cols.map((c) => <TableCell key={c} sx={cell} align="right">{c === 'power_kw' ? (rawPowerKw(r)?.toFixed(2) ?? '—') : r[c] ?? '—'}</TableCell>)}</TableRow>
             ))}
           </TableBody>
         </Table>
@@ -225,7 +314,8 @@ export const TestsPanel: React.FC<{
   die: string; config: string; source: TestsSource;
   /** production document download (the panel itself never fetches files) */
   onOpenDocument?: (fileId: string, name: string) => void;
-}> = ({ die, config, source, onOpenDocument }) => {
+  onLoadDocument?: (fileId: string, onProgress: (fraction: number) => void) => Promise<Blob>;
+}> = ({ die, config, source, onOpenDocument, onLoadDocument }) => {
   const { t } = useTranslation('production');
   // "Compute it" adds a duty to the SHARED configuration: only an admin's catalog write lands there (anybody else's would
   // be a copy in their own workspace), so the button is the admin's
@@ -233,16 +323,23 @@ export const TestsPanel: React.FC<{
   const [data, setData] = useState<TestsPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sub, setSubState] = useState<TestKind>(() => readSub(die, config));
+  const [sub, setSubState] = useState<TestTab>(() => readSub(die, config));
   const [editing, setEditing] = useState<{ rec: TestRecord | null } | null>(null);
   const [toDelete, setToDelete] = useState<TestRecord | null>(null);
+  const [toCompute, setToCompute] = useState<CreateDutyAction[] | null>(null);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggleTest = (id: string) => setExpanded((was) => {
+    const now = new Set(was);
+    if (!now.delete(id)) now.add(id);
+    return now;
+  });
   const [msg, setMsg] = useState<string | null>(null);
   const [msgError, setMsgError] = useState(false);
-  // run ids of the solves "Compute it" queued; while any is open the panel polls the job list and refreshes when they end
+  // run ids of the solves "Compute all missing" queued; while any is open the panel polls the job list and refreshes when they end
   const [pending, setPending] = useState<string[]>([]);
   const unlisted = useRef(0);
   const note = (text: string | null, isError = false) => { setMsg(text); setMsgError(isError); };
-  const setSub = (v: TestKind) => { setSubState(v); writeSub(die, config, v); };
+  const setSub = (v: TestTab) => { setSubState(v); writeSub(die, config, v); };
   const projectId = source.kind === 'project' ? source.projectId : '';
   const showAll = source.kind === 'project' ? !!source.showAll : false;
 
@@ -257,7 +354,7 @@ export const TestsPanel: React.FC<{
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
 
   const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
-  // "Compute it": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
+  // "Compute all missing": the server creates the TEST duties and queues their solve (admin only); the server's own words on failure
   const startCompute = async (actions: CreateDutyAction[]) => {
     if (!actions.length || pending.length) return;
     try {
@@ -294,8 +391,17 @@ export const TestsPanel: React.FC<{
   if (err) return <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>;
   if (!data) return null;
   const can = data.can;
-  const list = testsOfKind(data.tests, sub);
+  const list = testsOfTab(data.tests, data.compare, sub);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
+  const power = powerSummary(data.tests);
+  const massTip = data.motor_mass
+    ? t(`tests.power.mass_${data.motor_mass.basis}`, { kg: data.motor_mass.kg.toFixed(2) })
+    : t('tests.power.massNone');
+  const openTest = (id: string) => {
+    setSub('loads');
+    setExpanded((was) => new Set(was).add(id));
+    window.setTimeout(() => document.getElementById(`test-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
 
   const setVisible = async (v: boolean) => {
     try { await testsApi.setVisibleToCustomer(die, config, v); await reload(); }
@@ -312,7 +418,8 @@ export const TestsPanel: React.FC<{
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <SubTabs value={sub} onChange={setSub} ariaLabel={t('tests.tab')}
-          items={TEST_KINDS.map((k) => ({ id: k, tip: t(`tests.subTip.${k}`), label: `${t(`tests.sub.${k}`)} (${testsOfKind(data.tests, k).length})` }))} />
+          items={TEST_TABS.map((k) => ({ id: k, tip: t(`tests.tabsTip.${k}`),
+            label: `${t(`tests.tabs.${k}`)} (${k === 'power' ? power.length : testsOfTab(data.tests, data.compare, k).length})` }))} />
         <Box sx={{ flex: 1 }} />
         {!data.model.available && (
           <Tooltip title={t('tests.modelMissingTip')}><Chip size="small" label={t('tests.modelMissing')} sx={{ fontSize: 11 }} /></Tooltip>
@@ -330,54 +437,133 @@ export const TestsPanel: React.FC<{
         <Alert severity={msgError ? 'error' : 'info'} onClose={() => note(null)} sx={{ mb: 1, fontSize: 12 }}
           icon={!msgError && pending.length ? <CircularProgress size={14} /> : undefined}>{msg}</Alert>
       )}
-      {list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
+      {sub === 'power' && (power.length === 0
+        ? <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>
+        : (
+          <Paper variant="outlined" sx={{ bgcolor: 'var(--panel)', overflowX: 'auto' }} data-testid="tests-power">
+            <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={head}>{t('tests.power.test')}</TableCell>
+                  <TableCell sx={head}>{t('tests.power.mode')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.max')}<HelpTip title={t('tests.power.maxTip')} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.powerPerMass')}<HelpTip title={massTip} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.torque')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.torquePerMass')}<HelpTip title={massTip} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.speed')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.vDc')}</TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.iDc')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.iPhase')}<HelpTip title={t('tests.power.iPhaseTip')} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.efficiency')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.j')}<HelpTip title={t('tests.power.jTip')} /></Box>
+                  </TableCell>
+                  <TableCell sx={head} align="right">{t('tests.power.coil')}</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {power.map((l) => (
+                  <TableRow key={l.id} hover onClick={() => openTest(l.id)} sx={{ cursor: 'pointer' }}>
+                    <TableCell sx={{ ...cell, color: 'var(--text-0)' }}>{[l.date, l.title].filter(Boolean).join(' · ')}</TableCell>
+                    <TableCell sx={cell}>{l.mode ? t(`tests.power.${l.mode}`) : '—'}</TableCell>
+                    <TableCell sx={{ ...num, fontWeight: 700 }} align="right">{l.powerKw.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{perMass(l.powerKw, data.motor_mass?.kg)?.toFixed(2) ?? '—'}</TableCell>
+                    <TableCell sx={num} align="right">{l.torque.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{perMass(l.torque, data.motor_mass?.kg)?.toFixed(1) ?? '—'}</TableCell>
+                    <TableCell sx={num} align="right">{Math.round(l.rpm)}</TableCell>
+                    <TableCell sx={num} align="right">{l.vDc === null ? '—' : Math.round(l.vDc)}</TableCell>
+                    <TableCell sx={num} align="right">{l.iDc === null ? '—' : l.iDc.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.iPhase === null ? '—' : l.iPhase.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.effPct === null ? '—' : l.effPct.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.jAmm2 === null ? '—' : l.jAmm2.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{l.tempC === null ? '—' : Math.round(l.tempC)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Paper>
+        ))}
+      {sub !== 'power' && list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
       {list.map((rec) => {
-        const cmp = data.compare[rec.id];
+        const cmp = cmpForTab(data.compare[rec.id], rec.kind, sub);       // only this tab's groups
         const s = summary(cmp);
         const missing = canCompute ? missingActions(cmp) : [];
-        const bits = [rec.date, rec.title, rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
+        const details = [rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
+        const isOpen = expanded.has(rec.id);
+        // what the caller may see: an internal document of a test is not listed for the factory or a project viewer
+        const docs = (rec.documents ?? []).flatMap((id) => { const d = docName.get(id); return d ? [d] : []; });
+        const files = testFiles(docs);
+        const plain = onLoadDocument ? files.other : docs;
         const cond = [rec.conditions?.ambient_c !== undefined ? `${rec.conditions.ambient_c} °C` : '',
           rec.conditions?.humidity_pct !== undefined ? `${rec.conditions.humidity_pct} % RH` : ''].filter(Boolean);
         return (
-          <Paper key={rec.id} variant="outlined" sx={{ p: 1, mb: 1.2, bgcolor: 'var(--panel)' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap', mb: 0.5 }}>
-              <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{bits.join(' · ')}</Typography>
-              {cond.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{cond.join(' · ')}</Typography>}
+          <Paper key={rec.id} id={`test-${rec.id}`} variant="outlined" sx={{ px: 1, py: 0.5, mb: 0.6, bgcolor: 'var(--panel)', scrollMarginTop: 60 }}>
+            {/* one structure for every test (owner 2026-11-05): the name on one line opens the test; under it pictures, then videos, then the rest */}
+            <Box role="button" tabIndex={0} aria-expanded={isOpen} data-testid="test-header" onClick={() => toggleTest(rec.id)}
+              onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleTest(rec.id); } }}
+              sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minHeight: 26, cursor: 'pointer' }}>
+              <ExpandMoreIcon sx={{ fontSize: 18, color: 'var(--text-3)', flexShrink: 0, transform: isOpen ? 'none' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
+              <Typography noWrap sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)', minWidth: 0 }}>{[rec.date, rec.title].filter(Boolean).join(' · ')}</Typography>
               {s.worst !== null && <Chip size="small" label={`Δ ${s.worst > 0 ? '+' : ''}${s.worst.toFixed(1)} %`}
-                sx={{ height: 18, fontSize: 10.5 }} />}
-              <Tooltip title={[t('tests.by', { who: rec.operator || rec.created_by || '' }), rec.created_at, rec.updated_by ? `${rec.updated_by} ${rec.updated_at ?? ''}` : ''].filter(Boolean).join(' · ')}>
-                <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{rec.operator || rec.created_by}</Typography>
-              </Tooltip>
-              {rec.note && <Tooltip title={rec.note}><NotesIcon sx={{ fontSize: 16, color: 'var(--text-3)' }} /></Tooltip>}
-              {(rec.documents ?? []).map((id) => {
-                const d = docName.get(id);
-                return <Chip key={id} size="small" label={d?.name ?? id} sx={{ height: 18, fontSize: 10.5 }}
-                  onClick={d && onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />;
-              })}
+                sx={{ height: 18, fontSize: 10.5, flexShrink: 0 }} />}
               <Box sx={{ flex: 1 }} />
-              {missing.length > 0 && (
-                <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
-                  <span><Button size="small" variant="outlined" disabled={pending.length > 0} sx={{ fontSize: 11, py: 0, minHeight: 22 }}
-                    onClick={() => void startCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
-                </Tooltip>
-              )}
               {can.edit && (
-                <>
+                <Box sx={{ display: 'flex', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                   <Tooltip title={t('tests.edit')}><IconButton size="small" onClick={() => setEditing({ rec })}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
                   <Tooltip title={t('tests.delete')}><IconButton size="small" onClick={() => setToDelete(rec)}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
-                </>
+                </Box>
               )}
             </Box>
-            <CompareTable cmp={cmp} tips={data.tips} canCompute={canCompute} busy={pending.length > 0} onCompute={(a) => void startCompute(a)} />
-            <RawRows rec={rec} />
+            {isOpen && (
+              <Box sx={{ pt: 0.5 }}>
+                {onLoadDocument && files.pictures.length > 0 && <TestMedia kind="picture" files={files.pictures} load={onLoadDocument} onDownload={onOpenDocument} />}
+                {onLoadDocument && files.videos.length > 0 && <TestMedia kind="video" files={files.videos} load={onLoadDocument} onDownload={onOpenDocument} />}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap', mb: 0.5 }}>
+                  {details.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{details.join(' · ')}</Typography>}
+                  {cond.length > 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{cond.join(' · ')}</Typography>}
+                  <Tooltip title={[t('tests.by', { who: rec.operator || rec.created_by || '' }), rec.created_at, rec.updated_by ? `${rec.updated_by} ${rec.updated_at ?? ''}` : ''].filter(Boolean).join(' · ')}>
+                    <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{rec.operator || rec.created_by}</Typography>
+                  </Tooltip>
+                  {rec.note && <Tooltip title={rec.note}><NotesIcon sx={{ fontSize: 16, color: 'var(--text-3)' }} /></Tooltip>}
+                  {plain.map((d) => (
+                    <Chip key={d.id} size="small" label={d.name} sx={{ height: 18, fontSize: 10.5 }}
+                      onClick={onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />
+                  ))}
+                  <Box sx={{ flex: 1 }} />
+                  {missing.length > 0 && (
+                    <Tooltip title={t('tests.computeAllTip', { count: missing.length })}>
+                      <span><Button size="small" variant="outlined" disabled={pending.length > 0} sx={{ fontSize: 11, py: 0, minHeight: 22 }}
+                        onClick={() => setToCompute(missing)}>{t('tests.computeAll', { count: missing.length })}</Button></span>
+                    </Tooltip>
+                  )}
+                </Box>
+                <CompareTable cmp={cmp} tips={data.tips} />
+                <RawRows rec={rec} />
+              </Box>
+            )}
           </Paper>
         );
       })}
       {editing && (
-        <TestEditor open die={die} config={config} kind={editing.rec?.kind ?? sub} record={editing.rec}
+        <TestEditor open die={die} config={config} kind={editing.rec?.kind ?? kindOfTab(sub)} record={editing.rec}
           documents={(data.documents ?? []).map((d) => ({ id: d.id, name: d.name }))}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void reload(); }} />
       )}
+      <Dialog open={!!toCompute} onClose={() => setToCompute(null)}>
+        <DialogContent sx={{ fontSize: 13 }}>{t('tests.computeAllConfirm', { count: toCompute?.length ?? 0 })}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setToCompute(null)}>{t('tests.editor.cancel')}</Button>
+          <Button onClick={() => { const a = toCompute ?? []; setToCompute(null); void startCompute(a); }}>{t('tests.computeAllYes')}</Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={!!toDelete} onClose={() => setToDelete(null)}>
         <DialogContent sx={{ fontSize: 13 }}>{t('tests.deleteConfirm')}</DialogContent>
         <DialogActions>

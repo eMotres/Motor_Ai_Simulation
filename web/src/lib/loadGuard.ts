@@ -51,6 +51,8 @@ export interface Savers {
 
 let savers: Savers | null = null;
 export function registerSavers(s: Savers | null): void { savers = s; }
+/** The header strip's save flows, for any other place that offers "save the last run here" (the Simulation point switcher). */
+export function getSavers(): Savers | null { return savers; }
 
 /** What the dialog shows. */
 export interface LoadAsk {

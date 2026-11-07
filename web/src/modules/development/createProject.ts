@@ -1,16 +1,16 @@
 // Pure helpers of the "New project" dialog (owner 2026-10-30: any signed-in account may open its own project).
 
-/** What the create dialog posts: staff name the customer organisation and the id; a customer gives a title and (optionally) its
+/** What the create dialog posts: staff name the project, the customer organisation and the id; a customer gives only (optionally) its
  *  company - the server generates the id, makes the account the owner and ignores everything else. */
 export function createPayload(staff: boolean, v: { title: string; org: string; id: string }):
-  { id?: string; title: string; customer_org: string } {
+  { id?: string; title?: string; customer_org: string } {
   const title = v.title.trim(); const customer_org = v.org.trim();
-  return staff ? { id: v.id.trim(), title, customer_org } : { title, customer_org };
+  return staff ? { id: v.id.trim(), title, customer_org } : { customer_org };
 }
 
 /** May the dialog's Create button be pressed? */
 export function createReady(staff: boolean, v: { title: string; org: string; id: string }): boolean {
-  return !!v.title.trim() && (!staff || (!!v.org.trim() && !!v.id.trim()));
+  return !staff || (!!v.title.trim() && !!v.org.trim() && !!v.id.trim());
 }
 
 /** The text of a refused create: the account's open-project limit (HTTP 429, detail.code "project_limit") is shown from the
@@ -21,5 +21,7 @@ export function createErrorText(e: unknown, t: (key: string, args?: Record<strin
   if (status === 429 && detail && typeof detail === 'object' && detail.code === 'project_limit') {
     return t('projectLimit', { count: typeof detail.limit === 'number' ? detail.limit : 5 });
   }
+  // the data agreement is accepted at New project (owner 2026-11-05); a cancelled dialog says so, not "to start a simulation"
+  if (status === 428 && detail && typeof detail === 'object' && detail.code === 'agreement_required') return t('agreementNeeded');
   return e instanceof Error ? e.message : String(e);
 }

@@ -173,6 +173,9 @@ from motor_ai_sim import watchdog_notify as _watchdog
 async def _lifespan(_app):
     _log_redaction.install()        # again: uvicorn may have (re)built its handlers
     _run_startup_checks()
+    # New device cards of the image are copied into the live shared catalogue; never overwrites (seed_devices.py).
+    from motor_ai_sim.seed_devices import seed_new_device_cards as _seed_new_device_cards
+    _seed_new_device_cards()
     # Deploy stage 2 (docs/DEPLOY_STAGE2.md): which process is this?  Leader-only work runs in exactly one place - the
     # process that computes.  The API role (blue / green, two of them alive during a switch) never resumes a sweep.
     from motor_ai_sim import roles as _roles
@@ -454,8 +457,17 @@ from motor_ai_sim.development.motors import router as development_motors_router
 from motor_ai_sim.development.activity import router as development_activity_router
 app.include_router(development_router)
 app.include_router(development_admin_router)
+from motor_ai_sim.development.cost_estimate_routes import router as development_cost_estimate_router
+app.include_router(development_cost_estimate_router)   # admin-only project cost estimate (owner 2026-11-02)
+from motor_ai_sim.development.quote_routes import router as development_quote_router
+app.include_router(development_quote_router)   # GET /api/projects/{id}/quote: the shared quote, project members + admins only
+from motor_ai_sim.development.timeline_routes import router as development_timeline_router, admin_router as development_timeline_admin_router
+app.include_router(development_timeline_router)   # GET /api/projects/{id}/timeline: plan + forecast, project members + admins only
+app.include_router(development_timeline_admin_router)   # /api/admin/projects/{id}/timeline: admin edit, seed, baseline
 app.include_router(development_motors_router)
 app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
+from motor_ai_sim.development.productions import router as development_productions_router
+app.include_router(development_productions_router)   # GET /api/projects/{id}/productions: productions of the linked motors
 from motor_ai_sim.development.spec_assistant_routes import router as development_spec_assistant_router
 app.include_router(development_spec_assistant_router)  # Specification side panel: assistant turn + proposals (apply: spec editors only)
 # Activity digests (owner 2026-10-26): settings, unsubscribe link, Admin -> Digests (the only place a digest is sent)
@@ -1112,6 +1124,8 @@ def get_full_config(geo: Optional[str] = None):
                     # "rule" = the one coil rule (coil_build.coil_rule) - no CAD profile on this path
                     "kind": _cd.get("coil_kind"),
                     "typed_keys": _cd.get("coil_typed") or [],
+                    # the keys the loaded CONFIGURATION sets itself (its coil_overrides, owner 2026-11-02)
+                    "config_keys": _cd.get("coil_config_keys") or [],
                     "wire_beng_r_mm": round(float(_cd["wire_beng_r_mm"]), 4),
                     "coil_straight_extra_mm": round(float(_cd["coil_straight_extra_mm"]), 4),
                     "coil_lead_total_mm": round(float(_cd["coil_lead_total_mm"]), 4),

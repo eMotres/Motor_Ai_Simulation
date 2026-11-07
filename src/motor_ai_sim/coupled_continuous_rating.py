@@ -243,6 +243,8 @@ COOLING_KEYS: Tuple[str, ...] = (
     "bore_flow_lpm", "shaft_ext_length_mm", "shaft_ext_sides",
     "frame", "open_air_speed_mps", "emissivity", "mount_g_w_per_k",
     "mount_temp_c", "heat_path", "end_faces", "end_face_sides",
+    # the stator-OD sleeve (2026-11-03) — only when chosen
+    "stator_od_cooling", "od_sleeve_wall_mm", "od_sleeve_k",
 )
 
 
@@ -312,6 +314,9 @@ def _prune(kw: Mapping[str, Any]) -> Dict[str, Any]:
         drop.add("heat_path")
     if not _num(out.get("shaft_ext_length_mm")):
         drop.update(("shaft_ext_length_mm", "shaft_ext_sides"))
+    if str(out.get("stator_od_cooling") or "direct") != "sleeve_contact":
+        # 'direct' is the router's default — never sent (cooling_fields)
+        drop.update(("stator_od_cooling", "od_sleeve_wall_mm", "od_sleeve_k"))
     return {k: v for k, v in out.items() if k not in drop}
 
 
@@ -387,6 +392,12 @@ def cooling_from_duty_thermal(thermal_block: Mapping[str, Any]
     if str(faces.get("mode") or "off") == "still":
         out["end_faces"] = "still"
         out["end_face_sides"] = int(faces.get("sides") or 2)
+    # THE STATOR-OD SLEEVE (2026-11-03): present on a map only when chosen.
+    sod = dict(outer.get("stator_od") or {})
+    if str(sod.get("mode") or "") == "sleeve_contact":
+        out["stator_od_cooling"] = "sleeve_contact"
+        out["od_sleeve_wall_mm"] = _num(sod.get("wall_mm"))
+        out["od_sleeve_k"] = _num(sod.get("k_sleeve_W_per_mK"))
     return _prune({k: v for k, v in out.items() if v is not None})
 
 

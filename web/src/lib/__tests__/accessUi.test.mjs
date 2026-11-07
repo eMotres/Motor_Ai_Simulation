@@ -62,6 +62,29 @@ t('only a gate refusal has a reason key', () => {
   assert.equal(A.refusalReasonKey(403, null), null);
 });
 
+t('a refused solve (SOLVE_ADMIN_ONLY) has its own one-line reason, even though the gate also names the admin role', () => {
+  const body = { detail: 'Simulations are run by MOTRES for now.', code: 'solve.admin_only', params: {}, required_role: 'admin', your_role: 'engineer' };
+  assert.equal(A.refusalReasonKey(403, body), 'refused.solveClosed');
+  assert.equal(A.refusalReasonKey(403, { ...body, code: 'http.403' }), 'refused.admin');
+});
+
+t('view-only simulations: the workbench tabs follow canSolve, no other tab moves', () => {
+  const WORKBENCH = ['simulation', 'mechanical', 'thermal', 'schemas'];
+  const ctx = (role, isAdmin, canSolve) => ({ signedIn: true, fullUI: A.hasSimulationUI(true, isAdmin, role), isAdmin, canSolve,
+    producer: A.productionVisible(true, isAdmin, role) });
+  const tabs = (c) => ALL_TABS.filter((id) => A.tabVisible(id, c));
+  const engOpen = tabs(ctx('engineer', false, true));
+  const engClosed = tabs(ctx('engineer', false, false));
+  for (const id of WORKBENCH) { assert.ok(engOpen.includes(id), id); assert.ok(!engClosed.includes(id), id); }
+  // everything else an engineer had stays: Geometry, Materials, Mesh, Controller, Compare, Configure, Production ...
+  assert.deepEqual(engOpen.filter((id) => !WORKBENCH.includes(id)), engClosed);
+  // the admin and the setting-off case are unchanged; an old caller that passes no canSolve keeps today's answer
+  assert.deepEqual(tabs(ctx('admin', true, true)), tabs({ ...ctx('admin', true, true), canSolve: undefined }));
+  for (const id of WORKBENCH) assert.ok(tabs(ctx('admin', true, true)).includes(id), id);
+  // a standard user never had them
+  for (const id of WORKBENCH) assert.ok(!tabs(ctx('user', false, true)).includes(id), id);
+});
+
 const refs = [
   { id: 'cat:1', name: 'CIANO14 40 new L12', card: { die: 'CIANO14 40 new', config: 'L12' } },
   { id: 'cat:2', name: 'CIANO14 40 new L20', card: null },
@@ -155,6 +178,16 @@ t('My compute nodes is reachable for every signed-in role, engineer included', (
   assert.equal(A.computeNodesReachable(true), true);
   assert.equal(A.computeNodesReachable(false), false);
   assert.ok(A.ROLE_VALUES.every((r) => A.computeNodesReachable(r !== 'anon')));
+});
+
+t('SOLVE_ADMIN_ONLY: while an account cannot start a calculation, My compute nodes and its hint are hidden', () => {
+  assert.equal(A.computeNodesReachable(true, false), false);
+  assert.equal(A.computeNodesReachable(true, true), true);
+  for (const tab of A.COMPUTE_HINT_TABS) {
+    assert.equal(A.computeHintApplies(tab, true, false, 'engineer', false), false, tab);
+    assert.equal(A.computeHintApplies(tab, true, false, 'user', false), false, tab);
+    assert.equal(A.computeHintApplies(tab, true, false, 'user', true), true, tab);
+  }
 });
 
 t('the compute hint: user and engineer on a simulation tab of an enforcing backend only', () => {

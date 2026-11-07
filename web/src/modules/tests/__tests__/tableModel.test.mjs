@@ -582,3 +582,20 @@ t('the power list carries the current density of the row it shows', () => {
   const none = { id: 's', kind: 'load', date: '', title: '', rows: [{ rpm: 3000, torque_nm: 100 }] };
   assert.equal(M.powerSummary([none])[0].jAmm2, null);
 });
+
+t('the power list carries DC voltage, DC current, phase current and the type of the test', () => {
+  const row = { rpm: 2000, torque_nm: 100, v_dc_v: 600, i_dc_a: 39, i_phase_a: 53 };
+  const [l] = M.powerSummary([{ id: 'a', kind: 'load', date: '', title: 'Load sweep', rows: [row] }]);
+  assert.equal(l.vDc, 600);
+  assert.equal(l.iDc, 39);
+  assert.equal(l.iPhase, 53);
+  assert.equal(l.mode, 'motor');
+  const gen = { rpm: 3000, torque_nm: 100, v_dc_v: 600, i_dc_a: 47.6 };
+  assert.equal(M.powerSummary([{ id: 'b', kind: 'load', date: '', title: 'Load sweep', rows: [gen] }])[0].mode, 'generator');
+  const bare = { rpm: 3000, torque_nm: 100 };
+  assert.equal(M.powerSummary([{ id: 'c', kind: 'load', date: '', title: 'Continuous run, generator', rows: [bare] }])[0].mode, 'generator');
+  assert.equal(M.powerSummary([{ id: 'd', kind: 'load', date: '', title: 'Sweep, motoring', rows: [bare] }])[0].mode, 'motor');
+  const none = M.powerSummary([{ id: 'e', kind: 'load', date: '', title: 'Maximum power test', rows: [bare] }])[0];
+  assert.equal(none.mode, null);
+  assert.equal(none.vDc, null);
+});

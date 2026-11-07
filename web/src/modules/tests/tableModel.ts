@@ -521,6 +521,18 @@ export function parseNumberList(text: string): Array<number | null> {
 export interface PowerLine {
   id: string; date: string; title: string; rpm: number; torque: number; powerKw: number;
   effPct: number | null; tempC: number | null; jAmm2: number | null;
+  vDc: number | null; iDc: number | null; iPhase: number | null; mode: TestMode | null;
+}
+
+export type TestMode = 'motor' | 'generator';
+
+/** Motor or generator: the test's own title when it says so, else the direction of power in the row (DC above shaft = motor); null when neither tells. */
+export function testMode(title: string, row: Record<string, unknown>, shaftW: number): TestMode | null {
+  if (/\bgenerat/i.test(title)) return 'generator';
+  if (/\bmotoring\b/i.test(title)) return 'motor';
+  const dc = Number(row.v_dc_v) * Number(row.i_dc_a);
+  if (!(dc > 0) || !(shaftW > 0)) return null;
+  return dc > shaftW ? 'motor' : 'generator';
 }
 
 /** Efficiency of a row, in either direction: DC over shaft for a generator, shaft over DC for a motor, so the smaller over the larger.
@@ -547,7 +559,8 @@ export function powerSummary(tests: TestRecord[]): PowerLine[] {
       if (!logged && best && shaftW / 1000 <= best.powerKw) continue;
       best = { id: t.id, date: t.date, title: t.title ?? '', rpm, torque, powerKw: shaftW / 1000, effPct: rowEfficiency(raw, shaftW),
         tempC: typeof raw.temp_winding_c === 'number' ? raw.temp_winding_c : null,
-        jAmm2: finite(raw.j_a_mm2) };
+        jAmm2: finite(raw.j_a_mm2), vDc: finite(raw.v_dc_v), iDc: finite(raw.i_dc_a), iPhase: finite(raw.i_phase_a),
+        mode: testMode(t.title ?? '', raw, shaftW) };
     }
     if (best) out.push(best);
   }

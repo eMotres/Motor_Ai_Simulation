@@ -67,6 +67,7 @@ def _payload(die: str, config: str, *, can: Dict[str, bool], documents: Optional
     model = model_source.collect(model_die or die, config)
     return {"die": die, "config": config, "settings": doc.get("settings") or {}, "can": can,
             "tests": doc.get("tests") or [], "compare": comparison.compare_all(doc, model),
+            "motor_mass": comparison.motor_mass(doc, model),
             "model": {"available": bool(model.get("available")), "duties": len(model.get("duties") or []),
                       "noload": [r.get("duty") for r in model.get("noload") or []],
                       "magnet": (model.get("magnet") or {}).get("card"),

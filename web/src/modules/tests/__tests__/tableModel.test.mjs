@@ -599,3 +599,9 @@ t('the power list carries DC voltage, DC current, phase current and the type of 
   assert.equal(none.mode, null);
   assert.equal(none.vDc, null);
 });
+
+t('power and torque per mass need a mass', () => {
+  assert.ok(Math.abs(M.perMass(32.5, 8.47) - 3.837) < 0.001);
+  assert.equal(M.perMass(32.5, null), null);
+  assert.equal(M.perMass(32.5, 0), null);
+});

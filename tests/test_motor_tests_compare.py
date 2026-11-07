@@ -563,3 +563,13 @@ def test_a_load_row_keeps_its_current_density_and_shows_it():
     rows = {r["key"]: r for r in cmp["groups"][0]["rows"]}
     assert rows["j_coil"]["measured"] == pytest.approx(18.8)
     assert rows["j_coil"]["unit"] == "A/mm²"
+
+
+def test_the_per_mass_columns_prefer_the_weighed_motor_then_cad_then_active():
+    weighed = {"tests": [{"date": "2026-10-26", "conditions": {"rotor": "in"}, "weight": [{"what": "motor as photographed", "mass_g": 9400.0}]},
+                         {"date": "2026-11-05", "conditions": {"rotor": "out"}, "weight": [{"what": "stator, bare", "mass_g": 3351.5}]}]}
+    cad = {"mass": {"full_kg": 9.72, "active_kg": 7.33, "partial": False}}
+    assert comparison.motor_mass(weighed, cad) == {"kg": 9.4, "basis": "weighed"}
+    assert comparison.motor_mass({"tests": []}, cad) == {"kg": 9.72, "basis": "cad"}
+    assert comparison.motor_mass({"tests": []}, {"mass": {"full_kg": 2.23, "active_kg": 2.23, "partial": True}}) == {"kg": 2.23, "basis": "active"}
+    assert comparison.motor_mass({"tests": []}, {}) is None

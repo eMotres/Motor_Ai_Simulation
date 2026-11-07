@@ -26,7 +26,7 @@ import TestMedia from './TestMedia';
 import {
   cmpForTab, columnsFor, computeProgress, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
-  normalizeTab, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
+  normalizeTab, perMass, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
 import {
   TEST_TABS, type CreateDutyAction, type TestCompare, type TestRecord, type TestsPayload, type TestTab,
@@ -394,6 +394,9 @@ export const TestsPanel: React.FC<{
   const list = testsOfTab(data.tests, data.compare, sub);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
   const power = powerSummary(data.tests);
+  const massTip = data.motor_mass
+    ? t(`tests.power.mass_${data.motor_mass.basis}`, { kg: data.motor_mass.kg.toFixed(2) })
+    : t('tests.power.massNone');
   const openTest = (id: string) => {
     setSub('loads');
     setExpanded((was) => new Set(was).add(id));
@@ -446,7 +449,13 @@ export const TestsPanel: React.FC<{
                   <TableCell sx={head} align="right">
                     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.max')}<HelpTip title={t('tests.power.maxTip')} /></Box>
                   </TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.powerPerMass')}<HelpTip title={massTip} /></Box>
+                  </TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.torque')}</TableCell>
+                  <TableCell sx={head} align="right">
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>{t('tests.power.torquePerMass')}<HelpTip title={massTip} /></Box>
+                  </TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.speed')}</TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.vDc')}</TableCell>
                   <TableCell sx={head} align="right">{t('tests.power.iDc')}</TableCell>
@@ -466,7 +475,9 @@ export const TestsPanel: React.FC<{
                     <TableCell sx={{ ...cell, color: 'var(--text-0)' }}>{[l.date, l.title].filter(Boolean).join(' · ')}</TableCell>
                     <TableCell sx={cell}>{l.mode ? t(`tests.power.${l.mode}`) : '—'}</TableCell>
                     <TableCell sx={{ ...num, fontWeight: 700 }} align="right">{l.powerKw.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{perMass(l.powerKw, data.motor_mass?.kg)?.toFixed(2) ?? '—'}</TableCell>
                     <TableCell sx={num} align="right">{l.torque.toFixed(1)}</TableCell>
+                    <TableCell sx={num} align="right">{perMass(l.torque, data.motor_mass?.kg)?.toFixed(1) ?? '—'}</TableCell>
                     <TableCell sx={num} align="right">{Math.round(l.rpm)}</TableCell>
                     <TableCell sx={num} align="right">{l.vDc === null ? '—' : Math.round(l.vDc)}</TableCell>
                     <TableCell sx={num} align="right">{l.iDc === null ? '—' : l.iDc.toFixed(1)}</TableCell>

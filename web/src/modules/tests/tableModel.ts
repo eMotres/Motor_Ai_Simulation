@@ -526,6 +526,11 @@ export interface PowerLine {
 
 export type TestMode = 'motor' | 'generator';
 
+/** A value per kilogram of the motor; null without a mass. */
+export function perMass(value: number, kg: number | null | undefined): number | null {
+  return kg && kg > 0 ? value / kg : null;
+}
+
 /** Motor or generator: the test's own title when it says so, else the direction of power in the row (DC above shaft = motor); null when neither tells. */
 export function testMode(title: string, row: Record<string, unknown>, shaftW: number): TestMode | null {
   if (/\bgenerat/i.test(title)) return 'generator';

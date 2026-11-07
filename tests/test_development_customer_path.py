@@ -52,7 +52,7 @@ def test_with_the_agreement_the_project_opens_and_staff_get_one_mail(path, monke
     project = _project()
     assert project["status"] == "spec"
     (to, subject, body), = path["mails"]
-    assert to == "owner@motres-staff.test" and "New customer project" in subject and "Pump motor" in subject
+    assert to == "owner@motres-staff.test" and "New customer project" in subject and "New project" in subject
     assert ANNA in body and f"/projects/{project['id']}/specification" in body
 
 

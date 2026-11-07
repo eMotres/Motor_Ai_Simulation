@@ -318,6 +318,8 @@ def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision
     if out.get("invalid"):
         raise ProposalError(out["invalid"])
     saved = out["saved"]
+    from motor_ai_sim.development import self_service
+    self_service.refresh_title(project_id, saved.get("draft") or {})
     store.append_audit(project_id, actor_email, "spec.proposal.apply", "spec_proposal", proposal_id,
                        {"field": out["proposal"]["field_id"], "revision": saved["revision"]})
     return {"proposal": out["proposal"], "revision": saved["revision"], "draft": saved["draft"],

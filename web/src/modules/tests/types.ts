@@ -111,7 +111,7 @@ export interface TestsPayload {
   tests: TestRecord[];
   compare: Record<string, TestCompare>;
   /** the mass of the per-mass columns: weighed whole motor, whole motor from CAD, or active parts only */
-  motor_mass?: { kg: number; basis: 'weighed' | 'cad' | 'active' } | null;
+  motor_mass?: { kg: number; basis: 'weighed' | 'stated' | 'cad' | 'active' } | null;
   model: { available: boolean; duties: number; noload: string[]; magnet?: string | null; has_bearings: boolean;
     end3d?: End3dProvenance | null };
   tips: Record<string, string>;

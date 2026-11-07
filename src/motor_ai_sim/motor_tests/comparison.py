@@ -144,7 +144,8 @@ def motor_mass(doc: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str,
         for row in rec.get("weight") or []:
             kg = num(row.get("mass_g"))
             if kg and "motor" in str(row.get("what") or "").lower():
-                return {"kg": kg / 1000.0, "basis": "weighed"}
+                what = str(row.get("what") or "").lower()
+                return {"kg": kg / 1000.0, "basis": "stated" if "not weighed" in what else "weighed"}
     mass = model.get("mass") or {}
     if num(mass.get("full_kg")) and not mass.get("partial"):
         return {"kg": float(mass["full_kg"]), "basis": "cad"}

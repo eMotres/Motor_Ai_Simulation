@@ -840,7 +840,7 @@ function App() {
         {/* A motor loading in the background (its tab is already open) / why it failed */}
         <FamilyLoadBanner />
         {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
-        {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
+        {computeHintApplies(activeTab, enforced, isAdmin, role, canSolve) && <ComputeNodesHint />}
 
         {/* ── The panel header row (owner 2026-10-30): the same row on EVERY tab - the panel's label, its sub-tabs
             (the Simulations members here; a panel's own sections come in through <HeaderTabs>) and its actions ── */}

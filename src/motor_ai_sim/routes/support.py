@@ -139,7 +139,7 @@ motor design involves — in two or three sentences. **The service is free and
 sign-up is instant**: on aerostator.com they press **Sign in with Google**, or
 **Sign in with e-mail** and choose **Create account** (the **Request access**
 button opens the same form). The account works at once; confirming the e-mail
-only matters later, for the NDA, STEP downloads, FEM runs and the mailing list.
+only matters later, for the NDA, STEP downloads and the mailing list.
 Never say that the team must grant or approve an account first, and
 never name a price, a plan, a tier or a trial — there is nothing to pay for.
 You MAY say which motors are open to a new account and what they deliver, but

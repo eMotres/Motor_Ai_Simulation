@@ -593,7 +593,20 @@ NO_PRICE_RULE = ("NO PRICES: this server never gives, estimates or discusses "
                  "with the customer first, and they contact the customer about "
                  "everything after that.")
 
-GUIDE = """# AeroStator MCP — how to use (Stages 1-3, orders, public discovery)
+def simulations_closed() -> bool:
+    """Are simulations closed to clients right now?  Follows ``MOTRES_SOLVE_ADMIN_ONLY`` (auth.solve_admin_only), so the
+    texts below, the ``simulate`` tool description and the capability rows reopen with the setting - no text edit."""
+    from motor_ai_sim import auth as _auth
+    return _auth.solve_admin_only()
+
+
+#: What an agent reads about ``simulate`` while simulations are closed (owner 2026-11-04: MOTRES engineers run them; clients
+#: view results and order).  No price, quote, cost or date.
+SIM_CLOSED_NOTE = ("Simulations are run by MOTRES engineers for now. The simulate tool is listed, but it answers "
+                   "status 'simulations_closed' with a user_message to relay, queues nothing and uses no daily-limit "
+                   "slot: do not retry it.")
+
+_GUIDE_HEAD = """# AeroStator MCP — how to use (Stages 1-3, orders, public discovery)
 
 AeroStator (aerostator.com, by eMotres) designs permanent-magnet
 motors/generators and keeps a catalog of simulated machines (2-D FEM,
@@ -622,7 +635,9 @@ Tools after sign-in:
 - get_machine_performance(die, config, duty) — one duty's saved results
 - check_fit(torque_nm, speed_rpm, ...) — ranked machines meeting requirements
 
-Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
+"""
+
+_GUIDE_STAGE3_OPEN = """Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
 - start_design(requirements, base?, name?) — a DRAFT from the nearest existing
   machine, scaled by stack length / turns / parallel paths.  If the answer says
   status 'needs_input', ASK THE ENGINEER each listed field (why + options are
@@ -637,7 +652,27 @@ Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
 Example: "I need 12 N*m at 3000 rpm, 48 V" -> start_design -> needs_input
 [cooling, duty] -> ask -> start_design again -> simulate(em) -> get_job until
 done -> get_design_result -> open_in_configure link to the engineer.
+"""
 
+_GUIDE_STAGE3_CLOSED = """Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
+- start_design(requirements, base?, name?) — a DRAFT from the nearest existing
+  machine, scaled by stack length / turns / parallel paths.  If the answer says
+  status 'needs_input', ASK THE ENGINEER each listed field (why + options are
+  written for him), then call again.  'no_fit' says which limit blocks it.
+- simulate(design_id, what=em|thermal|coupled, steps?) — CLOSED for now.  """ + SIM_CLOSED_NOTE + """
+- get_job(job_id) — state, position, progress, ETA, error of a job that exists
+- get_design_result(design_id) — the draft's analytical estimate and any finished
+  run; requirement checks
+- open_in_configure(design_id) — link for the engineer to tune it interactively
+
+Example: "I need 12 N*m at 3000 rpm, 48 V" -> start_design -> needs_input
+[cooling, duty] -> ask -> start_design again -> get_design_result ->
+open_in_configure link to the engineer.  For the FEM simulation of the motor,
+use the order flow below: it ends at a submitted specification and MOTRES
+engineers run the simulation.
+"""
+
+_GUIDE_ORDERS = """
 Order a motor (scopes projects:read + projects:write) — turn the customer's
 requirements into a development project with a submitted specification:
 1. get_spec_form(lang?) — the form, generated from the live schema: sections,
@@ -669,3 +704,16 @@ never change the user's saved machines or the machine he has open.
 Units are in field names (_nm, _rpm, _kw, _v, _mm, _kg, _c, _pct).
 Only public-datasheet data is returned — no internal dimensions or drawings.
 """
+
+
+def guide() -> str:
+    """The ``emotres://guide`` text.  The simulation block follows the setting (``simulations_closed``)."""
+    stage3 = _GUIDE_STAGE3_CLOSED if simulations_closed() else _GUIDE_STAGE3_OPEN
+    return _GUIDE_HEAD + stage3 + _GUIDE_ORDERS
+
+
+def __getattr__(name: str):
+    # ``GUIDE`` stays importable (tests, older callers) and always reads the setting at the time it is used.
+    if name == "GUIDE":
+        return guide()
+    raise AttributeError(name)

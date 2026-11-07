@@ -39,7 +39,7 @@ def list_my_keys(authorization: Optional[str] = Header(default=None)):
     sim_day = _ad.daily_limit(_keys.Principal(email=owner, credential_id=""))
     return {"keys": _keys.list_keys(owner), "scopes": list(_keys.SCOPES),
             "default_scopes": list(_keys.DEFAULT_SCOPES),
-            "scope_descriptions": dict(_keys.SCOPE_DESCRIPTIONS),
+            "scope_descriptions": _keys.scope_descriptions(),
             "limits": {"per_minute": _keys.per_minute_limit(),
                        "per_day": _keys.per_day_limit(),
                        "simulations_per_day": sim_day}}

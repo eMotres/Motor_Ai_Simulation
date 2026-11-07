@@ -73,6 +73,23 @@ def test_who_may_open_the_tests(env):
     assert client.get(BASE, headers=h[ADMIN]).json()["settings"] == {"tests_visible_to_customer": False}
 
 
+def test_freerun_loss_endpoint_follows_the_tests_gate(env):
+    client, h = env
+    url = BASE + "/freerun-loss"
+    free = {"kind": "free_run", "date": "2026-10-30", "rows": [{"rpm": 3000, "shaft_power_w": 734}]}
+    assert client.get(url, headers=h[ENGINEER]).json() == {"available": False}      # no test yet
+    assert client.post(BASE + "/tests", headers=h[ENGINEER], json=PARAM_TEST).status_code == 200
+    assert client.get(url, headers=h[ENGINEER]).json() == {"available": False}      # no free-run test
+    assert client.post(BASE + "/tests", headers=h[ENGINEER], json=free).status_code == 200
+    got = client.get(url, headers=h[ENGINEER])
+    assert got.status_code == 200 and got.json()["available"] is True
+    assert got.json()["points"] == [{"rpm": 3000.0, "measured_w": 734.0, "model_w": None}]   # the test model has no no-load duty
+    assert client.get(url, headers=h[OEM_NDA]).status_code == 200                   # whoever opens the tests opens this
+    assert client.get(url, headers=h[OEM_NO_NDA]).status_code == 403                # the production's own NDA gate
+    assert client.get(url, headers=h[NON_MEMBER]).status_code == 404                # nothing for a non-reader
+    assert client.get(url).status_code == 401
+
+
 def test_factory_adds_engineer_edits_and_deletes_everything_audited(env):
     client, h = env
     added = client.post(BASE + "/tests", headers=h[OEM_NDA], json=PARAM_TEST)

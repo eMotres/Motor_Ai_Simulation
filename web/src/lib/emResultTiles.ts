@@ -10,6 +10,7 @@
 import { tempTileSpec, type TempTileSpec } from './configuratorTiles';
 import { tempLimits, judgeTemps, type TempLimits } from './configuratorPropeller';
 import { shaftBalance } from './shaftBalance';
+import { withFreeRunLoss } from './freeRunLoss.ts';
 import { hasSleeve } from './hasSleeve.ts';
 import { ktFromKv } from './kvKt.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
@@ -172,6 +173,17 @@ export interface EmTileView {
   /** where the point's EM numbers come from (`StoredPanel.source.em`): which magnet temperature the voltage tiles state.
    *  Absent = a plain run summary (the Electromagnetic tab). */
   emSource?: 'coupled' | 'em_run';
+  /** The "With free-run losses" view (lib/freeRunLoss.ts): the bench free-run loss the model does not have at this speed.
+   *  Display only - the shaft power, total loss and efficiencies carry it, a row of its own shows it; absent = pure simulation. */
+  freeRun?: EmFreeRun | null;
+}
+
+export interface EmFreeRun {
+  /** measured free-run shaft power minus the model's no-load loss at this speed [W]; may be negative */
+  extraW: number;
+  rpm: number;
+  measuredW?: number | null;
+  modelW?: number | null;
 }
 
 export interface EmCooling {
@@ -318,7 +330,12 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   // UNKNOWN friction (not zero): POWER is then the rotor T·ω, EFFICIENCY the electromagnetic one,
   // and both say so.
   const mech = view.mech ?? null;
-  const bal = shaftBalance(s, mech?.extra_W ?? null);
+  const bal0 = shaftBalance(s, mech?.extra_W ?? null);
+  // the free-run view moves ONLY the shaft side: power, total loss, the shaft efficiency (and the wall-to-shaft product below)
+  const fr = view.freeRun != null && Number.isFinite(view.freeRun.extraW) ? view.freeRun : null;
+  const bal = bal0 != null && fr != null ? withFreeRunLoss(bal0, fr.extraW) : bal0;
+  const frRatio = bal0?.eta != null && bal0.eta > 0 && bal?.eta != null && fr != null ? bal.eta / bal0.eta : 1;
+  const frTip = fr != null ? ['emTiles.freeRunOnTip'] : [];
   const mechKnown = bal?.mechKnown === true;
   const dir = bal?.gen ? '+' : '−';
 
@@ -356,7 +373,8 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       d: T != null && Math.abs(T) < 0.1 ? 4 : 2, value: T }),
     tile({ id: 'power', labelKey: 'configure.power',
       tipKey: mechKnown ? 'emTiles.powerTip' : 'emTiles.powerTipRotor',
-      tipVars: { rotor: _n2((bal?.pRotor ?? 0) / 1000), op: dir, mech: _n(mech?.extra_W ?? 0) },
+      tipExtraKeys: frTip.length ? frTip : undefined,
+      tipVars: { rotor: _n2((bal?.pRotor ?? 0) / 1000), op: dir, mech: _n(mech?.extra_W ?? 0), extra: _n(fr?.extraW ?? 0) },
       unit: 'kW', d: 2, value: bal != null ? bal.pShaft / 1000 : null }),
     tile({ id: 'elecPower', labelKey: 'configure.elecPower',
       tipKey: bal?.gen ? 'emTiles.elecPowerTipGen' : 'emTiles.elecPowerTipMotor',
@@ -365,8 +383,8 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     massTile,
     tile({ id: 'efficiency', labelKey: 'configure.efficiency',
       tipKey: mechKnown ? 'emTiles.efficiencyTip' : 'emTiles.efficiencyTipNoMech',
-      tipVars: { em: bal?.etaEm != null ? _n2(100 * bal.etaEm) : '—' },
-      tipExtraKeys: partial ? ['emTiles.partial'] : undefined, unit: '%', d: 2,
+      tipVars: { em: bal?.etaEm != null ? _n2(100 * bal.etaEm) : '—', extra: _n(fr?.extraW ?? 0) },
+      tipExtraKeys: partial || frTip.length ? [...(partial ? ['emTiles.partial'] : []), ...frTip] : undefined, unit: '%', d: 2,
       value: etaPct, display: etaPct != null && etaFlag ? `${etaPct.toFixed(2)}*` : undefined,
       level: etaPct == null ? undefined : etaFlag ? 'warn' : etaPct >= 92 ? 'ok' : etaPct >= 85 ? 'warn' : 'bad' }),
     tile({ id: 'tRipple', labelKey: 'configure.tRipple', tipKey: rippleTipKey, tipVars: rippleVars,
@@ -411,7 +429,8 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     // ALL losses: electromagnetic + bearings + windage when the friction is known
     tile({ id: 'totalLoss', labelKey: 'configure.totalLoss',
       tipKey: mechKnown ? 'emTiles.totalLossTip' : 'emTiles.totalLossTipEm',
-      tipVars: { em: _n(pLoss ?? 0), mech: _n(mech?.extra_W ?? 0) }, unit: 'W', d: 0,
+      tipVars: { em: _n(pLoss ?? 0), mech: _n(mech?.extra_W ?? 0), extra: _n(fr?.extraW ?? 0) },
+      tipExtraKeys: frTip.length ? frTip : undefined, unit: 'W', d: 0,
       value: bal?.lossAll ?? pLoss }),
     tile({ id: 'ironLoss', labelKey: 'configure.ironLoss', tipKey: 'emTiles.ironLossTip',
       tipExtraKeys: hs || hr ? [ironSurface ? 'emTiles.ironMeasured' : 'emTiles.ironBertotti',
@@ -443,6 +462,12 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
         unit: 'W', d: 2, value: mech.windage_W,
         blankTipKey: mech.windage_W != null ? undefined : 'emTiles.noBearings' }),
     ] : []),
+    // the bench free-run loss the model does not have at this speed ("With free-run losses" only): it is inside Total loss, so the
+    // row adds up; signed, as measured
+    ...(fr != null ? [tile({ id: 'freeRunExtra', labelKey: 'configure.freeRunExtra', tipKey: 'emTiles.freeRunExtraTip',
+      tipVars: { rpm: _n(fr.rpm), measured: fr.measuredW != null ? _n(fr.measuredW) : '-',
+        model: fr.modelW != null ? _n(fr.modelW) : '-' },
+      unit: 'W', d: 0, value: fr.extraW })] : []),
     tile({ id: 'statorHeat', labelKey: 'configure.statorHeat', tipKey: 'emTiles.statorHeatTip',
       tipExtraKeys: splitUnknown ? ['emTiles.splitUnknown'] : undefined, unit: 'W', d: 0, value: num(s.P_loss_stator_W) }),
     tile({ id: 'rotorHeat', labelKey: 'configure.rotorHeat', tipKey: 'emTiles.rotorHeatTip',
@@ -458,10 +483,12 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
     tile({ id: 'tj', labelKey: 'configureDrive.tj', tipKey: 'emTiles.tjTip', unit: '°C', d: 0, value: tj,
       level: tj == null ? undefined : tjMax != null && tj > tjMax - 25 ? 'warn' : 'ok' }),
     tile({ id: 'motorEff', labelKey: 'configureDrive.motorEff', tipKey: 'emTiles.motorEffTip', unit: '%', d: 1,
-      value: num(ctl?.efficiency?.shaft) != null ? (num(ctl?.efficiency?.shaft) as number) * 100 : null }),
+      tipExtraKeys: frTip.length ? frTip : undefined,
+      value: num(ctl?.efficiency?.shaft) != null ? (num(ctl?.efficiency?.shaft) as number) * 100 * frRatio : null }),
     // inverter eta x shaft eta: a DIFFERENT quantity from the shaft efficiency, never folded into it
     tile({ id: 'wallToShaft', labelKey: 'configure.wallToShaft', tipKey: 'emTiles.wallToShaftTip', unit: '%', d: 2,
-      value: wall != null ? wall * 100 : null, level: ctl?.limits_verdict === 'fail' ? 'bad' : undefined }),
+      tipExtraKeys: frTip.length ? frTip : undefined,
+      value: wall != null ? wall * 100 * frRatio : null, level: ctl?.limits_verdict === 'fail' ? 'bad' : undefined }),
     tile({ id: 'pContMax', labelKey: 'configureDrive.pContMax', tipKey: 'emTiles.pContTip',
       tipExtraKeys: s1p != null && !s1Verified ? ['emTiles.unverified'] : undefined, unit: 'kW', d: 2,
       value: s1p != null ? s1p / 1000 : null, level: s1p == null ? undefined : s1Verified ? 'ok' : 'warn' }),

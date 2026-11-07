@@ -571,7 +571,8 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
             emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, None, tip="emf_peak", params=params))
             rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), None, tip="emf_rms", params=params))
             if num(r.get("shaft_power_w")) is not None:
-                loss_rows.append(_row("loss", lbl, "W", r.get("shaft_power_w"), None, tip="loss", params=params))
+                loss_rows.append(_row("loss", lbl, "W", r.get("shaft_power_w"), None, tip="loss", params=params,
+                                      extra={"rpm": n}))
             continue
         ratio = C.br_ratio(pts, t_mag, ref.get("magnet_temp_c"))
         emf = C.emf_model_at(n, ref, ratio)
@@ -604,7 +605,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
               "solid_w": None if em is None else em["solid"],
               "bearings_w": (mech or {}).get("bearings_w"), "windage_w": (mech or {}).get("windage_w"),
               "unexplained_w": None if (meas_w is None or total is None) else meas_w - total,
-              "has_bearings": bool(model.get("has_bearings")), **extra}
+              "has_bearings": bool(model.get("has_bearings")), "rpm": n, **extra}
         if meas_w is not None or total is not None:
             loss_rows.append(_row("loss", lbl, "W", meas_w, total, tip="loss", params=params, detail=det, extra=lx))
         if meas_w is not None:
@@ -871,6 +872,34 @@ def compare_record(rec: Dict[str, Any], model: Dict[str, Any], die: str, config:
     else:
         out = _load(rec, model, die, config)
     return {"test_id": rec.get("id"), "kind": kind, "model_available": bool(model.get("available")), **out}
+
+
+def freerun_loss(doc: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
+    """The bench no-load loss against the model's, per bench speed, for the Simulation tab's "with free-run losses" box.
+
+    The NEWEST free-run record of the configuration by date (then by creation time) that has a measured shaft power;
+    ``{"available": False}`` when there is none.  Each point is ``{"rpm", "measured_w", "model_w"}`` straight from the
+    "No-load loss (shaft power)" rows of :func:`_free_run`, so ``model_w`` is the very figure the Tests tab compares
+    (EM no-load loss scaled from the stored no-load duty + bearings + windage); it is ``None`` where the model has no
+    no-load duty (nothing is invented).  Nothing is solved and nothing is stored."""
+    recs = [r for r in doc.get("tests") or []
+            if isinstance(r, dict) and r.get("kind") == "free_run"
+            and any(num(x.get("rpm")) and num(x.get("shaft_power_w")) is not None
+                    for x in r.get("rows") or [] if isinstance(x, dict))]
+    if not recs:
+        return {"available": False}
+    rec = max(recs, key=lambda r: (str(r.get("date") or ""), str(r.get("created_at") or "")))
+    out = _free_run(rec, model, die, config)
+    points: List[Dict[str, Any]] = []
+    for g in out.get("groups") or []:
+        if g.get("key") != "loss":
+            continue
+        for row in g.get("rows") or []:
+            n, meas = num((row.get("extra") or {}).get("rpm")), num(row.get("measured"))
+            if n is not None and meas is not None:
+                points.append({"rpm": n, "measured_w": meas, "model_w": num(row.get("model"))})
+    points.sort(key=lambda p: p["rpm"])
+    return {"available": bool(points), "test_id": rec.get("id"), "date": rec.get("date"), "points": points}
 
 
 def compare_all(doc: Dict[str, Any], model: Dict[str, Any]) -> Dict[str, Any]:

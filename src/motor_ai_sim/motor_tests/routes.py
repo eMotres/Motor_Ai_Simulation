@@ -7,6 +7,8 @@ Production side (factory + our engineers; ``access.resolve``)::
     PUT    /api/motor-tests/{die}/{config}/tests/{test_id}     replace a test      (admin, production owner/engineer)
     DELETE /api/motor-tests/{die}/{config}/tests/{test_id}     delete a test       (admin, production owner/engineer)
     PATCH  /api/motor-tests/{die}/{config}/settings            tests_visible_to_customer (admin, production owner/engineer)
+    GET    /api/motor-tests/{die}/{config}/freerun-loss        the newest free-run test's loss per bench speed, for the
+                                                               Simulation tab's "with free-run losses" box (same gate as the tests)
     GET    /api/motor-tests/{die}/{config}/audit               the change log      (admin, production owner/engineer)
     POST   /api/motor-tests/{die}/{config}/compute             "Compute it": add the missing bench points as TEST duties
                                                                and queue their solve  (global admin only; compute.py)
@@ -15,6 +17,9 @@ Project side (read-only, Development)::
 
     GET    /api/projects/{project_id}/motors/tests                       which linked motors have tests the caller may see
     GET    /api/projects/{project_id}/motors/tests?die=..&config=..      one motor's tests + comparison
+    GET    /api/projects/{project_id}/motors/tests/freerun-loss?die=..&config=..   the "with free-run losses" figures; the SAME
+                                                               gate as one motor's tests, a caller who may not read them gets
+                                                               {"available": false} (indistinguishable from "no test")
 
 Every change is appended to ``audit.jsonl`` (who, when, action, the record before/after).  Only ``compute`` solves (queued).
 """
@@ -74,6 +79,14 @@ def _payload(die: str, config: str, *, can: Dict[str, bool], documents: Optional
             "tips": TIPS, **({"documents": documents} if documents is not None else {})}
 
 
+def _freerun_payload(die: str, config: str, model_die: Optional[str] = None) -> Dict[str, Any]:
+    """The newest free-run test's measured | model no-load loss per bench speed (``comparison.freerun_loss``)."""
+    doc = store.load(die, config)
+    if not any(isinstance(t, dict) and t.get("kind") == "free_run" for t in doc.get("tests") or []):
+        return {"available": False}
+    return comparison.freerun_loss(doc, model_source.collect(model_die or die, config), die, config)
+
+
 async def _body(request: Request) -> Any:
     try:
         return await request.json()
@@ -93,6 +106,19 @@ def get_tests(request: Request, die: str, config: str, response: Response):
     return _payload(die, config, can={"add": bool(ctx["can_add"]), "edit": bool(ctx["can_edit"]),
                                       "settings": bool(ctx["can_edit"])},
                     documents=_documents(die, config, ctx))
+
+
+@router.get("/{die}/{config}/freerun-loss")
+def get_freerun_loss(request: Request, die: str, config: str, response: Response):
+    die, config = _names(die, config)
+    ctx = A.resolve(request, die, config)            # the SAME gate as the tests themselves: no read access = 404
+    response.headers["Cache-Control"] = "no-store"
+    out = _freerun_payload(die, config)
+    viewer = ctx.get("viewer")
+    if out.get("available") and viewer and viewer.get("project_role") == "customer":
+        from motor_ai_sim.development import store as DS
+        DS.append_audit(viewer["project_id"], A.email(ctx["user"]), "motor.tests.read", "motor", f"{die}/{config}")
+    return out
 
 
 @router.post("/{die}/{config}/tests")
@@ -260,3 +286,28 @@ def project_tests(project_id: str, request: Request, response: Response, die: Op
     if not staff:
         DS.append_audit(project_id, A.email(user), "motor.tests.read", "motor", f"{key_die}/{cfg_name}")
     return _payload(key_die, cfg_name, can={"add": False, "edit": False, "settings": False}, model_die=open_die)
+
+
+@project_router.get("/tests/freerun-loss")
+def project_freerun_loss(project_id: str, request: Request, response: Response, die: str, config: str,
+                         show_all: bool = False):
+    """The figures behind the read-only Simulation view's "with free-run losses" box.
+
+    Bench data is never widened: the project motor gate is the one of ``/tests?die=..&config=..`` (linked to this project,
+    a trial variant only with ``show_all``, the caller's grant on the motor) and so is the tests gate - staff always, a
+    customer only behind the configuration's ``tests_visible_to_customer`` flag.  A caller who passes the motor gate but
+    may not read the tests gets ``{"available": false}``, exactly what a motor without a free-run test gets."""
+    response.headers["Cache-Control"] = "no-store"
+    from motor_ai_sim.development import store as DS
+    from motor_ai_sim.development.motors import _project_motor
+    user, role, open_die, cfg_name, _path, _cfg, link = _project_motor(project_id, request, die, config, show_all)
+    key_die = str(link.get("die") or open_die)
+    if not store.exists(key_die, cfg_name):
+        return {"available": False}
+    staff = _project_staff(user, role)
+    if not staff and not bool((store.load(key_die, cfg_name).get("settings") or {}).get("tests_visible_to_customer")):
+        return {"available": False}
+    out = _freerun_payload(key_die, cfg_name, model_die=open_die)
+    if out.get("available") and not staff:
+        DS.append_audit(project_id, A.email(user), "motor.tests.read", "motor", f"{key_die}/{cfg_name}")
+    return out

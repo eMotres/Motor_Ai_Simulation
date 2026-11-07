@@ -1,0 +1,60 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-20: T-Motor heavy-lift props of 42-47 in with a published torque column, for motors that
+# need more propeller torque at 3500-4500 rpm than the G40x13.1 absorbs.
+schema: propeller-1
+id: tmotor_ns47x18
+vendor: T-MOTOR
+model: NS47*18
+series: NS series (manned aircraft / heavy-lift carbon fiber, 2 blades integrated)
+status: current
+product_url: https://store.tmotor.com/product/ns47x18-manned-aircraft-carbon-fiber.html
+source_urls:
+- https://store.tmotor.com/product/ns47x18-manned-aircraft-carbon-fiber.html
+- https://store.tmotor.com/product/u15l-manned-aircraft-combo.html
+accessed: '2026-10-20'
+geometry:
+  diameter_in: 47.0
+  diameter_mm: 1193.8
+  pitch_in: 18.0
+  pitch_mm: 457.2
+  blades: 2                  # "T-MOTOR Series 2blades-intergrated"
+material: CF+Epoxy, glossy
+mass_single_blade_g: 320     # "Weight (Single Blade) 320+-20g"
+published_limits: {}         # the product page publishes no rpm or thrust limits
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.1567
+  density_basis: "the U15L table states 'Ambient Temperature: 32' (C) and no pressure or altitude; density = ISA sea-level pressure at 32 C (dry air)"
+  tables:
+    - id: u15l_kv43_ns47x18_98v
+      source_url: https://store.tmotor.com/product/u15l-manned-aircraft-combo.html
+      accessed: '2026-10-20'
+      test_motor: "U15L KV43 + Thunder 300A 24S (97-99 V)"
+      prop_label_in_source: "47*18 in"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["type", "propeller", "throttle", "voltage_V", "thrust_g", "torque_Nm", "current_A", "rpm", "power_W", "efficiency_g_per_W", "operating_temperature"]
+      note: "motor bench table of the U15L KV43 combo; Power (W) is electrical input"
+      rows:
+      - {thr: 30, V: 99.0, I: 9.43, Pel: 929.0, rpm: 1239, thrust_g: 9563, torque_Nm: 5.22}
+      - {thr: 35, V: 98.0, I: 12.11, Pel: 1192.0, rpm: 1413, thrust_g: 11668, torque_Nm: 6.30}
+      - {thr: 40, V: 98.0, I: 16.72, Pel: 1646.0, rpm: 1566, thrust_g: 14955, torque_Nm: 8.06}
+      - {thr: 45, V: 98.0, I: 24.74, Pel: 2434.0, rpm: 1809, thrust_g: 20009, torque_Nm: 10.77}
+      - {thr: 50, V: 98.0, I: 33.35, Pel: 3279.0, rpm: 2019, thrust_g: 24767, torque_Nm: 13.33}
+      - {thr: 55, V: 98.0, I: 40.56, Pel: 3984.0, rpm: 2193, thrust_g: 28438, torque_Nm: 15.34}
+      - {thr: 60, V: 98.0, I: 46.64, Pel: 4572.0, rpm: 2313, thrust_g: 31314, torque_Nm: 16.94}
+      - {thr: 65, V: 98.0, I: 58.94, Pel: 5769.0, rpm: 2469, thrust_g: 36747, torque_Nm: 19.95}
+      - {thr: 70, V: 98.0, I: 64.97, Pel: 6359.0, rpm: 2580, thrust_g: 38966, torque_Nm: 21.22}
+      - {thr: 75, V: 98.0, I: 87.88, Pel: 8580.0, rpm: 2799, thrust_g: 48025, torque_Nm: 26.26}
+      - {thr: 80, V: 97.0, I: 95.31, Pel: 9286.0, rpm: 2913, thrust_g: 50683, torque_Nm: 27.84}
+      - {thr: 85, V: 97.0, I: 102.47, Pel: 9976.0, rpm: 2973, thrust_g: 53225, torque_Nm: 29.28}
+      - {thr: 90, V: 97.0, I: 110.95, Pel: 10788.0, rpm: 3060, thrust_g: 56197, torque_Nm: 30.90}
+      - {thr: 95, V: 97.0, I: 123.93, Pel: 12036.0, rpm: 3156, thrust_g: 60146, torque_Nm: 33.17}
+      - {thr: 100, V: 97.0, I: 134.64, Pel: 13109.0, rpm: 3210, thrust_g: 63383, torque_Nm: 35.04}
+notes:
+- T-Motor 'Power (W)' is electrical input power (motor + ESC); shaft power is derived from the published torque.
+- Tested 1239-3210 rpm (30-100 % throttle on 24S); above 3210 rpm the coefficients are held at the tested edge (extrapolated).
+- T-Motor publishes no 46 in propeller (store.tmotor.com and uav-en.tmotor.com, checked 2026-10-20); the 45 in VZ45*18 and the 47 in NS47*18 are the nearest sizes with a torque column.

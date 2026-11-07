@@ -822,6 +822,70 @@ def project(env, monkeypatch):
     return {"outsider": {"Authorization": f"Bearer {U.issue_token(OUTSIDER)}"}}
 
 
+@pytest.fixture
+def linked_public(env, monkeypatch):
+    """A project that links only the public configuration; the private sibling is in no project.  ``PLAIN`` and ``ENG`` are members."""
+    from motor_ai_sim.development import motors, store
+    if not env["layered"]:
+        pytest.skip("workspace copies exist only with layering")
+    root = env["tmp"] / "projects"
+    root.mkdir()
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(root))
+    monkeypatch.setattr(motors, "_capture_project_motor_snapshot", lambda *a, **k: None)
+    store.create_project({"id": PROJECT, "members": [{"email": e, "role": "customer"} for e in (PLAIN, ENG)],
+                          "linked_motors": [{"die": DIE, "config": PUB, "status": "current"}]})
+    store.save_index({"motors": {motors._key(DIE, PUB): {"project_id": PROJECT, "die": DIE, "config": PUB}}})
+    return store
+
+
+def _project_motors(store) -> set:
+    return {m["config"] for m in store.get_project(PROJECT).get("linked_motors", [])}
+
+
+def _fork_die(env, who: str) -> None:
+    """Bring the die into the account's workspace (any first save does it)."""
+    r = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": "Lfirst"}, headers=env[who])
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("name", [PRIV, "Lfree"])
+def test_a_workspace_copy_never_joins_the_project_or_makes_a_grant(env, linked_public, name):
+    from motor_ai_sim import users as U
+    _fork_die(env, "plain")
+    r = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": name}, headers=env["plain"])
+    assert r.status_code == 200, r.text
+    assert _project_motors(linked_public) == {PUB}
+    assert len(linked_public.load_index()["motors"]) == 1
+    assert U.get_stored_motor_grants(PLAIN).get("configs") in (None, [])
+
+
+def test_a_reader_outside_the_project_adds_no_row_to_it(env, linked_public):
+    r = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": "Lmine"}, headers=env["granted"])
+    assert r.status_code == 200, r.text
+    assert _project_motors(linked_public) == {PUB}
+
+
+def test_deleting_a_copy_leaves_the_private_sibling_closed(env, linked_public):
+    _fork_die(env, "eng")
+    copied = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": PRIV}, headers=env["eng"])
+    assert copied.status_code == 200, copied.text
+    client.delete(f"/api/family/config/{DIE}/{copied.json()['config']}", headers=env["eng"])
+    gone = client.delete(f"/api/family/die/{DIE}", params={"force": True}, headers=env["eng"])   # back to the catalog die
+    assert gone.status_code == 200, gone.text
+    r = client.get(f"/api/family/payload/{DIE}/{PRIV}", headers=env["eng"])
+    missing = client.get(f"/api/family/payload/{DIE}/{NOSUCH}", headers=env["eng"])
+    assert r.status_code == missing.status_code == 404
+
+
+def test_an_admin_copy_in_the_shared_catalog_still_joins_the_project(env, linked_public):
+    from motor_ai_sim import users as U
+    r = client.post(f"/api/family/config/{DIE}/{PUB}/duplicate", json={"name": "Lteam"}, headers=env["admin"])
+    assert r.status_code == 200, r.text
+    assert _project_motors(linked_public) == {PUB, "Lteam"}
+    assert f"{DIE}/Lteam" in U.get_stored_motor_grants(PLAIN).get("configs")
+    assert client.get(f"/api/family/payload/{DIE}/Lteam", headers=env["plain"]).status_code == 200
+
+
 def _sim_get(route: str, cfg: str, hdr: dict, project_id: str = PROJECT):
     params = {"die": DIE, "config": cfg}
     if route == "sim/run":

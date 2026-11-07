@@ -14,9 +14,11 @@ configuration with no known source (created from scratch) falls back to the die 
 holds that family; several projects = the same skip note.
 
 It never links into a project the die is not already in, never steals a motor that another project holds, and never fails
-the route that created the configuration (the caller logs and moves on).  No owner check here on purpose: the person who may
-create a configuration in that die is the person who is already working on the project's motor; the link only adds what the
-project already shows for the sibling variants.
+the route that created the configuration (the caller logs and moves on).
+
+WHO (2026-11-07): only a verified admin writing the shared catalog starts a link (:func:`writes_shared_catalog`).  A link
+stores a grant for every member, and such a grant is for a configuration of the catalog.  A workspace copy stays with its
+author: it never joins a project and never makes a grant.
 """
 from __future__ import annotations
 
@@ -146,6 +148,13 @@ def _note_skipped(candidates: List[str], die: str, config: str, source: str, rea
     log.warning("autolink: %s/%s not linked - %s (%d candidate projects)", die, config, reason, len(candidates))
 
 
+def writes_shared_catalog() -> bool:
+    """Does this call's write land in the shared catalog?  A single-layer install has only that one (and only an admin writes
+    it); with layering, only a verified admin's write does - with no bound caller, the answer is no."""
+    from motor_ai_sim import workspace
+    return not workspace.layering() or workspace.is_verified_admin_request()
+
+
 def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = None, source_config: Optional[str] = None,
                         actor: str = "", sources: Optional[List[str]] = None) -> List[str]:
     """Link ``die/config`` to the ONE project that holds its source motor.  Returns the project ids it joined (0 or 1).
@@ -154,6 +163,8 @@ def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = N
     itself.  Without it the die family decides, and only when exactly one project holds that family."""
     die, config = str(die or "").strip(), str(config or "").strip()
     if not die or not config or any(x in die + config for x in ("/", "\\", "..")):
+        return []
+    if not writes_shared_catalog():
         return []
     actor = str(actor or "").strip().lower()
     src_cfg = str(source_config or "").strip()

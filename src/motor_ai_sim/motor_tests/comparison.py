@@ -134,6 +134,25 @@ def _create_duty(die: str, config: str, *, rpm: float, current: float, mode: str
 # parameters
 # ---------------------------------------------------------------------------
 
+def motor_mass(doc: Dict[str, Any], model: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The mass power and torque per mass are taken on (owner 2026-11-07): the whole motor as weighed on the bench, newest
+    first; else the whole motor from CAD; else the active parts only, and the basis says which."""
+    tests = sorted(doc.get("tests") or [], key=lambda t: str(t.get("date") or ""), reverse=True)
+    for rec in tests:
+        if str((rec.get("conditions") or {}).get("rotor") or "") == "out":
+            continue
+        for row in rec.get("weight") or []:
+            kg = num(row.get("mass_g"))
+            if kg and "motor" in str(row.get("what") or "").lower():
+                return {"kg": kg / 1000.0, "basis": "weighed"}
+    mass = model.get("mass") or {}
+    if num(mass.get("full_kg")) and not mass.get("partial"):
+        return {"kg": float(mass["full_kg"]), "basis": "cad"}
+    if num(mass.get("active_kg")):
+        return {"kg": float(mass["active_kg"]), "basis": "active"}
+    return None
+
+
 def _weight_row(p: Dict[str, Any], model: Dict[str, Any]) -> Dict[str, Any]:
     """The bench weight against the model's WHOLE-motor mass (owner 2026-10-27).
 

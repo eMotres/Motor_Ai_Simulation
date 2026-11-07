@@ -687,6 +687,13 @@ SELF_GATED_PREFIXES = (
 SELF_GATED_SUFFIXES = ("/part_materials",)
 
 
+def _project_sim_route(path: str) -> bool:
+    """A project motor's read-only Simulation view.  ``development.motors._project_motor`` gates it (project membership,
+    then the ordinary configuration gate on the LINKED motor) and answers a hidden motor exactly like one the project
+    does not have; a refusal here would name the configuration and so tell the two apart."""
+    return path.startswith("/api/projects/") and path.endswith(("/motors/sim", "/motors/sim/run"))
+
+
 def request_is_bound() -> bool:
     """Is there a request / tool caller to refuse?  (False in a CLI or a bare
     background thread - those read the catalog as the process, not as a user.)"""
@@ -744,7 +751,7 @@ def _config_path_check(request) -> None:
     if request.method not in ("GET", "HEAD"):
         return
     path = request.url.path
-    if path.startswith(SELF_GATED_PREFIXES) or path.endswith(SELF_GATED_SUFFIXES):
+    if path.startswith(SELF_GATED_PREFIXES) or path.endswith(SELF_GATED_SUFFIXES) or _project_sim_route(path):
         return
     from fastapi import HTTPException
     acc = catalog_access(request.headers.get("authorization"))

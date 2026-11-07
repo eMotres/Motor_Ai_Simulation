@@ -325,6 +325,7 @@ READ_ROUTES = {          # (method, path template) -> request builder key
     ("GET", "/api/family/die/{die}/part_materials"): "query-config",
     ("GET", "/api/family/die/{die}/part_tree"): "query-config",
     ("GET", "/api/family/config/{die}/{cfg}/cad_params"): "plain",
+    ("GET", "/api/family/config/{die}/{cfg}/coil"): "plain",            # the configuration's coil keys + k_end
     # the Motors-tab read-only view of stored results (tests/test_motor_view.py): gated by the app-wide path gate
     ("GET", "/api/motor-view/{die}/{cfg}"): "plain",
     ("GET", "/api/motor-view/{die}/{cfg}/{duty}/field/{kind}"): "plain",
@@ -344,6 +345,7 @@ WRITE_ROUTES = {         # layered-only (a registered account writes into its ow
     ("PATCH", "/api/family/config/{die}/{cfg}/limits"): {"winding_c": 180},
     ("PUT", "/api/family/config/{die}/{cfg}/cad-mass"): {"grams": 9721.111, "source": "Fusion"},
     ("PATCH", "/api/family/config/{die}/{cfg}/bearings"): {"A": {"card": "618/8-2Z"}, "B": {"card": "618/8-2Z"}},
+    ("PATCH", "/api/family/config/{die}/{cfg}/coil"): {"wire_beng_r": 2.5},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/duplicate"): {"name": "copy"},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/save_continuous_point"): {"name": "continuous"},
     ("PATCH", "/api/family/duty/{die}/{cfg}/{duty}"): {"name": "renamed"},
@@ -385,6 +387,11 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     # move / copy a configuration to another die: admin only, 403 for everybody else before any name resolves
     # (routes/family.move_config, tests/test_config_move.py)
     ("POST", "/api/family/config/{die}/{cfg}/move"),
+    # the safe rename: the same admin-only 403 before any name resolves, tested below
+    ("POST", "/api/family/config/{die}/{cfg}/rename"),
+    # a project motor's read-only Simulation view: project membership, then the ordinary configuration gate in
+    # development.motors._project_motor; the same 404 for a hidden motor and a missing one, tested below
+    ("GET", "/api/projects/{project_id}/motors/sim"), ("GET", "/api/projects/{project_id}/motors/sim/run"),
 }
 NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog configuration
     ("POST", "/api/family/save_as_new_die"), ("POST", "/api/optimization/saved"),
@@ -670,6 +677,202 @@ def test_propeller_s1_is_a_404_for_a_hidden_configuration(env):
     for who, want in (("plain", 404), ("eng", 404)):
         r = client.get("/api/propellers/any/s1", params={"die": DIE, "config": PRIV}, headers=env[who])
         assert r.status_code == want and f"no propeller S1 model for {DIE} {PRIV}" in r.text
+
+
+# ── the coil of a configuration ──────────────────────────────────────────────
+# (the sweep above answers hidden == missing; these pin what the refusal protects and that allowed accounts keep their answer)
+
+def _coil_url(cfg: str) -> str:
+    return f"/api/family/config/{DIE}/{cfg}/coil"
+
+
+def _closed_account() -> dict:
+    """A registered account the die is not open to at all (no grant of any kind)."""
+    from motor_ai_sim import users as U
+    email = "closed@example.com"
+    U.create_user(email, "password-closed", role="user", name="Closed")
+    U.set_motor_grants(email, all_motors=False, dies=[])
+    return {"Authorization": f"Bearer {U.issue_token(email)}"}
+
+
+def _catalog_files(env) -> dict:
+    """Every catalog document a write could touch.  A workspace's own ``motor_config.yaml`` is not one: the first request
+    of an account seeds it, refused or not."""
+    files = sorted((env["dies_dir"] / DIE).rglob("*.yaml"))
+    if env["layered"]:
+        files += sorted((env["tmp"] / "srv" / "workspaces").glob("*/dies/**/*.yaml"))
+    return {p: p.read_bytes() for p in files}
+
+
+def _shared_files(env) -> dict:
+    return {p: p.read_bytes() for p in (env["dies_dir"] / DIE).glob("*.yaml")}
+
+
+def test_coil_refuses_every_account_that_may_not_see_the_configuration(env):
+    closed = _closed_account()
+    for name, hdr in (("plain", env["plain"]), ("eng", env["eng"]), ("closed", closed)):
+        r = client.get(_coil_url(PRIV), headers=hdr)
+        assert r.status_code == 404, (name, r.text)
+        assert "k_end" not in r.text and "overrides" not in r.text, name
+    # a die that is not open hides its ordinary configurations too
+    assert client.get(_coil_url(PUB), headers=closed).status_code == 404
+    assert client.get(_coil_url(PRIV)).status_code in (401, 404)
+
+
+def test_coil_serves_the_accounts_that_may_see_the_configuration(env):
+    for who in ("admin", "granted"):
+        r = client.get(_coil_url(PRIV), headers=env[who])
+        assert r.status_code == 200, (who, r.text)
+        assert r.json()["config"] == PRIV and r.json()["overrides"] == {}, who
+    for who in ("eng", "plain"):
+        r = client.get(_coil_url(PUB), headers=env[who])
+        assert r.status_code == 200, (who, r.text)
+        assert r.json()["config"] == PUB, who
+
+
+def test_coil_write_refuses_and_changes_nothing_for_a_stranger(env):
+    closed = _closed_account()
+    before = _catalog_files(env)
+    refused = 404 if env["layered"] else 403                    # a flat install: only the admin writes at all
+    for hdr in (env["plain"], env["eng"], closed):
+        r = client.patch(_coil_url(PRIV), json={"wire_beng_r": 2.5}, headers=hdr)
+        assert r.status_code == refused, r.text
+    r = client.patch(_coil_url(PUB), json={"wire_beng_r": 2.5}, headers=closed)
+    assert r.status_code == refused, r.text
+    assert client.patch(_coil_url(PRIV), json={"wire_beng_r": 2.5}).status_code in (401, 403)
+    assert _catalog_files(env) == before
+
+
+@pytest.mark.parametrize("body", [{"wire_beng_r": "not a length"}, {"wire_beng_r": -1}, {"coil_straight_extra": True}])
+def test_coil_write_with_a_bad_value_is_no_oracle_for_a_hidden_configuration(env, body):
+    # the validator runs in the route (the model takes Any): it must not tell a missing configuration from a hidden one
+    for who in ("plain", "eng"):
+        hidden = client.patch(_coil_url(PRIV), json=body, headers=env[who])
+        missing = client.patch(_coil_url(NOSUCH), json=body, headers=env[who])
+        _same_as_missing(hidden, missing, PRIV)
+
+
+def test_coil_write_stays_in_the_writers_own_copy(env):
+    shared = _shared_files(env)
+    r = client.patch(_coil_url(PUB), json={"wire_beng_r": 2.5}, headers=env["eng"])
+    if not env["layered"]:
+        assert r.status_code == 403, r.text
+        return
+    assert r.status_code == 200 and r.json()["overrides"] == {"wire_beng_r": 2.5}, r.text
+    assert _shared_files(env) == shared                         # the shared catalog is untouched
+    assert client.get(_coil_url(PUB), headers=env["eng"]).json()["overrides"] == {"wire_beng_r": 2.5}
+    assert client.get(_coil_url(PUB), headers=env["plain"]).json()["overrides"] == {}       # nobody else sees it
+    # the account holding the configuration grant edits the private one, in its own copy too
+    r = client.patch(_coil_url(PRIV), json={"wire_beng_r": 2.5}, headers=env["granted"])
+    assert r.status_code == 200, r.text
+    assert _shared_files(env) == shared
+
+
+def test_coil_write_serves_the_admin(env):
+    r = client.patch(_coil_url(PRIV), json={"wire_beng_r": 2.5}, headers=env["admin"])
+    assert r.status_code == 200 and r.json()["overrides"] == {"wire_beng_r": 2.5}, r.text
+
+
+# ── the safe rename ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("query", ["", "?dry_run=1"])
+def test_safe_rename_is_refused_alike_for_every_non_admin(env, query):
+    closed = _closed_account()
+    before = _catalog_files(env)
+    for hdr in (env["plain"], env["eng"], env["granted"], closed):
+        answers = [client.post(f"/api/family/config/{DIE}/{c}/rename{query}", json={"name": "Lnew"}, headers=hdr)
+                   for c in (PRIV, PUB, NOSUCH)]
+        assert {r.status_code for r in answers} == {403}, [r.text for r in answers]
+        assert len({r.text for r in answers}) == 1              # hidden, ordinary and missing answer the same words
+    assert client.post(f"/api/family/config/{DIE}/{PRIV}/rename{query}", json={"name": "Lnew"}).status_code in (401, 403)
+    assert _catalog_files(env) == before
+
+
+def test_safe_rename_plan_serves_the_admin(env):
+    r = client.post(f"/api/family/config/{DIE}/{PRIV}/rename?dry_run=1", json={"name": "Lnew"}, headers=env["admin"])
+    assert r.status_code == 200 and r.json()["dry_run"] is True, r.text
+    assert client.post(f"/api/family/config/{DIE}/{NOSUCH}/rename?dry_run=1", json={"name": "Lnew"},
+                       headers=env["admin"]).status_code == 404
+
+
+# ── a project motor's read-only Simulation view ──────────────────────────────
+
+PROJECT = "visproject"
+OUTSIDER = "outsider@example.com"     # holds the configuration grant, but is no member of the project
+
+
+@pytest.fixture
+def project(env, monkeypatch):
+    """A project with both configurations linked; every test account but OUTSIDER and the admin is a member."""
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors, store
+    root = env["tmp"] / "projects"
+    root.mkdir()
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(root))
+    for cfg in (PUB, PRIV):
+        f = env["dies_dir"] / DIE / f"{cfg}.yaml"
+        doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        doc["duties"][0]["runs"] = {"current": {"recorded_at": "2026-10-15T10:00:00", "summary": {"T_em_avg_Nm": 1.5}}}
+        f.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    store.create_project({"id": PROJECT,
+                          "members": [{"email": e, "role": "customer"} for e in (PLAIN, ENG, GRANTED)],
+                          "linked_motors": [{"die": DIE, "config": PUB}, {"die": DIE, "config": PRIV}]})
+    store.save_index({"motors": {motors._key(DIE, c): {"project_id": PROJECT} for c in (PUB, PRIV)}})
+    U.create_user(OUTSIDER, "password-outsider", role="user", name="Outsider")
+    U.set_motor_grants(OUTSIDER, all_motors=False, dies=[DIE], configs=[f"{DIE}/{PRIV}"])
+    return {"outsider": {"Authorization": f"Bearer {U.issue_token(OUTSIDER)}"}}
+
+
+def _sim_get(route: str, cfg: str, hdr: dict, project_id: str = PROJECT):
+    params = {"die": DIE, "config": cfg}
+    if route == "sim/run":
+        params.update(duty=DUTY, drive="current")
+    return client.get(f"/api/projects/{project_id}/motors/{route}", params=params, headers=hdr)
+
+
+@pytest.mark.parametrize("route", ["sim", "sim/run"])
+def test_project_sim_refuses_a_member_who_may_not_see_the_configuration(env, project, route):
+    for who in ("plain", "eng"):
+        hidden = _sim_get(route, PRIV, env[who])
+        missing = _sim_get(route, NOSUCH, env[who])
+        assert hidden.status_code == 404, (who, hidden.text)
+        _same_as_missing(hidden, missing, PRIV)
+        assert "T_em_avg_Nm" not in hidden.text and DUTY not in hidden.text, who
+        assert _sim_get(route, PUB, env[who]).status_code == 200, who       # the sibling is untouched
+
+
+@pytest.mark.parametrize("route", ["sim", "sim/run"])
+def test_project_sim_refuses_a_stranger_to_the_project(env, project, route):
+    # the configuration grant does not open somebody else's project
+    for hdr in (project["outsider"], _closed_account()):
+        for cfg in (PUB, PRIV):
+            r = _sim_get(route, cfg, hdr)
+            assert r.status_code == 404 and "T_em_avg_Nm" not in r.text, r.text
+            _same_as_missing(r, _sim_get(route, NOSUCH, hdr), cfg)
+    assert _sim_get(route, PRIV, {}).status_code in (401, 404)
+    assert _sim_get(route, PUB, {}).status_code in (401, 404)
+    # an unknown project answers a hidden name like any other
+    _same_as_missing(_sim_get(route, PRIV, env["plain"], "nosuchproject"),
+                     _sim_get(route, NOSUCH, env["plain"], "nosuchproject"), PRIV)
+
+
+def test_the_project_sim_exemption_from_the_path_gate_is_those_two_routes_only():
+    from motor_ai_sim import motor_access as MA
+    assert MA._project_sim_route("/api/projects/p1/motors/sim") and MA._project_sim_route("/api/projects/p1/motors/sim/run")
+    assert not MA._project_sim_route("/api/projects/p1/motors/view")
+    # a catalog read whose die + configuration happen to spell the same tail keeps the app-wide gate
+    assert not MA._project_sim_route("/api/family/payload/motors/sim")
+
+
+@pytest.mark.parametrize("route", ["sim", "sim/run"])
+def test_project_sim_serves_the_accounts_that_may_see_the_configuration(env, project, route):
+    for who in ("granted", "admin"):
+        assert _sim_get(route, PRIV, env[who]).status_code == 200, who
+    body = _sim_get(route, PRIV, env["granted"]).json()
+    if route == "sim":
+        assert body["config"] == PRIV and [d["name"] for d in body["duties"]] == [DUTY]
+    else:
+        assert body["duty"] == DUTY and body["summary"]["T_em_avg_Nm"] == 1.5
 
 
 # ── 3-D model ────────────────────────────────────────────────────────────────

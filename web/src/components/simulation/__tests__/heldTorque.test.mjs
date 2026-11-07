@@ -65,7 +65,7 @@ test('the row is wired, and every key it uses exists in EN and zh-CN', () => {
       assert.ok(typeof j[k] === 'string' && j[k].length > 0, `${lng}: ${k}`);
       assert.match(st, new RegExp(`'${k}'`));
     }
-    for (const ph of ['{{i}}', '{{t}}', '{{m}}']) {
+    for (const ph of ['{i}', '{t}', '{m}']) {
       assert.ok(j.torqueHeldLine.includes(ph), `${lng}: torqueHeldLine ${ph}`);
     }
   }

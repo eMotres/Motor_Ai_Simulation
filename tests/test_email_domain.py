@@ -218,8 +218,8 @@ def test_change_email_moves_the_account_and_mails_the_new_address(cp):
     mail = env["outbox"][-1]
     assert mail["to"] == "d.xu@movigor.com" and mail["subject"].startswith("Confirm your e-mail address")
     # the old link names the old address: dead; the new one works and the account can sign in
-    assert client.post("/api/auth/verify", json={"token": old_tok}).status_code == 400
-    assert client.post("/api/auth/verify", json={"token": _token_from(mail, "verify")}).status_code == 200
+    assert client.post("/api/auth/verify", json={"token": old_tok, "password": PW}).status_code == 400
+    assert client.post("/api/auth/verify", json={"token": _token_from(mail, "verify"), "password": PW}).status_code == 200
     assert _login("d.xu@movigor.com").status_code == 200
     assert _login("d.xu@movigor.tech").status_code == 401
     # what was ticked at sign-up follows the account (fresh email_change line under the new address)

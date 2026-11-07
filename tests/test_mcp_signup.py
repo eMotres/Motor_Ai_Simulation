@@ -186,9 +186,10 @@ def test_authorize_signup_verify_consent_token(senv):
     raw = O.store_path().read_text(encoding="utf-8")
     assert cont not in raw                        # stored hashed only
     assert cont not in mail["body"]
-    # 5. the link opens (maybe in a WeChat browser): the SERVER confirms the address and resumes the SAME authorization;
-    #    the page's button goes back to the consent page it derived from the secret's own record
-    v = c.get(u.path)
+    # 5. the link opens (maybe in a WeChat browser) a page with a form; its POST confirms the address and resumes the SAME
+    #    authorization; the page's button goes back to the consent page it derived from the secret's own record
+    assert "<form" in c.get(u.path).text
+    v = c.post("/api/auth/link/verify", data={"id": u.path.rsplit("/", 1)[1], "password": PW})
     assert v.status_code == 200 and "E-mail confirmed" in v.text
     assert f'href="{BASE}{consent}"' in v.text.replace("&amp;", "&") and "Continue connecting your AI app" in v.text
     assert O._load()["requests"][rid]["bound_email"] == NEW
@@ -318,7 +319,7 @@ def test_verify_ignores_a_swapped_return_to(senv):
     _, _, rid2, consent2 = _start_authorization(c)          # the attacker's
     exp2 = O._load()["requests"][rid2]["expires_at"]
     token, cont = _signup_link(senv, consent1)
-    v = c.post("/api/auth/verify", json={"token": token, "continuation": cont,
+    v = c.post("/api/auth/verify", json={"password": PW, "token": token, "continuation": cont,
                                          "return_to": consent2})
     assert v.status_code == 200
     assert v.json()["return_to"] == consent1                # derived, not taken
@@ -327,13 +328,25 @@ def test_verify_ignores_a_swapped_return_to(senv):
     assert O._load()["requests"][rid1]["bound_email"] == NEW
 
 
+def test_the_confirm_page_resumes_the_authorization_only_after_its_post(senv):
+    c = senv["c"]
+    _, _, rid, consent = _start_authorization(c)
+    token, _cont = _signup_link(senv, consent)
+    assert "bound_email" not in O._load()["requests"][rid]
+    page = c.get(f"/api/auth/link/v/{token}")
+    assert page.status_code == 200 and "bound_email" not in O._load()["requests"][rid]
+    done = c.post("/api/auth/link/verify", data={"id": token, "password": PW})
+    assert done.status_code == 200 and "/agent-consent" in done.text
+    assert O._load()["requests"][rid]["bound_email"] == NEW
+
+
 def test_verify_without_continuation_resumes_nothing(senv):
     c = senv["c"]
     _, _, rid2, consent2 = _start_authorization(c)
     exp2 = O._load()["requests"][rid2]["expires_at"]
     token, cont = _signup_link(senv)                        # plain sign-up: no secret
     assert cont is None
-    v = c.post("/api/auth/verify", json={"token": token, "return_to": consent2})
+    v = c.post("/api/auth/verify", json={"password": PW, "token": token, "return_to": consent2})
     assert v.status_code == 200 and "return_to" not in v.json()
     assert "authorization_pending" not in v.json()
     assert O._load()["requests"][rid2]["expires_at"] == exp2
@@ -346,7 +359,7 @@ def test_foreign_continuation_is_refused(senv):
     _, _, rid_a, consent_a = _start_authorization(c)
     _, cont_a = _signup_link(senv, consent_a, email="attacker@example.com", ip="198.51.100.9")
     token_v, _ = _signup_link(senv, email=NEW)
-    v = c.post("/api/auth/verify", json={"token": token_v, "continuation": cont_a})
+    v = c.post("/api/auth/verify", json={"password": PW, "token": token_v, "continuation": cont_a})
     assert v.status_code == 200 and v.json()["email"] == NEW     # the victim is verified
     assert v.json()["authorization_pending"] is False and "return_to" not in v.json()
     assert "bound_email" not in O._load()["requests"][rid_a]
@@ -356,11 +369,11 @@ def test_continuation_is_single_use(senv):
     c = senv["c"]
     _, _, rid, consent = _start_authorization(c)
     token, cont = _signup_link(senv, consent)
-    assert c.post("/api/auth/verify", json={"token": token, "continuation": cont}
+    assert c.post("/api/auth/verify", json={"password": PW, "token": token, "continuation": cont}
                   ).json()["authorization_pending"] is True
     # replay with a fresh token of another new account from the same page
     token2, _ = _signup_link(senv, consent, email="second@example.com", ip="198.51.100.10")
-    v = c.post("/api/auth/verify", json={"token": token2, "continuation": cont})
+    v = c.post("/api/auth/verify", json={"password": PW, "token": token2, "continuation": cont})
     assert v.status_code == 200 and v.json()["authorization_pending"] is False
     assert O.consume_continuation(cont, NEW) is None
     assert O._load()["requests"][rid]["bound_email"] == NEW      # unchanged
@@ -371,7 +384,7 @@ def test_bound_request_refuses_a_different_account(senv):
     senv["U"].create_user(OTHER, PW, role="user")
     _, _, rid, consent = _start_authorization(c)
     token, cont = _signup_link(senv, consent)
-    assert c.post("/api/auth/verify", json={"token": token, "continuation": cont}
+    assert c.post("/api/auth/verify", json={"password": PW, "token": token, "continuation": cont}
                   ).json()["authorization_pending"] is True
     other = {"Authorization": f"Bearer {_login(c, email=OTHER).json()['token']}"}
     assert c.get(f"/api/oauth/requests/{rid}", headers=other).status_code == 403

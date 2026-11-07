@@ -15,7 +15,7 @@ from a password account below; RIGHTS always come from our registry
 - POST /api/auth/logout       — revoke the session this request is using
 - POST /api/auth/heartbeat    — "the user is here": refreshes the session's idle clock (session_activity.py)
 - POST /api/auth/register     — self-service e-mail/password sign-up (unverified); needs ``accept_terms`` + ``terms_version`` (Terms of Use + Privacy Policy, legal_texts.py)
-- POST /api/auth/verify       — consume the e-mail confirmation link
+- POST /api/auth/verify       — consume the e-mail confirmation link, with the sign-up's password
 - POST /api/auth/register/resend        — mail the confirmation link again (rate-limited)
 - POST /api/auth/register/change-email  — an unverified account fixes a mistyped address (password proves it is theirs)
 - POST /api/auth/reset/request, /reset/confirm — password reset by link
@@ -437,15 +437,26 @@ class VerifyReq(TokenReq):
     #: OAuth window).  The return target is DERIVED from its stored record —
     #: a caller-supplied path is never accepted here.
     continuation: Optional[str] = None
+    #: The password of this sign-up.  Whoever registered an address need not be whoever reads its mail, so the link alone never
+    #: activates that password (the link page also lets the reader of the mail choose their own).
+    password: str = ""
 
 
 @router.post("/verify")
 def verify_email(req: VerifyReq, request: Request):
-    email = U.consume_link_token(req.token, "verify") or U.consume_short_link(req.token, "verify")
+    invalid = HTTPException(400, detail=(
+        "this link is invalid, already used or expired — sign up again "
+        "to get a new one"))
+    email = U.peek_link_token(req.token, "verify")
     if not email:
-        raise HTTPException(400, detail=(
-            "this link is invalid, already used or expired — sign up again "
-            "to get a new one"))
+        info = U.find_short_link(req.token, "verify")
+        email = info["email"] if info and info["state"] == "valid" else ""
+    if not email:
+        raise invalid
+    if not U._verify_pw(U.get_user(email), req.password):
+        raise ApiError(403, "auth.verify_password", "Open the link in the mail and enter your password to confirm this address.")
+    if not (U.consume_link_token(req.token, "verify") or U.consume_short_link(req.token, "verify")):
+        raise invalid
     U.mark_verified(email, by="link")
     S.record_event("verified", email=email, reason="link", ip=_ip(request),
                    path="/api/auth/verify")
@@ -524,8 +535,12 @@ def reset_confirm(req: ResetReq, request: Request):
 # ── the links in the account mails: tiny server-rendered pages, no JavaScript ─────────────────────────
 # A visitor in China (2026-10-15) opened the confirmation link, but the single-page app's 1.2 MB bundle aborted on the China ->
 # Germany line, so the browser-side confirmation call never ran.  These routes confirm / reset on the server and answer with a
-# page of a few kB (link_pages.py) that works in any in-app browser and with scripts off.  A second click (or a mail scanner that
-# opened the link first) just says "already confirmed".
+# page of a few kB (link_pages.py) that works in any in-app browser and with scripts off.
+#
+# OPENING a link changes nothing: a mail scanner fetches every link it sees, and the address is not its to confirm.  The page holds a
+# form, and its POST confirms - with the password, because whoever registered an address need not be whoever reads its mail.  The
+# sign-up's own password confirms at once; another one, typed twice, replaces it, so the reader of the mail always ends up holding
+# the account's password.  Sign-up stays automatic: nobody approves anything.
 
 _LINK_HEADERS = {
     "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff",
@@ -611,9 +626,18 @@ def _do_verify(request: Request, email: str, sid: str = "", next_path: str = "")
     S.record_event("verified", email=email, reason="link", ip=_ip(request), path="/api/auth/link")
 
 
+def _confirm_page(request: Request, email: str, fields: dict, new_password: bool = False, error: str = "") -> HTMLResponse:
+    from motor_ai_sim import link_pages as LP
+    lang = _link_lang(request, email)
+    # a language chosen on the page holds through the POST
+    action = "/api/auth/link/verify" + (f"?lang={lang}" if request.query_params.get("lang") else "")
+    return _html(LP.confirm_form(lang, email=email, action=action, fields=fields, new_password=new_password,
+                                 error=error, switch_url=_switch(request, lang) if request.method == "GET" else ""))
+
+
 @router.get("/link/v/{sid}")
 def link_verify(sid: str, request: Request):
-    """The confirmation link of a mail (short id).  Confirms the address and answers with a small page; idempotent."""
+    """The confirmation link of a mail (short id): the confirm form, or what became of the link.  Changes nothing."""
     _link_guard(request)
     info = U.find_short_link(sid, "verify")
     if info is None:
@@ -621,29 +645,71 @@ def link_verify(sid: str, request: Request):
     email, rec = info["email"], U.get_user(info["email"])
     if rec is None:
         return _invalid_page(request, "verify")
-    if info["state"] == "valid" and not U.is_verified(rec):
-        _do_verify(request, email, sid, next_path=info.get("next_path", ""))
-        return _confirmed_page(request, email, already=False, return_path=info.get("return_path", ""),
-                               next_path=info.get("next_path", ""))
     if U.is_verified(rec):
         return _confirmed_page(request, email, already=True, next_path=info.get("next_path", ""))
+    if info["state"] == "valid" and not rec.get("disabled"):
+        return _confirm_page(request, email, {"id": sid}, new_password=not rec.get("has_password"))
     return _invalid_page(request, "verify", email)
 
 
 @router.get("/link/verify")
 def link_verify_legacy(request: Request, t: str = ""):
-    """The long link of a mail sent before the short ones (``/?verify=<token>``; nginx redirects the old SPA URL here)."""
+    """The long link of a mail sent before the short ones (``/?verify=<token>``; nginx redirects the old SPA URL here).  Changes nothing."""
     _link_guard(request)
-    secret = request.query_params.get("continue", "")
-    email = U.consume_link_token(t, "verify")
-    if email:
-        _do_verify(request, email)
-        return _confirmed_page(request, email, already=False, secret=secret)
+    email = U.peek_link_token(t, "verify")
+    rec = U.get_user(email) if email else None
+    if rec is not None and not U.is_verified(rec) and not rec.get("disabled"):
+        fields = {"t": t}
+        if request.query_params.get("continue"):
+            fields["continue"] = request.query_params["continue"]
+        return _confirm_page(request, email, fields, new_password=not rec.get("has_password"))
     sub = U.link_token_subject(t)
     rec = U.get_user(sub) if sub else None
     if rec is not None and U.is_verified(rec):
         return _confirmed_page(request, sub, already=True)
     return _invalid_page(request, "verify", sub)
+
+
+@router.post("/link/verify")
+def link_verify_submit(request: Request, id: str = Form(""), t: str = Form(""), password: str = Form(""), password2: str = Form(""),
+                       secret: str = Form("", alias="continue")):
+    """The confirm form (a plain HTML POST).  The link is checked first and burned only when the address is confirmed."""
+    from motor_ai_sim import link_pages as LP
+    _link_guard(request)
+    if id:
+        info = U.find_short_link(id, "verify") or {}
+        email, live = info.get("email", ""), info.get("state") == "valid"
+        fields = {"id": id}
+    else:
+        info = {}
+        email = U.peek_link_token(t, "verify") or ""
+        email, live = email or U.link_token_subject(t), bool(email)
+        fields = {"t": t}
+        if secret:
+            fields["continue"] = secret
+    rec = U.get_user(email) if email else None
+    if rec is not None and U.is_verified(rec):                # a second submit of the form
+        return _confirmed_page(request, email, already=True, next_path=info.get("next_path", ""))
+    if rec is None or rec.get("disabled") or not live:
+        return _invalid_page(request, "verify", email if rec else "")
+    if not U._verify_pw(rec, password):
+        lang = _link_lang(request, email)
+        if not password2:
+            return _confirm_page(request, email, fields, new_password=True)
+        if password != password2:
+            return _confirm_page(request, email, fields, new_password=True, error=LP.STRINGS[lang]["mismatch"])
+        try:
+            U.check_password_policy(password, email)
+            U.set_pending_password(email, password)
+        except U.PasswordPolicyError as e:
+            return _confirm_page(request, email, fields, new_password=True, error=LP.policy_message(lang, str(e)))
+        except KeyError:
+            return _invalid_page(request, "verify")
+    if not id and U.consume_link_token(t, "verify") != email:
+        return _invalid_page(request, "verify", email)
+    _do_verify(request, email, id, next_path=info.get("next_path", ""))
+    return _confirmed_page(request, email, already=False, return_path=info.get("return_path", ""),
+                           secret=secret, next_path=info.get("next_path", ""))
 
 
 def _reset_page(request: Request, email: str, fields: dict, error: str = "") -> HTMLResponse:

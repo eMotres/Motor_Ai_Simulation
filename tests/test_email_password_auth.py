@@ -118,9 +118,9 @@ def test_register_verify_login_round_trip(env):
     assert _login().status_code == 403                  # correct pw, not yet proven
     tok = _token_from(env["outbox"][-1], "verify")
     assert env["outbox"][-1]["to"] == NEW
-    assert client.post("/api/auth/verify", json={"token": tok}).status_code == 200
+    assert client.post("/api/auth/verify", json={"token": tok, "password": PW}).status_code == 200
     # single use
-    assert client.post("/api/auth/verify", json={"token": tok}).status_code == 400
+    assert client.post("/api/auth/verify", json={"token": tok, "password": PW}).status_code == 400
     r = _login()
     assert r.status_code == 200, r.text
     me = client.get("/api/me", headers={"Authorization": f"Bearer {r.json()['token']}"})

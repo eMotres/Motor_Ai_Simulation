@@ -218,13 +218,12 @@ export function changeSignupEmail(email: string, password: string, newEmail: str
   return postPlain('/api/auth/register/change-email', { email, password, new_email: newEmail, lang });
 }
 
-/** Consume the mailed confirmation link.  `continuation`: the link's
- *  single-use `continue` secret (a sign-up started in an AI app's
- *  authorization window).  The server derives where to go back from it and
- *  answers `return_to` only when it is valid for the confirmed address. */
-export function verifyEmail(token: string, continuation?: string) {
-  return postPlain('/api/auth/verify', { token, ...(continuation ? { continuation } : {}) }) as
-    Promise<{ message?: string; email?: string; authorization_pending?: boolean; return_to?: string }>;
+/** The server page of a mailed confirmation link: the address is confirmed there, with the password, never by opening a URL.
+ *  `continuation`: the link's single-use `continue` secret (a sign-up started in an AI app's authorization window). */
+export function confirmPageUrl(token: string, continuation?: string) {
+  const q = new URLSearchParams({ t: token });
+  if (continuation) q.set('continue', continuation);
+  return `${API}/api/auth/link/verify?${q.toString()}`;
 }
 
 /** The `continue` secret of a mailed confirmation link, if any. */

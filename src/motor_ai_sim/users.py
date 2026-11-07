@@ -659,6 +659,24 @@ def register_self(email: str, password: str, name: str = "") -> str:
     return "created"
 
 
+def set_pending_password(email: str, password: str) -> None:
+    """The reader of a confirmation mail chose the password of a still unconfirmed account: it replaces the one the account was
+    registered with.  The outstanding links stay valid (the confirmation burns them).  KeyError: no such account."""
+    email = _norm(email)
+    check_password_policy(password, email)
+    fields = _pw_fields(password)
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None or is_verified(rec):
+            raise KeyError(email)
+        rec.update(fields)
+        rec.pop("pw_salt", None)
+        rec.pop("pw_iters", None)
+        rec["has_password"] = True
+        _save(users)
+
+
 def mark_verified(email: str, *, by: str = "link") -> bool:
     """Activate an account (link clicked, admin approval, Google proof)."""
     email = _norm(email)

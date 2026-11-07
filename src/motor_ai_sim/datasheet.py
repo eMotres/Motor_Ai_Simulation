@@ -708,8 +708,13 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     r = line(r, "KV (no load)",
              f"=IF({B(R_EMF)}<=0,0,{B(R_RPM)}/{B(R_EMF)})", "rpm/V",
              "rpm per volt of line-peak back-EMF", OUT, "0.0")
+    from motor_ai_sim import kv_kt as _KK
     r = line(r, "Torque constant Kt",
-             f"=IF({B(R_I)}<=0,0,{B(R_T_ROW)}/{B(R_I)})", "N·m/A rms", "", OUT, "0.0000")
+             f"=IF({B(R_KV)}<=0,0,{round(_KK.KT_TIMES_KV, 6)}/{B(R_KV)})", "N·m/A rms",
+             "no load, from KV (the same Kt on every page)", OUT, "0.0000")
+    r = line(r, "Torque per ampere at this load, T / I",
+             f"=IF({B(R_I)}<=0,0,{B(R_T_ROW)}/{B(R_I)})", "N·m/A rms",
+             "not Kt: saturation and the load angle are inside it", OUT, "0.0000")
     r = line(r, "Motor constant Km",
              f"=IF({B(R_CUDC)}<=0,0,{B(R_T_ROW)}/SQRT({B(R_CUDC)}))", "N·m/√W",
              "torque per square root of copper loss — quoted on the DC part, "
@@ -1457,8 +1462,15 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         cur = _g(duties[i], "current_arms")
         return abs(float(T_nm[i])) / float(cur) if (T_nm[i] and cur) else None
 
-    row("Torque constant Kt (N·m/A rms)", [_kt(i) for i in range(len(duties))],
-        "torque per ampere at this point — it falls as the iron saturates", 4)
+    from motor_ai_sim import kv_kt as _KK
+
+    def _kt_nl(i: int) -> Optional[float]:
+        return _KK.noload_constants(_g(duties[i], "summary") or {})["kt"]
+
+    row("Torque constant Kt (N·m/A rms)", [_kt_nl(i) for i in range(len(duties))],
+        "no load, from KV: Kt = %.3f / KV — the same Kt on every page" % _KK.KT_TIMES_KV, 4)
+    row("Torque per ampere at this load, T / I (N·m/A rms)", [_kt(i) for i in range(len(duties))],
+        "torque per ampere at this point — it falls as the iron saturates; not Kt", 4)
 
     def _S_kva(d: Dict[str, Any]) -> Optional[float]:
         v = _g(d, "summary.V_phase_rms_V")
@@ -1729,7 +1741,11 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                for d in duties
                if _g(d, "result.kv_rpm_per_v", "summary.KV_noload_rpm_per_V_line")), None)
     one("Motor constant KV (rpm/V)", kv,
-        "no-load: rpm per volt of line-peak back-EMF", 1)
+        "no-load: rpm per volt of line-peak back-EMF (the fundamental)", 1)
+    from motor_ai_sim import kv_kt as _KK
+    _kt_noload = _KK.kt_per_line_amp(float(kv)) if kv else None
+    one("Torque constant Kt (N·m/A rms)", _kt_noload,
+        "no load, from KV: Kt = %.3f / KV, per ampere rms of line current, sine current" % _KK.KT_TIMES_KV, 4)
     # Kt beside KV — from the first duty carrying both T and I (same source
     # rule as KV above).  T/I_rms at the duty point: saturation included, so a
     # low-current bench measurement reads slightly above it.
@@ -1737,11 +1753,11 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                  if _g(d, "summary.T_em_avg_Nm")
                  and float(_g(d, "summary.I_phase_rms_A") or 0) > 0), None)
     if _ktd is not None:
-        one("Torque constant Kt (N·m/A rms)",
+        one("Torque per ampere at this load, T / I (N·m/A rms)",
             float(_g(_ktd, "summary.T_em_avg_Nm"))
             / float(_g(_ktd, "summary.I_phase_rms_A")),
-            "measured T/I at the duty point; saturation included — the "
-            "low-current (bench) value sits slightly above", 4)
+            "T/I at the duty point; saturation included, so it is not Kt "
+            "(the no-load Kt above)", 4)
     # ── THE SAME FOUR, AT 20 °C (owner 2026-09-18) ──────────────────────────
     # *"do a cold 20 °C pass for every report, to find all the coefficients
     # KV, Kt, Km, Km/mass that appear in every motor catalogue and are needed
@@ -1768,8 +1784,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         from motor_ai_sim.report import cold_torque_constants, kt_basis_note
         _ct20 = cold_torque_constants(_c20)
         _kb = kt_basis_note(_ct20["k_torque"], _ct20["basis"])
-        one("Kt at 20 °C (N·m/A rms)", _ct20["kt_line_Nm_per_A"],
-            "per line amp; " + _kb + "; " + _tail20, 4)
+        one("Kt at 20 °C (N·m/A rms)", _KK.kt_per_line_amp(_c20.get("kv_line_rpm_per_V")),
+            "no load, from the KV above: Kt = %.3f / KV, per line amp; " % _KK.KT_TIMES_KV + _tail20, 4)
         one("Km at 20 °C (N·m/√W)", _ct20["km_Nm_sqrtW"],
             "torque per root watt of copper; " + _kb + "; " + _tail20, 3)
         # THE PER-MASS FIGURES ARE OVER THE FULL MASS (owner 2026-10-20): the stored per-mass number is Km over the ACTIVE mass of
@@ -1897,7 +1913,10 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # only while a stale stored override could disagree with what a duty was
     # actually solved with; with the override gone, quote the solved value
     # (all duties agree) or the cross-section's own formula.
-    _kg = _k_end_geom(geo)
+    # THIS configuration's coil (its lead edits and coil_overrides), never the loaded machine's
+    from motor_ai_sim.coil_build import machine_scope
+    with machine_scope(die, cfg, cfg_doc):
+        _kg = _k_end_geom(geo)
     ew = [(_g(d, "summary.end_winding_factor") or _setting(d, "sim.endWinding"))
           for d in duties]
     ew_vals = {round(float(x), 2) for x in ew if x}

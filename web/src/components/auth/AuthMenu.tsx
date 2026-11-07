@@ -23,7 +23,7 @@ import LanguageSwitcher from '../common/LanguageSwitcher';
 import CookieIcon from '@mui/icons-material/Cookie';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import { openCookieSettings, useAnalyticsState } from '../common/AnalyticsConsent';
-import { OPEN_COMPUTE_NODES_EVENT } from '../../lib/accessUi';
+import { OPEN_COMPUTE_NODES_EVENT, computeNodesReachable } from '../../lib/accessUi';
 
 /**
  * The signed-in half of the header control: avatar, account menu and the dialogs behind it
@@ -31,7 +31,7 @@ import { OPEN_COMPUTE_NODES_EVENT } from '../../lib/accessUi';
  * AuthButton.tsx and loaded lazily, so the signed-out landing does not download any of it.
  */
 const AuthMenu: React.FC = () => {
-  const { user, role, logout } = useAuth();
+  const { user, role, canSolve, logout } = useAuth();
   const { t } = useTranslation('common');
   const analyticsState = useAnalyticsState();
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
@@ -99,11 +99,13 @@ const AuthMenu: React.FC = () => {
           <ListItemIcon><SmartToyIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           {t('account.agents')}
         </MenuItem>
-        <MenuItem sx={{ fontSize: 12.5 }}
-          onClick={() => { setAnchor(null); setNodesOpen(true); }}>
-          <ListItemIcon><DnsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
-          {t('account.computeNodes')}
-        </MenuItem>
+        {computeNodesReachable(true, canSolve) && (
+          <MenuItem sx={{ fontSize: 12.5 }}
+            onClick={() => { setAnchor(null); setNodesOpen(true); }}>
+            <ListItemIcon><DnsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            {t('account.computeNodes')}
+          </MenuItem>
+        )}
         <MenuItem sx={{ fontSize: 12.5 }}
           onClick={() => { setAnchor(null); setNotifOpen(true); }}>
           <ListItemIcon><NotificationsIcon sx={{ fontSize: 16 }} /></ListItemIcon>

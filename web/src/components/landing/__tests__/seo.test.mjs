@@ -124,7 +124,7 @@ for (const { name, dist } of targets) {
       ? fs.readFileSync(path.join(dist, 'llms.txt'), 'utf8') : read('public/llms.txt');
     assert.match(llms, /^# AeroStator/);
     for (const k of ['https://aerostator.com/', 'github.com/eMotres/Motor_Ai_Simulation',
-      'COMPONENT_SDK.md', 'MODULE_CONTRIBUTION_RULES.md', 'BYO_COMPUTE.md', 'MCP_DISCOVERY.md',
+      'COMPONENT_SDK.md', 'MODULE_CONTRIBUTION_RULES.md', 'MCP_DISCOVERY.md',
       'https://aerostator.com/mcp', 'support@aerostator.com']) assert.ok(llms.includes(k), `llms.txt lacks ${k}`);
     assert.ok(!/\bpatented\b/i.test(llms));
   });

@@ -47,6 +47,8 @@ def test_shipped_groups_are_the_owners():
             assert g == "qdpak_750_1200", part
         elif pkg == "PG-TSON-6":                     # CoolGaN 3 x 5 mm (2026-10-05)
             assert g == "tson6_3x5", part
+        elif pkg == "2in1-150x62":                   # Fuji X-series IGBT module (2026-11-03)
+            assert g == "fuji_2in1_150x62", part
         else:
             assert (pkg, g) == ("PG-WHSON-8", "whson8_tson8"), part
 

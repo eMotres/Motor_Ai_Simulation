@@ -482,7 +482,7 @@ def new_revision(lineage_id: str, *, reason: str, who: dict, actor: str, new_die
             locked_now = _lock_config_and_die(die, cfg)
             lin_id = lin["id"]
             if new_die:
-                family._autolink_new_config(target[0], target[1], who, copied_from=die)
+                family._autolink_new_config(target[0], target[1], who, copied_from=die, source_config=cfg)
             stamp = _now()
 
             def add(lineages: Dict[str, dict]) -> dict:

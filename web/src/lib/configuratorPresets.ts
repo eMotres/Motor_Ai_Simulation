@@ -10,6 +10,7 @@
 //
 // Pure, type imports only: web/src/lib/__tests__/configuratorPresets.test.mjs imports this file.
 import type { BearingSpeed } from './configuratorLimits';
+import type { ConfigCoolingSpec } from './configureCooling';
 
 /** The knobs the server states for a configuration (`null` = the configuration does not say). */
 export interface PresetKnobs {
@@ -55,6 +56,9 @@ export interface Preset {
   /** THE masses of this configuration as the server computes them (owner 2026-10-19): "Mass" = full_kg, "Active mass" =
    *  active_kg for this exact build; absent on older servers / when the die cannot be weighed */
   mass?: PresetMass | null;
+  /** the configuration's OWN cooling (its `thermal_defaults:`, 2026-11-03): Configure's temperatures use it instead of the
+   *  page's typed air (lib/configureCooling); absent = the configuration states none */
+  cooling_defaults?: ConfigCoolingSpec | null;
 }
 
 export interface PresetMass {

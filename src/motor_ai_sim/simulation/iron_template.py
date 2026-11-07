@@ -845,7 +845,17 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     mesh_r, tags_r, cls_r) — full ring (n_sectors=1) or one [0..360/ns]
     wedge with clone-identical radial cuts.  Coil/magnet domains are
     renumbered by centroid against the CadQuery lists so the winding
-    circuit and pole polarities stay identical to the gmsh build."""
+    circuit and pole polarities stay identical to the gmsh build.
+
+    A stator WITHOUT outer notches (``stator_outer_notches: false``) is
+    refused: the unit blocks carry the V-notch by construction.  Every caller
+    falls back on a ValueError (the mesher routes such a stator to the
+    geometry-driven mesher before it gets here)."""
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+    if not stator_outer_notches(p) or (polys or {}).get("stator_outer_notches") is False:
+        raise ValueError("the iron template builds the stator's outer notches "
+                         "into its blocks; a notch-free stator OD needs the "
+                         "geometry-driven mesher")
     from skfem import MeshTri
     from scipy.spatial import cKDTree
     from scipy.sparse import coo_matrix

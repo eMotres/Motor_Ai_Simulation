@@ -11,7 +11,7 @@ import { RevisionLabel } from '../../../components/common/MotorRevisionText';
 import { useAuth } from '../../../contexts/AuthContext';
 import BilingualText from './BilingualText';
 import { productionApi } from '../api';
-import { callerRole } from '../helpers';
+import { productionRole } from '../helpers';
 import { productionUnreadKey, unreadFor } from '../../../lib/unreadMessages';
 import UnreadBadge from '../../../components/common/UnreadBadge';
 import CardMotorThumb, { useDieIndex } from '../../../components/common/CardMotorThumb';
@@ -58,7 +58,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
       {!loading && !err && items && items.length > 0 && viewMode === 'cards' && (
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>
           {items.map((p) => {
-            const role = callerRole(p.members, user?.email ?? '', isAdmin);
+            const role = productionRole(p, user?.email ?? '', isAdmin);
             const unread = unreadOf(p);
             const motor = productionCardMotor(p, dieIndex);
             return (
@@ -97,7 +97,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
             </TableHead>
             <TableBody>
               {items.map((p) => {
-                const role = callerRole(p.members, user?.email ?? '', isAdmin);
+                const role = productionRole(p, user?.email ?? '', isAdmin);
                 const unread = unreadOf(p);
                 return (
                   <TableRow key={`${p.die}/${p.config}`} hover tabIndex={0} sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(p); } }}>

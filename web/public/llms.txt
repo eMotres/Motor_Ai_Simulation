@@ -4,7 +4,7 @@
 
 AeroStator is run by MOTRES d.o.o. The software is Apache-2.0. The AeroStator Core motor technology is patent pending; manufacturing requires a licence from MOTRES (non-exclusive manufacturing licences are available). Applications: aviation and drones, robotics, marine, and your own.
 
-The platform covers five steps: design (motor geometry for your task), simulation (coupled electromagnetic, thermal and mechanical finite-element analysis), configure (choose a motor for your operating point, cooling, propeller, battery and controller), 3D model (viewable by everyone, tools and STEP files after an NDA) and production (order motors from MOTRES or take a manufacturing licence). Signed-in work, simulations and motor design data are private to their owners.
+The platform covers five steps: design (motor geometry for your task), simulation (coupled electromagnetic, thermal and mechanical finite-element analysis, run by MOTRES engineers today; users see the computed results), configure (choose a motor for your operating point, cooling, propeller, battery and controller), 3D model (viewable by everyone, tools and STEP files after an NDA) and production (order motors from MOTRES or take a manufacturing licence). Signed-in work, simulations and motor design data are private to their owners.
 
 ## Start here
 
@@ -16,7 +16,6 @@ The platform covers five steps: design (motor geometry for your task), simulatio
 
 - [Component SDK](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/COMPONENT_SDK.md): add a propeller, gearbox, controller, battery or your own module
 - [Module contribution rules](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MODULE_CONTRIBUTION_RULES.md): what a community module must provide
-- [Bring your own compute](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/BYO_COMPUTE.md): run heavy simulations on your own server
 - [MCP discovery and auth](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md): how an agent connects (OAuth sign-in by the user)
 - [MCP endpoint](https://aerostator.com/mcp): Model Context Protocol, streamable HTTP, JSON-RPC 2.0; a plain GET returns the service card
 - [MCP server card](https://aerostator.com/.well-known/mcp.json): machine-readable description
@@ -25,4 +24,4 @@ The platform covers five steps: design (motor geometry for your task), simulatio
 ## Access and contact
 
 - Anyone can sign in with Google on https://aerostator.com/ and pick a motor in Configure.
-- To ask for the engineer role (run your own simulations), a manufacturing licence, or to ask anything else: support@aerostator.com
+- To ask for the engineer role (the full results and charts of stored points), a manufacturing licence, or to ask anything else: support@aerostator.com

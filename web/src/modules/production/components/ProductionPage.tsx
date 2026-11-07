@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SubTabs from '../../../components/common/SubTabs';
 import { HeaderTabs } from '../../../components/common/PanelHeader';
 import { useTranslation } from 'react-i18next';
@@ -16,8 +17,9 @@ import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
-import { downloadFile, ProductionApiError, productionApi } from '../api';
-import { callerRole, canEditRole, displayText, unackedRevisions } from '../helpers';
+import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
+import { canEditRole, displayText, productionRole, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
+import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
@@ -26,7 +28,7 @@ import DigestSettings from '../../../components/digest/DigestSettings';
 import { productionUnreadKey } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type {
-  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
+  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, Revision, Thread,
 } from '../types';
 
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
@@ -72,7 +74,6 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const unreadDiscussion = unreadCounts?.productions[productionUnreadKey(die, config)] ?? 0;
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
-  const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
   // a shared link (since= / ids=) opens the Documents sub-tab; "Clear" / "Show all" drops its filter for this visit
   const [link, setLink] = useState<ProductionLink | null>(linkProp);
   const [tab, setTabState] = useState<TabId>(() => {
@@ -105,16 +106,23 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const reload = useCallback(async () => {
     try {
       const p = await productionApi.get(die, config);
-      const [parts, bom, toolingBom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
+      if (p.access === 'project') {
+        // a member of the project that links this motor: read-only documents and the customer-visible threads, nothing else
+        const [documents, threads] = await Promise.all([productionApi.documents(die, config), productionApi.threads(die, config)]);
+        setProd(p);
+        setData({ ...EMPTY, documents, threads });
+        setTabState((cur) => ((VIEWER_TABS as readonly string[]).includes(cur) ? cur : 'documents'));
+        setErr(null); setNda(false);
+        return;
+      }
+      const [parts, bom, toolingBom, process, documents, threads, proposals, revisions] = await Promise.all([
         productionApi.parts(die, config), productionApi.bom(die, config), productionApi.bom(die, config, 'tooling').catch(() => [] as BomRow[]),
         productionApi.process(die, config),
         productionApi.documents(die, config), productionApi.threads(die, config), productionApi.proposals(die, config),
         productionApi.revisions(die, config),
-        productionApi.procurement(die, config).catch(() => null),
       ]);
       setProd(p);
       setData({ parts, bom, toolingBom, process, documents, threads, proposals, revisions });
-      if (proc?.summary) setReadiness(proc.summary);
       setErr(null);
       setNda(false);
     } catch (e) {
@@ -131,7 +139,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     if (el) { scrolledTo.current = `${tab}:${itemId}`; el.scrollIntoView({ block: 'center' }); }
   }, [itemId, loading, tab, data]);
 
-  const role = prod ? callerRole(prod.members, email, isAdmin) : null;
+  const role = productionRole(prod, email, isAdmin);
   // the strip above the page names this production's motor with its title when that is short (lib/stripContext.shortTitle)
   const stripTitle = shortTitle(displayText(prod?.title, ui).text);
   // ... and the product revision of the motor ("Rev A"), which the production itself carries (no catalogue visibility needed)
@@ -148,7 +156,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   }), [die, config, role, email, ui, reload, prod?.product_type]);
   // the separate tooling / fixtures order list (owner 2026-10-19): same table, ?list=tooling
   const toolingCtx = useMemo(() => ({ ...ctx, list: 'tooling' as const }), [ctx]);
-  const visibleTabs = TABS.filter((id) => id !== 'tooling' || data.toolingBom.length > 0 || ctx.canEdit);
+  const visibleTabs = visibleProductionTabs(TABS, role, data.toolingBom.length);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
 
   return (
@@ -170,62 +178,17 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
       {prod && !loading && (
         // owner 2026-10-17: the tab menu stays fixed while the page scrolls; since 2026-10-30 it is in the shared header row
         <HeaderTabs tab="production">
-          <SubTabs value={tab} onChange={setTab} ariaLabel={t('title')}
-            items={visibleTabs.map((id) => ({ id, label: id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : id === 'discussion' && unreadDiscussion > 0 ? `${t('tabs.discussion')} (${unreadDiscussion})` : t(`tabs.${id}`) }))} />
-        </HeaderTabs>
-      )}
-
-      {/* Top Readiness Summary Bar */}
-      {prod && readiness && !loading && (
-        <Paper
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 1.5,
-            px: 2,
-            py: 1,
-            mb: 1.5,
-            bgcolor: readiness.ready_for_assembly ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
-            border: `1px solid ${readiness.ready_for_assembly ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-            borderRadius: 1.5,
-          }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>
-              {t('procurement.summary', {
-                received: readiness.parts_received_count,
-                total: readiness.parts_total_count,
-                pct: Math.round(readiness.received_pct),
-                late: readiness.late_count,
-                assemblyStatus: readiness.ready_for_assembly
-                  ? `✓ ${t('procurement.readyForAssembly')}`
-                  : `✗ ${t('procurement.notReadyForAssembly')}`,
-              })}
-            </Typography>
-            {readiness.at_risk_count > 0 && (
-              <Chip
-                size="small"
-                label={`${readiness.at_risk_count} ${t('procurement.status.at_risk')}`}
-                sx={{
-                  height: 20,
-                  fontSize: 11,
-                  bgcolor: 'rgba(245, 158, 11, 0.15)',
-                  color: '#f59e0b',
-                  border: '1px solid rgba(245, 158, 11, 0.4)',
-                }}
-              />
-            )}
-          </Box>
-          {readiness.assembly_warnings && readiness.assembly_warnings.length > 0 && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography sx={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>
-                ⚠️ {readiness.assembly_warnings[0].message}
-              </Typography>
+          {/* the way out stays in the fixed menu (owner 2026-11-06): on a phone the link above scrolls away with the page */}
+          <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+            <Tooltip title={t('back')}>
+              <IconButton size="small" aria-label={t('back')} data-testid="production-back" onClick={onBack} sx={{ flexShrink: 0 }}><ArrowBackIcon sx={{ fontSize: 18 }} /></IconButton>
+            </Tooltip>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <SubTabs value={tab} onChange={setTab} ariaLabel={t('title')}
+                items={visibleTabs.map((id) => ({ id, label: id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : id === 'discussion' && unreadDiscussion > 0 ? `${t('tabs.discussion')} (${unreadDiscussion})` : t(`tabs.${id}`) }))} />
             </Box>
-          )}
-        </Paper>
+          </Box>
+        </HeaderTabs>
       )}
 
       {loading && <Box sx={{ display: 'flex', gap: 1.5, color: 'var(--text-3)', py: 3 }}><CircularProgress size={18} /><Typography sx={{ fontSize: 13 }}>{t('loading')}</Typography></Box>}
@@ -281,7 +244,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} />}
           {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
-            onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }} />}
+            onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
+            onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}
@@ -305,6 +269,15 @@ export const ProductionTab: React.FC = () => {
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
   const setSel = (v: { die: string; config: string } | null) => { setSelState(v); writeStore(LAST_KEY, v); };
+  // "Open in Production" from a project (lib/openProduction): the tab may already be mounted, so it listens
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<OpenProductionDetail>).detail;
+      if (d && typeof d.die === 'string' && typeof d.config === 'string') { setEntry(null); setAppEntry(null); setSel({ die: d.die, config: d.config }); }
+    };
+    window.addEventListener(OPEN_PRODUCTION_EVENT, on);
+    return () => window.removeEventListener(OPEN_PRODUCTION_EVENT, on);
+  }, []);
   // the strip under the tabs names THIS production's motor, not the live machine (lib/stripContext.ts)
   useEffect(() => {
     useTabContextStore.getState().setProduction(sel ? { die: sel.die, config: sel.config } : null);

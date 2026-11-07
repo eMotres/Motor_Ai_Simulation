@@ -147,6 +147,7 @@ const COMPLETE = {
   flowLpm: '8', boreMode: 'none', boreAirSpeed: '0', boreFluid: 'water', boreTIn: '30',
   boreFlowLpm: '4', shaftExtMm: '0', shaftExtSides: '2', frame: 'housed', openAirSpeed: '0',
   emissivity: '0.9', heatPath: 'housing', endFaces: 'still', endFaceSides: '2',
+  statorOd: 'direct', sleeveWallMm: '1.5', sleeveK: '160',
   airSpeedSource: 'manual', propellerId: '', propellerContextKey: '',
 };
 const MKEY = 'CIANO10 200 opt|L155 motor';

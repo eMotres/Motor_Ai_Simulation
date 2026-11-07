@@ -183,13 +183,106 @@ def anonymous_allowed(path: str) -> bool:
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 
+# ── SOLVE_ADMIN_ONLY — who may START a calculation? ──────────────────────────
+#
+# Owner 2026-11-04: «расчёты никто не может запускать кроме меня пока».  For now only an admin starts a
+# simulation; everybody else reads what is stored (Configure, projects, Production, Tests, catalog).
+#
+# ONE server setting, read in ONE place: env ``MOTRES_SOLVE_ADMIN_ONLY`` (DEFAULT ON = closed).  Set it to 0 / false / no / off
+# and every route below behaves exactly as it did before (its old tier).  Read PER CALL, like PUBLIC_EXHIBIT, so a restart of the
+# process is the only thing needed to flip it, and a test can monkeypatch the environment.
+#
+# How a route joins the class: its entry in the tier tables names the tier ``"solve:<old>"`` - ``<old>`` is the tier the route
+# had before this rule (``user``, ``engineer``, ``admin``, or ``open`` for a route that had none).  ``required_role`` resolves it:
+# ``admin`` while the setting is on, ``<old>`` (or no tier at all for ``open``) when it is off.  A job queue admission
+# (``jobs.require_solve_allowed``) and the MCP ``simulate`` tool check the same setting, so a path that does not meet the
+# middleware (an in-process call, ``/mcp``) is closed by the same rule.
+_ENV_SOLVE_ADMIN_ONLY = "MOTRES_SOLVE_ADMIN_ONLY"
+
+#: What a refused caller reads (web: ``errors.json`` ``solve.admin_only``, EN + zh-CN; MCP: ``user_message``).  No price, no quote.
+SOLVE_REFUSAL = "Simulations are run by MOTRES for now."
+SOLVE_REFUSAL_CODE = "solve.admin_only"
+_SOLVE_TIER = "solve:"
+
+
+def solve_admin_only() -> bool:
+    """Is starting a calculation closed to everybody but admins?  Default: yes."""
+    return os.environ.get(_ENV_SOLVE_ADMIN_ONLY, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def principal_is_admin(email: str) -> bool:
+    """Is the account behind an MCP agent key an admin?  The same definition ``_is_admin_caller`` gives a web session (the
+    unconfigured local backend is the admin too)."""
+    if not AUTH_ENFORCE and not _ADMIN_EMAILS:
+        return True
+    ident = (email or "").strip().lower()
+    if not ident:
+        return False
+    if ident == ADMIN_OWNER or ident in _ADMIN_EMAILS:
+        return True
+    try:                                    # a read-only look: never provision an account from a permission question
+        from motor_ai_sim import users as _users
+        rec = _users._load().get(ident)
+    except Exception:                       # noqa: BLE001 - unreadable registry = not an admin (fail closed)
+        return False
+    return bool(rec) and str(rec.get("role") or "") == "admin" and not rec.get("disabled")
+
+
+def solve_refusal_body(your_role: str = "") -> dict:
+    """The JSON a refused solve answers with (HTTP 403): the unchanged English ``detail`` plus the translatable ``code``."""
+    return {"detail": SOLVE_REFUSAL, "code": SOLVE_REFUSAL_CODE, "params": {},
+            "required_role": "admin", "your_role": your_role}
+
+
+def refuse_solve_unless_admin(identity: Optional[dict]) -> None:
+    """Route / queue hook: HTTP 403 ``solve.admin_only`` while the setting is on and ``identity`` (``caller_identity``'s dict, or
+    ``workspace.caller()``) names a caller who is not an admin.  ``None`` (a direct call, a CLI run, a test without a caller)
+    is never refused - the middleware already stands in front of every HTTP request."""
+    if not solve_admin_only() or not isinstance(identity, dict) or identity.get("is_admin"):
+        return
+    from motor_ai_sim.api_errors import ApiError
+    raise ApiError(403, SOLVE_REFUSAL_CODE, SOLVE_REFUSAL)
+
+
 # (HTTP method, exact path) -> minimum tier required to call it.
 # Everything not listed here (and not matched by _GATED_PREFIX below) is open.
 _GATED: dict[tuple[str, str], str] = {
-    ("GET",  "/api/simulation/physics/fem_transient"): "user",
-    ("GET",  "/api/simulation/physics/fem_field2d"): "user",
+    ("GET",  "/api/simulation/physics/fem_transient"): "solve:user",
+    ("GET",  "/api/simulation/physics/fem_field2d"): "solve:user",
     # The no-load cogging torque of a configuration (owner 2026-10-26): one FEM transient, the same tier as the solves above.
-    ("POST", "/api/simulation/cogging/run"): "user",
+    ("POST", "/api/simulation/cogging/run"): "solve:user",
+    # SOLVE_ADMIN_ONLY (owner 2026-11-04) - the routes below were NOT in this table (or sat at a lower tier) although each one
+    # starts a calculation.  "solve:open" = no tier before; the rule above closes them to everybody but an admin.
+    #  * the small-signal Ld/Lq bench probe is a pair of FEM runs, and the PWM calculator starts that same probe when Ld / Lq are not given
+    ("GET",  "/api/simulation/physics/bench_ldq"): "solve:open",
+    ("GET",  "/api/simulation/pwm_waveform"): "solve:open",
+    #  * the inverter loss / junction-temperature model (circuit arithmetic on the duty's stored record, but a calculation)
+    ("POST", "/api/controller/solve"): "solve:open",
+    #  * the 3-D holder FEM job (a stub today - 501 - listed so that wiring it to the queue cannot open a door)
+    ("POST", "/api/mechanical/holder_fem_job"): "solve:open",
+    #  * "My compute nodes": a job sent to the caller's own (or a shared) node is a solve started by the caller
+    ("POST", "/api/nodes/jobs/submit"): "solve:open",
+    ("POST", "/api/nodes/jobs/submit-shared"): "solve:admin",
+    #  * the System graph's run (engineer tier before)
+    ("POST", "/api/system/run"): "solve:engineer",
+    ("POST", "/api/system/graphs/run"): "solve:engineer",
+    #  * static 3-D: the tet-mesh build behind GET /mesh (gmsh); the solve itself was admin already
+    ("GET",  "/api/static3d/mesh"): "solve:open",
+    ("POST", "/api/static3d/solve"): "solve:admin",
+    ("POST", "/api/simulation/run"): "solve:admin",
+    #  * admin before and after; named here so that a refused non-admin reads the same sentence as everywhere else
+    #    (the rest of /api/optimization, /api/pipeline and /api/static3d keeps the prefix entries below)
+    ("POST", "/api/optimization/run"): "solve:admin",
+    ("POST", "/api/optimization/refine"): "solve:admin",
+    ("POST", "/api/optimization/scan"): "solve:admin",
+    ("POST", "/api/optimization/scan/validate_point"): "solve:admin",
+    ("POST", "/api/optimization/scan/seed_cache"): "solve:admin",
+    ("POST", "/api/optimization/doe/start"): "solve:admin",
+    ("POST", "/api/optimization/descent/start"): "solve:admin",
+    ("POST", "/api/optimization/descent/baseline"): "solve:admin",
+    ("POST", "/api/optimization/descent/validate_point"): "solve:admin",
+    ("POST", "/api/optimization/auto"): "solve:admin",
+    ("POST", "/api/pipeline/generate"): "solve:admin",
     # The System graph (Simulations > System): how the simulations are chained.  A read of the
     # code's structure plus the caller's own last-run status; the Simulation menus' audience.
     ("GET",  "/api/system/graph"): "engineer",
@@ -207,24 +300,24 @@ _GATED: dict[tuple[str, str], str] = {
     # "Have you already computed exactly this?" — a hash lookup, no solve, but
     # it answers a question only a paying engineering user gets to ask, so it
     # rides the same tier as the run it is a pre-flight for.
-    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "user",
+    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "solve:user",
     # Rotor structural solve — same class of compute as the field solves above
     # (a gmsh mesh + an FE solve per call), so the same tier.
-    ("GET",  "/api/mechanical/rotor_stress"): "user",
+    ("GET",  "/api/mechanical/rotor_stress"): "solve:user",
     ("GET",  "/api/mechanical/materials"): "user",
     # Modal analysis, added 2026-09-05 ("we also need to do modal analysis,
     # to understand all the frequencies — that's very important for 20000 rpm").  /modes is a
     # gmsh mesh + a sparse eigensolve and /critical_speeds is a Campbell sweep
     # of dense eigenvalue problems: the same class of compute as the solves
     # above, so the same tier.
-    ("GET",  "/api/mechanical/modes"): "user",
-    ("GET",  "/api/mechanical/critical_speeds"): "user",
+    ("GET",  "/api/mechanical/modes"): "solve:user",
+    ("GET",  "/api/mechanical/critical_speeds"): "solve:user",
     # Added 2026-09-06 with "if there are [results] — the last result gets
     # loaded": /last hands back a structural result that was already paid for
     # and /mesh runs the same gmsh pass the solve does, so both ride the tier of
     # the solves they serve rather than being open because they are cheaper.
     ("GET",  "/api/mechanical/last"): "user",
-    ("GET",  "/api/mechanical/mesh"): "user",
+    ("GET",  "/api/mechanical/mesh"): "solve:user",
     # Thermal, split out of the simulation router on 2026-09-07 and gated
     # IDENTICALLY to mechanical above, because it is the same bargain: /field is
     # a full EM transient plus a conduction solve, /coupled is up to twelve of
@@ -233,10 +326,10 @@ _GATED: dict[tuple[str, str], str] = {
     # (/api/simulation/physics/thermal_field2d) was never listed here — an
     # oversight, not a decision: it was always heavier than /physics/fem_field2d,
     # which IS gated, since it CALLS it.
-    ("GET",  "/api/thermal/field"): "user",
-    ("GET",  "/api/thermal/coupled"): "user",
+    ("GET",  "/api/thermal/field"): "solve:user",
+    ("GET",  "/api/thermal/coupled"): "solve:user",
     ("GET",  "/api/thermal/last"): "user",
-    ("GET",  "/api/thermal/mesh"): "user",
+    ("GET",  "/api/thermal/mesh"): "solve:user",
     # Which Electromagnetic run the next Solve will use (2026-09-30) — it
     # reads the caller's run store, so it rides the tier of the solve it
     # describes.
@@ -244,7 +337,7 @@ _GATED: dict[tuple[str, str], str] = {
     # The DUTY CYCLE (2026-09-14): one conduction solve plus a transient
     # integration over up to 200 cycles, and /duty_cycle/last hands back a
     # result that was already paid for — the same bargain the four above make.
-    ("POST", "/api/thermal/duty_cycle"): "user",
+    ("POST", "/api/thermal/duty_cycle"): "solve:user",
     ("GET",  "/api/thermal/duty_cycle/last"): "user",
     # The EM<->thermal orchestrator (2026-09-08).  /run is up to six FULL
     # electromagnetic transients plus a conduction solve each — the heaviest
@@ -252,9 +345,17 @@ _GATED: dict[tuple[str, str], str] = {
     # solves it drives.  /cancel and /last follow the pattern their transient and
     # thermal equivalents set: the Stop button is gated with the run it stops,
     # and /last hands back a result that was already paid for.
-    ("POST", "/api/coupled/run"): "user",
+    ("POST", "/api/coupled/run"): "solve:user",
     ("POST", "/api/coupled/cancel"): "user",
     ("GET",  "/api/coupled/last"): "user",
+    # Added 2026-11-04 (read-only Simulation view audit): three more solves that were NOT in this table although each
+    # starts the same class of work as its siblings - /coupled/continuous_rating and /coupled/constants_20c queue a
+    # coupled / cold electromagnetic pass, /mechanical/limit_speed a structural solve, /physics/harm_screening an FEM
+    # transient.  Same tier as the routes beside them; nothing is widened and nobody who could use them loses them.
+    ("POST", "/api/coupled/continuous_rating"): "solve:user",
+    ("POST", "/api/coupled/constants_20c"): "solve:user",
+    ("POST", "/api/mechanical/limit_speed"): "solve:user",
+    ("GET",  "/api/simulation/physics/harm_screening"): "solve:user",
     # NOT listed, and that is the decision, not an oversight (2026-09-07):
     #   GET /api/mechanical/progress
     #   GET /api/thermal/progress
@@ -265,8 +366,8 @@ _GATED: dict[tuple[str, str], str] = {
     # a second for the whole of a solve the user is ALREADY paying the gated
     # tier for.  Gating them would mean a progress bar that 401s over a running
     # solve, i.e. the one moment the user most needs to see something.
-    ("GET",  "/api/simulation/mesh/build2d"): "user",
-    ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "user",
+    ("GET",  "/api/simulation/mesh/build2d"): "solve:user",
+    ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "solve:user",
     # The component library (product composer, stage 1): ComponentCards built read-only from the
     # existing stores - the Simulation menus' audience, like the System graph.  The per-card
     # route /api/components/{id} is in _GATED_PREFIX below.
@@ -304,9 +405,11 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     # the solves whose inputs they are
     ("GET",    "/api/panel_settings", "user"),
     ("PUT",    "/api/panel_settings", "user"),
-    # heavy compute a signed-up engineering user may run on their own copy
-    ("POST",   "/api/kernel/run", "user"),
-    ("POST",   "/api/kernel/study", "user"),
+    # heavy compute a signed-up engineering user may run on their own copy.  The kernel's ``cost`` capability is the
+    # exception: admin-only like the Cost tab, refused in routes/kernel.py (refuse_admin_only) because this table gates
+    # by path, not by the capability named in the body.
+    ("POST",   "/api/kernel/run", "solve:user"),
+    ("POST",   "/api/kernel/study", "solve:user"),
     ("POST",   "/api/simulation/physics/fem_transient/cancel", "user"),
     # The History popover's load/delete on ONE ledger row — a path param, so
     # the exact table above cannot name it; same "admin" bargain as the
@@ -329,7 +432,6 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("PATCH",  "/api/mesh/config", "admin"),
     ("PATCH",  "/api/simulation/config", "admin"),
     ("PUT",    "/api/sweep/config", "admin"),
-    ("POST",   "/api/simulation/run", "admin"),
     ("POST",   "/api/simulation/caches/clear", "admin"),
     # reference catalogues (bearings, devices): ONE machine-wide library, never
     # a per-workspace copy — admin even with the layering on (owner 2026-09-28).
@@ -352,6 +454,15 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("DELETE", "/api/optimization", "admin"),
     ("POST",   "/api/pipeline", "admin"),
     ("POST",   "/api/static3d", "admin"),
+]
+
+# (HTTP method, path REGEX matched from the start) -> minimum tier, for the routes whose path carries a parameter and that
+# no prefix can name without catching their neighbours.  Checked after the exact table, BEFORE the prefix list.
+_GATED_PATTERN: list[tuple[str, "re.Pattern[str]", str]] = [
+    # The Tests tab's "Compute it": writes test duties into the catalog and queues their solve (motor_tests/compute.py)
+    ("POST", re.compile(r"^/api/motor-tests/[^/]+/[^/]+/compute$"), "solve:open"),
+    # The catalog passport: minutes of FEM (and a Stage A subprocess on a miss) inside the request - admin before and after
+    ("POST", re.compile(r"^/api/catalog/[^/]+/passport$"), "solve:admin"),
 ]
 
 #: The four shared-store writes above that stop being SHARED the moment the
@@ -393,18 +504,53 @@ def _layering_on() -> bool:
         return False
 
 
+def _resolve_solve_tier(need: Optional[str]) -> Optional[str]:
+    """``"solve:<old>"`` -> ``"admin"`` while SOLVE_ADMIN_ONLY is on, else the route's old tier (``None`` = it had none)."""
+    if need is None or not need.startswith(_SOLVE_TIER):
+        return need
+    if solve_admin_only():
+        return "admin"
+    old = need[len(_SOLVE_TIER):]
+    return None if old == "open" else old
+
+
+def raw_tier(method: str, path: str) -> Optional[str]:
+    """The tier a route's table entry names, BEFORE the per-workspace relaxations and the solve rule resolve it
+    (exact table, then patterns, then the first matching prefix); ``None`` = no entry."""
+    need = _GATED.get((method, path))
+    if need is not None:
+        return need
+    for _m, _rx, _role in _GATED_PATTERN:
+        if method == _m and _rx.match(path):
+            return _role
+    for _m, _pfx, _role in _GATED_PREFIX:
+        if method == _m and path.startswith(_pfx):
+            return _role
+    return None
+
+
+def is_solve_route(method: str, path: str) -> bool:
+    """Does this route's table entry put it in the solve class (SOLVE_ADMIN_ONLY)?"""
+    need = raw_tier(method, path)
+    return need is not None and need.startswith(_SOLVE_TIER)
+
+
 def required_role(method: str, path: str) -> Optional[str]:
     """The minimum tier for one request, or ``None`` when the route is open.
 
-    The exact table wins; otherwise the FIRST matching prefix does, with the
+    The exact table wins, then the path patterns; otherwise the FIRST matching prefix does, with the
     per-workspace relaxation above applied to the four stores that are the
-    caller's own once layering is on.
+    caller's own once layering is on.  A ``solve:<old>`` entry resolves through
+    :func:`_resolve_solve_tier` (admin while SOLVE_ADMIN_ONLY is on).
     """
     need = _GATED.get((method, path))
     if need is not None:
         if need == "admin" and (method, path) in _ENGINEER_WORKSPACE_GATES and _layering_on():
             return ENGINEER_WORKSPACE_MIN_ROLE
-        return need
+        return _resolve_solve_tier(need)
+    for _m, _rx, _role in _GATED_PATTERN:
+        if method == _m and _rx.match(path):
+            return _resolve_solve_tier(_role)
     for _m, _pfx, _role in _GATED_PREFIX:
         if method == _m and path.startswith(_pfx):
             if (_role == "admin" and _pfx in _WORKSPACE_STORE_PREFIXES
@@ -412,7 +558,7 @@ def required_role(method: str, path: str) -> Optional[str]:
                 return WORKSPACE_STORE_MIN_ROLE
             if _role == "admin" and (_m, _pfx) in _ENGINEER_WORKSPACE_GATES and _layering_on():
                 return ENGINEER_WORKSPACE_MIN_ROLE
-            return _role
+            return _resolve_solve_tier(_role)
     return None
 
 
@@ -841,6 +987,10 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
                 if need is not None:
                     role = user["role"] if user else "anon"
                     if _ROLE_RANK.get(role, -1) < _ROLE_RANK[need]:
+                        if user is not None and need == "admin" and solve_admin_only() and is_solve_route(request.method, path):
+                            # SOLVE_ADMIN_ONLY: one short, translatable sentence (errors.json solve.admin_only), not the generic admin line
+                            return JSONResponse(status_code=403,
+                                                content={**solve_refusal_body(role), **_idle_reason_field()})
                         return JSONResponse(
                             status_code=401 if user is None else 403,
                             content={
@@ -965,6 +1115,9 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         "tokenRejected": bool(rejected),
         "authError": None if reason in ("ok", "no_token") else reason,
         "sid": det["sid"] or None,
+        # May this caller START a calculation?  False for a non-admin while SOLVE_ADMIN_ONLY is on: the web disables Run / Solve
+        # and says why (SOLVE_REFUSAL); the server refuses the call anyway.
+        "canSolve": bool(is_admin or not solve_admin_only()),
     }
     # Which provider answers the in-app help chat (gemini | anthropic | none): the chat shows a notice above its input when it is
     # Gemini (free tier: Google may use the messages).  The kind only - never a key, model or override.

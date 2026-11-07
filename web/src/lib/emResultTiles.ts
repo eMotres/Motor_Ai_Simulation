@@ -11,6 +11,7 @@ import { tempTileSpec, type TempTileSpec } from './configuratorTiles';
 import { tempLimits, judgeTemps, type TempLimits } from './configuratorPropeller';
 import { shaftBalance } from './shaftBalance';
 import { hasSleeve } from './hasSleeve.ts';
+import { ktFromKv } from './kvKt.ts';
 import { shownMass, perMass, type MassSummary } from './fullMass';
 import type { SixPhaseResult } from '../components/simulation/sixPhase';
 import { quotedRipple, type RippleRefined } from './rippleAccuracy.ts';
@@ -107,6 +108,8 @@ export interface EmTileSummary {
   B_gap_mean_T?: number | null;
   six_phase?: SixPhaseResult | null;
   psi_pm_Wb?: number | null;
+  /** the magnet temperature the no-load probe (psi_pm_Wb, KV no-load) was solved at (routes.simulation._psi_pm_temp_c) */
+  psi_pm_magnet_temp_c?: number | null;
   KV_rpm_per_V_line?: number | null;
   KV_noload_rpm_per_V_line?: number | null;
   Km_Nm_sqrtW?: number | null;
@@ -166,6 +169,9 @@ export interface EmTileView {
   cooling?: EmCooling | null;
   /** the configuration's saved cogging torque (a property of the configuration, not of the run); absent = none saved */
   cogging?: CoggingView | null;
+  /** where the point's EM numbers come from (`StoredPanel.source.em`): which magnet temperature the voltage tiles state.
+   *  Absent = a plain run summary (the Electromagnetic tab). */
+  emSource?: 'coupled' | 'em_run';
 }
 
 export interface EmCooling {
@@ -231,6 +237,34 @@ const _n3 = (v: number | null) => (v == null ? '-' : String(Number(v.toFixed(3))
 const tile = (t: EmTileSpec | null): EmTileSpec | null =>
   (t != null && (t.value != null || t.display != null || t.blankTipKey != null) ? t : null);
 const row = (...ts: (EmTileSpec | null)[]): EmTileSpec[] => ts.filter((x): x is EmTileSpec => x != null);
+
+/** Tooltip line naming the magnet temperature a tile's number is at (owner 2026-11-03: the voltages and psi_PM of a duty are at
+ *  the duty's magnet temperature, a bench comparison is at another one; nothing said which).  The line is a locale key the
+ *  renderer resolves with `magT` (0 decimals); an unknown temperature adds nothing. */
+export const MAGNET_TEMP_TIP_KEY = 'emTiles.atMagnetTemp';
+export function magnetTempTip(tempC: number | null): Pick<EmTileSpec, 'tipExtraKeys' | 'tipVars'> {
+  return tempC == null ? {} : { tipExtraKeys: [MAGNET_TEMP_TIP_KEY], tipVars: { magT: _n(tempC) } };
+}
+
+/** The tooltip of a tile: its text, then the extra lines (method, basis, magnet temperature), then the run's verbatim note,
+ *  one sentence after the other.  `tx` resolves a locale key with the tile's values. */
+export function tileTooltip(t: EmTileSpec, tx: (key: string, vars?: Record<string, string | number>) => string): string {
+  return [t.tipKey ? tx(t.tipKey, t.tipVars) : '', ...(t.tipExtraKeys ?? []).map((k) => tx(k, t.tipVars)),
+    ...(t.tipParts ?? []).map((p) => tx(p.key, p.args)), t.tipText ?? '']
+    .filter((x) => !!x).join(' ');
+}
+
+/** The magnet temperature the voltage tiles are at: the coupled loop's when the point's EM numbers ARE the loop's, the run's own
+ *  (typed or the card's) when they are the EM run's; a plain run summary follows the magnet-temperature tile (loop first). */
+export function voltageMagnetTempC(s: EmTileSummary, emSource?: 'coupled' | 'em_run'): number | null {
+  const loop = num(s.coupling?.magnet_temp_c), used = num(s.magnet_temp_used_c);
+  if (emSource === 'coupled') return loop;
+  if (emSource === 'em_run') return used;
+  return loop ?? used;
+}
+
+/** The magnet temperature of the no-load probe (psi_PM, no-load KV): the probe's own stamp, never guessed from another field. */
+export const probeMagnetTempC = (s: EmTileSummary): number | null => num(s.psi_pm_magnet_temp_c);
 
 /** The method line behind a measured dq quantity (differential / secant / bench). */
 export function ldqMethodKey(s: EmTileSummary, ld: boolean): string {
@@ -468,14 +502,15 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
 
   // ── 4 voltages + current density ──────────────────────────────────────────
   const vLinePeak = num(s.V_line_peak_solved_V) ?? num(s.V_line_peak_V);
+  const vTip = magnetTempTip(voltageMagnetTempC(s, view.emSource));
   const r4 = row(
     tile({ id: 'dcBusMin', labelKey: 'configure.dcBusMin', tipKey: 'emTiles.dcBusMinTip', unit: 'V', d: 0, value: vLinePeak }),
-    tile({ id: 'vLinePeak', labelKey: 'configure.vLinePeak', tipKey: 'emTiles.vLinePeakTip', unit: 'V', d: 1, value: vLinePeak }),
-    tile({ id: 'vPhasePeak', labelKey: 'configure.vPhasePeak', tipKey: 'emTiles.vPhasePeakTip', unit: 'V', d: 1,
+    tile({ id: 'vLinePeak', labelKey: 'configure.vLinePeak', tipKey: 'emTiles.vLinePeakTip', ...vTip, unit: 'V', d: 1, value: vLinePeak }),
+    tile({ id: 'vPhasePeak', labelKey: 'configure.vPhasePeak', tipKey: 'emTiles.vPhasePeakTip', ...vTip, unit: 'V', d: 1,
       value: num(s.V_phase_peak_V) }),
-    tile({ id: 'vLineRms', labelKey: 'configure.vLineRms', tipKey: 'emTiles.vLineRmsTip', unit: 'V', d: 1,
+    tile({ id: 'vLineRms', labelKey: 'configure.vLineRms', tipKey: 'emTiles.vLineRmsTip', ...vTip, unit: 'V', d: 1,
       value: num(s.V_line_rms_solved_V) ?? (isDelta ? null : num(s.V_line_rms_V)) }),
-    tile({ id: 'vPhaseRms', labelKey: 'configure.vPhaseRms', tipKey: 'emTiles.vPhaseRmsTip', unit: 'V', d: 1,
+    tile({ id: 'vPhaseRms', labelKey: 'configure.vPhaseRms', tipKey: 'emTiles.vPhaseRmsTip', ...vTip, unit: 'V', d: 1,
       value: num(s.V_phase_rms_V) }),
     tile({ id: 'iWinding', labelKey: 'configure.iWinding', tipKey: 'emTiles.iWindingTip', unit: 'A', d: 1,
       value: isDelta ? num(s.I_winding_rms_A) : null, level: 'warn' }),
@@ -524,7 +559,7 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       tipExtraKeys: [ldqMethodKey(s, false), ...(num(s.Lq_fp_secant_mH) != null ? ['emTiles.secantAlt'] : []),
         ...(num(s.Lq_mH) != null && num(s.bench_ldq?.Lq_mH) != null ? ['emTiles.benchAlt'] : [])],
       tipVars: { sec: _n3(num(s.Lq_fp_secant_mH)), bench: _n3(num(s.bench_ldq?.Lq_mH)) } }),
-    tile({ id: 'psiPm', label: 'ψ_PM', tipKey: 'emTiles.psiTip', unit: 'mWb', d: 2,
+    tile({ id: 'psiPm', label: 'ψ_PM', tipKey: 'emTiles.psiTip', ...magnetTempTip(probeMagnetTempC(s)), unit: 'mWb', d: 2,
       value: num(s.psi_pm_Wb) != null ? (num(s.psi_pm_Wb) as number) * 1000 : null }),
     tile({ id: 'lqLd', labelKey: 'configure.lqLd', tipKey: 'configure.lqLdTip', tipExtraKeys: [salMethod],
       unit: '', d: 2, value: sal }),
@@ -541,14 +576,20 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
 
   // ── 7 KV · Kt · Km · Km/mass (the controller-facing constants, in blue) ───
   const kvNl = num(s.KV_noload_rpm_per_V_line);
-  const kt = num(s.T_em_avg_Nm) != null && (num(s.I_phase_rms_A) ?? 0) > 0
+  // ONE Kt (owner 2026-11-05): from the KV shown beside it, so the two always agree.  T / I at this load is a different
+  // quantity and has its own tile.
+  const deltaConn = String(s.star_delta ?? 'star').toLowerCase().startsWith('d');
+  const kt = ktFromKv(kvNl ?? num(s.KV_rpm_per_V_line), deltaConn);
+  const ktLoad = num(s.T_em_avg_Nm) != null && (num(s.I_phase_rms_A) ?? 0) > 0
     ? (num(s.T_em_avg_Nm) as number) / (num(s.I_phase_rms_A) as number) : null;
   const blue = { labelColor: '#60a5fa', valueColor: '#60a5fa' } as const;
   const r7 = row(
     tile({ id: 'kv', labelKey: 'configure.kvNoLoad', tipKey: kvNl != null ? 'emTiles.kvTip' : 'emTiles.kvTipLoaded',
-      unit: 'rpm/V', d: 1, value: kvNl ?? num(s.KV_rpm_per_V_line), ...blue }),
-    tile({ id: 'kt', labelKey: 'configure.kt', tipKey: 'emTiles.ktTip', tipExtraKeys: k3d, unit: 'N·m/A',
+      ...magnetTempTip(kvNl != null ? probeMagnetTempC(s) : voltageMagnetTempC(s, view.emSource)), unit: 'rpm/V', d: 1, value: kvNl ?? num(s.KV_rpm_per_V_line), ...blue }),
+    tile({ id: 'kt', labelKey: 'configure.kt', tipKey: kvNl != null ? 'emTiles.ktTip' : 'emTiles.ktTipPeak', unit: 'N·m/A',
       d: kt != null && Math.abs(kt) < 0.1 ? 4 : 3, value: kt, ...blue }),
+    tile({ id: 'ktLoad', labelKey: 'configure.ktLoad', tipKey: 'emTiles.ktLoadTip', tipExtraKeys: k3d, unit: 'N·m/A',
+      d: ktLoad != null && Math.abs(ktLoad) < 0.1 ? 4 : 3, value: ktLoad, ...blue }),
     tile({ id: 'km', labelKey: 'configure.km', tipKey: 'emTiles.kmTip', tipExtraKeys: k3d, unit: 'N·m/√W', d: 3,
       value: num(s.Km_Nm_sqrtW), ...blue }),
     tile({ id: 'kmPerMass', labelKey: pm('km').full ? 'configure.kmPerMass' : 'configure.kmPerMassActive',

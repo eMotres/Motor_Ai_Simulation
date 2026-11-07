@@ -81,10 +81,12 @@ export function propertyRequired(prop: RuleProperty, value: unknown): boolean {
 /** A requirement that follows another property of the same answer (the power supply, 2_1): `required_if_value` makes a property
  *  required while the named property holds the choice, `required_unless_value` drops a required property while it does.  The
  *  same rule as the backend's `_property_required`. */
-export interface ChoiceRule { property: string; equals: unknown }
+export interface ChoiceRule { property: string; equals?: unknown; /** the rule holds for any of these (AC mains and a DC source both drop the battery voltage) */ equals_any?: unknown[] }
 export type RuleProperty = { required?: boolean; required_flag?: string; required_when_cooling_medium?: string; required_if_value?: ChoiceRule; required_unless_value?: ChoiceRule };
 export function choiceHolds(rule: ChoiceRule | undefined, value: unknown): boolean {
-  return !!rule && !!value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>)[rule.property] === rule.equals;
+  if (!rule || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const current = (value as Record<string, unknown>)[rule.property];
+  return Array.isArray(rule.equals_any) ? rule.equals_any.includes(current) : current === rule.equals;
 }
 export function fieldRequired(f: SchemaField, draft: SpecDraft): boolean { return fieldApplies(f, draft) && (isRequired(f) || isConditionallyRequired(f, draft)); }
 export function answerNamespace(section: SchemaSection, field: SchemaField): 'fields' | 'production' {

@@ -32,6 +32,7 @@ import FieldViewer from '../common/FieldViewer';
 import { SolveTimer, solvedIn } from './SolveTimer';
 import { modeOutputs } from './fieldAdapters';
 import { fmt } from './api';
+import SolveGate from '../common/SolveGate';
 import type {
   BeamInputs, CriticalSpeed, Excitation, ModalBody, ModalResult, ModalSupport,
 } from './api';
@@ -397,10 +398,12 @@ const ModalSection: React.FC<{ rpm: number }> = ({ rpm }) => {
           </span>
         </Tooltip>
         <Num label="modes" tip="How many ELASTIC modes to report. The rigid-body modes are found, checked and dropped before this count starts." value={nModes} width={80} onChange={(v) => setField('nModes', v)} />
-        <Button variant="contained" size="small" onClick={solveModes} disabled={mBusy || !(rpm > 0)}
-          startIcon={mBusy ? <CircularProgress size={13} color="inherit" /> : undefined}>
-          {mBusy ? 'Solving' : 'Solve modes'}
-        </Button>
+        <SolveGate>
+          <Button variant="contained" size="small" onClick={solveModes} disabled={mBusy || !(rpm > 0)}
+            startIcon={mBusy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+            {mBusy ? 'Solving' : 'Solve modes'}
+          </Button>
+        </SolveGate>
         <SolveTimer busy={mBusy} startedAt={st.modal.startedAt} est={st.est.modal}
           what="modal solve" />
         {meshOff && (
@@ -555,11 +558,13 @@ const ModalSection: React.FC<{ rpm: number }> = ({ rpm }) => {
               width={f.key === 'bearing_k_n_per_m' ? 108 : 92}
               onChange={(v) => st.setBeam(f.key, v)} />
           ))}
-          <Button variant="contained" size="small" onClick={solveCriticals}
-            disabled={rBusy || !(rpm > 0)}
-            startIcon={rBusy ? <CircularProgress size={13} color="inherit" /> : undefined}>
-            {rBusy ? 'Solving' : 'Critical speeds'}
-          </Button>
+          <SolveGate>
+            <Button variant="contained" size="small" onClick={solveCriticals}
+              disabled={rBusy || !(rpm > 0)}
+              startIcon={rBusy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+              {rBusy ? 'Solving' : 'Critical speeds'}
+            </Button>
+          </SolveGate>
           <SolveTimer busy={rBusy} startedAt={st.rotordyn.startedAt}
             est={st.est.rotordyn} what="critical-speed solve" />
           {rotorStale && (

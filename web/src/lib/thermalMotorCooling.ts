@@ -26,6 +26,7 @@ export const COOLING_FIELD_KEYS = [
   'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
   'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
   'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+  'statorOd', 'sleeveWallMm', 'sleeveK',
 ] as const;
 
 export interface MotorIdentity { die: string; config: string }

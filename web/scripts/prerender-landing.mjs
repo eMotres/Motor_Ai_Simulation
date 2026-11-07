@@ -61,7 +61,6 @@ export const DEV_LINKS = [
   ['github', REPO_URL],
   ['sdk', `${REPO_URL}/blob/${BRANCH}/docs/COMPONENT_SDK.md`],
   ['rules', `${REPO_URL}/blob/${BRANCH}/docs/MODULE_CONTRIBUTION_RULES.md`],
-  ['byo', `${REPO_URL}/blob/${BRANCH}/docs/BYO_COMPUTE.md`],
   ['mcp', `${REPO_URL}/blob/${BRANCH}/docs/MCP_DISCOVERY.md`],
 ];
 export const CHAIN_IDS = ['idea', 'design', 'simulation', 'configure', 'model3d', 'production', 'product'];

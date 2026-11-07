@@ -26,7 +26,7 @@ const ResultsPanel: React.FC<{ panel: StoredPanel }> = ({ panel }) => {
         <Chip size="small" label={tx(`emTiles.${caption.key}`, caption.vars)} data-testid="em-source-chip"
           sx={{ alignSelf: 'flex-start', height: 20, fontSize: 11, color: 'var(--text-2)', bgcolor: 'var(--panel-2)' }} />
       </Tooltip>
-      <EmResultTiles summary={summary} k3dBasis={k3dBasis} mech={panelMech(panel.summary)} cooling={panel.cooling ?? null} cogging={panelCogging(panel)} look="configure" />
+      <EmResultTiles summary={summary} k3dBasis={k3dBasis} mech={panelMech(panel.summary)} cooling={panel.cooling ?? null} cogging={panelCogging(panel)} look="configure" emSource={panel.source?.em} />
     </Box>
   );
 };

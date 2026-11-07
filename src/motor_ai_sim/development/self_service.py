@@ -10,7 +10,9 @@ per-account limit of open projects that stops abuse of the open sign-up.
 """
 from __future__ import annotations
 
+import logging
 import re
+import secrets
 import unicodedata
 
 from motor_ai_sim.development import access, project_limits, store
@@ -20,6 +22,71 @@ from motor_ai_sim.development import access, project_limits, store
 MAX_OPEN_OWNED_PROJECTS = project_limits.DEFAULT_OPEN_LIMIT
 LIMIT_CODE = "project_limit"
 _MAX_SLUG = 48
+_MAX_TITLE = 120
+log = logging.getLogger(__name__)
+
+
+#: The name of a customer's project until its specification says which motor it is (owner 2026-11-07: we name the
+#: projects, not the users, so that the name tells which motor it is).
+NEW_PROJECT_TITLE = "New project"
+
+
+def new_project_seed() -> str:
+    """What a customer's project id is made from: nothing of the customer's in the address."""
+    return "project " + secrets.token_hex(3)
+
+
+def _value(fields: dict, key: str):
+    field = fields.get(key)
+    return field.get("value") if isinstance(field, dict) else None
+
+
+def _number(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{number:g}" if number > 0 else ""
+
+
+def spec_title(draft: dict) -> str:
+    """"Vehicle traction motor, 100 N·m, 1500 rpm": the application, motor or generator, and the continuous point.
+    Empty while the specification names neither the application nor a point."""
+    fields = (draft or {}).get("fields") or {}
+    application = str(_value(fields, "1_1") or "").strip()
+    kind = str(_value(fields, "1_2") or "").strip().lower()
+    machine = "generator" if kind.startswith("generator") else ("motor" if kind.startswith("motor") else "")
+    if machine and machine in application.lower():
+        machine = ""
+    point = _value(fields, "1_4")
+    if not (isinstance(point, dict) and _number(point.get("torque_Nm"))):
+        rows = _value(fields, "key_points")
+        point = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
+    torque, speed = _number(point.get("torque_Nm")), _number(point.get("speed_rpm"))
+    parts = [" ".join(x for x in (application, machine) if x)]
+    if torque:
+        parts.append(f"{torque} N·m")
+    if speed:
+        parts.append(f"{speed} rpm")
+    return ", ".join(x for x in parts if x)[:_MAX_TITLE] if (application or torque) else ""
+
+
+def refresh_title(project_id: str, draft: dict) -> None:
+    """After a save of the specification: the name of a project we name follows it.  Never blocks the save."""
+    try:
+        project = store.get_project(project_id)
+        if not project or not project.get("auto_title"):
+            return
+        title = spec_title(draft)
+        if not title or title == project.get("title"):
+            return
+
+        def mutate(current: dict) -> None:
+            if current.get("auto_title"):
+                current["title"] = title
+        store.mutate_project(project_id, mutate)
+    except Exception:                                       # noqa: BLE001 - the name must never block a save
+        log.warning("project title not refreshed for %s", project_id, exc_info=True)
 
 
 def slug_from_title(title: str) -> str:

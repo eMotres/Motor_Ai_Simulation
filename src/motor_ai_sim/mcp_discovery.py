@@ -113,7 +113,29 @@ TOOL_SUMMARIES: Dict[str, str] = {
     "get_job": "Status, queue position, progress and ETA of a queued simulation.",
     "get_design_result": "Headline results of a draft's finished runs and the requirement checks.",
     "open_in_configure": "The link that opens a draft in the Configure tab of the web app.",
+    "get_spec_form": "The motor specification form (fields, units, required flags, choices) generated from the live schema.",
+    "create_order": "Order a motor: open a development project in your name and save the first specification answers.",
+    "update_spec": "Merge answers into a project's specification draft; returns needs_input until it is complete.",
+    "submit_spec": "Submit the complete specification; MOTRES engineers review it, simulate and contact you.",
+    "get_order_status": "Your own development projects: stage, completeness, submitted version, motors, unread messages.",
 }
+
+
+def _closed() -> bool:
+    """Simulations closed to clients (``MOTRES_SOLVE_ADMIN_ONLY``, owner 2026-11-04): the texts below follow the setting."""
+    from motor_ai_sim import mcp_tools as _t
+    return _t.simulations_closed()
+
+
+#: What the tool table says about ``simulate`` while simulations are closed.
+SIMULATE_CLOSED_SUMMARY = ("CLOSED for now: MOTRES engineers run the simulations. Answers status 'simulations_closed' "
+                           "with a user_message and queues nothing; do not retry.")
+
+
+def _purpose(name: str) -> str:
+    if name == "simulate" and _closed():
+        return SIMULATE_CLOSED_SUMMARY
+    return TOOL_SUMMARIES.get(name, "")
 
 
 def capabilities() -> Dict[str, Any]:
@@ -123,12 +145,12 @@ def capabilities() -> Dict[str, Any]:
         scope = _app.TOOL_SCOPES.get(name)
         tools.append({
             "name": name,
-            "purpose": TOOL_SUMMARIES.get(name, ""),
+            "purpose": _purpose(name),
             "required_scope": scope,
             "requires_auth": scope is not None,
             "read_only": name not in _app.WRITE_TOOLS,
         })
-    scopes = [{"scope": s, "description": _keys.SCOPE_DESCRIPTIONS.get(s, ""),
+    scopes = [{"scope": s, "description": _keys.scope_descriptions().get(s, ""),
                "unlocks": sorted(t for t, need in _app.TOOL_SCOPES.items() if need == s),
                "default_on_new_key": s in _keys.DEFAULT_SCOPES}
               for s in _keys.SCOPES]
@@ -191,6 +213,15 @@ def _calc_types() -> List[Dict[str, Any]]:
          "method": "fixed-point loop of 2-D FEM transient and thermal solves",
          "available_via": "mcp", "tools": ["simulate", "get_job", "get_design_result"],
          "simulate_what": "coupled", "required_scope": "simulate"},
+        {"id": "motor_order",
+         "title": "Order a motor to your specification",
+         "what": ("turns the customer's requirements into a development project "
+                  "with a filled, submitted specification; MOTRES engineers then "
+                  "review it, run the full simulation and contact the customer."),
+         "method": "the AeroStator specification form (the same one the web app shows)",
+         "available_via": "mcp",
+         "tools": ["get_spec_form", "create_order", "update_spec", "submit_spec", "get_order_status"],
+         "required_scope": "projects:write"},
         {"id": "catalog_lookup",
          "title": "Materials and component catalog",
          "what": ("magnets, lamination steels, wires, bearings, power devices and "
@@ -229,12 +260,26 @@ def _calc_types() -> List[Dict[str, Any]]:
     ]
 
 
+#: Added to a simulation calculation type while simulations are closed.
+_CLOSED_TYPE_NOTE = ("Closed for now: MOTRES engineers run this simulation. The simulate tool answers "
+                     "'simulations_closed'; the saved results of existing machines are readable with "
+                     "get_machine_performance.")
+
+
 def calculation_types() -> Dict[str, Any]:
-    return {"calculation_types": _calc_types(),
-            "note": ("available_via 'mcp' = an agent can run it after sign-in "
-                     "with required_scope; 'web' = in the AeroStator web app "
-                     "only. Call get_input_requirements(calculation_type) for "
-                     "the inputs.")}
+    types = _calc_types()
+    note = ("available_via 'mcp' = an agent can run it after sign-in "
+            "with required_scope; 'web' = in the AeroStator web app "
+            "only. Call get_input_requirements(calculation_type) for "
+            "the inputs.")
+    if _closed():
+        for t in types:
+            if t.get("simulate_what"):
+                t["status"] = "closed_for_clients"
+                t["closed_note"] = _CLOSED_TYPE_NOTE
+        note += (" FEM simulations are run by MOTRES engineers for now: a type with status "
+                 "'closed_for_clients' is not started by a client; its saved results are read.")
+    return {"calculation_types": types, "note": note}
 
 
 def _field(name: str, unit: Optional[str], description: str, *,
@@ -288,6 +333,30 @@ def _design_inputs() -> Dict[str, Any]:
     }
 
 
+def _order_inputs() -> Dict[str, Any]:
+    """The required fields of the specification, from schema.json (static, no user data)."""
+    from motor_ai_sim.development import spec_order as _so
+    inputs = []
+    for fid, (_, field) in _so.writable_fields().items():
+        if not field.get("required"):
+            continue
+        label = (field.get("label") or {}).get("en") if isinstance(field.get("label"), dict) else None
+        inputs.append(_field(fid, field.get("unit") or None, label or fid,
+                             type_="object" if field.get("properties") else str(field.get("type") or "string"),
+                             required=True, accepts_not_known_yet=bool(field.get("allow_not_known_yet"))))
+    inputs.append(_field("mission_profile", None, "mission phases (phase, torque_Nm, speed_rpm, duration_s, "
+                         "battery_voltage_V) or not_known_yet", type_="list", required=True,
+                         accepts_not_known_yet=True))
+    return {
+        "tool": "create_order / update_spec", "argument": "answers",
+        "rule": ("every required field needs a value or 'not_known_yet'; get_spec_form "
+                 "(after sign-in) gives the full form with properties, units and choices; "
+                 "needs_input in each answer says what is still missing"),
+        "flow": ["get_spec_form", "create_order", "update_spec", "submit_spec", "get_order_status"],
+        "inputs": inputs,
+    }
+
+
 def _simulate_inputs(what: str) -> Dict[str, Any]:
     from motor_ai_sim import agent_designs as _ad
     return {
@@ -304,7 +373,7 @@ def _simulate_inputs(what: str) -> Dict[str, Any]:
                    type_="integer", range=list(_ad.STEPS_RANGE)),
         ],
         "limits": "daily fair-use limit of simulations per account (429 + Retry-After when used up)",
-    }
+    } | ({"status": "closed_for_clients", "closed_note": _CLOSED_TYPE_NOTE} if _closed() else {})
 
 
 def input_requirements(calculation_type: str) -> Dict[str, Any]:
@@ -341,6 +410,8 @@ def input_requirements(calculation_type: str) -> Dict[str, Any]:
         return head | _design_inputs()
     if ct in ("em_fem_transient", "thermal", "coupled_em_thermal"):
         return head | _simulate_inputs(t["simulate_what"])
+    if ct == "motor_order":
+        return head | _order_inputs()
     if ct == "catalog_lookup":
         from motor_ai_sim.mcp_tools import CATALOG_KINDS
         return head | {"tool": "list_catalog", "inputs": [
@@ -361,11 +432,18 @@ def describe_service() -> Dict[str, Any]:
     return {
         "name": SERVICE_NAME,
         "operator": OPERATOR,
-        "summary": ("Engineering service for permanent-magnet electric motors "
-                    "and generators: a catalog of FEM-characterised machines, "
-                    "draft designs from requirements, and 2-D FEM "
-                    "electromagnetic, thermal and coupled simulations on the "
-                    "user's own job queue."),
+        "summary": (("Engineering service for permanent-magnet electric motors "
+                     "and generators: a catalog of FEM-characterised machines "
+                     "with their saved results, draft designs from requirements, 2-D FEM "
+                     "simulations run by MOTRES engineers, and motor orders: a development "
+                     "project with the customer's specification.")
+                    if _closed() else
+                    ("Engineering service for permanent-magnet electric motors "
+                     "and generators: a catalog of FEM-characterised machines, "
+                     "draft designs from requirements, 2-D FEM "
+                     "electromagnetic, thermal and coupled simulations on the "
+                     "user's own job queue, and motor orders: a development "
+                     "project with the customer's specification.")),
         "for_whom": "engineers sizing motors / generators (aerospace, robotics, EV, marine)",
         "license": LICENSE,
         "website": L["website"],
@@ -375,8 +453,11 @@ def describe_service() -> Dict[str, Any]:
         "privacy_url": L["privacy_url"],
         "docs_url": L["docs_url"],
         "access": ("the public tools (list_capabilities) work without an "
-                   "account; machines, drafts, simulations and your saved "
-                   "results need an account and an OAuth sign-in (or an agent key). "
+                   "account; " + ("machines, drafts, projects and your saved results "
+                                  if _closed() else
+                                  "machines, drafts, simulations, projects and your saved "
+                                  "results ") +
+                   "need an account and an OAuth sign-in (or an agent key). "
                    "Which catalog machines an account may see is granted per "
                    "account."),
         "data_policy": ("anonymous calls return only this public description; "
@@ -384,12 +465,16 @@ def describe_service() -> Dict[str, Any]:
                         "jobs or usage. Only public-datasheet data leaves the "
                         "server — never internal dimensions or drawings."),
         "next": "list_calculation_types, then how_to_authenticate to sign in",
+        "order_flow": ("to order a motor: sign in, get_spec_form, create_order, "
+                       "update_spec until needs_input is empty, submit_spec, "
+                       "get_order_status. The order ends at a submitted "
+                       "specification; MOTRES engineers take it from there."),
     }
 
 
 def _scope_rows() -> List[Dict[str, Any]]:
     from motor_ai_sim import mcp_app as _app
-    return [{"scope": s, "description": _keys.SCOPE_DESCRIPTIONS.get(s, ""),
+    return [{"scope": s, "description": _keys.scope_descriptions().get(s, ""),
              "unlocks": sorted(t for t, need in _app.TOOL_SCOPES.items() if need == s)}
             for s in _keys.SCOPES]
 
@@ -423,7 +508,8 @@ def how_to_authenticate() -> Dict[str, Any]:
         "scopes": _scope_rows(),
         "never": "never type a password into the chat; sign-in and sign-up happen only on the AeroStator page",
         "docs_url": L["docs_url"],
-        "user_message": ("To use your AeroStator machines and simulations, connect "
+        "user_message": ("To use your AeroStator machines and "
+                         + ("drafts" if _closed() else "simulations") + ", connect "
                          "AeroStator in this app (Connect / Sign in); the page that "
                          "opens lets you sign in or create an account."),
     }
@@ -619,8 +705,10 @@ def service_card(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         },
         "authentication": {
             "anonymous": ("the public tools above work without sign-in; "
-                          "machines, drafts and simulations need OAuth 2.1 "
-                          "(or an agent key)"),
+                          + ("machines, drafts and projects need OAuth 2.1 "
+                             if _closed() else
+                             "machines, drafts and simulations need OAuth 2.1 ")
+                          + "(or an agent key)"),
             "resource_metadata_url": L["resource_metadata_url"],
             "authorization_server_metadata_url": L["authorization_server_metadata_url"],
             "sign_in_url": L["sign_in_url"],
@@ -704,7 +792,8 @@ def server_card(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         "capabilities": {"tools": {}, "resources": {}},
         "authentication": {
             "type": "oauth2",
-            "required": "for user data and simulations; the public tools work without it",
+            "required": ("for user data and drafts; the public tools work without it" if _closed()
+                         else "for user data and simulations; the public tools work without it"),
             "protectedResourceMetadata": L["resource_metadata_url"],
             "authorizationServerMetadata": L["authorization_server_metadata_url"],
             "scopes": list(_keys.SCOPES),
@@ -730,8 +819,17 @@ def llms_txt(tools: List[Dict[str, Any]]) -> str:
         f"{SERVICE_NAME} is run by {OPERATOR}; the code is open source ({LICENSE}). "
         "AI agents use it through an MCP server (Model Context Protocol, "
         "streamable HTTP, stateless JSON). Without sign-in an agent can call the "
-        "public discovery tools below; machines, draft designs and FEM "
-        "simulations need an OAuth sign-in by the user.\n\n"
+        "public discovery tools below; "
+        + ("machines, draft designs and motor orders" if _closed() else
+           "machines, draft designs, FEM simulations and motor orders")
+        + " need an OAuth sign-in by the user.\n\n"
+        + ("FEM simulations are run by MOTRES engineers for now: the simulate tool answers "
+           "'simulations_closed' and queues nothing; every other tool works as before.\n\n"
+           if _closed() else "")
+        +
+        "To order a motor built to a customer's requirements, a signed-in agent "
+        "calls get_spec_form, create_order, update_spec (until needs_input is "
+        "empty), submit_spec and get_order_status.\n\n"
         "## MCP\n\n"
         f"- [MCP endpoint]({ep}): POST JSON-RPC 2.0 (`initialize`, `tools/list`, "
         "`tools/call`); a plain GET returns the service card\n"

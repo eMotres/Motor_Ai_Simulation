@@ -375,9 +375,9 @@ def _audit(project_id):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
 
 
-def test_a_new_configuration_joins_the_project_its_die_is_in(link_env):
-    joined = autolink.autolink_new_config("linked die", "A2", actor="Eng@Example.test")
-    # a motor belongs to ONE project (the index): the die is in two, the first one takes the new variant, the second is left clean
+def test_a_new_configuration_joins_the_project_of_its_source(link_env):
+    joined = autolink.autolink_new_config("linked die", "A2", source_config="a", actor="Eng@Example.test")
+    # the die is in two projects: the copy of A joins A's project (alpha), the other one is left clean
     assert joined == ["alpha"]
     project = store.get_project("alpha")
     row = next(m for m in project["linked_motors"] if m["config"] == "A2")
@@ -398,7 +398,7 @@ def test_it_never_links_into_a_project_the_die_is_not_in(link_env):
 
 
 def test_a_die_copied_from_a_linked_one_links_its_new_configuration_under_its_own_name(link_env):
-    joined = autolink.autolink_new_config("Linked Die copy 2", "L9", copied_from="Linked Die")
+    joined = autolink.autolink_new_config("Linked Die copy 2", "L9", copied_from="Linked Die", source_config="A")
     assert joined == ["alpha"]
     assert {"die": "Linked Die copy 2", "config": "L9", "status": "current"} in store.get_project("alpha")["linked_motors"]
 
@@ -418,8 +418,50 @@ def test_a_failing_link_never_raises_and_leaves_the_project_as_it_was(link_env, 
     def boom(*a, **k):
         raise OSError("injected")
     monkeypatch.setattr(motors, "_sync_grants", boom)
-    assert autolink.autolink_new_config("Linked Die", "A3") == []
+    assert autolink.autolink_new_config("Linked Die", "A3", source_config="A") == []
     assert store.get_project("alpha") == before and store.load_index() == before_index
+
+
+def test_a_copy_joins_the_project_that_holds_its_source_not_the_first_one_alphabetically(link_env):
+    """2026-11-02: two projects hold configurations of one die (a motor and a generator); the generator's copy
+    belongs to the generator's project (beta), not to alpha, which merely sorts first."""
+    joined = autolink.autolink_new_config("Linked Die", "Held-2", source_config="Held", actor="eng@example.test")
+    assert joined == ["beta"]
+    assert {"die": "Linked Die", "config": "Held-2", "status": "current"} in store.get_project("beta")["linked_motors"]
+    assert [m["config"] for m in store.get_project("alpha")["linked_motors"]] == ["A"]
+    assert store.load_index()["motors"][motors._key("Linked Die", "Held-2")]["project_id"] == "beta"
+    assert _audit("alpha") == []
+
+
+def test_a_source_in_no_project_links_nothing(link_env):
+    assert autolink.autolink_new_config("Linked Die", "X2", source_config="Unlinked") == []
+    for pid in ("alpha", "beta"):
+        assert _audit(pid) == []
+        assert all(m["config"] != "X2" for m in store.get_project(pid)["linked_motors"])
+
+
+def test_an_ambiguous_source_links_nothing_and_leaves_a_note(link_env):
+    # no source named and the die is in two projects: no guess
+    assert autolink.autolink_new_config("Linked Die", "A2", actor="eng@example.test") == []
+    for pid in ("alpha", "beta"):
+        assert all(m["config"] != "A2" for m in store.get_project(pid)["linked_motors"])
+        note = _audit(pid)[-1]
+        assert (note["action"], note["entity_id"]) == ("motor.autolink_skipped", "Linked Die/A2")
+        assert note["details"]["candidates"] == 2 and "alpha" not in str(note["details"]) and "beta" not in str(note["details"])
+    assert motors._key("Linked Die", "A2") not in store.load_index()["motors"]
+    # the source itself held by two projects under two spellings of the die: no guess either
+    index = store.load_index()
+    index["motors"][motors._key("Linked Die · by Someone", "Held")] = {"project_id": "alpha", "die": "Linked Die · by Someone", "config": "Held"}
+    store.save_index(index)
+    assert autolink.autolink_new_config("Linked Die", "Held-3", source_config="Held") == []
+    assert _audit("alpha")[-1]["action"] == "motor.autolink_skipped"
+
+
+def test_no_source_and_one_project_still_links(link_env):
+    index = store.load_index()
+    index["motors"].pop(motors._key("Linked Die", "Held"))
+    store.save_index(index)
+    assert autolink.autolink_new_config("Linked Die", "A9") == ["alpha"]
 
 
 def test_the_family_hook_never_raises_and_names_the_actor(monkeypatch):
@@ -434,10 +476,10 @@ def test_the_family_hook_never_raises_and_names_the_actor(monkeypatch):
 
 def test_every_way_to_make_a_variant_calls_the_hook():
     src = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "routes" / "family.py").read_text(encoding="utf-8")
-    for needle in ("_autolink_new_config(die, name, _w)",                          # POST /config
-                   "_autolink_new_config(die, new, _w)",                           # configuration copy
+    for needle in ("_autolink_new_config(die, name, _w, copied_from=",            # POST /config (source = loaded)
+                   "_autolink_new_config(die, new, _w, source_config=cfg)",        # configuration copy
                    "_autolink_new_config(name, cfg_name, _w, copied_from=",        # save as new die
-                   "_autolink_new_config(target, target_cfg, None, copied_from=die)"):   # automatic die transition
+                   "_autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)"):   # die transition
         assert needle in src, needle
     assert 'd["derived_from"] = {"die": die' in src                                  # a die copy remembers its source
 

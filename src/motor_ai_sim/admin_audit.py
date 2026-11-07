@@ -65,6 +65,8 @@ ACTIONS = frozenset({
     # catalog / workspaces
     "die.access", "die.rename", "die.retire", "die.restore", "workspace.read", "workspace.export",
     "config.applications", "config.cad_mass",
+    # config_move.py: a configuration moved / copied to another die, or renamed (every store keyed by the pair follows)
+    "config.move", "config.copy", "config.rename",
     # Geometry tab Full: CAD-only construction edits and the server CAD rebuild they request
     "cad.params", "cad.rebuild",
     # agent drafts (MCP Stage 3) — cross-account reads/writes

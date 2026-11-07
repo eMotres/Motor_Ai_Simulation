@@ -840,18 +840,25 @@ def kinds_present(die: str, cfg: str) -> Dict[str, List[str]]:
     return {duty: [r["kind"] for r in rows] for duty, rows in have(die, cfg).items()}
 
 
-def meta_die(path: Path) -> Optional[str]:
-    """The ``die`` a stored field file names in its own ``meta`` member (``None`` when unreadable)."""
+def meta_field(path: Path, key: str) -> Optional[str]:
+    """The ``key`` (``die`` / ``config`` / ``duty``) a stored field file names in its own ``meta`` member
+    (``None`` when unreadable)."""
     try:
         import numpy as np
         with np.load(path, allow_pickle=False) as z:
-            return json.loads(str(z["meta"])).get("die")
+            return json.loads(str(z["meta"])).get(key)
     except Exception:                                       # noqa: BLE001
         return None
 
 
-def retag_meta(path: Path, *, duty: Optional[str] = None, die: Optional[str] = None) -> bool:
-    """Rewrite one stored field's ``meta["duty"]`` and/or ``meta["die"]`` in place.
+def meta_die(path: Path) -> Optional[str]:
+    """The ``die`` a stored field file names in its own ``meta`` member (``None`` when unreadable)."""
+    return meta_field(path, "die")
+
+
+def retag_meta(path: Path, *, duty: Optional[str] = None, die: Optional[str] = None,
+               config: Optional[str] = None) -> bool:
+    """Rewrite one stored field's ``meta["duty"]``, ``meta["die"]`` and/or ``meta["config"]`` in place.
 
     :func:`have` keys its listing off the name INSIDE the file, not off the
     folder - it cannot invert the hash - so a folder moved by :func:`rename`
@@ -879,6 +886,9 @@ def retag_meta(path: Path, *, duty: Optional[str] = None, die: Optional[str] = N
         changed = True
     if die is not None and str(meta.get("die")) != str(die):
         meta["die"] = str(die)
+        changed = True
+    if config is not None and str(meta.get("config")) != str(config):
+        meta["config"] = str(config)        # a configuration rename (config_move.py)
         changed = True
     if not changed:
         return False

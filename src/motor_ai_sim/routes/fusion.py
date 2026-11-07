@@ -37,6 +37,12 @@ to nothing are exported as-is and reported as `unknown` on import — the
 user's housing dimensions live in the same parameter list and are none of
 our business (same rule as the FreeCAD sheet).
 
+COIL (2026-11-02).  ``wire_beng_r`` and ``coil_straight_extra`` (or
+``coil_straight_len``, minus the stack) are read into the LOADED
+CONFIGURATION's ``coil_overrides`` (``family.set_config_coil``), not into the
+live geometry: machines on one die can have different Fusion coils.  They
+are imported only, never exported (Fusion keeps them as its own formulas).
+
 Fusion has no external API (scripts run in-app only), which is why the
 channel is a FILE and not a socket: this route works with Fusion closed, the
 CSV is what Parameter I/O speaks natively, and the Fusion-side script is an
@@ -107,7 +113,11 @@ def _name_map() -> Dict[str, str]:
 #: A user parameter the model does not drive and nobody may sensibly edit is
 #: noise in Fusion's list, so it is neither exported nor read back: the import
 #: treats such a row exactly like a derived one — ignored, and reported.
-FUSION_EXCLUDED_NAMES: frozenset = frozenset({"slot_hs"})
+#: `stator_outer_notches` (2026-11-03) is a lamination FLAG, not a length:
+#: Fusion's parameter table holds expressions with units, and the notch is a
+#: feature of the Fusion sketch itself (suppress it there), so the flag is
+#: set in the Geometry tab and never travels through the CSV.
+FUSION_EXCLUDED_NAMES: frozenset = frozenset({"slot_hs", "stator_outer_notches"})
 
 
 def _rows():
@@ -254,11 +264,33 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
     from motor_ai_sim.routes._validation import DERIVED_GEOMETRY_NAMES
     vals: Dict[str, float] = {}
     unknown, refused, derived, excluded = [], {}, [], []
+    # The coil of the loaded CONFIGURATION (owner 2026-11-02: «все бери из
+    # Fusion»): its inner bend radius and straight overhang are not live
+    # geometry keys but the configuration's own ``coil_overrides``.  Fusion
+    # usually keeps them as formulas, so the add-in's evaluated Value is read
+    # when the Expression is not a plain number; ``coil_straight_extra`` is
+    # also derived from ``coil_straight_len - motor_length`` (the template's
+    # own definition) when the CSV carries the length only.
+    from motor_ai_sim.coil_build import CONFIG_COIL_KEYS, validate_coil_override
+    coil_vals: Dict[str, float] = {}
+    coil_straight_len: Optional[float] = None
     for r in rows:
         fname = str(r.get(cols["name"]) or "").strip()
         if not fname:
             continue
         key = inv.get(fname, fname)
+        if key in CONFIG_COIL_KEYS or key == "coil_straight_len":
+            unit = r.get(cols.get("unit", ""), "")
+            v, why = _parse_expression(r.get(cols["expression"]), unit)
+            if v is None and "value" in cols:
+                v, why = _parse_expression(r.get(cols["value"]), unit)
+            if v is None:
+                refused[fname] = why; continue
+            if key == "coil_straight_len":
+                coil_straight_len = v
+            else:
+                coil_vals[key] = v
+            continue
         if key not in geo:
             unknown.append(fname); continue
         if key in DERIVED_GEOMETRY_NAMES:
@@ -269,6 +301,17 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
         if v is None:
             refused[fname] = why; continue
         vals[key] = v
+    if coil_straight_len is not None and "coil_straight_extra" not in coil_vals:
+        _L = vals.get("motor_length", geo.get("motor_length"))
+        try:
+            coil_vals["coil_straight_extra"] = round(float(coil_straight_len) - float(_L), 6)
+        except (TypeError, ValueError):
+            refused["coil_straight_len"] = "no motor_length to subtract it from"
+    for _k in list(coil_vals):
+        _v, _why = validate_coil_override(_k, coil_vals[_k])
+        if _why:
+            refused[_k] = _why
+            coil_vals.pop(_k)
     changed = {k: v for k, v in vals.items() if abs(float(geo[k]) - float(v)) > 1e-5}
     out: Dict[str, Any] = {
         "ok": True, "dry_run": bool(dry_run),
@@ -280,6 +323,25 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
         "unknown": sorted(unknown),
         "refused": refused,
     }
+    coil_target = _coil_target() if coil_vals else None
+    coil_changed: Dict[str, float] = {}
+    if coil_vals:
+        before = coil_target.get("overrides", {}) if coil_target else {}
+        coil_changed = {k: v for k, v in coil_vals.items()
+                        if before.get(k) is None or abs(float(before[k]) - float(v)) > 1e-6}
+        why_not = ("no configuration is loaded - the coil belongs to a configuration" if coil_target is None else
+                   "configuration '%s' is locked - unlock it to take its coil from Fusion" % coil_target["config"]
+                   if coil_target.get("locked") and coil_changed else None)
+        if why_not:
+            coil_target, coil_changed = None, {}
+        # additive bucket: the loaded configuration's coil (never the live geometry)
+        out["coil"] = {
+            "die": (coil_target or {}).get("die"), "config": (coil_target or {}).get("config"),
+            "values": {k: coil_vals[k] for k in sorted(coil_vals)},
+            "applied": {k: coil_changed[k] for k in sorted(coil_changed)},
+            "before": {k: before.get(k) for k in sorted(coil_changed)},
+            **({"not_applied": why_not} if why_not else {}),
+        }
     # ── Validate the RESULTING machine — every imported value APPLIED
     # TOGETHER — before dry_run=1 (the confirm dialog) tells the user
     # anything is fine to apply.  Before this, the dry run only diffed
@@ -311,15 +373,43 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
             return out
         raise reject(_error, _invalid)
 
-    if not changed or dry_run:
+    _coil_todo = bool(coil_changed) and coil_target is not None
+    if (not changed and not _coil_todo) or dry_run:
         out["note"] = ("nothing to apply — every recognised parameter already has this value"
-                       if not changed else "dry run — nothing written")
+                       if not (changed or _coil_todo) else "dry run — nothing written")
         return out
-    # THE geometry write path, never a private copy of it.
-    from motor_ai_sim.routes.geometry import GeometryUpdateModel, update_geometry
-    result = update_geometry(GeometryUpdateModel(**changed))
-    log.info("Fusion import: %d parameter(s) applied (%s), %d unknown, %d refused",
-             len(changed), ", ".join(sorted(changed)), len(unknown), len(refused))
-    out["geometry_validation"] = (result or {}).get("geometry_validation")
-    out["constraints_applied"] = (result or {}).get("constraints_applied")
+    if changed:
+        # THE geometry write path, never a private copy of it.
+        from motor_ai_sim.routes.geometry import GeometryUpdateModel, update_geometry
+        result = update_geometry(GeometryUpdateModel(**changed))
+        log.info("Fusion import: %d parameter(s) applied (%s), %d unknown, %d refused",
+                 len(changed), ", ".join(sorted(changed)), len(unknown), len(refused))
+        out["geometry_validation"] = (result or {}).get("geometry_validation")
+        out["constraints_applied"] = (result or {}).get("constraints_applied")
+    if _coil_todo:
+        # THE configuration coil writer (validation, lock, cache, build signature)
+        from motor_ai_sim.routes.family import set_config_coil
+        res = set_config_coil(coil_target["die"], coil_target["config"], coil_changed, source="fusion import")
+        out["coil"]["k_end_before"] = res.get("k_end_before")
+        out["coil"]["k_end_after"] = res.get("k_end_after")
+        log.info("Fusion import: coil of '%s/%s' set (%s)", coil_target["die"], coil_target["config"],
+                 ", ".join("%s=%g" % kv for kv in sorted(coil_changed.items())))
     return out
+
+
+def _coil_target() -> Optional[Dict[str, Any]]:
+    """``{die, config, overrides}`` of the loaded configuration whose coil a Fusion import sets, or None."""
+    try:
+        from motor_ai_sim import coil_build
+        from motor_ai_sim.routes import family as fam
+        ctx = fam._read_ctx() or {}
+        die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
+        if not die or not cfg:
+            return None
+        doc = fam.config_doc(die, cfg)
+        if doc is None:
+            return None
+        return {"die": die, "config": cfg, "locked": doc.get("locked") is True,
+                "overrides": coil_build.clean_coil_overrides(doc.get(coil_build.CONFIG_COIL_BLOCK))}
+    except Exception:      # noqa: BLE001 — no target = reported, never a 500
+        return None

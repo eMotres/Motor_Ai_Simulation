@@ -279,6 +279,46 @@ def fundamental_current(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def loss_parts(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Period-mean loss of a finished transient dict, BY PART [W].
+
+    The same terms the route's summary sums into ``P_loss_total_W`` (copper +
+    laminated iron + magnet eddy + shaft eddy + sleeve eddy), each the mean of
+    its own per-frame series, plus the iron's Bertotti terms per half
+    (``P_fe_terms``, {stator|rotor: hysteresis_W, eddy_W, excess_W}).  Stored
+    on both sides of the ΔP_harm comparison (``harm_ref``) so the PWM extra
+    loss can be split by part from the matched pair itself, not inferred.
+    """
+    def _m(key: str) -> float:
+        s = d.get(key) or [0.0]
+        try:
+            a = np.asarray(s, dtype=float)
+        except (TypeError, ValueError):
+            return 0.0
+        return float(np.mean(a)) if a.size else 0.0
+    out: Dict[str, Any] = {
+        "copper_W": round(_m("P_cu_W"), 4),
+        "iron_W": round(_m("P_fe_W"), 4),
+        "magnet_W": round(_m("P_mag_eddy_W"), 4),
+        "shaft_W": round(_m("P_shaft_eddy_W"), 4),
+        "sleeve_W": round(_m("P_sleeve_eddy_W"), 4),
+    }
+    out["total_W"] = round(sum(out[k] for k in ("copper_W", "iron_W", "magnet_W",
+                                                 "shaft_W", "sleeve_W")), 4)
+    terms = d.get("P_fe_terms")
+    if isinstance(terms, dict) and terms:
+        it: Dict[str, Dict[str, float]] = {}
+        for half in ("stator", "rotor"):
+            h = terms.get(half)
+            if not isinstance(h, dict):
+                continue
+            it[half] = {k: round(float(h.get(k) or 0.0), 4)
+                        for k in ("hysteresis_W", "eddy_W", "excess_W")}
+        if it:
+            out["iron_terms"] = it
+    return out
+
+
 def complex_fundamental(d: Dict[str, Any], key: str) -> complex:
     """Complex fundamental phasor of a per-frame series in the ROTOR frame
     (projection onto e^{-j·θe}, θe = rotor_deg·pp).  Runs that share the same

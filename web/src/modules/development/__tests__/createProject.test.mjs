@@ -4,17 +4,17 @@ import { createErrorText, createPayload, createReady } from '../createProject.ts
 
 const t = (key, args) => `${key}:${JSON.stringify(args ?? {})}`;
 
-test('a customer posts only a title and a company; the server makes the id', () => {
-  assert.deepEqual(createPayload(false, { title: ' 7-inch prop motor ', org: ' ', id: 'ignored' }), { title: '7-inch prop motor', customer_org: '' });
+test('a customer posts only a company; the server makes the id and the name', () => {
+  assert.deepEqual(createPayload(false, { title: ' 7-inch prop motor ', org: ' ', id: 'ignored' }), { customer_org: '' });
+  assert.deepEqual(createPayload(false, { title: '', org: ' Acme ', id: '' }), { customer_org: 'Acme' });
 });
 
 test('staff post the id and the customer organisation as before', () => {
   assert.deepEqual(createPayload(true, { title: 'A', org: 'Acme', id: ' acme-1 ' }), { id: 'acme-1', title: 'A', customer_org: 'Acme' });
 });
 
-test('Create needs a title for a customer, and also an organisation and an id for staff', () => {
-  assert.equal(createReady(false, { title: '', org: '', id: '' }), false);
-  assert.equal(createReady(false, { title: 'x', org: '', id: '' }), true);
+test('a customer can always press Create; staff need a title, an organisation and an id', () => {
+  assert.equal(createReady(false, { title: '', org: '', id: '' }), true);
   assert.equal(createReady(true, { title: 'x', org: '', id: 'a' }), false);
   assert.equal(createReady(true, { title: 'x', org: 'o', id: '' }), false);
   assert.equal(createReady(true, { title: 'x', org: 'o', id: 'a' }), true);

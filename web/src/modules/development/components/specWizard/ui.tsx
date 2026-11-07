@@ -1,7 +1,7 @@
 /** Small presentational pieces of the specification wizard: the card, the optional-details group, a large number input with
  *  a unit and the duration chips.  Touch targets are at least 44 px; colours come from the app's CSS variables. */
 import { useEffect, useState } from 'react';
-import { Box, ButtonBase, Collapse, InputAdornment, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import { Box, ButtonBase, Collapse, InputAdornment, Paper, Stack, TextField, Tooltip, Typography, type TextFieldProps } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HelpTip from '../../../../components/common/HelpTip';
 import { DURATION_PRESETS, autoPowerUnit, durationMode, formatSig, parseDecimal, type PowerUnit } from './operatingPoints';
@@ -35,15 +35,33 @@ export function OptionalGroup({ label, count, open, onOpenChange, forceOpen = fa
   </Paper>;
 }
 
+/** A number box that takes a decimal comma (owner 2026-11-06: `0,35` must never become 35).  A plain text input, so the browser's own
+ *  number parsing never eats the comma: while it has focus it shows what is typed, otherwise the stored value.  A cleared box
+ *  commits `''`, a complete number commits it, a half-typed or non-numeric text commits nothing and shows the box in error. */
+export function DecimalField({ value, onValue, error, onBlur, inputProps, ...rest }: Omit<TextFieldProps, 'value' | 'onChange' | 'type'> & { value: number | string | null | undefined; onValue: (next: number | '') => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const shown = text ?? (value === null || value === undefined ? '' : String(value));
+  const bad = text !== null && parseDecimal(text) === 'partial' && text.trim() !== '' && !/^[+-]?\.?$/.test(text.trim());
+  return <TextField {...rest} value={shown} error={error || bad} autoComplete="off"
+    onBlur={(e) => { setText(null); onBlur?.(e); }}
+    onChange={(e) => {
+      setText(e.target.value);
+      const parsed = parseDecimal(e.target.value);
+      if (parsed === 'empty') onValue('');
+      else if (parsed !== 'partial') onValue(parsed);
+    }}
+    inputProps={{ ...inputProps, inputMode: 'decimal' }} />;
+}
+
 /** A large labelled number input with a unit: the label above, the value large, the unit as a quiet suffix. */
-export function BigNumber({ label, unit, value, onChange, disabled, error, ariaLabel, placeholder, min, step = 'any', size = 'large' }: { label: string; unit: string; value: number | null | undefined; onChange: (next: number | null) => void; disabled?: boolean; error?: boolean; ariaLabel: string; placeholder?: string; min?: number; step?: string; size?: 'large' | 'normal' }) {
+export function BigNumber({ label, unit, value, onChange, disabled, error, ariaLabel, placeholder, size = 'large' }: { label: string; unit: string; value: number | null | undefined; onChange: (next: number | null) => void; disabled?: boolean; error?: boolean; ariaLabel: string; placeholder?: string; min?: number; step?: string; size?: 'large' | 'normal' }) {
   const big = size === 'large';
   return <Box component="label" sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, minWidth: 0, fontSize: 12.5, color: 'var(--text-2)' }}>
     <span>{label}</span>
-    <TextField type="number" size="small" fullWidth value={value ?? ''} error={error} disabled={disabled} placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value.trim() === '' || !Number.isFinite(Number(e.target.value)) ? null : Number(e.target.value))}
+    <DecimalField size="small" fullWidth value={value ?? ''} error={error} disabled={disabled} placeholder={placeholder}
+      onValue={(next) => onChange(next === '' ? null : next)}
       slotProps={{
-        htmlInput: { 'aria-label': ariaLabel, min, step, inputMode: 'decimal' },
+        htmlInput: { 'aria-label': ariaLabel, inputMode: 'decimal' },
         input: { endAdornment: unit ? <InputAdornment position="end" sx={{ '& .MuiTypography-root': { fontSize: 12.5, color: 'var(--text-3)' } }}>{unit}</InputAdornment> : undefined },
       }}
       sx={{ '& .MuiInputBase-root': { minHeight: big ? 52 : TOUCH, borderRadius: '10px' }, '& .MuiInputBase-input': { fontSize: big ? 20 : 16, fontWeight: 600, fontVariantNumeric: 'tabular-nums', pr: '4px' } }} />

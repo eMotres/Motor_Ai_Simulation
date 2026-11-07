@@ -25,6 +25,7 @@ import FemFieldChart from './FemFieldChart';
 import { tileFullRing } from './fem-types';
 import type { FemPayload } from './fem-types';
 import { storedMeshQuery } from '../../lib/meshSettings';
+import SolveGate from '../common/SolveGate';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -308,13 +309,15 @@ const FemAnimationViewer: React.FC<Props> = ({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button size="small" variant="contained" disableElevation
-            onClick={runAnimation} disabled={loading}
-            startIcon={loading ? <CircularProgress size={14}/> : <RestartAltIcon fontSize="small"/>}
-            sx={{ textTransform: 'none', fontSize: 11, bgcolor: 'var(--line-accent)',
-              '&:hover': { bgcolor: '#2c5282' }}}>
-            {loading ? 'Running FEM…' : (data ? 'Re-run animation' : 'Run animation')}
-          </Button>
+          <SolveGate>
+            <Button size="small" variant="contained" disableElevation
+              onClick={runAnimation} disabled={loading}
+              startIcon={loading ? <CircularProgress size={14}/> : <RestartAltIcon fontSize="small"/>}
+              sx={{ textTransform: 'none', fontSize: 11, bgcolor: 'var(--line-accent)',
+                '&:hover': { bgcolor: '#2c5282' }}}>
+              {loading ? 'Running FEM…' : (data ? 'Re-run animation' : 'Run animation')}
+            </Button>
+          </SolveGate>
         </Box>
       </Box>
 

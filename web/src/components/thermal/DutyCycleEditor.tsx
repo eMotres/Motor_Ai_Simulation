@@ -85,6 +85,7 @@ import { effectiveAssignment } from '../../lib/dutyMaterials';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/thermal.json (docs/I18N.md).
 const tx = nsT('thermal');
@@ -280,6 +281,10 @@ const DutyCycleEditor: React.FC = () => {
         const r = e.result;
         if (r.die !== ctx.die || r.configuration !== ctx.config
             || r.duty !== ctx.duty) return;
+        // …and only of THIS machine: the names alone match a point rebuilt on
+        // another geometry.  A proven match is the licence; unknown is not
+        // (the same rule as `/last`, lib/resultOwner.mayAdopt).
+        if (e.stale_geometry !== false) return;
         setRes(r);
         setRestoredAt(e.computed_at);
       } catch { /* a tab that has never solved a cycle is the normal state */ }
@@ -731,11 +736,13 @@ const DutyCycleEditor: React.FC = () => {
             </Box>
 
             <Box sx={CTRL_ROW}>
-              <Button variant="contained" size="small" onClick={run}
-                disabled={busy || !!issue}
-                startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
-                {busy ? 'Running' : 'Run cycle'}
-              </Button>
+              <SolveGate>
+                <Button variant="contained" size="small" onClick={run}
+                  disabled={busy || !!issue}
+                  startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+                  {busy ? 'Running' : 'Run cycle'}
+                </Button>
+              </SolveGate>
               <HelpTip title={tx('oneCalibrationThermalMapThenThe')} />
             </Box>
             {issue && !busy && (

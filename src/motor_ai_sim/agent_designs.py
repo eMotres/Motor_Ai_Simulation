@@ -708,7 +708,8 @@ def _make_draft(p: Principal, req: Dict[str, Any], best: Dict[str, Any],
                 "mass_kg": _r(s["mass_est"]),
                 "current_density_factor": _r(s["k_current"]),
                 "method": "analytical scaling of a saved FEM duty (T ~ L*I, "
-                          "EMF ~ L*N*n/p) — run simulate() for the FEM answer"}
+                          "EMF ~ L*N*n/p) — " + ("MOTRES engineers run the FEM simulation"
+                                       if _closed() else "run simulate() for the FEM answer")}
     why = [f"nearest existing machine you can use: {m['die']} / {m['config']} / "
            f"duty '{d['duty']}' ({d['torque_nm']:g} N*m at {d['speed_rpm']:g} rpm, "
            f"OD {m['outer_diameter_mm']:g} mm)",
@@ -745,6 +746,12 @@ def _make_draft(p: Principal, req: Dict[str, Any], best: Dict[str, Any],
         "edited_by_user": False, "history": [{"at": now, "event": "created"}],
     }
     return design
+
+
+def _closed() -> bool:
+    """Simulations closed to clients (``MOTRES_SOLVE_ADMIN_ONLY``): the hints below stop sending an agent to ``simulate``."""
+    from motor_ai_sim import auth as _auth
+    return _auth.solve_admin_only()
 
 
 def _fmt(x: float) -> str:
@@ -1143,10 +1150,19 @@ def headline(answer: Any, d: Dict[str, Any], what: str) -> Dict[str, Any]:
 
 def simulate(p: Principal, design_id: str, what: str,
              steps: Optional[int] = None) -> Dict[str, Any]:
-    """Queue a solve of the draft on the user's queue; return the job id."""
+    """Queue a solve of the draft on the user's queue; return the job id.
+
+    SOLVE_ADMIN_ONLY (auth.py): while ``MOTRES_SOLVE_ADMIN_ONLY`` is on (the default) only an admin account starts a simulation; any
+    other account gets a clean refusal AS DATA (``status`` + ``user_message``, the web's own sentence), nothing is queued and no
+    daily-limit slot is used.  ``/mcp`` never meets the web's role gate, so this is where the rule meets the MCP."""
+    from motor_ai_sim import auth as _auth
     from motor_ai_sim import jobs as _jobs
     from motor_ai_sim import mcp_tools as _t
     from motor_ai_sim import platform_agreement as _pa
+    if _auth.solve_admin_only() and not _auth.principal_is_admin(p.email):
+        return {"status": "simulations_closed", "design_id": str(design_id or ""),
+                "user_message": _auth.SOLVE_REFUSAL,
+                "next": "relay user_message; the draft stays and can be opened in Configure (open_in_configure)"}
     needed = _pa.simulation_gate_detail(p.email)
     if needed:      # PLATFORM_AGREEMENT_AT_SIMULATION=1: new simulations need the Platform Agreement (company OR account; staff / MOTRES exempt)
         raise DesignError("agreement_required: the account has not accepted the AeroStator Platform Agreement (version %s), which "
@@ -1280,7 +1296,9 @@ def get_design_result(p: Principal, design_id: str) -> Dict[str, Any]:
            "requirements": d.get("requirements"),
            "estimate": d.get("estimate"),
            "results": res,
-           "status": ("simulated" if res else "not simulated yet — call simulate()"),
+           "status": ("simulated" if res else
+                      ("not simulated yet — MOTRES engineers run the simulations" if _closed()
+                       else "not simulated yet — call simulate()")),
            "source": "2-D FEM (energy torque) of the draft in its own sandbox; "
                      "mass is the scaled estimate",
            "open_in_configure": configure_url(d["id"])}

@@ -299,6 +299,8 @@ def _battery_max_V(draft: Dict[str, Any]) -> Optional[float]:
         return None
     if value.get("supply_type") == "dc_source":        # a DC power source states one voltage
         return _num(value.get("dc_source_V"))
+    if value.get("supply_type") == "ac_mains":         # AC mains is not a DC window: the drive's own rectifier sets the bus, nothing to compare here
+        return None
     top = _num(value.get("voltage_max_V"))
     if top is not None:
         return top

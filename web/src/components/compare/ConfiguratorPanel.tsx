@@ -44,7 +44,7 @@ import PropellerLoadChart from './PropellerLoadChart';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import { coggingDigits, coggingTipText, coggingValue } from '../../lib/coggingTile';
 import {
-  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, pwmExtraW, pwmMagnetW, lossPartTiles, lossTailTiles, lossDigits, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -63,6 +63,7 @@ import { ratedSpeedCap, loadedRatedRpm } from '../../lib/configureRatedCap';
 import { s1LoadPoint, s1ThermalAt, type S1ThermalModel } from '../../lib/s1Thermal';
 import { anchoredTemperatures, anchorLossRatios, type ThermalAnchor } from '../../lib/thermalAnchor';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
+import { configCooling } from '../../lib/configureCooling';
 import CoolingControls from '../thermal/CoolingControls';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
@@ -73,7 +74,7 @@ import {
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
 import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, presetMassAnchor, type Preset } from '../../lib/configuratorPresets';
-import { buildModePresets, baseModeLabel, presetButtons, type ModePreset } from '../../lib/configuratorModes';
+import { buildModePresets, baseModeLabel, matchesMode, presetButtons, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
@@ -97,6 +98,7 @@ import { slotMouthLimit } from '../../lib/slotMouthFit';
 import i18n from '../../i18n';
 import {
   usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems, pwmBuildScale, transferPwmReading,
+  pwmSplitState, pwmPartsAnchors,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits, type VariantReading,
@@ -839,6 +841,9 @@ const ConfiguratorPanel: React.FC = () => {
     [p, basePreset, ref.referenceOnly]);
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn ? (resolveVariant(variants, knobs) ?? null) : null;
+  /** is the motor PWM extra split by part on this machine (owner 2026-11-02)?  Machine-level: the tile names never
+   *  change when the drive is switched */
+  const pwmSplit = useMemo(() => pwmSplitState(variants), [variants]);
   /** the drive choice that names a variant: its id AND its (transistor, frequency) pair */
   const choiceOf = (v: PwmVariant): Partial<Knobs> =>
     ({ drive: 'pwm', drive_variant: v.id, drive_device: v.device, drive_carrier_hz: Number(v.carrier_hz) });
@@ -1536,10 +1541,19 @@ ${s1Text.text}` : '';
     const v = Number(t?.rated_winding_C ?? NaN);
     return Number.isFinite(v) && v > 0 ? v : null;
   })();
-  const extraLossW = extraLossTile(driveMode, drv).value;
+  const extraLossW = pwmExtraW(driveMode, drv);
+  /** iron / copper / magnet as the tiles show them: the sine value, + its PWM part under a split PWM passport */
+  const partTile = Object.fromEntries(lossPartTiles(driveMode, drv, { iron: result.P_fe_W, copper: result.P_cu_W, magnet: result.P_mag_W })
+    .map((x) => [x.id, x])) as Record<'iron' | 'copper' | 'magnet', ReturnType<typeof lossPartTiles>[number]>;
+  /** one tooltip line: "Sine X W + PWM Y W. 2-D FEM at anchor (…), scaled by modulation." (only when a PWM part is shown) */
+  const partTip = (x: ReturnType<typeof lossPartTiles>[number]) => (x.pwmW == null || x.sineW == null ? ''
+    : ['', [tx('configureDrive.partTip', { sine: fmt(x.sineW, 1), pwm: fmt(x.pwmW, 1) }),
+      tx('configureDrive.partBasis', { anchors: pwmPartsAnchors(variant) || '—' })].join(' ')].join('\n'));
   const motorHeatBase = pointGate.showMotorLosses ? { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
     stator_W: result.P_loss_stator_W, rotor_W: result.P_loss_rotor_W } : null;
-  const motorHeat = configureMotorHeat(driveMode, pointGate.accepted, motorHeatBase, extraLossW);
+  // the heat tiles put the PWM magnet part on the rotor (the split by part); the thermal verdict keeps the whole
+  // extra on the winding (conservative, `judgePoint`)
+  const motorHeat = configureMotorHeat(driveMode, pointGate.accepted, motorHeatBase, extraLossW, pwmMagnetW(driveMode, drv));
   // The typed cooling system (air speed or a liquid jacket) of a machine the registry gives no
   // cooling for: `CoolingControls` persists it to localStorage `sim.cool.*` and fires
   // `cooling:changed` — it is not React state, so read it again on that event.
@@ -1550,11 +1564,17 @@ ${s1Text.text}` : '';
     return () => window.removeEventListener('cooling:changed', bump);
   }, []);
   const coolPayload = useMemo(() => (hasPropellerControls || roboticsOnly ? null : getCoolingPayload()), [coolTick, hasPropellerControls, roboticsOnly]);
+  /** The configuration's OWN cooling (its `thermal_defaults:`, 2026-11-03: a jacket-cooled generator showed the page's
+   *  typed 8 m/s air and every temperature red).  It replaces the typed cooling wherever no propeller and no robot rule
+   *  decides; a configuration that states none keeps the typed cooling exactly as before. */
+  const cfgCooling = useMemo(() => (hasPropellerControls || roboticsOnly ? null
+    : configCooling(basePreset?.cooling_defaults, (thermalGeom.statorOD_mm || 150) / 1000, airH, liqH)),
+  [hasPropellerControls, roboticsOnly, basePreset, thermalGeom]);
   /** The cooling behind the ONE temperature row — the same lumped estimate in every mode: the
-   *  propeller's film h at this rpm, still air at the natural-convection floor, or the typed
-   *  air / liquid system.  (It replaces the removed "Estimated temperatures" block,
+   *  propeller's film h at this rpm, still air at the natural-convection floor, the configuration's own
+   *  cooling, or the typed air / liquid system.  (It replaces the removed "Estimated temperatures" block,
    *  owner 2026-10-12.)  null = the point cannot be run and nothing may be shown for it. */
-  const cooling = useMemo((): { h_Wm2K: number; ambient_C: number; air_speed_ms: number | null } | null => {
+  const cooling = useMemo((): { h_Wm2K: number; ambient_C: number; air_speed_ms: number | null; film?: boolean } | null => {
     const D = (thermalGeom.statorOD_mm || 150) / 1000;
     if (propellerCoolingActive) {
       return propPoint && propPoint.h_W_m2K != null && !loadRefused
@@ -1562,6 +1582,7 @@ ${s1Text.text}` : '';
         : null;
     }
     if (optionalPropellerCooling || roboticsOnly) return { h_Wm2K: airH(0, D), ambient_C: ambient, air_speed_ms: 0 };   // still air (Robotics)
+    if (cfgCooling) return cfgCooling;
     if (coolPayload) {
       const isAir = coolPayload.cooling_mode === 'air';
       return {
@@ -1571,7 +1592,7 @@ ${s1Text.text}` : '';
       };
     }
     return null;
-  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, coolPayload]);
+  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, cfgCooling, coolPayload]);
   /** winding / magnet / housing temperatures at the knobs (null while the cooling data is not
    *  here, or while the load is refused — never numbers for a point that cannot be run) */
   /** ONE verdict for a point: the server's thermal model at (rpm, I) when it applies, else the lumped estimate - for the
@@ -1583,12 +1604,17 @@ ${s1Text.text}` : '';
     const m = thermalAnchor.cooling_mode;
     const stillAir = !propellerCoolingActive && (optionalPropellerCooling || roboticsOnly);
     if (m === 'robotics' || m === 'still') return stillAir;
-    if (m === 'air') return !propellerCoolingActive && !stillAir && coolPayload?.cooling_mode === 'air';
+    if (m === 'air') return !propellerCoolingActive && !stillAir
+      && (cfgCooling ? cfgCooling.air_speed_ms != null : coolPayload?.cooling_mode === 'air');
+    // a record solved with a stated film (manual h) anchors a configuration that states its film
+    if (m === 'manual') return !propellerCoolingActive && !stillAir && !!cfgCooling
+      && basePreset?.cooling_defaults?.kind === 'film' && Number(thermalAnchor.h_W_m2K) > 0;
     return false;
   })();
   const anchorUsable = !!thermalAnchor && !calUsable && anchorCoolingMatch && !buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const anchorHRef = thermalAnchor
-    ? airH(thermalAnchor.cooling_mode === 'air' ? thermalAnchor.air_speed_ms : 0, (thermalGeom.statorOD_mm || 150) / 1000) : 1;
+    ? (thermalAnchor.cooling_mode === 'manual' && Number(thermalAnchor.h_W_m2K) > 0 ? Number(thermalAnchor.h_W_m2K)
+      : airH(thermalAnchor.cooling_mode === 'air' ? thermalAnchor.air_speed_ms : 0, (thermalGeom.statorOD_mm || 150) / 1000)) : 1;
   /** record / page losses at the record's point: the stored point IS the record, the loss model only carries the change */
   const anchorRatios = useMemo(() => {
     if (!anchorUsable || !thermalAnchor) return null;
@@ -1650,7 +1676,8 @@ ${s1Text.text}` : '';
   const propBad = !!propLine && (loadRefused || overheats);
   const tempTiles = tempRowTiles(
     thermal && cooling ? { T_winding_C: thermal.T_winding_C, T_magnet_C: thermal.T_magnet_C, T_housing_C: thermal.T_housing_C,
-      air_speed_ms: cooling.air_speed_ms, h_W_m2K: cooling.h_Wm2K, surface_cm2: thermal.A_surface_m2 * 1e4 } : null, tLimits);
+      air_speed_ms: cooling.air_speed_ms, h_W_m2K: cooling.h_Wm2K, surface_cm2: thermal.A_surface_m2 * 1e4,
+      ambient_C: cooling.ambient_C } : null, tLimits, !!cfgCooling?.film);
   // Narrow screens (< COMPACT_BAR_MAX_PX): the knobs are on top and the numbers they move far below, so a one-line results
   // bar stays pinned to the bottom edge and follows every slider (the full tiles are unchanged on a wide screen).
   const narrow = useMediaQuery(`(max-width:${COMPACT_BAR_MAX_PX - 0.05}px)`);
@@ -1662,7 +1689,7 @@ ${s1Text.text}` : '';
   });
   const renderTemp = (t: TempTileSpec) => (
     <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
-      absLevel={t.level} plain
+      absLevel={t.level} plain width={t.width}
       tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
         air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
         surface: t.surface != null ? fmt(t.surface, 0) : '—' })}
@@ -1728,7 +1755,7 @@ ${s1Text.text}` : '';
     const j = judgePoint(driveMode, gate.accepted,
       gate.showMotorLosses ? { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W, P_mag_W: r.P_mag_W,
         stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W } : null,
-      extraLossTile(driveMode, dr).value,
+      pwmExtraW(driveMode, dr),
       pt.h_W_m2K != null ? { h_Wm2K: pt.h_W_m2K, ambient_C: ambient } : null,
       rpm, ld.I_A, kI.L_mm);
     // RATED aims at the rated winding temperature when the server states one (owner 2026-10-19: the continuous point
@@ -1899,11 +1926,12 @@ ${s1Text.text}` : '';
       }
     }
   };
-  // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
+  // Which mode button the state IS (every knob and the pack equal) — highlighted.  The drive (Sine/PWM, transistor,
+  // carrier) is not part of the operating mode, so changing it keeps the highlight (owner 2026-11-02).
   // (with a propeller as the load the current is the propeller's, not a setting)
-  const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
+  const matchedKey = modePresets.find((pr) => matchesMode(presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
     cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
-    { ignoreCurrent: propLoad, speedCap: propLoad ? ratedCapRpm : null, speedIsCap: isRatedPreset(pr) }).length === 0)?.key ?? null;
+    { ignoreCurrent: propLoad, speedCap: propLoad ? ratedCapRpm : null, speedIsCap: isRatedPreset(pr) })))?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
   const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
   const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);
@@ -2336,11 +2364,6 @@ ${s1Text.text}` : '';
             <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mb: 1.25, flexWrap: 'wrap' }}>
               <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={tx('configure.presetTip')}>
                 {tx('configure.preset')}
-                {basePreset && modified && (
-                  <Box component="span" sx={{ color: '#fbbf24' }}>
-                    {' · '}{tx('configure.changedFrom', { mode: baseLabel ?? basePreset.config })}
-                  </Box>
-                )}
               </Typography>
               {defaultMotor && defaultRef && (
                 <Button size="small" onClick={goDefault}
@@ -2450,7 +2473,8 @@ ${s1Text.text}` : '';
               </ToggleButtonGroup>
             </Box>
           )}
-          {ctxDone && !hasPropellerControls && !roboticsOnly && (
+          {/* a configuration that states its own cooling (thermal_defaults) is not typed over: the row shows its film */}
+          {ctxDone && !hasPropellerControls && !roboticsOnly && !cfgCooling && (
             <CoolingControls diameterMm={thermalGeom.statorOD_mm} />
           )}
           {/* A robot: the robotics mode only - still air, one ambient field, no air speed or liquid system. */}
@@ -2687,11 +2711,11 @@ ${s1Text.text}` : '';
             <MetricTile label={tx('configure.totalLoss')} value={pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null} unit="W" d={0}
               base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')}
               blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? result.P_fe_W : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
-              tip={tx('configure.ironLossTip')} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? result.P_mag_W : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
-              tip={tx('configure.magnetLossTip')} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? partTile.iron.value : null} unit="W" d={lossDigits(partTile.iron.value)} base={baseRes.P_fe_W} goodHi={false}
+              tip={tx('configure.ironLossTip') + partTip(partTile.iron)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? partTile.copper.value : null} unit="W" d={lossDigits(partTile.copper.value)} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip + partTip(partTile.copper)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? partTile.magnet.value : null} unit="W" d={lossDigits(partTile.magnet.value)} base={baseRes.P_mag_W} goodHi={false}
+              tip={tx('configure.magnetLossTip') + partTip(partTile.magnet)} blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
             <MetricTile label={tx('configure.statorHeat')} value={motorHeat?.stator_W ?? null} unit="W" d={0}
               base={baseRes.P_loss_stator_W} goodHi={false}
@@ -2706,7 +2730,7 @@ ${s1Text.text}` : '';
               base={baseRes.loss_density_W_kg} goodHi={false} tip={tx('configure.lossDensityTip')} blankTip={pointBlankTip} />
             {/* ONE contiguous controller group at the end of the loss row (owner 2026-10-05): the PWM loss,
                 the controller loss, then T_j, the efficiencies and P cont — same cells in Sine and PWM */}
-            {lossTailTiles(driveMode, drv).map(renderSpec)}
+            {lossTailTiles(driveMode, drv, pwmSplit).map(renderSpec)}
             {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, motorLoss_W)).map(renderSpec)}
           </Box>
           {/* ── TEMPERATURES — ONE row in EVERY cooling mode (owner 2026-10-12: the separate
@@ -2799,6 +2823,12 @@ ${s1Text.text}` : '';
                 blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
                 labelColor="#60a5fa" valueColor="#60a5fa"
                 tip={tx('configure.ktTip')} />
+            )}
+            {!coldConstantsUnavailable && result.Kt_load_Nm_per_A != null && (
+              <MetricTile label={tx('configure.ktLoad')}
+                value={result.Kt_load_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_load_Nm_per_A ?? result.Kt_load_Nm_per_A} goodHi
+                labelColor="#60a5fa" valueColor="#60a5fa"
+                tip={tx('configure.ktLoadTip')} />
             )}
             <MetricTile label={coldConstantsUnavailable ? tx('configure.km20c') : tx('configure.km')}
               value={coldConstantsUnavailable ? null : result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi

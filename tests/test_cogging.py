@@ -121,7 +121,7 @@ def test_run_asks_for_a_no_load_virtual_work_cogging_solve():
     assert kw["sampling_purpose"] == "cogging_quality" and kw["n_periods"] == 1.0
     assert kw["n_steps_per_period"] == 144                                  # 12 samples x 12 cycles per electrical period
     assert kw["torque_method"] == "coulomb" and kw["element_order"] == 2 and kw["drive"] == "current"
-    assert kw["daxis_deg"] == 0.0                                           # given: no calibration solve is paid for
+    assert kw["daxis_deg"] is None                                          # nothing known: the solver's own calibration
     assert kw["frozen_nu"] is False                                         # the iron is re-converged (see the module note)
     assert kw["mesh_size_mm"] == 2.0 and kw["geo_override"]["num_slots"] == 12
     assert kw["gap_refine"] is True                                         # a stored number gets the gap-ring refinement
@@ -153,6 +153,56 @@ def test_the_run_pins_the_machines_own_d_axis_not_zero():
     duty2 = dict(duty, summary={"T_em_avg_Nm": 4.0}, mesh={"sim.daxisDeg": "33.5"})
     assert C.machine_from_config(_die_doc(), _cfg_doc(duties=[duty2]))["daxis_deg"] == 33.5
     assert C.machine_from_config(_die_doc(), _cfg_doc())["daxis_deg"] is None
+    C.run(C.machine_from_config(_die_doc(), _cfg_doc()), em_transient_eval=_fake_solver(seen))
+    assert seen[-1]["daxis_deg"] is None, "nothing known: the solver's own calibration, never a guessed 0"
+
+
+def _guarded_solver(seen, calibrated_deg=60.0):
+    """The fake solve behind the solver's d-axis guard (fem_solver_2d): a pin more than 15 deg from the topology's
+    calibration on file is a ValueError; None = the solver measures / reads its own calibration."""
+    inner = _fake_solver(seen)
+
+    def fake(**kw):
+        pin = kw.get("daxis_deg")
+        if pin is not None and abs((float(pin) - calibrated_deg + 180.0) % 360.0 - 180.0) > 15.0:
+            raise ValueError("d-axis pin %.1f° does not belong to this machine: calibrates to %.1f°"
+                             % (float(pin), calibrated_deg))
+        return inner(**kw)
+    return fake
+
+
+def test_the_live_route_passes_the_machines_d_axis_not_zero(monkeypatch):
+    """2026-11-01: the live cogging route answered 422 "pin 0 vs 60" - ``machine_live`` carried no d-axis, so the run
+    pinned 0 deg on a 24s/28p topology calibrated to 60 deg.  It now takes it the way ``machine_from_config`` does."""
+    from motor_ai_sim import config as cfgmod
+    from motor_ai_sim import solve_pool
+    seen = []
+    monkeypatch.setattr(solve_pool, "em_transient_eval", _guarded_solver(seen))
+    live = {"geometry": dict(_die_doc()["geometry"]), "winding": {"connection": "2S"},
+            "materials": {"magnet": "F52SH_120C"}, "simulation": {"daxis_deg": ""}}
+    monkeypatch.setattr(cfgmod, "get_config", lambda *a, **k: live)
+    assert C.machine_live()["daxis_deg"] is None
+    r = client.post("/api/simulation/cogging/run", json={"mesh_size_mm": 2.0})
+    assert r.status_code == 200, r.text
+    assert seen[-1]["daxis_deg"] is None and seen[-1]["I_phase_rms"] == 0.0 and seen[-1]["magnet_temp_c"] == 20.0
+    live["simulation"]["daxis_deg"] = 58.0                                 # the Simulation tab's pin is the machine's
+    assert C.machine_live()["daxis_deg"] == 58.0
+    r = client.post("/api/simulation/cogging/run", json={"mesh_size_mm": 2.0})
+    assert r.status_code == 200, r.text
+    assert seen[-1]["daxis_deg"] == 58.0
+    live["simulation"]["daxis_deg"] = 0.0                                  # a wrong pin is still the solver's refusal
+    r = client.post("/api/simulation/cogging/run", json={"mesh_size_mm": 2.0})
+    assert r.status_code == 422 and "does not belong" in r.text
+
+
+def test_the_catalogued_route_without_a_known_d_axis_is_not_refused(dies, granted, monkeypatch):
+    from motor_ai_sim import solve_pool
+    seen = []
+    monkeypatch.setattr(solve_pool, "em_transient_eval", _guarded_solver(seen))
+    r = client.post("/api/simulation/cogging/run", headers=granted,
+                    json={"die": DIE, "config": CFG, "mesh_size_mm": 2.0})
+    assert r.status_code == 200, r.text
+    assert seen[-1]["daxis_deg"] is None
 
 
 def test_sector_count_is_the_largest_divisor_of_gcd_not_above_the_request():

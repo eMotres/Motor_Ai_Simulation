@@ -22,7 +22,7 @@ MAP = {"terms_of_use": ("terms_of_use", "terms_of_use"), "privacy_notice": ("pri
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("source", type=Path)
-    ap.add_argument("--version", default="v0.5")
+    ap.add_argument("--version", default="v0.6")
     a = ap.parse_args(argv)
     missing = [str(a.source / f"{s}_{l}_{a.version}.md") for s in MAP for l in ("en", "zh-CN")
                if not (a.source / f"{s}_{l}_{a.version}.md").is_file()]

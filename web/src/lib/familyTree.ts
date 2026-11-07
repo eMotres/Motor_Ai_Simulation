@@ -31,6 +31,8 @@ export interface FamilyTree {
   dies: unknown[];
   can_write?: boolean;
   note?: string;
+  /** machine-readable twin of `note` (`no_motors_granted`): the page words it itself */
+  note_code?: string;
   [k: string]: unknown;
 }
 

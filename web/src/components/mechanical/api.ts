@@ -739,6 +739,10 @@ export interface LastEntry<T> {
    *  live one. `null` = UNKNOWN (a fingerprint is missing), never "fine" — a
    *  staleness check that cannot prove a mismatch must not claim one. */
   stale_geometry: boolean | null;
+  /** The catalogue point (`{die, config, duty}`) the answer was solved for - the
+   *  second witness beside the fingerprint (2026-11-04).  `null` / absent =
+   *  unknown (stored before the stamp, or no catalogue point was loaded). */
+  context?: { die?: string; config?: string; duty?: string } | null;
 }
 
 export interface LastMechanical {
@@ -778,6 +782,10 @@ export interface MechMeshPayload {
 
 export const fetchLastMechanical = () =>
   get<LastMechanical>('/last', { field: true });
+/** The same answer without the heavy field payloads - for the one number the
+ *  stored-result check needs, the server's fingerprint of the machine loaded now. */
+export const fetchLastMechanicalLight = () =>
+  get<LastMechanical>('/last', { field: false });
 
 /** Build (or fetch) the rotor mesh alone.
  *

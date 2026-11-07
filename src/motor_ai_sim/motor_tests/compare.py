@@ -12,7 +12,7 @@ Conventions
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 #: Copper: alpha = 0.00393 1/K about 20 C, i.e. R(T) / R(T0) = (234.5 + T) / (234.5 + T0).
 CU_T0 = 234.5
@@ -21,25 +21,31 @@ RHO_CU_20 = 0.017241
 
 #: The one-line explanations the UI puts in a tooltip (EN source; the web carries the zh mirror).
 TIPS = {
-    "cogging": ("no-load cogging peak-to-peak: model = the configuration's stored cogging block (2-D, I = 0, eddy and "
+    "cogging": ("no-load cogging peak-to-peak: simulation = the configuration's stored cogging block (I = 0, eddy and "
                 "demagnetisation off, magnets at the temperature the block states); bench = break-away by hand through a "
                 "torque meter in both directions, friction taken out"),
-    "resistance": ("model R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line "
-                   "in star (2/3 in delta), plus the stated lead cables; the phase board and the joints are not in the model"),
-    "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star); model = the incremental Ld/Lq of the lowest-current duty",
-    "ldq_amp": "3-pair amplitude sqrt(2/3 * sum dev^2) = |Lq - Ld|; the pair order is not known, so the smaller fitted value is compared with the smaller model value",
+    "resistance": ("simulated R_phase at its coil temperature, scaled to the measured temperature by (234.5 + T), x2 line-to-line "
+                   "in star (2/3 in delta), plus the stated lead cables; the phase board and the joints are not in the simulation"),
+    "ldq_sum": "3-pair mean of L line-line = Ld + Lq (star); simulation = the incremental Ld/Lq of the lowest-current duty",
+    "ldq_amp": "3-pair amplitude sqrt(2/3 * sum dev^2) = |Lq - Ld|; the pair order is not known, so the smaller fitted value is compared with the smaller simulated value",
     "l_rotor_out": "stator without rotor: compared with a stored stator-only run when one exists",
-    "l_freq": "the model is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading",
-    "emf_peak": "model V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(model magnet T), x the 3-D end-effect flux factor k_flux of the configuration (Stage A; 2-D when it has no passport); measured = Vpp / 2",
-    "emf_rms": "model V_LL rms of the no-load duty, same speed, Br and 3-D scaling",
-    "loss": ("model = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
+    "l_freq": "the simulation is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading",
+    "emf_peak": "simulated V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(simulation magnet T), x the end-effect correction of the configuration (\"not corrected yet\" when it has none); measured = Vpp / 2",
+    "emf_rms": "simulated V_LL rms of the no-load duty, same speed, Br and correction",
+    "loss": ("simulation = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
-    "load": ("the duty within 2 % speed and 3 % current; model torque x the 3-D torque factor (measured k_T, else k_flux); "
-             "model efficiency is the motor's at the shaft (no inverter)"),
-    "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the stored system "
-                   "(wall-to-shaft) efficiency of the controller record, never with the motor's"),
-    "weight": "model mass of the configuration's parts; the bench weighs what the record names",
+    "bearings": ("simulation values, not a measurement: SKF friction of the bearings assigned to the configuration, the rotor "
+                 "weight as radial load, at the bench speed and temperature; the only measured figure is the total free-run "
+                 "loss, in which the bearings are not separated"),
+    "kv_kt": ("slope of V_LL peak against speed (least squares through the origin, over the rows named in the group); "
+              "Kv = 1000 / slope in rpm per V of line-line peak of the FUNDAMENTAL; Kt = 3 * Ke per A rms of phase current "
+              "(Ke = phase rms EMF per rad/s; current on the q axis, sine EMF); the simulated values carry the end-effect correction"),
+    "load": ("the duty within 2 % speed and 3 % current; simulated torque x the torque factor (measured k_T, else k_flux); "
+             "simulated efficiency is the motor's at the corrected shaft power (no inverter)"),
+    "eff_system": ("torque * omega / (V_dc * I_dc) includes the inverter: compared only with the system efficiency of the "
+                   "stored duty (inverter x motor), never with the motor's"),
+    "weight": "simulated mass of the configuration's parts; the bench weighs what the record names",
 }
 
 
@@ -189,13 +195,89 @@ def br_ratio(points: Sequence[Tuple[float, float]], test_temp_c: Optional[float]
 
 
 def emf_model_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Dict[str, Optional[float]]:
-    """V_LL peak and rms at ``rpm`` from a no-load reference point: EMF is proportional to speed and to Br."""
+    """V_LL waveform peak, rms and FUNDAMENTAL peak at ``rpm`` from a no-load reference point: EMF is proportional to speed
+    and to Br.  ``fund`` is None for an older stored run that carries no fundamental (the waveform peak then stands in for
+    it, flagged by the caller)."""
     r0 = num(ref.get("rpm"))
     if not r0:
-        return {"peak": None, "rms": None}
+        return {"peak": None, "rms": None, "fund": None}
     k = float(rpm) / r0 * float(ratio)
-    pk, rms = num(ref.get("v_ll_peak")), num(ref.get("v_ll_rms"))
-    return {"peak": None if pk is None else pk * k, "rms": None if rms is None else rms * k}
+    pk, rms, fund = num(ref.get("v_ll_peak")), num(ref.get("v_ll_rms")), num(ref.get("v_ll_fund_peak"))
+    return {"peak": None if pk is None else pk * k, "rms": None if rms is None else rms * k,
+            "fund": None if fund is None else fund * k}
+
+
+# ---------------------------------------------------------------------------
+# EMF slope, Kv, Ke, Kt
+# ---------------------------------------------------------------------------
+
+#: A bench row whose V/n differs from the median of the OTHER rows by more than this (percent) is flagged (shown, never
+#: dropped); at least ``SLOPE_FLAG_MIN_ROWS`` rows are needed for the others to mean anything.
+SLOPE_FLAG_PCT = 3.0
+SLOPE_FLAG_MIN_ROWS = 4
+
+
+def summary_magnet_temp_c(s: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The magnet temperature a stored EM run was SOLVED at, from its summary, or None.
+
+    ``magnet_temp_used_c`` is the run's own stamp (``routes.simulation._magnet_temperature_stamp``: the typed or coupled
+    temperature, else its card's); ``magnet_temp_c`` / ``magnet_temp_C`` are the older spellings.  The first one present
+    wins; 0 C is a temperature, not "missing"."""
+    s = s if isinstance(s, dict) else {}
+    for key in ("magnet_temp_used_c", "magnet_temp_c", "magnet_temp_C"):
+        v = num(s.get(key))
+        if v is not None:
+            return v
+    return None
+
+
+def slope_through_origin(points: Sequence[Tuple[Any, Any]]) -> Optional[Dict[str, float]]:
+    """Least squares V = s * n through the origin (EMF is zero at standstill): ``{"slope", "n", "rmse_pct"}`` with the
+    slope in V per rpm.  At least two points at a positive speed; None otherwise (one point is a ratio, not a slope)."""
+    pts = [(float(n), float(v)) for n, v in points if num(n) is not None and num(v) is not None and float(n) > 0]
+    if len(pts) < 2:
+        return None
+    sxx = sum(n * n for n, _ in pts)
+    s = sum(n * v for n, v in pts) / sxx
+    if s <= 0:
+        return None
+    rmse = math.sqrt(sum((v - s * n) ** 2 for n, v in pts) / len(pts))
+    mean_v = sum(v for _, v in pts) / len(pts)
+    return {"slope": s, "n": float(len(pts)), "rmse_pct": 100.0 * rmse / mean_v if mean_v else float("nan")}
+
+
+def kv_ke_kt(slope_peak_v_per_krpm: float) -> Dict[str, float]:
+    """The speed / torque constants from the slope of the line-line PEAK of the FUNDAMENTAL EMF against speed.
+
+    * ``kv`` = 1000 / slope (rpm per V of line-line peak of the fundamental);
+    * ``ke`` = phase rms EMF per mechanical rad/s = slope_peak / 1000 * (30 / pi) / sqrt(3) / sqrt(2)  [V s/rad];
+    * ``kt`` = :func:`motor_ai_sim.kv_kt.kt_from_kv` (= 3 * ke), N m per A rms of phase current, sine current on the q axis.
+    """
+    from motor_ai_sim import kv_kt as K
+    sp = float(slope_peak_v_per_krpm)
+    kv = 1000.0 / sp
+    ke = sp / 1000.0 * (30.0 / math.pi) / math.sqrt(3.0) / math.sqrt(2.0)
+    return {"slope_peak": sp, "kv": kv, "ke": ke, "kt": K.kt_from_kv(kv)}
+
+
+def flag_slope_outliers(points: Sequence[Tuple[Any, Any]], *, pct: float = SLOPE_FLAG_PCT,
+                        min_rows: int = SLOPE_FLAG_MIN_ROWS) -> List[Dict[str, Any]]:
+    """For each ``(rpm, V)`` row: ``{"rpm", "dev_pct", "flagged"}``, ``dev_pct`` = how far its V/n sits from the median V/n of
+    the OTHER rows (percent, negative = below).  Rows are only flagged - never removed here; with fewer than
+    ``min_rows`` usable rows nothing is flagged (``dev_pct`` None)."""
+    pts = [(i, float(n), float(v)) for i, (n, v) in enumerate(points)
+           if num(n) is not None and num(v) is not None and float(n) > 0]
+    out: List[Dict[str, Any]] = [{"rpm": num(n), "dev_pct": None, "flagged": False} for n, _ in points]
+    if len(pts) < min_rows:
+        return out
+    for i, n, v in pts:
+        others = sorted(vv / nn for j, nn, vv in pts if j != i)
+        k = len(others)
+        med = others[k // 2] if k % 2 else 0.5 * (others[k // 2 - 1] + others[k // 2])
+        if med > 0:
+            dev = 100.0 * ((v / n) / med - 1.0)
+            out[i] = {"rpm": n, "dev_pct": dev, "flagged": abs(dev) > pct}
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +360,8 @@ def noload_reference(rpm: float, refs: Sequence[Dict[str, Any]]) -> Optional[Dic
     return min(good, key=lambda r: abs(math.log(n / float(r["rpm"]))))
 
 
-def mech_loss_at(fn: Optional[Callable[[float, Optional[float]], Optional[Dict[str, float]]]], rpm: float,
-                 temp_c: Optional[float]) -> Optional[Dict[str, float]]:
+def mech_loss_at(fn: Optional[Callable[[float, Optional[float]], Optional[Dict[str, Any]]]], rpm: float,
+                 temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
     """Call the injected bearings + windage function; a failure is "not available", never zero."""
     if fn is None:
         return None

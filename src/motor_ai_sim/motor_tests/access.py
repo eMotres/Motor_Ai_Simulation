@@ -29,9 +29,20 @@ def resolve(request: Request, die: str, config: str) -> Dict[str, Any]:
         role = PM.is_member(str(user.get("email") or ""), production) if production else None
         return {"user": user, "admin": True, "role": role, "production": production,
                 "can_view": True, "can_add": True, "can_edit": True}
-    # members only; an OEM member must have the signed NDA, exactly as for the production itself
-    user, production = PA.require_member_with_full_view(request, die, config)
-    role = PM.is_member(str(user.get("email") or ""), production)
+    # members (an OEM member must have the signed NDA, exactly as for the production itself), or a member of the project
+    # that links this motor (production.project_link): read-only, and a project customer only behind the flag
+    user, production, role, viewer = PA.require_reader(request, die, config)
+    if viewer is not None:
+        from motor_ai_sim.motor_tests import store
+        from motor_ai_sim.production import project_link
+        try:
+            doc = store.load(die, config) if store.exists(die, config) else {}
+        except ValueError:
+            doc = {}
+        if not project_link.viewer_sees_tests(viewer, doc):
+            raise HTTPException(status_code=404, detail="No tests")
+        return {"user": user, "admin": False, "role": role, "production": production, "viewer": viewer,
+                "can_view": True, "can_add": False, "can_edit": False}
     edit = role in ("owner", "engineer")
     return {"user": user, "admin": False, "role": role, "production": production,
             "can_view": True, "can_add": edit or role == "oem", "can_edit": edit}

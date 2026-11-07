@@ -289,7 +289,7 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
     split = _num(geo.get("wire_split"))
     vs = [v for v in (variants or []) if isinstance(v, dict) and v.get("id")]
     ctrl = doc.get("controller") if isinstance(doc.get("controller"), dict) else {}
-    return {
+    out = {
         "config": str(doc.get("name") or ""),
         "die": str(doc.get("die") or ""),
         "knobs": {
@@ -329,6 +329,22 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
         "drive_variant": None,
         "drive_variant_suggested": vs[0]["id"] if vs else None,
     }
+    cool = preset_cooling(doc)
+    if cool is not None:
+        # the configuration's OWN cooling (its ``thermal_defaults:``, 2026-11-03): Configure's temperatures use it
+        # instead of the page's typed air.  Absent = the preset is byte-identical to before (the page's own cooling).
+        out["cooling_defaults"] = cool
+    return out
+
+
+def preset_cooling(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The cooling a configuration declares in ``thermal_defaults:`` as Configure reads it
+    (``thermal_settings.configure_cooling``), ``None`` when it declares none or none Configure can use."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("thermal_defaults"), dict):
+        return None
+    from motor_ai_sim import thermal_settings as _ts
+    label = "%s %s" % (doc.get("die") or "", doc.get("name") or "")
+    return _ts.configure_cooling(_ts.thermal_defaults_of_doc(doc, label))
 
 
 def presets_for_die(docs: list, die_geometry: Optional[Dict[str, Any]] = None,

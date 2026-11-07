@@ -58,13 +58,17 @@ def _dies_dir() -> Path:
     return _ws_root() / "dies"
 
 # The keys a CONFIGURATION snapshots on top of a die — everything the stamp
-# does not fix: stack length and the whole wire stack.
+# does not fix: stack length, the whole wire stack, and (owner 2026-11-03,
+# after #563) the stator OD notches: one die, notched or smooth per
+# configuration (a submerged motor drops them).  ``stator_outer_notches`` is
+# stored in ``geometry_overrides`` only when it is OFF (absent = on).
 FREE_GEO_KEYS = (
     "motor_length",
     "wire_width", "wire_height",
     "wire_spacing_x", "wire_spacing_y",
     "num_wires_per_slot", "wire_split", "wire_parallel",
     "insulation_thickness",
+    "stator_outer_notches",
 )
 
 # What stays EDITABLE while the die is locked — the user's definition, and
@@ -87,8 +91,12 @@ FREE_GEO_KEYS = (
 #:
 #: `wire_split` stays LOCKED on purpose: a split wire is N narrower strips with
 #: spacing between them, the slot grows around them, and that is geometry.
+#:
+#: `stator_outer_notches` (owner 2026-11-03): a CONFIGURATION option on a
+#: common die — the lamination is cut from the same stamp with or without the
+#: OD notches, so a locked die never refuses it (the configuration lock does).
 EDITABLE_UNDER_DIE_LOCK = ("motor_length", "wire_height", "num_wires_per_slot",
-                           "wire_parallel")
+                           "wire_parallel", "stator_outer_notches")
 
 #: What makes a die THIS die: the stamped lamination's diameter and its
 #: slot/pole topology.  Every other geometry key is a shape the engineer may
@@ -1187,6 +1195,11 @@ def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
         # when the configuration carries no `parts:` block — which is every
         # configuration written before this feature.
         **({"parts": cfg_doc["parts"]} if cfg_doc.get("parts") else {}),
+        # The configuration's own coil (bend radius / straight overhang, owner
+        # 2026-11-02): it moves k_end, so R, copper loss and copper mass — a
+        # result computed before the edit is on an older build.  Absent block =
+        # the signature every configuration had before.
+        **({"coil": cfg_doc["coil_overrides"]} if cfg_doc.get("coil_overrides") else {}),
     }
     return hashlib.sha1(
         _json.dumps(src, sort_keys=True, default=str).encode()).hexdigest()[:12]
@@ -2366,6 +2379,7 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                "can_write": _can_write}
         if not _hit[1] and _acc["mode"] == MODE_GRANTED:
             res["note"] = "no motors granted yet — ask the vendor"
+            res["note_code"] = "no_motors_granted"          # the page shows its own "start a project" line (owner 2026-11-06)
         return res
 
     for _e in _entries:
@@ -2552,6 +2566,7 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.
         res["note"] = "no motors granted yet — ask the vendor"
+        res["note_code"] = "no_motors_granted"
     return res
 
 
@@ -2860,15 +2875,20 @@ def retired_dies(_w: dict = Depends(require_catalog_write)):
 
 # ── configuration ────────────────────────────────────────────────────────────
 
-def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None) -> None:
+def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None,
+                         source_config: Optional[str] = None) -> None:
     """A new variant of a project's motor joins the project at once (owner 2026-10-27, ``development.autolink``).  Never
-    raises: the configuration is already saved, the link is an addition."""
+    raises: the configuration is already saved, the link is an addition.
+
+    ``source_config`` (with ``copied_from`` when it lives in another die) is the configuration the new one was made
+    from: the copy joins THAT motor's project (2026-11-02), not the first project that holds the die."""
     try:
         from motor_ai_sim.development import autolink
         actor = ""
         if isinstance(w, dict) and isinstance(w.get("user"), dict):
             actor = str(w["user"].get("email") or "").strip().lower()
-        joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor)
+        kw = {"source_config": source_config} if source_config else {}
+        joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor, **kw)
         if joined:
             log.info("family: new configuration '%s/%s' linked to project(s) %s", die, cfg, ", ".join(joined))
     except Exception:                                       # noqa: BLE001
@@ -2929,7 +2949,10 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     _save_yaml(_cfg_file(die, name), doc)
     log.info("family: configuration '%s/%s' created from the live machine",
              die, name)
-    _autolink_new_config(die, name, _w)
+    # the live machine came from the configuration the editor has loaded: the new one joins THAT motor's project
+    _src = _read_ctx() or {}
+    _autolink_new_config(die, name, _w, copied_from=(str(_src.get("die") or "") or None),
+                         source_config=(str(_src.get("config") or "") or None))
     out = {"ok": True, "die": die, "config": name}
     _shaft_note = _live_shaft_note()
     if _shaft_note:
@@ -3016,49 +3039,107 @@ def _lname_fix(name: str, stack) -> Optional[str]:
 
 class ConfigRename(BaseModel):
     name: str
+    dry_run: bool = False           # list every change, write nothing (also ``?dry_run=1``; the POST route)
+
+
+def _config_rename(die: str, cfg: str, name: str, *, dry: bool, _w: dict) -> Dict[str, Any]:
+    """RENAME a configuration as one transaction (``config_move.run`` with ``new_cfg``): every store keyed by
+    ``"<die>/<cfg>"`` follows to ``"<die>/<name>"`` - the file and its ``runs/`` (``payload_file`` repointed),
+    the result ledgers, the active contexts, the workspace memories, the catalog cards and, for a shared-catalog
+    configuration, the account grants, the development projects (links, history, grant ledger, snapshots,
+    ``index.json``, the cost estimate's target motor), production, tests, CAD and the product revision records.
+
+    Scope: a verified admin (or the single-user install) renames in the layer the die lives in - the shared
+    catalog's die takes its accounts / projects / production along.  Any other writer renames in their OWN
+    workspace (a shared or published die is copied there first, its runs copied - never moved - from the other
+    layer): only that workspace's stores follow, the shared catalog's name stays what it is for everybody else."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    new = _check_name(name, "configuration")
+    _require_die_write(die, _w, cfg, "pair")
+    if new == "die":
+        raise HTTPException(422, detail="'die' is reserved")
+    if not _cfg_file(die, cfg).is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    if new == cfg:
+        return {"ok": True, "config": cfg, "mode": "rename", "dry_run": dry, "changes": [], "manual": [],
+                "from": {"die": die, "config": cfg}, "to": {"die": die, "config": cfg}, "backup": None}
+    if new.casefold() == cfg.casefold():
+        # the stores match names case-insensitively and a case-insensitive disk sees ONE file: a rename that
+        # only changes letter case would collide with itself
+        raise HTTPException(422, detail=(
+            f"'{new}' differs from '{cfg}' only in letter case; rename it to another name first, then to '{new}'"))
+    runs_fallback: Optional[Path] = None
+    if not _ws_layering() or _w.get("is_admin"):
+        if _ws_layering() and not _WS.is_verified_admin_request():
+            raise HTTPException(403, detail="only a verified signed-in admin may rename a shared configuration")
+        src_dir = _die_dir(die)
+        glob_scope = True
+        if _ws_layering():
+            layer = _classify_die_dir(src_dir)[0]
+            if layer == _WS.LAYER_PUBLISHED:
+                raise HTTPException(409, detail=(
+                    f"'{die}' is a published community die; its publisher renames it in their own workspace"))
+            glob_scope = layer == _WS.LAYER_SHARED
+    else:
+        if dry:
+            raise HTTPException(403, detail="the rename plan (dry run) is an admin action")
+        # a workspace copy never renames what a product revision record names (before the copy is made)
+        from motor_ai_sim import motor_revisions as _mr
+        _mr.refuse_rename_config(die, cfg)
+        src_dir = _ensure_writable_die(die)        # copy-on-write: the rename happens in the caller's workspace
+        glob_scope = False
+        _s = _src_die_dir(die)
+        if _s is not None and Path(str(_s)) != src_dir and (Path(str(_s)) / "runs" / cfg).is_dir():
+            runs_fallback = Path(str(_s)) / "runs" / cfg
+    if not (src_dir / f"{cfg}.yaml").is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    for p in sorted(src_dir.glob("*.yaml")):
+        if p.name != "die.yaml" and p.stem != cfg and p.stem.casefold() == new.casefold():
+            raise HTTPException(409, detail=f"configuration '{p.stem}' already exists under die '{die}'")
+    import sys as _sys
+    from motor_ai_sim import config_move as _cm
+    from motor_ai_sim.admin_audit import actor_of
+    try:
+        out = _cm.run(_sys.modules[__name__], die, cfg, die, src_dir=src_dir, dst_dir=src_dir, dry_run=dry,
+                      copy=False, glob_scope=glob_scope, actor=actor_of(_w.get("user")), new_cfg=new,
+                      runs_fallback=runs_fallback)
+    except _cm.MoveBlocked as exc:
+        raise HTTPException(409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("family: rename of '%s/%s' -> '%s' failed; rolled back", die, cfg, new)
+        bad = getattr(exc, "rollback_failures", None)
+        raise HTTPException(500, detail=(
+            f"the rename of '{die}/{cfg}' to '{new}' failed ({type(exc).__name__}: {exc}) and "
+            + (f"the rollback was INCOMPLETE ({'; '.join(bad)}) - see the backup folder under .config_moves"
+               if bad else "was rolled back; nothing was changed")))
+    out["config"] = new                            # what the PATCH always answered
+    return out
+
+
+@router.post("/config/{die}/{cfg}/rename")
+def rename_config_safe(die: str, cfg: str, req: ConfigRename, dry_run: bool = False,
+                       _w: dict = Depends(require_catalog_write)):
+    """RENAME a configuration - and everything keyed by ``"<die>/<cfg>"`` (``config_move.py``, rename mode).
+
+    Admin only, one transaction: every rewritten file is backed up under ``.config_moves/`` first, a failure
+    undoes the steps already done, a finished rename writes a ``config.rename`` admin-audit entry.  ``dry_run``
+    (body or ``?dry_run=1``) writes nothing and answers the same document: ``changes`` (every store and place)
+    and ``manual`` (deploy-managed folders to move by hand).  409 when the die already has a configuration of
+    that name (letter case ignored), a frozen product revision would be renamed, or a job is running on it."""
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="renaming a catalog configuration is an admin action")
+    return _config_rename(die, cfg, req.name, dry=bool(dry_run or req.dry_run), _w=_w)
 
 
 @router.patch("/config/{die}/{cfg}")
 def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(require_catalog_write)):
-    """Rename a configuration (its file moves with it; duties ride along)."""
-    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    new = _check_name(req.name, "configuration")
-    _require_die_write(die, _w, cfg, "pair")
-    if new == "die":
-        raise HTTPException(422, detail="'die' is reserved")
-    src = _cfg_file(die, cfg)
-    if not src.is_file():
-        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
-    if new == cfg:
-        return {"ok": True, "config": cfg}
-    from motor_ai_sim import motor_revisions as _mr
-    _mr.refuse_rename_config(die, cfg)     # the revision record names the configuration
-    # Copy-on-write BEFORE anything is unlinked or moved: a rename inside a
-    # published or shared die happens on this workspace's own copy of it.
-    _wdir = _ensure_writable_die(die)
-    src = _wdir / src.name
-    dst = _wdir / f"{new}.yaml"
-    if dst.exists():
-        raise HTTPException(409, detail=f"configuration '{new}' already exists "
-                                        f"under die '{die}'")
-    c = _load_yaml(src, "configuration")
-    c["name"] = new
-    # The stored-run sidecars live under runs/<configuration>/ — move the
-    # folder and repoint every duty's `payload_file`, or the copies would
-    # dangle and the PWM chips would open nothing.
-    _refile_config_runs(die, c, cfg, new, copy=False)
-    _save_yaml(dst, c)
-    src.unlink()
-    # Keep the active context pointing at the renamed configuration (same
-    # pattern as the upsert_duty auto-rename) — a stale context 404s inside
-    # geometry_lock_check and silently drops the config lock.
-    ctx = _read_ctx() or {}
-    if ctx.get("die") == die and ctx.get("config") == cfg:
-        import json as _json
-        ctx["config"] = new
-        _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
-    log.info("family: configuration '%s/%s' renamed to '%s'", die, cfg, new)
-    return {"ok": True, "config": new}
+    """Rename a configuration.  The SAME transaction as ``POST .../rename`` (2026-11-02: this route used to move
+    only the file, ``runs/``, the duties and the active context, orphaning the grants, projects, results,
+    production ... keyed by the old pair); an admin renames in the catalog, any other writer in their own
+    workspace.  No dry run here: the plan is the POST route's (admin)."""
+    return _config_rename(die, cfg, req.name, dry=False, _w=_w)
 
 
 class DieDuplicate(BaseModel):
@@ -3161,7 +3242,7 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     _save_yaml(dst, c)
     log.info("family: configuration '%s/%s' duplicated as '%s' (%d duty(ies))",
              die, cfg, new, len(c.get("duties") or []))
-    _autolink_new_config(die, new, _w)
+    _autolink_new_config(die, new, _w, source_config=cfg)
     return {"ok": True, "config": new,
             "duties": [d.get("name") for d in (c.get("duties") or [])]}
 
@@ -4586,7 +4667,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
             target_cfg = _copy_config_into(die, target, cfg)
             new_variant = True
     if new_variant and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
     # The configurations now sit on the NEW lamination: a connection that
     # factored the old slot count may not factor this one (2S on 48 slots).
     _repick_die_windings(target, skip_locked=not created)
@@ -4664,6 +4745,9 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
     if dsw is not None and lsw is not None and abs(dsw - lsw) > 1e-6:
         out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
+    # `stator_outer_notches` is NOT here: it is a configuration key
+    # (FREE_GEO_KEYS, owner 2026-11-03), so switching it never makes another
+    # lamination and never moves a configuration to another die.
     return out
 
 
@@ -4751,7 +4835,7 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
             target_cfg = _copy_config_into(die, target, cfg)
             copied = True
     if copied and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
     import json as _json
     at = datetime.now().isoformat(timespec="seconds")
     _ctx_file().write_text(_json.dumps({
@@ -5047,8 +5131,13 @@ def duty_saved_geometry(duty: Optional[dict]) -> Dict[str, float]:
         sig = None
         g = duty.get("geometry")
         if isinstance(g, dict) and g:
-            return {k: v for k, v in g.items()
-                    if isinstance(v, (int, float)) and not isinstance(v, bool)}
+            out = {k: v for k, v in g.items()
+                   if isinstance(v, (int, float)) and not isinstance(v, bool)}
+            # the OD-notch flag, in the stamp's own spelling (0 = off)
+            from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+            if "stator_outer_notches" in g and not stator_outer_notches(g):
+                out["stator_outer_notches"] = 0.0
+            return out
         sig = _find_geo_sig({k: v for k, v in duty.items()
                              if k not in ("geometry", "solved_on")})
     if not sig:
@@ -5108,6 +5197,18 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
         else:
             continue
         out.append({"key": k, "scope": scope, "live": lv, "duty": sv})
+    # The OD-notch FLAG (a bool, so the numeric loop above skips it).  Only a
+    # stamp that SAYS something is compared: stamps carry it only when the
+    # notches were off, and an older stamp's silence says nothing.
+    from motor_ai_sim.geometry.motor_geometry import (STATOR_OUTER_NOTCHES,
+                                                      stator_outer_notches)
+    # A configuration key (FREE_GEO_KEYS): the configuration's own build, the
+    # scope its other free keys but the stack length are reported under.
+    if STATOR_OUTER_NOTCHES in saved:
+        _sv, _lv = stator_outer_notches(saved), stator_outer_notches(live)
+        if _sv != _lv:
+            out.append({"key": STATOR_OUTER_NOTCHES, "scope": "winding",
+                        "live": _lv, "duty": _sv})
     return out
 
 
@@ -5564,7 +5665,8 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
                                                from_current=True,
                                                note=req.note or "")), _w=_w)
     cfg_name = str(out.get("config") or cfg_name)
-    _autolink_new_config(name, cfg_name, _w, copied_from=(rel.get("released_from") or None))
+    _autolink_new_config(name, cfg_name, _w, copied_from=(rel.get("released_from") or None),
+                         source_config=(rel.get("released_config") or None))
     import json as _json
     _ctx_file().write_text(
         _json.dumps({"die": name, "config": cfg_name, "duty": duty_name,
@@ -6013,6 +6115,151 @@ def set_limits(die: str, cfg: str, req: LimitsPatch,
     _save_yaml(_cfg_file(die, cfg), c)
     log.info("family: limits on '%s/%s': %s", die, cfg, lim)
     return {"ok": True, "limits": lim}
+
+
+# ── the configuration's own coil (owner 2026-11-02: «все бери из Fusion») ────
+# Machines on one die with one wire can still have different coils in their
+# Fusion models (a motor and two generators on one shared die).  The inner bend
+# radius ``wire_beng_r`` and the straight overhang ``coil_straight_extra`` used
+# to come only from the die's geometry (or the coil rule), so one die-level
+# edit moved all of them.  A configuration now keeps its own in the
+# ``coil_overrides`` block: it wins over the die, an absent key keeps the die's
+# value (coil_build.coil_parameters).  The block is NOT a geometry override: it
+# never reaches the live geometry (PUT /api/geometry), so loading a sibling
+# configuration never carries this one's coil along — the coil is read from the
+# configuration document of the machine a computation is for.
+
+
+def _config_coil_view(die: str, cfg: str, die_doc: dict, c: dict) -> Dict[str, Any]:
+    """What ``GET .../coil`` answers: the stored block, the die's values, the
+    coil k_end is billed at for this configuration, and k_end itself."""
+    from motor_ai_sim import coil_build as _cb
+    die_geo = dict((die_doc or {}).get("geometry") or {})
+    view: Dict[str, Any] = {
+        "die": die, "config": cfg, "locked": bool(c.get("locked", False)),
+        "block": _cb.CONFIG_COIL_BLOCK, "keys": list(_cb.CONFIG_COIL_KEYS), "unit": "mm",
+        "limits_mm": {k: {"above": lo, "max": hi} for k, (lo, hi) in _cb.CONFIG_COIL_LIMITS_MM.items()},
+        "overrides": _cb.clean_coil_overrides(c.get(_cb.CONFIG_COIL_BLOCK)),
+        "die_values": {k: die_geo.get(k) for k in _cb.CONFIG_COIL_KEYS},
+        "coil": None, "k_end": None,
+    }
+    try:
+        from motor_ai_sim.masses import cad_coil_dimensions
+        from motor_ai_sim.modules.motor_mass import _default_config_doc
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override, params_from_config
+        geo = dict(die_geo)
+        geo.update({k: v for k, v in (c.get("geometry_overrides") or {}).items() if v is not None})
+        p = params_from_config(geo_override=geo)
+        g = merge_geo_override(dict(_default_config_doc().get("geometry") or {}), geo)
+        # the same scope the catalog mass uses (modules.motor_mass): THIS configuration's file
+        with _cb.machine_scope(die, cfg, c):
+            dims = cad_coil_dimensions(p, g)
+        view["coil"] = {
+            "wire_beng_r": round(float(dims["wire_beng_r_mm"]), 4),
+            "coil_straight_extra": round(float(dims["coil_straight_extra_mm"]), 4),
+            "coil_lead_total": round(float(dims["coil_lead_total_mm"]), 4),
+            "mean_turn_length_mm": round(float(dims["mean_turn_length_mm"]), 3),
+            "source": dims.get("coil_source"),
+            "config_keys": dims.get("coil_config_keys") or [],
+            "typed_keys": dims.get("coil_typed") or [],
+        }
+        view["k_end"] = round(float(dims["k_end_cad"]), 4)
+    except Exception as exc:                  # noqa: BLE001 - the stored block still answers
+        log.warning("family: coil view of '%s/%s' - k_end not computed: %s", die, cfg, exc)
+    return view
+
+
+@router.get("/config/{die}/{cfg}/coil")
+def get_config_coil(die: str, cfg: str, authorization: str = Header(default=None)):
+    """The configuration's own coil keys (``coil_overrides``), the die's values
+    beside them, and the coil + k_end this configuration is billed at."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_access(die, authorization, cfg)
+    d = _load_yaml(_die_file(die), "die")
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    return _config_coil_view(die, cfg, d, c)
+
+
+def set_config_coil(die: str, cfg: str, values: Dict[str, Any], *, source: str = "form") -> Dict[str, Any]:
+    """Write the SENT keys of a configuration's ``coil_overrides`` (a value in
+    mm sets it, ``None`` clears it - the die's value then stands again).  The
+    one writer, shared by ``PATCH .../coil`` and the Fusion import.  No access
+    check here: the callers make it.  422 for an unknown key or a value out of
+    range (nothing is written), 423 for a locked configuration."""
+    from motor_ai_sim import coil_build as _cb
+    bad, clean = [], {}
+    for k, v in (values or {}).items():
+        if k not in _cb.CONFIG_COIL_KEYS:
+            bad.append({"field": k, "reason": "not a configuration coil key (allowed: %s)"
+                        % ", ".join(_cb.CONFIG_COIL_KEYS)})
+            continue
+        if v is None:
+            clean[k] = None
+            continue
+        val, why = _cb.validate_coil_override(k, v)
+        if why:
+            bad.append({"field": k, "value": v, "reason": why})
+        else:
+            clean[k] = val
+    if bad:
+        raise HTTPException(422, detail={"error": "invalid coil values", "invalid_parameters": bad})
+    d = _load_yaml(_die_file(die), "die")
+    cfile = _cfg_file(die, cfg)
+    c = _load_yaml(cfile, "configuration")
+    if c.get("locked") is True and clean:
+        raise HTTPException(423, detail={
+            "error": "configuration is locked", "die": die, "config": cfg,
+            "hint": "the coil is part of the configuration's build; unlock it in the Motors catalog (admin) first"})
+    before = _cb.clean_coil_overrides(c.get(_cb.CONFIG_COIL_BLOCK))
+    after = dict(before)
+    for k, v in clean.items():
+        if v is None:
+            after.pop(k, None)
+        else:
+            after[k] = round(float(v), 6)
+    changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    k_before = _config_coil_view(die, cfg, d, c).get("k_end") if changed else None
+    if changed:
+        if after:
+            c[_cb.CONFIG_COIL_BLOCK] = {k: after[k] for k in _cb.CONFIG_COIL_KEYS if k in after}
+        else:
+            c.pop(_cb.CONFIG_COIL_BLOCK, None)
+        # a stored end-winding factor belongs to the coil it was measured on
+        # (the same rule as a build adopted by the duty save): absent = derive
+        if c.pop("end_winding_factor", None) is not None:
+            log.info("family: '%s/%s' stored end_winding_factor dropped - the coil changed", die, cfg)
+        _save_yaml(cfile, c)
+        _cb.clear_cache()
+        log.info("family: coil of '%s/%s' (%s): %s", die, cfg, source,
+                 ", ".join("%s %s -> %s" % (k, before.get(k), after.get(k)) for k in changed))
+    view = _config_coil_view(die, cfg, d, c)
+    has_results = any(isinstance(x, dict) and (x.get("result") or x.get("summary") or x.get("runs"))
+                      for x in (c.get("duties") or []))
+    return {"ok": True, "changed": changed,
+            "before": {k: before.get(k) for k in changed}, "after": {k: after.get(k) for k in changed},
+            "k_end_before": k_before, "k_end_after": view.get("k_end") if changed else None,
+            # the coil is part of the build signature: stored results are now "computed on an older build"
+            "results_stale": bool(changed) and has_results,
+            **view}
+
+
+class CoilPatch(BaseModel):
+    # Any, not float: the validator says what is wrong in words (and a bool is not a length)
+    wire_beng_r: Optional[Any] = None             # inner bend radius of the wire [mm]; null clears
+    coil_straight_extra: Optional[Any] = None     # straight overhang beyond the stack, both ends [mm]; null clears
+
+
+@router.patch("/config/{die}/{cfg}/coil")
+def patch_config_coil(die: str, cfg: str, req: CoilPatch, _w: dict = Depends(require_catalog_write)):
+    """Set or clear the configuration's own coil keys.  A field that is NOT SENT
+    is left unchanged, an explicit ``null`` clears it (the die's value, or the
+    coil rule, stands again).  k_end, the phase resistance, the copper loss and
+    the copper mass of THIS configuration follow; its siblings on the same die
+    keep theirs."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    sent = set(getattr(req, "model_fields_set", None) or getattr(req, "__fields_set__", None) or ())
+    return set_config_coil(die, cfg, {k: getattr(req, k) for k in sent}, source="form")
 
 
 class CadMassPut(BaseModel):
@@ -6514,6 +6761,12 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
             # typed by hand, is still refused.
             canon = ov.get(k, die_geo.get(k))
             lock_name = f"die '{die}'"
+        if k == "stator_outer_notches":
+            # a lamination FLAG: absent = on, so the canonical value is the
+            # flag's meaning on the die/configuration, never "missing"
+            from motor_ai_sim.geometry.motor_geometry import stator_outer_notches
+            canon = stator_outer_notches(
+                {k: ov[k]} if k in ov else {k: die_geo.get(k)})
         if canon is None:
             # A key the stamped file never carried has a canonical value all
             # the same — what its absence MEANS (no sleeve, one wire in hand):

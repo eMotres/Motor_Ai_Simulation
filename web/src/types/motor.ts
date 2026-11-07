@@ -5,7 +5,10 @@ export interface ParameterSchema {
   name: string;
   label: string;
   unit: string;
-  type: 'float' | 'int' | 'string';
+  /** 'bool' (2026-11-03) = a flag, rendered as a checkbox; absent value = `default` */
+  type: 'float' | 'int' | 'string' | 'bool';
+  /** the value an ABSENT key means (flags: `stator_outer_notches` absent = true) */
+  default?: number | string | boolean | null;
   min?: number;
   max?: number;
   step?: number;
@@ -44,6 +47,8 @@ export interface GeometrySchemaResponse {
  * Supports both numeric and string values
  */
 export type MotorGeometryParams = Record<string, number | string>;
+/* A geometry FLAG (`stator_outer_notches`, 2026-11-03) travels as a boolean on
+   the wire; the form reads it through `lib/geometryFlag.flagValue`. */
 
 /**
  * Material assignment for motor regions

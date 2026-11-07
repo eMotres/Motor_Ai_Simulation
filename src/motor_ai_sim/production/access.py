@@ -49,15 +49,55 @@ def can_propose(email: str, production: dict, is_admin: bool) -> bool:
     return role in ("owner", "engineer", "oem")
 
 
-def can_view_costs(user: dict, production: dict) -> bool:
+#: Fields of a costs payload / cost summary that carry OUR commercial terms - the margin, the selling price, a markup or a
+#: quote - and never only what the motor costs (owner 2026-11-02: the factory sees costs only where the production has
+#: ``share_costs_with_oem`` on, and even then never our margin or our selling price).
+COMMERCIAL_COST_FIELDS = frozenset({
+    "margin_pct", "margin", "price_per_motor", "order_price_total", "factory_price_per_motor",
+    "markup", "markup_pct", "price", "selling_price", "sale_price",
+    "quote", "quotes", "quote_id", "quote_total", "quoted_price",
+})
+
+#: What a caller sees of the production's money: everything, the cost rows and cost totals only, or nothing at all.
+COST_VIEW_FULL, COST_VIEW_COST_ONLY, COST_VIEW_NONE = "full", "cost", "none"
+
+
+def cost_view(user: dict, production: dict) -> str:
+    """The ONE rule for production money: admins and the production's owner / engineer see everything; the factory (OEM)
+    sees the cost rows and cost totals only, and only with ``share_costs_with_oem`` on; anybody else - a project
+    "viewer" (project_link) included - sees no cost at all."""
     if is_admin(user):
-        return True
-    role = is_member(user["email"], production)
+        return COST_VIEW_FULL
+    role = is_member(str(user.get("email") or ""), production)
     if role in ("owner", "engineer"):
-        return True
+        return COST_VIEW_FULL
     if role == "oem" and bool(production.get("share_costs_with_oem")):
-        return True
-    return False
+        return COST_VIEW_COST_ONLY
+    return COST_VIEW_NONE
+
+
+def can_view_costs(user: dict, production: dict) -> bool:
+    return cost_view(user, production) != COST_VIEW_NONE
+
+
+def _strip_commercial(value):
+    if isinstance(value, dict):
+        return {k: _strip_commercial(v) for k, v in value.items() if str(k) not in COMMERCIAL_COST_FIELDS}
+    if isinstance(value, list):
+        return [_strip_commercial(v) for v in value]
+    return value
+
+
+def costs_for_caller(user: dict, production: dict, payload: dict) -> dict:
+    """Filter a response that carries costs (``/bom``, ``/costs``, a cost summary) for the caller: as it is for a full
+    view, without any commercial field (recursively) for the factory, and empty for anybody else (fail closed - the
+    routes refuse or strip earlier, this is the belt)."""
+    level = cost_view(user, production)
+    if level == COST_VIEW_FULL:
+        return payload
+    if level == COST_VIEW_COST_ONLY:
+        return _strip_commercial(payload)
+    return {}
 
 
 def can_edit_costs(user: dict, production: dict) -> bool:
@@ -110,6 +150,43 @@ def require_member_with_full_view(request: Request, die: str, config: str) -> tu
     if denial is not None:
         raise HTTPException(status_code=403, detail=denial, headers={"code": "nda_required"})
     return user, production
+
+
+def require_reader(request: Request, die: str, config: str) -> tuple[dict, dict, str, Optional[dict]]:
+    """A production MEMBER (with the NDA gate for the factory), an admin, or a member of the project that links this
+    motor (``project_link``: derived at request time, read-only).
+
+    Returns ``(user, production, role, viewer_ctx)``: ``role`` is the production role (``owner`` / ``engineer`` /
+    ``oem``), ``"admin"`` for a global admin who is not a member, or ``"viewer"`` for a project member; ``viewer_ctx`` is
+    ``{"project_id", "project_role"}`` for a viewer and ``None`` otherwise.  Anybody else gets 404, exactly like a
+    missing production.  Only the read routes a viewer may use call this; every other route keeps ``require_member``."""
+    from motor_ai_sim.production import project_link
+    user = require_signed_in(request)
+    production = load_production(die, config)
+    if production is None:
+        raise HTTPException(status_code=404, detail="Production not found.")
+    email = str(user.get("email") or "")
+    role = is_member(email, production)
+    if role is not None:
+        denial = None if is_admin(user) else full_view_denial(request, user, production)
+        if denial is not None:
+            raise HTTPException(status_code=403, detail=denial, headers={"code": "nda_required"})
+        return user, production, role, None
+    if is_admin(user):
+        return user, production, "admin", None
+    ctx = project_link.viewer_context(email, die, config)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Production not found.")
+    return user, production, project_link.VIEWER, ctx
+
+
+def viewer_download_denial(request: Request) -> Optional[dict]:
+    """A project viewer downloads a production FILE only with the signed NDA - the same gate as the factory's."""
+    identity = auth.caller_identity(request.headers.get("authorization"))
+    rec = _user_rec(identity.get("id") or "")
+    if not model3d.can_download(identity, rec):
+        return {"code": "nda_required", "message": str(model3d.denial_detail(identity, rec))}
+    return None
 
 
 def require_editor(request: Request, die: str, config: str) -> tuple[dict, dict]:

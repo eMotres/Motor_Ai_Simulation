@@ -23,7 +23,7 @@ import {
 } from '@mui/material';
 
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
-import { coolingIssue, effectiveBoreMode, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
+import { coolingIssue, effectiveBoreMode, geomFor, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
 import type { HeatPath } from '../../stores/thermalStore';
 import { historyNoticeFor } from '../../lib/historyNotice';
 import { hasSleeve } from '../../lib/hasSleeve.ts';
@@ -34,6 +34,7 @@ import type { ColumnDef } from '../common/LocalCompareTable';
 import SolveProgressStrip from '../common/SolveProgressStrip';
 import { SolveTimer, solvedIn } from '../mechanical/SolveTimer';
 import ThermalMap, { GeometryMap } from './ThermalMap';
+import StoredPointMap from '../common/StoredPointMap';
 import DutyCycleEditor from './DutyCycleEditor';
 import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
@@ -53,7 +54,7 @@ import {
 } from './api';
 import { emRunLine, emRunPoint, emRunTooltip } from './emRun';
 import type {
-  BoreMode, CoolMode, EndFaceMode, FrameMode, ThermView, ThermalCoolingSurface,
+  BoreMode, CoolMode, EndFaceMode, FrameMode, StatorOdMode, ThermView, ThermalCoolingSurface,
 } from './api';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -72,6 +73,7 @@ import {
 } from '../../lib/configuratorPropeller';
 import type { CoolingInfo, PropSummary } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchPropellerCoolingOptions, fetchPropellerThermalPoint } from '../../lib/propellerApi';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/thermal.json (docs/I18N.md).
 const tx = nsT('thermal');
@@ -638,7 +640,7 @@ const ThermalPanel: React.FC = () => {
     coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
     boreAirSpeed, boreFluid, boreTIn, boreFlowLpm,
     shaftExtMm, shaftExtSides, frame,
-    emissivity, heatPath,
+    emissivity, heatPath, statorOd, sleeveWallMm, sleeveK,
     endFaces, endFaceSides,
     view, eqTemp, showFlux, geom, geomBusy, geomErr,
   } = st;
@@ -664,8 +666,20 @@ const ThermalPanel: React.FC = () => {
   // coupled loop's own map is filed as the last thermal result, and `hydrate`
   // only ever runs once per session (2026-09-10).
   const refreshLastThermal = st.refreshLast;
-  useEffect(() => { void hydrate().then(() => refreshLastThermal()); },
-            [hydrate, refreshLastThermal]);
+  const loadStoredThermal = st.loadStored;
+  useEffect(() => { void hydrate().then(() => refreshLastThermal()).then(() => loadStoredThermal()); },
+            [hydrate, refreshLastThermal, loadStoredThermal]);
+
+  /* The cross-section drawn while nothing of this point is solved is THIS motor's:
+     a mesh built for the previous machine is not drawn (`geomFor`, compared by value)
+     and is rebuilt - the mesher, never a solve - once the geometry has settled. */
+  const geomShown = geomFor(geom, st.geomSig);
+  const ensureGeometry = st.ensureGeometry;
+  useEffect(() => {
+    if (res || geomShown || geomBusy || geomErr) return;
+    const id = window.setTimeout(() => { void ensureGeometry(); }, 600);
+    return () => window.clearTimeout(id);
+  }, [res, geomShown, geomBusy, geomErr, liveGeometry, ensureGeometry]);
 
   /* ── the Electromagnetic run the next Solve uses ──────────────────────────
      THE LATEST run of the loaded machine (owner rule 2026-09-30, «always take
@@ -937,6 +951,10 @@ const ThermalPanel: React.FC = () => {
      rule the shaft and the open-frame tiles follow. */
   const mount = res?.cooling?.mount;
   const hpBlk = res?.cooling?.heat_path;
+  // the stator-OD sleeve block of the last map (read-only)
+  const sleeveBlk = res?.cooling?.outer?.stator_od;
+  const sleeveFrac = typeof sleeveBlk?.stator_od_contact_fraction === 'number'
+    ? sleeveBlk.stator_od_contact_fraction : null;
   const endFaceBlk = res?.cooling?.end_faces;
   const sSplit = budget?.stator_heat_split;
   const showRobot = mount?.mode === 'conduction' || endFaceBlk?.mode === 'still'
@@ -1116,11 +1134,13 @@ const ThermalPanel: React.FC = () => {
             </Box>
           )}
 
-          <Button variant="contained" size="small" onClick={solve}
-            disabled={busy || !!coolErr}
-            startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
-            {busy ? 'Solving' : 'Solve'}
-          </Button>
+          <SolveGate>
+            <Button variant="contained" size="small" onClick={solve}
+              disabled={busy || !!coolErr}
+              startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+              {busy ? 'Solving' : 'Solve'}
+            </Button>
+          </SolveGate>
           <SolveTimer busy={busy} startedAt={st.field.startedAt} est={st.est.field}
             what="thermal solve" />
 
@@ -1165,11 +1185,13 @@ const ThermalPanel: React.FC = () => {
             <Typography sx={{ ...lbl, color: '#93c5fd' }}>
               {historyNoticeFor(res)!.text}
               {' · '}
-              <Typography component="span" onClick={recompute}
-                sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
-                     cursor: 'pointer' }}>
-                {tx('recompute')}
-              </Typography>
+              <SolveGate>
+                <Typography component="span" onClick={recompute}
+                  sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
+                       cursor: 'pointer' }}>
+                  {tx('recompute')}
+                </Typography>
+              </SolveGate>
             </Typography>
           )}
 
@@ -1507,6 +1529,39 @@ const ThermalPanel: React.FC = () => {
           </Box>
         </Box>
 
+        {/* ── how the outer boundary reaches the stator (2026-11-03) ──────────
+            Direct = the film on the stator's own outer contour (every stored
+            map).  Sleeve = a dry press fit into a round sleeve (a submerged
+            motor): only the OD iron arcs touch it. */}
+        <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}
+          data-testid="thermal-stator-od">
+          <RowLabel text="Stator OD"
+            tip="How the outer boundary reaches the stator. Direct: the film acts on the stator's own outer contour. Sleeve contact: the stator is pressed into a round sleeve; heat crosses the OD iron arcs, the sleeve wall, then the film." />
+          <Box sx={CTRL_ROW}>
+            <Select size="small" value={statorOd}
+              onChange={(e) => setField('statorOd', e.target.value as StatorOdMode)}
+              sx={{ fontSize: 11, height: 30, minWidth: 150 }}>
+              <MenuItem value="direct" sx={{ fontSize: 11 }}>Direct film</MenuItem>
+              <MenuItem value="sleeve_contact" sx={{ fontSize: 11 }}>Sleeve contact</MenuItem>
+            </Select>
+          </Box>
+          {statorOd === 'sleeve_contact' && (<>
+            <NumField label="wall mm" value={sleeveWallMm} width={80}
+              onChange={(v) => setField('sleeveWallMm', v)}
+              tip="Sleeve wall thickness, mm. A pressed aluminium sleeve is 1–2 mm." />
+            <NumField label="k W/m·K" value={sleeveK} width={80}
+              onChange={(v) => setField('sleeveK', v)}
+              tip="Sleeve material conductivity, W/m·K. Aluminium alloy ≈ 160, stainless steel ≈ 15." />
+            {sleeveFrac != null && (
+              <Tooltip {...TIP_PROPS} title={sleeveBlk?.note ?? 'Share of the stator OD that is iron in contact with the sleeve.'}>
+                <Typography sx={{ ...lbl, cursor: 'help' }} data-testid="thermal-od-contact">
+                  contact {fmt(sleeveFrac * 100, 1)} % of OD
+                </Typography>
+              </Tooltip>
+            )}
+          </>)}
+        </Box>
+
         {/* ── WHAT THE MACHINE DOES WITH THIS POINT, over TIME ───────────────
             Right here, under the frame, and always open (user 2026-09-16:
             «The Duty cycle menu should always be open and sit near the top,
@@ -1608,14 +1663,20 @@ const ThermalPanel: React.FC = () => {
       {err && <Alert severity="error" sx={{ mb: 1.5, fontSize: 12 }}>{err}</Alert>}
 
       {/* ── nothing solved: the cross-section itself ──────────────────────── */}
+      {/* With no fresh solve of the loaded point: ITS OWN stored map if it has
+          one, else only this motor's cross-section and one line saying nothing
+          is computed for the point.  Never another motor's result (owner
+          2026-11-04) - the store drops those before they get here. */}
       {!res && (
         <Paper sx={{ p: 1.25, bgcolor: 'var(--panel)' }}>
-          {!err && (
-            <Typography sx={{ ...lbl, mb: 0.75, display: 'block' }}>
-              {tx('nothingSolvedForThisMachineYet')}
-            </Typography>
-          )}
-          <GeometryMap mesh={geom} busy={geomBusy || busy} error={geomErr} />
+          <StoredPointMap stored={st.stored} what="thermal">
+            {!err && st.stored.status === 'idle' && (
+              <Typography sx={{ ...lbl, mb: 0.75, display: 'block' }}>
+                {tx('nothingSolvedForThisMachineYet')}
+              </Typography>
+            )}
+            <GeometryMap mesh={geomShown} busy={geomBusy || busy} error={geomErr} />
+          </StoredPointMap>
         </Paper>
       )}
       {!res && localTable}

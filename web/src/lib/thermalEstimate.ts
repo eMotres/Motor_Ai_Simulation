@@ -31,21 +31,26 @@ export interface ThermalLosses {
 }
 export interface ThermalCooling { h_Wm2K: number; ambient_C: number; }
 
-/** Configure's motor heat attribution. PWM carrier loss is motor heat assigned to the stator/winding;
- * controller losses are outside this object. Null means the operating point or a required motor loss is unknown. */
+/** Configure's motor heat attribution. PWM carrier loss is motor heat assigned to the stator/winding, except its
+ * MAGNET part (`extraMagnet_W`, from the passport's split by part, owner 2026-11-02), which heats the magnets and is
+ * rotor heat; controller losses are outside this object. Null means the operating point or a required motor loss is
+ * unknown. */
 export function configureMotorHeat(
   mode: 'sine' | 'pwm', pointAccepted: boolean,
   base: { P_cu_W: number; P_fe_W: number; P_mag_W: number; stator_W: number; rotor_W: number } | null,
   extraMotorLoss_W: number | null,
+  extraMagnet_W = 0,
 ): { stator_W: number; rotor_W: number; totalMotor_W: number; thermalLosses: ThermalLosses } | null {
   if (!pointAccepted || !base || Object.values(base).some((v) => !Number.isFinite(v) || v < 0)
     || (mode === 'pwm' && (extraMotorLoss_W == null || !Number.isFinite(extraMotorLoss_W) || extraMotorLoss_W < 0))) return null;
   const extra = mode === 'sine' ? 0 : extraMotorLoss_W as number;
-  const stator_W = base.stator_W + extra;
-  const rotor_W = base.rotor_W;
+  // the magnet part of the extra, never more than the extra itself
+  const mag = mode === 'sine' || !Number.isFinite(extraMagnet_W) ? 0 : Math.min(extra, Math.max(0, extraMagnet_W));
+  const stator_W = base.stator_W + extra - mag;
+  const rotor_W = base.rotor_W + mag;
   return { stator_W, rotor_W, totalMotor_W: stator_W + rotor_W,
-    thermalLosses: { P_cu_W: base.P_cu_W, P_fe_W: base.P_fe_W, P_mag_W: base.P_mag_W,
-      P_extra_W: extra, P_extra_stator_W: extra } };
+    thermalLosses: { P_cu_W: base.P_cu_W, P_fe_W: base.P_fe_W, P_mag_W: base.P_mag_W + mag,
+      P_extra_W: extra - mag, P_extra_stator_W: extra - mag } };
 }
 
 /** ONE operating point's temperatures and verdict, exactly as the Configure tiles and the red
@@ -62,6 +67,7 @@ export function configurePointThermal(
   limits: { winding_C: number; magnet_C: number },
 ): { heat: ReturnType<typeof configureMotorHeat>; thermal: ThermalEstimate | null; over: boolean;
      windingOver: boolean; magnetOver: boolean } {
+  // the whole PWM extra on the winding here (no magnet split): the verdict stays the conservative one
   const heat = configureMotorHeat(mode, pointAccepted, base, extraMotorLoss_W);
   const thermal = heat && cooling ? estimateThermal(geom, heat.thermalLosses, cooling) : null;
   const windingOver = !!thermal && thermal.T_winding_C > limits.winding_C;

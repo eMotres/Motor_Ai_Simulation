@@ -10,7 +10,7 @@ import type { SixPhaseResult } from './sixPhase';
 import React from 'react';
 import { Box, Button, Chip, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
-import { geoSignature } from '../common/geoSig';
+import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { geoSigDiffRows, staleBuildKeysText } from '../../lib/dutyGeometryDiff';
 import { canRefineRipple, quotedRipple, type RippleRefined } from '../../lib/rippleAccuracy';
 import { currentMatJson } from '../../lib/apiAuth';
@@ -30,6 +30,7 @@ import { apply3dToSummary } from '../../lib/apply3d';
 import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import SolveGate from '../common/SolveGate';
 
 // UI strings: locales/<lng>/results.json (docs/I18N.md).
 const tx = nsT('results');
@@ -462,6 +463,10 @@ interface Props {
   // the Optimize tab already uses the new point), flag the result as stale so the
   // Sim numbers aren't mistaken for the current point.
   liveOp?: { current?: number; gamma?: number; connection?: string; rpm?: number };
+  /** READ-ONLY (owner 2026-11-04): a stored card shown to a project member.  Nothing is compared with the workbench
+   *  (live geometry, materials, operating point), nothing is fetched, written or offered: no Compare, Recompute or
+   *  Refine ripple. */
+  readOnly?: boolean;
 }
 
 /** Short label of a run's torque method (its own stored label). */
@@ -528,7 +533,7 @@ const Cell: React.FC<{
   return tooltip ? <Tooltip title={tooltip} placement="top">{cell}</Tooltip> : cell;
 };
 
-const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
+const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, readOnly = false }) => {
   useTranslation('results'); // re-render on language change; lazy-loads the namespace
   // Hook FIRST — the empty-state early-return below must not sit between the
   // component entry and a hook call.
@@ -571,16 +576,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
     try { localStorage.setItem('sim.r25', v ? '1' : '0'); } catch { /* quota */ }
   };
 
-  // KV view: loaded (terminal voltage of THIS run) vs no-load (from ψ_PM —
-  // the spun-motor bench figure).  Both are in the summary; the button only
-  // picks which one the KV cell shows.
-  const [kvNl, setKvNlState] = React.useState<boolean>(() => {
-    try { return localStorage.getItem('sim.kvNoload') === '1'; } catch { return false; }
-  });
-  const setKvNl = (v: boolean) => {
-    setKvNlState(v);
-    try { localStorage.setItem('sim.kvNoload', v ? '1' : '0'); } catch { /* quota */ }
-  };
+  // ONE KV (owner 2026-11-05): the no-load fundamental (from ψ_PM — the spun-motor bench figure).  A run that predates
+  // the no-load stamp falls back to its waveform-peak KV, which the cell's tooltip says; the waveform peak stays a voltage.
+  const kvNl = true;
 
   // ── THE MECHANICAL HALF OF THE LOSS PICTURE ──────────────────────────────
   // The transient solve knows nothing about bearings — they are not in the
@@ -617,7 +615,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
     // second answer computed from today's assignment would contradict the
     // efficiency stored beside them.  The fetch stays for runs solved before
     // 2026-09-08 — see the cells' tooltip, which says which one is on screen.
-    if (!(sumRpm > 0) || runCarriesMech) { setMech(null); return; }
+    if (readOnly || !(sumRpm > 0) || runCarriesMech) { setMech(null); return; }
     const ac = new AbortController();
     void fetchBearingLosses({ rpm: sumRpm, rotorMassKg: sumMass,
                               signal: ac.signal })
@@ -634,7 +632,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       window.removeEventListener('family-changed', on);
       window.removeEventListener('family-context-changed', on);
     };
-  }, [sumRpm, sumMass, runCarriesMech]);
+  }, [sumRpm, sumMass, runCarriesMech, readOnly]);
 
   const [apply3d, setApply3dState] = React.useState<boolean>(() => {
     // ON unless the user switched it off (user 2026-09-03): the machine's
@@ -658,12 +656,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             {tx('simulationSummaryRealFemResults')}
           </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
+          {!readOnly && <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
             <AddToCompareButton />
-          </Box>
+          </Box>}
         </Box>
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-          {loading
+          {readOnly ? 'No summary is stored for this run.' : loading
             ? 'Computing transient FEM — summary will appear when the run completes…'
             : 'No transient data yet — press “Run Simulation” in the left panel.'}
         </Typography>
@@ -750,7 +748,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // cells apply, stamp WHICH buttons were pressed, and publish.  A plain
   // localStorage write keyed to render values — deterministic, no effect
   // ordering games around the early return above.
-  try {
+  if (!readOnly) try {
     const view: any = {
       ...s,
       R_phase_ohm: s.R_phase_ohm != null ? s.R_phase_ohm * rf : s.R_phase_ohm,
@@ -843,14 +841,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // Two independent witnesses: this client's stamp, and the backend's own
   // fingerprint verdict on a restored run.  Unknown (unstamped legacy run) is
   // NOT treated as fresh — it simply cannot raise this flag on its own.
-  const geoStale = (!!s._geoSig && !!liveSig && s._geoSig !== liveSig)
-                   || s._geoStaleBackend === true;
+  const geoStale = !readOnly && ((!!s._geoSig && !!liveSig && geoSigsDiffer(s._geoSig, liveSig))
+                   || s._geoStaleBackend === true);
   // MATERIALS staleness (user 2026-08-25: a run with the old steel showed as
   // current after the assignment changed — "the numbers match the hardware
   // that was there before").  The run's grades are in its own mass rows
   // ("Stator core (B15AHV950M)"); the live ones are what the next run will
   // use (currentMatJson — the same payload the solve carries).
-  const matDiffs: string[] = (() => {
+  const matDiffs: string[] = readOnly ? [] : (() => {
     try {
       const j = currentMatJson();
       if (!j) return [];
@@ -954,22 +952,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Button>
           </span>
         </Tooltip>
-        {/* KV: loaded ↔ no-load.  No-load comes free from the run's cached
-            ψ_PM (fundamental back-EMF) — no separate I=0 simulation. */}
-        <Tooltip title={s.KV_noload_rpm_per_V_line == null
-          ? 'This run predates the no-load-KV stamp — re-run to enable.'
-          : (kvNl
-              ? 'Showing NO-LOAD KV — rpm per volt of back-EMF (fundamental, from the run\'s cached ψ_PM probe): what spinning the motor on the bench reads. Free of the IR/IL drop and load saturation inside the loaded KV. Click for loaded KV.'
-              : 'Showing LOADED KV — rpm per volt of this run\'s terminal voltage (includes IR/IL drop and saturation). Click for the no-load (bench) KV, computed from ψ_PM with no extra solve.')}>
-          <span>
-            <Button size="small" variant={kvNl && s.KV_noload_rpm_per_V_line != null ? 'contained' : 'outlined'}
-              disabled={s.KV_noload_rpm_per_V_line == null}
-              onClick={() => setKvNl(!kvNl)}
-              sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, textTransform: 'none' }}>
-              {kvNl && s.KV_noload_rpm_per_V_line != null ? 'KV no-load' : 'KV loaded'}
-            </Button>
-          </span>
-        </Tooltip>
+        {s.KV_noload_rpm_per_V_line == null && (
+          <Tooltip title="This run predates the no-load KV stamp: KV is formed from the waveform peak of its terminal voltage. Re-run for the fundamental.">
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>KV: from waveform peak</Typography>
+          </Tooltip>
+        )}
         {/* Torque method of THIS run (its own label — an older run keeps its
             hybrid label) and the ripple self-check badge. */}
         {s.torque_method && (
@@ -997,7 +984,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             layers run; a ripple whose ring check failed is marked and refined
             only on request — the same point at >= 3 layers/side, nothing about
             the machine's mesh or the duty changes. */}
-        {canRefineRipple(s) && (
+        {!readOnly && canRefineRipple(s) && (
           <>
             <Tooltip title={tx('rippleNotAccurateTip', {
               err: s.ripple_self_check_rel != null ? fmt(s.ripple_self_check_rel * 100, 0) : '>5',
@@ -1006,12 +993,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               <Chip size="small" color={refine.error ? 'error' : 'warning'} variant="outlined"
                 label={tx('rippleNotAccurate')} sx={{ fontSize: 10, height: 18 }}/>
             </Tooltip>
-            <Button size="small" variant="outlined" color="warning"
-              disabled={refine.busy || stale}
-              onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-refine-ripple')); } catch { /* SSR */ } }}
-              sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6, textTransform: 'none' }}>
-              {refine.busy ? tx('refiningRipple') : tx('refineRipple')}
-            </Button>
+            <SolveGate>
+              <Button size="small" variant="outlined" color="warning"
+                disabled={refine.busy || stale}
+                onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-refine-ripple')); } catch { /* SSR */ } }}
+                sx={{ fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6, textTransform: 'none' }}>
+                {refine.busy ? tx('refiningRipple') : tx('refineRipple')}
+              </Button>
+            </SolveGate>
           </>
         )}
         {quotedRipple(s).refined && (
@@ -1026,9 +1015,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         )}
         {/* Snapshot THIS design as a comparison point (Compare tab). Sits next to
             the numbers it captures, so it is obvious what gets saved. */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
+        {!readOnly && <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
           <AddToCompareButton />
-        </Box>
+        </Box>}
         {/* Operating-point text removed (user: "remove it — it's clear without it",
             the panel inputs above already say it).  The line SURVIVES as the
             carrier of the warnings: stale ⚠, non-converged, snapped steps,
@@ -1048,12 +1037,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                 placement="top">
                 <span style={{ marginLeft: 6, cursor: 'help' }}>{tx('staleBuild')}</span>
               </Tooltip>
-              <Button size="small" variant="outlined" color="warning"
-                onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-rerun')); } catch { /* SSR */ } }}
-                sx={{ ml: 0.75, fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6,
-                      textTransform: 'none' }}>
-                {tx('recompute')}
-              </Button>
+              <SolveGate>
+                <Button size="small" variant="outlined" color="warning"
+                  onClick={() => { try { window.dispatchEvent(new CustomEvent('sim-rerun')); } catch { /* SSR */ } }}
+                  sx={{ ml: 0.75, fontSize: 10, py: 0, px: 1, minWidth: 0, lineHeight: 1.6,
+                        textTransform: 'none' }}>
+                  {tx('recompute')}
+                </Button>
+              </SolveGate>
             </>
           )}
           {(matStale || (opStale && !geoStale)) && (

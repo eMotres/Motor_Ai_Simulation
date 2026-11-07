@@ -4,7 +4,8 @@
  *   Ø <diameter>
  *     🔒 die (stamped lamination, real cross-section)
  *        configuration (stack · wire · turns · connection · steel · magnet)
- *           duty table (kW/Nm/rpm/A/V/η/ripple/loss/kg/γ) → ▶ load / 📥 record / ✕
+ *           → loads its default duty (rated); the other computed points
+ *             appear in the Electromagnetic Simulation tab's point switcher
  *
  * Every motor lives as a die with configurations and duties — the legacy
  * card/preset catalog was migrated into this structure (2026-08-19); the
@@ -14,6 +15,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Button, Tooltip } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
+import StartProject from './StartProject';
 import MyMotorsPanel from './MyMotorsPanel';
 import ProjectHighlightSelect from './ProjectHighlightSelect';
 import { isListableForClient } from '../../lib/catalogRows';
@@ -74,6 +76,7 @@ const MotorsCatalog: React.FC = () => {
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — shown instead of the vendor's "no dies yet".
   const [note, setNote] = useState<string | null>(null);
+  const [noteCode, setNoteCode] = useState<string | null>(null);
   // ONE request for this component and the N Ø sections it mounts
   // (lib/familyTree — 2026-09-13, the tab took seconds because each section
   // fetched the 900 KB tree for itself).  `fresh` after a mutation.
@@ -83,6 +86,7 @@ const MotorsCatalog: React.FC = () => {
         // may write the SHARED config (admin / local dev) - not merely "a copy into my own workspace"
         setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
         setNote(typeof t.note === 'string' ? t.note : null);
+        setNoteCode(typeof t.note_code === 'string' ? t.note_code : null);
         setAllDies((t.dies || []) as never);
         setLoaded(true); setFailed(false);
       })
@@ -191,7 +195,7 @@ const MotorsCatalog: React.FC = () => {
       ) : diams.length === 0 && (() => {
         const line = emptyCatalogLine({ loaded, failed, note, canWrite });
         return (
-          <Typography sx={{ fontSize: 11, color: line === 'unreachable' ? '#f59e0b' : 'var(--text-4)' }}>
+          line === 'note' && noteCode === 'no_motors_granted' ? <StartProject /> : <Typography sx={{ fontSize: 11, color: line === 'unreachable' ? '#f59e0b' : 'var(--text-4)' }}>
             {line === 'loading' ? tx('catalogLoading')
               : line === 'unreachable' ? tx('catalogUnreachable')
               : line === 'note' ? note

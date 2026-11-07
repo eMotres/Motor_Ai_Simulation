@@ -404,13 +404,19 @@ def test_customer_routes_private_project_and_versioned_submit(project_root, monk
     assert (project_root / "alpha" / "audit.jsonl").read_text(encoding="utf-8").count('"action": "submit"') == 1
     first_version = client.get("/api/projects/alpha/spec/versions/1", headers={"Authorization": "Bearer dev"})
     assert first_version.status_code == 200
-    assert first_version.json()["draft"] == models.normalize_draft(draft)
-    # A new draft and submit creates v2 while v1 remains immutable.
+    first_draft = first_version.json()["draft"]
+    assert first_draft == models.normalize_draft(draft)
+    # The same draft submitted again is no new version (owner 2026-11-06) ...
+    same = client.post("/api/projects/alpha/spec/submit", headers={"Authorization": "Bearer dev"}, json={"revision": 2})
+    assert same.status_code == 200 and same.json()["version"] == 1 and same.json()["unchanged"] is True
+    assert not (project_root / "alpha" / "spec" / "v2.json").exists()
+    # ... a changed draft and submit creates v2 while v1 remains immutable.
+    draft["fields"]["startup_mode"] = {"value": "loaded", "status": "filled"}
     resaved = client.put("/api/projects/alpha/spec", headers={"Authorization": "Bearer dev"}, json={"draft": draft, "revision": 2})
     assert resaved.status_code == 200
     second = client.post("/api/projects/alpha/spec/submit", headers={"Authorization": "Bearer dev"}, json={"revision": 3})
     assert second.status_code == 200 and second.json()["version"] == 2
-    assert first_version.json()["draft"] == client.get("/api/projects/alpha/spec/versions/1", headers={"Authorization": "Bearer dev"}).json()["draft"]
+    assert first_draft == client.get("/api/projects/alpha/spec/versions/1", headers={"Authorization": "Bearer dev"}).json()["draft"]
     assert (project_root / "alpha" / "spec" / "v2.json").exists()
     duplicate = client.post("/api/projects/alpha/spec/submit", headers={"Authorization": "Bearer dev"}, json={"revision": 3})
     assert duplicate.status_code == 409

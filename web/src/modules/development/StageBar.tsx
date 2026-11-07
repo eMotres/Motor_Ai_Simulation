@@ -1,5 +1,5 @@
 import { Box, Stack, Tooltip, Typography } from '@mui/material';
-import { STAGE_ORDER, projectPercent, segmentFill, stageAria, stageTooltip, stagesForMotor, summaryLine, summaryTooltip, variantEndText, variantPercent, type ActivityData, type StageInfo } from './stageBar';
+import { STAGE_ORDER, projectPercent, segmentFill, stageAria, stageTooltip, stagesForMotor, summaryLine, summaryTooltip, variantEndText, variantPercent, type ActivityData, type StageInfo } from './stageBarModel';
 import type { ProjectMotor } from './types';
 
 type Tr = (key: string, options?: Record<string, unknown>) => string;

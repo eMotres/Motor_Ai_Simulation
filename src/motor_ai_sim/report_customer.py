@@ -136,6 +136,8 @@ def requirements_from_draft(draft: Optional[Mapping[str, Any]], source: str = "p
         dc = _num(b.get("dc_source_V"))
         if dc is not None:
             out["battery"] = {"v_min": dc, "v_nom": dc, "v_max": dc, "cells": None, "chemistry": None}
+    elif b and b.get("supply_type") == "ac_mains":       # AC mains: no battery window, the line-line voltage and the frequency
+        out["ac_mains"] = {"v_line_line": _num(b.get("ac_line_voltage_V")), "frequency_Hz": _num(b.get("ac_frequency_Hz"))}
     elif b:
         out["battery"] = {"v_min": _num(b.get("voltage_min_V")), "v_nom": _num(b.get("voltage_nominal_V")),
                           "v_max": _num(b.get("voltage_max_V")), "cells": _num(b.get("series_cells")),

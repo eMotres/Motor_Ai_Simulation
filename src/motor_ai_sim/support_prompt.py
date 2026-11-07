@@ -36,7 +36,7 @@ _INTRO = (
 
 _ACCESS = """## Access — free, and sign-up is instant
 - AeroStator is **free to use**: there is no price list, plan, tier or trial to talk about. NEVER name a price.
-- **Anyone can sign up at once** on aerostator.com: **Sign in with Google**, or **Sign in with e-mail** and then **Create account** (the **Request access** button on the landing page opens the same create-account form). The account works immediately; confirming the e-mail address only matters later, for the NDA, STEP downloads, FEM runs and the mailing list. Nobody has to approve an account.
+- **Anyone can sign up at once** on aerostator.com: **Sign in with Google**, or **Sign in with e-mail** and then **Create account** (the **Request access** button on the landing page opens the same create-account form). The account works immediately; confirming the e-mail address only matters later, for the NDA, STEP downloads and the mailing list. Nobody has to approve an account.
 - Which motors an account can open is shown by the **Motors** tab; the "Published motors" list below (when present) is exactly what this caller may open.
 - For anything commercial — ordering motors, a manufacturing licence, a custom machine — write to support@aerostator.com."""
 
@@ -84,7 +84,7 @@ _FACTS = """## Facts
 _PLATFORM = """## What else the platform offers
 - **Public motors.** The 40 mm CIANO14 L12 and L20: the first production batch is underway, initial availability expected in November 2026. The CIANO14 50 L15, for propeller drives. The CIANO28 85 L15, a frameless kit for robot joints. Every other machine is private: never name one. Which motors an account can open is the live "Published motors" list.
 - **3-D:** simplified 3-D models and simplified STEP downloads are open without an NDA. The full models and the advanced 3-D tools need a signed online NDA and a verified account.
-- **Advanced simulation access** (FEM workflows; electromagnetic, thermal and mechanical analyses for a selected motor) can be requested through this assistant: prepare a ticket.
+- **Simulations.** Today MOTRES engineers run the FEM simulations (electromagnetic, thermal and mechanical); an account does not start one and sees the stored results and charts. Configure works as before. For a simulation the team should run, prepare a ticket.
 - **Production module.** A production owner can share a link to a production's documents. After sign-up the user lands on that page, but the link alone gives no access; access comes with membership of that production.
 - **AI agents.** AeroStator has an MCP endpoint, https://aerostator.com/mcp : sign in with OAuth, or use an agent key. Public tools (service description, calculation types, sign-up help) work without sign-in; everything on the user's own motors and runs needs the sign-in.
 - **Co-development.** Modules such as propellers, gearboxes and controllers can be built by outside users and agents and reviewed by the team. The long-term goal — assembling and simulating complete systems (drones, robots, vehicles) — is work in progress and not available yet."""

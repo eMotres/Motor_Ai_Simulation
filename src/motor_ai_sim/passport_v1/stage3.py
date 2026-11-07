@@ -114,6 +114,12 @@ def drive_for(card, r_g_si: Optional[float]) -> Dict[str, Any]:
     """Gate-drive request for a card: Si = the controller's UCC27289 build
     (SPICE set R_G + driver resistance), GaN = the reference-board drive."""
     tech = str(card.doc.get("technology") or "").lower()
+    if getattr(card, "is_igbt", False):
+        on, off = card.gate_reference()
+        rg = card.r_g_ref_ohm if r_g_si is None else float(r_g_si)
+        return {"tech": "IGBT", "v_gs_on": on, "v_gs_off": off, "r_g": rg,
+                "r_g_off": rg, "l_sigma": None, "source": "datasheet",
+                "label": "IGBT module: datasheet V_CE(sat)/V_F and E_on/E_off/E_rr curves"}
     if tech.startswith("gan"):
         return {"tech": "GaN", "v_gs_on": GAN_DRIVE["v_gs_on_V"], "v_gs_off": 0.0,
                 "r_g": GAN_DRIVE["r_g_ohm"], "r_g_off": None, "l_sigma": None,
@@ -134,6 +140,9 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
     from motor_ai_sim.inverter.losses import _leg_losses
     th = np.linspace(0.0, 2.0 * math.pi, 720, endpoint=False)
     i = SQ2 * float(I_rms) * np.sin(th)
+    if getattr(card, "is_igbt", False):
+        return _igbt_inverter_losses(card, drv, i=i, th=th, f_sw=f_sw, dead_s=dead_s,
+                                     v_dc=v_dc, t_j=t_j, n_par=n_par)
     r = _leg_losses(card=card, i_leg=i, n_par=n_par, f_sw=f_sw, t_j_c=t_j, v_dc=v_dc,
                     v_gs_on=drv["v_gs_on"], v_gs_off=drv["v_gs_off"], r_g=drv["r_g"],
                     dead_time_s=dead_s, e_oss_policy="included_in_eon",
@@ -144,7 +153,44 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
     dead = 3.0 * r["p_third_quadrant_W"]
     return {"cond": cond, "sw": sw, "dead": dead, "total": cond + sw + dead,
             "per_switch_W": r["p_total_W"] / 2.0, "notes": r["notes"],
-            "switching_basis": r.get("conduction_source"), "extrapolated": r["extrapolated"]}
+            "switching_basis": r.get("conduction_source"), "extrapolated": r["extrapolated"],
+            "conduction_basis": r.get("conduction_source"),
+            "third_quadrant_basis": r.get("third_quadrant_source"),
+            "conduction_check": r.get("conduction_check"),
+            "r_ds_on_mohm": r.get("r_ds_on_mohm")}
+
+
+def conduction_provenance(card, drv: Mapping[str, Any], t_j: float = T_J_AT_LIMIT_C) -> str:
+    """One line: which basis the bridge conduction is on, and the SPICE static
+    table's R_DS(on) against the datasheet curve at ``t_j`` (2026-11-03)."""
+    if drv.get("source") != "spice" or card.static_table() is None:
+        return ("datasheet R_DS(on)(T_j) curve, V_GS(on) %g V (%s)"
+                % (float(drv["v_gs_on"]), card.r_ds_on_note(drv["v_gs_on"])))
+    chk = card.static_conduction_check(t_j, drv["v_gs_on"])
+    if chk is None or chk["ok"]:
+        return ("SPICE static table V_DS(I, T_j) at V_GS(on) %g V; checked against the "
+                "datasheet: %s" % (float(drv["v_gs_on"]), chk["line"] if chk else "no check"))
+    return "datasheet R_DS(on)(T_j) curve (FALLBACK): %s" % chk["line"]
+
+
+def _igbt_inverter_losses(card, drv, *, i, th, f_sw, dead_s, v_dc, t_j, n_par,
+                          m: float = 0.89, cos_phi: float = 1.0) -> Dict[str, Any]:
+    """The IGBT-module version of :func:`inverter_losses`: conduction split
+    between IGBT and FWD by the leg's own sine duty (m = 0.89, the
+    controller's README modulation, current in phase — stated), both
+    devices at ``t_j``.  ``dead`` is 0: the dead time is inside the FWD
+    conduction here."""
+    from motor_ai_sim.inverter.igbt import igbt_leg_losses
+    duty = 0.5 * (1.0 + m * np.sin(th + math.acos(max(min(cos_phi, 1.0), -1.0))))
+    r = igbt_leg_losses(card=card, i_leg=i, duty=duty, n_par=n_par, f_sw=f_sw,
+                        t_j_igbt_c=t_j, t_j_diode_c=t_j, v_dc=v_dc,
+                        r_g_on=drv.get("r_g"), r_g_off=drv.get("r_g_off"),
+                        dead_time_s=dead_s)
+    cond = 3.0 * (r["p_igbt_conduction_W"] + r["p_diode_conduction_W"] + r["p_lead_W"])
+    sw = 3.0 * (r["p_on_W"] + r["p_off_W"] + r["p_rr_W"])
+    return {"cond": cond, "sw": sw, "dead": 0.0, "total": cond + sw,
+            "per_switch_W": r["p_total_W"] / 2.0, "notes": r["notes"],
+            "switching_basis": "datasheet", "extrapolated": r["extrapolated"]}
 
 
 def board_air_film(air_speed_ms: float, t_amb_c: float,
@@ -548,6 +594,27 @@ def motor_point(rec, snap, hm, rows_grid, p) -> Dict[str, Any]:
 #  the motor PWM extra loss from the FEM anchors
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: The parts the motor PWM extra loss is split into (owner 2026-11-02): laminated
+#: iron, magnet eddy, copper (DC-resistance ripple heating + AC), and an explicit
+#: remainder (shaft / sleeve eddy, rounding, or what an anchor could not split).
+#: They sum to ``motor_pwm_loss_W`` at every point.
+PART_KEYS: Tuple[str, ...] = ("iron", "magnet", "copper_ac", "other")
+
+
+def anchor_parts_W(x: Mapping[str, Any]) -> Dict[str, float]:
+    """An anchor's PWM extra loss by part [W], summing to its ``dP_harm_W``.
+
+    ``x["dP_parts"]`` is :func:`motor_ai_sim.passport_v1.pwm_parts.anchor_loss_parts`'
+    record; an anchor without one carries its whole extra loss as ``other``."""
+    dp = x.get("dP_parts")
+    p = dp.get("parts_W") if isinstance(dp, Mapping) else None
+    if not isinstance(p, Mapping):
+        out = {k: 0.0 for k in PART_KEYS}
+        out["other"] = float(x.get("dP_harm_W") or 0.0)
+        return out
+    return {k: float(p.get(k) or 0.0) for k in PART_KEYS}
+
+
 class PwmModel:
     """dP_harm(n, I) from a carrier class's FEM anchors.
 
@@ -557,7 +624,12 @@ class PwmModel:
     and at I0, m 0.90 / 0.93), and rises at low m where the dead-time
     distortion is not in HDF (2.5·I0 at γ = 80°, m 0.30: k ×2.3).  So k is
     linear in m between the anchors (held outside, flagged) and
-    dP(n, I) = k(m) · HDF(m(n, I)).  Exact at every anchor."""
+    dP(n, I) = k(m) · HDF(m(n, I)).  Exact at every anchor.
+
+    BY PART (2026-11-02): the same rule per part, k_part = dP_part / HDF(m) at
+    each anchor (:data:`PART_KEYS`; ``other`` holds what an anchor could not
+    split).  The interpolation is linear, so the parts sum to the total at every
+    point exactly as they do at the anchors."""
 
     def __init__(self, anchors: Sequence[Mapping[str, Any]], scale: float = 1.0,
                  derived: Optional[str] = None):
@@ -566,14 +638,48 @@ class PwmModel:
         self.scale = float(scale)
         self.derived = derived
         km: Dict[float, List[float]] = {}
+        kp: Dict[str, Dict[float, List[float]]] = {k: {} for k in PART_KEYS}
         for x in self.anchors:          # anchors at the same m are averaged
             m = round(float(x["m_index"]), 3)
-            km.setdefault(m, []).append(float(x["dP_harm_W"]) * self.scale
-                                        / max(hdf_svpwm(float(x["m_index"])), 1e-12))
+            h = max(hdf_svpwm(float(x["m_index"])), 1e-12)
+            km.setdefault(m, []).append(float(x["dP_harm_W"]) * self.scale / h)
+            for k, w in anchor_parts_W(x).items():
+                kp[k].setdefault(m, []).append(w * self.scale / h)
         self.k = sorted((m, sum(v) / len(v)) for m, v in km.items())
+        self.kp = {k: sorted((m, sum(v) / len(v)) for m, v in d.items())
+                   for k, d in kp.items()}
+        #: True when at least one anchor carries a split (else every part but
+        #: ``other`` would be zero — the passport then stays unsplit)
+        self.split = any(isinstance(x.get("dP_parts"), Mapping) for x in self.anchors)
 
     def __bool__(self) -> bool:
         return bool(self.anchors)
+
+    def parts_at(self, n: float, I: float, m_p: float) -> Dict[str, float]:
+        """The extra loss by part at (n, I, m) — the per-part twin of :meth:`at`."""
+        for x in self.anchors:
+            if abs(float(x["rpm"]) - n) < 1e-6 and abs(float(x["I"]) - I) < 1e-6:
+                return {k: w * self.scale for k, w in anchor_parts_W(x).items()}
+        ms = [k[0] for k in self.k]
+        h = hdf_svpwm(m_p)
+        return {k: float(np.interp(m_p, ms, [v for _, v in self.kp[k]])) * h
+                for k in PART_KEYS}
+
+    def parts_block(self) -> Dict[str, Any]:
+        """The variant-level record of the split: one row per anchor."""
+        rows = []
+        for x in self.anchors:
+            dp = x.get("dP_parts") if isinstance(x.get("dP_parts"), Mapping) else {}
+            rows.append({"tag": x.get("tag"), "rpm": x.get("rpm"), "I_A": x.get("I"),
+                         "m_index": x.get("m_index"), "dP_total_W": x.get("dP_harm_W"),
+                         "parts_W": anchor_parts_W(x), "mode": dp.get("mode", "unsplit"),
+                         "iron_terms_W": dp.get("iron_terms_W"), "basis": dp.get("basis")})
+        modes = sorted({r["mode"] for r in rows})
+        return {"keys": list(PART_KEYS), "anchors": rows, "modes": modes,
+                "scale": self.scale, "derived": self.derived,
+                "basis": ("2-D FEM at the anchors, PWM − sine split by part; each part "
+                          "k_part = dP_part/HDF(m) linear in m, × HDF(m) at the point "
+                          "(the same rule as the total)")}
 
     def at(self, n: float, I: float, m_p: float):
         for x in self.anchors:
@@ -703,10 +809,13 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                                         + "; ".join(m_pt.get("loss_notes") or []))
                 continue
             m_p = m_pt["V_phase_peak_V"] / (v_dc / 2.0)
-            dP, how = None, None
+            dP, how, parts = None, None, None
             if model:
                 dP, how, is_fem = model.at(p["rpm"], p["I_A"], m_p)
                 (cov["fem"] if is_fem else cov["scaled"]).append(p["key"])
+                if model.split:
+                    parts = model.parts_at(p["rpm"], p["I_A"], m_p)
+                    dP = sum(parts.values())       # the total IS the sum of its parts
             st = board.state(card, drv, I_rms=p["I_A"], f_sw=f_sw, dead_s=dead, v_dc=v_dc)
             inv = st["inv"]
             P_sh = m_pt["P_shaft_W"]
@@ -735,6 +844,8 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                 "board_ok": st["board_ok"], "tj_ok": st["tj_ok"],
                 "continuous_ok": st["continuous_ok"], "tj_basis": st["tj_basis"],
             })
+            if parts is not None:
+                row["motor_pwm_loss_parts_W"] = parts
             if P_cont is None:
                 row["p_cont_max_status"] = cont_basis["favourable"]
                 cov["no_cont"].append(p["key"])
@@ -757,6 +868,7 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                               % v["fem_class"]),
                 "motor_pwm_fem_runs": [x.get("tag") for x in model.anchors] if model else [],
                 "inverter": drv["label"],
+                "inverter_conduction": conduction_provenance(card, drv),
                 "thermal": "board model (estimate, calibrated on the controller project's Si "
                            "ratings) — see controller.board",
                 "motor_sine": "passport loss trajectory (m = %g) + analytic mech" % m_max,
@@ -771,6 +883,7 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                     if drv["tech"] == "GaN" else ["Si switching: vendor SPICE table"]),
             },
             "i_board_limit_A": I_lim,
+            **({"motor_pwm_loss_parts": model.parts_block()} if model and model.split else {}),
             "coverage": {"points": len(points), "fem_points": cov["fem"],
                          "scaled_points": cov["scaled"], "infeasible": cov["infeasible"],
                          "no_continuous": cov["no_cont"],

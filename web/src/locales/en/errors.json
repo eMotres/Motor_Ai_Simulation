@@ -6,6 +6,9 @@
     "email_domain_unknown_suggest": "The domain {domain} does not exist - please check the address (did you mean {suggestion}?)."
   },
   "rate_limited": "Too many requests — try again later.",
+  "solve": {
+    "admin_only": "Simulations are run by MOTRES for now."
+  },
   "material": {
     "unknown": "Unknown material: {name}"
   },

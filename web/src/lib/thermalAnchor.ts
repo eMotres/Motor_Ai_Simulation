@@ -12,6 +12,8 @@ export interface ThermalAnchor {
   duty: string;
   cooling_mode: string;
   air_speed_ms: number;
+  /** the record's housing film when stated as one (`manual` cooling); null / absent otherwise */
+  h_W_m2K?: number | null;
   ambient_C: number;
   point: { rpm: number; I_A: number };
   drive: string;

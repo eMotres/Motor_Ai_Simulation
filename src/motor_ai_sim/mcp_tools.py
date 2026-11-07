@@ -13,6 +13,12 @@ winding geometry, thumbnails or build signatures.  Every machine payload is
 built from an explicit whitelist, and ``assert_no_geometry`` re-checks the
 result against ``GEOMETRY_DENYLIST`` before it leaves the server.
 
+NO-PRICE RULE (owner 2026-11-02): no price or quote talk with a customer before
+the quote stage, and never through the MCP.  ``assert_no_commercial`` refuses any
+answer carrying a cost, price, margin, markup, quote or currency field
+(``COMMERCIAL_DENYLIST`` / ``COMMERCIAL_TOKENS``); ``mcp_app`` runs it on EVERY
+tool answer, public tools included.
+
 PUBLIC-CATALOG RULE (2026-10-19): the MCP is public-facing for every caller,
 admins included.  Catalogue text is sanitised (``public_text``): no warehouse
 stock (batches, lots, kilograms), no internal design notes or attributions, no
@@ -43,6 +49,7 @@ GEOMETRY_DENYLIST = frozenset({
     "rotor_house_height", "shaft_height", "magnet_fill_down", "magnet_fill_up",
     "magnet_fill_radius", "magnet_up_gap", "rotor_hole", "magnet_down_height",
     "magnet_lamination", "stator_fillet_r", "stator_fillet_r1", "rotor_fill_r",
+    "stator_outer_notches",
     "stator_inner_radius", "rotor_outer_radius", "rotor_inner_radius",
     "slot_width", "shaft_diameter", "slot_pitch", "pole_pitch", "angle_slot",
     "angle_pole", "daxis_deg", "bh_curve", "core_loss_curves", "payload",
@@ -52,6 +59,49 @@ GEOMETRY_DENYLIST = frozenset({
     "contact_core_mm2", "film_area_mm2", "char_len_mm",
     "rotor_face_open_fraction", "holder_open_fraction",
 })
+
+
+#: Keys that must never appear anywhere in a tool answer: money (owner 2026-11-02, the NO-PRICE RULE above).  Exact
+#: names first; ``COMMERCIAL_TOKENS`` then catches any key with one of these words between underscores
+#: (``unit_price``, ``order_cost_total``, ``quote_id`` ...).  ``margin`` is matched EXACTLY only: the physics margins
+#: (``torque_margin_pct`` in check_fit, a mode's frequency margin) are engineering data, not our commercial margin.
+COMMERCIAL_DENYLIST = frozenset({
+    "margin", "margin_pct", "share_costs_with_oem", "by_currency", "mixed_currency",
+    # the cost estimate's exchange rates and display-currency totals (``display_currency`` is caught by "currency")
+    "fx", "fx_status", "rates", "converted",
+    # the cost estimate's DHL quote table and shipping margin (``price`` / ``quoted_on`` inside are caught by the tokens)
+    "dhl_lanes", "ship_margin_pct", "ship_round_eur",
+    # the customer's shared quote (owner 2026-11-03): its flag, mark, payment terms and display rates never leave
+    # through the MCP either (``price`` / ``quote`` / ``payment`` are also caught by the tokens)
+    "payment_terms", "quote_shared", "shared_quote", "exchange_rates", "per_eur", "total_price",
+})
+COMMERCIAL_TOKENS = frozenset({
+    "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",
+    "quotation", "currency", "currencies", "subtotal", "invoice", "payment", "contingency", "exchange", "ecb",
+})
+
+
+def commercial_key(key: Any) -> bool:
+    k = str(key).strip().lower()
+    return k in COMMERCIAL_DENYLIST or any(t in COMMERCIAL_TOKENS for t in k.replace("-", "_").split("_"))
+
+
+def assert_no_commercial(obj: Any, path: str = "$") -> None:
+    """Raise if any key of `obj` (recursively) is a cost / price / margin / quote field."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if commercial_key(k):
+                raise AssertionError(f"commercial field leaked: {path}.{k}")
+            assert_no_commercial(v, f"{path}.{k}")
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            assert_no_commercial(v, f"{path}[{i}]")
+
+
+def no_commercial(obj: Any) -> Any:
+    """``obj`` itself once it is checked - the guard ``mcp_app`` wraps every tool answer in."""
+    assert_no_commercial(obj)
+    return obj
 
 
 class ToolError(ValueError):
@@ -115,6 +165,7 @@ def assert_no_geometry(obj: Any, path: str = "$") -> None:
 
 def _checked(obj: Any) -> Any:
     assert_no_geometry(obj)
+    assert_no_commercial(obj)
     return obj
 
 
@@ -532,7 +583,30 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
     })
 
 
-GUIDE = """# AeroStator MCP — how to use (Stages 1-3 + public discovery)
+#: The one rule about money and dates (owner 2026-10-26 / 2026-11-02).  Quoted
+#: verbatim in the guide and the server instructions; tests check that no tool
+#: description and no other line of the guide talks about it.
+NO_PRICE_RULE = ("NO PRICES: this server never gives, estimates or discusses "
+                 "prices, quotes, costs, budgets or lead times, and neither "
+                 "does the agent. The order ends at a submitted specification; "
+                 "MOTRES engineers run the full simulation and agree the design "
+                 "with the customer first, and they contact the customer about "
+                 "everything after that.")
+
+def simulations_closed() -> bool:
+    """Are simulations closed to clients right now?  Follows ``MOTRES_SOLVE_ADMIN_ONLY`` (auth.solve_admin_only), so the
+    texts below, the ``simulate`` tool description and the capability rows reopen with the setting - no text edit."""
+    from motor_ai_sim import auth as _auth
+    return _auth.solve_admin_only()
+
+
+#: What an agent reads about ``simulate`` while simulations are closed (owner 2026-11-04: MOTRES engineers run them; clients
+#: view results and order).  No price, quote, cost or date.
+SIM_CLOSED_NOTE = ("Simulations are run by MOTRES engineers for now. The simulate tool is listed, but it answers "
+                   "status 'simulations_closed' with a user_message to relay, queues nothing and uses no daily-limit "
+                   "slot: do not retry it.")
+
+_GUIDE_HEAD = """# AeroStator MCP — how to use (Stages 1-3, orders, public discovery)
 
 AeroStator (aerostator.com, by eMotres) designs permanent-magnet
 motors/generators and keeps a catalog of simulated machines (2-D FEM,
@@ -561,7 +635,9 @@ Tools after sign-in:
 - get_machine_performance(die, config, duty) — one duty's saved results
 - check_fit(torque_nm, speed_rpm, ...) — ranked machines meeting requirements
 
-Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
+"""
+
+_GUIDE_STAGE3_OPEN = """Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
 - start_design(requirements, base?, name?) — a DRAFT from the nearest existing
   machine, scaled by stack length / turns / parallel paths.  If the answer says
   status 'needs_input', ASK THE ENGINEER each listed field (why + options are
@@ -576,9 +652,68 @@ Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
 Example: "I need 12 N*m at 3000 rpm, 48 V" -> start_design -> needs_input
 [cooling, duty] -> ask -> start_design again -> simulate(em) -> get_job until
 done -> get_design_result -> open_in_configure link to the engineer.
+"""
+
+_GUIDE_STAGE3_CLOSED = """Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
+- start_design(requirements, base?, name?) — a DRAFT from the nearest existing
+  machine, scaled by stack length / turns / parallel paths.  If the answer says
+  status 'needs_input', ASK THE ENGINEER each listed field (why + options are
+  written for him), then call again.  'no_fit' says which limit blocks it.
+- simulate(design_id, what=em|thermal|coupled, steps?) — CLOSED for now.  """ + SIM_CLOSED_NOTE + """
+- get_job(job_id) — state, position, progress, ETA, error of a job that exists
+- get_design_result(design_id) — the draft's analytical estimate and any finished
+  run; requirement checks
+- open_in_configure(design_id) — link for the engineer to tune it interactively
+
+Example: "I need 12 N*m at 3000 rpm, 48 V" -> start_design -> needs_input
+[cooling, duty] -> ask -> start_design again -> get_design_result ->
+open_in_configure link to the engineer.  For the FEM simulation of the motor,
+use the order flow below: it ends at a submitted specification and MOTRES
+engineers run the simulation.
+"""
+
+_GUIDE_ORDERS = """
+Order a motor (scopes projects:read + projects:write) — turn the customer's
+requirements into a development project with a submitted specification:
+1. get_spec_form(lang?) — the form, generated from the live schema: sections,
+   field ids, labels, units, required flags, choices, which fields accept
+   not_known_yet, the key point and mission phase rows, and how to fill it.
+2. create_order(title, customer_org?, application?, answers?) — opens a
+   project owned by the user (he is its owner and the only one who edits the
+   specification) and saves the first answers.  Returns project_id, revision,
+   link, completeness and needs_input.
+3. update_spec(project_id, revision, answers) — merges answers into the draft.
+   Ask the user for every needs_input row (label, unit and reason are written
+   to be read out), never invent a value; mark a field 'not_known_yet' only
+   when the user says so.  Numbers in the field's unit; one key point per
+   continuous and per peak operating point.  Repeat until needs_input is empty.
+4. submit_spec(project_id, revision) — creates the specification version;
+   MOTRES engineers review it, run the full simulation and contact the user
+   in the project's messages.
+5. get_order_status(project_id?) — the user's own projects: stage, completeness,
+   submitted version, linked motor names, unread messages.
+Answers that come back 'agreement_required' or 'project_limit' carry a
+user_message: relay it (the user accepts the platform agreement himself on
+aerostator.com; an agent never accepts it).  Only the user's own projects are
+visible; only the project owner changes the specification.
+
+""" + NO_PRICE_RULE + """
 
 Rules: read tools solve nothing; numbers are the last saved simulation.  Drafts
 never change the user's saved machines or the machine he has open.
 Units are in field names (_nm, _rpm, _kw, _v, _mm, _kg, _c, _pct).
 Only public-datasheet data is returned — no internal dimensions or drawings.
 """
+
+
+def guide() -> str:
+    """The ``emotres://guide`` text.  The simulation block follows the setting (``simulations_closed``)."""
+    stage3 = _GUIDE_STAGE3_CLOSED if simulations_closed() else _GUIDE_STAGE3_OPEN
+    return _GUIDE_HEAD + stage3 + _GUIDE_ORDERS
+
+
+def __getattr__(name: str):
+    # ``GUIDE`` stays importable (tests, older callers) and always reads the setting at the time it is used.
+    if name == "GUIDE":
+        return guide()
+    raise AttributeError(name)

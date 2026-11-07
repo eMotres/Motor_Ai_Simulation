@@ -6,6 +6,12 @@
   "duplicateCopyThisConfigurationWithAll": "Duplicate — copy this configuration with ALL its duties (a starting point for a variant)",
   "downloadTheDatasheetXlsxEveryDuty": "Download the datasheet (.xlsx) — every duty in a column, the design and battery blocks, the cross-section, the measured curves and a page explaining each number. Opens in Google Sheets or Excel.",
   "noMotorsAssigned": "No motors are assigned to your account yet. Ask MOTRES for access.",
+  "startProject": {
+    "text": "No motors here yet. Start a project and describe the motor you need.",
+    "button": "Start a project",
+    "textBack": "No motors here yet. Your specification is in Projects.",
+    "buttonBack": "Open Projects"
+  },
   "lossNotComputed": "Loss not computed for this duty.",
   "lossElectromagneticAndMechanical": "{em} W electromagnetic + {mech} W bearings and windage",
   "lossElectromagneticUnknownMechanical": "Electromagnetic loss only; this run carries no bearings, so mechanical loss is unknown, not zero.",

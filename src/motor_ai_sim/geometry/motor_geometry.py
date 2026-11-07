@@ -89,6 +89,79 @@ _COUNT_SEGMENT_KEY = {"num_slots": "num_slots_per_segment",
                       "num_poles": "num_poles_per_segment"}
 
 
+#: The flag "stator outer notches" (2026-11-03) — a CONFIGURATION option on a
+#: common die (owner 2026-11-03, routes.family.FREE_GEO_KEYS).  True (the default,
+#: and what every die stamped before the flag means) = the wedge notches between
+#: the slot units are cut from the stator OD down to the neck (``cut_width``
+#: above the bore).  False = a smooth, full-circle OD (e.g. a submerged motor,
+#: where the OD notches only add drag); ``cut_width`` and the notch fill radius
+#: are then stored but unused.
+#:
+#: ABSENT MEANS TRUE, and the canonical stored form of TRUE is ABSENT: the key
+#: is written only when it is False (``canonical_outer_notches``).  That keeps
+#: every existing die, configuration, ``motor_config.yaml`` block and every hash
+#: taken over them (``_geometry_fingerprint``, ``_build_sig``, the polygon and
+#: CAD caches) byte-identical to what they were before the flag existed.
+STATOR_OUTER_NOTCHES = "stator_outer_notches"
+
+_FALSE_WORDS = frozenset({"false", "0", "no", "off", "none", ""})
+
+
+def stator_outer_notches(g: Optional[Dict[str, Any]]) -> bool:
+    """The ``stator_outer_notches`` flag of a geometry dict: absent / None = True.
+
+    Accepts a bool, a number (0 = off) or a word ("false"/"off"/"0"/"no"), so a
+    value that crossed JSON, YAML or a query string reads the same."""
+    v = (g or {}).get(STATOR_OUTER_NOTCHES)
+    if v is None:
+        return True
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return float(v) != 0.0
+    if isinstance(v, str):
+        return v.strip().lower() not in _FALSE_WORDS
+    return bool(v)
+
+
+#: A geometry dict carrying ALL of these describes a whole lamination (a die,
+#: a configuration, the machine on screen), not a partial edit or a sweep
+#: candidate's few knobs.
+_WHOLE_LAMINATION_KEYS = ("stator_diameter", "core_thickness", "slot_height",
+                          "tooth_width", "tooth2_width", "cut_width")
+
+
+def describes_whole_lamination(g: Optional[Dict[str, Any]]) -> bool:
+    """Does ``g`` state a whole lamination?  Then a missing
+    ``stator_outer_notches`` MEANS on (an ON die never stores the key), and a
+    merge over another machine must not inherit that machine's flag; a partial
+    override (a sweep candidate's few knobs) inherits it like any other key."""
+    g = g or {}
+    return all(g.get(k) is not None for k in _WHOLE_LAMINATION_KEYS)
+
+
+def merge_outer_notches(merged: Dict[str, Any],
+                        override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """After ``merged = {**base, **override}``: a whole-lamination override that
+    is silent on the flag is a notched stator, whatever ``base`` said.  In place;
+    returns ``merged``."""
+    if (override and STATOR_OUTER_NOTCHES not in override
+            and describes_whole_lamination(override)):
+        merged.pop(STATOR_OUTER_NOTCHES, None)
+    return merged
+
+
+def canonical_outer_notches(g: Dict[str, Any]) -> Dict[str, Any]:
+    """Put the flag in its canonical stored form IN PLACE and return ``g``:
+    absent when the notches are on, ``False`` when they are off."""
+    if STATOR_OUTER_NOTCHES in g:
+        if stator_outer_notches(g):
+            g.pop(STATOR_OUTER_NOTCHES, None)
+        else:
+            g[STATOR_OUTER_NOTCHES] = False
+    return g
+
+
 def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
     """Every derived geometry field, computed from the PRIMARIES in ``g``.
 
@@ -357,6 +430,10 @@ class MotorGeometryParams:
             geometry_config: Dictionary of geometry parameters from YAML
             derived_config: Dictionary of derived parameter formulas from YAML
         """
+        # The notch flag in its canonical form: an ON flag is never carried
+        # (absent = on), so the live object's dict — and every hash over it —
+        # is what it was before the flag existed.
+        geometry_config = canonical_outer_notches(dict(geometry_config))
         # Store all geometry parameters as attributes (dynamic!)
         for key, value in geometry_config.items():
             # Only convert numeric values to float; keep strings as-is

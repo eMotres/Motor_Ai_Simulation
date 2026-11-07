@@ -421,11 +421,11 @@ def no_last_run(monkeypatch):
     stopped being true and both tests below found a 61 N·m torque to apply.
     Same family as every other sandbox leak — pin the premise.
     """
-    from motor_ai_sim.routes import presets, simulation as sim
+    from motor_ai_sim.routes import mechanical as mech
 
-    monkeypatch.setattr(presets, "_last_transient_summary", lambda: None,
-                        raising=True)
-    monkeypatch.setattr(sim, "_last_transient_ref", {}, raising=True)
+    # 2026-11-02: the default torque is the LOADED DUTY's own stored torque, no
+    # longer the last run of the process — so "never run" = no machine loaded.
+    monkeypatch.setattr(mech, "_loaded_machine", lambda: None, raising=True)
 
 
 def test_route_refuses_loads_torque_with_no_torque_to_apply(client, no_last_run):
@@ -505,19 +505,18 @@ def test_centrifugal_only_reports_no_torque(client):
     assert c["torque_path"] is None
 
 
-def test_loads_both_downgrades_when_nothing_has_been_run(client, no_last_run):
-    """``both`` is the API default, so a machine that has never been simulated
-    must still get its centrifugal answer — and the response has to SAY that
-    the torque half was dropped rather than showing an empty column."""
+def test_loads_both_with_no_torque_for_this_machine_is_a_422(client, no_last_run):
+    """2026-11-02: ``both`` with no torque for THIS machine is refused by name —
+    the old silent downgrade sat next to a default that could pick up another
+    machine's torque.  ``loads=centrifugal`` (or a torque) is the way through."""
     r = client.get("/api/mechanical/rotor_stress",
                    params={"rpm": 6000, "mesh_size_mm": 4.0, "order": 1,
                            "cases": "single", "lift_off_solves": 0,
                            "field": False})
-    assert r.status_code == 200, r.text[:400]
-    out = r.json()
-    assert out["loads_requested"] == "both"
-    assert out["loads"] == "centrifugal"
-    assert out["torque_source"] == "none"
+    assert r.status_code == 422, r.text[:400]
+    detail = r.json()["detail"]
+    assert detail["error"] == "no torque for this machine; give torque_nm"
+    assert detail["invalid_parameters"][0]["field"] == "torque_nm"
 
 
 def test_the_load_selection_is_part_of_the_cache_key():

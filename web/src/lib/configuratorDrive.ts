@@ -11,7 +11,7 @@
 // it reads the sine passport's loss grid (bilinear over current × speed) and
 // REFUSES outside the computed envelope.  scaleMotor() never sees any of this,
 // so the Sine numbers cannot move.
-import type { Knobs, PwmVariant, PwmVariantPoint } from './motorScaling';
+import type { Knobs, PwmLossParts, PwmVariant, PwmVariantPoint } from './motorScaling';
 
 // ── the variants of a passport ──────────────────────────────────────────────
 
@@ -183,6 +183,9 @@ export function variantEnvelope(v: PwmVariant): Envelope | null {
 /** What Configure shows for one drive variant at one operating point. */
 export interface VariantReading {
   motor_pwm_loss_W: number | null;
+  /** the same extra loss by part (iron / magnet / copper_ac / other), summing to `motor_pwm_loss_W`;
+   *  null on a passport built before the split, or when a corner of the read lacks it */
+  motor_pwm_loss_parts_W: PwmLossParts | null;
   inv_cond_W: number | null;
   inv_sw_W: number | null;
   inv_dead_W: number | null;
@@ -214,11 +217,45 @@ function inv(p: PwmVariantPoint): { c: number | null; s: number | null; d: numbe
   return { c, s, d, t };
 }
 
-/** The nine fields of one computed point. */
+/** The keys of the motor PWM extra loss split, in display order. */
+export const PWM_PART_KEYS = ['iron', 'magnet', 'copper_ac', 'other'] as const;
+export type PwmPartKey = typeof PWM_PART_KEYS[number];
+
+/** A point's split of the motor PWM extra loss, or null (absent / any part not a finite number). */
+export function partsOf(p: PwmVariantPoint): PwmLossParts | null {
+  const q = p.motor_pwm_loss_parts_W;
+  if (!q || typeof q !== 'object') return null;
+  const out = {} as PwmLossParts;
+  for (const k of PWM_PART_KEYS) {
+    const v = num((q as unknown as Record<string, unknown>)[k]);
+    if (v == null) return null;
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Is the motor PWM extra loss split by part on this machine's computed variants?
+ *  'none' = no variant; 'total' = a variant carries only the total (a passport built before the split);
+ *  'parts' = every point with a total carries its split.  Machine-level, so the loss tiles keep the same
+ *  labels in Sine and PWM (a tile never changes its name when the drive is switched). */
+export type PwmSplitState = 'none' | 'total' | 'parts';
+export function pwmSplitState(vs: PwmVariant[] | null | undefined): PwmSplitState {
+  const list = usableVariants(vs);
+  if (!list.length) return 'none';
+  for (const v of list) {
+    for (const p of Object.values(v.points || {})) {
+      if (p && typeof p === 'object' && num(p.motor_pwm_loss_W) != null && !partsOf(p)) return 'total';
+    }
+  }
+  return 'parts';
+}
+
+/** The fields of one computed point. */
 export function readingOf(p: PwmVariantPoint): VariantReading {
   const i = inv(p);
   return {
     motor_pwm_loss_W: num(p.motor_pwm_loss_W),
+    motor_pwm_loss_parts_W: num(p.motor_pwm_loss_W) == null ? null : partsOf(p),
     inv_cond_W: i.c, inv_sw_W: i.s, inv_dead_W: i.d, inv_total_W: i.t,
     board_copper_W: num(p.board_copper_W),
     tj_C: num(p.tj_C), eta_drive_pct: num(p.eta_drive_pct),
@@ -226,7 +263,7 @@ export function readingOf(p: PwmVariantPoint): VariantReading {
   };
 }
 
-const KEYS: (keyof VariantReading)[] = ['motor_pwm_loss_W', 'inv_cond_W', 'inv_sw_W',
+const KEYS: Exclude<keyof VariantReading, 'motor_pwm_loss_parts_W'>[] = ['motor_pwm_loss_W', 'inv_cond_W', 'inv_sw_W',
   'inv_dead_W', 'inv_total_W', 'board_copper_W', 'tj_C', 'eta_drive_pct', 'eta_shaft_pct', 'p_cont_max_W'];
 
 /** The bracketing axis values around x: [lo, hi] (equal when x sits on a node
@@ -268,11 +305,15 @@ export function readVariant(v: PwmVariant, rpm: number, I: number):
   const u = ib[1] > ib[0] ? Math.min(1, Math.max(0, (I - ib[0]) / (ib[1] - ib[0]))) : 0;
   const r00 = readingOf(c00.p), r01 = readingOf(c01.p), r10 = readingOf(c10.p), r11 = readingOf(c11.p);
   const out = {} as VariantReading;
-  for (const k of KEYS) {
-    const a = r00[k], b = r01[k], c = r10[k], d = r11[k];
-    out[k] = a == null || b == null || c == null || d == null ? null
-      : (1 - t) * ((1 - u) * a + u * b) + t * ((1 - u) * c + u * d);
-  }
+  const lerp = (a: number | null, b: number | null, c: number | null, d: number | null) =>
+    (a == null || b == null || c == null || d == null ? null
+      : (1 - t) * ((1 - u) * a + u * b) + t * ((1 - u) * c + u * d));
+  for (const k of KEYS) out[k] = lerp(r00[k], r01[k], r10[k], r11[k]);
+  // the split, part by part with the same weights (so the parts still sum to the total); a corner without it = no split
+  const ps = [r00, r01, r10, r11].map((r) => r.motor_pwm_loss_parts_W);
+  out.motor_pwm_loss_parts_W = ps.every((q) => q != null) && out.motor_pwm_loss_W != null
+    ? Object.fromEntries(PWM_PART_KEYS.map((k) => [k, lerp(ps[0]![k], ps[1]![k], ps[2]![k], ps[3]![k]) as number])) as unknown as PwmLossParts
+    : null;
   const exact = (t === 0 || t === 1) && (u === 0 || u === 1);
   return { ok: true, values: out, exact };
 }
@@ -337,7 +378,25 @@ export function pwmBuildScale(loaded: Pick<Knobs, 'N' | 'L_mm' | 'nP'>, now: Pic
 
 /** A reading with the motor's PWM extra loss carried to another build (`pwmBuildScale`). */
 export function transferPwmReading(r: VariantReading, scale: number): VariantReading {
-  return { ...r, motor_pwm_loss_W: r.motor_pwm_loss_W == null ? null : r.motor_pwm_loss_W * scale };
+  const q = r.motor_pwm_loss_parts_W;
+  return { ...r, motor_pwm_loss_W: r.motor_pwm_loss_W == null ? null : r.motor_pwm_loss_W * scale,
+    motor_pwm_loss_parts_W: q == null ? null
+      : { iron: q.iron * scale, magnet: q.magnet * scale, copper_ac: q.copper_ac * scale, other: q.other * scale } };
+}
+
+/** `42.8 A · 13000 rpm; 21.4 A · 13000 rpm` — the FEM anchors the split was measured at (for the tooltip). */
+export function pwmPartsAnchors(v: PwmVariant | null | undefined, max = 3): string {
+  const a = v?.motor_pwm_loss_parts?.anchors;
+  if (!Array.isArray(a)) return '';
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of a) {
+    const I = num(x?.I_A), r = num(x?.rpm);
+    if (I == null || r == null) continue;
+    const s = `${trimNum(I, 1)} A · ${trimNum(r, 0)} rpm`;
+    if (!seen.has(s)) { seen.add(s); out.push(s); }
+  }
+  return out.length > max ? `${out.slice(0, max).join('; ')}; …` : out.join('; ');
 }
 
 /** True when a build knob moved off the machine as loaded.  The variants were

@@ -101,7 +101,7 @@ class P2Drive:
         self._plan_fs = None             # (Pro, free, FrameSystem)
         self._plan_const = None          # (FrameSystem, Msd, Sdt, data)
         self._plan_dead = None           # why the plan was switched off
-        self._plan_win = None            # (plan, member slip maps, systems)
+        self._plan_win = None            # (plan, member maps, systems, free)
         self.S_raw = None
         self.ed_ca = self.ed_cb = None
         self.pT = self.pQ = self.p_rep = self.p_mask = None
@@ -717,11 +717,12 @@ class P2Drive:
         window built for the shifts around it (``p2.shift_hint`` = (Pro, m,
         step, projection), set by the frame loop; without it the window is
         this frame alone).  Frames of one window share one PARDISO analysis."""
-        si = plan.slip_idx
         w = self._plan_win
-        if w is not None and w[0] is plan:
+        # the whole map and free set: anything else must meet plan.window's
+        # check that no dof outside the slip set moved
+        if w is not None and w[0] is plan and np.array_equal(w[3], free):
             for (r_, s_), fs in zip(w[1], w[2]):
-                if np.array_equal(r_, rr[si]) and np.array_equal(s_, sg[si]):
+                if np.array_equal(r_, rr) and np.array_equal(s_, sg):
                     return fs
         maps = [(rr, sg)]
         hint = getattr(self.p2, "shift_hint", None)
@@ -748,8 +749,7 @@ class P2Drive:
                 raise
             maps = maps[:1]
             systems = plan.window(maps)
-        self._plan_win = (plan, [(m_[0][si], m_[1][si]) for m_ in maps],
-                          systems)
+        self._plan_win = (plan, maps, systems, np.array(free))
         return systems[0]
 
     def _eddy_solve_plan(self, Pro, free, Ae, Ue, Msd, Sdt, rhs_e, cr, bn,

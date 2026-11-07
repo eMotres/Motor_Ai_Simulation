@@ -109,7 +109,6 @@ class ReducedPlan:
         self.n = self.nf + self.nb
         self.slip = np.zeros(self.N + self.nb, dtype=bool)
         self.slip[np.asarray(slip, dtype=np.int64)] = True
-        self.slip_idx = np.flatnonzero(self.slip[:self.N])
         self.rr0 = np.asarray(rr0, dtype=np.int64).copy()
         self.sg0 = np.asarray(sg0, dtype=float).copy()
         rrE, sgE = self._ext(self.rr0, self.sg0)

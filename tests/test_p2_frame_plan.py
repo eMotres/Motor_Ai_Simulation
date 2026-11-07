@@ -294,6 +294,36 @@ def test_eddy_newton_on_the_plan_matches_the_scipy_path(full_ring, sign,
         assert np.abs(U1 - U0).max() <= 1e-5 * np.abs(U0).max()
 
 
+def test_a_window_hit_needs_the_same_free_set():
+    """A same-length ``free`` that leaves every slip dof's reduced index alone
+    must not hit the window: its Jacobian belongs to the other free set."""
+    bits = _machine()
+    mesh, b, proj, K_const, sat, sat_sub, body = bits
+    p2 = _pardiso_p2(bits)
+    p2.slip_dofs = proj.slip_dofs
+    drv = _drive(p2, bits, 1e-4)
+    Pro, outer = proj.build(0)
+    free = np.setdiff1d(np.arange(Pro.shape[1]), outer)
+    rr, sg = reduced_map(Pro, free)
+    plan = ReducedPlan(b.N, len(free), 0, [tuple(K_const.tocoo().coords)],
+                       proj.slip_dofs, rr, sg)
+    fs = drv._plan_window_member(plan, Pro, free, rr, sg)
+    assert drv._plan_window_member(plan, Pro, free, rr, sg) is fs
+    # swap a Dirichlet column with its free neighbour: every other reduced
+    # index stays put, so the slip dofs see no change
+    welded = set(Pro.tocsr().indices[proj.slip_dofs].tolist())
+    pairs = [(int(o), int(free[np.searchsorted(free, o)])) for o in outer
+             if np.searchsorted(free, o) < free.size]
+    o, f = next(p for p in pairs if not welded & set(p))
+    free2 = np.sort(np.append(free[free != f], o))
+    rr2, sg2 = reduced_map(Pro, free2)
+    assert len(free2) == len(free)
+    assert np.array_equal(rr2[proj.slip_dofs], rr[proj.slip_dofs])
+    assert not np.array_equal(rr2, rr)
+    with pytest.raises(PlanMismatch):
+        drv._plan_window_member(plan, Pro, free2, rr2, sg2)
+
+
 def test_kill_switch_keeps_the_scipy_path(monkeypatch):
     from motor_ai_sim.simulation import p2_frame_plan
     monkeypatch.setattr(p2_frame_plan, "ENABLED", False)

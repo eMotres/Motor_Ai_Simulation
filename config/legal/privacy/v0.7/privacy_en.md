@@ -31,7 +31,7 @@ We do not sell or rent personal data. Personal data is processed by the provider
 
 ## 6. International transfers
 
-The Platform runs on two servers, one in Germany (EU) and one in the United States. Accounts whose company or stated country is the United States are hosted, with their projects, files and backups, on the US server; all other accounts are hosted in Germany with backups in the EU. Some providers are in the United States; transfers rely on the EU–US Data Privacy Framework where the provider is certified, and otherwise on the EU Standard Contractual Clauses. You can request a copy of the applicable safeguards at support@aerostator.com.
+The Platform runs on two servers, one in Germany (EU) and one in the United States. Accounts whose company or stated country is in North, Central or South America or the Caribbean are hosted, with their projects, files and backups, on the US server; all other accounts are hosted in Germany with backups in the EU. Some providers are in the United States; transfers rely on the EU–US Data Privacy Framework where the provider is certified, and otherwise on the EU Standard Contractual Clauses. You can request a copy of the applicable safeguards at support@aerostator.com.
 
 ## 7. Analytics and cookies
 

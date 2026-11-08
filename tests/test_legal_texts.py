@@ -32,8 +32,8 @@ client = TestClient(app)
 PINNED = {
     ("terms", "en"): "16e077c02ef807a07877f406d4767a85a22369486bd6b455ebec39bcac6cb61e",
     ("terms", "zh-CN"): "a225e9f1e0dbc6576c9ea40e376ac488c41837eb421bedc6ff408ef838bde2e5",
-    ("privacy", "en"): "6fce4190a4d2f5c67582e221a5627fd2c1850c051d4d98c88d9fa27cd1d9fb31",
-    ("privacy", "zh-CN"): "d69dff8a6405dd12a67350b45718a5c4b1c5214f73e3e027895139e49c0f5a27",
+    ("privacy", "en"): "d8ac343904cda1f308b33533319e77cb2234ee84e7a1a32835c65c3e9acc07cc",
+    ("privacy", "zh-CN"): "3c00a0b4231657654565aebf7a613e18d5b614627ef8a0db331e15a932f7ed58",
     ("platform-agreement", "en"): "cf6bd098d34d87a66a6747de0ff8f249eb76381da8be96006e4760ef2c277430",
     ("platform-agreement", "zh-CN"): "7b1673838da580732c09b3e79bbf7eb4363d73d7198a0bef85a0424fd7e6bca7",
     ("schedules", "en"): "061d953115a6d76465c82084dd346ea56d1feec29257be3827641821ea729df5",

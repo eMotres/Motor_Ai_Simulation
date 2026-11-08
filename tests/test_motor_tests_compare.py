@@ -397,8 +397,10 @@ def test_the_passport_stored_with_a_duty_is_used_when_none_is_resolved():
     doc["duties"][0]["summary"]["end3d"] = {"k_flux": 0.9}
     m = model_source.from_docs({}, doc, {}, LIB)
     assert m["end3d"]["k_flux"] == 0.9 and "stored with the duty" in m["end3d"]["source"]
-    # an absurd factor is not a passport
-    assert model_source.factors_from_end3d({"k_flux": 1.4})["k_flux"] is None
+    # an absurd factor is not a passport (outside end3d_factors.FACTOR_BAND = (0.5, 1.5)); a factor above 1 inside the
+    # band is a real correction and is kept (EMF audit 2026-11-07)
+    assert model_source.factors_from_end3d({"k_flux": 1.6})["k_flux"] is None
+    assert model_source.factors_from_end3d({"k_flux": 1.4})["k_flux"] == 1.4
 
 
 def test_torque_carries_the_torque_factor_k_t_else_the_flux_factor():

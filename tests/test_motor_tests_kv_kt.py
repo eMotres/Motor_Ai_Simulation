@@ -224,10 +224,14 @@ def test_without_a_passport_the_value_stays_and_says_not_corrected_yet():
     assert rows["kv"]["detail"].endswith("not corrected yet")
 
 
-def test_the_measured_torque_factor_goes_on_kt_and_is_named():
+def test_the_measured_torque_factor_is_named_but_kt_follows_kv():
+    """Kt of the slope is the no-load constant 11.695 / Kv (owner 2026-11-05): it carries Kv's flux factor; the measured
+    k_T (a load-point factor) is carried as provenance only (EMF audit 2026-11-07)."""
+    from motor_ai_sim import kv_kt as K
     g = _groups(_noload(end3d={"k_flux": 0.95, "k_T": 0.98}))
     rows = _by_key(g["kv_kt"])
-    assert rows["kt"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kt"] * 0.98)
+    assert rows["kt"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kt"] * 0.95)
+    assert rows["kt"]["model"] == pytest.approx(K.kt_from_kv(rows["kv"]["model"]))
     assert rows["kt"]["extra"]["end3d"]["torque_basis"] == "3-D"
     assert rows["kv"]["model"] == pytest.approx(C.kv_ke_kt(MODEL_SLOPE)["kv"] / 0.95)
     assert rows["kt"]["extra"]["end3d"]["k_torque"] == pytest.approx(0.98)

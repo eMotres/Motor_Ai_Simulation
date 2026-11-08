@@ -12,7 +12,15 @@ torque AND for Kt / Km, so that torque and Kt stay consistent:
 3. otherwise nothing: plain 2-D.
 
 KV and ψ_PM keep k_flux in every case — the flux factor is what Stage A
-measures.  Voltages keep k_flux too.
+measures.  Voltages keep k_flux too.  So does Kt, the NO-LOAD torque constant:
+it is formed from KV (``kv_kt``: Kt = 11.695 / KV, owner 2026-11-05), so it
+carries KV's factor and the pair always agrees.  Torque at a load point,
+T / I at that load ("Kt at load"), Km and Km per mass are torque-proportional
+and carry the torque factor above.
+
+Every reader applies a stored factor only inside :data:`FACTOR_BAND`
+(:func:`accepted_factor`): both sides of 1 are physical, so a factor above 1 is
+applied, never dropped.  A value outside the band is refused AND logged.
 
 The measured k_T records live in the repository's config (they are research
 results, not per-workspace state): ``config/end_effect_3d.json`` →
@@ -24,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +52,30 @@ def _num(v: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return f if f == f else None
+
+
+#: The open band a stored 3-D / end-effect factor (k_flux, k_T, k_3d) is applied in.  BOTH SIDES OF 1 ARE PHYSICAL: a
+#: short stack loses gap flux to fringing (k < 1); flux linked beyond the stack, or a factor calibrated on a bench EMF
+#: that reads above the model (a 40 mm-stack test motor: +8.5 %), puts it above 1.  Readers used to keep k <= 1.0 only
+#: and silently printed the uncorrected number for such a factor (EMF audit 2026-11-07).  Outside this band, or not
+#: finite, the number is not a correction but a broken record: it is refused, and the refusal is logged.
+FACTOR_BAND = (0.5, 1.5)
+
+
+def accepted_factor(k: Any, what: str = "3-D factor") -> Optional[float]:
+    """``k`` as a float when it is a finite number inside :data:`FACTOR_BAND` (open), else ``None``.
+
+    ``None`` in = no factor, quietly ``None`` out (the normal state of a machine without a 3-D result).  Anything else
+    that is refused - outside the band, NaN / inf, not a number - is logged as a warning naming ``what``, so a dropped
+    factor is never silent."""
+    if k is None:
+        return None
+    f = _num(k)
+    lo, hi = FACTOR_BAND
+    if f is None or not math.isfinite(f) or not (lo < f < hi):
+        log.warning("end3d_factors: %s = %r is outside (%g, %g) or not a number; not applied", what, k, lo, hi)
+        return None
+    return f
 
 
 def _records() -> List[Dict[str, Any]]:
@@ -125,10 +158,11 @@ def torque_factor(end3d: Optional[Dict[str, Any]]) -> Tuple[Optional[float], str
     k = _num(e.get("k_T"))
     if k is None:
         k = _num(e.get("k_torque")) if e.get("torque_basis") == BASIS_MEASURED else None
-    if k is not None and 0.5 < k <= 1.2:
+    k = accepted_factor(k, "k_T")
+    if k is not None:
         return k, BASIS_MEASURED
-    kf = _num(e.get("k_flux"))
-    if kf is not None and 0.5 < kf <= 1.2:
+    kf = accepted_factor(e.get("k_flux"), "k_flux")
+    if kf is not None:
         return kf, BASIS_FLUX
     return None, BASIS_2D
 

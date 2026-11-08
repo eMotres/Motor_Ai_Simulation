@@ -284,6 +284,11 @@ install_workspace_resolver(app)
 from motor_ai_sim.auth import install_role_gate
 install_role_gate(app)
 
+# Two regions (docs/regions/DESIGN.md): the wrong-region answer (421) for a signed-in account of the other region.  Inside
+# CORS (the 421 carries CORS headers); inactive unless MOTRES_REGION_GUARD=1 and a peer is configured.
+from motor_ai_sim.regions import guard as _region_guard
+_region_guard.install(app)
+
 # Path-traversal guard (audit 2026-09-29 #7): OUTSIDE the gate and the
 # resolver, inside CORS, so a '..' / encoded-slash / absolute-path request is
 # refused before anything resolves a name — and the 400 still carries CORS.
@@ -416,6 +421,8 @@ app.include_router(verification_router)
 app.include_router(verification_admin_router)
 app.include_router(data_sharing_router)
 app.include_router(cluster_router)
+from motor_ai_sim.routes.regions import router as regions_router
+app.include_router(regions_router)   # /api/region, /api/peer/v1/*, /api/admin/regions*: two regions, stage 1 (docs/regions/DESIGN.md)
 app.include_router(compute_nodes_router)
 app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)

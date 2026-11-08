@@ -5,10 +5,12 @@
  * re-run the checks.  Every action is audited on the server.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, Link, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, Link, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { CASE_STATUSES, adminActions, reasonOk, sortQueue, statusTone, type QueueRow } from '../../lib/verification';
+import { REGIONS, matchesRegion, regionLabel, regionOf, type RegionFilter } from './regions';
+import { useRegionMap } from './useRegionMap';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.5, mb: 2 } as const;
@@ -203,7 +205,10 @@ const VerificationPanel: React.FC = () => {
   }, [filter]);
   useEffect(() => { void load(); }, [load]);
 
-  const sorted = useMemo(() => sortQueue(rows ?? []), [rows]);
+  const regionMap = useRegionMap();
+  const [regionFilter, setRegionFilter] = useState<RegionFilter>('all');
+  const sorted = useMemo(() => sortQueue(rows ?? []).filter((r) => matchesRegion(regionOf(r.user, regionMap), regionFilter)),
+    [rows, regionMap, regionFilter]);
   if (open) return <CaseView id={open} onBack={() => { setOpen(null); void load(); }} onChanged={() => void load()} />;
 
   return (
@@ -213,13 +218,14 @@ const VerificationPanel: React.FC = () => {
         {CASE_STATUSES.map((s) => (
           <Chip key={s} size="small" label={`${t(`verification.status.${s}`)} ${counts[s] ?? 0}`} color={filter === s ? 'primary' : 'default'} onClick={() => setFilter(s)} sx={{ fontSize: 11 }} />
         ))}
+        <TextField select size="small" value={regionFilter} onChange={(e) => setRegionFilter(e.target.value as RegionFilter)} inputProps={{ 'aria-label': t('regions.region') }} sx={{ minWidth: 110, '& .MuiInputBase-input': { fontSize: 12, py: 0.6 } }}><MenuItem value="all" sx={{ fontSize: 12 }}>{t('regions.allRegions')}</MenuItem>{REGIONS.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 12 }}>{regionLabel(r)}</MenuItem>)}</TextField>
         <Button size="small" onClick={() => void load()} sx={{ textTransform: 'none' }}>{t('verification.refresh')}</Button>
         <HelpTip title={t('verification.help')} />
       </Box>
       {err && <Alert severity="error" sx={{ mb: 1, fontSize: 12 }}>{err}</Alert>}
       <Paper sx={PANEL}>
         <Table size="small">
-          <TableHead><TableRow>{['updated', 'company', 'country', 'applicant', 'account', 'status', 'signals'].map((h) => <TableCell key={h} sx={HEAD}>{t(`verification.col.${h}`, { defaultValue: h })}</TableCell>)}</TableRow></TableHead>
+          <TableHead><TableRow>{['updated', 'company', 'country', 'applicant', 'account', 'status', 'signals'].map((h) => <TableCell key={h} sx={HEAD}>{t(`verification.col.${h}`, { defaultValue: h })}</TableCell>)}<TableCell sx={HEAD}>{t('regions.region')}</TableCell></TableRow></TableHead>
           <TableBody>
             {sorted.map((r) => (
               <TableRow key={r.id} hover sx={{ cursor: 'pointer' }} onClick={() => setOpen(r.id)}>
@@ -230,9 +236,10 @@ const VerificationPanel: React.FC = () => {
                 <TableCell sx={CELL}>{r.user}</TableCell>
                 <TableCell sx={CELL}><Chipped status={r.status} /></TableCell>
                 <TableCell sx={CELL}>{r.signals}</TableCell>
+                <TableCell sx={CELL}>{regionLabel(regionOf(r.user, regionMap))}</TableCell>
               </TableRow>
             ))}
-            {rows && rows.length === 0 && <TableRow><TableCell colSpan={7} sx={CELL}>{t('verification.empty')}</TableCell></TableRow>}
+            {rows && rows.length === 0 && <TableRow><TableCell colSpan={8} sx={CELL}>{t('verification.empty')}</TableCell></TableRow>}
           </TableBody>
         </Table>
       </Paper>

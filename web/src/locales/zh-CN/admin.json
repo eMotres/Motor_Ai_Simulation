@@ -357,5 +357,33 @@
     "jobOwner": "账号",
     "jobState": "状态",
     "jobElapsed": "用时"
+  },
+  "regions": {
+    "title": "区域",
+    "titleTip": "欧盟和美国服务器。每个账户位于其所属服务器。",
+    "region": "区域",
+    "regionTip": "账户的所属服务器：美国公司为 US，其他所有账户为 EU。",
+    "allRegions": "全部区域",
+    "thisServer": "本服务器",
+    "peer": "另一区域",
+    "state": "状态",
+    "up": "运行中",
+    "down": "无法连接",
+    "version": "版本",
+    "load": "负载",
+    "loadTip": "每核 1 分钟平均负载。",
+    "queue": "作业",
+    "queueTip": "运行中 / 排队中。",
+    "disk": "可用磁盘",
+    "single": "单区域",
+    "singleTip": "未配置对端服务器；本服务器服务所有账户。",
+    "homeRegion": "所属区域",
+    "homeRegionTip": "管理员覆盖，已记录。不迁移数据：迁移是单独的步骤。",
+    "remoteTip": "位于 {{region}} 服务器；请在该服务器上管理。",
+    "source": {
+      "admin": "管理员设置",
+      "classifier": "分类器设置",
+      "default": "默认"
+    }
   }
 }

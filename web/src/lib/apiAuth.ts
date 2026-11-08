@@ -7,6 +7,7 @@
 import { refusalReasonKey } from './accessUi';
 import { sharedGet } from './sharedGet';
 import { handleAgreementRequired } from './platformAgreement';
+import { wrongRegionTarget } from './regionRedirect';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const DOCUMENT_URL = new URL(window.location.href);
@@ -199,6 +200,14 @@ export function installFetchAuth(): void {
         }).catch(() => { /* not JSON */ });
       }
     } catch { /* a notice must never break a request */ }
+    // Two regions (docs/regions/DESIGN.md): this account lives on the other region's server (421 `wrong_region`, sent only
+    // when the server's region guard is on).  Move the tab to the home server, same path; a bad or foreign URL is ignored.
+    try {
+      if (res.status === 421 && isApiUrl(String(res.url || url))) {
+        const target = wrongRegionTarget(421, await res.clone().json().catch(() => null), window.location.href);
+        if (target) window.location.assign(target);
+      }
+    } catch { /* a redirect must never break a request */ }
     // A gated action (starting a development) answered 428 `agreement_required`: open the Platform Agreement dialog and, once
     // the company accepted, repeat the very same call (lib/platformAgreement.ts).  A Request object cannot be re-sent, so it is left alone.
     try {

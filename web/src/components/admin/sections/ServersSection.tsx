@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, Table, TableHead, TableRow, TableCell, TableBody } from '@mui/material';
 import ServersPanel from '../ServersPanel';
+import RegionsCard from '../RegionsCard';
 import { getStoredToken } from '../../../lib/localAuth';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
@@ -64,6 +65,7 @@ const UserNodesTable: React.FC = () => {
 const ServersSection: React.FC = () => (
   <Box>
     <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)', mb: 1.5 }}>Servers</Typography>
+    <RegionsCard />
     <ServersPanel />
     <UserNodesTable />
   </Box>

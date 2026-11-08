@@ -357,5 +357,33 @@
     "jobOwner": "Account",
     "jobState": "State",
     "jobElapsed": "Time"
+  },
+  "regions": {
+    "title": "Regions",
+    "titleTip": "EU and US servers. Each account lives on its home server.",
+    "region": "Region",
+    "regionTip": "Home server of the account: US for US companies, EU for all others.",
+    "allRegions": "All regions",
+    "thisServer": "this server",
+    "peer": "other region",
+    "state": "State",
+    "up": "up",
+    "down": "unreachable",
+    "version": "Version",
+    "load": "Load",
+    "loadTip": "1-minute load average per core.",
+    "queue": "Jobs",
+    "queueTip": "Running / queued.",
+    "disk": "Disk free",
+    "single": "Single region",
+    "singleTip": "No peer server is configured; this server serves every account.",
+    "homeRegion": "Home region",
+    "homeRegionTip": "Admin override, logged. Moves no data: migration is a separate step.",
+    "remoteTip": "Lives on the {{region}} server; manage it there.",
+    "source": {
+      "admin": "set by admin",
+      "classifier": "set by classifier",
+      "default": "default"
+    }
   }
 }

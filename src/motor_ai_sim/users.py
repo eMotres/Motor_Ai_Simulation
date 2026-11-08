@@ -893,7 +893,19 @@ def public_user(email: str) -> dict:
             # NDA state (3D model menu): an account without it is served the simplified envelope only.
             "nda": normalize_nda(u.get("nda")),
             # consent to share my own data with the engineering dataset (motor_ai_sim.data_sharing); default False
-            "data_sharing": normalize_data_sharing(u.get("data_sharing"))}
+            "data_sharing": normalize_data_sharing(u.get("data_sharing")),
+            # two regions (docs/regions/DESIGN.md): the home region (eu when not set) and who set it (admin | classifier | default)
+            "home_region": _home_region(u), "home_region_source": _home_region_source(u)}
+
+
+def _home_region(u: dict) -> str:
+    from motor_ai_sim.regions import store as _RS
+    return _RS.effective_region(u)
+
+
+def _home_region_source(u: dict) -> str:
+    from motor_ai_sim.regions import store as _RS
+    return _RS.region_source(u)
 
 
 # ── NDA flag (3D model menu) ─────────────────────────────────────────────────

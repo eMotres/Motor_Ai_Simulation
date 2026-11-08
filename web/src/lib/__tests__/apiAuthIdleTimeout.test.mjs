@@ -23,6 +23,7 @@ function loadAuth(window, apiUrl) {
       if (id === './sharedGet') return { sharedGet: (orig, _api, input, init) => orig(input, init) };
       if (id === './accessUi') return { refusalReasonKey: () => null };
       if (id === './platformAgreement') return { handleAgreementRequired: async (res) => res };
+      if (id === './regionRedirect') return { wrongRegionTarget: () => null };
       throw new Error(`Unexpected import ${id}`);
     },
   };

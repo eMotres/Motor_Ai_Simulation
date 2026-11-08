@@ -77,6 +77,8 @@ ACTIONS = frozenset({
     "retention.run",
     # applicant verification (motor_ai_sim.verification): queue / case reads, decisions, the uploaded documents
     "verification.read", "verification.approve", "verification.deny", "verification.request", "verification.rerun", "verification.document",
+    # two regions (docs/regions/DESIGN.md): the home-region override, the classifier report, the directory pull, a live read of the peer's rows
+    "user.region", "regions.classify", "regions.directory_sync", "regions.remote_read",
 })
 
 _SECRETISH = ("password", "secret", "token", "key", "authorization", "cookie",

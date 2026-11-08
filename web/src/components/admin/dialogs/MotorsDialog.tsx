@@ -26,6 +26,9 @@ export interface RegistryUser {
   /** NDA state (3D model menu): signed accounts get the 3D tools and the STEP download. */
   data_sharing?: { consent: boolean; version: string; time: string };
   nda?: { signed: boolean; date: string; by: string; version?: string; company?: string; record_id?: string; revoked?: string };
+  /** Two regions (docs/regions/DESIGN.md): the home server (eu when not set) and who set it; `remote` = a row of the OTHER
+   *  region's server, shown read-only (fetched live, never stored here). */
+  home_region?: string; home_region_source?: string; remote?: boolean;
 }
 
 /** The dies a default may name: every die for an "all" grant, else the picked ones. */

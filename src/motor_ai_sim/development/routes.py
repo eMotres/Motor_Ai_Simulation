@@ -126,6 +126,10 @@ def _summary(project: dict, user: dict) -> dict:
         projection.pop("project_motor_grants", None)
         projection.pop("grant_removal_candidates", None)
         projection.pop("motor_history", None)
+    if not access.is_engineer(user):
+        # who holds a project grant, by address: a grant exists only for an account, so these ledgers are staff's
+        projection.pop("project_motor_grants", None)
+        projection.pop("grant_removal_candidates", None)
     projection["can_edit"] = bool(engineer)
     projection["can_edit_spec"] = access.can_edit_spec(user, project)
     # the shared quote (owner 2026-11-03): only a flag here, never its numbers; it lives in GET /{id}/quote
@@ -1183,6 +1187,48 @@ def claim_pending_invites(email: str) -> list[str]:
     return claimed
 
 
+#: Notices one customer account may send a day; the member is added regardless, so the cap only stops mail (owner 2026-11-08).
+_ADDED_NOTICE_DAY_MAX = 30
+_added_notices: dict[tuple[str, str], int] = {}
+
+
+def _added_notice_text(project: dict, project_id: str, who: str, url: str) -> tuple[str, str]:
+    """Subject and body of the notice to an address just added to a project, English then Chinese.  No prices, no promises."""
+    title = " ".join(str(project.get("title") or project_id).split())[:120]
+    link = f"{url}/projects/{project_id}/specification"
+    subject = f"[AeroStator] You were added to a project / 您已被添加到项目: {title}"
+    body = "\n".join((
+        "Hello,", "",
+        f'{who} added you to the project "{title}" on AeroStator.', "",
+        f"Open it: {link}",
+        "If you have no account yet, create one with this address and the project will be in your list.", "",
+        "您好，", "",
+        f"{who} 已将您添加到 AeroStator 项目“{title}”。", "",
+        f"打开项目：{link}",
+        "如果您还没有账户，请用此邮箱注册，项目会出现在您的列表中。", "",
+        "AeroStator support: support@aerostator.com", ""))
+    return subject, body
+
+
+def _notify_added_member(project_id: str, email: str, user: dict) -> None:
+    """One notice when an address joins a project (owner 2026-11-08: it is in the project at once, and it is told).  The answer to the
+    caller does not change, and mail trouble never blocks the add."""
+    who = _email(user)
+    if email == who:
+        return
+    try:
+        if not access.is_engineer(user):
+            day = (who, models.now()[:10])
+            if _added_notices.get(day, 0) >= _ADDED_NOTICE_DAY_MAX:
+                return
+            _added_notices[day] = _added_notices.get(day, 0) + 1
+        from motor_ai_sim import auth_email as E
+        subject, body = _added_notice_text(store.get_project(project_id) or {}, project_id, who, E.app_url())
+        E.send(email, subject, body, kind="project-member")
+    except Exception:                                       # noqa: BLE001 - never block the add
+        log.warning("member notice failed for %s", project_id, exc_info=True)
+
+
 @router.post("/{project_id}/members")
 async def add_member(request: Request, project_id: str):
     user, _, _ = access.require_project(request, project_id, edit=True)
@@ -1191,10 +1237,19 @@ async def add_member(request: Request, project_id: str):
     role = str(body.get("role") or "customer") if isinstance(body, dict) else "customer"
     if not email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or role not in ("customer", "engineer", "owner"):
         raise HTTPException(status_code=422, detail="Valid email and role required")
+    before = store.get_project(project_id) or {}
+    known = any(str(m.get("email") or "").lower() == email for m in [*before.get("members", []), *before.get("pending_invites", [])])
     entry, found = _apply_member(project_id, email, role)
     account = found
     store.append_audit(project_id, _email(user), "invite", "member", email, {"role": role, "pending": not bool(account)})
-    return {"member": entry if account else None, "pending": not bool(account)}
+    if not known:
+        _notify_added_member(project_id, email, user)
+    answer = {"invited": True, "email": email, "role": role}
+    if access.is_engineer(user):
+        # staff already see members and pending invites side by side; for anybody else the answer is the same whether the
+        # address has an account or not
+        answer.update(member=entry if account else None, pending=not bool(account))
+    return answer
 
 
 @router.delete("/{project_id}/members")

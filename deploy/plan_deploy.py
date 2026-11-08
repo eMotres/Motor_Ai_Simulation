@@ -37,7 +37,7 @@ BACKEND_MODULES = (
 )
 NEUTRAL = ("tests/", "docs/", "README", "CHANGELOG", ".github/", ".gitattributes",
            "deploy/deploy_module.sh", "deploy/plan_deploy.py", "deploy/bluegreen.sh", "deploy/cutover_stage2.sh",
-           "deploy/systemd/", "deploy/README.md", "deploy/CONTAINER_TEST.md")
+           "deploy/systemd/", "deploy/README.md", "deploy/CONTAINER_TEST.md", "deploy/nginx_rate_limits_proposed.conf")
 #: files that only change the web container (pages and their nginx)
 WEB_FILES = ("web/", "deploy/nginx.conf", "deploy/Dockerfile.web", "deploy/nginx-")
 #: files that change every part (the compose file decides the fences / services of all of them)

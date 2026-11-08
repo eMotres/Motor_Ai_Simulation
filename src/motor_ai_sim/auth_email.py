@@ -255,8 +255,12 @@ MAIL_ACCOUNT = Limiter(max_hits=3, window_s=3600.0, lock_s=3600.0)
 #: address cannot mint many unverified accounts (the MCP sign-up path sends
 #: agents' users here).
 SIGNUP_IP = Limiter(max_hits=5, window_s=3600.0, lock_s=3600.0)
+#: The OAuth endpoints write the store and take no credentials (routes/oauth.py).  One user's connection is one authorization
+#: and at most one registration; an AI service registers from a shared address, hence the wider hour.
+OAUTH_AUTHORIZE_IP = Limiter(max_hits=30, window_s=900.0, lock_s=900.0)
+OAUTH_REGISTER_IP = Limiter(max_hits=20, window_s=3600.0, lock_s=3600.0)
 
 
 def reset_limits() -> None:
-    for lim in (LOGIN_ACCOUNT, LOGIN_IP, MAIL_IP, MAIL_ACCOUNT, SIGNUP_IP, LINK_IP):
+    for lim in (LOGIN_ACCOUNT, LOGIN_IP, MAIL_IP, MAIL_ACCOUNT, SIGNUP_IP, LINK_IP, OAUTH_AUTHORIZE_IP, OAUTH_REGISTER_IP):
         lim.reset_all()

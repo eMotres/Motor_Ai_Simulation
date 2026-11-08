@@ -15,7 +15,7 @@ import datetime
 import re
 import unicodedata
 from typing import Any, Optional
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -1214,20 +1214,105 @@ async def patch_document(request: Request, die: str, config: str, doc_id: str):
     return found["doc"]
 
 
+#: What a member may upload, per file and per production (the shape of the project documents, development/documents.py).  A
+#: bench video is about 80 MB, so a production holds about sixty of them.  Staff get a larger file and no production quota, and
+#: their files do not use up the members' quota: our videos must not stop the factory from sending a photo.
+UPLOAD_MEMBER_FILE_MAX_BYTES = 200 * 1024 * 1024
+UPLOAD_MEMBER_PRODUCTION_MAX_BYTES = 5 * 1024 * 1024 * 1024
+UPLOAD_STAFF_FILE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+_UPLOAD_CHUNK = 1024 * 1024
+#: The file types a member may upload, by extension.  Wide on purpose (owner 2026-10-17: the factory sends photos, test reports,
+#: anything it needs); what stays out is what a browser or a computer would run: pages, scripts, programs, SVG.
+UPLOAD_EXTENSIONS = frozenset((
+    # documents, tables, measurements
+    "pdf doc docx odt rtf txt md xls xlsx xlsm xlsb ods csv tsv ppt pptx odp json xml yaml yml log dat mat tdms lvm wfm isf h5 "
+    # pictures
+    "jpg jpeg png gif webp bmp tif tiff heic heif avif "
+    # video and sound
+    "mp4 m4v mov webm avi mkv wmv mpg mpeg 3gp mts m2ts wav mp3 m4a "
+    # CAD
+    "step stp iges igs stl dxf dwg sat x_t x_b f3d f3z fcstd sldprt sldasm slddrw ipt iam prt asm catpart catproduct 3mf obj glb gltf "
+    # electronics: KiCad, other PCB tools, Gerber, drill, pick and place
+    "kicad_pro kicad_pcb kicad_sch kicad_sym kicad_mod kicad_dru kicad_prl pcbdoc schdoc brd sch net ipc "
+    "gbr ger gtl gbl gts gbs gto gbo gtp gbp gko gm1 gm2 g1 g2 g3 g4 drl xln exc pos cpl bom "
+    # archives
+    "zip 7z rar tar gz tgz bz2 xz"
+).split())
+
+
+def _is_upload_staff(user: dict) -> bool:
+    return str(user.get("role") or "") in ("admin", "engineer")
+
+
+def _member_upload_bytes(die: str, config: str) -> int:
+    """The bytes of this production's files that count against the members' quota: every file except a document staff uploaded."""
+    staff_files, roles = set(), {}
+    for row in (store.load_file(die, config, "documents.json") or {}).get("documents", []):
+        email = str(row.get("uploader_email") or "").strip().lower()
+        if email not in roles:
+            roles[email] = str((users.get_user(email) or {}).get("role") or "") if email else ""
+        if roles[email] in ("admin", "engineer"):
+            staff_files.add(row.get("file_id"))
+    total = 0
+    for path in store.file_dir(die, config).iterdir():
+        if path.name not in staff_files and path.is_file():
+            total += path.stat().st_size
+    return total
+
+
+def _check_upload_length(request: Request, user: dict) -> None:
+    """Refuse a body that is too large by its own account, before it is parsed into a temporary file."""
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    limit = UPLOAD_STAFF_FILE_MAX_BYTES if _is_upload_staff(user) else UPLOAD_MEMBER_FILE_MAX_BYTES
+    if declared > limit + 2 * _UPLOAD_CHUNK:
+        raise HTTPException(status_code=413, detail="The file is larger than %d MB" % (limit // (1024 * 1024)))
+
+
+async def _store_upload(user: dict, die: str, config: str, uploaded: Any) -> str:
+    """Stream one uploaded file to the production's files, within the caller's limits; returns its file id."""
+    limit = UPLOAD_STAFF_FILE_MAX_BYTES
+    if not _is_upload_staff(user):
+        if PurePosixPath(str(uploaded.filename or "").replace(chr(92), "/")).suffix[1:].lower() not in UPLOAD_EXTENSIONS:
+            raise HTTPException(status_code=415, detail="This file type is not accepted. Send documents, tables, pictures, "
+                                                        "videos, CAD or PCB files, or a zip of them.")
+        used = await run_in_threadpool(_member_upload_bytes, die, config)
+        if used >= UPLOAD_MEMBER_PRODUCTION_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="The production's file storage is full")
+        limit = min(UPLOAD_MEMBER_FILE_MAX_BYTES, UPLOAD_MEMBER_PRODUCTION_MAX_BYTES - used)
+    file_id = secrets.token_urlsafe(16)
+
+    def chunks():
+        while True:
+            block = uploaded.file.read(_UPLOAD_CHUNK)
+            if not block:
+                return
+            yield block
+
+    try:
+        await run_in_threadpool(store.save_uploaded_stream, die, config, file_id, chunks(), limit)
+    except ValueError as exc:
+        if str(exc) == "too_large":
+            raise HTTPException(status_code=413, detail="The file is larger than the allowed %d MB" % (limit // (1024 * 1024)))
+        if str(exc) == "empty":
+            raise HTTPException(status_code=400, detail="Empty file")
+        raise HTTPException(status_code=400, detail="Invalid upload")
+    return file_id
+
+
 @router.post("/{die}/{config}/documents")
 async def upload_document(request: Request, die: str, config: str):
     # every member may upload (owner 2026-10-17: the factory sends photos, test reports, anything it needs;
     # we sort the documents out ourselves).  Design data (parts / BOM / process) stays editor-only.
     user, _production = require_member_with_full_view(request, die, config)
+    _check_upload_length(request, user)
     form = await request.form()
     uploaded = form.get("file")
-    if uploaded is None:
+    if uploaded is None or isinstance(uploaded, str):
         raise HTTPException(status_code=400, detail="No file uploaded")
-    data = await uploaded.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-    file_id = secrets.token_urlsafe(16)
-    store.save_uploaded_file(die, config, file_id, data)
+    file_id = await _store_upload(user, die, config, uploaded)
     part_id = form.get("part_id")
     if part_id and not isinstance(part_id, str):
         part_id = str(part_id)
@@ -1736,6 +1821,7 @@ async def post_message(request: Request, die: str, config: str, thread_id: str):
 
     content_type = request.headers.get("content-type") or ""
     if "multipart/form-data" in content_type:
+        _check_upload_length(request, user)
         form = await request.form()
         text_raw = form.get("text")
         if isinstance(text_raw, str):
@@ -1748,10 +1834,9 @@ async def post_message(request: Request, die: str, config: str, thread_id: str):
         for key in form:
             val = form[key]
             if key == "files" and hasattr(val, "read"):
-                data = await val.read()
-                if data:
-                    file_id = secrets.token_urlsafe(16)
-                    store.save_uploaded_file(die, config, file_id, data)
+                if val.file.read(1):
+                    val.file.seek(0)
+                    file_id = await _store_upload(user, die, config, val)
                     attachments.append({"file_id": file_id, "name": str(val.filename or "attachment")})
     else:
         body = await _json_or_form(request)

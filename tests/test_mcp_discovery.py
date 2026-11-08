@@ -22,6 +22,7 @@ from motor_ai_sim import mcp_discovery as D
 from motor_ai_sim import oauth as O
 from motor_ai_sim import users as U
 
+from motor_ai_sim.auth_email import reset_limits
 from tests.test_mcp_stage1 import A, B  # noqa: F401
 from tests.test_mcp_stage1 import env as _stage1_env  # noqa: F401
 
@@ -36,6 +37,7 @@ def denv(_stage1_env, monkeypatch):
     monkeypatch.delenv("MCP_ANON_RATE_PER_MIN", raising=False)
     monkeypatch.delenv("MCP_ANON_RATE_PER_DAY", raising=False)
     D.reset_hints()
+    reset_limits()
     yield _stage1_env
     D.reset_hints()
 

@@ -22,6 +22,7 @@ from motor_ai_sim import agent_keys as K
 from motor_ai_sim import oauth as O
 from motor_ai_sim.routes import oauth as R
 
+from motor_ai_sim.auth_email import reset_limits
 from tests.test_mcp_stage1 import A, B, _call, _payload, _rpc  # noqa: F401
 from tests.test_mcp_stage1 import env as _stage1_env  # noqa: F401
 
@@ -32,6 +33,7 @@ REDIRECT = "https://claude.ai/api/mcp/auth_callback"
 def oenv(_stage1_env, monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://aerostator.com")
     O._touched.clear()
+    reset_limits()
 
     def _fake_owner(authorization):
         if not isinstance(authorization, str) or not authorization.startswith("Session "):

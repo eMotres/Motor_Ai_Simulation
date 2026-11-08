@@ -2588,8 +2588,8 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
 
 @router.post("/die")
 def create_die(req: DieCreate, _w: dict = Depends(require_catalog_write)):
-    name = _check_name(req.name or _default_die_name(_active_die_name(), _w.get("authorization")),
-                       "die")
+    name = _caller_die_name(_check_name(req.name or _default_die_name(_active_die_name(), _w.get("authorization")),
+                                        "die"), _w.get("authorization"))
     if _die_file(name).exists():
         raise HTTPException(409, detail=f"die '{name}' already exists — delete it "
                                         "first or pick another name")
@@ -2647,6 +2647,7 @@ def rename_die(die: str, req: DieRename, dry_run: bool = False,
     src = _die_dir(die)
     if not (src / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
+    new = _caller_die_name(new, _w.get("authorization"))
     if new == die:
         return {"ok": True, "die": die, "dry_run": dry_run, "changes": [], "manual": []}
     _require_writable_die(die)
@@ -3181,6 +3182,7 @@ def duplicate_die(die: str, req: DieDuplicate,
     src_dir = _die_dir(die)
     if not (src_dir / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
+    new = _caller_die_name(new, _w.get("authorization"))
     dst_dir = _die_dir(new)
     if _WS.is_verified_admin_request():
         # A new die has no resolved layer yet, so _die_dir(new) names the
@@ -4465,6 +4467,42 @@ def _default_die_name(source: Optional[str], authorization: Optional[str] = None
     return _dn.suggest(str(source or ""), name, ident, _die_name_taken)
 
 
+def _account_variant(requested: str, suffix: str, hidden) -> str:
+    """``requested`` under the die-naming rule of 2026-10-26: ``"fast"`` -> ``"fast vadim"``, ``"fast vadim"`` stays, and the
+    next free number when ``hidden`` claims the name."""
+    from motor_ai_sim import die_names as _dn
+    tagged = re.fullmatch(rf"(.*\S) {re.escape(suffix)}(?: \d+)?", requested, re.IGNORECASE)
+    if tagged and not hidden(requested):
+        return requested
+    return _dn.variant_name(tagged.group(1) if tagged else requested, suffix, hidden)
+
+
+def _die_hidden_from(acc: dict, name: str) -> bool:
+    """Does the caller's catalog resolve ``name`` to a die the caller may not see?"""
+    d = _ws_resolve_die_dir(name)
+    return d is not None and _classify_die_dir(Path(str(d)))[0] == _WS.LAYER_SHARED and not may_see_die(acc, name)
+
+
+def _caller_die_name(requested: str, authorization: Optional[str] = None) -> str:
+    """The name a new die is saved under for this caller.
+
+    A die is identified by its name across the catalog (grants, projects, stored results), so an account's own die must never
+    take the name of a catalog die the account cannot see, and refusing that name would say the die exists.  So a non-admin's
+    new die always carries the account's suffix, the rule ``_caller_config_name`` follows: ``"fast"`` -> ``"fast vadim"``.
+    ALWAYS, not only on a clash: an answer that changed only for a taken name would tell the caller the name is taken.
+
+    A name the caller CAN see stays as asked, and the route answers "already exists" as it always did: that is the duplicate
+    check of the dialogs.  An admin, who sees every name, names a die exactly."""
+    acc = catalog_access(authorization)
+    if not _ws_layering() or acc.get("is_admin"):
+        return requested
+    if _ws_resolve_die_dir(requested) is not None and not _die_hidden_from(acc, requested):
+        return requested
+    from motor_ai_sim import die_names as _dn
+    profile, ident = _acting_account(authorization)
+    return _account_variant(requested, _dn.user_suffix(profile, ident), lambda n: _die_hidden_from(acc, n))
+
+
 def _active_die_name() -> str:
     """The die the editor works on (the released one when the context is released), else ''."""
     try:
@@ -4510,10 +4548,7 @@ def _caller_config_name(die: str, requested: str, authorization: Optional[str] =
     suffix = _dn.user_suffix(profile, ident)
     hidden = {f.stem.casefold() for f in src.glob("*.yaml")
               if f.name != "die.yaml" and not may_see_config_file(acc, die, f.stem, f, layer=layer)}
-    tagged = re.fullmatch(rf"(.*\S) {re.escape(suffix)}(?: \d+)?", requested, re.IGNORECASE)
-    if tagged and requested.casefold() not in hidden:
-        return requested
-    return _dn.variant_name(tagged.group(1) if tagged else requested, suffix, lambda n: n.casefold() in hidden)
+    return _account_variant(requested, suffix, lambda n: n.casefold() in hidden)
 
 
 def _die_transition_name(source_die: str, die_geo: dict, live_geo: dict,
@@ -5659,8 +5694,9 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
     config; it only writes the new die's folder and the context file.
     """
     rel = released_state() or {}
-    name = _check_name(req.name or _default_die_name(rel.get("released_from") or _active_die_name(),
-                                                     _w.get("authorization")), "die")
+    name = _caller_die_name(_check_name(req.name or _default_die_name(rel.get("released_from") or _active_die_name(),
+                                                                      _w.get("authorization")), "die"),
+                            _w.get("authorization"))
     if req.mode is not None and req.mode not in ("motor", "generator"):
         raise HTTPException(422, detail="mode must be 'motor' or 'generator'")
     if _die_file(name).exists() or (_ws_layering() and _ws_resolve_die_dir(name) is not None):

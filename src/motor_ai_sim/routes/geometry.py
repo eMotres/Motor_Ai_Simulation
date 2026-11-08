@@ -2,6 +2,8 @@ import logging
 import math
 import os
 import re
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,6 +13,8 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 
+from motor_ai_sim.auth import caller_identity
+from motor_ai_sim.auth_email import Limiter
 from motor_ai_sim.config import get_config, clear_config_cache, config_path as _resolve_cfg_path
 from motor_ai_sim import workspace as _WSG
 from motor_ai_sim.workspace import root as _ws_root_g
@@ -930,6 +934,59 @@ def __getattr__(name):
 
 
 _MESH_DISK_KEEP = 40
+#: Bytes one workspace's mesh cache may hold, all kinds together.  Forty payloads of each kind are about 20 MB; a machine
+#: with an unusually fine mesh must not grow the folder without bound, so the oldest files go first.
+_MESH_DISK_MAX_BYTES = 64 * 1024 * 1024
+
+# ── CadQuery builds per account ──────────────────────────────────────────
+# A cache miss on /mesh is 10-16 s of one core, and `geo=` makes every request a possible miss, so real builds are counted per
+# account (a cache hit costs nothing and is not counted).  No screen of the app asks for this route today: Configure draws from
+# /mesh2d and the 3-D viewer from /mesh_extruded, neither of which runs CadQuery, and the old viewer hook asked once per
+# committed edit.  Thirty builds in ten minutes is one every 20 s, longer than anybody edits without looking at the result.
+# Staff (admin, engineer) and the boot warm-up are not counted.
+MESH_BUILD_WINDOW_S = 600.0
+MESH_BUILD_MAX_IN_WINDOW = 30
+#: The viewer does not cancel a build when the geometry changes, so a quick second edit overlaps the first one.
+MESH_BUILD_MAX_RUNNING = 3
+MESH_BUILD_RETRY_AFTER_S = 60
+_MESH_BUILD_WINDOW = Limiter(max_hits=MESH_BUILD_MAX_IN_WINDOW, window_s=MESH_BUILD_WINDOW_S, lock_s=MESH_BUILD_WINDOW_S)
+_MESH_BUILD_RUNNING: dict = {}
+_MESH_BUILD_LOCK = threading.Lock()
+
+
+def _mesh_build_account(request: Optional[Request]) -> Optional[str]:
+    """The account a build counts against, or None: staff, and a call outside a request."""
+    if not isinstance(request, Request):
+        return None
+    who = caller_identity(request.headers.get("authorization"))
+    if who.get("is_admin") or str(who.get("role") or "") in ("admin", "engineer"):
+        return None
+    return str(who.get("id") or "") or "anonymous"
+
+
+@contextmanager
+def _mesh_build_turn(request: Optional[Request]):
+    """Hold one of the account's build turns, or answer 429 before any CAD work starts."""
+    account = _mesh_build_account(request)
+    if account is None:
+        yield
+        return
+    with _MESH_BUILD_LOCK:
+        if (_MESH_BUILD_RUNNING.get(account, 0) >= MESH_BUILD_MAX_RUNNING
+                or _MESH_BUILD_WINDOW.blocked(account)):
+            raise HTTPException(status_code=429, detail="Too many 3-D model builds - try again in a few minutes.",
+                                headers={"Retry-After": str(MESH_BUILD_RETRY_AFTER_S)})
+        _MESH_BUILD_RUNNING[account] = _MESH_BUILD_RUNNING.get(account, 0) + 1
+        _MESH_BUILD_WINDOW.hit(account)
+    try:
+        yield
+    finally:
+        with _MESH_BUILD_LOCK:
+            left = _MESH_BUILD_RUNNING.get(account, 1) - 1
+            if left > 0:
+                _MESH_BUILD_RUNNING[account] = left
+            else:
+                _MESH_BUILD_RUNNING.pop(account, None)
 
 
 def _mesh_disk_get(kind: str, params_hash: str):
@@ -959,6 +1016,13 @@ def _mesh_disk_put(kind: str, params_hash: str, data) -> None:
                      key=lambda q: q.stat().st_mtime)
         for q in old[:-_MESH_DISK_KEEP]:
             q.unlink(missing_ok=True)
+        kept = 0
+        for q in sorted(_mesh_disk_dir().glob("*.json.gz"), key=lambda q: q.stat().st_mtime, reverse=True):
+            size = q.stat().st_size
+            if kept + size > _MESH_DISK_MAX_BYTES:
+                q.unlink(missing_ok=True)
+            else:
+                kept += size
     except Exception:      # noqa: BLE001
         log.debug("mesh disk cache: could not store %s", kind, exc_info=True)
 
@@ -1098,7 +1162,7 @@ def _part_state_cache_tag() -> str:
 
 
 @router.get("/mesh")
-def get_geometry_mesh(geo: Optional[str] = None):
+def get_geometry_mesh(geo: Optional[str] = None, request: Request = None):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
@@ -1117,42 +1181,43 @@ def get_geometry_mesh(geo: Optional[str] = None):
             _mesh_cache["build_time_s"] = 0.0
             return _disk
 
-        motor = CadQueryMotor()
-        motor.set_parameters(params_dict)
-        t0 = time.perf_counter()
-        motor.build_all()
-        data = motor.get_all_mesh_data()
+        with _mesh_build_turn(request):
+            motor = CadQueryMotor()
+            motor.set_parameters(params_dict)
+            t0 = time.perf_counter()
+            motor.build_all()
+            data = motor.get_all_mesh_data()
 
-        # rotor_fill_r: the 3D SOLID rotor cannot take a BRep fillet at the full
-        # radius near the thin bridges (it falls back to a smaller r).  The 2D
-        # physics geometry IS filleted at the requested radius (per-edge clamp),
-        # and get_extruded_mesh_data() extrudes that filleted 2D rotor to 3D for
-        # free — no OCC fillet.  Swap the viewer's rotor_core to that mesh so the
-        # 3D view shows the SAME rounding as the physics.  The extruded mesh is
-        # z∈[-w,0]; the solids are z∈[0,w], so shift z by +w to align.  Guarded:
-        # any failure keeps the (smaller-radius but smooth) solid rotor.
-        try:
-            _rfr = float(params_dict.get('rotor_fill_r', 0.0) or 0.0)
-        except Exception:
-            _rfr = 0.0
-        if _rfr > 1e-4:
+            # rotor_fill_r: the 3D SOLID rotor cannot take a BRep fillet at the full
+            # radius near the thin bridges (it falls back to a smaller r).  The 2D
+            # physics geometry IS filleted at the requested radius (per-edge clamp),
+            # and get_extruded_mesh_data() extrudes that filleted 2D rotor to 3D for
+            # free — no OCC fillet.  Swap the viewer's rotor_core to that mesh so the
+            # 3D view shows the SAME rounding as the physics.  The extruded mesh is
+            # z∈[-w,0]; the solids are z∈[0,w], so shift z by +w to align.  Guarded:
+            # any failure keeps the (smaller-radius but smooth) solid rotor.
             try:
-                _w = float(params_dict.get('motor_length') or 45.0)
-                _rc = motor.get_extruded_mesh_data().get('rotor_core')
-                if _rc and _rc.get('vertices'):
-                    _v = _rc['vertices']
-                    if _v and isinstance(_v[0], (list, tuple)):
-                        _nv = [[float(x), float(y), float(z) + _w] for (x, y, z) in _v]
-                    else:                       # flat [x,y,z,x,y,z,...]
-                        _nv = [float(c) for c in _v]
-                        for _i in range(2, len(_nv), 3):
-                            _nv[_i] += _w
-                    _rc2 = dict(_rc); _rc2['vertices'] = _nv
-                    data['rotor_core'] = _rc2
-            except Exception as _e:
-                print(f"rotor_core extruded-fillet override skipped: {_e}")
+                _rfr = float(params_dict.get('rotor_fill_r', 0.0) or 0.0)
+            except Exception:
+                _rfr = 0.0
+            if _rfr > 1e-4:
+                try:
+                    _w = float(params_dict.get('motor_length') or 45.0)
+                    _rc = motor.get_extruded_mesh_data().get('rotor_core')
+                    if _rc and _rc.get('vertices'):
+                        _v = _rc['vertices']
+                        if _v and isinstance(_v[0], (list, tuple)):
+                            _nv = [[float(x), float(y), float(z) + _w] for (x, y, z) in _v]
+                        else:                       # flat [x,y,z,x,y,z,...]
+                            _nv = [float(c) for c in _v]
+                            for _i in range(2, len(_nv), 3):
+                                _nv[_i] += _w
+                        _rc2 = dict(_rc); _rc2['vertices'] = _nv
+                        data['rotor_core'] = _rc2
+                except Exception as _e:
+                    print(f"rotor_core extruded-fillet override skipped: {_e}")
 
-        build_time = time.perf_counter() - t0
+            build_time = time.perf_counter() - t0
 
         data = _drop_excluded_meshes(data)
         _mesh_cache["hash"] = params_hash

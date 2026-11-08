@@ -23,6 +23,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
+from motor_ai_sim import auth_email as _limits
 from motor_ai_sim import oauth as _o
 from motor_ai_sim.routes.agent_keys import _owner
 
@@ -36,6 +37,19 @@ def _err(e: _o.OAuthError) -> JSONResponse:
     if e.status == 401:
         h["WWW-Authenticate"] = 'Basic realm="emotres-oauth"'
     return JSONResponse(e.body(), status_code=e.status, headers=h)
+
+
+def _ip(request: Request) -> str:
+    try:
+        from motor_ai_sim.client_ip import from_request
+        return from_request(request) or "?"
+    except Exception:                                   # noqa: BLE001
+        return "?"
+
+
+def _too_many() -> JSONResponse:
+    body = _o.OAuthError("temporarily_unavailable", "Too many requests from this address; try again in a few minutes.").body()
+    return JSONResponse(body, status_code=429, headers={**_NO_STORE, "Retry-After": "300"})
 
 
 @router.get("/.well-known/oauth-protected-resource")
@@ -53,18 +67,26 @@ def authorization_server(rest: str = ""):
 
 @router.post("/oauth/register")
 async def register(request: Request):
+    ip = _ip(request)
+    if _limits.OAUTH_REGISTER_IP.blocked(ip):
+        return _too_many()
     try:
         meta = await request.json()
     except Exception:                                   # noqa: BLE001
         return _err(_o.OAuthError("invalid_client_metadata", "JSON body expected"))
     try:
-        return JSONResponse(_o.register_client(meta), status_code=201, headers=_NO_STORE)
+        out = _o.register_client(meta)
     except _o.OAuthError as e:
         return _err(e)
+    _limits.OAUTH_REGISTER_IP.hit(ip)                   # only a registration that was stored counts
+    return JSONResponse(out, status_code=201, headers=_NO_STORE)
 
 
 @router.get("/oauth/authorize")
 def authorize(request: Request):
+    ip = _ip(request)
+    if _limits.OAUTH_AUTHORIZE_IP.blocked(ip):
+        return _too_many()
     q = dict(request.query_params)
     try:
         rid = _o.start_authorization(q)
@@ -73,6 +95,7 @@ def authorize(request: Request):
     except _o.OAuthError as e:
         # bad client / redirect URI: never redirect to an unverified URI
         return _err(e)
+    _limits.OAUTH_AUTHORIZE_IP.hit(ip)                  # only a request that was stored counts
     return RedirectResponse(f"{_o.CONSENT_PATH}?request={quote(rid)}", status_code=302)
 
 

@@ -979,8 +979,10 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     # run carries its Stage-A 3-D factor (``end3d.k_flux``, the report's k_3d), torque, power, torque/mass and the
     # voltage peaks are scaled by it, exactly as report.py does; the 2-D values stay beside them.
     end3d = next((src["end3d"] for src in (summary_raw, result_raw) if isinstance(src.get("end3d"), dict)), None)
-    k3 = _number((end3d or {}).get("k_flux"))
-    if k3 is not None and 0.5 < k3 <= 1.0:
+    # either side of 1 (end3d_factors.FACTOR_BAND); a refused factor is logged there
+    from motor_ai_sim.end3d_factors import accepted_factor
+    k3 = accepted_factor((end3d or {}).get("k_flux"), "end3d.k_flux")
+    if k3 is not None:
         try:   # the torque carries the torque factor (measured k_T, else k_flux) - report._pwm_end3d's rule
             from motor_ai_sim.end3d_factors import torque_factor
             kt = _number(torque_factor(end3d)[0]) or k3

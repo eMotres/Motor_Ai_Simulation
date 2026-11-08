@@ -43,8 +43,8 @@ def noload_constants(summary: Optional[dict], k_flux: Optional[float] = None) ->
 
     ``kv`` = the stored no-load Kv (``KV_noload_rpm_per_V_line``, the fundamental); an older run that carries only the
     loaded waveform-peak Kv (``KV_rpm_per_V_line``) still works and is marked ``source = "waveform peak"``.  ``k_flux`` (the
-    end-effect correction already accepted by the caller, 0.5 < k <= 1) divides Kv like every voltage, and Kt follows it, so
-    the two stay consistent.  ``kt`` is per A rms of the winding (phase) current, ``kt_line`` per A rms of line current.
+    end-effect correction, applied inside ``end3d_factors.FACTOR_BAND`` - either side of 1, a refused one is logged) divides
+    Kv like every voltage, and Kt follows it, so the two stay consistent.  ``kt`` is per A rms of the winding (phase) current, ``kt_line`` per A rms of line current.
     Nothing is invented: no Kv at all gives ``None`` values."""
     s = summary if isinstance(summary, dict) else {}
 
@@ -60,7 +60,9 @@ def noload_constants(summary: Optional[dict], k_flux: Optional[float] = None) ->
         kv, source = _f("KV_rpm_per_V_line"), "waveform peak"
     if kv is None:
         return {"kv": None, "kt": None, "kt_line": None, "source": None}
-    if k_flux is not None and 0.5 < float(k_flux) <= 1.0:
-        kv = kv / float(k_flux)
+    from motor_ai_sim.end3d_factors import accepted_factor
+    kf = accepted_factor(k_flux, "k_flux")
+    if kf is not None:
+        kv = kv / kf
     delta = str(s.get("star_delta") or "star").lower().startswith("d")
     return {"kv": kv, "kt": kt_from_kv(kv, delta=delta), "kt_line": kt_per_line_amp(kv), "source": source}

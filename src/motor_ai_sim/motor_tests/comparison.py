@@ -412,8 +412,11 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
              excluded: List[float]) -> List[Dict[str, Any]]:
     """The Kv / Kt rows of one slope fit: bench | simulation (corrected), with the difference from the bench.
 
-    Correction: the flux factor multiplies the EMF slope (so Kv, a reciprocal, divides by it); Kt carries the torque factor
-    (measured k_T, else the flux factor), exactly as the load rows do."""
+    Correction: the flux factor multiplies the EMF slope (so Kv, a reciprocal, divides by it).  Kt here is the NO-LOAD
+    constant formed from that same slope (Kt = 11.695 / Kv, ``kv_kt``, owner 2026-11-05), so it carries the same flux
+    factor and the simulated pair always agrees.  The measured torque factor k_T is a load-point quantity: it goes on the
+    load rows' torque, never on this Kt (EMF audit 2026-11-07: Kv / k_flux beside Kt x k_T broke Kt = 11.695 / Kv by
+    k_T / k_flux); it is still carried in the provenance."""
     b_pk, m_pk = fit["b_pk"], fit["m_pk"]
     if b_pk is None:
         return []
@@ -423,7 +426,6 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     k_flux, k_t = f3.get("k_flux"), f3.get("k_torque")
     k_t = k_t if k_t is not None else k_flux
     flux_clause = _k3(model, "flux")[1]
-    torque_clause = _k3(model, "torque")[1]
     used = [r["rpm"] for r in rows]
     prov = {"k_flux": k_flux, "k_torque": k_t, "torque_basis": f3.get("torque_basis"), "source": f3.get("source"),
             "inherited": bool(f3.get("inherited")), "inherited_note": f3.get("inherited_note"), "date": f3.get("date"),
@@ -455,7 +457,8 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     add("kv_slope", "EMF slope, V_LL peak per 1000 rpm", "V/krpm", b["slope_peak"], "slope_peak", k_flux, False, flux_clause)
     add("kv", "Kv (rpm per V line-line peak)", "rpm/V", b["kv"], "kv", k_flux, True, flux_clause)
     delta = str(model.get("connection") or "star").lower().startswith("d")
-    add("kt", "Kt per A rms phase current", "N·m/A", b["kt"], "kt", k_t, False, torque_clause,
+    # Kt = 11.695 / Kv: x k_flux, the reciprocal of Kv's correction
+    add("kt", "Kt per A rms phase current", "N·m/A", b["kt"], "kt", k_flux, False, flux_clause,
         {"connection": "delta" if delta else "star", "winding_a_factor": math.sqrt(3.0) if delta else 1.0})
     return out
 

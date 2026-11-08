@@ -117,18 +117,24 @@ def grade_points(card: Optional[str], library: Dict[str, Any]) -> Dict[str, Any]
 def factors_from_end3d(end3d: Optional[Dict[str, Any]], source: str = "Stage A", *, current: bool = True) -> Dict[str, Any]:
     """The 3-D end-effect factors a comparison applies, from a passport block (``end3d``).
 
-    ``k_flux`` (voltages / EMF) is the Stage A flux factor, accepted in (0.5, 1.0] exactly as the report does;
-    ``k_torque`` (torque, Kt) is ``end3d_factors.torque_factor`` (the measured k_T, else k_flux).  Both None = 2-D.
+    ``k_flux`` (voltages / EMF, Kv and the no-load Kt) is the Stage A flux factor, accepted inside
+    ``end3d_factors.FACTOR_BAND`` exactly as the report does - either side of 1; ``k_torque`` (torque at load) is
+    ``end3d_factors.torque_factor`` (the measured k_T, else k_flux).  Both None = 2-D; a stored factor that was refused is
+    named in ``k_flux_rejected`` (and logged), never dropped silently.
 
     Provenance only, nothing recomputed: ``inherited`` (the passport belongs to an earlier geometry) with its
     ``inherited_note`` and the passport ``date``; ``current`` False = the block is the one stored with a duty, not the
     configuration's present passport; ``stale`` = either of the two."""
     from motor_ai_sim import end3d_factors as E
     e = end3d if isinstance(end3d, dict) else {}
-    k = num(e.get("k_flux"))
-    if k is None or not (0.5 < k <= 1.0):
-        return {"k_flux": None, "k_torque": None, "torque_basis": E.BASIS_2D, "source": None, "inherited": False,
-                "inherited_note": None, "date": None, "current": bool(current), "stale": False}
+    raw = e.get("k_flux")
+    k = E.accepted_factor(raw, "k_flux")
+    if k is None:
+        out = {"k_flux": None, "k_torque": None, "torque_basis": E.BASIS_2D, "source": None, "inherited": False,
+               "inherited_note": None, "date": None, "current": bool(current), "stale": False}
+        if raw is not None:
+            out["k_flux_rejected"] = raw
+        return out
     kt, basis = E.torque_factor(e)
     inherited = bool(e.get("inherited"))
     when = str(e.get("adopted_utc") or e.get("generated_utc") or "")[:10] or None

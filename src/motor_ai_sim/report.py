@@ -8875,8 +8875,10 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # 563.4 V while the detail table cleared it at 539.5 V and the modulation
     # row beside it was already ×k (reviewer 2026-09-14, A2).  One k, both
     # voltage rules.
-    _k3 = _numf(_g(em, "end3d.k_flux"))
-    _k3 = _k3 if (_k3 and 0.5 < _k3 <= 1.0) else None
+    # Either side of 1 (end3d_factors.FACTOR_BAND): a factor above 1 was dropped here before the EMF audit of 2026-11-07,
+    # while the 3-D voltage column of the same run applied it.
+    from motor_ai_sim.end3d_factors import accepted_factor as _accepted_k
+    _k3 = _accepted_k(_g(em, "end3d.k_flux"), "end3d.k_flux")
     v_peak = _numf(em.get("V_line_peak_V") or rr.get("v_ll_peak_v"))
     v_peak_2d = v_peak
     if v_peak is not None and _k3:
@@ -8920,7 +8922,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # The probe is 2-D; the EMF a real stack makes is the 2-D one × k_3d, so
     # the speed per volt is ÷ k_3d — the same correction every other
     # flux-proportional number of this document carries (2026-09-13).
-    if kv_nl and _k3 and 0.5 < _k3 <= 1.0:
+    if kv_nl and _k3:
         kv_nl = float(kv_nl) / float(_k3)
     if kv_nl and v_min and cold_k and cold_k >= 1.0 and cold_note:
         ctx["runaway_rpm"] = float(kv_nl) * float(v_min) / float(cold_k)
@@ -8928,7 +8930,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                                "%s °C%s scaled to 20 °C"
                                % (_fmt(t_card, 0),
                                   (" ÷ k_3d %.4f" % _k3)
-                                  if _k3 and 0.5 < _k3 <= 1.0 else ""))
+                                  if _k3 else ""))
     elif v_peak and v_min and rpm and v_peak > 0:
         # V_line_peak is proportional to speed; on COLD magnets it is higher by
         # the Br ratio, so the speed at which it reaches the pack floor is lower.
@@ -8955,7 +8957,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # voltage on these pages, and it is compared against 0.9959 x the pack
     # floor.  Measured on the reference motor peak duty: waveform peak passes, m = 1.15+.
     v1_ll = _numf(em.get("V1_LL_V"))
-    if v1_ll is not None and _k3 and 0.5 < _k3 <= 1.0:
+    if v1_ll is not None and _k3:
         v1_ll = v1_ll * float(_k3)
     ctx["v_line_fund_v"] = v1_ll
     if v_min:
@@ -11677,8 +11679,9 @@ def cold_torque_constants(c: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     kT = _numf(c.get("k_torque"))
     measured = (kT is not None and str(c.get("torque_basis") or "")
                 in (BASIS_MEASURED, "3-D corrected"))
-    k3 = _numf(c.get("k_3d"))
-    k = kT if measured else (k3 if (k3 and 0.5 < k3 <= 1.2) else None)
+    from motor_ai_sim.end3d_factors import accepted_factor
+    k3 = accepted_factor(c.get("k_3d"), "constants_20c.k_3d")
+    k = kT if measured else k3
     basis = BASIS_MEASURED if measured else (BASIS_FLUX if k else BASIS_2D)
     delta = str((c.get("point") or {}).get("star_delta")
                 or two.get("star_delta") or "star").lower().startswith("d")
@@ -11727,9 +11730,14 @@ def em_constants_note(k3d: Any, drive: str = "sine",
     from motor_ai_sim.end3d_factors import BASIS_FLUX, BASIS_MEASURED, basis_note
     kq = float(k_t) if k_t else float(k3d)
     _b = BASIS_MEASURED if (k_t and abs(float(k_t) - float(k3d)) > 1e-12) else BASIS_FLUX
-    return ("Kt, Km, Km per mass and the two densities above are %s; the "
-            "inductances, resistances, flux linkage and mean |B| are the 2-D "
-            "values as solved." % basis_note(kq, _b) + tail)
+    # Kt itself is formed from the no-load KV (Kt = 11.695 / KV, owner 2026-11-05), so it carries KV's flux factor; the
+    # torque-proportional rows are T / I at load, Km, Km per mass and the densities (EMF audit 2026-11-07: the note said
+    # Kt carried k_T while the Kt row beside it carried k_flux).
+    return ("Kt is formed from the no-load KV, which carries the flux factor "
+            "k_flux = %.4f; T / I at this load, Km, Km per mass and the two "
+            "densities above are %s; the inductances, resistances, flux linkage "
+            "and mean |B| are the 2-D values as solved."
+            % (float(k3d), basis_note(kq, _b)) + tail)
 
 
 def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],

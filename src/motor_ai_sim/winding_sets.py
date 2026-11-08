@@ -36,6 +36,7 @@ __all__ = [
     "SixPhaseError", "SPLITS", "NEUTRALS", "resolve_six_phase",
     "coil_units", "per_set_values", "vsd_basis",
     "set_current_scale", "with_open_set", "is_degraded",
+    "sets_from_parallel_paths",
 ]
 
 SPLITS = ("parallel_paths",)
@@ -270,6 +271,58 @@ def set_current_scale(spec: Optional[Dict[str, Any]]) -> Tuple[float, float]:
 def is_degraded(spec: Optional[Dict[str, Any]]) -> bool:
     """True when the two sets do NOT carry the balanced (identical) current."""
     return bool(spec) and set_current_scale(spec) != (1.0, 1.0)
+
+
+def sets_from_parallel_paths(winding: Dict[str, Any], *, num_slots: int,
+                             num_poles: int, single_layer: bool = True,
+                             layout_str: Optional[str] = None,
+                             star_delta: str = "star") -> Dict[str, Any]:
+    """The two 3-phase sets of a winding STORED as 3 phases with parallel
+    paths — for a request that runs ONE set (one inverter channel) alone.
+
+    A machine with two independent three-phase winding sets in the same
+    slots, each on its own inverter, is often stored as one 3-phase winding
+    with the sets as its parallel paths (``2S-2P``: two identical paths).
+    Healthy, the two descriptions are the same field: in-phase sets carry
+    the same current, exactly like paths in parallel.  With one channel off
+    they are not, and the sets have to be named.  The mapping is the one
+    ``resolve_six_phase`` uses for a stored 6-phase winding: the stator is
+    cut into ``n_parallel`` equal sectors, path k = the coils of sector k,
+    set 1 = the first half of the paths (``set1_paths`` overrides it).
+
+    Nothing is written: the stored winding stays 3-phase.  Refused (a
+    :class:`SixPhaseError` naming the field) when the paths cannot be two
+    identical sets — one path, an odd count, paths that are not rotated
+    copies of each other, a coil that straddles two sectors.
+    """
+    w = dict(winding or {})
+    try:
+        phases = int(w.get("phases") or 3)
+    except (TypeError, ValueError):
+        phases = 0
+    if phases not in (3, 6):
+        raise SixPhaseError(f"phases must be 3 or 6; got {w.get('phases')!r}",
+                            ["phases"])
+    w["phases"] = 6
+    try:
+        spec = resolve_six_phase(w, num_slots=num_slots, num_poles=num_poles,
+                                 single_layer=single_layer,
+                                 layout_str=layout_str, star_delta=star_delta)
+    except SixPhaseError as exc:
+        raise SixPhaseError(
+            "one set open needs two identical 3-phase sets; this 3-phase "
+            "winding cannot be read as two sets from its parallel paths: "
+            f"{exc}", list(exc.fields) + ["six_phase_open_set"]) from exc
+    assert spec is not None
+    spec = dict(spec)
+    spec["mapping"] = "parallel_paths_of_3phase"
+    spec["note"] = (
+        f"stored as a 3-phase winding with {spec['n_parallel']} parallel "
+        f"paths; read as two 3-phase sets for this run: set 1 = path(s) "
+        f"{','.join(str(p) for p in spec['set1_paths'])}, set 2 = path(s) "
+        f"{','.join(str(p) for p in spec['set2_paths'])} (each set its own "
+        "star/delta and its own inverter channel)")
+    return spec
 
 
 def with_open_set(spec: Dict[str, Any], open_set: Any) -> Dict[str, Any]:

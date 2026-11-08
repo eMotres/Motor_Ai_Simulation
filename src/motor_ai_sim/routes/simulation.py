@@ -1859,6 +1859,26 @@ def _effective_six_phase(star_delta: Optional[str] = None,
         raise HTTPException(status_code=422, detail=str(e))
 
 
+def _six_phase_for_open_set(star_delta: Optional[str] = None,
+                            n_parallel: Optional[int] = None) -> dict:
+    """The two sets a ONE-SET-OPEN request runs on when the loaded winding is
+    stored as 3 phases: its parallel paths read as the two 3-phase sets
+    (``winding_sets.sets_from_parallel_paths``).  Nothing is written.  A
+    winding whose paths are not two identical sets is a 422 naming why."""
+    from motor_ai_sim.config import get_config as _gc
+    from motor_ai_sim.winding_sets import SixPhaseError, sets_from_parallel_paths
+    w = dict((_gc() or {}).get("winding") or {})
+    if n_parallel is not None:
+        w["n_parallel"] = int(n_parallel)
+    try:
+        slots, poles, sl, lay = _six_phase_geometry()
+        return sets_from_parallel_paths(
+            w, num_slots=slots, num_poles=poles, single_layer=sl,
+            layout_str=lay, star_delta=_effective_star_delta(star_delta))
+    except SixPhaseError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 class _NotFiled(Exception):
     """A run that is deliberately not filed under the duty (see its raiser)."""
 
@@ -5301,6 +5321,12 @@ def get_fem_transient(
     _six_open = _six_open_set_value(six_phase_open_set)
     if _six_open is not None:
         from motor_ai_sim.winding_sets import SixPhaseError, with_open_set
+        if _six_spec is None:
+            # Stored as 3 phases: the two sets are its parallel paths (a
+            # two-channel machine kept as 2S-2P).  Refused when they are not
+            # two identical sets.
+            _six_spec = _six_phase_for_open_set(
+                star_delta, _effective_winding(n_parallel, connection)[0])
         try:
             _six_spec = with_open_set(_six_spec, _six_open)
         except SixPhaseError as _e6o:

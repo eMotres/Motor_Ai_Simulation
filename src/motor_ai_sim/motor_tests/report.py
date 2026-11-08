@@ -70,6 +70,20 @@ def _title(rec: Dict[str, Any]) -> str:
     return " · ".join(b for b in bits if b)
 
 
+def _group_label(g: Dict[str, Any]) -> str:
+    """The group's label; the report prints no basis line, so a group whose simulated EMF was not taken at the bench
+    temperature exactly says how (EMF audit 2026-11-07: ``_ts`` Br-scaled, ``_fit`` fitted elasticity, ``_pt`` a stored
+    point at another temperature)."""
+    key, p = str(g.get("basis_key") or ""), g.get("basis_params") or {}
+    if key.endswith("_ts"):
+        return "%s (simulation temperature-scaled with Br, approximate)" % g["label"]
+    if key.endswith("_fit"):
+        return "%s (simulation at the bench temperature, fitted EMF-to-Br elasticity %s)" % (g["label"], p.get("el", "?"))
+    if key.endswith("_pt"):
+        return "%s (simulation: stored no-load point at %s C)" % (g["label"], p.get("sim", "?"))
+    return str(g["label"])
+
+
 def tables(die: str, cfg: str) -> List[Dict[str, Any]]:
     """``[{"title", "rows": [[header...], [label, unit, measured, model, delta], ...]}]``; ``[]`` = no section."""
     if not _INCLUDE.get():
@@ -91,7 +105,7 @@ def tables(die: str, cfg: str) -> List[Dict[str, Any]]:
         for g in cmp_["groups"]:
             if not g.get("rows"):
                 continue
-            rows.append([g["label"], "", "", "", ""])
+            rows.append([_group_label(g), "", "", "", ""])
             for r in g["rows"]:
                 if r["status"] == "info" and r["measured"] is None and r["model"] is None:
                     continue

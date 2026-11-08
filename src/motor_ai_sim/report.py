@@ -8879,7 +8879,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # while the 3-D voltage column of the same run applied it.
     from motor_ai_sim.end3d_factors import accepted_factor as _accepted_k
     _k3 = _accepted_k(_g(em, "end3d.k_flux"), "end3d.k_flux")
-    v_peak =_numf(em.get("V_line_peak_V") or rr.get("v_ll_peak_v"))
+    v_peak = _numf(em.get("V_line_peak_V") or rr.get("v_ll_peak_v"))
     v_peak_2d = v_peak
     if v_peak is not None and _k3:
         v_peak = v_peak * float(_k3)

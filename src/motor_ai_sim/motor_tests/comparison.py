@@ -426,7 +426,7 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     k_flux, k_t = f3.get("k_flux"), f3.get("k_torque")
     k_t = k_t if k_t is not None else k_flux
     flux_clause = _k3(model, "flux")[1]
-    used =[r["rpm"] for r in rows]
+    used = [r["rpm"] for r in rows]
     prov = {"k_flux": k_flux, "k_torque": k_t, "torque_basis": f3.get("torque_basis"), "source": f3.get("source"),
             "inherited": bool(f3.get("inherited")), "inherited_note": f3.get("inherited_note"), "date": f3.get("date"),
             "current": f3.get("current", True), "stale": bool(f3.get("stale"))}

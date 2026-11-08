@@ -16,7 +16,7 @@ Shape (what the web and the report read)::
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from motor_ai_sim.motor_tests import compare as C
 from motor_ai_sim.motor_tests.compare import num
@@ -399,13 +399,20 @@ def _slope_fit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Bench and simulated line-line EMF slopes (V per 1000 rpm, least squares through the origin) over ``rows``.
 
     The bench slope is on the voltage ``r["v"]`` the caller chose (:func:`_pick_bench_source`): the peak of the fundamental
-    (or its stand-ins); the simulated slope on ``m_pk``.  No rms constant is ever shown: one Kv, per V of line-line peak of
-    the fundamental."""
+    (or its stand-ins).  Two simulated slopes: ``m_pk`` on the FUNDAMENTAL (the one Kv, per V of line-line peak of the
+    fundamental; no rms constant is ever shown) and ``m_cmp`` on the bench's OWN basis (fundamental, rms x sqrt(2) or the
+    waveform peak), which the EMF-slope row compares like for like."""
     def sl(pts):
         f = C.slope_through_origin(pts)
         return None if f is None else {**f, "krpm": 1000.0 * f["slope"]}
     return {"b_pk": sl([(r["rpm"], r["v"]) for r in rows if r.get("v") is not None]),
-            "m_pk": sl([(r["rpm"], r["m_pk"]) for r in rows if r["m_pk"] is not None])}
+            "m_pk": sl([(r["rpm"], r["m_pk"]) for r in rows if r["m_pk"] is not None]),
+            "m_cmp": sl([(r["rpm"], r.get("m_cmp")) for r in rows if r.get("m_cmp") is not None])}
+
+
+#: The simulated quantity on the same basis as each bench voltage source, and the words for it.
+_MODEL_BASIS_OF_SOURCE = {"fundamental": ("m_fund", "fundamental"), "rms": ("m_rms_pk", "rms x sqrt(2)"),
+                          "pp": ("m_peak", "waveform peak")}
 
 
 def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, Any],
@@ -417,11 +424,12 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     factor and the simulated pair always agrees.  The measured torque factor k_T is a load-point quantity: it goes on the
     load rows' torque, never on this Kt (EMF audit 2026-11-07: Kv / k_flux beside Kt x k_T broke Kt = 11.695 / Kv by
     k_T / k_flux); it is still carried in the provenance."""
-    b_pk, m_pk = fit["b_pk"], fit["m_pk"]
+    b_pk, m_pk, m_cmp = fit["b_pk"], fit["m_pk"], fit.get("m_cmp")
     if b_pk is None:
         return []
     b = C.kv_ke_kt(b_pk["krpm"])
     md = None if m_pk is None else C.kv_ke_kt(m_pk["krpm"])
+    md_cmp = None if m_cmp is None else C.kv_ke_kt(m_cmp["krpm"])
     f3 = model.get("end3d") or {}
     k_flux, k_t = f3.get("k_flux"), f3.get("k_torque")
     k_t = k_t if k_t is not None else k_flux
@@ -444,39 +452,64 @@ def _kv_rows(fit: Dict[str, Any], rows: List[Dict[str, Any]], model: Dict[str, A
     if excluded:
         det_b += "; left out: %s rpm" % _fmt_rpms(excluded)
     out: List[Dict[str, Any]] = []
+    # THE BASES (EMF audit 2026-11-07).  The EMF-slope row compares like for like: the simulation on the bench's own
+    # voltage basis; a stored run that lacks that basis keeps the fundamental and the row says the two are mixed.  Kv and
+    # Kt stay on the fundamental (owner rule: Kv = rpm per V line-line peak of the FUNDAMENTAL); when the bench Kv is not on
+    # the fundamental the rows say so.
+    want_src = _MODEL_BASIS_OF_SOURCE.get(src or "", (None, "line-line peak"))[1]
+    cmp_src = next((r.get("m_cmp_src") for r in rows if r.get("m_cmp_src")), None)
+    mixed = any(r.get("m_cmp_mixed") for r in rows)
+    bench_off_fund = src is not None and src != "fundamental"
+    slope_det = ("; simulation on the %s, the stored run has no %s: bench and simulation on different bases"
+                 % (cmp_src or "fundamental", want_src)) if mixed else ("; simulation on the %s" % (cmp_src or want_src))
+    kv_det = ("; bench Kv from the %s, not the fundamental; the simulated Kv is on the fundamental" % want_src
+              if bench_off_fund else "")
 
     def add(key: str, label: str, unit: str, bench_v: float, model_name: str, factor: Optional[float],
-            divide: bool, clause: str, more: Optional[Dict[str, Any]] = None) -> None:
-        m2 = None if md is None else md[model_name]
+            divide: bool, clause: str, more: Optional[Dict[str, Any]] = None, *, consts=None, det_more: str = "") -> None:
+        src_d = md if consts is None else consts
+        m2 = None if src_d is None else src_d[model_name]
         corrected = factor is not None and m2 is not None
         mv = m2 if not corrected else (m2 / float(factor) if divide else m2 * float(factor))
         x = {**base, **(more or {}), "corrected": factor is not None}
-        out.append(_row(key, label, unit, bench_v, mv, tip="kv_kt", detail=det_b + "; simulation, " + clause, extra=x,
-                        status=None if m2 is not None else "no_model"))
+        out.append(_row(key, label, unit, bench_v, mv, tip="kv_kt", detail=det_b + det_more + "; simulation, " + clause,
+                        extra=x, status=None if m2 is not None else "no_model"))
 
-    add("kv_slope", "EMF slope, V_LL peak per 1000 rpm", "V/krpm", b["slope_peak"], "slope_peak", k_flux, False, flux_clause)
-    add("kv", "Kv (rpm per V line-line peak)", "rpm/V", b["kv"], "kv", k_flux, True, flux_clause)
+    add("kv_slope", "EMF slope, V_LL peak per 1000 rpm", "V/krpm", b["slope_peak"], "slope_peak", k_flux, False, flux_clause,
+        {"bench_basis": src, "model_basis": cmp_src, "basis_mixed": mixed}, consts=md_cmp, det_more=slope_det)
+    kv_more = {"bench_basis": src, "bench_not_fundamental": bench_off_fund}
+    add("kv", "Kv (rpm per V line-line peak)", "rpm/V", b["kv"], "kv", k_flux, True, flux_clause, kv_more,
+        det_more=kv_det)
     delta = str(model.get("connection") or "star").lower().startswith("d")
     # Kt = 11.695 / Kv: x k_flux, the reciprocal of Kv's correction
     add("kt", "Kt per A rms phase current", "N·m/A", b["kt"], "kt", k_flux, False, flux_clause,
-        {"connection": "delta" if delta else "star", "winding_a_factor": math.sqrt(3.0) if delta else 1.0})
+        {"connection": "delta" if delta else "star", "winding_a_factor": math.sqrt(3.0) if delta else 1.0, **kv_more},
+        det_more=kv_det)
     return out
 
 
 def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]], model: Dict[str, Any],
-                  mag_p: str) -> List[Dict[str, Any]]:
+                  mag_p: str, temp_suffix: str = "", temp_params: Optional[Dict[str, Any]] = None
+                  ) -> List[Dict[str, Any]]:
     """Kv and Kt from the SLOPE of the line-line EMF against speed - never from one point (owner 2026-11-04).
 
     Group 1 uses every row that carries a voltage.  A row whose V/n sits more than ``compare.SLOPE_FLAG_PCT`` from the
     median of the others is FLAGGED on its EMF row (never dropped); group 2, shown only then, repeats the fit without the
     flagged rows, so both slopes are always reported and the exclusion is visible.  The bench constants need no model;
-    the model columns come from the same rows (each scaled to its own magnet temperature)."""
+    the model columns come from the same rows, each brought to its own magnet temperature (``temp_suffix`` /
+    ``temp_params``: how, from :func:`_temp_group_basis`)."""
     source = _pick_bench_source(slope_in)
     if source is None:
         return []
+    want_key, want_txt = _MODEL_BASIS_OF_SOURCE[source]
     for r in slope_in:
         r["v"] = _bench_voltage(r, source)
         r["src"] = source
+        # the simulation on the bench's basis; a stored run without it keeps the Kv basis and says the two are mixed
+        own = r.get(want_key)
+        r["m_cmp"] = own if own is not None else r.get("m_pk")
+        r["m_cmp_src"] = want_txt if own is not None else r.get("m_src")
+        r["m_cmp_mixed"] = own is None and r.get("m_pk") is not None
     rows = [r for r in slope_in if r["v"] is not None]
     pk_rows = rows
     flags = C.flag_slope_outliers([(r["rpm"], r["v"]) for r in pk_rows])
@@ -492,15 +525,17 @@ def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]]
             row["detail"] = (row["detail"] + "; " if row["detail"] else "") + \
                 "V/n %+.1f %% from the median of the other rows (flagged; still in the Kv / Kt fit)" % f["dev_pct"]
     k_flux, k_clause, k_src = _k3(model, "flux")
-    kp = {"mag": mag_p, "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or ""}
+    kp = {"mag": mag_p, "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or "", **(temp_params or {})}
+    t_txt = _TEMP_BASIS_TEXT.get(temp_suffix, "")
     out: List[Dict[str, Any]] = []
     rows_all = _kv_rows(_slope_fit(rows), rows, model, excluded=[])
     if not rows_all:
         return []
     out.append(_group("kv_kt", "Kv / Kt from the EMF slope, all %d rows" % len(rows), rows_all, params={"n": len(rows)},
-                      tip="kv_kt", basis="all %d rows, slope through the origin, magnets at %s C, %s" % (
-                          len(rows), mag_p, k_clause),
-                      basis_key="kv_3d" if k_flux is not None else "kv_2d", basis_params={"n": len(rows), **kp}))
+                      tip="kv_kt", basis="all %d rows, slope through the origin, magnets at %s C%s, %s" % (
+                          len(rows), mag_p, t_txt % kp if t_txt else "", k_clause),
+                      basis_key=("kv_3d" if k_flux is not None else "kv_2d") + temp_suffix,
+                      basis_params={"n": len(rows), **kp}))
     keep = [r for r in rows if r not in flagged]
     if flagged and len(keep) >= 2:
         ex = [r["rpm"] for r in flagged]
@@ -508,8 +543,9 @@ def _kv_kt_groups(slope_in: List[Dict[str, Any]], emf_rows: List[Dict[str, Any]]
         if rows_ex:
             out.append(_group("kv_kt_ex", "Kv / Kt without %s rpm (flagged)" % _fmt_rpms(ex), rows_ex,
                               params={"rpm": _fmt_rpms(ex)}, tip="kv_kt",
-                              basis="flagged rows left out, %d rows, magnets at %s C, %s" % (len(keep), mag_p, k_clause),
-                              basis_key="kv_ex_3d" if k_flux is not None else "kv_ex_2d",
+                              basis="flagged rows left out, %d rows, magnets at %s C%s, %s" % (
+                                  len(keep), mag_p, t_txt % kp if t_txt else "", k_clause),
+                              basis_key=("kv_ex_3d" if k_flux is not None else "kv_ex_2d") + temp_suffix,
                               basis_params={"n": len(keep), "rpm": _fmt_rpms(ex), **kp}))
     return out
 
@@ -550,6 +586,58 @@ def _bearing_groups(rows_in: List[Dict[str, Any]], rec: Dict[str, Any], model: D
                    basis="simulation: SKF friction, rotor weight as radial load; not measured", basis_key="bearings_model")]
 
 
+#: The clause a group basis gains for how its simulated EMF reached the bench magnet temperature (``%`` against the basis
+#: params); the web translates the same through the basis key suffix (``tests.basis.<key><suffix>``).
+_TEMP_BASIS_TEXT = {
+    "_pt": ", simulation = the stored no-load point at %(sim)s C, compared directly",
+    "_fit": (", simulation at the bench temperature by the EMF-to-Br elasticity %(el)s fitted from this "
+             "configuration's no-load points"),
+    "_ts": ", simulation temperature-scaled with Br (approximate)",
+}
+
+
+def _temp_group_basis(rows_x: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Any]]:
+    """``(suffix, params)`` of a group from its rows' ``emf_temp_*`` provenance: the least exact case present wins, so
+    the group never claims more than its weakest row - Br-scaled ``_ts`` > fitted ``_fit`` > a stored point at another
+    temperature ``_pt`` > exact (no suffix)."""
+    xs = [x for x in rows_x if x.get("emf_temp_basis")]
+    if any(x["emf_temp_basis"] == C.TEMP_BR_SCALED for x in xs):
+        return "_ts", {}
+    fitted = [x for x in xs if x["emf_temp_basis"] == C.TEMP_FITTED]
+    if fitted:
+        return "_fit", {"el": "%.2f" % float(fitted[0]["emf_elasticity"])}
+    off = [x for x in xs if x["emf_temp_basis"] == C.TEMP_STORED_POINT and x.get("magnet_temp_c") is not None
+           and x.get("emf_model_temp_c") is not None
+           and abs(float(x["emf_model_temp_c"]) - float(x["magnet_temp_c"])) > C.EMF_SAME_TEMP_K]
+    if off:
+        ts = [float(x["emf_model_temp_c"]) for x in xs if x["emf_temp_basis"] == C.TEMP_STORED_POINT]
+        lo, hi = min(ts), max(ts)
+        return "_pt", {"sim": "%.0f" % lo if round(lo) == round(hi) else "%.0f-%.0f" % (lo, hi)}
+    return "", {}
+
+
+def _emf_temp_detail(tb: Dict[str, Any], t_mag: Optional[float], t_src: str) -> str:
+    """The row detail (EN) for how the simulated EMF of one free-run row reached the bench magnet temperature."""
+    ref = tb["ref"]
+    t0 = ref.get("magnet_temp_c")
+    head = "no-load duty '%s' at %g rpm, magnet %s C" % (ref["duty"], ref["rpm"], "?" if t0 is None else "%g" % t0)
+    if tb["basis"] == C.TEMP_NO_BENCH_T:
+        return head + ", bench magnet temperature unknown: not scaled"
+    bench = "%.0f C (%s)" % (t_mag, t_src)
+    if tb["basis"] == C.TEMP_STORED_POINT:
+        return head + ", bench %s: stored point within %g K, compared directly (speed only)" % (bench, C.EMF_DIRECT_TEMP_K)
+    if tb["basis"] == C.TEMP_FITTED:
+        fit = tb["fit"] or {}
+        return head + (" -> %s, x %.4f = (Br ratio %.4f) ^ %.3f, the EMF elasticity to Br fitted from this configuration's "
+                       "%s no-load temperatures (%.0f K span)"
+                       % (bench, tb["factor"], tb["br_ratio"], tb["elasticity"], fit.get("n"), fit.get("span_k", 0.0)))
+    note = ""
+    fit = tb.get("fit")
+    if fit and not fit.get("accepted"):
+        note = "; the fitted elasticity %.3f is outside %s and is not used" % (fit["elasticity"], C.EMF_ELASTICITY_RANGE)
+    return head + " -> %s, Br ratio %.4f: temperature-scaled with Br (approximate)%s" % (bench, tb["br_ratio"], note)
+
+
 def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     rows_in = [r for r in rec.get("rows") or [] if num(r.get("rpm"))]
     rows_in.sort(key=lambda r: float(r["rpm"]))
@@ -569,15 +657,22 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         lbl = "%d rpm" % round(n)
         vpk_meas = None if num(r.get("v_ll_pp_v")) is None else float(r["v_ll_pp_v"]) / 2.0
         slope_in.append({"i": len(emf_rows), "rpm": n, "pk": vpk_meas, "rms": num(r.get("v_ll_rms_v")),
-                         "fund": num(r.get("v_ll_fund_pk_v")), "m_pk": None, "m_src": None})
+                         "fund": num(r.get("v_ll_fund_pk_v")), "m_pk": None, "m_src": None,
+                         "m_fund": None, "m_peak": None, "m_rms_pk": None})
         if ref is None:
             emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, None, tip="emf_peak", params=params))
             rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), None, tip="emf_rms", params=params))
             if num(r.get("shaft_power_w")) is not None:
                 loss_rows.append(_row("loss", lbl, "W", r.get("shaft_power_w"), None, tip="loss", params=params))
             continue
+        # THE NO-LOAD LOSS keeps the point nearest in speed and loss ~ Br^2 (unchanged; a separate question)
         ratio = C.br_ratio(pts, t_mag, ref.get("magnet_temp_c"))
-        emf = C.emf_model_at(n, ref, ratio)
+        # THE EMF (EMF audit 2026-11-07): EMF does not follow Br in a saturated rotor.  (a) a stored point within 10 K of
+        # the bench is compared directly; (b) else the elasticity fitted from this configuration's own no-load points;
+        # (c) else Br scaling, labelled approximate.  ``compare.emf_temperature_basis`` decides and says which.
+        tb = C.emf_temperature_basis(n, refs, pts, t_mag)
+        eref = tb["ref"]
+        emf = C.emf_model_at(n, eref, tb["factor"])
         if t_mag is not None:
             temps_used.append(float(t_mag))
         det = (f"no-load duty '{ref['duty']}' at {ref['rpm']:g} rpm, magnet {ref.get('magnet_temp_c') if ref.get('magnet_temp_c') is not None else '?'} C"
@@ -585,12 +680,17 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         extra = {"magnet_temp_c": t_mag, "magnet_temp_source": t_src, "br_ratio": ratio, "ref_duty": ref["duty"],
                  "ref_rpm": ref["rpm"]}
         # the EMF carries the end-effect flux factor (corrected value only)
-        emf_det = det + ", " + k_clause
-        # the simulated slope is formed on the FUNDAMENTAL; an older stored no-load run without one falls back to its waveform
-        # peak and says so
+        emf_det = _emf_temp_detail(tb, t_mag, t_src) + ", " + k_clause
+        # the Kv slope is formed on the FUNDAMENTAL; an older stored no-load run without one falls back to its waveform
+        # peak and says so.  The other bases ride along for the EMF-slope row, which follows the bench's basis.
         slope_in[-1].update({"m_pk": emf["fund"] if emf["fund"] is not None else emf["peak"],
-                             "m_src": "fundamental" if emf["fund"] is not None else "waveform peak"})
-        emf_x = {**extra, "corrected": k_flux is not None}
+                             "m_src": "fundamental" if emf["fund"] is not None else "waveform peak",
+                             "m_fund": emf["fund"], "m_peak": emf["peak"],
+                             "m_rms_pk": None if emf["rms"] is None else emf["rms"] * math.sqrt(2.0)})
+        emf_x = {**extra, "br_ratio": tb["br_ratio"], "ref_duty": eref["duty"], "ref_rpm": eref["rpm"],
+                 "corrected": k_flux is not None, "emf_temp_basis": tb["basis"], "emf_temp_factor": tb["factor"],
+                 "emf_elasticity": tb["elasticity"], "emf_model_temp_c": tb["model_temp_c"],
+                 "emf_ref_magnet_temp_c": eref.get("magnet_temp_c")}
         rms_x = dict(emf_x)
         emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, _scaled(emf["peak"], k_flux), tip="emf_peak", params=params,
                              detail=emf_det, extra=emf_x))
@@ -620,9 +720,10 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         mag_txt, mag_p = "magnets at %s C" % mag, mag
     else:
         mag_txt, mag_p = "magnets at the simulation temperature", None
-    basis_emf = mag_txt + ", " + k_clause
-    emf_key = "emf_3d" if k_flux is not None else "emf_2d"
-    emf_bp = {"mag": mag_p or "?", "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or ""}
+    t_suffix, t_params = _temp_group_basis([r["extra"] for r in emf_rows if r.get("model") is not None])
+    emf_bp = {"mag": mag_p or "?", "k": None if k_flux is None else "%.3f" % k_flux, "src": k_src or "", **t_params}
+    basis_emf = mag_txt + (_TEMP_BASIS_TEXT[t_suffix] % emf_bp if t_suffix else "") + ", " + k_clause
+    emf_key = ("emf_3d" if k_flux is not None else "emf_2d") + t_suffix
     groups = []
     # a voltage group only when the test measured that voltage (owner 2026-10-30: a free-run logged as torque /
     # speed / power only must not show empty EMF tables)
@@ -632,7 +733,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
     if any(r.get("measured") is not None for r in rms_rows):
         groups.append(_group("emf_rms", "EMF line-line rms", rms_rows, tip="emf_rms", basis=basis_emf,
                              basis_key=emf_key, basis_params=emf_bp))
-    groups.extend(_kv_kt_groups(slope_in, emf_rows, model, mag_p or "?"))
+    groups.extend(_kv_kt_groups(slope_in, emf_rows, model, mag_p or "?", t_suffix, t_params))
     if loss_rows:
         groups.append(_group("loss", "No-load loss (shaft power)", loss_rows, tip="loss",
                              basis=mag_txt, basis_key="loss",

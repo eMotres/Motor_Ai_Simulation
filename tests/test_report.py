@@ -2343,38 +2343,46 @@ class TestA2TheWaveformPeakCarriesK3d:
 
 class TestB1MachineConstantsAgreeWithSectionThree:
     """B1 — Km and Kt were printed twice, with different values and identical
-    labels: section 3 applied k_3d and section 4 did not."""
+    labels: section 3 applied k_3d and section 4 did not.
 
+    Since the one-Kt rule (owner 2026-11-05, ``kv_kt``) the torque CONSTANT Kt is
+    formed from the no-load KV, Kt = 11.695 / KV, so it carries KV's flux factor
+    and never k_T; the torque per ampere AT THIS LOAD (T / I), Km and Km per mass
+    are torque-proportional and carry the torque factor (measured k_T, else
+    k_flux, owner 2026-09-30)."""
+
+    KV = 22.5
     EM = {"star_delta": "delta", "end3d": {"k_flux": 0.9576},
+          "KV_noload_rpm_per_V_line": KV,
           "Kt_Nm_per_Arms": 0.579, "Kt_Nm_per_A_line": 0.3342,
           "Km_Nm_sqrtW": 4.611, "Km_per_mass_Nm_sqrtW_kg": 0.1673,
           "T_em_avg_Nm": 187.855, "P_mech_W": 279344.0,
           "mass_total_kg": 27.559}
 
-    def _rows(self):
+    def _rows(self, em=None):
         from motor_ai_sim import report as R
-        return dict((r[0], r[1]) for r in R.em_constant_rows(self.EM))
+        return dict((r[0], r[1]) for r in R.em_constant_rows(em or self.EM))
 
-    def test_kt_km_and_km_per_mass_carry_the_flux_factor_without_k_T(self):
-        """Owner 2026-09-30 («если были старые расчёты 3D — применяй пока
-        их»): the torque factor is the measured k_T, else k_flux — the same
-        one the torque carries."""
+    def test_kt_follows_the_corrected_kv_and_the_load_rows_carry_the_flux_factor(self):
+        from motor_ai_sim import kv_kt as K
         from motor_ai_sim import report as R
 
         rows = self._rows()
-        assert rows["Torque constant Kt per line A"] == \
-            R._fmt(0.3342 * 0.9576, 4, "N·m/A rms")
+        kv3 = self.KV / 0.9576
+        assert rows["Torque constant Kt per line A"] ==             R._fmt(K.kt_per_line_amp(kv3), 4, "N·m/A rms")
+        assert rows["Torque constant Kt per winding A"] ==             R._fmt(K.kt_from_kv(kv3, delta=True), 4, "N·m/A rms")
+        # without a measured k_T the torque factor is the flux factor
+        assert rows["Torque per ampere at this load, T / I per line A"] ==             R._fmt(0.3342 * 0.9576, 4, "N·m/A rms")
         assert rows["Motor constant Km"] == R._fmt(4.611 * 0.9576, 3, "N·m/√W")
-        assert rows["Km per mass"] == \
-            R._fmt(0.1673 * 0.9576, 4, "N·m/(√W·kg)")
+        assert rows["Km per mass"] ==             R._fmt(0.1673 * 0.9576, 4, "N·m/(√W·kg)")
 
-    def test_a_measured_k_T_goes_on_kt_and_km_once(self):
+    def test_a_measured_k_T_goes_on_the_load_rows_once_and_never_on_kt(self):
+        from motor_ai_sim import kv_kt as K
         from motor_ai_sim import report as R
 
-        em = dict(self.EM, end3d={"k_flux": 0.9576, "k_T": 0.9795})
-        rows = dict((r[0], r[1]) for r in R.em_constant_rows(em))
-        assert rows["Torque constant Kt per line A"] == \
-            R._fmt(0.3342 * 0.9795, 4, "N·m/A rms")
+        rows = self._rows(dict(self.EM, end3d={"k_flux": 0.9576, "k_T": 0.9795}))
+        assert rows["Torque constant Kt per line A"] ==             R._fmt(K.kt_per_line_amp(self.KV / 0.9576), 4, "N·m/A rms")
+        assert rows["Torque per ampere at this load, T / I per line A"] ==             R._fmt(0.3342 * 0.9795, 4, "N·m/A rms")
         assert rows["Motor constant Km"] == R._fmt(4.611 * 0.9795, 3, "N·m/√W")
 
     def test_section_four_now_equals_section_three(self):
@@ -2383,20 +2391,22 @@ class TestB1MachineConstantsAgreeWithSectionThree:
         col = {"duty": "d", "em": self.EM, "d": {}, "result": {}, "res": {}}
         cmp_rows = dict((r[0], r[1]) for r in R.em_compare_rows([col], {})[1])
         rows = self._rows()
-        assert rows["Motor constant Km"].split()[0] == \
-            cmp_rows["Km [N·m/sqrt(W), 3-D]"]
-        assert rows["Torque constant Kt per line A"].split()[0] == \
-            cmp_rows["Kt, line current [N·m/A rms, 3-D]"]
+        assert rows["Motor constant Km"].split()[0] ==             cmp_rows["Km [N·m/sqrt(W), 3-D]"]
+        assert rows["Torque constant Kt per line A"].split()[0] ==             cmp_rows["Kt, line current, from the no-load KV [N·m/A rms]"]
+        assert rows["Torque per ampere at this load, T / I per line A"].split()[0] ==             cmp_rows["Torque per ampere at this load, T / I, line current [N·m/A rms, 3-D]"]
 
     def test_the_rows_say_what_they_are(self):
         from motor_ai_sim import report as R
 
         notes = dict((r[0], r[2]) for r in R.em_constant_rows(self.EM))
-        for label in ("Motor constant Km", "Torque constant Kt per line A",
+        for label in ("Motor constant Km", "Torque per ampere at this load, T / I per line A",
                       "Km per mass"):
             assert "flux factor k_flux = 0.9576 (k_T not measured)" in notes[label], label
+        assert "from the no-load KV" in notes["Torque constant Kt per winding A"]
+        assert "from the no-load KV" in notes["Torque constant Kt per line A"]
         assert "k_T not measured" in R.em_constants_note(0.9576)
         assert "measured torque factor k_T = 0.9795" in R.em_constants_note(0.9576, "sine", 0.9795)
+        assert "Kt is formed from the no-load KV" in R.em_constants_note(0.9576)
 
     def test_the_both_columns_footnote_is_not_under_the_one_column_table(self):
         from motor_ai_sim import report as R

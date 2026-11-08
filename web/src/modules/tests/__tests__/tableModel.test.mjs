@@ -135,6 +135,12 @@ t('Kv / Kt rows: a flagged EMF row and a correction factor that is not the curre
   assert.equal(M.rowNote(inh).key, 'inheritedFactor');
   assert.equal(M.rowNote(row({ key: 'kt', extra: { corrected: true, end3d: { inherited: false, current: false } } })).key, 'storedFactor');
   assert.equal(M.rowNote(row({ key: 'kt', extra: { corrected: true, end3d: { inherited: false, current: true } } })), null);
+  // the voltage basis: a bench Kv off the fundamental, and an EMF slope on mixed bases, say so
+  assert.equal(M.rowNote(row({ key: 'kv', extra: { bench_not_fundamental: true, bench_basis: 'pp' } })).key, 'benchKvNotFundamental');
+  assert.equal(M.rowNote(row({ key: 'kt', extra: { bench_not_fundamental: true, bench_basis: 'rms' } })).key, 'benchKvNotFundamental');
+  assert.equal(M.rowNote(row({ key: 'kv', extra: { bench_not_fundamental: false } })), null);
+  assert.equal(M.rowNote(row({ key: 'kv_slope', extra: { basis_mixed: true } })).key, 'basisMixed');
+  assert.equal(M.rowNote(row({ key: 'kv_slope', extra: { basis_mixed: false } })), null);
   // an uncorrected row never carries the factor note, and Kv / Kt rows form no speed series (no chart)
   assert.equal(M.rowNote(row({ key: 'kv', extra: { corrected: false, end3d: { inherited: true } } })), null);
   const g = { key: 'kv_kt', label: 'x', params: { n: 6 }, rows: [row({ key: 'kv', measured: 5.8, model: 6.44, delta_pct: 11 })] };

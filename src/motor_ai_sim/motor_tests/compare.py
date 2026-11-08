@@ -30,8 +30,12 @@ TIPS = {
     "ldq_amp": "3-pair amplitude sqrt(2/3 * sum dev^2) = |Lq - Ld|; the pair order is not known, so the smaller fitted value is compared with the smaller simulated value",
     "l_rotor_out": "stator without rotor: compared with a stored stator-only run when one exists",
     "l_freq": "the simulation is low-frequency incremental; at kHz the eddy currents in iron and magnets lower the bench reading",
-    "emf_peak": "simulated V_LL peak of the no-load duty, x speed ratio, x Br(test magnet T) / Br(simulation magnet T), x the end-effect correction of the configuration (\"not corrected yet\" when it has none); measured = Vpp / 2",
-    "emf_rms": "simulated V_LL rms of the no-load duty, same speed, Br and correction",
+    "emf_peak": ("simulated V_LL peak of the no-load duty, x speed ratio, at the test magnet temperature: a stored no-load "
+                 "point within 10 K is compared directly; else the EMF-to-Br elasticity fitted from this configuration's own "
+                 "no-load points at other temperatures; else Br(test magnet T) / Br(simulation magnet T), labelled "
+                 "approximate; x the end-effect correction of the configuration (\"not corrected yet\" when it has none); "
+                 "measured = Vpp / 2"),
+    "emf_rms": "simulated V_LL rms of the no-load duty, same speed, temperature basis and correction",
     "loss": ("simulation = core (hysteresis ~n, eddy ~n^2, excess ~n^1.5) + solid eddy (~n^2) of the no-load duty, x (Br ratio)^2, "
              "+ bearings (SKF) + windage; the rest of the measured power is unexplained"),
     "fit": "least squares P = a*n + b*n^2 through the origin (n in krpm)",
@@ -194,10 +198,115 @@ def br_ratio(points: Sequence[Tuple[float, float]], test_temp_c: Optional[float]
     return a / b
 
 
+#: A stored no-load point within this many kelvin of the bench magnet temperature is compared DIRECTLY (speed scaling only,
+#: no temperature scaling).
+EMF_DIRECT_TEMP_K = 10.0
+#: Stored no-load points closer than this (K) are one temperature (averaged in the fit).
+EMF_SAME_TEMP_K = 0.5
+#: The stored no-load points must span at least this many kelvin for their EMF-to-Br elasticity to be fitted.
+EMF_FIT_MIN_SPAN_K = 10.0
+#: A fitted elasticity outside this range is not physical (EMF falls as Br rises, or rises faster than Br with linear
+#: iron at most 1): it is refused and the row falls back to the Br scaling, labelled approximate.
+EMF_ELASTICITY_RANGE = (0.0, 1.2)
+
+#: How the simulated EMF of a free-run row was brought to the bench magnet temperature (``emf_temperature_basis``).
+TEMP_STORED_POINT = "stored_point"        # (a) a stored no-load point within EMF_DIRECT_TEMP_K, compared directly
+TEMP_FITTED = "fitted"                    # (b) the elasticity fitted from this configuration's own no-load points
+TEMP_BR_SCALED = "br_scaled"              # (c) EMF taken proportional to Br: temperature-scaled (approximate)
+TEMP_NO_BENCH_T = "no_bench_temp"         # the bench row has no magnet temperature: nothing to bring it to
+
+
+def _emf_value(r: Dict[str, Any], key: str) -> Optional[float]:
+    v, n = num(r.get(key)), num(r.get("rpm"))
+    return v / n if (v and n) else None
+
+
+def _emf_per_rpm_by_temp(refs: Sequence[Dict[str, Any]]) -> Tuple[List[Tuple[float, float]], str]:
+    """``([(magnet temperature, V_LL per rpm), ...], key)`` of the stored no-load points, sorted by temperature, points within
+    ``EMF_SAME_TEMP_K`` averaged.  The fundamental when every point stores one, else the waveform peak: one curve never
+    mixes the two."""
+    good = [r for r in refs if num(r.get("rpm")) and num(r.get("magnet_temp_c")) is not None]
+    key = "v_ll_fund_peak" if good and all(num(r.get("v_ll_fund_peak")) for r in good) else "v_ll_peak"
+    pts = sorted((float(r["magnet_temp_c"]), _emf_value(r, key)) for r in good if _emf_value(r, key))
+    groups: List[List[Tuple[float, float]]] = []
+    for p in pts:
+        if groups and p[0] - groups[-1][0][0] <= EMF_SAME_TEMP_K:
+            groups[-1].append(p)
+        else:
+            groups.append([p])
+    return [(sum(t for t, _ in g) / len(g), sum(e for _, e in g) / len(g)) for g in groups], key
+
+
+def fit_emf_elasticity(refs: Sequence[Dict[str, Any]], br_points: Sequence[Tuple[float, float]]) -> Optional[Dict[str, Any]]:
+    """The elasticity d ln(EMF) / d ln(Br) of THIS configuration, least squares over its own stored no-load points at
+    different magnet temperatures (Br(T) from the grade's cards).  ``None`` when there are fewer than two temperatures, they
+    span less than ``EMF_FIT_MIN_SPAN_K``, or the cards give no Br at them.  ``{"elasticity", "n", "span_k", "key",
+    "accepted"}``; ``accepted`` False = outside ``EMF_ELASTICITY_RANGE`` (not applied).  Nothing is assumed: a saturated
+    rotor moves its EMF much less than Br, and how much is the machine's own number."""
+    table, key = _emf_per_rpm_by_temp(refs)
+    if len(table) < 2 or table[-1][0] - table[0][0] < EMF_FIT_MIN_SPAN_K:
+        return None
+    xs, ys = [], []
+    for t, e in table:
+        b = br_at(br_points, t)
+        if not b or b <= 0 or e <= 0:
+            return None
+        xs.append(math.log(b))
+        ys.append(math.log(e))
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx <= 0:
+        return None
+    el = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    lo, hi = EMF_ELASTICITY_RANGE
+    return {"elasticity": el, "n": len(table), "span_k": table[-1][0] - table[0][0], "key": key,
+            "accepted": lo <= el <= hi}
+
+
+def emf_temperature_basis(rpm: float, refs: Sequence[Dict[str, Any]], br_points: Sequence[Tuple[float, float]],
+                          test_temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
+    """Which stored no-load point a bench free-run row at ``rpm`` and ``test_temp_c`` is compared with, and by what factor
+    its EMF is moved to the bench magnet temperature.  In order of preference:
+
+    (a) ``stored_point``: a stored no-load point within ``EMF_DIRECT_TEMP_K`` of the bench temperature (the nearest in
+        temperature, then in speed) - compared directly, factor 1 (speed scaling only);
+    (b) ``fitted``: else, with two or more stored points of this configuration at different temperatures, the point nearest
+        in speed x (Br(test) / Br(point)) ** elasticity, the elasticity fitted from those points (``fit_emf_elasticity``);
+    (c) ``br_scaled``: else the point nearest in speed x Br(test) / Br(point) - EMF taken proportional to Br, which a
+        saturated rotor does not follow: temperature-scaled (approximate), and labelled so.
+
+    A row without a bench temperature is ``no_bench_temp`` (the point nearest in speed, factor 1).  ``None`` = no stored
+    no-load point.  Returns ``{"ref", "factor", "basis", "model_temp_c", "br_ratio", "elasticity", "fit"}``."""
+    near_speed = noload_reference(rpm, refs)
+    if near_speed is None:
+        return None
+    t = num(test_temp_c)
+    base = {"elasticity": None, "fit": None}
+    if t is None:
+        return {**base, "ref": near_speed, "factor": 1.0, "basis": TEMP_NO_BENCH_T,
+                "model_temp_c": num(near_speed.get("magnet_temp_c")), "br_ratio": 1.0}
+    n = float(rpm)
+    timed = [r for r in refs if num(r.get("rpm")) and num(r.get("magnet_temp_c")) is not None]
+    close = [r for r in timed if abs(float(r["magnet_temp_c"]) - t) <= EMF_DIRECT_TEMP_K]
+    if close:
+        best_dt = min(abs(float(r["magnet_temp_c"]) - t) for r in close)
+        tied = [r for r in close if abs(float(r["magnet_temp_c"]) - t) <= best_dt + EMF_SAME_TEMP_K]
+        ref = min(tied, key=lambda r: (abs(math.log(n / float(r["rpm"]))), abs(float(r["magnet_temp_c"]) - t)))
+        return {**base, "ref": ref, "factor": 1.0, "basis": TEMP_STORED_POINT,
+                "model_temp_c": float(ref["magnet_temp_c"]), "br_ratio": 1.0}
+    ratio = br_ratio(br_points, t, near_speed.get("magnet_temp_c"))
+    fit = fit_emf_elasticity(timed, br_points)
+    if fit and fit["accepted"] and num(near_speed.get("magnet_temp_c")) is not None:
+        return {"ref": near_speed, "factor": ratio ** fit["elasticity"], "basis": TEMP_FITTED, "model_temp_c": t,
+                "br_ratio": ratio, "elasticity": fit["elasticity"], "fit": fit}
+    return {"ref": near_speed, "factor": ratio, "basis": TEMP_BR_SCALED, "model_temp_c": t, "br_ratio": ratio,
+            "elasticity": None, "fit": fit}
+
+
 def emf_model_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Dict[str, Optional[float]]:
-    """V_LL waveform peak, rms and FUNDAMENTAL peak at ``rpm`` from a no-load reference point: EMF is proportional to speed
-    and to Br.  ``fund`` is None for an older stored run that carries no fundamental (the waveform peak then stands in for
-    it, flagged by the caller)."""
+    """V_LL waveform peak, rms and FUNDAMENTAL peak at ``rpm`` from a no-load reference point: EMF is proportional to speed;
+    ``ratio`` is the temperature factor (``emf_temperature_basis``).  ``fund`` is None for an older stored run that carries
+    no fundamental (the waveform peak then stands in for it, flagged by the caller)."""
     r0 = num(ref.get("rpm"))
     if not r0:
         return {"peak": None, "rms": None, "fund": None}

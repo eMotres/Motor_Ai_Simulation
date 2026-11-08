@@ -447,7 +447,11 @@ def test_the_simulated_slope_uses_the_stored_fundamental_and_an_older_run_falls_
     assert "waveform peak" not in rows["kv"]["detail"]
     old = {k: v for k, v in s.items() if k != "V1_LL_V"}
     rows_old = _by_key(_groups(model_source.from_docs({}, _cfg(old), {}, LIB))["kv_kt"])
-    assert rows_old["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE * 1.05)      # still works, and says where it came from
+    # still works, and says where it came from: the Kv falls back to the waveform peak ...
+    assert rows_old["kv"]["model"] == pytest.approx(1000.0 / (MODEL_SLOPE * 1.05))
     assert "waveform peak" in rows_old["kv"]["detail"]
+    # ... while the EMF-slope row follows the bench's own basis (this bench read rms: rms x sqrt(2) on both sides)
+    assert rows_old["kv_slope"]["model"] == pytest.approx(MODEL_SLOPE)
+    assert rows_old["kv_slope"]["extra"]["model_basis"] == "rms x sqrt(2)"
     for r in list(rows.values()) + list(rows_old.values()):
         assert "2-D" not in r["detail"] and "3-D" not in r["detail"]

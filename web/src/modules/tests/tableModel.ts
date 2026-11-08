@@ -120,6 +120,10 @@ export function rowNote(row: CompareRow): RowNote | null {
   if (row.key === 'emf_peak' && x.slope_flagged === true && typeof x.slope_dev_pct === 'number') {
     return { key: 'slopeFlagged', params: { pct: `${x.slope_dev_pct > 0 ? '+' : ''}${(x.slope_dev_pct as number).toFixed(1)}` } };
   }
+  // the voltage basis (EMF audit 2026-11-07): Kv / Kt stay on the fundamental and say when the bench Kv is not on it;
+  // the EMF-slope row says when the stored run lacks the bench's basis and the two sides are mixed
+  if ((row.key === 'kv' || row.key === 'kt') && x.bench_not_fundamental === true) return { key: 'benchKvNotFundamental', params: {} };
+  if (row.key === 'kv_slope' && x.basis_mixed === true) return { key: 'basisMixed', params: {} };
   // a Kv / Kt row that carries a correction factor says when that factor is not the configuration's own current one
   const p3 = x.end3d as { inherited?: boolean; current?: boolean } | undefined;
   if ((row.key === 'kv' || row.key === 'kt' || row.key === 'kv_slope') && p3 && x.corrected === true) {

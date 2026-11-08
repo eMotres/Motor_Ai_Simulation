@@ -376,7 +376,9 @@ def test_free_run_emf_carries_the_stage_a_flux_factor_and_says_so():
     assert pk["extra"]["corrected"] is True and "model_2d" not in pk["extra"] and "k_3d" not in pk["extra"]
     assert rms["model"] == pytest.approx(84.0 * 1.125 * 0.95)
     assert "Br ratio 1.125" in pk["detail"] and pk["detail"].endswith("corrected")
-    assert g["emf_peak"]["basis"] == "magnets at 60 C, corrected"
+    # one stored no-load point, 90 K from the bench: (c) Br scaling, said to be approximate (EMF audit 2026-11-07)
+    assert g["emf_peak"]["basis"] == "magnets at 60 C, simulation temperature-scaled with Br (approximate), corrected"
+    assert g["emf_peak"]["basis_key"] == "emf_3d_ts" and pk["extra"]["emf_temp_basis"] == "br_scaled"
     # losses are not scaled by the flux factor
     loss = [r for r in g["loss"]["rows"] if r["params"]["rpm"] == 3000][0]
     assert loss["extra"]["em_w"] == pytest.approx((210 + 105 + 52 + 40) * 1.125 ** 2)

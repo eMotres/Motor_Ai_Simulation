@@ -1,5 +1,5 @@
-"""The compute pool across both regions (owner 2026-11-08: «расчёты можно вести везде для любых пользователей»,
-«расчёты на сервере это не данные»).
+"""The compute pool across both regions (owner 2026-11-08: jobs of any account may run on either server, and a computation is not
+personal data).
 
 A simulation job of ANY account may run on EITHER server.  What crosses to the other region is the engineering input
 only — never who it is for:

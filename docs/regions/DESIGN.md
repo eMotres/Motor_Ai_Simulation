@@ -46,7 +46,9 @@ an admin sees one new column and one new card.
    stores `signup_country`.
 4. Nothing -> `eu`.
 
-US territories (PR, GU, VI, AS, MP) count as non-US in stage 1; one line in `US_COUNTRIES` changes that if the owner wants.
+Owner 2026-11-08: **North, Central and South America and the Caribbean go to the US server, every other country to the EU
+server** (`AMERICAS_COUNTRIES` in `regions/classifier.py`, territories in the Americas included; US Pacific territories
+GU, AS, MP, UM are not in the Americas and go to EU). Stage 4 edge routing uses the same list.
 
 **Storage**: `users.json` record fields `home_region` (`eu` | `us`) and `home_region_set` `{by: admin|classifier, actor,
 reason, iso}`. Absent = `eu`. The registry answer (`public_user`) carries `home_region` and `home_region_source`
@@ -135,7 +137,7 @@ is advisory and `MOTRES_REGION_GUARD` stays off on both servers.
 | Option | How | Cost | Remarks |
 |---|---|---|---|
 | **A. Host-nginx geo redirect (recommended)** | `us.aerostator.com` A/AAAA -> US server (Cloudflare DNS-only, as `cn`). EU host nginx: `geo $is_us` from a weekly-updated US list (`/etc/nginx/geo/us.conf`), 302 of GET/HEAD page loads (not `/api/`, `/mcp`, `/.well-known/`, `/forms/`, `/stats/`) to `https://us.aerostator.com$request_uri`; not for requests that came from the US server. US host nginx: the mirror rule for non-US visitors who land on `us.` only if the owner wants it (default: no, US server serves everyone who asks it). | free | Same as the live China redirect. `us.` has its own cookies / storage: sign-in is per host (section 5). Google sign-in must list `https://us.aerostator.com` as an authorised origin. |
-| B. Cloudflare Load Balancing, geo steering | One hostname `aerostator.com`, Cloudflare proxies and steers by visitor region | **paid**: from about 5 USD / month plus per-origin and health-check charges | Owner declined the same feature for China on 2026-10-28 («давай пока бесплатный»). Would remove the second hostname. Proxied traffic also changes the TLS / real-IP setup. |
+| B. Cloudflare Load Balancing, geo steering | One hostname `aerostator.com`, Cloudflare proxies and steers by visitor region | **paid**: from about 5 USD / month plus per-origin and health-check charges | Owner declined |
 | C. GeoDNS at another DNS provider (e.g. AWS Route 53 geolocation records) | `aerostator.com` resolves to the US server for US resolvers | **paid**: hosted zone plus per-million geo queries (small) | Moves DNS off Cloudflare; both servers then need the `aerostator.com` certificate (the HK edge already has the certificate-push channel pattern). Resolver location != visitor location. |
 
 Recommendation: A now (free, proven by `cn.aerostator.com`), revisit B when one hostname matters more than 5 USD / month.
@@ -182,7 +184,7 @@ proceeds locally and the next sync flags the duplicate in the admin (never auto-
 
 ## 9. Compute pool across regions
 
-Owner 2026-11-08: «расчёты можно вести везде для любых пользователей» and «расчёты на сервере это не данные».
+Owner 2026-11-08: jobs of any account may run on either server; a computation is not personal data.
 `regions/compute.py`:
 
 * **What crosses**: `{v, token, kind, priority, inputs}`. `inputs` = the job body with every identifying key removed at

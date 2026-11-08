@@ -1,9 +1,10 @@
 """Propose a home region for every account, with the reason (docs/regions/DESIGN.md, "Home region").
 
-THE RULE (owner 2026-11-08: «американцы в Америке, все остальные пока в Европе»):
+THE RULE (owner 2026-11-08: the Americas on the US server, everyone else on the EU server):
 
 1. an admin override stays as it is;
-2. otherwise the FIRST country found on record decides — ``US`` -> ``us``, any other country -> ``eu``.  Sources, in this
+2. otherwise the FIRST country found on record decides — a country of the Americas (:data:`AMERICAS_COUNTRIES`) -> ``us``,
+   any other country -> ``eu``.  Sources, in this
    order (the company first, then what the person stated):
      a. the directory company the account is CONFIRMED in (``platform_agreement.company_of``),
      b. the applicant-verification case (``application.country``),
@@ -28,7 +29,22 @@ from motor_ai_sim.regions import store as RS
 
 log = logging.getLogger(__name__)
 
-US_COUNTRIES = frozenset({"US"})
+#: The countries served by the US server (owner 2026-11-08: North and South America on the US server, every other
+#: country on the EU server): North America (with Greenland, Bermuda, Saint Pierre and Miquelon), Central America, the Caribbean and
+#: South America, territories included (ISO 3166-1 alpha-2).  Every other country is served by the EU server.
+AMERICAS_COUNTRIES = frozenset({
+    # North America
+    "US", "CA", "MX", "GL", "BM", "PM",
+    # Central America
+    "BZ", "CR", "SV", "GT", "HN", "NI", "PA",
+    # Caribbean
+    "AG", "AI", "AW", "BB", "BL", "BQ", "BS", "CU", "CW", "DM", "DO", "GD", "GP", "HT", "JM", "KN", "KY", "LC", "MF",
+    "MQ", "MS", "PR", "SX", "TC", "TT", "VC", "VG", "VI",
+    # South America
+    "AR", "BO", "BR", "CL", "CO", "EC", "FK", "GF", "GS", "GY", "PE", "PY", "SR", "UY", "VE",
+})
+#: Kept for callers of stage 1: the set that maps to the ``us`` region.
+US_COUNTRIES = AMERICAS_COUNTRIES
 
 
 def _cc(v: Any) -> str:

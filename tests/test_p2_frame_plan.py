@@ -305,22 +305,22 @@ def test_a_window_hit_needs_the_same_free_set():
     Pro, outer = proj.build(0)
     free = np.setdiff1d(np.arange(Pro.shape[1]), outer)
     rr, sg = reduced_map(Pro, free)
-    plan = ReducedPlan(b.N, len(free), 0, [tuple(K_const.tocoo().coords)],
-                       proj.slip_dofs, rr, sg)
-    fs = drv._plan_window_member(plan, Pro, free, rr, sg)
+    fs, _ = drv._plan_system(Pro, free, drv.Msd, drv.Sdt)
+    plan = drv._plan
     assert drv._plan_window_member(plan, Pro, free, rr, sg) is fs
     # swap a Dirichlet column with its free neighbour: every other reduced
     # index stays put, so the slip dofs see no change
+    used = set(Pro.tocsr().indices.tolist())
     welded = set(Pro.tocsr().indices[proj.slip_dofs].tolist())
     pairs = [(int(o), int(free[np.searchsorted(free, o)])) for o in outer
-             if np.searchsorted(free, o) < free.size]
+             if int(o) in used and np.searchsorted(free, o) < free.size]
     o, f = next(p for p in pairs if not welded & set(p))
     free2 = np.sort(np.append(free[free != f], o))
     rr2, sg2 = reduced_map(Pro, free2)
     assert len(free2) == len(free)
     assert np.array_equal(rr2[proj.slip_dofs], rr[proj.slip_dofs])
     assert not np.array_equal(rr2, rr)
-    with pytest.raises(PlanMismatch):
+    with pytest.raises(PlanMismatch, match="outside the slip set"):
         drv._plan_window_member(plan, Pro, free2, rr2, sg2)
 
 

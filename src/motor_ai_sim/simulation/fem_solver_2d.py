@@ -7448,6 +7448,10 @@ def _fem_transient_sliding_band_once(
                     "set2_paths": _six.get("set2_paths"),
                     "neutrals": _six.get("neutrals"),
                     "set_connection": _six.get("set_connection"),
+                    # "parallel_paths_of_3phase": the stored winding is 3-phase
+                    # and its paths were read as the two sets for this run
+                    "mapping": _six.get("mapping") or "stored_6phase",
+                    "mapping_note": _six.get("note"),
                     "source_sum_residual": _sum_err,
                     "sets_in_model": sorted(
                         s for s in (1, 2)

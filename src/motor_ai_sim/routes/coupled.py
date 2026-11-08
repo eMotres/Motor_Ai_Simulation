@@ -3350,6 +3350,41 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
     r_g = _pick("r_g_ext_ohm", st_set.get("r_g_ext_ohm"), None,
                 "the duty's stored controller solve",
                 "the datasheet's own R_G,ext")
+    # 2026-11-08: the rest of the switching set-up the Controller tab solves
+    # with.  Until now this path dropped them, so a coupled run switched a
+    # 20/15 ohm board at 20/20 ohm and on the card's default energy source
+    # while the tab's own solve of the same duty used what was saved.
+    r_g_off = _pick("r_g_off_ext_ohm", st_set.get("r_g_off_ext_ohm"), None,
+                    "the duty's stored controller solve",
+                    "R_G,on (the same resistor both ways)")
+    l_sigma = _pick("l_sigma_nH", st_set.get("l_sigma_nH"), None,
+                    "the duty's stored controller solve",
+                    "the card's switching-table default")
+    sw_src = _pick("switching_source", st_set.get("switching_source"), None,
+                   "the duty's stored controller solve",
+                   "the card's own default switching source")
+    if sw_src is not None:
+        from motor_ai_sim.inverter.devices import SWITCHING_SOURCES
+        sw_src = str(sw_src).strip().lower()
+        if sw_src not in SWITCHING_SOURCES:
+            raise _refuse("controller.switching_source must be "
+                          + " or ".join(SWITCHING_SOURCES),
+                          ["controller.switching_source"])
+    r_spread = _pick("r_spread_k_w", st_set.get("r_spread_k_w"), 0.0,
+                     "the duty's stored controller solve",
+                     "no spreading resistance (module default)")
+    for _nm, _v in (("r_g_ext_ohm", r_g), ("r_g_off_ext_ohm", r_g_off),
+                    ("l_sigma_nH", l_sigma), ("r_spread_k_w", r_spread)):
+        if _v is None:
+            continue
+        try:
+            _fv = float(_v)
+        except (TypeError, ValueError):
+            _fv = float("nan")
+        if not math.isfinite(_fv) or _fv < 0.0 or (_nm == "l_sigma_nH" and _fv == 0.0):
+            raise _refuse(f"controller.{_nm} must be a finite number >= 0"
+                          + (" (and > 0)" if _nm == "l_sigma_nH" else "")
+                          + f"; got {_v!r}", [f"controller.{_nm}"])
     policy = str(_pick("e_oss_policy", None, "included_in_eon", "", "the "
                        "module default — the datasheet E_on already contains "
                        "the C_oss discharge") or "included_in_eon")
@@ -3404,6 +3439,10 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
                                else round(float(floor_ns), 1)),
         "v_gs_on_V": v_gs_on, "v_gs_off_V": v_gs_off,
         "r_g_ext_ohm": (None if r_g is None else float(r_g)),
+        "r_g_off_ext_ohm": (None if r_g_off is None else float(r_g_off)),
+        "l_sigma_nH": (None if l_sigma is None else float(l_sigma)),
+        "switching_source": sw_src,
+        "r_spread_k_w": float(r_spread or 0.0),
         "e_oss_policy": policy, "set_split": split,
         "cooling": cooling or {}, "r_tim_k_w": r_tim,
         # A card whose datasheet prints no R_th(j-c) (some module datasheets)
@@ -3728,6 +3767,10 @@ class _ControllerLoop:
             "v_gs_on_V": float(cfg["v_gs_on_V"]),
             "v_gs_off_V": float(cfg["v_gs_off_V"]),
             "r_g_ext_ohm": cfg.get("r_g_ext_ohm"),
+            "r_g_off_ext_ohm": cfg.get("r_g_off_ext_ohm"),
+            "l_sigma_nH": cfg.get("l_sigma_nH"),
+            "switching_source": cfg.get("switching_source"),
+            "r_spread_k_w": float(cfg.get("r_spread_k_w") or 0.0),
             "e_oss_policy": cfg["e_oss_policy"],
             "cooling": cfg.get("cooling") or {},
             "r_tim_k_w": float(cfg["r_tim_k_w"]),
@@ -3829,7 +3872,9 @@ class _ControllerLoop:
                 k: self.cfg.get(k) for k in
                 ("device", "topology", "devices_parallel", "dead_time_us",
                  "dead_time_floor_ns", "v_gs_on_V", "v_gs_off_V",
-                 "r_g_ext_ohm", "e_oss_policy", "set_split", "r_tim_k_w")},
+                 "r_g_ext_ohm", "r_g_off_ext_ohm", "l_sigma_nH",
+                 "switching_source", "r_spread_k_w",
+                 "e_oss_policy", "set_split", "r_tim_k_w")},
             "sources": dict(self.cfg.get("sources") or {}),
             "t_j_c": round(float(self.t_j_c), 2),
             **({"power_direction_source":

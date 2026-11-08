@@ -23,6 +23,7 @@ import UserDrawer from '../UserDrawer';
 import { useTranslation } from 'react-i18next';
 
 import { lastMailText } from '../userMail';
+import { REGIONS, matchesRegion, regionLabel, type RegionFilter } from '../regions';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const ROLE_COLOR: Record<string, string> = {
   anon: 'var(--text-4)', user: 'var(--text-3)', admin: '#fbbf24',
@@ -56,18 +57,26 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [regionFilter, setRegionFilter] = useState<RegionFilter>('all');
+  const [remoteUsers, setRemoteUsers] = useState<RegistryUser[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [u, s, us] = await Promise.all([
+      const [u, s, us, rem] = await Promise.all([
         fetch(`${API}/api/auth/users`).then((r) => { if (!r.ok) throw new Error(`users HTTP ${r.status}`); return r.json(); }),
         fetch(`${API}/api/admin/sessions`).then((r) => (r.ok ? r.json() : { sessions: [] })).catch(() => ({ sessions: [] })),
         fetch(`${API}/api/admin/usage?by=user&days=30`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })),
+        // the other region's accounts, live (empty in single-region mode)
+        fetch(`${API}/api/admin/regions/remote/users`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })),
       ]);
       setUsers(u.users || []); setSessions(s.sessions ?? []); setUsage(us.rows ?? []);
+      setRemoteUsers(((rem.rows ?? []) as Array<Record<string, unknown>>).map((r) => ({
+        email: String(r.email ?? ''), role: String(r.role ?? 'user'), name: String(r.name ?? ''), disabled: !!r.disabled,
+        created: (r.created as string | null) ?? null, home_region: String(r.region ?? ''), remote: true,
+      })));
       if (typeof u.project_limit_default === 'number') setProjectLimitDefault(u.project_limit_default);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load');
@@ -135,6 +144,24 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
     },
   });
 
+  const setRegion = async (email: string, region: string) => {
+    setBusy(email);
+    try {
+      const r = await fetch(`${API}/api/admin/users/${encodeURIComponent(email)}/region`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ region }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        setUsers((us) => us.map((u) => (u.email === email ? { ...u, home_region: j.region, home_region_source: j.source } : u)));
+        setError(null);
+      } else {
+        let why = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (typeof j?.detail === 'string') why = j.detail; } catch { /* keep the status */ }
+        setError(why);
+      }
+    } catch { /* keep prior state */ } finally { setBusy(null); }
+  };
+
   const revokeAllSessions = async (email: string) => {
     setBusy(email);
     try {
@@ -145,8 +172,8 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let rows = users.filter((u) =>
-      (roleFilter === 'all' || u.role === roleFilter) &&
+    let rows = [...users, ...remoteUsers.filter((r) => !users.some((u) => u.email === r.email))].filter((u) =>
+      (roleFilter === 'all' || u.role === roleFilter) && matchesRegion(u.home_region, regionFilter) &&
       (!q || u.email.toLowerCase().includes(q) || (u.name ?? '').toLowerCase().includes(q)));
     const lastLogin = (email: string) => {
       const live = (sessionsByEmail.get(email) ?? []).filter((s) => !s.revoked);
@@ -161,7 +188,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return rows;
-  }, [users, search, roleFilter, sortKey, sortDir, sessionsByEmail]);
+  }, [users, remoteUsers, search, roleFilter, regionFilter, sortKey, sortDir, sessionsByEmail]);
   // the client number: the order of registration, the oldest account = 1 (owner 2026-10-20) - fixed per
   // account, whatever the sort or the filter
   const clientNo = useMemo(() => {
@@ -195,6 +222,11 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         <Select size="small" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} sx={{ fontSize: 12.5 }}>
           <MenuItem value="all" sx={{ fontSize: 12.5 }}>All roles</MenuItem>
           {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 12.5 }}>{roleLabel(r)}</MenuItem>)}
+        </Select>
+        <Select size="small" value={regionFilter} onChange={(e) => setRegionFilter(e.target.value as RegionFilter)} sx={{ fontSize: 12.5 }}
+          inputProps={{ 'aria-label': t('regions.region') }} data-testid="region-filter">
+          <MenuItem value="all" sx={{ fontSize: 12.5 }}>{t('regions.allRegions')}</MenuItem>
+          {REGIONS.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 12.5 }}>{regionLabel(r)}</MenuItem>)}
         </Select>
         <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => onInvite()}
           variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>Invite</Button>
@@ -231,6 +263,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                 <TableCell align="right" title="Client number: order of registration, the first account = 1">#</TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'email'} direction={sortDir} onClick={() => toggleSort('email')}>User</TableSortLabel></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'role'} direction={sortDir} onClick={() => toggleSort('role')}>Role</TableSortLabel></TableCell>
+                <TableCell><Tooltip title={t('regions.regionTip')} arrow><span>{t('regions.region')}</span></Tooltip></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'created'} direction={sortDir} onClick={() => toggleSort('created')}>Created</TableSortLabel></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'lastLogin'} direction={sortDir} onClick={() => toggleSort('lastLogin')}>Last login</TableSortLabel></TableCell>
                 <TableCell align="right">CPU-h 30 d</TableCell>
@@ -247,14 +280,19 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                 const g = u.motors;
                 const motorsLabel = u.role === 'admin' ? 'all' : g?.all ? 'all' : g?.dies?.length ? String(g.dies.length) : '—';
                 return (
-                  <TableRow key={u.email} hover onClick={() => setSelected(u.email)}
-                    sx={{ opacity: u.disabled ? 0.55 : 1, cursor: 'pointer' }}>
+                  <TableRow key={`${u.remote ? 'remote:' : ''}${u.email}`} hover onClick={() => { if (!u.remote) setSelected(u.email); }}
+                    sx={{ opacity: u.disabled || u.remote ? 0.55 : 1, cursor: u.remote ? 'default' : 'pointer' }}>
                     <TableCell align="right" sx={{ color: 'var(--text-3)', fontFamily: 'monospace', width: 40 }}>{clientNo.get(u.email) ?? ''}</TableCell>
                     <TableCell>
                       <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{u.email}</Typography>
                     </TableCell>
                     <TableCell>
                       <Chip size="small" label={roleLabel(u.role)} sx={{ height: 18, fontSize: 11, fontWeight: 700, bgcolor: 'var(--panel)', color: ROLE_COLOR[u.role] ?? 'var(--text-2)' }} />
+                    </TableCell>
+                    <TableCell data-testid="region-cell">
+                      <Tooltip title={u.remote ? t('regions.remoteTip', { region: regionLabel(u.home_region) }) : t(`regions.source.${u.home_region_source ?? 'default'}`)} arrow>
+                        <Chip size="small" label={regionLabel(u.home_region)} sx={{ height: 18, fontSize: 10, fontWeight: 700, bgcolor: 'var(--panel)', color: u.home_region === 'us' ? '#60a5fa' : 'var(--text-2)' }} />
+                      </Tooltip>
                     </TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{fmtCreated(u.created)}</TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{last ? new Date(last * 1000).toLocaleDateString() : '—'}</TableCell>
@@ -279,7 +317,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
               })}
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
+                  <TableCell colSpan={10} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
                     {users.length === 0
                       ? 'No accounts yet — Google sign-ins appear here automatically; password accounts via "Add account".'
                       : 'No accounts match this search/filter.'}
@@ -300,6 +338,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         busy={busy === selected}
         onClose={() => setSelected(null)}
         onRole={(role) => void patchUser(selected!, { role })}
+        onRegion={(region) => void setRegion(selected!, region)}
         onQuota={(q) => void patchUser(selected!, { sim_quota_cpu_h_month: q })}
         projectLimitDefault={projectLimitDefault}
         onProjectLimit={(limit) => void setProjectLimit(selected!, limit)}

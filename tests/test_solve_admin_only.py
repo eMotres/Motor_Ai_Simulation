@@ -285,6 +285,7 @@ DATA_MODULES = frozenset({
     "auth_local", "cluster", "comm_prefs", "data_sharing", "erp_export", "family", "legal", "live", "mcp_discovery", "messages",
     "motor_revisions", "my_motors", "nda", "newsletter", "oauth", "panel_settings", "platform_agreement", "public_motors", "support",
     "verification", "worker_state", "modules",
+    "regions",                          # two regions: region info, the signed peer channel, admin region views - computes nothing
 })
 #: Router modules that can compute: every route in them is admin-only or reviewed above.
 COMPUTE_MODULES = frozenset({

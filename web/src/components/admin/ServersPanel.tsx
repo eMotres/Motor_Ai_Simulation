@@ -10,6 +10,7 @@ import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RcTooltip, Legend,
 } from 'recharts';
+import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -57,14 +58,19 @@ const Bar: React.FC<{ v: number; label: string }> = ({ v, label }) => (
   </Box>
 );
 
-const NodeDetail: React.FC<{ node: Node }> = ({ node }) => {
+// `remote` = region code of the OTHER server: its history comes through /api/admin/regions/remote/cluster.
+const NodeDetail: React.FC<{ node: Node; remote?: string }> = ({ node, remote }) => {
   const [range, setRange] = useState<'24h' | '7d'>('24h');
   const [pts, setPts] = useState<Point[]>([]);
   useEffect(() => {
-    fetch(`${API}/api/admin/nodes/${encodeURIComponent(node.id)}/history?range=${range}`)
-      .then((r) => (r.ok ? r.json() : { points: [] })).then((d) => setPts(d.points || []))
+    const url = remote
+      ? `${API}/api/admin/regions/remote/cluster?hist=${range}`
+      : `${API}/api/admin/nodes/${encodeURIComponent(node.id)}/history?range=${range}`;
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : { points: [] }))
+      .then((d) => setPts((remote ? d.history?.[node.id] : d.points) || []))
       .catch(() => setPts([]));
-  }, [node.id, range, node.last_seen]);
+  }, [node.id, range, node.last_seen, remote]);
   const s = node.sample;
   const fmt = (ts: number) => new Date(ts * 1000).toLocaleString(undefined,
     range === '24h' ? { hour: '2-digit', minute: '2-digit' } : { day: '2-digit', hour: '2-digit' });
@@ -126,7 +132,10 @@ const NodeDetail: React.FC<{ node: Node }> = ({ node }) => {
   );
 };
 
-const ServersPanel: React.FC = () => {
+// `remote` = region code of the OTHER server: the same panel, read-only, fed by the live peer payload.
+const ServersPanel: React.FC<{ remote?: string }> = ({ remote }) => {
+  const { t } = useTranslation('admin');
+  const [unreachable, setUnreachable] = useState(false);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [cluster, setCluster] = useState<Cluster | null>(null);
   const [app, setApp] = useState<AppView | null>(null);
@@ -138,13 +147,20 @@ const ServersPanel: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
+      if (remote) {
+        const j = await fetch(`${API}/api/admin/regions/remote/cluster`)
+          .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+        setUnreachable(!j.reachable);
+        setNodes(j.nodes?.nodes || []); setCluster(j.nodes?.cluster || null); setApp(j.app || null); setErr(null);
+        return;
+      }
       const [n, a] = await Promise.all([
         fetch(`${API}/api/admin/nodes`).then((r) => { if (!r.ok) throw new Error(`nodes HTTP ${r.status}`); return r.json(); }),
         fetch(`${API}/api/admin/cluster/app`).then((r) => (r.ok ? r.json() : null)),
       ]);
       setNodes(n.nodes || []); setCluster(n.cluster || null); setApp(a); setErr(null);
     } catch (e) { setErr(String(e)); }
-  }, []);
+  }, [remote]);
   useEffect(() => { void load(); const t = setInterval(() => void load(), 10000); return () => clearInterval(t); }, [load]);
 
   const addNode = async () => {
@@ -164,15 +180,19 @@ const ServersPanel: React.FC = () => {
     <Paper elevation={0} sx={{ ...PANEL, p: 2, mb: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <Typography sx={{ fontWeight: 700 }}>Servers</Typography>
-        <HelpTip title="Load of every host running the node agent; refreshes every 10 s. Offline = no sample for 60 s." />
+        <HelpTip title={remote ? t('regions.remoteServersTip', { region: remote.toUpperCase() })
+          : 'Load of every host running the node agent; refreshes every 10 s. Offline = no sample for 60 s.'} />
         <Box sx={{ flex: 1 }} />
-        <Button size="small" onClick={() => setAddOpen(true)}>Add server</Button>
-        <HelpTip title="Mints a node token (shown once) for deploy/node-agent/install.sh on the new host." />
+        {!remote && <Button size="small" onClick={() => setAddOpen(true)}>Add server</Button>}
+        {!remote && <HelpTip title="Mints a node token (shown once) for deploy/node-agent/install.sh on the new host." />}
         <Button size="small" startIcon={<RefreshIcon />} onClick={() => void load()}>Refresh</Button>
       </Box>
       {err && <Typography sx={{ color: '#f87171', fontSize: 12 }}>{err}</Typography>}
+      {remote && unreachable && (
+        <Typography data-testid="remote-servers-unreachable" sx={{ color: '#f87171', fontSize: 12 }}>{t('regions.down')}</Typography>
+      )}
 
-      {cluster && (
+      {cluster && !unreachable && (
         <Box sx={{ display: 'flex', gap: 3, fontSize: 12, color: 'var(--text-2)', mb: 1.5, flexWrap: 'wrap' }}>
           <span>Nodes <b>{cluster.online}/{cluster.nodes}</b> online</span>
           <span>Cores <b>{cluster.cores}</b></span>
@@ -206,7 +226,7 @@ const ServersPanel: React.FC = () => {
                   </Typography>
                 </>
               ) : <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>no samples yet</Typography>}
-              {n.status !== 'revoked' && (
+              {!remote && n.status !== 'revoked' && (
                 <Button size="small" color="error" sx={{ mt: 0.5, p: 0, minWidth: 0, fontSize: 11 }}
                   onClick={(e) => { e.stopPropagation(); void revoke(n.id); }}>Revoke token</Button>
               )}
@@ -214,7 +234,7 @@ const ServersPanel: React.FC = () => {
           );
         })}
       </Box>
-      {selNode && <NodeDetail node={selNode} />}
+      {selNode && <NodeDetail node={selNode} remote={remote} />}
 
       <Dialog open={addOpen} onClose={() => { setAddOpen(false); setMinted(null); }} maxWidth="sm" fullWidth>
         <DialogTitle>Add server</DialogTitle>

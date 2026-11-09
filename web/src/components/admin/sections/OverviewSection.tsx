@@ -7,6 +7,9 @@ import HelpTip from '../../common/HelpTip';
 import LiveLoadPanel from '../LiveLoadPanel';
 import type { AdminSectionId } from '../AdminNav';
 import { countAuthRejects24h } from '../../../lib/authEventCounts';
+import { useTranslation } from 'react-i18next';
+import { useRemoteCluster } from '../useRemoteCluster';
+import { remoteTile } from '../regions';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -40,6 +43,8 @@ interface Cluster { cores: number; cpu_used_cores: number; mem_used: number; mem
 interface AppView { jobs: { running: number; queued: number }; mcp: { calls_per_min: number; throttled_429: number } }
 
 const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ onGoto }) => {
+  const { t } = useTranslation('admin');
+  const remote = useRemoteCluster();                  // null / configured:false in single-region mode: nothing extra is shown
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [users, setUsers] = useState<RegistryUser[]>([]);
@@ -92,12 +97,20 @@ const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ on
   const cpuPct = cluster?.cores ? Math.round((100 * cluster.cpu_used_cores) / cluster.cores) : 0;
   const ramPct = cluster?.mem_total ? Math.round((100 * cluster.mem_used) / cluster.mem_total) : 0;
 
+  const tile = remoteTile(remote);
   const kpis: Kpi[] = [
     { label: 'Users total', value: users.length, sub: `${newThisWeek} new this week`, goto: 'users' },
     { label: 'Active 7 d', value: activeThisWeek, sub: 'distinct signed-in accounts', goto: 'logs',
       help: 'Accounts with a live, non-revoked session seen in the last 7 days.' },
     { label: 'Jobs', value: `${app?.jobs.running ?? 0} / ${app?.jobs.queued ?? 0}`, sub: 'running / queued', color: '#60a5fa', goto: 'agents' },
     { label: 'Cluster load', value: `${cpuPct}%`, sub: `RAM ${ramPct}% · ${cluster?.cores ?? 0} cores`, color: cpuPct > 85 ? '#f87171' : '#4ade80', goto: 'servers' },
+    ...(tile ? [{
+      label: t('regions.serverName', { region: tile.region }),
+      value: tile.reachable ? `${tile.cpu ?? '—'}${tile.cpu != null ? '%' : ''}` : t('regions.down'),
+      sub: tile.reachable ? `RAM ${tile.ram ?? '—'}${tile.ram != null ? '%' : ''} · ${tile.cores ?? '—'} cores · jobs ${tile.jobs}` : undefined,
+      color: !tile.reachable || (tile.cpu ?? 0) > 85 ? '#f87171' : '#4ade80',
+      help: t('regions.remoteTileTip', { region: tile.region }), goto: 'servers' as const,
+    }] : []),
     { label: 'Pending sign-ups', value: pending, color: pending ? '#fbbf24' : undefined, goto: 'signups' },
     { label: 'MCP calls', value: app?.mcp.calls_per_min ?? 0, sub: `per min · ${app?.mcp.throttled_429 ?? 0} throttled (429)`, goto: 'agents' },
     { label: 'Auth errors', value: rejects24h, sub: 'rejected tokens, 24 h', color: rejects24h ? '#f87171' : undefined, goto: 'logs',
@@ -111,6 +124,7 @@ const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ on
         {kpis.map((k) => <Tile key={k.label} k={k} onGoto={onGoto} />)}
       </Box>
       <LiveLoadPanel />
+      {tile && <LiveLoadPanel remote={tile.region.toLowerCase()} />}
     </Box>
   );
 };

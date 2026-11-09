@@ -31,6 +31,7 @@ import {
   ResponsiveContainer, ComposedChart, AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RcTooltip,
 } from 'recharts';
+import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
@@ -211,7 +212,11 @@ const ChartLegend: React.FC<{ items: LegendItem[] }> = ({ items }) => (
   </Box>
 );
 
-const LiveLoadPanel: React.FC = () => {
+// `remote` = region code of the OTHER server: the same charts, read-only (no Stop), fed by the live peer payload
+// (/api/admin/regions/remote/cluster -> .live, accounts already replaced by "user N" on the peer).
+const LiveLoadPanel: React.FC<{ remote?: string }> = ({ remote }) => {
+  const { t } = useTranslation('admin');
+  const [unreachable, setUnreachable] = useState(false);
   const [range, setRange] = useState<Range>('1h');
   const [data, setData] = useState<LoadLive | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -230,6 +235,15 @@ const LiveLoadPanel: React.FC = () => {
     try {
       // top=6: matches the 6-slot user palette exactly, so "top N users" never
       // outnumbers the distinct hash-stable colours available for them.
+      if (remote) {
+        const res = await fetch(`${API}/api/admin/regions/remote/cluster?range=${r}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const j = await res.json();
+        setUnreachable(!j.reachable || !j.live);
+        if (j.reachable && j.live) setData(j.live as LoadLive);
+        setErr(null);
+        return;
+      }
       const res = await fetch(`${API}/api/admin/load/live?range=${r}&top=6`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
@@ -237,7 +251,7 @@ const LiveLoadPanel: React.FC = () => {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [remote]);
 
   useEffect(() => {
     const onVis = () => { visibleRef.current = document.visibilityState === 'visible'; if (visibleRef.current) void load(range); };
@@ -387,14 +401,18 @@ const LiveLoadPanel: React.FC = () => {
   return (
     <Paper elevation={0} sx={{ ...PANEL, p: 2, mt: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontWeight: 700 }}>Live load</Typography>
-        <HelpTip title="Server CPU/RAM and who — or what — is using them, refreshed every 7 s. Pauses while this tab is hidden." />
+        <Typography sx={{ fontWeight: 700 }}>{remote ? t('regions.remoteLive', { region: remote.toUpperCase() }) : 'Live load'}</Typography>
+        <HelpTip title={remote ? t('regions.remoteLiveTip', { region: remote.toUpperCase() })
+          : 'Server CPU/RAM and who — or what — is using them, refreshed every 7 s. Pauses while this tab is hidden.'} />
         <Box sx={{ flex: 1 }} />
         <ToggleButtonGroup size="small" exclusive value={range} onChange={(_, v) => v && setRange(v)}>
           {RANGES.map((r) => <ToggleButton key={r.v} value={r.v} sx={{ py: 0, fontSize: 11 }}>{r.label}</ToggleButton>)}
         </ToggleButtonGroup>
       </Box>
       {err && <Typography sx={{ color: '#f87171', fontSize: 12, mb: 1 }}>{err}</Typography>}
+      {remote && unreachable && (
+        <Typography data-testid="remote-live-unreachable" sx={{ color: '#f87171', fontSize: 12, mb: 1 }}>{t('regions.down')}</Typography>
+      )}
 
       {!!nodesNow.length && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
@@ -586,7 +604,7 @@ const LiveLoadPanel: React.FC = () => {
               <TableCell>{dur(entry.row.elapsedS)}</TableCell>
               <TableCell>{entry.row.cpuS != null ? entry.row.cpuS.toFixed(1) : '—'}</TableCell>
               <TableCell>
-                {entry.row.isJob && entry.row.state === 'running' && (
+                {!remote && entry.row.isJob && entry.row.state === 'running' && (
                   <Button size="small" color="error" sx={{ p: 0, minWidth: 0, fontSize: 11 }}
                     onClick={() => void stop(entry.row.runId!)}>Stop</Button>
                 )}

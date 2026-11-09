@@ -187,6 +187,12 @@ fields only (extra fields are dropped), so the peer can never place personal dat
 views of the other region fetch rows live through `GET /api/admin/regions/remote/{kind}` and never store them; a live read
 of users or verification rows is audited (`regions.remote_read`).
 
+Load graphs of the other region: `GET /api/peer/v1/admin/cluster?range=&hist=` returns the answering server's cluster
+payload (nodes, app metrics, the live-load series, node history) in the same shape the local admin graphs read; server
+metrics only (accounts become "user N", job ids "job N", OS process owners are blanked). The admin reads it live through
+`GET /api/admin/regions/remote/cluster` (3 s timeout, `reachable: false` with empty data when the peer is down, nothing
+stored) for the Overview tile / live-load panel and the Servers panel of the other region. Single-region mode: 404 / nothing shown.
+
 **Open-only mirror (owner 2026-11-09)**: US mirrors only what is open in the public catalog; closed customer motors stay
 on EU. OPEN is the union of (a) the anonymous public exhibit — a die whose geometry matches a passported card of
 `motor_catalog.json` in the workspace root, the same check `routes/family.py` `tree()` runs for anonymous visitors

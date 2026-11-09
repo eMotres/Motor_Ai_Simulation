@@ -379,7 +379,12 @@
     "singleTip": "No peer server is configured; this server serves every account.",
     "homeRegion": "Home region",
     "homeRegionTip": "Admin override, logged. Moves no data: migration is a separate step.",
-    "remoteTip": "Lives on the {{region}} server; manage it there.",
+    "remoteTip": "Lives on the {region} server; manage it there.",
+    "serverName": "{region} server",
+    "remoteTileTip": "CPU and RAM of the {region} server, fetched live. Click for its graphs.",
+    "remoteServersTip": "Nodes of the {region} server, fetched live from it; read-only.",
+    "remoteLive": "{region} live load",
+    "remoteLiveTip": "CPU and RAM of the {region} server, fetched live from it; read-only, accounts shown as user N.",
     "source": {
       "admin": "set by admin",
       "classifier": "set by classifier",

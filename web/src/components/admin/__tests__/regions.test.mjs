@@ -53,7 +53,7 @@ test('EN and zh-CN carry the same regions keys', () => {
   assert.ok(en && zh);
   assert.deepEqual(keys(zh), keys(en));
   for (const k of ['title', 'region', 'allRegions', 'homeRegion', 'remoteTip']) assert.ok(en[k] && zh[k], k);
-  assert.match(zh.remoteTip, /\{\{region\}\}/);
+  assert.match(zh.remoteTip, /\{region\}/);
 });
 
 test('the Servers section mounts the Regions card; the Users table has the region column and filter', () => {

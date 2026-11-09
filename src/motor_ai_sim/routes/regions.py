@@ -13,10 +13,14 @@ PEER (server-to-server, HMAC-signed: regions/peer.py; 404 for anything unsigned 
   GET  /api/peer/v1/admin/{users|projects|verification|jobs}
                                                 this server's rows, tagged with the region, for the OTHER region's admin
                                                 view.  Fetched live, shown, never stored by the caller.
+  GET  /api/peer/v1/admin/cluster?range=&hist=  this server's cluster / load payload (nodes, app, live load, node
+                                                history) for the other region's Overview and Servers graphs; server
+                                                metrics only (regions/cluster_view.py), fetched live, never stored.
 
 ADMIN (require_admin)
   GET  /api/admin/regions                       both regions' status (the Servers card); the local one alone when single
   GET  /api/admin/regions/accounts              {email: region} for the admin tables (local + directory)
+  GET  /api/admin/regions/remote/cluster        the peer's cluster / load payload, live; reachable:false when it is down
   GET  /api/admin/regions/remote/{kind}         the peer's rows of users / projects / verification / jobs, live
   GET  /api/admin/regions/classify              the classifier's DRY-RUN report (proposed region + reason per account)
   POST /api/admin/regions/directory/sync        pull the peer's directory entries into the remote directory
@@ -37,6 +41,7 @@ from motor_ai_sim.regions import store as RS
 
 router = APIRouter(tags=["regions"])
 
+CLUSTER_TIMEOUT_S = 3.0      # the admin page never waits longer than this for the other region's graphs
 REMOTE_KINDS = ("users", "projects", "verification", "jobs")
 
 
@@ -139,6 +144,12 @@ _LOCAL_ROWS = {"users": _local_users, "projects": _local_projects, "verification
                "jobs": _local_jobs}
 
 
+@router.get(P.PREFIX + "/admin/cluster")
+def peer_admin_cluster(range: str = "1h", hist: str = "24h", _peer: str = Depends(require_peer)) -> Dict[str, Any]:
+    from motor_ai_sim.regions import cluster_view as CV
+    return CV.build(range, hist)
+
+
 @router.get(P.PREFIX + "/admin/{kind}")
 def peer_admin_rows(kind: str, _peer: str = Depends(require_peer)) -> Dict[str, Any]:
     fn = _LOCAL_ROWS.get(kind)
@@ -159,6 +170,24 @@ def admin_region_accounts(_admin: dict = Depends(require_admin)) -> Dict[str, An
     m = RS.region_map()
     return {"region": RC.local_region(), "mode": RC.describe()["mode"], "accounts": m,
             "counts": {r: sum(1 for v in m.values() if v == r) for r in RC.REGIONS}}
+
+
+@router.get("/api/admin/regions/remote/cluster")
+def admin_remote_cluster(range: str = "1h", hist: str = "24h", _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    """The peer's cluster / load payload for the Overview and Servers graphs, fetched live (short timeout) and never
+    stored.  An unreachable peer is ``reachable: false`` with empty data, never an error."""
+    empty: Dict[str, Any] = {"configured": RC.peer_configured(), "reachable": False,
+                             "region": RC.peer_region() if RC.peer_configured() else None,
+                             "nodes": {"nodes": [], "cluster": None}, "app": None, "live": None, "history": {}}
+    if not RC.peer_configured():
+        return empty
+    from urllib.parse import urlencode
+    got = P.get("/admin/cluster?" + urlencode({"range": range, "hist": hist}), timeout=CLUSTER_TIMEOUT_S)
+    if not isinstance(got, dict) or not isinstance(got.get("nodes"), dict):
+        return empty
+    return {**empty, "reachable": True, "range": got.get("range"), "hist": got.get("hist"),
+            "nodes": got["nodes"], "app": got.get("app"), "live": got.get("live"),
+            "history": got.get("history") or {}}
 
 
 @router.get("/api/admin/regions/remote/{kind}")

@@ -7550,6 +7550,8 @@ def _fem_transient_sliding_band_once(
     # the dofs that move between frames: the frame plan of the eddy Newton
     # (simulation/p2_frame_plan.py) keeps every other dof's reduced position
     _p2.slip_dofs = _proj.slip_dofs
+    _plan_m_prev = None             # previous frame's shift / its step
+    _plan_dm = 0
     # The derivative is an independent, diagnostic L2 mortar trace action.
     # Prepare its rotor-trace mass factorization once for the entire run.
     # OPT-IN (2026-09-24, held-item fix of a88ae64): the diagnostic costs a
@@ -11006,6 +11008,12 @@ def _fem_transient_sliding_band_once(
                                  + Ist['B'] * f_coil2['B']
                                  + Ist['C'] * f_coil2['C'])
         Pro, outer_red = _proj.build(m_shift)
+        # The rotor step of the march, for the frame plan's analysis window
+        # (p2_frame_plan.py: one PARDISO analysis serves the next few frames)
+        if _plan_m_prev is not None and m_shift != _plan_m_prev:
+            _plan_dm = m_shift - _plan_m_prev
+        _plan_m_prev = m_shift
+        _p2.shift_hint = (Pro, int(m_shift), int(_plan_dm), _proj)
         # WARM-START ν across frames (perf): only frame 0 converges from the
         # unsaturated base (~60–70 sweeps cold); every later frame starts from
         # the PREVIOUS frame's CONVERGED ν and reaches the fixed point in ~40

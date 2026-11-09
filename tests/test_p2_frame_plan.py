@@ -229,16 +229,21 @@ def _drive(p2, mesh_bits, dt):
                    Msd=(Msig * (1.0 / dt)).tocsr(), Sdt=S * dt)
 
 
-def _march(mesh_bits, use_plan, shifts, dt=1e-4):
+def _march(mesh_bits, use_plan, shifts, dt=1e-4, hint=False):
     p2 = _pardiso_p2(mesh_bits)
     p2.slip_dofs = mesh_bits[2].slip_dofs if use_plan else None
     drv = _drive(p2, mesh_bits, dt)
     N = mesh_bits[1].N
     A = np.zeros(N); U = np.zeros(1); Ap = np.zeros(N)
     out = []
+    prev = None
     for m in shifts:
         Pro, outer = mesh_bits[2].build(m)
         free = np.setdiff1d(np.arange(Pro.shape[1]), outer)
+        if hint:
+            d = (m - prev) if prev is not None else 0
+            p2.shift_hint = (Pro, m, d, mesh_bits[2])
+            prev = m
         ok, A, U, rr, nit = drv.eddy_solve(Pro, free, A, U, np.array([3.0]),
                                            Ap, None, 25)
         assert ok, (m, rr, nit)
@@ -247,16 +252,36 @@ def _march(mesh_bits, use_plan, shifts, dt=1e-4):
     return out, p2, drv
 
 
+def test_window_shifts_are_aligned_and_hold_the_shift():
+    from motor_ai_sim.simulation.p2_frame_plan import window_shifts
+    for d in (1, 2, 3, -2):
+        for m in range(-20, 21):
+            w = window_shifts(m, d, 3)
+            assert m in w and len(w) == 3
+            assert np.all(np.diff(w) == abs(d))
+            # every member of a window names the same window
+            for x in w:
+                assert window_shifts(x, d, 3) == w
+    assert window_shifts(7, 0, 3) == [7]
+    assert window_shifts(7, 2, 1) == [7]
+
+
+@pytest.mark.parametrize("window", [1, 3])
 @pytest.mark.parametrize("full_ring,sign", [(False, -1), (True, 1)])
-def test_eddy_newton_on_the_plan_matches_the_scipy_path(full_ring, sign):
+def test_eddy_newton_on_the_plan_matches_the_scipy_path(full_ring, sign,
+                                                       window, monkeypatch):
+    from motor_ai_sim.simulation import p2_frame_plan
+    monkeypatch.setattr(p2_frame_plan, "WINDOW", window)
     bits = _machine(full_ring, sign, segments=16)
-    shifts = [0, 1, 2, 3, 4, 17, 18]
+    shifts = [0, 1, 2, 3, 4, 5, 17, 18]
     ref, p_ref, _ = _march(bits, False, shifts)
-    new, p_new, drv = _march(bits, True, shifts)
+    new, p_new, drv = _march(bits, True, shifts, hint=True)
     assert p_ref.plan_solves == 0
     assert p_new.plan_solves == p_new.spd_solves > 0
     assert drv._plan_dead is None
-    assert p_new.spd_analyses == len(shifts)        # one analysis per frame
+    # one analysis per window at w=3: {0} (the first frame has no step yet),
+    # {0,1,2}, {3,4,5}, {15,16,17}, {18,19,20}
+    assert p_new.spd_analyses == (len(shifts) if window == 1 else 5)
     # Both marches stop at the Newton residual 1e-7, from iterates that
     # differ by round-off (the sums are re-associated), so the converged
     # fields agree to the Newton tolerance, not to the last bit.  The body
@@ -267,6 +292,36 @@ def test_eddy_newton_on_the_plan_matches_the_scipy_path(full_ring, sign):
         assert n0 == n1
         assert np.abs(A1 - A0).max() <= 1e-6 * np.abs(A0).max()
         assert np.abs(U1 - U0).max() <= 1e-5 * np.abs(U0).max()
+
+
+def test_a_window_hit_needs_the_same_free_set():
+    """A same-length ``free`` that leaves every slip dof's reduced index alone
+    must not hit the window: its Jacobian belongs to the other free set."""
+    bits = _machine()
+    mesh, b, proj, K_const, sat, sat_sub, body = bits
+    p2 = _pardiso_p2(bits)
+    p2.slip_dofs = proj.slip_dofs
+    drv = _drive(p2, bits, 1e-4)
+    Pro, outer = proj.build(0)
+    free = np.setdiff1d(np.arange(Pro.shape[1]), outer)
+    rr, sg = reduced_map(Pro, free)
+    fs, _ = drv._plan_system(Pro, free, drv.Msd, drv.Sdt)
+    plan = drv._plan
+    assert drv._plan_window_member(plan, Pro, free, rr, sg) is fs
+    # swap a Dirichlet column with its free neighbour: every other reduced
+    # index stays put, so the slip dofs see no change
+    used = set(Pro.tocsr().indices.tolist())
+    welded = set(Pro.tocsr().indices[proj.slip_dofs].tolist())
+    pairs = [(int(o), int(free[np.searchsorted(free, o)])) for o in outer
+             if int(o) in used and np.searchsorted(free, o) < free.size]
+    o, f = next(p for p in pairs if not welded & set(p))
+    free2 = np.sort(np.append(free[free != f], o))
+    rr2, sg2 = reduced_map(Pro, free2)
+    assert len(free2) == len(free)
+    assert np.array_equal(rr2[proj.slip_dofs], rr[proj.slip_dofs])
+    assert not np.array_equal(rr2, rr)
+    with pytest.raises(PlanMismatch, match="outside the slip set"):
+        drv._plan_window_member(plan, Pro, free2, rr2, sg2)
 
 
 def test_kill_switch_keeps_the_scipy_path(monkeypatch):

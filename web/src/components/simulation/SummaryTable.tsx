@@ -57,10 +57,10 @@ export interface TransientSummary {
   n_parallel?:         number;
   // STRANDS IN HAND: k wires wound together as one turn.  The slot keeps its
   // num_wires_per_slot physical wire rows (same copper, same fill, same mass),
-  // but the coil has turns_per_coil = rows/k SERIES turns (a wire_split adds no
-  // turn) — so EMF and Kt divide by k, R by k², and the phase current splits
-  // over n_parallel_eff = paths×k×wire_split conductors (a row's strips are
-  // parallel conductors of one turn).  Absent on runs saved before it was stamped.
+  // but the coil has turns_per_coil = (rows/k)×wire_split SERIES turns — so EMF
+  // and Kt divide by k, R by k², and the phase current splits over
+  // n_parallel_eff = paths×k conductors (the split divides no current: its
+  // strips are turns).  Absent on runs saved before it was stamped.
   wire_parallel?:      number;
   turns_per_coil?:     number;
   n_parallel_eff?:     number;

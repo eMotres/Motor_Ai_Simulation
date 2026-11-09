@@ -38,7 +38,7 @@ export interface Passport {
   /** STRANDS IN HAND the base point was measured at (geometry.wire_parallel,
    *  ABSENT = 1).  `N0` and the `N` knob are PHYSICAL wire ROWS per slot — that
    *  is what the wire coating and the copper mass are built on — so the SERIES
-   *  turns are N/wire_parallel0 (a split adds no turn).  The strands are fixed by the
+   *  turns are (N/wire_parallel0)·wire_split0.  The strands are fixed by the
    *  build (they are not a knob), so they cancel out of every turns ratio
    *  below.  Recorded so a 24-turn coil and 24 wires wound 2-in-hand — the same
    *  slot, a factor 2 apart in EMF and 4 in R — can be told apart in the
@@ -46,11 +46,13 @@ export interface Passport {
   wire_parallel0?: number;
   /** STRIPS PER WIRE ROW the base point was measured at (geometry.wire_split,
    *  ABSENT = 1 — the passport predates the split, and the machines it was
-   *  measured on were unsplit).  A row's strips are PARALLEL conductors of one
-   *  turn (owner 2026-11-09): they add NO turn, each carries 1/S of the branch
-   *  current, and the width-direction AC loss falls.  So the turn count is
-   *  N0/k whatever S is.  `Knobs.split` is the configured machine's own value
-   *  (it enters the current density, not the turns); see `turnsFactor`. */
+   *  measured on were unsplit).  A row's strips are consecutive SERIES turns,
+   *  so they MULTIPLY the turn count: N0 rows at wire_split0 = S is S·N0/k
+   *  electrical turns.  Unlike the strands this does not always cancel — a
+   *  reference passport measured unsplit can be scaled onto a machine that IS
+   *  split (Configure matches passports by cross-section, not by build), and
+   *  then the turns ratio is off by S.  `Knobs.split` is that machine's own
+   *  value; see `turnsFactor`. */
   wire_split0?: number;
   T0_Nm: number;       // base torque at (I0, rpm0)
   /** Base no-load back-EMF at (N0, L0, rpm0), phase, star-equivalent [V].
@@ -234,9 +236,10 @@ export interface Knobs {
   rpm: number;     // speed
   /** STRIPS PER WIRE ROW of the machine being configured (geometry.wire_split).
    *  Not a slider — it comes from the loaded build, because the strips are
-   *  PARALLEL conductors of one turn: a machine split S ways has the turns of
-   *  the same rows unsplit and 1/S of the current in each strip.  ABSENT = the
-   *  passport's own `wire_split0` (itself absent = 1). */
+   *  SERIES turns and a machine split S ways has S× the turns of the same rows
+   *  unsplit.  ABSENT = the passport's own `wire_split0` (itself absent = 1),
+   *  which makes the turns ratio the plain row ratio — the behaviour every
+   *  caller had before the split existed. */
   split?: number;
   // ── DRIVE (Configure's Sine | PWM menu, owner 2026-10-05).  scaleMotor()
   //    never reads these: the PWM numbers come from the passport's COMPUTED
@@ -345,17 +348,23 @@ function interp(xs: number[], ys: number[], x: number): number {
 
 /** Turns ratio — ELECTRICAL turns over the passport's, never rows over rows.
  *
- *  turns = rows / strands in hand.  A `wire_split` row's strips are PARALLEL
- *  conductors of ONE turn (owner 2026-11-09), so the split is NOT in the turn
- *  count; it divides the current in each strip instead.  The strands in hand
- *  are fixed by the build and cancel.  Everything that reads a measured table
- *  in ampere-turn space (torque, EMF, the saturation and demag curves) goes
- *  through this one function so the four call sites cannot drift apart. */
+ *  turns = (rows / strands in hand) × strips per row, because a `wire_split`
+ *  row's strips are consecutive SERIES turns.  The strands in hand are fixed by
+ *  the build and cancel; the SPLIT does not always, since Configure matches a
+ *  reference passport by cross-section and the loaded machine may be split when
+ *  the measured one was not.  Everything that reads a measured table in
+ *  ampere-turn space (torque, EMF, the saturation and demag curves) goes
+ *  through this one function so the four call sites cannot drift apart.
+ *
+ *  Both split values default to 1 when absent — a passport written before the
+ *  split, or a caller that has no machine to speak for, is an unsplit build. */
 export function turnsFactor(p: Passport, k: Knobs): number {
   if (!p.N0) return 1;
   const kPar0 = Math.max(1, Math.round(p.wire_parallel0 ?? 1));
   const kPar  = kPar0;                    // strands in hand are not a knob
-  return (k.N / kPar) / (p.N0 / kPar0);
+  const s0 = Math.max(1, Math.round(p.wire_split0 ?? 1));
+  const s  = Math.max(1, Math.round(k.split ?? s0));
+  return ((k.N / kPar) * s) / ((p.N0 / kPar0) * s0);
 }
 
 /** Instant analytical scaling of a passport to a new (length, turns, wire, I, rpm).

@@ -2867,7 +2867,7 @@ def retired_dies(_w: dict = Depends(require_catalog_write)):
 # ── configuration ────────────────────────────────────────────────────────────
 
 def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None,
-                         source_config: Optional[str] = None) -> None:
+                         source_config: Optional[str] = None, transition: bool = False) -> None:
     """A new variant of a project's motor joins the project at once (owner 2026-10-27, ``development.autolink``).  Never
     raises: the configuration is already saved, the link is an addition.
 
@@ -2879,6 +2879,8 @@ def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_fr
         if isinstance(w, dict) and isinstance(w.get("user"), dict):
             actor = str(w["user"].get("email") or "").strip().lower()
         kw = {"source_config": source_config} if source_config else {}
+        if transition:
+            kw["transition"] = True
         joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor, **kw)
         if joined:
             log.info("family: new configuration '%s/%s' linked to project(s) %s", die, cfg, ", ".join(joined))
@@ -3173,7 +3175,7 @@ def duplicate_die(die: str, req: DieDuplicate,
     d["locked"] = False
     d["created"] = datetime.now().isoformat(timespec="seconds")
     # where the copy came from: a configuration later created in it joins the project(s) of the original (development.autolink)
-    d["derived_from"] = {"die": die, "at": d["created"]}
+    d["derived_from"] = {"die": die, "at": d["created"], "origin": "duplicate"}
     _save_yaml(dst_dir / "die.yaml", d)
     cfgs = []
     _acc = catalog_access(_w.get("authorization"))
@@ -4702,7 +4704,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
         nd = _load_yaml(_die_file(name), "die")
         nd["geometry"] = dict(live_geo)
         nd["derived_from"] = {
-            "die": die, "config": cfg, "duty": duty,
+            "die": die, "config": cfg, "duty": duty, "origin": "transition",
             "at": datetime.now().isoformat(timespec="seconds"),
             "changed": [f"{x['key']} {x['die']} → {x['live']}" for x in diffs]}
         try:
@@ -4729,7 +4731,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
             target_cfg = _copy_config_into(die, target, cfg)
             new_variant = True
     if new_variant and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg, transition=True)
     # The configurations now sit on the NEW lamination: a connection that
     # factored the old slot count may not factor this one (2S on 48 slots).
     _repick_die_windings(target, skip_locked=not created)
@@ -4870,7 +4872,7 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
         nd.update({"name": name, "locked": False, "created": at,
                    "geometry": dict(live_geo),
                    "derived_from": {
-                       "die": die, "config": cfg, "duty": duty, "at": at,
+                       "die": die, "config": cfg, "duty": duty, "at": at, "origin": "transition",
                        "reason": ("edit of one configuration on a die shared with others"
                                   if reason == "shared_die" else
                                   "duty save from a build that is another lamination"),
@@ -4897,7 +4899,7 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
             target_cfg = _copy_config_into(die, target, cfg)
             copied = True
     if copied and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg, transition=True)
     import json as _json
     at = datetime.now().isoformat(timespec="seconds")
     _ctx_file().write_text(_json.dumps({

@@ -317,13 +317,11 @@ def generate_passport(
     # STRANDS IN HAND and STRIPS PER ROW the passport was MEASURED at.  N0 stays
     # the PHYSICAL wire rows per slot (that is what the Configure knob edits and
     # what the wire coating is built on); the ELECTRICAL turns are
-    # N0 / wire_parallel0 = winding.turns_per_coil (the strips of a split row
-    # are parallel conductors of ONE turn and add no turn, 2026-11-09), and
-    # every measured number below (T0, Vemf0, R0, the loss grid) already
-    # carries that scale.  Both are recorded so a consumer can tell a 24-turn
-    # coil from 24 wires wound 2-in-hand (the same slot, a factor 2 apart in
-    # EMF) and from 24 rows split in two (the same turns, half the current per
-    # strip, lower AC loss).  A passport
+    # (N0 / wire_parallel0) × wire_split0 = winding.turns_per_coil, and every
+    # measured number below (T0, Vemf0, R0, the loss grid) already carries that
+    # scale.  Both are recorded so a consumer can tell a 24-turn coil from 24
+    # wires wound 2-in-hand (the same slot, a factor 2 apart in EMF) and from 24
+    # rows split in two (the same rows, a factor 2 THE OTHER WAY).  A passport
     # written before these fields existed carries neither; ABSENT MEANS 1 —
     # which is what the unsplit, one-in-hand machine they were all measured on
     # actually was.
@@ -679,8 +677,8 @@ def generate_passport(
         "I0_A": I0, "rpm0": round(rpm0), "nP0": nP0,
         # Strands in hand and strips per wire row at the measured point (1 = one
         # wire per turn / one solid bar).  N0 is PHYSICAL wire ROWS per slot, so
-        # the SERIES turns are N0 / wire_parallel0 — the split's strips are
-        # parallel conductors of one turn.  A passport without these keys was
+        # the SERIES turns are (N0 / wire_parallel0) × wire_split0 — the split's
+        # strips are consecutive turns.  A passport without these keys was
         # measured on a machine that had neither: read them as 1.
         "wire_parallel0": wireParallel0,
         "wire_split0": wireSplit0,

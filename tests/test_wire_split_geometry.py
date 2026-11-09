@@ -1,11 +1,10 @@
-"""``wire_split`` is GEOMETRY, and its strips are PARALLEL conductors of ONE turn.
+"""``wire_split`` is GEOMETRY, and its strips are SERIES TURNS.
 
 The rule this file pins (user, 2026-09-08: *"make the wire width 4.5 mm, the
-slot will get a bit bigger, I'd make the gap between wires 2·Wire Spacing X"*;
-and the owner, 2026-11-09: the split cuts a flat wire by its width into strips
-to cut the AC loss - it adds NO turn.  From 2026-09-08 to 2026-11-09 the strips
-were counted as series turns, which turned ``num_wires_per_slot 17,
-wire_split 2`` into 34 turns and doubled the ampere-turns):
+slot will get a bit bigger, I'd make the gap between wires 2·Wire Spacing X"*, then
+*"wire_split_series can be removed — we will always only need
+a series connection of these two coils; a parallel connection
+would create compensating currents between them"*):
 
   * ``wire_width`` is ONE STRIP.  ``wire_split`` = N lays N of them SIDE BY SIDE
     across the slot, ``2 × wire_spacing_x`` apart, so the wire column — and the
@@ -14,17 +13,15 @@ wire_split 2`` into 34 turns and doubled the ampere-turns):
   * every strip is a DRAWN, MESHED, SEPARATELY-EXCITED conductor: N polygons
     where the wire had one, N bodies in the coupled σ·∂A/∂t solve, N blocks in
     the thermal map, N counted in the mass.
-  * the N strips of a row are PARALLEL conductors of one turn: turns, ψ, KV
-    and torque do not move, every strip carries 1/N of the branch current
-    (``n_parallel_effective`` carries the N), the DC copper is the same copper,
-    and the solved AC copper falls with the strip width.
+  * the N strips of a row are CONSECUTIVE SERIES TURNS — always, there is no
+    other wiring: turns ×N, ψ ×N, KV ÷N, R ×N², every strip at the full branch
+    current, and the same torque back at I ÷ N.
 
 What is deliberately NOT here: the retired reading in which ``wire_split`` cut a
 bar into strips of ``wire_width/N`` with no CAD behind them and assumed ideal
 transposition (``cu_ac_solved_ignores_wire_split`` was its flag and it is gone,
-case (e)), and the ``wire_split_series`` knob that chose between the two wirings
-for a few hours on 2026-09-08 (case (f) pins that it is gone: the wiring is now
-always parallel, no flag).
+case (e)), and the ``wire_split_series`` knob that offered a PARALLEL wiring for
+a few hours the same day (case (f) pins that it is gone, not that it works).
 
 Cost: two 4-frame transients and one thermal map on the 30 mm 12s/14p fixture
 the physics-regression suite is pinned on — the smallest honest cycle in the
@@ -244,18 +241,14 @@ def test_the_users_own_numbers_come_out_of_the_rule():
     assert strip_gap_mm(g) == pytest.approx(0.2)  # 2 × wire_spacing_x
     assert winding_footprint_mm(g) == pytest.approx(2 * 4.5 + 0.2)   # 9.2 mm
     assert conductors_per_slot(g) == 27 * 2
-    # 27 rows / 3 in hand = 9 turns whatever the split; the strips of a turn
-    # are parallel conductors, so the divider is 3 strands x 2 strips.
-    assert turns_per_coil(g) == 9
-    assert n_parallel_effective(1, g) == 6
-    # …and the same rows unsplit are the same turns on half the divider
+    # 27 rows / 3 in hand = 9 rows of turns, each row TWO series strips = 18
+    # turns; the strips add no parallel path, so the divider stays the 3
+    # strands in hand.
+    assert turns_per_coil(g) == 18
+    assert n_parallel_effective(1, g) == 3
+    # …and the same rows unsplit are half the turns, on the same divider
     assert turns_per_coil(dict(g, wire_split=1)) == 9
     assert n_parallel_effective(1, dict(g, wire_split=1)) == 3
-    # the owner's 2026-11-09 case: 17 rows, two 3.2 mm strips in ONE turn
-    h = {"num_wires_per_slot": 17, "wire_width": 3.2, "wire_split": 2}
-    assert turns_per_coil(h) == 17            # NOT 34
-    assert conductors_per_slot(h) == 34       # drawn strips
-    assert n_parallel_effective(1, h) == 2    # I per strip = I_coil / 2
 
 
 def test_the_strips_are_drawn_side_by_side_and_the_slot_grows():
@@ -330,39 +323,40 @@ def test_the_new_gaps_are_wire_coating_not_slot_air():
 @pytest.fixture(scope="module")
 def runs() -> Dict[str, Dict[str, Any]]:
     """Two 4-frame transients: the unsplit bar at I, and the same wire split in
-    two at the SAME I — the strips are parallel conductors of one turn, so the
-    MMF is the bar's with no current rescaling.  Module-scoped — they are the
-    only FEM solves here."""
+    two at I/2 — the current that restores the MMF, since the strips are series
+    turns.  Module-scoped — they are the only FEM solves here."""
     return {
         "base": _solve(BASE, I_PROBE),
-        "split": _solve(SPLIT, I_PROBE),
+        "split": _solve(SPLIT, I_PROBE / 2.0),
     }
 
 
 @pytest.mark.slow
-def test_parallel_strips_add_no_turn_and_keep_the_bars_resistance(runs):
-    """N strips are N parallel conductors of ONE turn: the turn count, ψ, the
-    voltage, the torque and the (same-copper) resistance and DC copper watts are
-    the unsplit bar's at the SAME phase current, while each strip carries 1/N of
-    the branch current (``n_parallel_eff`` carries the N).
+def test_series_strips_double_the_turns_and_quadruple_the_resistance(runs):
+    """N strips are N times the turns.  At I/N the MMF — and therefore the
+    torque and the copper watts — come back, while ψ, the voltage and the
+    resistance carry the ×N and ×N² the user is trading current for.
 
     The AC copper is measured on the STRIP: same MMF, same field, half the
-    conductor width, so the solved ∫σE² falls.
+    conductor width, so the solved ∫σE² falls.  The strip and its current here
+    are exactly what they were under the retired PARALLEL wiring at the full
+    phase current (I/(paths·k·N) either way), which is why this one number
+    survives the flag's removal unchanged.
     """
     b, s = runs["base"], runs["split"]
 
     assert s["wire_split"] == 2
     assert "wire_split_series" not in s, "the removed flag is back in the result"
-    assert s["turns_per_coil"] == b["turns_per_coil"]
-    # the strips divide the current: each carries 1/2 of the branch current
-    assert s["n_parallel_eff"] == 2 * b["n_parallel_eff"]
+    assert s["turns_per_coil"] == 2 * b["turns_per_coil"]
+    # the strips add no parallel path: each carries the full branch current
+    assert s["n_parallel_eff"] == b["n_parallel_eff"]
 
     t_b, t_s = _mean(b["T_avg_Nm"]), _mean(s["T_avg_Nm"])
     assert abs(t_b) > 1e-3, "probe torque is noise — the ratio would be too"
     assert t_s == pytest.approx(t_b, rel=0.02), (t_b, t_s)
-    assert _amp(s["psi_A_Wb"]) == pytest.approx(_amp(b["psi_A_Wb"]), rel=0.02)
-    assert s["R_phase_ohm"] == pytest.approx(b["R_phase_ohm"], rel=0.03)
-    assert _mean(s["P_cu_dc_W"]) == pytest.approx(_mean(b["P_cu_dc_W"]), rel=0.03)
+    assert _amp(s["psi_A_Wb"]) == pytest.approx(2 * _amp(b["psi_A_Wb"]), rel=0.02)
+    assert s["R_phase_ohm"] == pytest.approx(4 * b["R_phase_ohm"], rel=0.02)
+    assert _mean(s["P_cu_dc_W"]) == pytest.approx(_mean(b["P_cu_dc_W"]), rel=0.02)
 
     # d_r halves and the width-direction proximity term goes as d_r², so the
     # honest expectation is ~4x; 1.3x is the floor a wrong sign or a lost
@@ -381,7 +375,7 @@ def test_the_summary_no_longer_says_the_solve_ignores_the_split(runs):
 
     s = _build_transient_summary(
         runs["split"], I_phase_rms=float(runs["split"].get("I_phase_rms_A")
-                                         or I_PROBE),
+                                         or I_PROBE / 2.0),
         gamma_deg=0.0, coil_temp_c=120.0, geo_override=dict(SPLIT))
     assert s["wire_split"] == 2
     assert s["cu_ac_solved_ignores_wire_split"] is False
@@ -457,9 +451,9 @@ def test_the_knob_reaches_the_geometry_tab_and_the_old_text_does_not():
     """A knob the solver honours and the UI cannot show does not exist for the
     user — and the stored per-machine schema still explains the RETIRED split
     (strips of wire_width/N, transposed, no CAD), so the server owns that
-    sentence now.  It must also say the strips are PARALLEL within one turn
-    (they add no turn): that is the whole electrical meaning of the knob and
-    there is no second knob to carry it any more."""
+    sentence now.  It must also say the strips are SERIES turns: that is the
+    whole electrical meaning of the knob and there is no second knob to carry
+    it any more."""
     from motor_ai_sim.routes._validation import (SCHEMA_DESCRIPTION_OVERRIDE,
                                                  geometry_schema_meta)
 
@@ -468,7 +462,7 @@ def test_the_knob_reaches_the_geometry_tab_and_the_old_text_does_not():
     assert ws == SCHEMA_DESCRIPTION_OVERRIDE["wire_split"]
     assert "wire_width/N" not in ws and "transposed" not in ws.lower()
     assert "2 x wire_spacing_x" in ws
-    assert "PARALLEL" in ws and "adds no turn" in ws and "wire_split_series" not in ws
+    assert "SERIES" in ws and "wire_split_series" not in ws
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -481,9 +475,8 @@ def test_the_passport_records_the_split_and_the_scaling_uses_the_real_turns():
     Configure picks a reference passport by CROSS-SECTION, not by build, so a
     passport measured unsplit can legitimately be scaled onto a machine that is
     split — and the turns ratio would then be short by exactly N.  The fix is
-    two halves: the passport records ``wire_split0``, and the scaling knows the
-    split is NOT a turn (2026-11-09: strips are parallel conductors of one turn),
-    so the turns ratio is the rows ratio over the strands in hand.
+    two halves: the passport records ``wire_split0``, and the scaling multiplies
+    by the split on BOTH sides instead of comparing rows to rows.
 
     A source contract, not a solve: generating a passport is a dozen FEM runs,
     and what is at stake here is bookkeeping that a reader can break silently.
@@ -502,21 +495,19 @@ def test_the_passport_records_the_split_and_the_scaling_uses_the_real_turns():
     # …and says out loud that an old passport without it means 1
     assert "ABSENT MEANS 1" in src
 
-    # 2 — the datasheet reads it with that default, keeps it OUT of the turns
-    # and puts it in the strand count the current density divides by
+    # 2 — the datasheet reads it with that default and puts it IN the turns
     dsrc = inspect.getsource(_ds)
     assert 'ws0 = max(1.0, float(pp.get("wire_split0") or 1))' in dsrc
-    assert "turns0 = N0 / wp0" in dsrc
-    assert 'strands = float(wind.get("n_parallel") or 1) * wp0 * ws0' in dsrc
+    assert "turns0 = (N0 / wp0) * ws0" in dsrc
 
-    # 3 — the web scaler declares it and keeps it out of the turns ratio
+    # 3 — the web scaler declares it and multiplies BOTH sides by a split
     ts = (_pl.Path(__file__).resolve().parents[1] / "web" / "src" / "lib"
           / "motorScaling.ts").read_text(encoding="utf-8")
     assert "wire_split0?: number;" in ts
     i = ts.index("export function turnsFactor")
     body = ts[i:i + 700]
-    assert "return (k.N / kPar) / (p.N0 / kPar0);" in body
-    assert "k.split" not in body
+    assert "p.wire_split0 ?? 1" in body and "k.split ?? s0" in body
+    assert "((k.N / kPar) * s) / ((p.N0 / kPar0) * s0)" in body
 
 
 # ─────────────────────────────────────────────────────────────────────────────

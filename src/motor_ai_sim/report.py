@@ -265,8 +265,8 @@ def winding_words(geo: Dict[str, Any]) -> str:
 
     `num_wires_per_slot` is the TURN count; `wire_parallel` is how many strands
     are wound in hand for each of those turns (they share the turn's current);
-    `wire_split` cuts each strand into that many narrower strips in PARALLEL
-    within the turn, which lowers the eddy loss and adds no turn.  A reader
+    `wire_split` cuts each strand into that many narrower strips in SERIES,
+    which lowers the eddy loss and leaves the current where it was.  A reader
     given only the turn count cannot tell 6 fat conductors from 6 x 4 thin ones,
     and the two are different machines (2026-09-10).
     """
@@ -288,7 +288,7 @@ def winding_words(geo: Dict[str, Any]) -> str:
     else:
         out = "%s turns" % _fmt(n, 0)
     if spl and spl > 1:
-        out += ", each strand split into %s parallel strips" % _fmt(spl, 0)
+        out += ", each strand split into %s strips in series" % _fmt(spl, 0)
     return out
 
 
@@ -10817,7 +10817,7 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
         # anywhere that it's 6 turns of 4 parallel wires each").  The turn count alone
         # does not describe the winding: each turn is `wire_parallel` strands in
         # hand, and `wire_split` cuts each strand into that many narrower strips
-        # in PARALLEL.  All three are drawn and meshed, so they belong on the
+        # in SERIES.  All three are drawn and meshed, so they belong on the
         # geometry page rather than in a note somewhere.
         ["Stack length", _f("motor_length"), "mm",
          "Turns per slot", winding_words(geo), ""],

@@ -6,8 +6,9 @@
    family hook, with a real project store and a duplicated die.
 2. The open-frame thermal model counted one coil per tooth (``n_coils =
    num_slots``) on a single-layer winding that winds every second tooth.
-3. ``wire_split`` strips were counted as extra SERIES turns (34 turns for 17
-   rows split in two), and a slot-width change silently created a new die.
+3. A slot-width change (a ``wire_split`` edit) silently created a new die: the
+   response now says so and a caller can refuse it.  (The ``wire_split`` meaning
+   itself - strips = series turns - is unchanged and documented.)
 
 Synthetic data only; no FEM solve, nothing reads or writes ``config/``.
 """
@@ -66,6 +67,54 @@ def test_a_new_config_in_the_linked_die_itself_still_auto_links(customer_project
     assert ("SOURCE DIE", "base 2") in _linked_configs()
 
 
+LIVE_EDIT = dict(GEO, magnet_height=23.0, slot_height=22.0, magnet_down=2.5)    # reshapes the shared die
+_REAL_AUTOLINK = fam._autolink_new_config      # the dies fixture replaces it with a no-op
+
+
+def test_an_automatic_die_transition_keeps_the_project_link(dies, tmp_path, monkeypatch):
+    """The engineer edits the lamination of a config that is ALREADY linked: same customer motor,
+    so the config that lands in the new die keeps the link."""
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
+    (tmp_path / "projects").mkdir()
+    store.create_project({"id": "customer-project", "status": "design", "members": [],
+                          "linked_motors": [{"die": DIE, "config": "L100", "status": "current"}]})
+    store.save_index({"motors": {motors._key(DIE, "L100"): {"project_id": "customer-project", "die": DIE, "config": "L100"}}})
+    monkeypatch.setattr(motors, "_capture_project_motor_snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(autolink, "writes_shared_catalog", lambda: True)
+    monkeypatch.setattr(fam, "_autolink_new_config", _REAL_AUTOLINK)
+    _activate("L100")
+    new = fam.sync_active_die_geometry(dict(LIVE_EDIT), prev_geo=dict(GEO))
+    assert new == "CIANO56 400_80 vadim"
+    assert (new, "L100") in _linked_configs("customer-project")
+    import yaml
+    nd = yaml.safe_load((dies / new / "die.yaml").read_text(encoding="utf-8"))
+    assert nd["derived_from"]["origin"] == "transition"
+
+
+def test_a_transition_from_an_unlinked_config_links_nothing(dies, tmp_path, monkeypatch):
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
+    (tmp_path / "projects").mkdir()
+    store.create_project({"id": "customer-project", "status": "design", "members": [], "linked_motors": []})
+    store.save_index({"motors": {}})
+    monkeypatch.setattr(autolink, "writes_shared_catalog", lambda: True)
+    monkeypatch.setattr(fam, "_autolink_new_config", _REAL_AUTOLINK)
+    _activate("L100")
+    assert fam.sync_active_die_geometry(dict(LIVE_EDIT), prev_geo=dict(GEO))
+    assert store.get_project("customer-project")["linked_motors"] == []
+
+
+def test_a_duplicate_and_a_config_made_in_it_never_inherit_a_link(customer_project, monkeypatch):
+    """No transition flag = an explicit duplicate / save-as-new-die / rename-copy, or a config created in one
+    while the editor still holds the source die's motor."""
+    monkeypatch.setattr(autolink, "writes_shared_catalog", lambda: True)
+    assert autolink.autolink_new_config("STUDY DIE", "base", copied_from="SOURCE DIE", source_config="base") == []
+    assert autolink.autolink_new_config("STUDY DIE", "S1") == []
+    assert _linked_configs() == [("SOURCE DIE", "base")]
+    # even a transition flag needs a LINKED source: a copy of an unlinked motor links nothing
+    assert autolink.autolink_new_config("STUDY DIE", "S2", copied_from="STUDY DIE", source_config="nope",
+                                        transition=True) == []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. open-frame coil count follows the winding as wound
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,26 +160,20 @@ def test_the_thermal_route_uses_the_helper_for_both_end_winding_models():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3a. wire_split strips are parallel conductors of ONE turn
+# 3a. wire_split: the CURRENT meaning (strips = series turns) is kept and documented
+#     (the parallel reading lives on branch wip/wire-split-parallel, not active)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SPLIT_GEO = {"num_wires_per_slot": 17, "wire_width": 3.2, "wire_split": 2, "wire_spacing_x": 0.05,
              "wire_height": 1.0}
 
 
-def test_a_split_adds_no_turn_and_divides_the_strip_current():
-    assert turns_per_coil(SPLIT_GEO) == 17                          # was 34
-    assert turns_per_coil(dict(SPLIT_GEO, wire_split=1)) == 17
-    assert conductors_per_slot(SPLIT_GEO) == 34                     # two drawn strips per row
-    assert n_parallel_effective(1, SPLIT_GEO) == 2                  # each strip carries I_coil / 2
-    assert n_parallel_effective(2, dict(SPLIT_GEO, wire_parallel=1)) == 4
-    # ampere-turns per slot = conductors x strip current = turns x branch current, split or not
-    i_branch = 100.0
-    assert conductors_per_slot(SPLIT_GEO) * i_branch / n_parallel_effective(1, SPLIT_GEO) \
-        == turns_per_coil(SPLIT_GEO) * i_branch
-    # strands in hand and strips compose
-    g = dict(SPLIT_GEO, num_wires_per_slot=18, wire_parallel=3)
-    assert turns_per_coil(g) == 6 and n_parallel_effective(1, g) == 6
+def test_a_split_strip_is_a_series_turn_as_documented():
+    assert turns_per_coil(SPLIT_GEO) == 34
+    assert conductors_per_slot(SPLIT_GEO) == 34
+    assert n_parallel_effective(1, SPLIT_GEO) == 1
+    import motor_ai_sim.winding as w
+    assert "CURRENT MEANING" in w.__doc__ and "SLOT WIDTH" in w.__doc__ and "wip/wire-split-parallel" in w.__doc__
 
 
 def test_the_slot_width_grows_only_by_the_strip_insulation():
@@ -142,40 +185,10 @@ def test_the_slot_width_grows_only_by_the_strip_insulation():
     assert winding_footprint_mm(SPLIT_GEO) - winding_footprint_mm(bar) == pytest.approx(0.1)
 
 
-def test_the_winding_config_route_reports_the_unsplit_turn_count(monkeypatch):
-    """PUT /api/geometry {"num_wires_per_slot": 17, "wire_width": 3.2, "wire_split": 2} read back
-    turns_per_coil 34 and doubled the amp-turns; it is 17 now."""
-    from motor_ai_sim import api
-    cfg = {"geometry": {"num_seg": 8, "num_slots_per_segment": 3, "num_poles_per_segment": 2.5,
-                        "num_slots": 24, "num_poles": 20, **SPLIT_GEO},
-           "winding": {"connection": "4S", "n_parallel": 1, "n_series": 4, "n_coils_per_phase": 4, "layers": 1},
-           "simulation": {"max_current": 100.0}}
-    monkeypatch.setattr(api, "get_config", lambda: cfg)
-    out = api.get_winding_config()
-    assert out["turns_per_coil"] == 17
-    assert out["n_parallel_eff"] == 2
-    assert out["amp_turns_per_slot"] == 1700.0           # 17 turns x 100 A, not 34 x 100 A
-    cfg["geometry"]["wire_split"] = 1
-    assert api.get_winding_config()["amp_turns_per_slot"] == 1700.0
-
-
-def test_no_consumer_counts_strips_as_turns():
-    """Every reader of wire_split goes through the winding helpers or its own strip-count
-    (conductors) arithmetic; the series-turn wording is gone from the code that carried it."""
-    import inspect
-    import motor_ai_sim.winding as w
-    import motor_ai_sim.routes._validation as v
-    src = inspect.getsource(w.turns_per_coil)
-    assert "wire_split" not in src.split('"""')[2]          # the body no longer multiplies by the split
-    assert "PARALLEL" in v.SCHEMA_DESCRIPTION_OVERRIDE["wire_split"]
-    assert "SERIES" not in v.SCHEMA_DESCRIPTION_OVERRIDE["wire_split"]
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 3b. a geometry edit that would create a die says so, and can be refused
 # ─────────────────────────────────────────────────────────────────────────────
 
-LIVE_EDIT = dict(GEO, magnet_height=23.0, slot_height=22.0, magnet_down=2.5)    # reshapes the shared die
 
 
 def test_the_preview_names_the_die_a_save_would_create_and_creates_nothing(dies):

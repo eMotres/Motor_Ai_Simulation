@@ -66,10 +66,10 @@ def _geo(k: int) -> Dict[str, Any]:
     side across the slot; strands in hand are k wires wound as one turn) and the
     point of carrying both is that neither shadows the other.
 
-    The split's strips are PARALLEL conductors of one turn (2026-11-09), so it
-    contributes a constant factor 2 to ``n_parallel_effective`` on both members
-    of the pair — and nothing at all to ``turns_per_coil`` — and therefore
-    cancels out of every ratio this file measures.
+    The split's strips are SERIES turns, so it contributes a constant factor 2
+    to ``turns_per_coil`` on both members of the pair — and nothing at all to
+    ``n_parallel_effective`` — and therefore cancels out of every ratio this
+    file measures.
     """
     g = dict(GEO_30MM)
     g["wire_split"] = 2
@@ -111,13 +111,13 @@ def test_absent_means_one_strand_in_hand():
 
 def test_turns_and_effective_paths_divide_and_multiply():
     g = _geo(K)
-    # turns are the WIRE ROWS / k — the geometry's wire_split = 2 adds no turn
-    # (its strips are parallel conductors of one turn).
-    assert turns_per_coil(g) == GEO_30MM["num_wires_per_slot"] // K == 2
-    # …they ARE a divider on the branch current: the k strands in hand AND the
-    # 2 strips multiply the paths (winding.n_parallel_effective).
-    assert n_parallel_effective(1, g) == K * 2
-    assert n_parallel_effective(4, g) == 4 * K * 2
+    # turns are the WIRE ROWS / k, TIMES the geometry's wire_split = 2 — those
+    # strips are consecutive SERIES turns, not strands.
+    assert turns_per_coil(g) == (GEO_30MM["num_wires_per_slot"] // K) * 2 == 4
+    # …and they are NOT a divider on the branch current: only the k strands in
+    # hand multiply the paths (winding.n_parallel_effective).
+    assert n_parallel_effective(1, g) == K
+    assert n_parallel_effective(4, g) == 4 * K
 
 
 def test_strands_that_do_not_divide_the_wires_are_refused_by_name():
@@ -172,7 +172,7 @@ def test_psi_pm_and_bench_caches_cannot_answer_across_k():
     w = {"connection": CONNECTION, "n_parallel": 1, "layers": 1}
     assert _geometry_fingerprint(_geo(1)) != _geometry_fingerprint(_geo(K))
     assert psipm_cache_key(_geo(1), w) != psipm_cache_key(_geo(K), w)
-    # …and the SPLIT, whose parallel strips divide the strip current by N
+    # …and the SPLIT, whose series strips scale ψ_PM by N
     g_split = dict(_geo(1)); g_unsplit = dict(g_split, wire_split=1)
     assert psipm_cache_key(g_unsplit, w) != psipm_cache_key(g_split, w)
     # the ANGLE, on the other hand, is genuinely the same for all of them — the
@@ -212,13 +212,14 @@ def noload() -> Dict[int, Dict[str, Any]]:
 def test_solver_reports_the_effective_winding(loaded):
     d1, dk = loaded[1], loaded[K]
     assert d1["wire_parallel"] == 1 and dk["wire_parallel"] == K
-    # The fixture's wire_split = 2 adds no turn: 6 rows are 6 turns at k = 1
-    # and 2 at k = K.
-    assert d1["turns_per_coil"] == 6 and dk["turns_per_coil"] == 2
+    # ×2 on both: the fixture's wire_split = 2 makes every wire row TWO series
+    # turns, so 6 rows are 12 turns at k = 1 and 4 at k = K.
+    assert d1["turns_per_coil"] == 12 and dk["turns_per_coil"] == 4
     # The CONNECTION's own paths are untouched by the strands (2S -> 1 path);
-    # the effective divider is their product with the strips (x2 on both).
+    # the effective divider is their product.  The split is NOT in it — its
+    # strips are turns, and each carries the branch current whole.
     assert d1["n_parallel"] == dk["n_parallel"] == 1
-    assert d1["n_parallel_eff"] == 2 and dk["n_parallel_eff"] == 2 * K
+    assert d1["n_parallel_eff"] == 1 and dk["n_parallel_eff"] == K
     assert d1["connection"] == dk["connection"] == CONNECTION
 
 

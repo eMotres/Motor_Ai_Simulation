@@ -3969,9 +3969,9 @@ class CadQueryMotor:
         # bar.  With `wire_split` = S each wire ROW IS S conductors: S strips of
         # wire_w side by side with 2·wire_spacing_x of enamel between them, so
         # the slot holds num_wires·S conductors and the row gets S polygons
-        # where it had one.  Those S strips are PARALLEL conductors of one turn
-        # (2026-11-09, see winding.n_parallel_effective), which changes no
-        # polygon here — a strip is a body either way.
+        # where it had one.  Those S strips are consecutive SERIES turns (see
+        # winding.turns_per_coil), which changes no polygon here — a strip is a
+        # body either way.
         # `coil_polys` order = slot-by-slot, +x side then −x side, wire-by-wire,
         # strip-by-strip; each entry's centroid still lands in its slot so the
         # (phase, direction) lookup downstream is unchanged.

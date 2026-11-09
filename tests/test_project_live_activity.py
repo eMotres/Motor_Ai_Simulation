@@ -497,7 +497,7 @@ def test_every_way_to_make_a_variant_calls_the_hook():
     for needle in ("_autolink_new_config(die, name, _w, copied_from=",            # POST /config (source = loaded)
                    "_autolink_new_config(die, new, _w, source_config=cfg)",        # configuration copy
                    "_autolink_new_config(name, cfg_name, _w, copied_from=",        # save as new die
-                   "_autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)"):   # die transition
+                   "_autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg, transition=True)"):   # die transition
         assert needle in src, needle
     assert 'd["derived_from"] = {"die": die' in src                                  # a die copy remembers its source
 

@@ -158,9 +158,11 @@ class MagnetostaticsSolver2D:
         # from n_parallel, so handing it turns/k and paths×k gives R ∝ 1/k² and
         # I_coil = I_phase/(paths·k) = the current in ONE strand — both correct.
         # STRIPS PER ROW (geometry.wire_split): a wire row is N strips of
-        # wire_width side by side, wired in PARALLEL within one turn (owner
-        # 2026-11-09).  So the ÷N rides in `n_parallel_effective` (R ÷N) and
-        # NOT in `turns_per_coil` - the split adds no turn.
+        # wire_width side by side, wired as N consecutive SERIES turns.  So the
+        # ×N rides in `turns_per_coil` (R ×N²) and NOT in
+        # `n_parallel_effective` — putting it in both would move the resistance
+        # twice, putting it only in the paths would build the parallel machine
+        # the user rejected.
         from motor_ai_sim.winding import (turns_per_coil as _tpc,
                                           wire_parallel_from_geo as _wp_geo,
                                           n_parallel_effective as _npar_eff,

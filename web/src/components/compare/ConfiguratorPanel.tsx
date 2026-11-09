@@ -1816,26 +1816,25 @@ ${s1Text.text}` : '';
   // slot-fit limiter below counts.
   const kPar = Math.max(1, Math.round(p.wire_parallel0 ?? 1));
   // STRIPS PER WIRE ROW of the machine being configured — also a property of
-  // the BUILD, and also not a knob.  They are PARALLEL conductors of one turn
-  // (they add no turn, each carries 1/N of the branch current); the N slider
+  // the BUILD, and also not a knob.  They are SERIES turns, so they multiply
+  // the turn count the same way the strands in hand divide it; the N slider
   // stays wire ROWS either way.
   const kSplit = Math.max(1, Math.round(knobs.split ?? p.wire_split0 ?? 1));
-  const kSplit0 = Math.max(1, Math.round(p.wire_split0 ?? 1));
   const rowsLabel = (() => {
     const tags = [kPar > 1 ? tx('configureLimits.inHand', { k: kPar }) : '',
-                  kSplit > 1 ? tx('configureLimits.stripsInParallel', { k: kSplit }) : ''].filter(Boolean);
+                  kSplit > 1 ? tx('configureLimits.stripsInSeries', { k: kSplit }) : ''].filter(Boolean);
     return tags.length ? tx('configureLimits.wireRowsTagged', { tags: tags.join(', ') }) : tx('configureLimits.turnsPerSlot');
   })();
   // Current density in the conductor (A/mm², RMS) = strand current / wire area;
   // strand current = phase current / (parallel paths × strands in hand), wire
   // area = width × height.
-  const J_A_mm2 = (knobs.I_A / Math.max(1, knobs.nP * kPar * kSplit)) / Math.max(1e-6, ref.fit.wireWidth_mm * knobs.wireH_mm);
-  const baseJ   = (p.I0_A / Math.max(1, p.nP0 * kPar * kSplit0)) / Math.max(1e-6, ref.fit.wireWidth_mm * p.wireH0_mm);
+  const J_A_mm2 = (knobs.I_A / Math.max(1, knobs.nP * kPar)) / Math.max(1e-6, ref.fit.wireWidth_mm * knobs.wireH_mm);
+  const baseJ   = (p.I0_A / Math.max(1, p.nP0 * kPar)) / Math.max(1e-6, ref.fit.wireWidth_mm * p.wireH0_mm);
   // Phase copper section = strand area × parallel paths × strands in hand
   // (matches the FEM card's A_phase, so J = I_phase / A_phase holds on both
   // sides).
-  const A_phase_mm2 = ref.fit.wireWidth_mm * knobs.wireH_mm * Math.max(1, knobs.nP * kPar * kSplit);
-  const baseA_phase = ref.fit.wireWidth_mm * p.wireH0_mm * Math.max(1, p.nP0 * kPar * kSplit0);
+  const A_phase_mm2 = ref.fit.wireWidth_mm * knobs.wireH_mm * Math.max(1, knobs.nP * kPar);
+  const baseA_phase = ref.fit.wireWidth_mm * p.wireH0_mm * Math.max(1, p.nP0 * kPar);
   // A wire count that no longer divides the strands in hand is not a machine:
   // the coil would need a fraction of a turn.  Flagged where the number is
   // typed, so the user is not told about it three screens later by the solver.

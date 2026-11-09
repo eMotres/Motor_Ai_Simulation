@@ -16,6 +16,12 @@ holds that family; several projects = the same skip note.
 It never links into a project the die is not already in, never steals a motor that another project holds, and never fails
 the route that created the configuration (the caller logs and moves on).
 
+DIE TRANSITION EXCEPTION (2026-11-09, owner): an automatic die transition (the engineer edits the lamination of a
+configuration that is ALREADY linked, ``family._auto_transition_die`` / ``_transition_config_to_own_die``) is the same
+customer motor, edited, so the configuration it lands in the new die keeps the project link of its source
+(``transition=True``).  Explicit die duplicates, "save as new die", rename-copies and configurations created in them
+are NOT transitions and never inherit a link.
+
 SAME DIE ONLY (2026-11-09, data leak): a duplicated study die, and any configuration created in it, was linked to the CUSTOMER
 project of the die it was copied from (the editor's loaded configuration counted as the "source", and ``derived_from`` was
 followed as ancestry).  Now a new configuration joins a project only when that project ALREADY holds a configuration of the
@@ -175,7 +181,7 @@ def writes_shared_catalog() -> bool:
 
 
 def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = None, source_config: Optional[str] = None,
-                        actor: str = "", sources: Optional[List[str]] = None) -> List[str]:  # noqa: ARG001 - ``sources`` kept for callers
+                        actor: str = "", sources: Optional[List[str]] = None, transition: bool = False) -> List[str]:  # noqa: ARG001 - ``sources`` kept for callers
     """Link ``die/config`` to the ONE project that holds its source motor.  Returns the project ids it joined (0 or 1).
 
     ``source_config`` names the configuration the new one was copied from, in ``copied_from`` (another die) or in ``die``
@@ -196,9 +202,11 @@ def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = N
         source = str(copied_from or die)
         candidates = _projects_of([die], die)               # the die itself, never its ancestors (a copy is a new die)
         reason = "no source configuration named and the die is in more than one project"
-    # never across a die: only a project that already holds this very die may take a new variant of it
-    in_die = _projects_in_die(die)
-    candidates = {pid: c for pid, c in candidates.items() if pid in in_die}
+    # never across a die: only a project that already holds this very die may take a new variant of it - except the
+    # configuration an automatic die transition moved, which keeps its source's link (the source must be linked)
+    if not (transition and src_cfg):
+        in_die = _projects_in_die(die)
+        candidates = {pid: c for pid, c in candidates.items() if pid in in_die}
     if not candidates:
         return []                                           # the source motor is in no project: nothing to join
     if len(candidates) > 1:

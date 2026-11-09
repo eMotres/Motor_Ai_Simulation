@@ -97,7 +97,9 @@ test('the table rows: a variant without results is ONE "not computed" row', () =
 });
 
 test('the page: one group header per variant, left column in one style, no blue link buttons, two-state view', () => {
-  assert.match(page, /renderGroupHeader=\{\(r, index, _all, colSpan\) =>/);
+  assert.match(page, /headInGroups renderGroupHeader=\{\(r, index, _all, colSpan, headRow\) =>/);
+  // the motor name sits ABOVE the column names (owner 2026-11-09): the column row follows each group header
+  assert.match(page, /\{flags\.group && groupHeader\(r, colSpan\)\}\{flags\.group && headRow\}/);
   assert.match(page, /rowAccent=\{\(r\) => motorColor\(r\.motor\)\}/);
   assert.match(page, /data-testid="variant-name"/);
   assert.match(page, /showAllVersions \? orderByGroup\(versions\) : latestAndRecommended\(versions\)/);
@@ -122,7 +124,8 @@ test('the page: one group header per variant, left column in one style, no blue 
 
 test('the table skin supports group headers and an accent without changing the other tables', () => {
   const table = read('../../../components/compare/SharedComparisonTable.tsx');
-  assert.match(table, /renderGroupHeader\?: \(row: T, index: number, rows: T\[\], columnCount: number\) => React\.ReactNode/);
+  assert.match(table, /renderGroupHeader\?: \(row: T, index: number, rows: T\[\], columnCount: number, headRow: React\.ReactNode\) => React\.ReactNode/);
+  assert.match(table, /\{!headInGroups && <Box component=\"thead\">\{headRow\}<\/Box>\}/);
   assert.match(table, /rowAccent\?: \(row: T\) => string \| undefined/);
   assert.match(table, /boxShadow: `inset 4px 0 0 \$\{rowAccent\(row\)\}`/);
 });

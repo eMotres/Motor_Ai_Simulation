@@ -24,7 +24,7 @@ function Segment({ stage, t, nowMs }: { stage: StageInfo; t: Tr; nowMs: number }
             transition: 'width 600ms ease',
             ...(fill.active ? { animation: 'stagePulse 1.6s infinite ease-in-out', '@keyframes stagePulse': { '0%': { opacity: 1 }, '50%': { opacity: 0.6 }, '100%': { opacity: 1 } }, '@media (prefers-reduced-motion: reduce)': { animation: 'none' } } : {}) }} />
         </Box>
-        <Typography noWrap sx={{ mt: 0.3, fontSize: 10, lineHeight: 1.2, color: stage.state === 'not_started' ? 'var(--text-3)' : 'var(--text-2)' }}>{t(`stages.names.${stage.id}`)}</Typography>
+        <Typography noWrap sx={{ mt: 0.4, fontSize: 12.5, lineHeight: 1.2, color: stage.state === 'not_started' ? 'var(--text-3)' : 'var(--text-2)' }}>{t(`stages.names.${stage.id}`)}</Typography>
       </Box>
     </Tooltip>
   );
@@ -40,11 +40,11 @@ export function VariantStageBar({ data, motor, t }: { data: ActivityData; motor:
   const ordered = STAGE_ORDER.map((id) => byId.get(id)).filter((s): s is StageInfo => !!s);
   const pct = variantPercent(v);
   return (
-    <Stack direction="row" alignItems="flex-start" spacing={1} data-testid="stage-bar" role="group" aria-label={t('stages.label')} sx={{ width: '100%', maxWidth: 560 }}>
+    <Stack direction="row" alignItems="flex-start" spacing={1} data-testid="stage-bar" role="group" aria-label={t('stages.label')} sx={{ width: '100%', maxWidth: 640 }}>
       <Stack direction="row" spacing={0.5} sx={{ flex: '1 1 auto', minWidth: 0 }}>
         {ordered.map((s) => <Segment key={s.id} stage={s} t={t} nowMs={nowMs} />)}
       </Stack>
-      <Typography data-testid="stage-bar-end" aria-label={`${pct} %`} sx={{ flex: '0 0 auto', fontSize: 11, lineHeight: '8px', color: 'var(--text-1)', whiteSpace: 'nowrap', maxWidth: { xs: 120, sm: 220 }, overflow: 'hidden', textOverflow: 'ellipsis' }}>{variantEndText(v, nowMs, t)}</Typography>
+      <Typography data-testid="stage-bar-end" aria-label={`${pct} %`} sx={{ flex: '0 0 auto', fontSize: 13, lineHeight: 1.2, mt: '-5px', fontWeight: 600, color: 'var(--text-1)', whiteSpace: 'nowrap', maxWidth: { xs: 120, sm: 220 }, overflow: 'hidden', textOverflow: 'ellipsis' }}>{variantEndText(v, nowMs, t)}</Typography>
     </Stack>
   );
 }
